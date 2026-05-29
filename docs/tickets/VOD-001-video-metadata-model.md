@@ -9,6 +9,8 @@
 
 ## 1. Overview & Motivation
 
+<!-- NOTE: This feature is ALREADY FULLY IMPLEMENTED. app/models_video.py, app/services/video_metadata_store.py, app/services/video_state_machine.py all exist. The VideoMetadata DynamoDB table is defined at scripts/local-ddb-init.py:708. Settings at settings.py:1075. Table handle at tables.py:76,200. Router at app/routers/transcode_jobs.py:151 (video_router with prefix /ui/videos), registered at main.py:101,424. The router file name differs from the ticket spec (transcode_jobs.py instead of video_metadata.py). -->
+
 The platform already supports live broadcasting (`BroadcastSessions`), file storage (`file_manager`), and playback entitlements (`entitlements`), but there is no first-class model that captures the metadata of a discrete video asset throughout its lifecycle: from initial upload or recording, through encoding and processing, to a published state ready for on-demand playback.
 
 Today, video files land in the file manager as opaque blobs. A file node in the `file_manager` table knows a file's name, MIME type, size, and S3 key, but nothing about resolution, duration, codec, bitrate, encoding status, DRM packaging state, thumbnail locations, or the relationship between a source file and its transcoded renditions. Broadcast archive recordings similarly produce raw HLS segments in S3 with no queryable metadata record that links the archive to its encoding outputs.
@@ -37,7 +39,7 @@ All DynamoDB tables are declared in `scripts/local-ddb-init.py` as `TableDef` da
 
 The `_ensure_table` function creates the table if absent or adds missing GSIs to existing tables. All tables use `BillingMode=PAY_PER_REQUEST`.
 
-**Comparable table: `BroadcastSessions`** (lines 477-488 of `local-ddb-init.py`):
+**Comparable table: `BroadcastSessions`** (line 517 of `local-ddb-init.py`):
 
 ```python
 TableDef(
@@ -52,7 +54,7 @@ TableDef(
 
 This table uses a single primary key (`session_id`) with two GSIs for querying by status and by creator, both sorted by `created_at`. Note that `created_at` here is stored as a string (ISO 8601), so no `attr_types` override is needed. However, for the video metadata table we will use integer Unix timestamps (consistent with `now_ts()` from `app/core/time.py` and the messaging tables), which **requires** `attr_types={"created_at": "N"}`.
 
-**Comparable table: `file_manager`** (lines 152-160):
+**Comparable table: `file_manager`** (line 158):
 
 ```python
 TableDef(
@@ -744,7 +746,7 @@ class VideoTransitionIn(BaseModel):
 
 ### 4.1 Changes to `app/core/settings.py`
 
-Add the table name setting to the `Settings` dataclass (in the video/broadcast settings section, after the existing `broadcast_*` fields around line 466):
+Add the table name setting to the `Settings` dataclass (already implemented at line 1075):
 
 ```python
 # Video metadata (VOD-001)
@@ -753,7 +755,7 @@ video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMeta
 
 ### 4.2 Changes to `scripts/local-ddb-init.py`
 
-Add a new `TableDef` entry to the `_table_defs()` list, placed after the broadcast table definitions (after line 506):
+Add a new `TableDef` entry to the `_table_defs()` list (already implemented at line 708):
 
 ```python
 # Video metadata (VOD-001)
@@ -1284,16 +1286,36 @@ Once frontend pages are built (out of scope for VOD-001), add Playwright E2E tes
 
 ## Appendix: File Change Summary
 
-| File | Change Type | Description |
-|------|-------------|-------------|
-| `app/core/settings.py` | Modify | Add `video_metadata_table_name` field |
-| `app/core/tables.py` | Modify | Add `video_metadata` field to `Tables` dataclass and `T` constructor |
-| `scripts/local-ddb-init.py` | Modify | Add `VideoMetadata` `TableDef` with 3 GSIs |
-| `app/models_video.py` | New | Pydantic models: `VideoMetadataModel`, `CreateVideoIn`, `UpdateVideoIn`, `VideoOut`, `VideoRendition`, type aliases |
-| `app/services/video_state_machine.py` | New | `_ALLOWED_TRANSITIONS` dict, `validate_transition()` function |
-| `app/services/video_metadata_store.py` | New | Full CRUD: `create_video`, `get_video`, `update_video`, `delete_video`, `transition_video_status`, `list_videos_by_owner`, `list_videos_by_status`, `get_video_by_broadcast_session` |
-| `app/routers/video_metadata.py` | New | FastAPI router with 7 endpoints |
-| `app/main.py` | Modify | Register `video_metadata_router` |
-| `tests/test_video_state_machine.py` | New | 5 unit tests for state machine |
-| `tests/test_video_metadata_store.py` | New | 13 unit tests for CRUD store |
-| `.env.local.example` | Modify | Add `DDB_VIDEO_METADATA=VideoMetadata` |
+<!-- NOTE: This feature is ALREADY IMPLEMENTED. All files below have been created/modified. -->
+
+| File | Change Type | Description | Status |
+|------|-------------|-------------|--------|
+| `app/core/settings.py` | Modify | `video_metadata_table_name` at :1075 | **DONE** |
+| `app/core/tables.py` | Modify | `video_metadata` field at :76, constructor at :200 | **DONE** |
+| `scripts/local-ddb-init.py` | Modify | `VideoMetadata` TableDef at :708 | **DONE** |
+| `app/models_video.py` | New | Pydantic models | **DONE** (file exists) |
+| `app/services/video_state_machine.py` | New | State transition validation | **DONE** (file exists) |
+| `app/services/video_metadata_store.py` | New | Full CRUD store | **DONE** (file exists) |
+| `app/routers/video_metadata.py` | New | FastAPI router | **NOTE**: Router is in `app/routers/transcode_jobs.py` as `video_router` (prefix `/ui/videos`, :151), NOT a separate `video_metadata.py` file. Registered in `main.py:424`. |
+| `app/main.py` | Modify | Registered at :101, :424 | **DONE** |
+| `tests/test_video_state_machine.py` | New | State machine unit tests | Exists in `tests/` |
+| `tests/test_video_metadata_store.py` | New | CRUD store unit tests | Exists in `tests/` |
+
+### Codebase References
+
+| Reference in Ticket | Verified Location | Notes |
+|---------------------|-------------------|-------|
+| BroadcastSessions TableDef at "lines 477-488" | `scripts/local-ddb-init.py:517` | Line shifted (517, not 477) |
+| file_manager TableDef at "lines 152-160" | `scripts/local-ddb-init.py:158` | Confirmed at :158 |
+| `broadcast_sessions_table_name` setting | `app/core/settings.py:453` | Confirmed |
+| `broadcast_sessions` table handle | `app/core/tables.py:40` (field), :164 (constructor) | Confirmed |
+| `app/models_broadcast.py` | Exists | Confirmed |
+| `app/services/broadcast_store.py` | Exists | Confirmed |
+| `app/services/broadcast_state_machine.py` | Exists | Confirmed |
+| `tests/test_broadcast_store.py` | Exists | Confirmed |
+| `tests/test_broadcast_state_machine.py` | Exists | Confirmed |
+| `video_metadata_table_name` setting | `app/core/settings.py:1075` | Confirmed: `os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")` |
+| `video_metadata` table handle | `app/core/tables.py:76` (field), :200 (constructor) | Confirmed |
+| VideoMetadata TableDef | `scripts/local-ddb-init.py:708` | Confirmed |
+| Video router prefix `/ui/videos` | `app/routers/transcode_jobs.py:151` | **Differs from ticket**: not in a separate `video_metadata.py` file |
+| Video router registration | `app/main.py:101, 424` | Confirmed via `transcode_video_router` |

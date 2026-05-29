@@ -61,8 +61,8 @@ The KYC case `intake_profile` field accepts `standard`, `enhanced`, or `high_ris
 is set by the user at case creation and determines which documents and signatures are
 required. There is no computed numeric score.
 
-The admin queue (`STORE.list_admin_queue()` in `app/services/kyc_cases.py`, line 646)
-supports filtering by `risk_tier`, but currently this just maps from `intake_profile`:
+The admin queue (`STORE.list_admin_queue()` — see `app/services/kyc_cases.py:646`)
+supports filtering by `risk_tier`, but currently this just maps from `intake_profile` (see `:664` for `_risk`):
 ```python
 def _risk(case: dict) -> str:
     ip = str(case.get("intake_profile") or "standard").lower()
@@ -97,7 +97,7 @@ The scoring engine can influence status transitions:
 
 ### 2.4 Metrics Endpoint
 
-`get_admin_kyc_metrics()` (line 946 of `kyc_cases.py`) returns funnel counts and latency.
+`get_admin_kyc_metrics()` (see `app/routers/kyc_cases.py:947`) returns funnel counts and latency.
 Risk distribution metrics will be added to this response.
 
 ---
@@ -1224,3 +1224,38 @@ test("181.7 List users by invalid tier returns 422", async () => {
   // Expect 422 validation_error
 });
 ```
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router | `app/routers/kyc_cases.py` | all | VERIFIED (1294 lines) |
+| `get_admin_kyc_metrics()` | `app/routers/kyc_cases.py` | 947 | VERIFIED (ticket cites line 946 -- off by 1) |
+| KYC cases service | `app/services/kyc_cases.py` | all | VERIFIED (828 lines) |
+| `_risk()` function | `app/services/kyc_cases.py` | 664 | VERIFIED |
+| `_ALLOWED_STATUSES` | `app/services/kyc_cases.py` | 17 | VERIFIED |
+| `create_case()` | `app/services/kyc_cases.py` | 97 | VERIFIED |
+| `apply_admin_decision()` | `app/services/kyc_cases.py` | 534 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+| KYC settings | `app/core/settings.py` | 1065-1072 | VERIFIED |
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+| `require_root_session` | `app/auth/deps.py` | 273 | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+<!-- NOTE: The ticket references `get_admin_kyc_metrics()` at line 946 -- actual line is 947. -->
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `app/services/kyc_risk_scoring.py` | `app/services/` | NOT FOUND -- new service required |
+| `kyc_risk_scores` DDB table | `scripts/local-ddb-init.py` | NOT FOUND -- new table required |
+| Risk scoring settings (table name, weights) | `app/core/settings.py` | NOT FOUND -- new settings required |
+| Risk scoring admin endpoints | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoints required |
+| Risk tier assignment logic | `app/services/kyc_cases.py` | NOT FOUND -- new logic required (extends `_risk()`) |
+| `frontend/src/pages/admin/KycRiskDashboard.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |

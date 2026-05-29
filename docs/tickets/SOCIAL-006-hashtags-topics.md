@@ -11,6 +11,16 @@
 
 ## 1. Executive Summary
 
+<!-- NOTE: This ticket's "current state" description is OUTDATED. Hashtags/topics have been FULLY IMPLEMENTED:
+  - Write-side: _extract_hashtags (newsfeed.py:292), _normalize_tags (newsfeed.py:304), _write_tag_index (newsfeed.py:314)
+  - CreatePostRequest has tags field (newsfeed.py:1279)
+  - _post_to_dict includes tags (newsfeed.py:2012)
+  - FeedPost has tags field (types.ts:1979)
+  - Read-side: GET /ui/discover/trending-tags (discovery.py:81), GET /ui/discover/tags/{tag} (discovery.py:110)
+  - Frontend: TagPage at frontend/src/pages/discover/TagPage.tsx, route at App.tsx:152
+  All "Files to Create" listed in section 15 already exist (TagPage.tsx).
+-->
+
 The platform has no hashtag or topic taxonomy for posts. Newsfeed posts (`FeedPost` in `types.ts:1781-1834`) lack any `tags` or `hashtags` field. While the video system has `tags: List[str]` on `VideoMetadataModel` (`app/models_video.py:126`), those tags are never surfaced as clickable hashtags and exist only as metadata for video gallery filtering. Post bodies may contain `#word` patterns in user-written text, but these are never extracted, indexed, or made interactive.
 
 This means there is no way for users to discover content by topic, no way for creators to categorize their posts, and no cross-content tag-based browsing experience. Hashtags are a fundamental content discovery mechanism on every social platform. Without them, the Discover page (`/discover`, `DiscoverPage.tsx`) is limited to user search and trending creators -- there is no content-level discovery.
@@ -941,12 +951,13 @@ Estimated cost: ~0.5 WCU per post * 100K posts = 50K WCU total (spread over minu
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| FeedPost has no tags field | `frontend/src/api/types.ts` | 1781-1834 | VERIFIED |
+| FeedPost has no tags field | `frontend/src/api/types.ts` | 1979 | **OUTDATED** — `tags` field exists |
 | VideoMetadataModel has tags | `app/models_video.py` | 126 | VERIFIED |
-| CreatePostRequest has no tags | `app/routers/newsfeed.py` | 1204-1262 | VERIFIED |
-| _post_to_dict output has no tags | `app/routers/newsfeed.py` | 1853-1899 | VERIFIED |
-| DDB key builders have no tag key | `app/routers/newsfeed.py` | 711-793 | VERIFIED |
-| Discovery router has no tag endpoints | `app/routers/discovery.py` | 16-57 | VERIFIED |
-| CreatePost.tsx has no tag input | `frontend/src/pages/feed/CreatePost.tsx` | 1-60 | VERIFIED |
-| DiscoverPage has no tag section | `frontend/src/pages/discover/DiscoverPage.tsx` | 1-40 | VERIFIED |
-| PostCard uses plain `<img src>` | `frontend/src/pages/feed/PostCard.tsx` | 77-82 | VERIFIED |
+| CreatePostRequest has no tags | `app/routers/newsfeed.py` | 1279 | **OUTDATED** — `tags` field exists on CreatePostRequest |
+| _post_to_dict output has no tags | `app/routers/newsfeed.py` | 2012 | **OUTDATED** — `tags` field included in output |
+| _HASHTAG_RE and _extract_hashtags | `app/routers/newsfeed.py` | 287, 292 | **ALREADY IMPLEMENTED** |
+| _normalize_tags | `app/routers/newsfeed.py` | 304 | **ALREADY IMPLEMENTED** |
+| _write_tag_index | `app/routers/newsfeed.py` | 314 | **ALREADY IMPLEMENTED** |
+| Discovery router has no tag endpoints | `app/routers/discovery.py` | 81, 110 | **OUTDATED** — GET /trending-tags and GET /tags/{tag} exist |
+| TagPage.tsx | `frontend/src/pages/discover/TagPage.tsx` | — | **ALREADY IMPLEMENTED** |
+| /discover/tags/:tag route | `frontend/src/App.tsx` | 152 | **ALREADY IMPLEMENTED** |

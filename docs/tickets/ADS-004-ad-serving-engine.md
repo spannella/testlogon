@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: High
 **Estimated effort**: 8-10 days
-**Dependencies**: ADS-001 (Accounts), ADS-002 (Creatives), ADS-003 (Targeting)
+**Dependencies**: ADS-001 (Accounts), ADS-002 (Creatives), ADS-003 (Targeting) — all sibling tickets, not yet implemented
+<!-- NOTE: ADS-001/002/003 services, tables, and routers do not exist yet. Only the existing ad_placement.py service and AdImpressions table are available. -->
 
 ---
 
@@ -172,7 +173,7 @@ Browser                          Backend                           DynamoDB
 
 ### 2.1 Existing Ad Placement (`app/services/ad_placement.py`)
 
-The current `calculate_ad_slots()` function (line 116) selects creatives by index from the hardcoded `DEV_AD_CREATIVES` list. There is no campaign selection, no targeting evaluation, no frequency capping, and no budget checks. The `record_ad_impression()` function (line 222) writes to `ad_impressions` and credits creator revenue, but does not debit any advertiser.
+The current `calculate_ad_slots()` function selects creatives by index from the hardcoded `DEV_AD_CREATIVES` list (see `app/services/ad_placement.py:25`). There is no campaign selection, no targeting evaluation, no frequency capping, and no budget checks. The `record_ad_impression()` function (see `app/services/ad_placement.py:222`) writes to `ad_impressions` (see `app/core/tables.py:93,217`) and credits creator revenue via `_credit_ad_revenue()` (line 279), but does not debit any advertiser.
 
 ADS-004 replaces the creative selection logic but preserves the impression tracking and creator revenue crediting. The `record_ad_impression()` function is extended with advertiser debit.
 
@@ -1087,3 +1088,16 @@ test.beforeAll(async ({ browser }) => {
 8. Creator ad preferences (allow_ads, block list) are respected.
 9. All 30 E2E tests pass in `frontend/e2e/ads-serving.spec.ts`.
 10. Serve endpoint p99 latency < 200ms under normal load.
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ad_placement.py` | 25, 178, 222, 279 | Existing: `DEV_AD_CREATIVES` (line 25), `get_ad_config` (line 178), `record_ad_impression` (line 222), `_credit_ad_revenue` (line 279) |
+| `app/core/tables.py` | 93, 217 | Existing `ad_impressions` table handle |
+| `app/core/settings.py` | 1242 | Existing `ad_impressions_table_name` setting |
+| `scripts/local-ddb-init.py` | 832 | Existing `AdImpressions` table definition |
+| `app/services/ad_serving.py` | — | Does not exist yet — new implementation required |
+| `ad_frequency_caps` DDB table | — | Does not exist yet — new implementation required |

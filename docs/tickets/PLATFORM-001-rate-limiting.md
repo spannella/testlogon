@@ -1099,7 +1099,7 @@ The IP extraction should rely on `TRUSTED_PROXY_CIDRS` to determine which `X-For
 | `can_send_verification()` | `app/services/rate_limit.py` | 314 | VERIFIED |
 | `client_ip_from_request()` | `app/core/normalize.py` | 9 | CORRECTED: does NOT respect TRUSTED_PROXY_CIDRS; simply returns first X-Forwarded-For or client.host |
 | `T.sessions` (rate limit storage) | `app/core/tables.py` | exists | VERIFIED |
-| Middleware registration pattern `app.middleware("http")` | `app/main.py` | 240-243 | VERIFIED |
+| Middleware registration pattern `app.middleware("http")` | `app/main.py` | 289-291 | VERIFIED |
 | `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED |
 | `get_authenticated_user` → `AuthenticatedUser(sub, role, admin_profile)` | `app/auth/deps.py` | 184, 126 | VERIFIED |
 | `require_root_session` | N/A | N/A | CORRECTED: does not exist; use `require_ui_session` + role check |

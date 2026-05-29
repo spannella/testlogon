@@ -368,16 +368,18 @@ def get_architect_metrics(*, period_days: int = 30) -> dict:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| PUT | `/ui/agents/types/{type_id}/architect-config` | `require_admin_session` | Set or update architect_config |
-| GET | `/ui/agents/types/{type_id}/architect-config` | `require_admin_session` | Get current architect_config |
-| POST | `/ui/agents/types/{type_id}/architect-config/validate` | `require_admin_session` | Validate config |
-| GET | `/ui/agents/types/{type_id}/architect-eligible-tickets` | `require_admin_session` | Preview eligible feature requests |
-| GET | `/ui/agents/runs/{run_id}/architect-output` | `require_admin_session` | Get decomposition output |
-| GET | `/ui/agents/features/{feature_ticket_id}/decomposition` | `require_admin_session` | Get decomposition for a feature request |
-| GET | `/ui/agents/features/{feature_ticket_id}/dependency-graph` | `require_admin_session` | Get dependency graph visualization data |
-| GET | `/ui/agents/features/{feature_ticket_id}/dev-tickets` | `require_admin_session` | List dev tickets generated from a feature |
-| POST | `/ui/agents/types/{type_id}/test-architect-workflow` | `require_admin_session` | Dry-run: preview workflow for a feature request |
-| GET | `/ui/agents/architect/metrics` | `require_admin_session` | Decomposition metrics |
+| PUT | `/ui/agents/types/{type_id}/architect-config` | `require_admin_scope` | Set or update architect_config |
+| GET | `/ui/agents/types/{type_id}/architect-config` | `require_admin_scope` | Get current architect_config |
+| POST | `/ui/agents/types/{type_id}/architect-config/validate` | `require_admin_scope` | Validate config |
+| GET | `/ui/agents/types/{type_id}/architect-eligible-tickets` | `require_admin_scope` | Preview eligible feature requests |
+| GET | `/ui/agents/runs/{run_id}/architect-output` | `require_admin_scope` | Get decomposition output |
+| GET | `/ui/agents/features/{feature_ticket_id}/decomposition` | `require_admin_scope` | Get decomposition for a feature request |
+| GET | `/ui/agents/features/{feature_ticket_id}/dependency-graph` | `require_admin_scope` | Get dependency graph visualization data |
+| GET | `/ui/agents/features/{feature_ticket_id}/dev-tickets` | `require_admin_scope` | List dev tickets generated from a feature |
+| POST | `/ui/agents/types/{type_id}/test-architect-workflow` | `require_admin_scope` | Dry-run: preview workflow for a feature request |
+| GET | `/ui/agents/architect/metrics` | `require_admin_scope` | Decomposition metrics |
+
+<!-- NOTE: `require_admin_session` does not exist in the codebase. The correct admin auth dependency is `require_admin_scope(AdminScope.XXX)` from `app/auth/policy.py:84`. -->
 
 **Key request models**:
 
@@ -788,7 +790,7 @@ let devTicketIds: string[];
 
 ## 9. Security Considerations
 
-- **Admin-only access**: All Architect Agent endpoints require `require_admin_session`.
+- **Admin-only access**: All Architect Agent endpoints require `require_admin_scope()` (see `app/auth/policy.py:84`). <!-- NOTE: was `require_admin_session` which does not exist -->
 - **Repository read-only**: The Architect Agent only reads the codebase. It does not create branches, modify files, or push changes. The terminal is provisioned with read-only repository access.
 - **Ticket content sanitization**: Generated ticket descriptions are sanitized to prevent XSS when rendered in the frontend. Markdown output from the coding tool is validated against an allowlist of safe HTML elements.
 - **Reference doc access control**: Reference document paths are validated against the repository tree. Paths outside the repository root are rejected (`../` traversal prevention).
@@ -829,3 +831,24 @@ let devTicketIds: string[];
 |--------|-----------|
 | AGENT-008 (Coder Agent) | Picks up development tickets created by Architect Agent |
 | AGENT-012 (Project Manager) | Uses decomposition data for project planning and velocity tracking |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| TicketStore class | `app/services/tickets.py` | 110 | `create_ticket` (215), `update_status` (683), `add_message` (621) |
+| `require_admin_scope` | `app/auth/policy.py` | 84 | Correct admin auth (ticket originally said `require_admin_session` which does not exist) |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `(event, user_sub, request, **fields)` |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+| Tables singleton | `app/core/tables.py` | — | `T` object |
+| Router registration | `app/main.py` | 297-465 | No `agent_architect_router` registered yet |
+| `agent_types` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `agent_runs` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `feature_decompositions` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — new table proposed in this ticket |
+| `agent_architect.py` service | `app/services/` | — | Does NOT exist yet — new implementation in this ticket |
+| `agent_architect.py` router | `app/routers/` | — | Does NOT exist yet — new implementation in this ticket |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing table |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |

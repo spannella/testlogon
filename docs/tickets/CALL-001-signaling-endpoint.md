@@ -12,7 +12,9 @@
 
 ### The Gap
 
-The WebRTC call system currently has a complete backend signaling validation and routing framework (`app/services/messaging_call_signaling.py`) that validates envelopes, enforces replay protection, checks call state transitions, and writes signaling events into the Events DynamoDB table for SSE delivery. However, **no HTTP endpoint exposes this service layer to clients**.
+The WebRTC call system currently has a complete backend signaling validation and routing framework (`app/services/messaging_call_signaling.py`) that validates envelopes, enforces replay protection, checks call state transitions, and writes signaling events into the Events DynamoDB table for SSE delivery.
+
+<!-- NOTE: The HTTP endpoint now EXISTS at app/routers/messaging.py:13244-13288 (POST /messages/calls/{call_id}/signal). The remaining work is the unit test file for the HTTP layer (tests/test_messaging_call_signaling_endpoint.py) and the E2E test file (frontend/e2e/webrtc-signaling.spec.ts). -->
 
 The existing call lifecycle endpoints (`POST /messages/calls/invite`, `/accept`, `/decline`, `/end`) handle high-level call state transitions (invited -> accepted -> connected -> ended), but the actual WebRTC session establishment -- the exchange of SDP offers, SDP answers, and ICE candidates between peers -- has no transport mechanism over HTTP.
 
@@ -54,76 +56,79 @@ Frontend (Caller)                    Backend                         Frontend (C
 
 ### 2.1 Signaling Service Layer (`app/services/messaging_call_signaling.py`)
 
-The signaling module (336 lines) is production-ready but unreachable from HTTP. Key components:
+The signaling module (359 lines) is production-ready. Key components:
+<!-- NOTE: The HTTP endpoint now exists — see `send_signaling_event` at app/routers/messaging.py:13249. -->
 
-**Constants and Configuration (lines 14-33)**:
-- `ALLOWED_SIGNALING_TYPES`: `{"call.invite", "call.ring", "call.accept", "call.decline", "webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end"}`
-- `MAX_SIGNALING_SKEW_SECONDS`: 120s (env-configurable)
-- `NONCE_TTL_SECONDS`: 600s for replay guard entries
-- `MAX_SIGNALING_PAYLOAD_BYTES`: 8192 bytes (sufficient for SDP + ICE)
-- `STATE_ALLOWED_SIGNALING_TYPES`: Maps call states to permitted signaling event types:
+**Constants and Configuration (lines 14-40)** (see `app/services/messaging_call_signaling.py:14-40`):
+- `ALLOWED_SIGNALING_TYPES` (line 14): Now 17 types — includes recording signals (`call.recording_request/accept/decline/started/stopped`), screen share (`webrtc.screen_share_start/stop`), and voicemail signals (`call.voicemail_start/complete`) in addition to the original 8
+- `MAX_SIGNALING_SKEW_SECONDS` (line 34): 120s (env-configurable)
+- `NONCE_TTL_SECONDS` (line 35): 600s for replay guard entries
+- `MAX_SIGNALING_PAYLOAD_BYTES` (line 36): 8192 bytes (sufficient for SDP + ICE)
+- `TERMINAL_CALL_STATES` (line 37): `{"ended", "missed", "declined", "busy", "failed", "canceled"}`
+- `STATE_ALLOWED_SIGNALING_TYPES` (line 41): Maps call states to permitted signaling event types:
   - `"invited"` -> `{call.invite, call.ring, call.accept, call.decline, call.end}`
-  - `"accepted"` -> `{webrtc.offer, webrtc.answer, webrtc.ice_candidate, call.end}`
-  - `"connected"` -> `{webrtc.offer, webrtc.answer, webrtc.ice_candidate, call.end}`
+  - `"accepted"` -> `{webrtc.offer, webrtc.answer, webrtc.ice_candidate, call.end, webrtc.screen_share_start, webrtc.screen_share_stop}`
+  - `"connected"` -> `{webrtc.offer, ..., call.end, call.recording_*, webrtc.screen_share_*}`
+  - `"declined"/"missed"/"busy"` -> `{call.voicemail_start, call.voicemail_complete}` (CALL-014)
 
-**Core Function `route_signaling_event()` (lines 162-332)**:
+**Core Function `route_signaling_event()` (lines 186-356)** (see `app/services/messaging_call_signaling.py:186`):
 
-This is the function the HTTP endpoint will call. It performs:
+This is the function the HTTP endpoint calls. It performs:
 
-1. **Envelope validation** (`_validate_envelope`, line 89): Extracts and validates `type`, `version` (must be 1), `event_id`, `call_id`, `conversation_id`, `sender_user_id`, `recipient_user_id`, `nonce` (8-128 chars), `sent_at` (within skew window).
+1. **Envelope validation** (`_validate_envelope`, line 113): Extracts and validates `type`, `version` (must be 1), `event_id`, `call_id`, `conversation_id`, `sender_user_id`, `recipient_user_id`, `nonce` (8-128 chars), `sent_at` (within skew window).
 
-2. **Actor verification** (line 189): `sender_user_id` must match the authenticated `actor_user_id`.
+2. **Actor verification** (line 213): `sender_user_id` must match the authenticated `actor_user_id`.
 
-3. **Participant check** (lines 194-203): Both sender and recipient must be conversation participants; they must differ.
+3. **Participant check** (lines 217-227): Both sender and recipient must be conversation participants; they must differ.
 
-4. **Call session validation** (lines 205-230): Loads `CallSessionRecord`, verifies `conversation_id` matches, confirms both users are call participants, validates the event type is allowed for the current call state.
+4. **Call session validation** (lines 229-254): Loads `CallSessionRecord`, verifies `conversation_id` matches, confirms both users are call participants, validates the event type is allowed for the current call state. Also allows voicemail signals in terminal states (CALL-014, line 248).
 
-5. **Replay guard** (lines 232-240): Uses `_reserve_signaling_nonce()` which does a conditional DDB `put_item` with `attribute_not_exists(event_id)`. Nonces are TTL-expired after 600s.
+5. **Replay guard** (lines 256-264): Uses `_reserve_signaling_nonce()` (line 139) which does a conditional DDB `put_item` with `attribute_not_exists(event_id)`. Nonces are TTL-expired after 600s.
 
-6. **Payload validation** (lines 242-257): Payload must be a JSON-serializable object under 8192 bytes.
+6. **Payload validation** (lines 266-281): Payload must be a JSON-serializable object under 8192 bytes.
 
-7. **Event delivery** (lines 259-332): Writes event item to the Events table with `user_id=recipient_user_id` as PK. The SSE stream (`GET /events/stream`) polls this table by `user_id`, so the recipient will receive the event on their next poll cycle.
+7. **Event delivery** (lines 283-356): Writes event item to the Events table with `user_id=recipient_user_id` as PK. The SSE stream (`GET /events/stream`) polls this table by `user_id`, so the recipient will receive the event on their next poll cycle.
 
-**Return type `SignalingAck`** (lines 42-49): Contains `event_id`, `call_id`, `conversation_id`, `event_type`, `delivered_to`, `status` (either `"delivered"` or `"duplicate"`).
+**Return type `SignalingAck`** (lines 66-73) (see `app/services/messaging_call_signaling.py:66`): Contains `event_id`, `call_id`, `conversation_id`, `event_type`, `delivered_to`, `status` (either `"delivered"` or `"duplicate"`).
 
-**Error type `SignalingValidationError`** (lines 36-39): Has a `code` field for programmatic error classification.
+**Error type `SignalingValidationError`** (lines 60-63) (see `app/services/messaging_call_signaling.py:60`): Has a `code` field for programmatic error classification.
 
-### 2.2 Call Lifecycle Endpoints (`app/routers/messaging.py`, lines 12104-12271)
+### 2.2 Call Lifecycle Endpoints (`app/routers/messaging.py`, lines 12896-13145)
 
-The existing call endpoints follow a consistent pattern:
-- Auth via `Depends(get_messaging_user_id)` (supports cookie auth, Bearer, and API key principal)
+The existing call endpoints follow a consistent pattern (see `app/routers/messaging.py:12896`):
+- Auth via `Depends(get_messaging_user_id)` (supports cookie auth, Bearer, and API key principal) (see `app/routers/messaging.py:1549`)
 - Request/response models defined inline as Pydantic `BaseModel` classes
-- Error handling wraps service-layer exceptions via `_call_error_to_http()` helper
+- Error handling wraps service-layer exceptions via `_call_error_to_http()` helper (line 12956)
 - All endpoints are on the `router` (prefix `/messaging`)
 - Path pattern: `/messages/calls/{call_id}/<action>`
 
-Models defined (lines 12108-12145):
-- `CallInviteIn`, `CallInviteOut`
-- `CallAcceptIn`, `CallDeclineIn`, `CallEndIn`
-- `CallActionOut`
+Models defined (lines 12900-12942) (see `app/routers/messaging.py:12900`):
+- `CallInviteIn` (line 12900), `CallInviteOut` (line 12910) — includes `paid` and `rate_cents_per_min` fields for CALL-011
+- `CallAcceptIn` (line 12922), `CallDeclineIn` (line 12926), `CallEndIn` (line 12930)
+- `CallActionOut` (line 12935) — includes `voicemail_eligible` field for CALL-014
 
-Error status map `_CALL_ERROR_STATUS_MAP` (lines 12148-12156): Maps error codes to HTTP status codes.
+Error status map `_CALL_ERROR_STATUS_MAP` (lines 12945-12953) (see `app/routers/messaging.py:12945`): Maps error codes to HTTP status codes.
 
-### 2.3 SSE Stream (`GET /messaging/events/stream`, lines 11035-11070)
+### 2.3 SSE Stream (`GET /messaging/events/stream`, lines 11785-11820)
 
-The SSE endpoint polls the Events DynamoDB table (`_ddb_fetch_events`) every `poll_ms` milliseconds, projects events via `_project_event_for_user()`, and streams them as typed SSE events using `_sse_pack()`.
+The SSE endpoint (see `app/routers/messaging.py:11785`) polls the Events DynamoDB table (`_ddb_fetch_events`) every `poll_ms` milliseconds, projects events via `_project_event_for_user()`, and streams them as typed SSE events using `_sse_pack()` (line 11815).
 
 Key behavior: Events written to the Events table with `user_id=<recipient>` are automatically picked up by that user's SSE stream. The event `type` field becomes the SSE event name, which the frontend registers listeners for.
 
 ### 2.4 Frontend SSE Handler (`frontend/src/hooks/useMessagingStream.ts`)
 
-The hook (139 lines) already handles call events:
-- Registers listeners for `call.invite`, `call.accept`, `call.decline`, `call.end` (lines 102-106)
-- Any event with type starting with `"call."` invalidates the `["conversations"]` query key (line 41)
-- Call events are dispatched as `CustomEvent("messaging:call-event")` on `window` (lines 69-78)
+The hook (217 lines) handles call events (see `frontend/src/hooks/useMessagingStream.ts:148-184`):
+- `EVENT_TYPES` array (line 148) registers listeners for `call.invite`, `call.accept`, `call.decline`, `call.end`, `call.missed`, `call.recording_*`, `call.billing_tick`, `call.balance_*`, AND `webrtc.offer`, `webrtc.answer`, `webrtc.ice_candidate` (lines 181-183)
+- Any event with type starting with `"call."` is dispatched as `CustomEvent("messaging:call-event")` on `window` (lines 121-130)
+- Events starting with `"webrtc."` are dispatched as `CustomEvent("messaging:webrtc-signal")` (lines 132-141)
 
-**Gap**: The hook does NOT listen for `webrtc.offer`, `webrtc.answer`, or `webrtc.ice_candidate` event types. These must be added to `EVENT_TYPES` array.
+<!-- NOTE: The gap described in the original spec is now closed — webrtc.offer/answer/ice_candidate are already in EVENT_TYPES and the webrtc dispatch block exists. -->
 
 ### 2.5 Call Session Records (`app/services/messaging_call_sessions.py`)
 
-`CallSessionRecord` dataclass (lines 19-33): `call_id`, `conversation_id`, `caller_user_id`, `callee_user_id`, `initial_mode`, `state` (Literal type), `start_ts`, `connect_ts`, `end_ts`, `end_reason`, `network_path`, `lifecycle_events`, `idempotency_records`.
+`CallSessionRecord` dataclass (lines 19-50) (see `app/services/messaging_call_sessions.py:19`): `call_id`, `conversation_id`, `caller_user_id`, `callee_user_id`, `initial_mode`, `state` (Literal type), `start_ts`, `connect_ts`, `end_ts`, `end_reason`, `network_path`, `lifecycle_events`, `idempotency_records`. Also includes BCAST-011 fields (`broadcast_session_id`, line 35), CALL-011 pay-per-minute billing fields (lines 37-48), and CALL-014 voicemail linkage (`voicemail_message_id`, line 50).
 
-The `state` field drives which signaling events are permitted (see `STATE_ALLOWED_SIGNALING_TYPES` above).
+The `state` field drives which signaling events are permitted (see `STATE_ALLOWED_SIGNALING_TYPES` at `app/services/messaging_call_signaling.py:41`).
 
 ### 2.6 Existing Unit Tests (`tests/test_messaging_call_signaling.py`, 517 lines)
 
@@ -143,7 +148,7 @@ POST /messaging/messages/calls/{call_id}/signal
 
 **Auth**: `Depends(get_messaging_user_id)` -- consistent with all other call endpoints. Supports cookie+CSRF, Bearer token, and API key principal.
 
-**Rate Limiting**: Per-user burst limit of 60 signaling events per 10-second window. This accommodates ICE trickle bursts (typically 10-30 candidates within seconds) while preventing abuse. Implemented as a DDB-based sliding window counter (same pattern as `_enforce_report_rate_limits` at line 6491).
+**Rate Limiting**: Per-user burst limit of 60 signaling events per 10-second window. This accommodates ICE trickle bursts (typically 10-30 candidates within seconds) while preventing abuse. Implemented as a DDB-based sliding window counter (see `_enforce_signaling_rate_limit` at `app/routers/messaging.py:13206`; similar pattern to `_enforce_report_rate_limits` at line 6691).
 
 ### 3.2 Request Model
 
@@ -252,9 +257,9 @@ The SSE stream endpoint (`GET /events/stream`) polls by `user_id` PK and emits e
 
 ### 3.8 Feature Gating
 
-The endpoint should respect the existing WebRTC feature flags:
-- `S.messaging_webrtc_direct_call_enabled` must be `True`
-- `S.messaging_webrtc_direct_call_kill_switch` must be `False`
+The endpoint should respect the existing WebRTC feature flags (see `app/core/settings.py:1041-1042`):
+- `S.messaging_webrtc_direct_call_enabled` (line 1041) must be `True`
+- `S.messaging_webrtc_direct_call_kill_switch` (line 1042) must be `False`
 
 If disabled, return 403 with `code: "feature_disabled"`.
 
@@ -341,7 +346,9 @@ For sub-200ms total signaling latency, consider reducing the default `poll_ms` t
 
 ### Step 1: Add Pydantic Models (in `app/routers/messaging.py`)
 
-**Location**: After `CallActionOut` (line 12145), before `_CALL_ERROR_STATUS_MAP` (line 12148).
+<!-- NOTE: IMPLEMENTED — CallSignalingIn at line 13151, CallSignalingOut at 13161, CallSignalingErrorOut at 13170 (see app/routers/messaging.py:13151-13173). Actual CallSignalingIn.type pattern also includes webrtc.screen_share_start|webrtc.screen_share_stop. -->
+
+**Location**: After `CallActionOut` (line 12935), before `_CALL_ERROR_STATUS_MAP` (line 12945).
 
 **Lines to add**: ~40 lines
 
@@ -372,7 +379,9 @@ class CallSignalingErrorOut(BaseModel):
 
 ### Step 2: Add Error Status Map and Feature Gate Helper
 
-**Location**: After the new models, alongside `_CALL_ERROR_STATUS_MAP` (line 12148).
+<!-- NOTE: IMPLEMENTED — _SIGNALING_ERROR_STATUS_MAP at line 13175, _enforce_webrtc_signaling_enabled at 13199, _enforce_signaling_rate_limit at 13206 (see app/routers/messaging.py:13175-13231). -->
+
+**Location**: After the new models, alongside `_CALL_ERROR_STATUS_MAP` (line 12945).
 
 **Lines to add**: ~35 lines
 
@@ -438,7 +447,9 @@ def _enforce_signaling_rate_limit(user_id: str) -> None:
 
 ### Step 3: Add Endpoint Handler
 
-**Location**: After `end_call_endpoint` (line 12271), in a new section.
+<!-- NOTE: IMPLEMENTED — send_signaling_event at line 13249, SIGNALING_ENDPOINT_RESPONSES at 13234, route at /messages/calls/{call_id}/signal (see app/routers/messaging.py:13244-13288). -->
+
+**Location**: After `timeout_call_endpoint` (line 13113), in a new section.
 
 **Lines to add**: ~45 lines
 
@@ -507,9 +518,11 @@ async def send_signaling_event(
 
 ### Step 4: Update Frontend SSE Handler
 
+<!-- NOTE: IMPLEMENTED — webrtc.offer/answer/ice_candidate already in EVENT_TYPES at lines 181-183 and webrtc.* dispatch block at lines 132-141 (see frontend/src/hooks/useMessagingStream.ts:132-183). -->
+
 **File**: `frontend/src/hooks/useMessagingStream.ts`
 
-**Change**: Add three entries to the `EVENT_TYPES` array (after line 105):
+**Change**: Add three entries to the `EVENT_TYPES` array (after line 177):
 
 ```typescript
 const EVENT_TYPES = [
@@ -541,7 +554,9 @@ if (eventType.startsWith("webrtc.")) {
 
 ### Step 5: Add Frontend API Endpoint Wrapper
 
-**File**: `frontend/src/api/endpoints/messaging.ts` (or equivalent)
+<!-- NOTE: IMPLEMENTED — SignalingPayload at line 929, SignalingAck at 939, sendSignalingEvent at 948 (see frontend/src/api/endpoints/messaging.ts:929-953). -->
+
+**File**: `frontend/src/api/endpoints/messaging.ts`
 
 ```typescript
 export interface SignalingPayload {
@@ -574,6 +589,8 @@ export async function sendSignalingEvent(
 
 ### Step 6: Environment Variable Defaults
 
+<!-- NOTE: These env vars are read at runtime via os.environ.get() with defaults in messaging_call_signaling.py:34-36 and messaging.py:13191-13196. They have NOT been added to .env.local.example yet. -->
+
 **File**: `.env.local.example`
 
 Add:
@@ -600,6 +617,8 @@ MESSAGING_WEBRTC_SIGNALING_MAX_PAYLOAD_BYTES=8192
 ## 5. Testing Strategy
 
 ### 5.1 Unit Tests (`tests/test_messaging_call_signaling_endpoint.py`)
+
+<!-- NOTE: This file does not exist yet — new implementation required. The existing tests/test_messaging_call_signaling.py (517 lines) covers the service layer but not the HTTP endpoint layer. -->
 
 New file, ~300 lines. Tests the HTTP layer using the FastAPI test client.
 
@@ -676,6 +695,8 @@ New file, ~300 lines. Tests the HTTP layer using the FastAPI test client.
     - Assert 403
 
 ### 5.2 E2E Tests (`frontend/e2e/webrtc-signaling.spec.ts`)
+
+<!-- NOTE: This file does not exist yet — new implementation required. -->
 
 New file, ~400 lines. Tests the full round-trip: HTTP POST -> DynamoDB -> SSE stream -> frontend event.
 
@@ -775,3 +796,38 @@ Caller Frontend          Backend                    DynamoDB              Callee
 - **CALL-003**: WebSocket upgrade path for signaling (sub-100ms latency)
 - **CALL-004**: Signaling event delivery confirmation (read receipts for ICE)
 - **CALL-005**: Group call signaling (mesh/SFU topology negotiation)
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/services/messaging_call_signaling.py` | 1-359 | Signaling validation + routing service (fully implemented) |
+| `app/services/messaging_call_signaling.py` | 14-33 | `ALLOWED_SIGNALING_TYPES` — 17 types including recording/screenshare/voicemail |
+| `app/services/messaging_call_signaling.py` | 41-57 | `STATE_ALLOWED_SIGNALING_TYPES` — state-to-event mapping |
+| `app/services/messaging_call_signaling.py` | 60-63 | `SignalingValidationError` class |
+| `app/services/messaging_call_signaling.py` | 66-73 | `SignalingAck` dataclass |
+| `app/services/messaging_call_signaling.py` | 113-136 | `_validate_envelope()` |
+| `app/services/messaging_call_signaling.py` | 139-162 | `_reserve_signaling_nonce()` — DDB conditional write replay guard |
+| `app/services/messaging_call_signaling.py` | 186-356 | `route_signaling_event()` — core routing function |
+| `app/services/messaging_call_sessions.py` | 19-50 | `CallSessionRecord` dataclass (incl. billing + voicemail fields) |
+| `app/services/messaging_call_sessions.py` | 133 | `create_call_session()` |
+| `app/services/messaging_call_sessions.py` | 165 | `get_call_session()` |
+| `app/routers/messaging.py` | 12896-12960 | Call lifecycle models (`CallInviteIn/Out`, `CallActionOut`, `_CALL_ERROR_STATUS_MAP`) |
+| `app/routers/messaging.py` | 12963-13145 | Call lifecycle endpoints (`create_call_invite`, `accept`, `decline`, `end`, `timeout`) |
+| `app/routers/messaging.py` | 13151-13173 | `CallSignalingIn`, `CallSignalingOut`, `CallSignalingErrorOut` models |
+| `app/routers/messaging.py` | 13175-13189 | `_SIGNALING_ERROR_STATUS_MAP` |
+| `app/routers/messaging.py` | 13191-13231 | Rate limit constants + `_enforce_webrtc_signaling_enabled` + `_enforce_signaling_rate_limit` |
+| `app/routers/messaging.py` | 13234-13288 | `SIGNALING_ENDPOINT_RESPONSES` + `send_signaling_event` endpoint handler |
+| `app/routers/messaging.py` | 1549 | `get_messaging_user_id` auth dependency |
+| `app/routers/messaging.py` | 11785-11820 | SSE stream endpoint (`events_stream`) |
+| `app/routers/messaging.py` | 6691 | `_enforce_report_rate_limits` (similar DDB counter pattern) |
+| `app/core/settings.py` | 1041-1042 | `messaging_webrtc_direct_call_enabled`, `messaging_webrtc_direct_call_kill_switch` |
+| `app/core/settings.py` | 1047-1050 | TURN settings (`turn_enabled`, `turn_urls`, `turn_secret`, `turn_ttl`) |
+| `frontend/src/hooks/useMessagingStream.ts` | 148-184 | `EVENT_TYPES` array (includes webrtc.offer/answer/ice_candidate) |
+| `frontend/src/hooks/useMessagingStream.ts` | 121-141 | `call.*` and `webrtc.*` CustomEvent dispatchers |
+| `frontend/src/api/endpoints/messaging.ts` | 929-953 | `SignalingPayload`, `SignalingAck`, `sendSignalingEvent()` |
+| `tests/test_messaging_call_signaling.py` | 1-517 | Unit tests for signaling service layer (21 tests) |
+| `tests/test_messaging_call_signaling_endpoint.py` | — | Does not exist yet — HTTP endpoint unit tests needed |
+| `frontend/e2e/webrtc-signaling.spec.ts` | — | Does not exist yet — E2E tests needed |

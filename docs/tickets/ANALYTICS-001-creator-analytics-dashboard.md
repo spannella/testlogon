@@ -16,7 +16,7 @@ This ticket builds a full analytics stack: a DynamoDB-backed rollup pipeline tha
 
 The end goal is to give every creator a Shopify-analytics-grade view of their platform business, accessible at `/analytics`, integrated into the sidebar navigation, and responsive on both desktop and mobile viewports.
 
-> **Codebase context**: The existing MON-003 Creator Earnings Dashboard is implemented at `app/services/creator_earnings.py` (service) and `app/routers/creator_earnings.py` (router, prefix `/ui/earnings`). <!-- VERIFIED: creator_earnings.py:1, creator_earnings router line 16 --> The earnings router is registered in `app/main.py` at line 100/363. <!-- VERIFIED -->
+> **Codebase context**: The existing MON-003 Creator Earnings Dashboard is implemented at `app/services/creator_earnings.py` (service) and `app/routers/creator_earnings.py` (router, prefix `/ui/earnings`). <!-- VERIFIED: creator_earnings.py:1, creator_earnings router line 16 --> The earnings router is registered in `app/main.py` at line 106/429. <!-- VERIFIED -->
 
 ---
 
@@ -60,7 +60,7 @@ The end goal is to give every creator a Shopify-analytics-grade view of their pl
 +-------------------+     +---------------------+     +------------------+
 |  Billing Ledger   |     |   Video Views       |     |  Subscriptions   |
 |  (T.billing)      |     |   (T.video_views)   |     |  (T.subscriptions)|
-<!-- VERIFIED: T.billing at tables.py:22/106, T.video_views at tables.py:89/173, T.subscriptions at tables.py:36/120 -->
+<!-- VERIFIED: T.billing at tables.py:22/146, T.video_views at tables.py:91/215, T.subscriptions at tables.py:36/160 -->
 +--------+----------+     +---------+-----------+     +--------+---------+
          |                          |                           |
          v                          v                           v
@@ -77,7 +77,7 @@ The end goal is to give every creator a Shopify-analytics-grade view of their pl
 | Post     |  | Ad       | | Call    | | Newsfeed | | Broadcast| | Shop |
 | Reactions|  | Impressn | | Billing | | Comments | | Chat Msg | | Sales|
 | (T.app)  |  |(T.ad_imp)| |(T.call)|  | (T.app) | |(T.bcast) | |(T.) |
-<!-- VERIFIED: T.ad_impressions at tables.py:91/175, T.call_billing_ledger at tables.py:92/176 -->
+<!-- VERIFIED: T.ad_impressions at tables.py:93/217, T.call_billing_ledger at tables.py:94/218 -->
 <!-- CORRECTED: "T.ad_imp" should be "T.ad_impressions"; "T.call" should be "T.call_billing_ledger" -->
 +----------+  +----------+ +--------+ +----------+ +----------+ +------+
 
@@ -158,24 +158,22 @@ TableDef(
 **Settings entry for `app/core/settings.py`:**
 
 ```python
-# NEW — does not exist yet in settings.py (last setting is at line 1193)
 analytics_rollups_table_name: str = os.environ.get("DDB_ANALYTICS_ROLLUPS", "AnalyticsRollups")
 analytics_rollup_enabled: bool = os.environ.get("ANALYTICS_ROLLUP_ENABLED", "1") not in ("0", "false", "False")
 analytics_rollup_interval_seconds: int = int(os.environ.get("ANALYTICS_ROLLUP_INTERVAL_SECONDS", "900"))
 analytics_rollup_lookback_days: int = int(os.environ.get("ANALYTICS_ROLLUP_LOOKBACK_DAYS", "3"))
 ```
-<!-- NOTE: These settings must be added. Follow the existing bool-flag pattern (e.g. vod_drm_enabled at line 1081) and int-from-env pattern (e.g. video_gallery_page_size at line 1183). -->
+<!-- VERIFIED: All four settings exist at app/core/settings.py:1334-1337 -->
 
 **Tables entry for `app/core/tables.py`:**
 
 ```python
-# NEW — must be added to Tables dataclass in app/core/tables.py
-# The Tables dataclass is at line 17 (definition) and the T singleton at line 94.
-# Follow the existing pattern: field declaration at ~line 91 and wiring at ~line 175.
-analytics_rollups: Any
+# In Tables dataclass (app/core/tables.py)
+analytics_rollups: Any  # line 97
 # ...
-analytics_rollups=ddb.Table(S.analytics_rollups_table_name),
+analytics_rollups=ddb.Table(S.analytics_rollups_table_name),  # line 221
 ```
+<!-- VERIFIED: analytics_rollups handle exists at app/core/tables.py:97 (declaration) and :221 (wiring) -->
 
 ### Primary Access Patterns
 
@@ -724,23 +722,26 @@ export const refreshAnalytics = () =>
 
 ---
 
-## Appendix: Codebase Citations
+## Codebase References
 
 | Claim | Verified? | File:Line | Notes |
 |-------|-----------|-----------|-------|
-| `T.billing` table handle | Yes | `app/core/tables.py:22,106` | PK=pk, SK=sk. billing_table_name at settings.py:306 |
-| `T.video_views` table handle | Yes | `app/core/tables.py:89,173` | video_views_table_name at settings.py:1180 |
-| `T.subscriptions` table handle | Yes | `app/core/tables.py:36,120` | subscriptions_table_name at settings.py:1008 |
-| `T.ad_impressions` table handle | Yes | `app/core/tables.py:91,175` | ad_impressions_table_name at settings.py:1188 |
-| `T.call_billing_ledger` table handle | Yes | `app/core/tables.py:92,176` | call_billing_ledger_table_name at settings.py:1141 |
+| `T.billing` table handle | Yes | `app/core/tables.py:22,146` | PK=pk, SK=sk. billing_table_name at settings.py:306 |
+| `T.video_views` table handle | Yes | `app/core/tables.py:91,215` | video_views_table_name at settings.py:1180 |
+| `T.subscriptions` table handle | Yes | `app/core/tables.py:36,160` | subscriptions_table_name at settings.py:1008 |
+| `T.ad_impressions` table handle | Yes | `app/core/tables.py:93,217` | ad_impressions_table_name at settings.py:1188 |
+| `T.call_billing_ledger` table handle | Yes | `app/core/tables.py:94,218` | call_billing_ledger_table_name at settings.py:1141 |
 | `creator_earnings.py` service exists | Yes | `app/services/creator_earnings.py:1-208` | get_earnings_summary() at line 47, get_earnings_transactions() at line 117 |
-| `creator_earnings` router exists | Yes | `app/routers/creator_earnings.py:1-62` | Prefix `/ui/earnings`, registered in main.py:100/363 |
+| `creator_earnings` router exists | Yes | `app/routers/creator_earnings.py:1-62` | Prefix `/ui/earnings`, registered in main.py:106/429 |
 | `require_ui_session` auth dependency | Yes | `app/services/sessions.py:283` | Used by creator_earnings_router at line 12,23,46 |
 | `_bucket_limit()` rate limit function | Yes | `app/services/rate_limit.py:60` | Uses T.sessions for storage |
 | Background task startup pattern | Yes | `app/main.py:326-327,366-370` | `app.add_event_handler("startup", ...)` |
 | `TableDef` pattern for DDB init | Yes | `scripts/local-ddb-init.py:28-35` | `TableDef(name, partition_key, sort_key=None, gsi=[], attr_types={})` |
 | Prometheus-style metrics in `app/metrics.py` | Yes | `app/metrics.py:1-1782+` | METRICS_ENABLED flag at line 16, noop pattern when not prod |
 | `T.app_single_table` reference | **Partial** | `scripts/local-ddb-init.py:216-228` | Table exists in DDB init with pk/sk + 6 GSIs, but it is NOT wired as `T.app_single_table` in tables.py. Must access via `ddb.Table(S.app_single_table_name)` or add a handle. |
-| Settings do not yet exist | Confirmed | `app/core/settings.py` (1197 lines) | No `analytics_rollups`, `analytics_rollup_enabled`, etc. Must be added. |
-| Tables handle does not yet exist | Confirmed | `app/core/tables.py` (178 lines) | No `analytics_rollups` handle. Must be added. |
-| Recharts already used in app | Assumed | Frontend bundle | Ticket states Recharts is "already used for other charts" -- verify in package.json before implementation. |
+| Settings now exist | Yes | `app/core/settings.py:1334-1337` | `analytics_rollups_table_name`, `analytics_rollup_enabled`, `analytics_rollup_interval_seconds`, `analytics_rollup_lookback_days` |
+| Tables handle now exists | Yes | `app/core/tables.py:97,221` | `T.analytics_rollups` field + wiring |
+| AnalyticsRollups DDB table | Yes | `scripts/local-ddb-init.py:853-861` | With ByDateCreatedAt GSI, `created_at` numeric attr |
+| `creator_analytics.py` service | Yes | `app/services/creator_analytics.py` | Queries `T.analytics_rollups`, has rollup job logic |
+| `creator_analytics_router` registered | Yes | `app/main.py:109,432` | Import + `include_router` |
+| Recharts in package.json | Yes | `frontend/package.json:64` | `"recharts": "^3.8.1"` |

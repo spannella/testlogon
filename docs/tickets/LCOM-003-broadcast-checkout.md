@@ -124,27 +124,25 @@ Viewer                       Frontend                     Backend               
 
 ### 2.1 Existing Order System
 
-**Orders table** (`scripts/local-ddb-init.py`, line 112-119): DynamoDB table with `order_id` as PK, GSIs `GSI_USER` (partition: `user_id`, sort: `created_at`) and `GSI_STATUS` (partition: `status`, sort: `created_at`).
+**Orders table** (see `scripts/local-ddb-init.py:118`): DynamoDB table with `order_id` as PK.
 
-**Order items table** (line 120): `order_id` PK, `item_id` SK.
-
-**Table handles** (`app/core/tables.py`, lines 135-136): `T.orders`, `T.order_items`.
+**Order items table** (see line 125): `order_id` PK, `item_id` SK.
 
 The orders table currently has no `broadcast_session_id` field. Orders created through the standard checkout flow have no broadcast attribution.
 
 ### 2.2 Billing System (`app/services/billing_shared.py`)
 
-The billing system uses a single-table design with `pk=USER#{user_id}` and various SK prefixes:
+The billing system (~260 lines) uses a single-table design with `pk=USER#{user_id}` and various SK prefixes:
 
 - `PM#{pm_id}`: Payment method records with `provider`, `provider_id`, `brand`, `last_four`, `exp_month`, `exp_year`
 - `BILLING`: User's billing settings including `default_payment_method_id`
-- `BALANCE`: Balance tracking with `owed_pending_cents`, `owed_settled_cents`, `payments_pending_cents`, `payments_settled_cents`
+- `BALANCE`: Balance tracking
 - `LEDGER#{ledger_id}`: Individual transaction records with `amount_cents`, `currency`, `reason`, `created_at`
 
-Helpers (lines 16-59): `user_pk(user_id)`, `ddb_get(table, pk, sk)`, `ddb_put(table, item)`, `ddb_del(table, pk, sk)`, `ddb_query_pk(table, pk)`, `ddb_update(table, pk, sk, expr, values)`.
+Helpers: `user_pk(user_id)` (see line 16), `ddb_get(table, pk, sk)` (see line 20), `ddb_put(table, item)` (see line 25).
 
-`ensure_balance_row(table, pk, currency)` (line 62-73): Creates BALANCE row if missing.
-`apply_balance_delta(table, pk, delta, currency)` (line 76+): Atomic increment/decrement of balance fields.
+`ensure_balance_row(table, pk, currency)` (see line 62): Creates BALANCE row if missing.
+`apply_balance_delta(table, pk, delta, currency)` (see line 76): Atomic increment/decrement of balance fields.
 
 ### 2.3 Payment Method Validation Pattern
 
@@ -167,15 +165,13 @@ The Stripe mock server on port 12111 is noted in CLAUDE.md: "stripe-mock always 
 
 Option 2 is consistent with how tips and locked message unlocks work in the codebase — they validate the PM exists, write a ledger entry, but don't make a real Stripe API call. The quick-buy should follow this pattern.
 
-### 2.5 Purchase Transaction System (`app/models.py`, lines 432-478)
+### 2.5 Purchase Transaction System (`app/models.py`)
 
-The platform has a `PurchaseTransactionIn` model (lines 432-438) with fields: `merchant_id`, `external_ref`, `money` (a `PurchaseMoneyIn` sub-model), `description`, `metadata`. The `PurchaseTransactionSummary` (lines 440-449) includes `txn_id`, `created_at`, `updated_at`, `status`, `amount`, `currency`, `merchant_id`, `external_ref`, `description`.
-
-The purchase transactions table (`scripts/local-ddb-init.py`, line 64): `pk=user_sub`, `sk` (for transaction records).
+The platform has a `PurchaseMoneyIn` model (see `app/models.py:419`), `PurchaseTransactionIn` model (see line 443), and `PurchaseTransactionSummary` (see line 451) with transaction tracking fields.
 
 ### 2.6 Broadcast SSE System (`app/services/broadcast_sse.py`)
 
-`broadcast_sse_publish(session_id, event)` (line 29) fans out events to all SSE subscribers. Already used for chat events, health updates, and viewer count updates. The quick-buy system will use this to broadcast purchase events to the broadcaster.
+`broadcast_sse_publish(session_id, event)` (see line 29) fans out events to all SSE subscribers. Already used for chat events, shelf events, health updates, and viewer count updates. The quick-buy system will use this to broadcast purchase events to the broadcaster.
 
 ### 2.7 Frontend Shop Components (`frontend/src/pages/shop/`)
 
@@ -1073,20 +1069,24 @@ export const getMyPurchases = () =>
 
 ### Summary of All Files
 
-| File | Type | Estimated Lines |
-|------|------|-----------------|
-| `app/core/settings.py` | Modify | +2 |
-| `app/core/tables.py` | Modify | +1 |
-| `scripts/local-ddb-init.py` | Modify | +8 |
-| `app/services/broadcast_orders.py` | Create | ~200 |
-| `app/routers/broadcast.py` | Modify | ~120 |
-| `frontend/src/api/endpoints/broadcast-orders.ts` | Create | ~40 |
-| `frontend/src/pages/broadcast/QuickBuyDialog.tsx` | Create | ~150 |
-| `frontend/src/pages/broadcast/PurchaseCounter.tsx` | Create | ~60 |
-| `frontend/src/pages/broadcast/LivePlayer.tsx` | Modify | +30 |
-| `frontend/src/pages/broadcast/BroadcastPage.tsx` | Modify | +15 |
-| `frontend/src/pages/broadcast/ProductShelfCard.tsx` | Modify | +10 |
-| **Total** | | **~636** |
+<!-- NOTE: app/services/broadcast_orders.py does NOT exist yet — new implementation required.
+     The BroadcastOrders DDB table also does not exist yet.
+     The broadcast router already has resolve_effective_price integration at line 1465
+     (from LCOM-004), but no quick-buy endpoint exists. -->
+
+| File | Type | Status |
+|------|------|--------|
+| `app/core/settings.py` | Modify | Need `broadcast_orders_table_name` |
+| `app/core/tables.py` | Modify | Need `broadcast_orders` handle |
+| `scripts/local-ddb-init.py` | Modify | Need `BroadcastOrders` table definition |
+| `app/services/broadcast_orders.py` | **Create** | Does not exist yet |
+| `app/routers/broadcast.py` | Modify | Need quick-buy endpoint (~3969 lines currently) |
+| `frontend/src/api/endpoints/broadcast-orders.ts` | **Create** | Does not exist yet |
+| `frontend/src/pages/broadcast/QuickBuyDialog.tsx` | **Create** | Does not exist yet |
+| `frontend/src/pages/broadcast/PurchaseCounter.tsx` | **Create** | Does not exist yet |
+| `frontend/src/pages/broadcast/LivePlayer.tsx` | Modify | Already exists |
+| `frontend/src/pages/broadcast/BroadcastPage.tsx` | Modify | Already exists |
+| `frontend/src/pages/broadcast/ProductShelfCard.tsx` | **Create** | Does not exist yet (no separate file) |
 
 ---
 
@@ -1656,3 +1656,26 @@ Purchase Completed (order created)
 - **LCOM-001**: Broadcast product shelf (prerequisite — products must be on shelf)
 - **LCOM-002**: Chat product links (ProductLinkCard "Buy Now" button uses this quick-buy flow)
 - **LCOM-004**: Broadcast-exclusive pricing (quick-buy uses `broadcast_price_cents` when available)
+
+---
+
+## Codebase References
+
+| File | Lines | What was verified |
+|------|-------|-------------------|
+| `scripts/local-ddb-init.py` | 118, 125 | Orders and order_items table definitions confirmed |
+| `app/services/billing_shared.py` | 16, 20, 25, 62, 76 | Billing helpers confirmed: `user_pk`, `ddb_get`, `ddb_put`, `ensure_balance_row`, `apply_balance_delta` |
+| `app/models.py` | 419, 443, 451 | `PurchaseMoneyIn`, `PurchaseTransactionIn`, `PurchaseTransactionSummary` confirmed |
+| `app/services/broadcast_sse.py` | 29 | `broadcast_sse_publish` confirmed |
+| `app/services/broadcast_product_shelf.py` | -- | Exists (~441 lines); has `resolve_effective_price` (line 225+) and `get_shelf_product_raw` |
+| `app/routers/broadcast.py` | 1465 | Imports `get_shelf_product_raw` and `resolve_effective_price` from shelf service |
+| `app/routers/broadcast.py` | 76 | Router prefix `/broadcast`; ~3969 lines total |
+| `app/core/settings.py` | 1152 | `broadcast_product_shelf_table_name` confirmed |
+| `app/core/tables.py` | 83 | `broadcast_product_shelf` handle confirmed |
+| `frontend/src/pages/shop/Checkout.tsx` | -- | Exists (standard checkout flow) |
+| `frontend/src/pages/shop/Cart.tsx` | -- | Exists |
+| `frontend/src/pages/broadcast/LivePlayer.tsx` | -- | Exists |
+| `frontend/src/pages/broadcast/BroadcastPage.tsx` | -- | Exists |
+| `app/services/broadcast_orders.py` | -- | **Does not exist yet** -- new implementation required |
+| `frontend/src/pages/broadcast/QuickBuyDialog.tsx` | -- | **Does not exist yet** -- new component required |
+| `frontend/src/pages/broadcast/PurchaseCounter.tsx` | -- | **Does not exist yet** -- new component required |

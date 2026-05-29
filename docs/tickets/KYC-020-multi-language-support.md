@@ -21,7 +21,7 @@ The KYC system currently operates exclusively in English. All KYC forms, questio
 3. **Support burden**: Non-English users generate disproportionate support tickets asking for clarification on KYC steps.
 4. **Abandonment**: Users who cannot read the KYC forms abandon the process, reducing verification completion rates.
 
-The platform already has a foundational i18n infrastructure (`app/core/settings.py`, lines 1405-1409): `i18n_default_locale` (default "en"), `i18n_supported_locales` ("en,es,fr"), and `i18n_enabled`/`i18n_rtl_enabled`/`i18n_admin_management_enabled` flags. However, this infrastructure is not wired into the KYC system at all.
+The platform already has a foundational i18n infrastructure (see `app/core/settings.py:1405-1409`): `i18n_default_locale` (default "en"), `i18n_supported_locales` ("en,es,fr"), and `i18n_enabled`/`i18n_rtl_enabled`/`i18n_admin_management_enabled` flags. However, this infrastructure is not wired into the KYC system at all.
 
 ### 1.2 Supported Languages
 
@@ -156,7 +156,7 @@ The platform already has a foundational i18n infrastructure (`app/core/settings.
 
 ## 3. Current State Analysis
 
-### 3.1 i18n Settings (`app/core/settings.py`, lines 1405-1409)
+### 3.1 i18n Settings (see `app/core/settings.py:1405-1409`)
 
 ```python
 i18n_default_locale: str = os.environ.get("I18N_DEFAULT_LOCALE", "en")
@@ -168,21 +168,22 @@ i18n_admin_management_enabled: bool = os.environ.get("I18N_ADMIN_MANAGEMENT_ENAB
 
 These settings exist but are not consumed by any KYC code path.
 
-### 3.2 Questionnaire System (`app/services/questionnaires_repository.py`)
+### 3.2 Questionnaire System (see `app/services/questionnaires_repository.py`)
 
-The questionnaire repository stores questionnaire definitions with `title`, `description`, and question `label`/`hint` fields -- all stored as plain strings with no language dimension. The KYC integration (`app/routers/kyc_cases.py`, line 625, `start_kyc_questionnaire`) binds a questionnaire to a case by slug, but the slug lookup returns the English-only version.
+The questionnaire repository stores questionnaire definitions with `title`, `description`, and question `label`/`hint` fields -- all stored as plain strings with no language dimension. The KYC integration (see `app/routers/kyc_cases.py:625`, `start_kyc_questionnaire`) binds a questionnaire to a case by slug, but the slug lookup returns the English-only version.
 
-### 3.3 Alert/Email System (`app/services/alerts.py`)
+### 3.3 Alert/Email System (see `app/services/alerts.py`)
 
-The `write_alert` function (line 355) accepts `title` and `details` as plain strings. The `send_alert_email` function (line 458) sends emails with hard-coded English subject/body patterns. Alert email templates (`app/services/alert_email_templates.py`) have English-only templates.
+The `write_alert` function (see line 355) accepts `title` and `details` as plain strings. The `send_alert_email` function (see line 458) sends emails with hard-coded English subject/body patterns. Alert email templates (see `app/services/alert_email_templates.py`) have English-only templates.
 
 ### 3.4 Signature Packet Legal Notices
 
-The `KycSignatureStatusOut` (`app/contracts/kyc_cases_contract.py`, line 160) has a `legal_notice_version` field and `legal_notice_accepted` flag. The legal notice text is currently hard-coded in the frontend signing page, not served from the backend or localized.
+The `KycSignatureStatusOut` (see `app/contracts/kyc_cases_contract.py:160`) has a `legal_notice_version` field and `legal_notice_accepted` flag. The legal notice text is currently hard-coded in the frontend signing page, not served from the backend or localized.
 
 ### 3.5 User Profile Locale
 
-User profiles can store a `locale` field (e.g., `"es"`, `"fr"`), but this field is not currently used by any KYC code path. The profile is accessible via `app/services/user_profile.py`.
+User profiles can store a `locale` field (e.g., `"es"`, `"fr"`), but this field is not currently used by any KYC code path. The profile is accessible via `app/services/profile.py`.
+<!-- NOTE: The ticket originally referenced app/services/user_profile.py which does not exist — the correct file is app/services/profile.py -->
 
 ---
 
@@ -251,6 +252,7 @@ kyc.ui.label.{component}.{field}      — UI label
 ```
 
 ### 4.4 New Service: `app/services/kyc_i18n.py`
+<!-- NOTE: app/services/kyc_i18n.py does not exist yet — new implementation required -->
 
 ```python
 class KycI18nService:
@@ -589,7 +591,7 @@ Response (200):
 
 ### 4.9 Integration Points
 
-**Questionnaire localization**: Modify `start_kyc_questionnaire` in `app/routers/kyc_cases.py` (line 625) to accept an optional `?lang=` parameter. Before returning the questionnaire to the user, pass it through `kyc_i18n_svc.localize_questionnaire()`.
+**Questionnaire localization**: Modify `start_kyc_questionnaire` in `app/routers/kyc_cases.py` (see line 625) to accept an optional `?lang=` parameter. Before returning the questionnaire to the user, pass it through `kyc_i18n_svc.localize_questionnaire()`.
 
 **Email notification localization**: Modify alert-sending code paths in KYC (case status transitions, decision notifications) to resolve the user's locale and call `kyc_i18n_svc.localize_email()` before `send_alert_email()`.
 
@@ -984,3 +986,21 @@ Translation values are stored as plain text and rendered by React JSX, which aut
 | `frontend/src/pages/admin/KycTranslationsPage.tsx` | **New** | Translation management UI |
 | `frontend/src/App.tsx` | Modify | Add `/admin/kyc/translations` route |
 | `frontend/e2e/kyc-i18n.spec.ts` | **New** | 24 E2E tests across sections 225-230 |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| i18n settings | `app/core/settings.py` | 1405-1409 | Exists |
+| Translations table | `app/core/settings.py` | 1404 | Exists (`translations_table_name`) |
+| `start_kyc_questionnaire()` | `app/routers/kyc_cases.py` | 625 | Exists |
+| `KycSignatureStatusOut` | `app/contracts/kyc_cases_contract.py` | 160 | Exists |
+| `write_alert()` | `app/services/alerts.py` | 355 | Exists |
+| `send_alert_email()` | `app/services/alerts.py` | 458 | Exists |
+| Alert email templates | `app/services/alert_email_templates.py` | -- | Exists |
+| Questionnaire repository | `app/services/questionnaires_repository.py` | -- | Exists |
+| Profile service | `app/services/profile.py` | -- | Exists (ticket incorrectly references `user_profile.py`) |
+| `app/services/kyc_i18n.py` | -- | -- | Does NOT exist — new implementation required |
+| `app/routers/kyc_i18n.py` | -- | -- | Does NOT exist — new router required |

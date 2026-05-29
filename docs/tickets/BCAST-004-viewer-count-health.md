@@ -8,6 +8,10 @@ Live broadcasts provide value only when the broadcaster understands their audien
 stream quality in real time. The current broadcast infrastructure (`app/routers/broadcast.py`,
 `app/services/broadcast_orchestrator.py`) manages the full session lifecycle (draft through
 stopped) and provisions playback URLs, but provides **zero observability** into:
+<!-- NOTE: This claim is NOW OUTDATED. Viewer count and health services exist:
+  `app/services/broadcast_viewers.py`, `app/services/broadcast_health.py`,
+  `frontend/src/pages/broadcast/ViewerCountBadge.tsx`, `StreamHealthIndicator.tsx`,
+  `frontend/e2e/broadcast-health.spec.ts` -->
 
 1. How many viewers are currently watching a live session.
 2. Whether the ingest stream is healthy (bitrate stability, dropped frames, connection state).
@@ -1483,3 +1487,23 @@ TableDef(
 "broadcast_health_reports_total"     # Counter: labels=[session_id, connection_quality]
 "broadcast_viewer_count_gauge"       # Gauge: labels=[session_id] (current active viewers)
 ```
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/services/broadcast_viewers.py` | — | EXISTS | Viewer count tracking service |
+| `app/services/broadcast_health.py` | — | EXISTS | Stream health metrics service |
+| `app/services/broadcast_sse.py` | — | EXISTS | SSE event streaming |
+| `app/routers/broadcast.py` | 505+ | EXISTS | Viewer join endpoint (`/sessions/{id}/viewers/join`) |
+| `app/core/settings.py` | 490-491 | EXISTS | `broadcast_viewers_table_name`, `broadcast_health_snapshots_table_name` |
+| `app/core/settings.py` | 498 | EXISTS | `broadcast_health_poll_interval_seconds` |
+| `app/core/tables.py` | 78-79 | EXISTS | `T.broadcast_viewers`, `T.broadcast_health_snapshots` |
+| `scripts/local-ddb-init.py` | 545-550 | EXISTS | BroadcastViewers, BroadcastHealthSnapshots tables |
+| `frontend/src/pages/broadcast/ViewerCountBadge.tsx` | — | EXISTS | Viewer count UI component |
+| `frontend/src/pages/broadcast/StreamHealthIndicator.tsx` | — | EXISTS | Stream health UI component |
+| `frontend/e2e/broadcast-health.spec.ts` | — | EXISTS | E2E tests for health metrics |
+| `app/main.py` | 396 | EXISTS | `broadcast_router` registered |
+| `app/metrics.py` | — | EXISTS | Prometheus-style metrics framework |

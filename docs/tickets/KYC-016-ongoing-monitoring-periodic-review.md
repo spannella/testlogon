@@ -13,7 +13,7 @@
 
 ### 1.1 The Gap
 
-The current KYC system is a one-time verification process. Once a user is approved (`status: "approved"` in `app/services/kyc_cases.py`), their verification is considered complete indefinitely — or until the retention purge deletes the case after `kyc_retention_approved_days` (default 365 days, configured in `app/core/settings.py`, line 1070). There is no mechanism for:
+The current KYC system is a one-time verification process. Once a user is approved (`status: "approved"` in `app/services/kyc_cases.py`), their verification is considered complete indefinitely — or until the retention purge deletes the case after `kyc_retention_approved_days` (default 365 days, see `app/core/settings.py:1070`). There is no mechanism for:
 
 1. **Periodic re-verification** based on risk tier — regulators require low-risk users to be reviewed every 3 years, high-risk users every 6 months.
 2. **Event-triggered review** — A user changes their country, makes a large transaction, or appears in an updated sanctions list, and the system should flag them for review.
@@ -118,11 +118,12 @@ Trigger Flow:
 
 ## 2. Current State Analysis
 
-### 2.1 KYC Case Approval (`app/services/kyc_cases.py`, line 534)
+### 2.1 KYC Case Approval (see `app/services/kyc_cases.py:534`)
 
 The `apply_admin_decision()` method transitions a case to `"approved"` or `"rejected"`. When a case is approved, there is no downstream scheduling of future reviews. The approval is final until the retention purge deletes the case.
 
 ### 2.2 Risk Scoring (KYC-008)
+<!-- NOTE: KYC-008 (Risk Scoring Engine) is a dependency — the risk scoring service does not exist yet and must be implemented first or in parallel. -->
 
 The risk scoring engine assigns a risk tier (low, medium, high, critical) to each case. This risk tier should determine the review frequency. The `risk_tier` field on the case review should be used as input to the review schedule.
 
@@ -131,6 +132,7 @@ The risk scoring engine assigns a risk tier (low, medium, high, critical) to eac
 The screening system checks users against sanctions and PEP lists at case submission time. There is no ongoing re-screening after approval. The screening service should be called in batch for re-screening.
 
 ### 2.4 KYC Tiers (KYC-009)
+<!-- NOTE: app/services/kyc_tiers.py does not exist yet — KYC-009 is a dependency that must be implemented first. -->
 
 The tier system supports `upgrade_tier()` and has no `downgrade_tier()` concept beyond admin override. Automatic downgrade on overdue review is a new behavior that uses the existing `upgrade_tier()` function with a lower tier value.
 
@@ -140,9 +142,9 @@ The notification system can dispatch alerts for tier changes and case events. Ne
 
 ### 2.6 Background Tasks (`app/main.py`)
 
-Background tasks are registered via `app.add_event_handler("startup", ...)` (lines 306-365). The review checker and re-screening jobs should follow this pattern.
+Background tasks are registered via `app.add_event_handler("startup", ...)` (see `app/main.py:358-379`, `466-469`). The review checker and re-screening jobs should follow this pattern.
 
-### 2.7 Retention Purge (`app/services/kyc_cases.py`, line 747)
+### 2.7 Retention Purge (see `app/services/kyc_cases.py:747`)
 
 The `run_retention_purge()` method runs on demand (triggered by admin via `POST /v1/kyc/cases/admin/purge/run`). The review checker should be a similar on-demand or scheduled operation.
 
@@ -151,6 +153,7 @@ The `run_retention_purge()` method runs on demand (triggered by admin via `POST 
 ## 3. Technical Design
 
 ### 3.1 New DDB Table: `kyc_review_schedule`
+<!-- NOTE: kyc_review_schedule table does not exist yet in scripts/local-ddb-init.py — new table definition required -->
 
 **Table definition for `scripts/local-ddb-init.py`**:
 
@@ -171,6 +174,7 @@ TableDef(
 ```
 
 ### 3.2 Settings (`app/core/settings.py`)
+<!-- NOTE: These settings do not exist yet — add near existing KYC settings at line 1072 -->
 
 ```python
 kyc_review_schedule_table_name: str = os.environ.get("KYC_REVIEW_SCHEDULE_TABLE_NAME", "kyc_review_schedule")
@@ -199,6 +203,7 @@ REVIEW_FREQUENCY_DAYS = {
 ```
 
 ### 3.5 New Service: `app/services/kyc_monitoring.py`
+<!-- NOTE: app/services/kyc_monitoring.py does not exist yet — new implementation required -->
 
 ```python
 """KYC ongoing monitoring — periodic review scheduling and trigger events."""
@@ -212,7 +217,7 @@ from boto3.dynamodb.conditions import Key
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
-from app.services.alerts import audit_event, write_alert
+from app.services.alerts import audit_event, write_alert  # see app/services/alerts.py:695 and :355
 
 REVIEW_FREQUENCY_DAYS = {
     "low": 1095,
@@ -495,7 +500,7 @@ def _enter_grace_period(user_sub: str, schedule: dict) -> None:
 def _auto_downgrade(user_sub: str, schedule: dict) -> None:
     """Automatically downgrade user's tier due to overdue review."""
     ts = now_ts()
-    from app.services.kyc_tiers import get_user_kyc_tier, upgrade_tier
+    from app.services.kyc_tiers import get_user_kyc_tier, upgrade_tier  # NOTE: kyc_tiers.py does not exist yet — KYC-009 dependency
 
     current_tier = get_user_kyc_tier(user_sub)
     if current_tier <= 0:
@@ -587,7 +592,7 @@ def get_monitoring_dashboard(*, status_filter: str | None = None) -> dict[str, A
 
 ### 3.6 Integration Points
 
-**After KYC case approval** (`app/routers/kyc_cases.py`, `_admin_decide_case`):
+**After KYC case approval** (see `app/routers/kyc_cases.py:1099` — `_admin_decide_case`):
 
 ```python
 if decision == "approved":
@@ -601,7 +606,7 @@ if decision == "approved":
     )
 ```
 
-**After profile country/name change** (`app/routers/profile.py`):
+**After profile country/name change** (see `app/routers/profile.py`):
 
 ```python
 # In profile update handler, after saving:
@@ -620,7 +625,7 @@ if "first_name" in changes or "last_name" in changes:
     )
 ```
 
-**After large transaction** (`app/routers/billing.py`):
+**After large transaction** (see `app/routers/billing.py`):
 
 ```python
 # In payment processing, after successful payment:
@@ -690,12 +695,13 @@ router = APIRouter(prefix="/v1/kyc/monitoring", tags=["kyc-monitoring"])
 |--------|------|------|-------------|
 | `GET` | `/schedule` | `require_ui_session` | Get user's own review schedule |
 | `GET` | `/triggers` | `require_ui_session` | List user's trigger events |
-| `GET` | `/admin/dashboard` | `require_root_session` | Admin monitoring dashboard |
-| `POST` | `/admin/review-check` | `require_root_session` | Run review checker manually |
-| `POST` | `/admin/rescreening` | `require_root_session` | Run re-screening manually |
-| `POST` | `/admin/{user_sub}/trigger` | `require_root_session` | Admin manually triggers review |
-| `POST` | `/admin/{user_sub}/complete-review` | `require_root_session` | Mark review as completed |
-| `GET` | `/admin/{user_sub}/schedule` | `require_root_session` | Get any user's schedule |
+| `GET` | `/admin/dashboard` | `require_ui_session` + admin role check | Admin monitoring dashboard |
+| `POST` | `/admin/review-check` | `require_ui_session` + admin role check | Run review checker manually |
+| `POST` | `/admin/rescreening` | `require_ui_session` + admin role check | Run re-screening manually |
+| `POST` | `/admin/{user_sub}/trigger` | `require_ui_session` + admin role check | Admin manually triggers review |
+| `POST` | `/admin/{user_sub}/complete-review` | `require_ui_session` + admin role check | Mark review as completed |
+| `GET` | `/admin/{user_sub}/schedule` | `require_ui_session` + admin role check | Get any user's schedule |
+<!-- NOTE: Existing KYC admin endpoints use require_ui_session + manual role check, not require_root_session. Follow the same pattern (see app/routers/kyc_cases.py:1000-1003). -->
 
 ```python
 @router.get("/schedule")
@@ -946,3 +952,28 @@ test.beforeAll(async ({ browser }) => {
 
 - Remove `app/routers/kyc_monitoring.py` from `app/main.py`.
 - Schedules and trigger events remain in DDB but are inert without the router and background jobs.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `apply_admin_decision()` | `app/services/kyc_cases.py` | 534 | Exists |
+| `run_retention_purge()` | `app/services/kyc_cases.py` | 747 | Exists |
+| `_admin_decide_case()` | `app/routers/kyc_cases.py` | 1099 | Exists |
+| `kyc_retention_approved_days` | `app/core/settings.py` | 1070 | Exists |
+| `audit_event()` | `app/services/alerts.py` | 695 | Exists |
+| `write_alert()` | `app/services/alerts.py` | 355 | Exists |
+| Startup event handlers | `app/main.py` | 358-379, 466-469 | Exists |
+| Profile router | `app/routers/profile.py` | -- | Exists |
+| Billing router | `app/routers/billing.py` | -- | Exists |
+| KYC admin auth pattern | `app/routers/kyc_cases.py` | 1000-1003 | Exists — uses `require_ui_session` + role check |
+| `kyc_review_schedule_table_name` | -- | -- | Does NOT exist — new setting required |
+| `kyc_review_schedule` DDB table | -- | -- | Does NOT exist — new table required |
+| `app/services/kyc_monitoring.py` | -- | -- | Does NOT exist — new implementation required |
+| `app/services/kyc_monitoring_scheduler.py` | -- | -- | Does NOT exist — new implementation required |
+| `app/routers/kyc_monitoring.py` | -- | -- | Does NOT exist — new implementation required |
+| `app/services/kyc_tiers.py` (KYC-009) | -- | -- | Does NOT exist — dependency on KYC-009 |
+| `frontend/src/pages/admin/KycMonitoringDashboard.tsx` | -- | -- | Does NOT exist — new implementation required |
+| `frontend/src/api/endpoints/kyc-monitoring.ts` | -- | -- | Does NOT exist — new file required |

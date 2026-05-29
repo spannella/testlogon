@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: High  
 **Estimated effort**: 8-10 days  
-**Dependencies**: ADS-001 (advertiser accounts), ADS-004 (ad serving engine), ADS-007 (ad billing)
+**Dependencies**: ADS-001 (advertiser accounts), ADS-004 (ad serving engine), ADS-007 (ad billing) — all sibling tickets, not yet implemented
+<!-- NOTE: All ADS dependencies are sibling tickets. Existing: ad_placement.py (record_ad_impression), affiliate_links.py (bot detection patterns), billing_shared.py. -->
 
 ---
 
@@ -600,13 +601,13 @@ def record_ad_impression(
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/v1/admin/ads/fraud/events` | `require_admin_session` | List flagged fraud events (paginated, by date) |
-| GET | `/v1/admin/ads/fraud/events/{event_id}` | `require_admin_session` | Get fraud event details |
-| GET | `/v1/admin/ads/fraud/accounts` | `require_admin_session` | List accounts with risk scores |
-| GET | `/v1/admin/ads/fraud/accounts/{id}` | `require_admin_session` | Get account fraud details |
-| POST | `/v1/admin/ads/fraud/accounts/{id}/suspend` | `require_admin_session` | Manually suspend account |
-| POST | `/v1/admin/ads/fraud/accounts/{id}/unsuspend` | `require_admin_session` | Unsuspend account |
-| GET | `/v1/admin/ads/fraud/summary` | `require_admin_session` | Fraud summary stats |
+| GET | `/v1/admin/ads/fraud/events` | `require_admin_or_root` | List flagged fraud events (paginated, by date) |
+| GET | `/v1/admin/ads/fraud/events/{event_id}` | `require_admin_or_root` | Get fraud event details |
+| GET | `/v1/admin/ads/fraud/accounts` | `require_admin_or_root` | List accounts with risk scores |
+| GET | `/v1/admin/ads/fraud/accounts/{id}` | `require_admin_or_root` | Get account fraud details |
+| POST | `/v1/admin/ads/fraud/accounts/{id}/suspend` | `require_admin_or_root` | Manually suspend account |
+| POST | `/v1/admin/ads/fraud/accounts/{id}/unsuspend` | `require_admin_or_root` | Unsuspend account |
+| GET | `/v1/admin/ads/fraud/summary` | `require_admin_or_root` | Fraud summary stats |
 
 ### 3.7 Pydantic Models
 
@@ -720,7 +721,7 @@ export const getFraudSummary = () =>
 
 ### 5.3 Admin Access
 
-- All fraud endpoints require `require_admin_session` (role >= ADMIN).
+- All fraud endpoints require `require_admin_or_root` (role >= ADMIN).
 - Account suspension is logged with actor and timestamp.
 - Unsuspension requires explicit admin action (no auto-unsuspend).
 
@@ -830,3 +831,16 @@ export const getFraudSummary = () =>
 9. Admin can manually suspend/unsuspend accounts
 10. Accounts with >20% fraud rate are auto-suspended
 11. All 15 E2E tests pass in `frontend/e2e/ad-fraud.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ad_placement.py` | 222 | Existing `record_ad_impression` — currently no fraud validation |
+| `app/services/affiliate_links.py` | — | Existing bot detection patterns (reference for fraud detection heuristics) |
+| `app/services/billing_shared.py` | — | Existing billing ledger — for credit reversal on fraud detection |
+| `app/auth/policy.py` | 67 | `require_admin_or_root` — for admin fraud review endpoints |
+| `app/services/ad_fraud_detection.py` | — | Does not exist yet — new implementation required |
+| `ad_fraud_events` DDB table | — | Does not exist yet — new implementation required |

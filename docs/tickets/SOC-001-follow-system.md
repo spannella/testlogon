@@ -1912,3 +1912,70 @@ Count Side Effects:
 - **SOC-003**: User search and discovery (uses follower counts for ranking)
 - **SOC-004**: Notification expansion (emits `new_follower` alerts)
 - **SOC-005**: Public profile page (displays counts, follow button)
+
+---
+
+## Codebase References
+
+### Backend — Services
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `social.py` (399 lines) | `app/services/social.py` | whole file | **Exists** — already implements follow/unfollow with counts, mutual detection, block enforcement |
+| `follow_user()` | `app/services/social.py` | 31 | **Verified** — returns `ok`, `status`, `follower_count`, `following_count` |
+| `unfollow_user()` | `app/services/social.py` | 102 | **Verified** |
+| `get_followers()` (paginated) | `app/services/social.py` | 142 | **Verified** |
+| `get_following()` (paginated) | `app/services/social.py` | 167 | **Verified** |
+| `get_follow_counts()` | `app/services/social.py` | 189 | **Verified** — reads `follower_count` and `following_count` from profiles table |
+| `get_follow_status()` | `app/services/social.py` | 206 | **Verified** |
+| `get_mutual_followers()` | `app/services/social.py` | 225 | **Verified** |
+| `recompute_follow_counts()` | `app/services/social.py` | 296 | **Verified** |
+| `PROFILE_FIELDS` tuple | `app/services/profile.py` | 16 | **Verified** |
+| `profile_discoverability.py` | `app/services/profile_discoverability.py` | 80 lines | **Exists** — `DiscoverabilityState` enum at line 10 |
+
+### Backend — Routers
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| Legacy `POST /social/unfollow` | `app/routers/newsfeed.py` | 2810-2813 | **Verified** (ticket says lines 2657-2688 — **INCORRECT**, actual lines are 2810-2821) |
+| Legacy `POST /social/refollow` | `app/routers/newsfeed.py` | 2816-2821 | **Verified** — now delegates to `app.services.social.follow_user` |
+| `UnfollowRequest` model | `app/routers/newsfeed.py` | 1478 | **Verified** (ticket says line 1395 — **INCORRECT**, actual is 1478) |
+| `is_following()` helper | `app/routers/newsfeed.py` | 2250 | **Verified** (ticket says line 2131 — **INCORRECT**, actual is 2250; now delegates to `social.get_follow_status`) |
+| `social_router` (dedicated) | `app/routers/social.py` | 292 lines | **Exists** — full follow system router with all proposed endpoints |
+| `social_router` registration | `app/main.py` | 71, 393 | **Verified** |
+| `follow_user()` endpoint | `app/routers/social.py` | 140 | **Verified** — `POST /ui/social/follow` |
+| `unfollow_user()` endpoint | `app/routers/social.py` | 159 | **Verified** — `POST /ui/social/unfollow` |
+| `get_followers()` endpoint | `app/routers/social.py` | 166 | **Verified** — `GET /ui/social/{user_id}/followers` |
+| `get_following()` endpoint | `app/routers/social.py` | 184 | **Verified** — `GET /ui/social/{user_id}/following` |
+| `get_follow_counts()` endpoint | `app/routers/social.py` | 202 | **Verified** — `GET /ui/social/{user_id}/counts` |
+| `get_follow_status()` endpoint | `app/routers/social.py` | 211 | **Verified** — `GET /ui/social/status/{target_user_id}` |
+| `get_mutual_followers()` endpoint | `app/routers/social.py` | 222 | **Verified** — `GET /ui/social/mutual/{user_id}` |
+| `block_user()` endpoint | `app/routers/social.py` | 246 | **Verified** |
+| `unblock_user()` endpoint | `app/routers/social.py` | 261 | **Verified** |
+| `get_blocked_users()` endpoint | `app/routers/social.py` | 268 | **Verified** |
+| `get_block_status()` endpoint | `app/routers/social.py` | 286 | **Verified** |
+
+### Frontend
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `follow()` / `unfollow()` | `frontend/src/api/endpoints/newsfeed.ts` | 79-83 | **Verified** (ticket says lines 66-70 — **INCORRECT**, actual is 79-83) |
+| `PublicUserProfilePage.tsx` | `frontend/src/pages/profile/PublicUserProfilePage.tsx` | 340 lines | **Exists** |
+| Route `/u/:identifier` | `frontend/src/App.tsx` | 124 | **Verified** |
+
+### DynamoDB (`scripts/local-ddb-init.py`)
+
+| Reference | Line | Status |
+|-----------|------|--------|
+| `app_single_table` definition | 222 | **Verified** (ticket says line 217 — **INCORRECT**, actual is 222) |
+| GSI5 (follower reverse index) | 231 | **Verified** — `GSI5PK` / `GSI5SK` already defined |
+| `profiles` table | 61 | **Verified** |
+
+### Corrections
+
+1. **Line numbers in section 2.1**: Ticket says follow endpoints are at lines 2657-2688 in `newsfeed.py`. Actual locations: `unfollow` at line 2810, `refollow` at line 2816.
+2. **`UnfollowRequest` line**: Ticket says line 1395, actual is line 1478.
+3. **`is_following()` line**: Ticket says line 2131, actual is line 2250. Also, this function now delegates to `app.services.social.get_follow_status` rather than doing a direct DDB read.
+4. **`app_single_table` line**: Ticket says line 217, actual is line 222.
+5. **`follow()` / `unfollow()` frontend lines**: Ticket says lines 66-70, actual is 79-83.
+6. **Much of this ticket is ALREADY IMPLEMENTED**: The `app/routers/social.py` (292 lines) and `app/services/social.py` (399 lines) files provide the complete follow system with followers list, following list, counts, mutual detection, and block enforcement. The legacy newsfeed endpoints now delegate to the social service. The ticket's scope may need to be re-evaluated to focus only on remaining gaps (frontend UI components, E2E tests).

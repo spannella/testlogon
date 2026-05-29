@@ -58,24 +58,30 @@ Instagram, Snapchat, and YouTube have demonstrated that 24-hour stories drive si
 
 ### 3.1 Newsfeed Infrastructure
 
-All newsfeed logic lives in `app/routers/newsfeed.py` (~4998 lines). <!-- CORRECTED: was ~5000, actually 4998 lines --> Posts use the `app_single_table` DynamoDB table with `PK=POST#{post_id}`, `SK=META`. The feed index uses `GSI1PK=FEED#{user_id}`. <!-- VERIFIED: app_single_table defined in local-ddb-init.py:217 with GSI1-GSI5 -->
+All newsfeed logic lives in `app/routers/newsfeed.py` (~5954 lines). <!-- CORRECTED: was ~5000, actually 5954 lines --> Posts use the `app_single_table` DynamoDB table with `PK=POST#{post_id}`, `SK=META`. The feed index uses `GSI1PK=FEED#{user_id}`. <!-- VERIFIED: app_single_table defined in local-ddb-init.py:217 with GSI1-GSI5 -->
 
 Stories will use the same `app_single_table` but with a distinct entity type (`Story`) and separate GSI partition to avoid mixing ephemeral and permanent content in query results.
 
 ### 3.2 Media Upload
 
-The existing presign upload flow handles image uploads to S3 with content-type validation. The upload endpoint is `POST /ui/newsfeed/uploads/image` (see `async def upload_image` at newsfeed.py:2621). <!-- CORRECTED: was POST /ui/newsfeed/presign-upload, actually POST /ui/newsfeed/uploads/image at newsfeed.py:2620-2621 --> Stories will reuse this mechanism for image uploads and extend it for short video clips (up to 60 seconds, capped at 50MB).
+The existing presign upload flow handles image uploads to S3 with content-type validation. The upload endpoint is `POST /ui/newsfeed/uploads/image` (see `async def upload_image` at newsfeed.py:2737). <!-- VERIFIED: app/routers/newsfeed.py:2737 — upload_image --> Stories will reuse this mechanism for image uploads and extend it for short video clips (up to 60 seconds, capped at 50MB).
 
 ### 3.3 Following System
 
-`app/services/social.py` (SOC-001) provides `get_following(user_id, *, limit=20, cursor=None)` which returns a tuple of `(List[Dict], Optional[str])` -- a list of following records and a pagination cursor. <!-- CORRECTED: was app/services/following.py with get_followed_user_ids(user_id), actually app/services/social.py with get_following() (social.py:166-184). The function returns paginated following items, NOT a flat list of user IDs. Callers must extract user IDs from the returned dicts and handle pagination. -->
+`app/services/social.py` (SOC-001) provides `get_following(user_id, *, limit=20, cursor=None)` (line 167) which returns a tuple of `(List[Dict], Optional[str])` -- a list of following records and a pagination cursor. <!-- VERIFIED: app/services/social.py:167 — get_following -->
 
 ### 3.4 Gaps
 
-1. No DynamoDB entity type for ephemeral content with TTL-based expiry
-2. No story bar or full-screen viewer components in the frontend
-3. No view tracking mechanism for individual content items
-4. No "highlights" concept for promoting ephemeral content to permanent
+<!-- NOTE: ALL GAPS HAVE BEEN CLOSED — Stories feature is FULLY IMPLEMENTED -->
+<!-- Backend: app/services/stories.py (create_story:39, get_story:83, record_view:137, highlight_story:252, etc.) -->
+<!-- Backend: app/routers/stories.py (full router with 13 endpoints, registered in main.py:443) -->
+<!-- Frontend: frontend/src/pages/feed/StoryBar.tsx, StoryComposer.tsx, StoryViewer.tsx, StoryHighlights.tsx -->
+<!-- Settings: app/core/settings.py:1262 — stories_enabled -->
+
+1. ~~No DynamoDB entity type for ephemeral content with TTL-based expiry~~ (DONE: `app/services/stories.py:39`)
+2. ~~No story bar or full-screen viewer components in the frontend~~ (DONE: `StoryBar.tsx`, `StoryViewer.tsx`)
+3. ~~No view tracking mechanism for individual content items~~ (DONE: `app/services/stories.py:137` — `record_view`)
+4. ~~No "highlights" concept for promoting ephemeral content to permanent~~ (DONE: `app/services/stories.py:252` — `highlight_story`)
 
 ---
 
@@ -888,21 +894,50 @@ story_max_per_day: int = int(os.environ.get("STORY_MAX_PER_DAY", "30"))
 
 ---
 
-## Appendix: Codebase Citations
+## Codebase References
 
+> **NOTE**: The Stories feature is FULLY IMPLEMENTED. All backend services, router, and frontend components exist.
+
+### Backend Services
+| File | Key Functions | Lines |
+|------|--------------|-------|
+| `app/services/stories.py` | `create_story`, `get_story`, `get_user_stories`, `delete_story`, `count_stories_today`, `record_view`, `has_viewed`, `get_story_viewers`, `get_story_bar`, `highlight_story`, `unhighlight_story`, `create_highlight_group`, `delete_highlight_group`, `get_user_highlights` | 39, 83, 89, 106, 117, 137, 169, 175, 195, 252, 276, 293, 310, 320 |
+| `app/routers/stories.py` | Full CRUD + view tracking + highlights (13 endpoints) | 67-238 |
+| `app/services/social.py` | `get_following` (used for story bar query) | 167 |
+
+### Configuration
+| File | Setting | Line |
+|------|---------|------|
+| `app/core/settings.py` | `stories_enabled` | 1262 |
+
+### Registration
+| File | Registration | Line |
+|------|-------------|------|
+| `app/main.py` | `app.include_router(stories_router)` | 443 |
+
+### Frontend
+| File | Purpose |
+|------|---------|
+| `frontend/src/pages/feed/StoryBar.tsx` | Horizontal story bar above feed |
+| `frontend/src/pages/feed/StoryComposer.tsx` | Story creation UI |
+| `frontend/src/pages/feed/StoryViewer.tsx` | Full-screen story viewer |
+| `frontend/src/pages/feed/StoryHighlights.tsx` | Highlights management |
+
+### DynamoDB
+| Table | Usage |
+|-------|-------|
+| `app_single_table` | Story items (distinct entity type) — defined at `scripts/local-ddb-init.py:222` |
+
+### Existing References
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| Newsfeed router file | `app/routers/newsfeed.py` | 4998 lines | VERIFIED (ticket said ~5000) |
-| `app_single_table` DDB table | `scripts/local-ddb-init.py` | 217 | VERIFIED: PK=pk, SK=sk, GSI1-GSI5 + GSI_SCHEDULE_DUE |
-| Feed index uses `GSI1PK=FEED#{user_id}` | `app/routers/newsfeed.py` | passim | VERIFIED |
-| Image upload endpoint | `app/routers/newsfeed.py` | 2620-2621 | VERIFIED: `@router.post("/uploads/image")` / `async def upload_image(...)` (ticket said `/ui/newsfeed/presign-upload` -- CORRECTED) |
-| Following service | `app/services/social.py` | 166-184 | VERIFIED: `get_following(user_id, *, limit=20, cursor=None) -> Tuple[List[Dict], Optional[str]]` (ticket said `app/services/following.py` with `get_followed_user_ids` -- CORRECTED) |
-| `app/services/following.py` existence | N/A | N/A | DOES NOT EXIST (CORRECTED to `app/services/social.py`) |
-| `app/core/settings.py` | `app/core/settings.py` | 1-1197 | VERIFIED: frozen dataclass; no `STORIES_*` settings exist yet |
-| `require_ui_session` auth dependency | `app/auth/deps.py` | 184+ | VERIFIED: `async def get_authenticated_user(request: Request) -> AuthenticatedUser` |
+| Newsfeed router file | `app/routers/newsfeed.py` | 5954 lines | VERIFIED |
+| `app_single_table` DDB table | `scripts/local-ddb-init.py` | 222 | VERIFIED: PK=pk, SK=sk, GSI1-GSI5 |
+| Image upload endpoint | `app/routers/newsfeed.py` | 2737 | VERIFIED: `async def upload_image(...)` |
+| Following service | `app/services/social.py` | 167 | VERIFIED: `get_following(user_id, *, limit=20, cursor=None)` |
 
-### Key Corrections Summary
-
+### Key Corrections from Original
 1. **`app/services/following.py` does not exist** -- following logic is in `app/services/social.py`.
-2. **`get_followed_user_ids(user_id)` does not exist** -- the actual function is `get_following(user_id, *, limit=20, cursor=None)` at social.py:166, which returns `(List[Dict], Optional[str])` (paginated following items + cursor, NOT a flat list of user IDs).
-3. **`POST /ui/newsfeed/presign-upload` does not exist** -- the actual upload endpoint is `POST /ui/newsfeed/uploads/image` at newsfeed.py:2620.
+2. **`get_followed_user_ids(user_id)` does not exist** -- the actual function is `get_following(user_id, *, limit=20, cursor=None)` at social.py:167.
+3. **`POST /ui/newsfeed/presign-upload` does not exist** -- the actual upload endpoint is `POST /ui/newsfeed/uploads/image` at newsfeed.py:2737.
+4. **Stories settings DO exist** -- `stories_enabled` at settings.py:1262 (original said "no STORIES_* settings exist yet").

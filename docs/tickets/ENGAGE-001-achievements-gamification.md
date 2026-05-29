@@ -55,7 +55,7 @@ Competitor platforms use achievement systems extensively: Twitch has channel-poi
 
 ### 2.1 Alert System (`app/routers/alerts.py`, `app/services/alerts.py`) <!-- VERIFIED: app/services/alerts.py exists -->
 
-The alert system already supports structured event dispatch, SSE delivery, and per-type preferences. The `ALERT_EVENT_TYPES` list in `app/services/alerts.py` (line 46) defines supported alert types: <!-- VERIFIED: app/services/alerts.py:46 -->
+The alert system already supports structured event dispatch, SSE delivery, and per-type preferences. The `ALERT_EVENT_TYPES` list in `app/services/alerts.py` (line 133) defines supported alert types: <!-- CORRECTED: was line 46, actually line 133 -->
 
 ```python
 ALERT_EVENT_TYPES: List[str] = [
@@ -73,7 +73,7 @@ ALERT_EVENT_TYPES: List[str] = [
 ]
 ```
 
-Achievement unlock notifications will be added as a new event type (`achievement_unlocked`) to this list. The existing SSE infrastructure in `app/services/alerts.py` (lines 61-96) provides real-time delivery via `sse_publish_alert()`: <!-- CORRECTED: was "lines 61-95", actually lines 61-96 (sse_publish_alert at line 84) -->
+Achievement unlock notifications will be added as a new event type (`achievement_unlocked`) to this list. The existing SSE infrastructure in `app/services/alerts.py` provides real-time delivery via `sse_publish_alert()` (see `app/services/alerts.py:173`): <!-- CORRECTED: sse_publish_alert is at line 173, not 84 -->
 
 ```python
 def sse_publish_alert(user_sub: str, alert_obj: Dict[str, Any]) -> None:
@@ -90,7 +90,7 @@ def sse_publish_alert(user_sub: str, alert_obj: Dict[str, Any]) -> None:
         sse_unsubscribe(user_sub, q)
 ```
 
-The `audit_event` function (line 570) handles writing alert rows and dispatching to channels. The unread count sentinel in `app/services/notification_unread.py` (line 26) uses atomic DynamoDB increments: <!-- VERIFIED: app/services/alerts.py:570 audit_event, app/services/notification_unread.py:26 increment_unread_count -->
+The `audit_event` function (see `app/services/alerts.py:695`) handles writing alert rows and dispatching to channels. The unread count sentinel in `app/services/notification_unread.py` (line 26) uses atomic DynamoDB increments: <!-- CORRECTED: audit_event is at line 695, not 570. increment_unread_count at line 26 is correct. -->
 
 ```python
 def increment_unread_count(user_sub: str, delta: int = 1) -> int:
@@ -220,11 +220,11 @@ The DM messaging system serializes messages via `_message_out_from_item()` (line
 
 ### 2.7 Newsfeed Post Actions (`app/routers/newsfeed.py`)
 
-The newsfeed router handles post creation, commenting, tipping, and reactions. Each of these actions is a potential achievement trigger. The post creation endpoint (line 2975) writes the post item and feed reference: <!-- CORRECTED: was "line ~1400", actually line 2975 -->
+The newsfeed router handles post creation, commenting, tipping, and reactions. Each of these actions is a potential achievement trigger. The post creation endpoint (see `app/routers/newsfeed.py:3013`) writes the post item and feed reference: <!-- CORRECTED: was "line ~1400", then corrected to 2975, actually line 3013. Signature is `def create_post(req: CreatePostRequest, user_id: UserIdDep)`, not `async def create_post(...ctx: dict = Depends(require_ui_session))` -->
 
 ```python
 @router.post("/posts", status_code=200)
-async def create_post(req: CreatePostRequest, ctx: dict = Depends(require_ui_session)):
+def create_post(req: CreatePostRequest, user_id: UserIdDep):  # NOTE: not async, uses UserIdDep not Depends(require_ui_session)
     user_id = ctx["user_sub"]
     post_id = f"p_{uuid4().hex}"
     # ... post creation logic ...
@@ -704,7 +704,7 @@ def _emit_achievement_alert(
         },
     }
 
-    # Persist to alerts table <!-- CORRECTED: write_alert actual signature is write_alert(user_sub, *, event, outcome, title, details) at line 266, not write_alert(user_sub, alert_obj). Must use keyword args. -->
+    # Persist to alerts table <!-- CORRECTED: write_alert actual signature is write_alert(user_sub, *, event, outcome, title, details) at line 355, not 266. Must use keyword args. -->
     from app.services.alerts import write_alert
     write_alert(user_sub, event="achievement_unlocked", outcome="success", title=defn.get("label", ""), details=alert_obj.get("data", {}))
 
@@ -865,7 +865,7 @@ def _invalidate_badge_cache(user_sub: str) -> None:
         _BADGE_CACHE.pop(user_sub, None)
 ```
 
-### 3.7 Integration Points <!-- VERIFIED: create_post at newsfeed.py:2975, transition_session_status at broadcast_store.py:326, _message_out_from_item at messaging.py:3766 -->
+### 3.7 Integration Points <!-- CORRECTED: create_post at newsfeed.py:3013 (not 2975), transition_session_status at broadcast_store.py:336 (not 326), _message_out_from_item at messaging.py:3766 (correct) -->
 
 Achievement progress must be advanced at the point of action. Key integration points with existing code:
 
@@ -1276,7 +1276,7 @@ POST /ui/achievements/display                 — Set which badges to display (m
 
 **GET /ui/achievements** -- List the authenticated user's unlocked achievements.
 
-Auth: `Depends(require_ui_session)`
+Auth: `Depends(require_ui_session)` (see `app/services/sessions.py:283`)
 
 Query params:
 - `displayed`: Optional[bool] -- filter to only displayed badges
@@ -1501,7 +1501,7 @@ Response (200):
 ### 5.2 API Endpoints (`frontend/src/api/endpoints/achievements.ts`)
 
 ```typescript
-import client from "../client";
+import { api } from "@/api/client";  // NOTE: codebase uses named `api` export, not default `client` import
 
 // Types
 export interface AchievementDefinition {
@@ -1567,31 +1567,31 @@ export interface BadgeSummary {
 
 // API calls
 export const getMyAchievements = async (params?: { displayed?: boolean; category?: string }) =>
-  client.get<{ achievements: UserAchievement[]; total_points: number; achievement_count: number }>(
+  api.get<{ achievements: UserAchievement[]; total_points: number; achievement_count: number }>(
     "/ui/achievements", { params }
   ).then(r => r.data);
 
 export const getAchievementProgress = async () =>
-  client.get<{ progress: AchievementProgress[] }>("/ui/achievements/progress").then(r => r.data);
+  api.get<{ progress: AchievementProgress[] }>("/ui/achievements/progress").then(r => r.data);
 
 export const getProgressForMetric = async (metricKey: string) =>
-  client.get<AchievementProgress>(`/ui/achievements/progress/${metricKey}`).then(r => r.data);
+  api.get<AchievementProgress>(`/ui/achievements/progress/${metricKey}`).then(r => r.data);
 
 export const getUserAchievements = async (userSub: string) =>
-  client.get<{ user_sub: string; display_badges: BadgeSummary[]; total_points: number }>(
+  api.get<{ user_sub: string; display_badges: BadgeSummary[]; total_points: number }>(
     `/ui/users/${userSub}/achievements`
   ).then(r => r.data);
 
 export const setDisplayBadges = async (achievementIds: string[]) =>
-  client.post("/ui/achievements/display", { achievement_ids: achievementIds }).then(r => r.data);
+  api.post("/ui/achievements/display", { achievement_ids: achievementIds }).then(r => r.data);
 
 export const getLeaderboard = async (params: { period: string; limit?: number; cursor?: string }) =>
-  client.get<{ entries: LeaderboardEntry[]; next_cursor?: string; period: string }>(
+  api.get<{ entries: LeaderboardEntry[]; next_cursor?: string; period: string }>(
     "/ui/leaderboards", { params }
   ).then(r => r.data);
 
 export const getMyRank = async (period: string) =>
-  client.get<LeaderboardEntry & { period: string }>("/ui/leaderboards/me", { params: { period } }).then(r => r.data);
+  api.get<LeaderboardEntry & { period: string }>("/ui/leaderboards/me", { params: { period } }).then(r => r.data);
 ```
 
 ### 5.3 AchievementsPage Component
@@ -2064,6 +2064,47 @@ const AchievementsPage = lazy(() => import("./pages/achievements/AchievementsPag
 Feature flag: `ACHIEVEMENTS_ENABLED` (default `false`). All achievement progress writes and UI components are gated behind this flag. The feature flag is checked in `_achievements_enabled()` at the top of `advance_progress` and `update_streak`, and in the frontend via a feature flag check before rendering the Achievements sidebar link and page.
 
 ```python
-# app/core/settings.py addition
-achievements_enabled: bool = Field(default=False, description="Enable achievements and gamification system")
+# app/core/settings.py — already exists at line 1444:
+achievements_enabled: bool = os.environ.get("ACHIEVEMENTS_ENABLED", "0") not in ("0", "false", "False")
+# Also: achievements_table_name, user_achievements_table_name, user_achievement_progress_table_name,
+#        achievement_leaderboard_table_name (lines 1445-1448)
 ```
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | Status |
+|-----|------|---------|--------|
+| `ALERT_EVENT_TYPES` | `app/services/alerts.py` | 133 | VERIFIED (ticket said 46) |
+| `sse_publish_alert` | `app/services/alerts.py` | 173 | VERIFIED (ticket said 84) |
+| `audit_event` | `app/services/alerts.py` | 695 | VERIFIED (ticket said 570) |
+| `write_alert` | `app/services/alerts.py` | 355 | VERIFIED (ticket said 266) |
+| `increment_unread_count` | `app/services/notification_unread.py` | 26 | VERIFIED |
+| `broadcast_tip_goals.py` | `app/services/broadcast_tip_goals.py` | exists | VERIFIED |
+| `create_goal` | `app/services/broadcast_tip_goals.py` | 20 | VERIFIED |
+| `advance_goal_progress` | `app/services/broadcast_tip_goals.py` | 98 | VERIFIED |
+| SSE event dispatch | `app/services/broadcast_tip_goals.py` | 164 | VERIFIED |
+| ProfilePage | `frontend/src/pages/settings/ProfilePage.tsx` | exists | VERIFIED |
+| Profile `profileQuery` | `frontend/src/pages/settings/Profile.tsx` | 59 | VERIFIED |
+| `SOCIAL_ALERT_TYPES` | `app/services/social_alerts.py` | 32 | VERIFIED |
+| `_is_alert_type_enabled` | `app/services/social_alerts.py` | 64 | VERIFIED |
+| `_chat_msg_out` | `app/services/broadcast_chat_store.py` | 344 | VERIFIED |
+| `_message_out_from_item` | `app/routers/messaging.py` | 3766 | VERIFIED |
+| `create_post` | `app/routers/newsfeed.py` | 3013 | VERIFIED (ticket said 2975; signature uses `UserIdDep`, not `Depends(require_ui_session)`) |
+| `transition_session_status` | `app/services/broadcast_store.py` | 336 | VERIFIED (ticket said 326) |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED (NOT in app/auth/deps.py) |
+| Achievement settings | `app/core/settings.py` | 1444-1448 | VERIFIED: `achievements_enabled` + 4 table names |
+| Achievement table handles | `app/core/tables.py` | 115-118, 239-242 | VERIFIED: achievements, user_achievements, user_achievement_progress, achievement_leaderboard |
+| Achievement DDB tables | `scripts/local-ddb-init.py` | 1012-1039 | VERIFIED: 4 tables with GSIs |
+| Achievement router registration | `app/main.py` | 159, 450 | VERIFIED |
+| Backend service: progress | `app/services/achievement_progress.py` | exists (11960 bytes) | VERIFIED |
+| Backend service: badges | `app/services/achievement_badges.py` | exists (2957 bytes) | VERIFIED |
+| Backend service: badge cache | `app/services/achievement_badge_cache.py` | exists (1102 bytes) | VERIFIED |
+| Backend router | `app/routers/achievements.py` | exists (12940 bytes) | VERIFIED |
+| Frontend API | `frontend/src/api/endpoints/achievements.ts` | 1 (`import { api } from "@/api/client"`) | VERIFIED |
+| AchievementsPage | `frontend/src/pages/achievements/AchievementsPage.tsx` | exists | VERIFIED |
+| BadgeGrid | `frontend/src/pages/achievements/BadgeGrid.tsx` | exists | VERIFIED |
+| ProgressTracker | `frontend/src/pages/achievements/ProgressTracker.tsx` | exists | VERIFIED |
+| LeaderboardTable | `frontend/src/pages/achievements/LeaderboardTable.tsx` | exists | VERIFIED |
+| Route registration | `frontend/src/App.tsx` | 81, 190 | VERIFIED |

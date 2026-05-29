@@ -865,14 +865,21 @@ If only the TTL cleanup causes issues, it can be removed independently while kee
 | DDB put_item with TTL | `app/routers/messaging.py` | 11346-11353 | VERIFIED |
 | GET typing poll endpoint | `app/routers/messaging.py` | 11366-11382 | VERIFIED |
 | TTL expiry check in get_typing | `app/routers/messaging.py` | 11376-11377 | VERIFIED |
-| TypingIndicator polls every 3 seconds | `frontend/src/pages/messages/TypingIndicator.tsx` | 7, 36-42 | VERIFIED |
+| TypingIndicator polls every 3 seconds | `frontend/src/pages/messages/TypingIndicator.tsx` | 7, 36-42 | OUTDATED: TypingIndicator.tsx:7 shows `TYPING_FALLBACK_POLL_MS = 30_000` (30 seconds, NOT 3 seconds). The SSE-driven real-time update is ALREADY IMPLEMENTED |
 | useTypingSignal debounces at 2 seconds | `frontend/src/pages/messages/TypingIndicator.tsx` | 8, 73-89 | VERIFIED |
 | useMessagingStream EVENT_TYPES array | `frontend/src/hooks/useMessagingStream.ts` | 96-129 | VERIFIED |
-| `typing:update` NOT in EVENT_TYPES | `frontend/src/hooks/useMessagingStream.ts` | 96-129 | VERIFIED (absent) |
-| handleEvent has no typing branch | `frontend/src/hooks/useMessagingStream.ts` | 23-92 | VERIFIED (absent) |
+| `typing:update` NOT in EVENT_TYPES | `frontend/src/hooks/useMessagingStream.ts` | 160 | INCORRECT: `typing:update` IS in EVENT_TYPES at line 160. The SSE handler exists at lines 70-86, writing directly to React Query cache. THIS WORK IS ALREADY DONE |
+| handleEvent has no typing branch | `frontend/src/hooks/useMessagingStream.ts` | 70-86 | INCORRECT: typing:update handler EXISTS at lines 70-86, using `queryClient.setQueryData` to write typing state directly to cache |
 | SSE URL is /messaging/events/stream | `frontend/src/hooks/useMessagingStream.ts` | 4 | VERIFIED |
 | EventSource with withCredentials | `frontend/src/hooks/useMessagingStream.ts` | 132 | VERIFIED |
 | EventSource listeners per EVENT_TYPES | `frontend/src/hooks/useMessagingStream.ts` | 142-143 | VERIFIED |
 | Exponential backoff reconnection | `frontend/src/hooks/useMessagingStream.ts` | 146-152 | VERIFIED |
 | BouncingDots animation component | `frontend/src/pages/messages/TypingIndicator.tsx` | 12-24 | VERIFIED |
 | Others filter (exclude self) | `frontend/src/pages/messages/TypingIndicator.tsx` | 45 | VERIFIED |
+
+<!-- CRITICAL NOTE: This ticket's core proposal (adding typing:update to the SSE handler and reducing polling) has been FULLY IMPLEMENTED:
+- useMessagingStream.ts line 70-86: typing:update handler writes directly to React Query cache
+- useMessagingStream.ts line 160: typing:update is in EVENT_TYPES array
+- TypingIndicator.tsx line 7: TYPING_FALLBACK_POLL_MS = 30_000 (30s fallback, not 3s)
+- TypingIndicator.tsx line 48-66: client-side TTL cleanup every 2s
+The ticket should be marked as Complete. -->

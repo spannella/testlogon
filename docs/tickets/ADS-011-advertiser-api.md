@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: High  
 **Estimated effort**: 8-10 days  
-**Dependencies**: ADS-001 (advertiser accounts & campaign manager), ADS-002 (ad creative management), ADS-008 (ad analytics dashboard)
+**Dependencies**: ADS-001 (advertiser accounts & campaign manager), ADS-002 (ad creative management), ADS-008 (ad analytics dashboard) — all sibling tickets, not yet implemented
+<!-- NOTE: All ADS dependencies are sibling tickets. Existing: API key infrastructure (app/services/api_keys.py, app/services/api_key_capabilities.py). The CANONICAL_API_KEY_CAPABILITIES tuple at api_key_capabilities.py:5 has no ads:* scopes — these must be added. -->
 
 ---
 
@@ -905,3 +906,15 @@ X-Ads-Delivery: del_xxx
 8. Bulk operations process up to 100 items per request with partial-failure handling
 9. All 18 E2E tests pass in `frontend/e2e/ads-api.spec.ts`
 10. OpenAPI documentation auto-generated at `/openapi.json` includes all `/api/v1/ads/` endpoints
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/api_keys.py` | — | Existing API key service (generation, hashing, validation) |
+| `app/services/api_key_capabilities.py` | 5, 45, 57 | `CANONICAL_API_KEY_CAPABILITIES` (line 5 — no `ads:*` scopes), `normalize_api_key_capabilities` (line 45), `expand_api_key_capabilities` (line 57) |
+| `app/core/tables.py` | 18, 142 | Existing `api_keys` table handle |
+| `app/services/ad_placement.py` | 25, 222 | Existing ad placement (dev creatives, impression recording) |
+| `app/routers/ads_api.py` | — | Does not exist yet — new implementation required |

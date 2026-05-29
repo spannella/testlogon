@@ -1,6 +1,6 @@
 # VOD-019: View-Once / Rental / Download Access Tiers — Granular Purchase Options
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-27  
 **Priority**: High  
@@ -13,7 +13,8 @@
 
 ### The Gap
 
-The pay-per-view system (MON-001) treats all purchases identically: a viewer pays `price_cents`, receives a permanent entitlement, and can re-watch indefinitely. The `purchase_video()` function (`app/services/vod_purchase.py`, line 263) writes an entitlement record with no expiry and no view limit. The `check_entitlement_purchase_only()` function (line 219) returns `True` for any record that exists, regardless of age or usage.
+The pay-per-view system (MON-001) treats all purchases identically: a viewer pays `price_cents`, receives a permanent entitlement, and can re-watch indefinitely. The `purchase_video()` function (`app/services/vod_purchase.py`, line 398) writes an entitlement record with no expiry and no view limit. The `check_entitlement_purchase_only()` function (line 316) returns `True` for any record that exists, regardless of age or usage.
+<!-- NOTE: Line numbers updated — purchase_video is at line 398 (was 263 in original spec), check_entitlement_purchase_only is at line 316 (was 219). Both functions now implement VOD-019 purchase tiers with purchase_type, views_remaining, expires_at, and download_allowed support. -->
 
 This one-size-fits-all model misses common video commerce patterns:
 
@@ -200,7 +201,8 @@ vod_entitlements table — after VOD-019:
 
 ### 2.1 Entitlement Record Schema (MON-001)
 
-From `app/services/vod_purchase.py`, `purchase_video()` (line 298-315):
+From `app/services/vod_purchase.py`, `purchase_video()` (line 398+):
+<!-- NOTE: Line number updated from 298 to 398; function now includes purchase_type, views_remaining, expires_at, download_allowed fields -->
 
 ```python
 entitlement_item: Dict[str, Any] = {
@@ -221,7 +223,8 @@ Missing fields for VOD-019: `purchase_type`, `views_remaining`, `expires_at`, `d
 
 ### 2.2 Entitlement Check (MON-001 + MON-005)
 
-From `app/services/vod_purchase.py`, `check_entitlement_purchase_only()` (line 219-234):
+From `app/services/vod_purchase.py`, `check_entitlement_purchase_only()` (line 316+):
+<!-- NOTE: Line number updated from 219 to 316; function now returns EntitlementStatus (not bool), validating views_remaining and expires_at -->
 
 ```python
 def check_entitlement_purchase_only(*, user_id: str, video_id: str) -> bool:
@@ -253,7 +256,8 @@ Only `price_cents` exists — a single price for all purchase types. VOD-019 add
 
 ### 2.4 Purchase Endpoint (MON-001)
 
-From `app/routers/video_listing.py`, `purchase_video_endpoint()` (line 509-552):
+From `app/routers/video_listing.py`, `purchase_video_endpoint()` (line 1117):
+<!-- NOTE: Line number updated from 509 to 1117; VodPurchaseIn now at line 1023 with purchase_type field -->
 
 ```python
 class VodPurchaseIn(BaseModel):
@@ -275,11 +279,13 @@ download_mp4_status: str = ""  # "", "generating", "ready", "failed"
 download_count: int = 0
 ```
 
-The `allow_download` flag is a global video setting. The download endpoint (`GET /ui/videos/{id}/download`, `app/routers/video_listing.py` line 369) checks `video.allow_download` but does NOT check whether the viewer's entitlement includes download rights.
+The `allow_download` flag is a global video setting. The download endpoint (`GET /ui/videos/{id}/download`, `app/routers/video_listing.py` line 773) checks `video.allow_download` but does NOT check whether the viewer's entitlement includes download rights.
+<!-- NOTE: Line number updated from 369 to 773 -->
 
 ### 2.6 Playback Token Issuance
 
-From `app/routers/video_listing.py`, `_try_issue_playback_token()` (line 224-246):
+From `app/routers/video_listing.py`, `_try_issue_playback_token()` (line 283):
+<!-- NOTE: Line number updated from 224 to 283 -->
 
 ```python
 def _try_issue_playback_token(video: VideoMetadataModel, user_sub: str):
@@ -788,7 +794,8 @@ class VideoDetailOut(BaseModel):
 
 ### 3.11 Updated Video Pricing Endpoint
 
-**File**: `app/routers/video_listing.py`, `set_video_pricing()` (line 566)
+**File**: `app/routers/video_listing.py`, `set_video_pricing()` (line 1220)
+<!-- NOTE: Line number updated from 566 to 1220 -->
 
 ```python
 class VodPricingIn(BaseModel):
@@ -913,11 +920,29 @@ Entitlement status badges on the video player page:
 
 ## 4. Implementation Plan
 
+<!-- NOTE: All steps below have been implemented. Key existing code:
+- `app/models_video.py:143-147` — available_purchase_types, view_once_price_cents, rental_price_cents, rental_duration_hours, download_price_cents all exist
+- `app/services/vod_purchase.py:32-55` — EntitlementStatus class exists with purchase_type, views_remaining, expires_at, download_allowed
+- `app/services/vod_purchase.py:61-128` — VodAccessResult class exists with purchase_type, views_remaining, expires_at, download_allowed fields
+- `app/services/vod_purchase.py:316` — check_entitlement_purchase_only() returns EntitlementStatus (not bool)
+- `app/services/vod_purchase.py:398` — purchase_video() accepts purchase_type, rental_duration_hours params
+- `app/services/vod_purchase.py:636` — record_playback_complete() function exists
+- `app/routers/video_listing.py:1023` — VodPurchaseIn model includes purchase_type field
+- `app/routers/video_listing.py:1027` — purchase_type Field with pattern validation
+- `app/routers/video_listing.py:1104` — _resolve_price() helper function exists
+- `app/routers/video_listing.py:1198-1199` — POST /{video_id}/playback-complete endpoint exists
+- `app/routers/video_listing.py:112` — VideoDetailOut includes available_purchase_types
+- `app/routers/video_listing.py:117` — VideoDetailOut includes purchase_type
+- `app/routers/video_listing.py:1068` — VodPricingIn includes available_purchase_types
+- E2E: `frontend/e2e/vod-purchase-tiers.spec.ts` exists
+-->
+
 ### Step 1: Extend VideoMetadataModel
 
 **File**: `app/models_video.py`
 
 Add after `revenue_cents` (line 96):
+<!-- NOTE: These fields now exist at app/models_video.py:143-147 -->
 ```python
 # Purchase tiers (VOD-019)
 available_purchase_types: List[str] = Field(default_factory=list)
@@ -1919,3 +1944,33 @@ For prorated rental refunds, the creator retains the consumed portion. For examp
 - **VOD-012**: MP4 download (download infrastructure used by "download" purchase type)
 - **MON-003**: Creator earnings dashboard (will show revenue by purchase type)
 - **VOD-017**: Video gallery hub (gallery cards show price range: "From $1.99")
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `available_purchase_types` field | `app/models_video.py` | 143 | VERIFIED |
+| `view_once_price_cents` field | `app/models_video.py` | 144 | VERIFIED |
+| `rental_price_cents` field | `app/models_video.py` | 145 | VERIFIED |
+| `rental_duration_hours` field | `app/models_video.py` | 146 | VERIFIED |
+| `download_price_cents` field | `app/models_video.py` | 147 | VERIFIED |
+| `EntitlementStatus` class | `app/services/vod_purchase.py` | 32-55 | VERIFIED |
+| `VodAccessResult` class | `app/services/vod_purchase.py` | 61-128 | VERIFIED |
+| `check_vod_access()` | `app/services/vod_purchase.py` | 131 | VERIFIED |
+| `_batch_check_entitlements()` | `app/services/vod_purchase.py` | 271 | VERIFIED |
+| `check_entitlement_purchase_only()` returns `EntitlementStatus` | `app/services/vod_purchase.py` | 316 | VERIFIED |
+| `check_entitlement()` | `app/services/vod_purchase.py` | 372 | VERIFIED |
+| `purchase_video()` with purchase_type param | `app/services/vod_purchase.py` | 398 | VERIFIED |
+| `record_playback_complete()` | `app/services/vod_purchase.py` | 636 | VERIFIED |
+| `VodPurchaseIn` model with purchase_type | `app/routers/video_listing.py` | 1023 | VERIFIED |
+| `_resolve_price()` helper | `app/routers/video_listing.py` | 1104 | VERIFIED |
+| `POST /{video_id}/playback-complete` endpoint | `app/routers/video_listing.py` | 1198 | VERIFIED |
+| `VideoDetailOut.available_purchase_types` | `app/routers/video_listing.py` | 112 | VERIFIED |
+| `VideoDetailOut.purchase_type` | `app/routers/video_listing.py` | 117 | VERIFIED |
+| `VodPricingIn.available_purchase_types` | `app/routers/video_listing.py` | 1068 | VERIFIED |
+| `_video_to_detail` passes purchase_type | `app/routers/video_listing.py` | 270-275 | VERIFIED |
+| VodEntitlements DDB table | `scripts/local-ddb-init.py` | 583-591 | VERIFIED |
+| `vod_entitlements_table_name` setting | `app/core/settings.py` | 1076 | VERIFIED |
+| E2E test file | `frontend/e2e/vod-purchase-tiers.spec.ts` | — | VERIFIED |

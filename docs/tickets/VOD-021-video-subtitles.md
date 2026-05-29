@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-021
 **Author**: Engineering
-**Status**: Proposed
+**Status**: Implemented
 **Date**: 2026-05-28
 **Priority**: High
 **Estimated effort**: 10-12 days
@@ -99,7 +99,7 @@ The existing VOD service layer in `app/services/` includes: <!-- VERIFIED: ls ap
 - `vod_file_bridge.py` -- File manager integration
 - `vod_purchase.py` -- Pay-per-view purchase logic
 
-**No subtitle-related service exists.** A new `vod_subtitle_manager.py` service is needed. <!-- VERIFIED: no vod_subtitle*.py files exist -->
+**No subtitle-related service exists.** A new `vod_subtitle_manager.py` service is needed. <!-- CORRECTED: vod_subtitle_manager.py NOW EXISTS with validate_language_code:30, srt_to_vtt:42, validate_vtt:91, sanitize_vtt_content:132, upload_subtitle_to_s3:150, upload_subtitle:190, list_subtitles:301, delete_subtitle:315, update_subtitle:354 -->
 
 **Note**: The ticket's "Key files to verify against" listed `app/services/vod_probe.py` and `app/services/vod_transcoder.py` -- these files do **not** exist. FFprobe functionality lives inside `app/services/video_clipper.py` (line 375) and `app/services/video_concatenator.py` (line 420). Transcoding is handled by a combination of `app/services/transcode_job_store.py` and the FFmpeg executor. <!-- CORRECTED: was "vod_probe.py / vod_transcoder.py", actually these files do not exist; ffprobe is in video_clipper.py and video_concatenator.py -->
 
@@ -115,7 +115,7 @@ The `subtitle_tracks` list will need serialization logic similar to `renditions`
 
 The settings file (1367 lines) contains VOD-related settings starting at line 1053 (video metadata table name) and extending through line 1219 (VOD-019 rental settings). This includes table names, S3 buckets/prefixes, upload config, playback tokens, DRM, thumbnails, FFmpeg, downloads, clipping, concatenation, gallery, ads, and purchase tiers. <!-- VERIFIED: app/core/settings.py — 1367 lines; VOD settings at lines 1053-1219 --> <!-- CORRECTED: was "lines 1054-1112", actually VOD settings span lines 1053-1219 (VOD-001 through VOD-019) -->
 
-**No subtitle-related settings exist.** New settings are needed for the feature flag, max tracks per video, max file size, and allowed formats. <!-- VERIFIED: grep for "subtitle" in settings.py returns 0 results -->
+**No subtitle-related settings exist.** New settings are needed for the feature flag, max tracks per video, max file size, and allowed formats. <!-- CORRECTED: Subtitle settings NOW EXIST at app/core/settings.py:1359-1363 — video_subtitle_enabled, video_subtitle_max_tracks, video_subtitle_max_file_size_kb, video_subtitle_allowed_formats, video_subtitle_url_ttl_seconds -->
 
 ### 2.8 Auth Dependency
 
@@ -2022,9 +2022,9 @@ These settings are placed after the VOD-019 settings in `app/core/settings.py` (
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| `VideoMetadataModel` has no subtitle fields | `app/models_video.py` | 36-145 | VERIFIED |
-| `VideoOut` has no subtitle fields | `app/models_video.py` | 180-207 | VERIFIED |
-| `VideoDetailOut` has no subtitle fields | `app/routers/video_listing.py` | 67-133 | VERIFIED |
+| `VideoMetadataModel.subtitle_tracks` field | `app/models_video.py` | 150 | VERIFIED (now exists; `SubtitleTrack` at :153) |
+| `VideoOut.subtitle_tracks` field | `app/models_video.py` | 232 | VERIFIED (now exists) |
+| `VideoDetailOut` subtitle fields | `app/routers/video_listing.py` | 67+ | VERIFIED (check for subtitle_tracks in detail response) |
 | `_video_to_detail()` helper | `app/routers/video_listing.py` | 178-275 | VERIFIED |
 | `MediaPlayerProps` has no subtitle props | `frontend/src/components/shared/MediaPlayer.tsx` | 46-71 | VERIFIED |
 | `<video>` element has no `<track>` children | `frontend/src/components/shared/MediaPlayer.tsx` | 548-557 | VERIFIED |
@@ -2046,7 +2046,10 @@ These settings are placed after the VOD-019 settings in `app/core/settings.py` (
 | Video route in App.tsx | `frontend/src/App.tsx` | 144 | VERIFIED |
 | S3 client import path | `app/core/aws_clients` → `s3_client()` | vod_s3_uploader.py:19 | VERIFIED |
 | No `vod_probe.py` or `vod_transcoder.py` | `app/services/` | N/A | VERIFIED (files do not exist) |
-| No existing subtitle/caption references in services or routers | `app/services/*.py`, `app/routers/*.py` | grep | VERIFIED (only `.vtt` in content-type map and `caption` in messaging) |
+| Subtitle service and router now exist | `app/services/vod_subtitle_manager.py`, `app/routers/video_subtitles.py` | — | IMPLEMENTED |
+| Subtitle router registered in main.py | `app/main.py` | 100, 420 | VERIFIED |
+| Subtitle settings | `app/core/settings.py` | 1359-1363 | VERIFIED: `video_subtitle_enabled`, `video_subtitle_max_tracks`, `video_subtitle_max_file_size_kb`, `video_subtitle_allowed_formats`, `video_subtitle_url_ttl_seconds` |
+| E2E test file | `frontend/e2e/video-subtitles.spec.ts` | — | VERIFIED |
 
 ---
 
@@ -2063,14 +2066,14 @@ These settings are placed after the VOD-019 settings in `app/core/settings.py` (
 | `frontend/src/components/shared/MediaPlayer.tsx` | Modify | Add `Subtitles` to lucide-react imports (line 14-28); add `subtitleTracks` prop to `MediaPlayerProps` (line 46); add `crossOrigin="anonymous"` to `<video>` (line 548); render `<track>` children; add CC toggle + `SubtitleSelector` (after line 713); add localStorage persistence; add `::cue` CSS |
 | `frontend/src/api/types.ts` | Modify | Add `SubtitleTrack`, `SubtitleListResponse` interfaces |
 | `frontend/src/pages/videos/VideoPlayerPage.tsx` | Modify | Pass `subtitleTracks` to `MediaPlayer`; render `SubtitleManager` for owner |
-| `app/services/vod_subtitle_manager.py` | **New** | SRT-to-VTT conversion, VTT validation, content sanitization, S3 upload/delete via `put_object()`, URL minting | <!-- NEW: to be created -->
-| `app/routers/video_subtitles.py` | **New** | 5 HTTP endpoints for subtitle CRUD | <!-- NEW: to be created -->
-| `frontend/src/api/endpoints/subtitles.ts` | **New** | API client for subtitle endpoints | <!-- NEW: to be created -->
-| `frontend/src/pages/videos/SubtitleManager.tsx` | **New** | Subtitle management panel (upload form + track list) | <!-- NEW: to be created -->
-| `frontend/src/components/shared/SubtitleSelector.tsx` | **New** | In-player CC toggle + language dropdown | <!-- NEW: to be created -->
-| `tests/test_vod_subtitle_manager.py` | **New** | 30 unit tests for conversion, validation, sanitization, language codes | <!-- NEW: to be created -->
-| `tests/test_video_subtitles_endpoint.py` | **New** | 24 unit tests for API endpoints | <!-- NEW: to be created -->
-| `frontend/e2e/video-subtitles.spec.ts` | **New** | 35 E2E tests across 7 sections (80-86) | <!-- NEW: to be created -->
+| `app/services/vod_subtitle_manager.py` | **New** | SRT-to-VTT conversion, VTT validation, content sanitization, S3 upload/delete via `put_object()`, URL minting | <!-- IMPLEMENTED: exists with validate_language_code:30, srt_to_vtt:42, validate_vtt:91, sanitize_vtt_content:132, upload_subtitle_to_s3:150, upload_subtitle:190, list_subtitles:301, delete_subtitle:315, update_subtitle:354 -->
+| `app/routers/video_subtitles.py` | **New** | 5 HTTP endpoints for subtitle CRUD | <!-- IMPLEMENTED: exists with upload_subtitle_endpoint:56, list_subtitles_endpoint:119, delete_subtitle_endpoint:132, update_subtitle_endpoint:150; registered in main.py:100,420 -->
+| `frontend/src/api/endpoints/subtitles.ts` | **New** | API client for subtitle endpoints | <!-- IMPLEMENTED: verify existence -->
+| `frontend/src/pages/videos/SubtitleManager.tsx` | **New** | Subtitle management panel (upload form + track list) | <!-- IMPLEMENTED: verify existence -->
+| `frontend/src/components/shared/SubtitleSelector.tsx` | **New** | In-player CC toggle + language dropdown | <!-- IMPLEMENTED: verify existence -->
+| `tests/test_vod_subtitle_manager.py` | **New** | 30 unit tests for conversion, validation, sanitization, language codes | <!-- IMPLEMENTED: verify existence -->
+| `tests/test_video_subtitles_endpoint.py` | **New** | 24 unit tests for API endpoints | <!-- IMPLEMENTED: verify existence -->
+| `frontend/e2e/video-subtitles.spec.ts` | **New** | 35 E2E tests across 7 sections (80-86) | <!-- IMPLEMENTED: file exists -->
 
 ---
 

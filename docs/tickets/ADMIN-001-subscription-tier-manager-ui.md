@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: High  
 **Estimated effort**: 7-9 days  
-**Dependencies**: Subscription access (`subscription_access.py`), subscription entitlements (`subscription_entitlement_templates.py`), subscription cycle orders (`subscription_cycle_orders.py`), admin auth (`auth/deps.py`)
+**Dependencies**: Subscription access (`subscription_access.py` — see `app/services/subscription_access.py`), subscription entitlements (`subscription_entitlement_templates.py` — see `app/services/subscription_entitlement_templates.py`), subscription cycle orders (`subscription_cycle_orders.py` — see `app/services/subscription_cycle_orders.py`), UI session auth (`auth/deps.py` — see `app/auth/deps.py`)
+<!-- NOTE: auth/deps.py provides `require_ui_session` (line 175) and `require_root_session` (line 273). There is no `require_admin_session` in deps.py. Admin auth helpers are in `app/auth/policy.py`: `require_admin_or_root` (line 67), `require_admin_scope` (line 84), `require_root` (line 63). -->
 
 ---
 
@@ -13,7 +14,7 @@
 
 ### The Gap
 
-The backend supports subscription tier CRUD through `subscription_access.py` and `subscription_entitlement_templates.py`, and the subscription lifecycle is managed via `subscription_cycle_orders.py`. Subscription plans can be created, updated, and deleted through API endpoints. However, there is no creator-facing UI for managing subscription tiers. Creators cannot:
+The backend supports subscription tier CRUD through `subscription_access.py` (see `app/services/subscription_access.py`) and `subscription_entitlement_templates.py` (see `app/services/subscription_entitlement_templates.py`), and the subscription lifecycle is managed via `subscription_cycle_orders.py` (see `app/services/subscription_cycle_orders.py`). Subscription plans can be created, updated, and deleted through API endpoints. However, there is no creator-facing UI for managing subscription tiers. Creators cannot:
 
 - Create new subscription tiers with name, price, billing cycle, and description
 - Edit existing tier details (price, benefits, description)
@@ -128,12 +129,12 @@ Request Flow — Analytics:
 
 ### 2.1 Subscription Access (`app/services/subscription_access.py`)
 
-Existing functions:
-- `get_subscription_settings(creator_id)`: Get creator's subscription settings
-- `set_subscription_settings(creator_id, ...)`: Update settings
-- `creator_requires_subscription(creator_id)`: Check if creator has subscriptions enabled
-- `has_active_subscription(subscriber_id, creator_id)`: Check active subscription
-- `can_access_creator(subscriber_id, creator_id)`: Access check
+Existing functions (verified):
+- `get_subscription_settings(creator_id)` (line 20): Get creator's subscription settings
+- `set_subscription_settings(creator_id, ...)` (line 34): Update settings
+- `creator_requires_subscription(creator_id)` (line 51): Check if creator has subscriptions enabled
+- `has_active_subscription(subscriber_id, creator_id)` (line 55): Check active subscription
+- `can_access_creator(subscriber_id, creator_id)` (line 72): Access check
 
 ### 2.2 Subscription Entitlements (`app/services/subscription_entitlement_templates.py`)
 
@@ -145,7 +146,8 @@ Handles subscription billing cycles, charges, and entitlement provisioning. The 
 
 ### 2.4 Frontend Subscription Page
 
-`frontend/src/pages/subscriptions/` exists with subscriber-facing views but no creator management interface.
+`frontend/src/pages/subscriptions/` exists with subscriber-facing views. A `TierManager.tsx` (308 lines) already exists at `frontend/src/pages/subscriptions/TierManager.tsx` and is registered in `App.tsx` at line 182 (`/subscriptions/manage`). It uses `listPlans`, `archivePlan`, and `updatePlan` from `frontend/src/api/endpoints/subscriptions.ts` and includes components like `PlanEditor`, `DiscountCodeManager`, and `PlanBrowser`.
+<!-- NOTE: TierManager.tsx already exists (308 lines) with plan listing, archiving, updating, and editing UI. The ticket's proposed implementation should build on top of or replace this existing page rather than creating it from scratch. -->
 
 ### 2.5 Gaps
 
@@ -199,6 +201,7 @@ Extend existing subscription data with tier management fields. Using the existin
 | Decrement subscriber count | `CREATOR#{creator_id}` | `TIER#{tier_id}` | UpdateItem `ADD subscriber_count :neg_one` | Subscription cancelled |
 
 ### 3.3 Tier Management Service: `app/services/tier_management.py`
+<!-- NOTE: app/services/tier_management.py does not exist yet — new implementation required -->
 
 ```python
 """Subscription tier management for creators (ADMIN-001).
@@ -290,6 +293,7 @@ def preview_tiers(
 ```
 
 ### 3.4 Router: `app/routers/tier_management.py`
+<!-- NOTE: app/routers/tier_management.py does not exist yet — new implementation required. The prefix /v1/subscriptions/tiers is reasonable; existing subscription-related code uses /api/subscriptions (see app/routers/subscriptions.py) and /api/creators/{id}/plans. -->
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -514,8 +518,9 @@ class TierPreviewOut(BaseModel):
 
 ### 3.8 Frontend: Tier Manager Page
 
-**Route**: `/subscriptions/manage` in `frontend/src/App.tsx`  
-**Page**: `frontend/src/pages/subscriptions/TierManager.tsx`
+**Route**: `/subscriptions/manage` in `frontend/src/App.tsx` (see line 182 — route already exists)  
+**Page**: `frontend/src/pages/subscriptions/TierManager.tsx` (see existing 308-line file — already registered via lazy import at App.tsx line 35)
+<!-- NOTE: The TierManager page and route already exist. This ticket should extend the existing page with the proposed features (tier cards, analytics, preview, reorder) rather than creating from scratch. -->
 
 #### Frontend Component Tree
 
@@ -693,6 +698,7 @@ interface BenefitsEditorProps {
 ```
 
 ### 3.10 Frontend API (`frontend/src/api/endpoints/tierManagement.ts`)
+<!-- NOTE: frontend/src/api/endpoints/tierManagement.ts does not exist yet. The existing TierManager.tsx uses frontend/src/api/endpoints/subscriptions.ts which provides listPlans, archivePlan, updatePlan. The new tier management API calls should either extend subscriptions.ts or create this new file. -->
 
 ```typescript
 export const createTier = (data: TierCreate) =>
@@ -1003,20 +1009,20 @@ All tier management operations log structured events:
 
 | File | Purpose |
 |------|---------|
-| `app/services/tier_management.py` | Tier CRUD, lifecycle, analytics |
-| `app/routers/tier_management.py` | Tier management API (10 endpoints) |
-| `frontend/src/api/endpoints/tierManagement.ts` | API wrappers |
-| `frontend/src/pages/subscriptions/TierManager.tsx` | Tier management page |
+| `app/services/tier_management.py` | Tier CRUD, lifecycle, analytics <!-- NOTE: does not exist yet --> |
+| `app/routers/tier_management.py` | Tier management API (10 endpoints) <!-- NOTE: does not exist yet --> |
+| `frontend/src/api/endpoints/tierManagement.ts` | API wrappers <!-- NOTE: does not exist yet --> |
 | `frontend/e2e/tier-manager.spec.ts` | E2E tests (30 tests, sections 547-550b) |
 
 ## 11. Files to Modify
 
 | File | Change |
 |------|--------|
-| `app/models.py` | Add tier management Pydantic models |
-| `app/main.py` | Register `tier_management_router` |
+| `app/models.py` | Add tier management Pydantic models (see `app/models.py`) |
+| `app/main.py` | Register `tier_management_router` (see `app/main.py` for router registration pattern around lines 113-162, 430-439) |
 | `frontend/src/api/types.ts` | Add tier management TypeScript types |
-| `frontend/src/App.tsx` | Add `/subscriptions/manage` route |
+| `frontend/src/pages/subscriptions/TierManager.tsx` | Extend existing 308-line page with tier cards, analytics, preview, and reorder <!-- NOTE: this file already exists — modify, do not recreate --> |
+| `frontend/src/App.tsx` | Route already exists at line 182 — no change needed <!-- NOTE: /subscriptions/manage route already registered --> |
 | `frontend/src/components/layout/Sidebar.tsx` | Add "Manage Tiers" nav link |
 
 ## 12. Acceptance Criteria
@@ -1031,3 +1037,22 @@ All tier management operations log structured events:
 8. All operations scoped to the authenticated creator's tiers
 9. All 30 E2E tests pass in `frontend/e2e/tier-manager.spec.ts`
 10. Observability metrics and structured logging in place for all operations
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/subscription_access.py` | 20, 34, 51, 55, 72 | Existing subscription functions: `get_subscription_settings`, `set_subscription_settings`, `creator_requires_subscription`, `has_active_subscription`, `can_access_creator` |
+| `app/services/subscription_entitlement_templates.py` | — | Entitlement template management (exists) |
+| `app/services/subscription_cycle_orders.py` | — | Subscription billing cycle and lifecycle (exists) |
+| `app/auth/deps.py` | 175, 273 | `require_ui_session` (line 175), `require_root_session` (line 273) |
+| `app/auth/policy.py` | 63, 67, 84 | `require_root` (line 63), `require_admin_or_root` (line 67), `require_admin_scope` (line 84) |
+| `frontend/src/pages/subscriptions/TierManager.tsx` | 1-308 | Existing tier manager page (308 lines) — already has plan list, archive, update, PlanEditor, DiscountCodeManager, PlanBrowser |
+| `frontend/src/api/endpoints/subscriptions.ts` | — | Existing API wrappers: `listPlans`, `archivePlan`, `updatePlan` |
+| `frontend/src/App.tsx` | 35, 182 | Lazy import of TierManager (line 35), route `/subscriptions/manage` (line 182) |
+| `app/main.py` | 113-162, 430-439 | Router registration pattern (for reference when adding `tier_management_router`) |
+| `app/services/tier_management.py` | — | Does not exist yet — new implementation required |
+| `app/routers/tier_management.py` | — | Does not exist yet — new implementation required |
+| `frontend/src/api/endpoints/tierManagement.ts` | — | Does not exist yet — new implementation required |

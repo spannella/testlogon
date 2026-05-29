@@ -825,11 +825,11 @@ A one-time backfill script can regenerate variants for existing post images:
 | PostCard uses single `<img src>` | `frontend/src/pages/feed/PostCard.tsx` | 77-82 | VERIFIED |
 | Six `<img>` instances in PostCard | `frontend/src/pages/feed/PostCard.tsx` | 77, 97, 114, 125, 143, 162 | VERIFIED |
 | No `srcset` or `<picture>` in frontend | `frontend/src/` (all files) | N/A | VERIFIED (zero results) |
-| upload_image no resize | `app/routers/newsfeed.py` | 2620-2640 | VERIFIED |
-| get_upload_object cache header | `app/routers/newsfeed.py` | 2657 | VERIFIED: `max-age=300` |
-| _MAX_UPLOAD_BYTES = 10MB | `app/routers/newsfeed.py` | ~2600 | VERIFIED |
+| upload_image no resize | `app/routers/newsfeed.py` | 2737 | VERIFIED |
+| _MAX_UPLOAD_BYTES = 10MB | `app/routers/newsfeed.py` | 2733 | VERIFIED |
+| S3 UPLOAD_BUCKET env var | `app/routers/newsfeed.py` | 56 | VERIFIED |
 | No Pillow in requirements | `requirements.txt` / `pyproject.toml` | N/A | VERIFIED (not present) |
 | No image processing packages in frontend | `frontend/package.json` | N/A | VERIFIED (not present) |
 | FeedPost has no image_variants | `frontend/src/api/types.ts` | 1781-1834 | VERIFIED |
 | FFmpeg used for video poster | `app/services/filemanager.py` | 1379-1391 | VERIFIED |
-| S3 upload bucket env var | `app/routers/newsfeed.py` | ~2620 | VERIFIED: UPLOAD_BUCKET |
+| UPLOAD_BUCKET (duplicate entry removed) | — | — | See line 56 above |

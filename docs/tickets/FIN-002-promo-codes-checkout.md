@@ -39,8 +39,9 @@ The promo code backend is fully built (`create_promo_code`, `validate_promo_code
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Promo code service | `app/services/promo_codes.py` (~460 lines) | Full CRUD: `create_promo_code`, `validate_promo_code`, `redeem_promo_code`, `_calculate_discount`, `get_promo_stats` |
-| Promo code validation | `app/services/promo_codes.py:239` | `validate_promo_code(code, user_id, checkout_type, item_price_cents, creator_user_id)` -- checks expiry, usage limits, min order, eligible products |
+| Promo code service | `app/services/promo_codes.py` | Full CRUD: `create_promo_code`, `validate_promo_code`, `redeem_promo_code`, `_calculate_discount`, `get_promo_stats` |
+| Promo code validation | `app/services/promo_codes.py:239` | `validate_promo_code(code, user_id, checkout_type, item_price_cents, creator_user_id)` |
+<!-- VERIFIED: app/services/promo_codes.py:239 — validate_promo_code; :335 — _calculate_discount; :357 — redeem_promo_code; :85 — create_promo_code; :421 — get_promo_stats -->
 | Discount calculation | `app/services/promo_codes.py:335` | `_calculate_discount(promo, item_price_cents)` -- returns `(discount_cents, final_price, trial_days)` |
 | Promo code redemption | `app/services/promo_codes.py:357` | `redeem_promo_code(code_id, user_id, ...)` -- writes redemption record, increments usage count |
 | Shop checkout UI | `frontend/src/pages/shop/Checkout.tsx:53-131` | Has promo code state, `handleApplyPromo`, `handleRemovePromo`, `effectiveTotal`; calls `validatePromoCode` |
@@ -1086,3 +1087,25 @@ When disabled, promo codes only work in shop checkout (existing behavior). Subsc
 6. Only one promo code per transaction; applying a new code replaces the previous one.
 7. Promo redemption atomically increments usage count to prevent over-redemption.
 8. All 24 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key Functions | Lines |
+|------|--------------|-------|
+| `app/services/promo_codes.py` | `create_promo_code`, `validate_promo_code`, `_calculate_discount`, `redeem_promo_code`, `get_promo_stats` | 85, 239, 335, 357, 421 |
+| `app/routers/promo_codes.py` | Promo code CRUD router | - |
+| `app/main.py` | `app.include_router(promo_codes_router)` | 451 |
+| `scripts/local-ddb-init.py` | `PromoCodes` table | 902 |
+| `frontend/src/api/endpoints/promoCodes.ts` | Frontend promo code API | - |
+| `frontend/src/pages/promo/PromoCodesPage.tsx` | Promo code management UI | - |
+
+### Files to Modify (extension needed)
+| File | Change Needed |
+|------|--------------|
+| `frontend/src/pages/subscriptions/SubscribePage.tsx` | Add promo code input |
+| `app/routers/subscription_server.py` | Accept promo code on subscription creation |
+| `app/routers/messaging.py` | Add promo code to tip/unlock endpoints |
+| `app/routers/newsfeed.py` | Add promo code to post tip/unlock endpoints |

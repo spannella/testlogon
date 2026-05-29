@@ -2544,3 +2544,58 @@ The `follower:{user_id}` key for a popular creator (100K followers) receives hig
 - **SOC-002**: Feed fan-out (post creation triggers fan-out AND notifications)
 - **SOC-003**: User search/discovery (suggested users may leverage notification engagement data)
 - **SOC-005**: Public profile page (profile links in notification actor avatars)
+
+---
+
+## Codebase References
+
+### Backend — Services
+
+| Reference | File | Line(s) | Ticket Claims | Status |
+|-----------|------|---------|---------------|--------|
+| `alerts.py` (899 lines) | `app/services/alerts.py` | whole file | ~680 lines | **INCORRECT** — actual is 899 lines; all line numbers in the ticket are significantly off |
+| `ALERT_EVENT_TYPES` | `app/services/alerts.py` | **133** | line 46 | **INCORRECT** — actual is line 133 |
+| `_NO_ALERT_EVENTS` | `app/services/alerts.py` | **116** | line 29 | **INCORRECT** — actual is line 116 |
+| `write_alert()` | `app/services/alerts.py` | **355** | line 261 | **INCORRECT** — actual is line 355 |
+| `get_alert_prefs()` | `app/services/alerts.py` | **271** | line 177 | **INCORRECT** — actual is line 271 |
+| `event_to_type()` | `app/services/alerts.py` | **186** | line 92 | **INCORRECT** — actual is line 186 |
+| `sse_subscribe()` | `app/services/alerts.py` | 153 | — | **Verified** |
+| `sse_unsubscribe()` | `app/services/alerts.py` | 162 | — | **Verified** |
+| `sse_publish_alert()` | `app/services/alerts.py` | 173 | — | **Verified** |
+| `send_alert_email()` | `app/services/alerts.py` | 458 | — | **Verified** |
+| `send_alert_sms()` | `app/services/alerts.py` | 481 | — | **Verified** |
+| `send_push_for_alert` import | `app/services/alerts.py` | 24 | — | **Verified** |
+| `social_alerts.py` (701 lines) | `app/services/social_alerts.py` | whole file | — | **ALREADY EXISTS** — ticket treats social alerts as new, but this file already implements `emit_social_alert()` (line 167), `SOCIAL_ALERT_TYPES` (line 32), `get_unread_alert_count()` (line 517), `mark_all_alerts_read()` (line 551), `get_all_type_preferences()` (line 149), `update_type_preference()` (line 97), `_batch_alert()` (line 310), mention extraction (line 604), and channel dispatch (line 241) |
+
+### Backend — Routers
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `alerts.py` router (750 lines) | `app/routers/alerts.py` | whole file | **Exists** |
+| `alerts_stream` SSE endpoint | `app/routers/alerts.py` | **721-722** | **Verified** (ticket says lines 382-383 — **INCORRECT**) |
+| `GET /alerts/unread-count` | `app/routers/alerts.py` | 269-278 | **ALREADY EXISTS** — marked as SOC-004 at line 266 |
+| `POST /alerts/mark-all-read` | `app/routers/alerts.py` | 281-291 | **ALREADY EXISTS** — marked as SOC-004 |
+| `GET /alerts/type-preferences` | `app/routers/alerts.py` | 295 | **ALREADY EXISTS** |
+| `PUT /alerts/type-preferences` | `app/routers/alerts.py` | 307+ | **ALREADY EXISTS** |
+
+### Backend — Settings (`app/core/settings.py`)
+
+| Setting | Line | Status |
+|---------|------|--------|
+| `notification_unread_count_enabled` | 1394 | **Verified** — default `True` (enabled) |
+
+### Frontend
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| Bell icon in Header | `frontend/src/components/layout/Header.tsx` | 374 | **Verified** — `<Bell>` icon with `animate-bell-shake` class |
+| Bell shake animation | `frontend/src/components/layout/Header.tsx` | 177-183 | **Verified** — useState for `bellShake`, triggers on unread count increase |
+| Bell popover tabs | `frontend/src/components/layout/Header.tsx` | 292-297 | **Verified** — "activity" / "system" tabs with activity feed query |
+
+### Corrections
+
+1. **Nearly all line numbers are wrong**: The ticket appears to reference an older version of `alerts.py` (~680 lines). The current file is 899 lines. Every line number cited in the ticket is significantly off (by 70-120+ lines).
+2. **`social_alerts.py` ALREADY EXISTS** (701 lines): The ticket describes building a social notification system from scratch, but `app/services/social_alerts.py` already implements: `SOCIAL_ALERT_TYPES` (32 types), `emit_social_alert()` with channel dispatch, notification batching via `_batch_alert()`, `get_unread_alert_count()`, `mark_all_alerts_read()`, per-type preferences via `update_type_preference()` / `get_all_type_preferences()`, and mention alerts via `extract_mentions()` / `emit_mention_alerts()`.
+3. **SOC-004 endpoints ALREADY EXIST in alerts router**: The unread-count, mark-all-read, and type-preferences endpoints are already implemented and explicitly labeled as SOC-004 at line 266.
+4. **`alerts_stream` line**: Ticket says lines 382-383, actual is lines 721-722.
+5. **Ticket scope needs re-evaluation**: Most of the proposed functionality already exists. Remaining work may include: refining batching thresholds, adding more social alert types beyond what `SOCIAL_ALERT_TYPES` currently covers, improving SSE integration for social events, and frontend UI polish.

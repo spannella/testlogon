@@ -77,9 +77,9 @@ Acceptance Criteria:
 
 ### 3.1 Frontend Theme Store
 
-`frontend/src/stores/uiStore.ts` defines a Zustand store with `persist` middleware. The store exports `useUiStore` (line 17) with three state fields: `theme` (type `Theme = "system" | "light" | "dark"`, line 4), `sidebarCollapsed` (boolean), and three actions: `setTheme`, `toggleSidebar`, `setSidebarCollapsed`. The `persist` middleware writes to localStorage key `"ui-store"` (line 28) and `partialize` (line 29) limits persistence to `theme` and `sidebarCollapsed`.
+`frontend/src/stores/uiStore.ts` defines a Zustand store with `persist` middleware (line 60). The store exports `useUiStore` with state fields: `theme` (type `Theme = "system" | "light" | "dark"`, line 6), `sidebarCollapsed` (boolean), and actions: `setTheme` (line 73), `toggleSidebar`, `setSidebarCollapsed`. The `persist` middleware writes to localStorage key `"ui-store"` and `partialize` (line 160) limits persistence to `theme` and `sidebarCollapsed`.
 
-The `setTheme` action (line 23) is a simple synchronous setter: `set({ theme })`. There is no backend call, no debounce, and no side effect. Changes are immediately reflected in the Zustand store and persisted to localStorage by the middleware.
+The `setTheme` action (line 73) is a simple synchronous setter: `set({ theme })`. There is no backend call, no debounce, and no side effect. Changes are immediately reflected in the Zustand store and persisted to localStorage by the middleware.
 
 **Current store implementation:**
 
@@ -102,14 +102,14 @@ export const useUiStore = create<UiState>()(
 ```
 
 **Citations**:
-- `frontend/src/stores/uiStore.ts:4` -- `type Theme = "system" | "light" | "dark"`
-- `frontend/src/stores/uiStore.ts:17-32` -- `useUiStore` with `persist({ name: "ui-store" })`
-- `frontend/src/stores/uiStore.ts:23` -- `setTheme: (theme) => set({ theme })`
-- `frontend/src/stores/uiStore.ts:28-29` -- `partialize` saves `theme` and `sidebarCollapsed`
+- `frontend/src/stores/uiStore.ts:6` -- `type Theme = "system" | "light" | "dark"`
+- `frontend/src/stores/uiStore.ts:60` -- `persist(` middleware wrapper
+- `frontend/src/stores/uiStore.ts:73` -- `setTheme: (theme) => {`
+- `frontend/src/stores/uiStore.ts:160-162` -- `partialize` saves `theme` and `sidebarCollapsed`
 
 ### 3.2 Theme Toggle in Header
 
-`frontend/src/components/layout/Header.tsx` reads `theme` and `setTheme` from `useUiStore` (lines 96-97). The `THEME_OPTIONS` array (lines 166-170) provides system/light/dark choices rendered as `DropdownMenuItem` elements. Clicking a theme option calls `setTheme(value)` directly with no server interaction. The theme icon in the header (lines 160-164) changes reactively based on the current theme value via an object lookup: `{ system: <Monitor />, light: <Sun />, dark: <Moon /> }[theme]`.
+`frontend/src/components/layout/Header.tsx` reads `theme` and `setTheme` from `useUiStore` (lines 129-130). The `THEME_OPTIONS` array (line 282) provides system/light/dark choices rendered as `DropdownMenuItem` elements. Clicking a theme option calls `setTheme(value)` directly with no server interaction.
 
 ```typescript
 const theme = useUiStore((s) => s.theme);
@@ -123,9 +123,8 @@ const THEME_OPTIONS: { value: Theme; label: string; icon: React.ReactNode }[] = 
 ```
 
 **Citations**:
-- `frontend/src/components/layout/Header.tsx:96-97` -- `const theme = useUiStore((s) => s.theme)` / `const setTheme = useUiStore((s) => s.setTheme)`
-- `frontend/src/components/layout/Header.tsx:160-164` -- Theme icon lookup
-- `frontend/src/components/layout/Header.tsx:166-170` -- `THEME_OPTIONS` array
+- `frontend/src/components/layout/Header.tsx:129-130` -- `const theme = useUiStore((s) => s.theme)` / `const setTheme = useUiStore((s) => s.setTheme)`
+- `frontend/src/components/layout/Header.tsx:282` -- `THEME_OPTIONS` array
 
 ### 3.3 Theme Application in HTML Root
 
@@ -133,14 +132,14 @@ The `<html>` element's `class` attribute is toggled between `dark` and empty by 
 
 ### 3.4 Profile API
 
-The profile system uses `PATCH /ui/profile` (profile.py:166) to update user profile fields stored in the `profiles` DynamoDB table (table handle `T.profile`, tables.py:127, settings.py:398). The profile record currently has fields like `first_name`, `last_name`, `display_name`, `bio`, `avatar_url`, etc. There is no `preferences` or `ui_settings` field. The `ProfilePatchReq` model (models.py) defines the allowed profile fields for PATCH -- UI preferences are not among them.
+The profile system uses `PATCH /ui/profile` (profile.py:167) to update user profile fields stored in the `profiles` DynamoDB table (table handle `T.profile`, tables.py:153, settings.py:413). The profile record currently has fields like `first_name`, `last_name`, `display_name`, `bio`, `avatar_url`, etc. There is no `preferences` or `ui_settings` field. The `ProfilePatchReq` model (models.py) defines the allowed profile fields for PATCH -- UI preferences are not among them.
 
-The `apply_profile_update` function (referenced from profile.py:169) uses DynamoDB `UpdateItem` with SET expressions to merge fields. This same pattern will be used for the preferences endpoint.
+The `apply_profile_update` function (referenced from profile.py) uses DynamoDB `UpdateItem` with SET expressions to merge fields. This same pattern will be used for the preferences endpoint.
 
 **Citations**:
-- `app/routers/profile.py:166-171` -- `ui_patch_profile` endpoint
-- `app/core/settings.py:398` -- `profile_table_name: str = "profiles"`
-- `app/core/tables.py:127` -- `profile=ddb.Table(S.profile_table_name)`
+- `app/routers/profile.py:167-168` -- `ui_patch_profile` endpoint
+- `app/core/settings.py:413` -- `profile_table_name: str = "profiles"`
+- `app/core/tables.py:153` -- `profile=ddb.Table(S.profile_table_name)`
 
 ### 3.5 Session Init Flow
 
@@ -876,14 +875,14 @@ None. No new npm packages or Python libraries required.
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| Zustand persist to localStorage | `frontend/src/stores/uiStore.ts` | 17-32 | VERIFIED |
-| Theme type definition | `frontend/src/stores/uiStore.ts` | 4 | VERIFIED: `type Theme = "system" \| "light" \| "dark"` |
-| setTheme action (sync, no backend call) | `frontend/src/stores/uiStore.ts` | 23 | VERIFIED: `setTheme: (theme) => set({ theme })` |
-| partialize saves theme + sidebarCollapsed | `frontend/src/stores/uiStore.ts` | 29 | VERIFIED |
-| Header theme toggle reads from uiStore | `frontend/src/components/layout/Header.tsx` | 96-97 | VERIFIED |
-| THEME_OPTIONS array | `frontend/src/components/layout/Header.tsx` | 166-170 | VERIFIED |
-| Profile PATCH endpoint | `app/routers/profile.py` | 166-171 | VERIFIED |
-| Profile table config | `app/core/settings.py` | 398 | VERIFIED: `profile_table_name: str = "profiles"` |
-| Profile table handle | `app/core/tables.py` | 127 | VERIFIED: `profile=ddb.Table(S.profile_table_name)` |
+| Zustand persist to localStorage | `frontend/src/stores/uiStore.ts` | 60 (`persist(`) | VERIFIED |
+| Theme type definition | `frontend/src/stores/uiStore.ts` | 6 | VERIFIED: `type Theme = "system" \| "light" \| "dark"` |
+| setTheme action (sync, no backend call) | `frontend/src/stores/uiStore.ts` | 73 | VERIFIED: `setTheme: (theme) => {` |
+| partialize saves theme + sidebarCollapsed | `frontend/src/stores/uiStore.ts` | 160-162 | VERIFIED |
+| Header theme toggle reads from uiStore | `frontend/src/components/layout/Header.tsx` | 129-130 | VERIFIED |
+| THEME_OPTIONS array | `frontend/src/components/layout/Header.tsx` | 282 | VERIFIED |
+| Profile PATCH endpoint | `app/routers/profile.py` | 167-168 | VERIFIED |
+| Profile table config | `app/core/settings.py` | 413 | VERIFIED: `profile_table_name: str = ...` |
+| Profile table handle | `app/core/tables.py` | 153 | VERIFIED: `profile=ddb.Table(S.profile_table_name)` |
 | No preferences field in profile | `app/routers/profile.py` | all | VERIFIED (grep for "preferences" returns 0 results) |
 | No ui_preferences in DDB schema | `scripts/local-ddb-init.py` | all | VERIFIED (no preferences-related table or attribute) |

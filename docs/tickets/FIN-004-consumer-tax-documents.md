@@ -38,8 +38,10 @@ The platform processes significant financial transactions (tips, subscriptions, 
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Billing ledger | `app/services/billing_shared.py` | `new_ledger_entry` writes entries with `type`, `amount_cents`, `reason`, `ts`; `ledger_sk` format: `LEDGER#{ts}#{entry_id}` |
-| Billing ledger endpoint | `app/routers/billing.py:2274` | `GET /billing/ledger` returns all entries for a user; SK prefix `LEDGER#` |
+| Billing ledger | `app/services/billing_shared.py` | `new_ledger_entry` (line 217) writes entries with `type`, `amount_cents`, `reason`, `ts`; `ledger_sk` (line 213) format: `LEDGER#{ts}#{entry_id}` |
+<!-- VERIFIED: app/services/billing_shared.py:217 — new_ledger_entry; :213 — ledger_sk; :209 — ulidish -->
+| Billing ledger endpoint | `app/routers/billing.py:2274` | `GET /billing/ledger` returns all entries for a user |
+<!-- VERIFIED: app/routers/billing.py:2274 — list_ledger endpoint -->
 | Billing table | `app/core/tables.py` | `T.billing` with PK `USER#{user_sub}` |
 | Invoice system | FIN-001 (prerequisite) | Invoice records with `invoice_type`, PDF generation, S3 storage |
 | PDF generation | FIN-001 (`fpdf2`) | PDF rendering library available after FIN-001 implementation |
@@ -967,3 +969,22 @@ If critical issues arise:
 8. All 32 E2E tests pass.
 9. Feature flag controls rollout; endpoints return 503 when disabled.
 10. Observability metrics and logging are in place for all endpoints.
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key Functions | Lines |
+|------|--------------|-------|
+| `app/services/billing_shared.py` | `new_ledger_entry`, `ledger_sk`, `ulidish` | 217, 213, 209 |
+| `app/routers/billing.py` | `GET /billing/ledger` (`list_ledger`) | 2274 |
+| `app/services/receipts.py` | `get_or_create_receipt`, `_render_pdf` | 199, 53 |
+| `scripts/local-ddb-init.py` | `billing` table | 59 |
+
+### Files to Create (new implementation)
+| File | Purpose |
+|------|---------|
+| `app/services/tax_documents.py` | Tax summary computation, PDF generation, caching |
+| Tax documents DDB table | Table definition in `scripts/local-ddb-init.py` |
+| Frontend Tax Documents page | Date picker + summary display + PDF download |

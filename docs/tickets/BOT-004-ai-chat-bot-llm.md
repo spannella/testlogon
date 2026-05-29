@@ -45,7 +45,7 @@ Template bots (BOT-002) handle structured, predictable interactions but cannot h
 - **Bot framework** (BOT-001): Bot CRUD, assignments, trigger evaluation, `send_bot_message()`, `sender_type=bot` on messages.
 - **Templates** (BOT-002): Fallback message templates, scheduled sends. AI bots use templates for the fallback message when the LLM API is unavailable.
 - **Messaging** (`app/routers/messaging.py`): `send_text_message()` with `MessageOut` model. Bot messages flow through the same pipeline as human messages.
-- **Crypto** (`app/core/crypto.py`): KMS encrypt/decrypt for sensitive data at rest. Used for encrypting creator API keys.
+- **Crypto** (`app/core/crypto.py`): KMS encrypt/decrypt for sensitive data at rest (see `app/core/crypto.py:16` for `kms_encrypt`, line 22 for `kms_decrypt`). Used for encrypting creator API keys.
 - **S3** (`app/core/dev_s3.py`): File upload infrastructure for knowledge base documents.
 - **Billing/cost tracking**: `billing` table with `pk=USER#{user_sub}` pattern. Existing ledger infrastructure for tracking debits/credits.
 
@@ -411,12 +411,12 @@ Distinct from the regular "Bot" badge (BOT-001) to indicate AI-generated content
 
 | File | Changes |
 |------|---------|
-| `scripts/local-ddb-init.py` | Add `bot_knowledge`, `bot_conversation_history`, `bot_cost_tracking`, `bot_escalations` TableDefs |
-| `app/core/settings.py` | Add table name settings for new tables |
-| `app/core/tables.py` | Add table handles |
-| `app/main.py` | Register `bot_ai_router` |
-| `app/services/chat_bot.py` | Add AI config fields to bot record handling; wire `_trigger_bot_responses()` into message flow |
-| `app/routers/messaging.py` | Add `ai_generated` field to `MessageOut`; call `_trigger_bot_responses()` after message send |
+| `scripts/local-ddb-init.py` | Add `bot_knowledge`, `bot_conversation_history`, `bot_cost_tracking`, `bot_escalations` TableDefs <!-- NOTE: None of these tables exist yet — new implementation required --> |
+| `app/core/settings.py` | Add table name settings for new tables <!-- NOTE: No AI bot settings exist yet — new implementation required --> |
+| `app/core/tables.py` | Add table handles <!-- NOTE: No AI bot table handles exist yet — new implementation required --> |
+| `app/main.py` | Register `bot_ai_router` <!-- NOTE: No AI bot router registered — new implementation required --> |
+| `app/services/chat_bot.py` | Add AI config fields to bot record handling; wire `_trigger_bot_responses()` into message flow <!-- NOTE: chat_bot.py does not exist yet — depends on BOT-001 --> |
+| `app/routers/messaging.py` | Add `ai_generated` field to `MessageOut`; call `_trigger_bot_responses()` after message send <!-- NOTE: ai_generated field does not exist on MessageOut — new implementation required --> |
 | `frontend/src/api/types.ts` | Add `AiConfig`, `KnowledgeDoc`, `BotEscalation`, `MonthlyCost`, `AiTestResult` types |
 | `frontend/src/api/endpoints/bots.ts` | Add AI config, knowledge, test chat, cost, escalation API functions |
 | `frontend/src/pages/messages/MessageBubble.tsx` | Render "AI Bot" badge with sparkle icon for AI-generated messages |
@@ -795,3 +795,21 @@ AIBotConfigPage                       data-testid="ai-bot-config-page"
 | N2 | Invalid LLM provider | PUT config with provider="invalid"; 422 |
 | N3 | Knowledge doc over 10KB | POST doc with 15KB content; 422 |
 | N4 | Delete non-existent knowledge doc | DELETE with fake doc_id; 404 |
+
+---
+
+## Codebase References
+
+| Claim | File | Line(s) | Status |
+|-------|------|---------|--------|
+| `kms_encrypt()` exists | `app/core/crypto.py` | 16 | VERIFIED |
+| `kms_decrypt()` exists | `app/core/crypto.py` | 22 | VERIFIED |
+| `send_text_message()` exists | `app/routers/messaging.py` | 7684 | VERIFIED |
+| `MessageOut` model exists | `app/routers/messaging.py` | 2325 | VERIFIED |
+| No `ai_generated` field on MessageOut | `app/routers/messaging.py` | 2325-2380 | VERIFIED (does not exist — new implementation required) |
+| No `bot_knowledge` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (does not exist — new implementation required) |
+| No `bot_conversation_history` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (does not exist — new implementation required) |
+| No `bot_cost_tracking` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (does not exist — new implementation required) |
+| No `bot_escalations` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (does not exist — new implementation required) |
+| No `bot_ai_router` in main.py | `app/main.py` | full file | VERIFIED (not registered — new implementation required) |
+| BOT-001 dependency (chat_bot.py) | `app/services/chat_bot.py` | N/A | NOT YET IMPLEMENTED (depends on BOT-001) |

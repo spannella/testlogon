@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-016
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-27
 
 ---
@@ -880,11 +880,18 @@ VOD-016 depends on the existing transcode pipeline (VOD-001 through VOD-005) for
 
 ## 4. Implementation Plan
 
-### 4.1 Files to Create
+### 4.1 Files
+
+<!-- NOTE: Key files ALREADY EXIST:
+     - `app/services/video_concatenator.py` — `create_concat_job()` (line 43), `_check_codec_compatibility()` (line 183), `execute_concat()` (line 218), `_run_concat_demuxer()` (line 318), `_run_concat_filter()` (line 356)
+     - `app/services/video_metadata_store.py` — `update_concat_fields()` already at line 646
+     - `app/routers/video_listing.py` — `CombineVideosIn` (line 930), `CombineVideosOut` (line 936)
+     - `frontend/e2e/video-concat.spec.ts` — ALREADY EXISTS
+-->
 
 | File | Purpose |
 |------|---------|
-| `app/services/video_concatenator.py` | Concat logic: input probing, demuxer/filter path selection, ffmpeg execution, S3 upload, transcode enqueue |
+| `app/services/video_concatenator.py` | **Already exists**: `create_concat_job()` (line 43), `execute_concat()` (line 218), `_run_concat_demuxer()` (line 318), `_run_concat_filter()` (line 356) |
 | `frontend/src/components/shared/CombineVideosDialog.tsx` | Combine dialog with video selection, drag-and-drop ordering, title/description fields, estimated duration |
 | `tests/test_video_concatenator.py` | Unit tests for concat service |
 | `frontend/e2e/video-concat.spec.ts` | E2E tests for concat API and processing |

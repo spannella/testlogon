@@ -14,7 +14,7 @@
 
 ### 1.1 Problem Statement
 
-The existing KYC case system (`app/routers/kyc_cases.py`, 1295 lines) integrates with the signature packet system (`app/routers/signature_packets.py`, 819 lines) to support document signing as a KYC requirement. However, admins must currently create and upload a PDF for every individual case manually. There is no concept of reusable document templates, no auto-population of user profile data into form fields, and no way to tie specific documents to KYC verification tiers.
+The existing KYC case system (see `app/routers/kyc_cases.py`, ~1294 lines) integrates with the signature packet system (see `app/routers/signature_packets.py`, ~818 lines) to support document signing as a KYC requirement. However, admins must currently create and upload a PDF for every individual case manually. There is no concept of reusable document templates, no auto-population of user profile data into form fields, and no way to tie specific documents to KYC verification tiers.
 
 In practice, KYC compliance requires users to sign standardized legal documents: terms of service acknowledgments, AML declarations, PEP disclosures, tax compliance forms (W-9, W-8BEN), and data processing consent forms. Without a template library, each admin must manually prepare these PDFs, fill in user details by hand, and upload them per-case -- an error-prone process that does not scale.
 
@@ -56,15 +56,15 @@ In practice, KYC compliance requires users to sign standardized legal documents:
 
 ## 2. Current State Analysis
 
-### 2.1 Signature Packet System (`app/services/signature_packet_store.py`)
+### 2.1 Signature Packet System (see `app/services/signature_packet_store.py`)
 
-The signature packet system stores packets in `T.signature_packets` with `packet_id` as the primary key. Signers, fields, events, and artifacts are stored in separate tables (`T.signature_packet_signers`, `T.signature_packet_fields`, `T.signature_packet_events`, `T.signature_packet_artifacts`). The `upsert_packet_field` function (which stores float values as `Decimal(str(x))` for DDB compatibility) writes field values but has no concept of template-driven auto-population.
+The signature packet system stores packets in `T.signature_packets` (see `scripts/local-ddb-init.py:175`) with `packet_id` as the primary key. Signers, fields, events, and artifacts are stored in separate tables (`T.signature_packet_signers`, `T.signature_packet_fields`, `T.signature_packet_events`, `T.signature_packet_artifacts`). The `upsert_packet_field` function (see `app/services/signature_packet_store.py:133`, stores float values as `Decimal(str(x))` for DDB compatibility) writes field values but has no concept of template-driven auto-population.
 
-### 2.2 KYC Case Signature Integration (`app/routers/kyc_cases.py`, line 1206)
+### 2.2 KYC Case Signature Integration (see `app/routers/kyc_cases.py:1206`)
 
-The `create_or_link_signature_packet` endpoint creates a signature packet and links it to a KYC case via the `signature` ref field (`KycCaseSignatureRef` in `app/contracts/kyc_cases_contract.py`, line 38). The current flow requires the admin to provide a `source_path` pointing to an already-uploaded PDF. There is no template selection or auto-population step.
+The `create_or_link_signature_packet` endpoint creates a signature packet and links it to a KYC case via the `signature` ref field (`KycCaseSignatureRef` in `app/contracts/kyc_cases_contract.py:38`). The current flow requires the admin to provide a `source_path` pointing to an already-uploaded PDF. There is no template selection or auto-population step.
 
-### 2.3 KYC Case Readiness (`app/routers/kyc_cases.py`, line 223)
+### 2.3 KYC Case Readiness (see `app/routers/kyc_cases.py:223`)
 
 The `_readiness_for_case` function checks whether the signature packet is present and completed. It does not check whether all tier-required templates have been signed -- it only checks for a single signature packet.
 
@@ -74,7 +74,8 @@ S3 is mocked via moto in dev mode, started in-process by the FastAPI app. Templa
 
 ### 2.5 User Profile Data
 
-User profile data is stored in the `users` DDB table. Fields available for template merge: `full_name`, `email`, `phone`, `address_line_1`, `address_line_2`, `city`, `state`, `postal_code`, `country`, `date_of_birth`. The profile is accessed via `app/services/user_profile.py`.
+User profile data is stored in the `users` DDB table (see `scripts/local-ddb-init.py:49`). Fields available for template merge: `full_name`, `email`, `phone`, `address_line_1`, `address_line_2`, `city`, `state`, `postal_code`, `country`, `date_of_birth`. The profile is accessed via `app/services/profile.py`.
+<!-- NOTE: The ticket references app/services/user_profile.py but the actual file is app/services/profile.py -->
 
 ---
 
@@ -143,6 +144,7 @@ kyc_templates=ddb.Table(S.kyc_templates_table_name),
 ```
 
 ### 3.2 New Service: `app/services/kyc_templates.py`
+<!-- NOTE: app/services/kyc_templates.py does not exist yet — new implementation required -->
 
 ```python
 class KycTemplateService:
@@ -192,6 +194,7 @@ class KycTemplateService:
 ### 3.3 New Router Endpoints
 
 Add to a new router `app/routers/kyc_templates.py`:
+<!-- NOTE: app/routers/kyc_templates.py does not exist yet — new implementation required -->
 
 ```python
 router = APIRouter(prefix="/v1/kyc/templates", tags=["kyc-templates"])
@@ -284,7 +287,7 @@ In dev mode, placeholder replacement uses simple string substitution on the raw 
 
 ### 3.6 Integration with KYC Case Readiness
 
-Extend `_readiness_for_case` in `app/routers/kyc_cases.py` (line 223) to check template completion:
+Extend `_readiness_for_case` in `app/routers/kyc_cases.py` (see line 223) to check template completion:
 
 ```python
 def _readiness_for_case(case: dict) -> dict:
@@ -1234,3 +1237,27 @@ test("217.6 Template list sorts by updated_at descending", async ({ page }) => {
   // Verify most recently updated template appears first in list
 });
 ```
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router | `app/routers/kyc_cases.py` | 48 | Exists (~1294 lines) |
+| Signature packets router | `app/routers/signature_packets.py` | -- | Exists (~818 lines) |
+| `create_or_link_signature_packet()` | `app/routers/kyc_cases.py` | 1206 | Exists |
+| `_readiness_for_case()` | `app/routers/kyc_cases.py` | 223 | Exists |
+| `KycCaseSignatureRef` | `app/contracts/kyc_cases_contract.py` | 38 | Exists |
+| `upsert_packet_field()` | `app/services/signature_packet_store.py` | 133 | Exists |
+| Signature packets DDB tables | `scripts/local-ddb-init.py` | 175-208 | Exist |
+| Users DDB table | `scripts/local-ddb-init.py` | 49 | Exists |
+| Profile service | `app/services/profile.py` | -- | Exists (ticket incorrectly calls it `user_profile.py`) |
+| S3 mock | `app/core/dev_s3.py` | -- | Exists |
+| `kyc_templates` DDB table | -- | -- | Does NOT exist — new table required |
+| `kyc_templates_table_name` setting | -- | -- | Does NOT exist — new setting required |
+| `app/services/kyc_templates.py` | -- | -- | Does NOT exist — new implementation required |
+| `app/routers/kyc_templates.py` | -- | -- | Does NOT exist — new router required |
+| `app/contracts/kyc_templates_contract.py` | -- | -- | Does NOT exist — new file required |
+| `frontend/src/pages/admin/KycTemplatesPage.tsx` | -- | -- | Does NOT exist — new page required |
+| `frontend/src/api/endpoints/kyc-templates.ts` | -- | -- | Does NOT exist — new file required |

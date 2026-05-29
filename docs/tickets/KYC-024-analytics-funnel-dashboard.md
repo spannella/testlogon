@@ -62,14 +62,16 @@ Without this visibility, compliance teams operate reactively rather than proacti
 
 ## 2. Current State Analysis
 
-### 2.1 Existing Metrics (`app/routers/kyc_cases.py`, line 947)
+### 2.1 Existing Metrics (`app/routers/kyc_cases.py`, line 946)
 
-The `get_admin_kyc_metrics` endpoint delegates to `KycCaseStore.get_metrics_snapshot` (line 701 in `app/services/kyc_cases.py`). This method:
+The `get_admin_kyc_metrics` endpoint (see `app/routers/kyc_cases.py:946-959`) delegates to `KycCaseStore.get_metrics_snapshot` (see `app/services/kyc_cases.py:701`). This method:
 
-1. Queries each status from the `status-updated-index` GSI to count cases per status (`funnel_counts`).
+1. Queries each status via `list_cases_by_status` (see `app/services/kyc_cases.py:617`) from the `status-updated-index` GSI (see `app/core/settings.py:1067`) to count cases per status (`funnel_counts`).
 2. Collects `review_latency_seconds` from cases that have a decision timestamp minus submission timestamp.
 3. Computes `stale_queue_count` -- cases under review for longer than `stale_after_seconds` (default 48h).
 4. Aggregates `submit_guard_failures_by_reason` from cases with `missing_requirements`.
+
+The auth pattern uses `require_ui_session` + manual admin/root role check (see `app/routers/kyc_cases.py:950-953`), consistent with all other KYC admin endpoints.
 
 This is a real-time scan that becomes expensive as the case count grows. It provides no time-series data, no segmentation, no comparison capability, and no geographic breakdown.
 
@@ -86,10 +88,10 @@ The table does not store country or document type as top-level indexed attribute
 
 ### 2.3 Admin Dashboard Patterns
 
-The platform has several admin dashboards:
-- `frontend/src/pages/admin/ModerationBoardPage.tsx` -- Moderation queue
-- `frontend/src/pages/admin/RateLimitDashboard.tsx` -- Rate limit metrics
-- `frontend/src/pages/admin/AuditExportPage.tsx` -- Audit log export
+The platform has several admin dashboards (all confirmed to exist):
+- `frontend/src/pages/admin/ModerationBoardPage.tsx` (301 lines) -- Moderation queue
+- `frontend/src/pages/admin/RateLimitDashboard.tsx` (544 lines) -- Rate limit metrics
+- `frontend/src/pages/admin/AuditExportPage.tsx` (168 lines) -- Audit log export
 
 These follow a common pattern: a React page with `useQuery` hooks fetching JSON data from admin API endpoints, rendered with Card/Table components. The analytics dashboard will follow the same pattern, using simple HTML/CSS chart components (bar, line, pie) rather than a heavy charting library.
 
@@ -152,6 +154,8 @@ Request Flow:
 ```
 
 ### 3.2 New Service: `app/services/kyc_analytics.py`
+
+<!-- NOTE: app/services/kyc_analytics.py does not exist yet — new implementation required -->
 
 ```python
 @dataclass
@@ -232,7 +236,7 @@ class KycAnalyticsService:
 | Store daily snapshot | `ANALYTICS` | `DAILY#{date_iso}` | PutItem | Hourly background task |
 | Get daily snapshot | `ANALYTICS` | `DAILY#{date_iso}` | GetItem | Cached per-day lookup |
 | Query snapshot range | `ANALYTICS` | Between `DAILY#start` and `DAILY#end` | Query | For trends over date range |
-| Count cases by status (funnel) | `gsi_status_pk` GSI | SK=status, filter by created_at | Query | Real-time funnel computation |
+| Count cases by status (funnel) | `gsi_status_pk` GSI (see `app/core/settings.py:1067` — `status-updated-index`) | SK=status, filter by created_at | Query | Real-time funnel computation |
 | Get case processing times | `gsi_status_pk` GSI | SK=approved/rejected, filter by timestamps | Query | Histogram computation |
 | Count by country | Full table scan with FilterExpression | -- | Scan | Expensive; prefer pre-computed |
 | Count by tier | Full table scan with FilterExpression | -- | Scan | Expensive; prefer pre-computed |
@@ -399,10 +403,13 @@ class CompareResponse(BaseModel):
 
 Add to a new router `app/routers/kyc_analytics.py`:
 
+<!-- NOTE: app/routers/kyc_analytics.py does not exist yet — new implementation required -->
+
 ```python
 router = APIRouter(prefix="/v1/kyc/analytics", tags=["kyc-analytics"])
 
-# All endpoints require admin session
+# All endpoints require admin session: use require_ui_session + manual role check
+# (same pattern as app/routers/kyc_cases.py:950-953)
 GET /funnel?from={ts}&to={ts}&country={cc}&tier={tier}
   -- KYC funnel with optional filters
   -- Response: { "funnel": [FunnelStep], "conversion_rate": float }
@@ -440,7 +447,7 @@ GET /drop-off?from={ts}&to={ts}
   -- Response: { "steps": [{ from_step, to_step, continued, dropped, drop_rate }] }
 ```
 
-Register in `app/main.py`:
+Register in `app/main.py` (see existing KYC router registration at line 88, 406; background tasks registered via `add_event_handler("startup", ...)` at lines 375-379, 466-469):
 
 ```python
 from app.routers.kyc_analytics import router as kyc_analytics_router
@@ -903,8 +910,10 @@ test("240.4 Multiple concurrent analytics queries return consistent data", async
 | `app/core/tables.py` | Modify | No new table needed (uses kyc_cases single-table) |
 | `app/models.py` | Modify | Add analytics Pydantic models |
 | `frontend/src/api/endpoints/kyc-analytics.ts` | **New** | API client functions for all analytics endpoints |
+<!-- NOTE: frontend/src/api/endpoints/kyc-analytics.ts does not exist yet — new file required -->
 | `frontend/src/api/types.ts` | Modify | Add `FunnelStep`, `TrendPoint`, `HistogramBucket`, `CountryStats`, etc. |
 | `frontend/src/pages/admin/KycAnalyticsDashboard.tsx` | **New** | Main analytics dashboard page |
+<!-- NOTE: frontend/src/pages/admin/KycAnalyticsDashboard.tsx does not exist yet — new file required -->
 | `frontend/src/components/shared/FunnelChart.tsx` | **New** | Horizontal bar funnel chart |
 | `frontend/src/components/shared/VolumeChart.tsx` | **New** | Time-series line chart |
 | `frontend/src/components/shared/ProcessingTimeHistogram.tsx` | **New** | Histogram bar chart |
@@ -923,3 +932,33 @@ test("240.4 Multiple concurrent analytics queries return consistent data", async
 | `KYC_ANALYTICS_CACHE_TTL` | `300` | Cache TTL in seconds for real-time analytics queries |
 | `KYC_ANALYTICS_MAX_SCAN_ITEMS` | `10000` | Maximum items to scan for real-time computation |
 | `KYC_ANALYTICS_TREND_MAX_PERIODS` | `90` | Maximum periods for trend queries |
+
+---
+
+## Codebase References
+
+| File | Lines | What was verified |
+|------|-------|-------------------|
+| `app/routers/kyc_cases.py` | 946-959 | `get_admin_kyc_metrics` endpoint confirmed; uses `require_ui_session` + role check |
+| `app/routers/kyc_cases.py` | 48 | Router prefix `/v1/kyc/cases` confirmed |
+| `app/routers/kyc_cases.py` | 950-953 | Admin auth pattern: `require_ui_session` + `normalize_role(user.role) not in {Role.ADMIN, Role.ROOT}` |
+| `app/services/kyc_cases.py` | 701-714 | `get_metrics_snapshot` method confirmed; queries per-status counts |
+| `app/services/kyc_cases.py` | 617-628 | `list_cases_by_status` queries `status-updated-index` GSI |
+| `app/services/kyc_cases.py` | 48 | `_status_pk(status)` returns `STATUS#{status}` |
+| `app/core/settings.py` | 1066-1067 | KYC GSI index names: `owner-updated-index`, `status-updated-index` |
+| `scripts/local-ddb-init.py` | 91-96 | KYC cases table + 2 GSI definitions |
+| `app/main.py` | 88, 406 | Existing KYC router registration |
+| `app/main.py` | 375-379, 466-469 | Background task startup pattern via `add_event_handler("startup", ...)` |
+| `app/auth/deps.py` | 126, 184 | `AuthenticatedUser` and `get_authenticated_user` confirmed |
+| `frontend/src/pages/admin/ModerationBoardPage.tsx` | -- | Exists (301 lines) — admin dashboard pattern reference |
+| `frontend/src/pages/admin/RateLimitDashboard.tsx` | -- | Exists (544 lines) — admin dashboard pattern reference |
+| `frontend/src/pages/admin/AuditExportPage.tsx` | -- | Exists (168 lines) — admin dashboard pattern reference |
+| `app/services/kyc_analytics.py` | -- | **Does not exist yet** — new implementation required |
+| `app/routers/kyc_analytics.py` | -- | **Does not exist yet** — new implementation required |
+| `frontend/src/pages/admin/KycAnalyticsDashboard.tsx` | -- | **Does not exist yet** — new implementation required |
+| `frontend/src/api/endpoints/kyc-analytics.ts` | -- | **Does not exist yet** — new file required |
+| `frontend/src/components/shared/FunnelChart.tsx` | -- | **Does not exist yet** — new component required |
+| `frontend/src/components/shared/VolumeChart.tsx` | -- | **Does not exist yet** — new component required |
+| `frontend/src/components/shared/ProcessingTimeHistogram.tsx` | -- | **Does not exist yet** — new component required |
+| `frontend/src/components/shared/RejectionReasonsPie.tsx` | -- | **Does not exist yet** — new component required |
+| `frontend/src/components/shared/PeriodComparisonCards.tsx` | -- | **Does not exist yet** — new component required |

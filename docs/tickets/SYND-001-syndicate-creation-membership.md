@@ -41,7 +41,7 @@ Individual creators compete for subscribers independently, leading to audience f
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Subscription server | `app/routers/subscription_server.py` (1735 lines) | Defines plan/subscription/invoice patterns; SYND-002 will extend with `plan_type=syndicate_bundle` |
+| Subscription server | `app/routers/subscription_server.py` (1852 lines) | Defines plan/subscription/invoice patterns; SYND-002 will extend with `plan_type=syndicate_bundle` |
 | Billing shared | `app/services/billing_shared.py` (260 lines) | Wallet balance, ledger entries, `apply_wallet_delta`; SYND-004 treasury will reuse |
 | Profile service | `app/services/profile.py` | `get_profile(user_id)` for display names and avatars in member lists |
 | Newsfeed fanout | `app/services/newsfeed_fanout.py` | Fan-out patterns for follower-based content distribution; SYND-005 will adapt |
@@ -54,7 +54,7 @@ Individual creators compete for subscribers independently, leading to audience f
 
 1. **No syndicate concept** -- there is no syndicate table, service, router, or frontend page anywhere in the codebase.
 2. **No group membership model** -- the platform has individual creator-subscriber relationships but no creator-to-creator group model.
-3. **No invite/request flow** -- the closest pattern is contact requests (`app/services/contacts.py`), but those are 1:1 and lack admin approval workflows.
+3. **No invite/request flow** -- the closest pattern is contact requests (`app/routers/contacts.py`), but those are 1:1 and lack admin approval workflows.
 4. **No admin transfer mechanism** -- role management exists for platform-level roles (USER/ADMIN/ROOT in `app/auth/roles.py`) but not for entity-level ownership.
 5. **No auto-dissolution logic** -- no precedent for archiving an entity when all participants leave.
 
@@ -755,3 +755,21 @@ When `member_count` reaches 0 after a leave/remove:
 8. All membership changes are recorded in the audit log.
 9. User's syndicate list shows all syndicates they belong to with their role.
 10. All 18 E2E tests pass.
+
+---
+
+## Codebase References
+
+| Claim | File | Line(s) | Status |
+|-------|------|---------|--------|
+| No syndicate code exists in codebase | All files | — | VERIFIED: grep "syndicate" returns zero results in app/ and frontend/src/ |
+| subscription_server.py exists (1852 lines) | `app/routers/subscription_server.py` | — | VERIFIED |
+| billing_shared.py exists (260 lines) | `app/services/billing_shared.py` | — | VERIFIED |
+| profile service exists | `app/services/profile.py` | — | VERIFIED (345 lines) |
+| newsfeed_fanout.py exists | `app/services/newsfeed_fanout.py` | — | VERIFIED (173 lines) |
+| subscription_access.py exists | `app/services/subscription_access.py` | — | VERIFIED (82 lines) |
+| ad_placement.py exists | `app/services/ad_placement.py` | — | VERIFIED (342 lines) |
+| Contact requests in app/services/contacts.py | `app/routers/contacts.py` | — | **CORRECTED** — contacts is a router, not a service |
+| require_ui_session auth dependency | `app/auth/deps.py` | — | VERIFIED |
+| Role enum (USER/ADMIN/ROOT) | `app/auth/roles.py` | — | VERIFIED |
+| DDB table init pattern | `scripts/local-ddb-init.py` | — | VERIFIED (1359 lines, TableDef pattern) |

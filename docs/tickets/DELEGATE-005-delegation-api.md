@@ -40,13 +40,17 @@ Creators use external tools to manage their online presence -- social media sche
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| API key service | `app/services/api_keys.py` (~400 lines) | Key creation, hashing, capabilities, IP rules, rate limits; foundation for delegation API keys |
+| API key service | `app/services/api_keys.py` (~412 lines) | Key creation, hashing, capabilities, IP rules, rate limits; foundation for delegation API keys |
 | API key router | `app/routers/api_keys.py` | Key management endpoints; will be extended with delegation scope |
 | Auth deps | `app/auth/deps.py` | Bearer token auth via `extract_bearer_token`; delegation API uses same mechanism |
 | Delegate chat service | `app/services/delegate_chat.py` (DELEGATE-002) | Chat delegation logic; API wraps same service |
+<!-- NOTE: app/services/delegate_chat.py does not exist yet — depends on DELEGATE-002 -->
 | Delegate feed service | `app/services/delegate_feed.py` (DELEGATE-003) | Feed delegation logic; API wraps same service |
+<!-- NOTE: app/services/delegate_feed.py does not exist yet — depends on DELEGATE-003 -->
 | Delegate broadcast service | `app/services/delegate_broadcast.py` (DELEGATE-004) | Broadcast delegation logic; API wraps same service |
+<!-- NOTE: app/services/delegate_broadcast.py does not exist yet — depends on DELEGATE-004 -->
 | Delegates service | `app/services/delegates.py` (DELEGATE-001) | Permission checks, delegation records |
+<!-- NOTE: app/services/delegates.py does not exist yet — depends on DELEGATE-001 -->
 | Rate limiter | In-memory rate limiter in various routers | Per-user rate limiting; delegation API needs per-key limits |
 | Settings | `app/core/settings.py` | Configuration for rate limits, webhook settings |
 
@@ -566,7 +570,7 @@ delegated actions on behalf of creators.
 
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from app.auth.deps import require_ui_session
+from app.services.sessions import require_ui_session  # actual location of require_ui_session
 from app.services import delegation_api as svc
 from app.services import delegate_chat, delegate_feed, delegate_broadcast
 
@@ -999,3 +1003,20 @@ X-RateLimit-Reset: 1748520460
 9. Rate limit exceeded returns 429 with Retry-After header.
 10. Usage counters (total_calls, last_used_at) are updated on each API call.
 11. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+| File | Line(s) | What | Status |
+|------|---------|------|--------|
+| `app/services/api_keys.py` | all (412 lines) | API key creation, hashing, capabilities | EXISTS (modify) |
+| `app/routers/api_keys.py` | all (168 lines) | API key management endpoints | EXISTS (modify) |
+| `app/auth/deps.py` | all (308 lines) | Bearer token extraction | EXISTS |
+| `app/services/sessions.py` | 283 | `require_ui_session` (NOT in app/auth/deps.py) | EXISTS |
+| `app/services/delegates.py` | — | Delegate management (DELEGATE-001) | NOT YET CREATED |
+| `app/services/delegate_chat.py` | — | Chat delegation (DELEGATE-002) | NOT YET CREATED |
+| `app/services/delegate_feed.py` | — | Feed delegation (DELEGATE-003) | NOT YET CREATED |
+| `app/services/delegate_broadcast.py` | — | Broadcast delegation (DELEGATE-004) | NOT YET CREATED |
+| `app/core/settings.py` | all | Configuration for rate limits, webhook settings | EXISTS (modify) |
+| `scripts/local-ddb-init.py` | all | Needs GSI additions for api_keys table | EXISTS (modify) |

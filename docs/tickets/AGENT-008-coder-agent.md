@@ -222,15 +222,17 @@ def build_coder_workflow(*, agent_run_id: str, agent_type_id: str,
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/ui/agents/types/coder/config-schema` | `require_admin_session` | Return JSON schema for coder_config fields |
-| PUT | `/ui/agents/types/{type_id}/coder-config` | `require_admin_session` | Set or update coder_config |
-| GET | `/ui/agents/types/{type_id}/coder-config` | `require_admin_session` | Get current coder_config |
-| POST | `/ui/agents/types/{type_id}/coder-config/validate` | `require_admin_session` | Validate config without saving (test repo access, etc.) |
-| GET | `/ui/agents/types/{type_id}/eligible-tickets` | `require_admin_session` | Preview which tickets this agent would pick up |
-| POST | `/ui/agents/runs/{run_id}/claim-ticket` | `require_admin_session` | Manually trigger ticket claim for a specific run |
-| GET | `/ui/agents/runs/{run_id}/coder-output` | `require_admin_session` | Get structured output from a completed coder run |
-| POST | `/ui/agents/types/{type_id}/test-workflow` | `require_admin_session` | Dry-run: generate workflow steps for a given ticket without executing |
-| GET | `/ui/agents/coder/metrics` | `require_admin_session` | Aggregate metrics: tickets completed, avg time, failure rate |
+| GET | `/ui/agents/types/coder/config-schema` | `require_admin_scope` | Return JSON schema for coder_config fields |
+| PUT | `/ui/agents/types/{type_id}/coder-config` | `require_admin_scope` | Set or update coder_config |
+| GET | `/ui/agents/types/{type_id}/coder-config` | `require_admin_scope` | Get current coder_config |
+| POST | `/ui/agents/types/{type_id}/coder-config/validate` | `require_admin_scope` | Validate config without saving (test repo access, etc.) |
+| GET | `/ui/agents/types/{type_id}/eligible-tickets` | `require_admin_scope` | Preview which tickets this agent would pick up |
+| POST | `/ui/agents/runs/{run_id}/claim-ticket` | `require_admin_scope` | Manually trigger ticket claim for a specific run |
+| GET | `/ui/agents/runs/{run_id}/coder-output` | `require_admin_scope` | Get structured output from a completed coder run |
+| POST | `/ui/agents/types/{type_id}/test-workflow` | `require_admin_scope` | Dry-run: generate workflow steps for a given ticket without executing |
+| GET | `/ui/agents/coder/metrics` | `require_admin_scope` | Aggregate metrics: tickets completed, avg time, failure rate |
+
+<!-- NOTE: `require_admin_session` does not exist in the codebase. The correct admin auth dependency is `require_admin_scope(AdminScope.XXX)` from `app/auth/policy.py:84`. -->
 
 **Key request models**:
 
@@ -490,7 +492,7 @@ let runId: string;
 
 ## 7. Security Considerations
 
-- **Admin-only access**: All Coder Agent configuration endpoints require `require_admin_session`. Regular users cannot configure or trigger agents.
+- **Admin-only access**: All Coder Agent configuration endpoints require `require_admin_scope()` (see `app/auth/policy.py:84`). Regular users cannot configure or trigger agents. <!-- NOTE: was `require_admin_session` which does not exist -->
 - **Repository credential isolation**: Git credentials (SSH keys, personal access tokens) are stored in the agent secrets vault (AGENT-006), never in the coder_config. The terminal environment has credentials injected at provisioning time.
 - **Command injection prevention**: Branch names and ticket subjects are sanitized (alphanumeric + hyphens only) before being interpolated into shell commands. The `build_git_commands()` and `build_pr_command()` functions use array-based command construction, not string interpolation.
 - **File exclusion enforcement**: `file_exclude_patterns` are passed to the coding tool prompt. The agent's git diff output is checked post-hoc to verify no excluded files were modified; if they were, the PR is flagged for human review.
@@ -1256,3 +1258,23 @@ interface PatternPreviewProps {
 | 658.2 | Claim already-claimed ticket returns 409 | Claim same ticket twice → second attempt returns 409 "already assigned" |
 | 658.3 | Coder output for run without output returns 404 | GET coder-output for a run that has not completed → 404 "No coder output available" |
 | 658.4 | Metrics endpoint returns zeros for new agent type | GET metrics for a type with no completed runs → `completed_count: 0`, `failure_rate: 0` |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| TicketStore class | `app/services/tickets.py` | 110 | `create_ticket` (215), `get_ticket` (300), `assign_ticket` (577), `add_message` (621), `update_status` (683) |
+| `require_admin_scope` | `app/auth/policy.py` | 84 | Correct admin auth (ticket originally said `require_admin_session` which does not exist) |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `(event, user_sub, request, **fields)` |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+| Tables singleton | `app/core/tables.py` | — | `T` object; no `agent_types` or `agent_runs` table handles exist yet |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing table — `labels` field extension proposed |
+| `agent_types` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `agent_runs` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `agent_coder.py` | `app/services/` | — | Does NOT exist yet — new implementation in this ticket |
+| `agent_coder.py` router | `app/routers/` | — | Does NOT exist yet — new implementation in this ticket |
+| Router registration | `app/main.py` | 297-465 | No `agent_coder_router` registered yet |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |

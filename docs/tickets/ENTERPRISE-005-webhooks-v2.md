@@ -13,21 +13,21 @@
 
 The platform's existing webhook system (PLATFORM-002) provides basic webhook delivery with endpoint registration, HMAC signing, and a retry mechanism. However, enterprise customers require a higher level of reliability, observability, and control that the current implementation does not provide:
 
-1. **Limited event types**: The current `WEBHOOK_EVENT_TYPES` dict in `app/services/webhook_service.py` (lines 24-56) has 22 event types. Many important events are missing: `user.created`, `user.deleted`, `ticket.created`, `ticket.resolved`, `file.deleted`, `calendar.event.created`, `call.started`, `call.ended`, `video.published`, `video.transcoded`, etc.
-<!-- VERIFIED: app/services/webhook_service.py:24-56 — WEBHOOK_EVENT_TYPES with 22 entries -->
+1. **Limited event types**: The current `WEBHOOK_EVENT_TYPES` dict in `app/services/webhook_service.py` (lines 24-58) has 22 event types. Many important events are missing: `user.created`, `user.deleted`, `ticket.created`, `ticket.resolved`, `file.deleted`, `calendar.event.created`, `call.started`, `call.ended`, `video.published`, `video.transcoded`, etc.
+<!-- VERIFIED: app/services/webhook_service.py:24 — WEBHOOK_EVENT_TYPES dict start -->
 
-2. **Basic retry policy**: The retry schedule (line 60) is hardcoded as `RETRY_DELAYS_SECONDS = [0, 60, 300, 1800, 7200]` -- 5 attempts with fixed delays. There is no exponential backoff, no jitter, no configurable retry policy per endpoint, and no maximum retry window.
-<!-- VERIFIED: app/services/webhook_service.py:60 — RETRY_DELAYS_SECONDS = [0, 60, 300, 1800, 7200] -->
+2. **Basic retry policy**: The retry schedule (line 161) is hardcoded as `RETRY_DELAYS_SECONDS = [0, 60, 300, 1800, 7200]` -- 5 attempts with fixed delays. There is no exponential backoff, no jitter, no configurable retry policy per endpoint, and no maximum retry window.
+<!-- VERIFIED: app/services/webhook_service.py:161 — RETRY_DELAYS_SECONDS = [0, 60, 300, 1800, 7200] -->
 
 3. **No delivery dashboard**: The current `get_delivery_log()` function returns raw delivery records. There is no aggregated view of delivery success rate, average latency, failure patterns, or dead-letter queue management.
 
 4. **Limited signature verification**: The signing uses HMAC-SHA256 via `app/services/webhook_service.py`, but the signature is only placed in a custom header. There is no timestamp-based replay protection, no signature versioning, and no sample verification code provided to consumers.
 
-5. **No dead letter queue management**: Failed deliveries that exhaust all retries become "dead-lettered" (the admin endpoint at `app/routers/webhooks.py` line 204 lists them), but there is no way to replay dead-lettered events, acknowledge them, or purge them.
-<!-- VERIFIED: app/routers/webhooks.py:204 — admin_dead_letter endpoint -->
+5. **No dead letter queue management**: Failed deliveries that exhaust all retries become "dead-lettered" (the admin endpoint at `app/routers/webhooks.py` line 220 lists them), but there is no way to replay dead-lettered events, acknowledge them, or purge them.
+<!-- VERIFIED: app/routers/webhooks.py:220 — admin_dead_letter endpoint -->
 
-6. **Auto-disable is crude**: The `webhooks_auto_disable_threshold` (settings line 1300) disables an endpoint after N consecutive failures, but there is no gradual degradation, no circuit breaker, and no automatic re-enable after the issue resolves.
-<!-- VERIFIED: app/core/settings.py:1300 — webhooks_auto_disable_threshold -->
+6. **Auto-disable is crude**: The `webhooks_auto_disable_threshold` (settings line 1308) disables an endpoint after N consecutive failures, but there is no gradual degradation, no circuit breaker, and no automatic re-enable after the issue resolves.
+<!-- VERIFIED: app/core/settings.py:1308 — webhooks_auto_disable_threshold -->
 
 ### 1.2 How It Works
 
@@ -108,17 +108,17 @@ This covers 22 event types. v2 adds coverage for tickets, calendar, VOD, calls, 
 
 ### 2.2 Retry Schedule (`app/services/webhook_service.py`)
 
-The retry schedule is a hardcoded list (line 60):
+The retry schedule is a hardcoded list (line 161):
 
 ```python
-# app/services/webhook_service.py, line 60
+# app/services/webhook_service.py, line 161
 RETRY_DELAYS_SECONDS = [0, 60, 300, 1800, 7200]
 ```
 
 This means retries happen at T+0, T+1m, T+5m, T+30m, T+2h. There is no jitter, no per-endpoint configuration, and no exponential backoff formula.
 
-The current `handle_delivery_failure` function (lines 612-673) uses this fixed schedule:
-<!-- VERIFIED: app/services/webhook_service.py:612-673 — handle_delivery_failure -->
+The current `handle_delivery_failure` function (line 763) uses this fixed schedule:
+<!-- VERIFIED: app/services/webhook_service.py:763 — handle_delivery_failure -->
 
 ```python
 # app/services/webhook_service.py, lines 644-646
@@ -128,11 +128,11 @@ expr_vals[":nra"] = now + delay
 
 ### 2.3 Endpoint Registration (`app/services/webhook_service.py`)
 
-Endpoint creation (lines 81-148) stores the endpoint in the `webhook_endpoints` table with a `pk=USER#{user_sub}` and `sk=ENDPOINT#{endpoint_id}` pattern:
-<!-- VERIFIED: app/services/webhook_service.py:81 — register_endpoint; lines 111-124 — item dict -->
+Endpoint creation (line 182) stores the endpoint in the `webhook_endpoints` table with a `pk=USER#{user_sub}` and `sk=ENDPOINT#{endpoint_id}` pattern:
+<!-- VERIFIED: app/services/webhook_service.py:182 — register_endpoint; lines 230-250 — item dict (now includes v2 fields) -->
 
 ```python
-# app/services/webhook_service.py, lines 111-124
+# app/services/webhook_service.py, lines 230-250 (now includes v2 fields: retry_policy, signature_version, circuit_state, etc.)
 item = {
     "pk": f"USER#{user_sub}",
     "sk": f"ENDPOINT#{endpoint_id}",
@@ -149,10 +149,10 @@ item = {
 }
 ```
 
-Additionally, event-type index items are written for fast dispatch lookup (lines 128-136):
+Additionally, event-type index items are written for fast dispatch lookup (lines 254-262):
 
 ```python
-# app/services/webhook_service.py, lines 128-136
+# app/services/webhook_service.py, lines 254-262
 for et in event_types:
     T.webhook_endpoints.put_item(Item={
         "pk": f"EVENT#{et}",
@@ -168,11 +168,11 @@ This dual-write pattern (endpoint record + per-event-type lookup record) is main
 
 ### 2.4 Webhook Delivery (`app/services/webhook_dispatcher.py`)
 
-The dispatcher runs as a background async task (lines 28-91), started at `app/main.py` line 443:
-<!-- VERIFIED: app/main.py:443 — start_webhook_dispatcher_task -->
+The dispatcher runs as a background async task (lines 28-91), started at `app/main.py` line 472:
+<!-- VERIFIED: app/main.py:472 — start_webhook_dispatcher_task -->
 
 ```python
-# app/main.py, line 443
+# app/main.py, line 472
 app.add_event_handler("startup", start_webhook_dispatcher_task)
 ```
 
@@ -209,30 +209,29 @@ async def run_webhook_dispatcher_loop() -> None:
         await asyncio.sleep(poll_interval)
 ```
 
-The `MAX_BATCH_SIZE` is 50 (line 25) and `POLL_INTERVAL_SECONDS` is 10 (line 24). The poll interval comes from settings (line 1301):
-<!-- CORRECTED: was "line 27" for MAX_BATCH_SIZE, actually POLL_INTERVAL_SECONDS=10 at line 24, MAX_BATCH_SIZE=50 at line 25 -->
-<!-- VERIFIED: app/core/settings.py:1301 — webhooks_dispatcher_poll_interval -->
+The `MAX_BATCH_SIZE` is 50 (line 25) and `POLL_INTERVAL_SECONDS` is 10 (line 24). The poll interval comes from settings (line 1309):
+<!-- VERIFIED: app/services/webhook_dispatcher.py:24 — POLL_INTERVAL_SECONDS=10; :25 — MAX_BATCH_SIZE=50 -->
+<!-- VERIFIED: app/core/settings.py:1309 — webhooks_dispatcher_poll_interval -->
 
 ```python
-# app/core/settings.py, line 1301
+# app/core/settings.py, line 1309
 webhooks_dispatcher_poll_interval: int = int(os.environ.get("WEBHOOKS_DISPATCHER_POLL_INTERVAL", "10"))
 ```
 
 ### 2.5 Secret Management
 
-Endpoint secrets are generated as `whsec_{token_urlsafe(32)}` (line 77-78) and encrypted via KMS for storage:
-<!-- VERIFIED: app/services/webhook_service.py:77-78 — _gen_secret returns whsec_{token_urlsafe(32)} -->
-<!-- CORRECTED: was "line 79", _gen_secret is at line 77-78 -->
+Endpoint secrets are generated as `whsec_{token_urlsafe(32)}` (line 178-179) and encrypted via KMS for storage:
+<!-- VERIFIED: app/services/webhook_service.py:178-179 — _gen_secret returns whsec_{token_urlsafe(32)} -->
 
 ```python
-# app/services/webhook_service.py, lines 103-108
+# app/services/webhook_service.py, lines 217-221
 try:
     encrypted_secret = kms_encrypt(plaintext_secret)
 except Exception:
     # If KMS is unavailable (dev mode), store plaintext with marker
     encrypted_secret = f"PLAIN:{plaintext_secret}"
 ```
-<!-- VERIFIED: app/services/webhook_service.py:103-108 — KMS encrypt with PLAIN fallback -->
+<!-- VERIFIED: app/services/webhook_service.py:217-221 — KMS encrypt with PLAIN fallback -->
 
 The dispatcher decrypts before signing (line 53):
 <!-- VERIFIED: app/services/webhook_dispatcher.py:53 — _decrypt_secret -->
@@ -244,31 +243,31 @@ secret = _decrypt_secret(endpoint["secret"])
 
 ### 2.6 Webhook Router (`app/routers/webhooks.py`)
 
-The router (lines 1-241) provides user and admin endpoints:
+The router provides user and admin endpoints, plus v2 DLQ/stats/circuit-breaker management:
 
-**User endpoints** (lines 48-177):
-- `POST /ui/webhooks` -- create endpoint (line 48)
-- `GET /ui/webhooks` -- list endpoints (line 69)
-- `GET /ui/webhooks/event-types` -- list event types (line 77)
-- `GET /ui/webhooks/{endpoint_id}` -- get endpoint (line 89)
-- `PATCH /ui/webhooks/{endpoint_id}` -- update endpoint (line 101)
-- `DELETE /ui/webhooks/{endpoint_id}` -- delete endpoint (line 125)
-- `POST /ui/webhooks/{endpoint_id}/test` -- test endpoint (line 136)
-- `POST /ui/webhooks/{endpoint_id}/rotate-secret` -- rotate secret (line 148)
-- `GET /ui/webhooks/{endpoint_id}/deliveries` -- delivery log (line 160)
+**User endpoints** (lines 58-193):
+- `POST /ui/webhooks` -- create endpoint (line 58)
+- `GET /ui/webhooks` -- list endpoints (line 82)
+- `GET /ui/webhooks/event-types` -- list event types (line 90)
+- `GET /ui/webhooks/{endpoint_id}` -- get endpoint (line 103)
+- `PATCH /ui/webhooks/{endpoint_id}` -- update endpoint (line 115)
+- `DELETE /ui/webhooks/{endpoint_id}` -- delete endpoint (line 141)
+- `POST /ui/webhooks/{endpoint_id}/test` -- test endpoint (line 152)
+- `POST /ui/webhooks/{endpoint_id}/rotate-secret` -- rotate secret (line 164)
+- `GET /ui/webhooks/{endpoint_id}/deliveries` -- delivery log (line 176)
 
-**Admin endpoints** (lines 180-241):
-- `GET /ui/admin/webhooks/endpoints` -- list all endpoints (line 182)
-- `GET /ui/admin/webhooks/health` -- health summary (line 193)
-- `GET /ui/admin/webhooks/dead-letter` -- dead letter queue (line 204)
-- `POST /ui/admin/webhooks/endpoints/{endpoint_id}/disable` -- admin disable (line 215)
-<!-- VERIFIED: app/routers/webhooks.py — admin endpoints at lines 182, 193, 204, 215 -->
+**Admin endpoints** (lines 198-390):
+- `GET /ui/admin/webhooks/endpoints` -- list all endpoints (line 198)
+- `GET /ui/admin/webhooks/health` -- health summary (line 209)
+- `GET /ui/admin/webhooks/dead-letter` -- dead letter queue (line 220)
+- `POST /ui/admin/webhooks/endpoints/{endpoint_id}/disable` -- admin disable (line 232)
+<!-- VERIFIED: app/routers/webhooks.py — user endpoints at lines 58-193; admin endpoints at lines 198-390 -->
 
 The admin endpoints use a simple role check:
-<!-- VERIFIED: app/routers/webhooks.py:187-189 — role check -->
+<!-- VERIFIED: app/routers/webhooks.py:203-205 — role check -->
 
 ```python
-# app/routers/webhooks.py, lines 187-189
+# app/routers/webhooks.py, lines 203-205
 role = ctx.get("role", "user")
 if str(role).lower() not in ("root", "admin"):
     raise HTTPException(status_code=403, detail="Admin access required")
@@ -288,7 +287,7 @@ pending  ──(attempt)──> success
                              └──(max attempts)──> dead_letter (end state)
 ```
 
-The `handle_delivery_failure` function (lines 612-673) manages transitions:
+The `handle_delivery_failure` function (line 763) manages transitions:
 - Increments `attempt_count`
 - If `attempt >= max_attempts`: set `status=dead_letter`
 - Otherwise: set `status=failed`, `next_retry_at = now + delay`
@@ -297,11 +296,11 @@ The `handle_delivery_failure` function (lines 612-673) manages transitions:
 
 ### 2.8 Settings (`app/core/settings.py`)
 
-Webhook-related settings (lines 1294-1302):
-<!-- VERIFIED: app/core/settings.py:1294-1302 — all webhook settings confirmed -->
+Webhook-related settings (lines 1302-1322):
+<!-- VERIFIED: app/core/settings.py:1302-1322 — all webhook settings (v1 at 1302-1310, v2 at 1312-1322) -->
 
 ```python
-# app/core/settings.py, lines 1294-1302
+# app/core/settings.py, lines 1302-1322
 webhook_endpoints_table_name: str = os.environ.get("WEBHOOK_ENDPOINTS_TABLE_NAME", "webhook_endpoints")
 webhook_deliveries_table_name: str = os.environ.get("WEBHOOK_DELIVERIES_TABLE_NAME", "webhook_deliveries")
 webhooks_enabled: bool = os.environ.get("WEBHOOKS_ENABLED", "1") not in ("0", "false", "False")
@@ -311,6 +310,17 @@ webhooks_max_retries: int = int(os.environ.get("WEBHOOKS_MAX_RETRIES", "5"))
 webhooks_auto_disable_threshold: int = int(os.environ.get("WEBHOOKS_AUTO_DISABLE_THRESHOLD", "50"))
 webhooks_dispatcher_poll_interval: int = int(os.environ.get("WEBHOOKS_DISPATCHER_POLL_INTERVAL", "10"))
 webhooks_delivery_ttl_days: int = int(os.environ.get("WEBHOOKS_DELIVERY_TTL_DAYS", "30"))
+# v2 settings (lines 1313-1322)
+webhooks_v2_enabled: bool = ...
+webhooks_circuit_breaker_enabled: bool = ...
+webhooks_default_circuit_failure_threshold: int = ...
+webhooks_circuit_initial_cooldown_seconds: int = ...
+webhooks_circuit_max_cooldown_seconds: int = ...
+webhooks_stats_table_name: str = ...
+webhooks_stats_retention_days: int = ...
+webhooks_replay_rate_limit_per_hour: int = ...
+webhooks_signature_replay_window_seconds: int = ...
+webhooks_max_payload_size_bytes: int = ...
 ```
 
 ---
@@ -469,8 +479,9 @@ DEFAULT_RETRY_POLICY = {
 
 **Retry delay calculation** -- full implementation:
 
+<!-- NOTE: app/services/webhook_retry.py ALREADY EXISTS — implemented with normalize_retry_policy:18, compute_retry_delay:39, should_retry:74 -->
 ```python
-# app/services/webhook_retry.py (new)
+# app/services/webhook_retry.py (already implemented)
 
 from __future__ import annotations
 
@@ -785,8 +796,9 @@ The circuit breaker has three states:
 
 Full circuit breaker implementation:
 
+<!-- NOTE: app/services/webhook_circuit_breaker.py ALREADY EXISTS — implemented with get_circuit_state:20, should_attempt_delivery:25, record_delivery_result:53, transition_circuit:123, reset_circuit:157 -->
 ```python
-# app/services/webhook_circuit_breaker.py (new)
+# app/services/webhook_circuit_breaker.py (already implemented)
 
 from __future__ import annotations
 
@@ -1047,8 +1059,9 @@ async def run_webhook_dispatcher_loop() -> None:
 
 Dead-lettered events are stored in the `webhook_deliveries` table with `status=dead_letter`. v2 adds management operations:
 
+<!-- NOTE: app/services/webhook_dlq.py ALREADY EXISTS — implemented with replay_dead_letter:15, replay_all_dead_letters:61, acknowledge_dead_letter:111, purge_dead_letters:133, list_endpoint_dead_letters:163 -->
 ```python
-# app/services/webhook_dlq.py (new)
+# app/services/webhook_dlq.py (already implemented)
 
 from __future__ import annotations
 
@@ -1282,8 +1295,9 @@ Delivery statistics are aggregated hourly and stored for dashboard rendering:
 
 Stats recording implementation:
 
+<!-- NOTE: app/services/webhook_stats.py ALREADY EXISTS — implemented with record_delivery_stat:25, get_endpoint_stats:75, get_global_stats:124 -->
 ```python
-# app/services/webhook_stats.py (new)
+# app/services/webhook_stats.py (already implemented)
 
 from __future__ import annotations
 
@@ -1468,8 +1482,9 @@ def _classify_error(result: Dict[str, Any]) -> str:
 
 ### 3.7 SSRF Protection Implementation
 
+<!-- NOTE: app/services/webhook_ssrf.py ALREADY EXISTS — implemented with validate_webhook_url:26 -->
 ```python
-# app/services/webhook_ssrf.py (new)
+# app/services/webhook_ssrf.py (already implemented)
 
 from __future__ import annotations
 
@@ -1825,7 +1840,8 @@ async def admin_enable_endpoint(
 
 ### 5.1 Webhook Dashboard Page
 
-**File**: `frontend/src/pages/webhooks/WebhookDashboard.tsx` (new/enhanced)
+**File**: `frontend/src/pages/webhooks/WebhookDashboard.tsx` (already exists)
+<!-- VERIFIED: frontend/src/pages/webhooks/WebhookDashboard.tsx exists -->
 
 - Overview cards: Total Endpoints, Active, Success Rate (24h), Avg Latency, Dead Letters
 - Endpoint list table with circuit state badge (green=closed, yellow=half_open, red=open)
@@ -1961,7 +1977,8 @@ export default function WebhookDashboard() {
 
 ### 5.2 Endpoint Detail Page
 
-**File**: `frontend/src/pages/webhooks/WebhookEndpointDetail.tsx` (new)
+**File**: `frontend/src/pages/webhooks/WebhookEndpointDetail.tsx` (already exists)
+<!-- VERIFIED: frontend/src/pages/webhooks/WebhookEndpointDetail.tsx exists -->
 
 - Tabs: Configuration, Deliveries, Dead Letters, Statistics
 - Configuration tab: URL, event types (multi-select), retry policy form, signature version toggle
@@ -2602,8 +2619,8 @@ The v2 signature includes a timestamp. Consumers should reject payloads where `a
 
 ### 9.3 Secret Encryption at Rest
 
-Endpoint secrets are encrypted with KMS before storage (via `kms_encrypt` from `app/core/crypto.py`, line 16). In dev mode, secrets are stored with a `PLAIN:` prefix (line 108 of webhook_service.py).
-<!-- VERIFIED: app/core/crypto.py:16 — kms_encrypt; app/services/webhook_service.py:108 — PLAIN: fallback -->
+Endpoint secrets are encrypted with KMS before storage (via `kms_encrypt` from `app/core/crypto.py`, line 16). In dev mode, secrets are stored with a `PLAIN:` prefix (line 221 of webhook_service.py).
+<!-- VERIFIED: app/core/crypto.py:16 — kms_encrypt; app/services/webhook_service.py:221 — PLAIN: fallback -->
 
 ### 9.4 Delivery Response Handling
 
@@ -2639,6 +2656,7 @@ Webhook payloads containing user-generated content (message text, post content) 
 6. Ensure backward compatibility (existing endpoints only receive subscribed events)
 
 ### 10.2 Phase 2: Retry Policy & Signatures (Week 2)
+<!-- NOTE: Phase 2 ALREADY IMPLEMENTED — app/services/webhook_retry.py exists -->
 
 1. Create `app/services/webhook_retry.py` with retry delay computation
 2. Add `retry_policy` field to endpoint record
@@ -2648,6 +2666,7 @@ Webhook payloads containing user-generated content (message text, post content) 
 6. Add `signature_version` field to endpoint record
 
 ### 10.3 Phase 3: Circuit Breaker (Week 3)
+<!-- NOTE: Phase 3 ALREADY IMPLEMENTED — app/services/webhook_circuit_breaker.py exists -->
 
 1. Create `app/services/webhook_circuit_breaker.py`
 2. Add circuit breaker fields to endpoint record
@@ -2656,6 +2675,7 @@ Webhook payloads containing user-generated content (message text, post content) 
 5. Admin monitoring for circuit-open endpoints
 
 ### 10.4 Phase 4: Dead Letter Management (Week 3-4)
+<!-- NOTE: Phase 4 ALREADY IMPLEMENTED — app/services/webhook_dlq.py exists -->
 
 1. Create `app/services/webhook_dlq.py`
 2. Add replay, acknowledge, purge functions
@@ -2663,6 +2683,7 @@ Webhook payloads containing user-generated content (message text, post content) 
 4. Rate limiting on replay operations
 
 ### 10.5 Phase 5: Dashboard & Stats (Week 4-5)
+<!-- NOTE: Phase 5 ALREADY IMPLEMENTED — app/services/webhook_stats.py exists; webhook_stats DDB table defined at scripts/local-ddb-init.py:896 -->
 
 1. Create `app/services/webhook_stats.py`
 2. Create `webhook_stats` DDB table
@@ -2680,6 +2701,7 @@ Webhook payloads containing user-generated content (message text, post content) 
 6. E2E test suite (`frontend/e2e/webhooks-v2.spec.ts`)
 
 ### 10.7 Phase 7: SSRF Protection (Week 6)
+<!-- NOTE: Phase 7 ALREADY IMPLEMENTED — app/services/webhook_ssrf.py exists with validate_webhook_url:26 -->
 
 1. Create `app/services/webhook_ssrf.py`
 2. Integrate URL validation into `register_endpoint` and `update_endpoint`
@@ -2726,3 +2748,53 @@ logger.info(
 ```
 
 These structured logs can be indexed in Elasticsearch/CloudWatch for operational dashboards.
+
+---
+
+## Codebase References
+
+> **NOTE**: Most v2 features described in this ticket have ALREADY BEEN IMPLEMENTED. The files listed below exist in the codebase with the functionality described.
+
+### Backend Services (all exist)
+| File | Key Functions | Lines |
+|------|--------------|-------|
+| `app/services/webhook_service.py` | `WEBHOOK_EVENT_TYPES` (22 types), `WEBHOOK_EVENT_TYPES_V2` (merged), `register_endpoint`, `handle_delivery_failure`, `_gen_secret` | 24, 60, 182, 763, 178 |
+| `app/services/webhook_retry.py` | `normalize_retry_policy`, `compute_retry_delay`, `should_retry` | 18, 39, 74 |
+| `app/services/webhook_circuit_breaker.py` | `get_circuit_state`, `should_attempt_delivery`, `record_delivery_result`, `transition_circuit`, `reset_circuit` | 20, 25, 53, 123, 157 |
+| `app/services/webhook_dlq.py` | `replay_dead_letter`, `replay_all_dead_letters`, `acknowledge_dead_letter`, `purge_dead_letters`, `list_endpoint_dead_letters` | 15, 61, 111, 133, 163 |
+| `app/services/webhook_stats.py` | `record_delivery_stat`, `get_endpoint_stats`, `get_global_stats` | 25, 75, 124 |
+| `app/services/webhook_ssrf.py` | `validate_webhook_url` | 26 |
+| `app/services/webhook_dispatcher.py` | `run_webhook_dispatcher_loop`, `start_webhook_dispatcher_task` | 28, 84 |
+
+### Backend Router
+| File | Key Endpoints | Lines |
+|------|--------------|-------|
+| `app/routers/webhooks.py` | User CRUD (58-193), Admin endpoints (198-390), DLQ mgmt (275-345), Stats (262, 359), Circuit reset (344) | 58-390 |
+
+### Configuration
+| File | Settings | Lines |
+|------|----------|-------|
+| `app/core/settings.py` | v1 webhook settings (table names, enabled, max endpoints, timeout, retries, auto-disable, poll interval, TTL) | 1302-1310 |
+| `app/core/settings.py` | v2 webhook settings (v2 enabled, circuit breaker, stats table, replay rate limit, signature replay window, max payload size) | 1313-1322 |
+| `app/core/crypto.py` | `kms_encrypt` (used for endpoint secret storage) | 16 |
+
+### Registration & Startup
+| File | Registration | Line |
+|------|-------------|------|
+| `app/main.py` | `app.include_router(webhooks_router)` | 446 |
+| `app/main.py` | `app.add_event_handler("startup", start_webhook_dispatcher_task)` | 472 |
+
+### DynamoDB Tables
+| Table | Definition | Line in `scripts/local-ddb-init.py` |
+|-------|-----------|------|
+| `webhook_endpoints` | PK: `pk`, SK: `sk` | 880 |
+| `webhook_deliveries` | PK: `pk`, SK: `sk` | 885 |
+| `webhook_stats` | PK: `pk`, SK: `sk` | 896 |
+
+### Frontend (all exist)
+| File | Purpose |
+|------|---------|
+| `frontend/src/pages/webhooks/WebhookDashboard.tsx` | Endpoint list + overview cards |
+| `frontend/src/pages/webhooks/WebhookEndpointDetail.tsx` | Endpoint detail with config, deliveries, DLQ, stats tabs |
+| `frontend/src/api/endpoints/webhooks.ts` | API client functions for webhook CRUD, DLQ, stats |
+| `frontend/src/components/shared/DeadLetterPanel.tsx` | Reusable DLQ management component |

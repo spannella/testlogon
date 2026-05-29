@@ -40,14 +40,16 @@ Creators increasingly incorporate third-party assets -- licensed music, stock fo
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| File manager service | `app/services/filemanager.py` (~700 lines) | S3 upload/download patterns; `put_node`, `get_node`, bucket helpers; reuse for agreement file storage |
-| Billing shared | `app/services/billing_shared.py` (260 lines) | Ledger entry patterns (`new_ledger_entry`); LICENSE-003 will extend for revenue splits |
-| Alerts service | `app/services/alerts.py` (~640 lines) | `write_alert`, SSE publish, email/SMS dispatch; reuse for expiry warnings |
-| Content reports | `app/services/content_reports_store.py` | Content flagging patterns; LICENSE-006 will extend for compliance flags |
-| Profile service | `app/services/profile.py` | `get_profile(user_id)` for creator display names in admin review views |
+| File manager service | `app/services/filemanager.py` (~4955 lines) | S3 upload/download patterns; `put_node` (line 460), `get_node` (line 450), bucket helpers; reuse for agreement file storage |
+| Billing shared | `app/services/billing_shared.py` (~260 lines) | Ledger entry patterns (`new_ledger_entry` at line 217); LICENSE-003 will extend for revenue splits |
+| Alerts service | `app/services/alerts.py` (~899 lines) | `write_alert` (line 355), SSE publish, email/SMS dispatch; reuse for expiry warnings |
+| Content reports | `app/services/content_reports_store.py` (82 lines) | Content flagging patterns; LICENSE-006 will extend for compliance flags |
+| Profile service | `app/services/profile.py` (345 lines) | `get_profile(user_id)` (line 220) for creator display names in admin review views |
 | DDB table init | `scripts/local-ddb-init.py` | `TableDef` pattern with GSIs and `attr_types` for numeric sort keys |
-| Auth dependencies | `app/auth/deps.py` | `require_ui_session` returns `{user_sub, role, admin_profile}`; `require_admin_session` for admin endpoints |
+| Auth dependencies | `app/auth/deps.py` | `require_ui_session` (line 184) returns `{user_sub, role, admin_profile}` |
 | S3 mock (moto) | `app/core/dev_s3.py` | In-process S3 mock; agreement PDFs stored alongside other uploads |
+
+<!-- NOTE: require_admin_session does NOT exist in app/auth/deps.py. The codebase pattern for admin auth is: require_ui_session + manual role check via normalize_role(user.role) not in {Role.ADMIN, Role.ROOT} (see app/routers/kyc_cases.py:1003 for the pattern). -->
 
 ### 2.2 Gaps
 
@@ -411,7 +413,8 @@ def _get_reverse_lookup(license_id):
 
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
-from app.auth.deps import require_ui_session, require_admin_session
+from app.auth.deps import require_ui_session
+from app.auth.roles import Role, normalize_role
 from app.services import license_agreements as svc
 
 router = APIRouter(prefix="/ui/licenses", tags=["licenses"])
@@ -432,8 +435,8 @@ admin_router = APIRouter(prefix="/ui/admin/licenses", tags=["licenses-admin"])
 | `GET` | `/ui/licenses/agreements/{license_id}/content` | `require_ui_session` | List content linked to agreement |
 | `GET` | `/ui/licenses/content/{content_id}/licenses` | `require_ui_session` | List licenses for a content item |
 | `GET` | `/ui/licenses/agreements/{license_id}/download` | `require_ui_session` | Download agreement file (signed URL) |
-| `GET` | `/ui/admin/licenses/review` | `require_admin_session` | List agreements pending review |
-| `POST` | `/ui/admin/licenses/review/{license_id}` | `require_admin_session` | Verify or reject agreement |
+| `GET` | `/ui/admin/licenses/review` | `require_ui_session + admin role check` | List agreements pending review |
+| `POST` | `/ui/admin/licenses/review/{license_id}` | `require_ui_session + admin role check` | Verify or reject agreement |
 
 ### 3.6 Request/Response Models
 
@@ -561,6 +564,8 @@ Add to `frontend/src/App.tsx`:
 Add "Licenses" entry to the Productivity group in `Sidebar.tsx` and `AppShell.tsx` (MobileSidebar) with `FileCheck` icon from lucide-react. Add to `MORE_LINKS` in `MobileNav.tsx`.
 
 ### 3.10 Files to Create
+
+<!-- NOTE: None of the files below exist yet — all are new implementation required. The licenses table is not in scripts/local-ddb-init.py, app/core/settings.py, or app/core/tables.py. No frontend pages/licenses/ directory exists. -->
 
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
@@ -697,7 +702,7 @@ A periodic background task (runs daily, triggered by `BackgroundTasks` or a cron
 | Endpoint | Auth | Authorization |
 |----------|------|---------------|
 | `/ui/licenses/*` | `require_ui_session` | Creator sees only own agreements |
-| `/ui/admin/licenses/*` | `require_admin_session` | Platform admin or root only |
+| `/ui/admin/licenses/*` | `require_ui_session + admin role check` | Platform admin or root only |
 | Download endpoint | `require_ui_session` | Owner or admin only |
 
 ### 7.2 File Upload Security
@@ -712,7 +717,7 @@ A periodic background task (runs daily, triggered by `BackgroundTasks` or a cron
 
 - Agreement CRUD operations validate `creator_sub` matches the agreement owner in the PK.
 - Content linking validates the creator owns both the agreement and has access to the content item.
-- Admin endpoints use `require_admin_session` (role >= ADMIN).
+- Admin endpoints use `require_ui_session + admin role check` (role >= ADMIN).
 - Soft-delete prevents data loss; hard-delete is admin-only (future consideration).
 
 ### 7.4 Rate Limiting
@@ -740,7 +745,7 @@ A periodic background task (runs daily, triggered by `BackgroundTasks` or a cron
 | `app/services/filemanager.py` | Exists | S3 upload/download patterns and bucket access |
 | `app/services/alerts.py` | Exists | Expiry notifications and admin review notifications |
 | `app/services/profile.py` | Exists | Creator display names in admin review queue |
-| `app/auth/deps.py` | Exists | `require_ui_session`, `require_admin_session` |
+| `app/auth/deps.py` | Exists | `require_ui_session` (line 184); admin auth via manual role check pattern |
 | `app/core/tables.py` | Exists (modify) | Add `T.licenses` table handle |
 | `scripts/local-ddb-init.py` | Exists (modify) | Add `licenses` table definition |
 | LICENSE-002 | Not started | Extends the licenses table with issued license records |
@@ -761,3 +766,50 @@ A periodic background task (runs daily, triggered by `BackgroundTasks` or a cron
 8. Expiry alerts are sent when agreements are within 30 days of expiration.
 9. Expired agreements are automatically flagged and linked content marked for compliance review.
 10. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+All file paths relative to the repository root.
+
+### Existing Files Referenced (verified)
+- `app/services/filemanager.py` (4955 lines) — S3 upload/download patterns
+  - `get_node()` at line 450
+  - `put_node()` at line 460
+- `app/services/alerts.py` (899 lines) — Alert system
+  - `write_alert()` at line 355 — reuse for license expiry/verification notifications
+- `app/services/billing_shared.py` (~260 lines) — Billing helpers
+  - `new_ledger_entry()` at line 217 — pattern for LICENSE-003 revenue splits
+- `app/services/content_reports_store.py` (82 lines) — Content flagging patterns
+- `app/services/profile.py` (345 lines) — Profile lookups
+  - `get_profile()` at line 220 — for admin review queue display names
+- `app/auth/deps.py` — Auth dependencies
+  - `require_ui_session` at line 184 (returns `{user_sub, role, admin_profile}`)
+  - `require_root_session` at line 273
+  - **`require_admin_session` does NOT exist** — use `require_ui_session` + `normalize_role(user.role) not in {Role.ADMIN, Role.ROOT}` pattern (see `app/routers/kyc_cases.py:1003`)
+- `app/auth/roles.py` — `Role` enum and `normalize_role()` helper
+- `app/core/dev_s3.py` — In-process S3 mock (moto)
+- `scripts/local-ddb-init.py` — DynamoDB table definitions (`TableDef` pattern)
+
+### Files to Create (none exist yet)
+- `app/services/license_agreements.py` — Core service (~400 lines)
+- `app/routers/license_agreements.py` — REST API endpoints (~250 lines)
+- `frontend/src/pages/licenses/LicensesPage.tsx` — Main page (~280 lines)
+- `frontend/src/pages/licenses/UploadAgreementDialog.tsx` — Upload dialog (~150 lines)
+- `frontend/src/pages/licenses/AgreementDetailDialog.tsx` — Detail dialog (~120 lines)
+- `frontend/src/pages/licenses/LinkContentDialog.tsx` — Link content dialog (~80 lines)
+- `frontend/src/pages/licenses/AdminReviewPage.tsx` — Admin review page (~150 lines)
+- `frontend/src/api/endpoints/licenses.ts` — API wrappers (~120 lines)
+- `frontend/e2e/license-agreements.spec.ts` — E2E tests (~500 lines)
+
+### Files to Modify (verified to exist)
+- `app/main.py` — Register license routers
+- `app/models.py` — Add License Agreement Pydantic models
+- `app/core/settings.py` — Add `licenses_table_name` setting
+- `app/core/tables.py` — Add `T.licenses` table handle
+- `scripts/local-ddb-init.py` — Add `licenses` TableDef with 3 GSIs
+- `frontend/src/App.tsx` — Add license routes
+- `frontend/src/components/layout/Sidebar.tsx` — Add "Licenses" nav entry
+- `frontend/src/components/layout/AppShell.tsx` — Add to mobile sidebar
+- `frontend/src/components/layout/MobileNav.tsx` — Add to MORE_LINKS

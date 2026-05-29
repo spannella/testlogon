@@ -1006,6 +1006,6 @@ None. Python's `csv` module is in the standard library.
 | No text/csv in any router response | all routers | -- | VERIFIED (grep for "text/csv" returns 0 results in app/routers/) |
 | _csv_items is env var parsing | `app/routers/browser_ssh_terminal.py` | 389 | VERIFIED (not data export) |
 | No export in contacts page | `frontend/src/pages/contacts/ContactsPage.tsx` | all | VERIFIED (grep for "export" returns only the default export) |
-| Billing table handle | `app/core/tables.py` | 120 | VERIFIED: `billing=ddb.Table(S.billing_table_name)` |
-| Contacts table config | `app/core/settings.py` | 434 | VERIFIED: `contacts_table_name` |
+| Billing table handle | `app/core/tables.py` | 146 | VERIFIED: `billing=ddb.Table(S.billing_table_name)` |
+| Contacts table config | `app/core/settings.py` | 449 | VERIFIED: `contacts_table_name` |
 | Questionnaire response sessions | `app/routers/questionnaires.py` | 151 | VERIFIED: `REPO.list_response_sessions` |

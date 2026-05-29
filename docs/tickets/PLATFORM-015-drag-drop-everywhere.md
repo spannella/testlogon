@@ -14,13 +14,13 @@
 
 The platform has partial drag-and-drop support in two areas, but lacks a universal, consistent drag-and-drop experience across the application:
 
-1. **File Manager UploadZone**: The `UploadZone` component (`frontend/src/pages/files/UploadZone.tsx`, line 13) <!-- VERIFIED: UploadZone.tsx:13 --> wraps the file table and supports drag-and-drop file upload. It tracks `dragOver` state (line 14) <!-- VERIFIED: UploadZone.tsx:14 --> using a `dragCountRef` (line 15) <!-- VERIFIED: UploadZone.tsx:15 --> to handle nested drag enter/leave events. When files are dropped, it calls `uploadFile` for each file (line 17) <!-- CORRECTED: was "line 19", actually handleFiles at line 17, uploadFile call at line 26 -->. The visual overlay (line 71) <!-- VERIFIED: UploadZone.tsx:71 --> shows a dashed border with "Drop files here to upload" text.
+1. **File Manager UploadZone**: The `UploadZone` component (`frontend/src/pages/files/UploadZone.tsx`, line 17) <!-- CORRECTED: was "line 13"; UploadZone function is at line 17 --> wraps the file table and supports drag-and-drop file upload. It tracks `dragOver` state (line 18) <!-- CORRECTED: was "line 14"; dragOver state at line 18 --> using a `dragCountRef` (line 19) <!-- CORRECTED: was "line 15"; dragCountRef at line 19 --> to handle nested drag enter/leave events. When files are dropped, it calls `handleFiles` which uploads each file (line 21) <!-- CORRECTED: was "line 17"; handleFiles function at line 21, uploadFile call at line 51 -->. The visual overlay (line 137) <!-- CORRECTED: was "line 71"; dragOver overlay at line 137 --> shows a dashed border with "Drop files here to upload" text.
 
-2. **Image Editor Canvas**: The `ImageEditorDialog` (`frontend/src/pages/files/ImageEditorDialog.tsx`, line 23) <!-- CORRECTED: was "line 29", actually function definition at line 23; dragStart state is at line 29 --> uses `dragStart` state for crop selection drawing on a canvas element, but this is canvas-level drag tracking, not a file drop target.
+2. **Image Editor Canvas**: The `ImageEditorDialog` (`frontend/src/pages/files/ImageEditorDialog.tsx`, line 23) <!-- VERIFIED: ImageEditorDialog.tsx:23; dragStart state is at line 29 --> uses `dragStart` state for crop selection drawing on a canvas element, but this is canvas-level drag tracking, not a file drop target.
 
 3. **ComposeBar File Input**: The `ComposeBar` (`frontend/src/pages/messages/ComposeBar.tsx`) uses a hidden `<input type="file">` with an `onChange` handler (`handleFileChange`, line 632) <!-- VERIFIED: ComposeBar.tsx:632 --> that processes selected files. There is **no drag-and-drop** support on the compose bar or the conversation view. Users must click the paperclip button to attach files.
 
-4. **Broadcast Product Shelf Reorder**: The backend supports reordering broadcast product shelf items via `PATCH /sessions/{session_id}/products/reorder` (`app/routers/broadcast.py`, line 1931) <!-- VERIFIED: broadcast.py:1931 --> which accepts a `BroadcastShelfReorderIn` body with `item_order: List[str]` (line 1833) <!-- VERIFIED: broadcast.py:1833 -->. The service function `reorder_shelf` (`app/services/broadcast_product_shelf.py`, line 188) <!-- VERIFIED: broadcast_product_shelf.py:188 --> updates `display_order` for each item. The frontend has NO drag-and-drop reordering UI --- reordering requires manual API calls.
+4. **Broadcast Product Shelf Reorder**: The backend supports reordering broadcast product shelf items via `PATCH /sessions/{session_id}/products/reorder` (`app/routers/broadcast.py`, line 1945) <!-- CORRECTED: was "line 1931"; reorder route at line 1945 --> which accepts a `BroadcastShelfReorderIn` body with `item_order: List[str]` (line 1845) <!-- CORRECTED: was "line 1833"; BroadcastShelfReorderIn at line 1845 -->. The service function `reorder_shelf` (`app/services/broadcast_product_shelf.py`, line 188) <!-- VERIFIED: broadcast_product_shelf.py:188 --> updates `display_order` for each item. The frontend has NO drag-and-drop reordering UI --- reordering requires manual API calls.
 
 5. **No drag-and-drop in feed/posts**: Users cannot drag images from their desktop onto the post composer to attach them.
 
@@ -175,7 +175,7 @@ DndContext onDragEnd
 
 ### 2.1 UploadZone Component (`frontend/src/pages/files/UploadZone.tsx`)
 
-The `UploadZone` (line 13) <!-- VERIFIED: UploadZone.tsx:13 --> is the only production-ready drop zone in the codebase. It uses native browser drag events (`onDragEnter`, `onDragLeave`, `onDragOver`, `onDrop`) and wraps child content:
+The `UploadZone` (line 17) <!-- CORRECTED: was "line 13"; UploadZone function at line 17 --> is the only production-ready drop zone in the codebase. It uses native browser drag events (`onDragEnter`, `onDragLeave`, `onDragOver`, `onDrop`) and wraps child content:
 
 ```tsx
 export function UploadZone({ currentPath, onUploadComplete, children }: UploadZoneProps) {
@@ -201,9 +201,9 @@ export function UploadZone({ currentPath, onUploadComplete, children }: UploadZo
 ```
 
 Key implementation details:
-- **dragCountRef** (line 15) <!-- VERIFIED: UploadZone.tsx:15 -->: Counter to handle nested drag enter/leave events from child elements. Incremented on `dragEnter`, decremented on `dragLeave`. The overlay only shows when the count is > 0. This is a standard workaround for the browser's bubbling drag events.
-- **handleDrop** (line 51) <!-- VERIFIED: UploadZone.tsx:51 -->: Resets `dragCountRef` to 0 and processes `e.dataTransfer.files`.
-- **Visual overlay** (line 71) <!-- VERIFIED: UploadZone.tsx:71 -->: Shows when `dragOver` is true --- a dashed border with backdrop blur and an `Upload` icon from lucide-react.
+- **dragCountRef** (line 19) <!-- CORRECTED: was "line 15"; dragCountRef at line 19 -->: Counter to handle nested drag enter/leave events from child elements. Incremented on `dragEnter`, decremented on `dragLeave`. The overlay only shows when the count is > 0. This is a standard workaround for the browser's bubbling drag events.
+- **handleDrop** (line 104) <!-- CORRECTED: was "line 51"; handleDrop at line 104 -->: Resets `dragCountRef` to 0 and processes `e.dataTransfer.files`.
+- **Visual overlay** (line 137) <!-- CORRECTED: was "line 71"; drag overlay at line 137 -->: Shows when `dragOver` is true --- a dashed border with backdrop blur and an `Upload` icon from lucide-react.
 - **Sequential upload**: Files are uploaded one at a time in a `for` loop. No parallelism. For 10 files, each taking 500ms, total upload time is 5 seconds. Parallel upload would reduce this to ~2 seconds.
 
 ### 2.2 ComposeBar File Handling (`frontend/src/pages/messages/ComposeBar.tsx`)
@@ -259,9 +259,9 @@ The backend is ready for reorder operations:
 - Accepts an ordered list of item IDs
 - Updates `display_order` atomically per item
 - Publishes SSE event if the session is live (real-time update for viewers)
-- The route (`app/routers/broadcast.py`, line 1931) <!-- VERIFIED: broadcast.py:1931 --> checks that only the session creator can reorder
+- The route (`app/routers/broadcast.py`, line 1945) <!-- CORRECTED: was "line 1931"; reorder route at line 1945 --> checks that only the session creator can reorder
 
-The `BroadcastShelfReorderIn` model (line 1831) <!-- CORRECTED: was "line 1832", actually line 1831 --> validates the input:
+The `BroadcastShelfReorderIn` model (line 1845) <!-- CORRECTED: was "line 1831"; BroadcastShelfReorderIn at line 1845 --> validates the input:
 
 ```python
 class BroadcastShelfReorderIn(BaseModel):
@@ -270,7 +270,7 @@ class BroadcastShelfReorderIn(BaseModel):
 
 ### 2.4 File Manager Page (`frontend/src/pages/files/FilesPage.tsx`)
 
-The `FilesPage` (line 1171) <!-- CORRECTED: was "line 1170", actually UploadZone JSX at line 1171 --> wraps its content in the `UploadZone`:
+The `FilesPage` (line 1186) <!-- CORRECTED: was "line 1171"; UploadZone JSX at line 1186 --> wraps its content in the `UploadZone`:
 
 ```tsx
 <UploadZone currentPath={currentPath} onUploadComplete={() => refetchTree()}>
@@ -1206,7 +1206,7 @@ export function DropIndicator({ text, icon: Icon = Upload, variant = "upload" }:
 
 **File**: `frontend/src/pages/tickets/TicketKanbanBoard.tsx` (new)
 
-- Five-column layout with `useDroppable` per column.
+- Four-column layout with `useDroppable` per column (open, in_progress, waiting_on_user, done).
 - Each ticket card is `useDraggable`.
 - Calls status change API on cross-column drop.
 - Validates status transitions client-side before API call.
@@ -1317,11 +1317,11 @@ const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
 ### Section 134: Ticket Kanban Drag
 
 ```
-134.1  Drag ticket card from "Open" to "Pending": status updates
-134.2  Drag ticket card from "Pending" to "Resolved": status updates
+134.1  Drag ticket card from "Open" to "In Progress": status updates
+134.2  Drag ticket card from "In Progress" to "Done": status updates
 134.3  Ticket card moves to the new column with animation
 134.4  Status change persists (API confirms via GET)
-134.5  Invalid transition (Closed -> In Progress): rejected with toast
+134.5  Invalid transition (Done -> In Progress): rejected with toast <!-- NOTE: Per _STATUS_TRANSITIONS, "done" can only transition to "open" -->
 134.6  View toggle switches between list and kanban
 134.7  Kanban column shows ticket count badge
 134.8  Ticket card shows subject, priority badge, and assignee
@@ -1426,7 +1426,7 @@ const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
 
 3. **Drop zone spoofing**: A malicious browser extension could programmatically trigger drop events. The backend validates all uploads via session auth + CSRF, so spoofed drops without proper auth fail at the server level.
 
-4. **Reorder authorization**: The broadcast shelf reorder endpoint (`app/routers/broadcast.py`, line 1942) checks `ctx["user_sub"] != session.created_by` before allowing reorder. The ticket status change endpoint should similarly check that the user has permission to change the ticket's status (creator, assignee, or admin).
+4. **Reorder authorization**: The broadcast shelf reorder endpoint (`app/routers/broadcast.py`, line 1953) checks `ctx["user_sub"] != session.created_by` before allowing reorder. The ticket status change endpoint should similarly check that the user has permission to change the ticket's status (creator, assignee, or admin).
 
 5. **Denial of service via rapid drops**: Dropping 100 files simultaneously triggers 100 upload requests. The client-side cap of 20 files per drop mitigates this. The backend should also enforce per-user upload rate limiting. The parallel upload concurrency limit (3) prevents the client from overwhelming the server with simultaneous connections.
 
@@ -1437,3 +1437,35 @@ const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
 8. **Custom dataTransfer types**: The file-to-folder drag uses `application/x-file-path` as the data transfer type. This is a custom MIME type that is only readable within the same origin (browsers prevent cross-origin access to custom data transfer types). This prevents a malicious external page from reading or injecting file paths.
 
 9. **Kanban status validation**: The client-side `VALID_TRANSITIONS` map should be treated as a UX optimization, not a security measure. The backend must independently validate status transitions. The backend's validation is authoritative --- the client-side validation only prevents unnecessary API calls.
+
+---
+
+## Codebase References
+
+> **NOTE**: Several components described in this ticket already exist: `AppDropZone`, `DropIndicator`, `TicketKanbanBoard`, and the enhanced `UploadZone` (with parallel upload, size validation, and file count cap). The `SortableShelf` component is not a separate file; `@dnd-kit` integration exists in `ProductShelfManager.tsx`.
+
+| File | Line(s) | What |
+|------|---------|------|
+| `frontend/src/pages/files/UploadZone.tsx` | 17 | `UploadZone` component (drag-and-drop file upload) |
+| `frontend/src/pages/files/UploadZone.tsx` | 18 | `dragOver` state |
+| `frontend/src/pages/files/UploadZone.tsx` | 19 | `dragCountRef` (nested drag enter/leave counter) |
+| `frontend/src/pages/files/UploadZone.tsx` | 21 | `handleFiles()` (parallel upload with concurrency limit) |
+| `frontend/src/pages/files/UploadZone.tsx` | 104 | `handleDrop()` event handler |
+| `frontend/src/pages/files/UploadZone.tsx` | 114-123 | `app-file-drop` custom event listener for global drop routing |
+| `frontend/src/pages/files/UploadZone.tsx` | 137 | Visual drag overlay |
+| `frontend/src/pages/files/ImageEditorDialog.tsx` | 23 | `ImageEditorDialog` component |
+| `frontend/src/pages/files/ImageEditorDialog.tsx` | 29 | `dragStart` state (canvas crop selection, not file drop) |
+| `frontend/src/pages/messages/ComposeBar.tsx` | 632 | `handleFileChange()` (file input handler; no drop support) |
+| `frontend/src/pages/files/FilesPage.tsx` | 1186 | `UploadZone` JSX wrapper in FilesPage |
+| `frontend/src/components/shared/AppDropZone.tsx` | — | Global file drop zone (already implemented) |
+| `frontend/src/components/shared/DropIndicator.tsx` | — | Reusable drop zone visual indicator (already implemented) |
+| `frontend/src/pages/tickets/TicketKanbanBoard.tsx` | — | Kanban board with drag-and-drop (already implemented) |
+| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | 3 | `@dnd-kit/sortable` import for shelf reorder |
+| `app/routers/broadcast.py` | 1845 | `BroadcastShelfReorderIn` model (item_order validation) |
+| `app/routers/broadcast.py` | 1945 | `PATCH /sessions/{id}/products/reorder` route |
+| `app/routers/broadcast.py` | 1953 | Creator-only auth check for reorder |
+| `app/services/broadcast_product_shelf.py` | 188 | `reorder_shelf()` (updates display_order, publishes SSE) |
+| `app/services/tickets.py` | 15 | `_TICKET_STATUSES` = ("open", "in_progress", "waiting_on_user", "done") |
+| `app/services/tickets.py` | 16-21 | `_STATUS_TRANSITIONS` (valid status transition map) |
+| `app/services/filemanager.py` | 3474 | `move_node()` (file/folder move) |
+| `app/services/filemanager.py` | 3412 | `move_node_dispatched()` (dispatched variant) |

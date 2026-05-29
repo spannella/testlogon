@@ -45,7 +45,7 @@ Visual design consistency directly impacts user trust and engagement. Applicatio
 - **Frontend design system**: shadcn/ui components (`frontend/src/components/ui/`), Tailwind CSS configuration.
 - **Frontend pages**: 20+ feature pages under `frontend/src/pages/`.
 - **Existing UI components**: `Button`, `Dialog`, `Card`, `Badge`, `Input`, `Select` from shadcn/ui.
-- **Tailwind config**: `frontend/tailwind.config.js` with custom theme colors and spacing.
+- **Tailwind config**: Tailwind CSS v4 via `@tailwindcss/vite` plugin (`frontend/vite.config.ts:3,7`); theme tokens in `frontend/src/globals.css` (CSS `@theme` block). <!-- NOTE: `frontend/tailwind.config.js` does NOT exist — Tailwind v4 uses the Vite plugin and CSS-based configuration, not a JS config file. -->
 - **Playwright**: Installed and configured for E2E tests in `frontend/playwright.config.ts`.
 
 ### 2.2 Gaps
@@ -167,7 +167,7 @@ Stored as a DDB map on the agent registry entry (`stylist_config` field):
   ],
   "pages_to_review": ["/messages", "/feed", "/billing", "/files", "/settings"],
   "design_system_ref": "shadcn-ui",
-  "tailwind_config_path": "frontend/tailwind.config.js",
+  "tailwind_config_path": "frontend/src/globals.css",  // NOTE: Tailwind v4 — theme tokens are in globals.css, not tailwind.config.js
   "contrast_ratio_min": 4.5,
   "auto_create_tickets": true,
   "ticket_min_severity": "warning",
@@ -728,3 +728,25 @@ UIReviewDashboard                     data-testid="stylist-dashboard"
 | N2 | Invalid rule category | POST rule with category="invalid"; 422 |
 | N3 | Delete non-existent rule | DELETE rule with fake ID; 404 |
 | N4 | Review for non-existent page | Review completes but page marked as "not found" in results |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| shadcn/ui components | `frontend/src/components/ui/` | — | Confirmed exists; `Button`, `Dialog`, `Card`, `Badge`, etc. |
+| Frontend pages | `frontend/src/pages/` | — | 20+ feature page directories confirmed |
+| Tailwind CSS v4 | `frontend/vite.config.ts` | 3, 7 | `@tailwindcss/vite` plugin; NO `tailwind.config.js` file exists |
+| Theme tokens | `frontend/src/globals.css` | — | CSS-based theme configuration (Tailwind v4 pattern) |
+| Playwright config | `frontend/playwright.config.ts` | — | Confirmed exists; used for E2E tests |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `(event, user_sub, request, **fields)` |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+| Tables singleton | `app/core/tables.py` | — | `T` object |
+| Router registration | `app/main.py` | 297-465 | No `agent_stylist_router` registered yet |
+| `agent_ui_reviews` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — new table proposed in this ticket |
+| `agent_stylist.py` service | `app/services/` | — | Does NOT exist yet — new implementation in this ticket |
+| `agent_stylist.py` router | `app/routers/` | — | Does NOT exist yet — new implementation in this ticket |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing table |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |

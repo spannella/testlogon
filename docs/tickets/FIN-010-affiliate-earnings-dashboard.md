@@ -13,7 +13,7 @@
 
 ### 1.1 Purpose
 
-FIN-010 builds a comprehensive affiliate earnings dashboard on top of the existing affiliate link infrastructure. The backend (`app/services/affiliate_links.py`, 364 lines) supports link creation, click tracking, and conversion recording, and DynamoDB tables exist (AffiliateLinks, AffiliateClicks). The frontend (`frontend/src/pages/affiliates/AffiliateDashboard.tsx`, 204 lines) shows a basic list of affiliate links with create/delete functionality, but has no performance analytics, no earnings breakdown, no time-series charts, and no click-through analytics. This ticket fills those gaps.
+FIN-010 builds a comprehensive affiliate earnings dashboard on top of the existing affiliate link infrastructure. The backend (`app/services/affiliate_links.py`, 382 lines) supports link creation, click tracking, and conversion recording, and DynamoDB tables exist (`AffiliateLinks` at `scripts/local-ddb-init.py:990`, `AffiliateClicks` at `scripts/local-ddb-init.py:1001`). The frontend (`frontend/src/pages/affiliates/AffiliateDashboard.tsx`, 204 lines) shows a basic list of affiliate links with create/delete functionality, but has no performance analytics, no earnings breakdown, no time-series charts, and no click-through analytics. This ticket fills those gaps.
 
 ### 1.2 User Stories
 
@@ -40,26 +40,26 @@ The affiliate system backend is feature-complete: links are created, clicks are 
 
 | Function | Location | Status |
 |----------|----------|--------|
-| `create_affiliate_link` | `app/services/affiliate_links.py:63` | Complete -- creates link with commission, tracking code, GSI keys |
-| `get_link` | `app/services/affiliate_links.py:135` | Complete -- by link_id |
-| `get_link_by_code` | `app/services/affiliate_links.py:141` | Complete -- by tracking code via GSI |
-| `list_creator_links` | `app/services/affiliate_links.py:152` | Complete -- by creator via ByAffiliate GSI |
-| `delete_link` | `app/services/affiliate_links.py:162` | Complete -- soft delete (status=revoked) |
-| `record_click` | `app/services/affiliate_links.py:190` | Complete -- records click with device/UA classification |
-| `record_conversion` | `app/services/affiliate_links.py:272` | Complete -- records conversion with commission calculation |
-| `get_link_stats` | `app/services/affiliate_links.py:336` | Complete -- click_count, unique_click_count, conversion_count, revenue_cents, commission_earned_cents |
+| `create_affiliate_link` | `app/services/affiliate_links.py:63` | **Verified** -- creates link with commission, tracking code, GSI keys |
+| `get_link` | `app/services/affiliate_links.py:135` | **Verified** -- by link_id |
+| `get_link_by_code` | `app/services/affiliate_links.py:141` | **Verified** -- by tracking code via GSI |
+| `list_creator_links` | `app/services/affiliate_links.py:152` | **Verified** -- by creator via ByAffiliate GSI |
+| `delete_link` | `app/services/affiliate_links.py:162` | **Verified** -- soft delete (status=revoked) |
+| `record_click` | `app/services/affiliate_links.py:190` | **Verified** -- records click with device/UA classification |
+| `record_conversion` | `app/services/affiliate_links.py:272` | **Verified** -- records conversion with commission calculation |
+| `get_link_stats` | `app/services/affiliate_links.py:336` | **Verified** -- click_count, unique_click_count, conversion_count, revenue_cents, commission_earned_cents |
 
 ### 2.2 Existing Router Endpoints
 
 | Method | Path | Auth | Status |
 |--------|------|------|--------|
-| `POST` | `/ui/affiliates/links` | `require_ui_session` | Complete |
-| `GET` | `/ui/affiliates/links` | `require_ui_session` | Complete |
-| `GET` | `/ui/affiliates/links/{id}` | `require_ui_session` | Complete |
-| `DELETE` | `/ui/affiliates/links/{id}` | `require_ui_session` | Complete |
-| `GET` | `/ui/affiliates/links/{id}/stats` | `require_ui_session` | Complete |
-| `POST` | `/ui/affiliates/links/{id}/conversions` | Internal | Complete |
-| `GET` | `/r/{code}` | Public | Redirect to destination with tracking |
+| `POST` | `/ui/affiliates/links` | `require_ui_session` | **Verified** (see `app/routers/affiliate_links.py:66`) |
+| `GET` | `/ui/affiliates/links` | `require_ui_session` | **Verified** (see `app/routers/affiliate_links.py:96`) |
+| `GET` | `/ui/affiliates/links/{id}` | `require_ui_session` | **Verified** (see `app/routers/affiliate_links.py:106`) |
+| `DELETE` | `/ui/affiliates/links/{id}` | `require_ui_session` | **Verified** (see `app/routers/affiliate_links.py:120`) |
+| `GET` | `/ui/affiliates/links/{id}/stats` | `require_ui_session` | **Verified** (see `app/routers/affiliate_links.py:133`) |
+| `POST` | `/ui/affiliates/links/{id}/conversions` | Internal | **Verified** (see `app/routers/affiliate_links.py:148`) |
+| `GET` | `/r/{code}` | Public | **Verified** — Redirect to destination with tracking (see `app/routers/affiliate_links.py:174`) |
 
 ### 2.3 Existing Frontend (Stub)
 
@@ -73,13 +73,13 @@ The current `AffiliateDashboard.tsx` (204 lines) includes:
 
 | Access Pattern | Table | Key Condition | Filter | Use Case |
 |---------------|-------|---------------|--------|----------|
-| List links by creator | `AffiliateLinks` GSI1 | GSI1PK=`AFL#{creator_id}` | — | Creator's link list |
-| Get link by ID | `AffiliateLinks` | PK=`LINK#{link_id}`, SK=`META` | — | Link detail |
-| Get link by tracking code | `AffiliateLinks` GSI2 | GSI2PK=`CODE#{code}` | — | Redirect endpoint |
-| Record click | `AffiliateClicks` | PK=`LINK#{link_id}`, SK=`CLK#{ts}#{uuid}` | — | Click event storage |
-| Click time series | `AffiliateClicks` GSI1 | GSI1PK=`LINK#{link_id}#DAY#{date}` | — | Daily aggregated clicks |
-| Get summary | `AffiliateLinks` GSI1 | GSI1PK=`AFL#{creator_id}` | — | Aggregate all link stats |
-| Top products | `AffiliateLinks` GSI1 | GSI1PK=`AFL#{creator_id}` | — | Sort in-memory by conversions |
+| List links by creator | `AffiliateLinks` ByAffiliate GSI | GSI1PK=`AFL#{creator_id}` (see `scripts/local-ddb-init.py:994`) | — | Creator's link list |
+| Get link by ID | `AffiliateLinks` | PK=`link_id` (note: table has NO sort key — see `scripts/local-ddb-init.py:992`) | — | Link detail |
+| Get link by tracking code | `AffiliateLinks` ByCode GSI | GSI2PK=`CODE#{code}` (see `scripts/local-ddb-init.py:995`) | — | Redirect endpoint |
+| Record click | `AffiliateClicks` | PK=`link_id`, SK=`click_id` (see `scripts/local-ddb-init.py:1003-1004`) | — | Click event storage |
+| Click time series | `AffiliateClicks` ByVisitor GSI | GSI1PK, GSI1SK(N) (see `scripts/local-ddb-init.py:1006`) | — | Daily aggregated clicks |
+| Get summary | `AffiliateLinks` ByAffiliate GSI | GSI1PK=`AFL#{creator_id}` | — | Aggregate all link stats |
+| Top products | `AffiliateLinks` ByProduct GSI | GSI3PK (see `scripts/local-ddb-init.py:996`) | — | Sort in-memory by conversions |
 
 **Example DynamoDB Item** (affiliate link):
 
@@ -712,3 +712,31 @@ AffiliateDashboard
 8. Creators see only their own affiliate data.
 9. Admin can view platform-wide affiliate stats.
 10. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | What |
+|-----|------|---------|------|
+| 1 | `app/services/affiliate_links.py` | 63 | `create_affiliate_link()` |
+| 2 | `app/services/affiliate_links.py` | 135 | `get_link()` |
+| 3 | `app/services/affiliate_links.py` | 141 | `get_link_by_code()` |
+| 4 | `app/services/affiliate_links.py` | 152 | `list_creator_links()` |
+| 5 | `app/services/affiliate_links.py` | 162 | `delete_link()` |
+| 6 | `app/services/affiliate_links.py` | 190 | `record_click()` |
+| 7 | `app/services/affiliate_links.py` | 272 | `record_conversion()` |
+| 8 | `app/services/affiliate_links.py` | 336 | `get_link_stats()` |
+| 9 | `app/routers/affiliate_links.py` | 66 | `POST /ui/affiliates/links` |
+| 10 | `app/routers/affiliate_links.py` | 96 | `GET /ui/affiliates/links` |
+| 11 | `app/routers/affiliate_links.py` | 106 | `GET /ui/affiliates/links/{id}` |
+| 12 | `app/routers/affiliate_links.py` | 120 | `DELETE /ui/affiliates/links/{id}` |
+| 13 | `app/routers/affiliate_links.py` | 133 | `GET /ui/affiliates/links/{id}/stats` |
+| 14 | `app/routers/affiliate_links.py` | 148 | `POST /ui/affiliates/links/{id}/conversions` |
+| 15 | `app/routers/affiliate_links.py` | 174 | `GET /r/{tracking_code}` |
+| 16 | `app/main.py` | 117, 452 | `affiliate_links_router` import and registration |
+| 17 | `scripts/local-ddb-init.py` | 990-998 | `AffiliateLinks` table definition (PK=link_id, no SK; 3 GSIs: ByAffiliate, ByCode, ByProduct) |
+| 18 | `scripts/local-ddb-init.py` | 1001-1008 | `AffiliateClicks` table definition (PK=link_id, SK=click_id; 1 GSI: ByVisitor) |
+| 19 | `app/core/settings.py` | 1436-1441 | `affiliate_links_enabled`, `affiliate_links_table_name`, `affiliate_clicks_table_name` |
+| 20 | `frontend/src/pages/affiliates/AffiliateDashboard.tsx` | — | Current 204-line stub dashboard |
+| 21 | `frontend/src/api/endpoints/affiliates.ts` | — | Existing frontend API wrappers |

@@ -64,27 +64,27 @@ The platform has multiple audit event sources, each with its own storage and sch
 
 #### 2.1.1 General Audit Events (`app/services/alerts.py`)
 
-The `audit_event()` function (line 570) is the primary audit recording mechanism:
-<!-- VERIFIED: app/services/alerts.py:570 — audit_event -->
+The `audit_event()` function (line 695) is the primary audit recording mechanism:
+<!-- CORRECTED: audit_event is at line 695, not 570 -->
 
 ```python
-# app/services/alerts.py, lines 570-571
+# app/services/alerts.py, lines 695-696
 def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
     payload: Dict[str, Any] = {"event": event, "user_sub": user_sub, "ts": now_ts(), **fields}
 ```
 
-This records events to the `T.alerts` table. Events include `ui_session_start`, `ui_session_finalize`, `mfa_email_verify`, `mfa_sms_verify`, `role_grant`, `role_revoke`, `impersonation_start`, `impersonation_stop`, and many more. The function enriches events with IP address, user agent, and profile identity (lines 578-580):
-<!-- VERIFIED: app/services/alerts.py:578-580 — IP and user_agent enrichment -->
+This records events to the `T.alerts` table. Events include `ui_session_start`, `ui_session_finalize`, `mfa_email_verify`, `mfa_sms_verify`, `role_grant`, `role_revoke`, `impersonation_start`, `impersonation_stop`, and many more. The function enriches events with IP address, user agent, and profile identity (lines 703-705):
+<!-- CORRECTED: IP/user_agent enrichment is at lines 703-705, not 578-580 -->
 
 ```python
-# app/services/alerts.py, lines 578-580
+# app/services/alerts.py, lines 703-705
 if request is not None:
     payload["ip"] = client_ip_from_request(request)
     payload["user_agent"] = (request.headers.get("user-agent", "")[:256])
 ```
 
-And impersonation context (lines 581-593):
-<!-- VERIFIED: app/services/alerts.py:581-593 — impersonation context extraction -->
+And impersonation context (lines 706-712):
+<!-- CORRECTED: impersonation context extraction is at lines 706-712, not 581-593 -->
 
 ```python
 actor_sub = getattr(state, "actor_sub", "")
@@ -233,7 +233,7 @@ And uses it within ticket resolution, content removal, and ban operations to cre
 #### 2.1.5 Role Audit (`app/core/tables.py`)
 
 The role audit table (line 119):
-<!-- VERIFIED: app/core/tables.py:119 — role_audit=ddb.Table(S.role_audit_table_name) -->
+<!-- CORRECTED: role_audit is at line 17 (class field) and line 141 (initialization), not 119 -->
 
 ```python
 # app/core/tables.py, line 119
@@ -313,7 +313,7 @@ The audit export system builds on this pattern but adds JSON format support, asy
 | `T.broadcast_action_audit` | `broadcast_action_audit_table_name` (line 459) | Broadcast operations |
 | `T.billing` (LEDGER entries) | `billing_table_name` (line 321) | Financial transactions |
 <!-- VERIFIED: settings.py lines — alerts:76, role_audit:43, broadcast_action_audit:459, billing:321 -->
-<!-- CORRECTED: moderation_audit_log_table_name was "line 566", actually line 563 -->
+<!-- CORRECTED: moderation_audit_log_table_name is at line 566 (previous "correction" to 563 was wrong) -->
 
 ---
 
@@ -1503,7 +1503,7 @@ For exports >10,000 events:
 
 1. **Job creation**: `POST /v1/admin/audit/exports` creates a job record in `T.audit_exports` with `status=pending`.
 2. **Background worker**: The audit export worker (registered at startup like `start_webhook_dispatcher_task` in `app/main.py` line 443) polls for pending jobs.
-<!-- VERIFIED: app/main.py:443 — start_webhook_dispatcher_task -->
+<!-- CORRECTED: start_webhook_dispatcher_task is at line 472, not 443 -->
 3. **Scan phase**: The worker iterates through all selected source adapters, merging results by timestamp.
 4. **Write phase**: Results are written to a temporary file, then uploaded to S3 (`privacy-export` bucket reused from PRIVACY-001, settings line 1250).
 5. **Presigned URL**: A download URL with 24-hour TTL is generated and stored on the job record.
@@ -1512,7 +1512,7 @@ For exports >10,000 events:
 ### 3.7 Scheduled Recurring Exports
 
 Building on the existing unified scheduler (`app/services/unified_scheduler.py`, started at `app/main.py` line 437):
-<!-- VERIFIED: app/main.py:437 — start_unified_scheduler_task -->
+<!-- CORRECTED: start_unified_scheduler_task is at line 466, not 437 -->
 
 ```python
 # Scheduled action record
@@ -1710,7 +1710,8 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse, StreamingResponse
 
-from app.auth.deps import require_root_session, require_ui_session
+from app.services.sessions import require_ui_session  # NOTE: require_ui_session is in app/services/sessions.py:283, NOT app/auth/deps.py
+from app.auth.deps import require_root_session
 from app.auth.roles import AdminScope, Role, admin_profile_has_scope
 from app.core.settings import S
 from app.core.tables import T
@@ -2369,7 +2370,7 @@ export default function AuditExport() {
 ```typescript
 // frontend/src/api/endpoints/audit.ts
 
-import client from "../client";
+import { api } from "@/api/client";  // NOTE: codebase uses named `api` export, not default `client` import
 import type {
   AuditExportCreateReq,
   AuditExportOut,
@@ -2381,7 +2382,7 @@ import type {
 // ─── Exports ──────────────────────────────────────────────────────────────
 
 export const createAuditExport = (req: AuditExportCreateReq) =>
-  client.post<AuditExportOut>("/v1/admin/audit/exports", req).then((r) => r.data);
+  api.post<AuditExportOut>("/v1/admin/audit/exports", req).then((r) => r.data);
 
 export const listAuditExports = (cursor?: string) =>
   client
@@ -2400,7 +2401,7 @@ export const downloadAuditExport = (exportId: string) =>
   window.open(`/v1/admin/audit/exports/${exportId}/download`, "_blank");
 
 export const deleteAuditExport = (exportId: string) =>
-  client.delete(`/v1/admin/audit/exports/${exportId}`);
+  api.delete(`/v1/admin/audit/exports/${exportId}`);
 
 export const verifyAuditExport = (exportId: string) =>
   client
@@ -2471,7 +2472,7 @@ export const updateAuditSchedule = (
     .then((r) => r.data);
 
 export const deleteAuditSchedule = (scheduleId: string) =>
-  client.delete(`/v1/admin/audit/schedules/${scheduleId}`);
+  api.delete(`/v1/admin/audit/schedules/${scheduleId}`);
 ```
 
 ### 5.4 Frontend TypeScript Types
@@ -3096,4 +3097,32 @@ Audit log protection controls:
 3. Build `AuditExport.tsx` page with filters, export table, and schedule management
 4. Build `AuditEventViewer.tsx` page with infinite scroll and metadata expansion
 5. Add routes to `App.tsx` and sidebar entries
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | Status |
+|-----|------|---------|--------|
+| `audit_event` | `app/services/alerts.py` | 695 | VERIFIED (ticket said 570) |
+| IP/user_agent enrichment | `app/services/alerts.py` | 703-705 | VERIFIED (ticket said 578-580) |
+| Impersonation context | `app/services/alerts.py` | 706-712 | VERIFIED (ticket said 581-593) |
+| `write_moderation_audit_event` | `app/services/moderation_audit_log.py` | 10 | VERIFIED |
+| `record_broadcast_action` | `app/services/broadcast_audit.py` | 45 | VERIFIED |
+| `query_broadcast_actions` | `app/services/broadcast_audit.py` | 68 | VERIFIED |
+| `role_audit` table handle | `app/core/tables.py` | 17 (field), 141 (init) | VERIFIED (ticket said 119) |
+| CSV export router | `app/routers/csv_export.py` | 22 | VERIFIED |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED (NOT in app/auth/deps.py) |
+| Settings: alerts_table_name | `app/core/settings.py` | 76 | VERIFIED |
+| Settings: role_audit_table_name | `app/core/settings.py` | 43 | VERIFIED |
+| Settings: broadcast_action_audit | `app/core/settings.py` | 459 | VERIFIED |
+| Settings: moderation_audit_log | `app/core/settings.py` | 566 | VERIFIED |
+| Settings: billing_table_name | `app/core/settings.py` | 321 | VERIFIED |
+| Settings: compliance export | `app/core/settings.py` | 690-693 | VERIFIED |
+| `start_unified_scheduler_task` | `app/main.py` | 466 | VERIFIED (ticket said 437) |
+| `start_webhook_dispatcher_task` | `app/main.py` | 472 | VERIFIED (ticket said 443) |
+| Audit export service | `app/services/audit_export.py` | exists | VERIFIED |
+| Audit export pipeline | `app/services/audit_export_pipeline.py` | exists | VERIFIED |
+| Audit export router | `app/routers/audit_export.py` | exists, registered at `app/main.py:157,448` | VERIFIED |
+| Frontend audit API | `frontend/src/api/endpoints/audit-export.ts` | exists | VERIFIED |
 6. Write E2E test suite (`frontend/e2e/audit-export.spec.ts`)

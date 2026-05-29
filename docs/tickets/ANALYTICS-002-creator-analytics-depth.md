@@ -637,6 +637,7 @@ class ContentAnalyticsOut(BaseModel):
 ### 4.5 Frontend -- Content Detail Page
 
 **New file**: `frontend/src/pages/analytics/ContentAnalyticsPage.tsx`
+<!-- NOTE: This page ALREADY EXISTS as `frontend/src/pages/analytics/ContentDetailPage.tsx` (353 lines), routed at `/analytics/content/:contentId` in App.tsx:185. It already imports from recharts and has the Back button, summary cards, view trends chart, and revenue breakdown described below. This ticket should MODIFY the existing ContentDetailPage.tsx rather than creating a new ContentAnalyticsPage.tsx. -->
 
 Component tree:
 
@@ -798,10 +799,15 @@ const ContentAnalyticsPage = lazy(() => import("./pages/analytics/ContentAnalyti
 // ...
 <Route path="analytics/content/:contentId" element={<ContentAnalyticsPage />} />
 ```
+<!-- NOTE: This route ALREADY EXISTS in App.tsx:66,185 but uses `ContentDetailPage` as the component name:
+  `const ContentDetailPage = lazy(() => import("@/pages/analytics/ContentDetailPage"));`
+  `<Route path="analytics/content/:contentId" element={<ContentDetailPage />} />`
+  No new route is needed — the existing one should be reused. -->
 
 ### 4.8 Frontend -- API Client
 
 **File**: `frontend/src/api/endpoints/analytics.ts`
+<!-- NOTE: `getAnalyticsContentDetail` ALREADY EXISTS at analytics.ts:41. The interface may differ from below — verify and update rather than create new. -->
 
 ```typescript
 export interface AnalyticsContentDetailParams {
@@ -854,23 +860,25 @@ export interface ContentAnalytics {
 ```
 
 ### 4.10 Files to Create
+<!-- NOTE: Most files listed below ALREADY EXIST. Only the E2E test file is new. -->
 
-| File | Purpose | Estimated Lines |
-|------|---------|-----------------|
-| `frontend/src/pages/analytics/ContentAnalyticsPage.tsx` | Per-content detail page with charts | ~250 |
-| `frontend/e2e/analytics-depth.spec.ts` | E2E tests | ~350 |
+| File | Purpose | Estimated Lines | Status |
+|------|---------|-----------------|--------|
+| `frontend/src/pages/analytics/ContentAnalyticsPage.tsx` | Per-content detail page with charts | ~250 | **ALREADY EXISTS** as `ContentDetailPage.tsx` (353 lines) |
+| `frontend/e2e/analytics-depth.spec.ts` | E2E tests | ~350 | New file needed |
 
 ### 4.11 Files to Modify
+<!-- NOTE: Several of these modifications have ALREADY been made. -->
 
-| File | Change | Estimated Lines Changed |
-|------|--------|------------------------|
-| `app/services/creator_analytics.py` | Add `_resolve_content_details()`, `get_content_detail()`, `_get_content_view_time_series()`, `_get_content_revenue_breakdown()`, fix `get_top_content()` | ~180 |
-| `app/routers/creator_analytics.py` | Add `GET /ui/analytics/content/{content_id}` endpoint | ~40 |
-| `app/models.py` | Add `ContentAnalyticsOut`, `ContentAnalyticsViewsItem`, `ContentAnalyticsRevenueBreakdown` | ~25 |
-| `frontend/src/pages/analytics/AnalyticsPage.tsx` | Make table rows clickable, add engagement column, add navigate import | ~30 |
-| `frontend/src/api/endpoints/analytics.ts` | Add `getAnalyticsContentDetail` function | ~15 |
-| `frontend/src/api/types.ts` | Add `ContentAnalytics`, `ContentAnalyticsViewsItem`, `ContentAnalyticsRevenueBreakdown` interfaces | ~25 |
-| `frontend/src/App.tsx` | Add `/analytics/content/:contentId` route + lazy import | ~3 |
+| File | Change | Estimated Lines Changed | Status |
+|------|--------|------------------------|--------|
+| `app/services/creator_analytics.py` | Add `_resolve_content_details()`, `get_content_detail()`, `_get_content_view_time_series()`, `_get_content_revenue_breakdown()`, fix `get_top_content()` | ~180 | **DONE** — `get_content_detail` at line 605+, engagement calc at 461 |
+| `app/routers/creator_analytics.py` | Add `GET /ui/analytics/content/{content_id}` endpoint | ~40 | **DONE** — at line 244-283 |
+| `app/models.py` | Add `ContentAnalyticsOut`, `ContentAnalyticsViewsItem`, `ContentAnalyticsRevenueBreakdown` | ~25 | Verify if models exist |
+| `frontend/src/pages/analytics/AnalyticsPage.tsx` | Make table rows clickable, add engagement column, add navigate import | ~30 | Verify current state |
+| `frontend/src/api/endpoints/analytics.ts` | Add `getAnalyticsContentDetail` function | ~15 | **DONE** — at line 41 |
+| `frontend/src/api/types.ts` | Add `ContentAnalytics`, `ContentAnalyticsViewsItem`, `ContentAnalyticsRevenueBreakdown` interfaces | ~25 | Verify if types exist |
+| `frontend/src/App.tsx` | Add `/analytics/content/:contentId` route + lazy import | ~3 | **DONE** — at lines 66, 185 |
 
 ---
 
@@ -1325,26 +1333,27 @@ For the new per-content detail endpoint, it is purely additive and has no risk o
 Total additional DDB reads per dashboard load: ~40-70 RCU (up from ~30 RCU without the fix).
 Total DDB reads per content detail page: ~20-30 RCU.
 
-## Appendix B: Codebase Citations
+## Codebase References
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| `engagement_rate` hardcoded to 0.0 | `app/services/creator_analytics.py` | 391 | VERIFIED |
-| Top content uses content_id as title | `app/services/creator_analytics.py` | 388 | VERIFIED: `"title": cid` |
+| `engagement_rate` hardcoded to 0.0 | `app/services/creator_analytics.py` | 469 | **FIXED** — now computed as `(likes + comments) / views` at line 461 |
+| Top content uses content_id as title | `app/services/creator_analytics.py` | 466 | **FIXED** — now uses `d.get("title", cid)` with title resolution |
 | `_to_int` coercion helper | `app/services/creator_analytics.py` | 35-43 | VERIFIED |
 | `_query_rollups` reads from T.analytics_rollups | `app/services/creator_analytics.py` | 75-98 | VERIFIED |
-| `get_top_content` function | `app/services/creator_analytics.py` | 354-397 | VERIFIED |
-| `upsert_daily_rollup` writes pk=CREATOR#{user_id} | `app/services/creator_analytics.py` | 445-463 | VERIFIED |
+| `get_top_content` function | `app/services/creator_analytics.py` | 354-475 | VERIFIED (updated line range) |
+| `upsert_daily_rollup` writes pk=CREATOR#{user_id} | `app/services/creator_analytics.py` | 539 | VERIFIED |
 | Router prefix is `/ui/analytics` | `app/routers/creator_analytics.py` | 47 | VERIFIED |
 | Top content endpoint at `/top-content` | `app/routers/creator_analytics.py` | 191-214 | VERIFIED |
+| Per-content detail endpoint | `app/routers/creator_analytics.py` | 244-283 | **NOW EXISTS** — `GET /content/{content_id}` |
 | `sort_by` validated against ("views", "revenue") | `app/routers/creator_analytics.py` | 204-205 | VERIFIED |
 | `AnalyticsTopContentItem` model has engagement_rate field | `app/models.py` | 2462-2468 | VERIFIED |
 | `AnalyticsTopContentOut` wraps items list | `app/models.py` | 2534-2536 | VERIFIED |
 | Frontend renders title column | `frontend/src/pages/analytics/AnalyticsPage.tsx` | 404 | VERIFIED: `{item.title}` |
-| Frontend table has no onClick handler | `frontend/src/pages/analytics/AnalyticsPage.tsx` | 401-414 | VERIFIED: no onClick |
-| No engagement column in table header | `frontend/src/pages/analytics/AnalyticsPage.tsx` | 393-398 | VERIFIED: only #, Title, Type, Views, Revenue |
-| No per-content analytics endpoint | `app/routers/creator_analytics.py` | 1-266 | VERIFIED: only overview, revenue, views, subscribers, top-content, audience, refresh |
-| No `getAnalyticsContentDetail` in frontend API | `frontend/src/api/endpoints/analytics.ts` | 1-33 | VERIFIED: only 7 functions |
-| VideoViews GSI `ByVideoViewedAt` | `scripts/local-ddb-init.py` | 788-796 | VERIFIED (per DISC-001 citations) |
-| Rollup tracks `post_reactions`, `post_comments` at creator level | `app/services/creator_analytics.py` | 148-155 | VERIFIED: in `_merge_rollup_items` field list |
+| `ContentDetailPage.tsx` exists | `frontend/src/pages/analytics/ContentDetailPage.tsx` | 1-353 | **NOW EXISTS** — ticket calls it `ContentAnalyticsPage.tsx` but actual name is `ContentDetailPage.tsx` |
+| Content detail route in App.tsx | `frontend/src/App.tsx` | 66, 185 | **NOW EXISTS** — `analytics/content/:contentId` |
+| `getAnalyticsContentDetail` in frontend API | `frontend/src/api/endpoints/analytics.ts` | 41 | **NOW EXISTS** |
+| VideoViews GSI `ByVideoViewedAt` | `scripts/local-ddb-init.py` | 788-796 | VERIFIED |
+| Rollup tracks `post_reactions`, `post_comments` at creator level | `app/services/creator_analytics.py` | 148-155 | VERIFIED |
 | `video_metadata` table handle | `app/core/tables.py` | 76, 174 | VERIFIED |
+| `get_content_detail` service function | `app/services/creator_analytics.py` | 38, 605+ | **NOW EXISTS** — imported by router at line 38 |

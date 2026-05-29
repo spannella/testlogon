@@ -42,14 +42,22 @@ The licensing system (LICENSE-001 through LICENSE-005) establishes agreement tra
 | Component | Location | Relevance |
 |-----------|----------|-----------|
 | License agreements | `app/services/license_agreements.py` (LICENSE-001) | Agreement status tracking; `process_expired_agreements` sets `compliance_status` on linked content |
+<!-- NOTE: app/services/license_agreements.py does not exist yet — new implementation required as part of LICENSE-001 -->
 | Issued licenses | `app/services/issued_licenses.py` (LICENSE-002) | `list_licenses_for_content`, `check_license_for_use`; validation against active licenses |
+<!-- NOTE: app/services/issued_licenses.py does not exist yet — new implementation required as part of LICENSE-002 -->
 | Content reports | `app/services/content_reports_store.py` | Existing content reporting/flagging patterns; architectural reference for compliance flags |
+<!-- VERIFIED: app/services/content_reports_store.py exists -->
 | Content moderation | `app/services/content_moderation.py` | Content removal and moderation queue patterns |
+<!-- NOTE: app/services/content_moderation.py does not exist yet — new implementation required. Moderation logic is currently in app/routers/moderation.py and related service files (moderation_audit_log.py, moderation_policy_engine.py) -->
 | DMCA operations | `app/services/dmca_content_operations.py` | DMCA takedown patterns; related legal compliance workflow |
-| Alerts service | `app/services/alerts.py` | `write_alert` for compliance notifications |
+<!-- VERIFIED: app/services/dmca_content_operations.py exists -->
+| Alerts service | `app/services/alerts.py` | `write_alert` for compliance notifications (see app/services/alerts.py:355) |
 | Profile service | `app/services/profile.py` | Display names in compliance views |
+<!-- VERIFIED: app/services/profile.py exists -->
 | Billing shared | `app/services/billing_shared.py` | Ledger entries; compliance issues may freeze revenue splits |
-| Auth dependencies | `app/auth/deps.py` | `require_ui_session`, `require_admin_session` |
+<!-- VERIFIED: app/services/billing_shared.py exists -->
+| Auth dependencies | `app/auth/deps.py` | `require_ui_session`; `app/auth/policy.py` | `require_admin_scope(AdminScope.CONTENT_MODERATION)` |
+<!-- NOTE: require_admin_session does not exist in app/auth/deps.py. The correct admin auth pattern is require_admin_scope(AdminScope.CONTENT_MODERATION) from app/auth/policy.py:84 -->
 
 ### 2.2 Gaps
 
@@ -870,7 +878,9 @@ When a compliance flag is created:
 | `app/services/content_reports_store.py` | Exists | Architectural reference for flag system |
 | `app/services/alerts.py` | Exists | Notifications for compliance events |
 | `app/services/profile.py` | Exists | Display names in admin views |
-| `app/auth/deps.py` | Exists | `require_ui_session`, `require_admin_session` |
+| `app/auth/deps.py` | Exists | `require_ui_session` for user auth |
+| `app/auth/policy.py` | Exists | `require_admin_scope(AdminScope.CONTENT_MODERATION)` for admin auth (see policy.py:84) |
+<!-- NOTE: require_admin_session does not exist. Use require_admin_scope from app/auth/policy.py instead -->
 | `app/core/tables.py` | Exists (modify) | Add `T.license_compliance` table handle |
 | `scripts/local-ddb-init.py` | Exists (modify) | Add `license_compliance` table definition |
 
@@ -888,3 +898,23 @@ When a compliance flag is created:
 8. Admins can resolve flags (dismiss/resolve/action_required) and update content compliance status.
 9. Background compliance scan re-checks content and surfaces new issues.
 10. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/services/content_reports_store.py` | — | EXISTS: architectural reference for flag system |
+| `app/services/dmca_content_operations.py` | — | EXISTS: DMCA takedown patterns |
+| `app/services/alerts.py` | 355 | EXISTS: `write_alert()` function for notifications |
+| `app/services/profile.py` | — | EXISTS: display name resolution |
+| `app/services/billing_shared.py` | — | EXISTS: ledger entry patterns |
+| `app/auth/deps.py` | — | EXISTS: `require_ui_session` for cookie/bearer auth |
+| `app/auth/policy.py` | 84 | EXISTS: `require_admin_scope()` — correct admin auth pattern |
+| `app/core/tables.py` | — | EXISTS: table handle registry (needs `T.license_compliance` added) |
+| `scripts/local-ddb-init.py` | — | EXISTS: DDB table definitions (no `license_compliance` table yet) |
+| `app/core/settings.py` | — | EXISTS: no `license_compliance_table_name` setting yet — must be added |
+| `app/services/license_agreements.py` | — | DOES NOT EXIST: dependency from LICENSE-001, not yet implemented |
+| `app/services/issued_licenses.py` | — | DOES NOT EXIST: dependency from LICENSE-002, not yet implemented |
+| `app/services/content_moderation.py` | — | DOES NOT EXIST: moderation logic lives in `app/routers/moderation.py` and service files like `moderation_audit_log.py`, `moderation_policy_engine.py` |

@@ -13,7 +13,7 @@
 
 ### 1.1 The Gap
 
-The existing KYC system (`app/routers/kyc_cases.py`, `app/services/kyc_cases.py`) is designed exclusively for individual identity verification. There is no mechanism to verify business entities, which require fundamentally different documentation, verification steps, and ownership structures.
+The existing KYC system (see `app/routers/kyc_cases.py:48`, `app/services/kyc_cases.py:94`) is designed exclusively for individual identity verification. There is no mechanism to verify business entities, which require fundamentally different documentation, verification steps, and ownership structures.
 
 Tier 4 (Institutional) in KYC-009 is gated on business KYC approval, but the infrastructure to perform business KYC does not exist. Business accounts need:
 1. Company registration verification (certificate of incorporation, articles of association)
@@ -91,22 +91,23 @@ Data Model:
 
 ## 2. Current State Analysis
 
-### 2.1 Personal KYC System (`app/services/kyc_cases.py`)
+### 2.1 Personal KYC System (see `app/services/kyc_cases.py:94`)
 
 The existing `KycCaseStore` class provides the template for the business case store. Key patterns to reuse:
-- `create_case()` with `pk=KYC#{case_id}`, `sk=META` and GSI key derivation functions
+- `create_case()` (see `app/services/kyc_cases.py:97`) with `pk=KYC#{case_id}`, `sk=META` and GSI key derivation functions
 - Optimistic concurrency via `version` field and `ConditionExpression`
 - Status transitions with audit logging
 - Evidence snapshot on submission
 - Admin queue and metrics
 
-### 2.2 Organizations (`app/routers/orgs.py`)
+### 2.2 Organizations (see `app/routers/orgs.py`)
 
-The organizations system manages multi-user organizations. A business KYB case should link to an organization record so that approval grants Tier 4 to all organization members (or at least designated ones).
+The organizations system manages multi-user organizations (see `app/core/settings.py:1424` for `orgs_enabled`, `app/core/settings.py:1425` for `organizations_table_name`). A business KYB case should link to an organization record so that approval grants Tier 4 to all organization members (or at least designated ones).
 
 ### 2.3 KYC Tiers (KYC-009)
 
 Tier 4 requirements include `business_kyc_approved`. The `check_tier_requirements()` function in `app/services/kyc_tiers.py` (KYC-009) needs to query the `kyc_business_cases` table to check for approved business cases.
+<!-- NOTE: app/services/kyc_tiers.py does not exist yet — this is part of the KYC-009 ticket and must be implemented first or in parallel. -->
 
 ### 2.4 Sanctions Screening (KYC-006)
 
@@ -114,10 +115,10 @@ The screening system should apply to business names and UBO names. Corporate san
 
 ### 2.5 DynamoDB Table Patterns
 
-The existing `kyc_cases` table uses:
-- `pk=KYC#{case_id}`, `sk=META` for the main record
-- GSI with `gsi_owner_pk=OWNER#{user_sub}` and `gsi_status_pk=STATUS#{status}`
-- `_updated_sk()` for time-ordered sort keys
+The existing `kyc_cases` table (see `scripts/local-ddb-init.py:91-96`) uses:
+- `pk=KYC#{case_id}`, `sk=META` for the main record (see `app/services/kyc_cases.py:36`)
+- GSI with `gsi_owner_pk=OWNER#{user_sub}` and `gsi_status_pk=STATUS#{status}` (see `app/services/kyc_cases.py:44-48`)
+- `_updated_sk()` for time-ordered sort keys (see `app/services/kyc_cases.py:40`)
 
 The business cases table follows the same pattern but with `BIZ#` prefix and additional GSI for organization linking.
 
@@ -126,6 +127,7 @@ The business cases table follows the same pattern but with `BIZ#` prefix and add
 ## 3. Technical Design
 
 ### 3.1 New DDB Table: `kyc_business_cases`
+<!-- NOTE: kyc_business_cases table does not exist yet in scripts/local-ddb-init.py — new table definition required -->
 
 **Table definition for `scripts/local-ddb-init.py`**:
 
@@ -143,6 +145,7 @@ TableDef(
 ```
 
 ### 3.2 Settings (`app/core/settings.py`)
+<!-- NOTE: kyc_business_cases_table_name does not exist yet in app/core/settings.py — add near existing KYC settings at line 1065 -->
 
 ```python
 kyc_business_cases_table_name: str = os.environ.get("KYC_BUSINESS_CASES_TABLE_NAME", "kyc_business_cases")
@@ -278,6 +281,7 @@ CompanyType = Literal["llc", "corp", "partnership", "sole_prop", "nonprofit", "c
 ```
 
 ### 3.5 New Service: `app/services/kyc_business_cases.py`
+<!-- NOTE: app/services/kyc_business_cases.py does not exist yet — new implementation required -->
 
 ```python
 """KYB (Know Your Business) case management service."""
@@ -511,6 +515,7 @@ KYB_STORE = KybCaseStore()
 ```
 
 ### 3.6 New Router: `app/routers/kyc_business.py`
+<!-- NOTE: app/routers/kyc_business.py does not exist yet — new implementation required -->
 
 ```python
 router = APIRouter(prefix="/v1/kyc/business-cases", tags=["kyc-business"])
@@ -530,9 +535,10 @@ router = APIRouter(prefix="/v1/kyc/business-cases", tags=["kyc-business"])
 | `POST` | `/{case_id}/documents` | `require_ui_session` | Upload corporate document |
 | `POST` | `/{case_id}/addresses` | `require_ui_session` | Set address |
 | `POST` | `/{case_id}/submit` | `require_ui_session` | Submit for review |
-| `GET` | `/admin/queue` | `require_root_session` | Admin KYB review queue |
-| `POST` | `/admin/{case_id}/approve` | `require_root_session` | Approve business case |
-| `POST` | `/admin/{case_id}/reject` | `require_root_session` | Reject business case |
+| `GET` | `/admin/queue` | `require_ui_session` + admin role check | Admin KYB review queue |
+| `POST` | `/admin/{case_id}/approve` | `require_ui_session` + admin role check | Approve business case |
+| `POST` | `/admin/{case_id}/reject` | `require_ui_session` + admin role check | Reject business case |
+<!-- NOTE: Existing KYC admin endpoints use require_ui_session + manual role check (not require_root_session). Follow that pattern for consistency. See app/routers/kyc_cases.py:1000-1003 -->
 
 ### 3.7 Pydantic Models
 
@@ -728,3 +734,32 @@ test.beforeAll(async ({ browser }) => {
 - Remove `app/routers/kyc_business.py` from `app/main.py`.
 - The `kyc_business_cases` DDB table can remain (empty or with orphaned records).
 - Tier 4 requirement `business_kyc_approved` in KYC-009 would become unachievable, effectively capping max tier at 3.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| Personal KYC router | `app/routers/kyc_cases.py` | 48 | Exists |
+| `KycCaseStore` class | `app/services/kyc_cases.py` | 94 | Exists |
+| `create_case()` | `app/services/kyc_cases.py` | 97 | Exists |
+| `_case_pk()` | `app/services/kyc_cases.py` | 36 | Exists |
+| `_updated_sk()` | `app/services/kyc_cases.py` | 40 | Exists |
+| `_owner_pk()` | `app/services/kyc_cases.py` | 44 | Exists |
+| `_status_pk()` | `app/services/kyc_cases.py` | 48 | Exists |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | Exists |
+| KYC settings | `app/core/settings.py` | 1065-1072 | Exists |
+| Organizations router | `app/routers/orgs.py` | -- | Exists |
+| `orgs_enabled` setting | `app/core/settings.py` | 1424 | Exists |
+| `organizations_table_name` | `app/core/settings.py` | 1425 | Exists |
+| Organizations DDB table | `scripts/local-ddb-init.py` | 1092 | Exists |
+| Admin auth pattern | `app/routers/kyc_cases.py` | 1000-1003 | Exists — uses `require_ui_session` + role check, NOT `require_root_session` |
+| KYC contracts file | `app/contracts/kyc_cases_contract.py` | -- | Exists |
+| `kyc_business_cases_table_name` setting | -- | -- | Does NOT exist — new setting required |
+| `kyc_business_cases` DDB table | -- | -- | Does NOT exist — new table required |
+| `app/services/kyc_business_cases.py` | -- | -- | Does NOT exist — new implementation required |
+| `app/routers/kyc_business.py` | -- | -- | Does NOT exist — new implementation required |
+| `app/services/kyc_tiers.py` (KYC-009) | -- | -- | Does NOT exist — dependency on KYC-009 |
+| `frontend/src/pages/kyc/KybWizard.tsx` | -- | -- | Does NOT exist — new implementation required |
+| `frontend/src/api/endpoints/kyc-business.ts` | -- | -- | Does NOT exist — new file required |

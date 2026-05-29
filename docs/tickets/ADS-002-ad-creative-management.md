@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: High
 **Estimated effort**: 7-9 days
-**Dependencies**: ADS-001 (Advertiser Accounts & Campaign Manager)
+**Dependencies**: ADS-001 (Advertiser Accounts & Campaign Manager — sibling ticket, not yet implemented)
+<!-- NOTE: ADS-001's services (ad_accounts.py, ad_campaigns.py) and tables (AdAccounts, AdCampaigns) do not exist yet. This ticket depends on them being implemented first. -->
 
 ---
 
@@ -68,21 +69,22 @@ Creative Lifecycle:
 
 ## 2. Current State Analysis
 
-### 2.1 Hardcoded Creatives (`app/services/ad_placement.py`, lines 25-47)
+### 2.1 Hardcoded Creatives (`app/services/ad_placement.py`, line 25)
 
-The `DEV_AD_CREATIVES` list contains three static placeholder creatives (pre-roll video, mid-roll video, overlay image). The `calculate_ad_slots()` function (line 116) selects from this list by index. ADS-002 replaces this with a database-backed creative selection.
+The `DEV_AD_CREATIVES` list (line 25) contains three static placeholder creatives (pre-roll video, mid-roll video, overlay image). The `calculate_ad_slots()` function selects from this list. ADS-002 replaces this with a database-backed creative selection. (Verified: `DEV_AD_CREATIVES` at `app/services/ad_placement.py:25`)
 
 ### 2.2 S3 File Upload Pattern
 
-The codebase uploads files to S3 in multiple places: `app/services/file_node_store.py` for the file manager, `app/routers/newsfeed.py` for post images. The pattern uses `T.s3_client.upload_fileobj()` or `T.s3_client.put_object()` with a structured key prefix. Ad creatives follow the same pattern with prefix `ads/creatives/{creative_id}/`.
+The codebase uploads files to S3 in multiple places: `app/services/filemanager.py` for the file manager (see `app/services/filemanager.py`), `app/routers/newsfeed.py` for post images. The pattern uses `boto3` S3 client calls with a structured key prefix. Ad creatives follow the same pattern with prefix `ads/creatives/{creative_id}/`. The S3 bucket for files is `S.filemgr_bucket` (see `app/core/settings.py:828`); ad creatives may use a dedicated bucket.
+<!-- NOTE: `app/services/file_node_store.py` does not exist. The actual file manager service is `app/services/filemanager.py`. Also, there is no generic `S.s3_bucket` setting; bucket names are feature-specific (filemgr_bucket, video_upload_bucket, vod_output_bucket). -->
 
 ### 2.3 Promo Codes (`app/services/promo_codes.py`)
 
-The promo code service (462 lines) manages discount codes with creator-scoping, limits, and redemption tracking. Creatives can reference a `promo_code_id` to display a promo code alongside the ad.
+The promo code service manages discount codes with creator-scoping, limits, and redemption tracking (verified: `app/services/promo_codes.py` exists; table handle at `app/core/tables.py:103,227`; settings at `app/core/settings.py:1366`). Creatives can reference a `promo_code_id` to display a promo code alongside the ad.
 
 ### 2.4 Affiliate Links (`app/services/affiliate_links.py`)
 
-The affiliate link service (383 lines) tracks clicks and conversions with commission calculation. Creatives can reference an `affiliate_link_id` to use the affiliate link as the click-through URL, enabling conversion attribution.
+The affiliate link service tracks clicks and conversions with commission calculation (verified: `app/services/affiliate_links.py` exists; table handle at `app/core/tables.py:112,236`; settings at `app/core/settings.py:1440`). Creatives can reference an `affiliate_link_id` to use the affiliate link as the click-through URL, enabling conversion attribution.
 
 ### 2.5 Gaps
 
@@ -571,7 +573,7 @@ def submit_creative_endpoint(campaign_id: str, creative_id: str, ctx=Depends(req
 # ── Admin Creative Review ──
 
 @admin_router.get("/creatives/pending")
-def list_pending_creatives(ctx=Depends(require_admin_session)):
+def list_pending_creatives(ctx=Depends(require_admin_or_root  # from app/auth/policy.py:67)):
     resp = T.ad_creatives.query(
         IndexName="ByStatus",
         KeyConditionExpression=Key("status").eq("pending_review"),
@@ -580,7 +582,7 @@ def list_pending_creatives(ctx=Depends(require_admin_session)):
     return resp.get("Items", [])
 
 @admin_router.post("/creatives/{creative_id}/review")
-def review_creative_endpoint(creative_id: str, body: CreativeReviewIn, ctx=Depends(require_admin_session)):
+def review_creative_endpoint(creative_id: str, body: CreativeReviewIn, ctx=Depends(require_admin_or_root  # from app/auth/policy.py:67)):
     result = review_creative(creative_id, ctx["user_sub"], body.decision, body.notes or "")
     if result is None:
         raise HTTPException(status_code=404, detail="Creative not found")
@@ -1037,3 +1039,20 @@ test.beforeAll(async ({ browser }) => {
 | ADS-005 (Sponsored Posts) | Native post creatives from ADS-002 |
 | ADS-006 (Broadcast Ads) | Video creatives from ADS-002 |
 | ADS-008 (Analytics) | Creative-level performance breakdowns |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ad_placement.py` | 25 | Existing `DEV_AD_CREATIVES` hardcoded list (to be replaced by this ticket) |
+| `app/services/filemanager.py` | — | Existing file manager service (S3 upload pattern reference) |
+| `app/services/promo_codes.py` | — | Existing promo code service (creative can reference promo_code_id) |
+| `app/services/affiliate_links.py` | — | Existing affiliate link service (creative can reference affiliate_link_id) |
+| `app/core/settings.py` | 828, 1366, 1440 | `filemgr_bucket` (line 828), `promo_codes_table_name` (line 1366), `affiliate_links_table_name` (line 1440) |
+| `app/core/tables.py` | 93, 103, 112 | `ad_impressions` (line 93), `promo_codes` (line 103), `affiliate_links` (line 112) |
+| `app/auth/policy.py` | 67 | `require_admin_or_root` — for creative review admin endpoints |
+| `app/services/ad_creatives.py` | — | Does not exist yet — new implementation required |
+| `ad_creatives` DDB table | — | Does not exist yet in `scripts/local-ddb-init.py` — must be created |
+| `app/core/settings.py` (ad_creatives_table_name) | — | Does not exist yet — must add setting |

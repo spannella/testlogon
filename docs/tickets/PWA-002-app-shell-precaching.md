@@ -1441,3 +1441,24 @@ risk is negligible.
 | Sourcemaps inflate cache size | Harmless; sourcemaps are hashed and immutable; total cache remains under 10 MB |
 | CDN caches sw.js with long TTL | Production deployment must set `Cache-Control: no-cache` for sw.js |
 | Cache API unavailable in some contexts | `caches.open()` throws in some private browsing modes; SW catches and passes through |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `sw.js` (service worker) | `frontend/public/sw.js` | 576 lines | **ALREADY IMPLEMENTED** — has install (precache), activate (purge old caches), fetch (cache-first for assets, network-first for HTML, passthrough for API), and message handlers |
+| `registerServiceWorker()` | `frontend/src/lib/pushSetup.ts` | 11 | **Verified** (126 lines total) |
+| `listenForSwUpdate()` | `frontend/src/lib/pushSetup.ts` | — | **Exists** — imported and called in `main.tsx:29` |
+| SW registration + update listener | `frontend/src/main.tsx` | 29-34 | **Verified** |
+| `OfflineBanner` | `frontend/src/components/shared/OfflineBanner.tsx` | 45 lines | **Exists** |
+| `offlineStore` | `frontend/src/stores/offlineStore.ts` | 213 lines | **Exists** — Zustand store |
+| `useOfflineQueue` hook | `frontend/src/hooks/useOfflineQueue.ts` | 133 lines | **Exists** |
+| Vite config | `frontend/vite.config.ts` | — | **Exists** |
+| API client | `frontend/src/api/client.ts` | 309 lines | **Exists** |
+| `ConversationView` SSE refetch | `frontend/src/pages/messages/ConversationView.tsx` | — | **Exists** (1461 lines) |
+
+### Key Correction
+
+**This ticket appears to be ALREADY IMPLEMENTED.** The service worker (`sw.js`, 576 lines) already has: precache URLs on install, old cache purge on activate, fetch interception with cache-first for static assets / network-first for HTML / passthrough for API routes, SKIP_WAITING message handler, and cache inspection/clearing. The `listenForSwUpdate` function exists in `pushSetup.ts`. Verify whether an UpdateBanner component and version injection also exist before scoping remaining work.

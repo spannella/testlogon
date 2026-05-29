@@ -33,7 +33,8 @@ The VOD pipeline is complete (VOD-001 through VOD-012) and creators can upload, 
 
 ### 2.1 Newsfeed Post Model
 
-> **Implementation note**: There is no separate `app/services/newsfeed.py` — all newsfeed logic (models, helpers, endpoints) lives in `app/routers/newsfeed.py` (~4500 lines).
+> **Implementation note**: There is no separate `app/services/newsfeed.py` — all newsfeed logic (models, helpers, endpoints) lives in `app/routers/newsfeed.py` (~5954 lines).
+<!-- VERIFIED: app/routers/newsfeed.py — monolithic file with all newsfeed logic -->
 
 Posts are stored in the `app_single_table` DynamoDB table with:
 - **PK**: `POST#{post_id}`, **SK**: `META`
@@ -42,7 +43,9 @@ Posts are stored in the `app_single_table` DynamoDB table with:
 - **Lock fields**: `locked`, `lock_type`, `unlock_price_cents`, `unlock_limit`, etc.
 - **Feed index** (GSI1): `FEED#{user_id}` / `{created_at}#POST#{post_id}`
 
-The `CreatePostRequest` model (`app/routers/newsfeed.py`, line 1204) currently accepts `image_urls`, `visibility`, lock fields, scheduling fields, and content envelope fields. There is no `video_id` field.
+The `CreatePostRequest` model (`app/routers/newsfeed.py`, line 1276) currently accepts `image_urls`, `visibility`, lock fields, scheduling fields, and content envelope fields.
+<!-- NOTE: video_id ALREADY EXISTS on CreatePostRequest at line 1280 — this gap has been closed -->
+<!-- VERIFIED: app/routers/newsfeed.py:1276 — CreatePostRequest; :1280 — video_id field -->
 
 ### 2.2 Video Metadata Model
 
@@ -61,7 +64,8 @@ Videos are stored in the `VideoMetadata` DynamoDB table (VOD-001) with primary k
 
 ### 2.3 Playback Entitlements
 
-`app/services/playback_entitlements.py` provides `issue_playback_entitlement()` which generates a signed JWT token for time-limited HLS playback access. The Video Player Page (`VideoPlayerPage`) and the video listing endpoint (`/ui/videos/{video_id}`) already call this function. The newsfeed must use the same mechanism.
+`app/services/playback_entitlements.py` provides `issue_playback_entitlement()` (line 200) which generates a signed JWT token for time-limited HLS playback access.
+<!-- VERIFIED: app/services/playback_entitlements.py:200 — issue_playback_entitlement --> The Video Player Page (`VideoPlayerPage`) and the video listing endpoint (`/ui/videos/{video_id}`) already call this function. The newsfeed must use the same mechanism.
 
 ### 2.4 Existing Video Listing Endpoints
 
@@ -70,6 +74,7 @@ Videos are stored in the `VideoMetadata` DynamoDB table (VOD-001) with primary k
 ### 2.5 MediaPlayer Component
 
 `frontend/src/components/shared/MediaPlayer.tsx` is a fully featured HLS player with:
+<!-- VERIFIED: frontend/src/components/shared/MediaPlayer.tsx exists -->
 - HLS.js initialization with quality selection
 - Loading/error/buffering overlays
 - Poster image support via `poster` prop
@@ -80,12 +85,14 @@ Props relevant to newsfeed embedding: `src` (HLS manifest URL), `poster` (thumbn
 
 ### 2.6 Gaps
 
-1. **No `video_id` field** on post model or DDB item
-2. **No video validation** on post creation (ownership, status checks)
-3. **No video metadata in post response** (title, thumbnail, duration, manifest URL needed for rendering)
-4. **No playback entitlement issuance** when loading a video post in the feed
-5. **No frontend video picker** in the CreatePost composer
-6. **No video rendering** in PostCard component
+<!-- NOTE: Gaps 1-4 have been CLOSED — video_id exists on CreatePostRequest (line 1280), video validation exists in create_post (line 3186), _post_to_dict enriches with video embed (line 1943-1959), and issue_video_post_entitlement exists (line 3972). Frontend VideoPickerDialog.tsx and VideoPostPlayer.tsx also exist in frontend/src/pages/feed/. -->
+
+1. ~~**No `video_id` field** on post model or DDB item~~ (DONE: `app/routers/newsfeed.py:1280`)
+2. ~~**No video validation** on post creation~~ (DONE: `app/routers/newsfeed.py:3186-3193`)
+3. ~~**No video metadata in post response**~~ (DONE: `app/routers/newsfeed.py:1943-1959` in `_post_to_dict`)
+4. ~~**No playback entitlement issuance**~~ (DONE: `app/routers/newsfeed.py:3972` — `issue_video_post_entitlement`)
+5. ~~**No frontend video picker**~~ (DONE: `frontend/src/pages/feed/VideoPickerDialog.tsx`)
+6. ~~**No video rendering** in PostCard~~ (DONE: `frontend/src/pages/feed/VideoPostPlayer.tsx`)
 
 ---
 
@@ -151,7 +158,8 @@ class EditPostRequest(ContentFieldsMixin):
 
 #### 3.2.2 Create Post Validation
 
-In the `create_post` endpoint (line 2841), add validation after the existing lock logic and before building `post_item`:
+In the `create_post` endpoint (line 3013), add validation after the existing lock logic and before building `post_item`:
+<!-- NOTE: Video validation ALREADY EXISTS at lines 3186-3193 of app/routers/newsfeed.py -->
 
 ```python
 # --- Video validation ---
@@ -187,7 +195,8 @@ post_item = {
 }
 ```
 
-> **Implementation note**: `create_post` builds `post_item` as an explicit dict (lines 3023–3054) and returns `PostResponse(...)` with explicit field assignments (lines 3076–3110), not `**kwargs`. Add `video_id` to both the dict literal and the `PostResponse(...)` call.
+> **Implementation note**: `create_post` (line 3013) builds `post_item` as an explicit dict and returns a response dict. `video_id` is already included at line 3253.
+<!-- VERIFIED: app/routers/newsfeed.py:3253 — "video_id": video_id in post_item dict -->
 
 #### 3.2.3 Post Serialization (`_post_to_dict`)
 
@@ -394,7 +403,8 @@ const payload = {
 
 #### 3.3.4 VideoPickerDialog Component
 
-File: `frontend/src/pages/feed/VideoPickerDialog.tsx` (new file)
+File: `frontend/src/pages/feed/VideoPickerDialog.tsx` (already exists)
+<!-- VERIFIED: frontend/src/pages/feed/VideoPickerDialog.tsx exists -->
 
 A dialog that lists the user's published videos and allows selection:
 
@@ -451,7 +461,8 @@ File: `frontend/src/pages/feed/PostCard.tsx`
 
 #### 3.3.6 VideoPostPlayer Component
 
-File: `frontend/src/pages/feed/VideoPostPlayer.tsx` (new file)
+File: `frontend/src/pages/feed/VideoPostPlayer.tsx` (already exists)
+<!-- VERIFIED: frontend/src/pages/feed/VideoPostPlayer.tsx exists -->
 
 A wrapper around `MediaPlayer` that handles entitlement fetching:
 
@@ -726,3 +737,41 @@ The `video_id` field is stored as a top-level string attribute on the existing p
 | 3 | Should video posts appear in scheduled posts? | Yes. Scheduling works identically -- `video_id` is just another field on the post item. |
 | 4 | Can a draft contain a video_id? | Yes. Add `video_id` to `CreateDraftPostRequest` and `UpdateDraftPostRequest` for consistency. No validation is needed until publish time. |
 | 5 | Should the video picker support searching/filtering? | v1: simple list of published videos sorted by newest. Future: add search. |
+
+---
+
+## Codebase References
+
+> **NOTE**: This feature has been FULLY IMPLEMENTED. All gaps listed in section 2.6 have been closed.
+
+### Backend
+| File | Key References | Lines |
+|------|---------------|-------|
+| `app/routers/newsfeed.py` | `ContentFieldsMixin` | 1182 |
+| `app/routers/newsfeed.py` | `CreatePostRequest` with `video_id` field | 1276, 1280 |
+| `app/routers/newsfeed.py` | `_post_to_dict` with video embed enrichment | 1900, 1943-1959 |
+| `app/routers/newsfeed.py` | `create_post` with video validation | 3013, 3186-3193 |
+| `app/routers/newsfeed.py` | `video_id` stored in post_item dict | 3253 |
+| `app/routers/newsfeed.py` | `issue_video_post_entitlement` endpoint | 3972 |
+| `app/services/playback_entitlements.py` | `issue_playback_entitlement` | 200 |
+| `app/services/video_metadata_store.py` | `get_video` (imported by newsfeed) | - |
+
+### Frontend
+| File | Purpose |
+|------|---------|
+| `frontend/src/components/shared/MediaPlayer.tsx` | HLS adaptive bitrate player |
+| `frontend/src/pages/feed/VideoPickerDialog.tsx` | Dialog for selecting published videos |
+| `frontend/src/pages/feed/VideoPostPlayer.tsx` | Entitlement-aware video player wrapper |
+| `frontend/src/pages/feed/CreatePost.tsx` | Post composer with video button |
+| `frontend/src/pages/feed/PostCard.tsx` | Post card with video rendering |
+
+### DynamoDB
+| Table | Usage |
+|-------|-------|
+| `app_single_table` | Post items (PK: `POST#{post_id}`, SK: `META`) with `video_id` attribute |
+| `VideoMetadata` | Video records (PK: `video_id`) — defined at `scripts/local-ddb-init.py:708` |
+
+### Router Registration
+| File | Line |
+|------|------|
+| `app/main.py` | `app.include_router(newsfeed_router)` at line 339 |

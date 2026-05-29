@@ -703,3 +703,19 @@ When `mode="edit"`:
 - The `original_text` field is set only on the first edit (`if_not_exists`), preventing repeated overwrites
 
 **Key finding**: The ticket's premise that edit/delete "does not exist" is **incorrect**. Both operations are already implemented. This ticket should be scoped as an **enhancement** of the existing edit/delete functionality, adding: time-window enforcement, admin moderation delete, proper "deleted" placeholder behavior in the UI, and frontend context menu integration.
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/routers/messaging.py` | 10157 | ALREADY EXISTS: `edit_message()` function |
+| `app/routers/messaging.py` | 9983 | ALREADY EXISTS: `delete_message_for_me()` function |
+| `app/routers/messaging.py` | 10022 | ALREADY EXISTS: `revoke_message_for_all()` function |
+| `app/routers/messaging.py` | 2255 | ALREADY EXISTS: `EditMessageIn` Pydantic model |
+| `app/routers/messaging.py` | 175, 234 | EXISTS: `DDB_MESSAGE_EDITS` env var and `tbl_edits` table handle |
+| `app/routers/messaging.py` | 10195 | EXISTS: edit history written to `tbl_edits` table |
+| `app/routers/messaging.py` | 10273 | EXISTS: edit history queried from `tbl_edits` |
+| `scripts/local-ddb-init.py` | 276 | EXISTS: `MessageEdits` table definition |
+| `app/routers/messaging.py` | 1264 | EXISTS: `ENCRYPTED_EDIT_ERROR_CODE` — encrypted message edit restriction |

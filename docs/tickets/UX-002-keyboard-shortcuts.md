@@ -11,7 +11,9 @@
 
 ## 1. Executive Summary
 
-The platform has a minimal command palette in the header that only supports page navigation. The `cmdk` library (package.json:42) is installed but its only non-trivial usage is `TimezoneCombobox.tsx`. There are no global keyboard shortcuts for common actions like sending a message, closing dialogs, or navigating between sections. Power users and accessibility-conscious users expect keyboard-driven workflows.
+<!-- NOTE: This feature is ALREADY FULLY IMPLEMENTED. The global shortcuts hook exists at frontend/src/hooks/useGlobalShortcuts.ts, the ShortcutHelpDialog at frontend/src/components/shared/ShortcutHelpDialog.tsx, the shortcutStore at frontend/src/stores/shortcutStore.ts. Header.tsx already imports and uses useGlobalShortcuts (line 50, mounted at line 246), ShortcutHelpDialog (line 49, rendered at line 851), and has an "Actions" CommandGroup (line 606+). The uiStore already has recentCommands (line 28, 64, 89-92) and trackRecentCommand (line 47, 89-92). -->
+
+The platform has a minimal command palette in the header that only supports page navigation. The `cmdk` library (package.json:46) is installed but its only non-trivial usage is `TimezoneCombobox.tsx`. There are no global keyboard shortcuts for common actions like sending a message, closing dialogs, or navigating between sections. Power users and accessibility-conscious users expect keyboard-driven workflows.
 
 Keyboard-driven interfaces are a hallmark of professional-grade SaaS tools. Applications like Slack, Linear, Notion, and GitHub invest heavily in command palettes and shortcut systems because they dramatically reduce the time-to-action for experienced users. The current platform has the foundational library (`cmdk`) already installed and a working Ctrl+K listener, but the palette is limited to static page navigation with no action commands, no recent history, and no shortcut discoverability. Users who press Ctrl+K expecting to toggle dark mode, compose a new message, or search contacts are met with a simple 14-item page list.
 
@@ -92,7 +94,7 @@ Acceptance Criteria:
 
 ### 3.1 Existing Command Palette
 
-`Header.tsx` imports `CommandDialog`, `CommandInput`, `CommandList`, `CommandEmpty`, `CommandGroup`, and `CommandItem` from `@/components/ui/command` (lines 29-35). A `SEARCH_PAGES` constant (lines 72-87) defines 14 navigable pages across "Pages" and "Account" groups:
+`Header.tsx` imports `CommandDialog`, `CommandInput`, `CommandList`, `CommandEmpty`, `CommandGroup`, `CommandItem`, and `CommandShortcut` from `@/components/ui/command` (lines 41-47). A `SEARCH_PAGES` constant (line 88+) defines navigable pages across groups:
 
 ```typescript
 const SEARCH_PAGES = [
@@ -113,18 +115,20 @@ const SEARCH_PAGES = [
 ];
 ```
 
-The `searchOpen` state (line 105) is toggled by the Ctrl+K keydown handler (lines 139-148) and by clicking the search button (line 197). The `CommandDialog` renders at lines 365-386 with two `CommandGroup` sections (Pages, Account). There are no action commands (e.g., "New message", "Toggle dark mode", "Log out").
+The `searchOpen` state (line 144) is toggled by clicking the search button (line 324) and by keyboard shortcut. The `CommandDialog` renders at line 550+ with multiple `CommandGroup` sections (Recently Used, Pages/Account, Actions, Recent Searches, Users, Posts, Catalog, Files, Messages).
+
+<!-- NOTE: The command palette has ALREADY been extended with action commands (line 606+), recently used commands (line 561+), and full global search (users, posts, catalog, files, messages). The "Actions" group and "Recently Used" section described in this ticket are ALREADY IMPLEMENTED. -->
 
 **Citations**:
-- `frontend/src/components/layout/Header.tsx:29-35` -- cmdk imports
-- `frontend/src/components/layout/Header.tsx:72-87` -- `SEARCH_PAGES` navigation items (14 entries)
-- `frontend/src/components/layout/Header.tsx:105` -- `const [searchOpen, setSearchOpen] = React.useState(false)`
-- `frontend/src/components/layout/Header.tsx:139-148` -- Ctrl+K keydown listener with `e.metaKey || e.ctrlKey`
-- `frontend/src/components/layout/Header.tsx:365-386` -- `CommandDialog` rendering with CommandInput, CommandList, two CommandGroups
+- `frontend/src/components/layout/Header.tsx:41-47` -- cmdk imports (including CommandShortcut)
+- `frontend/src/components/layout/Header.tsx:88+` -- `SEARCH_PAGES` navigation items
+- `frontend/src/components/layout/Header.tsx:144` -- `const [searchOpen, setSearchOpen] = React.useState(false)`
+- `frontend/src/components/layout/Header.tsx:550+` -- `CommandDialog` rendering with multiple CommandGroups (Recently Used, Pages, Actions, Search, etc.)
+- `frontend/src/components/layout/Header.tsx:606+` -- `CommandGroup heading="Actions"` (already implemented)
 
 ### 3.2 cmdk Library Usage
 
-`cmdk` is installed at version `^1.1.1` (package.json:42). Beyond Header.tsx, it is used only in `TimezoneCombobox.tsx` (lines 10-15) for timezone search within a `Popover`. The `Command` primitives from `@/components/ui/command` are shadcn/ui wrappers around `cmdk`, providing styled versions of the underlying command menu components.
+`cmdk` is installed at version `^1.1.1` (package.json:46). Beyond Header.tsx, it is used only in `TimezoneCombobox.tsx` (lines 10-15) for timezone search within a `Popover`. The `Command` primitives from `@/components/ui/command` are shadcn/ui wrappers around `cmdk`, providing styled versions of the underlying command menu components.
 
 The shadcn/ui `command.tsx` wrapper file exists at `frontend/src/components/ui/command.tsx`. It re-exports cmdk components with Tailwind styling and provides:
 - `Command` -- the root wrapper
@@ -144,7 +148,7 @@ The shadcn/ui `command.tsx` wrapper file exists at `frontend/src/components/ui/c
 
 ### 3.3 Existing Keyboard Handlers
 
-ComposeBar.tsx has a `handleKeyDown` function (line 618) that sends on Enter (non-Shift). This is a component-local handler, not part of a global shortcut system:
+ComposeBar.tsx has a `handleKeyDown` function (line 618) that sends on Enter (non-Shift):
 
 ```typescript
 const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -155,36 +159,38 @@ const handleKeyDown = (e: React.KeyboardEvent) => {
 };
 ```
 
-The Header's Ctrl+K handler (lines 139-148) is another component-local handler attached to `document` via `useEffect`. There is no centralized registry that tracks all active shortcuts.
+<!-- NOTE: A centralized global shortcut registry NOW EXISTS at frontend/src/hooks/useGlobalShortcuts.ts. Header.tsx uses useGlobalShortcuts (line 246) instead of a standalone keydown listener. -->
 
 **Citations**:
-- `frontend/src/pages/messages/ComposeBar.tsx:618-623` -- Enter to send handler
-- `frontend/src/components/layout/Header.tsx:139-148` -- Ctrl+K handler
+- `frontend/src/pages/messages/ComposeBar.tsx:618-619` -- Enter to send handler
+- `frontend/src/hooks/useGlobalShortcuts.ts` -- centralized shortcut registry (already implemented)
 
 ### 3.4 Sidebar Navigation Structure
 
 The sidebar (`frontend/src/components/layout/Sidebar.tsx`) renders navigation items in groups. The item order is fixed in the component JSX. For Ctrl+1-9 mapping, the shortcut registry needs to know the ordered list of sidebar paths. The sidebar component uses `useUiStore` (line 143) for collapse state.
 
 **Citations**:
-- `frontend/src/components/layout/Sidebar.tsx:141-143` -- Sidebar component with collapsed state
+- `frontend/src/components/layout/Sidebar.tsx:166-167` -- Sidebar component with collapsed state from `useUiStore`
 
 ### 3.5 Theme Store
 
-The `setTheme` action in `uiStore.ts` (line 23) is the target for the "Toggle Dark Mode" command palette action. After UX-001, this action also syncs to the backend.
+The `setTheme` action in `uiStore.ts` (line 73) is the target for the "Toggle Dark Mode" command palette action. After UX-001, this action also syncs to the backend.
 
 **Citations**:
-- `frontend/src/stores/uiStore.ts:23` -- `setTheme: (theme) => set({ theme })`
+- `frontend/src/stores/uiStore.ts:73` -- `setTheme: (theme) => {`
 
 ### 3.6 Gaps
 
-1. Command palette only navigates -- no action commands
-2. No global keyboard shortcut registry or hook
-3. No shortcut reference overlay
-4. No section-level keyboard navigation (Ctrl+1 through Ctrl+9)
-5. No "recently used" or "recent actions" in the command palette
-6. No Cmd+K badge on the search button for discoverability
-7. No Ctrl+Enter alternative for message send
-8. The `CommandShortcut` component from shadcn/ui is available but unused
+<!-- NOTE: Items 1-6 are now RESOLVED. The implementation already exists. -->
+
+1. ~~Command palette only navigates -- no action commands~~ **RESOLVED**: Actions CommandGroup at Header.tsx:606+
+2. ~~No global keyboard shortcut registry or hook~~ **RESOLVED**: `frontend/src/hooks/useGlobalShortcuts.ts` exists, mounted at Header.tsx:246
+3. ~~No shortcut reference overlay~~ **RESOLVED**: `frontend/src/components/shared/ShortcutHelpDialog.tsx` exists, rendered at Header.tsx:851
+4. No section-level keyboard navigation (Ctrl+1 through Ctrl+9) -- may still need implementation
+5. ~~No "recently used" or "recent actions" in the command palette~~ **RESOLVED**: `recentCommands` in uiStore.ts:28,64,89-92; "Recently Used" CommandGroup at Header.tsx:561
+6. ~~No Cmd+K badge on the search button for discoverability~~ **RESOLVED**: Header.tsx:329 shows Cmd+K/Ctrl+K badge
+7. No Ctrl+Enter alternative for message send -- may still need implementation
+8. ~~The `CommandShortcut` component from shadcn/ui is available but unused~~ **RESOLVED**: imported at Header.tsx:47
 
 ---
 
@@ -921,14 +927,22 @@ None. No new npm packages required.
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| cmdk installed | `frontend/package.json` | 42 | VERIFIED: `"cmdk": "^1.1.1"` |
-| cmdk imports in Header | `frontend/src/components/layout/Header.tsx` | 29-35 | VERIFIED |
-| SEARCH_PAGES navigation items | `frontend/src/components/layout/Header.tsx` | 72-87 | VERIFIED: 14 pages in 2 groups |
-| Ctrl+K keydown listener | `frontend/src/components/layout/Header.tsx` | 139-148 | VERIFIED: checks `e.metaKey \|\| e.ctrlKey` |
-| searchOpen state | `frontend/src/components/layout/Header.tsx` | 105 | VERIFIED |
-| CommandDialog rendering | `frontend/src/components/layout/Header.tsx` | 365-386 | VERIFIED: two CommandGroups (Pages, Account) |
+| cmdk installed | `frontend/package.json` | 46 | VERIFIED: `"cmdk": "^1.1.1"` |
+| cmdk imports in Header | `frontend/src/components/layout/Header.tsx` | 41-47 | VERIFIED (includes CommandShortcut) |
+| SEARCH_PAGES navigation items | `frontend/src/components/layout/Header.tsx` | 88+ | VERIFIED |
+| searchOpen state | `frontend/src/components/layout/Header.tsx` | 144 | VERIFIED |
+| CommandDialog rendering | `frontend/src/components/layout/Header.tsx` | 550+ | VERIFIED: multiple CommandGroups (Recently Used, Pages, Actions, Search results) |
+| Actions group in palette | `frontend/src/components/layout/Header.tsx` | 606+ | VERIFIED: **already implemented** |
 | TimezoneCombobox cmdk usage | `frontend/src/components/shared/TimezoneCombobox.tsx` | 10-15 | VERIFIED |
-| ComposeBar Enter handler | `frontend/src/pages/messages/ComposeBar.tsx` | 618-623 | VERIFIED |
-| No global shortcut system | all frontend files | -- | VERIFIED (grep for "useHotkeys", "hotkey", "shortcut" returns no shortcut registry) |
-| CommandShortcut export | `frontend/src/components/ui/command.tsx` | exists | VERIFIED (shadcn/ui exports CommandShortcut) |
-| Sidebar uses uiStore | `frontend/src/components/layout/Sidebar.tsx` | 143 | VERIFIED |
+| ComposeBar Enter handler | `frontend/src/pages/messages/ComposeBar.tsx` | 618-619 | VERIFIED |
+| Global shortcut registry | `frontend/src/hooks/useGlobalShortcuts.ts` | exists | VERIFIED: **already implemented** |
+| ShortcutHelpDialog | `frontend/src/components/shared/ShortcutHelpDialog.tsx` | exists | VERIFIED: **already implemented** |
+| useGlobalShortcuts mounted | `frontend/src/components/layout/Header.tsx` | 246 | VERIFIED |
+| ShortcutHelpDialog rendered | `frontend/src/components/layout/Header.tsx` | 851 | VERIFIED |
+| shortcutHelpOpen state | `frontend/src/components/layout/Header.tsx` | 148 | VERIFIED |
+| recentCommands in uiStore | `frontend/src/stores/uiStore.ts` | 28, 64, 89-92 | VERIFIED: **already implemented** |
+| trackRecentCommand action | `frontend/src/stores/uiStore.ts` | 47, 89-92 | VERIFIED |
+| CommandShortcut export | `frontend/src/components/ui/command.tsx` | 112, 125 | VERIFIED |
+| Sidebar uses uiStore | `frontend/src/components/layout/Sidebar.tsx` | 166-167 | VERIFIED |
+| Cmd+K badge on search button | `frontend/src/components/layout/Header.tsx` | 329 | VERIFIED: **already implemented** |
+| shortcutStore | `frontend/src/stores/shortcutStore.ts` | exists | VERIFIED |

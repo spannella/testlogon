@@ -115,13 +115,13 @@ The Agent Orchestration Platform (AGENT-002 through AGENT-007) requires LLM API 
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| KMS encrypt/decrypt | `app/core/crypto.py` | `kms_encrypt(plaintext) -> str`, `kms_decrypt(ct_b64) -> bytes`; used for encrypting LLM API keys at rest |
-| API key service | `app/services/api_keys.py` (~400 lines) | Platform API key management; provides patterns for key hashing, CRUD, capabilities; LLM keys follow a similar but separate pattern |
-| API key router | `app/routers/api_keys.py` | Platform API key endpoints; reference for router structure |
-| Settings | `app/core/settings.py` | Configuration singleton `S`; will add `llm_provider_keys_table_name` |
-| Tables | `app/core/tables.py` | DynamoDB table handles; will add `T.llm_provider_keys` |
-| Mock KMS server | `scripts/mock_kms_server.py` (port 7999) | Provides KMS encrypt/decrypt in dev mode |
-| Auth deps | `app/auth/deps.py` | `require_ui_session` for cookie auth; `require_admin_session` for admin endpoints |
+| KMS encrypt/decrypt | `app/core/crypto.py` | `kms_encrypt(plaintext) -> str` (line 16), `kms_decrypt(ct_b64) -> bytes` (line 22); used for encrypting LLM API keys at rest (verified) |
+| API key service | `app/services/api_keys.py` (~412 lines) | Platform API key management; provides patterns for key hashing, CRUD, capabilities; LLM keys follow a similar but separate pattern (verified) |
+| API key router | `app/routers/api_keys.py` | Platform API key endpoints; reference for router structure (verified) |
+| Settings | `app/core/settings.py` | Configuration singleton `S` (line 1494); will add `llm_provider_keys_table_name` (verified) |
+| Tables | `app/core/tables.py` | DynamoDB table handles; will add `T.llm_provider_keys` (verified) |
+| Mock KMS server | `scripts/mock_kms_server.py` (port 7999) | Provides KMS encrypt/decrypt in dev mode (verified) |
+| Auth deps | `app/auth/deps.py`, `app/auth/policy.py` | `require_ui_session` for cookie auth; <!-- NOTE: `require_admin_session` does not exist. Use `require_admin_scope(AdminScope.XXX)` from `app/auth/policy.py:84` for admin endpoints, or `require_root_session` (deps.py:273) for root-only endpoints --> `require_admin_scope()` for admin endpoints |
 
 ### 2.2 Gaps
 
@@ -531,7 +531,7 @@ Prefix: `/ui/agent/llm-keys`
 | `GET` | `/ui/agent/llm-providers` | `require_ui_session` | List supported providers with metadata |
 | `POST` | `/ui/agent/llm-keys/{key_id}/assign` | `require_ui_session` | Assign key to a worker |
 | `DELETE` | `/ui/agent/llm-keys/{key_id}/assign/{worker_id}` | `require_ui_session` | Unassign key from worker |
-| `GET` | `/ui/admin/agent/llm-keys` | `require_admin_session` | Admin: list all keys across users |
+| `GET` | `/ui/admin/agent/llm-keys` | `require_admin_scope` | Admin: list all keys across users <!-- NOTE: was `require_admin_session` which does not exist — use `require_admin_scope()` from app/auth/policy.py:84 --> |
 
 ### 3.6 Pydantic Models
 
@@ -988,3 +988,24 @@ Admin endpoint lists all keys across users with usage stats but never exposes th
 8. Admin endpoint provides cross-user key audit data.
 9. Frontend provides a complete key management interface with add, test, rotate, and delete flows.
 10. All key lifecycle operations produce audit events.
+
+---
+
+## Codebase References
+
+| Reference | Path | Line(s) | Status |
+|-----------|------|---------|--------|
+| KMS encrypt | `app/core/crypto.py` | 16 (`kms_encrypt`) | Verified |
+| KMS decrypt | `app/core/crypto.py` | 22 (`kms_decrypt`) | Verified |
+| API key service (pattern ref) | `app/services/api_keys.py` | ~412 lines | Verified |
+| API key router (pattern ref) | `app/routers/api_keys.py` | entire file | Verified |
+| Settings singleton | `app/core/settings.py` | 1494 (`S = Settings()`) | Verified |
+| Tables dataclass | `app/core/tables.py` | entire file | Verified |
+| Mock KMS server | `scripts/mock_kms_server.py` | entire file (port 7999) | Verified |
+| DDB init script | `scripts/local-ddb-init.py` | 42 (`_table_defs()`) | Verified — new TableDef entry needed |
+| Router registration | `app/main.py` | 297-465 | Verified — new router must be registered |
+| Admin auth pattern | `app/auth/policy.py` | 84 (`require_admin_scope`) | Verified — **not** `require_admin_session` |
+| Root session auth | `app/auth/deps.py` | 273 (`require_root_session`) | Verified |
+| `llm_provider_keys` table | — | — | **Does not exist** — new table required |
+| `llm_provider_keys` service | — | — | **Does not exist** — new file required |
+| `llm_provider_keys` router | — | — | **Does not exist** — new file required |

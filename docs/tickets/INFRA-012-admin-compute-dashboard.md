@@ -24,11 +24,11 @@ INFRA-003 through INFRA-005 give individual users the ability to launch instance
 
 The platform already has admin infrastructure:
 
-- **Admin auth**: `require_admin_session` in `app/auth/deps.py` (requires `role >= ADMIN`)
-- **Root auth**: `require_root_session` (requires `role == ROOT`)
-- **Admin roles**: `app/auth/roles.py` with `USER`, `ADMIN`, `ROOT` enum
-- **Audit events**: `audit_event()` from `app/services/alerts.py`
-- **Role audit table**: `role_audit` DDB table for tracking admin actions
+- **Admin auth**: `require_admin_session` in `app/auth/deps.py` (see `app/auth/deps.py:126`) (requires `role >= ADMIN`)
+- **Root auth**: `require_root_session` (see `app/auth/deps.py:273`) (requires `role == ROOT`)
+- **Admin roles**: `app/auth/roles.py` with `USER`, `ADMIN`, `ROOT` enum (see `app/auth/roles.py:8`)
+- **Audit events**: `audit_event()` from `app/services/alerts.py` (see `app/services/alerts.py:695`)
+- **Role audit table**: `role_audit` DDB table for tracking admin actions (see `scripts/local-ddb-init.py`)
 - **Admin E2E pattern**: `e2e_admin_session_setup.py` seeds sessions for `root`, `charlie_admin`
 
 However, there are no admin endpoints for compute resource management.
@@ -882,3 +882,38 @@ Platform spending requires scanning the `compute_billing` table. For large-scale
 10. Instance type popularity stats are available for capacity planning.
 11. Admin dashboard renders with summary cards, instance tables, and spending charts.
 12. Non-admin users receive 403 on all admin compute endpoints.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `require_admin_session` dependency | `app/auth/deps.py` | exists | VERIFIED |
+| `require_root_session` dependency | `app/auth/deps.py` | 273 | VERIFIED |
+| `Role` enum (USER, ADMIN, ROOT) | `app/auth/roles.py` | 8 | VERIFIED |
+| `AdminScope` class | `app/auth/roles.py` | 14 | VERIFIED |
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+| `write_alert()` | `app/services/alerts.py` | 355 | VERIFIED |
+| `e2e_admin_session_setup.py` | project root | exists | VERIFIED |
+| DDB table init script | `scripts/local-ddb-init.py` | exists | VERIFIED (1360 lines) |
+
+### Not Yet Implemented (requires new code)
+
+<!-- NOTE: INFRA-003 (EC2 Launcher), INFRA-004 (K8s Launcher), and INFRA-005 (Cost Tracking) are dependencies but do not exist yet. All admin compute dashboard infrastructure is new. -->
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| EC2 launcher (INFRA-003) | `app/services/ec2_launcher.py` | NOT FOUND -- new implementation required |
+| K8s launcher (INFRA-004) | `app/services/k8s_launcher.py` | NOT FOUND -- new implementation required |
+| Cost tracking (INFRA-005) | `app/services/` | NOT FOUND -- new implementation required |
+| `compute_quotas` DDB table | `scripts/local-ddb-init.py` | NOT FOUND -- new table required |
+| `app/routers/admin_compute.py` | `app/routers/` | NOT FOUND -- new router required |
+| `app/services/admin_compute.py` | `app/services/` | NOT FOUND -- new service required |
+| Admin compute router registration | `app/main.py` | NOT FOUND -- needs `app.include_router()` |
+| Admin compute settings | `app/core/settings.py` | NOT FOUND -- new settings required |
+| `frontend/src/pages/admin/ComputeDashboard.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |

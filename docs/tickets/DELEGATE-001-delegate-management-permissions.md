@@ -40,17 +40,21 @@ Creators with large audiences cannot personally respond to every DM, moderate ev
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Messaging router | `app/routers/messaging.py` (~1200 lines) | Endpoints for DMs, group chats, mass messages; will need `on_behalf_of` parameter in DELEGATE-002 |
-| Newsfeed router | `app/routers/newsfeed.py` (~800 lines) | Post CRUD, comments, reactions; will need delegation support in DELEGATE-003 |
-| Broadcast chat store | `app/services/broadcast_chat_store.py` | Chat message CRUD, muting, rate limiting; will need moderator support in DELEGATE-004 |
-| Broadcast store | `app/services/broadcast_store.py` | Broadcast session lifecycle; will need delegation in DELEGATE-004 |
-| API key service | `app/services/api_keys.py` (~400 lines) | Key creation, capabilities, IP rules, rate limits; DELEGATE-005 will extend with `delegation_scope` |
-| Auth dependencies | `app/auth/deps.py` | `require_ui_session` returns `{user_sub, role, admin_profile}`; delegation auth will layer on top |
-| Profile service | `app/services/profile.py` | `get_profile(user_id)` for display names and avatars in delegate lists |
-| Contacts service | `app/services/contacts.py` | Contact request pattern (invite/accept/decline) -- closest existing model for delegation invites |
+| Messaging router | `app/routers/messaging.py` (~13287 lines) | Endpoints for DMs, group chats, mass messages; will need `on_behalf_of` parameter in DELEGATE-002 |
+<!-- NOTE: Messaging router is ~13287 lines, not ~1200 lines -->
+| Newsfeed router | `app/routers/newsfeed.py` (~5954 lines) | Post CRUD, comments, reactions; will need delegation support in DELEGATE-003 |
+<!-- NOTE: Newsfeed router is ~5954 lines, not ~800 lines -->
+| Broadcast chat store | `app/services/broadcast_chat_store.py` (~423 lines) | Chat message CRUD, muting, rate limiting; will need moderator support in DELEGATE-004 |
+| Broadcast store | `app/services/broadcast_store.py` (~480 lines) | Broadcast session lifecycle; will need delegation in DELEGATE-004 |
+| API key service | `app/services/api_keys.py` (~412 lines) | Key creation, capabilities, IP rules, rate limits; DELEGATE-005 will extend with `delegation_scope` |
+| Auth dependencies | `app/auth/deps.py` (~308 lines) | Auth middleware; `require_ui_session` is actually defined in `app/services/sessions.py:283` |
+<!-- NOTE: require_ui_session is in app/services/sessions.py:283, not app/auth/deps.py -->
+| Profile service | `app/services/profile.py` (~345 lines) | `get_profile(user_id)` (see line 220) for display names and avatars in delegate lists |
+| Contacts router | `app/routers/contacts.py` | Contact request pattern (invite/accept/decline) -- closest existing model for delegation invites |
+<!-- NOTE: Contacts are in app/routers/contacts.py, not app/services/contacts.py -->
 | DDB table init | `scripts/local-ddb-init.py` | `TableDef` pattern with GSIs and `attr_types` for numeric sort keys |
 | Newsfeed fanout | `app/services/newsfeed_fanout.py` | Fan-out patterns for follower-based content; DELEGATE-003 will use for delegated posts |
-| Broadcast SSE | `app/services/broadcast_sse.py` | SSE event streaming; DELEGATE-002/004 will extend for delegate subscriptions |
+| Broadcast SSE | `app/services/broadcast_sse.py` (~49 lines) | SSE event streaming; DELEGATE-002/004 will extend for delegate subscriptions |
 
 ### 2.2 Gaps
 
@@ -401,7 +405,7 @@ def _write_audit(creator_id, actor_id, actor_type, action, target_id, details=No
 
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.auth.deps import require_ui_session
+from app.services.sessions import require_ui_session  # actual location of require_ui_session
 from app.services import delegates as svc
 
 router = APIRouter(prefix="/ui/delegates", tags=["delegates"])
@@ -558,6 +562,7 @@ Add "Delegates" entry to the Settings/Account group in `Sidebar.tsx` and `AppShe
 
 ### 3.10 Files to Create
 
+<!-- NOTE: None of the files below exist yet — all are new implementation required -->
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
 | `app/services/delegates.py` | Core delegate management service | ~400 |
@@ -787,3 +792,36 @@ Every action performed via delegation writes an audit entry with:
 9. Self-delegation is rejected.
 10. Delegate limits are enforced per creator settings.
 11. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+| File | Line(s) | What | Status |
+|------|---------|------|--------|
+| `app/services/delegates.py` | — | Delegate management service | NOT YET CREATED |
+| `app/routers/delegates.py` | — | Delegate REST API router | NOT YET CREATED |
+| `app/routers/messaging.py` | all (13287 lines) | Messaging endpoints needing `on_behalf_of` in DELEGATE-002 | EXISTS |
+| `app/routers/newsfeed.py` | all (5954 lines) | Newsfeed endpoints needing delegation in DELEGATE-003 | EXISTS |
+| `app/services/broadcast_chat_store.py` | all (423 lines) | Broadcast chat CRUD needing moderator support in DELEGATE-004 | EXISTS |
+| `app/services/broadcast_store.py` | all (480 lines) | Broadcast session lifecycle | EXISTS |
+| `app/services/api_keys.py` | all (412 lines) | API key service for DELEGATE-005 extension | EXISTS |
+| `app/services/sessions.py` | 283 | `require_ui_session` definition (NOT in `app/auth/deps.py`) | EXISTS |
+| `app/auth/deps.py` | all (308 lines) | Auth middleware (references `require_ui_session` but does not define it) | EXISTS |
+| `app/services/profile.py` | 220 | `get_profile(user_sub)` for delegate display names | EXISTS |
+| `app/routers/contacts.py` | all | Contact request pattern (invite/accept/decline model) | EXISTS |
+| `app/services/newsfeed_fanout.py` | all | Newsfeed fan-out patterns | EXISTS |
+| `app/services/broadcast_sse.py` | all (49 lines) | SSE event streaming | EXISTS |
+| `scripts/local-ddb-init.py` | — | Needs `delegates` TableDef with 2 GSIs | EXISTS (modify) |
+| `app/core/settings.py` | — | Needs `delegates_table_name` setting | EXISTS (modify) |
+| `app/core/tables.py` | — | Needs `T.delegates` table handle | EXISTS (modify) |
+| `app/main.py` | — | Needs `delegates_router` registration | EXISTS (modify) |
+| `app/models.py` | — | Needs Delegate* Pydantic models | EXISTS (modify) |
+| `frontend/src/pages/delegates/` | — | All frontend delegate components | NOT YET CREATED |
+| `frontend/src/api/endpoints/delegates.ts` | — | API client wrappers | NOT YET CREATED |
+| `frontend/src/api/types.ts` | — | Needs Delegate TypeScript interfaces | EXISTS (modify) |
+| `frontend/src/App.tsx` | — | Needs `/delegates` route | EXISTS (modify) |
+| `frontend/src/components/layout/Sidebar.tsx` | — | Needs "Delegates" nav entry | EXISTS (modify) |
+| `frontend/src/components/layout/AppShell.tsx` | — | Needs mobile sidebar entry | EXISTS (modify) |
+| `frontend/src/components/layout/MobileNav.tsx` | — | Needs MORE_LINKS entry | EXISTS (modify) |
+| `frontend/e2e/delegates-management.spec.ts` | — | E2E tests | NOT YET CREATED |

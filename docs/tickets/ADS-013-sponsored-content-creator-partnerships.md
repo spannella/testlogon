@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 10-12 days  
-**Dependencies**: ADS-001 (advertiser accounts), ADS-007 (ad billing), ADS-008 (ad analytics)
+**Dependencies**: ADS-001 (advertiser accounts), ADS-007 (ad billing), ADS-008 (ad analytics) — all sibling tickets, not yet implemented
+<!-- NOTE: All ADS dependencies are sibling tickets. Existing: app/routers/newsfeed.py, app/services/billing_shared.py. -->
 
 ---
 
@@ -699,3 +700,14 @@ export const cancelDeal = (dealId: string, data: { reason: string }) =>
 7. Deal cancellation releases escrow appropriately (full return before content, 50/50 after)
 8. Deal history records all state transitions
 9. All 18 E2E tests pass in `frontend/e2e/sponsorship-deals.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/routers/newsfeed.py` | — | Existing newsfeed router — sponsored content appears in feed |
+| `app/services/billing_shared.py` | — | Existing billing ledger — escrow and payout patterns |
+| `app/services/sponsorship_deals.py` | — | Does not exist yet — new implementation required |
+| `sponsorship_deals` DDB table | — | Does not exist yet — new implementation required |

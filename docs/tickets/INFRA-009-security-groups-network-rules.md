@@ -21,7 +21,7 @@ INFRA-003 (EC2 Launcher) mentions auto-creating security groups with SSH/VNC por
 4. Open additional ports (e.g., 8080, 3000, 5432) for development purposes
 5. Apply different security groups to different instances
 
-The platform has CIDR validation utilities in `app/core/normalize.py` with `normalize_cidr()` and `ip_in_any_cidr()`, which can be reused for rule source validation. However, there is no security group model, storage, or management API.
+The platform has CIDR validation utilities in `app/core/normalize.py` with `normalize_cidr()` (see `app/core/normalize.py:43`) and `ip_in_any_cidr()` (see `app/core/normalize.py:53`), which can be reused for rule source validation. However, there is no security group model, storage, or management API.
 
 ### Why This Matters
 
@@ -81,9 +81,9 @@ def ip_in_any_cidr(ip_str: str, cidrs: List[str]) -> bool:
     """Check if an IP is in any of the given CIDR ranges."""
 ```
 
-These can validate security group rule sources.
+These can validate security group rule sources (see `app/core/normalize.py:43-53`).
 
-### 2.3 SSH Destination Policy (`app/routers/browser_ssh_terminal.py`)
+### 2.3 SSH Destination Policy (`app/routers/browser_ssh_terminal.py`, see line 60 for `ParamikoSshBridge`)
 
 The SSH terminal has a built-in destination policy (whitelist/blacklist) for hosts. This operates at the platform level — which hosts the platform will proxy SSH connections to. Security groups are a different layer — they control which network traffic the instance itself accepts.
 
@@ -824,3 +824,32 @@ interface SourceInputProps {
 26. `Alice cannot add rule to Bob's SG` -- POST rule to Bob's SG. Verify 403.
 27. `Delete SG with associated instance fails` -- Launch instance with SG, DELETE SG. Verify 409.
 28. `Delete SG succeeds after disassociating instances` -- Terminate instance, DELETE SG. Verify 200.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `normalize_cidr()` | `app/core/normalize.py` | 43 | VERIFIED |
+| `ip_in_any_cidr()` | `app/core/normalize.py` | 53 | VERIFIED |
+| DDB table init script | `scripts/local-ddb-init.py` | exists | VERIFIED (1360 lines) |
+
+### Not Yet Implemented (requires new code)
+
+<!-- NOTE: INFRA-003 (EC2 Launcher) and INFRA-004 (K8s Launcher) are dependencies but do not exist yet. Security group infrastructure is entirely new. -->
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `security_groups` DDB table | `scripts/local-ddb-init.py` | NOT FOUND -- new table required |
+| `app/routers/security_groups.py` | `app/routers/` | NOT FOUND -- new router required |
+| `app/services/security_groups.py` | `app/services/` | NOT FOUND -- new service required |
+| Security groups router registration | `app/main.py` | NOT FOUND -- needs `app.include_router()` |
+| `SecurityGroupOut` / `SecurityRuleOut` models | `app/models.py` | NOT FOUND -- new models required |
+| Security group settings | `app/core/settings.py` | NOT FOUND -- new settings required |
+| EC2 launch integration (INFRA-003) | `app/services/ec2_launcher.py` | NOT FOUND -- new implementation required |
+| `frontend/src/pages/remote/SecurityGroupsPage.tsx` | `frontend/src/pages/remote/` | NOT FOUND -- new page required |

@@ -69,7 +69,7 @@ The affiliate payout will integrate with this system by adding affiliate commiss
 
 ### 3.3 Registration Flow
 
-`app/routers/register.py` handles user registration (functions: `register_start` at line 61, `register_check` at line 154, `register_confirm` at line 188, `register_resend` at line 233). <!-- CORRECTED: was app/routers/auth.py, which does not exist. Registration is in app/routers/register.py --> The registration endpoint must be extended to check for a `ref_attribution` cookie and record the referral relationship.
+`app/routers/register.py` handles user registration (functions: `register_start` at line 61, `register_check` at line 154, `register_confirm` at line 188, `register_resend` at line 242). <!-- CORRECTED: was app/routers/auth.py, which does not exist. Registration is in app/routers/register.py --> The registration endpoint must be extended to check for a `ref_attribution` cookie and record the referral relationship.
 
 ### 3.4 Gaps
 
@@ -889,12 +889,15 @@ The `record_affiliate_commission` function adds 2 DDB reads to every qualifying 
 | `app/services/billing.py` | N/A | N/A | DOES NOT EXIST (CORRECTED to `app/services/billing_shared.py` + `billing_ccbill.py` + `billing_dunning.py` + `billing_reconcile.py`) |
 | `new_ledger_entry` billing function | `app/services/billing_shared.py` | 217 | VERIFIED |
 | `app/routers/auth.py` | N/A | N/A | DOES NOT EXIST (CORRECTED to `app/routers/register.py`) |
-| Registration functions | `app/routers/register.py` | 61 (register_start), 154 (register_check), 188 (register_confirm), 233 (register_resend) | VERIFIED |
-| `S.public_base_url` | `app/core/settings.py` | 286 | VERIFIED |
-| `billing` table handle | `app/core/tables.py` | 22/106 | VERIFIED: `T.billing` |
-| `S.billing_table_name` | `app/core/settings.py` | 306 | VERIFIED |
-| `app_single_table` DDB table | `scripts/local-ddb-init.py` | 217 | VERIFIED: PK=pk, SK=sk, GSI1-GSI5 (referral entities use this table) |
-| `app/core/settings.py` | `app/core/settings.py` | 1-1197 | VERIFIED: frozen dataclass; no `REFERRAL_*` settings exist yet |
+| Registration functions | `app/routers/register.py` | 61 (register_start), 154 (register_check), 188 (register_confirm), 242 (register_resend) | VERIFIED |
+| `S.public_base_url` | `app/core/settings.py` | 301 | VERIFIED |
+| `billing` table handle | `app/core/tables.py` | 22/146 | VERIFIED: `T.billing` |
+| `S.billing_table_name` | `app/core/settings.py` | 321 | VERIFIED |
+| `app_single_table` DDB table | `scripts/local-ddb-init.py` | 221-233 | VERIFIED: PK=pk, SK=sk, GSI1-GSI5 (referral entities use this table) |
+| `app/core/settings.py` | `app/core/settings.py` | 1-1494 | VERIFIED: frozen dataclass; `REFERRAL_*` settings exist at lines 1270-1277 |
+| Referral router | `app/routers/referrals.py` | entire file | VERIFIED — already implemented and registered in `app/main.py:115,444-445` |
+| Referral service | `app/services/referrals.py` | entire file | VERIFIED — already implemented with code generation, attribution, commissions |
+| Referral settings | `app/core/settings.py` | 1270-1277 | VERIFIED — `referral_enabled`, `referral_cookie_max_age_days`, `referral_standard_rate_bps`, etc. |
 | `require_ui_session` auth dependency | `app/auth/deps.py` | 184+ | VERIFIED |
 
 ### Key Corrections Summary

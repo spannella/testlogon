@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-013
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-25
 
 ---
@@ -768,20 +768,29 @@ If a video's visibility changes from public to private after being shared:
 
 ## 6. Implementation Plan
 
-### 6.1 Files to Create
+### 6.1 Files
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/pages/messages/VideoPickerDialog.tsx` | Video selection dialog for ComposeBar |
-| `frontend/src/pages/messages/VideoShareCard.tsx` | Inline video player card for MessageBubble |
-| `tests/test_video_share_message.py` | Unit tests for the video share endpoint |
-| `frontend/e2e/messaging-video-share.spec.ts` | E2E tests for video sharing in messages |
+<!-- NOTE: The video_share message kind is ALREADY IMPLEMENTED in the messaging router.
+     - `CreateVideoShareMessageIn` exists at `app/routers/messaging.py:2027`
+     - `"video_share"` is in `MessageOut.kind` literal at line 2330
+     - `video_share: Optional[Dict[str, Any]]` field at line 2338
+     - `_is_searchable_kind` includes "video_share" at line 3384
+     - Gallery handler at line 2793 handles video_share kind
+     - `video_share_out` projection in `_message_out_from_item` at line 3907
+     - Setting `video_share_playback_token_ttl_seconds` at app/core/settings.py:1023
+-->
 
-### 6.2 Files to Modify
+| File | Purpose | Status |
+|------|---------|--------|
+| `frontend/src/pages/messages/VideoPickerDialog.tsx` | Video selection dialog | Verify existence |
+| `frontend/src/pages/messages/VideoShareCard.tsx` | Inline video player card | Verify existence |
+| `frontend/e2e/messaging-video-share.spec.ts` | E2E tests | Verify existence |
+
+### 6.2 Files Modified
 
 | File | Change |
 |------|--------|
-| `app/routers/messaging.py` | Add `CreateVideoShareMessageIn` model; add `create_video_share_message` endpoint; add `video_share` projection in `_message_out_from_item`; update `MessageOut.kind` literal; add `video_share` field to `MessageOut`; update `_is_searchable_kind`; update gallery index handler |
+| `app/routers/messaging.py` | **Already done**: `CreateVideoShareMessageIn` (line 2027); `video_share` in `MessageOut.kind` (line 2330); `video_share` field (line 2338); `_is_searchable_kind` (line 3384); gallery handler (line 2793); `_message_out_from_item` projection (line 3907) |
 | `app/main.py` | No change needed (messaging router already registered) |
 | `app/core/settings.py` | Add `video_sharing_enabled`, `video_share_playback_token_ttl_seconds` |
 | `.env.local.example` | Add `VIDEO_SHARING_ENABLED`, `VIDEO_SHARE_PLAYBACK_TOKEN_TTL_SECONDS` |

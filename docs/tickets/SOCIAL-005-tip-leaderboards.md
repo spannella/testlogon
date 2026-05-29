@@ -13,6 +13,14 @@
 
 The platform has a robust tip ledger system (`app/services/tip_ledger.py`, 149 lines) that writes paired debit/credit entries for every tip transaction across four tipping surfaces: message-attached tips, post-send message tips, post tips, and comment tips. Each ledger entry includes `tipper_user_id`, `recipient_user_id`, `amount_cents`, `content_type`, and `content_id`. These entries are written to the billing DynamoDB table but are never aggregated or queried for ranking purposes.
 
+<!-- NOTE: This ticket's "current state" description is OUTDATED. Tip leaderboards have been FULLY IMPLEMENTED:
+  - Backend service: app/services/tip_leaderboard.py — get_leaderboard, refresh_creator_leaderboard, refresh_all_leaderboards
+  - Backend router: app/routers/tip_leaderboard.py — GET /ui/creators/{creator_id}/top-supporters (line 30), POST /internal/tip-leaderboards/refresh (line 54)
+  - Registered in main.py at lines 107-108 and 430-431
+  - Pydantic models: TopSupportersOut, TopSupporterItem in app/models.py
+  All "Files to Create" listed in section 7.9 already exist (tip_leaderboard.py service + router).
+-->
+
 There is no "top supporters" endpoint, no leaderboard aggregation logic, no ranking query, and no frontend widget. Creators cannot see who their top tippers are, and supporters have no recognition mechanism for their contributions. This is a significant gap in the social engagement layer -- leaderboards are a proven driver of competitive tipping behavior on platforms like Twitch, YouTube Super Chat, and Patreon.
 
 This ticket implements a tip aggregation service, a `GET /ui/creators/{creator_id}/top-supporters` API endpoint, a configurable leaderboard widget for creator profiles, and integration into the analytics dashboard. The system reads existing billing ledger credit entries, aggregates by tipper over configurable time periods, and returns ranked lists. A background pre-computation job runs periodically to keep leaderboard data fresh without real-time DynamoDB scans. The pre-computed data is stored in the billing table using a `BOARD#` prefix key pattern, with DynamoDB TTL for automatic cleanup of stale rankings.
@@ -1034,8 +1042,10 @@ Set `TIP_LEADERBOARD_ENABLED=false`. Background loop stops. API returns empty da
 | Earnings categorizes tips via reason prefix "tip" | `app/services/creator_earnings.py` | 22-33 | VERIFIED |
 | Earnings summary queries billing table credits with pagination | `app/services/creator_earnings.py` | 47-114 | VERIFIED |
 | get_earnings_transactions with FilterExpression loop | `app/services/creator_earnings.py` | 117-207 | VERIFIED |
-| No aggregation/leaderboard endpoint in any router | All routers | N/A | VERIFIED (grep 0) |
-| No "leaderboard" or "top.*supporter" in codebase | Full codebase | N/A | VERIFIED (grep 0) |
+| No aggregation/leaderboard endpoint in any router | `app/routers/tip_leaderboard.py` | 30, 54 | **OUTDATED** — GET /top-supporters and POST /refresh exist |
+| No "leaderboard" or "top.*supporter" in codebase | `app/services/tip_leaderboard.py`, `app/routers/tip_leaderboard.py` | — | **OUTDATED** — service + router fully implemented |
+| Tip leaderboard router registered | `app/main.py` | 107-108, 430-431 | **ALREADY IMPLEMENTED** |
+| TopSupportersOut / TopSupporterItem models | `app/models.py` | — | **ALREADY IMPLEMENTED** |
 | AnalyticsPage top content table area | `frontend/src/pages/analytics/AnalyticsPage.tsx` | 374-419 | VERIFIED |
 | FilterExpression applied AFTER DDB page fetch | `CLAUDE.md` | gotchas | VERIFIED |
 | get_profile returns display_name, avatar_url | `app/services/profile.py` | various | VERIFIED |

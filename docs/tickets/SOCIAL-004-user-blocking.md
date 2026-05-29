@@ -11,6 +11,13 @@
 
 ## 1. Executive Summary
 
+<!-- NOTE: This ticket's "current state" description is OUTDATED. User blocking is FULLY IMPLEMENTED:
+  - Backend service: app/services/blocking.py — block_user (line 30), unblock_user (line 77), get_blocked_users (line 89), get_block_status (line 121), is_any_block (line 129), get_blocked_set (line 134)
+  - Backend router: app/routers/social.py — POST /block (line 245), POST /unblock (line 260), GET /blocked (line 267), GET /block-status/{target} (line 285)
+  - Frontend API: frontend/src/api/endpoints/blocking.ts
+  The ticket's claim that "there are no public endpoints to create or remove a block" is incorrect.
+-->
+
 The platform has partial blocking infrastructure but no user-facing way to block someone. The private function `_is_blocked()` in `app/services/social.py:393-398` checks for a `BLOCKED#{blocked_id}` sort key under `USER#{blocker_id}` in the `app_single_table`, and the follow endpoint in `app/routers/social.py:108-118` returns 403 when the target has blocked the requester. However, there are no public endpoints to create or remove a block, no endpoint to list blocked users, no messaging filter for blocked users, no prevention of DM creation with blocked users, and no frontend UI for blocking.
 
 User blocking is a safety feature required by virtually every social platform. Without it, users have no way to protect themselves from harassment, unwanted messages, or uncomfortable interactions. The absence of blocking is a trust and safety liability.
@@ -939,16 +946,12 @@ class TestIsAnyBlock:
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| `_is_blocked()` function | `app/services/social.py` | 393-398 | VERIFIED |
-| `_is_blocked()` checks state=="blocked" | `app/services/social.py` | 398 | VERIFIED |
-| `_is_blocked()` reads from app_single_table | `app/services/social.py` | 19-20, 395-397 | VERIFIED |
-| follow_user calls _is_blocked | `app/services/social.py` | 40-41 | VERIFIED |
-| Router returns 403 on blocked follow | `app/routers/social.py` | 112-113 | VERIFIED |
-| Social router has no block endpoints | `app/routers/social.py` | 1-200 | VERIFIED: all 200 lines reviewed |
-| Social service has no block/unblock functions | `app/services/social.py` | 1-398 | VERIFIED |
-| find_or_create_dm has no block check | `app/routers/messaging.py` | 5798-5825 | VERIFIED: no _is_blocked call |
-| Social router registered in main.py | `app/main.py` | 69, 365 | VERIFIED |
+| `_is_blocked()` function | `app/services/social.py` | 394 | VERIFIED |
+| Blocking service | `app/services/blocking.py` | 30, 77, 89, 121, 129, 134 | **ALREADY IMPLEMENTED** — block_user, unblock_user, get_blocked_users, get_block_status, is_any_block, get_blocked_set |
+| Social router has no block endpoints | `app/routers/social.py` | 245-291 | **OUTDATED** — POST /block (245), POST /unblock (260), GET /blocked (267), GET /block-status (285) all exist |
+| Social service has no block/unblock functions | `app/services/blocking.py` | — | **OUTDATED** — full blocking.py service exists |
+| blocking.ts frontend API | `frontend/src/api/endpoints/blocking.ts` | — | **ALREADY IMPLEMENTED** |
+| Social router registered in main.py | `app/main.py` | 71, 393 | VERIFIED |
 | app_single_table schema | `scripts/local-ddb-init.py` | 216-227 | VERIFIED |
-| DDB key pattern: USER#{id} + BLOCKED#{id} | `app/services/social.py` | 396 | VERIFIED |
-| DDB key pattern: USER#{id} + FOLLOWING#{id} | `app/services/social.py` | 51, 69 | VERIFIED |
+| DDB key pattern: USER#{id} + BLOCKED#{id} | `app/services/blocking.py` | — | VERIFIED (used in block_user) |
 | GSI5 used for followers | `app/services/social.py` | 77, 148 | VERIFIED |

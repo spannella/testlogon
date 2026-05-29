@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: Medium
 **Estimated effort**: 6-8 days
-**Dependencies**: ADS-001 (Accounts), ADS-002 (Creatives — native_post format), ADS-004 (Ad Serving Engine)
+**Dependencies**: ADS-001 (Accounts), ADS-002 (Creatives — native_post format), ADS-004 (Ad Serving Engine) — all sibling tickets, not yet implemented
+<!-- NOTE: All ADS dependencies are sibling tickets not yet in the codebase. The existing newsfeed router (app/routers/newsfeed.py) is the integration point. -->
 
 ---
 
@@ -790,3 +791,14 @@ The sponsored post injection adds at most 3 `serve_ad()` calls per feed page. Ea
 | 367.3 | CTA button navigates to URL | Click CTA; intercept navigation; URL matches cta_url |
 | 367.4 | Sponsored badge text correct | Sponsored post shows "Sponsored" text and sponsor_label |
 | 367.5 | Overflow menu has all options | Click three-dot menu; "Hide this ad", "Why this ad?", "Report ad" all visible |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/routers/newsfeed.py` | — | Existing newsfeed router (5954 lines) — integration point for sponsored post injection |
+| `app/services/ad_placement.py` | 25, 222 | Existing ad placement: `DEV_AD_CREATIVES` (line 25), `record_ad_impression` (line 222) |
+| `app/core/tables.py` | 93 | Existing `ad_impressions` table handle |
+| `app/services/ad_serving.py` | — | Does not exist yet (ADS-004) — required for sponsored post selection |

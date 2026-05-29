@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: High
 **Estimated effort**: 8-10 days
-**Dependencies**: Billing ledger (`app/services/billing_shared.py`), Admin moderation (`app/auth/deps.py`)
+**Dependencies**: Billing ledger (`app/services/billing_shared.py` — exists, see `app/services/billing_shared.py`), Admin auth (`app/auth/policy.py` — see `require_admin_or_root` at line 67, `require_root` at line 63)
+<!-- NOTE: auth/deps.py does not have `require_admin_session`. Admin auth helpers are in app/auth/policy.py: `require_admin_or_root` (line 67), `require_admin_scope` (line 84), `require_root` (line 63). -->
 
 ---
 
@@ -80,11 +81,12 @@ The `billing` table stores per-user ledger entries with pattern `pk=USER#{user_s
 
 ### 2.3 Admin Moderation Pattern
 
-Content moderation uses admin endpoints gated by `Depends(require_admin_session)`. The same pattern applies to advertiser account and campaign review. Admin endpoints live alongside regular endpoints in the same router, distinguished by path prefix (`/v1/admin/ads/...`).
+Content moderation uses admin endpoints gated by `Depends(require_admin_or_root)` (see `app/auth/policy.py:67`). The same pattern applies to advertiser account and campaign review. Admin endpoints live alongside regular endpoints in the same router, distinguished by path prefix.
+<!-- NOTE: `require_admin_session` does not exist. The codebase uses `require_admin_or_root` from app/auth/policy.py. Both /ui/admin/ and /v1/admin/ prefixes exist in the codebase; either pattern is acceptable. -->
 
 ### 2.4 Existing Ad Placement (`app/services/ad_placement.py`)
 
-The current ad placement service uses `DEV_AD_CREATIVES` — a hardcoded list of three placeholder creatives. It has no concept of campaigns, budgets, or advertiser accounts. The `record_ad_impression()` function writes to the `ad_impressions` table and credits creator revenue, but does not debit any advertiser account. ADS-001 provides the account structure that later tickets (ADS-004, ADS-007) will integrate with impression tracking and billing.
+The current ad placement service uses `DEV_AD_CREATIVES` (line 25) — a hardcoded list of three placeholder creatives. It has no concept of campaigns, budgets, or advertiser accounts. The `record_ad_impression()` function (line 222) writes to the `ad_impressions` table (see `app/core/tables.py:93,217`) and credits creator revenue via `_credit_ad_revenue()` (line 279), but does not debit any advertiser account. ADS-001 provides the account structure that later tickets (ADS-004, ADS-007) will integrate with impression tracking and billing.
 
 ### 2.5 Gaps
 
@@ -100,6 +102,7 @@ The current ad placement service uses `DEV_AD_CREATIVES` — a hardcoded list of
 ## 3. Technical Design
 
 ### 3.1 DynamoDB Tables
+<!-- NOTE: Neither ad_accounts nor ad_campaigns tables exist yet in scripts/local-ddb-init.py. No ad_accounts_table_name or ad_campaigns_table_name settings exist in app/core/settings.py. No T.ad_accounts or T.ad_campaigns handles exist in app/core/tables.py. All must be created. -->
 
 #### 3.1.1 `ad_accounts` Table
 
@@ -219,6 +222,7 @@ class CampaignReviewIn(BaseModel):
 ### 3.3 Backend Service
 
 **File**: `app/services/ad_accounts.py`
+<!-- NOTE: app/services/ad_accounts.py does not exist yet — new implementation required -->
 
 ```python
 def create_ad_account(owner_sub: str, data: AdAccountCreateIn) -> dict:
@@ -273,6 +277,7 @@ def review_ad_account(account_id: str, reviewer_sub: str, decision: str, notes: 
 ```
 
 **File**: `app/services/ad_campaigns.py`
+<!-- NOTE: app/services/ad_campaigns.py does not exist yet — new implementation required -->
 
 ```python
 def create_campaign(account_id: str, data: CampaignCreateIn) -> dict:
@@ -386,10 +391,12 @@ def _validate_campaign_transition(current: str, target: str) -> None:
 ### 3.4 Backend Router
 
 **File**: `app/routers/ads.py`
+<!-- NOTE: app/routers/ads.py does not exist yet — new implementation required. An existing frontend/src/api/endpoints/ads.ts (for ad display) does exist, but the backend router does not. -->
 
 ```python
 from fastapi import APIRouter, Depends, HTTPException
-from app.auth.deps import require_ui_session, require_admin_session
+from app.auth.deps import require_ui_session
+from app.auth.policy import require_admin_or_root  # NOTE: require_admin_session does not exist; use require_admin_or_root
 
 router = APIRouter(prefix="/ui/ads", tags=["ads"])
 admin_router = APIRouter(prefix="/v1/admin/ads", tags=["ads-admin"])
@@ -444,19 +451,19 @@ def submit_for_review_endpoint(account_id: str, campaign_id: str, ctx=Depends(re
 # ── Admin ──
 
 @admin_router.get("/accounts/pending")
-def list_pending_accounts(ctx=Depends(require_admin_session)):
+def list_pending_accounts(ctx=Depends(require_admin_or_root)  # NOTE: use require_admin_or_root from app/auth/policy.py:67):
     return list_accounts_by_status("pending_review")
 
 @admin_router.post("/accounts/{account_id}/review")
-def review_account(account_id: str, body: AdAccountReviewIn, ctx=Depends(require_admin_session)):
+def review_account(account_id: str, body: AdAccountReviewIn, ctx=Depends(require_admin_or_root)  # NOTE: use require_admin_or_root from app/auth/policy.py:67):
     return review_ad_account(account_id, ctx["user_sub"], body.decision, body.notes or "")
 
 @admin_router.get("/campaigns/pending")
-def list_pending_campaigns(ctx=Depends(require_admin_session)):
+def list_pending_campaigns(ctx=Depends(require_admin_or_root)  # NOTE: use require_admin_or_root from app/auth/policy.py:67):
     return list_campaigns_by_status("pending_review")
 
 @admin_router.post("/campaigns/{campaign_id}/review")
-def review_campaign_endpoint(campaign_id: str, body: CampaignReviewIn, ctx=Depends(require_admin_session)):
+def review_campaign_endpoint(campaign_id: str, body: CampaignReviewIn, ctx=Depends(require_admin_or_root)  # NOTE: use require_admin_or_root from app/auth/policy.py:67):
     return review_campaign(campaign_id, ctx["user_sub"], body.decision, body.notes or "")
 ```
 
@@ -505,6 +512,7 @@ export interface Campaign {
 ### 3.6 Frontend API
 
 **File**: `frontend/src/api/endpoints/ads.ts`
+<!-- NOTE: frontend/src/api/endpoints/ads.ts already exists but only contains ad display functions (for the consumer side). The advertiser campaign management functions below should be added to this existing file or a new ads-manager.ts file. -->
 
 ```typescript
 import api from "../client";
@@ -699,7 +707,7 @@ test.beforeAll(async ({ browser }) => {
 ## 7. Security Considerations
 
 - Account ownership enforced on all campaign operations via `_require_account_owner()` helper
-- Admin review endpoints gated by `require_admin_session`
+- Admin review endpoints gated by `require_admin_or_root` (see `app/auth/policy.py:67`)
 - Account `balance_cents` is never directly settable via API (only via deposit endpoint in ADS-007)
 - Campaign budgets are validated server-side; client-side validation is cosmetic only
 - Rate limiting: max 5 accounts per user, max 50 campaigns per account
@@ -710,7 +718,7 @@ test.beforeAll(async ({ browser }) => {
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| Admin auth | — | Existing (`require_admin_session`) |
+| Admin auth | — | Existing (`require_admin_or_root` from `app/auth/policy.py:67`) |
 | Billing ledger | — | Existing (`billing_shared.py`) |
 
 ### 8.1 Downstream Dependents
@@ -722,3 +730,25 @@ test.beforeAll(async ({ browser }) => {
 | ADS-004 (Ad Serving) | Account + campaign status checks |
 | ADS-007 (Billing) | Account balance + budget fields |
 | ADS-008 (Analytics) | Campaign hierarchy for breakdown |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ad_placement.py` | 25, 222, 279 | Existing ad service: `DEV_AD_CREATIVES` (line 25), `record_ad_impression` (line 222), `_credit_ad_revenue` (line 279) |
+| `app/services/billing_shared.py` | — | Existing billing ledger helpers (`new_ledger_entry`, `user_pk`) |
+| `app/auth/policy.py` | 63, 67, 84 | `require_root` (line 63), `require_admin_or_root` (line 67), `require_admin_scope` (line 84) |
+| `app/auth/deps.py` | 175 | `require_ui_session` (line 175) — used for advertiser endpoints |
+| `app/core/tables.py` | 93, 217 | Existing `ad_impressions` table handle |
+| `app/core/settings.py` | 1242 | Existing `ad_impressions_table_name` setting |
+| `scripts/local-ddb-init.py` | 832 | Existing `AdImpressions` table definition |
+| `frontend/src/api/endpoints/ads.ts` | — | Existing file (consumer-facing ad display only) |
+| `app/services/ad_accounts.py` | — | Does not exist yet — new implementation required |
+| `app/services/ad_campaigns.py` | — | Does not exist yet — new implementation required |
+| `app/routers/ads.py` | — | Does not exist yet — new implementation required |
+| `scripts/local-ddb-init.py` (AdAccounts) | — | Does not exist yet — must add table definition |
+| `scripts/local-ddb-init.py` (AdCampaigns) | — | Does not exist yet — must add table definition |
+| `app/core/settings.py` (ad_accounts_table_name) | — | Does not exist yet — must add setting |
+| `app/core/settings.py` (ad_campaigns_table_name) | — | Does not exist yet — must add setting |

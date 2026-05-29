@@ -11,7 +11,9 @@
 
 ## 1. Executive Summary
 
-The backend `GET /questionnaires/drafts/{id}/analytics` endpoint (questionnaires.py:604) computes rich analytics data -- funnel metrics (starts, completions, completion rate), average completion time, top 5 dropoff points, and validation hotspots. The frontend `QuestionnaireBuilderPage.tsx` already fetches this data (line 90) and renders it in a basic card (lines 395-429), but the visualization is text-only: plain numbers, unformatted lists, and no charts. The analytics data deserves proper visual treatment.
+<!-- NOTE: This feature is ALREADY IMPLEMENTED. QuestionnaireAnalyticsTab.tsx exists at frontend/src/pages/questionnaires/QuestionnaireAnalyticsTab.tsx. QuestionnaireBuilderPage.tsx already uses it (lines 398-399) instead of inline analytics rendering. recharts is installed at package.json:64. -->
+
+The backend `GET /questionnaires/drafts/{id}/analytics` endpoint (questionnaires.py:604) computes rich analytics data -- funnel metrics (starts, completions, completion rate), average completion time, top 5 dropoff points, and validation hotspots. The frontend `QuestionnaireBuilderPage.tsx` already fetches this data (line 92) and renders it via the `QuestionnaireAnalyticsTab` component (lines 398-399). The analytics data deserves proper visual treatment.
 
 Questionnaire creators invest significant effort in designing forms and need to understand their performance. A completion rate of 0.7 is a number; a green circular gauge showing 70% is instantly interpretable. A list of dropoff points as `"Section 1 / q_slider: 2"` requires mental parsing; a horizontal bar chart with proportional bars communicates relative severity at a glance. Visual analytics transform raw data into actionable insights, helping creators identify which sections cause abandonment and which questions trigger validation errors.
 
@@ -201,20 +203,16 @@ All data is rendered as plain text with `data-testid` attributes for testing.
 ```
 
 **Citations**:
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:90-95` -- `analyticsQuery` React Query hook with 60s refetchInterval
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:395-432` -- Full analytics card rendering
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:400` -- Freshness display
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:401-404` -- Summary grid
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:409-410` -- Per-version funnel text
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:417-421` -- Dropoff `<ul>` list
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:425-428` -- Hotspot `<ul>` list
+- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:92-94` -- `analyticsQuery` React Query hook
+- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:398-399` -- **ALREADY REFACTORED**: `<QuestionnaireAnalyticsTab>` component call (replaced inline card)
+- `frontend/src/pages/questionnaires/QuestionnaireAnalyticsTab.tsx` -- Visual analytics component (already exists)
 
 ### 3.3 Frontend API Client
 
 `frontend/src/api/endpoints/questionnaires.ts:106` provides the `getQuestionnaireAnalytics` function that the query uses. This function is a simple GET wrapper -- no transformation of the response data.
 
 **Citations**:
-- `frontend/src/api/endpoints/questionnaires.ts:106` -- `getQuestionnaireAnalytics` API function
+- `frontend/src/api/endpoints/questionnaires.ts:105` -- `getQuestionnaireAnalytics` API function
 
 ### 3.4 Existing Unit Tests
 
@@ -230,7 +228,7 @@ These test IDs MUST be preserved in the new implementation to avoid breaking exi
 The project has `recharts` installed at version `^3.8.1` (`package.json:59`). This is a full-featured React charting library built on D3 that supports bar charts, funnel charts, pie/radial charts, and custom SVG compositions. The analytics visualizations for this feature can leverage `recharts` components (`BarChart`, `Bar`, `ResponsiveContainer`, `RadialBarChart`, etc.) rather than building custom SVG from scratch, reducing implementation effort and ensuring consistent chart rendering.
 
 **Citations**:
-- `frontend/package.json:59` -- `"recharts": "^3.8.1"` (charting library already installed)
+- `frontend/package.json:64` -- `"recharts": "^3.8.1"` (charting library already installed)
 
 ### 3.6 Gaps
 
@@ -973,15 +971,15 @@ None. `recharts` is already installed (`^3.8.1` in `package.json:59`) and can be
 | QuestionnaireAnalyticsEnvelope model | `app/routers/questionnaires.py` | 141-142 | VERIFIED |
 | list_response_sessions call | `app/routers/questionnaires.py` | 151 | VERIFIED |
 | list_response_events call | `app/routers/questionnaires.py` | 152 | VERIFIED |
-| Top 5 dropoffs sorted by count | `app/routers/questionnaires.py` | 204-205 | VERIFIED |
+| Top 5 dropoffs sorted by count | `app/routers/questionnaires.py` | 204 | VERIFIED |
 | Completion rate calculation | `app/routers/questionnaires.py` | 206 | VERIFIED: `(completions / starts) if starts else 0.0` |
-| Frontend analytics query | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 90-95 | VERIFIED: 60s refetchInterval |
-| Analytics card rendering | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 395-432 | VERIFIED: text-only Card with data-testid attributes |
-| Freshness display | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 400 | VERIFIED |
-| Summary stats grid | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 401-404 | VERIFIED |
-| Per-version funnel text | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 409-410 | VERIFIED |
-| Dropoff list rendering | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 417-421 | VERIFIED |
-| Hotspot list rendering | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 425-428 | VERIFIED |
-| Existing unit test assertions | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.test.tsx` | 198-206 | VERIFIED |
-| API client function | `frontend/src/api/endpoints/questionnaires.ts` | 106 | VERIFIED |
-| recharts charting library installed | `frontend/package.json` | 59 | VERIFIED: `"recharts": "^3.8.1"` |
+| Frontend analytics query | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 92-94 | VERIFIED: `queryKey: ["questionnaire", questionnaireId, "analytics"]` |
+| Analytics card rendering | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 398-399 | **ALREADY REFACTORED**: now uses `<QuestionnaireAnalyticsTab analytics={...} isLoading={...} />` |
+| QuestionnaireAnalyticsTab component | `frontend/src/pages/questionnaires/QuestionnaireAnalyticsTab.tsx` | exists | **ALREADY IMPLEMENTED** |
+| API client function | `frontend/src/api/endpoints/questionnaires.ts` | 105 | VERIFIED |
+| recharts charting library installed | `frontend/package.json` | 64 | VERIFIED: `"recharts": "^3.8.1"` |
+
+### Notes
+
+- The inline analytics card (previously at lines 395-432) has already been extracted into `QuestionnaireAnalyticsTab.tsx` and replaced with a single `<QuestionnaireAnalyticsTab>` component call at lines 398-399.
+- Backend analytics code is unchanged from the ticket description -- all line numbers match.

@@ -12,7 +12,7 @@
 
 ### 1.1 Problem Statement
 
-The platform's newsfeed (`app/routers/newsfeed.py`, 5775 lines) supports rich text posts, images, videos, locked content, and tip-lottery mechanics -- but has **no native poll or survey capability**. <!-- CORRECTED: was "5776 lines", actually 5775 lines --> Creators who want to gauge audience preferences or collect structured feedback must resort to external polling services (Google Forms, Strawpoll) and paste links into posts, which:
+The platform's newsfeed (`app/routers/newsfeed.py`, 5954 lines) supports rich text posts, images, videos, locked content, and tip-lottery mechanics -- but has **no native poll or survey capability**. <!-- CORRECTED: was "5776 lines", then corrected to 5775, actually 5954 lines --> Creators who want to gauge audience preferences or collect structured feedback must resort to external polling services (Google Forms, Strawpoll) and paste links into posts, which:
 
 1. Breaks the engagement loop -- users leave the platform to vote.
 2. Provides no real-time feedback -- results are not visible inline.
@@ -58,7 +58,7 @@ The platform already has a **meeting poll** implementation in broadcast chat (`a
 
 ### 2.1 Newsfeed Post Creation (`app/routers/newsfeed.py`) <!-- VERIFIED: app/routers/newsfeed.py exists -->
 
-The `CreatePostRequest` model (line 1257) defines the post creation schema: <!-- VERIFIED: app/routers/newsfeed.py:1257 -->
+The `CreatePostRequest` model (line 1276) defines the post creation schema: <!-- CORRECTED: was line 1257, actually line 1276 -->
 
 ```python
 class CreatePostRequest(ContentFieldsMixin):
@@ -72,7 +72,7 @@ class CreatePostRequest(ContentFieldsMixin):
     ...
 ```
 
-Posts are stored using the single-table pattern with `pk=POST#{post_id}`, `sk=META`, and a feed reference item `GSI1PK=FEED#{user_id}` (line 1791): <!-- CORRECTED: was "line 1799", actually line 1791 -->
+Posts are stored using the single-table pattern with `pk=POST#{post_id}`, `sk=META`, and a feed reference item `GSI1PK=FEED#{user_id}` (see `app/routers/newsfeed.py:1818`): <!-- CORRECTED: was "line 1799", then corrected to 1791, actually line 1818 (_write_feed_ref_for_published_post) -->
 
 ```python
 def _write_feed_ref_for_published_post(*, user_id: str, post_id: str, created_at: str) -> None:
@@ -91,9 +91,9 @@ def _write_feed_ref_for_published_post(*, user_id: str, post_id: str, created_at
 
 Poll posts will extend `CreatePostRequest` with poll-specific fields and use the same feed reference pattern.
 
-### 2.2 Post Serialization (`_post_to_dict`) <!-- VERIFIED: app/routers/newsfeed.py:1864 _post_to_dict -->
+### 2.2 Post Serialization (`_post_to_dict`) <!-- CORRECTED: _post_to_dict is at line 1900, not 1864 -->
 
-The `_post_to_dict` function (line 1864) maps DDB items to the frontend shape. It already handles `post_type` (line 1970): <!-- CORRECTED: was "line 1969", actually line 1970 -->
+The `_post_to_dict` function (see `app/routers/newsfeed.py:1900`) maps DDB items to the frontend shape. It already handles `post_type` (line 2006): <!-- CORRECTED: was "line 1969", then corrected to 1970, actually line 2006 -->
 
 ```python
 return {
@@ -133,7 +133,7 @@ out = _chat_msg_out(item)
 broadcast_sse_publish(session_id, {"_type": "chat:message", **out})
 ```
 
-The newsfeed poll will use the same SSE publish pattern but through the newsfeed `sse_hub` (line 2051): <!-- VERIFIED: app/routers/newsfeed.py:2051 sse_hub = SSEHub() -->
+The newsfeed poll will use the same SSE publish pattern but through the newsfeed `sse_hub` (see `app/routers/newsfeed.py:2089`): <!-- CORRECTED: SSEHub class at line 2051, sse_hub instance at line 2089 (ticket said 2051) -->
 
 ```python
 sse_hub = SSEHub()
@@ -151,9 +151,9 @@ async def publish(self, user_id: str, event: Dict[str, Any]) -> int:
     return delivered
 ```
 
-### 2.4 Newsfeed SSE Stream (`app/routers/newsfeed.py`) <!-- VERIFIED: app/routers/newsfeed.py:2122 @router.get("/sse"), 2123 async def sse -->
+### 2.4 Newsfeed SSE Stream (`app/routers/newsfeed.py`) <!-- CORRECTED: SSE endpoint is at line 2160, not 2122 -->
 
-The SSE endpoint at `/sse` (line 2122) already delivers real-time events: <!-- VERIFIED: app/routers/newsfeed.py:2122 -->
+The SSE endpoint at `/sse` (see `app/routers/newsfeed.py:2160`) already delivers real-time events: <!-- CORRECTED: was line 2122, actually line 2160 -->
 
 ```python
 @router.get("/sse")
@@ -170,7 +170,7 @@ async def sse(request: Request, user_id: UserIdDep):
 
 Poll vote events will be published through this SSE stream with `type: "poll:vote_update"`.
 
-### 2.5 Reaction System (Existing Pattern) <!-- VERIFIED: app/routers/newsfeed.py:1744 _reaction_summaries -->
+### 2.5 Reaction System (Existing Pattern) <!-- CORRECTED: _reaction_summaries is at line 1771, not 1744 -->
 
 The post reaction system in `_post_to_dict` computes per-emoji counts (line 1744):
 
@@ -994,22 +994,22 @@ export interface PollResultsResponse {
 ```typescript
 // frontend/src/api/endpoints/polls.ts
 
-import client from "../client";
-import { VoteResponse, PollResultsResponse } from "../types";
+import { api } from "@/api/client";  // NOTE: codebase uses named `api` export, not default `client` import
+import type { VoteResponse, PollResultsResponse } from "@/api/types";  // NOTE: actual file uses `@/api/types` not `../types`
 
 export const castVote = async (postId: string, questionId: string, optionId: string) =>
-  client.post<VoteResponse>(`/ui/posts/${postId}/vote`, { question_id: questionId, option_id: optionId })
+  api.post<VoteResponse>(`/ui/posts/${postId}/vote`, { question_id: questionId, option_id: optionId })
     .then(r => r.data);
 
 export const removeVote = async (postId: string, questionId: string) =>
-  client.delete<VoteResponse>(`/ui/posts/${postId}/vote`, { params: { question_id: questionId } })
+  api.delete<VoteResponse>(`/ui/posts/${postId}/vote`, { params: { question_id: questionId } })
     .then(r => r.data);
 
 export const closePoll = async (postId: string) =>
-  client.post(`/ui/posts/${postId}/close-poll`).then(r => r.data);
+  api.post(`/ui/posts/${postId}/close-poll`).then(r => r.data);
 
 export const getPollResults = async (postId: string, questionId: string) =>
-  client.get<PollResultsResponse>(`/ui/posts/${postId}/poll-results`, { params: { question_id: questionId } })
+  api.get<PollResultsResponse>(`/ui/posts/${postId}/poll-results`, { params: { question_id: questionId } })
     .then(r => r.data);
 ```
 
@@ -1465,7 +1465,7 @@ case "poll:closed":
 
 ## 8. Security Considerations
 
-1. **Vote manipulation**: Votes are tied to `user_sub` from the authenticated session. No anonymous/unauthenticated voting is possible. The `require_ui_session` dependency ensures the user is authenticated.
+1. **Vote manipulation**: Votes are tied to `user_sub` from the authenticated session. No anonymous/unauthenticated voting is possible. The `require_ui_session` dependency (see `app/services/sessions.py:283`) ensures the user is authenticated. <!-- NOTE: require_ui_session is defined in app/services/sessions.py, NOT app/auth/deps.py -->
 
 2. **Poll creation rate limiting**: Poll posts go through the same `_enforce_newsfeed_post_quota_precheck` (line 606 of `newsfeed.py`) as regular posts. No additional rate limiting needed for poll creation. <!-- VERIFIED: app/routers/newsfeed.py:606 -->
 
@@ -1496,3 +1496,28 @@ case "poll:closed":
 4. **Phase 4** (days 11-14): E2E tests (sections 85-88), edge case testing, performance testing with high-volume vote simulation, QA.
 
 Feature flag: `POLLS_ENABLED` (default `false`). The poll/survey post type is rejected in `create_post` when disabled. The PollComposer buttons are hidden in the frontend when the flag is off.
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | Status |
+|-----|------|---------|--------|
+| Newsfeed router | `app/routers/newsfeed.py` | 5954 lines total | VERIFIED |
+| `CreatePostRequest` | `app/routers/newsfeed.py` | 1276 | VERIFIED (ticket said 1257) |
+| `_write_feed_ref_for_published_post` | `app/routers/newsfeed.py` | 1818 | VERIFIED (ticket said 1791) |
+| `_post_to_dict` | `app/routers/newsfeed.py` | 1900 | VERIFIED (ticket said 1864) |
+| `post_type` in `_post_to_dict` | `app/routers/newsfeed.py` | 2006 | VERIFIED (ticket said 1970) |
+| `_reaction_summaries` | `app/routers/newsfeed.py` | 1771 | VERIFIED (ticket said 1744) |
+| `_enforce_newsfeed_post_quota_precheck` | `app/routers/newsfeed.py` | 606 | VERIFIED |
+| `SSEHub` class | `app/routers/newsfeed.py` | 2051 | VERIFIED |
+| `sse_hub` instance | `app/routers/newsfeed.py` | 2089 | VERIFIED |
+| SSE endpoint | `app/routers/newsfeed.py` | 2160 | VERIFIED (ticket said 2122) |
+| `send_chat_message` | `app/services/broadcast_chat_store.py` | 136 | VERIFIED |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED (NOT in app/auth/deps.py) |
+| Poll vote endpoint | `app/routers/newsfeed.py` | 5843 | VERIFIED (`@router.post("/posts/{post_id}/vote")`) |
+| `newsfeed_polls` service | `app/services/newsfeed_polls.py` | exists (16300 bytes) | VERIFIED |
+| Frontend polls API | `frontend/src/api/endpoints/polls.ts` | 1 (`import { api } from "@/api/client"`) | VERIFIED |
+| PollComposer | `frontend/src/pages/feed/PollComposer.tsx` | exists (5527 bytes) | VERIFIED |
+| PollDisplay | `frontend/src/pages/feed/PollDisplay.tsx` | N/A | NOT YET CREATED |
+| PollResultsView | `frontend/src/pages/feed/PollResultsView.tsx` | N/A | NOT YET CREATED |

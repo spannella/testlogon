@@ -40,12 +40,12 @@ Autonomous AI agents consume significant resources -- both LLM API credits (pote
 
 ### 2.1 Existing Infrastructure
 
-- **Agent Registry** (AGENT-001): Agent type definitions, worker assignments.
-- **Worker Agent Framework** (AGENT-003): Task execution with duration tracking.
-- **Agent Monitoring** (AGENT-006): Worker health, uptime, task completion metrics.
-- **Ticket Lifecycle Bridge** (AGENT-004): Ticket assignment and completion tracking.
-- **Billing system** (`app/services/billing.py`): Existing billing infrastructure for platform payments.
-- **AWS SDK** (`app/core/aws.py`): boto3 helpers for AWS API calls.
+- **Agent Registry** (AGENT-001): Agent type definitions, worker assignments. <!-- NOTE: AGENT-001 spec exists at docs/tickets/AGENT-001-llm-provider-key-management.md but NO code has been implemented yet — no agent registry tables, services, or routers exist in the codebase -->
+- **Worker Agent Framework** (AGENT-003): Task execution with duration tracking. <!-- NOTE: AGENT-003 spec exists at docs/tickets/AGENT-003-worker-agent-framework-lifecycle.md but NO code has been implemented yet -->
+- **Agent Monitoring** (AGENT-006): Worker health, uptime, task completion metrics. <!-- NOTE: AGENT-006 spec exists at docs/tickets/AGENT-006-terminal-monitoring-feedback-loop.md but NO code has been implemented yet -->
+- **Ticket Lifecycle Bridge** (AGENT-004): Ticket assignment and completion tracking. <!-- NOTE: AGENT-004 spec exists at docs/tickets/AGENT-004-worker-fleet-management-ui.md but NO code has been implemented yet -->
+- **Billing system** (`app/services/billing_shared.py`): Existing billing infrastructure for platform payments. <!-- NOTE: There is no `app/services/billing.py` — the billing logic lives in `app/services/billing_shared.py` (helpers: `new_ledger_entry`, `user_pk`, `ddb_get`, etc.) -->
+- **AWS SDK** (`app/core/aws.py`): boto3 helpers for AWS API calls. (see `app/core/aws.py` — 41 lines, wraps `ddb_resource`, `kms_client`, `secretsmanager_client`, `sqs_client` from `app/core/aws_clients.py`)
 
 ### 2.2 Gaps
 
@@ -66,6 +66,7 @@ Autonomous AI agents consume significant resources -- both LLM API credits (pote
 ### 3.1 Data Model
 
 #### 3.1.1 AgentCosts Table
+<!-- NOTE: The `agent_costs` table does NOT exist yet in `scripts/local-ddb-init.py` — new TableDef required -->
 
 Primary cost tracking table. Each record represents a cost entry for a specific worker on a specific date.
 
@@ -112,6 +113,7 @@ TableDef(
 ```
 
 #### 3.1.2 TicketCosts Table
+<!-- NOTE: The `agent_ticket_costs` table does NOT exist yet in `scripts/local-ddb-init.py` — new TableDef required -->
 
 Attributes costs to individual tickets.
 
@@ -150,6 +152,7 @@ TableDef(
 ```
 
 #### 3.1.3 CostBudgets Table
+<!-- NOTE: The `agent_cost_budgets` table does NOT exist yet in `scripts/local-ddb-init.py` — new TableDef required -->
 
 Stores budget caps and alert thresholds.
 
@@ -178,6 +181,7 @@ TableDef(
 ```
 
 #### 3.1.4 CostAlerts Table
+<!-- NOTE: The `agent_cost_alerts` table does NOT exist yet in `scripts/local-ddb-init.py` — new TableDef required -->
 
 Stores triggered budget alerts and spending anomaly notifications.
 
@@ -244,6 +248,7 @@ Stored as a DDB map on the agent registry entry (`accountant_config` field):
 ```
 
 ### 3.2 Backend Service (`app/services/agent_accountant.py`)
+<!-- NOTE: `app/services/agent_accountant.py` does NOT exist yet — new implementation required. No agent service files exist in the codebase. -->
 
 ```python
 def record_cost_entry(*, user_id, worker_id, agent_type, agent_id, date,
@@ -294,6 +299,7 @@ def get_optimization_recommendations(*, user_id) -> list[dict]:
 ```
 
 ### 3.3 Backend Router (`app/routers/agent_accountant.py`)
+<!-- NOTE: `app/routers/agent_accountant.py` does NOT exist yet — new implementation required. No agent router files exist in the codebase. -->
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -344,6 +350,7 @@ class UpdateAccountantConfigIn(BaseModel):
 ```
 
 Register in `app/main.py`:
+<!-- NOTE: `agent_accountant_router` is NOT currently registered in `app/main.py` — new registration required. See existing pattern at `app/main.py:396` for `broadcast_router` or `app/main.py:432` for `creator_analytics_router`. -->
 
 ```python
 from app.routers.agent_accountant import router as agent_accountant_router
@@ -351,6 +358,7 @@ app.include_router(agent_accountant_router, prefix="/ui")
 ```
 
 ### 3.4 Frontend Types (`frontend/src/api/types.ts`)
+<!-- NOTE: None of the listed TypeScript interfaces exist yet in `frontend/src/api/types.ts` — new types required -->
 
 Key TypeScript interfaces (mirroring DDB fields):
 
@@ -365,11 +373,13 @@ Key TypeScript interfaces (mirroring DDB fields):
 - **`AccountantConfig`**: collection_frequency, report_frequency, report_hour_utc, anomaly_detection_enabled, anomaly_threshold_pct, idle_worker_threshold_minutes, optimization_suggestions_enabled.
 
 ### 3.5 Frontend API (`frontend/src/api/endpoints/agents.ts`)
+<!-- NOTE: `frontend/src/api/endpoints/agents.ts` does NOT exist yet — new file required -->
 
 Standard wrappers: `getDailyCostSummary(date)`, `getPeriodCostSummary(start, end, period)`, `getAgentTypeCosts(agentType, days?)`, `listTicketCosts(limit?)`, `getTicketCost(ticketId)`, `getCostTrends(days?)`, `getOptimizations()`, `listBudgets()`, `createBudget(data)`, `updateBudget(budgetId, data)`, `deleteBudget(budgetId)`, `listAlerts(acknowledged?)`, `acknowledgeAlert(alertId)`, `updateAccountantConfig(config)`, `triggerCostCollection()`.
 
 ### 3.6 Frontend Pages
 
+<!-- NOTE: The `frontend/src/pages/agents/` directory does NOT exist yet — all 5 page files below are new implementations required. No `/agents/*` routes exist in `frontend/src/App.tsx`. -->
 - **CostOverviewPage** (`frontend/src/pages/agents/CostOverviewPage.tsx`): Route `/agents/costs`. Top summary: today's spend, this week, this month (with budget progress bars). Stacked area chart of daily costs (LLM vs compute). Per-agent-type pie chart. Active alerts banner. `data-testid="cost-overview-page"`.
 - **CostBreakdownPage** (`frontend/src/pages/agents/CostBreakdownPage.tsx`): Route `/agents/costs/breakdown`. Tab bar: By Agent Type / By Worker / By Ticket. Sortable table with cost columns. Drill-down to per-day entries. Date range picker. `data-testid="cost-breakdown-page"`.
 - **BudgetManagerPage** (`frontend/src/pages/agents/BudgetManagerPage.tsx`): Route `/agents/costs/budgets`. List of budgets with progress bars (spent vs limit). Create/edit budget dialog. Toggle auto-pause. `data-testid="budget-manager-page"`.
@@ -396,14 +406,14 @@ Standard wrappers: `getDailyCostSummary(date)`, `getPeriodCostSummary(start, end
 
 | File | Changes |
 |------|---------|
-| `scripts/local-ddb-init.py` | Add `agent_costs`, `agent_ticket_costs`, `agent_cost_budgets`, `agent_cost_alerts` TableDefs |
-| `app/core/settings.py` | Add table name settings |
-| `app/core/tables.py` | Add table handles |
-| `app/main.py` | Register `agent_accountant_router` |
-| `app/models.py` | Add `CostEntryOut`, `CostSummaryOut`, `TicketCostOut`, `BudgetOut`, `AlertOut` models |
-| `frontend/src/api/types.ts` | Add cost, budget, alert, optimization types |
-| `frontend/src/api/endpoints/agents.ts` | Add Accountant Agent API functions |
-| `frontend/src/App.tsx` | Add `/agents/costs`, `/agents/costs/breakdown`, `/agents/costs/budgets`, `/agents/costs/alerts` routes |
+| `scripts/local-ddb-init.py` | Add `agent_costs`, `agent_ticket_costs`, `agent_cost_budgets`, `agent_cost_alerts` TableDefs (see existing tables at line 513+ for pattern) |
+| `app/core/settings.py` | Add table name settings + feature flags (see existing broadcast settings at line 452+ for pattern) |
+| `app/core/tables.py` | Add table handles (see existing broadcast handles at line 39-43 for pattern) |
+| `app/main.py` | Register `agent_accountant_router` (see existing registrations at line 396+ for pattern) |
+| `app/models.py` | Add `CostEntryOut`, `CostSummaryOut`, `TicketCostOut`, `BudgetOut`, `AlertOut` models (see existing Pydantic models — file is ~2000 lines) |
+| `frontend/src/api/types.ts` | Add cost, budget, alert, optimization types (see existing TypeScript interfaces in this file) |
+| `frontend/src/api/endpoints/agents.ts` | Add Accountant Agent API functions (new file; see `frontend/src/api/endpoints/analytics.ts` for pattern) |
+| `frontend/src/App.tsx` | Add `/agents/costs`, `/agents/costs/breakdown`, `/agents/costs/budgets`, `/agents/costs/alerts` routes (no `/agents` routes exist yet) |
 
 ---
 
@@ -508,16 +518,17 @@ let alertId: string;
 ---
 
 ## 9. Dependencies
+<!-- NOTE: ALL AGENT-001 through AGENT-007 dependencies exist as ticket specs in `docs/tickets/` but NONE have any code implementation yet — no agent services, routers, tables, or frontend pages exist in the codebase. This ticket cannot be implemented until at least AGENT-001, AGENT-003, AGENT-004, and AGENT-006 are built. -->
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| AGENT-001 (Agent Registry) | AGENT-001 | Required (agent type definitions, worker assignments) |
-| AGENT-002 (Terminal Provisioning) | AGENT-002 | Required (compute cost tracking per instance) |
-| AGENT-003 (Worker Agent Framework) | AGENT-003 | Required (task duration tracking, token usage reporting) |
-| AGENT-004 (Ticket Lifecycle Bridge) | AGENT-004 | Required (ticket-to-cost attribution) |
-| AGENT-005 (Context Injection) | AGENT-005 | Required (injecting provider API credentials into agent terminal) |
-| AGENT-006 (Agent Monitoring) | AGENT-006 | Required (worker health data for idle detection) |
-| AGENT-007 (Orchestration Dashboard) | AGENT-007 | Required (cost widgets on orchestration dashboard) |
+| AGENT-001 (Agent Registry) | AGENT-001 | Required (agent type definitions, worker assignments) — spec only, no code |
+| AGENT-002 (Terminal Provisioning) | AGENT-002 | Required (compute cost tracking per instance) — spec only, no code |
+| AGENT-003 (Worker Agent Framework) | AGENT-003 | Required (task duration tracking, token usage reporting) — spec only, no code |
+| AGENT-004 (Ticket Lifecycle Bridge) | AGENT-004 | Required (ticket-to-cost attribution) — spec only, no code |
+| AGENT-005 (Context Injection) | AGENT-005 | Required (injecting provider API credentials into agent terminal) — spec only, no code |
+| AGENT-006 (Agent Monitoring) | AGENT-006 | Required (worker health data for idle detection) — spec only, no code |
+| AGENT-007 (Orchestration Dashboard) | AGENT-007 | Required (cost widgets on orchestration dashboard) — spec only, no code |
 | LLM Provider APIs | External | Required (Anthropic/OpenAI usage/billing endpoints) |
 | AWS Cost Explorer | External | Required (EC2/K8s compute cost data) |
 
@@ -599,6 +610,7 @@ let alertId: string;
 
 ### 12.1 Feature Flag
 
+<!-- NOTE: Neither `accountant_agent_enabled` nor `accountant_agent_auto_alert` exist in `app/core/settings.py` yet — new settings required. See existing feature flag pattern, e.g., `broadcast_tipping_enabled` at settings.py:507. -->
 ```python
 # app/core/settings.py
 accountant_agent_enabled: bool = os.environ.get("ACCOUNTANT_AGENT_ENABLED", "false").lower() == "true"
@@ -882,6 +894,7 @@ x-csrf-token: <csrf>
 ---
 
 ## 18. Pydantic Models
+<!-- NOTE: None of these Pydantic models exist yet in `app/models.py` — all are new implementations required. The file is currently ~2000 lines of existing models. -->
 
 ```python
 # In app/models.py
@@ -1154,4 +1167,62 @@ class UpdateAccountantConfigIn(BaseModel):
 │       ├── Timestamp (created_at formatted)
 │       └── AcknowledgeButton (if not acknowledged)
 └── EmptyState ("No alerts — your budgets are on track")
+
+---
+
+## Codebase References
+
+### Verified Existing Files
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/billing_shared.py` | 16, 20, 217 | `user_pk()`, `ddb_get()`, `new_ledger_entry()` — billing helpers referenced by this ticket |
+| `app/core/aws.py` | 1-41 | boto3 client wrappers (`ddb_resource`, `kms_client`, `secretsmanager_client`, `sqs_client`) |
+| `app/core/settings.py` | 452-511 | Existing broadcast/analytics settings — pattern for new `accountant_agent_*` settings |
+| `app/core/tables.py` | 39-43, 163-167 | Existing broadcast table handles — pattern for new `agent_costs`/`agent_cost_*` handles |
+| `app/main.py` | 396-435 | Existing router registrations (broadcast, analytics) — pattern for `agent_accountant_router` |
+| `scripts/local-ddb-init.py` | 513-578 | Existing broadcast `TableDef` entries — pattern for new agent cost tables |
+| `app/models.py` | (entire file) | Existing Pydantic models (~2000 lines) — `CostEntryOut`, `BudgetOut`, etc. go here |
+| `frontend/src/api/types.ts` | (entire file) | Existing TypeScript interfaces — pattern for agent cost types |
+| `frontend/src/api/endpoints/analytics.ts` | (entire file) | Existing API endpoint wrappers — pattern for `agents.ts` |
+| `docs/tickets/AGENT-001-llm-provider-key-management.md` | — | Dependency ticket spec (no code yet) |
+| `docs/tickets/AGENT-002-terminal-worker-provisioning.md` | — | Dependency ticket spec (no code yet) |
+| `docs/tickets/AGENT-003-worker-agent-framework-lifecycle.md` | — | Dependency ticket spec (no code yet) |
+| `docs/tickets/AGENT-004-worker-fleet-management-ui.md` | — | Dependency ticket spec (no code yet) |
+| `docs/tickets/AGENT-005-agent-memory-context-injection.md` | — | Dependency ticket spec (no code yet) |
+| `docs/tickets/AGENT-006-terminal-monitoring-feedback-loop.md` | — | Dependency ticket spec (no code yet) |
+| `docs/tickets/AGENT-007-agent-pr-ticket-integration.md` | — | Dependency ticket spec (no code yet) |
+
+### Files That Do NOT Exist Yet (New Implementation Required)
+| File | Purpose |
+|------|---------|
+| `app/services/agent_accountant.py` | Cost recording, aggregation, budgets, alerts, optimizations service |
+| `app/routers/agent_accountant.py` | Cost tracking API endpoints router |
+| `frontend/src/api/endpoints/agents.ts` | Frontend API wrappers for agent cost endpoints |
+| `frontend/src/pages/agents/CostOverviewPage.tsx` | Cost dashboard page |
+| `frontend/src/pages/agents/CostBreakdownPage.tsx` | Detailed cost breakdown page |
+| `frontend/src/pages/agents/BudgetManagerPage.tsx` | Budget CRUD page |
+| `frontend/src/pages/agents/CostAlertsPage.tsx` | Alert management page |
+| `frontend/src/pages/agents/OptimizationsPanel.tsx` | Optimization recommendations panel |
+
+### DynamoDB Tables That Do NOT Exist Yet
+| Table Name | Notes |
+|------------|-------|
+| `agent_costs` | Not in `scripts/local-ddb-init.py`; no setting in `settings.py`; no handle in `tables.py` |
+| `agent_ticket_costs` | Not in `scripts/local-ddb-init.py`; no setting in `settings.py`; no handle in `tables.py` |
+| `agent_cost_budgets` | Not in `scripts/local-ddb-init.py`; no setting in `settings.py`; no handle in `tables.py` |
+| `agent_cost_alerts` | Not in `scripts/local-ddb-init.py`; no setting in `settings.py`; no handle in `tables.py` |
+
+### Settings That Do NOT Exist Yet
+| Setting | Notes |
+|---------|-------|
+| `accountant_agent_enabled` | Feature flag — not in `app/core/settings.py` |
+| `accountant_agent_auto_alert` | Feature flag — not in `app/core/settings.py` |
+| `agent_costs_table_name` | Table name setting — not in `app/core/settings.py` |
+| `agent_ticket_costs_table_name` | Table name setting — not in `app/core/settings.py` |
+| `agent_cost_budgets_table_name` | Table name setting — not in `app/core/settings.py` |
+| `agent_cost_alerts_table_name` | Table name setting — not in `app/core/settings.py` |
+
+### Router Registration
+- `agent_accountant_router` is NOT registered in `app/main.py` — new registration required
+- No `/agents/*` routes exist in `frontend/src/App.tsx`
 ```

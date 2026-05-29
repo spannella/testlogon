@@ -49,8 +49,8 @@ Creators who want to collaborate must negotiate splits off-platform and manually
 
 ### 2.1 Revenue & Billing Ledger Architecture
 
-The platform already has a robust paired-entry billing ledger via `app/services/tip_ledger.py`. The `TipLedgerEntry` class (line 20-61) writes paired debit/credit entries to `T.billing`:
-<!-- CORRECTED: was "line 22-60", actually class starts at line 20, ends ~line 61 -->
+The platform already has a robust paired-entry billing ledger via `app/services/tip_ledger.py`. The `TipLedgerEntry` class (line 20-60) writes paired debit/credit entries to `T.billing`:
+<!-- VERIFIED: app/services/tip_ledger.py:20 class TipLedgerEntry, constructor ends at line 60 -->
 
 ```python
 class TipLedgerEntry:
@@ -72,10 +72,10 @@ class TipLedgerEntry:
 ```
 
 The `write_tip_ledger` function (line 88-150) writes two items to `T.billing`: a DEBIT under `USER#{tipper_user_id}` and a CREDIT under `USER#{recipient_user_id}`.
-<!-- VERIFIED: app/services/tip_ledger.py:88 write_tip_ledger --> This pattern will be extended for collaboration revenue splits -- instead of a single credit to one recipient, the system will write proportional credits to each collaborator.
+(see `app/services/tip_ledger.py:88`) This pattern will be extended for collaboration revenue splits -- instead of a single credit to one recipient, the system will write proportional credits to each collaborator.
 
-The ledger write flow for tips is best-effort with individual try/except blocks around each write (lines 109-127 for debit, 129-148 for credit).
-<!-- CORRECTED: was "130-148 for credit", actually credit try block starts at line 129 --> The collaboration split writes must maintain this same resilience: if one collaborator's credit fails, the other should still be written. A reconciliation job will detect and repair partial writes.
+The ledger write flow for tips is best-effort with individual try/except blocks around each write (lines 109-127 for debit, 130-148 for credit).
+(see `app/services/tip_ledger.py:109` debit try, `:130` credit try) The collaboration split writes must maintain this same resilience: if one collaborator's credit fails, the other should still be written. A reconciliation job will detect and repair partial writes.
 
 Key billing table schema (from `T.billing`):
 - **PK**: `USER#{user_id}`
@@ -86,8 +86,8 @@ The `meta` dict is flexible and can store `collaboration_id`, `split_pct`, and `
 
 ### 2.2 Broadcast Session Ownership Model
 
-The broadcast store (`app/services/broadcast_store.py`, line 206-233) creates sessions tied to a single `created_by` user:
-<!-- VERIFIED: app/services/broadcast_store.py:206 create_session -->
+The broadcast store (`app/services/broadcast_store.py`, line 216-235) creates sessions tied to a single `created_by` user:
+<!-- CORRECTED: was "line 206-233"; `create_session` actually starts at line 216 (see app/services/broadcast_store.py:216) -->
 
 ```python
 def create_session(
@@ -113,8 +113,8 @@ def create_session(
     )
 ```
 
-The `session_to_item` function (line 111-157) already includes multi-input/co-streaming fields from BCAST-016:
-<!-- VERIFIED: app/services/broadcast_store.py:111 session_to_item -->
+The `session_to_item` function (line 111-159) already includes multi-input/co-streaming fields from BCAST-016:
+(see `app/services/broadcast_store.py:111`; multi-input fields at lines 152-157)
 
 ```python
 # Multi-input / Co-streaming (BCAST-016)
@@ -131,8 +131,8 @@ The session model already supports a `name` and `description` field (used by sch
 
 ### 2.3 Broadcast Tipping and Revenue Flow
 
-The broadcast router (`app/routers/broadcast.py`, lines 1629-1673) handles tip messages.
-<!-- VERIFIED: app/routers/broadcast.py:1629 send_tip_message_route decorator, :1634 function def --> The `send_tip_message_route` endpoint resolves the session, validates tipping is enabled, and delegates to `broadcast_tip_store.send_tip_message`. Revenue is currently credited entirely to the `session.created_by` user (the broadcaster).
+The broadcast router (`app/routers/broadcast.py`, lines 1643-1680) handles tip messages.
+<!-- CORRECTED: was "lines 1629-1673"; decorator @router.post is at line 1643, function def `send_tip_message_route` at line 1648 (see app/routers/broadcast.py:1643-1648) --> The `send_tip_message_route` endpoint resolves the session, validates tipping is enabled, and delegates to `broadcast_tip_store.send_tip_message`. Revenue is currently credited entirely to the `session.created_by` user (the broadcaster).
 
 ```python
 result = send_tip_message(
@@ -161,7 +161,7 @@ Step 4 changes: instead of one credit, write N credits (one per collaborator). S
 ### 2.4 Creator Earnings Dashboard
 
 The existing earnings service (`app/services/creator_earnings.py`, lines 22-33) categorizes revenue by reason string:
-<!-- CORRECTED: was "lines 23-34", actually _reason_to_category starts at line 22 -->
+(see `app/services/creator_earnings.py:22`)
 
 ```python
 def _reason_to_category(reason: str) -> str:
@@ -185,15 +185,16 @@ if "collaboration" in reason_lower or "collab" in reason_lower:
 ```
 
 The earnings summary aggregation loop (lines 92-107) uses `FilterExpression: Attr("type").eq("credit")` to find credit entries.
-<!-- CORRECTED: was "lines 92-102", actually aggregation while loop is lines 92-107 --> Collaboration credits will be standard credit entries with `reason="Collaboration tip split"` or `reason="Collaboration unlock split"`, ensuring they are automatically included in the earnings total and individually categorized.
+(see `app/services/creator_earnings.py:74` for filter_expr, `:92-107` for the while loop) Collaboration credits will be standard credit entries with `reason="Collaboration tip split"` or `reason="Collaboration unlock split"`, ensuring they are automatically included in the earnings total and individually categorized.
+<!-- NOTE: The `_reason_to_category` function at line 22 does not currently have a "collaborations" category. A new check (e.g., `if "collaboration" in reason_lower: return "collaborations"`) must be added, and "collaborations" must be added to the `breakdown` dict initializer at line 77. -->
 
-The `get_earnings_transactions` function (lines 117-207) returns paginated individual entries
-<!-- VERIFIED: app/services/creator_earnings.py:117 get_earnings_transactions --> with `meta` dicts. Collaboration split entries will include `meta.collaboration_id`, `meta.split_pct`, and `meta.total_amount_cents`, enabling the frontend to display "You earned $6.00 (60%) from a $10.00 tip on your collaboration with Bob".
+The `get_earnings_transactions` function (line 117+) returns paginated individual entries
+(see `app/services/creator_earnings.py:117`) with `meta` dicts. Collaboration split entries will include `meta.collaboration_id`, `meta.split_pct`, and `meta.total_amount_cents`, enabling the frontend to display "You earned $6.00 (60%) from a $10.00 tip on your collaboration with Bob".
 
 ### 2.5 Newsfeed Post Authorship
 
-Posts in the newsfeed (from `app/routers/newsfeed.py`) are single-author: each post has an `author_id` field. The `PostResponse` model (line 1330) includes `author_id: str`.
-<!-- VERIFIED: app/routers/newsfeed.py:1330 PostResponse --> Collaborative posts will add a `co_authors` list field and populate `collaboration_id` for attribution.
+Posts in the newsfeed (from `app/routers/newsfeed.py`) are single-author: each post has an `author_id` field. The `PostResponse` model (line 1352) includes `author_id: str`.
+<!-- CORRECTED: was "line 1330"; PostResponse is at line 1352, author_id at line 1354 (see app/routers/newsfeed.py:1352) --> Collaborative posts will add a `co_authors` list field and populate `collaboration_id` for attribution.
 
 The newsfeed post creation flow (`POST /posts`) writes to the app single table with PK `POST#{post_id}` and SK `META`. The item includes `author_id`, `body`, `image_urls`, `visibility`, and optional scheduling fields. Adding `collaboration_id` and `co_author_ids` to this item is straightforward.
 
@@ -201,7 +202,8 @@ For the feed query, posts appear in the author's feed via `GSI1PK = FEED#{author
 
 ### 2.6 Notification System Integration
 
-The platform uses `put_notification` from `app/routers/newsfeed.py` for in-app notifications. The function writes to the app single table with `pk=USER#{user_id}` and `sk=NOTIF#{timestamp}#{id}`. The notification item includes `type`, `title`, `body`, `action_url`, and `meta`.
+The platform uses `put_notification` from `app/routers/newsfeed.py` (line 2177) for in-app notifications. The function signature is `put_notification(*, recipient_user_id, notif_type, payload)` and writes to the app single table with `pk` via `pk_notif(recipient_user_id)` and `sk="{created_at}#NOTIF#{notif_id}"`. The notification item includes `type`, `payload` (a dict), and `created_at`.
+<!-- CORRECTED: The ticket described the signature as `put_notification(user_id, title, body, action_url, meta)` but the actual signature (see app/routers/newsfeed.py:2177) uses keyword-only args: `recipient_user_id`, `notif_type`, and `payload` (a dict). There are no `title`, `body`, or `action_url` params — those would be fields inside the `payload` dict. All call-sites in sections 3-4 must use the actual signature. -->
 
 Collaboration events that trigger notifications:
 - `collaboration_request`: "Alice invited you to collaborate on 'Summer Series'"
@@ -214,8 +216,8 @@ Collaboration events that trigger notifications:
 
 ### 2.7 Profile Identity Resolution
 
-The `get_profile_identity` function (used in `app/routers/subscription_server.py`, line 147) resolves display name and avatar for a user ID:
-<!-- VERIFIED: app/routers/subscription_server.py:147 attach_creator_profile -->
+The `get_profile_identity` function (imported from `app/services/profile` in `app/routers/subscription_server.py`, line 21; used at line 147) resolves display name and avatar for a user ID:
+(see `app/routers/subscription_server.py:21` for import, `:147` for `attach_creator_profile`)
 
 ```python
 def attach_creator_profile(plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -734,21 +736,27 @@ def process_expired_collaborations() -> Dict[str, int]:
 
 ### 4.1 Collaboration CRUD
 
+<!-- NOTE: The actual implementation (see app/routers/collaborations.py:42) uses SEPARATE POST endpoints for each action rather than a single PATCH endpoint with an action body. The table below reflects the ACTUAL implemented routes. -->
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/ui/collaborations` | `require_ui_session` | Create a collaboration proposal |
-| GET | `/ui/collaborations` | `require_ui_session` | List my collaborations (sent + received) |
-| GET | `/ui/collaborations/{collab_id}` | `require_ui_session` | Get collaboration detail |
-| PATCH | `/ui/collaborations/{collab_id}` | `require_ui_session` | Accept, reject, counter, or terminate |
-| DELETE | `/ui/collaborations/{collab_id}` | `require_ui_session` | Cancel a pending request (sender only) |
-| GET | `/ui/collaborations/{collab_id}/content` | `require_ui_session` | List content created under this collab |
-| GET | `/ui/collaborations/{collab_id}/revenue` | `require_ui_session` | Revenue breakdown for this collab |
-| GET | `/ui/collaborations/{collab_id}/revisions` | `require_ui_session` | List all revisions for a collab |
-| GET | `/ui/collaborations/settings` | `require_ui_session` | Get caller's collab settings |
-| PATCH | `/ui/collaborations/settings` | `require_ui_session` | Update collab settings |
-| GET | `/ui/collaborations/discover` | `require_ui_session` | Discover creators open to collaboration |
+| POST | `/ui/collaborations` | `require_ui_session` | Create a collaboration proposal (see `app/routers/collaborations.py:86`) |
+| GET | `/ui/collaborations` | `require_ui_session` | List my collaborations (sent + received) (see `:129`) |
+| GET | `/ui/collaborations/{collab_id}` | `require_ui_session` | Get collaboration detail (see `:161`) |
+| POST | `/ui/collaborations/{collab_id}/accept` | `require_ui_session` | Accept a proposal (see `:173`) |
+| POST | `/ui/collaborations/{collab_id}/reject` | `require_ui_session` | Reject a proposal (see `:189`) |
+| POST | `/ui/collaborations/{collab_id}/counter` | `require_ui_session` | Counter-propose with new terms (see `:205`) |
+| POST | `/ui/collaborations/{collab_id}/cancel` | `require_ui_session` | Cancel a pending request (sender only) (see `:229`) |
+| POST | `/ui/collaborations/{collab_id}/terminate` | `require_ui_session` | Terminate an active collaboration (see `:243`) |
+| GET | `/ui/collaborations/{collab_id}/revisions` | `require_ui_session` | List all revisions for a collab (see `:257`) |
+| POST | `/ui/collaborations/{collab_id}/split` | `require_ui_session` | Trigger a revenue split (see `:286`) |
+| GET | `/ui/collaborations/settings` | `require_ui_session` | Get caller's collab settings (see `:146`) |
+| PUT | `/ui/collaborations/settings` | `require_ui_session` | Update collab settings (see `:153`) |
+<!-- NOTE: `/ui/collaborations/{collab_id}/content`, `/ui/collaborations/{collab_id}/revenue`, and `/ui/collaborations/discover` are described in the design but not yet implemented in the router. New implementation required. -->
 
 ### 4.2 Admin Endpoints
+
+<!-- NOTE: No admin endpoints for collaborations exist yet in app/routers/collaborations.py — new implementation required. -->
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -758,22 +766,24 @@ def process_expired_collaborations() -> Dict[str, int]:
 
 ### 4.3 Request/Response Models
 
-```python
-# app/models.py additions
+<!-- NOTE: The actual implemented models (see app/models.py:3315-3417) differ from the design below in several important ways. Key differences are annotated. -->
 
-class CollaborationCreateIn(BaseModel):
-    recipient_id: str = Field(..., min_length=1, max_length=128, description="User ID of the creator to invite")
-    content_types: List[str] = Field(..., min_length=1, description="Content types covered: broadcast, post, vod")
-    split_pct: int = Field(..., ge=1, le=99, description="Initiator's percentage of the revenue split")
-    title: str = Field(..., min_length=1, max_length=200, description="Short title for the collaboration")
-    description: Optional[str] = Field(default=None, max_length=2000, description="Detailed description")
-    terms_text: Optional[str] = Field(default=None, max_length=5000, description="Written terms/conditions")
-    valid_from: Optional[int] = Field(default=None, description="Unix timestamp: collaboration start date")
-    valid_until: Optional[int] = Field(default=None, description="Unix timestamp: collaboration end date (null=indefinite)")
-    max_content_items: Optional[int] = Field(default=None, ge=1, le=10000, description="Maximum number of co-created items")
+```python
+# app/models.py — ACTUAL models at lines 3315-3417
+
+class CollaborationCreateIn(BaseModel):  # line 3315
+    recipient_id: str = Field(..., min_length=1, max_length=128)
+    content_types: List[str] = Field(..., min_length=1)
+    split_pct: int = Field(..., ge=1, le=99)
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    terms_text: Optional[str] = Field(default=None, max_length=5000)
+    valid_from: Optional[int] = None
+    valid_until: Optional[int] = None
+    max_content_items: Optional[int] = Field(default=None, ge=1, le=10000)
 
     @model_validator(mode="after")
-    def validate_dates(self):
+    def validate_collab_create(self):  # NOTE: method name is validate_collab_create, not validate_dates
         if self.valid_from and self.valid_until and self.valid_from >= self.valid_until:
             raise ValueError("valid_from must be before valid_until")
         for ct in self.content_types:
@@ -781,32 +791,26 @@ class CollaborationCreateIn(BaseModel):
                 raise ValueError(f"Invalid content_type: {ct}. Must be one of: broadcast, post, vod")
         return self
 
+# NOTE: CollaborationActionIn does NOT exist. Instead, the actual code uses separate models:
 
-class CollaborationActionIn(BaseModel):
-    action: Literal["accept", "reject", "counter", "terminate"] = Field(..., description="Action to perform")
-    reason: Optional[str] = Field(default=None, max_length=500, description="Optional reason for the action")
-    # For counter-proposals:
-    counter_split_pct: Optional[int] = Field(default=None, ge=1, le=99, description="New split percentage (initiator's share)")
-    counter_terms_text: Optional[str] = Field(default=None, max_length=5000, description="Updated terms text")
-    counter_valid_until: Optional[int] = Field(default=None, description="Updated end date")
+class CollaborationCounterIn(BaseModel):  # line 3336
+    counter_split_pct: int = Field(..., ge=1, le=99)
+    counter_terms_text: Optional[str] = Field(default=None, max_length=5000)
+    counter_valid_until: Optional[int] = None
+    reason: Optional[str] = Field(default=None, max_length=500)
 
-    @model_validator(mode="after")
-    def validate_counter(self):
-        if self.action == "counter" and self.counter_split_pct is None:
-            raise ValueError("counter_split_pct is required for counter-proposals")
-        return self
+class CollaborationTerminateIn(BaseModel):  # line 3343
+    reason: Optional[str] = Field(default=None, max_length=500)
 
-
-class CollaborationOut(BaseModel):
+class CollaborationOut(BaseModel):  # line 3347
     collaboration_id: str
     initiator_id: str
     recipient_id: str
-    initiator_profile: Optional[Dict[str, Optional[str]]] = None  # {display_name, avatar_url}
-    recipient_profile: Optional[Dict[str, Optional[str]]] = None
-    status: str  # pending | accepted | rejected | counter | cancelled | terminated | expired
-    content_types: List[str]
-    split: Dict[str, int]  # {user_id: percentage}
-    title: str
+    # NOTE: initiator_profile / recipient_profile fields do NOT exist in actual model
+    status: str
+    content_types: List[str] = Field(default_factory=list)
+    split: Dict[str, int] = Field(default_factory=dict)
+    title: str = ""
     description: Optional[str] = None
     terms_text: Optional[str] = None
     valid_from: Optional[int] = None
@@ -815,70 +819,63 @@ class CollaborationOut(BaseModel):
     content_count: int = 0
     total_revenue_cents: int = 0
     revision: int = 1
-    created_at: int
-    updated_at: int
+    created_at: int = 0  # NOTE: defaults to 0, not required
+    updated_at: int = 0
     accepted_at: Optional[int] = None
     terminated_at: Optional[int] = None
     terminated_by: Optional[str] = None
     termination_reason: Optional[str] = None
+    last_proposed_by: Optional[str] = None  # NOTE: this field exists in actual but not in design
+
+    @field_validator(...)  # NOTE: has Decimal coercion validator at line 3371
 
 
-class CollaborationListOut(BaseModel):
+class CollaborationListOut(BaseModel):  # line 3382
     items: List[CollaborationOut] = Field(default_factory=list)
     next_cursor: Optional[str] = None
-    total_count: int = 0
+    # NOTE: total_count field does NOT exist in actual model
 
 
-class CollaborationRevenueOut(BaseModel):
-    collaboration_id: str
-    total_revenue_cents: int
-    split_breakdown: Dict[str, int]  # {user_id: cents_earned}
-    content_count: int
-    by_content_type: Dict[str, int]  # {"broadcast": 5000, "post": 2000}
-    by_month: List[Dict[str, Any]]   # [{month: "2026-05", revenue_cents: 3000}, ...]
-    currency: str = "USD"
-
-
-class CollaborationRevisionOut(BaseModel):
+class CollaborationRevisionOut(BaseModel):  # line 3387
     revision: int
-    split: Dict[str, int]
+    split: Dict[str, int] = Field(default_factory=dict)
     terms_text: Optional[str] = None
-    proposed_by: str
-    proposed_at: int
-    status: str  # superseded | accepted | rejected
+    proposed_by: str = ""
+    proposed_at: int = 0
+    status: str = "superseded"
 
 
-class CollaborationSettingsIn(BaseModel):
+class CollaborationSettingsIn(BaseModel):  # line 3396
     accepting_requests: Optional[bool] = None
-    default_split_pct: Optional[int] = Field(default=None, ge=10, le=90)
-    allowed_content_types: Optional[List[str]] = None
     min_split_pct: Optional[int] = Field(default=None, ge=1, le=99)
-    require_terms_text: Optional[bool] = None
-    auto_reject_after_hours: Optional[int] = Field(default=None, ge=1, le=720)
-    discoverable: Optional[bool] = None
+    allowed_content_types: Optional[List[str]] = None
+    auto_expire_days: Optional[int] = Field(default=None, ge=1, le=365)
+    # NOTE: actual model uses auto_expire_days (not auto_reject_after_hours)
+    # NOTE: default_split_pct, require_terms_text, discoverable do NOT exist
 
 
-class CollaborationSettingsOut(BaseModel):
+class CollaborationSettingsOut(BaseModel):  # line 3403
     accepting_requests: bool = True
-    default_split_pct: int = 50
+    min_split_pct: int = 1  # NOTE: default is 1, not 20 as in design
     allowed_content_types: List[str] = Field(default_factory=lambda: ["broadcast", "post", "vod"])
-    min_split_pct: int = 20
-    require_terms_text: bool = False
-    auto_reject_after_hours: int = 168
-    discoverable: bool = True
+    auto_expire_days: int = 7  # NOTE: uses auto_expire_days, not auto_reject_after_hours
     updated_at: int = 0
+    # NOTE: default_split_pct, require_terms_text, discoverable do NOT exist
 
 
-class CollaborationContentItem(BaseModel):
-    content_id: str
-    content_type: str  # "post" | "broadcast" | "vod"
-    title: str
-    created_at: int
-    revenue_cents: int = 0
-    status: str = ""
+class CollaborationSplitIn(BaseModel):  # line 3411 — exists in actual but NOT in design
+    collaboration_id: str
+    amount_cents: int = Field(..., gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    content_type: str = "collaboration"
+    content_id: str = ""
 ```
 
+<!-- NOTE: CollaborationRevenueOut and CollaborationContentItem models do not exist yet in app/models.py — new implementation required. -->
+
 ### 4.4 Endpoint Implementation Details
+
+<!-- NOTE: The pseudo-code below represents the DESIGN. The actual router implementation (see app/routers/collaborations.py) differs: it uses separate POST endpoints per action, delegates to app/services/collaborations.py for business logic, and uses the actual put_notification signature. The design pseudo-code is kept for reference but should be reconciled with the actual implementation. -->
 
 #### POST `/ui/collaborations` — Create Proposal
 
@@ -953,12 +950,17 @@ def create_collaboration(
     T.collaboration_agreements.put_item(Item=item)
 
     # Notify recipient
+    # NOTE: actual put_notification signature (see app/routers/newsfeed.py:2177) is:
+    # put_notification(*, recipient_user_id, notif_type, payload)
     put_notification(
-        body.recipient_id,
-        title="New Collaboration Request",
-        body=f"{session.get('display_name', 'A creator')} wants to collaborate: {body.title}",
-        action_url=f"/collaborations?id={collab_id}",
-        meta={"collaboration_id": collab_id, "type": "collaboration_request"},
+        recipient_user_id=body.recipient_id,
+        notif_type="collaboration_request",
+        payload={
+            "title": "New Collaboration Request",
+            "body": f"{session.get('display_name', 'A creator')} wants to collaborate: {body.title}",
+            "action_url": f"/collaborations?id={collab_id}",
+            "collaboration_id": collab_id,
+        },
     )
 
     return _enrich_collab_out(item)
@@ -1004,14 +1006,16 @@ def action_collaboration(
             "GSI3PK": "STATUS#accepted",
         })
         other_party = collab["initiator_id"] if is_recipient else collab["recipient_id"]
-        put_notification(other_party, title="Collaboration Accepted", body=f"Your collaboration '{collab['title']}' has been accepted!")
+        put_notification(recipient_user_id=other_party, notif_type="collaboration_accepted",
+            payload={"title": "Collaboration Accepted", "body": f"Your collaboration '{collab['title']}' has been accepted!"})
 
     elif body.action == "reject":
         _conditional_status_update(collab_id, collab["status"], "rejected", {
             "GSI3PK": "STATUS#rejected",
         })
         other_party = collab["initiator_id"] if is_recipient else collab["recipient_id"]
-        put_notification(other_party, title="Collaboration Declined", body=f"Your collaboration '{collab['title']}' was declined.")
+        put_notification(recipient_user_id=other_party, notif_type="collaboration_rejected",
+            payload={"title": "Collaboration Declined", "body": f"Your collaboration '{collab['title']}' was declined."})
 
     elif body.action == "counter":
         # Snapshot current revision
@@ -1029,7 +1033,8 @@ def action_collaboration(
             "GSI3PK": "STATUS#counter",
         })
         other_party = collab["initiator_id"] if is_recipient else collab["recipient_id"]
-        put_notification(other_party, title="Counter-Proposal Received", body=f"New terms proposed for '{collab['title']}': {body.counter_split_pct}/{100 - body.counter_split_pct} split")
+        put_notification(recipient_user_id=other_party, notif_type="collaboration_counter",
+            payload={"title": "Counter-Proposal Received", "body": f"New terms proposed for '{collab['title']}': {body.counter_split_pct}/{100 - body.counter_split_pct} split"})
 
     elif body.action == "terminate":
         _conditional_status_update(collab_id, "accepted", "terminated", {
@@ -1039,7 +1044,8 @@ def action_collaboration(
             "GSI3PK": "STATUS#terminated",
         })
         other_party = collab["initiator_id"] if is_recipient else collab["recipient_id"]
-        put_notification(other_party, title="Collaboration Ended", body=f"The collaboration '{collab['title']}' has been terminated.")
+        put_notification(recipient_user_id=other_party, notif_type="collaboration_terminated",
+            payload={"title": "Collaboration Ended", "body": f"The collaboration '{collab['title']}' has been terminated."})
 
     return _enrich_collab_out(get_collaboration(collab_id))
 ```
@@ -1050,25 +1056,29 @@ def action_collaboration(
 
 ### 5.1 New Pages and Components
 
-| Component | Path | Purpose |
-|-----------|------|---------|
-| `CollaborationsPage` | `frontend/src/pages/collaborations/CollaborationsPage.tsx` | Main listing page with tabs: Active, Pending, History |
-| `CollaborationDetailDialog` | `frontend/src/pages/collaborations/CollaborationDetailDialog.tsx` | View/respond to a collaboration proposal |
-| `CreateCollaborationDialog` | `frontend/src/pages/collaborations/CreateCollaborationDialog.tsx` | Form to propose a new collaboration |
-| `CollaborationRevenueCard` | `frontend/src/pages/collaborations/CollaborationRevenueCard.tsx` | Revenue breakdown card for a collaboration |
-| `CollaboratorBadge` | `frontend/src/components/shared/CollaboratorBadge.tsx` | Small badge showing collaborator avatars on posts/broadcasts |
-| `CollaborationSettingsPanel` | `frontend/src/pages/collaborations/CollaborationSettingsPanel.tsx` | Configure collaboration preferences |
-| `RevisionTimeline` | `frontend/src/pages/collaborations/RevisionTimeline.tsx` | Visual timeline of counter-proposal revisions |
+<!-- NOTE: The actual implementation puts all components in a single file (CollaborationsPage.tsx) rather than separate files. Only CollaborationsPage.tsx exists; the other files listed below are NOT yet separate components. -->
+
+| Component | Path | Status |
+|-----------|------|--------|
+| `CollaborationsPage` | `frontend/src/pages/collaborations/CollaborationsPage.tsx` | **EXISTS** — all-in-one page with tabs, dialogs, settings (see `frontend/src/pages/collaborations/CollaborationsPage.tsx`) |
+| `CollaborationDetailDialog` | `frontend/src/pages/collaborations/CollaborationDetailDialog.tsx` | NOT separate — inline in CollaborationsPage.tsx |
+| `CreateCollaborationDialog` | `frontend/src/pages/collaborations/CreateCollaborationDialog.tsx` | NOT separate — inline in CollaborationsPage.tsx |
+| `CollaborationRevenueCard` | `frontend/src/pages/collaborations/CollaborationRevenueCard.tsx` | NOT YET IMPLEMENTED |
+| `CollaboratorBadge` | `frontend/src/components/shared/CollaboratorBadge.tsx` | NOT YET IMPLEMENTED |
+| `CollaborationSettingsPanel` | `frontend/src/pages/collaborations/CollaborationSettingsPanel.tsx` | NOT separate — settings tab inline in CollaborationsPage.tsx |
+| `RevisionTimeline` | `frontend/src/pages/collaborations/RevisionTimeline.tsx` | NOT YET IMPLEMENTED |
 
 ### 5.2 Frontend API Types
 
-```typescript
-// frontend/src/api/types.ts additions
+<!-- NOTE: Actual types are at frontend/src/api/types.ts:4029-4102. They differ from the design in section 4.3. Key differences: no CollaborationActionIn (uses separate CollaborationCounterIn), no initiator_profile/recipient_profile on CollaborationOut, CollaborationSettingsOut uses auto_expire_days not auto_reject_after_hours, and CollaborationRevenueOut does not exist yet. -->
 
-export interface CollaborationCreateIn {
+```typescript
+// frontend/src/api/types.ts — ACTUAL types at lines 4031-4102
+
+export interface CollaborationCreateIn {  // line 4031
   recipient_id: string;
-  content_types: ("broadcast" | "post" | "vod")[];
-  split_pct: number;           // 1-99, initiator's share
+  content_types: string[];
+  split_pct: number;
   title: string;
   description?: string;
   terms_text?: string;
@@ -1077,21 +1087,19 @@ export interface CollaborationCreateIn {
   max_content_items?: number;
 }
 
-export interface CollaborationActionIn {
-  action: "accept" | "reject" | "counter" | "terminate";
-  reason?: string;
-  counter_split_pct?: number;
+export interface CollaborationCounterIn {  // line 4043 — replaces the designed CollaborationActionIn
+  counter_split_pct: number;
   counter_terms_text?: string;
   counter_valid_until?: number;
+  reason?: string;
 }
 
-export interface CollaborationOut {
+export interface CollaborationOut {  // line 4050
   collaboration_id: string;
   initiator_id: string;
   recipient_id: string;
-  initiator_profile?: { display_name?: string; avatar_url?: string };
-  recipient_profile?: { display_name?: string; avatar_url?: string };
-  status: "pending" | "accepted" | "rejected" | "counter" | "cancelled" | "terminated" | "expired";
+  // NOTE: no initiator_profile or recipient_profile
+  status: string;
   content_types: string[];
   split: Record<string, number>;
   title: string;
@@ -1109,90 +1117,82 @@ export interface CollaborationOut {
   terminated_at?: number;
   terminated_by?: string;
   termination_reason?: string;
+  last_proposed_by?: string;
 }
 
-export interface CollaborationRevenueOut {
-  collaboration_id: string;
-  total_revenue_cents: number;
-  split_breakdown: Record<string, number>;
-  content_count: number;
-  by_content_type: Record<string, number>;
-  by_month: { month: string; revenue_cents: number }[];
-  currency: string;
-}
+// NOTE: CollaborationRevenueOut does not exist yet in types.ts — new implementation required
 
-export interface CollaborationSettingsOut {
+export interface CollaborationSettingsOut {  // line 4089
   accepting_requests: boolean;
-  default_split_pct: number;
-  allowed_content_types: string[];
   min_split_pct: number;
-  require_terms_text: boolean;
-  auto_reject_after_hours: number;
-  discoverable: boolean;
+  allowed_content_types: string[];
+  auto_expire_days: number;  // NOTE: not auto_reject_after_hours
   updated_at: number;
+  // NOTE: no default_split_pct, require_terms_text, or discoverable
 }
 ```
 
 ### 5.3 Frontend API Endpoints
 
-```typescript
-// frontend/src/api/endpoints/collaborations.ts
+<!-- NOTE: The actual file (see frontend/src/api/endpoints/collaborations.ts) uses separate functions per action (not a single actionCollaboration), and uses api.post/api.get/api.put directly (not axios-style res.data). No deleteCollaboration or getCollabRevenue exist yet. -->
 
-import api from "../client";
-import type {
-  CollaborationCreateIn,
-  CollaborationActionIn,
-  CollaborationOut,
-  CollaborationRevenueOut,
-  CollaborationSettingsOut,
-} from "../types";
+```typescript
+// frontend/src/api/endpoints/collaborations.ts — ACTUAL implementation (70 lines)
+
+import { api } from "@/api/client";
+import type { CollaborationCreateIn, CollaborationCounterIn, CollaborationOut,
+  CollaborationListOut, CollaborationRevisionOut, CollaborationSettingsOut,
+  CollaborationSettingsIn } from "@/api/types";
+
+const BASE = "/ui/collaborations";
 
 export async function createCollaboration(data: CollaborationCreateIn): Promise<CollaborationOut> {
-  const res = await api.post("/ui/collaborations", data);
-  return res.data;
+  return api.post<CollaborationOut>(BASE, data);
 }
 
 export async function listCollaborations(params?: {
-  status?: string;
-  cursor?: string;
-}): Promise<{ items: CollaborationOut[]; next_cursor?: string }> {
-  const res = await api.get("/ui/collaborations", { params });
-  return res.data;
+  role?: string; status?: string; cursor?: string; limit?: number;
+}): Promise<CollaborationListOut> {
+  return api.get<CollaborationListOut>(BASE, params);
 }
 
 export async function getCollaboration(collabId: string): Promise<CollaborationOut> {
-  const res = await api.get(`/ui/collaborations/${collabId}`);
-  return res.data;
+  return api.get<CollaborationOut>(`${BASE}/${collabId}`);
 }
 
-export async function actionCollaboration(
-  collabId: string,
-  data: CollaborationActionIn
-): Promise<CollaborationOut> {
-  const res = await api.patch(`/ui/collaborations/${collabId}`, data);
-  return res.data;
+export async function acceptCollaboration(collabId: string): Promise<CollaborationOut> {
+  return api.post<CollaborationOut>(`${BASE}/${collabId}/accept`, {});
 }
 
-export async function deleteCollaboration(collabId: string): Promise<void> {
-  await api.delete(`/ui/collaborations/${collabId}`);
+export async function rejectCollaboration(collabId: string): Promise<CollaborationOut> {
+  return api.post<CollaborationOut>(`${BASE}/${collabId}/reject`, {});
 }
 
-export async function getCollabRevenue(collabId: string): Promise<CollaborationRevenueOut> {
-  const res = await api.get(`/ui/collaborations/${collabId}/revenue`);
-  return res.data;
+export async function counterCollaboration(collabId: string, data: CollaborationCounterIn): Promise<CollaborationOut> {
+  return api.post<CollaborationOut>(`${BASE}/${collabId}/counter`, data);
+}
+
+export async function cancelCollaboration(collabId: string): Promise<CollaborationOut> {
+  return api.post<CollaborationOut>(`${BASE}/${collabId}/cancel`, {});
+}
+
+export async function terminateCollaboration(collabId: string, reason?: string): Promise<CollaborationOut> {
+  return api.post<CollaborationOut>(`${BASE}/${collabId}/terminate`, { reason });
+}
+
+export async function getCollabRevisions(collabId: string): Promise<CollaborationRevisionOut[]> {
+  return api.get<CollaborationRevisionOut[]>(`${BASE}/${collabId}/revisions`);
 }
 
 export async function getCollabSettings(): Promise<CollaborationSettingsOut> {
-  const res = await api.get("/ui/collaborations/settings");
-  return res.data;
+  return api.get<CollaborationSettingsOut>(`${BASE}/settings`);
 }
 
-export async function updateCollabSettings(
-  data: Partial<CollaborationSettingsOut>
-): Promise<CollaborationSettingsOut> {
-  const res = await api.patch("/ui/collaborations/settings", data);
-  return res.data;
+export async function updateCollabSettings(data: CollaborationSettingsIn): Promise<CollaborationSettingsOut> {
+  return api.put<CollaborationSettingsOut>(`${BASE}/settings`, data);  // NOTE: uses PUT, not PATCH
 }
+
+// NOTE: getCollabRevenue / deleteCollaboration do not exist yet — new implementation required
 ```
 
 ### 5.4 CollaborationsPage Component Design
@@ -1308,19 +1308,22 @@ export function CollaboratorBadge({ coAuthors, split, size = "sm" }: Collaborato
 
 ### 5.6 Integration Points
 
-- **CreatePost.tsx**: Add optional collaboration selector dropdown when user has active collaborations
-- **PostCard.tsx**: Show `CollaboratorBadge` when post has `co_authors`
-- **BroadcastSessionCard**: Show collaboration indicator and split percentage
-- **Earnings Dashboard**: Add `collaborations` breakdown category
-- **Sidebar.tsx / AppShell.tsx**: Add "Collaborations" nav item under Creator Tools group
-- **MobileNav.tsx**: Add "Collaborations" to `MORE_LINKS`
-- **Profile page**: Show active collaborations count
+- **CreatePost.tsx**: Add optional collaboration selector dropdown when user has active collaborations <!-- NOTE: not yet implemented -->
+- **PostCard.tsx**: Show `CollaboratorBadge` when post has `co_authors` <!-- NOTE: not yet implemented -->
+- **BroadcastSessionCard**: Show collaboration indicator and split percentage <!-- NOTE: not yet implemented -->
+- **Earnings Dashboard**: Add `collaborations` breakdown category <!-- NOTE: not yet implemented -->
+- **Sidebar.tsx**: "Collaborations" nav item **EXISTS** at line 109 (see `frontend/src/components/layout/Sidebar.tsx:109`)
+- **AppShell.tsx**: "Collaborations" nav item **NOT YET ADDED** <!-- NOTE: AppShell.tsx MobileSidebar does not have Collaborations entry -->
+- **MobileNav.tsx**: "Collaborations" **EXISTS** in `MORE_LINKS` (see `frontend/src/components/layout/MobileNav.tsx:98`)
+- **Profile page**: Show active collaborations count <!-- NOTE: not yet implemented -->
 
 ### 5.7 Route
 
 ```tsx
-// App.tsx
-{ path: "/collaborations", element: <CollaborationsPage /> }
+// App.tsx — VERIFIED at line 79 (lazy import) and line 191 (route)
+const CollaborationsPage = lazy(() => import("@/pages/collaborations/CollaborationsPage"));
+// ...
+<Route path="collaborations" element={<CollaborationsPage />} />
 ```
 
 ---
@@ -1330,15 +1333,15 @@ export function CollaboratorBadge({ coAuthors, split, size = "sm" }: Collaborato
 ### 6.1 collaboration_agreements Table
 
 ```python
-# scripts/local-ddb-init.py
+# scripts/local-ddb-init.py — VERIFIED at line 1064
 TableDef(
-    name="collaboration_agreements",
-    pk="collaboration_id",
-    sk="sk",  # "CURRENT" for main record, "REV#NNNN" for revisions
-    gsis=[
-        GsiDef(name="ByInitiator", pk="GSI1PK", sk="GSI1SK"),
-        GsiDef(name="ByRecipient", pk="GSI2PK", sk="GSI2SK"),
-        GsiDef(name="ByStatus", pk="GSI3PK", sk="GSI3SK"),
+    _resolve_table_name(S.collaboration_agreements_table_name, "collaboration_agreements"),
+    "collaboration_id",
+    "sk",  # "CURRENT" for main record, "REV#NNNN" for revisions
+    gsi=[  # NOTE: actual field is `gsi=`, not `gsis=`
+        {"index_name": "ByInitiator", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+        {"index_name": "ByRecipient", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+        {"index_name": "ByStatus", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
     ],
     attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
 ),
@@ -1349,13 +1352,16 @@ Note: `GSI1SK`, `GSI2SK`, and `GSI3SK` use numeric sort keys (`created_at` as Un
 ### 6.2 Table Handle Registration
 
 ```python
-# app/core/tables.py addition
-collaboration_agreements = ddb.Table(S.collaboration_agreements_table or "collaboration_agreements")
+# app/core/tables.py — VERIFIED: declaration at line 120, initialization at line 244
+collaboration_agreements: Any  # line 120
+collaboration_agreements=ddb.Table(S.collaboration_agreements_table_name),  # line 244
 ```
 
 ```python
-# app/core/settings.py addition
-collaboration_agreements_table: str = "collaboration_agreements"
+# app/core/settings.py — VERIFIED at line 1421
+collaboration_agreements_table_name: str = os.environ.get("DDB_COLLABORATION_AGREEMENTS", "collaboration_agreements")
+# Also: collaborations_enabled feature flag at line 1420
+collaborations_enabled: bool = os.environ.get("COLLABORATIONS_ENABLED", "1") not in ("0", "false", "False")
 ```
 
 ### 6.3 DynamoDB Access Patterns
@@ -1596,3 +1602,59 @@ test("2.1 — Revenue split distributes correctly", async ({ browser }) => {
 - GSI queries return only items where the caller is `initiator_id` or `recipient_id`
 - The list endpoint merges results from ByInitiator and ByRecipient GSIs, deduplicating by `collaboration_id`
 - Admin endpoints use a separate GSI (ByStatus) that does not filter by user, and require `require_admin_session`
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/services/tip_ledger.py` | 20-60 | `TipLedgerEntry` class |
+| `app/services/tip_ledger.py` | 88-150 | `write_tip_ledger` — paired debit/credit ledger writes |
+| `app/services/tip_ledger.py` | 109-127 | Debit try/except block |
+| `app/services/tip_ledger.py` | 130-148 | Credit try/except block |
+| `app/services/broadcast_store.py` | 111-159 | `session_to_item` — includes multi-input/BCAST-016 fields at lines 152-157 |
+| `app/services/broadcast_store.py` | 216-235 | `create_session` — single `created_by` user |
+| `app/routers/broadcast.py` | 1643-1648 | `send_tip_message_route` — decorator + function def |
+| `app/services/creator_earnings.py` | 22-33 | `_reason_to_category` — maps reason to category |
+| `app/services/creator_earnings.py` | 74 | `FilterExpression: Attr("type").eq("credit")` |
+| `app/services/creator_earnings.py` | 77-83 | Breakdown dict initializer (no "collaborations" category yet) |
+| `app/services/creator_earnings.py` | 92-107 | Earnings aggregation while loop |
+| `app/services/creator_earnings.py` | 117+ | `get_earnings_transactions` — paginated transaction list |
+| `app/routers/newsfeed.py` | 1352-1354 | `PostResponse` model with `author_id` field |
+| `app/routers/newsfeed.py` | 2177 | `put_notification` — signature: `(*, recipient_user_id, notif_type, payload)` |
+| `app/routers/subscription_server.py` | 21 | Import: `from app.services.profile import get_profile_identity` |
+| `app/routers/subscription_server.py` | 147-149 | `attach_creator_profile` — uses `get_profile_identity` |
+| `scripts/local-ddb-init.py` | 1064-1074 | `collaboration_agreements` TableDef with 3 GSIs |
+| `app/core/settings.py` | 1420 | `collaborations_enabled` feature flag |
+| `app/core/settings.py` | 1421 | `collaboration_agreements_table_name` setting |
+| `app/core/tables.py` | 120 | `collaboration_agreements` table handle declaration |
+| `app/core/tables.py` | 244 | `collaboration_agreements` table handle initialization |
+| `app/main.py` | 453 | `app.include_router(collaborations_router)` |
+| `app/routers/collaborations.py` | 42 | Router: `prefix="/ui/collaborations"` |
+| `app/routers/collaborations.py` | 86-127 | `create_collab` endpoint |
+| `app/routers/collaborations.py` | 129-143 | `list_collabs` endpoint |
+| `app/routers/collaborations.py` | 146-158 | Settings GET/PUT endpoints |
+| `app/routers/collaborations.py` | 161-171 | `get_collab` endpoint |
+| `app/routers/collaborations.py` | 173-227 | Accept/reject/counter endpoints (separate POSTs) |
+| `app/routers/collaborations.py` | 229-255 | Cancel/terminate endpoints |
+| `app/routers/collaborations.py` | 257-284 | `list_revisions` endpoint |
+| `app/routers/collaborations.py` | 286+ | `split_revenue` endpoint |
+| `app/services/collaborations.py` | 23-308 | Core service: CRUD, validation, status transitions |
+| `app/services/collaboration_splits.py` | 16-116 | `write_collaboration_split_ledger` + `_update_collab_revenue` |
+| `app/services/collaboration_expiry.py` | 16-50+ | `process_expired_collaborations` background worker |
+| `app/models.py` | 3315-3333 | `CollaborationCreateIn` model |
+| `app/models.py` | 3336-3340 | `CollaborationCounterIn` model |
+| `app/models.py` | 3343-3344 | `CollaborationTerminateIn` model |
+| `app/models.py` | 3347-3380 | `CollaborationOut` model (with Decimal coercion) |
+| `app/models.py` | 3382-3384 | `CollaborationListOut` model (no `total_count`) |
+| `app/models.py` | 3387-3393 | `CollaborationRevisionOut` model |
+| `app/models.py` | 3396-3401 | `CollaborationSettingsIn` model (uses `auto_expire_days`) |
+| `app/models.py` | 3403-3408 | `CollaborationSettingsOut` model |
+| `app/models.py` | 3411-3416 | `CollaborationSplitIn` model |
+| `frontend/src/api/types.ts` | 4031-4102 | TypeScript collaboration interfaces |
+| `frontend/src/api/endpoints/collaborations.ts` | 1-70 | Frontend API functions (separate per action) |
+| `frontend/src/pages/collaborations/CollaborationsPage.tsx` | all | Main page with tabs, create/detail dialogs inline |
+| `frontend/src/App.tsx` | 79, 191 | Lazy import + route for `/collaborations` |
+| `frontend/src/components/layout/Sidebar.tsx` | 109 | "Collaborations" nav item |
+| `frontend/src/components/layout/MobileNav.tsx` | 98 | "Collaborations" in MORE_LINKS |

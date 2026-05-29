@@ -4,11 +4,16 @@
 
 The WebRTC direct call feature (gated behind `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED`) currently provides call signalling via `app/routers/messaging.py` (endpoints at `/messages/calls/*`), a state machine (`callStateMachine.ts`), and a UI overlay (`CallSessionOverlay.tsx`) for call lifecycle states. CALL-004 added media stream rendering (remote/local `<video>` and `<audio>` elements with `srcObject` management). However, once a call reaches the `"connected"` state, the user has **no interactive media controls**:
 
-- **No mute toggle**: The user cannot mute/unmute their microphone without ending the call entirely.
-- **No camera toggle**: Video calls provide no way to turn the camera on/off mid-call.
-- **No duration timer**: There is no visible indicator of how long the call has been active.
-- **No connection quality indicator**: Users cannot assess whether degraded audio/video is due to network issues.
-- **End call button is isolated**: The existing "End call" button (line 109 of `CallSessionOverlay.tsx`) is the only control in the connected state, rendered inside a generic `DialogFooter` with no visual grouping with other controls.
+<!-- NOTE: This ticket is now FULLY IMPLEMENTED. CallSessionOverlay.tsx (671 lines) includes:
+- Mute toggle: CallControls component at line 167 with Mic/MicOff buttons (lines 171-178)
+- Camera toggle: Video/VideoOff buttons (lines 182-190)
+- Duration timer: CallTimer component at line 131
+- Recording controls: onRequestRecording/onStopRecording at lines 204-227
+- Screen share toggle: Monitor/MonitorOff buttons at lines 192-203
+- End call button: lines 230-237
+- Connection quality indicator via useCallQuality hook in ConversationView.tsx
+The props interface (line 42) includes localStream, remoteStream, isMuted, isCameraOff, recording props, and screen share props.
+-->
 
 ### Business requirements
 
@@ -29,49 +34,39 @@ The WebRTC direct call feature (gated behind `VITE_MESSAGING_WEBRTC_DIRECT_CALL_
 
 ## 2. Current State Analysis
 
-### 2.1 CallSessionOverlay.tsx (124 lines)
+### 2.1 CallSessionOverlay.tsx (671 lines)
 
-**Location**: `frontend/src/pages/messages/CallSessionOverlay.tsx`
+**Location**: `frontend/src/pages/messages/CallSessionOverlay.tsx` (see line 42 for Props interface)
 
-The component is a Radix UI `<Dialog>` that renders conditionally based on `session.state`. It receives:
+The component is a Radix UI `<Dialog>` that renders conditionally based on `session.state`. It now receives full media props:
 
 ```ts
 interface Props {
   session: CallSessionUi;
   isBusy?: boolean;
-  onAccept: () => void;
-  onDecline: () => void;
-  onEnd: () => void;
-  onDismiss: () => void;
+  localStream?: MediaStream | null;
+  remoteStream?: MediaStream | null;
+  isMuted?: boolean;
+  isCameraOff?: boolean;
+  isRecording?: boolean;
+  isScreenSharing?: boolean;
+  onAccept, onDecline, onEnd, onDismiss: () => void;
+  onToggleMute, onToggleCamera?: () => void;
+  onRequestRecording, onStopRecording?: () => void;
+  onToggleScreenShare?: () => void;
+  screenShareSupported, recordingEnabled?: boolean;
 }
 ```
 
-**Current connected-state rendering (lines 108-113):**
+**Connected-state rendering includes full CallControls component (line 167) with mute, camera, recording, screenshare, and end call buttons.**
 
-```tsx
-{isConnected && (
-  <Button variant="destructive" onClick={onEnd} disabled={isBusy} aria-label="End call">
-    <PhoneOff className="mr-2 h-4 w-4" />
-    End call
-  </Button>
-)}
-```
+<!-- NOTE: The descriptions below of missing controls are outdated. All controls are now implemented. Icons imported at line 2 include Phone, PhoneCall, PhoneIncoming, PhoneOff, Video, Mic, MicOff, VideoOff, ShieldAlert, Signal, Circle, Monitor, MonitorOff. -->
 
-This is the entire connected state UI -- a single destructive button inside `DialogFooter`. There are:
-- No media track controls
-- No timer display
-- No quality indicator
-- No visual grouping or "control bar" container
+### 2.2 callStateMachine.ts (222 lines)
 
-**Icons imported (line 2):** `Phone, PhoneCall, PhoneIncoming, PhoneOff, Video` from lucide-react. Missing: `Mic, MicOff, Camera, CameraOff, Wifi, WifiOff, Signal`.
+**Location**: `frontend/src/pages/messages/callStateMachine.ts` (see line 6)
 
-**Dialog sizing (line 68):** `className="sm:max-w-md"` -- adequate for audio calls, but video calls (per CALL-004) expand to near-fullscreen. The control bar must adapt to both layouts.
-
-### 2.2 callStateMachine.ts (187 lines)
-
-**Location**: `frontend/src/pages/messages/callStateMachine.ts`
-
-**`CallMachineState` interface (lines 6-17):**
+**`CallMachineState` interface (lines 6-20):**
 ```ts
 export interface CallMachineState {
   phase: CallUiState;
@@ -89,10 +84,10 @@ export interface CallMachineState {
 
 Notably, there are **no fields for media control state** (mute, camera off). The state machine is purely concerned with call lifecycle phases and network resilience. Media control state is inherently local (it only affects the user's own tracks) and does not need to be part of the signalling state machine.
 
-**`CallRuntimeResources` interface (lines 154-161):**
+**`CallRuntimeResources` interface (lines 190-197)** (see `frontend/src/pages/messages/callStateMachine.ts:190`):
 ```ts
 export interface CallRuntimeResources {
-  peerConnection?: { close: () => void } | null;
+  peerConnection?: RTCPeerConnection | null;
   localStream?: MediaStream | null;
   remoteStream?: MediaStream | null;
   detachListeners?: Array<() => void>;
@@ -103,38 +98,25 @@ export interface CallRuntimeResources {
 
 The `localStream` field is the key handle for media controls. `localStream.getAudioTracks()` returns the microphone track(s); `localStream.getVideoTracks()` returns the camera track(s). Setting `track.enabled = false` mutes/disables without stopping the track (which would require re-acquisition).
 
-**`teardownCallResources` (lines 163-186):** Already calls `track.stop()` on all tracks of both streams. This means: after `END_LOCAL` or `END_REMOTE`, all tracks are permanently stopped. Toggling must use `track.enabled`, not `track.stop()`.
+**`teardownCallResources` (lines 199-222)** (see `frontend/src/pages/messages/callStateMachine.ts:199`): Already calls `track.stop()` on all tracks of both streams. This means: after `END_LOCAL` or `END_REMOTE`, all tracks are permanently stopped. Toggling must use `track.enabled`, not `track.stop()`.
 
 The `peerConnection` field is typed as `{ close: () => void } | null` -- a minimal interface. For connection quality stats, we need `RTCPeerConnection.getStats()`. The type must be widened or the quality hook must accept `RTCPeerConnection` directly.
 
-### 2.3 ConversationView.tsx integration (lines 83-85, 466-505, 969-1011)
+### 2.3 ConversationView.tsx integration
 
-**Location**: `frontend/src/pages/messages/ConversationView.tsx`
+**Location**: `frontend/src/pages/messages/ConversationView.tsx` (1461 lines)
 
-**State machine usage (line 83):**
-```ts
-const [callMachine, dispatchCall] = React.useReducer(callStateReducer, undefined, createInitialCallMachineState);
-```
-
-**Resources ref (line 85):**
-```ts
-const callResourcesRef = React.useRef<{ cleanedUp?: boolean } | null>(null);
-```
-
-Note: The ref is typed as `{ cleanedUp?: boolean } | null`, not as the full `CallRuntimeResources`. This is because the WebRTC setup code (CALL-002/003) populates it at runtime with the full interface, but TypeScript only enforces the minimal shape here. For the media controls to access `localStream`, we either:
-1. Widen this ref type to `CallRuntimeResources | null`, or
-2. Pass `localStream` as a separate prop/ref to the overlay.
-
-**Overlay mounting (lines 969-1011):** The `<CallSessionOverlay>` is rendered unconditionally at the bottom of the component tree. Props are:
-- `session`: Derived from `callMachine` state
-- `isBusy`: From `callActionMutation.isPending`
-- `onAccept/onDecline/onEnd/onDismiss`: Inline handlers dispatching to `callMachine`
-
-**No `localStream`/`remoteStream` props are currently passed to the overlay.** The overlay has no access to media tracks.
+<!-- NOTE: All integration is now IMPLEMENTED:
+- callResourcesRef typed as CallRuntimeResources | null (line 92)
+- useRtcPeerConnection hook at line 618 provides rtcLocalStream/rtcRemoteStream
+- useMediaCapture at line 94 provides mediaCapture.stream
+- useCallRecording at line 640
+- CallSessionOverlay receives all props including streams, mute, camera, recording at line 1282+
+-->
 
 ### 2.4 Existing test coverage
 
-**Unit tests**: `callStateMachine.test.ts` (83 lines) covers state transitions and `teardownCallResources` idempotency. Does not test media track manipulation.
+**Unit tests**: `callStateMachine.test.ts` (202 lines) covers state transitions and `teardownCallResources` idempotency (see `frontend/src/pages/messages/callStateMachine.test.ts`).
 
 **Integration tests**: `ConversationView.call_flows.test.tsx` (~180 lines) tests:
 - Outgoing call state transitions (ringing -> connected -> ended)
@@ -830,3 +812,25 @@ test.describe("Section XX: Call media controls", () => {
 6. **Tab hidden during call**: Timer should continue running (uses `setInterval` not `requestAnimationFrame`). Quality polling pauses (tab hidden -> interval may be throttled by browser, which is acceptable).
 7. **`peerConnection.getStats()` throws**: Quality hook catches errors and returns `"unknown"`.
 8. **Multiple audio tracks** (rare, e.g., tab capture + mic): All audio tracks are toggled together.
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 1-671 | Full call overlay with all controls (IMPLEMENTED) |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 42-68 | Props interface (media, mute, camera, recording, screenshare) |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 82-115 | `VideoRenderer` sub-component |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 117-128 | `AudioRenderer` sub-component |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 131-147 | `CallTimer` sub-component |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 150-237 | `CallControls` sub-component (mute, camera, recording, screenshare, end) |
+| `frontend/src/pages/messages/ConversationView.tsx` | 618-637 | useRtcPeerConnection hook providing streams |
+| `frontend/src/pages/messages/ConversationView.tsx` | 639-647 | useCallRecording hook |
+| `frontend/src/pages/messages/ConversationView.tsx` | 1282-1290 | CallSessionOverlay mount with all props |
+| `frontend/src/hooks/useMediaCapture.ts` | 1-315 | Media capture with mute/camera toggle support |
+| `frontend/src/hooks/useCallRecording.ts` | 1-83+ | Call recording hook |
+| `frontend/src/pages/messages/callStateMachine.ts` | 190-222 | CallRuntimeResources + teardownCallResources |
+| `frontend/src/lib/featureFlags.ts` | 127 | isCallRecordingEnabled |
+| `frontend/e2e/webrtc-media.spec.ts` | 1-1375 | E2E media tests (IMPLEMENTED) |
+| `frontend/e2e/webrtc-calls.spec.ts` | 1-661 | E2E call tests (IMPLEMENTED) |

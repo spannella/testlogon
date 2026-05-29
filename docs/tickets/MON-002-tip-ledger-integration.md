@@ -1189,3 +1189,20 @@ No new frontend components are introduced by MON-002. The changes are entirely b
 - **MON-001**: VOD pay-per-view uses the same LEDGER# pattern for purchase debit/credit
 - **MON-003**: Creator earnings dashboard aggregates tip credits from the ledger
 - **MON-004**: Creator payouts depend on accurate credit entries for balance calculation
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/services/tip_ledger.py` | 20-150 | ALREADY EXISTS (151 lines): `TipLedgerEntry` class (20), `write_tip_ledger()` (88) — writes paired debit/credit ledger entries for all tip types. This is the exact service this ticket proposes |
+| `app/routers/messaging.py` | 7772-7773 | ALREADY USING: message attached tips call `write_tip_ledger(TipLedgerEntry(...))` |
+| `app/routers/messaging.py` | 8040-8041 | ALREADY USING: image attached tips call `write_tip_ledger()` |
+| `app/routers/messaging.py` | 8645-8646 | ALREADY USING: gallery attached tips call `write_tip_ledger()` |
+| `app/routers/messaging.py` | 12391-12392 | ALREADY USING: post-send message tips call `write_tip_ledger()` |
+| `app/routers/messaging.py` | 12674-12675 | ALREADY USING: message tip endpoint calls `write_tip_ledger()` |
+| `app/routers/newsfeed.py` | 3942-3943 | ALREADY USING: post tips call `write_tip_ledger()` |
+| `app/routers/newsfeed.py` | 4807-4808 | ALREADY USING: comment tips call `write_tip_ledger()` |
+| `app/services/broadcast_tip_store.py` | 18, 149 | ALREADY USING: broadcast tips call `write_tip_ledger()` |
+<!-- NOTE: This ticket's core proposal (a centralized tip ledger service with paired debit/credit entries) has been FULLY IMPLEMENTED in app/services/tip_ledger.py. All four tipping surfaces (message, post, comment, broadcast) already use it. The ticket should be marked as Complete. -->

@@ -1203,3 +1203,33 @@ The GSSYND GSI uses `GSSYND_SK` (numeric `created_at`) as sort key with `ScanInd
 8. Syndicate posts are paginated with cursor-based pagination.
 9. Profile page shows bundle subscription options (SYND-002 integration).
 10. All 26 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Verified Existing Infrastructure
+
+| Reference in Ticket | Verified | Notes |
+|---------------------|----------|-------|
+| `app/services/newsfeed_fanout.py` | Yes (173 lines) | Exists; fan-out logic for newsfeed |
+| `app/services/newsfeed_feed_query.py` | Yes (93 lines) | Exists; sorting utilities for posts |
+| `app/core/cursor.py` | Yes (120 lines) | Exists; cursor encode/decode for pagination |
+| `PostCard` component | Yes — `frontend/src/pages/feed/PostCard.tsx` (948 lines) | Ticket says "Exists"; confirmed. Note: located under `pages/feed/`, not `components/feed/` |
+| `app/core/tables.py` | Yes | Table handles wired from settings |
+
+### New Code (Correctly Identified as Not Yet Existing)
+
+| Item | Status |
+|------|--------|
+| `app/services/syndicates.py` | Does not exist — new implementation required (SYND-001) |
+| `app/routers/syndicates.py` | Does not exist — new implementation required (SYND-001) |
+| `frontend/src/pages/syndicates/` | Does not exist — new directory |
+| Syndicates DynamoDB table | Not defined in `scripts/local-ddb-init.py` — must be added |
+| `GSSYND` GSI on posts table | Does not exist — new GSI required |
+
+### Notes
+
+- No syndicate-related code exists anywhere in `app/services/` or `app/routers/` (grep confirmed zero results).
+- The posts table exists but has no `GSSYND` GSI; this must be added to `scripts/local-ddb-init.py`.
+- The ticket correctly identifies all syndicate infrastructure as new and depending on SYND-001.

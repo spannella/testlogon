@@ -43,11 +43,15 @@ LICENSE-002 only supports top-down licensing (content owner issues a license). I
 |-----------|----------|-----------|
 | Issued licenses service | `app/services/issued_licenses.py` (LICENSE-002) | `issue_license` called on approval; `check_license_for_use` for existing license checks |
 | Issued licenses table | `scripts/local-ddb-init.py` (LICENSE-002) | Reuse `issued_licenses` table with `REQUEST#` SK pattern |
-| Contact requests | `app/services/contacts.py` | 1:1 request/accept/decline pattern; architectural reference for approval workflow |
-| Alerts service | `app/services/alerts.py` | `write_alert` for request/approval/denial notifications |
-| Profile service | `app/services/profile.py` | `get_profile(user_id)` for requester/owner display names |
-| Syndicate invites | `app/services/syndicates.py` (SYND-001) | Invite/request/approve/reject workflow pattern; multi-step state machine reference |
-| Auth dependencies | `app/auth/deps.py` | `require_ui_session` returns `{user_sub, role, admin_profile}` |
+| Contact requests | `app/routers/contacts.py` | 1:1 request/accept/decline pattern; architectural reference for approval workflow |
+| Alerts service | `app/services/alerts.py` (~899 lines) | `write_alert` (line 355) for request/approval/denial notifications |
+| Profile service | `app/services/profile.py` (345 lines) | `get_profile(user_id)` (line 220) for requester/owner display names |
+| Auth dependencies | `app/auth/deps.py` | `require_ui_session` (line 184) returns `{user_sub, role, admin_profile}` |
+
+<!-- NOTE: app/services/issued_licenses.py (LICENSE-002) does NOT exist yet — LICENSE-002 is a prerequisite. -->
+<!-- NOTE: app/services/contacts.py does NOT exist — contacts logic lives in app/routers/contacts.py. -->
+<!-- NOTE: app/services/syndicates.py (SYND-001) does NOT exist — not yet implemented. -->
+<!-- NOTE: app/services/license_requests.py does NOT exist yet — new implementation required. -->
 
 ### 2.2 Gaps
 
@@ -841,3 +845,35 @@ The owner can re-counter if the requester hasn't yet responded to the previous c
 8. All state transitions follow the defined state machine.
 9. Both parties receive notifications at each state change.
 10. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+All file paths relative to the repository root.
+
+### Existing Files Referenced (verified)
+- `app/routers/contacts.py` — Contact request/accept/decline pattern (architectural reference)
+  - Note: `app/services/contacts.py` does NOT exist; contacts logic is in the router
+- `app/services/alerts.py` (899 lines) — `write_alert()` at line 355
+- `app/services/profile.py` (345 lines) — `get_profile()` at line 220
+- `app/auth/deps.py` — `require_ui_session` at line 184
+- `scripts/local-ddb-init.py` — DynamoDB table definitions
+
+### Dependencies Not Yet Implemented
+- `app/services/issued_licenses.py` — LICENSE-002 prerequisite (does not exist)
+- `issued_licenses` DDB table — LICENSE-002 prerequisite (not in `scripts/local-ddb-init.py`)
+- `app/services/syndicates.py` — Referenced as pattern but does not exist
+
+### Files to Create (none exist yet)
+- `app/services/license_requests.py` — Request workflow service (~400 lines)
+- `app/routers/license_requests.py` — REST API endpoints (~250 lines)
+- Frontend pages in `frontend/src/pages/licenses/` (RequestLicenseDialog, LicenseInboxPage, etc.)
+- `frontend/src/api/endpoints/license-requests.ts` — API wrappers
+- `frontend/e2e/license-requests.spec.ts` — E2E tests
+
+### Files to Modify (verified to exist)
+- `app/main.py` — Register request routers
+- `app/models.py` — Add License Request Pydantic models
+- `scripts/local-ddb-init.py` — Add GSI4 to `issued_licenses` table
+- `frontend/src/App.tsx` — Add request routes

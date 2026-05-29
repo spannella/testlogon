@@ -1070,3 +1070,58 @@ if S.push_canary_pct < 100:
 8. Dev mode push logs payload instead of delivering (existing behavior preserved).
 9. All 28 E2E tests pass.
 10. Category toggles render and persist on the PushDevices UI page.
+
+---
+
+## Codebase References
+
+### Backend — `app/services/push.py`
+| Reference | Line | Notes |
+|-----------|------|-------|
+| `list_push_devices(user_sub)` | 100 | Queries T.push_devices by user_sub |
+| `upsert_push_device(user_sub, token, platform)` | 117 | Writes to T.push_devices with TTL (180 days) |
+| `revoke_push_device(user_sub, device_id)` | 132 | Deletes from T.push_devices |
+| `web_push_send(...)` | 142 | VAPID signing via `pywebpush`; handles 410 Gone for stale subscriptions |
+| `send_push_for_alert(user_sub, alert_type, title, body, alert_id)` | 260 | Dispatches push to all user devices |
+| `fcm_send(token, title, body, data)` | 74 | FCM HTTP v1 API push send |
+
+### Backend — `app/services/alerts.py`
+| Reference | Line | Notes |
+|-----------|------|-------|
+| `audit_event()` | 695 | Master dispatch: calls `send_push_for_alert()` gated by user prefs |
+| `write_alert()` | 355 | Writes alert to DDB + publishes SSE |
+| `get_alert_prefs(user_sub)` | 271 | Returns user notification preferences |
+
+### Backend — `app/routers/push.py`
+| Reference | Notes |
+|-----------|-------|
+| Exists | Push API endpoints: VAPID key, subscribe, unsubscribe, list devices |
+
+### Backend — Settings (`app/core/settings.py`)
+| Reference | Line | Notes |
+|-----------|------|-------|
+| `push_devices_table_name` | 242 | DDB table for push device subscriptions |
+| `vapid_public_key` | 1398 | VAPID public key for push subscription |
+| `vapid_private_key` | 1399 | VAPID private key for signing |
+| `web_push_enabled` | 1401 | Feature flag for web push |
+
+### Frontend
+| File | Notes |
+|------|-------|
+| `frontend/src/lib/pushSetup.ts` | `registerServiceWorker()` (line 11) and `subscribeToPush()` (line 51) |
+| `frontend/public/sw.js` | Service worker file EXISTS |
+| `frontend/src/pages/alerts/PushDevices.tsx` | Push devices management UI (line 21) |
+| `frontend/src/pages/alerts/AlertsPage.tsx` | Integrates PushDevices component (line 47) |
+| `frontend/src/lib/swMessageHandler.ts` | Service worker message handler |
+
+### Dependencies
+| Dependency | Location | Notes |
+|------------|----------|-------|
+| `pywebpush>=2.0.0` | `requirements.txt:18` | VAPID signing and push encryption library |
+
+### Corrections
+| Claim in Ticket | Correction |
+|-----------------|------------|
+| "service worker file itself is missing" | `frontend/public/sw.js` EXISTS |
+| "PushDevices.tsx page" | Located at `frontend/src/pages/alerts/PushDevices.tsx`, not `frontend/src/pages/security/` |
+| `push_stats` table needed | Does not exist yet; `push_stats_table_name` setting not in settings.py — new implementation required |

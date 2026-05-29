@@ -14,7 +14,7 @@
 
 ### 1.1 Problem Statement
 
-The existing KYC admin queue (`list_admin_kyc_queue` in `app/routers/kyc_cases.py`, line 909) presents all pending cases in a flat list sorted by risk tier and waiting time. Admin assignment is implicit -- the `KycCaseReviewRef` (`app/contracts/kyc_cases_contract.py`, line 44) has an `assigned_admin_sub` field, but there is no logic to auto-assign cases, balance workload across admins, enforce SLAs, or escalate overdue cases. In practice, admins manually pick cases from the queue, leading to cherry-picking (easy cases first), uneven workloads, and missed SLA deadlines.
+The existing KYC admin queue (`list_admin_kyc_queue` in `app/routers/kyc_cases.py`, see line 909) presents all pending cases in a flat list sorted by risk tier and waiting time. Admin assignment is implicit -- the `KycCaseReviewRef` (see `app/contracts/kyc_cases_contract.py:44`) has an `assigned_admin_sub` field, but there is no logic to auto-assign cases, balance workload across admins, enforce SLAs, or escalate overdue cases. In practice, admins manually pick cases from the queue, leading to cherry-picking (easy cases first), uneven workloads, and missed SLA deadlines.
 
 For a compliance operation at scale, the platform needs:
 - **Smart assignment**: Automatically route cases to the right admin based on availability, expertise, and current workload.
@@ -161,7 +161,7 @@ Assignment Scoring Flow:
 
 ## 3. Current State Analysis
 
-### 3.1 Admin Queue (`app/routers/kyc_cases.py`, line 909)
+### 3.1 Admin Queue (see `app/routers/kyc_cases.py:909`)
 
 The `list_admin_kyc_queue` function queries the `kyc_cases` table's `status-updated-index` GSI for cases with status `submitted` or `under_review`. Results are sorted by risk tier (critical first) and then by waiting time (oldest first) via the `_risk` helper (line 664). The response uses `KycAdminQueueEnvelope` with `KycAdminQueueItem` models that include `assigned_admin_sub`, `waiting_seconds`, and `risk_tier` fields.
 
@@ -179,7 +179,7 @@ The `Role` enum defines `USER`, `ADMIN`, `ROOT`. Admin profiles (`AdminProfile` 
 
 The `write_alert` function (line 355) creates in-app alerts with `event`, `outcome`, `title`, `details` parameters. This is the integration point for assignment and escalation notifications.
 
-### 3.5 Existing Metrics (`app/routers/kyc_cases.py`, line 947)
+### 3.5 Existing Metrics (see `app/routers/kyc_cases.py:947`)
 
 The `get_admin_kyc_metrics` endpoint returns `KycMetricsSummaryOut` with `funnel_counts`, `review_latency_seconds`, and `stale_queue_count`. These metrics are aggregate only -- there is no per-admin breakdown.
 
@@ -188,6 +188,7 @@ The `get_admin_kyc_metrics` endpoint returns `KycMetricsSummaryOut` with `funnel
 ## 4. Technical Design
 
 ### 4.1 New Service: `app/services/kyc_assignment.py`
+<!-- NOTE: app/services/kyc_assignment.py does not exist yet — new implementation required -->
 
 ```python
 @dataclass
@@ -482,7 +483,8 @@ Assignment audit event:
 
 ### 4.5 Background SLA Checker
 
-Add a background task to `app/main.py` startup, following the same pattern as the newsfeed scheduler (`app/services/newsfeed_scheduler.py`, line 369):
+Add a background task to `app/main.py` startup, following the same pattern as the newsfeed scheduler (see `app/services/newsfeed_scheduler.py`):
+<!-- NOTE: Background tasks are registered in app/main.py:358-379 and 466-469 using app.add_event_handler("startup", ...) -->
 
 ```python
 async def kyc_sla_checker_loop():
@@ -1120,3 +1122,19 @@ Every assignment action (auto, manual, escalation) is recorded in the audit log 
 - Escalation level (if applicable)
 
 Audit records are append-only and cannot be deleted (no DELETE endpoint).
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `list_admin_kyc_queue()` | `app/routers/kyc_cases.py` | 909 | Exists |
+| `get_admin_kyc_metrics()` | `app/routers/kyc_cases.py` | 947 | Exists |
+| `KycCaseReviewRef` | `app/contracts/kyc_cases_contract.py` | 44 | Exists |
+| `KycCaseStore` | `app/services/kyc_cases.py` | 94 | Exists |
+| Alert system | `app/services/alerts.py` | 355, 695 | Exists (`write_alert`, `audit_event`) |
+| Startup event handlers | `app/main.py` | 358-379 | Exists |
+| `app/services/kyc_assignment.py` | -- | -- | Does NOT exist — new implementation required |
+| `frontend/src/api/endpoints/kyc-admin.ts` | -- | -- | Does NOT exist — new file required |
+| `frontend/src/components/shared/WorkloadDashboard.tsx` | -- | -- | Does NOT exist — new component required |

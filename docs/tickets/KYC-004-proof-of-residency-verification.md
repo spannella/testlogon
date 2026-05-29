@@ -15,7 +15,7 @@
 ### Problem Statement
 
 The current KYC system accepts `proof_of_address` as a single optional file type
-(`_KYC_ALLOWED_FILE_TYPES` in `app/routers/kyc_cases.py`, line 51), but there is no
+(`_KYC_ALLOWED_FILE_TYPES` — see `app/routers/kyc_cases.py:51`), but there is no
 structured handling beyond simple file upload. There is no way to specify what kind of
 proof-of-address document was uploaded (utility bill vs. bank statement vs. government
 letter), no metadata extraction from the document (issuing entity, document date, address),
@@ -105,7 +105,7 @@ residency document, which is error-prone and slow.
 
 ### 3.1 Current Proof of Address Handling
 
-`_KYC_ALLOWED_FILE_TYPES` (line 51 of `app/routers/kyc_cases.py`):
+`_KYC_ALLOWED_FILE_TYPES` (see `app/routers/kyc_cases.py:51`):
 ```python
 _KYC_ALLOWED_FILE_TYPES = set(_KYC_REQUIRED_FILE_TYPES + ["proof_of_address"])
 ```
@@ -117,7 +117,7 @@ array with no additional metadata.
 
 ### 3.2 User Mailing Address
 
-`MailingAddress` model (`app/models.py`, line 1273):
+`MailingAddress` model (see `app/models.py:1273`):
 ```python
 class MailingAddress(BaseModel):
     line1: Optional[str] = None
@@ -130,7 +130,7 @@ class MailingAddress(BaseModel):
 
 ### 3.3 File Validation
 
-`_validate_file_requirements()` (line 155 of `app/routers/kyc_cases.py`) checks for
+`_validate_file_requirements()` (see `app/routers/kyc_cases.py:155`) checks for
 required file types but does not validate metadata, recency, or content of proof_of_address
 files beyond their presence.
 
@@ -745,3 +745,32 @@ test("166.7 Removing last valid doc re-fails the gate", async () => {
   // GET readiness → missing residency_document
 });
 ```
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `attach_kyc_file()` endpoint | `app/routers/kyc_cases.py` | 734 | VERIFIED |
+| `_KYC_ALLOWED_FILE_TYPES` | `app/routers/kyc_cases.py` | 51 | VERIFIED |
+| `_validate_file_requirements()` | `app/routers/kyc_cases.py` | 155 | VERIFIED |
+| `validate_kyc_file_requirements()` endpoint | `app/routers/kyc_cases.py` | 791 | VERIFIED |
+| `_readiness_for_case()` | `app/routers/kyc_cases.py` | 223 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+| KYC settings | `app/core/settings.py` | 1065-1072 | VERIFIED |
+| `MailingAddress` model | `app/models.py` | 1273 | VERIFIED |
+| `app/contracts/kyc_cases_contract.py` | `app/contracts/` | exists | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `proof_of_address` / `residency_document` file type in `_KYC_ALLOWED_FILE_TYPES` | `app/routers/kyc_cases.py` | VERIFY -- may need to add new file type constants |
+| Address extraction from PoA documents | `app/services/kyc_document_verification.py` | NOT FOUND -- depends on KYC-002 |
+| PoA-specific validation (issuer date, document age) | `app/routers/kyc_cases.py` | NOT FOUND -- new validation logic required |
+| Readiness gate for residency document | `app/routers/kyc_cases.py:223` | NOT FOUND -- `_readiness_for_case()` needs modification |

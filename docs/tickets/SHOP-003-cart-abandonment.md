@@ -852,20 +852,19 @@ Set `CART_ABANDONMENT_ENABLED=false`. The background loop stops. Cart records re
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| Cart schema has no TTL/expiry/activity fields | `app/services/shoppingcart.py` | 51-59 | VERIFIED |
-| start_cart creates no last_activity_at | `app/services/shoppingcart.py` | 237-250 | VERIFIED |
-| add_item does not touch parent cart | `app/services/shoppingcart.py` | 287-312 | VERIFIED |
-| purchase_cart transitions to PURCHASED | `app/services/shoppingcart.py` | 428-536 | VERIFIED |
-| _cart_from_item has 6 fields only | `app/services/shoppingcart.py` | 51-59 | VERIFIED |
-| shoppingcart.py is 536 lines | `app/services/shoppingcart.py` | 1-536 | VERIFIED |
-| Shopping cart table defined in local-ddb-init | `scripts/local-ddb-init.py` | 66 | VERIFIED |
+| _cart_from_item | `app/services/shoppingcart.py` | 52 | VERIFIED (was 51; line drift) |
+| start_cart creates no last_activity_at | `app/services/shoppingcart.py` | 254 | VERIFIED (was 237; line drift) |
+| add_item does not touch parent cart | `app/services/shoppingcart.py` | 309 | VERIFIED (was 287; line drift) |
+| purchase_cart transitions to PURCHASED | `app/services/shoppingcart.py` | 469+ | VERIFIED (was 428; line drift) |
+| shoppingcart.py total | `app/services/shoppingcart.py` | 1-835 | VERIFIED (was 536 lines — file grew significantly) |
+| Shopping cart table defined in local-ddb-init | `scripts/local-ddb-init.py` | 67 | VERIFIED (was 66; line drift) |
 | Shopping cart table handle | `app/core/tables.py` | 34, 132 | VERIFIED |
-| Shopping cart table setting | `app/core/settings.py` | 710 | VERIFIED |
-| No cart-related executor in schedule_executors | `app/services/schedule_executors.py` | 1-165 | VERIFIED |
-| scheduled_actions.py create_action | `app/services/scheduled_actions.py` | 91-134 | VERIFIED |
+| Shopping cart table setting | `app/core/settings.py` | 740 | VERIFIED (was 710; line drift) |
+| No cart-related executor in schedule_executors | `app/services/schedule_executors.py` | — | VERIFIED |
+| scheduled_actions.py create_action | `app/services/scheduled_actions.py` | 91 | VERIFIED |
 | query_due_actions | `app/services/scheduled_actions.py` | 355 | VERIFIED |
-| write_alert function with event, title, details | `app/services/alerts.py` | 265-320 | VERIFIED |
-| send_alert_email (dev mode logs to file) | `app/services/alerts.py` | 332-353 | VERIFIED |
+| write_alert function with event, title, details | `app/services/alerts.py` | 355+ | VERIFIED (was 265; file grew from ~680 to 899 lines) |
+| send_alert_email (dev mode logs to file) | `app/services/alerts.py` | 458 | VERIFIED (was 332; line drift) |
 | No "abandonment" or "cart.*reminder" in codebase | grep full codebase | N/A | VERIFIED (0 results) |
 | DDB FilterExpression after page fetch gotcha | `CLAUDE.md` | gotchas | VERIFIED |
 | attr_types required for numeric GSI sort keys | `CLAUDE.md` | gotchas | VERIFIED |

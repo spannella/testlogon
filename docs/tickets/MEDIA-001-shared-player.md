@@ -46,13 +46,15 @@ A single `<MediaPlayer>` component in `frontend/src/components/shared/MediaPlaye
 
 The frontend currently handles video in two limited contexts:
 
-1. **`MediaPreviewThumb.tsx`** (`frontend/src/components/shared/`) — A thumbnail-only component that shows a poster image and, on hover, plays a short `.mp4` clip via native `<video autoPlay muted loop>`. No HLS support, no quality switching, no DRM. Used only for file manager hover previews.
+1. **`MediaPreviewThumb.tsx`** (`frontend/src/pages/files/MediaPreviewThumb.tsx`) — A thumbnail-only component that shows a poster image and, on hover, plays a short `.mp4` clip via native `<video autoPlay muted loop>`. No HLS support, no quality switching, no DRM. Used only for file manager hover previews.
+<!-- NOTE: MediaPreviewThumb.tsx is at frontend/src/pages/files/MediaPreviewThumb.tsx, NOT at frontend/src/components/shared/ as originally stated -->
 
 2. **`FilePreview.tsx`** (`frontend/src/pages/files/FilePreview.tsx`) — A full-screen file preview overlay that renders native `<video>` for `video/*` content types. Uses direct S3 presigned URLs (`previewUrl()` helper). No adaptive bitrate, no quality selector, no DRM. Content is always a single-file progressive download.
 
 3. **`CallSessionOverlay.tsx`** (`frontend/src/pages/messages/CallSessionOverlay.tsx`) — Renders WebRTC `MediaStream` objects via `srcObject` for 1:1 calls. Completely different paradigm (real-time peer connection, not HLS). Not reusable for VOD/live.
 
-**Key gap**: There is no HLS.js integration anywhere in the frontend. The `package.json` has no `hls.js` dependency. There is no quality selector UI, no EME/DRM integration, and no adaptive streaming infrastructure.
+**Key gap**: There is no quality selector UI, no EME/DRM integration, and limited adaptive streaming infrastructure.
+<!-- NOTE: hls.js IS already installed — see frontend/package.json line 49: "hls.js": "^1.6.16". Also, frontend/src/components/shared/MediaPlayer.tsx ALREADY EXISTS as an initial implementation of this component. This ticket should be reviewed as an enhancement of the existing implementation rather than a net-new component. -->
 
 ### HLS output format (backend)
 
@@ -1119,3 +1121,18 @@ describe("MediaPlayer accessibility", () => {
 | User clicks retry after error | Click "Try again" | New HLS instance created, playback retried |
 | Component unmount during loading | Unmount before MANIFEST_PARSED | No memory leak, destroy() called |
 | Rapid src changes (race condition) | Change src 5 times in 100ms | Only final src is loaded |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `frontend/src/components/shared/MediaPlayer.tsx` | — | ALREADY EXISTS: initial shared player implementation is in place |
+| `frontend/package.json` | 49 | `hls.js` is ALREADY installed: `"hls.js": "^1.6.16"` |
+| `frontend/src/pages/files/MediaPreviewThumb.tsx` | — | EXISTS at this path (NOT at `components/shared/` as ticket originally stated) |
+| `frontend/src/pages/files/FilePreview.tsx` | — | EXISTS: native `<video>` preview for file manager |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | — | EXISTS: WebRTC call overlay (separate paradigm from HLS) |
+| `app/services/ffmpeg_abr_pipeline.py` | 14 | EXISTS: ABR pipeline uses `get_ffmpeg_path()` from `ffmpeg_manager` |
+| `app/services/playback_entitlements.py` | 234 | EXISTS: `PLAYBACKJWT` constant for playback token type |
+| `app/contracts/video_rendition_profiles.py` | — | EXISTS: rendition profile definitions |

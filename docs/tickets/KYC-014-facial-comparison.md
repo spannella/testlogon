@@ -13,7 +13,7 @@
 
 ### 1.1 The Gap
 
-The current KYC system requires users to upload a selfie and an identity document (id_front, id_back) via `POST /v1/kyc/cases/{case_id}/files` (line 733 in `app/routers/kyc_cases.py`). However, once uploaded, these files are treated as opaque attachments. There is no automated comparison between the selfie and the photo on the identity document. An admin reviewing the case must manually compare the selfie against the ID photo -- a time-consuming, subjective, and error-prone process.
+The current KYC system requires users to upload a selfie and an identity document (id_front, id_back) via `POST /v1/kyc/cases/{case_id}/files` (see `app/routers/kyc_cases.py:734`). However, once uploaded, these files are treated as opaque attachments. There is no automated comparison between the selfie and the photo on the identity document. An admin reviewing the case must manually compare the selfie against the ID photo -- a time-consuming, subjective, and error-prone process.
 
 ### 1.2 What This Ticket Adds
 
@@ -73,7 +73,7 @@ Admin View:
 
 ### 2.1 File Attachments on KYC Cases
 
-The `attach_kyc_file()` endpoint (line 733) stores file references as dicts in the case's `files` array:
+The `attach_kyc_file()` endpoint (see `app/routers/kyc_cases.py:734`) stores file references as dicts in the case's `files` array:
 
 ```python
 {
@@ -84,23 +84,25 @@ The `attach_kyc_file()` endpoint (line 733) stores file references as dicts in t
 }
 ```
 
-The `file_node_id` references a node in the file manager (`app/services/filemanager.py`). The file manager stores the S3 key for the actual file data. To retrieve the image, the comparison service calls `get_node(user_sub, node_id)` and then downloads from S3.
+The `file_node_id` references a node in the file manager (see `app/services/filemanager.py:450`). The file manager stores the S3 key for the actual file data. To retrieve the image, the comparison service calls `get_node(owner, path)` and then downloads from S3.
+<!-- NOTE: get_node(owner, path) takes an owner string and a path string, NOT (user_sub, node_id). The file_node_id stored on the KYC case would need to be mapped to the correct path format used by get_node. -->
 
 ### 2.2 KYC Cases Table -- Existing Item Schema
 
 The `kyc_cases` table uses single-table design:
-- `pk=KYC#{case_id}`, `sk=META` -- main case record
+- `pk=KYC#{case_id}`, `sk=META` -- main case record (see `app/services/kyc_cases.py:36` for `_case_pk`)
 - `pk=KYC#{case_id}`, `sk=SCAN#{scan_id}` -- document scan results (KYC-010)
+<!-- NOTE: KYC-010 (Passport & National ID Scanner) is a dependency — verify SCAN# SK pattern exists when that ticket is implemented -->
 
 Face comparison results will use `sk=FACE_MATCH#{timestamp}` to store each comparison attempt.
 
 ### 2.3 S3 Access in Dev Mode
 
-The moto S3 mock is started in-process by `app/core/dev_s3.py`. File data uploaded through the file manager is stored in the mock S3 bucket and can be retrieved via `boto3.client("s3").get_object()`.
+The moto S3 mock is started in-process by `app/core/dev_s3.py` (see CLAUDE.md "S3 mock" section). File data uploaded through the file manager is stored in the mock S3 bucket and can be retrieved via `boto3.client("s3").get_object()`.
 
-### 2.4 Admin Case Detail (`app/routers/kyc_cases.py`, line 996)
+### 2.4 Admin Case Detail (see `app/routers/kyc_cases.py:997`)
 
-The `get_admin_kyc_case_detail()` endpoint builds a detailed case view via `_build_admin_case_detail()` (line 345). The face comparison results need to be included in this admin view, along with signed URLs for the selfie and ID images.
+The `get_admin_kyc_case_detail()` endpoint builds a detailed case view via `_build_admin_case_detail()` (see `app/routers/kyc_cases.py:345`). The face comparison results need to be included in this admin view, along with signed URLs for the selfie and ID images.
 
 ### 2.5 Mock Dev Image URLs
 
@@ -111,6 +113,7 @@ The `_message_out_from_item` function in messaging generates `/mock/s3/...` URLs
 ## 3. Technical Design
 
 ### 3.1 New Service: `app/services/kyc_facial_comparison.py`
+<!-- NOTE: app/services/kyc_facial_comparison.py does not exist yet — new implementation required -->
 
 ```python
 """Facial comparison service -- compares selfie against ID document photo."""
@@ -123,8 +126,8 @@ from typing import Any
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
-from app.services.filemanager import get_node
-from app.services.alerts import audit_event
+from app.services.filemanager import get_node  # see app/services/filemanager.py:450 — NOTE: signature is get_node(owner, path), not (user_sub, node_id)
+from app.services.alerts import audit_event  # see app/services/alerts.py:695
 
 # Confidence thresholds
 THRESHOLD_AUTO_PASS = 70
@@ -169,6 +172,7 @@ def compare_faces(
         raise ValueError("max_attempts_exceeded")
 
     # Retrieve file metadata
+    # NOTE: get_node takes (owner, path) — file_node_id must be translated to path format
     selfie_node = get_node(user_sub, selfie_ref["file_node_id"])
     id_front_node = get_node(user_sub, id_front_ref["file_node_id"])
 
@@ -413,8 +417,9 @@ Add to `app/routers/kyc_cases.py`:
 |--------|------|------|-------------|
 | `POST` | `/{case_id}/compare-face` | `require_ui_session` | Run facial comparison |
 | `GET` | `/{case_id}/face-comparisons` | `require_ui_session` | List comparison attempts |
-| `GET` | `/admin/cases/{case_id}/face-comparison` | `require_root_session` | Admin view with side-by-side |
-| `POST` | `/admin/cases/{case_id}/face-comparison/{comparison_id}/override` | `require_root_session` | Admin override |
+| `GET` | `/admin/cases/{case_id}/face-comparison` | `require_ui_session` + admin role check | Admin view with side-by-side |
+| `POST` | `/admin/cases/{case_id}/face-comparison/{comparison_id}/override` | `require_ui_session` + admin role check | Admin override |
+<!-- NOTE: Existing admin KYC endpoints use require_ui_session + manual role check (Role.ADMIN or Role.ROOT), NOT require_root_session. The new admin endpoints should follow the same pattern (see app/routers/kyc_cases.py:1000-1003). -->
 
 ```python
 @router.post("/{case_id}/compare-face")
@@ -452,7 +457,8 @@ def list_face_comparisons(case_id: str, ctx=Depends(require_ui_session)):
 
 
 @router.get("/admin/cases/{case_id}/face-comparison")
-def admin_face_comparison(case_id: str, user=Depends(require_root_session)):
+def admin_face_comparison(case_id: str, _ctx=Depends(require_ui_session), user=Depends(get_authenticated_user)):
+    # NOTE: follow existing pattern — check Role.ADMIN or Role.ROOT manually (see kyc_cases.py:1003)
     from app.services.kyc_facial_comparison import _get_comparisons, get_best_comparison
     case = STORE.get_case(case_id)
     if not case:
@@ -484,8 +490,10 @@ def admin_override_face(
     comparison_id: str,
     body: FaceComparisonOverrideRequest,
     request: Request,
-    user=Depends(require_root_session),
+    _ctx=Depends(require_ui_session),
+    user=Depends(get_authenticated_user),
 ):
+    # NOTE: follow existing pattern — check Role.ADMIN or Role.ROOT manually (see kyc_cases.py:1003)
     from app.services.kyc_facial_comparison import admin_override_comparison
     try:
         return admin_override_comparison(
@@ -503,6 +511,7 @@ def admin_override_face(
 ### 3.3 Frontend Components
 
 **File**: `frontend/src/pages/kyc/FaceComparisonResult.tsx`
+<!-- NOTE: frontend/src/pages/kyc/ directory does not exist yet — new implementation required -->
 
 Displayed after selfie upload in the KYC wizard (Step 3):
 - Shows confidence score as a circular progress gauge
@@ -520,6 +529,7 @@ Admin-facing component shown in the admin case detail view:
 - Override buttons: "Approve Match" / "Reject Match" with reason input dialog
 
 **File**: `frontend/src/api/endpoints/kyc-face.ts`
+<!-- NOTE: frontend/src/api/endpoints/kyc-face.ts does not exist yet — new implementation required -->
 
 ```typescript
 export const compareFace = (caseId: string) =>
@@ -1383,7 +1393,7 @@ Comparison results are stored in DynamoDB and never re-computed for the same sel
 | File | Change |
 |------|--------|
 | `app/routers/kyc_cases.py` | Add: 4 endpoints for face comparison (~100 lines) |
-| `app/contracts/kyc_cases_contract.py` | Add: `FaceComparisonOverrideRequest` model |
+| `app/contracts/kyc_cases_contract.py` | Add: `FaceComparisonOverrideRequest` model (see existing file `app/contracts/kyc_cases_contract.py`) |
 
 ### Phase 3: Frontend (2 days)
 
@@ -1517,3 +1527,29 @@ test.beforeAll(async ({ browser }) => {
 - Delete `app/services/kyc_facial_comparison.py`.
 - `FACE_MATCH#*` records in the `kyc_cases` table are independent of the case META record and can be ignored.
 - Frontend components (`FaceComparisonResult.tsx`, `KycFaceComparison.tsx`) can be deleted without affecting the wizard flow (Step 3 falls back to simple file upload).
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC router (prefix `/v1/kyc/cases`) | `app/routers/kyc_cases.py` | 48 | Exists |
+| KYC router registration | `app/main.py` | 88, 406 | Exists |
+| `attach_kyc_file()` endpoint | `app/routers/kyc_cases.py` | 734 | Exists |
+| `_build_admin_case_detail()` | `app/routers/kyc_cases.py` | 345 | Exists |
+| `get_admin_kyc_case_detail()` | `app/routers/kyc_cases.py` | 997 | Exists |
+| Admin auth pattern (role check) | `app/routers/kyc_cases.py` | 1000-1003 | Exists — uses `require_ui_session` + manual role check, NOT `require_root_session` |
+| `STORE` (KycCaseStore) | `app/services/kyc_cases.py` | 94 | Exists |
+| `KycCaseStore.get_case()` | `app/services/kyc_cases.py` | 138 | Exists |
+| `_case_pk()` helper | `app/services/kyc_cases.py` | 36 | Exists |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | Exists (with owner + status GSIs) |
+| KYC settings | `app/core/settings.py` | 1065-1072 | Exists |
+| `get_node(owner, path)` | `app/services/filemanager.py` | 450 | Exists — signature is `(owner, path)` not `(user_sub, node_id)` |
+| `audit_event()` | `app/services/alerts.py` | 695 | Exists |
+| S3 mock (moto in-process) | `app/core/dev_s3.py` | -- | Exists |
+| KYC contracts file | `app/contracts/kyc_cases_contract.py` | -- | Exists (no `FaceComparisonOverrideRequest` yet) |
+| `app/services/kyc_facial_comparison.py` | -- | -- | Does NOT exist — new implementation required |
+| `frontend/src/pages/kyc/` | -- | -- | Does NOT exist — new directory/files required |
+| `frontend/src/api/endpoints/kyc-face.ts` | -- | -- | Does NOT exist — new file required |
+| `frontend/e2e/kyc-face-comparison.spec.ts` | -- | -- | Does NOT exist — new test file required |

@@ -4,7 +4,7 @@
 **Type**: Testing
 **Priority**: P1
 **Size**: M
-**Status**: Design
+**Status**: Implemented
 **Author**: Engineering
 **Date**: 2026-05-24
 
@@ -548,6 +548,25 @@ Some tests need videos in specific states without waiting for processing. The `s
 ## 4. Implementation Plan
 
 ### 4.1 File Creation
+
+<!-- NOTE: Multiple VOD E2E test files ALREADY EXIST:
+     - frontend/e2e/video-upload.spec.ts
+     - frontend/e2e/video-listing.spec.ts
+     - frontend/e2e/video-player.spec.ts
+     - frontend/e2e/video-review-queue.spec.ts
+     - frontend/e2e/video-subtitles.spec.ts
+     - frontend/e2e/video-clipping.spec.ts
+     - frontend/e2e/video-concat.spec.ts
+     - frontend/e2e/video-gallery.spec.ts
+     - frontend/e2e/vod-pipeline.spec.ts
+     - frontend/e2e/vod-drm.spec.ts
+     - frontend/e2e/vod-download.spec.ts
+     - frontend/e2e/vod-purchase.spec.ts
+     - frontend/e2e/vod-purchase-tiers.spec.ts
+     - frontend/e2e/vod-file-bridge.spec.ts
+     - frontend/e2e/vod-ads.spec.ts
+     - frontend/e2e/vod-broadcast-pricing.spec.ts
+-->
 
 | File | Purpose |
 |------|---------|

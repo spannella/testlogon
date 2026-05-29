@@ -1144,3 +1144,22 @@ class UpdateMarketingConfigIn(BaseModel):
     ├── VariantComparisonChart (bar chart: views + clicks per variant)
     └── WinnerBadge (if test concluded)
 ```
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| TicketStore class | `app/services/tickets.py` | 110 | For reading feature ticket descriptions and status transitions |
+| Newsfeed router | `app/routers/newsfeed.py` | — | Confirmed exists; blog-like posts with markdown/rich text |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `(event, user_sub, request, **fields)` |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+| Tables singleton | `app/core/tables.py` | — | `T` object |
+| Router registration | `app/main.py` | 297-465 | No `agent_marketing_router` registered yet |
+| `agent_marketing_content` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — new table proposed in this ticket |
+| `agent_marketing.py` service | `app/services/` | — | Does NOT exist yet — new implementation in this ticket |
+| `agent_marketing.py` router | `app/routers/` | — | Does NOT exist yet — new implementation in this ticket |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing table |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |

@@ -14,10 +14,10 @@
 
 ### Problem Statement
 
-The KYC system (`app/routers/kyc_cases.py`) integrates with the signature packet system
-(`app/routers/signature_packets.py`, `app/services/signature_packet_store.py`) for consent
+The KYC system (see `app/routers/kyc_cases.py`) integrates with the signature packet system
+(see `app/services/signature_packet_store.py:91` for `create_draft_packet`, `:120` for `get_packet`) for consent
 signing. Currently, each KYC case creates a generic signature packet via
-`create_or_link_signature_packet()` (line 1206 of `kyc_cases.py`), but there is no
+`create_or_link_signature_packet()` (see `app/routers/kyc_cases.py:1206`), but there is no
 **template library** for standardized KYC consent forms. Each packet is created ad-hoc,
 leading to inconsistent consent language across cases.
 
@@ -62,13 +62,13 @@ Additionally, the current system lacks:
 - Legal notice acceptance tracking (`legal_notice_accepted_version`)
 - Final PDF generation with signed fields composited
 
-`app/services/signature_packet_store.py` provides DDB storage:
+`app/services/signature_packet_store.py` provides DDB storage (see `:91` for `create_draft_packet`, `:120` for `get_packet`, `:133` for `upsert_packet_field`):
 - `create_draft_packet()`, `get_packet()`, `upsert_packet_field()`
 - `get_packet_artifact()` -- final PDF artifact
 
 ### 2.2 KYC Signature Integration
 
-`create_or_link_signature_packet()` (line 1206 of `kyc_cases.py`) creates a signature
+`create_or_link_signature_packet()` (see `app/routers/kyc_cases.py:1206`) creates a signature
 packet from a file manager path and links it to the KYC case's `signature` field:
 
 ```python
@@ -79,7 +79,7 @@ packet from a file manager path and links it to the KYC case's `signature` field
 }
 ```
 
-`_signature_status_for_case()` (line 184) checks completion status and legal notice
+`_signature_status_for_case()` (see `app/routers/kyc_cases.py:184`) checks completion status and legal notice
 acceptance. This is one of the three readiness gates for case submission.
 
 ### 2.3 Legal Notice Version
@@ -1211,3 +1211,34 @@ test("177.7 Migrated packet has new version but retains auto-populated data", as
   // Verify auto-populated fields still contain profile data
 });
 ```
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `create_or_link_signature_packet()` | `app/routers/kyc_cases.py` | 1206 | VERIFIED |
+| `_signature_status_for_case()` | `app/routers/kyc_cases.py` | 184 | VERIFIED |
+| `_readiness_for_case()` | `app/routers/kyc_cases.py` | 223 | VERIFIED |
+| `create_draft_packet()` | `app/services/signature_packet_store.py` | 91 | VERIFIED |
+| `get_packet()` | `app/services/signature_packet_store.py` | 120 | VERIFIED |
+| `upsert_packet_field()` | `app/services/signature_packet_store.py` | 133 | VERIFIED |
+| Signature packets router | `app/routers/signature_packets.py` | all | VERIFIED (818 lines) |
+| Signature settings | `app/core/settings.py` | 798-827 | VERIFIED: table names, expiration, max signers/fields, legal notice |
+| `get_profile()` | `app/services/profiles.py` | 220 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| Enhanced signing template system | `app/services/signature_packet_store.py` | NOT FOUND -- new template logic required |
+| Auto-populated field resolution | `app/services/signature_packet_store.py` | NOT FOUND -- new auto-populate from profile required |
+| KYC-specific consent template | n/a | NOT FOUND -- new template definition required |
+| Template version migration endpoint | `app/routers/kyc_cases.py` or `app/routers/signature_packets.py` | NOT FOUND -- new endpoint required |
+| `frontend/src/pages/kyc/` consent components | `frontend/src/pages/kyc/` | NOT FOUND -- no KYC frontend pages exist |

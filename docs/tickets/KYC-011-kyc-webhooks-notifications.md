@@ -15,11 +15,11 @@
 
 The current KYC system (`app/routers/kyc_cases.py`, `app/services/kyc_cases.py`) transitions cases through `draft -> submitted -> under_review -> approved/rejected/needs_more_info -> expired`, but these transitions happen silently. The only feedback mechanism is polling — a user must repeatedly check their case status, and an admin must manually refresh the queue to see new submissions.
 
-The audit system (`audit_event()` in `app/services/alerts.py`, line 695) records KYC events to the audit log, but these are internal telemetry, not user-facing notifications. The alert system (`write_alert()`, line 355) supports in-app alerts, email, and SMS delivery, but no KYC-specific alert types are registered. The webhook system (`app/services/webhook_service.py`) defines event types for messaging, billing, newsfeed, broadcast, and account events — but no KYC events.
+The audit system (`audit_event()` — see `app/services/alerts.py:695`) records KYC events to the audit log, but these are internal telemetry, not user-facing notifications. The alert system (`write_alert()` — see `app/services/alerts.py:355`) supports in-app alerts, email, and SMS delivery, but no KYC-specific alert types are registered. The webhook system (see `app/services/webhook_service.py:24` for `WEBHOOK_EVENT_TYPES`) defines event types for messaging, billing, newsfeed, broadcast, and account events -- but no KYC events.
 
 ### 1.2 What This Ticket Adds
 
-1. **Webhook events** for all KYC state transitions, published through the existing webhook dispatcher (`app/services/webhook_dispatcher.py`).
+1. **Webhook events** for all KYC state transitions, published through the existing webhook dispatcher (see `app/services/webhook_dispatcher.py`).
 2. **Email notifications** to users at key moments: submission confirmation, request for additional information, approval, rejection (with reasons).
 3. **Email notifications** to admins: new submissions in queue, high-risk case flagged, screening match detected.
 4. **SMS notifications** for urgent actions: verification call scheduled, case about to expire.
@@ -77,20 +77,20 @@ User Notification Preferences:
 
 ### 2.1 Webhook System (`app/services/webhook_service.py`)
 
-The webhook service defines `WEBHOOK_EVENT_TYPES` (line 24) and `WEBHOOK_EVENT_TYPES_V2` (line 60) — dictionaries mapping event type strings to descriptions. No KYC event types exist. The `dispatch_webhook_event()` function (line 503) handles delivery to user-registered endpoints. The `is_valid_event_type()` check (line 154) validates against these dictionaries.
+The webhook service defines `WEBHOOK_EVENT_TYPES` (see `app/services/webhook_service.py:24`) and `WEBHOOK_EVENT_TYPES_V2` (see `:60`) -- dictionaries mapping event type strings to descriptions. No KYC event types exist. The `dispatch_webhook_event()` function (see `:503`) handles delivery to user-registered endpoints. The `is_valid_event_type()` check (see `:154`) validates against these dictionaries.
 
 To add KYC events, new entries must be added to `WEBHOOK_EVENT_TYPES_V2` and the `dispatch_webhook_event()` function must be called from KYC state transition points.
 
 ### 2.2 Webhook Dispatcher (`app/services/webhook_dispatcher.py`)
 
-The dispatcher handles async delivery, retry logic (`app/services/webhook_retry.py`), circuit breaking (`app/services/webhook_circuit_breaker.py`), dead letter queue (`app/services/webhook_dlq.py`), and SSRF protection (`app/services/webhook_ssrf.py`). KYC webhook events will use this existing infrastructure.
+The dispatcher handles async delivery, retry logic (see `app/services/webhook_retry.py`), circuit breaking (see `app/services/webhook_circuit_breaker.py`), dead letter queue (see `app/services/webhook_dlq.py`), and SSRF protection (see `app/services/webhook_ssrf.py`). KYC webhook events will use this existing infrastructure.
 
 ### 2.3 Alert System (`app/services/alerts.py`)
 
-- `write_alert(user_sub, *, event, outcome, title, details)` (line 355): Creates in-app alerts stored in the `alerts` table.
-- `send_alert_email(to_emails, subject, body_text)` (line 458): Sends email via SES (mocked in dev).
-- `send_alert_sms(to_numbers, body_text)` (line 481): Sends SMS via SNS (mocked in dev).
-- `send_alert_webhook(payload, *, alert_type, alert_id)` (line 600): Sends webhook to the platform-level webhook URL.
+- `write_alert(user_sub, *, event, outcome, title, details)` (see `app/services/alerts.py:355`): Creates in-app alerts stored in the `alerts` table.
+- `send_alert_email(to_emails, subject, body_text)` (see `app/services/alerts.py:458`): Sends email via SES (mocked in dev).
+- `send_alert_sms(to_numbers, body_text)` (see `app/services/alerts.py:481`): Sends SMS via SNS (mocked in dev).
+- `send_alert_webhook(payload, *, alert_type, alert_id)` (see `app/services/alerts.py:600`): Sends webhook to the platform-level webhook URL.
 
 ### 2.4 Email Templates (`app/services/alert_email_templates.py`)
 
@@ -102,7 +102,7 @@ The alert preferences system (`app/services/alerts.py`) stores per-user preferen
 
 ### 2.6 KYC State Transitions (`app/routers/kyc_cases.py`)
 
-The `_audit_state_transition()` helper (line 85) is called at every state change. It calls `audit_event()` with KYC-specific event names. This is the integration point — `kyc_notify()` should be called alongside `_audit_state_transition()`.
+The `_audit_state_transition()` helper (see `app/routers/kyc_cases.py:85`) is called at every state change. It calls `audit_event()` with KYC-specific event names. This is the integration point -- `kyc_notify()` should be called alongside `_audit_state_transition()`.
 
 ---
 
@@ -1186,3 +1186,56 @@ test("193.7 Tier upgrade event dispatched when KYC case approved with tier chang
   // Verify payload includes from_tier and to_tier
 });
 ```
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+| `write_alert()` | `app/services/alerts.py` | 355 | VERIFIED |
+| `send_alert_email()` | `app/services/alerts.py` | 458 | VERIFIED |
+| `send_alert_sms()` | `app/services/alerts.py` | 481 | VERIFIED |
+| `send_alert_webhook()` | `app/services/alerts.py` | 600 | VERIFIED |
+| `can_send_alert_channel()` import | `app/services/alerts.py` | 22 | VERIFIED (imported from rate_limit) |
+| `WEBHOOK_EVENT_TYPES` | `app/services/webhook_service.py` | 24 | VERIFIED |
+| `WEBHOOK_EVENT_TYPES_V2` | `app/services/webhook_service.py` | 60 | VERIFIED |
+| `is_valid_event_type()` | `app/services/webhook_service.py` | 154 | VERIFIED |
+| `dispatch_webhook_event()` | `app/services/webhook_service.py` | 503 | VERIFIED |
+| Webhook dispatcher | `app/services/webhook_dispatcher.py` | exists | VERIFIED |
+| Webhook retry | `app/services/webhook_retry.py` | exists | VERIFIED |
+| Webhook circuit breaker | `app/services/webhook_circuit_breaker.py` | exists | VERIFIED |
+| Webhook DLQ | `app/services/webhook_dlq.py` | exists | VERIFIED |
+| Webhook SSRF protection | `app/services/webhook_ssrf.py` | exists | VERIFIED |
+| Alert email templates | `app/services/alert_email_templates.py` | exists | VERIFIED |
+| `_audit_state_transition()` | `app/routers/kyc_cases.py` | 85 | VERIFIED |
+| `submit_kyc_case()` | `app/routers/kyc_cases.py` | 830 | VERIFIED |
+| `_admin_decide_case()` | `app/routers/kyc_cases.py` | 1099 | VERIFIED |
+| `admin_request_more_info()` | `app/routers/kyc_cases.py` | 1021 | VERIFIED |
+| `create_kyc_case()` | `app/routers/kyc_cases.py` | 519 | VERIFIED |
+| `get_profile()` | `app/services/profiles.py` | 220 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+| KYC cases router registration | `app/main.py` | 406 | VERIFIED |
+| `app/contracts/kyc_cases_contract.py` | `app/contracts/` | exists | VERIFIED |
+| `require_ui_session` | `app/auth/deps.py` | exists | VERIFIED |
+| `require_root_session` | `app/auth/deps.py` | 273 | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `app/services/kyc_notifications.py` | `app/services/` | NOT FOUND -- new service required |
+| `app/routers/kyc_notifications.py` | `app/routers/` | NOT FOUND -- new router required |
+| `kyc_notifications_router` registration | `app/main.py` | NOT FOUND -- needs `app.include_router()` |
+| `KycNotificationPrefsUpdate` model | `app/contracts/kyc_cases_contract.py` | NOT FOUND -- new model required |
+| `kyc_notify()` calls in state transitions | `app/routers/kyc_cases.py` | NOT FOUND -- needs integration |
+| KYC event types in `WEBHOOK_EVENT_TYPES_V2` | `app/services/webhook_service.py` | NOT FOUND -- needs 8 new event types |
+| `KYC_NOTIFICATION_PREFS` sort key in users table | DDB `users` table | NOT FOUND -- new item pattern |
+| `ByRole` GSI on users table (for admin notifications) | `scripts/local-ddb-init.py` | VERIFY -- may or may not exist |
+| `frontend/src/pages/kyc/KycNotificationPrefs.tsx` | `frontend/src/pages/kyc/` | NOT FOUND -- new page required |
+| `frontend/src/api/endpoints/kyc-notifications.ts` | `frontend/src/api/endpoints/` | NOT FOUND -- new endpoint file required |

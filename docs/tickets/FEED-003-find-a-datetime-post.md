@@ -36,10 +36,13 @@ With MSG-009 providing the core Find-a-DateTime logic and the shared `Availabili
 
 ### 2.1 Newsfeed Post Infrastructure
 
-Posts are stored in `app_single_table` DynamoDB with PK `POST#{post_id}`, SK `META`. The `CreatePostRequest` model accepts various content types including polls (existing `newsfeed_polls.py`). Adding `kind="find_datetime"` follows the same extension pattern.
+Posts are stored in `app_single_table` DynamoDB with PK `POST#{post_id}`, SK `META`. The `CreatePostRequest` model (see `app/routers/newsfeed.py:1276`) accepts various content types including polls (existing `app/services/newsfeed_polls.py`). Adding `kind="find_datetime"` follows the same extension pattern.
+<!-- VERIFIED: app/services/newsfeed_polls.py exists; app/routers/newsfeed.py:3205 — newsfeed_polls_enabled check -->
+<!-- VERIFIED: scripts/local-ddb-init.py:222 — app_single_table -->
 
 ### 2.2 Find-a-DateTime Backend (MSG-009)
 
+<!-- NOTE: app/services/messaging_find_datetime.py does NOT exist yet — MSG-009 has not been implemented. This is a blocking dependency. New implementation required. -->
 `app/services/messaging_find_datetime.py` provides:
 - `create_find_datetime()` — creates poll in calendar table
 - `submit_availability()` — stores user's available slots
@@ -50,6 +53,7 @@ These functions are conversation-agnostic (they only reference `conversation_id`
 
 ### 2.3 AvailabilityGrid Component (MSG-009)
 
+<!-- NOTE: frontend/src/components/shared/AvailabilityGrid.tsx does NOT exist yet — MSG-009 has not been implemented. This is a blocking dependency. New implementation required. -->
 The shared `AvailabilityGrid` component in `frontend/src/components/shared/AvailabilityGrid.tsx` handles the interactive time grid UI. It accepts `fromDate`, `toDate`, `startHour`, `endHour`, `slotDurationMinutes`, and callbacks for slot selection. This component is fully reusable for the newsfeed context.
 
 ### 2.4 Gaps
@@ -746,6 +750,26 @@ When disabled, the backend rejects `POST /posts/find-datetime` with 400 "Find-a-
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| Find-a-DateTime backend logic | MSG-009 | Required |
-| AvailabilityGrid component | MSG-009 | Required |
-| FindDateTimeComposer | MSG-009 | Required (reused) |
+| Find-a-DateTime backend logic | MSG-009 | Required — **NOT YET IMPLEMENTED** (`app/services/messaging_find_datetime.py` does not exist) |
+| AvailabilityGrid component | MSG-009 | Required — **NOT YET IMPLEMENTED** (`frontend/src/components/shared/AvailabilityGrid.tsx` does not exist) |
+| FindDateTimeComposer | MSG-009 | Required (reused) — **NOT YET IMPLEMENTED** |
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key References | Lines |
+|------|---------------|-------|
+| `app/routers/newsfeed.py` | `CreatePostRequest`, `_post_to_dict`, `create_post` | 1276, 1900, 3013 |
+| `app/services/newsfeed_polls.py` | Existing poll system (pattern to follow) | - |
+| `app/routers/newsfeed.py` | Poll creation in `create_post` | 3205-3209 |
+| `scripts/local-ddb-init.py` | `app_single_table` definition | 222 |
+| `app/services/social.py` | `get_following` (for follower audience) | 167 |
+
+### Files That Do NOT Exist Yet (blocking dependencies from MSG-009)
+| File | Purpose | Status |
+|------|---------|--------|
+| `app/services/messaging_find_datetime.py` | Find-a-DateTime backend logic | Not implemented |
+| `frontend/src/components/shared/AvailabilityGrid.tsx` | Interactive time grid UI | Not implemented |
+| `frontend/src/components/shared/FindDateTimeComposer.tsx` | FADT creation form | Not implemented |

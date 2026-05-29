@@ -72,6 +72,7 @@ EC2 Launch Flow
 ## 2. Current State Analysis
 
 ### 2.1 AWS Client Infrastructure (`app/core/aws.py`)
+<!-- VERIFIED: app/core/aws.py exists; has sns_client() at :30, sqs_client() at :40; NO EC2 client exists -->
 
 The `aws.py` module creates boto3 clients via helper functions. Example pattern:
 
@@ -118,6 +119,7 @@ No instance type configuration exists in the codebase. The launcher must define 
 ## 3. Technical Design
 
 ### 3.1 DynamoDB Table: `ec2_instances`
+<!-- NOTE: ec2_instances table does not exist yet in scripts/local-ddb-init.py — new table required -->
 
 ```python
 # scripts/local-ddb-init.py
@@ -162,6 +164,7 @@ TableDef(
 | `source` | S | `manual`, `template` |
 
 ### 3.2 Mock EC2 Service: `app/services/ec2_launcher.py`
+<!-- NOTE: app/services/ec2_launcher.py does not exist yet — new implementation required -->
 
 New file (~400 lines). The service provides a unified interface that delegates to either real EC2 API or an in-memory mock based on `S.dev_mode`.
 
@@ -374,6 +377,7 @@ async def run_idle_instance_checker(*, poll_interval: int = 300):
 ```
 
 ### 3.4 API Router: `app/routers/ec2_launcher.py`
+<!-- NOTE: app/routers/ec2_launcher.py does not exist yet — new implementation required -->
 
 New file (~200 lines). Prefix: `/ui/remote/ec2`.
 
@@ -708,3 +712,19 @@ All instance records use `user_sub` as the DDB partition key. No cross-user acce
 8. Instance list page shows real-time status with auto-refresh.
 9. All lifecycle operations produce audit events.
 10. Terminated instances are cleaned up from host inventory.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| AWS client helpers | `app/core/aws.py` | 30, 40 | `sns_client()`, `sqs_client()` — pattern for EC2 client; NO EC2 client exists yet |
+| `S.dev_mode` | `app/core/settings.py` | — | Boolean; controls mock vs real services |
+| `audit_event()` | `app/services/alerts.py` | 695 | Audit logging for lifecycle events |
+| Call billing heartbeat pattern | `app/routers/call_billing.py` | — | Per-minute billing model for reuse in INFRA-005 |
+| `ec2_instances` DDB table | — | — | Does not exist yet in `scripts/local-ddb-init.py` |
+| `app/services/ec2_launcher.py` | — | — | Does not exist yet |
+| `app/routers/ec2_launcher.py` | — | — | Does not exist yet |
+| `remote_hosts` (INFRA-001 dep) | — | — | Host auto-registration target; does not exist yet |
+| `ssh_key_manager` (INFRA-002 dep) | — | — | Key injection source; does not exist yet |

@@ -1464,3 +1464,15 @@ Columns:
 - **MON-002**: Tip ledger integration ensures all tips have credit entries
 - **MON-004**: Payout system uses earnings totals for available balance
 - **MON-005**: Subscription-gated VOD generates additional subscription credits
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/services/creator_earnings.py` | 22-137 | ALREADY EXISTS (207 lines): `_reason_to_category` (22), `get_earnings_summary` (47), `get_earnings_transactions` (117) |
+| `app/routers/creator_earnings.py` | 16, 19, 40 | ALREADY EXISTS: router with prefix `/ui/earnings`, `GET /summary` (19), `GET /transactions` (40) |
+| `app/main.py` | 106, 429 | EXISTS: `creator_earnings_router` imported and registered |
+| `app/services/billing_shared.py` | — | EXISTS: billing table access patterns used by earnings aggregation |
+<!-- NOTE: The backend service layer and API endpoints for creator earnings are ALREADY IMPLEMENTED. The frontend dashboard page may still need implementation — verify whether frontend/src/pages/earnings/ exists. -->

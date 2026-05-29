@@ -990,22 +990,24 @@ translations=ddb.Table(S.translations_table_name),
 
 | Reference | File | Line(s) | Status |
 |-----------|------|---------|--------|
-| Profile fields (`empty_profile()`) | `app/services/profile.py` | 189-206 | VERIFIED: fields are `display_name`, `first_name`, `middle_name`, `last_name`, `title`, `description`, `birthday`, `gender`, `location`, `displayed_email`, `displayed_telephone_number`, `mailing_address`, `languages`, `profile_photo_url`, `cover_photo_url` |
+| Profile fields (`empty_profile()`) | `app/services/profile.py` | 199 | VERIFIED: fields are `display_name`, `first_name`, `middle_name`, `last_name`, `title`, `description`, `birthday`, `gender`, `location`, `displayed_email`, `displayed_telephone_number`, `mailing_address`, `languages`, `profile_photo_url`, `cover_photo_url` |
 | `bio` field in profile | N/A | N/A | CORRECTED: does not exist; the field is `description` |
 | `avatar_url` field in profile | N/A | N/A | CORRECTED: does not exist; the field is `profile_photo_url` |
 | `timezone` field in profile | N/A | N/A | CORRECTED: does not exist in `empty_profile()` or elsewhere in `profile.py` |
-| `get_profile()` | `app/services/profile.py` | 209 | VERIFIED |
-| `apply_profile_update()` | `app/services/profile.py` | 283 | VERIFIED |
-| `normalize_profile_payload()` | `app/services/profile.py` | 144 | VERIFIED (would need to be extended to accept `locale` field) |
-| `languages` field in profile | `app/services/profile.py` | 175-181, 203 | VERIFIED (this is spoken languages, not locale -- different concept) |
+| `get_profile()` | `app/services/profile.py` | 220 | VERIFIED |
+| `apply_profile_update()` | `app/services/profile.py` | 294 | VERIFIED |
+| `normalize_profile_payload()` | `app/services/profile.py` | 146 | VERIFIED (would need to be extended to accept `locale` field) |
+| `languages` field in profile | `app/services/profile.py` | 199 | VERIFIED (this is spoken languages, not locale -- different concept) |
 | `T.profile` table handle | `app/core/tables.py` | 29, 113 | VERIFIED |
 | `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED |
 | `require_admin_session` | N/A | N/A | CORRECTED: does not exist; use `require_ui_session` + role check |
 | `get_authenticated_user` → `AuthenticatedUser` | `app/auth/deps.py` | 126, 184 | VERIFIED |
 | `TableDef` dataclass | `scripts/local-ddb-init.py` | 29 | VERIFIED |
 | `_resolve_table_name()` | `scripts/local-ddb-init.py` | 38 | VERIFIED |
-| Settings dataclass | `app/core/settings.py` | entire file | VERIFIED (no i18n settings exist yet; no `locale` or `i18n` references) |
-| Tables dataclass | `app/core/tables.py` | entire file | VERIFIED (no `translations` table handle exists yet) |
+| i18n settings | `app/core/settings.py` | 1404-1409 | VERIFIED: `translations_table_name` (1404), `i18n_default_locale` (1405), `i18n_supported_locales` (1406), `i18n_enabled` (1407), `i18n_rtl_enabled` (1408), `i18n_admin_management_enabled` (1409) — these ALL exist |
+| i18n router | `app/routers/i18n.py` | exists | VERIFIED: registered in main.py:459 with prefix "/ui/i18n"; has `list_locales`, `get_translations`, `get_user_locale`, `save_user_locale` endpoints |
+| translations DDB table | `scripts/local-ddb-init.py` | exists | VERIFIED: translations table defined in local-ddb-init.py |
+| i18n JSON files | `app/i18n/` | exists | VERIFIED: en.json, es.json, fr.json |
 | Sidebar navigation | `frontend/src/components/layout/Sidebar.tsx` | exists | VERIFIED (hardcoded English navigation labels) |
 | `AppShell.tsx` | `frontend/src/components/layout/AppShell.tsx` | exists | VERIFIED |
 | `MobileNav.tsx` | `frontend/src/components/layout/MobileNav.tsx` | exists | VERIFIED |

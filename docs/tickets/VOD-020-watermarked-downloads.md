@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-020
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-27
 **Priority**: High
 **Estimated effort**: 10-12 days
@@ -1104,15 +1104,38 @@ If the feature is permanently removed:
 | `app/services/video_metadata_store.py` | `app/services/video_metadata_store.py` | exists | VERIFIED: `get_video` at line 307, `update_video` at line 316 |
 | `app/routers/video_listing.py` | `app/routers/video_listing.py` | exists | VERIFIED |
 | VideoMetadata DDB table | `scripts/local-ddb-init.py` | 702 | VERIFIED: PK=video_id |
-| `app/core/settings.py` | `app/core/settings.py` | 1-1197 | VERIFIED: frozen dataclass; no `WATERMARK_*` settings exist yet |
-| `app/core/tables.py` | `app/core/tables.py` | 1-177 | VERIFIED: no `watermark_jobs` handle exists yet |
-| `require_ui_session` auth dependency | `app/auth/deps.py` | 184+ | VERIFIED |
+| `watermark_downloads_enabled` setting | `app/core/settings.py` | 1348 | VERIFIED |
+| `watermark_jobs_table_name` setting | `app/core/settings.py` | 1349 | VERIFIED |
+| `watermark_jobs` table handle | `app/core/tables.py` | 105, 229 | VERIFIED |
+| `require_ui_session` auth dependency | `app/services/sessions.py` | 283 | VERIFIED (not `app/auth/deps.py` as originally cited) |
 | `now_ts()` function | `app/core/time.py` | 2 | VERIFIED |
+| `watermark_jobs` DDB table definition | `scripts/local-ddb-init.py` | 924 | VERIFIED |
+| `build_watermark_payload()` | `app/services/watermark_generator.py` | 28 | VERIFIED |
+| `create_watermark_job()` | `app/services/watermark_generator.py` | 70 | VERIFIED |
+| `find_cached_watermark()` | `app/services/watermark_generator.py` | 100 | VERIFIED |
+| `complete_watermark_job_mock()` | `app/services/watermark_generator.py` | 123 | VERIFIED |
+| `mint_watermarked_download_url()` | `app/services/watermark_generator.py` | 171 | VERIFIED |
+| `list_download_history()` | `app/services/watermark_generator.py` | 198 | VERIFIED |
+| `list_user_downloads()` | `app/services/watermark_generator.py` | 214 | VERIFIED |
+| Watermark router (prefix `/ui/videos`) | `app/routers/watermark.py` | 38 | VERIFIED |
+| Watermark internal router (`/internal/watermark`) | `app/routers/watermark.py` | 39 | VERIFIED |
+| `request_watermarked_download` endpoint | `app/routers/watermark.py` | 93 | VERIFIED |
+| `poll_watermark_status` endpoint | `app/routers/watermark.py` | 173 | VERIFIED |
+| `toggle_watermark_setting` endpoint | `app/routers/watermark.py` | 210 | VERIFIED |
+| `get_download_history` endpoint | `app/routers/watermark.py` | 235 | VERIFIED |
+| `extract_watermark_endpoint` | `app/routers/watermark.py` | 288 | VERIFIED |
+| Watermark router registration in main.py | `app/main.py` | 122, 418, 460 | VERIFIED |
+| `WatermarkedDownloadButton` component | `frontend/src/pages/videos/WatermarkedDownloadButton.tsx` | — | VERIFIED |
+| `ffmpeg_watermark_lifecycle.py` | `app/services/ffmpeg_watermark_lifecycle.py` | exists | VERIFIED: `prepare_watermark_asset` at :23, `patch_watermark_input` at :69 |
+| `watermark_profile_renderers.py` | `app/services/watermark_profile_renderers.py` | exists | VERIFIED: `ffmpeg_watermark_filter` at :51 |
+| Watermark policy contract | `app/contracts/watermark_policy.py` | 43-69 | VERIFIED: WatermarkPolicy, TenantWatermarkSettings |
 
 ### Key Corrections Summary
 
-All file references in VOD-020 are verified correct. No significant corrections needed. The ticket correctly identifies:
-- `vod_mp4_generator.py` functions and their signatures
-- `ffmpeg_executor.py` and `ffmpeg_manager.py` infrastructure
-- `VideoMetadataModel` and its existing download-related fields
-- The need for `attr_types={"GSI1SK": "N"}` on the WatermarkJobs table (per the CLAUDE.md DynamoDB numeric GSI sort key gotcha)
+- `require_ui_session` is in `app/services/sessions.py:283`, NOT `app/auth/deps.py` as originally cited
+- Watermark settings and infrastructure have been fully implemented since the original citations were written:
+  - `watermark_downloads_enabled` at `app/core/settings.py:1348`
+  - `watermark_jobs` table handle at `app/core/tables.py:105`
+  - Full service layer in `app/services/watermark_generator.py`
+  - Full router in `app/routers/watermark.py`
+  - Frontend component `WatermarkedDownloadButton.tsx`

@@ -40,10 +40,10 @@ Autonomous agents occasionally get stuck on ambiguous requirements, need clarifi
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Agent orchestrator | `app/services/agent_orchestrator.py` (AGENT-003) | Agent state machine; `awaiting_feedback` state |
-| WebSocket terminal | `app/routers/terminal.py` | SSH terminal via WebSocket; bidirectional data channel |
-| Worker provisioner | `app/services/agent_worker_provisioner.py` (AGENT-002) | Worker records with `host_id` for SSH |
-| Alerts service | `app/services/alerts.py` | Notification system; push, email, in-app alerts |
+| Agent orchestrator | `app/services/agent_orchestrator.py` (AGENT-003) | <!-- NOTE: does not exist yet — requires AGENT-003 --> Agent state machine; `awaiting_feedback` state |
+| WebSocket terminal | `app/routers/browser_ssh_terminal.py` | <!-- NOTE: was listed as `app/routers/terminal.py` which does not exist. The actual SSH terminal router is `app/routers/browser_ssh_terminal.py` (see app/main.py:404) --> SSH terminal via WebSocket; bidirectional data channel |
+| Worker provisioner | `app/services/agent_worker_provisioner.py` (AGENT-002) | <!-- NOTE: does not exist yet — requires AGENT-002 --> Worker records with `host_id` for SSH |
+| Alerts service | `app/services/alerts.py` | <!-- NOTE: `audit_event` exists at line 695 with signature `audit_event(event, user_sub, request, **fields)` — NOT `audit_event(user_id, event, outcome, details)` as used in the code samples below. `create_alert` does NOT exist in this file — new implementation required --> Notification system; push, email, in-app alerts |
 | SSE patterns | Various routers | Server-Sent Events for real-time push to frontend |
 | S3 storage | `app/core/dev_s3.py` | Object storage for large terminal logs |
 | Ticket messaging | `app/services/tickets.py` | Ticket comment/message system; feedback can be posted as comments |
@@ -794,7 +794,7 @@ Feedback timeouts are enforced by a background task running every 60 seconds. Ti
 | AGENT-002 | Upstream | Worker records with `host_id` for terminal access |
 | AGENT-004 | Downstream | Fleet dashboard integrates FeedbackPanel |
 | `app/services/alerts.py` | Upstream | Notification system for feedback alerts |
-| `app/routers/terminal.py` | Upstream | WebSocket terminal for output capture and text injection |
+| `app/routers/browser_ssh_terminal.py` | Upstream | WebSocket terminal for output capture and text injection <!-- NOTE: actual file is browser_ssh_terminal.py, not terminal.py --> |
 
 ---
 
@@ -810,3 +810,22 @@ Feedback timeouts are enforced by a background task running every 60 seconds. Ti
 8. Terminal output is searchable by keyword.
 9. Live terminal output streams to the UI via SSE.
 10. Pattern configuration is customizable per worker with test functionality.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| WebSocket terminal router | `app/routers/browser_ssh_terminal.py` | 1-1125 | Actual file (ticket originally listed `app/routers/terminal.py` which does not exist) |
+| Router registration | `app/main.py` | 82-84, 404 | `browser_ssh_terminal_router` import and `include_router` |
+| Terminal enable check | `app/main.py` | 275 | `browser_ssh_terminal_enabled()` gate |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `audit_event(event, user_sub, request, **fields)` — NOT `(user_id, event, outcome, details)` as used in code samples |
+| `create_alert` | `app/services/alerts.py` | — | Does NOT exist; new implementation required |
+| Ticket store | `app/services/tickets.py` | 110 | `TicketStore` class; `add_message` at 621, `update_status` at 683 |
+| S3 mock | `app/core/dev_s3.py` | — | In-process moto S3 mock (no separate process) |
+| Agent orchestrator | `app/services/agent_orchestrator.py` | — | Does NOT exist yet — requires AGENT-003 |
+| Worker provisioner | `app/services/agent_worker_provisioner.py` | — | Does NOT exist yet — requires AGENT-002 |
+| `agent_workers` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-002 |
+| `agent_feedback` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — new table proposed in this ticket |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |

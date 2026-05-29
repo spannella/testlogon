@@ -14,7 +14,7 @@
 
 ### Problem Statement
 
-The KYC system (`app/routers/kyc_cases.py`, `app/services/kyc_cases.py`) accepts document
+The KYC system (see `app/routers/kyc_cases.py:734` for `attach_kyc_file`, `app/services/kyc_cases.py:97` for `create_case`) accepts document
 uploads (selfie, id_front, id_back, proof_of_address) but treats them as opaque files. There
 is no automated extraction of identity data from uploaded documents, no cross-referencing of
 extracted data against the user's profile, and no confidence scoring to help reviewers
@@ -121,11 +121,11 @@ dates, and document numbers against the profile -- a slow, error-prone process.
 
 ### 3.1 KYC File Attachment Flow
 
-Files are attached to a KYC case via `POST /v1/kyc/cases/{id}/files` (line 734 of
-`app/routers/kyc_cases.py`). The `KycFileAttachmentRequest` model (contract line 133)
+Files are attached to a KYC case via `POST /v1/kyc/cases/{id}/files` (see `app/routers/kyc_cases.py:734`).
+The `KycFileAttachmentRequest` model (see `app/contracts/kyc_cases_contract.py:133`)
 accepts `path` (file manager path), `file_type` (selfie/id_front/id_back/proof_of_address),
 and `expected_version`. The file path points to a node in the file manager
-(`app/services/filemanager.py`), which stores the actual content in S3.
+(see `app/services/filemanager.py`), which stores the actual content in S3.
 
 Each file entry stored on the case:
 ```python
@@ -477,7 +477,7 @@ DOB matching: exact string comparison after normalizing to ISO format.
 
 ### 8.5 Integration with Case Submission
 
-In `submit_kyc_case()` (line 830 of `app/routers/kyc_cases.py`), after successful
+In `submit_kyc_case()` (see `app/routers/kyc_cases.py:830`), after successful
 submission, automatically trigger extraction for all id_front and id_back files:
 
 ```python
@@ -783,3 +783,32 @@ test("158.7 Concurrent extractions for same file are idempotent", async () => {
 | `frontend/src/api/endpoints/kyc-admin.ts` | Modify | Add extraction API functions |
 | `frontend/src/pages/admin/KycCaseDetailPage.tsx` | Modify | Add extraction results panel |
 | `frontend/e2e/kyc-document-verification.spec.ts` | **New** | 20+ E2E tests across sections 156-159 |
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `attach_kyc_file()` endpoint | `app/routers/kyc_cases.py` | 734 | VERIFIED |
+| `_KYC_ALLOWED_FILE_TYPES` | `app/routers/kyc_cases.py` | 51 | VERIFIED |
+| `_validate_file_requirements()` | `app/routers/kyc_cases.py` | 155 | VERIFIED |
+| `submit_kyc_case()` | `app/routers/kyc_cases.py` | 830 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+| KYC settings | `app/core/settings.py` | 1065-1072 | VERIFIED |
+| `app/contracts/kyc_cases_contract.py` | `app/contracts/` | exists | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `app/services/kyc_document_verification.py` | `app/services/` | NOT FOUND -- new service required |
+| `kyc_document_extractions` DDB table | `scripts/local-ddb-init.py` | NOT FOUND -- new table required |
+| `kyc_document_extractions` table handle | `app/core/tables.py` | NOT FOUND -- new handle required |
+| Extraction settings (table name, provider) | `app/core/settings.py` | NOT FOUND -- new settings required |
+| Extraction endpoints in KYC router | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoints required |
+| `frontend/src/pages/admin/KycCaseDetailPage.tsx` extraction panel | `frontend/src/pages/admin/` | NOT FOUND -- page does not exist yet (KYC-001 dependency) |

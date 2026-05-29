@@ -42,12 +42,17 @@ Syndicate members (SYND-001) can pool audiences and share advertising (SYND-006)
 |-----------|----------|-----------|
 | Syndicates service | `app/services/syndicates.py` (SYND-001) | `create_syndicate`, `list_members`, `leave_syndicate`, `_add_member`; membership lifecycle hooks for auto-licensing |
 | Syndicates table | `scripts/local-ddb-init.py` (SYND-001) | `SYND#{id}/META` holds syndicate config; add `open_licensing_enabled` + `open_licensing_terms` fields |
-| Issued licenses service | `app/services/issued_licenses.py` (LICENSE-002) | `issue_license` for creating auto-license records; `revoke_license` not used (auto-licenses persist) |
+| Issued licenses service | `app/services/issued_licenses.py` (LICENSE-002) | `issue_license` for creating auto-license records |
 | Issued licenses table | `scripts/local-ddb-init.py` (LICENSE-002) | Storage for auto-license records with `license_mode=syndicate_auto` |
 | License revenue | `app/services/license_revenue.py` (LICENSE-003) | Revenue splits apply to syndicate-auto-licensed content like any other license |
-| Alerts service | `app/services/alerts.py` | Notifications when open licensing is toggled or member joins/leaves |
-| Profile service | `app/services/profile.py` | Display names in license records |
-| Auth dependencies | `app/auth/deps.py` | `require_ui_session` for all endpoints |
+| Alerts service | `app/services/alerts.py` (~899 lines) | `write_alert` (line 355) for notifications |
+| Profile service | `app/services/profile.py` (345 lines) | `get_profile` (line 220) for display names |
+| Auth dependencies | `app/auth/deps.py` | `require_ui_session` (line 184) for all endpoints |
+
+<!-- NOTE: app/services/syndicates.py (SYND-001) does NOT exist yet — SYND-001 is an unimplemented prerequisite. The syndicates table is not in scripts/local-ddb-init.py. -->
+<!-- NOTE: app/services/issued_licenses.py (LICENSE-002) does NOT exist yet — LICENSE-002 prerequisite. -->
+<!-- NOTE: app/services/license_revenue.py (LICENSE-003) does NOT exist yet — LICENSE-003 prerequisite. -->
+<!-- NOTE: app/services/syndicate_licensing.py does NOT exist yet — new implementation required. -->
 
 ### 2.2 Gaps
 
@@ -754,3 +759,37 @@ Open licensing being disabled does NOT revoke existing auto-licenses.
 8. Auto-licenses integrate with LICENSE-003 revenue sharing.
 9. All admin-only operations are properly access-controlled.
 10. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+All file paths relative to the repository root.
+
+### Existing Files Referenced (verified)
+- `app/services/alerts.py` (899 lines) — `write_alert()` at line 355
+- `app/services/profile.py` (345 lines) — `get_profile()` at line 220
+- `app/auth/deps.py` — `require_ui_session` at line 184
+- `scripts/local-ddb-init.py` — DynamoDB table definitions
+
+### Dependencies Not Yet Implemented (all are prerequisites)
+- `app/services/syndicates.py` — SYND-001 prerequisite (does not exist; syndicates table not in DDB init)
+- `app/services/issued_licenses.py` — LICENSE-002 prerequisite (does not exist)
+- `issued_licenses` DDB table — LICENSE-002 prerequisite (not in `scripts/local-ddb-init.py`)
+- `app/services/license_revenue.py` — LICENSE-003 prerequisite (does not exist)
+
+### Files to Create (none exist yet)
+- `app/services/syndicate_licensing.py` — Syndicate open licensing service (~450 lines)
+- `app/routers/syndicate_licensing.py` — REST API endpoints (~200 lines)
+- Frontend pages for syndicate licensing settings and content registry
+- `frontend/src/api/endpoints/syndicate-licensing.ts` — API wrappers
+- `frontend/e2e/syndicate-licensing.spec.ts` — E2E tests
+
+### Files to Modify (dependencies must be created first)
+- `app/main.py` — Register syndicate licensing routers
+- `app/models.py` — Add Syndicate Licensing Pydantic models
+- `app/core/settings.py` — Add `syndicate_content_table_name` setting
+- `app/core/tables.py` — Add `T.syndicate_content` table handle
+- `scripts/local-ddb-init.py` — Add `syndicate_content` TableDef with 1 GSI
+- `app/services/syndicates.py` (SYND-001, when created) — Add membership lifecycle hooks for auto-licensing
+- `frontend/src/App.tsx` — Add syndicate licensing routes

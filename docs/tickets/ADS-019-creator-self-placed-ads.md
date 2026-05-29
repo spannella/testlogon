@@ -60,13 +60,13 @@ Self-placed ads are **creator-owned promotions**: a creator can pin a card promo
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Ad placement service | `app/services/ad_placement.py` | VOD ad slots, CPM billing, impression tracking — self-promo needs slot resolution WITHOUT billing |
-| Ad config on videos | `app/routers/video_listing.py:1507-1537` | PATCH `/videos/{id}/ad-config` — self-promo needs a parallel `self_promo_config` |
-| Newsfeed posts | `app/services/newsfeed.py` | Post CRUD, feed query — self-promo cards inserted as special post type or injected at query time |
-| Broadcast sessions | `app/services/broadcast.py` | Broadcast lifecycle — self-promo overlay triggered via broadcast event |
-| Creator profiles | `app/services/creator_profiles.py` | Profile page data — pinned promo banner stored here |
-| AdImpressions table | `scripts/local-ddb-init.py:830-840` | Impression storage — reusable for self-promo analytics (add `promo_type` attribute) |
-| Billing ledger | `app/services/billing_shared.py` | Ledger entries — self-promo MUST NOT create any billing entries |
+| Ad placement service | `app/services/ad_placement.py` | VOD ad slots, CPM billing, impression tracking — self-promo needs slot resolution WITHOUT billing (verified: exists) |
+| Ad config on videos | `app/routers/video_listing.py:1506-1537` | PATCH `/videos/{id}/ad-config` (see line 1506) — self-promo needs a parallel `self_promo_config` (verified: endpoint exists) |
+| Newsfeed posts | `app/services/newsfeed_feed_query.py`, `app/services/newsfeed_fanout.py` | Post CRUD and feed query <!-- NOTE: `app/services/newsfeed.py` does not exist; newsfeed logic is split across `newsfeed_feed_query.py`, `newsfeed_fanout.py`, `newsfeed_polls.py`, `newsfeed_scheduler.py` --> |
+| Broadcast sessions | `app/services/broadcast_store.py`, `app/services/broadcast_orchestrator.py` | Broadcast lifecycle <!-- NOTE: `app/services/broadcast.py` does not exist; broadcast logic is split across ~20 `broadcast_*.py` files --> |
+| Creator profiles | `app/services/profile.py` | Profile page data — pinned promo banner stored here <!-- NOTE: `app/services/creator_profiles.py` does not exist; profile logic is in `app/services/profile.py` and `app/services/profile_discoverability.py` --> |
+| AdImpressions table | `scripts/local-ddb-init.py:831-840` | Impression storage — reusable for self-promo analytics (add `promo_type` attribute) (verified: table exists) |
+| Billing ledger | `app/services/billing_shared.py` | Ledger entries via `new_ledger_entry()` (line 217) — self-promo MUST NOT create any billing entries (verified: file exists) |
 
 ### 2.2 Gaps
 
@@ -822,3 +822,25 @@ ProfilePromoBanner (on creator profile page)
 | 426.2 | Activate via event | Call activate_event_promos(broadcast_id); promo status=active |
 | 426.3 | Deactivate via event | Call deactivate_event_promos(broadcast_id); promo status=paused |
 | 426.4 | Scheduled promo with past end time filtered | Create with schedule_end in past; query feed promos; not returned |
+
+---
+
+## Codebase References
+
+| Reference | Path | Line(s) | Status |
+|-----------|------|---------|--------|
+| Ad placement service | `app/services/ad_placement.py` | entire file | Verified (VOD-018) |
+| Video ad-config endpoint | `app/routers/video_listing.py` | 1506 (PATCH `/{video_id}/ad-config`) | Verified |
+| Newsfeed feed query | `app/services/newsfeed_feed_query.py` | entire file | Verified — **not** `app/services/newsfeed.py` (does not exist) |
+| Newsfeed fanout | `app/services/newsfeed_fanout.py` | entire file | Verified |
+| Broadcast store | `app/services/broadcast_store.py` | entire file | Verified — **not** `app/services/broadcast.py` (does not exist) |
+| Profile service | `app/services/profile.py` | entire file | Verified — **not** `app/services/creator_profiles.py` (does not exist) |
+| AdImpressions DDB table | `scripts/local-ddb-init.py` | 831-840 | Verified |
+| AdImpressions settings | `app/core/settings.py` | 1242 (`ad_impressions_table_name`) | Verified |
+| AdImpressions table handle | `app/core/tables.py` | 217 (`T.ad_impressions`) | Verified |
+| Billing ledger | `app/services/billing_shared.py` | 217 (`new_ledger_entry`) | Verified |
+| UI session auth | `app/auth/deps.py` | (via `require_ui_session` from `app/services/sessions.py`) | Verified |
+| Router registration | `app/main.py` | 297-465 | Verified — new router must be registered here |
+| `SelfPromos` DDB table | — | — | **Does not exist** — new table required |
+| `self_promos` service | — | — | **Does not exist** — new file required |
+| `self_promos` router | — | — | **Does not exist** — new file required |

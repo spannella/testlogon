@@ -1023,3 +1023,24 @@ const PartyListPage = lazy(() => import("./pages/watch-parties/PartyListPage"));
 4. **Phase 4** (days 14-18): E2E tests (sections 94-97), integration testing with real HLS playback, performance testing with multiple participants, QA.
 
 Feature flag: `WATCH_PARTIES_ENABLED` (default `false`).
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | Status |
+|-----|------|---------|--------|
+| `mint_vod_playback_url` | `app/services/vod_playback_url.py` | 40 | VERIFIED |
+| `_mint_dev_url` | `app/services/vod_playback_url.py` | 118 | VERIFIED |
+| Broadcast SSE | `app/services/broadcast_sse.py` | 49 lines | VERIFIED |
+| `broadcast_sse_publish` | `app/services/broadcast_sse.py` | 29 | VERIFIED |
+| Messaging router | `app/routers/messaging.py` | exists | VERIFIED |
+| Video listing router | `app/routers/video_listing.py` | 40 (router) | VERIFIED |
+| `VideoDetailOut` | `app/routers/video_listing.py` | 67 | VERIFIED |
+| `mint_recording_playback_url` | `app/services/broadcast_recording.py` | 208 | VERIFIED |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED (NOT in app/auth/deps.py) |
+| Watch party settings | `app/core/settings.py` | 1473-1474 | VERIFIED |
+| Watch party service | `app/services/watch_party.py` | exists | VERIFIED |
+| Watch party router | `app/routers/watch_party.py` | exists, registered at `app/main.py:123,461` | VERIFIED |
+| WatchPartyPage | `frontend/src/pages/watch-parties/WatchPartyPage.tsx` | exists | VERIFIED |
+| Route registration | `frontend/src/App.tsx` | 91, 161 | VERIFIED |

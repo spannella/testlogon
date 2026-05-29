@@ -2006,3 +2006,17 @@ Admin           Backend                UserEnforcement     AccountState      Aud
 | Admin rubber-stamps all appeals as "upheld" | Monitor `appeals_reversal_rate` per admin. If an admin upholds 100% of >20 appeals, flag for quality review. |
 | Admin reverses enforcement for a friend | Audit trail records `decided_by_admin_user_id`. Self-review prevention blocks the original enforcement admin. Cross-reference reversal decisions with admin-user social connections (future). |
 | Admin claims many appeals without deciding them | Monitor `appeals_queue_depth_under_review`. Alert if an admin has >5 claimed appeals without decisions after 24h. |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/routers/appeals.py` | — | ALREADY EXISTS: `appeals_router` and `admin_appeals_router` |
+| `app/main.py` | 95-96, 346-347 | EXISTS: `appeals_router` and `admin_appeals_router` imported and registered |
+| `scripts/local-ddb-init.py` | 465 | EXISTS: `Appeals` table with 4 GSIs |
+| `app/core/settings.py` | 1172 | EXISTS: `appeals_table_name` setting with default `"Appeals"` |
+| `scripts/local-ddb-init.py` | 437 | EXISTS: `UserEnforcementHistory` table definition |
+| `app/auth/policy.py` | 84 | EXISTS: `require_admin_scope(AdminScope.CONTENT_MODERATION)` |
+| `app/services/alerts.py` | 355 | EXISTS: `write_alert()` for notifications |

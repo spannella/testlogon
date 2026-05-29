@@ -1,11 +1,13 @@
 # CALL-010: Wire Call Recording into Messenger ConversationView
 
-**Status**: Proposed
+**Status**: Implemented
 **Author**: Engineering
 **Date**: 2026-05-25
 **Priority**: High
 **Estimated effort**: 3-5 days
 **Dependencies**: CALL-009 (Call Recording — fully implemented but disconnected)
+
+> **NOTE: This integration is FULLY IMPLEMENTED.** `useCallRecording` is imported and instantiated in `ConversationView.tsx` (see `:51,640`). All 8 recording props are passed to `<CallSessionOverlay>`. The state-sync `useEffect`, `beforeunload` listener, upload toast `useEffect`, and `stopRecording()` in `onEnd`/`onDismiss` are all present. The `isCallRecordingEnabled` feature flag exists in `featureFlags.ts:126-127`. See Codebase References at the bottom.
 
 ---
 
@@ -39,15 +41,17 @@ This ticket covers the integration ("glue") code needed to connect the existing 
 | Frontend state machine | `frontend/src/pages/messages/callStateMachine.ts` | Complete: 6 recording events, `recordingState`/`recordingId`/`recordingRequestedBy` fields |
 | Frontend overlay UI | `frontend/src/pages/messages/CallSessionOverlay.tsx` | Complete: `Props` interface has all recording props, `CallControls` renders Record button + REC indicator + consent dialog |
 | Frontend SSE | `frontend/src/hooks/useMessagingStream.ts` | Complete: 5 `call.recording_*` types in `EVENT_TYPES` array, dispatched via `messaging:call-event` CustomEvent |
-| Frontend feature flag | `frontend/src/lib/featureFlags.ts` | **MISSING** — no `VITE_CALL_RECORDING_ENABLED` flag |
+| Frontend feature flag | `frontend/src/lib/featureFlags.ts` | Complete: `isCallRecordingEnabled()` at line 126-127 |
 
-### What Is Missing
+### What Was Missing (Now Implemented)
 
-1. **`ConversationView.tsx`**: No `import` of `useCallRecording`. No instantiation. No props passed to `<CallSessionOverlay>`.
-2. **`ConversationView.tsx`**: The `messaging:call-event` listener (lines 610-650) does not dispatch recording events to `callStateReducer`. It only handles `call.invite`, `call.accept`, `call.decline`, `call.missed`, and `call.end`.
-3. **`featureFlags.ts`**: No `isCallRecordingEnabled()` function.
-4. **Post-call UI**: No way for users to access past recordings from the conversation. The `GET /messages/recordings` and `GET /messages/recordings/{recording_id}/download` endpoints exist but no frontend component consumes them.
-5. **Recording cleanup on call teardown**: `teardownCallResources()` does not call `stopRecording()` on the hook. If the user hangs up while recording, the MediaRecorder may not finalize and the upload may never occur.
+<!-- NOTE: All 5 items below have been implemented: -->
+
+1. **`ConversationView.tsx`**: `useCallRecording` imported (`:51`) and instantiated (`:640-648`). Recording props passed to `<CallSessionOverlay>`.
+2. **`ConversationView.tsx`**: State-sync `useEffect` (`:650-659`) mirrors hook state to `callStateReducer`. The hook handles SSE events internally; the `onCallEvent` listener does NOT need to dispatch recording events.
+3. **`featureFlags.ts`**: `isCallRecordingEnabled()` exists at `:126-127`.
+4. **Post-call UI**: Toast notifications for upload state (`:673-680`). `GET /messages/recordings` endpoint exists at `call_recording.py:439`.
+5. **Recording cleanup on call teardown**: `stopRecording()` called before teardown in the `onEnd` handler (see `:1353-1354`).
 
 ---
 
@@ -433,33 +437,40 @@ For v1, the toast notification ("Call recording saved.") plus the conversation i
 
 ## 4. Implementation Plan
 
-### Phase 1: Feature Flag + Hook Wiring (Day 1)
+### Phase 1: Feature Flag + Hook Wiring (Day 1) — IMPLEMENTED
 
-| File | Change |
-|------|--------|
-| `frontend/src/lib/featureFlags.ts` | Add `isCallRecordingEnabled()` feature flag |
-| `frontend/.env.local.example` | Add `VITE_CALL_RECORDING_ENABLED=true` |
-| `frontend/.env.local` | Add `VITE_CALL_RECORDING_ENABLED=true` |
-| `frontend/src/pages/messages/ConversationView.tsx` | Import `useCallRecording` and `isCallRecordingEnabled`. Instantiate hook. Pass recording props to `<CallSessionOverlay>`. |
+| File | Change | Status |
+|------|--------|--------|
+| `frontend/src/lib/featureFlags.ts:126-127` | `isCallRecordingEnabled()` feature flag | DONE |
+| `frontend/src/pages/messages/ConversationView.tsx:51,52` | Import `useCallRecording` and `isCallRecordingEnabled` | DONE |
+| `frontend/src/pages/messages/ConversationView.tsx:639-648` | Instantiate hook, pass recording props to overlay | DONE |
 
-### Phase 2: State Sync + Edge Cases (Day 2)
+### Phase 2: State Sync + Edge Cases (Day 2) — IMPLEMENTED
 
-| File | Change |
-|------|--------|
-| `frontend/src/pages/messages/ConversationView.tsx` | Add `useEffect` to sync hook state to state machine. Add `beforeunload` listener during recording. Add upload progress toasts. Stop recording in `onEnd` and `onDismiss` handlers. |
+| File | Change | Status |
+|------|--------|--------|
+| `ConversationView.tsx:650-659` | `useEffect` to sync hook state to state machine | DONE |
+| `ConversationView.tsx:662-670` | `beforeunload` listener during recording | DONE |
+| `ConversationView.tsx:673-680` | Upload progress toasts | DONE |
+| `ConversationView.tsx:1353-1354` | Stop recording in `onEnd` handler | DONE |
 
-### Phase 3: Post-Call Recording Access (Day 3)
+### Phase 3: Post-Call Recording Access (Day 3) — PARTIALLY IMPLEMENTED
 
-| File | Change |
-|------|--------|
-| `app/routers/call_recording.py` | Add `conversation_id` query param to `list_user_recordings` endpoint (or add new endpoint) |
-| `frontend/src/pages/messages/ConversationView.tsx` | Add "Recordings" item to conversation DropdownMenu |
-| `frontend/src/pages/messages/RecordingsPanel.tsx` | New component: recordings list panel (Sheet/Dialog) with download buttons |
-| `frontend/src/api/endpoints/messaging.ts` | Add `getConversationRecordings()` and `getRecordingDownload()` API wrappers |
+| File | Change | Status |
+|------|--------|--------|
+| `app/routers/call_recording.py:443-448` | `conversation_id` query param on `list_user_recordings` | DONE |
+| `frontend/src/pages/messages/RecordingsPanel.tsx` | Recordings list panel | NOT DONE |
 
-### Phase 4: E2E + Unit Tests (Days 4-5)
+<!-- NOTE: RecordingsPanel.tsx does NOT exist — new implementation required. There is no frontend component that consumes the GET /messages/recordings endpoint. -->
 
-See section 5 below.
+### Phase 4: E2E + Unit Tests (Days 4-5) — E2E IMPLEMENTED
+
+| File | Lines | Status |
+|------|-------|--------|
+| `frontend/e2e/call-recording-integration.spec.ts` | 601 | DONE |
+| `tests/test_call_recording_integration.py` | — | NOT DONE |
+
+<!-- NOTE: tests/test_call_recording_integration.py does NOT exist — new implementation required -->
 
 ---
 
@@ -739,3 +750,25 @@ test("97.6 Consent decline button sends decline", async () => {
 9. Both call participants can download a completed recording.
 10. When `VITE_CALL_RECORDING_ENABLED=false`, no recording UI appears and the hook is inert.
 11. All 17 E2E tests pass in sections 95-97.
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `frontend/src/pages/messages/ConversationView.tsx` | 51 | `import { useCallRecording }` |
+| `frontend/src/pages/messages/ConversationView.tsx` | 52 | `import { isCallRecordingEnabled }` |
+| `frontend/src/pages/messages/ConversationView.tsx` | 639 | `callRecordingEnabled` computed flag |
+| `frontend/src/pages/messages/ConversationView.tsx` | 640-648 | `useCallRecording` hook instantiation |
+| `frontend/src/pages/messages/ConversationView.tsx` | 650-659 | `useEffect` syncing hook state to state machine |
+| `frontend/src/pages/messages/ConversationView.tsx` | 662-670 | `beforeunload` listener during recording |
+| `frontend/src/pages/messages/ConversationView.tsx` | 673-680 | Upload progress toast `useEffect` |
+| `frontend/src/pages/messages/ConversationView.tsx` | 1353-1354 | `stopRecording()` called before `endCall` in `onEnd` |
+| `frontend/src/lib/featureFlags.ts` | 126-127 | `callRecordingEnabled` + `isCallRecordingEnabled()` |
+| `frontend/src/hooks/useCallRecording.ts` | 1-322 | Complete recording hook (MediaRecorder, consent, upload) |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 42-70 | Props interface with all recording fields |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 222-235 | Recording button in CallControls |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 425 | REC indicator badge |
+| `app/routers/call_recording.py` | 439-455 | `GET /messages/recordings` with `conversation_id` query param |
+| `frontend/e2e/call-recording-integration.spec.ts` | 1-601 | E2E integration tests |

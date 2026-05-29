@@ -230,9 +230,9 @@ broadcast_sse_publish(session_id, {"_type": "goal:created", **out})
 
 Clip creation will follow the same pattern, publishing `clip:created` events to the broadcast SSE channel so the broadcaster can see clips being created in real-time.
 
-### 2.7 Broadcast Session Fields Update (`app/services/broadcast_store.py`) <!-- VERIFIED: app/services/broadcast_store.py:459 update_session_fields -->
+### 2.7 Broadcast Session Fields Update (`app/services/broadcast_store.py`) <!-- CORRECTED: update_session_fields is at line 469, not 459 -->
 
-The `update_session_fields` function (line 459) is used to set various session configuration flags. The `clips_enabled` field will be toggled through this same mechanism: <!-- CORRECTED: was "update_session_fields(session_id, clips_enabled=False)" kwargs pattern, actual signature is update_session_fields(session_id: str, fields: Dict[str, Any]) taking a single dict -->
+The `update_session_fields` function (see `app/services/broadcast_store.py:469`) is used to set various session configuration flags. The `clips_enabled` field will be toggled through this same mechanism: <!-- CORRECTED: was "update_session_fields(session_id, clips_enabled=False)" kwargs pattern, actual signature is update_session_fields(session_id: str, fields: Dict[str, Any]) taking a single dict -->
 
 ```python
 update_session_fields(session_id, {"clips_enabled": False})
@@ -1067,32 +1067,32 @@ export interface ClipListResponse {
 ```typescript
 // frontend/src/api/endpoints/clips.ts
 
-import client from "../client";
-import type { BroadcastClip, ClipListResponse } from "../types";
+import { api } from "../client";  // NOTE: actual file uses named `api` export, not default `client` import
+import type { BroadcastClip, ClipListResponse } from "@/api/types";  // NOTE: actual file uses `@/api/types`
 
 export const createClip = async (sessionId: string, data: { start_seconds: number; end_seconds: number; title?: string }) =>
-  client.post<BroadcastClip>(`/broadcast/sessions/${sessionId}/clips`, data).then(r => r.data);
+  api.post<BroadcastClip>(`/broadcast/sessions/${sessionId}/clips`, data).then(r => r.data);
 
 export const getClip = async (clipId: string) =>
-  client.get<BroadcastClip>(`/broadcast/clips/${clipId}`).then(r => r.data);
+  api.get<BroadcastClip>(`/broadcast/clips/${clipId}`).then(r => r.data);
 
 export const listSessionClips = async (sessionId: string) =>
-  client.get<{ clips: BroadcastClip[] }>(`/broadcast/sessions/${sessionId}/clips`).then(r => r.data);
+  api.get<{ clips: BroadcastClip[] }>(`/broadcast/sessions/${sessionId}/clips`).then(r => r.data);
 
 export const listGallery = async (params?: { sort?: string; limit?: number; cursor?: string }) =>
-  client.get<ClipListResponse>("/ui/clips", { params }).then(r => r.data);
+  api.get<ClipListResponse>("/ui/clips", { params }).then(r => r.data);
 
 export const listMyClips = async () =>
-  client.get<{ clips: BroadcastClip[] }>("/ui/clips/mine").then(r => r.data);
+  api.get<{ clips: BroadcastClip[] }>("/ui/clips/mine").then(r => r.data);
 
 export const deleteClip = async (clipId: string) =>
-  client.delete(`/broadcast/clips/${clipId}`).then(r => r.data);
+  api.delete(`/broadcast/clips/${clipId}`).then(r => r.data);
 
 export const recordClipView = async (clipId: string) =>
-  client.post(`/broadcast/clips/${clipId}/view`).then(r => r.data);
+  api.post(`/broadcast/clips/${clipId}/view`).then(r => r.data);
 
 export const recordClipShare = async (clipId: string) =>
-  client.post<{ share_url: string }>(`/broadcast/clips/${clipId}/share`).then(r => r.data);
+  api.post<{ share_url: string }>(`/broadcast/clips/${clipId}/share`).then(r => r.data);
 ```
 
 ### 5.4 Viewer Player Integration
@@ -1437,3 +1437,25 @@ case "clip:ready":
 4. **Phase 4** (days 12-16): E2E tests (sections 98-101), Open Graph meta tags for public clip page, clip sharing to newsfeed/DM, integration testing with real FFmpeg, QA.
 
 Feature flag: `BROADCAST_CLIPS_ENABLED` (default `false`). When disabled, the `clips_enabled` field defaults to `false` on all sessions, and the ClipButton is hidden in the frontend.
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | Status |
+|-----|------|---------|--------|
+| Video clipper | `app/services/video_clipper.py` | 388 lines, `create_clip` at 51, `execute_clip` at 161 | VERIFIED |
+| FFmpeg cmd | `app/services/video_clipper.py` | 331 | VERIFIED |
+| Broadcast recording | `app/services/broadcast_recording.py` | `RecordingRecord` at 23, `get_recording_by_session` at 152 | VERIFIED |
+| Video listing router | `app/routers/video_listing.py` | 40 (router), `VideoDetailOut` at 67 | VERIFIED |
+| `BroadcastSessionOut` | `app/routers/broadcast.py` | 105 | VERIFIED |
+| Broadcast SSE | `app/services/broadcast_sse.py` | 29 (`broadcast_sse_publish`) | VERIFIED |
+| `update_session_fields` | `app/services/broadcast_store.py` | 469 | VERIFIED (ticket said 459) |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED (NOT in app/auth/deps.py) |
+| Broadcast clip service | `app/services/broadcast_clip.py` | exists (11878 bytes) | VERIFIED |
+| Broadcast clips router | `app/routers/broadcast_clips.py` | exists (127 lines), registered at `app/main.py:75,397` | VERIFIED |
+| Frontend clips API | `frontend/src/api/endpoints/clips.ts` | 1 (`import { api } from "../client"`) | VERIFIED |
+| ClipGalleryPage | `frontend/src/pages/clips/ClipGalleryPage.tsx` | exists (3620 bytes) | VERIFIED |
+| ClipPlayerPage | `frontend/src/pages/clips/ClipPlayerPage.tsx` | exists (4340 bytes) | VERIFIED |
+| ClipCard | `frontend/src/pages/clips/ClipCard.tsx` | exists (2082 bytes) | VERIFIED |
+| Route registration | `frontend/src/App.tsx` | 58 (ClipGalleryPage), 167 (clips route) | VERIFIED |

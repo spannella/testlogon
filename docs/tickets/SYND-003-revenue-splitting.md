@@ -724,3 +724,13 @@ When a member with 0% weight exists (e.g., new member before weights are updated
 7. Each member can see their total earnings from the syndicate.
 8. Config changes apply to future payments only; historical splits are immutable.
 9. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+| Claim | File | Line(s) | Status |
+|-------|------|---------|--------|
+| No syndicate/split code exists | All files | — | VERIFIED: grep "syndicate" returns zero |
+| billing_shared.py exists | `app/services/billing_shared.py` | — | VERIFIED (260 lines) |
+| creator_earnings.py exists | `app/services/creator_earnings.py` | — | VERIFIED |

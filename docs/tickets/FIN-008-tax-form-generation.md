@@ -45,11 +45,15 @@ Without this feature, the platform has no mechanism to collect TINs, calculate a
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| KMS crypto | `app/core/crypto.py` | `kms_encrypt` / `kms_decrypt` functions for sensitive data |
+| KMS crypto | `app/core/crypto.py:16` | `kms_encrypt` / `kms_decrypt` functions for sensitive data |
+<!-- VERIFIED: app/core/crypto.py:16 — kms_encrypt -->
 | Mock KMS | `scripts/mock_kms_server.py` (port 7999) | Local KMS mock for dev/test encryption |
-| Creator earnings | `app/services/creator_earnings.py` | `get_earnings_summary` aggregates annual credits |
-| Creator payouts | `app/services/creator_payouts.py` | Payout records per creator |
-| Billing ledger | `app/services/billing_shared.py` | All financial transactions |
+| Creator earnings | `app/services/creator_earnings.py:47` | `get_earnings_summary` aggregates annual credits |
+<!-- VERIFIED: app/services/creator_earnings.py:47 — get_earnings_summary -->
+| Creator payouts | `app/services/creator_payouts.py:55` | `get_available_balance`, payout records |
+<!-- VERIFIED: app/services/creator_payouts.py:55 — get_available_balance -->
+| Billing ledger | `app/services/billing_shared.py:217` | `new_ledger_entry` — all financial transactions |
+<!-- VERIFIED: app/services/billing_shared.py:217 — new_ledger_entry -->
 | Settings | `app/core/settings.py` | Config via env vars; KMS key ID configured |
 | Profile service | `app/services/profile.py` | Creator profile with name, address |
 
@@ -1010,3 +1014,25 @@ tax_forms_enabled: bool = os.environ.get("TAX_FORMS_ENABLED", "false").lower() =
 7. Admin can batch-generate 1099s for a tax year.
 8. All TIN access is audit-logged.
 9. All 27 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key Functions | Lines |
+|------|--------------|-------|
+| `app/core/crypto.py` | `kms_encrypt`, `kms_decrypt` | 16 |
+| `app/services/creator_earnings.py` | `get_earnings_summary` (annual earnings for threshold) | 47 |
+| `app/services/creator_payouts.py` | `get_available_balance` | 55 |
+| `app/services/billing_shared.py` | `new_ledger_entry` | 217 |
+| `scripts/mock_kms_server.py` | Mock KMS (port 7999) | - |
+
+### Files to Create (new implementation)
+| File | Purpose |
+|------|---------|
+| `app/services/tax_forms.py` | W-9 collection, TIN encryption, 1099 generation, PDF rendering |
+| `app/routers/tax_forms.py` | Tax form submission, download, admin batch generation endpoints |
+| `tax_forms` DDB table | Table definition in `scripts/local-ddb-init.py` |
+| Frontend W-9 form page | TIN input, tax info display |
+| Frontend 1099 download page | Annual form download |

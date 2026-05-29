@@ -792,3 +792,30 @@ After deployment, verify these existing metrics fire correctly:
 | `tests/test_broadcast_medialive_ops.py` | New unit test file |
 | `tests/integration/test_broadcast_aws_live.py` | New integration test file |
 | `frontend/e2e/broadcast-aws-errors.spec.ts` | New E2E error scenario tests |
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/services/broadcast_provider.py` | 40 | EXISTS | `BroadcastProvider` protocol |
+| `app/services/broadcast_provider.py` | 57 | EXISTS | `LocalBroadcastProvider` — fully functional for dev |
+| `app/services/broadcast_provider.py` | 200 | EXISTS | `AwsBroadcastProvider` |
+| `app/services/broadcast_provider.py` | 244-300 | **IMPLEMENTED** | `AwsBroadcastProvider.start()` — no longer stubbed; calls `medialive.start_channel`, polls until RUNNING |
+| `app/services/broadcast_provider.py` | 301-354 | **IMPLEMENTED** | `AwsBroadcastProvider.stop()` — calls `medialive.stop_channel`, polls until IDLE |
+| `app/services/broadcast_provider.py` | 355-380 | **IMPLEMENTED** | `AwsBroadcastProvider.status()` — calls `describe_channel`, maps channel state |
+| `app/services/broadcast_provider.py` | 381+ | **IMPLEMENTED** | `AwsBroadcastProvider.teardown()` — deletes channel, input, MediaPackage resources |
+| `app/services/broadcast_provider.py` | 469 | EXISTS | `get_broadcast_provider()` factory function |
+| `app/services/broadcast_mediolive.py` | — | EXISTS | MediaLive provisioning functions |
+| `app/services/broadcast_mediapackage.py` | — | EXISTS | MediaPackage provisioning functions |
+| `app/services/broadcast_orchestrator.py` | — | EXISTS | Orchestration layer |
+| `app/services/broadcast_reconciler.py` | — | EXISTS | Drift reconciler |
+| `app/services/broadcast_state_machine.py` | — | EXISTS | State transition validation |
+| `app/services/broadcast_store.py` | — | EXISTS | DDB CRUD + list functions |
+| `app/models_broadcast.py` | — | EXISTS | Pydantic models |
+| `app/core/settings.py` | 467 | EXISTS | `broadcast_provider` setting (default "local") |
+| `app/main.py` | 396, 470 | EXISTS | Router + reconciler task registration |
+
+### Key Discrepancies
+- Ticket claims start/stop/status/teardown are "stubbed" returning `{"mode": "stub"}`, but ALL FOUR methods have been fully implemented with real AWS API calls, polling, and error handling

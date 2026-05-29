@@ -39,12 +39,16 @@ Creators currently see aggregate revenue on the analytics dashboard (`get_overvi
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Content revenue breakdown | `app/services/creator_analytics.py:714-756` | `_get_content_revenue_breakdown` scans billing ledger for a single content_id |
-| Top content | `app/services/creator_analytics.py:424-476` | `get_top_content` aggregates from daily rollups; returns top N by views or revenue |
-| Content detail | `app/services/creator_analytics.py:565-638` | `get_content_detail` returns per-content views, revenue, engagement |
-| Billing ledger | `app/services/billing_shared.py:217-248` | `new_ledger_entry` writes entries with optional `meta` dict |
-| Tip ledger | `app/services/tip_ledger.py` | Writes tip credits with `meta.content_id` for content tips |
-| Creator earnings | `app/services/creator_earnings.py:47-114` | `get_earnings_summary` aggregates credits by category |
+| Content revenue breakdown | `app/services/creator_analytics.py:714` | `_get_content_revenue_breakdown` scans billing ledger for a single content_id |
+<!-- VERIFIED: app/services/creator_analytics.py:714 — _get_content_revenue_breakdown; :424 — get_top_content; :565 — get_content_detail -->
+| Top content | `app/services/creator_analytics.py:424` | `get_top_content` aggregates from daily rollups |
+| Content detail | `app/services/creator_analytics.py:565` | `get_content_detail` returns per-content views, revenue, engagement |
+| Billing ledger | `app/services/billing_shared.py:217` | `new_ledger_entry` writes entries with optional `meta` dict |
+<!-- VERIFIED: app/services/billing_shared.py:217 — new_ledger_entry -->
+| Tip ledger | `app/services/tip_ledger.py:88` | `write_tip_ledger` writes tip credits with `meta.content_id` |
+<!-- VERIFIED: app/services/tip_ledger.py:88 — write_tip_ledger -->
+| Creator earnings | `app/services/creator_earnings.py:47` | `get_earnings_summary` aggregates credits by category |
+<!-- VERIFIED: app/services/creator_earnings.py:47 — get_earnings_summary -->
 | Analytics router | `app/routers/creator_analytics.py:196-220` | `analytics_top_content` endpoint |
 | Analytics models | `app/models.py:2614-2748` | `ContentAnalyticsOut`, `AnalyticsTopContentItem` |
 
@@ -910,3 +914,22 @@ async def list_content_revenue(...):
 6. Revenue attribution is correct: sum of per-source amounts equals total for each item.
 7. Creators cannot view other creators' content revenue.
 8. All 25 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key Functions | Lines |
+|------|--------------|-------|
+| `app/services/creator_analytics.py` | `_get_content_revenue_breakdown`, `get_top_content`, `get_content_detail` | 714, 424, 565 |
+| `app/services/billing_shared.py` | `new_ledger_entry` | 217 |
+| `app/services/tip_ledger.py` | `write_tip_ledger` | 88 |
+| `app/services/creator_earnings.py` | `get_earnings_summary` | 47 |
+| `frontend/src/pages/analytics/AnalyticsPage.tsx` | Existing analytics UI | - |
+
+### Files to Create (new implementation)
+| File | Purpose |
+|------|---------|
+| `app/services/content_revenue.py` | Aggregated content revenue index, rebuild logic |
+| Content revenue frontend page | Revenue table with sort, filter, CSV export |

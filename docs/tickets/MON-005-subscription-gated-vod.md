@@ -2456,3 +2456,17 @@ When NOT subscribed, renders nothing (returns null). The subscribe CTA is on ind
 - **MON-002**: Tip ledger integration (same LEDGER# pattern; unrelated to subscription gating)
 - **MON-003**: Creator earnings dashboard (subscription VOD revenue shows in earnings via subscription payment LEDGER entries, NOT via subscription access records)
 - **MON-004**: Creator payouts (subscription-granted access does not generate direct payout-eligible credits — only subscription payments do, and those are handled by the subscription billing system)
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/services/vod_purchase.py` | 21, 131 | ALREADY IMPLEMENTS subscription check: imports `has_active_subscription` from `subscription_access` (line 21); `check_vod_access` (line 131) already combines purchase entitlement + subscription check + access_mode logic |
+| `app/services/subscription_access.py` | 55, 72, 77 | EXISTS: `has_active_subscription` (55), `can_access_creator` (72) — already used by vod_purchase.py |
+| `app/models_video.py` | 94 | EXISTS: `access_mode: Optional[str]` with values `"free"`, `"ppv"`, `"subscriber_only"`, `"subscriber_free"` — already defined |
+| `app/services/vod_purchase.py` | 241 | EXISTS: `_record_subscription_access()` — records subscription-based access events |
+| `scripts/local-ddb-init.py` | 584 | EXISTS: `VodEntitlements` table with GSIs |
+| `app/core/settings.py` | 1076 | EXISTS: `vod_entitlements_table_name` setting |
+<!-- NOTE: MON-005's core functionality (subscription-aware entitlement checks via access_mode) is ALREADY IMPLEMENTED in app/services/vod_purchase.py check_vod_access(). The ticket should be marked as Complete or verified against remaining frontend work. -->

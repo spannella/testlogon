@@ -62,7 +62,7 @@ This presents several risks:
 
 ### 2.1 KMS Infrastructure (`app/core/crypto.py`)
 
-The existing crypto module provides KMS integration:
+The existing crypto module (61 lines) provides KMS integration (see `app/core/crypto.py:16-25`):
 
 ```python
 def kms_encrypt(plaintext: str) -> str:
@@ -72,27 +72,27 @@ def kms_decrypt(ct_b64: str) -> bytes:
     """Decrypt a KMS ciphertext. Returns plaintext bytes."""
 ```
 
-The mock KMS server runs on port 7999 (`scripts/mock_kms_server.py`). The `kms_encrypt` function calls `boto3.client("kms").encrypt()` with the `KMS_KEY_ID` from settings. In dev mode, the mock KMS server accepts any key ID and performs reversible AES encryption.
+The `kms_encrypt` function uses `S.kms_key_id` (see `app/core/settings.py:176`) to call `kms.encrypt()` via the boto3 KMS client (see `app/core/aws.py`). The mock KMS server runs on port 7999 (see `scripts/mock_kms_server.py:33`). In dev mode, the mock KMS server accepts any key ID and performs reversible AES encryption.
 
 This infrastructure is suitable for field-level encryption, but the current functions operate on single strings. For batch encryption (multiple fields per case), a wrapper is needed to minimize KMS API calls.
 
 ### 2.2 KYC Case Storage (`app/services/kyc_cases.py`)
 
-The `KycCaseStore.create_case` (line 97) and `update_draft` (line 200) methods write case data directly to DDB without any encryption layer. The `files` list on each case stores file metadata including `file_type` and S3 references, but document numbers extracted from files (e.g., by OCR in KYC-002) would be stored as plaintext attributes.
+The `KycCaseStore.create_case` (see `app/services/kyc_cases.py:97`) and `update_draft` (see `app/services/kyc_cases.py:200`) methods write case data directly to DDB without any encryption layer. The `files` list on each case stores file metadata including `file_type` and S3 references, but document numbers extracted from files (e.g., by OCR in KYC-002) would be stored as plaintext attributes. The case PK uses `_case_pk` (see `app/services/kyc_cases.py:36`) which returns `KYC#{case_id}`.
 
 ### 2.3 GDPR Service (`app/services/gdpr_service.py`)
 
-The existing GDPR service supports:
-- `create_export_request(user_sub, categories)` -- Data export (DSAR)
-- `create_deletion_request(user_sub, reason)` -- Data deletion
-- `get_request(user_sub, request_id)` -- Status check
-- `list_user_requests(user_sub)` -- List requests
+The existing GDPR service (see `app/services/gdpr_service.py`) supports:
+- `create_export_request(user_sub, categories)` (see line 100) -- Data export (DSAR)
+- `create_deletion_request(user_sub, reason)` (see line 123) -- Data deletion
+- `get_request(user_sub, request_id)` (see line 149) -- Status check
+- `list_user_requests(user_sub)` (see line 169) -- List requests
 
 The deletion flow deletes DDB records but does not handle encrypted field key destruction. The encryption service must integrate with the GDPR service so that deletion requests also destroy per-user encryption keys.
 
 ### 2.4 Admin Role System (`app/auth/roles.py`, `app/auth/deps.py`)
 
-The `AuthenticatedUser` returned by `get_authenticated_user` includes `user_sub`, `role` (USER/ADMIN/ROOT), and `admin_profile` with `scopes`. The `assigned_admin_sub` field on KYC cases (`KycCaseReviewRef`, line 44 in contract) identifies which admin is currently assigned. Decryption authorization can use the comparison: `requesting_admin_sub == case.review.assigned_admin_sub`.
+The `AuthenticatedUser` (see `app/auth/deps.py:126`) returned by `get_authenticated_user` (see `app/auth/deps.py:184`) includes `sub`, `role` (USER/ADMIN/ROOT — see `app/auth/roles.py:8-11`), and `admin_profile` with `scopes`. The `assigned_admin_sub` field on KYC cases (`KycCaseReviewRef`, see `app/contracts/kyc_cases_contract.py:44-46`) identifies which admin is currently assigned. Decryption authorization can use the comparison: `requesting_admin_sub == case.review.assigned_admin_sub`.
 
 ---
 
@@ -171,6 +171,8 @@ Decryption Flow (read):
 ```
 
 ### 3.2 New Service: `app/services/kyc_encryption.py`
+
+<!-- NOTE: app/services/kyc_encryption.py does not exist yet — new implementation required -->
 
 ```python
 @dataclass
@@ -351,7 +353,7 @@ GSI pii-audit-accessor-index:
   SK: created_at (N)
 ```
 
-This GSI is added to the existing `kyc_cases` table (not a new table).
+This GSI would be added to the existing `kyc_cases` table (not a new table). The table is defined in `scripts/local-ddb-init.py:91-96` and currently has two GSIs: `owner-updated-index` and `status-updated-index` (see `app/core/settings.py:1066-1067`).
 
 ### 3.6 Integration with KYC Case Service
 
@@ -487,41 +489,46 @@ class KeyDestroyResponse(BaseModel):
 
 ### 3.9 Router Endpoints
 
-Add to `app/routers/kyc_cases.py`:
+Add to `app/routers/kyc_cases.py` (existing router prefix is `/v1/kyc/cases`, see line 48):
+
+<!-- NOTE: require_admin_session does not exist. The existing KYC admin pattern uses
+     require_ui_session + manual role check: normalize_role(user.role) not in {Role.ADMIN, Role.ROOT}
+     (see app/routers/kyc_cases.py:1000-1003). require_root_session does exist (see app/auth/deps.py:273)
+     but is not currently used in the KYC router. -->
 
 ```python
 # PII access endpoints
 POST /v1/kyc/cases/{case_id}/pii/decrypt
   -- Decrypt specific PII fields for assigned admin
-  -- Auth: require_admin_session
+  -- Auth: require_ui_session + admin/root role check (see app/routers/kyc_cases.py:1000-1003 for pattern)
   -- Body: { "fields": ["document_number", "date_of_birth"], "reason": str }
   -- Response: { "pii": { "document_number": "AB1234567", "date_of_birth": "1990-01-15" } }
 
 GET /v1/kyc/cases/{case_id}/pii/masked
   -- Get masked PII values (any admin)
-  -- Auth: require_admin_session
+  -- Auth: require_ui_session + admin/root role check
   -- Response: { "pii": { "document_number": "****4567", "date_of_birth": "1990-**-**" } }
 
 # Audit endpoints
 GET /v1/kyc/cases/{case_id}/pii/audit-log
   -- Get PII access log for a case
-  -- Auth: require_root_session
+  -- Auth: require_ui_session + root role check (or use require_root_session from app/auth/deps.py:273)
   -- Response: { "events": [...] }
 
 GET /v1/kyc/admin/pii/audit-log?accessor={sub}&from={ts}&to={ts}
   -- Query PII access log by accessor
-  -- Auth: require_root_session
+  -- Auth: require_ui_session + root role check
   -- Response: { "events": [...] }
 
 # Key management (root only)
 POST /v1/kyc/admin/encryption/rotate-key/{user_sub}
   -- Rotate a user's DEK
-  -- Auth: require_root_session
+  -- Auth: require_ui_session + root role check
   -- Response: { "ok": true, "new_version": int }
 
 POST /v1/kyc/admin/encryption/destroy-keys/{user_sub}
   -- Permanently destroy user's keys (GDPR erasure)
-  -- Auth: require_root_session
+  -- Auth: require_ui_session + root role check
   -- Response: { "ok": true, "fields_affected": int }
 ```
 
@@ -968,8 +975,37 @@ test("237.5 Audit log pagination works correctly", async ({ page }) => {
 | `app/services/gdpr_service.py` | Modify | Add key destruction to deletion flow |
 | `app/core/crypto.py` | Modify | Add batch encrypt/decrypt helpers, DEK generation |
 | `app/core/settings.py` | Modify | Add `kyc_encryption_enabled`, `kyc_dek_rotation_days` settings |
-| `frontend/src/api/endpoints/kyc-cases.ts` | Modify | Add `decryptPii`, `getMaskedPii`, `getAuditLog` functions |
+| `frontend/src/api/endpoints/kyc-cases.ts` | **New** | Add `decryptPii`, `getMaskedPii`, `getAuditLog` functions |
+<!-- NOTE: frontend/src/api/endpoints/kyc-cases.ts does not exist yet — new file required -->
 | `frontend/src/api/types.ts` | Modify | Add `PiiField`, `PiiAuditEvent` types |
 | `frontend/src/components/shared/PiiFieldDisplay.tsx` | **New** | Masked field with reveal button |
 | `frontend/src/components/shared/PiiAuditLog.tsx` | **New** | Audit log table (root-only) |
 | `frontend/e2e/kyc-encryption.spec.ts` | **New** | 22 E2E tests across sections 234-237 |
+
+---
+
+## Codebase References
+
+| File | Lines | What was verified |
+|------|-------|-------------------|
+| `app/core/crypto.py` | 16-25 | `kms_encrypt` and `kms_decrypt` function signatures confirmed |
+| `app/core/crypto.py` | 10 | Uses `kms` client from `app/core/aws.py` |
+| `app/core/settings.py` | 176 | `kms_key_id` setting exists |
+| `app/core/settings.py` | 1066-1067 | KYC cases GSI index name settings (owner + status) |
+| `app/services/kyc_cases.py` | 36-48 | `_case_pk`, `_updated_sk`, `_owner_pk`, `_status_pk` helpers confirmed |
+| `app/services/kyc_cases.py` | 94-97 | `KycCaseStore` dataclass and `create_case` method confirmed |
+| `app/services/kyc_cases.py` | 200 | `update_draft` method confirmed |
+| `app/services/kyc_cases.py` | 701 | `get_metrics_snapshot` method confirmed |
+| `app/services/kyc_cases.py` | 747 | `run_retention_purge` method confirmed |
+| `app/services/gdpr_service.py` | 100, 123, 149, 169 | GDPR service functions confirmed: `create_export_request`, `create_deletion_request`, `get_request`, `list_user_requests` |
+| `app/contracts/kyc_cases_contract.py` | 44-46 | `KycCaseReviewRef` with `assigned_admin_sub` confirmed |
+| `app/auth/deps.py` | 126, 184 | `AuthenticatedUser` class and `get_authenticated_user` confirmed |
+| `app/auth/deps.py` | 273 | `require_root_session` exists |
+| `app/auth/roles.py` | 8-11 | `Role` enum with ROOT/ADMIN/USER confirmed |
+| `app/routers/kyc_cases.py` | 48 | Router prefix `/v1/kyc/cases` confirmed |
+| `app/routers/kyc_cases.py` | 946-955 | `get_admin_kyc_metrics` endpoint confirmed |
+| `app/routers/kyc_cases.py` | 1000-1003 | Admin auth pattern: `require_ui_session` + manual `Role.ADMIN/ROOT` check |
+| `scripts/local-ddb-init.py` | 91-96 | KYC cases table definition with 2 GSIs |
+| `scripts/mock_kms_server.py` | 33 | Mock KMS server on port 7999 |
+| `app/services/kyc_encryption.py` | -- | **Does not exist yet** — new implementation required |
+| `frontend/src/api/endpoints/kyc-cases.ts` | -- | **Does not exist yet** — new file required |

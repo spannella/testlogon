@@ -11,6 +11,8 @@ issues short-lived JWTs for per-device, per-session authorization. However, ther
 currently **no frontend video player component anywhere in the codebase**. Viewers have
 no way to consume a live or archived broadcast stream in the browser.
 
+<!-- NOTE: This claim is NOW OUTDATED. A live player component exists at `frontend/src/pages/broadcast/LivePlayer.tsx`. The route is at App.tsx:57 (`const LivePlayer = lazy(...)`). hls.js is in package.json:49 ("hls.js": "^1.6.16"). Additional broadcast viewer components: ViewerCountBadge.tsx, StreamHealthIndicator.tsx, BroadcastChat.tsx. -->
+
 The platform needs a dedicated public-facing playback page that:
 
 1. Accepts a broadcast session identifier (or pre-signed URL) as a route parameter.
@@ -359,7 +361,7 @@ existing shadcn/ui primitives (`Button`, `Slider`, `Select`, `Badge`) and Tailwi
 ```
 frontend/src/
   api/endpoints/
-    broadcast.ts                 # NEW: API wrappers for broadcast + playback endpoints
+    broadcast.ts                 # ALREADY EXISTS: frontend/src/api/endpoints/broadcast.ts
   pages/
     watch/
       ViewerPlayerPage.tsx       # NEW: Route component (public, no auth shell)
@@ -806,3 +808,29 @@ created once in `beforeAll` and left in place.
 
 E2E tests run in Chromium only (per `playwright.config.ts`), but the component includes
 Safari-specific code paths that should be manually verified.
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `frontend/src/pages/broadcast/LivePlayer.tsx` | — | **ALREADY EXISTS** | HLS player component (ticket proposes `pages/watch/ViewerPlayerPage.tsx`) |
+| `frontend/src/pages/broadcast/ViewerCountBadge.tsx` | — | **ALREADY EXISTS** | Viewer count display |
+| `frontend/src/pages/broadcast/StreamHealthIndicator.tsx` | — | **ALREADY EXISTS** | Stream health display |
+| `frontend/src/api/endpoints/broadcast.ts` | — | **ALREADY EXISTS** | API wrappers for broadcast endpoints |
+| `frontend/package.json` | 49 | EXISTS | `"hls.js": "^1.6.16"` already in dependencies |
+| `frontend/src/App.tsx` | 57 | EXISTS | LivePlayer lazy import |
+| `app/routers/broadcast.py` | 442-455 | EXISTS | `mint_playback_url_route` endpoint |
+| `app/services/broadcast_playback.py` | — | EXISTS | `mint_local_playback_url` function |
+| `app/services/broadcast_local_drm.py` | — | EXISTS | DRM key delivery for dev mode |
+| `app/services/broadcast_cloudfront.py` | — | EXISTS | CloudFront token validation |
+| `app/core/settings.py` | 468-489 | EXISTS | DRM, archive, CloudFront settings |
+| `app/core/tables.py` | 78-79 | EXISTS | `T.broadcast_viewers`, `T.broadcast_health_snapshots` |
+| `scripts/local-ddb-init.py` | 545-550 | EXISTS | BroadcastViewers, BroadcastHealthSnapshots tables |
+
+### Key Discrepancies
+- Ticket says "no frontend video player" but `LivePlayer.tsx` exists
+- Ticket proposes `pages/watch/` directory but player is in `pages/broadcast/`
+- `broadcast.ts` API endpoints file already exists
+- hls.js is already installed (`^1.6.16`, ticket proposed `^1.5.0`)

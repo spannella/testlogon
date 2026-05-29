@@ -750,17 +750,19 @@ class IncidentMetadata(BaseModel):
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| PUT | `/ui/agents/types/{type_id}/devops-config` | `require_admin_session` | Set or update devops_config |
-| GET | `/ui/agents/types/{type_id}/devops-config` | `require_admin_session` | Get current devops_config |
-| POST | `/ui/agents/types/{type_id}/devops-config/validate` | `require_admin_session` | Validate config |
-| GET | `/ui/agents/types/{type_id}/devops-eligible-tickets` | `require_admin_session` | Preview eligible tickets |
-| GET | `/ui/agents/runs/{run_id}/devops-output` | `require_admin_session` | Get deployment output |
-| GET | `/ui/agents/runs/{run_id}/deployment-log` | `require_admin_session` | Get full deployment audit log |
-| POST | `/ui/agents/runs/{run_id}/approve-deployment` | `require_admin_session` | Approve a pending production deployment |
-| POST | `/ui/agents/runs/{run_id}/reject-deployment` | `require_admin_session` | Reject a pending deployment |
-| GET | `/ui/agents/devops/metrics` | `require_admin_session` | Deployment metrics |
-| GET | `/ui/agents/devops/deployments` | `require_admin_session` | List recent deployments across all agents |
-| POST | `/ui/agents/types/{type_id}/test-devops-workflow` | `require_admin_session` | Dry-run: preview workflow steps |
+| PUT | `/ui/agents/types/{type_id}/devops-config` | `require_admin_scope` | Set or update devops_config |
+| GET | `/ui/agents/types/{type_id}/devops-config` | `require_admin_scope` | Get current devops_config |
+| POST | `/ui/agents/types/{type_id}/devops-config/validate` | `require_admin_scope` | Validate config |
+| GET | `/ui/agents/types/{type_id}/devops-eligible-tickets` | `require_admin_scope` | Preview eligible tickets |
+| GET | `/ui/agents/runs/{run_id}/devops-output` | `require_admin_scope` | Get deployment output |
+| GET | `/ui/agents/runs/{run_id}/deployment-log` | `require_admin_scope` | Get full deployment audit log |
+| POST | `/ui/agents/runs/{run_id}/approve-deployment` | `require_admin_scope` | Approve a pending production deployment |
+| POST | `/ui/agents/runs/{run_id}/reject-deployment` | `require_admin_scope` | Reject a pending deployment |
+| GET | `/ui/agents/devops/metrics` | `require_admin_scope` | Deployment metrics |
+| GET | `/ui/agents/devops/deployments` | `require_admin_scope` | List recent deployments across all agents |
+| POST | `/ui/agents/types/{type_id}/test-devops-workflow` | `require_admin_scope` | Dry-run: preview workflow steps |
+
+<!-- NOTE: `require_admin_session` does not exist in the codebase. The correct admin auth dependency is `require_admin_scope(AdminScope.XXX)` from `app/auth/policy.py:84`. -->
 
 Register in `app/main.py`:
 
@@ -1237,7 +1239,7 @@ sum(rate(devops_health_checks_total{result="unhealthy"}[24h])) by (url)
 
 ## 10. Security Considerations
 
-- **Admin-only access**: All DevOps Agent endpoints require `require_admin_session`.
+- **Admin-only access**: All DevOps Agent endpoints require `require_admin_scope()` (see `app/auth/policy.py:84`). <!-- NOTE: was `require_admin_session` which does not exist -->
 - **Credential isolation**: Cloud provider credentials are stored in the Agent Secrets Vault (AGENT-006), never in devops_config. Credentials are injected into the terminal environment at provisioning time and scrubbed from deployment logs.
 - **Production approval gate**: Production deployments always require human approval. The agent cannot bypass this requirement. Approval is logged with the approver's identity and timestamp.
 - **Command sanitization**: Deploy and rollback commands in the config are validated against an allowlist of safe command prefixes (terraform, kubectl, aws, docker, npm, etc.). Raw shell commands require explicit admin opt-in.
@@ -1315,3 +1317,24 @@ sum(rate(devops_health_checks_total{result="unhealthy"}[24h])) by (url)
 | Ticket | Depends On |
 |--------|-----------|
 | AGENT-012 (Project Manager) | Uses deployment metrics for project reporting |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| TicketStore class | `app/services/tickets.py` | 110 | `update_status` (683), `add_message` (621) |
+| `require_admin_scope` | `app/auth/policy.py` | 84 | Correct admin auth (ticket originally said `require_admin_session` which does not exist) |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `(event, user_sub, request, **fields)` |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+| Tables singleton | `app/core/tables.py` | — | `T` object |
+| Router registration | `app/main.py` | 297-465 | No `agent_devops_router` registered yet |
+| `agent_types` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `agent_runs` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `deployment_log` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — new table proposed in this ticket |
+| `agent_devops.py` service | `app/services/` | — | Does NOT exist yet — new implementation in this ticket |
+| `agent_devops.py` router | `app/routers/` | — | Does NOT exist yet — new implementation in this ticket |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing table |

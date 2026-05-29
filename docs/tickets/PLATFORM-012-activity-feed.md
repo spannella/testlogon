@@ -118,7 +118,7 @@ User Action                Backend                         DynamoDB             
 
 ### 2.1 Alert Data Model (`app/services/alerts.py`)
 
-The `write_alert` function (line 266) <!-- VERIFIED: alerts.py:266 --> creates alert records with:
+The `write_alert` function (line 355) <!-- VERIFIED: alerts.py:355 --> creates alert records with:
 
 ```python
 item = {
@@ -184,11 +184,11 @@ Batch records are stored in the alerts table with `alert_id = f"BATCH#{batch_key
 
 ### 2.3 Alert SSE Stream (`app/services/alerts.py`, `app/routers/alerts.py`)
 
-Real-time alerts use Server-Sent Events via `GET /ui/alerts/stream` (line 451 in `alerts.py` router) <!-- CORRECTED: was "line 452", actually line 451 -->. The `sse_subscribe` function (line 64 in `services/alerts.py`) <!-- VERIFIED: alerts.py:64 --> maintains an in-memory `asyncio.Queue` per user. The `sse_publish_alert` function (line 84) <!-- VERIFIED: alerts.py:84 --> fans out to all connected clients for a user.
+Real-time alerts use Server-Sent Events via `GET /ui/alerts/stream` (line 451 in `alerts.py` router) <!-- CORRECTED: was "line 452", actually line 451 -->. The `sse_subscribe` function (line 153 in `services/alerts.py`) <!-- VERIFIED: alerts.py:153 --> maintains an in-memory `asyncio.Queue` per user. The `sse_publish_alert` function (line 173) <!-- VERIFIED: alerts.py:173 --> fans out to all connected clients for a user.
 
 On the frontend, `useAlertStream` (`frontend/src/hooks/useAlertStream.ts`, line 21) <!-- VERIFIED: useAlertStream.ts:21 --> opens an EventSource connection, handles `alert`, `hello`, and `heartbeat` events, and manages the `unreadCount` state.
 
-The SSE system is single-process (in-memory `_SSE_SUBSCRIBERS` dict at line 61) <!-- VERIFIED: alerts.py:61 -->. For multi-process deployments, this would need to be replaced with Redis pub/sub or SQS. This is acceptable for the current single-worker dev mode.
+The SSE system is single-process (in-memory `_SSE_SUBSCRIBERS` dict at line 61) <!-- VERIFIED: alerts.py:150 -->. For multi-process deployments, this would need to be replaced with Redis pub/sub or SQS. This is acceptable for the current single-worker dev mode.
 
 ### 2.4 Alert Preferences (`app/services/social_alerts.py`)
 
@@ -1381,7 +1381,7 @@ export interface TipsSummary {
 
 4. **Tips summary privacy**: The tips summary endpoint must only return tip data for the authenticated user's own content. An attacker should not be able to query another user's tip earnings. The endpoint uses `session["user_sub"]` to scope the query.
 
-5. **SSE connection limits**: Each connected user holds an in-memory `asyncio.Queue` (`_SSE_SUBSCRIBERS` dict at line 61 in `alerts.py`) <!-- VERIFIED: alerts.py:61 -->. The activity feed does not require a separate SSE channel --- it reuses the existing alert stream. Monitor memory usage for users with many concurrent connections. The `maxsize=200` on the queue prevents unbounded memory growth.
+5. **SSE connection limits**: Each connected user holds an in-memory `asyncio.Queue` (`_SSE_SUBSCRIBERS` dict at line 61 in `alerts.py`) <!-- VERIFIED: alerts.py:150 -->. The activity feed does not require a separate SSE channel --- it reuses the existing alert stream. Monitor memory usage for users with many concurrent connections. The `maxsize=200` on the queue prevents unbounded memory growth.
 
 6. **Read state manipulation**: The `mark_read` endpoint uses `ConditionExpression="#r = :f"` (line 169 in `alerts.py` router) <!-- VERIFIED: alerts.py router line 169 has ConditionExpression --> to only count items that were previously unread. This prevents a malicious client from inflating the "marked read" count by repeatedly marking the same alert. The new `mark-group-read` endpoint should use the same conditional check.
 

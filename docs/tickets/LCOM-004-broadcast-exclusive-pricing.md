@@ -196,18 +196,15 @@ No broadcast-specific pricing fields exist. The `price_cents` is a static snapsh
 
 ### 2.2 Product Shelf Service (LCOM-001)
 
-`app/services/broadcast_product_shelf.py` — `_shelf_item_out()` returns a dict with `price_cents` as the only price field. `add_product_to_shelf()` copies `price_cents` from the catalog item at add-time. `list_shelf_products()` returns all items sorted by `display_order`.
+`app/services/broadcast_product_shelf.py` (441 lines) — `_shelf_item_out()` (line 23) returns a dict with `price_cents` as the only price field. `add_product_to_shelf()` copies `price_cents` from the catalog item at add-time. `list_shelf_products()` (line 178) returns all items sorted by `display_order`.
+
+<!-- NOTE: resolve_effective_price() already exists at line 211, set_broadcast_price() at line 315, clear_broadcast_price() at line 399, _shelf_item_out_with_pricing() at line 264, and list_shelf_products_with_pricing() at line 296 — all LCOM-004 service functions are already implemented -->
 
 ### 2.3 Quick-Buy Price Resolution (LCOM-003)
 
-`app/services/broadcast_orders.py` — `create_quick_buy_order()` reads `shelf_item.price_cents` to calculate the order total:
+<!-- NOTE: app/services/broadcast_orders.py does NOT exist yet — new implementation required (LCOM-003 prerequisite) -->
 
-```python
-unit_price = int(shelf_item.get("price_cents", 0))
-total_cents = unit_price * quantity
-```
-
-This must be extended to prefer `broadcast_price_cents` when available and valid.
+The quick-buy order service (to be created by LCOM-003) will read `shelf_item.price_cents` to calculate the order total. Once created, it must be extended to prefer `broadcast_price_cents` when available and valid.
 
 ### 2.4 Broadcast Session Status (`app/services/broadcast_store.py`)
 
@@ -215,11 +212,13 @@ Session status values: `draft`, `provisioning`, `ready`, `live`, `stopping`, `st
 
 ### 2.5 SSE Infrastructure (`app/services/broadcast_sse.py`)
 
-`broadcast_sse_publish(session_id, event)` (line 29) fans out events to all subscribers via in-memory `asyncio.Queue` instances. The `_BROADCAST_SUBSCRIBERS` dict (line 8) maps `session_id` to a set of queues. The `broadcast_sse_subscribe()` function (line 11) creates a new queue with `maxsize=100`, and `broadcast_sse_unsubscribe()` (line 19) removes it. Dead queues (full) are discarded during publish (lines 38-43). Already used for `shelf:add`, `shelf:remove`, `chat:message`, `purchase:completed`, etc. Price updates will use a new `shelf:price_update` event type.
+`broadcast_sse_publish(session_id, event)` (line 29) fans out events to all subscribers via in-memory `asyncio.Queue` instances (see `app/services/broadcast_sse.py:29`). The `_BROADCAST_SUBSCRIBERS` dict (line 8) maps `session_id` to a set of queues. The `broadcast_sse_subscribe()` function (line 11) creates a new queue with `maxsize=100`, and `broadcast_sse_unsubscribe()` (line 19) removes it. Dead queues (full) are discarded during publish (lines 38-43, via `QueueFull` catch). Already used for `shelf:add`, `shelf:remove`, `chat:message`, `chat:product_link`, etc. Price updates will use a new `shelf:price_update` event type.
 
 ### 2.6 Frontend Price Display Patterns
 
-The existing `ProductShelfCard` (from LCOM-001) displays `price_cents` as `${(price_cents / 100).toFixed(2)}`. The `QuickBuyDialog` (LCOM-003) shows the same price. Neither component has any concept of a broadcast-exclusive price, strikethrough display, or countdown timer.
+<!-- NOTE: ProductShelfCard.tsx and QuickBuyDialog.tsx do NOT exist yet — new implementation required -->
+
+The product shelf card (to be created) will display `price_cents` as `${(price_cents / 100).toFixed(2)}`. The quick-buy dialog (LCOM-003) will show the same price. Neither component has any concept of a broadcast-exclusive price, strikethrough display, or countdown timer. The existing frontend API file `frontend/src/api/endpoints/broadcast-shelf.ts` (44 lines) provides `ShelfItem` interface and API functions but does NOT yet include broadcast pricing fields or `setBroadcastPrice`/`clearBroadcastPrice` endpoints.
 
 ### 2.7 DDB TTL for Expiring Prices
 
@@ -227,15 +226,16 @@ DynamoDB TTL can automatically delete items after expiry, but this is too coarse
 
 ### 2.8 Broadcast Router Structure (`app/routers/broadcast.py`)
 
-The broadcast router (944 lines) is registered in `app/main.py` at prefix `/broadcast`. Key structure:
-- Lines 0-59: Imports and router declaration. The router imports from `broadcast_store`, `broadcast_recording`, `broadcast_audit`, `broadcast_orchestrator`, `broadcast_sse`, `broadcast_chat_store`, `broadcast_viewers`, and `broadcast_health`.
-- Lines 60-99: Pydantic models for profile and session creation (`BroadcastProfileCreateIn`, `BroadcastSessionCreateIn`, etc.).
-- Lines 773-944: Chat section (comment at line 773, models at lines 776-804, `send_chat_message_route` at line 812, `get_chat_history_route` at line 850, `delete_chat_message_route` at line 868, `mute_chat_user_route` at line 882, `broadcast_chat_stream_route` at line 898).
-- The pricing endpoints will be inserted before the chat section (around line 800) to maintain logical grouping with shelf operations.
+The broadcast router (~3969 lines) is registered in `app/main.py` at prefix `/broadcast` (see `app/main.py`). Key structure:
+- Lines 1-76: Imports and router declaration (line 76). The router imports from `broadcast_store`, `broadcast_recording`, `broadcast_audit`, `broadcast_orchestrator`, `broadcast_sse`, `broadcast_chat_store`, `broadcast_viewers`, and `broadcast_health`. `BroadcastPriceSetIn` and `BroadcastPriceOut` imported from `app/models` at line 73.
+- Pricing Pydantic fields on `BroadcastShelfItemOut` at lines 1829-1835 (broadcast_price_cents, broadcast_price_expires_at, effective_price_cents, is_broadcast_price, discount_pct, original_price_cents).
+- Shelf listing endpoint (`list_shelf_products_route`) at line 1928 — already calls `list_shelf_products_with_pricing(session_id, session.status)` at line 1937.
+- Chat product link route at line 1446 — already uses `resolve_effective_price` (import at line 1465, call at line 1471) and includes pricing snapshot in `product_link_data` (lines 1494-1498).
+- **Pricing endpoints already exist**: `set_broadcast_price_route` (PATCH) at line 1975, `clear_broadcast_price_route` (DELETE) at line 2022.
 
 ### 2.9 Broadcast Chat Store Rate Limiting Pattern
 
-`app/services/broadcast_chat_store.py` (247 lines) implements in-memory rate limiting via `_CHAT_RATE_LOCK` (threading.Lock, line 19) and `_CHAT_RATE_BUCKETS` dict (line 20). The `_enforce_chat_rate_limit()` function (line 23) checks `now_ms - last < limit_ms` under the lock and raises a 429 with structured error detail including `retry_after_ms`. This same pattern should be used for price-change rate limiting to prevent broadcasters from spamming price updates (which would cause excessive SSE fan-out).
+`app/services/broadcast_chat_store.py` (423 lines) implements in-memory rate limiting via `_CHAT_RATE_LOCK` (threading.Lock, line 20) and `_CHAT_RATE_BUCKETS` dict (line 21). The `_enforce_chat_rate_limit()` function (line 25) checks `now_ms - last < limit_ms` under the lock and raises a 429 with structured error detail including `retry_after_ms`. The `_enforce_product_link_rate_limit()` function (line 46) applies a separate 5-second rate limit for product link sharing. This same pattern should be used for price-change rate limiting to prevent broadcasters from spamming price updates (which would cause excessive SSE fan-out).
 
 ### 2.10 DDB Access Patterns for BroadcastProductShelf
 
@@ -251,7 +251,7 @@ The `update_item` call for setting pricing fields uses `UpdateExpression` with `
 
 ### 2.11 Billing Shared Helpers (`app/services/billing_shared.py`)
 
-The billing module (line 16: `user_pk()`, line 20: `ddb_get()`, line 62: `ensure_balance_row()`) provides helpers for payment method validation and ledger entry creation. For broadcast pricing, the billing system is not directly involved in setting prices — it's only relevant when the viewer purchases via quick-buy (LCOM-003). The quick-buy order record will include `was_broadcast_price: true` and `original_price_cents` fields for audit purposes, written using the `new_ledger_entry()` helper (line 217).
+The billing module (see `app/services/billing_shared.py`: `user_pk()` at line 16, `ddb_get()` at line 20, `ensure_balance_row()` at line 62) provides helpers for payment method validation and ledger entry creation. For broadcast pricing, the billing system is not directly involved in setting prices — it's only relevant when the viewer purchases via quick-buy (LCOM-003). The quick-buy order record will include `was_broadcast_price: true` and `original_price_cents` fields for audit purposes.
 
 ---
 
@@ -311,10 +311,12 @@ BroadcastProductShelf Table
 
 ### 3.2 Price Resolution Logic
 
-A single function that determines the effective price for a shelf item:
+A single function that determines the effective price for a shelf item.
+
+<!-- NOTE: resolve_effective_price() already exists at app/services/broadcast_product_shelf.py:211 — implementation matches the spec below -->
 
 ```python
-# app/services/broadcast_product_shelf.py — new function
+# app/services/broadcast_product_shelf.py — already implemented (line 211)
 
 from app.core.time import now_ts
 from typing import Any, Dict, Optional
@@ -400,7 +402,7 @@ PATCH /broadcast/sessions/{session_id}/products/{item_id}/price
 
 **Auth**: `require_ui_session` — only session creator (broadcaster).
 
-**Request model**:
+**Request model** (already exists at `app/models.py:2426`):
 
 ```python
 class BroadcastPriceSetIn(BaseModel):
@@ -442,7 +444,7 @@ class BroadcastPriceSetIn(BaseModel):
         return v
 ```
 
-**Response model**:
+**Response model** (already exists at `app/models.py:2440`):
 
 ```python
 class BroadcastPriceOut(BaseModel):
@@ -460,8 +462,10 @@ class BroadcastPriceOut(BaseModel):
 
 **Full endpoint implementation**:
 
+<!-- NOTE: set_broadcast_price_route already exists at app/routers/broadcast.py:1975 — implementation matches the spec below -->
+
 ```python
-# app/routers/broadcast.py — new endpoint (insert around line 800)
+# app/routers/broadcast.py — already implemented (line 1975)
 
 @router.patch(
     "/sessions/{session_id}/products/{item_id}/price",
@@ -533,6 +537,8 @@ DELETE /broadcast/sessions/{session_id}/products/{item_id}/price
 **Auth**: `require_ui_session` — only session creator.
 
 **Full endpoint implementation**:
+
+<!-- NOTE: clear_broadcast_price_route already exists at app/routers/broadcast.py:2022 — implementation matches the spec below -->
 
 ```python
 @router.delete("/sessions/{session_id}/products/{item_id}/price")
@@ -607,10 +613,12 @@ The `_shelf_item_out` function is updated to call `resolve_effective_price()` an
 
 ### 3.4 Service Layer Extension — `app/services/broadcast_product_shelf.py`
 
-Add functions for broadcast pricing management:
+Functions for broadcast pricing management.
+
+<!-- NOTE: All functions below already exist in app/services/broadcast_product_shelf.py: set_broadcast_price() at line 315, clear_broadcast_price() at line 399, _shelf_item_out_with_pricing() at line 264 -->
 
 ```python
-# app/services/broadcast_product_shelf.py — new functions
+# app/services/broadcast_product_shelf.py — already implemented
 
 from app.core.tables import T
 from app.core.time import now_ts
@@ -795,7 +803,7 @@ def _shelf_item_out_with_pricing(item: Dict[str, Any], session_status: str) -> D
 
 ### 3.5 Quick-Buy Price Integration (LCOM-003 Modification)
 
-The `create_quick_buy_order()` in `app/services/broadcast_orders.py` must use the effective price instead of the raw shelf price:
+<!-- NOTE: app/services/broadcast_orders.py does NOT exist yet — new implementation required (LCOM-003 prerequisite). When created, its create_quick_buy_order() must use the effective price instead of the raw shelf price: -->
 
 ```python
 # Before (LCOM-003):
@@ -843,10 +851,12 @@ This is the CORRECT behavior. The server always resolves the current effective p
 
 ### 3.6 Chat Product Link Price Integration (LCOM-002 Modification)
 
-When sending a product link via `POST /broadcast/sessions/{id}/chat/product`, the `product_link` data should include broadcast pricing fields so the `ProductLinkCard` in chat shows the correct price:
+When sending a product link via `POST /broadcast/sessions/{id}/chat/product`, the `product_link` data should include broadcast pricing fields so the product link card in chat shows the correct price.
+
+<!-- NOTE: This integration is already implemented in app/routers/broadcast.py at the send_chat_product_link_route (line 1446). The route imports resolve_effective_price at line 1465, calls it at line 1471, and assembles the pricing fields into product_link_data at lines 1494-1498. -->
 
 ```python
-# In broadcast_chat_store.py or the chat product link handler
+# In app/routers/broadcast.py — already implemented (lines 1465-1498)
 
 from app.services.broadcast_product_shelf import resolve_effective_price
 
@@ -900,8 +910,10 @@ product_link_data = {
 
 ### 3.8 Frontend — Price Display Component
 
+<!-- NOTE: frontend/src/pages/broadcast/BroadcastPrice.tsx does NOT exist yet — new implementation required -->
+
 ```typescript
-// frontend/src/pages/broadcast/BroadcastPrice.tsx
+// frontend/src/pages/broadcast/BroadcastPrice.tsx — TO BE CREATED
 
 /**
  * BroadcastPrice — displays the effective price for a broadcast shelf item.
@@ -1051,8 +1063,10 @@ export function BroadcastPrice({
 
 ### 3.9 Frontend — Broadcaster Price Editor
 
+<!-- NOTE: frontend/src/pages/broadcast/BroadcastPriceEditor.tsx does NOT exist yet — new implementation required -->
+
 ```typescript
-// frontend/src/pages/broadcast/BroadcastPriceEditor.tsx
+// frontend/src/pages/broadcast/BroadcastPriceEditor.tsx — TO BE CREATED
 
 /**
  * BroadcastPriceEditor — broadcaster-facing UI for setting/clearing
@@ -1244,7 +1258,7 @@ export function BroadcastPriceEditor({ sessionId, item, onPriceSet }: BroadcastP
 ### 3.10 Frontend — SSE Event Handler for Price Updates
 
 ```typescript
-// Integration in frontend/src/pages/broadcast/LivePlayer.tsx
+// Integration in frontend/src/pages/broadcast/LivePlayer.tsx (exists, see LivePlayer.tsx)
 // or a dedicated useBroadcastShelfEvents hook
 
 /**
@@ -1285,8 +1299,10 @@ case "shelf:price_update": {
 
 ### 3.11 Frontend TypeScript Types
 
+<!-- NOTE: frontend/src/api/endpoints/broadcast-shelf.ts (44 lines) exists but does NOT yet include broadcast pricing fields, setBroadcastPrice, or clearBroadcastPrice API functions — extension required -->
+
 ```typescript
-// frontend/src/api/endpoints/broadcast-shelf.ts (extended)
+// frontend/src/api/endpoints/broadcast-shelf.ts (to be extended)
 
 export interface ShelfItem {
   session_id: string;
@@ -1373,47 +1389,48 @@ BroadcasterDashboard
 
 ## 4. Implementation Plan
 
-### Phase 1: Backend — Price Resolution + Schema (1 day)
+### Phase 1: Backend — Price Resolution + Schema (1 day) -- ALREADY IMPLEMENTED
 
-| File | Change | Lines Changed |
-|------|--------|---------------|
-| `app/services/broadcast_product_shelf.py` | Add `resolve_effective_price()` (~45 lines), `set_broadcast_price()` (~55 lines), `clear_broadcast_price()` (~30 lines), `_shelf_item_out_with_pricing()` (~25 lines). Update `_shelf_item_out()` to include pricing fields. Update `list_shelf_products()` to accept `session_status` param and include resolved pricing. | +155 |
+| File | Change | Status |
+|------|--------|--------|
+| `app/services/broadcast_product_shelf.py` (441 lines) | `resolve_effective_price()` at line 211, `set_broadcast_price()` at line 315, `clear_broadcast_price()` at line 399, `_shelf_item_out_with_pricing()` at line 264, `list_shelf_products_with_pricing()` at line 296. | **Done** |
 
-### Phase 2: Backend — Pricing Endpoints (1 day)
+### Phase 2: Backend — Pricing Endpoints (1 day) -- ALREADY IMPLEMENTED
 
-| File | Change | Lines Changed |
-|------|--------|---------------|
-| `app/routers/broadcast.py` | Add `BroadcastPriceSetIn`, `BroadcastPriceOut` models (~30 lines). Add `set_broadcast_price_route()` PATCH endpoint (~35 lines). Add `clear_broadcast_price_route()` DELETE endpoint (~25 lines). Update existing shelf list endpoint to pass session status for price resolution. Insert at ~line 800, before chat endpoints. | +90 |
+| File | Change | Status |
+|------|--------|--------|
+| `app/models.py` | `BroadcastPriceSetIn` at line 2426, `BroadcastPriceOut` at line 2440. | **Done** |
+| `app/routers/broadcast.py` (~3969 lines) | `set_broadcast_price_route()` PATCH at line 1975, `clear_broadcast_price_route()` DELETE at line 2022. Shelf listing at line 1928 already calls `list_shelf_products_with_pricing`. `BroadcastShelfItemOut` pricing fields at lines 1829-1835. | **Done** |
 
-### Phase 3: Backend — Quick-Buy Integration (0.5 days)
+### Phase 3: Backend — Quick-Buy Integration (0.5 days) -- BLOCKED (LCOM-003)
 
-| File | Change | Lines Changed |
-|------|--------|---------------|
-| `app/services/broadcast_orders.py` | Update `create_quick_buy_order()` to use `resolve_effective_price()` for unit price. Add `original_price_cents`, `was_broadcast_price`, `discount_pct` to order record. Add validation: if session not live, use catalog price. | +20 |
+| File | Change | Status |
+|------|--------|--------|
+| `app/services/broadcast_orders.py` | Does NOT exist yet — LCOM-003 prerequisite. When created, must use `resolve_effective_price()` for unit price, add `original_price_cents`, `was_broadcast_price`, `discount_pct` to order record. | **Not started** |
 
-### Phase 4: Backend — Chat Product Link Integration (0.5 days)
+### Phase 4: Backend — Chat Product Link Integration (0.5 days) -- ALREADY IMPLEMENTED
 
-| File | Change | Lines Changed |
-|------|--------|---------------|
-| `app/services/broadcast_chat_store.py` | Update `send_product_link_message()` to include broadcast pricing fields in `product_link` data. Requires importing `resolve_effective_price` from `broadcast_product_shelf`. | +15 |
+| File | Change | Status |
+|------|--------|--------|
+| `app/routers/broadcast.py` | `send_chat_product_link_route` (line 1446) already imports and calls `resolve_effective_price` (lines 1465, 1471) and assembles pricing snapshot in `product_link_data` (lines 1494-1498). | **Done** |
 
-### Phase 5: Frontend — Price Display Components (1.5 days)
+### Phase 5: Frontend — Price Display Components (1.5 days) -- NOT STARTED
 
-| File | Type | Lines |
-|------|------|-------|
-| `frontend/src/pages/broadcast/BroadcastPrice.tsx` | Create — price display with strikethrough, badge, countdown, Intl.NumberFormat, accessibility attrs, `onExpired` callback, compact mode | ~130 |
-| `frontend/src/pages/broadcast/BroadcastPriceEditor.tsx` | Create — broadcaster price setting UI with validation, React Query mutations, error toasts, savings preview badge | ~160 |
-| `frontend/src/api/endpoints/broadcast-shelf.ts` | Modify — extend ShelfItem interface, add BroadcastPriceResponse, add `setBroadcastPrice()`, `clearBroadcastPrice()` API functions | +40 |
+| File | Type | Lines | Status |
+|------|------|-------|--------|
+| `frontend/src/pages/broadcast/BroadcastPrice.tsx` | Create — price display with strikethrough, badge, countdown, Intl.NumberFormat, accessibility attrs, `onExpired` callback, compact mode | ~130 | **Does not exist** |
+| `frontend/src/pages/broadcast/BroadcastPriceEditor.tsx` | Create — broadcaster price setting UI with validation, React Query mutations, error toasts, savings preview badge | ~160 | **Does not exist** |
+| `frontend/src/api/endpoints/broadcast-shelf.ts` | Modify — extend `ShelfItem` interface (currently 44 lines, no pricing fields), add `BroadcastPriceResponse`, add `setBroadcastPrice()`, `clearBroadcastPrice()` API functions | +40 | **Exists but needs extension** |
 
-### Phase 6: Frontend — Integration (1 day)
+### Phase 6: Frontend — Integration (1 day) -- NOT STARTED
 
-| File | Change | Lines Changed |
-|------|--------|---------------|
-| `frontend/src/pages/broadcast/ProductShelfCard.tsx` | Replace simple price display with `BroadcastPrice` component. Pass `onExpired` to trigger shelf refetch. | +15 |
-| `frontend/src/pages/broadcast/ProductLinkCard.tsx` | Add `BroadcastPrice` display (compact mode) when broadcast pricing fields present in link data. | +12 |
-| `frontend/src/pages/broadcast/QuickBuyDialog.tsx` | Show effective price with `BroadcastPrice` component. Show both original and broadcast price in order summary. | +18 |
-| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | Add `BroadcastPriceEditor` for each shelf item in the manager list. | +10 |
-| `frontend/src/pages/broadcast/LivePlayer.tsx` | Handle `shelf:price_update` SSE event — update React Query cache surgically. | +20 |
+| File | Change | Lines Changed | Status |
+|------|--------|---------------|--------|
+| `frontend/src/pages/broadcast/ProductShelfCard.tsx` | Replace simple price display with `BroadcastPrice` component. Pass `onExpired` to trigger shelf refetch. | +15 | **Does not exist** |
+| `frontend/src/pages/broadcast/ProductLinkCard.tsx` | Add `BroadcastPrice` display (compact mode) when broadcast pricing fields present in link data. | +12 | **Does not exist** |
+| `frontend/src/pages/broadcast/QuickBuyDialog.tsx` | Show effective price with `BroadcastPrice` component. Show both original and broadcast price in order summary. | +18 | **Does not exist** |
+| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | Add `BroadcastPriceEditor` for each shelf item in the manager list. | +10 | **Exists** |
+| `frontend/src/pages/broadcast/LivePlayer.tsx` | Handle `shelf:price_update` SSE event — update React Query cache surgically. | +20 | **Exists** |
 
 ### Phase 7: Client-side Expiry Handling (0.5 days)
 
@@ -1427,21 +1444,22 @@ When a broadcast price expires client-side (countdown reaches 0):
 
 ### Summary of All Files
 
-| File | Type | Estimated Lines |
-|------|------|-----------------|
-| `app/services/broadcast_product_shelf.py` | Modify | +155 |
-| `app/services/broadcast_orders.py` | Modify | +20 |
-| `app/services/broadcast_chat_store.py` | Modify | +15 |
-| `app/routers/broadcast.py` | Modify | +90 |
-| `frontend/src/api/endpoints/broadcast-shelf.ts` | Modify | +40 |
-| `frontend/src/pages/broadcast/BroadcastPrice.tsx` | Create | ~130 |
-| `frontend/src/pages/broadcast/BroadcastPriceEditor.tsx` | Create | ~160 |
-| `frontend/src/pages/broadcast/ProductShelfCard.tsx` | Modify | +15 |
-| `frontend/src/pages/broadcast/ProductLinkCard.tsx` | Modify | +12 |
-| `frontend/src/pages/broadcast/QuickBuyDialog.tsx` | Modify | +18 |
-| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | Modify | +10 |
-| `frontend/src/pages/broadcast/LivePlayer.tsx` | Modify | +20 |
-| **Total** | | **~685** |
+| File | Type | Estimated Lines | Status |
+|------|------|-----------------|--------|
+| `app/services/broadcast_product_shelf.py` | Modify | +155 | **Already implemented** (441 lines total) |
+| `app/models.py` | Modify | +30 | **Already implemented** (lines 2426-2448) |
+| `app/routers/broadcast.py` | Modify | +90 | **Already implemented** (~3969 lines total) |
+| `app/services/broadcast_orders.py` | Modify | +20 | **Does not exist** (LCOM-003 prerequisite) |
+| `app/services/broadcast_chat_store.py` | N/A | 0 | **Integration done in broadcast.py instead** (line 1465) |
+| `frontend/src/api/endpoints/broadcast-shelf.ts` | Modify | +40 | **Exists** (44 lines, needs pricing extension) |
+| `frontend/src/pages/broadcast/BroadcastPrice.tsx` | Create | ~130 | **Does not exist** |
+| `frontend/src/pages/broadcast/BroadcastPriceEditor.tsx` | Create | ~160 | **Does not exist** |
+| `frontend/src/pages/broadcast/ProductShelfCard.tsx` | Create | +15 | **Does not exist** |
+| `frontend/src/pages/broadcast/ProductLinkCard.tsx` | Create | +12 | **Does not exist** |
+| `frontend/src/pages/broadcast/QuickBuyDialog.tsx` | Create | +18 | **Does not exist** (LCOM-003 prerequisite) |
+| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | Modify | +10 | **Exists** |
+| `frontend/src/pages/broadcast/LivePlayer.tsx` | Modify | +20 | **Exists** |
+| **Total** | | **~685** | Backend done; frontend remaining |
 
 ---
 
@@ -2553,3 +2571,69 @@ Track each funnel step as an analytics event with `session_id`, `item_id`, `has_
 | Flash deal | A broadcast price with a short expiry duration (typically 5-15 minutes) |
 | Session-wide discount | A broadcast price with no expiry — active for the entire broadcast duration |
 | Price reversion | The automatic return to catalog price when a broadcast price expires or the session ends |
+
+---
+
+## Codebase References
+
+All file paths are relative to the repository root.
+
+### Backend — Already Implemented
+- `app/services/broadcast_product_shelf.py` (441 lines) — Core pricing service
+  - `_shelf_item_out()` at line 23
+  - `get_shelf_product_raw()` at line 158
+  - `list_shelf_products()` at line 178
+  - `resolve_effective_price()` at line 211 — single source of truth for price resolution
+  - `_shelf_item_out_with_pricing()` at line 264
+  - `list_shelf_products_with_pricing()` at line 296
+  - `set_broadcast_price()` at line 315
+  - `clear_broadcast_price()` at line 399
+- `app/routers/broadcast.py` (~3969 lines) — Router with pricing endpoints
+  - Router prefix `/broadcast` at line 76
+  - `BroadcastPriceSetIn` / `BroadcastPriceOut` imported from `app/models` at line 73
+  - `BroadcastShelfItemOut` pricing fields at lines 1829-1835
+  - `BroadcastShelfListOut` at line 1838
+  - `list_shelf_products_route()` at line 1928 (calls `list_shelf_products_with_pricing`)
+  - `send_chat_product_link_route()` at line 1446 (includes pricing snapshot at lines 1494-1498)
+  - `set_broadcast_price_route()` (PATCH) at line 1975
+  - `clear_broadcast_price_route()` (DELETE) at line 2022
+- `app/models.py` — Pydantic models
+  - `BroadcastPriceSetIn` at line 2426
+  - `BroadcastPriceOut` at line 2440
+- `app/services/broadcast_sse.py` (49 lines) — SSE pub/sub infrastructure
+  - `_BROADCAST_SUBSCRIBERS` dict at line 8
+  - `broadcast_sse_subscribe()` at line 11
+  - `broadcast_sse_unsubscribe()` at line 19
+  - `broadcast_sse_publish()` at line 29 — used by set/clear pricing for `shelf:price_update` events
+  - Dead queue cleanup at lines 38-43
+- `app/services/broadcast_chat_store.py` (423 lines) — Chat store with rate limiting patterns
+  - `_CHAT_RATE_LOCK` at line 20
+  - `_CHAT_RATE_BUCKETS` at line 21
+  - `_enforce_chat_rate_limit()` at line 25
+  - `_enforce_product_link_rate_limit()` at line 46
+  - `send_product_link_message()` at line 219
+  - `_chat_msg_out()` at line 344 (passes through `product_link` at line 366)
+- `app/services/billing_shared.py` (~260 lines) — Billing helpers
+  - `user_pk()` at line 16
+  - `ddb_get()` at line 20
+  - `ensure_balance_row()` at line 62
+- `scripts/local-ddb-init.py` — DynamoDB table definitions
+  - `BroadcastProductShelf` table definition at line 578
+
+### Backend — Does Not Exist Yet
+- `app/services/broadcast_orders.py` — Quick-buy order service (LCOM-003 prerequisite)
+
+### Frontend — Exists
+- `frontend/src/api/endpoints/broadcast-shelf.ts` (44 lines) — Shelf API (needs pricing field extension)
+  - `ShelfItem` interface at line 5 (missing pricing fields)
+  - `addShelfProduct()` at line 33, `removeShelfProduct()` at line 36, `getShelfProducts()` at line 39, `reorderShelf()` at line 42
+  - Missing: `setBroadcastPrice()`, `clearBroadcastPrice()`, `BroadcastPriceResponse` type
+- `frontend/src/pages/broadcast/LivePlayer.tsx` — Live player (exists, needs SSE handler for `shelf:price_update`)
+- `frontend/src/pages/broadcast/ProductShelfManager.tsx` — Broadcaster shelf manager (exists, needs `BroadcastPriceEditor` integration)
+
+### Frontend — Does Not Exist Yet
+- `frontend/src/pages/broadcast/BroadcastPrice.tsx` — Price display component with strikethrough, badge, countdown
+- `frontend/src/pages/broadcast/BroadcastPriceEditor.tsx` — Broadcaster price editor with toggle, validation, mutations
+- `frontend/src/pages/broadcast/ProductShelfCard.tsx` — Viewer shelf card (LCOM-001 frontend)
+- `frontend/src/pages/broadcast/ProductLinkCard.tsx` — Chat product link card (LCOM-002 frontend)
+- `frontend/src/pages/broadcast/QuickBuyDialog.tsx` — Quick-buy dialog (LCOM-003 frontend)

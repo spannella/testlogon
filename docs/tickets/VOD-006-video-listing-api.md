@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-006
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-24
 
 ---
@@ -104,10 +104,12 @@ All UI endpoints use `require_ui_session` from `app/services/sessions.py` (cooki
 
 ### 2.5 Gaps
 
-1. **No router exists** for video metadata -- `app/routers/video_metadata.py` does not exist yet.
-2. **No public/viewer listing** -- the `ByOwnerCreatedAt` GSI returns all videos regardless of visibility/status; a viewer-facing endpoint needs additional filtering.
-3. **No `ByVisibilityPublishedAt` GSI** -- listing public videos across all creators requires either a new GSI or a scan with filter (unacceptable at scale). Design must address this.
-4. **No video metadata store** -- `app/services/video_metadata_store.py` must be created as part of VOD-001 implementation; this spec assumes it exists.
+<!-- NOTE: ALL gaps listed below have been resolved. The implementation exists. -->
+
+1. **~~No router exists~~**: `app/routers/video_listing.py` EXISTS (1539 lines, prefix `/ui/videos`, registered at `app/main.py:419`).
+2. **~~No public/viewer listing~~**: `list_videos_public()` EXISTS at `app/services/video_metadata_store.py:505`; `list_videos_by_creator_public()` at line 544.
+3. **~~No ByVisibilityPublishedAt GSI~~**: The `ByGalleryPublished` GSI (PK=`gallery_status`, SK=`published_at`) exists at `scripts/local-ddb-init.py:735`.
+4. **~~No video metadata store~~**: `app/services/video_metadata_store.py` EXISTS with full CRUD (create at 283, get at 323, update at 332, list_by_owner at 402, list_by_status at 461, list_public at 505).
 
 ---
 
@@ -871,14 +873,38 @@ test("Regular user cannot access admin listing", async ({ page }) => {
 
 ## Appendix: File Change Summary
 
-| File | Change Type | Description |
-|------|-------------|-------------|
-| `app/routers/video_listing.py` | **New** | Router with 7 endpoints (list own, list public, list creator, list admin, get detail, patch, delete) |
-| `app/main.py` | Modify | Register `video_listing_router` |
-| `app/models_video.py` | Modify | Add `VideoListItem`, `VideoListOut`, `VideoDetailOut` response models |
-| `app/services/video_metadata_store.py` | Modify | Add `list_videos_by_owner`, `list_videos_public`, `list_videos_by_creator_public`, `list_videos_by_status` with filter-loop pagination |
-| `app/core/settings.py` | Modify | Add `video_playback_token_ttl_seconds` setting |
-| `.env.local.example` | Modify | Add `VIDEO_PLAYBACK_TOKEN_TTL=300` |
-| `tests/test_video_listing.py` | **New** | 22 unit tests for listing/detail/update/delete logic |
-| `tests/test_video_listing_integration.py` | **New** | 11 integration tests with FastAPI test client |
-| `frontend/e2e/video-listing.spec.ts` | **New** | ~12 E2E tests covering CRUD, pagination, authorization, admin |
+<!-- NOTE: All files listed as "New" below ALREADY EXIST. -->
+
+| File | Change Type | Description | Status |
+|------|-------------|-------------|--------|
+| `app/routers/video_listing.py` | ~~New~~ | Router with many endpoints (1539 lines, prefix `/ui/videos`). Models inline: `VideoListItem` (line 46), `VideoListOut` (line 62), `VideoDetailOut` (line 67), `VideoUpdateIn` (line 137), etc. | **Already exists** |
+| `app/main.py` | Done | `video_listing_router` registered at line 419 (import at line 99) | **Already done** |
+| `app/models_video.py` | Done | Contains `VideoMetadataModel` (line 36), `VideoStatus` (line 7), `VideoVisibility` (line 23), `UpdateVideoIn` (line 183), `VideoOut` (line 202), `ClipVideoIn` (line 194) | **Already exists** |
+| `app/services/video_metadata_store.py` | Done | Contains `list_videos_by_owner` (line 402), `list_videos_public` (line 505), `list_videos_by_creator_public` (line 544), `list_videos_by_status` (line 461) | **Already exists** |
+| `frontend/e2e/video-listing.spec.ts` | ~~New~~ | E2E tests | **Already exists** |
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/routers/video_listing.py` | 40 | `APIRouter(prefix="/ui/videos", tags=["video-listing"])` |
+| `app/routers/video_listing.py` | 46 | `VideoListItem` model |
+| `app/routers/video_listing.py` | 62 | `VideoListOut` model |
+| `app/routers/video_listing.py` | 67 | `VideoDetailOut` model |
+| `app/routers/video_listing.py` | 137 | `VideoUpdateIn` model (for PATCH) |
+| `app/services/video_metadata_store.py` | 283 | `create_video()` |
+| `app/services/video_metadata_store.py` | 323 | `get_video()` |
+| `app/services/video_metadata_store.py` | 332 | `update_video()` |
+| `app/services/video_metadata_store.py` | 349 | `soft_delete_video()` |
+| `app/services/video_metadata_store.py` | 402 | `list_videos_by_owner()` |
+| `app/services/video_metadata_store.py` | 461 | `list_videos_by_status()` |
+| `app/services/video_metadata_store.py` | 505 | `list_videos_public()` |
+| `app/services/video_metadata_store.py` | 544 | `list_videos_by_creator_public()` |
+| `app/models_video.py` | 7 | `VideoStatus` type alias |
+| `app/models_video.py` | 36 | `VideoMetadataModel` class |
+| `app/models_video.py` | 183 | `UpdateVideoIn` class |
+| `app/models_video.py` | 202 | `VideoOut` class |
+| `app/main.py` | 99, 419 | video_listing_router import and registration |
+| `app/services/sessions.py` | 283 | `require_ui_session()` (used by video_listing.py) |
+| `scripts/local-ddb-init.py` | 707-737 | `VideoMetadata` table with 5 GSIs |
+| `frontend/e2e/video-listing.spec.ts` | -- | E2E listing tests |

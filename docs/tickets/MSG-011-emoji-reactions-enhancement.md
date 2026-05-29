@@ -38,30 +38,37 @@ Reactions are already functional but lack polish. The current implementation sho
 ### 2.1 Existing Reaction System
 
 **Backend** (`app/routers/messaging.py`):
-- `POST /messaging/conversations/{conv_id}/messages/{msg_id}/reactions` — add reaction
-- `POST /messaging/conversations/{conv_id}/messages/{msg_id}/unreact` — remove reaction
-- Reactions stored on message item as: `reactions: { "smiley": { "user_sub_1": True, "user_sub_2": True } }`
-- `MessageOut.reactions` returns this map in the API response
+- `POST /messaging/conversations/{conv_id}/messages/{msg_id}/reactions` (line 10087) — add or remove reaction via `ReactIn.action` ("add" | "remove")
+- Reactions stored on message item as DynamoDB String Sets: `reactions: { "smiley": SS["user_sub_1", "user_sub_2"] }` (see `ADD reactions.#e :u` at line 10106)
+- `MessageOut.reactions_counts` (line 2365) returns `Dict[str, int]` (emoji to count), and `MessageOut.my_reactions` (line 2366) returns `List[str]` of emojis the viewer reacted with — computed by `_reaction_summaries()` (line 5363)
 
-**Frontend** (`MessageBubble.tsx`):
-- Displays reaction badges below message content
-- Each badge shows emoji + count
-- Click on existing badge to toggle own reaction
-- React button opens a small emoji row (limited selection)
+<!-- NOTE: There is NO separate "/unreact" endpoint. The single reaction endpoint at line 10087 uses ReactIn with action: Literal["add", "remove"] to handle both cases. -->
+<!-- NOTE: Reactions are stored as DDB String Sets (via ADD/DELETE set operations), NOT as maps { user_id: True }. The _reaction_summaries function at line 5363 uses isinstance(userset, set) to process them. -->
+
+**Frontend** (`frontend/src/pages/messages/MessageBubble.tsx`):
+- Displays reaction badges below message content (line 1688: renders `reactions_counts` entries)
+- Each badge shows emoji + count (line 1690)
+- Click on existing badge to toggle own reaction via `reactMut.mutate(emoji)` (line 1694)
+- React button opens a small emoji row with 6 quick-pick emojis (line 789)
+- `reactMut` uses `reactToMessage()` from `frontend/src/api/endpoints/messaging.ts:447`
 
 ### 2.2 Reaction Data Shape
 
 ```typescript
-// Current reactions on MessageOut
-reactions?: Record<string, Record<string, boolean>>;
-// Example: { "smiley": { "user_sub_1": true }, "heart": { "user_sub_1": true, "user_sub_2": true } }
+// Current reactions on MessageOut (see frontend/src/api/types.ts)
+reactions_counts?: Record<string, number>;    // e.g., { "smiley": 1, "heart": 2 }
+my_reactions?: string[];                       // e.g., ["heart"]
 ```
 
-This structure supports both displaying counts (Object.keys(users).length) and checking the current user's reaction (users[currentUserSub]).
+This structure supports displaying counts directly and checking the current user's reaction via `my_reactions.includes(emoji)`. The raw DDB storage uses sets (not maps of boolean), but the API transforms them in `_reaction_summaries()` (see `app/routers/messaging.py:5363`).
+
+<!-- NOTE: The frontend MessageOut does NOT expose the raw reactions map { emoji: { user_id: true } }. It exposes reactions_counts (Dict[str, int]) and my_reactions (List[str]). The raw user IDs per emoji are not returned in the standard message response — they would need a new details endpoint. -->
 
 ### 2.3 Custom Emoji Storage (MSG-007)
 
-Custom emojis are stored in the `custom_emojis` table. In reactions, they're represented as `custom:shortcode` keys (e.g., `custom:my_cat`). The `resolveCustomShortcodes` API resolves shortcodes to image URLs for rendering.
+<!-- NOTE: MSG-007 (Custom Emojis) does not exist yet — there is no custom_emojis DDB table, no resolveCustomShortcodes API, and no custom emoji support anywhere in the codebase. All references to custom emoji functionality in this ticket are forward-looking and require MSG-007 to be implemented first. -->
+
+Custom emojis will be stored in a `custom_emojis` table (to be created by MSG-007). In reactions, they'll be represented as `custom:shortcode` keys (e.g., `custom:my_cat`). A `resolveCustomShortcodes` API will resolve shortcodes to image URLs for rendering.
 
 ### 2.4 Gaps
 
@@ -138,12 +145,10 @@ Custom emojis are stored in the `custom_emojis` table. In reactions, they're rep
 │  ┌────────────────────────────────────────────────────────────────┐  │
 │  │  messaging router                                              │  │
 │  │                                                                │  │
-│  │  POST /messages/{id}/reactions                                 │  │
-│  │       → validate limit (20 unique emojis max)                  │  │
-│  │       → UpdateItem SET reactions.#emoji.#user_sub = true       │  │
-│  │                                                                │  │
-│  │  POST /messages/{id}/unreact                                   │  │
-│  │       → UpdateItem REMOVE reactions.#emoji.#user_sub           │  │
+│  │  POST /messages/{id}/reactions  (existing, line 10087)          │  │
+│  │       → validate limit (20 unique emojis max) ← NEW           │  │
+│  │       → action="add": ADD reactions.#e :u (DDB Set add)       │  │
+│  │       → action="remove": DELETE reactions.#e :u (Set remove)  │  │
 │  │                                                                │  │
 │  │  GET  /messages/{id}/reactions/details   ← NEW                 │  │
 │  │       → batch_get_user_profiles for display names              │  │
@@ -192,26 +197,30 @@ Custom emojis are stored in the `custom_emojis` table. In reactions, they're rep
 
 ### 4.1 Backend: Reaction Limit
 
-Add validation in the reaction endpoint to enforce max 20 unique emojis:
+Add validation to the existing `react_to_message` endpoint (see `app/routers/messaging.py:10087`) to enforce max 20 unique emojis:
 
 ```python
-@router.post("/conversations/{conv_id}/messages/{msg_id}/reactions")
-def add_reaction(conv_id: str, msg_id: str, body: ReactionIn, ctx=Depends(require_ui_session)):
-    user_sub = ctx["user_sub"]
-    emoji = body.emoji
-
-    msg = _get_message_or_404(conv_id, msg_id)
+# Existing endpoint at messaging.py:10087 — add limit check before the ADD operation
+@router.post("/conversations/{conversation_id}/messages/{message_id}/reactions")
+def react_to_message(
+    conversation_id: str,
+    message_id: str,
+    inp: ReactIn,         # existing model at line 2150: emoji + action("add"|"remove")
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)  # line 5383
     reactions = msg.get("reactions", {})
 
-    # Check limit: max 20 unique emoji keys
-    if emoji not in reactions and len(reactions) >= 20:
+    # NEW: Check limit — max 20 unique emoji keys
+    if inp.action == "add" and inp.emoji not in reactions and len(reactions) >= 20:
         raise HTTPException(
             status_code=400,
             detail="Maximum 20 unique reactions per message"
         )
 
-    # Add reaction (existing logic)
-    ...
+    # ... existing ADD/DELETE logic continues (line 10103) ...
 ```
 
 ### 4.2 Backend: Reaction User Info Endpoint
@@ -249,12 +258,14 @@ def get_reaction_details(conv_id: str, msg_id: str, ctx=Depends(require_ui_sessi
 
 | # | Access Pattern | Table/Index | PK | SK | Operation | Notes |
 |---|---------------|-------------|----|----|-----------|-------|
-| 1 | Add reaction | `messages` | `conversation_id` | `message_id` | `UpdateItem` | `SET reactions.#emoji.#user_sub = :true` — nested map update |
-| 2 | Remove reaction | `messages` | `conversation_id` | `message_id` | `UpdateItem` | `REMOVE reactions.#emoji.#user_sub` — remove user from emoji map |
-| 3 | Check reaction limit | `messages` | `conversation_id` | `message_id` | `GetItem` | Read reactions map, count unique keys; done in same request as add |
-| 4 | Get reaction details | `messages` | `conversation_id` | `message_id` | `GetItem` | Read reactions map for user_subs |
-| 5 | Batch get user profiles | `users` | `user_sub` | `PROFILE` | `BatchGetItem` | Fetch display_name for each reacting user |
-| 6 | Get custom emoji image | `custom_emojis` | `shortcode` | `META` | `GetItem` or batch | Resolve `custom:shortcode` to image_url |
+| 1 | Add reaction | `Messages` | `conversation_id` | `message_id` | `UpdateItem` | `ADD reactions.#e :u` — DDB String Set add (see `messaging.py:10106`); `:u = {user_id}` |
+| 2 | Remove reaction | `Messages` | `conversation_id` | `message_id` | `UpdateItem` | `DELETE reactions.#e :u` — DDB String Set remove (see `messaging.py:10115`) |
+| 3 | Check reaction limit | `Messages` | `conversation_id` | `message_id` | `GetItem` | Read reactions map via `_get_message_or_404` (line 5383), count unique keys before ADD |
+| 4 | Get reaction details | `Messages` | `conversation_id` | `message_id` | `GetItem` | Read reactions map for user_subs — NEW endpoint |
+| 5 | Batch get user profiles | `Users` | `user_sub` | — | `BatchGetItem` | Fetch display_name for each reacting user |
+| 6 | Get custom emoji image | `custom_emojis` | — | — | — | Resolve `custom:shortcode` to image_url — requires MSG-007 |
+
+<!-- NOTE: custom_emojis table does not exist yet — MSG-007 dependency. -->
 
 **Example DynamoDB Item (message with reactions)**:
 
@@ -267,24 +278,15 @@ def get_reaction_details(conv_id: str, msg_id: str, ctx=Depends(require_ui_sessi
   "sender_id": {"S": "alice-sub-001"},
   "created_at": {"N": "1748500000"},
   "reactions": {"M": {
-    "thumbsup": {"M": {
-      "alice-sub-001": {"BOOL": true},
-      "bob-sub-002": {"BOOL": true},
-      "charlie-sub-003": {"BOOL": true}
-    }},
-    "heart": {"M": {
-      "bob-sub-002": {"BOOL": true}
-    }},
-    "fire": {"M": {
-      "alice-sub-001": {"BOOL": true},
-      "charlie-sub-003": {"BOOL": true}
-    }},
-    "custom:party_parrot": {"M": {
-      "alice-sub-001": {"BOOL": true}
-    }}
+    "thumbsup": {"SS": ["alice-sub-001", "bob-sub-002", "charlie-sub-003"]},
+    "heart": {"SS": ["bob-sub-002"]},
+    "fire": {"SS": ["alice-sub-001", "charlie-sub-003"]},
+    "custom:party_parrot": {"SS": ["alice-sub-001"]}
   }}
 }
 ```
+
+<!-- NOTE: Reactions are stored as String Sets (SS), not Maps of booleans. The existing code uses ADD/DELETE set operations (see messaging.py:10106-10117). The _reaction_summaries function at line 5363 handles both set and dict formats. -->
 
 **Reaction Details API Response Example**:
 
@@ -361,25 +363,24 @@ curl -s -X POST \
 #### 4.4.3 Remove Reaction
 
 ```bash
+# NOTE: Uses the same /reactions endpoint with action="remove" — there is no separate /unreact endpoint
 curl -s -X POST \
-  "http://localhost:8000/ui/messaging/conversations/conv_abc123/messages/m_def456/unreact" \
+  "http://localhost:8000/ui/messaging/conversations/conv_abc123/messages/m_def456/reactions" \
   -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=jwt_alice" \
   -H "x-csrf-token: csrf_alice" \
   -H "Content-Type: application/json" \
-  -d '{"emoji": "heart"}' \
+  -d '{"emoji": "heart", "action": "remove"}' \
   | jq .
 ```
 
 **Response** (200):
 ```json
 {
-  "ok": true,
-  "conversation_id": "conv_abc123",
-  "message_id": "m_def456",
-  "emoji": "heart",
-  "action": "removed"
+  "ok": true
 }
 ```
+
+<!-- NOTE: The existing react_to_message endpoint returns only {"ok": true} (see messaging.py:10150). The richer response shape shown elsewhere in this ticket (with conversation_id, message_id, emoji, action) would need to be added. -->
 
 #### 4.4.4 Get Reaction Details
 
@@ -431,18 +432,13 @@ curl -s -X POST \
 ### 4.5 Pydantic Models
 
 ```python
-from pydantic import BaseModel, Field
-from typing import Optional
-
-class ReactionIn(BaseModel):
-    """Request body for adding/removing a reaction."""
-    emoji: str = Field(..., min_length=1, max_length=64,
-        description="Emoji string or 'custom:shortcode' for custom emojis")
-
-    model_config = {"json_schema_extra": {"examples": [
-        {"emoji": "heart"},
-        {"emoji": "custom:party_parrot"}
-    ]}}
+# NOTE: ReactIn already exists at app/routers/messaging.py:2150
+# class ReactIn(BaseModel):
+#     emoji: str = Field(min_length=1, max_length=32)
+#     action: Literal["add", "remove"] = "add"
+#
+# The ticket calls it "ReactionIn" but the existing class is "ReactIn".
+# Consider extending max_length from 32 to 64 for custom emoji shortcodes.
 
 class ReactionOut(BaseModel):
     """Response from add/remove reaction."""
@@ -671,12 +667,14 @@ const [animatingEmoji, setAnimatingEmoji] = useState<string | null>(null);
 
 ### 4.11 Frontend: Quick-React Default Setting
 
-**File**: `frontend/src/stores/emojiStore.ts`
+**File**: `frontend/src/stores/emojiStore.ts` **(NEW — does not exist yet)**
+
+<!-- NOTE: emojiStore.ts does not exist in the codebase. The existing Zustand stores are: authStore.ts, impersonationStore.ts, offlineStore.ts, shortcutStore.ts, tenantStore.ts, uiStore.ts (all in frontend/src/stores/). This store would need to be created as part of MSG-006 or this ticket. -->
 
 ```typescript
 interface EmojiStore {
-  // ... existing fields from MSG-006 ...
   quickReactEmoji: string;  // Default: "heart"
+  recentEmojis: string[];   // Last 20 used
   setQuickReactEmoji: (emoji: string) => void;
 }
 ```
@@ -749,9 +747,10 @@ function ReactionBadge({ emoji, count, isOwn }: { emoji: string; count: number; 
 
 | File | Changes |
 |------|---------|
-| `app/routers/messaging.py` | Add reaction limit (20), reaction details endpoint |
+| `app/routers/messaging.py` | Add 20-emoji limit to `react_to_message` (line 10087), add new `/reactions/details` GET endpoint |
 | `frontend/src/pages/messages/MessageBubble.tsx` | Double-tap quick-react, animation, enhanced picker, custom emoji rendering |
-| `frontend/src/stores/emojiStore.ts` | Add `quickReactEmoji` field |
+| `frontend/src/api/endpoints/messaging.ts` | Add `getReactionDetails()` function (existing `reactToMessage` at line 447 covers add/remove) |
+| `frontend/src/stores/emojiStore.ts` | **New file** — create Zustand store for `quickReactEmoji` and `recentEmojis` |
 
 ### 6.3 Step-by-Step Order
 
@@ -936,5 +935,52 @@ test.beforeAll(async ({ browser }) => {
 | Dependency | Ticket | Status |
 |------------|--------|--------|
 | EmojiPicker component | MSG-006 | Required |
-| Custom emoji system | MSG-007 | Required (for custom emoji in reactions) |
-| Existing reaction endpoints | Existing | Available |
+| Custom emoji system | MSG-007 | Required (for custom emoji in reactions) — does not exist yet |
+| Existing reaction endpoints | Existing | Available (see `messaging.py:10087`) |
+
+---
+
+## Codebase References
+
+### Backend — `app/routers/messaging.py`
+| Reference | Line | Notes |
+|-----------|------|-------|
+| `ReactIn` model | 2150 | Existing input model: `emoji: str` + `action: Literal["add", "remove"]`; ticket calls it "ReactionIn" but actual name is `ReactIn`; max_length=32 (may need increase for custom emoji shortcodes) |
+| `MessageOut.reactions_counts` | 2365 | `Optional[Dict[str, int]]` — emoji-to-count mapping |
+| `MessageOut.my_reactions` | 2366 | `Optional[List[str]]` — emojis the viewer has reacted with |
+| `_reaction_summaries(message_item, viewer_user_id)` | 5363 | Computes `reactions_counts` and `my_reactions` from raw DDB set data |
+| `_get_message_or_404(conversation_id, message_id)` | 5383 | Reads message item for reaction limit check |
+| `react_to_message()` endpoint | 10087 | Existing reaction endpoint; uses ADD/DELETE DDB set operations |
+| DDB Set operations (ADD/DELETE) | 10106-10117 | Reactions stored as DDB String Sets, not maps of booleans |
+| `fanout_event_to_conversation()` | 5297 | Used at line 10127 to broadcast `reaction:update` SSE events |
+
+### Frontend — Existing Files
+| File | Line | Notes |
+|------|------|-------|
+| `frontend/src/pages/messages/MessageBubble.tsx` | 485 | `reactMut` mutation; line 789: quick emoji row; line 1688: reaction badge rendering |
+| `frontend/src/api/endpoints/messaging.ts` | 447 | `reactToMessage()` — existing API function for add/remove reactions |
+| `frontend/src/api/types.ts` | — | `MessageOut` type with `reactions_counts`, `my_reactions` fields |
+
+### Frontend — New Files
+| File | Notes |
+|------|-------|
+| `frontend/src/pages/messages/ReactionDetailPopover.tsx` | New component for reaction details |
+| `frontend/src/stores/emojiStore.ts` | New Zustand store for `quickReactEmoji` + `recentEmojis` |
+
+### DynamoDB Tables
+| Table | Notes |
+|-------|-------|
+| `Messages` (PK: `conversation_id`, SK: `message_id`) | Reactions stored as nested map of String Sets (`reactions.{emoji}` = SS[user_ids]) |
+| `custom_emojis` | Does NOT exist yet — requires MSG-007 |
+
+### Corrections Applied
+| Original Claim | Correction |
+|----------------|------------|
+| Separate `/unreact` endpoint | Does not exist; `react_to_message` (line 10087) handles both add/remove via `ReactIn.action` |
+| Reactions stored as `{ emoji: { user_id: True } }` (map of booleans) | Actually stored as DDB String Sets via ADD/DELETE operations (line 10106) |
+| `ReactionIn` model name | Actual name is `ReactIn` (line 2150) |
+| `MessageOut.reactions` as `Record<string, Record<string, boolean>>` | Actual fields are `reactions_counts: Dict[str, int]` and `my_reactions: List[str]` (lines 2365-2366) |
+| `emojiStore.ts` referenced as existing | Does not exist; must be created |
+| `custom_emojis` table referenced as existing | Does not exist; requires MSG-007 |
+| `resolveCustomShortcodes` API referenced | Does not exist; requires MSG-007 |
+| Reaction endpoint returns `{ok, conversation_id, message_id, emoji, action}` | Actually returns only `{"ok": true}` (line 10150) |

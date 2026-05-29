@@ -13,7 +13,12 @@
 
 ### The Gap
 
-The broadcast chat system (BCAST-005) provides a single public chat channel where all viewers participate equally. There is no way for a viewer to pay for a private text conversation with the broadcaster during a live session, and no mechanism for other viewers to pay a lower rate to spectate that private conversation in real time. This leaves two major monetization opportunities untapped:
+The broadcast chat system (BCAST-005) provides a single public chat channel where all viewers participate equally. There is no way for a viewer to pay for a private text conversation with the broadcaster during a live session
+<!-- NOTE: This gap is NOW ADDRESSED. Private chat infrastructure exists:
+  `app/services/broadcast_private_chat.py`,
+  `app/core/settings.py:1208-1210` (private_chat_enabled, max_duration, voyeur_enabled),
+  `frontend/src/api/endpoints/broadcastPrivateChat.ts`,
+  `frontend/e2e/broadcast-private-chat.spec.ts` -->, and no mechanism for other viewers to pay a lower rate to spectate that private conversation in real time. This leaves two major monetization opportunities untapped:
 
 1. **Premium private chat**: Viewers who want personal attention from the creator during a live stream have no way to get it. The public chat is noisy and the creator cannot give individualized responses at scale. A paid private channel solves this.
 
@@ -2437,3 +2442,18 @@ resp = T.billing.query(
 | MON-003 | Creator earnings dashboard will aggregate private chat credits |
 | MON-004 | Creator payouts include private chat revenue |
 | LCOM-004 | Session-level pricing settings pattern reused for chat rate configuration |
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/services/broadcast_private_chat.py` | — | EXISTS | Private chat service |
+| `app/core/settings.py` | 1208-1210 | EXISTS | `broadcast_private_chat_enabled`, max duration, voyeur settings |
+| `app/services/broadcast_chat_store.py` | — | EXISTS | Chat store (messages in same table) |
+| `app/core/tables.py` | 80-81 | EXISTS | `T.broadcast_chat_messages`, `T.broadcast_chat_mutes` |
+| `scripts/local-ddb-init.py` | 557-563 | EXISTS | BroadcastChatMessages, BroadcastChatMutes tables |
+| `scripts/local-ddb-init.py` | 798-808 | EXISTS | BroadcastPrivateSessions table |
+| `frontend/src/api/endpoints/broadcastPrivateChat.ts` | — | EXISTS | Private chat API wrappers |
+| `frontend/e2e/broadcast-private-chat.spec.ts` | — | EXISTS | E2E tests |

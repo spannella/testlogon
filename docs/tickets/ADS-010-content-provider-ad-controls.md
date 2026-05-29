@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: Medium
 **Estimated effort**: 6-8 days
-**Dependencies**: ADS-003 (Targeting — creator ad prefs), ADS-004 (Ad Serving), ADS-007 (Billing — revenue split)
+**Dependencies**: ADS-003 (Targeting — creator ad prefs), ADS-004 (Ad Serving), ADS-007 (Billing — revenue split) — all sibling tickets, not yet implemented
+<!-- NOTE: All ADS dependencies are sibling tickets not yet in the codebase. Existing: ad_placement.py, creator_analytics.py, billing_shared.py. -->
 
 ---
 
@@ -806,3 +807,14 @@ Transparency records are updated atomically using DDB `ADD` operations (incremen
 | 390.2 | Transparency with no advertisers | GET transparency; 200; empty array |
 | 390.3 | Transparency month filter works | Seed data for 2 months; filter by one; only that month's data returned |
 | 390.4 | Block then check serve_ad | Block advertiser; serve_ad for that advertiser; excluded |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ad_placement.py` | 178, 222 | Existing `get_ad_config` (line 178), `record_ad_impression` (line 222) |
+| `app/services/creator_analytics.py` | — | Existing creator analytics service (reference for ad revenue reporting) |
+| `app/services/billing_shared.py` | — | Existing billing ledger helpers |
+| `app/services/creator_ad_controls.py` | — | Does not exist yet — new implementation required |

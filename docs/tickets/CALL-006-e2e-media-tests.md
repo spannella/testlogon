@@ -6,7 +6,8 @@
 
 This ticket defines the end-to-end testing strategy for verifying that WebRTC media actually flows between two browser contexts during a direct call. The existing E2E test suite (`frontend/e2e/webrtc.spec.ts`, sections 73-77) validates the **call lifecycle API** (invite, accept, decline, end, TURN credential issuance) but never exercises the browser's `RTCPeerConnection`, `getUserMedia`, ICE negotiation, or media track rendering. Those tests are pure HTTP-level assertions against the FastAPI backend.
 
-Once CALL-002 (RTCPeerConnection hook) and CALL-003 (getUserMedia capture) land, the frontend will perform real WebRTC offer/answer exchange and media rendering within `CallSessionOverlay`. CALL-006 ensures that:
+<!-- NOTE: CALL-002 (useRtcPeerConnection at frontend/src/hooks/useRtcPeerConnection.ts, 518 lines) and CALL-003 (useMediaCapture at frontend/src/hooks/useMediaCapture.ts, 315 lines) are now IMPLEMENTED. E2E test files exist: webrtc-calls.spec.ts (661 lines), webrtc-media.spec.ts (1375 lines). The original webrtc.spec.ts (871 lines) also exists for call lifecycle HTTP tests. The proposed webrtc-media.spec.ts file name was used for the implementation. -->
+CALL-006 ensures that:
 
 1. Two browser contexts can establish a peer connection through the signaling server.
 2. ICE candidates are exchanged and the connection reaches the `connected` state.
@@ -42,7 +43,7 @@ These properties require two real browser contexts communicating through the rea
 
 ### Existing `webrtc.spec.ts` (Sections 73-77)
 
-The file at `frontend/e2e/webrtc.spec.ts` (872 lines) tests five sections:
+The file at `frontend/e2e/webrtc.spec.ts` (871 lines) tests five sections (see `frontend/e2e/webrtc.spec.ts`):
 
 | Section | What it tests | Technique |
 |---------|--------------|-----------|
@@ -732,3 +733,21 @@ The CALL-006 E2E test suite passes when:
 - [ ] Total execution time < 180 seconds.
 - [ ] Tests are idempotent (pass on retry without manual cleanup).
 - [ ] Existing 1070+ E2E tests remain unaffected (no config changes to `playwright.config.ts`).
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `frontend/e2e/webrtc.spec.ts` | 1-871 | Existing call lifecycle E2E tests (sections 73-77) |
+| `frontend/e2e/webrtc-calls.spec.ts` | 1-661 | WebRTC call E2E tests (IMPLEMENTED) |
+| `frontend/e2e/webrtc-media.spec.ts` | 1-1375 | WebRTC media E2E tests (IMPLEMENTED) |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 1-518 | RTCPeerConnection lifecycle hook |
+| `frontend/src/hooks/useMediaCapture.ts` | 1-315 | Media capture hook |
+| `frontend/src/lib/webrtc.ts` | 1-149 | WebRTC utilities |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 1-671 | Call UI overlay with media rendering |
+| `frontend/src/pages/messages/callStateMachine.ts` | 1-222 | Call state machine + teardown |
+| `frontend/src/hooks/useMessagingStream.ts` | 148-184 | EVENT_TYPES including webrtc events |
+| `app/services/messaging_call_signaling.py` | 1-359 | Backend signaling service |
+| `app/routers/messaging.py` | 13244-13288 | Signaling HTTP endpoint |

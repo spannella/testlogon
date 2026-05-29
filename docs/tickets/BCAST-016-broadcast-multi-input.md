@@ -2571,3 +2571,23 @@ logger.warning("Guest invite acceptance conflict", extra={
 ### 12.3 Audit Trail
 
 All 11 new audit actions are recorded via `record_broadcast_action()` with relevant metadata. The audit trail is queryable via the existing `GET /broadcast/admin/audit` endpoint with actor and time range filters.
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/services/broadcast_multi_input.py` | — | EXISTS | Multi-input management service |
+| `app/services/broadcast_input_store.py` | — | EXISTS | Input storage service |
+| `app/services/broadcast_layout.py` | — | EXISTS | Layout management service |
+| `app/services/broadcast_webrtc_relay.py` | — | EXISTS | WebRTC relay for guest inputs |
+| `app/core/settings.py` | 1213 | EXISTS | `broadcast_inputs_table_name` |
+| `app/core/tables.py` | 89 | EXISTS | `T.broadcast_inputs` handle |
+| `scripts/local-ddb-init.py` | 781-790 | EXISTS | BroadcastInputs table |
+| `frontend/src/api/endpoints/broadcast-inputs.ts` | — | EXISTS | Input API wrappers |
+| `frontend/src/pages/broadcast/InputManager.tsx` | — | EXISTS | Input manager UI |
+| `frontend/src/pages/broadcast/GuestInviteDialog.tsx` | — | EXISTS | Guest invite dialog |
+| `frontend/src/pages/broadcast/LayoutSwitcher.tsx` | — | EXISTS | Layout switcher UI |
+| `frontend/e2e/broadcast-multi-input.spec.ts` | — | EXISTS | E2E tests |
+| `app/services/broadcast_audit.py` | — | EXISTS | `record_broadcast_action()` for audit trail |

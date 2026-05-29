@@ -40,15 +40,18 @@ Creators with thousands of subscribers receive hundreds of DMs daily. Without ch
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Messaging router | `app/routers/messaging.py` (~1200 lines) | All conversation/message endpoints; needs `on_behalf_of` parameter support |
-| Messaging drafts | `app/services/messaging_drafts.py` | Draft message service; delegates may use drafts |
-| Messaging routing | `app/services/messaging_routing.py` | Message routing logic; needs delegate-aware routing |
+| Messaging router | `app/routers/messaging.py` (~13287 lines) | All conversation/message endpoints; needs `on_behalf_of` parameter support |
+<!-- NOTE: Messaging router is ~13287 lines, not ~1200 lines -->
+| Messaging drafts | `app/services/messaging_drafts.py` (~277 lines) | Draft message service; delegates may use drafts |
+| Messaging routing | `app/services/messaging_routing.py` (~245 lines) | Message routing logic; needs delegate-aware routing |
 | Messaging SSE | Messaging SSE stream in router | Real-time message delivery; needs delegate subscription |
-| Broadcast SSE | `app/services/broadcast_sse.py` | SSE pattern reference for multi-subscriber streams |
+| Broadcast SSE | `app/services/broadcast_sse.py` (~49 lines) | SSE pattern reference for multi-subscriber streams |
 | Delegates service | `app/services/delegates.py` (DELEGATE-001) | `require_delegate_permission`, `DelegationContext`, audit logging |
+<!-- NOTE: app/services/delegates.py does not exist yet — depends on DELEGATE-001 completion -->
 | ConversationView | `frontend/src/pages/messages/ConversationView.tsx` | Message UI; needs "Managing" mode and delegate tag rendering |
 | ConversationList | `frontend/src/pages/messages/ConversationList.tsx` | Conversation sidebar; needs creator-context switching |
-| useMessagingStream | `frontend/src/pages/messages/useMessagingStream.ts` | SSE hook; needs creator-scoped subscription |
+| useMessagingStream | `frontend/src/hooks/useMessagingStream.ts` | SSE hook; needs creator-scoped subscription |
+<!-- NOTE: useMessagingStream is at frontend/src/hooks/, not frontend/src/pages/messages/ -->
 
 ### 2.2 Gaps
 
@@ -390,6 +393,7 @@ Delegates CANNOT access encrypted messages. The system enforces this at multiple
 
 ### 3.9 Files to Create
 
+<!-- NOTE: None of these files exist yet — all require new implementation. Also depends on DELEGATE-001 being completed first. -->
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
 | `app/services/delegate_chat.py` | Chat delegation service | ~300 |
@@ -408,7 +412,8 @@ Delegates CANNOT access encrypted messages. The system enforces this at multiple
 | `app/models.py` | Add DelegatedSendMessageIn, DelegatedMessageOut, DelegatedConversationOut, ChatDelegateAuditEntry |
 | `frontend/src/pages/messages/ConversationList.tsx` | Add delegate mode rendering; creator-scoped queries |
 | `frontend/src/pages/messages/ConversationView.tsx` | Delegate mode awareness; disable E2E encrypt for delegates |
-| `frontend/src/pages/messages/useMessagingStream.ts` | Add delegate SSE subscription mode |
+| `frontend/src/hooks/useMessagingStream.ts` | Add delegate SSE subscription mode |
+<!-- NOTE: useMessagingStream is at frontend/src/hooks/, not frontend/src/pages/messages/ -->
 | `frontend/src/api/endpoints/messaging.ts` | Add delegate conversation/message API wrappers |
 | `frontend/src/api/types.ts` | Add DelegatedMessage, DelegatedConversation types |
 | `frontend/src/stores/authStore.ts` | Add `managingCreatorId` state for delegate mode |
@@ -744,6 +749,31 @@ class DelegateChatAuditOut(BaseModel):
 | Permission check on every request | Cache delegate permissions (30s TTL) in backend |
 | Audit query on large conversation | Paginated query; filter delegate_sub != null |
 | Multiple delegates same creator | Each gets own SSE; no broadcast needed (SSE is per-user) |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What | Status |
+|------|---------|------|--------|
+| `app/services/delegate_chat.py` | — | Chat delegation service | NOT YET CREATED |
+| `app/services/delegates.py` | — | Delegate management (DELEGATE-001 dependency) | NOT YET CREATED |
+| `app/routers/messaging.py` | all (13287 lines) | Messaging router needing delegation endpoints | EXISTS |
+| `app/services/messaging_drafts.py` | all (277 lines) | Draft message service | EXISTS |
+| `app/services/messaging_routing.py` | all (245 lines) | Message routing logic | EXISTS |
+| `app/services/broadcast_sse.py` | all (49 lines) | SSE pattern reference | EXISTS |
+| `app/services/profile.py` | 220 | `get_profile(user_sub)` for delegate display names | EXISTS |
+| `app/services/sessions.py` | 283 | `require_ui_session` (used by messaging router) | EXISTS |
+| `frontend/src/pages/messages/ConversationView.tsx` | all | Message UI needing delegate mode | EXISTS |
+| `frontend/src/pages/messages/ConversationList.tsx` | all | Conversation sidebar | EXISTS |
+| `frontend/src/hooks/useMessagingStream.ts` | all | SSE hook (NOT at pages/messages/) | EXISTS |
+| `frontend/src/stores/authStore.ts` | all | Auth store needing `managingCreatorId` | EXISTS (modify) |
+| `frontend/src/pages/messages/DelegateConversationView.tsx` | — | Delegate conversation view | NOT YET CREATED |
+| `frontend/src/pages/messages/CreatorSelector.tsx` | — | Creator selector dropdown | NOT YET CREATED |
+| `frontend/src/pages/messages/DelegateBanner.tsx` | — | Managing mode banner | NOT YET CREATED |
+| `frontend/src/pages/messages/DelegateMessageBubble.tsx` | — | Delegate message bubble | NOT YET CREATED |
+| `frontend/src/pages/messages/DelegateAuditView.tsx` | — | Delegated message audit view | NOT YET CREATED |
+| `frontend/e2e/delegates-chat.spec.ts` | — | E2E tests | NOT YET CREATED |
 
 ---
 

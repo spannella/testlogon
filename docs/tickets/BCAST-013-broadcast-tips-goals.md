@@ -2329,3 +2329,21 @@ This prevents users from submitting arbitrary PM IDs that belong to other users.
 | BCAST-011 | Parallel | Go-private — tips during private sessions use the same system |
 | MON-003 | Downstream | Creator earnings dashboard includes broadcast tip revenue |
 | MON-004 | Downstream | Creator payouts include broadcast tip credits |
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/services/broadcast_tip_store.py` | — | EXISTS | Tip storage service |
+| `app/services/broadcast_tip_goals.py` | — | EXISTS | Tip goal tracking service |
+| `app/core/settings.py` | 507, 511 | EXISTS | `broadcast_tipping_enabled`, `broadcast_tip_goals_table_name` |
+| `app/core/tables.py` | 90 | EXISTS | `T.broadcast_tip_goals` handle |
+| `scripts/local-ddb-init.py` | 792-797 | EXISTS | BroadcastTipGoals table |
+| `frontend/src/api/endpoints/broadcast-tips.ts` | — | EXISTS | Tips API wrappers |
+| `frontend/src/pages/broadcast/BroadcastTipButton.tsx` | — | EXISTS | Tip button UI component |
+| `frontend/src/pages/broadcast/BroadcastTipSummary.tsx` | — | EXISTS | Tip summary display |
+| `frontend/src/pages/broadcast/TipGoalBar.tsx` | — | EXISTS | Goal progress bar |
+| `frontend/src/pages/broadcast/TipTicker.tsx` | — | EXISTS | Real-time tip ticker |
+| `frontend/e2e/broadcast-tips.spec.ts` | — | EXISTS | E2E tests |

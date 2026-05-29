@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: High
 **Estimated effort**: 7-9 days
-**Dependencies**: ADS-001 (Advertiser Accounts & Campaign Manager)
+**Dependencies**: ADS-001 (Advertiser Accounts & Campaign Manager — sibling ticket, not yet implemented)
+<!-- NOTE: ADS-001's services (ad_accounts.py, ad_campaigns.py), tables, and router do not exist yet. This ticket depends on them being implemented first. -->
 
 ---
 
@@ -57,7 +58,7 @@ creator blocks advertiser account?    → ✗ if blocked
 
 ### 2.1 Ad Placement Resolution (`app/services/ad_placement.py`)
 
-The current `get_ad_config()` function (line 178) checks only two things: whether the video is `ad_supported` and whether the viewer is a subscriber with ad-free access. There is no targeting evaluation — every non-subscriber viewer sees the same hardcoded ads regardless of demographics or context.
+The current `get_ad_config()` function (see `app/services/ad_placement.py:178`) checks only two things: whether the video is `ad_supported` and whether the viewer is a subscriber with ad-free access. There is no targeting evaluation — every non-subscriber viewer sees the same hardcoded ads regardless of demographics or context.
 
 ### 2.2 User Profile Data
 
@@ -1103,3 +1104,17 @@ Targeting sets are queried per campaign using the table PK (`CAMP#{campaign_id}`
 | 357.2 | Invalid ad category rejected | Bob PATCH allowed_ad_categories=["invalid_cat"]; 400 |
 | 357.3 | Block already-blocked advertiser is idempotent | Bob blocks Alice twice; 200 both times; block list has one entry |
 | 357.4 | Unblock non-blocked advertiser is idempotent | Bob unblocks non-existent account; 200; block list unchanged |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ad_placement.py` | 178 | Existing `get_ad_config()` — currently no targeting evaluation |
+| `app/services/ad_placement.py` | 25 | Existing `DEV_AD_CREATIVES` — hardcoded creatives (no targeting) |
+| `app/auth/policy.py` | 67 | `require_admin_or_root` — admin auth pattern |
+| `app/services/ad_targeting.py` | — | Does not exist yet — new implementation required |
+| `app/services/creator_ad_prefs.py` | — | Does not exist yet — new implementation required |
+| `ad_targeting` DDB table | — | Does not exist yet in `scripts/local-ddb-init.py` |
+| `app/core/settings.py` (ad_targeting_table_name) | — | Does not exist yet |

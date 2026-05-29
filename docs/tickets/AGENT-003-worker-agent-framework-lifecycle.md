@@ -165,13 +165,13 @@ Data Flow — Heartbeat Monitoring:
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Ticket store | `app/services/tickets.py` (~500 lines) | `TicketStore` class: `create_ticket`, `get_ticket`, `list_tickets`, `update_ticket_status`; ticket spaces and assignment |
-| Ticket models | `app/models.py` | `TicketCreateIn`, `TicketOut`, etc. |
-| Worker provisioner | `app/services/agent_worker_provisioner.py` (AGENT-002) | Worker CRUD, compute lifecycle |
-| Agent workers DDB | `agent_workers` table | Worker records with `worker_status`, `compute_instance_id`, `host_id` |
-| SSE infrastructure | Various routers | Server-Sent Events for real-time state push |
-| Alerts service | `app/services/alerts.py` | `audit_event()` for logging; notification infrastructure |
-| Background tasks | `app/main.py` | Pattern: `add_event_handler("startup", ...)` for async loops |
+| Ticket store | `app/services/tickets.py` | `TicketStore` class (line 110): `create_ticket` (line 215), `get_ticket` (line 300), `list_tickets` (line 384), `update_status` (line 683), `assign_ticket` (line 577), `add_message` (line 621) <!-- NOTE: method is `update_status`, not `update_ticket_status` --> (verified) |
+| Ticket models | `app/models.py` | `TicketCreateIn`, `TicketOut`, etc. (verified — file exists, ~2000 lines) |
+| Worker provisioner | `app/services/agent_worker_provisioner.py` (AGENT-002) | <!-- NOTE: does not exist yet — requires AGENT-002 implementation --> Worker CRUD, compute lifecycle |
+| Agent workers DDB | `agent_workers` table | <!-- NOTE: does not exist yet — requires AGENT-002 implementation --> Worker records with `worker_status`, `compute_instance_id`, `host_id` |
+| SSE infrastructure | Various routers | Server-Sent Events for real-time state push (verified — pattern used in broadcast, messaging) |
+| Alerts service | `app/services/alerts.py` | `audit_event()` for logging; notification infrastructure (verified) |
+| Background tasks | `app/main.py` | Pattern: `add_event_handler("startup", ...)` for async loops (verified — see lines 348-378 for startup tasks) |
 
 ### 2.2 Gaps
 
@@ -1562,3 +1562,22 @@ Checkpoint data is JSON-serialized and size-limited (max 64KB) to prevent DDB it
 8. Pause/resume allows users to temporarily halt an agent without losing progress.
 9. Completed tickets increment the worker's `tickets_completed` counter.
 10. All state transitions produce audit events.
+
+---
+
+## Codebase References
+
+| Reference | Path | Line(s) | Status |
+|-----------|------|---------|--------|
+| Ticket store class | `app/services/tickets.py` | 110 (`class TicketStore`) | Verified |
+| Ticket create | `app/services/tickets.py` | 215 (`create_ticket`) | Verified |
+| Ticket get | `app/services/tickets.py` | 300 (`get_ticket`) | Verified |
+| Ticket list | `app/services/tickets.py` | 384 (`list_tickets`) | Verified |
+| Ticket update status | `app/services/tickets.py` | 683 (`update_status`) | Verified — **not** `update_ticket_status` |
+| Ticket assign | `app/services/tickets.py` | 577 (`assign_ticket`) | Verified |
+| Alerts / audit | `app/services/alerts.py` | entire file | Verified |
+| Background task pattern | `app/main.py` | 348-378 (startup tasks) | Verified |
+| Tickets DDB table | `scripts/local-ddb-init.py` | 494-510 | Verified |
+| Worker provisioner | `app/services/agent_worker_provisioner.py` | — | **Does not exist** — requires AGENT-002 |
+| `agent_workers` DDB table | — | — | **Does not exist** — requires AGENT-002 |
+| Agent orchestrator | `app/services/agent_orchestrator.py` | — | **Does not exist** — new file (this ticket) |

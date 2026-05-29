@@ -25,6 +25,11 @@ Broadcasters want to:
 HLS playlists consist of hundreds of small `.ts` segment files and a manifest. They cannot
 be opened by video editors, uploaded to other platforms, or meaningfully shared. Broadcasters
 currently have **no way** to get their own content out of the platform in a portable format.
+<!-- NOTE: This claim is NOW OUTDATED. MP4 download infrastructure exists:
+  `app/routers/broadcast.py:762-808` (download endpoint with `broadcast_recording_download_enabled` gate),
+  `mint_recording_download_url` (broadcast.py:29 import),
+  `app/core/settings.py:1147-1148` (download_enabled, download_ttl_seconds),
+  `frontend/e2e/broadcast-recording-download.spec.ts` -->
 
 ### Viewer Downloads
 
@@ -1321,3 +1326,17 @@ by disk I/O and S3 transfer speeds:
 The `+faststart` flag adds a second pass that relocates the moov atom. For very large files
 (>4GB), this requires reading and rewriting the file header, adding 1-5 seconds to the
 operation. Total time remains well under the recording pipeline's existing transcode step.
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/routers/broadcast.py` | 762-808 | EXISTS | Download endpoint with `broadcast_recording_download_enabled` gate |
+| `app/routers/broadcast.py` | 27, 29 | EXISTS | Imports `mint_recording_playback_url`, `mint_recording_download_url` |
+| `app/services/broadcast_recording.py` | — | EXISTS | Recording service with download URL minting |
+| `app/core/settings.py` | 1147-1148 | EXISTS | `broadcast_recording_download_enabled`, `broadcast_recording_download_ttl_seconds` |
+| `app/core/tables.py` | 82 | EXISTS | `T.broadcast_recordings` handle |
+| `scripts/local-ddb-init.py` | 567-576 | EXISTS | BroadcastRecordings table |
+| `frontend/e2e/broadcast-recording-download.spec.ts` | — | EXISTS | E2E tests for download |

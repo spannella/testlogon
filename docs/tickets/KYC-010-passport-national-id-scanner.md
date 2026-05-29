@@ -13,7 +13,7 @@
 
 ### 1.1 The Gap
 
-The current KYC system (`app/routers/kyc_cases.py`) allows users to upload identity documents (selfie, id_front, id_back, proof_of_address) via `POST /{case_id}/files`. However, the system treats these uploads as opaque file attachments -- there is no parsing, data extraction, or validation of document contents. The `_KYC_ALLOWED_FILE_TYPES` set (line 51) defines categories but does not distinguish between a passport, national ID card, driving license, or residence permit.
+The current KYC system (see `app/routers/kyc_cases.py`) allows users to upload identity documents (selfie, id_front, id_back, proof_of_address) via `POST /{case_id}/files` (see `:734` for `attach_kyc_file`). However, the system treats these uploads as opaque file attachments -- there is no parsing, data extraction, or validation of document contents. The `_KYC_ALLOWED_FILE_TYPES` set (see `app/routers/kyc_cases.py:51`) defines categories but does not distinguish between a passport, national ID card, driving license, or residence permit.
 
 When an admin reviews a case in the admin queue (`GET /admin/queue`), they must manually inspect each uploaded image, read the text, cross-reference it against the user's profile data, and check expiry dates. This is slow, error-prone, and does not scale.
 
@@ -120,11 +120,13 @@ ERIKSSON<<ANNA<MARIA<<<<<<<<<<
 
 ## 3. Current State Analysis
 
-### 3.1 File Attachment (`app/routers/kyc_cases.py`, line 733)
+### 3.1 File Attachment (see `app/routers/kyc_cases.py:734`)
+<!-- NOTE: ticket originally cited line 733 -- actual is line 734 -->
 
-The `attach_kyc_file()` endpoint accepts a `KycFileAttachmentRequest` with `file_type` (one of `selfie`, `id_front`, `id_back`, `proof_of_address`) and `file_node_id` (a reference to a file in the file manager). It validates the file type against `_KYC_ALLOWED_FILE_TYPES` and appends a file record to the case's `files` array. No content analysis occurs.
+The `attach_kyc_file()` endpoint accepts a `KycFileAttachmentRequest` with `file_type` (one of `selfie`, `id_front`, `id_back`, `proof_of_address`) and `file_node_id` (a reference to a file in the file manager). It validates the file type against `_KYC_ALLOWED_FILE_TYPES` (see `:51`) and appends a file record to the case's `files` array. No content analysis occurs.
 
-### 3.2 File Validation (`app/routers/kyc_cases.py`, line 790)
+### 3.2 File Validation (see `app/routers/kyc_cases.py:791`)
+<!-- NOTE: ticket originally cited line 790 -- actual is line 791 -->
 
 The `validate_kyc_file_requirements()` endpoint checks whether all required file types are present (selfie, id_front, id_back) but does not validate document contents, expiry, or data consistency.
 
@@ -1226,3 +1228,39 @@ test("189.8 Cross-reference excluded when extraction fails", async () => {
 - The scanner service is invoked explicitly via `POST /{case_id}/scan-document`. It does not modify the existing file attachment flow.
 - Removing the endpoints and service file has no impact on existing KYC case lifecycle.
 - Extraction records (`SK=SCAN#*`) are independent of the case `META` record and can be ignored by existing code.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `attach_kyc_file()` endpoint | `app/routers/kyc_cases.py` | 734 | VERIFIED (ticket cites 733 -- off by 1) |
+| `validate_kyc_file_requirements()` endpoint | `app/routers/kyc_cases.py` | 791 | VERIFIED (ticket cites 790 -- off by 1) |
+| `_KYC_ALLOWED_FILE_TYPES` | `app/routers/kyc_cases.py` | 51 | VERIFIED |
+| `submit_kyc_case()` | `app/routers/kyc_cases.py` | 830 | VERIFIED |
+| KYC cases service | `app/services/kyc_cases.py` | all | VERIFIED (828 lines) |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+| KYC settings | `app/core/settings.py` | 1065-1072 | VERIFIED |
+| `app/contracts/kyc_cases_contract.py` | `app/contracts/` | exists | VERIFIED |
+
+### Corrections
+
+<!-- NOTE: The ticket cites `attach_kyc_file()` at line 733 -- actual line is 734. -->
+<!-- NOTE: The ticket cites `validate_kyc_file_requirements()` at line 790 -- actual line is 791. -->
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `app/services/kyc_document_scanner.py` | `app/services/` | NOT FOUND -- new service required |
+| `POST /{case_id}/scan-document` endpoint | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoint required |
+| `GET /{case_id}/scan/{scan_id}` endpoint | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoint required |
+| Scan result items (SK=SCAN#*) in kyc_cases | `kyc_cases` table | NOT FOUND -- new item pattern required |
+| Scanner settings (provider, confidence threshold) | `app/core/settings.py` | NOT FOUND -- new settings required |
+| MRZ/barcode parsing logic | `app/services/kyc_document_scanner.py` | NOT FOUND -- new implementation required |
+| `frontend/src/pages/kyc/` scanner components | `frontend/src/pages/kyc/` | NOT FOUND -- no KYC frontend pages exist |

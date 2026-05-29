@@ -18,7 +18,7 @@ Document-based identity verification can be defeated by high-quality forgeries, 
 documents, or AI-generated images. Regulatory frameworks (e.g., EU AML5D, FinCEN) increasingly
 require financial platforms to perform **liveness verification** -- confirming that the person
 submitting documents is physically present and matches the identity claimed. The current KYC
-system (`app/routers/kyc_cases.py`, `app/services/kyc_cases.py`) has no mechanism to schedule
+system (see `app/routers/kyc_cases.py:519` for `create_kyc_case`, `app/services/kyc_cases.py:97` for `create_case`) has no mechanism to schedule
 or conduct a live verification interview as part of the case workflow.
 
 ### Goals
@@ -26,8 +26,8 @@ or conduct a live verification interview as part of the case workflow.
 1. Allow a verification video call to be scheduled as part of a KYC case review.
 2. Implement a verifier pool: admins with a `kyc_verifier` scope who can conduct calls.
 3. Auto-assign the next available verifier from the pool when a call is requested.
-4. Integrate with the existing call lifecycle (`app/services/messaging_call_lifecycle.py`)
-   and call recording (`app/services/messaging_call_sessions.py`).
+4. Integrate with the existing call lifecycle (see `app/services/messaging_call_lifecycle.py:334` for `end_call`)
+   and call recording (see `app/services/messaging_call_sessions.py:133` for `create_call_session`).
 5. Link call recording to the KYC case as evidence.
 6. Allow the verifier to mark the call as passed/failed with structured notes.
 7. Display verification call status, join button, and recording playback in the case detail page.
@@ -114,7 +114,7 @@ or conduct a live verification interview as part of the case workflow.
 
 ### 3.1 Call Lifecycle
 
-`app/services/messaging_call_lifecycle.py` manages the call state machine:
+`app/services/messaging_call_lifecycle.py` (see `:334` for `end_call`) manages the call state machine:
 ```
 invited -> accepted -> connected -> ended
        -> declined / busy / canceled / failed / missed
@@ -126,7 +126,7 @@ Call sessions are stored in the `MessageCallSessions` DDB table (PK: `call_id`, 
 
 ### 3.2 Call Recording
 
-`app/services/messaging_call_sessions.py` tracks recording state. When recording is enabled,
+`app/services/messaging_call_sessions.py` (see `:19` for `CallSessionRecord`, `:133` for `create_call_session`) tracks recording state. When recording is enabled,
 the system stores `recording_s3_key` on the call session after the call ends. Recordings are
 stored in S3 at `recordings/{call_id}/recording.webm`.
 
@@ -138,9 +138,10 @@ Calendar events are stored in the `calendar` DDB table (PK: `calendar_id`, SK: `
 
 ### 3.4 Admin Scopes
 
-`app/auth/roles.py` defines `AdminScope` enum (line 14). Current scopes:
-`AUTH_SUPPORT`, `BILLING_SUPPORT`, `CONTENT_MODERATION`, `CONTENT_MODERATION_SENIOR`.
+`app/auth/roles.py` defines `AdminScope` enum (see `app/auth/roles.py:14`). Current scopes:
+`AUTH_SUPPORT`, `BILLING_SUPPORT`, `CONTENT_MODERATION`, `CONTENT_MODERATION_SENIOR` (see `app/auth/roles.py:26-30`).
 A new `KYC_VERIFIER` scope will be added for verifier pool membership.
+<!-- NOTE: KYC_VERIFIER scope does not exist yet -- new implementation required -->
 
 ### 3.5 KYC Case Structure
 
@@ -740,3 +741,32 @@ test("163.6 Applicant cannot see verifier's full profile data", async () => {
   // Only includes verifier display name (if any)
 });
 ```
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `CallSessionRecord` class | `app/services/messaging_call_sessions.py` | 19 | VERIFIED |
+| `create_call_session()` | `app/services/messaging_call_sessions.py` | 133 | VERIFIED |
+| `end_call()` | `app/services/messaging_call_lifecycle.py` | 334 | VERIFIED |
+| KYC cases router | `app/routers/kyc_cases.py` | all | VERIFIED (1294 lines) |
+| `submit_kyc_case()` | `app/routers/kyc_cases.py` | 830 | VERIFIED |
+| `_readiness_for_case()` | `app/routers/kyc_cases.py` | 223 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+| `app/contracts/kyc_cases_contract.py` | `app/contracts/` | exists | VERIFIED |
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| Verification call scheduling/joining endpoints | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoints required |
+| Liveness verification service | `app/services/kyc_liveness.py` or similar | NOT FOUND -- new service required |
+| Verification call DDB items (SK=CALL#*) | `kyc_cases` table | NOT FOUND -- new item pattern required |
+| `KYC_VERIFIER` admin scope | `app/auth/roles.py` | NOT FOUND -- only AUTH_SUPPORT, BILLING_SUPPORT, CONTENT_MODERATION, CONTENT_MODERATION_SENIOR exist (lines 26-30) |

@@ -438,15 +438,17 @@ def build_qa_workflow(*, agent_run_id: str, agent_type_id: str,
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| PUT | `/ui/agents/types/{type_id}/qa-config` | `require_admin_session` | Set or update qa_config |
-| GET | `/ui/agents/types/{type_id}/qa-config` | `require_admin_session` | Get current qa_config |
-| POST | `/ui/agents/types/{type_id}/qa-config/validate` | `require_admin_session` | Validate config without saving |
-| GET | `/ui/agents/types/{type_id}/qa-eligible-tickets` | `require_admin_session` | Preview tickets this QA agent would pick up |
-| GET | `/ui/agents/runs/{run_id}/qa-output` | `require_admin_session` | Get structured QA output |
-| GET | `/ui/agents/runs/{run_id}/qa-report` | `require_admin_session` | Get rendered Markdown QA report |
-| GET | `/ui/agents/runs/{run_id}/qa-screenshots` | `require_admin_session` | List screenshots with presigned S3 URLs |
-| POST | `/ui/agents/types/{type_id}/test-qa-workflow` | `require_admin_session` | Dry-run: preview workflow steps for a ticket |
-| GET | `/ui/agents/qa/metrics` | `require_admin_session` | QA metrics: tested count, pass rate, bugs found, avg time |
+| PUT | `/ui/agents/types/{type_id}/qa-config` | `require_admin_scope` | Set or update qa_config |
+| GET | `/ui/agents/types/{type_id}/qa-config` | `require_admin_scope` | Get current qa_config |
+| POST | `/ui/agents/types/{type_id}/qa-config/validate` | `require_admin_scope` | Validate config without saving |
+| GET | `/ui/agents/types/{type_id}/qa-eligible-tickets` | `require_admin_scope` | Preview tickets this QA agent would pick up |
+| GET | `/ui/agents/runs/{run_id}/qa-output` | `require_admin_scope` | Get structured QA output |
+| GET | `/ui/agents/runs/{run_id}/qa-report` | `require_admin_scope` | Get rendered Markdown QA report |
+| GET | `/ui/agents/runs/{run_id}/qa-screenshots` | `require_admin_scope` | List screenshots with presigned S3 URLs |
+| POST | `/ui/agents/types/{type_id}/test-qa-workflow` | `require_admin_scope` | Dry-run: preview workflow steps for a ticket |
+| GET | `/ui/agents/qa/metrics` | `require_admin_scope` | QA metrics: tested count, pass rate, bugs found, avg time |
+
+<!-- NOTE: `require_admin_session` does not exist in the codebase. The correct admin auth dependency is `require_admin_scope(AdminScope.XXX)` from `app/auth/policy.py:84`. -->
 
 ### 4.5 API Request/Response Examples
 
@@ -1351,7 +1353,7 @@ sum(rate(qa_agent_runs_total[1h])) * 3600
 
 ## 10. Security Considerations
 
-- **Admin-only access**: All QA Agent configuration endpoints require `require_admin_session`.
+- **Admin-only access**: All QA Agent configuration endpoints require `require_admin_scope()` (see `app/auth/policy.py:84`). <!-- NOTE: was `require_admin_session` which does not exist -->
 - **Screenshot access control**: Presigned S3 URLs expire after 15 minutes. Screenshots are stored in a separate S3 prefix not accessible via the public file manager.
 - **Test code injection prevention**: Generated test files are written to a sandboxed directory within the checked-out repo. The coding tool prompt explicitly instructs against modifying production source code.
 - **Bug ticket attribution**: Auto-filed bugs have `metadata.bug_source = "qa_agent"` for auditability. The `agent_run_id` links back to the full QA run record.
@@ -1434,3 +1436,23 @@ sum(rate(qa_agent_runs_total[1h])) * 3600
 | Ticket | Depends On |
 |--------|-----------|
 | AGENT-012 (Project Manager) | Uses QA pass rate and defect data for project reporting |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| TicketStore class | `app/services/tickets.py` | 110 | `create_ticket` (215), `assign_ticket` (577), `add_message` (621), `update_status` (683) |
+| `require_admin_scope` | `app/auth/policy.py` | 84 | Correct admin auth (ticket originally said `require_admin_session` which does not exist) |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `(event, user_sub, request, **fields)` |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+| Tables singleton | `app/core/tables.py` | — | `T` object |
+| Router registration | `app/main.py` | 297-465 | No `agent_qa_router` registered yet |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing; ticket proposes extending with QA statuses |
+| `agent_types` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `agent_runs` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `agent_qa.py` service | `app/services/` | — | Does NOT exist yet — new implementation in this ticket |
+| `agent_qa.py` router | `app/routers/` | — | Does NOT exist yet — new implementation in this ticket |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |

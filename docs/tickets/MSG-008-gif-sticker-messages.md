@@ -36,11 +36,12 @@ GIFs and stickers are a core communication medium for modern messaging. They ena
 
 ### 2.1 Message Kinds
 
-Current message kinds in `app/routers/messaging.py`: `text`, `image`, `file_share`, `calendar_share`, `calendar_event`, `meeting_poll`. The `kind` field on messages determines how `MessageBubble.tsx` renders the content. Adding `gif` and `sticker` kinds follows the same pattern.
+Current message kinds in `app/routers/messaging.py` (see `:2330`): `text`, `image`, `file`, `audio`, `video`, `gallery`, `file_share`, `calendar_share`, `calendar_event`, `meeting_poll`, `video_share`, `voice_message`, `voicemail`. The `kind` field on messages determines how `MessageBubble.tsx` renders the content. Adding `gif` and `sticker` kinds follows the same pattern.
 
 ### 2.2 Message Send Flow
 
-`send_text_message()` in `app/services/messaging.py` stores a message item in the `Messages` DDB table with fields including `kind`, `text`, and various media fields. Image messages use `create_image_message()` with `image_url`, `image_width`, `image_height`. GIF and sticker messages will follow the same pattern with their own dedicated fields.
+`send_text_message()` in `app/routers/messaging.py` (see `:3308`) stores a message item
+<!-- NOTE: There is no separate `app/services/messaging.py` — messaging logic lives in the monolith router `app/routers/messaging.py` (13,287 lines). --> in the `Messages` DDB table with fields including `kind`, `text`, and various media fields. Image messages use `create_image_message()` with `image_url`, `image_width`, `image_height`. GIF and sticker messages will follow the same pattern with their own dedicated fields.
 
 ### 2.3 ComposeBar
 
@@ -179,7 +180,7 @@ Sticker items (SK = `STICKER#{sticker_id}`):
 | `width` | Number | Image width in pixels |
 | `height` | Number | Image height in pixels |
 
-**User favorites** are stored in the user's preferences (billing table pattern):
+**User favorites** are stored in the user's preferences (billing table pattern, see `app/core/settings.py:321` for `billing_table_name`; `scripts/local-ddb-init.py:59` for table definition):
 
 | PK | SK | Fields |
 |----|----|--------|
@@ -420,7 +421,8 @@ async def create_sticker_collection(
     description: str = Form(default=""),
     files: list[UploadFile] = File(...),
     alt_texts: str = Form(default=""),  # comma-separated, one per file
-    ctx=Depends(require_admin_session),
+    ctx=Depends(require_admin_scope(AdminScope.CONTENT_MODERATION)),
+    # NOTE: `require_admin_session` does not exist — use `require_admin_scope()` from `app/auth/policy.py:84`
 ):
     """Create a sticker collection with uploaded images (admin only)."""
 
@@ -1233,7 +1235,7 @@ test.beforeAll(async ({ browser }) => {
 - GIF URLs are validated to be from allowed domains (mock provider in dev, configured domains in prod)
 - Sticker images are uploaded to platform S3 — no external hotlinking
 - Alt text is HTML-escaped by React JSX
-- Admin endpoints require `require_admin_session` auth
+- Admin endpoints require `require_admin_scope()` auth (see `app/auth/policy.py:84`; `require_admin_session` does not exist)
 - Rate limiting on GIF search: 30 requests/minute per user
 - Sticker file uploads validated for MIME type (PNG, WebP, SVG only) and size (512KB max)
 - GIF provider responses are sanitized — only `id`, `url`, `alt_text`, `width`, `height` fields passed through
@@ -1249,3 +1251,25 @@ test.beforeAll(async ({ browser }) => {
 | Admin session auth | Existing | Available |
 | S3 mock (moto) | Existing | Available |
 | Billing table (favorites) | Existing | Available |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/routers/messaging.py` | 2330 | Message `kind` Literal — currently 13 kinds; no `gif` or `sticker` — **new kinds required** |
+| `app/routers/messaging.py` | 3308 | `send_text_message()` — pattern to follow for `send_gif_message` and `send_sticker_message` |
+| `app/routers/messaging.py` | 3876-3901 | Kind-specific rendering in `_message_out_from_item` for `file_share`, `calendar_share`, `calendar_event`, `meeting_poll` — pattern to follow |
+| `scripts/local-ddb-init.py` | 59 | Billing table (`billing`) exists — used for sticker favorites (`FAV_STICKER#` SK pattern) |
+| `scripts/local-ddb-init.py` | — | No `sticker_collections` table exists — **new table required** |
+| `app/core/settings.py` | 321 | `billing_table_name` setting exists; no `ddb_sticker_collections_table` or GIF/sticker settings — **new settings required** |
+| `app/auth/policy.py` | 84 | `require_admin_scope()` is the correct admin auth dependency (NOT `require_admin_session` which does not exist) |
+| `frontend/src/pages/messages/ComposeBar.tsx` | 160, 1777 | MeetingPollComposer integration pattern — GIF/sticker buttons follow the same popover pattern |
+| `frontend/src/pages/messages/MessageBubble.tsx` | 412 | Existing state management pattern — add GIF/sticker rendering sections |
+| `app/main.py` | — | No sticker/GIF router registered — **registration required** |
+| `app/services/gif_provider.py` | — | **Does not exist** — new mock GIF provider required |
+| `app/services/sticker_collections.py` | — | **Does not exist** — new service required |
+| `app/routers/sticker_collections.py` | — | **Does not exist** — new router required |
+| `frontend/src/components/shared/GifPicker.tsx` | — | **Does not exist** — new component required |
+| `frontend/src/components/shared/StickerPicker.tsx` | — | **Does not exist** — new component required |

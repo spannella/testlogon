@@ -50,7 +50,7 @@ Individual creators often lack the advertising budget to compete for visibility.
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Ad placement | `app/services/ad_placement.py` (327 lines) | `calculate_ad_slots`, `record_ad_impression`, `get_ad_stats` |
+| Ad placement | `app/services/ad_placement.py` (342 lines) | `calculate_ad_slots` (:116), `record_ad_impression` (:222), `get_ad_stats` (:327) |
 | Ad config | `app/services/ad_placement.py:53-78` | `get_default_ad_config`, `validate_ad_config` for campaign setup |
 | Ad impression recording | `app/services/ad_placement.py:222-279` | `record_ad_impression` with daily tracking, `_credit_ad_revenue` |
 | Ad stats | `app/services/ad_placement.py:327+` | `get_ad_stats` for impression/click/revenue aggregation |
@@ -859,3 +859,42 @@ The `record_campaign_impression` function checks `remaining_cents` after each im
 8. All syndicate members can view campaign list and analytics.
 9. Campaigns auto-complete when budget is exhausted.
 10. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Verified Existing Infrastructure
+
+| Reference in Ticket | Verified | Notes |
+|---------------------|----------|-------|
+| `app/services/ad_placement.py` | Yes (342 lines, not 327) | `calculate_ad_slots` at :116, `record_ad_impression` at :222, `get_ad_stats` at :327, `_credit_ad_revenue` at :279 |
+| `app/services/ad_placement.py:53-78` | Yes | `get_default_ad_config` at :53, `validate_ad_config` at :78 — confirmed |
+| `app/services/ad_placement.py:222-279` | Yes | `record_ad_impression` at :222, `_credit_ad_revenue` at :279 — confirmed |
+| `app/services/ad_placement.py:327+` | Yes | `get_ad_stats` at :327 — confirmed |
+| `app/services/billing_shared.py` | Yes (260 lines) | `apply_wallet_delta` at :178, `new_ledger_entry` at :217 — correctly referenced for budget refunds |
+| ADS ticket specs (`docs/tickets/ADS-001` through `ADS-019`) | Yes | Ticket files exist in `docs/tickets/` |
+
+### Line Count Correction
+
+- Ticket states `ad_placement.py` is "327 lines" — actual count is **342 lines**. The `get_ad_stats` function starts at line 327, not the file ending.
+
+### New Code (Correctly Identified as Not Yet Existing)
+
+| Item | Status |
+|------|--------|
+| `app/services/syndicate_advertising.py` | Does not exist — new implementation required |
+| `app/routers/syndicate_advertising.py` | Does not exist — new implementation required |
+| `app/services/syndicate_treasury.py` | Does not exist — new implementation required (SYND-004) |
+| `app/services/syndicates.py` | Does not exist — new implementation required (SYND-001) |
+| `frontend/src/pages/syndicates/CampaignsTab.tsx` | Does not exist — new component |
+| `frontend/src/pages/syndicates/CreateCampaignDialog.tsx` | Does not exist — new component |
+| `frontend/src/pages/syndicates/CampaignDetailPage.tsx` | Does not exist — new component |
+| `frontend/src/pages/syndicates/CampaignAnalyticsChart.tsx` | Does not exist — new component |
+
+### Notes
+
+- No syndicate-related code exists anywhere in `app/services/` or `app/routers/` (grep confirmed zero results).
+- The ticket's service code references `syndicate_svc._require_admin` and `spend_on_advertising` from SYND-001 and SYND-004 respectively — neither exists yet.
+- The `billing_shared.py` functions (`apply_wallet_delta`, `new_ledger_entry`) referenced for budget refunds are correctly cited and exist at the specified locations.
+- The `T.syndicates` table handle does not exist in `app/core/tables.py` and the syndicates table is not defined in `scripts/local-ddb-init.py` — must be added as part of SYND-001.

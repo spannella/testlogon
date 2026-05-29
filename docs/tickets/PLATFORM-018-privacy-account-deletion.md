@@ -1336,3 +1336,59 @@ The deletion cascade processes tables sequentially (not in parallel) to avoid ov
 11. Admin retention hold prevents deletion even after grace period.
 12. Pre-deletion email is sent before profile is deleted.
 13. All 31 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Backend — Services
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `gdpr_service.py` (~815 lines) | `app/services/gdpr_service.py` | whole file | **Exists** — ticket says ~810, actual ~815 |
+| `create_deletion_request()` | `app/services/gdpr_service.py` | 123 | **Verified** |
+| `process_export()` | `app/services/gdpr_service.py` | 402 | **Verified** |
+| `process_deletion()` | `app/services/gdpr_service.py` | 660 | **Verified** |
+| `delete_user_data()` | `app/services/account.py` | — | **Exists** (sessions/MFA/API key cleanup) |
+| `list_push_devices()`, `revoke_push_device()` | `app/services/push.py` | — | **Exists** |
+| `deletion_scheduler.py` | `app/services/deletion_scheduler.py` | — | <!-- NOTE: `deletion_scheduler.py` does not exist yet — new implementation required --> |
+| `cognito_auth.py` | `app/services/cognito_auth.py` | — | <!-- NOTE: `cognito_auth.py` does not exist yet — new implementation required --> |
+
+### Backend — Routers
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| Password verification stub (`pass` in prod) | `app/routers/privacy.py` | 148-151 | **Verified** — `pass` statement confirms this is a stub |
+| `privacy_router` registration | `app/main.py` | 441 | **Verified** |
+| `admin_privacy_router` registration | `app/main.py` | 442 | **Verified** |
+
+### Backend — Settings (`app/core/settings.py`)
+
+| Setting | Line | Default | Ticket Claims | Status |
+|---------|------|---------|---------------|--------|
+| `privacy_deletion_grace_period_days` | 1256 | **14** | 30 | **INCORRECT** — ticket says 30-day grace period in multiple places (sections 3.2, 19.3, 19.4, acceptance criteria), but the actual default is **14 days**. Frontend `PrivacyPage.tsx` line 243 also references "14-day grace period". |
+| `privacy_export_max_items_per_table` | 1253 | 100000 | — | **Verified** |
+| `privacy_export_s3_bucket` | 1254 | `""` | — | **Verified** |
+| `privacy_export_s3_prefix` | 1255 | `"exports/"` | — | **Verified** |
+| `privacy_deletion_batch_size` | 1257 | 25 | — | **Verified** |
+| `privacy_anonymize_display_name` | 1258 | `"Deleted User"` | — | **Verified** |
+| `privacy_anonymize_message_text` | 1259 | `"[This message was deleted]"` | — | **Verified** |
+
+### DynamoDB Tables (`scripts/local-ddb-init.py`)
+
+| Table | Line | PK / SK | GSIs | Status |
+|-------|------|---------|------|--------|
+| `data_requests` | 864 | `pk` / `sk` | ByStatus, ByType | **Verified** |
+| `data_request_audit` | 874 | `pk` / `sk` | — | **Verified** |
+
+### Frontend
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `PrivacyPage.tsx` | `frontend/src/pages/settings/PrivacyPage.tsx` | whole file | **Exists** — references "14-day grace period" at line 243 |
+
+### Corrections
+
+1. **Grace period default**: The ticket states "30-day grace period" in multiple places, but `app/core/settings.py:1256` sets `privacy_deletion_grace_period_days: int = 14`. The frontend also says "14-day". Either update the ticket to say 14, or update the setting default to 30 if the intent is to change it.
+2. **`deletion_scheduler.py`**: Referenced as the background job for processing expired grace periods. This file does not exist — it is new implementation required by this ticket.
+3. **`cognito_auth.py`**: Referenced for real password verification via Cognito `AdminInitiateAuth`. This file does not exist — it is new implementation required by this ticket.

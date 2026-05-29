@@ -698,3 +698,24 @@ multi_currency_enabled: bool = os.environ.get("MULTI_CURRENCY_ENABLED", "true").
 8. A disclaimer on checkout pages clarifies that charges are in USD.
 9. Admins can view rate source details and force a rate refresh.
 10. All 15 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key References |
+|------|---------------|
+| `app/services/billing_shared.py` | Ledger entries (all USD) — `new_ledger_entry:217` |
+| `app/core/settings.py` | Configuration (no currency settings yet) |
+| `frontend/src/pages/billing/` | Billing pages (all USD formatting) |
+| `frontend/src/pages/shop/Checkout.tsx` | Cart totals (USD) |
+| `frontend/src/pages/feed/PostCard.tsx` | Post unlock prices (USD) |
+
+### Files to Create (new implementation)
+| File | Purpose |
+|------|---------|
+| `app/services/exchange_rates.py` | Rate fetching, caching, conversion logic |
+| `exchange_rates` DDB table or cache | Cached rate storage |
+| `frontend/src/components/shared/CurrencyAmount.tsx` | Reusable converted price display component |
+| `frontend/src/contexts/CurrencyContext.tsx` | Currency provider with user preference + rates |

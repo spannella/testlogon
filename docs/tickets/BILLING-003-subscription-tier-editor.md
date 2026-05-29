@@ -421,11 +421,13 @@ Currently has:
 - `listSubscriptions(params)` -- list user's own subscriptions
 - `cancelSubscription`, `resumeSubscription`, `changePlan`, `updateRenewal`
 
-**Missing**: No `createPlan`, `updatePlan`, `archivePlan`, `createDiscount`, `listDiscounts`, `disableDiscount` functions.
+<!-- NOTE: The creator CRUD functions listed below as "missing" have since been implemented at subscriptions.ts:94-112 (createPlan, updatePlan, archivePlan, createDiscount, listDiscounts, disableDiscount). -->
+~~**Missing**: No `createPlan`, `updatePlan`, `archivePlan`, `createDiscount`, `listDiscounts`, `disableDiscount` functions.~~
 
 **Citations**:
-- `frontend/src/api/endpoints/subscriptions.ts:13-28` -- `userIdHeader()`, `subGet()`, `subPost()` helpers
-- `frontend/src/api/endpoints/subscriptions.ts:33-34` -- only `listPlans`; no creator CRUD
+- `frontend/src/api/endpoints/subscriptions.ts:17-31` -- `userIdHeader()`, `subGet()`, `subPost()` helpers (see `frontend/src/api/endpoints/subscriptions.ts:17,22,26`)
+- `frontend/src/api/endpoints/subscriptions.ts:37` -- `listPlans`
+- `frontend/src/api/endpoints/subscriptions.ts:94-112` -- creator CRUD functions now exist: `createPlan`, `updatePlan`, `archivePlan`, `createDiscount`, `listDiscounts`, `disableDiscount`
 
 ---
 
@@ -1244,9 +1246,9 @@ Remove the route from `App.tsx` and the sidebar link from `Sidebar.tsx`. Delete 
 | Discount disable endpoint | `app/routers/subscription_server.py` | 1640-1669 | VERIFIED |
 | DiscountCodeCreateIn model | `app/routers/subscription_server.py` | 466-471 | VERIFIED |
 | DiscountCodeOut model | `app/routers/subscription_server.py` | 474-481 | VERIFIED |
-| PlanBrowser is subscriber-facing only | `frontend/src/pages/subscriptions/PlanBrowser.tsx` | 1-187 | VERIFIED |
+| PlanBrowser is subscriber-facing only | `frontend/src/pages/subscriptions/PlanBrowser.tsx` | 1-186 | VERIFIED |
 | PlanBrowser filters active plans | `frontend/src/pages/subscriptions/PlanBrowser.tsx` | 66 | VERIFIED |
-| No PlanEditor/TierManager exists | `frontend/src/pages/subscriptions/` | N/A | VERIFIED (only PlanBrowser.tsx) |
-| `userIdHeader()` + `subPost()` helpers | `frontend/src/api/endpoints/subscriptions.ts` | 13-28 | VERIFIED |
-| `listPlans` is the only plan function | `frontend/src/api/endpoints/subscriptions.ts` | 33-34 | VERIFIED |
-| No creator CRUD in subscriptions.ts | `frontend/src/api/endpoints/subscriptions.ts` | 1-79 | VERIFIED (only subscriber actions) |
+| PlanEditor/TierManager/DiscountCodeManager | `frontend/src/pages/subscriptions/` | N/A | NOW EXIST (TierManager.tsx, PlanEditor.tsx, DiscountCodeManager.tsx) |
+| `userIdHeader()` + `subPost()` helpers | `frontend/src/api/endpoints/subscriptions.ts` | 17-31 | VERIFIED |
+| `listPlans` function | `frontend/src/api/endpoints/subscriptions.ts` | 37 | VERIFIED |
+| Creator CRUD in subscriptions.ts | `frontend/src/api/endpoints/subscriptions.ts` | 94-112 | NOW EXISTS (createPlan, updatePlan, archivePlan, createDiscount, listDiscounts, disableDiscount) |

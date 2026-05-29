@@ -169,10 +169,10 @@ GET /ui/groups/{group_id}/campaigns/{campaign_id}/stats
 
 ### 3.1 Existing Infrastructure
 
-- **Ad platform** (`app/services/ad_placement.py`): VOD ad slot calculation, `record_ad_impression()`, `_credit_ad_revenue()`. ADS-001 defines campaign hierarchy (Account > Campaign > Ad Group > Creative) and budget tracking.
-- **Advertiser accounts** (ADS-001): `ad_accounts` table. Any user can create an advertiser account. Group campaigns create a group-linked account.
-- **Stripe** (`app/services/billing_shared.py`): Mock Stripe on port 12111. For external donations, Stripe Checkout Session handles payment method collection without requiring a platform account.
-- **Billing ledger**: `new_ledger_entry()` with `pk`, `sk=LEDGER#{ts}#{entry_id}`, `amount_cents`, `reason`, `direction`. Group treasury uses the same pattern with `pk=GROUP#{group_id}`.
+- **Ad platform** (`app/services/ad_placement.py`): VOD ad slot calculation, `record_ad_impression()` (see `app/services/ad_placement.py:222`), `_credit_ad_revenue()` (see `:279`). ADS-001 defines campaign hierarchy (Account > Campaign > Ad Group > Creative) and budget tracking. <!-- NOTE: ad_placement.py is VOD-specific (video ads); no generic campaign management or group-campaign linking exists yet -->
+- **Advertiser accounts** (ADS-001): `ad_accounts` table. <!-- NOTE: ad_accounts table does not exist in scripts/local-ddb-init.py — must be created by ADS-001 dependency --> Any user can create an advertiser account. Group campaigns create a group-linked account.
+- **Stripe** (`app/services/billing_shared.py`): Mock Stripe on port 12111. For external donations, Stripe Checkout Session handles payment method collection without requiring a platform account. <!-- NOTE: Stripe Checkout Session API is not currently used in the codebase; existing Stripe usage is PaymentIntent-based (see app/services/billing_reconcile.py:86, app/services/payment_incident_stripe_adapter.py:159). Checkout Session will be a new integration. -->
+- **Billing ledger**: `new_ledger_entry()` (see `app/services/billing_shared.py:217`) with `pk`, `sk=LEDGER#{ts}#{entry_id}`, `amount_cents`, `reason`, `type` (NOT `direction` — field is `type`, see `:217`). Group treasury uses the same pattern with `pk=GROUP#{group_id}`.
 
 ### 3.2 Gaps
 
@@ -189,7 +189,7 @@ GET /ui/groups/{group_id}/campaigns/{campaign_id}/stats
 
 | # | Operation | Table | PK | SK / GSI | Condition / Filter | Notes |
 |---|-----------|-------|-----|----------|-------------------|-------|
-| 1 | Link advertiser account | `user_groups` | `GROUP#{group_id}` | `SK=ADVERTISER` | `attribute_not_exists(sk)` (no overwrite) | One-time link |
+| 1 | Link advertiser account | `user_groups` | `GROUP#{group_id}` | `SK=ADVERTISER` | `attribute_not_exists(sk)` (no overwrite) | One-time link | <!-- NOTE: user_groups table does not exist yet — must be created by GROUP-001 -->
 | 2 | Get advertiser link | `user_groups` | `GROUP#{group_id}` | `SK=ADVERTISER` | None | Check before campaign create |
 | 3 | Create fundraiser | `user_groups` | `GROUP#{group_id}` | `SK=FUNDRAISER#{fundraiser_id}` | None | New item |
 | 4 | List fundraisers | `user_groups` | `GROUP#{group_id}` | `SK begins_with FUNDRAISER#` | None | Paginated query |
@@ -199,12 +199,12 @@ GET /ui/groups/{group_id}/campaigns/{campaign_id}/stats
 | 8 | Confirm donation (increment) | `user_groups` | `GROUP#{group_id}` | `SK=FUNDRAISER#{fundraiser_id}` | None | `ADD raised_cents :amt, donation_count :one` |
 | 9 | List donations | `user_groups` | `FUNDRAISER#{fundraiser_id}` | `SK begins_with DONATION#` | `ScanIndexForward=False` | Admin/mod only; paginated |
 | 10 | Get donation receipt | `user_groups` | `FUNDRAISER#{fundraiser_id}` | `SK=DONATION#{donation_id}` | `status = completed` | Public, requires completed status |
-| 11 | Campaign stats | `ad_impressions` | `CAMPAIGN#{campaign_id}` | Aggregate | None | Pre-aggregated |
-| 12 | List campaigns | `ad_campaigns` | By `advertiser_account_id` GSI | None | None | Via ADS-001 infrastructure |
+| 11 | Campaign stats | `ad_impressions` | `CAMPAIGN#{campaign_id}` | Aggregate | None | Pre-aggregated | <!-- NOTE: AdImpressions table exists (local-ddb-init.py:831) but GSIs are ByVideoCreatedAt and ByCreatorCreatedAt — no CAMPAIGN# PK pattern exists; would need new access pattern or GSI -->
+| 12 | List campaigns | `ad_campaigns` | By `advertiser_account_id` GSI | None | None | Via ADS-001 infrastructure | <!-- NOTE: ad_campaigns table does not exist yet — must be created by ADS-001 dependency -->
 
 **Key query example -- fundraiser atomic increment:**
 ```python
-T.user_groups.update_item(
+T.user_groups.update_item(  # NOTE: T.user_groups table handle does not exist yet in app/core/tables.py — must be added by GROUP-001
     Key={"pk": f"GROUP#{group_id}", "sk": f"FUNDRAISER#{fundraiser_id}"},
     UpdateExpression="ADD raised_cents :amt, donation_count :one SET updated_at = :now",
     ExpressionAttributeValues={
@@ -263,6 +263,7 @@ T.user_groups.update_item(
 No additional GSI needed -- donations queried via `pk=FUNDRAISER#{fundraiser_id}` with `sk begins_with DONATION#`.
 
 ### 5.2 Backend Service: Advertising (`app/services/group_advertising.py`)
+<!-- NOTE: app/services/group_advertising.py does not exist yet — new implementation required -->
 
 | Function | Description |
 |----------|-------------|
@@ -274,6 +275,7 @@ No additional GSI needed -- donations queried via `pk=FUNDRAISER#{fundraiser_id}
 | `resume_group_campaign(group_id, admin_id, campaign_id)` | Set campaign status to active |
 
 ### 5.3 Backend Service: Fundraising (`app/services/group_fundraising.py`)
+<!-- NOTE: app/services/group_fundraising.py does not exist yet — new implementation required -->
 
 | Function | Description |
 |----------|-------------|
@@ -288,7 +290,7 @@ No additional GSI needed -- donations queried via `pk=FUNDRAISER#{fundraiser_id}
 
 ### 5.4 Backend Routers
 
-**Advertising** (`app/routers/group_advertising.py`):
+**Advertising** (`app/routers/group_advertising.py`): <!-- NOTE: does not exist yet — new implementation required -->
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -298,7 +300,7 @@ No additional GSI needed -- donations queried via `pk=FUNDRAISER#{fundraiser_id}
 | GET | `/ui/groups/{group_id}/campaigns/{id}/stats` | `require_ui_session` | Campaign stats |
 | PATCH | `/ui/groups/{group_id}/campaigns/{id}` | `require_ui_session` | Pause/resume |
 
-**Fundraising** (`app/routers/group_fundraising.py`):
+**Fundraising** (`app/routers/group_fundraising.py`): <!-- NOTE: does not exist yet — new implementation required -->
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -893,6 +895,7 @@ logger.warning("group_fundraising.stripe_failure",
 group_advertising_enabled: bool = True   # GROUP_ADVERTISING_ENABLED env var
 group_fundraising_enabled: bool = True   # GROUP_FUNDRAISING_ENABLED env var
 ```
+<!-- NOTE: Neither setting exists yet in app/core/settings.py — must be added -->
 
 ### 13.2 Phased Rollout
 
@@ -940,14 +943,14 @@ group_fundraising_enabled: bool = True   # GROUP_FUNDRAISING_ENABLED env var
 
 | File | Purpose |
 |------|---------|
-| `app/services/group_advertising.py` | Advertiser link, campaign CRUD |
-| `app/services/group_fundraising.py` | Fundraiser CRUD, donation processing |
-| `app/routers/group_advertising.py` | Campaign endpoints |
-| `app/routers/group_fundraising.py` | Fundraiser + public donation endpoints |
-| `frontend/src/pages/groups/GroupAdsPage.tsx` | Campaign manager |
-| `frontend/src/pages/groups/GroupFundraisingPage.tsx` | Fundraiser management |
-| `frontend/src/pages/groups/PublicDonationPage.tsx` | Public donation page |
-| `frontend/src/pages/groups/FundraisingWidget.tsx` | Progress widget |
+| `app/services/group_advertising.py` | Advertiser link, campaign CRUD | <!-- new -->
+| `app/services/group_fundraising.py` | Fundraiser CRUD, donation processing | <!-- new -->
+| `app/routers/group_advertising.py` | Campaign endpoints | <!-- new -->
+| `app/routers/group_fundraising.py` | Fundraiser + public donation endpoints | <!-- new -->
+| `frontend/src/pages/groups/GroupAdsPage.tsx` | Campaign manager | <!-- new -->
+| `frontend/src/pages/groups/GroupFundraisingPage.tsx` | Fundraiser management | <!-- new -->
+| `frontend/src/pages/groups/PublicDonationPage.tsx` | Public donation page | <!-- new -->
+| `frontend/src/pages/groups/FundraisingWidget.tsx` | Progress widget | <!-- new -->
 
 ### 15.2 Files to Modify
 
@@ -1056,3 +1059,23 @@ let campaignId: string;
 | ADS-001 (Advertiser Accounts) | ADS-001 | Required -- campaign hierarchy |
 | Stripe integration | Existing | Available (mock port 12111) |
 | Billing ledger | Existing | Available |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| `record_ad_impression()` | `app/services/ad_placement.py` | 222 | VOD-specific ad impression tracking; uses AdImpressions table |
+| `_credit_ad_revenue()` | `app/services/ad_placement.py` | 279 | Credits creator billing ledger for ad revenue |
+| `AdImpressions` DDB table | `scripts/local-ddb-init.py` | 831 | PK=pk, SK=sk; GSIs: ByVideoCreatedAt, ByCreatorCreatedAt — no campaign-level GSI |
+| `ad_impressions_table_name` setting | `app/core/settings.py` | 1242 | `DDB_AD_IMPRESSIONS` env var, defaults to "AdImpressions" |
+| `T.ad_impressions` | `app/core/tables.py` | 93, 217 | Table handle exists for ad impressions |
+| `new_ledger_entry()` | `app/services/billing_shared.py` | 217 | Fields: `type`, `amount_cents`, `state`, `reason`, `ts`, `entry_id` (NOT `direction`) |
+| `ledger_sk()` | `app/services/billing_shared.py` | 213 | Constructs `LEDGER#{ts}#{entry_id}` sort key |
+| Stripe mock | — | — | Port 12111; existing usage is PaymentIntent-based, not Checkout Session |
+| `user_groups` table | — | — | Does not exist yet; must be created by GROUP-001 |
+| `ad_accounts` table | — | — | Does not exist yet; must be created by ADS-001 |
+| `ad_campaigns` table | — | — | Does not exist yet; must be created by ADS-001 |
+| `group_advertising_enabled` setting | — | — | Does not exist yet in settings.py |
+| `group_fundraising_enabled` setting | — | — | Does not exist yet in settings.py |

@@ -42,13 +42,13 @@ Creators produce content across multiple formats (VODs, posts, broadcasts, calls
 
 - **Bot framework** (BOT-001): Bot CRUD, assignments, trigger evaluation, `send_bot_message()`.
 - **Templates** (BOT-002): Template engine, variable substitution, scheduled sends, quick-reply buttons.
-- **Video listings** (`app/routers/video_listing.py`): Video metadata stored in DDB; listing API returns video cards with thumbnail URLs, title, price, duration.
+- **Video listings** (`app/routers/video_listing.py`): Video metadata stored in DDB; listing API returns video cards with thumbnail URLs, title, price, duration. (see `app/routers/video_listing.py` — file exists)
 - **Newsfeed** (`app/routers/newsfeed.py`): Posts stored in `app_single_table` with `PK=POST#{post_id}`. `_post_to_dict()` returns post data including `image_url`, `text`, `unlock_price_cents`.
-- **Broadcasts** (`app/routers/broadcast.py`): `BroadcastSessionOut` includes title, scheduled start time, thumbnail. Scheduled broadcasts queryable via `/broadcast/sessions/scheduled`.
-- **Calendar** (`app/routers/calendar.py`): Calendar events with booking links. `invert_intervals()` computes free slots. Public event page at `/event/:calendarId/:eventId`.
-- **Messaging content cards**: `MessageOut` supports `video_share`, `calendar_share`, `calendar_event` kinds with rich metadata. Bot messages can use these kinds.
-- **Purchase tracking**: `purchase_transactions` table tracks user purchases by `user_sub`.
-- **Broadcast reminders** (`app/services/broadcast_reminders.py`): Existing reminder infrastructure for scheduled broadcasts.
+- **Broadcasts** (`app/routers/broadcast.py`): `BroadcastSessionOut` (see `app/routers/broadcast.py:117`) includes title, scheduled start time, thumbnail. Scheduled broadcasts queryable via `list_scheduled_sessions_route` (see line 301).
+- **Calendar** (`app/routers/calendar.py`): Calendar events with booking links. `invert_intervals()` (see `app/routers/calendar.py:236`) computes free slots. Public event page at `/event/:calendarId/:eventId`.
+- **Messaging content cards**: `MessageOut` (see `app/routers/messaging.py:2325`) supports `video_share`, `calendar_share`, `calendar_event` kinds (see line 2330) with rich metadata. Bot messages can use these kinds.
+- **Purchase tracking**: `purchase_transactions` table (see `scripts/local-ddb-init.py:64`) tracks user purchases by `user_sub`.
+- **Broadcast reminders** (`app/services/broadcast_reminders.py`): Existing reminder infrastructure for scheduled broadcasts. (see `app/services/broadcast_reminders.py` — file exists)
 
 ### 2.2 Gaps
 
@@ -413,12 +413,12 @@ Integrated into `MessageBubble.tsx` when `message.kind === "content_card"`.
 
 | File | Changes |
 |------|---------|
-| `scripts/local-ddb-init.py` | Add `bot_content_sets`, `bot_promotion_history`, `bot_promotion_caps` TableDefs |
-| `app/core/settings.py` | Add table name settings |
-| `app/core/tables.py` | Add table handles |
-| `app/main.py` | Register `bot_promotion_router`; start broadcast announcer task |
-| `app/routers/messaging.py` | Add `content_card` to `MessageOut.kind` Literal; add `content_card` field |
-| `app/services/chat_bot.py` | Add `promotion_config` to bot record handling |
+| `scripts/local-ddb-init.py` | Add `bot_content_sets`, `bot_promotion_history`, `bot_promotion_caps` TableDefs <!-- NOTE: None of these tables exist yet — new implementation required --> |
+| `app/core/settings.py` | Add table name settings <!-- NOTE: No promotion settings exist yet — new implementation required --> |
+| `app/core/tables.py` | Add table handles <!-- NOTE: No promotion table handles exist yet — new implementation required --> |
+| `app/main.py` | Register `bot_promotion_router`; start broadcast announcer task <!-- NOTE: Neither exists yet — new implementation required --> |
+| `app/routers/messaging.py` | Add `content_card` to `MessageOut.kind` Literal; add `content_card` field <!-- NOTE: content_card kind does not exist on MessageOut at line 2330 — new implementation required --> |
+| `app/services/chat_bot.py` | Add `promotion_config` to bot record handling <!-- NOTE: chat_bot.py does not exist yet — depends on BOT-001 --> |
 | `frontend/src/api/types.ts` | Add content set, promotion config, stats, content card types |
 | `frontend/src/api/endpoints/bots.ts` | Add content set and promotion API functions |
 | `frontend/src/pages/messages/MessageBubble.tsx` | Render `ContentCardBubble` for `content_card` kind |
@@ -768,3 +768,23 @@ PromotionBotPage                      data-testid="promotion-bot-page"
 | N1 | Create set with >100 items | 422 validation error |
 | N2 | Non-owner cannot manage content sets | Bob (not bot owner) POSTs set; 403 |
 | N3 | Broadcast with non-existent set_id | 404 |
+
+---
+
+## Codebase References
+
+| Claim | File | Line(s) | Status |
+|-------|------|---------|--------|
+| `video_listing.py` exists | `app/routers/video_listing.py` | exists | VERIFIED |
+| `BroadcastSessionOut` model | `app/routers/broadcast.py` | 117 | VERIFIED |
+| Scheduled broadcasts route | `app/routers/broadcast.py` | 301 | VERIFIED (`list_scheduled_sessions_route`) |
+| `invert_intervals()` for free slots | `app/routers/calendar.py` | 236 | VERIFIED |
+| `MessageOut` with content kinds | `app/routers/messaging.py` | 2325, 2330 | VERIFIED (video_share, calendar_share, calendar_event exist) |
+| `purchase_transactions` table | `scripts/local-ddb-init.py` | 64 | VERIFIED |
+| `broadcast_reminders.py` exists | `app/services/broadcast_reminders.py` | exists | VERIFIED |
+| No `bot_content_sets` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (does not exist — new implementation required) |
+| No `bot_promotion_history` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (does not exist — new implementation required) |
+| No `bot_promotion_caps` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (does not exist — new implementation required) |
+| No `content_card` message kind | `app/routers/messaging.py` | 2330 | VERIFIED (not in MessageOut.kind Literal — new implementation required) |
+| BOT-001 dependency (chat_bot.py) | `app/services/chat_bot.py` | N/A | NOT YET IMPLEMENTED (depends on BOT-001) |
+| BOT-002 dependency (bot_template.py) | `app/services/bot_template.py` | N/A | NOT YET IMPLEMENTED (depends on BOT-002) |

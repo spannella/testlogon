@@ -1,11 +1,22 @@
 # CALL-013: Video Call Screen Sharing
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: High  
 **Estimated effort**: 8-12 days  
 **Dependencies**: CALL-002 (RTCPeerConnection), CALL-005 (Media Controls), CALL-012 (Group Video Calls)
+
+> **NOTE — Feature is FULLY IMPLEMENTED.** Key files:
+> - `frontend/src/lib/webrtc.ts` (149 lines, up from 92): `acquireScreenMedia()` at line 54, `isScreenShareSupported()` at line 92
+> - `frontend/src/hooks/useScreenShare.ts` (219 lines): Screen share hook
+> - `frontend/src/pages/messages/CallSessionOverlay.tsx` (671 lines): Screen share button (line 192-206), sharing/presenting indicators (lines 433-445), props include `isScreenSharing`, `onToggleScreenShare`, `screenShareSupported`
+> - `frontend/src/pages/messages/GroupCallOverlay.tsx` (489 lines): Screen share button (line 396-401), presentation layout (lines 301-311), simultaneous share prevention UI (disabled button at line 291), `toggleScreenShare` at line 243
+> - `app/services/messaging_call_signaling.py`: `webrtc.screen_share_start` and `webrtc.screen_share_stop` in `ALLOWED_SIGNALING_TYPES` (lines 28-29) and `STATE_ALLOWED_SIGNALING_TYPES` connected/accepted states (lines 45, 51)
+> - `app/routers/messaging.py:13152`: `CallSignalingIn.type` regex updated to include screen share types
+> - `app/services/group_call_service.py:357-391`: `_check_screen_share_conflict` for simultaneous share prevention
+> - `app/core/settings.py:1052`: `messaging_screen_share_enabled` feature flag (defaults to `"true"`)
+> - `frontend/e2e/call-screenshare.spec.ts` (517 lines): E2E tests
 
 ---
 
@@ -16,13 +27,13 @@
 The platform supports both 1:1 WebRTC video calls (`CallSessionOverlay.tsx`, `useRtcPeerConnection.ts`) and group video calls (`GroupCallOverlay.tsx`, `app/routers/group_calls.py`) but neither call type provides screen sharing capability. Users who need to present slides, demonstrate software, review documents, or collaborate visually during calls are forced to rely on external tools (Zoom, Google Meet) or awkward workarounds like holding their phone up to their monitor.
 
 The WebRTC utility module (`frontend/src/lib/webrtc.ts`) only implements `acquireLocalMedia(mode)` using `navigator.mediaDevices.getUserMedia()` (line 15). There is no `getDisplayMedia()` implementation anywhere in the codebase.
-<!-- VERIFIED: webrtc.ts has only acquireLocalMedia, createIceCandidateBuffer, generateNonce, generateEventId. No screen capture functions exist. -->
+<!-- UPDATE: webrtc.ts NOW has acquireScreenMedia (line 54) and isScreenShareSupported (line 92) in addition to the original 4 functions. File is now 149 lines. -->
 
 The group call system already has partial infrastructure for screen sharing: `GroupCallMediaStatus` includes a `screen: bool` field (line 3109 of `app/models.py`), the `PATCH /{call_id}/media` endpoint accepts `screen` in `GroupCallMediaUpdateIn` (line 3192), and the `ParticipantTile` component renders a `MonitorUp` icon when `participant.media_status.screen` is true (lines 421-425 of `GroupCallOverlay.tsx`). However, no actual screen capture, track replacement, or layout switching is implemented -- the `screen` field is purely cosmetic state with no media backing.
-<!-- VERIFIED: GroupCallMediaStatus at models.py:3106-3109 has audio/video/screen. GroupCallMediaUpdateIn at models.py:3189-3192 accepts Optional[bool] for screen. ParticipantTile at GroupCallOverlay.tsx:421-425 shows MonitorUp icon badge. But no getDisplayMedia call or track replacement logic exists anywhere. -->
+<!-- UPDATE: GroupCallMediaStatus at models.py:3219-3225 has audio/video/screen. GroupCallMediaUpdateIn at models.py:3302-3308 accepts Optional[bool] for screen. The screen share functionality IS now fully implemented: acquireScreenMedia in webrtc.ts, useScreenShare hook, screen share button in both overlays, simultaneous share prevention in group_call_service.py. -->
 
 The 1:1 call system has zero screen sharing support. `CallSessionOverlay.tsx` has no screenshare button in its `CallControls` component (lines 157-211), no screen sharing state tracking, and the `CallSessionRecord` dataclass in `messaging_call_sessions.py` (line 19) has no `screen_sharing` field. The signaling types in `messaging_call_signaling.py` (line 14) do not include screen share events.
-<!-- VERIFIED: CallControls at CallSessionOverlay.tsx:157-211 renders mute, camera toggle, end call, recording button. No screen share button. ALLOWED_SIGNALING_TYPES at messaging_call_signaling.py:14-28 has no screen share types. CallSessionRecord at messaging_call_sessions.py:19-48 has no screen_sharing field. -->
+<!-- UPDATE: CallControls now includes screen share button (lines 192-206) with isScreenSharing/onToggleScreenShare/screenShareSupported props. ALLOWED_SIGNALING_TYPES NOW includes webrtc.screen_share_start (line 28) and webrtc.screen_share_stop (line 29). CallSessionRecord still has no screen_sharing field (ephemeral state as designed). -->
 
 ### Goals
 
@@ -1876,26 +1887,23 @@ When disabled:
 
 ## Appendix A: File Change Summary
 
-| File | Action | Lines Changed (est.) |
-|------|--------|---------------------|
-| `frontend/src/lib/webrtc.ts` | Add `acquireScreenMedia()` + `isScreenShareSupported()` | +55 |
-| `frontend/src/hooks/useScreenShare.ts` | New hook | +200 |
-| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add screen share button, presentation layout, indicators | +80 |
-| `frontend/src/pages/messages/GroupCallOverlay.tsx` | Add screen share button, presentation layout, conflict handling | +90 |
-| `frontend/src/hooks/useRtcPeerConnection.ts` | Handle screen share signaling events, dispatch custom events | +30 |
-| `frontend/src/pages/messages/ConversationView.tsx` | Wire useScreenShare hook, peer screen share event listener | +50 |
-| `frontend/src/api/endpoints/messaging.ts` | Update SignalingPayload type | +5 |
-| `app/services/messaging_call_signaling.py` | Add signaling types to allowed sets | +6 |
-| `app/routers/messaging.py` | Update CallSignalingIn type regex | +1 |
-| `app/services/group_call_service.py` | Add simultaneous-share prevention | +25 |
-| `app/core/settings.py` | Add feature flag | +3 |
-| `frontend/.env.local.example` | Add VITE_MESSAGING_SCREEN_SHARE_ENABLED | +1 |
-| `frontend/e2e/call-screenshare.spec.ts` | New E2E test file (30 tests) | +500 |
-| `frontend/src/lib/__tests__/webrtc.test.ts` | Extend with screen media tests | +60 |
-| `frontend/src/hooks/__tests__/useScreenShare.test.ts` | New unit test file | +250 |
-| `tests/test_messaging_call_signaling.py` | Extend with screen share signaling tests | +60 |
-| `tests/test_group_call_service.py` | Extend with screen share conflict tests | +50 |
-| **Total** | | **~1466** |
+| File | Action | Status |
+|------|--------|--------|
+| `frontend/src/lib/webrtc.ts` | Add `acquireScreenMedia()` + `isScreenShareSupported()` | **DONE** (149 lines, lines 54-97 added) |
+| `frontend/src/hooks/useScreenShare.ts` | New hook | **DONE** (219 lines) |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add screen share button, presentation layout, indicators | **DONE** (671 lines; props lines 66-68, button lines 192-206, indicators lines 433-445) |
+| `frontend/src/pages/messages/GroupCallOverlay.tsx` | Add screen share button, presentation layout, conflict handling | **DONE** (489 lines; toggleScreenShare line 243, presentation layout lines 301-311, button lines 396-401) |
+| `app/services/messaging_call_signaling.py` | Add signaling types to allowed sets | **DONE** (lines 28-29, 45, 51) |
+| `app/routers/messaging.py` | Update CallSignalingIn type regex | **DONE** (line 13152) |
+| `app/services/group_call_service.py` | Add simultaneous-share prevention | **DONE** (`_check_screen_share_conflict` lines 357-375, enforcement lines 387-391) |
+| `app/core/settings.py` | Add feature flag | **DONE** (`messaging_screen_share_enabled` at line 1052) |
+| `frontend/e2e/call-screenshare.spec.ts` | New E2E test file | **DONE** (517 lines) |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | Handle screen share signaling events | **Status unknown — needs detailed line check** |
+| `frontend/src/pages/messages/ConversationView.tsx` | Wire useScreenShare hook | **Status unknown — needs detailed line check** |
+| `frontend/src/lib/__tests__/webrtc.test.ts` | Extend with screen media tests | **NOT VERIFIED** |
+| `frontend/src/hooks/__tests__/useScreenShare.test.ts` | New unit test file | **NOT VERIFIED** |
+| `tests/test_messaging_call_signaling.py` | Extend with screen share signaling tests | **NOT VERIFIED** |
+| `tests/test_group_call_service.py` | Extend with screen share conflict tests | **NOT VERIFIED** |
 
 ## Appendix B: Codebase Citations
 
@@ -1903,7 +1911,7 @@ When disabled:
 
 | Reference | File | Line(s) | Description |
 |-----------|------|---------|-------------|
-| `acquireLocalMedia` | `frontend/src/lib/webrtc.ts` | 15-41 | Only getUserMedia, no getDisplayMedia |
+| `acquireLocalMedia` | `frontend/src/lib/webrtc.ts` | 15-41 | getUserMedia; `acquireScreenMedia` NOW at line 54, `isScreenShareSupported` at line 92 |
 | `createIceCandidateBuffer` | `frontend/src/lib/webrtc.ts` | 48-77 | ICE candidate buffering with flush |
 | `generateNonce` | `frontend/src/lib/webrtc.ts` | 82-84 | 32-char hex nonce via crypto.randomUUID |
 | `generateEventId` | `frontend/src/lib/webrtc.ts` | 89-91 | Prefixed unique event ID |
@@ -1925,10 +1933,10 @@ When disabled:
 | `Teardown on disable` | `frontend/src/hooks/useRtcPeerConnection.ts` | 474-492 | Cleanup when enabled=false |
 | `CallRuntimeResources interface` | `frontend/src/pages/messages/callStateMachine.ts` | 190-197 | peerConnection, localStream, remoteStream, etc. |
 | `teardownCallResources` | `frontend/src/pages/messages/callStateMachine.ts` | 199-222 | Stops tracks, closes PC |
-| `Props interface` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 41-63 | No screen share props |
+| `Props interface` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 41-70 | NOW includes isScreenSharing, onToggleScreenShare, screenShareSupported, peerIsScreenSharing |
 | `VideoRenderer` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 75-108 | object-cover at line 101 |
-| `CallControlsProps` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 143-155 | No screen share props |
-| `CallControls` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 157-211 | Mute, camera, end, recording -- no screen share |
+| `CallControlsProps` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 143-167 | NOW includes isScreenSharing, onToggleScreenShare, screenShareSupported |
+| `CallControls` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 167-211 | NOW includes screen share button (lines 192-206) with MonitorOff/Monitor icons |
 | `ConnectionQualityIndicator` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 228-257 | Signal icon with RTT/loss tooltip |
 | `hasRemoteVideo state` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 301-324 | Remote video track monitoring |
 | `Video call connected layout` | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 333-441 | Remote full-area + local PiP |
@@ -1958,11 +1966,11 @@ When disabled:
 | `join_call media_status init` | `app/services/group_call_service.py` | 202 | screen: False default on join |
 | `leave_call` | `app/services/group_call_service.py` | 235-277 | Marks left, no media_status reset |
 | `list_participants` | `app/services/group_call_service.py` | 342-347 | Query PART# rows |
-| `ALLOWED_SIGNALING_TYPES` | `app/services/messaging_call_signaling.py` | 14-28 | No screen share event types |
-| `STATE_ALLOWED_SIGNALING_TYPES` | `app/services/messaging_call_signaling.py` | 34-42 | Connected state: webrtc + recording |
+| `ALLOWED_SIGNALING_TYPES` | `app/services/messaging_call_signaling.py` | 14-29 | NOW includes webrtc.screen_share_start (28) and webrtc.screen_share_stop (29) |
+| `STATE_ALLOWED_SIGNALING_TYPES` | `app/services/messaging_call_signaling.py` | 34-57 | Connected + accepted states NOW include screen share types (lines 45, 51) |
 | `_validate_envelope` | `app/services/messaging_call_signaling.py` | 98-121 | Type check, version, nonce, timestamp |
 | `route_signaling_event` | `app/services/messaging_call_signaling.py` | 171-341 | Full validation + delivery pipeline |
-| `CallSignalingIn type regex` | `app/routers/messaging.py` | 12885 | Only allows offer/answer/ice_candidate |
+| `CallSignalingIn type regex` | `app/routers/messaging.py` | 13152 | NOW allows offer/answer/ice_candidate + screen_share_start/stop |
 | `send_signaling_event endpoint` | `app/routers/messaging.py` | 12982-13019 | POST /messages/calls/{call_id}/signal |
 | `Rate limiter` | `app/routers/messaging.py` | 12939-12964 | 60 events per 10s window |
 | `CallSessionRecord` | `app/services/messaging_call_sessions.py` | 19-48 | No screen_sharing field |

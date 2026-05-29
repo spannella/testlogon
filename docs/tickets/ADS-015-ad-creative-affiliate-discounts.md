@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 6-8 days  
-**Dependencies**: ADS-002 (ad creative management), ADS-004 (ad serving engine), AFFILIATE-001 (referral system)
+**Dependencies**: ADS-002 (ad creative management — sibling ticket, not yet implemented), ADS-004 (ad serving engine — sibling ticket, not yet implemented), AFFILIATE-001 (referral system)
+<!-- NOTE: ADS-002 and ADS-004 are sibling tickets not yet in the codebase. Existing: affiliate_links.py (app/services/affiliate_links.py), promo_codes.py (app/services/promo_codes.py). -->
 
 ---
 
@@ -889,3 +890,15 @@ The `ad_promo_code` cookie adds ~30 bytes to each subsequent request. It is clea
 7. ROAS calculation links affiliate conversions to ad campaign spend
 8. Creators hosting ads with affiliate codes earn both ad CPM revenue and affiliate commissions
 9. All 18 E2E tests pass in `frontend/e2e/ad-affiliate-promo.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/affiliate_links.py` | — | Existing affiliate link service (click tracking, conversions, commissions) |
+| `app/services/promo_codes.py` | — | Existing promo code service (discount codes, redemption tracking) |
+| `app/core/tables.py` | 103, 112 | `promo_codes` table handle (line 103), `affiliate_links` table handle (line 112) |
+| `app/core/settings.py` | 1366, 1440 | `promo_codes_table_name` (line 1366), `affiliate_links_table_name` (line 1440) |
+| `app/services/ad_creative_affiliate.py` | — | Does not exist yet — new implementation required |

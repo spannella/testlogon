@@ -841,3 +841,23 @@ Set `PM_AGENT_ENABLED=false`. Existing ideas and preferences remain; no new revi
 |--------|-----------|
 | AGENT-014 (Documentation Agent) | May document features generated from PM Agent ideas |
 | AGENT-016 (Stylist/UI Agent) | Reviews UI mockup descriptions from PM Agent ideas |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| TicketStore class | `app/services/tickets.py` | 110 | `create_ticket` (215), `update_status` (683), `add_message` (621) |
+| Helpdesk/messaging router | `app/routers/messaging.py` | — | Confirmed exists; used for support ticket conversation analysis |
+| Newsfeed router | `app/routers/newsfeed.py` | — | Confirmed exists; user feedback via posts |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `(event, user_sub, request, **fields)` |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+| Tables singleton | `app/core/tables.py` | — | `T` object |
+| Router registration | `app/main.py` | 297-465 | No `agent_pm_router` registered yet |
+| `agent_feature_ideas` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — new table proposed in this ticket |
+| `agent_pm.py` service | `app/services/` | — | Does NOT exist yet — new implementation in this ticket |
+| `agent_pm.py` router | `app/routers/` | — | Does NOT exist yet — new implementation in this ticket |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing table |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |

@@ -4,7 +4,9 @@
 
 ### Purpose
 
-This ticket covers implementing a React hook (`useRtcPeerConnection`) that bridges the existing call state machine (`callStateMachine.ts`) to a real browser `RTCPeerConnection`. Today the frontend has complete signaling infrastructure, call lifecycle management, and UI -- but the actual peer-to-peer media connection is simulated with a hardcoded `window.setTimeout(() => dispatchCall({ type: "REMOTE_ACCEPT" }), 700)` in `ConversationView.tsx` (line 530-531). This hook will replace that simulation with genuine WebRTC offer/answer exchange, ICE candidate trickle, TURN credential fetching, and media stream attachment.
+This ticket covers implementing a React hook (`useRtcPeerConnection`) that bridges the existing call state machine (`callStateMachine.ts`) to a real browser `RTCPeerConnection`. Today the frontend has complete signaling infrastructure, call lifecycle management, and UI.
+
+<!-- NOTE: The hook `useRtcPeerConnection` is now IMPLEMENTED at frontend/src/hooks/useRtcPeerConnection.ts (518 lines). The fake setTimeout auto-accept has been removed from ConversationView.tsx. The hook is consumed at ConversationView.tsx:618-631. The webrtc utility library exists at frontend/src/lib/webrtc.ts (149 lines). The frontend API wrappers exist at frontend/src/api/endpoints/messaging.ts:929-971 (sendSignalingEvent + fetchTurnCredentials). E2E tests exist at frontend/e2e/webrtc-calls.spec.ts (661 lines). The unit test file frontend/src/hooks/useRtcPeerConnection.test.ts does NOT exist yet. -->
 
 ### What the Hook Does
 
@@ -32,15 +34,15 @@ The hook will be consumed by `ConversationView.tsx` and will:
 
 ### What Exists
 
-#### State Machine (`frontend/src/pages/messages/callStateMachine.ts`)
+#### State Machine (`frontend/src/pages/messages/callStateMachine.ts`, 222 lines)
 
-The state machine is fully implemented with 16 event types and 12 phases. Key types:
+The state machine is fully implemented (see `frontend/src/pages/messages/callStateMachine.ts:4-20`). Key types:
 
 ```typescript
 // Line 4: Role discriminator
 export type CallRole = "caller" | "callee";
 
-// Lines 6-17: Full machine state
+// Lines 6-20: Full machine state
 export interface CallMachineState {
   phase: CallUiState;
   role: CallRole | null;
@@ -51,6 +53,9 @@ export interface CallMachineState {
   maxRetries: number;          // default 2
   isOnline: boolean;
   isTabVisible: boolean;
+  recordingState: "idle" | "requesting" | "consent_pending" | "recording" | "stopped";
+  recordingId: string | null;
+  recordingRequestedBy: string | null;
 }
 ```
 
@@ -58,13 +63,13 @@ Critical events the RTCPeerConnection hook must dispatch:
 - `CONNECT` -- when `RTCPeerConnection.connectionState === "connected"`
 - `CONNECTION_LOST` -- when `connectionState === "disconnected"` or `"failed"`
 - `FAIL` -- when ICE gathering or offer/answer exchange fails unrecoverably
-- `RECONNECT_ATTEMPT` -- already triggered by a 1-second timer in `ConversationView.tsx` (line 477) when phase is `"reconnecting"`
+- `RECONNECT_ATTEMPT` -- already triggered by a 1-second timer in `ConversationView.tsx` (line 691) when phase is `"reconnecting"`
 
-#### Resource Interface (`callStateMachine.ts`, lines 154-161)
+#### Resource Interface (`callStateMachine.ts`, lines 190-197) (see `frontend/src/pages/messages/callStateMachine.ts:190`)
 
 ```typescript
 export interface CallRuntimeResources {
-  peerConnection?: { close: () => void } | null;
+  peerConnection?: RTCPeerConnection | null;   // Updated: now typed as RTCPeerConnection
   localStream?: MediaStream | null;
   remoteStream?: MediaStream | null;
   detachListeners?: Array<() => void>;
@@ -73,64 +78,70 @@ export interface CallRuntimeResources {
 }
 ```
 
-This is the contract the hook must fulfill. The `teardownCallResources()` function (lines 163-186) already handles:
+This is the contract the hook fulfills. The `teardownCallResources()` function (lines 199-222) (see `frontend/src/pages/messages/callStateMachine.ts:199`) already handles:
 - Clearing timers via `window.clearTimeout`
 - Invoking `detachListeners` callbacks
 - Stopping all tracks on both streams
 - Calling `peerConnection.close()`
 - Setting `cleanedUp = true` for idempotency
 
-#### Call UI (`frontend/src/pages/messages/CallSessionOverlay.tsx`)
+#### Call UI (`frontend/src/pages/messages/CallSessionOverlay.tsx`, 671 lines)
 
-A Dialog-based overlay rendering different states. It does not need modification for CALL-002 -- it already handles all phases. The `onAccept`, `onDecline`, `onEnd`, `onDismiss` callbacks wire through to the state machine dispatch in `ConversationView.tsx` (lines 969-1011).
+A Dialog-based overlay rendering different states. It does not need modification for CALL-002 -- it already handles all phases. The `onAccept`, `onDecline`, `onEnd`, `onDismiss` callbacks wire through to the state machine dispatch in `ConversationView.tsx` (lines 1290+).
 
-#### SSE Event Dispatch (`frontend/src/hooks/useMessagingStream.ts`, lines 69-77)
+#### SSE Event Dispatch (`frontend/src/hooks/useMessagingStream.ts`, lines 121-141)
 
-> **GAP**: The current SSE dispatch only fires for `eventType.startsWith("call.")` — it does NOT handle `webrtc.*` prefixed events. The `EVENT_TYPES` array (lines 85-106) also only lists `call.invite`, `call.accept`, `call.decline`, `call.end`. Adding `webrtc.offer`, `webrtc.answer`, `webrtc.ice_candidate` to `EVENT_TYPES` and updating the dispatch condition is a prerequisite for this ticket.
+<!-- NOTE: The gap described below is now CLOSED. The EVENT_TYPES array (lines 148-184) includes webrtc.offer/answer/ice_candidate (lines 181-183), and the webrtc.* dispatch block exists at lines 132-141 dispatching "messaging:webrtc-signal" CustomEvents. -->
 
-Currently only `call.*` events are re-dispatched as `window` CustomEvents:
+Both `call.*` and `webrtc.*` events are dispatched as window CustomEvents (see `frontend/src/hooks/useMessagingStream.ts:121-141`):
 
 ```typescript
 if (eventType.startsWith("call.")) {
   window.dispatchEvent(
-    new CustomEvent("messaging:call-event", {
-      detail: { ...data, event_type: eventType },
-    }),
+    new CustomEvent("messaging:call-event", { detail: { ...data, event_type: eventType } }),
+  );
+}
+if (eventType.startsWith("webrtc.")) {
+  window.dispatchEvent(
+    new CustomEvent("messaging:webrtc-signal", { detail: { ...data, event_type: eventType } }),
   );
 }
 ```
 
-The `ConversationView.tsx` already listens to these (lines 558-591) and handles `call.invite`, `call.accept`, `call.decline`, `call.end`. The hook will add handling for `webrtc.offer`, `webrtc.answer`, and `webrtc.ice_candidate`.
+The `useRtcPeerConnection` hook (see `frontend/src/hooks/useRtcPeerConnection.ts`) listens for `messaging:webrtc-signal` events to handle `webrtc.offer`, `webrtc.answer`, and `webrtc.ice_candidate`.
 
-#### API Endpoints (`frontend/src/api/endpoints/messaging.ts`, lines 253-284)
+#### API Endpoints (`frontend/src/api/endpoints/messaging.ts`, lines 280-307)
 
-Existing call API functions:
-- `createCallInvite(conversationId, body)` -- POST `/messages/calls/invite`
-- `acceptCallInvite(callId, idempotency_key)` -- POST `/messages/calls/{callId}/accept`
-- `declineCallInvite(callId, body)` -- POST `/messages/calls/{callId}/decline`
-- `endCall(callId, body)` -- POST `/messages/calls/{callId}/end`
+Existing call API functions (see `frontend/src/api/endpoints/messaging.ts:280`):
+- `createCallInvite(conversationId, body)` (line 280) -- POST `/messages/calls/invite`
+- `acceptCallInvite(callId, idempotency_key)` (line 293) -- POST `/messages/calls/{callId}/accept`
+- `declineCallInvite(callId, body)` (line 298) -- POST `/messages/calls/{callId}/decline`
+- `endCall(callId, body)` (line 307) -- POST `/messages/calls/{callId}/end`
 
-**Missing**: No frontend function for `POST /messages/calls/{call_id}/turn-credentials` or signaling relay.
+<!-- NOTE: Both functions now exist — sendSignalingEvent at line 948 and fetchTurnCredentials at line 970 (see frontend/src/api/endpoints/messaging.ts:929-971). -->
+Also implemented:
+- `sendSignalingEvent(callId, data)` (line 948) -- POST `/messages/calls/{callId}/signal`
+- `fetchTurnCredentials(callId)` (line 970) -- POST `/messages/calls/{callId}/turn-credentials`
 
 #### Backend Signaling Service (`app/services/messaging_call_signaling.py`)
 
-Fully implemented. Validates, rate-limits (nonce-based replay guard), and routes signaling events between participants. Allowed types (line 14-23):
-- `call.invite`, `call.ring`, `call.accept`, `call.decline`, `call.end`
-- `webrtc.offer`, `webrtc.answer`, `webrtc.ice_candidate`
+Fully implemented (see `app/services/messaging_call_signaling.py`). Validates, rate-limits (nonce-based replay guard), and routes signaling events between participants. Allowed types (lines 14-33) — now 17 types including recording, screen share, and voicemail signals.
 
-State-gated signaling (lines 29-33):
-- In `"accepted"` or `"connected"` states: `webrtc.offer`, `webrtc.answer`, `webrtc.ice_candidate`, `call.end` are allowed
+State-gated signaling (lines 41-57) (see `app/services/messaging_call_signaling.py:41`):
+- In `"accepted"` state: `webrtc.offer`, `webrtc.answer`, `webrtc.ice_candidate`, `call.end`, screen share signals
+- In `"connected"` state: all of above plus recording signals
 - In `"invited"` state: only `call.*` lifecycle events
+- In `"declined"/"missed"/"busy"` states: voicemail signals (CALL-014)
 
 #### Backend TURN Credentials (`app/services/messaging_turn_credentials.py`)
 
-Issues time-limited HMAC credentials per RFC 5766 / coturn convention:
-- Username format: `{expires_at}:{actor_user_id}` (line 203)
-- Credential: HMAC-SHA1 of username with shared secret (line 204)
-- Validates: call exists, actor is participant, call state in `{"invited", "accepted", "connected"}` (line 15)
-- Returns: `TurnCredentials(ttl_seconds, expires_at, ice_servers=[{urls, username, credential}])`
+Issues time-limited HMAC credentials per RFC 5766 / coturn convention (see `app/services/messaging_turn_credentials.py:88`):
+- Username format: `{expires_at}:{actor_user_id}` (line 208)
+- Credential: HMAC-SHA1 of username with shared secret
+- Validates: call exists, actor is participant, call state permits TURN issuance
+- Returns: `TurnCredentials(ttl_seconds, expires_at, ice_servers=[{urls, username, credential}])` (line 30)
 
-#### Backend TURN Endpoint (`app/routers/messaging.py`, line 12079-12101)
+#### Backend TURN Endpoint (`app/routers/messaging.py`, lines 12835-12893) (see `app/routers/messaging.py:12872`)
 
 ```
 POST /messages/calls/{call_id}/turn-credentials
@@ -139,21 +150,25 @@ Response: { ttl_seconds, expires_at, ice_servers: [{ urls: string[], username, c
 
 ### What's Simulated (the Gap)
 
-In `ConversationView.tsx` lines 528-535, after a successful `createCallInvite`:
+<!-- NOTE: The fake auto-accept has been REMOVED. See ConversationView.tsx:762-763 where the comment now reads "WebRTC negotiation is now handled by useRtcPeerConnection hook. REMOTE_ACCEPT will be dispatched when the callee accepts via SSE." -->
+
+In `ConversationView.tsx` lines 760-772, after a successful `createCallInvite` (see `frontend/src/pages/messages/ConversationView.tsx:760`):
 
 ```typescript
 onSuccess: (res) => {
   dispatchCall({ type: "OUTGOING_RINGING", callId: res.call_id });
-  window.setTimeout(() => {
-    dispatchCall({ type: "REMOTE_ACCEPT" });   // <-- FAKE: auto-accepts after 700ms
-  }, 700);
-  callTimeoutRef.current = window.setTimeout(() => {
+  // WebRTC negotiation is now handled by useRtcPeerConnection hook.
+  // REMOTE_ACCEPT will be dispatched when the callee accepts via SSE.
+  callTimeoutRef.current = window.setTimeout(async () => {
     dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
+    if (res.call_id) {
+      try { await timeoutCall(res.call_id, { reason: "no_answer" }); } catch { }
+    }
   }, 30_000);
 },
 ```
 
-This bypasses:
+The previous fake auto-accept bypassed:
 1. Fetching TURN credentials
 2. Creating an `RTCPeerConnection`
 3. Acquiring local media via `getUserMedia`
@@ -163,7 +178,7 @@ This bypasses:
 7. Trickling ICE candidates
 8. Monitoring connection state
 
-On the **callee** side (lines 972-981), `onAccept` just calls the accept API and dispatches `CONNECT` on success -- no SDP answer creation occurs.
+On the **callee** side (line 1290), `onAccept` calls the accept API (see `frontend/src/pages/messages/ConversationView.tsx:1290`). The `CONNECT` event is now dispatched by the `useRtcPeerConnection` hook when `RTCPeerConnection.connectionState === "connected"` (line 628).
 
 ---
 
@@ -312,6 +327,8 @@ When `CONNECTION_LOST` fires, the state machine moves to `"reconnecting"`. The e
 
 ### 3.6 New API Function (to add to `messaging.ts`)
 
+<!-- NOTE: IMPLEMENTED — fetchTurnCredentials at frontend/src/api/endpoints/messaging.ts:970 -->
+
 ```typescript
 // frontend/src/api/endpoints/messaging.ts
 
@@ -333,32 +350,11 @@ export const fetchTurnCredentials = (callId: string) =>
 
 ### 3.7 Signaling Relay Function
 
-A new function to post signaling events (offer/answer/ICE) to the backend. The backend routing service (`messaging_call_signaling.py`) writes these to the Events table, and the SSE stream delivers them to the recipient.
+<!-- NOTE: IMPLEMENTED — sendSignalingEvent at frontend/src/api/endpoints/messaging.ts:948. The backend endpoint also exists at app/routers/messaging.py:13249 (POST /messages/calls/{call_id}/signal). The interface uses SignalingPayload (line 929) and SignalingAck (line 939), not the SignalingEnvelope shape originally proposed. -->
 
-```typescript
-// frontend/src/api/endpoints/messaging.ts
+The `sendSignalingEvent` function posts signaling events to the backend, which writes them to the Events table for SSE delivery to the recipient (see `frontend/src/api/endpoints/messaging.ts:948`).
 
-export interface SignalingEnvelope {
-  type: string;
-  version: number;
-  event_id: string;
-  call_id: string;
-  conversation_id: string;
-  sender_user_id: string;
-  recipient_user_id: string;
-  nonce: string;
-  sent_at: number;
-  payload: Record<string, unknown>;
-}
-
-export const sendSignalingEvent = (envelope: SignalingEnvelope) =>
-  api.post<{ event_id: string; status: string }>(
-    `/messages/calls/${envelope.call_id}/signaling`,
-    envelope
-  );
-```
-
-Note: The backend signaling endpoint needs to be registered in `app/routers/messaging.py`. The service layer (`route_signaling_event`) exists but no HTTP endpoint currently exposes it. This is a prerequisite dependency (likely CALL-001 or a sub-task).
+The backend signaling endpoint is registered at `app/routers/messaging.py:13244` (`POST /messages/calls/{call_id}/signal`).
 
 ### 3.8 Media Stream Management
 
@@ -388,7 +384,7 @@ pc.ontrack = (event) => {
 
 The hook populates the `callResourcesRef` in `ConversationView.tsx`.
 
-> **NOTE**: The current type of `callResourcesRef` is `React.useRef<{ cleanedUp?: boolean } | null>(null)` — a narrow type that does NOT include `localStream`/`remoteStream`/`peerConnection`. This ref type must be widened to `CallRuntimeResources | null` (importing from `callStateMachine.ts`) before the hook can store streams.
+> **NOTE**: The ref type has been updated. `callResourcesRef` is now `React.useRef<CallRuntimeResources | null>(null)` at `ConversationView.tsx:92` (see `frontend/src/pages/messages/ConversationView.tsx:92`).
 
 ```typescript
 callResourcesRef.current = {
@@ -431,9 +427,11 @@ frontend/src/
 
 #### Step 1: Add API Functions
 
+<!-- NOTE: IMPLEMENTED — SignalingPayload/SignalingAck/sendSignalingEvent at lines 929-953, TurnIceServer/TurnCredentialsResp/fetchTurnCredentials at lines 958-971 (see frontend/src/api/endpoints/messaging.ts:929-971). -->
+
 **File**: `frontend/src/api/endpoints/messaging.ts`
 
-Add after line 284 (after `endCall`):
+Add after line 307 (after `endCall`):
 
 ```typescript
 export interface TurnIceServer {
@@ -476,7 +474,9 @@ export const sendSignalingEvent = (envelope: SignalingEnvelope) =>
 
 #### Step 2: Create WebRTC Utilities
 
-**File**: `frontend/src/lib/webrtc.ts` (NEW)
+<!-- NOTE: IMPLEMENTED — frontend/src/lib/webrtc.ts (149 lines) with acquireLocalMedia:15, acquireScreenMedia:54, isScreenShareSupported:94, createIceCandidateBuffer:106, generateNonce:140, generateEventId:147. -->
+
+**File**: `frontend/src/lib/webrtc.ts`
 
 ```typescript
 export async function acquireLocalMedia(mode: "audio" | "video"): Promise<MediaStream> {
@@ -516,7 +516,9 @@ export function generateEventId(prefix: string): string {
 
 #### Step 3: Implement the Hook
 
-**File**: `frontend/src/hooks/useRtcPeerConnection.ts` (NEW)
+<!-- NOTE: IMPLEMENTED — frontend/src/hooks/useRtcPeerConnection.ts (518 lines). UseRtcPeerConnectionParams at line 23, UseRtcPeerConnectionReturn at line 38, useRtcPeerConnection at line 69. -->
+
+**File**: `frontend/src/hooks/useRtcPeerConnection.ts`
 
 The hook is structured as a `useEffect` that activates when:
 - `enabled === true` (i.e., phase is `"outgoing_ringing"` for caller, `"outgoing_connecting"` for callee)
@@ -537,11 +539,13 @@ Cleanup returns teardown of listeners, timers, and streams.
 
 #### Step 4: Modify ConversationView.tsx
 
+<!-- NOTE: IMPLEMENTED — Hook imported at line 49, consumed at lines 618-631, resources wired at lines 633-637 (see frontend/src/pages/messages/ConversationView.tsx:49,618). Fake setTimeout removed; comment at line 762-763. -->
+
 **File**: `frontend/src/pages/messages/ConversationView.tsx`
 
 Changes:
 
-1. **Import the hook** (after line 46):
+1. **Import the hook** (line 49):
    ```typescript
    import { useRtcPeerConnection } from "@/hooks/useRtcPeerConnection";
    ```
@@ -599,52 +603,22 @@ Changes:
 
 #### Step 5: Update SSE Event Types
 
+<!-- NOTE: IMPLEMENTED — webrtc.offer/answer/ice_candidate at lines 181-183, webrtc.* dispatch block at lines 132-141 (see frontend/src/hooks/useMessagingStream.ts:132-183). -->
+
 **File**: `frontend/src/hooks/useMessagingStream.ts`
 
-Add to the `EVENT_TYPES` array (after line 105):
+Already added to the `EVENT_TYPES` array (lines 181-183):
 ```typescript
 "webrtc.offer",
 "webrtc.answer",
 "webrtc.ice_candidate",
 ```
 
-These events are already handled by the generic `call.*` startsWith check (line 41 and 69), but explicitly listing them ensures `EventSource.addEventListener` is called for each type (line 119-121). Without explicit registration, typed SSE events with `event: webrtc.offer` would not fire `handleEvent`.
+The `webrtc.*` dispatch block (lines 132-141) emits `CustomEvent("messaging:webrtc-signal")` for these event types.
 
 #### Step 6: Register Backend Signaling Endpoint
 
-**File**: `app/routers/messaging.py` (add after line 12101)
-
-```python
-class SignalingEventIn(BaseModel):
-    type: str
-    version: int = 1
-    event_id: str
-    call_id: str
-    conversation_id: str
-    sender_user_id: str
-    recipient_user_id: str
-    nonce: str
-    sent_at: int
-    payload: dict = Field(default_factory=dict)
-
-class SignalingAckOut(BaseModel):
-    event_id: str
-    call_id: str
-    status: str
-
-@router.post("/messages/calls/{call_id}/signaling", response_model=SignalingAckOut)
-async def post_signaling_event(
-    call_id: str,
-    body: SignalingEventIn,
-    user_id: str = Depends(get_messaging_user_id),
-):
-    from app.services.messaging_call_signaling import SignalingValidationError, route_signaling_event
-    try:
-        ack = route_signaling_event(envelope=body.model_dump(), actor_user_id=user_id)
-        return SignalingAckOut(event_id=ack.event_id, call_id=ack.call_id, status=ack.status)
-    except SignalingValidationError as exc:
-        raise HTTPException(status_code=400, detail={"code": exc.code, "message": str(exc)})
-```
+<!-- NOTE: IMPLEMENTED — The endpoint exists at app/routers/messaging.py:13244-13288. The actual implementation uses CallSignalingIn/Out/ErrorOut models (lines 13151-13173) and the route is POST /messages/calls/{call_id}/signal (not /signaling). The endpoint includes full error mapping via _SIGNALING_ERROR_STATUS_MAP (line 13175), rate limiting (line 13206), and feature gate checks (line 13199). See CALL-001 for full details. -->
 
 ### 4.3 Sequence Diagram (Caller Initiates)
 
@@ -681,6 +655,7 @@ Caller Browser          Backend SSE          Callee Browser
 
 ### 5.1 Unit Tests with Mocked RTCPeerConnection
 
+<!-- NOTE: This file does not exist yet — new implementation required. -->
 **File**: `frontend/src/hooks/useRtcPeerConnection.test.ts`
 
 Use Vitest + `@testing-library/react-hooks` (or `renderHook` from `@testing-library/react`). Mock `RTCPeerConnection` globally:
@@ -760,6 +735,7 @@ class MockRTCPeerConnection {
 
 ### 5.2 E2E Tests with Fake Media
 
+<!-- NOTE: IMPLEMENTED — frontend/e2e/webrtc-calls.spec.ts (661 lines) already exists. -->
 **File**: `frontend/e2e/webrtc-calls.spec.ts`
 
 Playwright supports granting media permissions and using fake media devices:
@@ -805,7 +781,7 @@ However, true peer-to-peer WebRTC in Playwright requires two browser contexts on
    - After connection, close the `RTCPeerConnection` on one side via `page.evaluate`
    - Verify the other side enters reconnecting state and attempts ICE restart
 
-**Note on E2E limitations**: Full WebRTC E2E tests require the signaling endpoint (`POST /messages/calls/{call_id}/signaling`) to be implemented. Until then, E2E tests can verify the UI flow up to the "Connecting..." state using mocked API responses via `page.route()`.
+<!-- NOTE: The signaling endpoint now exists (POST /messages/calls/{call_id}/signal) and the E2E test file exists with 661 lines. -->
 
 ### 5.3 Edge Cases to Test
 
@@ -853,19 +829,34 @@ These can be sent to the existing metrics endpoint or logged to console in dev m
 
 ---
 
-## Appendix: Key File References
+## Codebase References
 
 | File | Lines | What |
 |------|-------|------|
-| `frontend/src/pages/messages/callStateMachine.ts` | 1-186 | State machine, events, reducer, `CallRuntimeResources`, `teardownCallResources` |
-| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 1-124 | Call UI overlay (Dialog) |
-| `frontend/src/pages/messages/ConversationView.tsx` | 83-86, 466-612, 636-647, 717-738, 969-1011 | Call integration, fake setTimeout (530-531), SSE listener, UI buttons, overlay wiring |
-| `frontend/src/hooks/useMessagingStream.ts` | 41, 69-77, 102-105 | SSE call event dispatch |
-| `frontend/src/api/endpoints/messaging.ts` | 242-284 | Call API types and functions |
-| `frontend/src/lib/featureFlags.ts` | 35-79 | WebRTC feature flag gating |
-| `app/services/messaging_call_signaling.py` | 1-335 | Backend signaling validation and routing |
-| `app/services/messaging_call_sessions.py` | 1-159 | Call session DDB CRUD |
-| `app/services/messaging_turn_credentials.py` | 1-222 | TURN credential issuance (HMAC-SHA1) |
-| `app/routers/messaging.py` | 12036-12101 | TURN credential HTTP endpoint |
-| `app/routers/messaging.py` | 12104-12218 | Call lifecycle HTTP endpoints (invite/accept/decline/end) |
-| `frontend/src/pages/messages/callStateMachine.test.ts` | 1-83 | Existing unit tests for state machine |
+| `frontend/src/pages/messages/callStateMachine.ts` | 1-222 | State machine, events, reducer, `CallRuntimeResources` (190), `teardownCallResources` (199) |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 1-671 | Call UI overlay (Dialog) |
+| `frontend/src/pages/messages/ConversationView.tsx` | 49 | `useRtcPeerConnection` import |
+| `frontend/src/pages/messages/ConversationView.tsx` | 92 | `callResourcesRef` typed as `CallRuntimeResources` |
+| `frontend/src/pages/messages/ConversationView.tsx` | 615-637 | Hook invocation + resources wiring |
+| `frontend/src/pages/messages/ConversationView.tsx` | 691 | Reconnect timer (1s) |
+| `frontend/src/pages/messages/ConversationView.tsx` | 760-772 | Call invite success (fake auto-accept removed) |
+| `frontend/src/pages/messages/ConversationView.tsx` | 1290+ | `onAccept` callee handler |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 1-518 | RTCPeerConnection lifecycle hook (IMPLEMENTED) |
+| `frontend/src/hooks/useMessagingStream.ts` | 121-141 | `call.*` and `webrtc.*` CustomEvent dispatchers |
+| `frontend/src/hooks/useMessagingStream.ts` | 148-184 | `EVENT_TYPES` array (includes webrtc events) |
+| `frontend/src/api/endpoints/messaging.ts` | 280-307 | Call lifecycle API functions |
+| `frontend/src/api/endpoints/messaging.ts` | 929-953 | `SignalingPayload`, `SignalingAck`, `sendSignalingEvent` |
+| `frontend/src/api/endpoints/messaging.ts` | 958-971 | `TurnIceServer`, `TurnCredentialsResp`, `fetchTurnCredentials` |
+| `frontend/src/lib/webrtc.ts` | 1-149 | WebRTC utilities (acquireLocalMedia, createIceCandidateBuffer, etc.) |
+| `frontend/src/lib/featureFlags.ts` | 127 | `isCallRecordingEnabled` |
+| `app/services/messaging_call_signaling.py` | 1-359 | Backend signaling validation and routing |
+| `app/services/messaging_call_sessions.py` | 1-50+ | Call session record + DDB CRUD |
+| `app/services/messaging_turn_credentials.py` | 1-227 | TURN credential issuance (HMAC-SHA1) |
+| `app/routers/messaging.py` | 12835-12893 | TURN credential HTTP endpoint |
+| `app/routers/messaging.py` | 12896-13145 | Call lifecycle HTTP endpoints (invite/accept/decline/end/timeout) |
+| `app/routers/messaging.py` | 13151-13288 | Signaling endpoint (models + handler) |
+| `app/metrics.py` | 725-730 | TURN_CREDENTIAL_ISSUE_EVENTS/LATENCY |
+| `app/metrics.py` | 1379-1432 | WebRTC call setup/failure/connected/duration/signaling metrics |
+| `frontend/src/pages/messages/callStateMachine.test.ts` | 1-202 | Existing unit tests for state machine |
+| `frontend/e2e/webrtc-calls.spec.ts` | 1-661 | E2E WebRTC call tests (IMPLEMENTED) |
+| `frontend/src/hooks/useRtcPeerConnection.test.ts` | — | Does not exist yet — unit tests for hook needed |

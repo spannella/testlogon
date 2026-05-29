@@ -1,6 +1,6 @@
 # VOD-018: Ad-Supported Video Tier — Monetization via Ad Placements
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-27  
 **Priority**: Medium  
@@ -15,7 +15,8 @@
 
 The VOD system currently supports four access modes defined in `app/models_video.py` (line 94): `free`, `ppv`, `subscriber_only`, and `subscriber_free`. These modes gate access via payment or subscription, but there is **no ad-supported tier** — a monetization model where videos are free to watch but include advertisements.
 
-The entitlement cascade in `check_vod_access()` (`app/services/vod_purchase.py`, line 77) handles the four existing modes but has no concept of "entitled with conditions" — every entitled result means unrestricted playback. An ad-supported tier requires a new pattern: the viewer IS entitled (no paywall), but the playback experience includes ad insertions.
+The entitlement cascade in `check_vod_access()` (`app/services/vod_purchase.py`, line 131) handles the four existing modes but has no concept of "entitled with conditions"
+<!-- NOTE: Line number corrected from 77 to 131 --> — every entitled result means unrestricted playback. An ad-supported tier requires a new pattern: the viewer IS entitled (no paywall), but the playback experience includes ad insertions.
 
 Creators currently have two monetization levers: individual sales (PPV) and subscriptions. Adding ad-supported content creates a third revenue stream — especially valuable for creators who want broad audience reach (free access) while still earning revenue. This is the YouTube model: viewers watch for free, creators earn from ad impressions.
 
@@ -119,14 +120,16 @@ Browser                            Backend                              DynamoDB
 access_mode: Optional[str] = None  # "free", "ppv", "subscriber_only", "subscriber_free"
 ```
 
-The regex pattern validation in `VodPricingIn` (`app/routers/video_listing.py`, line 484):
+The regex pattern validation in `VodPricingIn` (`app/routers/video_listing.py`, line 1066):
+<!-- NOTE: Line number corrected from 484 to 1066; regex now includes ad_supported -->
 ```python
-access_mode: Optional[str] = Field(default=None, pattern=r"^(free|ppv|subscriber_only|subscriber_free)$")
+access_mode: Optional[str] = Field(default=None, pattern=r"^(free|ppv|subscriber_only|subscriber_free|ad_supported)$")
 ```
 
 Both must be updated to accept `"ad_supported"` as a valid value.
 
-### 2.2 Entitlement Cascade (`app/services/vod_purchase.py`, lines 77-153)
+### 2.2 Entitlement Cascade (`app/services/vod_purchase.py`, lines 131+)
+<!-- NOTE: Line number corrected from 77-153 to 131+ -->
 
 The `check_vod_access()` function handles modes in this order:
 1. Owner → entitled (line 97)
@@ -872,10 +875,23 @@ class VideoDetailOut(BaseModel):
 
 ## 4. Implementation Plan
 
+<!-- NOTE: All steps below have been implemented. Key existing code:
+- `app/models_video.py:137-140` — ad_config, ads_free_for_subscribers, ad_revenue_cents, ad_impression_count fields exist
+- `app/routers/video_listing.py:1066` — VodPricingIn access_mode regex already includes `ad_supported`
+- `app/services/vod_purchase.py:131` — check_vod_access() already handles ad_supported in entitlement cascade
+- `app/services/ad_placement.py` — full service exists (get_default_ad_config:53, validate_ad_config:78, calculate_ad_slots:116, get_ad_config:178, record_ad_impression:222, get_ad_stats:327)
+- `scripts/local-ddb-init.py:832` — AdImpressions table defined
+- `app/core/settings.py:1240-1242` — vod_ads_enabled, vod_ad_cpm_cents, ad_impressions_table_name settings exist
+- `app/core/tables.py:93,217` — ad_impressions table handle exists
+- `app/routers/video_listing.py:1392` — AdConfigIn model; endpoints: get_video_ad_config (:1437), record_ad_impression_endpoint (:1463), get_ad_stats (:1501), set_video_ad_config (:1507)
+- `app/routers/video_listing.py:125,259` — VideoDetailOut includes ad_config; _video_to_detail passes it through
+- E2E: `frontend/e2e/vod-ads.spec.ts` exists
+-->
+
 ### Step 1: Extend Access Mode
 
-**File**: `app/models_video.py` — Add `ad_config`, `ads_free_for_subscribers`, `ad_revenue_cents`, `ad_impression_count` fields  
-**File**: `app/routers/video_listing.py` — Update `VodPricingIn` regex to include `ad_supported`
+**File**: `app/models_video.py` — Add `ad_config`, `ads_free_for_subscribers`, `ad_revenue_cents`, `ad_impression_count` fields (see `app/models_video.py:137-140`)  
+**File**: `app/routers/video_listing.py` — Update `VodPricingIn` regex to include `ad_supported` (see `app/routers/video_listing.py:1066`)
 
 ### Step 2: Update Entitlement Cascade
 
@@ -2763,3 +2779,36 @@ function AdVideoPlayer({ slot, onComplete, onSkip, videoId }: PreRollPlayerProps
   );
 }
 ```
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `ad_config` field on VideoMetadataModel | `app/models_video.py` | 137 | VERIFIED |
+| `ads_free_for_subscribers` field | `app/models_video.py` | 138 | VERIFIED |
+| `ad_revenue_cents` field | `app/models_video.py` | 139 | VERIFIED |
+| `ad_impression_count` field | `app/models_video.py` | 140 | VERIFIED |
+| `ad_supported` in VodPricingIn access_mode regex | `app/routers/video_listing.py` | 1066 | VERIFIED |
+| `AdConfigIn` model | `app/routers/video_listing.py` | 1392 | VERIFIED |
+| `get_video_ad_config` endpoint | `app/routers/video_listing.py` | 1437 | VERIFIED |
+| `record_ad_impression_endpoint` | `app/routers/video_listing.py` | 1463 | VERIFIED |
+| `get_ad_stats` endpoint | `app/routers/video_listing.py` | 1501 | VERIFIED |
+| `set_video_ad_config` endpoint | `app/routers/video_listing.py` | 1507 | VERIFIED |
+| `VideoDetailOut.ad_config` field | `app/routers/video_listing.py` | 125 | VERIFIED |
+| `_video_to_detail` passes ad_config | `app/routers/video_listing.py` | 259 | VERIFIED |
+| `get_default_ad_config()` | `app/services/ad_placement.py` | 53 | VERIFIED |
+| `validate_ad_config()` | `app/services/ad_placement.py` | 78 | VERIFIED |
+| `calculate_ad_slots()` | `app/services/ad_placement.py` | 116 | VERIFIED |
+| `get_ad_config()` | `app/services/ad_placement.py` | 178 | VERIFIED |
+| `record_ad_impression()` | `app/services/ad_placement.py` | 222 | VERIFIED |
+| `get_ad_stats()` | `app/services/ad_placement.py` | 327 | VERIFIED |
+| `check_vod_access()` ad_supported handling | `app/services/vod_purchase.py` | 131 | VERIFIED |
+| `VodAccessResult.ads_enabled` | `app/services/vod_purchase.py` | 96 | VERIFIED |
+| AdImpressions DDB table definition | `scripts/local-ddb-init.py` | 832 | VERIFIED |
+| `vod_ads_enabled` setting | `app/core/settings.py` | 1240 | VERIFIED |
+| `vod_ad_cpm_cents` setting | `app/core/settings.py` | 1241 | VERIFIED |
+| `ad_impressions_table_name` setting | `app/core/settings.py` | 1242 | VERIFIED |
+| `ad_impressions` table handle | `app/core/tables.py` | 93, 217 | VERIFIED |
+| E2E test file | `frontend/e2e/vod-ads.spec.ts` | — | VERIFIED |

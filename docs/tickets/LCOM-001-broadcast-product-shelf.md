@@ -12,7 +12,9 @@
 
 ### The Gap
 
-The platform has a fully functional broadcast system (`app/routers/broadcast.py`, 944 lines) supporting live streaming with session lifecycle management, viewer counts, health metrics, live chat (BCAST-005), and recording archival. It also has a mature e-commerce catalog (`app/routers/catalog.py`, 664 lines) with categories, items, reviews, image uploads, and search. However, **there is no mechanism to connect products to a live broadcast**. Broadcasters cannot showcase catalog items during a stream, and viewers have no way to discover or purchase products without leaving the broadcast experience entirely.
+The platform has a fully functional broadcast system (`app/routers/broadcast.py`, ~3969 lines) supporting live streaming with session lifecycle management, viewer counts, health metrics, live chat (BCAST-005), and recording archival. It also has a mature e-commerce catalog (`app/routers/catalog.py`, ~933 lines) with categories, items, reviews, image uploads, and search. However, **there is no mechanism to connect products to a live broadcast**. Broadcasters cannot showcase catalog items during a stream, and viewers have no way to discover or purchase products without leaving the broadcast experience entirely.
+
+<!-- NOTE: The broadcast router is ~3969 lines (not 944 as originally noted) and the catalog router is ~933 lines (not 664). Many of the infrastructure components proposed in this ticket have already been implemented — see Codebase References section. -->
 
 ### Why This Is Needed
 
@@ -71,34 +73,34 @@ Live commerce is the primary revenue-generating feature for broadcast creators. 
 
 ### 2.1 Broadcast Infrastructure (`app/routers/broadcast.py`)
 
-The broadcast router (944 lines) is registered in `app/main.py` under the `/broadcast` prefix. It uses `require_ui_session` for auth and `_require_operator_role(ctx)` for admin-gated actions (lines 164-168).
+The broadcast router (~3969 lines) is registered in `app/main.py` under the `/broadcast` prefix (see `app/routers/broadcast.py:76`). It uses `require_ui_session` for auth and `_require_operator_role(ctx)` for admin-gated actions (see line 211).
 
-**Session model** (`app/models_broadcast.py`, lines 34-46): `BroadcastSessionModel` includes `id`, `profile_id`, `status`, `ingest_url`, `stream_key_ref`, `stream_key_last_rotated_at`, `stream_key_rotation_interval_seconds`, `started_at`, `stopped_at`, `created_by`, `created_at`, `updated_at`. No product-related fields exist.
+**Session model** (`app/models_broadcast.py`, see lines 37-49): `BroadcastSessionModel` includes `id`, `profile_id`, `status`, `ingest_url`, `stream_key_ref`, `stream_key_last_rotated_at`, `stream_key_rotation_interval_seconds`, `started_at`, `stopped_at`, `created_by`, `created_at`, `updated_at`, plus scheduling fields (BCAST-009).
 
-**Session status values** (from `broadcast_state_machine.py`): `draft`, `provisioning`, `ready`, `live`, `stopping`, `stopped`, `error`. Products should be attachable in `draft`, `ready`, or `live` states, and visible to viewers only when the session is `live`.
+**Session status values** (from `app/services/broadcast_state_machine.py` and `app/models_broadcast.py:8`): `BroadcastSessionStatus` Literal type. Products should be attachable in `draft`, `ready`, or `live` states, and visible to viewers only when the session is `live`.
 
-**SSE delivery** (`app/services/broadcast_sse.py`, 50 lines): In-memory pub/sub using `asyncio.Queue` per subscriber. `broadcast_sse_publish(session_id, event)` (line 29) fans out events to all subscribed queues for a session. Dead queues (full) are discarded during publish (lines 38-43). Already used by broadcast chat (BCAST-005) for `chat:message`, `chat:delete`, and `chat:mute` events. The SSE stream endpoint at `GET /broadcast/sessions/{session_id}/stream` (line 572-592 in broadcast.py) consumes these queues.
+**SSE delivery** (`app/services/broadcast_sse.py`, 49 lines): In-memory pub/sub using `asyncio.Queue` per subscriber. `broadcast_sse_publish(session_id, event)` (see line 29) fans out events to all subscribed queues for a session. The SSE stream endpoint at `GET /broadcast/sessions/{session_id}/stream` (see `app/routers/broadcast.py:639-640`) consumes these queues.
 
-**Broadcast chat store** (`app/services/broadcast_chat_store.py`, 247 lines): Demonstrates the pattern for a DynamoDB-backed feature integrated with the broadcast SSE system. Uses rate limiting, mute enforcement, and real-time SSE publish for chat events.
+**Broadcast chat store** (`app/services/broadcast_chat_store.py`, ~423 lines): Demonstrates the pattern for a DynamoDB-backed feature integrated with the broadcast SSE system. Uses rate limiting, mute enforcement, and real-time SSE publish for chat events.
 
 ### 2.2 Catalog Infrastructure (`app/routers/catalog.py`)
 
-The catalog router (664 lines) is under `/ui/catalog`. Uses a single-table design in DynamoDB:
+The catalog router (~933 lines) is under `/ui/catalog` (see `app/routers/catalog.py:41`). Uses a single-table design in DynamoDB:
 
-- Categories: `PK=CAT#{category_id}`, `SK=META`
-- Items: `PK=CAT#{category_id}`, `SK=ITEM#{item_id}` (items nested under their category)
+- Categories: `PK=CAT#{category_id}` (see `cat_pk` at line 54), `SK=META`
+- Items: `PK=CAT#{category_id}`, `SK=ITEM#{item_id}` (see `item_sk` at line 62, items nested under their category)
 - Reviews: `PK=ITEM#{item_id}`, `SK=REVIEW#{review_id}`
 - GSI1: `GSI1PK=CATS`, `GSI1SK={name}#{category_id}` (for listing all categories)
 
-**Item fields** (from `_catalog_item_out`, lines 88-100): `category_id`, `item_id`, `name`, `description`, `price_cents`, `currency`, `image_urls` (list of strings), `attributes` (dict), `created_at`, `updated_at`.
+**Item fields** (from `_catalog_item_out`, see line 106): `category_id`, `item_id`, `name`, `description`, `price_cents`, `currency`, `image_urls` (list of strings), `attributes` (dict), `created_at`, `updated_at`.
 
-**Item lookup** (`_get_item_meta`, line 210-212): Queries by `PK=ITEM#{item_id}` with `SK` begins_with `ITEM#`. Returns the raw DDB item dict.
+**Item lookup** (`_get_item_meta`, see line 235): Returns the raw DDB item dict.
 
-**Ownership model** (`_require_category_owner`, line 202-207): Categories have a `creator_id` field. Only the creator (or admin) can modify items.
+**Ownership model** (`_require_category_owner`, see line 227): Categories have a `creator_id` field. Only the creator (or admin) can modify items.
 
 ### 2.3 Shopping Cart (`frontend/src/api/endpoints/cart.ts`)
 
-The cart API is at `/ui/shoppingcart/carts` with full CRUD: `createCart`, `addCartItem`, `updateCartItemQty`, `removeCartItem`, `purchaseCart`. Cart items use `CartItemIn` with `sku` and `quantity`. The table handle is `T.shopping_cart` (PK/SK design from `scripts/local-ddb-init.py`, line 66).
+The cart API (see `frontend/src/api/endpoints/cart.ts`) is at `/ui/shoppingcart/carts` with full CRUD: `createCart`, `addCartItem`, `updateCartItemQty`, `removeCartItem`, `purchaseCart`. Cart items use `CartItemIn` with `sku` and `quantity`. The table handle is `T.shopping_cart` (PK/SK design from `scripts/local-ddb-init.py`, see line 67).
 
 ### 2.4 Frontend Broadcast Pages (`frontend/src/pages/broadcast/`)
 
@@ -109,15 +111,15 @@ The cart API is at `/ui/shoppingcart/carts` with full CRUD: `createCart`, `addCa
 
 ### 2.5 DynamoDB Table Definitions (`scripts/local-ddb-init.py`)
 
-Broadcast tables are defined starting at line 477. The `BroadcastSessions` table (line 482) has GSIs `ByStatusCreatedAt` and `ByCreatorCreatedAt`. No product shelf table exists. The pattern for adding new tables is well-established (e.g., `BroadcastChatMessages` at line 521).
+The `BroadcastProductShelf` table already exists (see `scripts/local-ddb-init.py:578`), defined after `BroadcastRecordings` (line 567). The table uses `session_id` as PK and `SK` as sort key.
 
 ### 2.6 Table Handles (`app/core/tables.py`)
 
-Table handle struct uses `@dataclass` with lazy `ddb.Table()` initialization (line 22-136). Broadcast handles include `broadcast_sessions`, `broadcast_profiles`, `broadcast_outputs`, `broadcast_chat_messages`, `broadcast_chat_mutes`, `broadcast_viewers`, `broadcast_health_snapshots`, `broadcast_recordings`. No product shelf handle exists.
+Table handle struct uses `@dataclass` with `ddb.Table()` initialization. The `broadcast_product_shelf` handle already exists (see `app/core/tables.py:83` for field, line 207 for initialization).
 
 ### 2.7 Settings (`app/core/settings.py`)
 
-Broadcast settings include `broadcast_chat_messages_table_name`, `broadcast_chat_mutes_table_name`, `broadcast_chat_rate_limit_ms`, etc. Pattern for adding new settings is clear.
+Broadcast settings include `broadcast_chat_messages_table_name`, `broadcast_chat_mutes_table_name`, `broadcast_chat_rate_limit_ms`, etc. The `broadcast_product_shelf_table_name` setting already exists (see `app/core/settings.py:1152`).
 
 ---
 
@@ -609,7 +611,9 @@ class BroadcastShelfReorderIn(BaseModel):
 
 ### 3.6 Full Router Endpoint Implementations
 
-These are added to `app/routers/broadcast.py` after the existing chat endpoints (after line 944):
+<!-- NOTE: These endpoints already exist in app/routers/broadcast.py. The add_shelf_product_route is at line 1851+. The router is ~3969 lines total. -->
+
+These are added to `app/routers/broadcast.py` (already implemented at lines 1851+):
 
 ```python
 # ─── Product Shelf Endpoints (LCOM-001) ────────────────────────
@@ -934,53 +938,25 @@ BroadcastPage
 
 ### Phase 1: Backend Infrastructure (1 day)
 
-**Files to modify**:
+<!-- NOTE: All Phase 1 infrastructure already exists in the codebase: -->
 
-| File | Change |
-|------|--------|
-| `app/core/settings.py` | Add `broadcast_product_shelf_table_name` setting |
-| `app/core/tables.py` | Add `broadcast_product_shelf` table handle |
-| `scripts/local-ddb-init.py` | Add `BroadcastProductShelf` table definition |
+**Already implemented**:
 
-**Settings addition** (`app/core/settings.py`):
-
-Insert after the existing `broadcast_recordings_table_name` setting (line 1089 in `settings.py`):
-
-```python
-broadcast_product_shelf_table_name: str = os.environ.get(
-    "DDB_BROADCAST_PRODUCT_SHELF", "BroadcastProductShelf"
-)
-```
-
-**Table handle** (`app/core/tables.py`):
-
-Add `broadcast_product_shelf: Any` to the `Tables` dataclass field list (after `broadcast_recordings` at line 81), and add the initialization in the `T = Tables(...)` constructor (after `broadcast_recordings` at line 154):
-
-```python
-broadcast_product_shelf=ddb.Table(S.broadcast_product_shelf_table_name),
-```
-
-**DDB table definition** (`scripts/local-ddb-init.py`):
-
-Insert after the `BroadcastRecordings` table definition (after line 540 in `scripts/local-ddb-init.py`):
-
-```python
-# Broadcast product shelf (LCOM-001)
-TableDef(
-    _resolve_table_name(S.broadcast_product_shelf_table_name, "BroadcastProductShelf"),
-    "session_id",
-    "SK",
-    attr_types={"added_at": "N", "display_order": "N"},
-),
-```
+| File | Status | Reference |
+|------|--------|-----------|
+| `app/core/settings.py` | EXISTS | `broadcast_product_shelf_table_name` at line 1152 |
+| `app/core/tables.py` | EXISTS | `broadcast_product_shelf` field at line 83, init at line 207 |
+| `scripts/local-ddb-init.py` | EXISTS | `BroadcastProductShelf` table at line 578 |
 
 ### Phase 2: Service Layer (1 day)
 
-**Files to create**:
+<!-- NOTE: app/services/broadcast_product_shelf.py already exists (~441 lines). -->
 
-| File | Purpose |
-|------|---------|
-| `app/services/broadcast_product_shelf.py` | DynamoDB CRUD for shelf items + SSE publish |
+**Already implemented**:
+
+| File | Status | Reference |
+|------|--------|-----------|
+| `app/services/broadcast_product_shelf.py` | EXISTS (~441 lines) | DynamoDB CRUD for shelf items + SSE publish |
 
 Functions: `add_product_to_shelf`, `remove_product_from_shelf`, `list_shelf_products`, `reorder_shelf`, `_shelf_item_out`.
 
@@ -1017,11 +993,13 @@ if not cat_item or cat_item.get("entity") != "item":
 
 ### Phase 4: Frontend API Layer (0.5 days)
 
-**Files to create**:
+<!-- NOTE: frontend/src/api/endpoints/broadcast-shelf.ts already exists. -->
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/api/endpoints/broadcast-shelf.ts` | API wrappers for shelf endpoints |
+**Already implemented**:
+
+| File | Status |
+|------|--------|
+| `frontend/src/api/endpoints/broadcast-shelf.ts` | EXISTS — API wrappers for shelf endpoints |
 
 ```typescript
 export const addShelfProduct = (sessionId: string, body: { item_id: string; category_id: string; display_order?: number }) =>
@@ -1039,12 +1017,14 @@ export const reorderShelf = (sessionId: string, itemOrder: string[]) =>
 
 ### Phase 5: Viewer-side ProductShelf Component (1 day)
 
-**Files to create**:
+<!-- NOTE: ProductShelf.tsx already exists. ProductShelfCard.tsx is NOT a separate file (may be embedded in ProductShelf.tsx). -->
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/pages/broadcast/ProductShelf.tsx` | Sidebar component showing shelf items for viewers |
-| `frontend/src/pages/broadcast/ProductShelfCard.tsx` | Individual product card with image, name, price, Add to Cart |
+**Already implemented**:
+
+| File | Status |
+|------|--------|
+| `frontend/src/pages/broadcast/ProductShelf.tsx` | EXISTS |
+| `frontend/src/pages/broadcast/ProductShelfCard.tsx` | May be embedded in ProductShelf.tsx (no separate file) |
 
 **Files to modify**:
 
@@ -1073,12 +1053,14 @@ es.addEventListener("shelf:reorder", (event) => {
 
 ### Phase 6: Broadcaster-side ProductShelfManager Component (1 day)
 
-**Files to create**:
+<!-- NOTE: Both files already exist. -->
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | Product management panel in broadcaster dashboard |
-| `frontend/src/pages/broadcast/CatalogPickerDialog.tsx` | Dialog for picking products from existing catalog |
+**Already implemented**:
+
+| File | Status |
+|------|--------|
+| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | EXISTS |
+| `frontend/src/pages/broadcast/CatalogPickerDialog.tsx` | EXISTS |
 
 **Files to modify**:
 
@@ -1092,21 +1074,21 @@ Verify that the Vite dev proxy in `frontend/vite.config.ts` already forwards `/b
 
 ### Summary of All Files
 
-| File | Type | Estimated Lines |
-|------|------|-----------------|
-| `app/core/settings.py` | Modify | +2 |
-| `app/core/tables.py` | Modify | +1 |
-| `scripts/local-ddb-init.py` | Modify | +5 |
-| `app/services/broadcast_product_shelf.py` | Create | ~140 |
-| `app/routers/broadcast.py` | Modify | ~100 |
-| `frontend/src/api/endpoints/broadcast-shelf.ts` | Create | ~50 |
-| `frontend/src/pages/broadcast/ProductShelf.tsx` | Create | ~120 |
-| `frontend/src/pages/broadcast/ProductShelfCard.tsx` | Create | ~60 |
-| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | Create | ~180 |
-| `frontend/src/pages/broadcast/CatalogPickerDialog.tsx` | Create | ~150 |
-| `frontend/src/pages/broadcast/LivePlayer.tsx` | Modify | +40 |
-| `frontend/src/pages/broadcast/BroadcastPage.tsx` | Modify | +20 |
-| **Total** | | **~870** |
+<!-- NOTE: Most files listed as "Create" already exist in the codebase. This ticket's infrastructure is largely implemented. -->
+
+| File | Type | Status |
+|------|------|--------|
+| `app/core/settings.py` | Modify | Already has `broadcast_product_shelf_table_name` (line 1152) |
+| `app/core/tables.py` | Modify | Already has `broadcast_product_shelf` (line 83, 207) |
+| `scripts/local-ddb-init.py` | Modify | Already has `BroadcastProductShelf` table (line 578) |
+| `app/services/broadcast_product_shelf.py` | Already exists | ~441 lines |
+| `app/routers/broadcast.py` | Already has shelf endpoints | Lines 1851+ |
+| `frontend/src/api/endpoints/broadcast-shelf.ts` | Already exists | -- |
+| `frontend/src/pages/broadcast/ProductShelf.tsx` | Already exists | -- |
+| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | Already exists | -- |
+| `frontend/src/pages/broadcast/CatalogPickerDialog.tsx` | Already exists | -- |
+| `frontend/src/pages/broadcast/LivePlayer.tsx` | Already exists | -- |
+| `frontend/src/pages/broadcast/BroadcastPage.tsx` | Already exists | -- |
 
 ---
 
@@ -1818,3 +1800,35 @@ Products added to a broadcast shelf are tagged with `session_id`. When LCOM-003 
 - **LCOM-002**: Chat product links — broadcaster can pin shelf products to live chat
 - **LCOM-003**: Broadcast quick-buy checkout — one-click purchase from shelf
 - **LCOM-004**: Broadcast-exclusive pricing — time-limited discounts on shelf products
+
+---
+
+## Codebase References
+
+| File | Lines | What was verified |
+|------|-------|-------------------|
+| `app/routers/broadcast.py` | 76 | Router prefix `/broadcast` confirmed; ~3969 lines total (not 944) |
+| `app/routers/broadcast.py` | 211 | `_require_operator_role` confirmed |
+| `app/routers/broadcast.py` | 639-640 | SSE stream endpoint `broadcast_event_stream_route` confirmed |
+| `app/routers/broadcast.py` | 1851+ | Product shelf endpoints already implemented (add/remove/list/reorder) |
+| `app/routers/catalog.py` | 41 | Router prefix `/ui/catalog` confirmed; ~933 lines total (not 664) |
+| `app/routers/catalog.py` | 54, 62 | `cat_pk` and `item_sk` helper functions confirmed |
+| `app/routers/catalog.py` | 106 | `_catalog_item_out` confirmed |
+| `app/routers/catalog.py` | 227, 235 | `_require_category_owner` and `_get_item_meta` confirmed |
+| `app/models_broadcast.py` | 37-49 | `BroadcastSessionModel` confirmed with all listed fields |
+| `app/models_broadcast.py` | 8 | `BroadcastSessionStatus` Literal type confirmed |
+| `app/services/broadcast_sse.py` | 29 | `broadcast_sse_publish(session_id, event)` confirmed; 49 lines total |
+| `app/services/broadcast_chat_store.py` | -- | Exists, ~423 lines (not 247) |
+| `app/services/broadcast_state_machine.py` | -- | Exists |
+| `app/services/broadcast_product_shelf.py` | -- | Already exists (~441 lines) |
+| `app/core/settings.py` | 1152 | `broadcast_product_shelf_table_name` already exists |
+| `app/core/tables.py` | 83, 207 | `broadcast_product_shelf` table handle already exists |
+| `scripts/local-ddb-init.py` | 578 | `BroadcastProductShelf` table definition already exists |
+| `scripts/local-ddb-init.py` | 67 | Shopping cart table confirmed |
+| `frontend/src/api/endpoints/broadcast-shelf.ts` | -- | Already exists |
+| `frontend/src/api/endpoints/cart.ts` | -- | Already exists |
+| `frontend/src/pages/broadcast/ProductShelf.tsx` | -- | Already exists |
+| `frontend/src/pages/broadcast/ProductShelfManager.tsx` | -- | Already exists |
+| `frontend/src/pages/broadcast/CatalogPickerDialog.tsx` | -- | Already exists |
+| `frontend/src/pages/broadcast/LivePlayer.tsx` | -- | Already exists |
+| `frontend/src/pages/broadcast/BroadcastPage.tsx` | -- | Already exists |

@@ -1031,3 +1031,68 @@ Unresolvable items (deleted content) are silently filtered out.
 8. Existing `/profile/:identifier` route redirects to `/creator/:identifier`.
 9. All 27 E2E tests pass.
 10. Storefront loads all essential data in a single aggregated API call.
+
+---
+
+## Codebase References
+
+All references verified against the codebase as of 2026-05-29.
+
+### Backend — Routers
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| Public profile endpoint `GET /profile/public/{identifier}` | `app/routers/profile.py` | 294 | VERIFIED |
+| Public profile posts `GET /profile/public/{identifier}/posts` | `app/routers/profile.py` | 387 | VERIFIED |
+| Subscription plans `GET /api/creators/{id}/plans` (public, no auth) | `app/routers/subscription_server.py` | (exists) | VERIFIED |
+| Catalog router | `app/routers/catalog.py` | (exists) | VERIFIED |
+| Privacy router (admin) | `app/routers/privacy.py` | 44 (admin_router prefix) | VERIFIED |
+| Profile router registered in main.py | `app/main.py` | (profile_router included) | VERIFIED |
+
+### Backend — Services
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `get_profile()` | `app/services/profile.py` | (exists) | VERIFIED |
+| `get_profile_for_requester()` | `app/services/profile.py` | (exists) | VERIFIED |
+| `store_profile_photo()` | `app/services/profile.py` | (exists) | VERIFIED |
+| Social service (`follow/unfollow`) | `app/services/social.py` | (exists) | VERIFIED |
+| `app/services/public_catalog.py` | — | — | <!-- NOTE: Does not exist yet — new implementation required --> |
+
+### Backend — Settings
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `S.catalog_table_name` → `shopping_catalog` | `app/core/settings.py` | (exists) | VERIFIED |
+| `S.subscriptions_table_name` → `subscriptions` | `app/core/settings.py` | (exists) | VERIFIED |
+| `S.storefront_shop_enabled` setting | `app/core/settings.py` | — | <!-- NOTE: Does not exist yet — new setting required --> |
+| `VITE_CREATOR_STOREFRONT_ENABLED` flag | `frontend/.env.local` | — | <!-- NOTE: Does not exist yet — new env var required --> |
+
+### DynamoDB Tables
+
+| Reference | Table | Definition | Status |
+|-----------|-------|------------|--------|
+| Profiles table (`T.profile`) | `profiles` | `scripts/local-ddb-init.py:61` | VERIFIED |
+| Catalog table (`T.catalog`) | `shopping_catalog` | `scripts/local-ddb-init.py:73` — PK=`PK`, SK=`SK`, GSI1 exists | VERIFIED |
+| Subscriptions table (`T.subscriptions`) | `subscriptions` | `scripts/local-ddb-init.py:78` — PK=`pk`, SK=`sk` | VERIFIED |
+| ByCreator GSI on catalog table | `shopping_catalog` GSI1 | `scripts/local-ddb-init.py:76` — GSI1PK/GSI1SK already exists | VERIFIED — GSI1 already defined; no new GSI needed. Ticket says "add ByCreator GSI" but GSI1 already exists on the catalog table. Reuse it with `GSI1PK=CREATOR#{creator_id}` key pattern. |
+
+### Frontend
+
+| Reference | File | Status |
+|-----------|------|--------|
+| `PublicUserProfilePage.tsx` | `frontend/src/pages/profile/PublicUserProfilePage.tsx` (286 lines, uses `StorefrontVideoGrid` + `StorefrontPostsFeed`) | VERIFIED |
+| `StorefrontVideoGrid.tsx` | `frontend/src/pages/profile/StorefrontVideoGrid.tsx:23` | VERIFIED |
+| `StorefrontPostsFeed.tsx` | `frontend/src/pages/profile/StorefrontPostsFeed.tsx:61` | VERIFIED |
+| `/profile/:identifier` route in App.tsx | `frontend/src/App.tsx` | VERIFIED — route exists; ticket adds `/creator/:identifier` alias |
+| `CreatorStorefrontPage.tsx` | — | <!-- NOTE: Does not exist yet — new file --> |
+| `StorefrontAboutTab.tsx`, `StorefrontPlansTab.tsx`, `StorefrontShopTab.tsx`, `FeaturedContentCarousel.tsx`, `SocialLinksBar.tsx` | — | <!-- NOTE: Do not exist yet — new files --> |
+| `StorefrontSettingsCard.tsx` | — | <!-- NOTE: Does not exist yet — new file --> |
+| `frontend/src/api/endpoints/storefront.ts` | — | <!-- NOTE: Does not exist yet — new file --> |
+
+### Corrections
+
+1. **Section 3.1**: States "~724 lines" for PublicUserProfilePage — actual line count is approximately 286 lines (verified via grep). The ticket's description of the flat layout with video grid + posts feed is accurate.
+2. **Section 4.1.2**: Proposes adding a ByCreator GSI to the catalog table. The `shopping_catalog` table already has GSI1 (`GSI1PK`/`GSI1SK`) defined at `local-ddb-init.py:76`. No new GSI creation is needed; instead populate `GSI1PK=CREATOR#{creator_id}` on catalog items.
+3. **Section 3.1 table**: References `app/routers/profile.py:294` for public profile endpoint — VERIFIED, line 294 is the `@router.get("/profile/public/{identifier}")` decorator.
+4. **Section 3.1 table**: References `app/routers/profile.py:388` for public profile posts — VERIFIED at line 387 (off by one).

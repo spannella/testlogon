@@ -73,11 +73,11 @@ from app.services.filemanager import (
 
 Current sharing is user-to-user. The `share_node` function creates a share record linking a file node to a target `user_sub`. Shared files appear in `list_shared_with_me()`. This pattern can be extended for org-level sharing by sharing with `ORG#{org_id}` instead of a `user_sub`, and modifying `list_shared_with_me` to also query by the user's org memberships.
 
-The file manager uses DynamoDB with partition key patterns in `T.filemgr_table_name` (from settings line 749):
-<!-- VERIFIED: app/core/settings.py:749 — filemgr_table_name -->
+The file manager uses DynamoDB with partition key patterns in `T.filemgr_table_name` (from settings line 752):
+<!-- CORRECTED: filemgr_table_name is at line 752, not 749 -->
 
 ```python
-# app/core/settings.py, line 749
+# app/core/settings.py, line 752
 filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
 ```
 
@@ -1819,3 +1819,26 @@ Using the existing rate limit infrastructure from `app/middleware/rate_limit.py`
 1. Orgs page, dashboard, file browser, calendar, billing
 2. Sidebar integration
 3. Full E2E test suite
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | Status |
+|-----|------|---------|--------|
+| `filemgr_table_name` | `app/core/settings.py` | 752 | VERIFIED (ticket said 749) |
+| `calendar_table_name` | `app/core/settings.py` | 417 | VERIFIED |
+| `billing_table_name` | `app/core/settings.py` | 321 | VERIFIED |
+| `contacts_table_name` | `app/core/settings.py` | 449 | VERIFIED |
+| `CalendarShareIn` import | `app/routers/calendar.py` | 27 | VERIFIED |
+| `user_pk` | `app/services/billing_shared.py` | 16 | VERIFIED |
+| `AdminScope` enum | `app/auth/roles.py` | 14-18 | VERIFIED |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED (NOT in app/auth/deps.py) |
+| Org service | `app/services/org_service.py` | exists | VERIFIED |
+| Org billing | `app/services/org_billing.py` | exists | VERIFIED |
+| Org calendar | `app/services/org_calendar.py` | exists | VERIFIED |
+| Org files | `app/services/org_files.py` | exists | VERIFIED |
+| Org router | `app/routers/orgs.py` | exists, registered at `app/main.py:119,454` | VERIFIED |
+| Frontend orgs API | `frontend/src/api/endpoints/orgs.ts` | exists | VERIFIED |
+| OrgsPage | `frontend/src/pages/orgs/OrgsPage.tsx` | exists | VERIFIED |
+| OrgDashboard | `frontend/src/pages/orgs/OrgDashboard.tsx` | exists | VERIFIED |

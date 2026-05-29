@@ -12,7 +12,7 @@
 
 ### The Gap
 
-The platform currently supports three theme modes --- light, dark, and system --- managed by the `ThemeProvider` (`frontend/src/components/ThemeProvider.tsx`, line 9) <!-- VERIFIED: ThemeProvider.tsx:9 --> and the `uiStore` (`frontend/src/stores/uiStore.ts`, line 38) <!-- VERIFIED: uiStore.ts:38 -->. The theme system toggles a single `.dark` class on the `<html>` element (line 16 in `ThemeProvider.tsx`) <!-- CORRECTED: was "line 21", actually classList.toggle is at line 16 -->, which activates Tailwind's dark mode CSS custom properties. This provides a binary light/dark experience with no room for:
+The platform currently supports three theme modes --- light, dark, and system --- managed by the `ThemeProvider` (`frontend/src/components/ThemeProvider.tsx`, line 77) <!-- CORRECTED: was "line 9"; ThemeProvider function is at line 77; line 9 is ACCENT_COLORS constant --> and the `uiStore` (`frontend/src/stores/uiStore.ts`, line 59) <!-- CORRECTED: was "line 38"; useUiStore create() is at line 59 -->. The theme system toggles a single `.dark` class on the `<html>` element (line 90 in `ThemeProvider.tsx`) <!-- CORRECTED: was "line 16"; classList.toggle("dark", isDark) is at line 90 -->, which activates Tailwind's dark mode CSS custom properties. This provides a binary light/dark experience with no room for:
 
 1. **Custom accent colors**: The primary/accent color is hardcoded in the Tailwind theme configuration. Users cannot choose their brand color or personal preference. The current primary color is a blue-purple shade defined as a static HSL value in the Tailwind CSS.
 
@@ -20,11 +20,11 @@ The platform currently supports three theme modes --- light, dark, and system --
 
 3. **Density modes**: The spacing between elements is fixed. Power users who want to see more content on screen ("compact mode") have no option, nor do users who prefer more breathing room ("spacious mode").
 
-4. **High contrast mode**: The current dark mode uses a background of `hsl(222 84% 5%)` with foreground of `hsl(210 40% 98%)` (confirmed in `theme-switcher.spec.ts`, test 96.2 at line 197 and 96.3 at line 209). While the contrast ratio is excellent in dark mode, the light mode uses relatively subtle borders and muted colors that may not meet WCAG AAA contrast requirements for all users.
+4. **High contrast mode**: The current dark mode uses a background of `hsl(222 84% 5%)` with foreground of `hsl(210 40% 98%)` (confirmed in `theme-switcher.spec.ts`, test 96.2 at line 193 and 96.3 at line 206). While the contrast ratio is excellent in dark mode, the light mode uses relatively subtle borders and muted colors that may not meet WCAG AAA contrast requirements for all users.
 
 5. **Theme preview**: Users must commit to a theme change to see the effect. There is no preview mechanism that shows how the UI would look before applying.
 
-6. **Server-side persistence**: The `uiStore` persists theme preferences to both localStorage and the server via `debouncedSyncToServer` (`uiStore.ts`, line 11) <!-- VERIFIED: uiStore.ts:11 --> which calls `patchPreferences` (`frontend/src/api/endpoints/preferences.ts`, line 22) <!-- VERIFIED: preferences.ts:22 -->. However, the `UiPreferences` interface (line 3) <!-- VERIFIED: preferences.ts:3 --> only supports `theme` and `sidebar_collapsed` --- no accent color, font size, or density.
+6. **Server-side persistence**: The `uiStore` persists theme preferences to both localStorage and the server via `debouncedSyncToServer` (`uiStore.ts`, line 12) <!-- CORRECTED: was "line 11"; debouncedSyncToServer function is at line 12 --> which calls `patchPreferences` (`frontend/src/api/endpoints/preferences.ts`, line 40) <!-- CORRECTED: was "line 22"; patchPreferences is at line 40 -->. However, the `UiPreferences` interface (line 7) <!-- CORRECTED: was "line 3"; UiPreferences interface is at line 7; line 3 is AccentColor type --> only supports `theme` and `sidebar_collapsed` --- no accent color, font size, or density. <!-- NOTE: This gap description is outdated — the current UiPreferences interface (preferences.ts:7) already includes accent_color, custom_accent_hex, font_size, density, and high_contrast. The feature has been implemented. -->
 
 ### Why This Is Needed
 
@@ -105,7 +105,7 @@ automatically update because they reference the CSS variable
 
 ### 2.1 ThemeProvider (`frontend/src/components/ThemeProvider.tsx`)
 
-The `ThemeProvider` (line 9) <!-- VERIFIED: ThemeProvider.tsx:9 --> is a React component that applies the `dark` class to `document.documentElement`:
+The `ThemeProvider` (line 77) <!-- CORRECTED: was "line 9"; ThemeProvider function is at line 77 --> is a React component that applies the `dark` class to `document.documentElement`:
 
 ```tsx
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -130,11 +130,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
 The provider only handles the dark/light toggle. It does not set any CSS custom properties for accent colors, font sizes, or density. Extending this component is the natural integration point for all theme customization.
 
-The current `useEffect` dependency array only contains `[theme]` <!-- VERIFIED: ThemeProvider.tsx:39 -->. After this change, it must include all new preference values to trigger re-application when they change.
+The current `useEffect` dependency array only contains `[theme]` <!-- CORRECTED: was "line 39"; the dark/light useEffect dep array [theme] is at line 113. Additional separate useEffects for accent (line 144), fontSize (line 149), density (line 158), and highContrast (line 163) now exist -->. After this change, it must include all new preference values to trigger re-application when they change.
 
 ### 2.2 UI Store (`frontend/src/stores/uiStore.ts`)
 
-The Zustand store (line 38) <!-- VERIFIED: uiStore.ts:38 --> with `persist` middleware currently tracks:
+The Zustand store (line 59) <!-- CORRECTED: was "line 38"; useUiStore = create<UiState>()( is at line 59; UiState interface at line 22 --> with `persist` middleware currently tracks:
 
 ```typescript
 interface UiState {
@@ -150,9 +150,9 @@ interface UiState {
 }
 ```
 
-The `setTheme` function (line 46) <!-- VERIFIED: uiStore.ts:46 --> calls `debouncedSyncToServer({ theme })` which PATCHes the server. The same pattern should be used for new preference fields.
+The `setTheme` function (line 73) <!-- CORRECTED: was "line 46"; setTheme is at line 73 --> calls `debouncedSyncToServer({ theme })` which PATCHes the server. The same pattern should be used for new preference fields.
 
-The localStorage key is `ui-store` (line 84) and `partialize` (line 85) <!-- CORRECTED: was "line 85" for localStorage key, actually name at line 84, partialize at line 85 --> controls which fields are persisted:
+The localStorage key is `ui-store` (line 159) and `partialize` (line 160) <!-- CORRECTED: was "line 84/85"; name: "ui-store" is at line 159, partialize is at line 160 --> controls which fields are persisted:
 
 ```typescript
 partialize: (state) => ({
@@ -162,7 +162,7 @@ partialize: (state) => ({
 }),
 ```
 
-The `debouncedSyncToServer` function (line 11) <!-- VERIFIED: uiStore.ts:11 --> uses a 500ms debounce timer:
+The `debouncedSyncToServer` function (line 12) <!-- CORRECTED: was "line 11"; function definition at line 12 --> uses a 500ms debounce timer:
 
 ```typescript
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -181,7 +181,7 @@ This means rapid changes (e.g., clicking through accent colors) coalesce into a 
 
 ### 2.3 Server-Side Preferences (`frontend/src/api/endpoints/preferences.ts`)
 
-The `UiPreferences` interface (line 3) <!-- VERIFIED: preferences.ts:3 --> is minimal:
+The `UiPreferences` interface (line 7) <!-- CORRECTED: was "line 3"; UiPreferences is at line 7; line 3 is AccentColor type --> is minimal: <!-- NOTE: This description is outdated — the actual UiPreferences interface already includes all PLATFORM-013 fields (accent_color, custom_accent_hex, font_size, density, high_contrast). -->
 
 ```typescript
 export interface UiPreferences {
@@ -190,9 +190,9 @@ export interface UiPreferences {
 }
 ```
 
-The `patchPreferences` function (line 22) <!-- VERIFIED: preferences.ts:22 --> sends a `PATCH /ui/settings/preferences` with partial updates. The backend merges these into the existing preferences record.
+The `patchPreferences` function (line 40) <!-- CORRECTED: was "line 22"; patchPreferences is at line 40 --> sends a `PATCH /ui/settings/preferences` with partial updates. The backend merges these into the existing preferences record.
 
-The `getPreferences` function (line 12) <!-- VERIFIED: preferences.ts:12 --> fetches the full preferences object from the server. It is called by `loadServerPreferences` in the uiStore during app initialization.
+The `getPreferences` function (line 30) <!-- CORRECTED: was "line 12"; getPreferences is at line 30 --> fetches the full preferences object from the server. It is called by `loadServerPreferences` in the uiStore during app initialization.
 
 ### 2.4 Tailwind CSS Configuration
 
@@ -234,7 +234,7 @@ New E2E tests for this ticket must not break any of these existing tests. The th
 
 ### 2.7 App Entry Point (`frontend/src/main.tsx`)
 
-The render tree (line 60) <!-- VERIFIED: main.tsx:60 --> wraps the app in `ThemeProvider`:
+The render tree (line 73) <!-- CORRECTED: was "line 60"; ThemeProvider wrapping is at line 73 --> wraps the app in `ThemeProvider`:
 
 ```tsx
 <ThemeProvider>
@@ -1260,7 +1260,7 @@ export function ColorSwatch({ color, hex, selected, onClick }: ColorSwatchProps)
 
 3. **Density and touch targets**: In compact mode, buttons and clickable elements must still meet WCAG's minimum touch target size of 44x44 CSS pixels. The density CSS must ensure that interactive elements have a minimum height even in compact mode. Add a CSS guard: `.density-compact button, .density-compact a { min-height: 44px; }` (or use `min-h-[44px]` via Tailwind).
 
-4. **Server preference sync race**: If the user rapidly changes multiple settings, `debouncedSyncToServer` (500ms debounce at line 11) <!-- VERIFIED: uiStore.ts:11 --> coalesces them into a single PATCH. But if the user navigates away before the debounce fires, the preference is lost on the server (though preserved in localStorage). Consider flushing pending sync on `beforeunload`:
+4. **Server preference sync race**: If the user rapidly changes multiple settings, `debouncedSyncToServer` (500ms debounce at line 12) <!-- CORRECTED: was "line 11"; function at line 12 --> coalesces them into a single PATCH. But if the user navigates away before the debounce fires, the preference is lost on the server (though preserved in localStorage). Consider flushing pending sync on `beforeunload`:
 
    ```typescript
    window.addEventListener("beforeunload", () => {
@@ -1291,10 +1291,64 @@ export function ColorSwatch({ color, hex, selected, onClick }: ColorSwatchProps)
 
 2. **Preference data size**: The preferences record should be capped at 4KB total to prevent abuse. Each field has bounded values (enum for most, 6-char hex for custom color). The backend should enforce a maximum payload size on the PATCH endpoint. With the current field set, the maximum serialized size is approximately 200 bytes.
 
-3. **Cross-device consistency**: Preferences are synced to the server and loaded on login via `loadServerPreferences` (`uiStore.ts`, line 68) <!-- VERIFIED: uiStore.ts:68 -->. If a user logs in on a new device, they get their customized theme. Ensure the `loadServerPreferences` function handles all new fields gracefully when the server returns a partial response (some fields undefined). The implementation uses conditional checks (`if (prefs.accent_color) updates.accentColor = ...`) which handles undefined fields correctly.
+3. **Cross-device consistency**: Preferences are synced to the server and loaded on login via `loadServerPreferences` (`uiStore.ts`, line 138) <!-- CORRECTED: was "line 68"; loadServerPreferences is at line 138 -->. If a user logs in on a new device, they get their customized theme. Ensure the `loadServerPreferences` function handles all new fields gracefully when the server returns a partial response (some fields undefined). The implementation uses conditional checks (`if (prefs.accent_color) updates.accentColor = ...`) which handles undefined fields correctly.
 
 4. **CSRF on PATCH**: The `PATCH /ui/settings/preferences` endpoint requires CSRF validation for cookie-authenticated requests (enforced by `require_ui_session` in `app/auth/deps.py`). The existing `api.patch` method in `frontend/src/api/client.ts` already sends the CSRF header.
 
 5. **No admin override**: Theme preferences are purely personal. Admins cannot set or reset another user's theme preferences, even via impersonation. The preferences endpoint should use `ctx["user_sub"]` directly, not the impersonated user's sub. If the admin is impersonating a user, `ctx["user_sub"]` already resolves to the impersonated user's sub --- this means impersonating admins CAN change the target user's theme. Consider using the admin's real sub instead if this is undesirable.
 
 6. **CSS custom property names**: The CSS variable names (`--primary`, `--primary-foreground`, etc.) are set via `style.setProperty()` which is safe against injection. The variable name is hardcoded (not user-controlled), and the value is validated to be an HSL string. There is no path for XSS through CSS custom properties in this implementation.
+
+---
+
+## Codebase References
+
+> **NOTE**: This feature has already been implemented. The "Current State Analysis" sections describe the pre-implementation state; the actual codebase now contains all proposed changes.
+
+| File | Line(s) | What |
+|------|---------|------|
+| `frontend/src/components/ThemeProvider.tsx` | 9 | `ACCENT_COLORS` constant (8 preset HSL values) |
+| `frontend/src/components/ThemeProvider.tsx` | 21 | `FONT_SIZES` constant |
+| `frontend/src/components/ThemeProvider.tsx` | 31 | `hexToHsl()` utility function |
+| `frontend/src/components/ThemeProvider.tsx` | 61 | `contrastForeground()` utility function |
+| `frontend/src/components/ThemeProvider.tsx` | 77 | `ThemeProvider` component (dark/light + accent + fontSize + density + highContrast) |
+| `frontend/src/components/ThemeProvider.tsx` | 90 | `classList.toggle("dark", isDark)` |
+| `frontend/src/components/ThemeProvider.tsx` | 113 | Dark/light `useEffect` dependency `[theme]` |
+| `frontend/src/components/ThemeProvider.tsx` | 116-144 | Accent color `useEffect` (sets CSS vars) |
+| `frontend/src/components/ThemeProvider.tsx` | 147-149 | Font size `useEffect` |
+| `frontend/src/components/ThemeProvider.tsx` | 152-158 | Density `useEffect` |
+| `frontend/src/components/ThemeProvider.tsx` | 161-163 | High contrast `useEffect` |
+| `frontend/src/stores/uiStore.ts` | 12 | `debouncedSyncToServer()` (500ms debounce) |
+| `frontend/src/stores/uiStore.ts` | 22 | `UiState` interface (includes accentColor, fontSize, density, highContrast) |
+| `frontend/src/stores/uiStore.ts` | 59 | `useUiStore = create<UiState>()` |
+| `frontend/src/stores/uiStore.ts` | 73 | `setTheme` setter |
+| `frontend/src/stores/uiStore.ts` | 108 | `setAccentColor` setter |
+| `frontend/src/stores/uiStore.ts` | 118 | `setCustomAccentHex` setter |
+| `frontend/src/stores/uiStore.ts` | 123 | `setFontSize` setter |
+| `frontend/src/stores/uiStore.ts` | 128 | `setDensity` setter |
+| `frontend/src/stores/uiStore.ts` | 133 | `setHighContrast` setter |
+| `frontend/src/stores/uiStore.ts` | 138 | `loadServerPreferences` (loads all new fields from server) |
+| `frontend/src/stores/uiStore.ts` | 159 | `name: "ui-store"` localStorage key |
+| `frontend/src/stores/uiStore.ts` | 160 | `partialize` (includes all new fields) |
+| `frontend/src/api/endpoints/preferences.ts` | 3 | `AccentColor` type export |
+| `frontend/src/api/endpoints/preferences.ts` | 4 | `FontSize` type export |
+| `frontend/src/api/endpoints/preferences.ts` | 5 | `Density` type export |
+| `frontend/src/api/endpoints/preferences.ts` | 7 | `UiPreferences` interface (includes accent_color, font_size, density, etc.) |
+| `frontend/src/api/endpoints/preferences.ts` | 17 | `ValidateColorResponse` interface |
+| `frontend/src/api/endpoints/preferences.ts` | 30 | `getPreferences()` |
+| `frontend/src/api/endpoints/preferences.ts` | 40 | `patchPreferences()` |
+| `frontend/src/api/endpoints/preferences.ts` | 47 | `validateColor()` |
+| `frontend/src/main.tsx` | 73 | `<ThemeProvider>` wrapping in render tree |
+| `frontend/src/pages/settings/AppearanceSection.tsx` | — | Appearance section component (accent, fontSize, density, highContrast, preview) |
+| `frontend/src/components/shared/ColorSwatch.tsx` | — | Color swatch picker component |
+| `frontend/src/components/shared/ThemePreviewPane.tsx` | — | Live theme preview pane component |
+| `frontend/src/styles/density.css` | — | CSS density modes + high-contrast overrides |
+| `app/models.py` | 1381 | `PreferencesPatchReq` Pydantic model (all 7 preference fields) |
+| `app/routers/profile.py` | 592 | `GET /settings/preferences` handler |
+| `app/routers/profile.py` | 605 | `PATCH /settings/preferences` handler |
+| `app/routers/profile.py` | 651 | `POST /settings/validate-color` handler |
+| `app/services/user_preferences.py` | 22 | `update_user_preferences()` |
+| `app/services/user_preferences.py` | 56 | `get_user_preferences()` |
+| `frontend/e2e/theme-switcher.spec.ts` | 152 | `settingsBtn()` helper |
+| `frontend/e2e/theme-switcher.spec.ts` | 193 | Test 96.2 (dark mode CSS variable) |
+| `frontend/e2e/theme-switcher.spec.ts` | 206 | Test 96.3 (dark mode foreground CSS variable) |

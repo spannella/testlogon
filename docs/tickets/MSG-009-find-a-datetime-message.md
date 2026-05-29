@@ -47,17 +47,19 @@ Meeting polls work well when the organizer already has candidate times in mind. 
 
 ### 2.1 Meeting Poll Infrastructure
 
-Meeting polls are stored in the `calendar` DDB table with `calendar_id = MPOLL#{poll_id}` (PK pattern). The same table and pattern will be used for Find-a-DateTime with `calendar_id = FADT#{poll_id}`. Key service functions:
+Meeting polls are stored in the `calendar` DDB table (see `scripts/local-ddb-init.py:63`, `app/core/settings.py:417`) with `calendar_id = MPOLL#{poll_id}` (PK pattern, see `app/routers/messaging.py:9287`). The same table and pattern will be used for Find-a-DateTime with `calendar_id = FADT#{poll_id}`. Key service functions:
 
-- `app/services/messaging.py`: `create_meeting_poll_message()` — creates poll + message
-- SSE events: `poll:vote`, `poll:confirmed` — real-time updates via `useMessagingStream.ts`
-- Frontend: `MeetingPollComposer.tsx` — composer UI in ComposeBar
+- `app/routers/messaging.py:9259`: `create_meeting_poll_message()` — creates poll + message
+<!-- NOTE: There is no separate `app/services/messaging.py`. All messaging logic lives in the monolith router `app/routers/messaging.py` (13,287 lines). -->
+- SSE events: `poll:vote`, `poll:confirmed` — real-time updates via `useMessagingStream.ts` (see `frontend/src/hooks/useMessagingStream.ts:62,162-163`)
+- Frontend: `MeetingPollComposer.tsx` — composer UI in ComposeBar (see `frontend/src/pages/messages/MeetingPollComposer.tsx`, integrated at `ComposeBar.tsx:18,160,1777`)
 
 ### 2.2 Calendar Table
 
-The `calendar` DDB table uses a single-table design:
+The `calendar` DDB table (see `scripts/local-ddb-init.py:63`, PK=`calendar_id`, SK=`sk`) uses a single-table design:
 - PK: `calendar_id` (e.g., `MPOLL#abc123`)
-- SK: `META` for metadata, `VOTE#{user_sub}` for votes, `SLOT#{slot_id}` for time slots
+- SK: `meta` for metadata (see `messaging.py:9383`), `vote#{user_sub}` for votes (see `:9391`), `SLOT#{slot_id}` for time slots
+<!-- NOTE: The existing meeting poll code uses lowercase SK values: "meta" (not "META") and "vote#" (not "VOTE#"). See `messaging.py:9383` for `"sk": "meta"` and `:9391` for `begins_with("vote#")`. The FADT design should be consistent — either adopt the lowercase convention of existing polls or document the intentional difference. -->
 
 Find-a-DateTime will use:
 - PK: `FADT#{poll_id}`
@@ -73,10 +75,10 @@ New message kinds are added by:
 
 ### 2.4 Gaps
 
-1. **No find-a-datetime message kind** — backend and frontend don't support it.
-2. **No availability grid storage** — no DDB schema for user availability ranges.
+1. **No find-a-datetime message kind** — backend and frontend don't support it. (VERIFIED: `kind` Literal at `messaging.py:2330` does not include `find_datetime`.)
+2. **No availability grid storage** — no DDB schema for user availability ranges. (VERIFIED: no `FADT#` prefix used anywhere in the codebase.)
 3. **No overlap computation** — no algorithm to find best overlapping windows.
-4. **No availability grid UI** — no interactive time grid component.
+4. **No availability grid UI** — no interactive time grid component. (VERIFIED: no `AvailabilityGrid` or `FindDateTime` components exist in `frontend/src/`.)
 5. **No auto-close mechanism** — meeting polls don't have deadline-based auto-close.
 
 ---
@@ -1152,3 +1154,27 @@ test.beforeAll(async ({ browser }) => {
 | Calendar DDB table | Existing | Available |
 | Meeting poll SSE patterns | Existing | Available |
 | AvailabilityGrid component | New (this ticket) | Shared with FEED-003 |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `scripts/local-ddb-init.py` | 63 | Calendar table exists — `TableDef("calendar", "calendar_id", "sk")` — will be reused for `FADT#` prefix items |
+| `app/core/settings.py` | 417 | `calendar_table_name` setting exists — no new DDB table needed (single-table design) |
+| `app/routers/messaging.py` | 9259-9355 | `create_meeting_poll_message()` — reference implementation for creating a new message kind with calendar table items |
+| `app/routers/messaging.py` | 9287 | `"calendar_id": f"MPOLL#{poll_id}"` — PK pattern to follow with `FADT#` prefix |
+| `app/routers/messaging.py` | 9383 | `"sk": "meta"` — existing polls use **lowercase** SK values, not `META` as proposed in this spec |
+| `app/routers/messaging.py` | 9391 | `begins_with("vote#")` — existing polls use **lowercase** SK prefix, not `VOTE#` |
+| `app/routers/messaging.py` | 9371-9465 | `get_meeting_poll()` and `vote_meeting_poll()` — patterns for FADT get/submit endpoints |
+| `app/routers/messaging.py` | 2330 | Message `kind` Literal — no `find_datetime` kind exists yet — **needs addition** |
+| `frontend/src/hooks/useMessagingStream.ts` | 62, 162-163 | SSE handling for `poll:vote`, `poll:confirmed` — pattern for `fadt:availability`, `fadt:result` events; no `fadt:` events handled yet |
+| `frontend/src/pages/messages/MeetingPollComposer.tsx` | — | EXISTS — ComposeBar integration pattern for FindDateTimeComposer to follow |
+| `frontend/src/pages/messages/ComposeBar.tsx` | 18, 160, 1777 | MeetingPollComposer import and integration — pattern for FindDateTimeComposer button |
+| `app/core/settings.py` | — | No `find_datetime_max_date_range_days` or similar settings — **new settings required** |
+| `app/services/messaging_find_datetime.py` | — | **Does not exist** — new service required |
+| `frontend/src/pages/messages/FindDateTimeComposer.tsx` | — | **Does not exist** — new component required |
+| `frontend/src/components/shared/AvailabilityGrid.tsx` | — | **Does not exist** — new shared component required |
+| `frontend/src/pages/messages/FindDateTimeCard.tsx` | — | **Does not exist** — new component required |
+| `frontend/src/pages/messages/FindDateTimeResult.tsx` | — | **Does not exist** — new component required |

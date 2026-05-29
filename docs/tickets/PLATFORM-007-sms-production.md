@@ -1561,17 +1561,15 @@ The `_estimate_segments()` function runs in O(n) where n = message length. For t
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| `send_alert_sms()` with SNS publish | `app/services/alerts.py` | 355-372 | VERIFIED |
-| Dev mode logs to `.logs/dev/sms.log` | `app/services/alerts.py` | 363 | VERIFIED |
-| Dev log writer `_write_dev_log()` | `app/services/alerts.py` | 322-329 | VERIFIED |
-| Silent exception: `except Exception: pass` | `app/services/alerts.py` | 371-372 | VERIFIED |
-| SMS fanout in alert write | `app/services/alerts.py` | 673-687 | VERIFIED |
-| SMS fanout outer exception handler | `app/services/alerts.py` | 686-687 | VERIFIED |
+| `send_alert_sms()` with SNS publish | `app/services/alerts.py` | 481 | VERIFIED |
+| Dev mode logs to `.logs/dev/sms.log` | `app/services/alerts.py` | 492 | VERIFIED |
+| Dev log writer `_write_dev_log()` | `app/services/alerts.py` | 448 | VERIFIED |
+| `audit_event()` master dispatch (SMS fanout) | `app/services/alerts.py` | 695 | VERIFIED |
 | `alerts_sms_enabled` default `"0"` | `app/core/settings.py` | 190 | VERIFIED |
 | `alerts_sms_max_per_window` default 10 | `app/core/settings.py` | 191 | VERIFIED |
 | `alerts_sms_window_seconds` default 3600 | `app/core/settings.py` | 192 | VERIFIED |
-| `dev_sms_log` default path | `app/core/settings.py` | 247 | VERIFIED |
-| `devtools_sms_log_path` | `app/core/settings.py` | 250 | VERIFIED |
+| `dev_sms_log` default path | `app/core/settings.py` | 262 | VERIFIED |
+| `devtools_sms_log_path` | `app/core/settings.py` | 265 | VERIFIED |
 | `sns_client()` lazy import per-call | `app/core/aws.py` | 30-37 | VERIFIED |
 | `can_send_alert_channel` SMS rate limit | `app/services/rate_limit.py` | 324-325 | VERIFIED |
 | AlertPrefs SMS phone management state | `frontend/src/pages/alerts/AlertPrefs.tsx` | 49-52 | VERIFIED |

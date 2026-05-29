@@ -961,8 +961,10 @@ If issues arise after deployment:
 | ViewTracker auto-marks viewed via IntersectionObserver | `frontend/src/pages/messages/ReadReceipts.tsx` | 78-108 | VERIFIED |
 | ViewTracker threshold is 0.5 | `frontend/src/pages/messages/ReadReceipts.tsx` | 99 | VERIFIED |
 | ViewTracker renders 1px invisible div | `frontend/src/pages/messages/ReadReceipts.tsx` | 107 | VERIFIED |
-| useMessagingStream has no message:viewed handler | `frontend/src/hooks/useMessagingStream.ts` | 23-92, 96-129 | VERIFIED (absent) |
-| EVENT_TYPES has 29 entries, no message:viewed | `frontend/src/hooks/useMessagingStream.ts` | 96-129 | VERIFIED |
+| useMessagingStream has no message:viewed handler | `frontend/src/hooks/useMessagingStream.ts` | 112-118 | INCORRECT: `message:viewed` handler EXISTS at lines 112-118. It invalidates `["message-views"]` and `["messages"]` queries on receipt of the event. |
+| EVENT_TYPES has no message:viewed | `frontend/src/hooks/useMessagingStream.ts` | 156 | INCORRECT: `message:viewed` IS in EVENT_TYPES at line 156 |
 | tbl_receipts table handle | `app/routers/messaging.py` | 235 | VERIFIED |
 | fanout_event_to_conversation function | `app/routers/messaging.py` | 10246-10252 | VERIFIED |
 | MessageBubble imports ReadReceipts | `frontend/src/pages/messages/MessageBubble.tsx` | 63 | VERIFIED |
+
+<!-- NOTE: The SSE message:viewed handler IS ALREADY IMPLEMENTED in useMessagingStream.ts lines 112-118. The EVENT_TYPES array includes message:viewed at line 156. The remaining work from this ticket is adding the DeliveryStatus checkmark component and the checkmark UI in MessageBubble — the SSE plumbing is already complete. -->

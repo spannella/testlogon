@@ -117,15 +117,19 @@ Countdowns create anticipation and engagement around upcoming events. With the b
 
 ### 3.1 Message Kinds
 
-Current kinds: `text`, `image`, `file_share`, `calendar_share`, `calendar_event`, `meeting_poll`, `find_datetime`. Adding `countdown` follows the established pattern.
+Current kinds (see `app/routers/messaging.py:2330`): `text`, `image`, `file`, `audio`, `video`, `gallery`, `file_share`, `calendar_share`, `calendar_event`, `meeting_poll`, `video_share`, `voice_message`, `voicemail`. Adding `countdown` follows the established pattern.
+
+<!-- NOTE: "find_datetime" does not exist in the codebase — the original list was incorrect. The actual Literal is at messaging.py:2330. -->
 
 ### 3.2 Message Send Infrastructure
 
-`send_text_message()` in `app/services/messaging.py` is the core send function. New message kinds are added by:
+`send_text_message()` in `app/routers/messaging.py` (line 7684) is the core send function. New message kinds are added by:
 1. Defining a new endpoint in `app/routers/messaging.py`
-2. Storing kind-specific fields on the message DDB item
-3. Including the fields in `MessageOut` and `_message_out_from_item()`
+2. Storing kind-specific fields on the message DDB item via `tbl_msgs.put_item()` (see line 7828)
+3. Including the fields in `MessageOut` (line 2325) and `_message_out_from_item()` (line 3766)
 4. Adding rendering in `MessageBubble.tsx`
+
+<!-- NOTE: app/services/messaging.py does not exist — all messaging logic lives in app/routers/messaging.py (a single ~9000-line file). -->
 
 ### 3.3 Frontend Timer Patterns
 
@@ -157,16 +161,19 @@ Add to message item when `kind = "countdown"`:
 
 | # | Access Pattern | Table | PK | SK | Operation | Notes |
 |---|---------------|-------|----|----|-----------|-------|
-| 1 | Create countdown message | Messages | `conversation_id` | `message_id` (m_{uuid}) | PutItem | Standard message write pattern |
-| 2 | Get countdown message | Messages | `conversation_id` | `message_id` | GetItem | Standard message read |
-| 3 | List messages in conversation | Messages | `conversation_id` | begins_with("m_") | Query | Includes countdown messages in regular list |
-| 4 | Update conversation last_message | Conversations | `conversation_id` | `META` | UpdateItem | Sets last_message_id, last_message_at |
+| 1 | Create countdown message | Messages (`DDB_MESSAGES`, see `messaging.py:160`) | `conversation_id` | `message_id` (m_{uuid}) | PutItem | Standard message write pattern (see `tbl_msgs.put_item()` at line 7828) |
+| 2 | Get countdown message | Messages | `conversation_id` | `message_id` | GetItem | Standard message read (see line 4163) |
+| 3 | List messages in conversation | Messages | `conversation_id` | begins_with("m_") | Query | Includes countdown messages in regular list (see line 4079) |
+| 4 | Update conversation last_message | Conversations (`DDB_CONVERSATIONS`, see `messaging.py:158`) | `conversation_id` | — | UpdateItem | Sets last_message_id, last_message_at, last_message_preview (see line 4842) |
+
+<!-- NOTE: Conversations table SK for the update is not "META" — the update uses Key={"conversation_id": conversation_id} directly (single-item table, no SK). See messaging.py:4842. -->
 | 5 | Get associated event details | Varies | Event-specific PK | Event-specific SK | GetItem | Optional: validate event exists at creation |
 
 ### 4.3 Pydantic Model Definitions
 
 ```python
-# app/models.py additions
+# app/routers/messaging.py additions (NOT app/models.py — all messaging models
+# are defined inline in the router file, e.g. SendTextMessageIn at line 1844)
 
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional
@@ -215,37 +222,42 @@ class CountdownMessageOut(BaseModel):
 **File**: `app/routers/messaging.py`
 
 ```python
+# Pattern follows send_text_message (see messaging.py:7684)
 @router.post("/conversations/{conv_id}/messages/countdown", status_code=201)
-def send_countdown_message(conv_id: str, body: SendCountdownMessageIn, ctx=Depends(require_ui_session)):
+def send_countdown_message(conv_id: str, body: SendCountdownMessageIn, user_id: str = Depends(get_messaging_user_id)):
     """Send a countdown message to a conversation."""
-    user_sub = ctx["user_sub"]
+    require_participant_active(user_id, conv_id)  # see existing pattern at line 7695
+    conv = _get_conversation_or_404(conv_id)  # takes only conversation_id (see messaging.py:4296)
 
-    # Verify conversation access (existing pattern)
-    conv = _get_conversation_or_404(conv_id, user_sub)
-
-    msg_id = f"m_{uuid4().hex}"
+    msg_id = f"m_{new_id()}"  # uses new_id() helper, not uuid4().hex directly
     ts = now_ts()
 
     message_item = {
         "conversation_id": conv_id,
         "message_id": msg_id,
-        "sender_id": user_sub,
+        "sender_id": user_id,
         "kind": "countdown",
         "text": body.title,  # Also stored as text for search/preview
         "countdown_title": body.title,
         "target_datetime": body.target_datetime,
         "associated_event_type": body.associated_event_type,
         "associated_event_id": body.associated_event_id,
-        "reply_to_message_id": body.reply_to_message_id,
+        "reactions": {},
         "created_at": ts,
     }
 
-    T.messages.put_item(Item=message_item)
-    _update_conversation_last_message(conv_id, msg_id, ts)
-    _emit_message_sse(conv_id, message_item)
+    tbl_msgs.put_item(Item=message_item)  # uses tbl_msgs, not T.messages (see messaging.py:224)
 
-    return _message_out_from_item(message_item)
+    # Follow _send_single_destination_message pattern (see line 4806)
+    # which handles conversation last_message update + search indexing + SSE fanout
+
+    return _message_out_from_item(message_item, user_id)  # requires viewer_user_id (see messaging.py:3766)
 ```
+
+<!-- NOTE: _get_conversation_or_404() takes only conversation_id, not user_sub (see messaging.py:4296). Participant access check is done separately via require_participant_active(). -->
+<!-- NOTE: _message_out_from_item() takes (message_item, viewer_user_id) — the viewer_user_id param is required (see messaging.py:3766). -->
+<!-- NOTE: T.messages does not exist — messaging.py uses module-level tbl_msgs = ddb.Table(DDB_MESSAGES) (see line 224). -->
+<!-- NOTE: _update_conversation_last_message() and _emit_message_sse() do not exist as named functions. Use _send_single_destination_message() (line 4806) which handles last_message update (line 4842) + SSE fanout via fanout_event_to_conversation() (line 5297). -->
 
 ### 4.5 API Request/Response Examples
 
@@ -348,7 +360,7 @@ Response (201):
 
 ### 4.7 MessageOut Extension
 
-Add to `MessageOut` model and `_message_out_from_item()`:
+Add to `MessageOut` model (see `app/routers/messaging.py:2325`) and `_message_out_from_item()` (line 3766). Also add `"countdown"` to the `kind` Literal at line 2330:
 
 ```python
 countdown_title: Optional[str] = None
@@ -359,7 +371,7 @@ associated_event_id: Optional[str] = None
 
 ### 4.8 Frontend Types
 
-**File**: `frontend/src/api/types.ts`
+**File**: `frontend/src/api/types.ts` (existing file — add countdown fields to `MessageOut` interface)
 
 ```typescript
 export interface MessageOut {
@@ -373,7 +385,7 @@ export interface MessageOut {
 
 ### 4.9 Frontend API
 
-**File**: `frontend/src/api/endpoints/messaging.ts`
+**File**: `frontend/src/api/endpoints/messaging.ts` (existing file — add new function)
 
 ```typescript
 export const sendCountdownMessage = (
@@ -760,10 +772,73 @@ test.beforeAll(async ({ browser }) => {
 |------|-------------|-------------|
 | `frontend/src/pages/messages/CountdownCard.tsx` | **New** | Live countdown timer card component |
 | `frontend/src/pages/messages/CountdownComposerDialog.tsx` | **New** | Dialog for creating countdown messages |
-| `app/routers/messaging.py` | Modify | Add countdown endpoint and model |
-| `app/models.py` | Modify | Add SendCountdownMessageIn, countdown fields to MessageOut |
-| `frontend/src/api/types.ts` | Modify | Add countdown fields to MessageOut |
-| `frontend/src/api/endpoints/messaging.ts` | Modify | Add `sendCountdownMessage` |
+| `app/routers/messaging.py` | Modify | Add countdown endpoint, `SendCountdownMessageIn` model, extend `MessageOut` kind Literal (line 2330), add countdown fields to `_message_out_from_item()` (line 3766) |
+| `frontend/src/api/types.ts` | Modify | Add countdown fields to `MessageOut` interface |
+| `frontend/src/api/endpoints/messaging.ts` | Modify | Add `sendCountdownMessage` function |
 | `frontend/src/pages/messages/ComposeBar.tsx` | Modify | Add countdown button + dialog |
-| `frontend/src/pages/messages/MessageBubble.tsx` | Modify | Render CountdownCard |
+| `frontend/src/pages/messages/MessageBubble.tsx` | Modify | Render CountdownCard for `kind === "countdown"` |
 | `frontend/e2e/countdown-messages.spec.ts` | **New** | 24 E2E tests across sections 306-311 |
+
+<!-- NOTE: app/models.py is NOT the correct location for SendCountdownMessageIn — all messaging Pydantic models are defined inline in app/routers/messaging.py (e.g., SendTextMessageIn at line 1844, CreateImageMessageIn at line 1911). Define SendCountdownMessageIn in messaging.py alongside the other models. -->
+
+---
+
+## Codebase References
+
+### Backend — `app/routers/messaging.py`
+| Reference | Line | Notes |
+|-----------|------|-------|
+| `MessageOut` class | 2325 | Add `countdown_title`, `target_datetime`, `associated_event_type`, `associated_event_id` fields |
+| `kind` Literal | 2330 | Add `"countdown"` to the union; current kinds: text, image, file, audio, video, gallery, file_share, calendar_share, calendar_event, meeting_poll, video_share, voice_message, voicemail |
+| `SendTextMessageIn` | 1844 | Pattern reference for `SendCountdownMessageIn` model definition |
+| `CreateImageMessageIn` | 1911 | Another pattern reference for new message kind input models |
+| `_message_out_from_item(message_item, viewer_user_id)` | 3766 | Extend to populate countdown fields; signature takes `(dict, str)` |
+| `_serialize_message_event_payload(message_item, viewer_user_id)` | 4065 | May need to include countdown fields in SSE payloads |
+| `_get_conversation_or_404(conversation_id)` | 4296 | Takes only `conversation_id` (not `user_sub`) |
+| `_send_single_destination_message(...)` | 4806 | Handles last_message update + search indexing + SSE fanout |
+| `tbl_convos.update_item(...)` (last_message update) | 4842 | Sets `last_message_at`, `last_message_preview`, `last_message_id` |
+| `fanout_event_to_conversation(...)` | 5297 | SSE event fanout to participants |
+| `send_text_message(...)` | 7684 | Primary pattern reference for new message endpoints |
+| `tbl_msgs` (Messages table handle) | 224 | `ddb.Table(DDB_MESSAGES)` — use this, not `T.messages` |
+| `DDB_MESSAGES` constant | 160 | `os.getenv("DDB_MESSAGES", "Messages")` |
+| `DDB_CONVERSATIONS` constant | 158 | `os.getenv("DDB_CONVERSATIONS", "Conversations")` |
+
+### Backend — DynamoDB Tables (`scripts/local-ddb-init.py`)
+| Table | Notes |
+|-------|-------|
+| `Messages` | PK: `conversation_id`, SK: `message_id` — stores all message kinds including countdown |
+| `Conversations` | PK: `conversation_id` — stores conversation metadata, last_message fields |
+| `Participants` | PK: `conversation_id#user_id`, GSI1PK: `conversation_id` — participant membership |
+
+### Frontend — Existing Files to Modify
+| File | Notes |
+|------|-------|
+| `frontend/src/pages/messages/MessageBubble.tsx` | Add countdown card rendering branch (existing expiry countdown logic at line 417 is unrelated — it handles message expiry timers) |
+| `frontend/src/pages/messages/ComposeBar.tsx` | Add Timer icon button + CountdownComposerDialog trigger (existing `autosaveTimerRef` at line 177 is unrelated) |
+| `frontend/src/pages/messages/ConversationView.tsx` | Wire countdown mutation to ComposeBar `onCountdownSubmit` prop |
+| `frontend/src/api/types.ts` | Add countdown fields to `MessageOut` TypeScript interface |
+| `frontend/src/api/endpoints/messaging.ts` | Add `sendCountdownMessage()` API function |
+
+### Frontend — New Files
+| File | Notes |
+|------|-------|
+| `frontend/src/pages/messages/CountdownCard.tsx` | New component — live ticking countdown card |
+| `frontend/src/pages/messages/CountdownComposerDialog.tsx` | New component — dialog for creating countdown messages |
+
+### Frontend — UI Components (verified present)
+| Component | Path |
+|-----------|------|
+| `Card`, `CardHeader`, `CardContent`, `CardTitle` | `frontend/src/components/ui/card.tsx` |
+| `Button` | `frontend/src/components/ui/button.tsx` |
+| `Dialog` | `frontend/src/components/ui/dialog.tsx` |
+
+### Corrections Applied
+| Original Claim | Correction |
+|----------------|------------|
+| `find_datetime` listed as existing message kind | Does not exist anywhere in codebase |
+| `app/services/messaging.py` referenced as location of `send_text_message` | File does not exist; all messaging logic is in `app/routers/messaging.py` |
+| `_get_conversation_or_404(conv_id, user_sub)` | Function takes only `conversation_id` (see line 4296) |
+| `_message_out_from_item(message_item)` | Function takes `(message_item, viewer_user_id)` — two arguments required (see line 3766) |
+| `T.messages.put_item(...)` | Should be `tbl_msgs.put_item(...)` — messaging.py uses module-level table handles, not `T.*` |
+| `_update_conversation_last_message()` and `_emit_message_sse()` | These named functions do not exist; use `_send_single_destination_message()` (line 4806) or call `tbl_convos.update_item()` + `fanout_event_to_conversation()` directly |
+| `app/models.py` for `SendCountdownMessageIn` | All messaging Pydantic models are defined in `app/routers/messaging.py`, not `app/models.py` |

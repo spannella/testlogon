@@ -46,7 +46,9 @@ These are all positive signals. There is no negative signal mechanism.
 
 ### 2.2 Hide Post (FEED-006)
 
-FEED-006 provides `hide_post(user_sub, post_id)` and `unhide_post(user_sub, post_id)` functions. "Not interesting" will call `hide_post` in addition to storing the signal.
+FEED-006 provides `hide_post` at `app/routers/newsfeed.py:4051` (using `pk_hide` at line 820). "Not interesting" will call `hide_post` in addition to storing the signal.
+<!-- VERIFIED: app/routers/newsfeed.py:4051 — hide_post; :820 — pk_hide -->
+<!-- NOTE: unhide_post does not exist yet — FEED-006 unhide endpoint still needed -->
 
 ### 2.3 Post Storage
 
@@ -723,4 +725,26 @@ No DDB migration needed. New SK prefix `POST_SIGNAL#` in billing table. New fiel
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| Hide Post functionality | FEED-006 | Required (hide_post/unhide_post functions) |
+| Hide Post functionality | FEED-006 | Required — `hide_post` exists (line 4051), `unhide_post` NOT YET IMPLEMENTED |
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key References | Lines |
+|------|---------------|-------|
+| `app/routers/newsfeed.py` | `hide_post` (FEED-006 dependency) | 4051 |
+| `app/routers/newsfeed.py` | `pk_hide` helper | 820 |
+| `app/routers/newsfeed.py` | `_post_to_dict` (will add signal counts) | 1900 |
+| `app/routers/newsfeed.py` | `CreatePostRequest` | 1276 |
+| `scripts/local-ddb-init.py` | `app_single_table` definition | 222 |
+| `frontend/src/pages/feed/PostCard.tsx` | Post card (needs "Interesting" / "Not for me" menu) | - |
+
+### Not Yet Implemented
+| Feature | Notes |
+|---------|-------|
+| Signal storage (`POST_SIGNAL#` prefix) | New implementation required |
+| Signal endpoints (`POST /posts/{id}/signal`, `DELETE /posts/{id}/signal`) | New implementation required |
+| `interesting_count` / `not_interesting_count` on posts | New fields on post items |
+| `app/services/feed_preferences.py` | Does not exist — new implementation required |

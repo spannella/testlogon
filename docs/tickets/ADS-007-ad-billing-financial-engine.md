@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: High
 **Estimated effort**: 8-10 days
-**Dependencies**: ADS-001 (Accounts), ADS-004 (Ad Serving — impression tracking)
+**Dependencies**: ADS-001 (Accounts — sibling ticket, not yet implemented), ADS-004 (Ad Serving — sibling ticket, not yet implemented)
+<!-- NOTE: ADS-001 and ADS-004 services/tables do not exist yet. The existing billing_shared.py and ad_placement.py are the integration points. -->
 
 ---
 
@@ -143,9 +144,9 @@ fractional cents accumulate correctly.
 
 ### 2.1 Existing Billing Ledger (`app/services/billing_shared.py`)
 
-The `billing` table stores user-scoped ledger entries with pattern `pk=USER#{user_sub}`, `sk=LEDGER#{ts}#{entry_id}`. The `new_ledger_entry()` helper (line 217) generates entries with `entry_type`, `amount_cents`, `state`, `reason`, and `meta`. This is used for tips, unlock payments, subscription charges, and ad revenue credits.
+The `billing` table stores user-scoped ledger entries with pattern `pk=USER#{user_sub}`, `sk=LEDGER#{ts}#{entry_id}`. The `new_ledger_entry()` helper generates entries with `entry_type`, `amount_cents`, `state`, `reason`, and `meta` (see `app/services/billing_shared.py`). This is used for tips, unlock payments, subscription charges, and ad revenue credits.
 
-The existing `_credit_ad_revenue()` function in `ad_placement.py` (line 279) uses `new_ledger_entry()` to credit creators. ADS-007 adds the debit side (charging the advertiser) and the platform revenue split.
+The existing `_credit_ad_revenue()` function in `ad_placement.py` (see `app/services/ad_placement.py:279`) uses `new_ledger_entry()` to credit creators. ADS-007 adds the debit side (charging the advertiser) and the platform revenue split.
 
 ### 2.2 Advertiser Account Balance (ADS-001)
 
@@ -1168,3 +1169,16 @@ For high-volume impressions, consider batching charges:
 8. Monthly invoices aggregate charges by campaign with impression/click/conversion counts.
 9. Billing history is accessible only to the account owner.
 10. All 28 E2E tests pass in `frontend/e2e/ads-billing.spec.ts`.
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/billing_shared.py` | — | Existing billing ledger helpers: `new_ledger_entry`, `user_pk` |
+| `app/services/ad_placement.py` | 279 | Existing `_credit_ad_revenue()` — credits creators (debit side not implemented) |
+| `app/services/alerts.py` | — | Existing alert system for spending notifications |
+| `app/core/tables.py` | 93 | Existing `ad_impressions` table handle |
+| `app/services/ad_billing.py` | — | Does not exist yet — new implementation required |
+| `ad_billing` DDB table | — | Does not exist yet — new implementation required |

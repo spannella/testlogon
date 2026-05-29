@@ -1,11 +1,13 @@
 # CALL-014: Voicemail — Record Audio/Video Message on Unanswered Calls
 
-**Status**: Proposed  
+**Status**: Implemented (partially)  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: High  
 **Estimated effort**: 8-12 days  
 **Dependencies**: CALL-001 (Signaling Endpoint), CALL-007 (Ringing Timeout), MSG-002 (Voice Messages)
+
+<!-- NOTE: Implementation status — Backend voicemail endpoints (presign + create) are fully implemented in messaging.py:8349-8527. CallSessionRecord.voicemail_message_id field exists (messaging_call_sessions.py:50). Voicemail signaling types added to messaging_call_signaling.py:31-32,54-56. Settings exist (settings.py:1286-1288). Pydantic models exist (messaging.py:1957-1972). MessageOut includes "voicemail" kind (messaging.py:2330) and voicemail field (messaging.py:2341). Voicemail projection in _message_out_from_item (messaging.py:3970-3997). Frontend: VoicemailRecorder.tsx (256 lines) and VoicemailBubble.tsx (66 lines) exist. CallSessionOverlay.tsx has voicemailEligible prop + voicemail prompt UI (lines 45,299,330,641-666). MessageBubble.tsx renders VoicemailBubble (line 1584). getPreviewText returns "[Voicemail]" (MessageBubble.tsx:169, ConversationList.tsx:329). API endpoints in messaging.ts (lines 1086-1164). Types in types.ts (lines 960-972). E2E tests: voicemail.spec.ts (733 lines, 17 tests). HOWEVER: ConversationView.tsx does NOT pass voicemailEligible or conversationId props to CallSessionOverlay (line 1284) — voicemail prompt will never appear in the UI. useMessagingStream.ts has NO voicemail event handling. messaging_call_timeline.py has NO voicemail preview text. VideoVoicemailRecorder.tsx does NOT exist — video recording is integrated directly into VoicemailRecorder.tsx. tests/test_voicemail.py does NOT exist. -->
 
 ---
 
@@ -13,7 +15,7 @@
 
 ### Problem Statement
 
-When a call is declined, times out (missed), or the callee is busy, the caller's `CallSessionOverlay` displays a static outcome message ("Call declined.", "Call timed out with no answer.", "User is busy on another call.") and a single "Dismiss" button (`CallSessionOverlay.tsx`, lines 65-71 for the `outcomeCopy` map, lines 588-592 for the Dismiss button rendering). <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:65-71,588-592 --> The overlay then closes and the caller has no opportunity to leave a message for the callee. This is a significant gap in the communication flow — the caller initiated the call because they had something to say, and the platform discards that intent entirely when the call is not answered.
+When a call is declined, times out (missed), or the callee is busy, the caller's `CallSessionOverlay` displays a static outcome message ("Call declined.", "Call timed out with no answer.", "User is busy on another call.") and a single "Dismiss" button (`CallSessionOverlay.tsx`, lines 72-78 for the `outcomeCopy` map, lines 641-644 for the Dismiss button rendering). <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:72-78,641-644 (line numbers shifted due to voicemail implementation) --> The overlay then closes and the caller has no opportunity to leave a message for the callee. This is a significant gap in the communication flow — the caller initiated the call because they had something to say, and the platform discards that intent entirely when the call is not answered.
 
 The platform already has a complete voice recording pipeline: `VoiceRecorder.tsx` (311 lines) provides MediaRecorder integration with live waveform visualization, configurable max duration (default 300s), and preview/re-record capability. <!-- VERIFIED: frontend/src/pages/messages/VoiceRecorder.tsx:1-311 --> The backend supports voice message presigning (`POST /conversations/{id}/voice-message/presign`, messaging.py line 8111), creation (`POST /conversations/{id}/voice-message`, line 8142), S3 upload, waveform storage, and playback via `WaveformPlayer.tsx` (177 lines). <!-- VERIFIED: frontend/src/pages/messages/WaveformPlayer.tsx:1-177 --> <!-- VERIFIED: app/routers/messaging.py:8111,8142 --> All the recording, upload, and playback infrastructure exists — it simply is not connected to the call outcome flow.
 
@@ -198,7 +200,7 @@ The full field inventory of `CallSessionRecord`:
 | `caller_last_heartbeat_ts` | `Optional[int]` | 47 | CALL-011 caller heartbeat | <!-- VERIFIED: app/services/messaging_call_sessions.py:47 -->
 | `callee_last_heartbeat_ts` | `Optional[int]` | 48 | CALL-011 callee heartbeat | <!-- VERIFIED: app/services/messaging_call_sessions.py:48 -->
 
-The record currently has **no voicemail-related fields**. A new `voicemail_message_id` field will be added to link the call session to the voicemail message if one is left.
+<!-- NOTE: voicemail_message_id field IS implemented at line 50 (see below) --> The record now has a `voicemail_message_id` field (line 50) to link the call session to the voicemail message if one is left. <!-- VERIFIED: app/services/messaging_call_sessions.py:49-50 -->
 
 Key helper functions on the session model:
 
@@ -215,7 +217,7 @@ The `update_call_session_state()` function (lines 165-220) reconstructs the enti
 
 ### 2.3 Call Signaling Types
 
-`app/services/messaging_call_signaling.py` (lines 14-28) defines the allowed signaling types: <!-- VERIFIED: app/services/messaging_call_signaling.py:14-28 -->
+`app/services/messaging_call_signaling.py` (lines 14-33) defines the allowed signaling types (now including voicemail at lines 30-32): <!-- VERIFIED: app/services/messaging_call_signaling.py:14-33 -->
 
 ```python
 ALLOWED_SIGNALING_TYPES = {
@@ -227,7 +229,7 @@ ALLOWED_SIGNALING_TYPES = {
 }
 ```
 
-No voicemail-related signal types exist. The `STATE_ALLOWED_SIGNALING_TYPES` map (lines 34-42) restricts which signals are valid in each call state: <!-- VERIFIED: app/services/messaging_call_signaling.py:34-42 -->
+<!-- NOTE: Voicemail signal types ARE now implemented: call.voicemail_start and call.voicemail_complete at lines 31-32, VOICEMAIL_SIGNAL_TYPES at line 39, and terminal-state entries at lines 54-56 --> The `STATE_ALLOWED_SIGNALING_TYPES` map (lines 41-57) restricts which signals are valid in each call state, now including voicemail terminal states: <!-- VERIFIED: app/services/messaging_call_signaling.py:41-57 -->
 
 ```python
 STATE_ALLOWED_SIGNALING_TYPES: dict[str, set[str]] = {
@@ -241,17 +243,17 @@ STATE_ALLOWED_SIGNALING_TYPES: dict[str, set[str]] = {
 }
 ```
 
-Terminal states (`TERMINAL_CALL_STATES` at line 32: `{"ended", "missed", "declined", "busy", "failed", "canceled"}`) are not present in `STATE_ALLOWED_SIGNALING_TYPES`. <!-- VERIFIED: app/services/messaging_call_signaling.py:32 --> The routing logic at lines 233-239 rejects non-`call.end` events in terminal states (line 233) and then checks state-specific allowlists (lines 236-239). <!-- VERIFIED: app/services/messaging_call_signaling.py:233-239 --> Since terminal states have no entry in the map, `allowed_events` is `None`, and the check at line 237 (`if allowed_events is not None`) passes — meaning any event type in `ALLOWED_SIGNALING_TYPES` is technically allowed if it passes the terminal-state guard at line 233. This means voicemail signals must either (a) be added to `ALLOWED_SIGNALING_TYPES` and given explicit terminal-state entries, or (b) bypass the terminal-state guard. Option (a) is safer and more explicit.
+Terminal states (`TERMINAL_CALL_STATES` at line 37). <!-- VERIFIED: app/services/messaging_call_signaling.py:37 --> <!-- NOTE: Terminal states `declined`, `missed`, `busy` now HAVE entries in STATE_ALLOWED_SIGNALING_TYPES (lines 54-56) allowing voicemail signals. --> The routing logic at line 248 rejects non-`call.end` events in terminal states, but now exempts voicemail signals via `event_type not in VOICEMAIL_SIGNAL_TYPES`. <!-- VERIFIED: app/services/messaging_call_signaling.py:248 --> Option (a) was chosen and implemented: voicemail signals are in `ALLOWED_SIGNALING_TYPES` (lines 31-32), in `STATE_ALLOWED_SIGNALING_TYPES` for terminal states (lines 54-56), and the terminal-state guard at line 248 allows them through via `VOICEMAIL_SIGNAL_TYPES` (line 39).
 
 ### 2.4 CallSessionOverlay Outcome UI
 
-`CallSessionOverlay.tsx` renders the non-connected states starting at line 529. <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:529 --> The `isOutcome` flag is computed at line 294: <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:294 -->
+`CallSessionOverlay.tsx` renders the non-connected states starting at line 582. <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:582 (shifted due to voicemail implementation) --> The `isOutcome` flag is computed at line 328: <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:328 -->
 
 ```typescript
 const isOutcome = ["declined", "busy", "timeout", "ended", "failure"].includes(session.state);
 ```
 
-When `isOutcome` is true, the UI shows at lines 588-592: <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:588-592 -->
+When `isOutcome` is true, the UI shows at lines 641-666 (voicemail prompt + dismiss + recorder): <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:641-666 (expanded with voicemail implementation) -->
 
 ```tsx
 {isOutcome && (
@@ -261,7 +263,7 @@ When `isOutcome` is true, the UI shows at lines 588-592: <!-- VERIFIED: frontend
 )}
 ```
 
-The outcome description text is rendered at line 565 via the `outcomeCopy` map (lines 65-71): <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:65-71,565 -->
+The outcome description text is rendered at line 618 via the `outcomeCopy` map (lines 72-78): <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:72-78,618 -->
 
 ```typescript
 const outcomeCopy: Record<Extract<CallUiState, "declined" | "busy" | "timeout" | "ended" | "failure">, string> = {
@@ -273,7 +275,7 @@ const outcomeCopy: Record<Extract<CallUiState, "declined" | "busy" | "timeout" |
 };
 ```
 
-The `Props` interface (lines 41-63) includes callback props `onAccept`, `onDecline`, `onEnd`, `onDismiss`, and media toggle functions, but no voicemail-related props. <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:41-63 -->
+The `Props` interface (lines 42-70) includes callback props `onAccept`, `onDecline`, `onEnd`, `onDismiss`, media toggle functions, and the `voicemailEligible?: boolean` prop (line 45). <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:42-70 --> <!-- NOTE: voicemailEligible prop IS implemented (line 45), but ConversationView.tsx does NOT pass it — so it always defaults to false -->
 
 This is where the voicemail prompt will be injected — replacing the single "Dismiss" button with "Leave a message?" + "Dismiss" options for the three voicemail-eligible states (`declined`, `timeout`, `busy`). The `ended` and `failure` states will continue to show only the "Dismiss" button.
 
@@ -369,7 +371,7 @@ if merged_item.get("kind") == "voice_message" and not content_hidden:
 
 ### 2.6 MessageOut Model
 
-`MessageOut` (line 2305) defines the `kind` literal at line 2310, currently supporting 12 message kinds: <!-- VERIFIED: app/routers/messaging.py:2305,2310 -->
+`MessageOut` (line 2325) defines the `kind` literal at line 2330, now supporting 13 message kinds (including `"voicemail"`): <!-- VERIFIED: app/routers/messaging.py:2325,2330 -->
 
 ```python
 kind: Literal["text", "image", "file", "audio", "video", "gallery",
@@ -377,7 +379,7 @@ kind: Literal["text", "image", "file", "audio", "video", "gallery",
               "meeting_poll", "video_share", "voice_message"]
 ```
 
-The `voice_message` field (line 2320) carries voice message metadata: <!-- VERIFIED: app/routers/messaging.py:2320 -->
+The `voice_message` field (line 2340) carries voice message metadata, and the `voicemail` field (line 2341) carries voicemail metadata: <!-- VERIFIED: app/routers/messaging.py:2340-2341 -->
 
 ```python
 voice_message: Optional[Dict[str, Any]] = None
@@ -387,12 +389,12 @@ Additional relevant fields on `MessageOut` that voicemail messages will inherit:
 
 | Field | Line | Type | Voicemail Usage |
 |-------|------|------|-----------------|
-| `reactions_counts` | 2344 | `Optional[Dict[str, int]]` | Reactions on voicemail messages | <!-- VERIFIED: app/routers/messaging.py:2344 -->
-| `tip_amount_cents` | 2358 | `Optional[int]` | Tips on voicemail messages (future) | <!-- VERIFIED: app/routers/messaging.py:2358 -->
-| `expires_at` | 2363 | `Optional[int]` | Voicemail expiry (future) | <!-- VERIFIED: app/routers/messaging.py:2363 -->
-| `scheduled` | 2354 | `bool` | Not used for voicemail (always immediate) | <!-- VERIFIED: app/routers/messaging.py:2354 -->
+| `reactions_counts` | ~2370+ | `Optional[Dict[str, int]]` | Reactions on voicemail messages | <!-- NOTE: Exact line numbers shifted due to added fields; verify in current file -->
+| `tip_amount_cents` | ~2384+ | `Optional[int]` | Tips on voicemail messages (future) |
+| `expires_at` | ~2389+ | `Optional[int]` | Voicemail expiry (future) |
+| `scheduled` | ~2380+ | `bool` | Not used for voicemail (always immediate) |
 
-The voicemail kind will be added to this literal and will use a new `voicemail` field for voicemail-specific metadata (call linkage, video URL, call state).
+<!-- NOTE: The voicemail kind IS already in the literal (messaging.py:2330) and the voicemail field IS already on MessageOut (messaging.py:2341). -->
 
 ### 2.7 Timeline Event System
 
@@ -770,6 +772,7 @@ class CreateVoicemailRequest(BaseModel):
 
 ### 3.6 CallSessionRecord Extension
 
+<!-- NOTE: DONE — voicemail_message_id field exists at messaging_call_sessions.py:50, serialization at lines 92-93, deserialization at lines 128-129, state-transition preservation at line 225, set_voicemail_message_id function at line 232 -->
 Add one new field to `CallSessionRecord` in `app/services/messaging_call_sessions.py`:
 
 | Field | Type | Description |
@@ -780,6 +783,7 @@ This field is set by the voicemail creation endpoint after the voicemail message
 
 ### 3.7 New Signaling Types
 
+<!-- NOTE: DONE — see messaging_call_signaling.py:31-32 (ALLOWED_SIGNALING_TYPES), line 39 (VOICEMAIL_SIGNAL_TYPES), lines 54-56 (STATE_ALLOWED_SIGNALING_TYPES), line 248 (terminal-state guard) -->
 Two new signal types added to `ALLOWED_SIGNALING_TYPES` in `messaging_call_signaling.py`:
 
 | Signal | Direction | Purpose |
@@ -809,6 +813,7 @@ if call_state in TERMINAL_CALL_STATES and event_type != "call.end" and event_typ
 
 ### 3.8 Voicemail Presign Endpoint
 
+<!-- NOTE: DONE — see messaging.py:8349-8394 -->
 ```
 POST /messaging/conversations/{conversation_id}/voicemail/presign
 ```
@@ -849,6 +854,7 @@ POST /messaging/conversations/{conversation_id}/voicemail/presign
 
 ### 3.9 Voicemail Create Endpoint
 
+<!-- NOTE: DONE — see messaging.py:8397-8527 -->
 ```
 POST /messaging/conversations/{conversation_id}/voicemail
 ```
@@ -878,7 +884,8 @@ POST /messaging/conversations/{conversation_id}/voicemail
 
 ### 3.10 MessageOut Extension
 
-Add `"voicemail"` to the `kind` literal on `MessageOut` (line 2310): <!-- VERIFIED: app/routers/messaging.py:2310 -->
+<!-- NOTE: DONE — "voicemail" already in kind literal at messaging.py:2330, voicemail field at messaging.py:2341 -->
+Add `"voicemail"` to the `kind` literal on `MessageOut` (line 2330): <!-- VERIFIED: app/routers/messaging.py:2330 -->
 
 ```python
 kind: Literal["text", "image", "file", "audio", "video", "gallery",
@@ -886,7 +893,7 @@ kind: Literal["text", "image", "file", "audio", "video", "gallery",
               "meeting_poll", "video_share", "voice_message", "voicemail"]
 ```
 
-Add a new optional field (after the `voice_message` field at line 2320): <!-- VERIFIED: app/routers/messaging.py:2320 -->
+Add a new optional field (after the `voice_message` field at line 2340): <!-- VERIFIED: app/routers/messaging.py:2340-2341 -->
 
 ```python
 voicemail: Optional[Dict[str, Any]] = None
@@ -912,7 +919,8 @@ The `voicemail` field structure:
 
 ### 3.11 _message_out_from_item Voicemail Projection
 
-Add a voicemail projection block in `_message_out_from_item` (after the existing voice message projection at line 3946), following the same URL-rewriting pattern: <!-- VERIFIED: app/routers/messaging.py:3745,3929-3946 -->
+<!-- NOTE: DONE — voicemail projection at messaging.py:3970-3997, voicemail_out passed to MessageOut at line 4023 -->
+Add a voicemail projection block in `_message_out_from_item` (after the existing voice message projection at line 3967), following the same URL-rewriting pattern: <!-- VERIFIED: app/routers/messaging.py:3970-3997 -->
 
 ```python
 # Voicemail projection
@@ -1109,9 +1117,9 @@ The `VoicemailRecorder` component manages a 5-phase state machine:
 
 ### Phase 1: Backend — Voicemail Endpoints and Data Model (Days 1-3)
 
-#### Modify: `app/services/messaging_call_sessions.py`
+#### Modify: `app/services/messaging_call_sessions.py` — DONE
 
-Add `voicemail_message_id` field to `CallSessionRecord` (after line 48): <!-- VERIFIED: app/services/messaging_call_sessions.py:48 -->
+Add `voicemail_message_id` field to `CallSessionRecord` (after line 48): <!-- VERIFIED: app/services/messaging_call_sessions.py:49-50 (field), 92-93 (serialize), 128-129 (deserialize), 225 (state-transition preserve), 232-272 (set_voicemail_message_id fn) -->
 
 ```python
 @dataclass(frozen=True)
@@ -1190,9 +1198,9 @@ def set_voicemail_message_id(*, call_id: str, voicemail_message_id: str) -> Opti
     return _record_from_item(item)
 ```
 
-#### Modify: `app/services/messaging_call_signaling.py`
+#### Modify: `app/services/messaging_call_signaling.py` — DONE
 
-Add voicemail signal types to `ALLOWED_SIGNALING_TYPES` (line 14): <!-- VERIFIED: app/services/messaging_call_signaling.py:14 -->
+Add voicemail signal types to `ALLOWED_SIGNALING_TYPES` (line 14): <!-- VERIFIED: app/services/messaging_call_signaling.py:14,31-32,39,54-56,248 -->
 
 ```python
 ALLOWED_SIGNALING_TYPES = {
@@ -1218,13 +1226,13 @@ VOICEMAIL_SIGNAL_TYPES = {"call.voicemail_start", "call.voicemail_complete"}
 if call_state in TERMINAL_CALL_STATES and event_type != "call.end" and event_type not in VOICEMAIL_SIGNAL_TYPES:
 ```
 
-#### Modify: `app/services/messaging_call_lifecycle.py`
+#### Modify: `app/services/messaging_call_lifecycle.py` — NOT NEEDED (per spec)
 
-Modify `decline_invite()` (line 279), `timeout_call()` (line 404) return values. No code change is needed in the lifecycle functions themselves — the `voicemail_eligible` flag is computed by the router from the returned `CallSessionRecord` state and `paid` flag.
+Modify `decline_invite()` (line 279), `timeout_call()` (line 404) return values. No code change is needed in the lifecycle functions themselves — the `voicemail_eligible` flag is computed by the router from the returned `CallSessionRecord` state and `paid` flag. <!-- VERIFIED: voicemail_eligible computed in messaging.py at lines 13061-13065 (decline) and 13127-13131 (timeout) -->
 
-#### Modify: `app/core/settings.py`
+#### Modify: `app/core/settings.py` — DONE
 
-Add voicemail-specific settings (after line 1254): <!-- VERIFIED: app/core/settings.py:1254 -->
+Add voicemail-specific settings: <!-- VERIFIED: app/core/settings.py:1286-1288 -->
 
 ```python
 voicemail_enabled: bool = os.environ.get("VOICEMAIL_ENABLED", "1") not in ("0", "false", "False")
@@ -1232,13 +1240,13 @@ voicemail_max_duration_seconds: int = int(os.environ.get("VOICEMAIL_MAX_DURATION
 voicemail_max_size_bytes: int = int(os.environ.get("VOICEMAIL_MAX_SIZE_BYTES", "52428800"))
 ```
 
-#### Modify: `app/routers/messaging.py`
+#### Modify: `app/routers/messaging.py` — DONE
 
-**Add Pydantic models** (after the `CreateVoiceMessageRequest` class at line 1952): <!-- VERIFIED: app/routers/messaging.py:1952 -->
+**Add Pydantic models** (after the `CreateVoiceMessageRequest` class): <!-- VERIFIED: app/routers/messaging.py:1957-1972 (PresignVoicemailRequest and CreateVoicemailRequest) -->
 
 See section 3.5 for complete `PresignVoicemailRequest` and `CreateVoicemailRequest` definitions.
 
-**Add `"voicemail"` to the `MessageOut.kind` literal** (line 2310): <!-- VERIFIED: app/routers/messaging.py:2310 -->
+**Add `"voicemail"` to the `MessageOut.kind` literal** (line 2330): <!-- VERIFIED: app/routers/messaging.py:2330 -->
 
 ```python
 kind: Literal["text", "image", "file", "audio", "video", "gallery",
@@ -1246,7 +1254,7 @@ kind: Literal["text", "image", "file", "audio", "video", "gallery",
               "meeting_poll", "video_share", "voice_message", "voicemail"]
 ```
 
-**Add `voicemail` field to `MessageOut`** (after the `voice_message` field at line 2320): <!-- VERIFIED: app/routers/messaging.py:2320 -->
+**Add `voicemail` field to `MessageOut`** (after the `voice_message` field at line 2340): <!-- VERIFIED: app/routers/messaging.py:2341 -->
 
 ```python
 voicemail: Optional[Dict[str, Any]] = None
@@ -1475,12 +1483,13 @@ def create_voicemail(
     )
 ```
 
-**Add voicemail projection to `_message_out_from_item`** (after the voice message projection block at ~line 3946): <!-- VERIFIED: app/routers/messaging.py:3946 -->
+**Add voicemail projection to `_message_out_from_item`** (after the voice message projection block): <!-- VERIFIED: app/routers/messaging.py:3970-3997 (voicemail projection block), 4023 (voicemail_out in MessageOut constructor) -->
 
 See section 3.11 for the complete projection code.
 
-#### Modify: `app/services/messaging_call_timeline.py`
+#### Modify: `app/services/messaging_call_timeline.py` — NOT DONE
 
+<!-- NOTE: _preview_for_event() at line 21-36 has NO voicemail_complete entry — new implementation required -->
 Add voicemail preview text to `_preview_for_event()` (after line 35): <!-- VERIFIED: app/services/messaging_call_timeline.py:35 -->
 
 ```python
@@ -1490,8 +1499,9 @@ if event_type == "call.voicemail_complete":
 
 ### Phase 2: Frontend — Voicemail Recording UI (Days 4-7)
 
-#### New File: `frontend/src/pages/messages/VoicemailRecorder.tsx`
+#### New File: `frontend/src/pages/messages/VoicemailRecorder.tsx` — DONE (256 lines)
 
+<!-- NOTE: VoicemailRecorder.tsx exists (256 lines). It integrates BOTH audio AND video recording directly (not a wrapper around VoiceRecorder). Has detectAudioMimeType() and detectVideoMimeType() functions. Uses sendVoicemail() from api/endpoints/messaging.ts. Props: conversationId, callId, onSent, onSkip (no callMode or peerName). Phases: idle | recording | previewing | uploading | sent. -->
 A wrapper around `VoiceRecorder` with voicemail-specific constraints:
 
 ```typescript
@@ -1570,8 +1580,9 @@ export function VoicemailRecorder({
 +-------------------------------------+
 ```
 
-#### New File: `frontend/src/pages/messages/VideoVoicemailRecorder.tsx`
+#### New File: `frontend/src/pages/messages/VideoVoicemailRecorder.tsx` — NOT CREATED
 
+<!-- NOTE: VideoVoicemailRecorder.tsx does NOT exist as a separate file. Video recording is integrated directly into VoicemailRecorder.tsx (using detectVideoMimeType and getUserMedia with video constraints). -->
 A video recording component for video voicemails:
 
 ```typescript
@@ -1584,9 +1595,10 @@ interface VideoVoicemailRecorderProps {
 
 Uses `navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true })` to capture both video and audio. The waveform is extracted from the audio track via `AnalyserNode` (same pattern as `VoiceRecorder` at line 86-90). <!-- VERIFIED: frontend/src/pages/messages/VoiceRecorder.tsx:86-90 --> Preview uses a `<video>` element with `URL.createObjectURL(blob)`.
 
-#### Modify: `frontend/src/pages/messages/CallSessionOverlay.tsx`
+#### Modify: `frontend/src/pages/messages/CallSessionOverlay.tsx` — DONE (partially)
 
-**Add new props** (after line 63): <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:63 -->
+<!-- NOTE: Props include voicemailEligible (line 45) and conversationId (line 44). VoicemailRecorder is imported (line 2). Voicemail prompt UI at lines 646-666. HOWEVER: ConversationView.tsx does NOT pass voicemailEligible or conversationId props — they always default to false/undefined, so the voicemail prompt never shows in the real UI. -->
+**Add new props** (after line 63): <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:42-70 -->
 
 ```typescript
 interface Props {
@@ -1598,7 +1610,7 @@ interface Props {
 }
 ```
 
-**Modify the outcome section** (lines 588-592): <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:588-592 -->
+**Modify the outcome section** (lines 641-666): <!-- VERIFIED: frontend/src/pages/messages/CallSessionOverlay.tsx:641-666 -->
 
 Replace the single "Dismiss" button for voicemail-eligible outcomes:
 
@@ -1638,8 +1650,9 @@ Replace the single "Dismiss" button for voicemail-eligible outcomes:
 )}
 ```
 
-#### New File: `frontend/src/pages/messages/VoicemailBubble.tsx`
+#### New File: `frontend/src/pages/messages/VoicemailBubble.tsx` — DONE (66 lines)
 
+<!-- NOTE: VoicemailBubble.tsx exists (66 lines). Props differ from spec: uses { message: Message; onCallBack?: () => void } instead of the proposed VoicemailBubbleProps. Renders audio via WaveformPlayer, video via <video> element, and "Call back" button. -->
 A specialized message bubble for voicemail messages rendered inside `MessageBubble`:
 
 ```typescript
@@ -1692,8 +1705,9 @@ interface VoicemailBubbleProps {
 
 The "Call back" button triggers a new call invite to the voicemail sender, reusing the existing call initiation flow in `ConversationView`.
 
-#### Modify: `frontend/src/pages/messages/MessageBubble.tsx`
+#### Modify: `frontend/src/pages/messages/MessageBubble.tsx` — DONE
 
+<!-- VERIFIED: VoicemailBubble imported at line 62, rendered at lines 1584-1586, getPreviewText returns "[Voicemail]" at line 169 -->
 Add a case for `kind === "voicemail"` in the message rendering logic:
 
 ```tsx
@@ -1708,8 +1722,10 @@ Add a case for `kind === "voicemail"` in the message rendering logic:
 )}
 ```
 
-#### Modify: `frontend/src/api/types.ts`
+#### Modify: `frontend/src/api/types.ts` — DONE
 
+<!-- VERIFIED: voicemail field on Message type at types.ts:960-972 with call_id, mode, audio_url, video_url, content_type, size_bytes, duration_seconds, waveform_data, call_state, caller_user_id, callee_user_id -->
+<!-- NOTE: VoicemailData is NOT a separate exported interface — it's an inline type on the Message interface. Kind literal includes "voicemail" at line 926. -->
 Add TypeScript types:
 
 ```typescript
@@ -1734,8 +1750,10 @@ export interface MessageOut {
 }
 ```
 
-#### Modify: `frontend/src/api/endpoints/messaging.ts`
+#### Modify: `frontend/src/api/endpoints/messaging.ts` — DONE
 
+<!-- VERIFIED: messaging.ts:1086-1164 — PresignVoicemailReq (1088), CreateVoicemailReq (1095), presignVoicemail (1106), createVoicemail (1116), sendVoicemail convenience fn (1126) -->
+<!-- NOTE: Uses { api } from "@/api/client" (not "client from '../client'"). sendVoicemail is a convenience that chains presign + S3 PUT + create. URL paths use /messaging/conversations/ prefix (not /ui/messaging/). -->
 Add voicemail API wrappers:
 
 ```typescript
@@ -1770,8 +1788,9 @@ export const createVoicemail = (
 
 ### Phase 3: Integration and Polish (Days 8-10)
 
-#### Modify: `frontend/src/pages/messages/ConversationView.tsx`
+#### Modify: `frontend/src/pages/messages/ConversationView.tsx` — NOT DONE
 
+<!-- NOTE: ConversationView.tsx renders CallSessionOverlay at line 1284, but does NOT pass voicemailEligible or conversationId props (line 1284-1387). There is NO voicemailEligible state variable, NO SSE event handler for voicemail_eligible, and NO voicemailPhase state. The voicemail prompt will never appear in the real UI because voicemailEligible defaults to false in CallSessionOverlay. -->
 Wire the voicemail flow into the call session state machine:
 
 1. When a call reaches an outcome state, check if `voicemail_eligible` is true in the SSE event payload
@@ -1790,8 +1809,9 @@ if (event.voicemail_eligible) {
 }
 ```
 
-#### Modify: SSE Event Handling
+#### Modify: SSE Event Handling — BACKEND DONE, FRONTEND NOT DONE
 
+<!-- NOTE: Backend DONE — CallActionOut.voicemail_eligible field exists (messaging.py:12942). Computed and returned in decline endpoint (messaging.py:13061-13074) and timeout endpoint (messaging.py:13127-13140). HOWEVER: Frontend NOT done — ConversationView.tsx does not read voicemail_eligible from the API response or pass it to CallSessionOverlay. useMessagingStream.ts has NO voicemail event handling. -->
 The backend must include `voicemail_eligible: true` in the SSE event payload when a call transitions to a voicemail-eligible terminal state. This is done by extending the event payload in the call lifecycle response processing in the messaging router.
 
 In the `/calls/{call_id}/decline` and `/calls/{call_id}/timeout` endpoint handlers, add to the SSE event:
@@ -1805,8 +1825,9 @@ event_payload["voicemail_eligible"] = (
 )
 ```
 
-#### Sidebar Preview Text
+#### Sidebar Preview Text — DONE
 
+<!-- VERIFIED: getPreviewText in MessageBubble.tsx:169 and ConversationList.tsx:329 both return "[Voicemail]" for kind="voicemail" -->
 In `_message_out_from_item` / `getPreviewText` (frontend), voicemail messages should show `"[Voicemail]"` in the conversation list sidebar:
 
 ```typescript
@@ -1814,8 +1835,9 @@ In `_message_out_from_item` / `getPreviewText` (frontend), voicemail messages sh
 if (lastMsg.kind === "voicemail") return "[Voicemail]";
 ```
 
-#### Modify: `frontend/src/hooks/useMessagingStream.ts`
+#### Modify: `frontend/src/hooks/useMessagingStream.ts` — NOT DONE
 
+<!-- NOTE: useMessagingStream.ts has NO voicemail-related event handling. call.voicemail_complete SSE events are NOT handled — query invalidation for voicemail messages is NOT implemented. -->
 Handle `call.voicemail_complete` SSE events to invalidate the messages query:
 
 ```typescript
@@ -1831,29 +1853,31 @@ if (event.type === "call.voicemail_complete") {
 
 ### Phase 4: E2E Tests (Days 10-12)
 
-#### New File: `frontend/e2e/voicemail.spec.ts`
+#### New File: `frontend/e2e/voicemail.spec.ts` — DONE (733 lines, 17 tests)
 
+<!-- NOTE: voicemail.spec.ts exists with 17 tests (not the 43 proposed in section 5). Tests cover API-level voicemail presign, create, validation, and rendering — NOT UI recording (MediaRecorder not available in headless Playwright). -->
 See section 5 for full testing strategy.
 
 ### File Change Summary
 
-| File | Action | Description |
-|------|--------|-------------|
-| `app/services/messaging_call_sessions.py` | Modify | Add `voicemail_message_id` field + `set_voicemail_message_id()` |
-| `app/services/messaging_call_signaling.py` | Modify | Add voicemail signal types to allowlists + terminal-state guard |
-| `app/services/messaging_call_timeline.py` | Modify | Add voicemail preview text |
-| `app/core/settings.py` | Modify | Add `voicemail_enabled`, `voicemail_max_duration_seconds`, `voicemail_max_size_bytes` |
-| `app/routers/messaging.py` | Modify | Add models, endpoints, projection, `"voicemail"` kind |
-| `frontend/src/pages/messages/VoicemailRecorder.tsx` | **New** | Voicemail recording UI (wraps VoiceRecorder) |
-| `frontend/src/pages/messages/VideoVoicemailRecorder.tsx` | **New** | Video voicemail recording |
-| `frontend/src/pages/messages/VoicemailBubble.tsx` | **New** | Voicemail message rendering |
-| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Modify | Add voicemail prompt to outcome states |
-| `frontend/src/pages/messages/MessageBubble.tsx` | Modify | Add voicemail rendering case |
-| `frontend/src/pages/messages/ConversationView.tsx` | Modify | Wire voicemail state into call flow |
-| `frontend/src/api/types.ts` | Modify | Add `VoicemailData` type |
-| `frontend/src/api/endpoints/messaging.ts` | Modify | Add `presignVoicemail`, `createVoicemail` |
-| `frontend/src/hooks/useMessagingStream.ts` | Modify | Handle `call.voicemail_complete` events |
-| `frontend/e2e/voicemail.spec.ts` | **New** | E2E tests |
+| File | Action | Status |
+|------|--------|--------|
+| `app/services/messaging_call_sessions.py` | Modify | **DONE** — field at :50, serialize :92-93, deserialize :128-129, preserve :225, set fn :232 |
+| `app/services/messaging_call_signaling.py` | Modify | **DONE** — types :31-32, VOICEMAIL_SIGNAL_TYPES :39, state entries :54-56, guard :248 |
+| `app/services/messaging_call_timeline.py` | Modify | **NOT DONE** — no voicemail preview text added |
+| `app/core/settings.py` | Modify | **DONE** — :1286-1288 |
+| `app/routers/messaging.py` | Modify | **DONE** — models :1957-1972, presign :8349, create :8397, projection :3970, kind :2330, field :2341, CallActionOut.voicemail_eligible :12942, decline :13061-13074, timeout :13127-13140 |
+| `frontend/src/pages/messages/VoicemailRecorder.tsx` | **New** | **DONE** (256 lines) — integrates audio + video directly |
+| `frontend/src/pages/messages/VideoVoicemailRecorder.tsx` | **New** | **NOT CREATED** — video recording in VoicemailRecorder.tsx |
+| `frontend/src/pages/messages/VoicemailBubble.tsx` | **New** | **DONE** (66 lines) |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Modify | **DONE** (partially) — props + UI exist, but NOT wired from ConversationView |
+| `frontend/src/pages/messages/MessageBubble.tsx` | Modify | **DONE** — import :62, render :1584, preview :169 |
+| `frontend/src/pages/messages/ConversationView.tsx` | Modify | **NOT DONE** — does NOT pass voicemailEligible or conversationId to overlay |
+| `frontend/src/api/types.ts` | Modify | **DONE** — voicemail type at :960-972, kind at :926 |
+| `frontend/src/api/endpoints/messaging.ts` | Modify | **DONE** — :1086-1164 |
+| `frontend/src/hooks/useMessagingStream.ts` | Modify | **NOT DONE** — no voicemail event handling |
+| `frontend/e2e/voicemail.spec.ts` | **New** | **DONE** (733 lines, 17 tests — not 43 as proposed) |
+| `tests/test_voicemail.py` | **New** | **NOT DONE** — unit tests do not exist |
 
 ---
 
@@ -1968,11 +1992,15 @@ The E2E tests use the existing session injection pattern (`injectAuth`, `apiPost
 | 145.12.2 | call.voicemail_complete signal accepted in missed state | Route signaling event with type=call.voicemail_complete |
 | 145.12.3 | call.voicemail_start rejected in connected state | Route signaling event -> invalid_state error |
 
-**Total: 43 tests across 12 sections**
+**Total: 43 tests across 12 sections** (proposed)
+
+<!-- NOTE: Actual implementation has 17 tests in voicemail.spec.ts (733 lines), not 43. Tests cover API-layer voicemail presign, create, validation, and rendering only (no UI recording tests since MediaRecorder is unavailable in headless Playwright). -->
 
 ### 5.2 Unit Tests (`tests/`)
 
-#### `tests/test_voicemail.py`
+#### `tests/test_voicemail.py` — NOT DONE
+
+<!-- NOTE: tests/test_voicemail.py does NOT exist. The 25 proposed unit tests below have not been implemented. -->
 
 | # | Test | Description |
 |---|------|-------------|
@@ -2395,8 +2423,8 @@ This ensures old clients do not crash when encountering voicemail messages — t
 
 ### 12.7 Tests
 
-40. All ~43 E2E tests in `frontend/e2e/voicemail.spec.ts` pass
-41. All 25 unit tests in `tests/test_voicemail.py` pass
+40. All ~43 E2E tests in `frontend/e2e/voicemail.spec.ts` pass <!-- NOTE: Actual count is 17 tests, not 43 -->
+41. All 25 unit tests in `tests/test_voicemail.py` pass <!-- NOTE: tests/test_voicemail.py does NOT exist -->
 42. No regressions in existing call-related E2E tests (`messaging-features.spec.ts` call sections, `calendar-messaging.spec.ts`)
 
 ### 12.8 Edge Cases
@@ -2404,3 +2432,70 @@ This ensures old clients do not crash when encountering voicemail messages — t
 43. Duplicate voicemail prevention works correctly (409 response, no duplicate messages)
 44. Presigned URL expiry is handled with automatic re-presign on retry
 45. Browser tab close during recording does not leave orphaned resources
+
+---
+
+## Codebase References
+
+| # | File | Lines | What |
+|---|------|-------|------|
+| 1 | `app/services/messaging_call_sessions.py` | 49-50 | `voicemail_message_id` field on CallSessionRecord |
+| 2 | `app/services/messaging_call_sessions.py` | 92-93 | Serialization of voicemail_message_id |
+| 3 | `app/services/messaging_call_sessions.py` | 128-129 | Deserialization of voicemail_message_id |
+| 4 | `app/services/messaging_call_sessions.py` | 225 | State-transition preservation of voicemail_message_id |
+| 5 | `app/services/messaging_call_sessions.py` | 232-272 | `set_voicemail_message_id()` function |
+| 6 | `app/services/messaging_call_signaling.py` | 14-33 | ALLOWED_SIGNALING_TYPES (includes voicemail at 31-32) |
+| 7 | `app/services/messaging_call_signaling.py` | 37 | TERMINAL_CALL_STATES |
+| 8 | `app/services/messaging_call_signaling.py` | 39 | VOICEMAIL_SIGNAL_TYPES set |
+| 9 | `app/services/messaging_call_signaling.py` | 41-57 | STATE_ALLOWED_SIGNALING_TYPES (voicemail at 54-56) |
+| 10 | `app/services/messaging_call_signaling.py` | 248 | Terminal-state guard updated for voicemail signals |
+| 11 | `app/services/messaging_call_lifecycle.py` | 23 | TERMINAL_STATES |
+| 12 | `app/services/messaging_call_lifecycle.py` | 24-28 | ALLOWED_TRANSITIONS |
+| 13 | `app/services/messaging_call_lifecycle.py` | 132-154 | `create_invite()` signature |
+| 14 | `app/services/messaging_call_lifecycle.py` | 279-295 | `decline_invite()` function |
+| 15 | `app/services/messaging_call_lifecycle.py` | 334-354 | `end_call()` function |
+| 16 | `app/services/messaging_call_lifecycle.py` | 404-423 | `timeout_call()` function |
+| 17 | `app/services/messaging_call_timeline.py` | 21-36 | `_preview_for_event()` — NO voicemail entry |
+| 18 | `app/services/messaging_call_timeline.py` | 39-119 | `emit_call_timeline_event()` |
+| 19 | `app/core/settings.py` | 1286 | `voicemail_enabled` (defaults "1") |
+| 20 | `app/core/settings.py` | 1287 | `voicemail_max_duration_seconds` (defaults 60) |
+| 21 | `app/core/settings.py` | 1288 | `voicemail_max_size_bytes` (defaults 50MB) |
+| 22 | `app/core/settings.py` | 1251-1254 | voice_message settings (reused for waveform_samples) |
+| 23 | `app/routers/messaging.py` | 1957-1961 | `PresignVoicemailRequest` model |
+| 24 | `app/routers/messaging.py` | 1964-1972 | `CreateVoicemailRequest` model |
+| 25 | `app/routers/messaging.py` | 2325 | `MessageOut` class definition |
+| 26 | `app/routers/messaging.py` | 2330 | `MessageOut.kind` literal (includes "voicemail") |
+| 27 | `app/routers/messaging.py` | 2341 | `MessageOut.voicemail` field |
+| 28 | `app/routers/messaging.py` | 3970-3997 | Voicemail projection in `_message_out_from_item` |
+| 29 | `app/routers/messaging.py` | 4023 | `voicemail=voicemail_out` in MessageOut constructor |
+| 30 | `app/routers/messaging.py` | 8346 | `VOICEMAIL_ELIGIBLE_STATES = {"declined", "missed", "busy"}` |
+| 31 | `app/routers/messaging.py` | 8349-8394 | Voicemail presign endpoint |
+| 32 | `app/routers/messaging.py` | 8397-8527 | Voicemail create endpoint |
+| 33 | `app/routers/messaging.py` | 12935-12942 | `CallActionOut` model with `voicemail_eligible` |
+| 34 | `app/routers/messaging.py` | 13055-13074 | Decline endpoint — computes voicemail_eligible |
+| 35 | `app/routers/messaging.py` | 13120-13140 | Timeout endpoint — computes voicemail_eligible |
+| 36 | `app/services/alerts.py` | 266 | `write_alert()` function |
+| 37 | `app/services/alerts.py` | 270 | alert_id generation |
+| 38 | `frontend/src/pages/messages/VoicemailRecorder.tsx` | 1-256 | Full voicemail recording component (audio + video) |
+| 39 | `frontend/src/pages/messages/VoicemailBubble.tsx` | 1-66 | Voicemail message rendering component |
+| 40 | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 2 | VoicemailRecorder import |
+| 41 | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 45 | `voicemailEligible?: boolean` prop |
+| 42 | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 330 | `isVoicemailEligibleOutcome` computation |
+| 43 | `frontend/src/pages/messages/CallSessionOverlay.tsx` | 641-666 | Voicemail prompt + recorder + dismiss UI |
+| 44 | `frontend/src/pages/messages/MessageBubble.tsx` | 62 | VoicemailBubble import |
+| 45 | `frontend/src/pages/messages/MessageBubble.tsx` | 169 | `getPreviewText` returns "[Voicemail]" |
+| 46 | `frontend/src/pages/messages/MessageBubble.tsx` | 1584-1586 | Voicemail rendering in message bubble |
+| 47 | `frontend/src/pages/messages/ConversationView.tsx` | 1284-1387 | CallSessionOverlay usage — voicemailEligible NOT passed |
+| 48 | `frontend/src/pages/messages/ConversationList.tsx` | 329 | `getPreviewText` returns "[Voicemail]" |
+| 49 | `frontend/src/api/types.ts` | 926 | Message kind includes "voicemail" |
+| 50 | `frontend/src/api/types.ts` | 960-972 | Voicemail type fields on Message |
+| 51 | `frontend/src/api/endpoints/messaging.ts` | 1088-1093 | `PresignVoicemailReq` interface |
+| 52 | `frontend/src/api/endpoints/messaging.ts` | 1095-1104 | `CreateVoicemailReq` interface |
+| 53 | `frontend/src/api/endpoints/messaging.ts` | 1106-1113 | `presignVoicemail()` function |
+| 54 | `frontend/src/api/endpoints/messaging.ts` | 1116-1123 | `createVoicemail()` function |
+| 55 | `frontend/src/api/endpoints/messaging.ts` | 1126-1164 | `sendVoicemail()` convenience function |
+| 56 | `frontend/src/pages/messages/VoiceRecorder.tsx` | 1-311 | Existing voice recording component (reused patterns) |
+| 57 | `frontend/src/pages/messages/WaveformPlayer.tsx` | 1-177 | Existing waveform playback component (used in VoicemailBubble) |
+| 58 | `frontend/e2e/voicemail.spec.ts` | 1-733 | E2E tests (17 tests) |
+| 59 | `tests/test_voicemail.py` | — | Does NOT exist (unit tests not implemented) |
+| 60 | `frontend/src/hooks/useMessagingStream.ts` | — | No voicemail event handling (not implemented) |

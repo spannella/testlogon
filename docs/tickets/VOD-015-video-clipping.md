@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-015
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-27
 
 ---
@@ -657,11 +657,19 @@ VOD-015 depends on the existing transcode pipeline (VOD-001 through VOD-005) for
 
 ## 4. Implementation Plan
 
-### 4.1 Files to Create
+### 4.1 Files
+
+<!-- NOTE: Key files ALREADY EXIST:
+     - `app/services/video_clipper.py` — `create_clip()` (line 51), `execute_clip()` (line 161), `process_clip_job()` (line 224), `_run_clip_ffmpeg()` (line 315), `_probe_duration()` (line 374)
+     - `app/services/video_metadata_store.py` — `update_clip_fields()` already at line 619
+     - `app/models_video.py` — `ClipVideoIn` at line 194
+     - `app/routers/video_listing.py` — `ClipVideoIn` (line 822), `ClipVideoOut` (line 828)
+     - `frontend/e2e/video-clipping.spec.ts` — ALREADY EXISTS
+-->
 
 | File | Purpose |
 |------|---------|
-| `app/services/video_clipper.py` | Clip extraction logic: stream copy attempt, re-encode fallback, duration validation, S3 upload of clip, transcode job enqueue |
+| `app/services/video_clipper.py` | **Already exists**: `create_clip()` (line 51), `execute_clip()` (line 161), `process_clip_job()` (line 224) |
 | `frontend/src/components/shared/ClipDialog.tsx` | Clip dialog component with timeline scrubber, start/end handles, title field |
 | `tests/test_video_clipper.py` | Unit tests for clip extraction service |
 | `frontend/e2e/video-clipping.spec.ts` | E2E tests for clip API and processing |

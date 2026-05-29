@@ -1421,3 +1421,22 @@ token is specific to the user's session and expires when the session expires.
 | CookieStore API unavailable in old Chromium | CSRF token stored with each queue item as primary strategy |
 | IDB version upgrade conflicts across tabs | `onversionchange` handler closes old connections gracefully |
 | Backend does not deduplicate messages | Add optional `client_request_id` field to backend (separate task) |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `syncQueueDb.ts` | `frontend/src/lib/syncQueueDb.ts` | 191 lines | **ALREADY EXISTS** — IndexedDB helpers for sync_queue object store |
+| `swMessageHandler.ts` | `frontend/src/lib/swMessageHandler.ts` | 52 lines | **ALREADY EXISTS** — main-thread listener for SW postMessage events |
+| `DeadLetterPanel` | `frontend/src/components/shared/DeadLetterPanel.tsx` | 111 lines | **ALREADY EXISTS** — dead-letter queue UI |
+| `sw.js` | `frontend/public/sw.js` | 576 lines | **Exists** — verify sync event handler is present |
+| `offlineStore` | `frontend/src/stores/offlineStore.ts` | 213 lines | **Exists** — verify `deadLetter` array and related methods |
+| `useOfflineQueue` hook | `frontend/src/hooks/useOfflineQueue.ts` | 133 lines | **Exists** — verify Background Sync skip logic |
+| `offlineCache.ts` (IDB) | `frontend/src/lib/offlineCache.ts` | 306 lines | **Exists** — IndexedDB database; version bump for sync_queue |
+| API client (CSRF) | `frontend/src/api/client.ts` | 309 lines | **Exists** |
+
+### Key Correction
+
+**This ticket appears to be ALREADY IMPLEMENTED.** All three proposed new files (`syncQueueDb.ts`, `swMessageHandler.ts`, `DeadLetterPanel.tsx`) exist with the described functionality.

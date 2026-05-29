@@ -1,11 +1,13 @@
 # CALL-011: Pay-Per-Minute Private Video Calls
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-27  
 **Priority**: High  
 **Estimated effort**: 10-14 days  
 **Dependencies**: CALL-002 (RTCPeerConnection), CALL-009 (Call Recording), MON-002 (Tip Ledger Integration)
+
+> **NOTE — Feature is FULLY IMPLEMENTED.** Backend service (`app/services/call_billing_timer.py`, 570 lines), router (`app/routers/call_billing.py`, 247 lines), call session extension (`app/services/messaging_call_sessions.py` with billing fields), settings (`app/core/settings.py:1179-1191`), DDB table (`CallBillingLedger` in `scripts/local-ddb-init.py:651-661`), frontend API wrapper (`frontend/src/api/endpoints/callBilling.ts`, 86 lines), frontend components (`frontend/src/components/calls/CallBillingOverlay.tsx`, `CallBillingSummary.tsx`, `RateNegotiationDialog.tsx`), SSE event types (`useMessagingStream.ts:178-180`), E2E tests (`frontend/e2e/call-billing.spec.ts`, 591 lines), and unit tests (`tests/test_call_billing.py`, 499 lines) are all present. The spec below reflects the original design proposal; inline notes mark deviations from the actual implementation.
 
 ---
 
@@ -76,7 +78,9 @@ Alice (caller)                Backend                          Bob (creator)
 
 ### 2.2 Call Session DDB Model
 
-`CallSessionRecord` in `app/services/messaging_call_sessions.py` (lines 18-33):
+`CallSessionRecord` in `app/services/messaging_call_sessions.py` (lines 19-50, including billing fields at lines 37-48):
+
+<!-- NOTE: The actual dataclass spans lines 19-50 (not 18-33) because billing fields have been added. The field `paid` is at line 37, `rate_cents_per_min` at line 38 (note: field is named `rate_cents_per_min`, NOT `rate_cents_per_minute`), and billing fields `billing_start_ts` through `callee_last_heartbeat_ts` are at lines 40-48. -->
 
 | Field | Type | Purpose |
 |-------|------|---------|
@@ -99,7 +103,9 @@ The paid call billing timer will reference `call_id` as a foreign key and extend
 
 ### 2.3 Call Invite Endpoint
 
-`POST /messaging/messages/calls/invite` (line 12384 of `app/routers/messaging.py`) currently accepts `CallInviteIn`:
+`POST /messaging/messages/calls/invite` (line 12963 of `app/routers/messaging.py`) currently accepts `CallInviteIn` (line 12900):
+
+<!-- NOTE: Line references corrected — CallInviteIn is at line 12900, the POST endpoint is at line 12963 (handler function `create_call_invite` at line 12964), not line 12384. -->
 
 > **Corrected**: The messaging router has `prefix="/messaging"` (line 238 of `messaging.py`), so the full endpoint path is `/messaging/messages/calls/invite`, not `/messages/calls/invite`. All call endpoints under this router share the `/messaging` prefix.
 
@@ -112,11 +118,11 @@ class CallInviteIn(BaseModel):
     idempotency_key: Optional[str] = None
 ```
 
-This model will be extended with a `paid: bool = False` flag to distinguish paid vs. free call invitations.
+This model has been extended with a `paid: bool = False` flag (see `app/routers/messaging.py:12906`). `CallInviteOut` (line 12910) also includes `paid: bool = False` (line 12918) and `rate_cents_per_minute: Optional[int] = None` (line 12919). **IMPLEMENTED.**
 
 ### 2.4 Billing Table Schema
 
-`T.billing` table (from `scripts/local-ddb-init.py`, line 59):
+`T.billing` table (from `scripts/local-ddb-init.py`, line 59 — verified):
 
 PK: `USER#{user_sub}`, SK patterns:
 - `PM#{pm_id}` -- payment methods
@@ -124,7 +130,7 @@ PK: `USER#{user_sub}`, SK patterns:
 - `LEDGER#{ts}#{entry_id}` -- billing ledger entries (debit/credit)
 - `WALLET` -- wallet balance
 
-Existing ledger entry structure (from `app/services/tip_ledger.py`):
+Existing ledger entry structure (from `app/services/tip_ledger.py` — `write_tip_ledger` at line 88):
 ```python
 {
     "pk": f"USER#{user_id}",
@@ -155,7 +161,7 @@ Wallet balance item (existing pattern):
 
 ### 2.5 Existing Call Lifecycle State Machine
 
-From `app/services/messaging_call_lifecycle.py` (lines 23-28):
+From `app/services/messaging_call_lifecycle.py` (lines 23-28 — verified, including `end_call` at line 334 which now calls `finalize_call_billing` at line 387-388):
 
 ```python
 TERMINAL_STATES = {"declined", "busy", "missed", "ended", "failed", "canceled"}
@@ -170,7 +176,7 @@ No modifications to the state machine are needed. Paid call billing is orthogona
 
 ### 2.6 Tip Ledger Pattern
 
-`app/services/tip_ledger.py` implements the paired debit/credit ledger write pattern that paid call billing will follow:
+`app/services/tip_ledger.py` (line 88) implements the paired debit/credit ledger write pattern that paid call billing follows:
 
 ```python
 def write_tip_ledger(entry: TipLedgerEntry) -> Dict[str, str]:
@@ -276,34 +282,35 @@ Alice (caller)                  Backend                              Bob (creato
 
 ### 3.3 Billing Timer Data Model
 
-Billing timer state is stored in the `MessageCallSessions` DDB table alongside the call session record.
+Billing timer state is stored in the `MessageCallSessions` DDB table alongside the call session record (see `scripts/local-ddb-init.py:629-639`).
 
 > **Corrected**: The original spec mentioned "using a separate sort key" but the `MessageCallSessions` table has **no sort key** -- it uses only a partition key (`call_id`). There is no SK to separate billing data from the call record. The approach below (extending the existing `CallSessionRecord` with billing fields on the same item) is compatible with this single-key schema.
 
-**Option chosen: Extend the existing `CallSessionRecord`** with billing fields rather than creating a separate table. This keeps all call state co-located and avoids cross-table consistency issues.
+**Option chosen: Extend the existing `CallSessionRecord`** with billing fields rather than creating a separate table. This keeps all call state co-located and avoids cross-table consistency issues. **IMPLEMENTED** — see `app/services/messaging_call_sessions.py:37-48` for the billing fields on `CallSessionRecord`, and lines 74-90 for serialization, 116-127 for deserialization.
 
-New fields on `CallSessionRecord`:
+New fields on `CallSessionRecord` (see `app/services/messaging_call_sessions.py:37-48`):
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `paid` | BOOL | Whether this is a paid call |
-| `rate_cents_per_minute` | N | Per-minute rate at call start (snapshot) |
-| `billing_start_ts` | N \| None | When billing started (= `connect_ts`) |
-| `last_billed_ts` | N \| None | Timestamp of last billing cycle |
-| `total_billed_cents` | N | Running total billed to caller |
-| `total_billed_seconds` | N | Total seconds billed |
-| `billing_cycle_count` | N | Number of completed billing cycles |
-| `platform_fee_bps` | N | Platform fee in basis points (snapshot) |
-| `hold_amount_cents` | N | Pre-authorization hold amount |
-| `hold_released` | BOOL | Whether the hold has been released |
-| `caller_wallet_balance_at_start` | N | Wallet balance when call started |
-| `max_duration_seconds` | N | Maximum allowed duration for this call |
+| Field | Type | Description | Status |
+|-------|------|-------------|--------|
+| `paid` | BOOL | Whether this is a paid call | **Line 37** |
+| `rate_cents_per_min` | N | Per-minute rate at call start (snapshot) | **Line 38** |
+| `billing_start_ts` | N \| None | When billing started (= `connect_ts`) | **Line 40** |
+| `last_billed_ts` | N \| None | Timestamp of last billing cycle | **Line 41** |
+| `total_billed_cents` | N | Running total billed to caller | **Line 42** |
+| `total_billed_seconds` | N | Total seconds billed | **Line 43** |
+| `billing_cycle_count` | N | Number of completed billing cycles | **Line 44** |
+| `platform_fee_bps` | N | Platform fee in basis points (snapshot) | **Line 45** |
+| `max_duration_seconds` | N | Maximum allowed duration for this call | **Line 46** |
+| `caller_last_heartbeat_ts` | N \| None | Last heartbeat from caller | **Line 47** |
+| `callee_last_heartbeat_ts` | N \| None | Last heartbeat from callee | **Line 48** |
 
-### 3.4 New DDB Table: `CallBillingLedger`
+<!-- NOTE: The actual field is `rate_cents_per_min` (NOT `rate_cents_per_minute`) on CallSessionRecord. The spec also proposed `hold_amount_cents`, `hold_released`, and `caller_wallet_balance_at_start` fields — these do NOT exist in the implementation. The hold mechanism was simplified to a balance check only (no actual hold item), consistent with the v1 simplification described in section 3.9. -->
 
-A dedicated table for per-minute billing entries, separate from the main billing ledger. This provides a clean audit trail for call billing without polluting the main ledger with high-frequency entries.
+### 3.4 New DDB Table: `CallBillingLedger` — **IMPLEMENTED**
 
-**Table name**: `CallBillingLedger` (env: `DDB_CALL_BILLING_LEDGER`)  
+A dedicated table for per-minute billing entries, separate from the main billing ledger. This provides a clean audit trail for call billing without polluting the main ledger with high-frequency entries. (See `scripts/local-ddb-init.py:651-661`, table handle at `app/core/tables.py:94,218`.)
+
+**Table name**: `CallBillingLedger` (env: `DDB_CALL_BILLING_LEDGER`, setting at `app/core/settings.py:1187`)  
 **Partition key**: `call_id` (String)  
 **Sort key**: `entry_id` (String)
 
@@ -332,7 +339,7 @@ A dedicated table for per-minute billing entries, separate from the main billing
 
 ### 3.5 Wallet Balance Operations
 
-Wallet balance checks and debits use atomic DDB operations on the existing `billing` table. The existing helpers live in `app/services/billing_shared.py`.
+Wallet balance checks and debits use atomic DDB operations on the existing `billing` table. The existing helpers live in `app/services/billing_shared.py` (lines 166-204 — `WALLET_SK` at 166, `get_wallet_balance` at 169, `apply_wallet_delta` at 178).
 
 **Existing `get_wallet_balance` (returns a dict, not an int):**
 ```python
@@ -545,12 +552,14 @@ if actual_balance < required_balance:
     })
 ```
 
-### 3.10 Platform Fee
+### 3.10 Platform Fee — **IMPLEMENTED**
 
-The platform fee is a configurable percentage deducted from the creator's credit for each billing cycle:
+The platform fee is a configurable percentage deducted from the creator's credit for each billing cycle (see `app/services/call_billing_timer.py:183,297-299,413-415`):
 
-- **Default**: 2000 basis points (20%)
-- **Configurable**: `CALL_BILLING_PLATFORM_FEE_BPS` env var
+- **Default**: 20% (stored as integer percent, not basis points)
+- **Configurable**: `CALL_BILLING_PLATFORM_FEE_PERCENT` env var (see `app/core/settings.py:1186`)
+
+<!-- NOTE: The actual setting is `call_billing_platform_fee_percent` (integer 20 = 20%), NOT `call_billing_platform_fee_bps` (2000 bps). The service converts percent to basis points internally: `platform_fee_bps = S.call_billing_platform_fee_percent * 100` (see call_billing_timer.py:183). -->
 - **Snapshot at call start**: The fee percentage is captured on the call session record when the call connects, so mid-call fee changes do not affect active calls
 - **Calculation**: `platform_fee_cents = (gross_amount_cents * platform_fee_bps) // 10000`
 - **Creator receives**: `creator_net_cents = gross_amount_cents - platform_fee_cents`
@@ -570,48 +579,38 @@ Paid calls have a maximum duration to prevent runaway billing:
 4. **Enforcement**: On each heartbeat, check if elapsed time exceeds the limit. If so, auto-end with reason `"max_duration_reached"`.
 5. **Warning**: Send `call.billing_tick` with `max_duration_warning: true` when 5 minutes remain.
 
-### 3.12 Configuration Settings
+### 3.12 Configuration Settings — **IMPLEMENTED**
 
-Add to `app/core/settings.py` (following the existing `@dataclass(frozen=True)` pattern using `os.environ.get()`):
+All settings are present in `app/core/settings.py` (lines 1179-1191). The actual settings differ from the original proposal in several ways:
 
-| Setting | Env Variable | Default | Purpose |
-|---------|-------------|---------|---------|
-| Feature flag | `CALL_BILLING_ENABLED` | `false` | Master on/off switch for paid calls |
-| Platform fee | `CALL_BILLING_PLATFORM_FEE_BPS` | `2000` | Fee in basis points (20%) |
-| Max duration | `CALL_BILLING_MAX_DURATION_SECONDS` | `7200` | Platform-wide max duration (2 hours) |
-| Heartbeat timeout | `CALL_BILLING_HEARTBEAT_TIMEOUT_SECONDS` | `30` | Auto-end if no heartbeat received |
-| Heartbeat interval | `CALL_BILLING_HEARTBEAT_INTERVAL_SECONDS` | `15` | Recommended client heartbeat interval |
-| Low balance threshold | `CALL_BILLING_LOW_BALANCE_MINUTES` | `2` | Warn when balance < N minutes |
-| Min rate | `CALL_BILLING_MIN_RATE_CENTS` | `100` | Minimum per-minute rate ($1.00) |
-| Max rate | `CALL_BILLING_MAX_RATE_CENTS` | `10000` | Maximum per-minute rate ($100.00) |
-| DDB table | `DDB_CALL_BILLING_LEDGER` | `CallBillingLedger` | Call billing ledger table |
+| Setting | Env Variable | Default | Line | Notes |
+|---------|-------------|---------|------|-------|
+| Feature flag | `CALL_BILLING_ENABLED` | `"1"` (enabled) | 1180 | **Default is ENABLED, not `"false"`** |
+| Heartbeat interval | `CALL_BILLING_HEARTBEAT_INTERVAL` | `15` | 1181 | Env var name lacks `_SECONDS` suffix |
+| Billing cycle | `CALL_BILLING_CYCLE_SECONDS` | `60` | 1182 | **New — not in original spec** |
+| Low balance warning | `CALL_BILLING_LOW_BALANCE_WARNING_CENTS` | `500` | 1183 | **Cents-based, not minutes-based** |
+| Grace period | `CALL_BILLING_GRACE_PERIOD_SECONDS` | `10` | 1184 | **New — not in original spec** |
+| Max rate | `CALL_BILLING_MAX_RATE_CENTS_PER_MIN` | `9999` | 1185 | **9999 not 10000** |
+| Platform fee | `CALL_BILLING_PLATFORM_FEE_PERCENT` | `20` | 1186 | **Percent (20) not BPS (2000)** |
+| DDB table | `DDB_CALL_BILLING_LEDGER` | `CallBillingLedger` | 1187 | Matches spec |
+| Max duration | `CALL_BILLING_MAX_DURATION_SECONDS` | `7200` | 1188 | Matches spec |
+| Min rate | `CALL_BILLING_MIN_RATE_CENTS` | `100` | 1189 | Matches spec |
+| Heartbeat timeout | `CALL_BILLING_HEARTBEAT_TIMEOUT_SECONDS` | `30` | 1190 | Matches spec |
+| Low balance minutes | `CALL_BILLING_LOW_BALANCE_MINUTES` | `2` | 1191 | Also present (both cents and minutes variants) |
 
-```python
-# Pay-per-minute calls (CALL-011)
-call_billing_enabled: bool = os.environ.get("CALL_BILLING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
-call_billing_platform_fee_bps: int = int(os.environ.get("CALL_BILLING_PLATFORM_FEE_BPS", "2000"))
-call_billing_max_duration_seconds: int = int(os.environ.get("CALL_BILLING_MAX_DURATION_SECONDS", "7200"))
-call_billing_heartbeat_timeout_seconds: int = int(os.environ.get("CALL_BILLING_HEARTBEAT_TIMEOUT_SECONDS", "30"))
-call_billing_heartbeat_interval_seconds: int = int(os.environ.get("CALL_BILLING_HEARTBEAT_INTERVAL_SECONDS", "15"))
-call_billing_low_balance_minutes: int = int(os.environ.get("CALL_BILLING_LOW_BALANCE_MINUTES", "2"))
-call_billing_min_rate_cents: int = int(os.environ.get("CALL_BILLING_MIN_RATE_CENTS", "100"))
-call_billing_max_rate_cents: int = int(os.environ.get("CALL_BILLING_MAX_RATE_CENTS", "10000"))
-call_billing_ledger_table_name: str = os.environ.get("DDB_CALL_BILLING_LEDGER", "CallBillingLedger")
-```
+<!-- NOTE: The actual implementation has ADDITIONAL settings not in the original spec: `call_billing_cycle_seconds` (1182) and `call_billing_grace_period_seconds` (1184). The `call_billing_enabled` defaults to `"1"` (enabled), not `"false"` as proposed. The platform fee uses integer percent (`call_billing_platform_fee_percent = 20`) instead of basis points (`call_billing_platform_fee_bps = 2000`). The low balance threshold has a dual implementation — both cents-based (`call_billing_low_balance_warning_cents = 500`) and minutes-based (`call_billing_low_balance_minutes = 2`). -->
 
-### 3.13 SSE Event Types for Billing
+### 3.13 SSE Event Types for Billing — **IMPLEMENTED**
 
 Billing events are dispatched via the existing SSE infrastructure in `useMessagingStream.ts`. These events are informational (UI updates) and do not require signaling relay.
 
-New event types to add to `EVENT_TYPES` in `frontend/src/hooks/useMessagingStream.ts`:
+All three event types are present in `EVENT_TYPES` in `frontend/src/hooks/useMessagingStream.ts` (lines 178-180):
 
 ```typescript
-"call.billing_tick",       // periodic billing update
-"call.balance_low",        // low balance warning
-"call.balance_depleted",   // balance depleted, call will end
+"call.billing_tick",       // periodic billing update (line 178)
+"call.balance_low",        // low balance warning (line 179)
+"call.balance_depleted",   // balance depleted, call will end (line 180)
 ```
-
-> **IMPORTANT**: These types MUST also be added to the `EVENT_TYPES` array in `useMessagingStream.ts`. Without this registration, the EventSource will not fire `handleEvent` for these typed SSE events, and they will never reach the client -- even though the backend dispatches them.
 
 **`call.billing_tick` payload:**
 ```json
@@ -641,44 +640,22 @@ New event types to add to `EVENT_TYPES` in `frontend/src/hooks/useMessagingStrea
 
 ## 4. Implementation Plan
 
-### Phase 1: Backend — Call Rate Settings & Billing Service (Days 1-3)
+### Phase 1: Backend — Call Rate Settings & Billing Service (Days 1-3) — **DONE**
 
 #### New Files
 
-| File | Purpose |
-|------|---------|
-| `app/services/call_billing_timer.py` | Billing timer logic, per-minute debit/credit, finalization |
-| `app/routers/call_billing.py` | HTTP endpoints for rate settings, heartbeat, billing status |
+| File | Purpose | Status |
+|------|---------|--------|
+| `app/services/call_billing_timer.py` | Billing timer logic, per-minute debit/credit, finalization | **570 lines** |
+| `app/routers/call_billing.py` | HTTP endpoints for rate settings, heartbeat, billing status | **247 lines** |
 
-#### `app/services/call_billing_timer.py`
+#### `app/services/call_billing_timer.py` — **IMPLEMENTED** (570 lines)
+
+Actual dataclasses (lines 34-61):
 
 ```python
-"""Server-side billing timer for pay-per-minute calls.
-
-Manages:
-  - Creator call rate settings (CRUD on T.billing CALL_RATE items)
-  - Per-minute billing cycles (triggered by heartbeat)
-  - Wallet debit / creator credit with platform fee
-  - Call finalization with pro-rated final billing
-  - Hold/release pattern for pre-authorization
-"""
-from __future__ import annotations
-
-import logging
-import math
-import uuid
-from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional
-
-from app.core.settings import S
-from app.core.tables import T
-from app.core.time import now_ts
-
-logger = logging.getLogger(__name__)
-
-
 @dataclass
-class CallRateSettings:
+class CallRateSettings:          # line 34
     user_id: str
     rate_cents_per_minute: int
     enabled: bool
@@ -687,9 +664,8 @@ class CallRateSettings:
     max_duration_minutes: int = 120
     updated_at: int = 0
 
-
 @dataclass
-class BillingTickResult:
+class BillingTickResult:         # line 45
     action: Literal["skip", "billed", "end_call"]
     amount_cents: int = 0
     total_cost_cents: int = 0
@@ -700,297 +676,147 @@ class BillingTickResult:
     reason: Optional[str] = None
     cycle_number: int = 0
 
-
 @dataclass
-class FinalBillingResult:
+class FinalBillingResult:        # line 58
     total_cents: int
     duration_seconds: int = 0
     final_charge_cents: int = 0
-
-
-def get_call_rate(creator_user_id: str) -> Optional[CallRateSettings]: ...
-
-def set_call_rate(
-    *, user_id: str, rate_cents_per_minute: int, enabled: bool = True,
-    min_balance_minutes: int = 5, max_duration_minutes: int = 120,
-) -> CallRateSettings: ...
-
-# NOTE: Wallet helpers already exist in app/services/billing_shared.py.
-# Use the existing API rather than creating new wrappers:
-#   get_wallet_balance(table, pk) -> Dict[str, Any]
-#   apply_wallet_delta(table, pk, delta_cents, *, currency="usd") -> int
-
-def check_balance_for_paid_call(
-    *, caller_user_id: str, rate_cents_per_minute: int, min_balance_minutes: int,
-) -> None: ...
-
-def start_billing_timer(
-    *, call_id: str, rate_cents_per_minute: int, platform_fee_bps: int,
-    max_duration_seconds: int,
-) -> None: ...
-
-def process_billing_cycle(call_id: str) -> BillingTickResult: ...
-
-def finalize_call_billing(call_id: str) -> FinalBillingResult: ...
-
-def write_call_billing_credit(
-    *, creator_user_id: str, amount_cents: int, call_id: str, cycle: int | str,
-) -> None: ...
-
-def write_call_summary_ledger(session, total_caller_debit: int) -> None: ...
 ```
 
-#### `app/routers/call_billing.py`
+Actual functions (with line numbers):
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/ui/calls/rates/{creator_id}` | Get creator's per-minute call rate |
-| `POST` | `/ui/calls/rates` | Set own call rate (creator) |
-| `PUT` | `/ui/calls/rates` | Update own call rate |
-| `DELETE` | `/ui/calls/rates` | Disable paid calls (delete rate setting) |
-| `PATCH` | `/messages/calls/{call_id}/heartbeat` | Billing heartbeat (triggers billing cycle) |
-| `GET` | `/messages/calls/{call_id}/billing` | Current call billing status |
+| Function | Line | Notes |
+|----------|------|-------|
+| `get_call_rate(creator_user_id)` | 71 | Returns `Optional[CallRateSettings]` |
+| `set_call_rate(*, user_id, rate_cents_per_minute, ...)` | 89 | Creates or updates CALL_RATE item |
+| `delete_call_rate(user_id)` | 121 | Deletes CALL_RATE item |
+| `check_balance_for_paid_call(*, caller_user_id, rate_cents_per_minute, min_balance_minutes)` | 131 | Raises HTTPException(402) if insufficient |
+| `start_call_billing(*, call_id, rate_cents_per_min, ...)` | 164 | Initializes billing state on call session |
+| `process_heartbeat(call_id, user_id)` | 210 | Returns `BillingTickResult` |
+| `finalize_call_billing(call_id)` | 362 | Returns `FinalBillingResult` |
+| `get_call_billing_summary(call_id)` | 461 | Returns `Optional[Dict[str, Any]]` |
+| `_write_creator_credit(...)` | 501 | Private — writes credit ledger entry |
+| `_write_caller_debit(...)` | 537 | Private — writes debit ledger entry |
 
-**Pydantic models:**
+<!-- NOTE: Spec proposed `start_billing_timer`, `process_billing_cycle`, `write_call_billing_credit`, `write_call_billing_entry`, `write_call_summary_ledger`. Actual names are `start_call_billing` (line 164), `process_heartbeat` (line 210), `_write_creator_credit` (line 501, private), `_write_caller_debit` (line 537, private). `write_call_summary_ledger` and `write_call_billing_entry` do not exist as separate functions; their logic is inlined in `finalize_call_billing` and `process_heartbeat`. Also, `start_call_billing` takes `rate_cents_per_min` (not `rate_cents_per_minute`). -->
+
+#### `app/routers/call_billing.py` — **IMPLEMENTED** (247 lines, registered in `app/main.py:103,426`)
+
+| Method | Path | Line | Notes |
+|--------|------|------|-------|
+| `GET` | `/ui/calls/rates/{creator_id}` | 78 | Matches spec |
+| `POST` | `/ui/calls/rates` | 98 | Matches spec |
+| `PUT` | `/ui/calls/rates` | 123 | Delegates to `set_own_rate` |
+| `DELETE` | `/ui/calls/rates` | 132 | Matches spec |
+| `PATCH` | `/messaging/messages/calls/{call_id}/heartbeat` | 148 | **Path differs from spec** |
+| `GET` | `/messaging/messages/calls/{call_id}/billing` | 215 | **Path differs from spec** |
+
+<!-- NOTE: The spec proposed heartbeat at `/messages/calls/{call_id}/heartbeat` and billing at `/messages/calls/{call_id}/billing`. The actual paths are `/messaging/messages/calls/{call_id}/heartbeat` (line 148) and `/messaging/messages/calls/{call_id}/billing` (line 215) — both prefixed with `/messaging/messages/` instead of just `/messages/`. The `HeartbeatOut` model at line 47 also has an extra `action: str = "ok"` field not in the spec, and `CallBillingStatusOut` at line 60 has an extra `billing_status: str = ""` field. -->
+
+**Pydantic models** (all verified in `app/routers/call_billing.py`):
+
+- `CallRateIn` (line 28) — matches spec: `rate_cents_per_minute: Field(..., ge=100, le=10000)`, `enabled`, `min_balance_minutes`, `max_duration_minutes`
+- `CallRateOut` (line 35) — matches spec
+- `HeartbeatIn` (line 43) — matches spec
+- `HeartbeatOut` (line 47) — matches spec plus extra fields: `action: str = "ok"` (line 57), all numeric fields default to `0`
+- `CallBillingStatusOut` (line 60) — matches spec plus extra field: `billing_status: str = ""` (line 71), all numeric fields default to `0`
+
+#### Modify: `app/routers/messaging.py` — **DONE**
+
+`CallInviteIn` (line 12900) now includes `paid: bool = False` (line 12906).
+
+`CallInviteOut` (line 12910) now includes `paid: bool = False` (line 12918) and `rate_cents_per_minute: Optional[int] = None` (line 12919).
+
+<!-- NOTE: `hold_amount_cents` is NOT in `CallInviteOut` — it was proposed but not implemented (consistent with the v1 simplification that uses a balance check instead of holds). -->
+
+`create_call_invite` handler (line 12964) implements the paid call flow at lines 12971-13003:
+1. Checks `body.paid` (line 12971)
+2. If paid, looks up callee's rate via `get_call_rate` (line 12978)
+3. If no rate or not enabled, returns 400 `"paid_calls_disabled"` (line 12981)
+4. Calls `check_balance_for_paid_call` (line 12985)
+5. Passes `paid=True` and `rate_cents_per_min` to `create_invite()` (line 13003)
+
+#### Modify: `app/services/messaging_call_lifecycle.py` — **DONE**
+
+- `create_invite()` accepts `paid` and `rate_cents_per_min` kwargs and passes them to `create_call_session()`
+- `end_call()` (line 334) calls `finalize_call_billing(call_id)` at lines 387-388 after transitioning to terminal state if the session is paid
+
+#### Modify: `app/services/messaging_call_sessions.py` — **DONE**
+
+Billing fields added to `CallSessionRecord` dataclass (lines 37-48). Serialization at lines 74-90, deserialization at lines 116-127. The `create_call_session` function (line 139) accepts `paid`, `rate_cents_per_min`, and `max_duration_seconds` kwargs (lines 142-144).
 
 ```python
-class CallRateIn(BaseModel):
-    rate_cents_per_minute: int = Field(..., ge=100, le=10000)
-    enabled: bool = True
-    min_balance_minutes: int = Field(default=5, ge=1, le=60)
-    max_duration_minutes: int = Field(default=120, ge=1, le=480)
-
-class CallRateOut(BaseModel):
-    rate_cents_per_minute: int
-    enabled: bool
-    currency: str = "USD"
-    min_balance_minutes: int
-    max_duration_minutes: int
-
-class HeartbeatIn(BaseModel):
-    client_ts: Optional[int] = None      # client-side timestamp for latency tracking
-
-class HeartbeatOut(BaseModel):
-    call_id: str
-    elapsed_seconds: int
-    total_cost_cents: int
-    balance_remaining_cents: int
-    rate_cents_per_minute: int
-    next_bill_in_seconds: int
-    warn_low_balance: bool = False
-    minutes_remaining: float = 0
-    max_duration_warning: bool = False
-
-class CallBillingStatusOut(BaseModel):
-    call_id: str
-    paid: bool
-    rate_cents_per_minute: int
-    total_cost_cents: int
-    total_billed_seconds: int
-    billing_cycle_count: int
-    caller_balance_remaining_cents: int
-    platform_fee_bps: int
-    max_duration_seconds: int
-    elapsed_seconds: int
+@dataclass
+class CallSessionRecord:  # line 19
+    # ... existing fields (lines 20-36) ...
+    paid: bool = False  # line 37
+    rate_cents_per_min: int = 0         # line 38 — NOTE: field name is rate_cents_per_min, NOT rate_cents_per_minute
+    billing_start_ts: Optional[int] = None  # line 40
+    last_billed_ts: Optional[int] = None    # line 41
+    total_billed_cents: int = 0             # line 42
+    total_billed_seconds: int = 0           # line 43
+    billing_cycle_count: int = 0            # line 44
+    platform_fee_bps: int = 0               # line 45
+    max_duration_seconds: int = 0           # line 46
+    caller_last_heartbeat_ts: Optional[int] = None   # line 47
+    callee_last_heartbeat_ts: Optional[int] = None   # line 48
 ```
 
-#### Modify: `app/routers/messaging.py`
+Serialization (`_item_from_record`, lines 70-90) and deserialization (`_record_from_item`, lines 108-127) handle all billing fields with safe coercion patterns (`int(item.get("field", 0))`).
 
-Extend `CallInviteIn` (line 12326):
-```python
-class CallInviteIn(BaseModel):
-    call_id: str
-    conversation_id: str
-    callee_user_id: str
-    initial_mode: str = "audio"
-    idempotency_key: Optional[str] = None
-    paid: bool = False     # CALL-011: flag for paid calls
-```
+<!-- NOTE: The spec proposed `hold_amount_cents` as a CallSessionRecord field — it is NOT present in the actual implementation. The spec also proposed a separate `update_call_billing_state()` function — this does NOT exist. Billing state updates are done inline within `process_heartbeat` (call_billing_timer.py:210) and `start_call_billing` (call_billing_timer.py:164) using direct DDB `update_item` calls. -->
 
-Extend `CallInviteOut` (line 12334):
-```python
-class CallInviteOut(BaseModel):
-    call_id: str
-    conversation_id: str
-    caller_user_id: str
-    callee_user_id: str
-    state: str
-    initial_mode: str
-    start_ts: int
-    paid: bool = False                         # CALL-011
-    rate_cents_per_minute: Optional[int] = None # CALL-011
-    hold_amount_cents: Optional[int] = None    # CALL-011
-```
+#### Modify: `scripts/local-ddb-init.py` — **DONE**
 
-Modify `create_call_invite` handler (line 12384) to:
-1. If `body.paid is True`, look up the callee's call rate settings
-2. If no rate set or `enabled=False`, return 400 "Creator has not enabled paid calls"
-3. Check caller's wallet balance against `rate * min_balance_minutes`
-4. If insufficient, return 402 with `required_cents` and `current_balance_cents`
-5. Pass `paid=True` and `rate_cents_per_minute` to `create_invite()`
+`CallBillingLedger` table definition at lines 651-661 — matches spec exactly (PK `call_id`, SK `entry_id`, GSIs `ByCallerCreatedAt` and `ByCreatorCreatedAt`, `attr_types={"created_at": "N"}`).
 
-#### Modify: `app/services/messaging_call_lifecycle.py`
+#### Modify: `app/core/tables.py` — **DONE**
 
-Extend `create_invite()` to accept optional `paid` and `rate_cents_per_minute` kwargs. Pass through to `create_call_session()`.
+Table handle `call_billing_ledger` at line 94 (declaration) and line 218 (instantiation).
 
-Extend `CallSessionRecord` with billing fields (see section 3.3).
+#### Modify: `app/main.py` — **DONE**
 
-Modify `end_call()` to call `finalize_call_billing(call_id)` after transitioning to a terminal state if the session is a paid call.
+Router imported at line 103 (`from app.routers.call_billing import router as call_billing_router`) and registered at line 426 (`app.include_router(call_billing_router)`).
 
-#### Modify: `app/services/messaging_call_sessions.py`
+### Phase 2: Frontend — Rate Display & Cost Ticker (Days 4-7) — **PARTIALLY DONE**
 
-Add billing fields to `CallSessionRecord` dataclass (lines 18-33):
-```python
-@dataclass(frozen=True)
-class CallSessionRecord:
-    # ... existing fields ...
-    paid: bool = False
-    rate_cents_per_minute: int = 0
-    billing_start_ts: Optional[int] = None
-    last_billed_ts: Optional[int] = None
-    total_billed_cents: int = 0
-    total_billed_seconds: int = 0
-    billing_cycle_count: int = 0
-    platform_fee_bps: int = 0
-    hold_amount_cents: int = 0
-    max_duration_seconds: int = 0
-    caller_last_heartbeat_ts: Optional[int] = None
-    callee_last_heartbeat_ts: Optional[int] = None
-```
+#### Files
 
-Update `_item_from_record()` and `_record_from_item()` to serialize/deserialize the new fields. Use safe coercion patterns (`int(item.get("field", 0))`) matching the existing style.
+| File | Purpose | Status |
+|------|---------|--------|
+| `frontend/src/api/endpoints/callBilling.ts` | API wrappers for rate and billing endpoints | **IMPLEMENTED** (86 lines) |
+| `frontend/src/components/calls/CallBillingOverlay.tsx` | Cost ticker overlay during call | **IMPLEMENTED** (62 lines) |
+| `frontend/src/components/calls/CallBillingSummary.tsx` | Post-call billing summary | **IMPLEMENTED** (88 lines) |
+| `frontend/src/components/calls/RateNegotiationDialog.tsx` | Rate negotiation dialog | **IMPLEMENTED** (RateNegotiationDialog, 3230 bytes) |
+| `frontend/src/pages/messages/PaidCallRateBadge.tsx` | Rate display before calling | **NOT IMPLEMENTED** |
+| `frontend/src/pages/messages/PaidCallCostTicker.tsx` | Live cost ticker during call | **NOT IMPLEMENTED** (replaced by CallBillingOverlay) |
+| `frontend/src/pages/messages/PaidCallBalanceWarning.tsx` | Low balance warning dialog | **NOT IMPLEMENTED** |
+| `frontend/src/pages/settings/CallRateSettings.tsx` | Creator call rate configuration UI | **NOT IMPLEMENTED** |
+| `frontend/src/hooks/useCallBillingHeartbeat.ts` | Heartbeat timer + billing state sync | **NOT IMPLEMENTED** |
 
-Add `update_call_billing_state()` function for atomic billing state updates:
-```python
-def update_call_billing_state(
-    *, call_id: str, last_billed_ts: int, total_billed_cents: int,
-    total_billed_seconds: int, billing_cycle_count: int,
-    caller_last_heartbeat_ts: Optional[int] = None,
-    callee_last_heartbeat_ts: Optional[int] = None,
-) -> Optional[CallSessionRecord]:
-    """Atomic update of billing-specific fields on the call session."""
-    ...
-```
+<!-- NOTE: The actual frontend components are in `frontend/src/components/calls/` (NOT `frontend/src/pages/messages/`). Three components exist: CallBillingOverlay.tsx (replaces the proposed PaidCallCostTicker), CallBillingSummary.tsx (not in original spec), and RateNegotiationDialog.tsx (not in original spec). However, PaidCallRateBadge, PaidCallBalanceWarning, CallRateSettings settings page, and useCallBillingHeartbeat hook do NOT exist. The billing components are NOT imported in ConversationView.tsx or CallSessionOverlay.tsx — they are defined but not yet wired into the call UI. -->
 
-#### Modify: `scripts/local-ddb-init.py`
+#### `frontend/src/api/endpoints/callBilling.ts` — **IMPLEMENTED** (86 lines)
 
-Add `CallBillingLedger` table definition:
-
-```python
-TableDef(
-    _resolve_table_name(S.call_billing_ledger_table_name, "CallBillingLedger"),
-    "call_id",
-    "entry_id",
-    gsi=[
-        {"index_name": "ByCallerCreatedAt", "partition_key": "caller_user_id", "sort_key": "created_at"},
-        {"index_name": "ByCreatorCreatedAt", "partition_key": "creator_user_id", "sort_key": "created_at"},
-    ],
-    attr_types={"created_at": "N"},
-),
-```
-
-#### Modify: `app/core/tables.py`
-
-Add table handle:
-```python
-call_billing_ledger: Any
-# In T = Tables(...):
-call_billing_ledger=ddb.Table(S.call_billing_ledger_table_name),
-```
-
-#### Modify: `app/main.py`
-
-Register `call_billing_router`.
-
-### Phase 2: Frontend — Rate Display & Cost Ticker (Days 4-7)
-
-#### New Files
-
-| File | Purpose |
-|------|---------|
-| `frontend/src/api/endpoints/callBilling.ts` | API wrappers for rate and billing endpoints |
-| `frontend/src/pages/messages/PaidCallRateBadge.tsx` | Rate display before calling |
-| `frontend/src/pages/messages/PaidCallCostTicker.tsx` | Live cost ticker during call |
-| `frontend/src/pages/messages/PaidCallBalanceWarning.tsx` | Low balance warning dialog |
-| `frontend/src/pages/settings/CallRateSettings.tsx` | Creator call rate configuration UI |
-| `frontend/src/hooks/useCallBillingHeartbeat.ts` | Heartbeat timer + billing state sync |
-
-#### `frontend/src/api/endpoints/callBilling.ts`
-
-```typescript
-import client from "../client";
-
-export interface CallRate {
-  rate_cents_per_minute: number;
-  enabled: boolean;
-  currency: string;
-  min_balance_minutes: number;
-  max_duration_minutes: number;
-}
-
-export interface HeartbeatResponse {
-  call_id: string;
-  elapsed_seconds: number;
-  total_cost_cents: number;
-  balance_remaining_cents: number;
-  rate_cents_per_minute: number;
-  next_bill_in_seconds: number;
-  warn_low_balance: boolean;
-  minutes_remaining: number;
-  max_duration_warning: boolean;
-}
-
-export const getCallRate = (creatorId: string) =>
-  client.get<CallRate>(`/ui/calls/rates/${creatorId}`).then((r) => r.data);
-
-export const setCallRate = (data: Partial<CallRate>) =>
-  client.post<CallRate>("/ui/calls/rates", data).then((r) => r.data);
-
-export const sendHeartbeat = (callId: string) =>
-  client
-    .patch<HeartbeatResponse>(`/messages/calls/${callId}/heartbeat`, {
-      client_ts: Math.floor(Date.now() / 1000),
-    })
-    .then((r) => r.data);
-
-export const getCallBillingStatus = (callId: string) =>
-  client
-    .get(`/messages/calls/${callId}/billing`)
-    .then((r) => r.data);
-```
+Key differences from spec:
+- Import is `{ api } from "@/api/client"` (not `client from "../client"`)
+- API calls use `api.get(...)`, `api.post(...)`, `api.patch(...)`, `api.put(...)`, `api.del(...)` (not `client.get(...).then(r => r.data)`)
+- `HeartbeatResponse` has extra `action: string` field (line 32)
+- Extra `CallBillingStatus` interface (lines 35-47) with `billing_status` field
+- Extra `CallRateIn` interface (lines 15-20)
+- Extra functions: `updateCallRate` (line 62, PUT), `deleteCallRate` (line 66, DELETE), `negotiateCallRate` (line 83)
+- Heartbeat path: `/messaging/messages/calls/${callId}/heartbeat` (not `/messages/calls/...`)
+- Billing path: `/messaging/messages/calls/${callId}/billing`
 
 #### `frontend/src/hooks/useCallBillingHeartbeat.ts`
 
-```typescript
-export interface UseCallBillingHeartbeatParams {
-  callId: string | undefined;
-  isPaid: boolean;
-  isConnected: boolean;
-  onBalanceLow: (minutesRemaining: number) => void;
-  onBalanceDepleted: () => void;
-  onMaxDurationWarning: () => void;
-}
-
-export interface UseCallBillingHeartbeatReturn {
-  elapsedSeconds: number;
-  totalCostCents: number;
-  balanceRemainingCents: number;
-  rateCentsPerMinute: number;
-  isHeartbeating: boolean;
-}
-```
-
-**Internal behavior:**
-- When `isConnected && isPaid`, start a `setInterval` at 15-second intervals
-- Each tick calls `PATCH /messages/calls/{callId}/heartbeat`
-- Response updates the local billing state for the cost ticker
-- If `warn_low_balance: true`, call `onBalanceLow(minutes_remaining)`
-- If heartbeat returns 409/402 with `balance_depleted`, call `onBalanceDepleted()`
-- On unmount, clear the interval
+<!-- NOTE: This hook file does NOT exist. The heartbeat mechanism has not been implemented as a standalone hook. The billing overlay components exist (CallBillingOverlay.tsx, CallBillingSummary.tsx) but are not wired into ConversationView or CallSessionOverlay, and there is no automatic heartbeat interval. This is a gap in the frontend implementation. -->
 
 #### Modify: `frontend/src/pages/messages/CallSessionOverlay.tsx`
 
-Add to Props:
+<!-- NOTE: CallSessionOverlay.tsx (671 lines) does NOT currently import or use CallBillingOverlay, CallBillingSummary, or any billing-related props. The billing overlay integration is NOT DONE. -->
+
+Proposed additions to Props:
 ```typescript
 isPaid?: boolean;
 rateCentsPerMinute?: number;
@@ -1026,6 +852,8 @@ Add low-balance warning overlay:
 
 #### Modify: `frontend/src/pages/messages/ConversationView.tsx`
 
+<!-- NOTE: ConversationView.tsx (1461 lines) does NOT currently import or reference any call billing components, hooks, or API calls. The paid call rate badge and heartbeat integration are NOT DONE. -->
+
 Before the call invite button, show the creator's rate if set:
 ```tsx
 {creatorCallRate && creatorCallRate.enabled && (
@@ -1037,6 +865,8 @@ When initiating a call, pass `paid: true` to the invite payload if the creator h
 
 #### New Page: `frontend/src/pages/settings/CallRateSettings.tsx`
 
+<!-- NOTE: This component does NOT exist. No call rate settings page has been implemented. -->
+
 A settings panel for creators to configure their per-minute rate:
 - Toggle: Enable/disable paid calls
 - Input: Rate per minute ($1.00 - $100.00 slider or input)
@@ -1044,20 +874,15 @@ A settings panel for creators to configure their per-minute rate:
 - Input: Maximum call duration (1-480 minutes)
 - Save button with `useMutation` to `POST /ui/calls/rates`
 
-#### Modify: `frontend/src/hooks/useMessagingStream.ts`
+#### Modify: `frontend/src/hooks/useMessagingStream.ts` — **DONE**
 
-Add billing event types to `EVENT_TYPES`:
-```typescript
-"call.billing_tick",
-"call.balance_low",
-"call.balance_depleted",
-```
+Billing event types already present in `EVENT_TYPES` at lines 178-180.
 
 #### Modify: `frontend/src/App.tsx`
 
-Add route for call rate settings page (if implemented as a standalone page rather than a section in existing settings).
+<!-- NOTE: No call rate settings route has been added to App.tsx. The CallRateSettings page does not exist. -->
 
-### Phase 3: Integration, Edge Cases & Polish (Days 8-10)
+### Phase 3: Integration, Edge Cases & Polish (Days 8-10) — **PARTIALLY DONE**
 
 #### Call-end summary message
 
@@ -1105,7 +930,9 @@ When balance is depleted during a billing cycle:
 
 ## 5. Testing Strategy
 
-### 5.1 Unit Tests: Call Billing Timer (`tests/test_call_billing_timer.py`)
+### 5.1 Unit Tests: Call Billing Timer
+
+<!-- NOTE: The spec proposed two separate files: `tests/test_call_billing_timer.py` and `tests/test_call_billing_endpoints.py`. Neither exists. Instead, there is a single `tests/test_call_billing.py` (499 lines) that covers both billing timer logic and endpoint tests. -->
 
 | # | Test Case | Assertions |
 |---|-----------|-----------|
@@ -1128,7 +955,9 @@ When balance is depleted during a billing cycle:
 | 17 | Max duration enforcement | Call at max duration triggers auto-end |
 | 18 | Concurrent paid calls blocked | Second paid invite returns 409 |
 
-### 5.2 Unit Tests: Call Billing Endpoints (`tests/test_call_billing_endpoints.py`)
+### 5.2 Unit Tests: Call Billing Endpoints
+
+<!-- NOTE: `tests/test_call_billing_endpoints.py` does NOT exist as a separate file. Endpoint tests are in `tests/test_call_billing.py` (499 lines). -->
 
 | # | Test Case | Expected |
 |---|-----------|----------|
@@ -1148,7 +977,7 @@ When balance is depleted during a billing cycle:
 | 14 | Paid call invite — creator paid calls disabled | 400 |
 | 15 | Paid call invite — feature flag disabled | 400, "Paid calls are not enabled" |
 
-### 5.3 E2E Tests (`frontend/e2e/call-billing.spec.ts`)
+### 5.3 E2E Tests (`frontend/e2e/call-billing.spec.ts`) — **IMPLEMENTED** (591 lines)
 
 Since real WebRTC media is not available in Playwright, E2E tests focus on the API endpoints and billing correctness.
 
@@ -1323,6 +1152,8 @@ TableDef(
 | 1 | `false` (default) | All paid call endpoints return 400 "Paid calls are not enabled". Rate settings can be configured but invites are blocked. |
 | 2 | `true` (staging) | Full paid call flow enabled on staging for internal testing. |
 | 3 | `true` (production) | GA rollout. |
+
+<!-- NOTE: In the actual implementation, `CALL_BILLING_ENABLED` defaults to `"1"` (enabled), NOT `"false"`. See `app/core/settings.py:1180`. The feature is already enabled in the dev environment. -->
 
 ### 7.3 Rollback Steps
 
@@ -1610,30 +1441,32 @@ Query key: `["call-rate", userId]`. Mutation invalidates this key on save.
 
 ## 14. Summary of Files Modified
 
-| File | Change Type | Estimated Lines |
-|------|-------------|-----------------|
-| `app/services/call_billing_timer.py` | New service | ~350 |
-| `app/routers/call_billing.py` | New router | ~250 |
-| `app/services/messaging_call_sessions.py` | Extend dataclass + serialization | ~50 |
-| `app/services/messaging_call_lifecycle.py` | Call finalization hook | ~15 |
-| `app/routers/messaging.py` | Extend invite models + handler | ~40 |
-| `app/core/settings.py` | Add 9 settings | ~15 |
-| `app/core/tables.py` | Add table handle | ~5 |
-| `app/main.py` | Register router | ~3 |
-| `scripts/local-ddb-init.py` | Add table definition | ~15 |
-| `frontend/src/api/endpoints/callBilling.ts` | New API wrappers | ~50 |
-| `frontend/src/hooks/useCallBillingHeartbeat.ts` | New hook | ~80 |
-| `frontend/src/pages/messages/PaidCallRateBadge.tsx` | New component | ~30 |
-| `frontend/src/pages/messages/PaidCallCostTicker.tsx` | New component | ~50 |
-| `frontend/src/pages/messages/PaidCallBalanceWarning.tsx` | New component | ~40 |
-| `frontend/src/pages/settings/CallRateSettings.tsx` | New component | ~100 |
-| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add cost ticker + warning | ~40 |
-| `frontend/src/hooks/useMessagingStream.ts` | Add billing event types | ~5 |
-| `frontend/src/api/types.ts` | Add TypeScript types | ~30 |
-| `frontend/e2e/call-billing.spec.ts` | New E2E tests | ~300 |
-| `tests/test_call_billing_timer.py` | New unit tests | ~400 |
-| `tests/test_call_billing_endpoints.py` | New unit tests | ~350 |
-| **Total** | | **~2218** |
+| File | Change Type | Status | Actual Lines |
+|------|-------------|--------|-------------|
+| `app/services/call_billing_timer.py` | New service | **DONE** | 570 |
+| `app/routers/call_billing.py` | New router | **DONE** | 247 |
+| `app/services/messaging_call_sessions.py` | Extend dataclass + serialization | **DONE** | ~50 added |
+| `app/services/messaging_call_lifecycle.py` | Call finalization hook | **DONE** | ~5 added (lines 387-388) |
+| `app/routers/messaging.py` | Extend invite models + handler | **DONE** | ~40 added (lines 12900-13016) |
+| `app/core/settings.py` | Add 13 settings (not 9) | **DONE** | lines 1179-1191 |
+| `app/core/tables.py` | Add table handle | **DONE** | lines 94, 218 |
+| `app/main.py` | Register router | **DONE** | lines 103, 426 |
+| `scripts/local-ddb-init.py` | Add table definition | **DONE** | lines 651-661 |
+| `frontend/src/api/endpoints/callBilling.ts` | New API wrappers | **DONE** | 86 |
+| `frontend/src/components/calls/CallBillingOverlay.tsx` | New component | **DONE** | 62 |
+| `frontend/src/components/calls/CallBillingSummary.tsx` | New component | **DONE** | 88 |
+| `frontend/src/components/calls/RateNegotiationDialog.tsx` | New component | **DONE** | ~90 |
+| `frontend/src/hooks/useCallBillingHeartbeat.ts` | New hook | **NOT DONE** | — |
+| `frontend/src/pages/messages/PaidCallRateBadge.tsx` | New component | **NOT DONE** | — |
+| `frontend/src/pages/messages/PaidCallCostTicker.tsx` | New component | **NOT DONE** (replaced by CallBillingOverlay) | — |
+| `frontend/src/pages/messages/PaidCallBalanceWarning.tsx` | New component | **NOT DONE** | — |
+| `frontend/src/pages/settings/CallRateSettings.tsx` | New component | **NOT DONE** | — |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add cost ticker + warning | **NOT DONE** (no billing integration) | — |
+| `frontend/src/hooks/useMessagingStream.ts` | Add billing event types | **DONE** | lines 178-180 |
+| `frontend/e2e/call-billing.spec.ts` | New E2E tests | **DONE** | 591 |
+| `tests/test_call_billing.py` | Unit tests (combined) | **DONE** | 499 |
+| `tests/test_call_billing_timer.py` | Separate unit tests | **NOT DONE** (merged into test_call_billing.py) | — |
+| `tests/test_call_billing_endpoints.py` | Separate unit tests | **NOT DONE** (merged into test_call_billing.py) | — |
 
 ---
 
@@ -1645,3 +1478,39 @@ Query key: `["call-rate", userId]`. Mutation invalidates this key on save.
 - **MON-002**: Tip ledger integration (paired debit/credit pattern reused here)
 - **MON-003**: Creator earnings dashboard (will aggregate paid call credits)
 - **MON-004**: Creator payouts (paid call earnings included in payout-eligible balance)
+
+---
+
+## Codebase References
+
+| # | File | Lines | What |
+|---|------|-------|------|
+| 1 | `app/services/call_billing_timer.py` | 1-570 | Billing timer service: rate CRUD, heartbeat, finalization |
+| 2 | `app/services/call_billing_timer.py` | 34, 45, 58 | `CallRateSettings`, `BillingTickResult`, `FinalBillingResult` dataclasses |
+| 3 | `app/services/call_billing_timer.py` | 71, 89, 121, 131, 164, 210, 362, 461 | Public functions: get/set/delete rate, check balance, start billing, process heartbeat, finalize, get summary |
+| 4 | `app/services/call_billing_timer.py` | 183, 297-299, 413-415 | Platform fee calculation (percent to BPS conversion) |
+| 5 | `app/services/call_billing_timer.py` | 501, 537 | Private helpers: `_write_creator_credit`, `_write_caller_debit` |
+| 6 | `app/routers/call_billing.py` | 1-247 | HTTP endpoints for rate settings, heartbeat, billing status |
+| 7 | `app/routers/call_billing.py` | 28, 35, 43, 47, 60 | Pydantic models: CallRateIn, CallRateOut, HeartbeatIn, HeartbeatOut, CallBillingStatusOut |
+| 8 | `app/routers/call_billing.py` | 78, 98, 123, 132, 148, 215 | Endpoint handlers |
+| 9 | `app/services/messaging_call_sessions.py` | 19-50 | `CallSessionRecord` with billing fields (37-48) |
+| 10 | `app/services/messaging_call_sessions.py` | 74-90, 116-127 | Serialization/deserialization of billing fields |
+| 11 | `app/services/messaging_call_sessions.py` | 139-157 | `create_call_session` with paid/rate/max_duration kwargs |
+| 12 | `app/services/messaging_call_lifecycle.py` | 334, 387-388 | `end_call()` calls `finalize_call_billing()` |
+| 13 | `app/routers/messaging.py` | 12900-12906 | `CallInviteIn` with `paid: bool = False` |
+| 14 | `app/routers/messaging.py` | 12910-12919 | `CallInviteOut` with `paid`, `rate_cents_per_minute` |
+| 15 | `app/routers/messaging.py` | 12964-13016 | `create_call_invite` handler with paid call flow |
+| 16 | `app/core/settings.py` | 1179-1191 | 13 call billing settings |
+| 17 | `app/core/tables.py` | 94, 218 | `call_billing_ledger` table handle |
+| 18 | `app/main.py` | 103, 426 | Router import and registration |
+| 19 | `scripts/local-ddb-init.py` | 651-661 | `CallBillingLedger` table definition |
+| 20 | `scripts/local-ddb-init.py` | 59 | `billing` table definition |
+| 21 | `app/services/billing_shared.py` | 166-204 | `WALLET_SK`, `get_wallet_balance`, `apply_wallet_delta` |
+| 22 | `app/services/tip_ledger.py` | 88 | `write_tip_ledger` (paired debit/credit pattern) |
+| 23 | `frontend/src/api/endpoints/callBilling.ts` | 1-86 | API wrappers for call billing |
+| 24 | `frontend/src/components/calls/CallBillingOverlay.tsx` | 1-62 | Cost ticker overlay component |
+| 25 | `frontend/src/components/calls/CallBillingSummary.tsx` | 1-88 | Post-call billing summary component |
+| 26 | `frontend/src/components/calls/RateNegotiationDialog.tsx` | 1-~90 | Rate negotiation dialog component |
+| 27 | `frontend/src/hooks/useMessagingStream.ts` | 178-180 | SSE billing event types |
+| 28 | `frontend/e2e/call-billing.spec.ts` | 1-591 | E2E tests for call billing |
+| 29 | `tests/test_call_billing.py` | 1-499 | Unit tests for call billing |

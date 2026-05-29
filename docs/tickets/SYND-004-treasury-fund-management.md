@@ -788,3 +788,13 @@ After Alice left (balance = $30, Alice net now = $20):
 7. No withdrawal endpoint exists; funds can only flow out via advertising spend or automated refunds.
 8. Treasury tab shows balance, contributors, and transaction history.
 9. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+| Claim | File | Line(s) | Status |
+|-------|------|---------|--------|
+| No treasury code exists | All files | — | VERIFIED: grep "treasury" returns zero in app/ |
+| billing_shared.py exists with apply_wallet_delta | `app/services/billing_shared.py` | — | VERIFIED (260 lines) |
+| Billing DDB table exists | `scripts/local-ddb-init.py` | 59 | VERIFIED |

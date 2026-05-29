@@ -22,7 +22,7 @@ INFRA-001 provides a host inventory with basic fields (hostname, port, protocol)
 5. See and re-use recent connections quickly
 6. Pin frequently-used connections for one-click access
 
-The SSH terminal WebSocket handler in `app/routers/browser_ssh_terminal.py` accepts connection parameters in the `connect` message but does not store or recall them. The VNC system in `app/services/vnc_sessions.py` uses hardcoded `TargetConfig` objects with no user customization. Every connection starts from scratch.
+The SSH terminal WebSocket handler in `app/routers/browser_ssh_terminal.py` (see `browser_ssh_terminal.py:43` — `connect` message protocol comment; `:646` — `authType` extraction) accepts connection parameters in the `connect` message but does not store or recall them. The VNC system in `app/services/vnc_sessions.py` uses hardcoded `TargetConfig` objects (see `vnc_sessions.py:24` — `TargetConfig` dataclass; `:200` — `_default_targets()`) with no user customization. Every connection starts from scratch.
 
 ### Why This Matters
 
@@ -37,6 +37,7 @@ The SSH terminal WebSocket handler in `app/routers/browser_ssh_terminal.py` acce
 Connection Profile Flow
 
   remote_hosts table (INFRA-001)
+  <!-- NOTE: remote_hosts table does not exist yet — created by INFRA-001 -->
   +-- Extended with connection profile fields:
   |   default_username, terminal_settings, vnc_settings,
   |   vnc_password_encrypted, is_pinned, last_connection_params
@@ -94,27 +95,30 @@ Connection Profile Flow
 
 ### 2.1 SSH Terminal Connection Form
 
-The SSH terminal frontend presents a connection form before establishing the WebSocket. The user must fill in:
+The SSH terminal frontend presents a connection form before establishing the WebSocket (see `frontend/src/pages/remote/RemoteDesktopPage.tsx`). The user must fill in:
 - Hostname (required)
 - Port (default 22)
 - Username (required)
-- Auth type (password / private key)
+- Auth type (password / private key) (see `browser_ssh_terminal.py:666` — valid authTypes are `password` and `private_key`)
 - Password or private key content
 - Terminal columns/rows
 
 None of these are pre-populated from any stored state (unless INFRA-001's query-param-based quick connect is used, which only fills hostname and port).
+<!-- NOTE: INFRA-001 (host inventory) does not exist yet — no query-param-based quick connect currently exists -->
 
 ### 2.2 VNC Session Creation (`app/routers/vnc_sessions.py`)
 
-The VNC session is created via `POST /api/vnc/sessions` with a `target_id`. The `CreateVncSessionReq` model (line 36) accepts only `target_id`. There is no field for display label, custom WebSocket URL, or user preferences. The `VncTimeoutPolicy` is hardcoded per-target, not user-configurable.
+The VNC session is created via `POST /api/vnc/sessions` with a `target_id` (see `vnc_sessions.py:16` — router prefix `/api/vnc`). The `CreateVncSessionReq` model (see `vnc_sessions.py:36`) accepts only `target_id`. There is no field for display label, custom WebSocket URL, or user preferences. The `VncTimeoutPolicy` (see `vnc_sessions.py:40`) is hardcoded per-target, not user-configurable.
 
 ### 2.3 Host Inventory Schema (INFRA-001)
 
+<!-- NOTE: The remote_hosts table does not exist yet — it is defined by INFRA-001, which has not been implemented -->
 The `remote_hosts` table has basic fields but no connection-profile-specific fields like `default_username`, `terminal_settings`, or `vnc_password_encrypted`.
 
 ### 2.4 KMS Encryption for VNC Passwords
 
-VNC connections sometimes require a password. The platform already has `kms_encrypt()` / `kms_decrypt()` in `app/core/crypto.py` which can be used to store VNC passwords encrypted at rest, following the same pattern as SSH key encryption in INFRA-002.
+VNC connections sometimes require a password. The platform already has `kms_encrypt()` / `kms_decrypt()` in `app/core/crypto.py` (see `crypto.py:16` — `kms_encrypt()`; `:22` — `kms_decrypt()`) which can be used to store VNC passwords encrypted at rest, following the same pattern as SSH key encryption in INFRA-002.
+<!-- NOTE: INFRA-002 SSH key encryption does not exist yet — new implementation required -->
 
 ---
 
@@ -122,6 +126,7 @@ VNC connections sometimes require a password. The platform already has `kms_encr
 
 ### 3.1 Extend `remote_hosts` Table (INFRA-001)
 
+<!-- NOTE: remote_hosts table does not exist yet — depends on INFRA-001. No table definition in scripts/local-ddb-init.py -->
 Add connection profile fields to existing host items. No new table needed.
 
 **New fields on host items**:
@@ -163,6 +168,7 @@ Add connection profile fields to existing host items. No new table needed.
 
 ### 3.3 Service Layer: `app/services/connection_profiles.py`
 
+<!-- NOTE: app/services/connection_profiles.py does not exist yet — new implementation required -->
 New file (~200 lines):
 
 ```python
@@ -171,9 +177,9 @@ New file (~200 lines):
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
-from app.core.crypto import kms_encrypt, kms_decrypt
-from app.core.tables import T
-from app.core.time import now_ts
+from app.core.crypto import kms_encrypt, kms_decrypt  # (see crypto.py:16, :22)
+from app.core.tables import T  # NOTE: T.remote_hosts does not exist yet — needs INFRA-001
+from app.core.time import now_ts  # (see time.py — now_ts() returns Unix timestamp int)
 
 
 def update_connection_profile(
@@ -223,6 +229,8 @@ def get_quick_connect_params(user_sub: str, host_id: str) -> Dict[str, Any]:
 
 ### 3.4 VNC Password Encryption
 
+Uses `kms_encrypt()` (see `crypto.py:16`) which requires `S.kms_key_id` to be set (`:17`). In dev mode, the mock KMS server on port 7999 handles encryption.
+
 ```python
 def update_connection_profile(user_sub, host_id, *, vnc_password=None, **kwargs):
     updates = {}
@@ -230,7 +238,7 @@ def update_connection_profile(user_sub, host_id, *, vnc_password=None, **kwargs)
         if vnc_password == "":
             updates["vnc_password_encrypted"] = ""  # clear password
         else:
-            updates["vnc_password_encrypted"] = kms_encrypt(vnc_password)
+            updates["vnc_password_encrypted"] = kms_encrypt(vnc_password)  # (see crypto.py:16)
     # ... other fields ...
 ```
 
@@ -238,6 +246,7 @@ The VNC password is encrypted with KMS before storage. When building quick-conne
 
 ### 3.5 API Endpoints
 
+<!-- NOTE: app/routers/remote_hosts.py does not exist yet — depends on INFRA-001 -->
 Extend `app/routers/remote_hosts.py` (from INFRA-001) with profile-specific endpoints:
 
 | Method | Path | Request | Response | Description |
@@ -410,6 +419,7 @@ When `auto_connect=True` and all required params are available (hostname, port, 
 1. Skips the connection form entirely
 2. Immediately opens the WebSocket with pre-filled params
 3. Sends the `connect` message with `authType: "stored_key"` and `keyId` (or password)
+   <!-- NOTE: Current SSH terminal only accepts authType "password" or "private_key" (see browser_ssh_terminal.py:666). A new "stored_key" authType must be added to support key-ref-based auto-connect -->
 4. Shows the terminal output directly
 
 The frontend detects auto-connect via query params: `/remote/ssh?host_id={id}&auto=true`. It fetches the quick-connect params from `GET /ui/remote/hosts/{id}/quick-connect` and proceeds without user input.
@@ -523,7 +533,7 @@ interface TerminalSettingsProps {
 
 | File | Change |
 |------|--------|
-| `app/routers/browser_ssh_terminal.py` | Accept pre-populated params from quick-connect endpoint; pass stored key auth to bridge |
+| `app/routers/browser_ssh_terminal.py` | Accept pre-populated params from quick-connect endpoint; add `stored_key` authType (currently only `password` and `private_key` at `:666`); pass stored key auth to bridge |
 
 ### Phase 3: Frontend (2-3 days)
 
@@ -533,8 +543,8 @@ interface TerminalSettingsProps {
 | `frontend/src/api/endpoints/remote-hosts.ts` | Add profile + recent API calls |
 | `frontend/src/pages/remote/ConnectionProfileDialog.tsx` | New file |
 | `frontend/src/pages/remote/RecentConnectionsList.tsx` | New file |
-| `frontend/src/pages/remote/HostInventoryPage.tsx` | Integrate RecentConnectionsList + profile dialog |
-| `frontend/src/pages/remote/RemoteDesktopPage.tsx` | Support auto-connect via query params |
+| `frontend/src/pages/remote/HostInventoryPage.tsx` | Integrate RecentConnectionsList + profile dialog <!-- NOTE: HostInventoryPage.tsx does not exist yet — depends on INFRA-001 --> |
+| `frontend/src/pages/remote/RemoteDesktopPage.tsx` | Support auto-connect via query params (see existing file at `frontend/src/pages/remote/RemoteDesktopPage.tsx`) |
 
 ### Phase 4: E2E Tests (1 day)
 
@@ -696,6 +706,8 @@ KMS encrypt/decrypt adds ~20-50ms latency. This is acceptable since it only occu
 | `AUTO_CONNECT_ENABLED` | `true` | Enable auto-connect mode |
 | `RECENT_CONNECTIONS_MAX` | `10` | Maximum recent connections stored |
 
+<!-- NOTE: None of these feature flags exist in app/core/settings.py — all must be added -->
+
 ---
 
 ## 9. Security Considerations
@@ -732,3 +744,31 @@ All profile data is scoped to `user_sub` as the DDB partition key. No user can r
 10. Frontend integrates profile editing and recent connections into the host inventory page.
 11. Profile validation rejects out-of-range values for terminal settings.
 12. Auto-connect falls back to connection form when required params are missing.
+
+---
+
+## Codebase References
+
+| # | File | Line(s) | What |
+|---|------|---------|------|
+| 1 | `app/routers/browser_ssh_terminal.py` | :30 | Router prefix `/api/browser-ssh` |
+| 2 | `app/routers/browser_ssh_terminal.py` | :43 | `connect` message protocol comment — accepted fields: host, port, username, authType |
+| 3 | `app/routers/browser_ssh_terminal.py` | :646 | `authType` extraction from `connect` payload |
+| 4 | `app/routers/browser_ssh_terminal.py` | :666 | Valid authType values: `password`, `private_key` (no `stored_key` — must be added) |
+| 5 | `app/main.py` | :404 | `browser_ssh_terminal_router` registered |
+| 6 | `app/routers/vnc_sessions.py` | :16 | VNC router prefix `/api/vnc` |
+| 7 | `app/routers/vnc_sessions.py` | :36 | `CreateVncSessionReq` — accepts only `target_id` |
+| 8 | `app/routers/vnc_sessions.py` | :40 | `VncTimeoutPolicy` model (hardcoded per-target) |
+| 9 | `app/services/vnc_sessions.py` | :24 | `TargetConfig` dataclass (frozen) |
+| 10 | `app/services/vnc_sessions.py` | :41 | `VncSessionStore` class |
+| 11 | `app/services/vnc_sessions.py` | :200 | `_default_targets()` — hardcoded demo + ops-admin targets |
+| 12 | `app/services/vnc_sessions.py` | :237 | `_resolve_target()` — looks up target by ID |
+| 13 | `app/core/crypto.py` | :16 | `kms_encrypt(plaintext)` — encrypts via KMS, returns base64 |
+| 14 | `app/core/crypto.py` | :17 | Uses `S.kms_key_id` setting |
+| 15 | `app/core/crypto.py` | :22 | `kms_decrypt(ct_b64)` — decrypts KMS ciphertext |
+| 16 | `frontend/src/pages/remote/RemoteDesktopPage.tsx` | — | Only existing remote page (VNC-focused) |
+| 17 | `app/core/settings.py` | — | No `CONNECTION_PROFILES_ENABLED`, `AUTO_CONNECT_ENABLED`, or `RECENT_CONNECTIONS_MAX` settings exist |
+| 18 | `scripts/local-ddb-init.py` | — | No `remote_hosts` table definition exists (INFRA-001 dependency) |
+| 19 | `app/services/` | — | No `connection_profiles.py` exists — new file required |
+| 20 | `app/routers/` | — | No `remote_hosts.py` exists — new file required (INFRA-001 dependency) |
+| 21 | `frontend/src/pages/remote/` | — | No `HostInventoryPage.tsx`, `ConnectionProfileDialog.tsx`, or `RecentConnectionsList.tsx` exist |

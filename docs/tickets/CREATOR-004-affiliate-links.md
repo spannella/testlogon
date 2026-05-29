@@ -51,7 +51,7 @@ Without an affiliate system, creators resort to off-platform link shorteners tha
 ### 2.1 Catalog and Purchase Flow
 
 The catalog router (`app/routers/catalog.py`) manages product CRUD under `/ui/catalog/`. Products are stored in the `T.catalog` table with composite keys (lines 54-63):
-<!-- VERIFIED: app/routers/catalog.py:54 cat_pk, :58 item_pk, :62 item_sk -->
+(see `app/routers/catalog.py:54` cat_pk, `:58` item_pk, `:62` item_sk)
 
 ```python
 def cat_pk(category_id: str) -> str:
@@ -64,8 +64,8 @@ def item_sk(item_id: str) -> str:
     return f"ITEM#{item_id}"
 ```
 
-The commerce order service (`app/services/commerce_order_service.py`, lines 39-130) creates orders with line items:
-<!-- VERIFIED: app/services/commerce_order_service.py:39 create_order -->
+The commerce order service (`app/services/commerce_order_service.py`, line 39+) creates orders with line items:
+(see `app/services/commerce_order_service.py:39`)
 
 ```python
 def create_order(
@@ -96,8 +96,8 @@ The order record includes `amount_cents`, `currency`, `line_items`, and `metadat
 
 ### 2.2 Promo Code Pattern (Similar Tracking)
 
-The promo codes system (`app/routers/promo_codes.py`, `app/services/promo_codes.py`) provides a useful pattern for tracking and attribution. Promo codes are stored with creator ownership, usage tracking, and validation logic (lines 85-111):
-<!-- CORRECTED: was "lines 84-100", actually create_promo_code starts at line 85 -->
+The promo codes system (`app/routers/promo_codes.py`, `app/services/promo_codes.py`) provides a useful pattern for tracking and attribution. Promo codes are stored with creator ownership, usage tracking, and validation logic (line 85+):
+(see `app/services/promo_codes.py:85`)
 
 ```python
 def create_promo_code(
@@ -132,7 +132,7 @@ The affiliate link system will follow a similar pattern: unique code generation,
 ### 2.3 Billing Ledger for Commission Payments
 
 The tip ledger (`app/services/tip_ledger.py`, lines 88-150) writes paired debit/credit entries.
-<!-- VERIFIED: app/services/tip_ledger.py:88 write_tip_ledger --> Commission payments will follow the same pattern:
+(see `app/services/tip_ledger.py:88`) Commission payments will follow the same pattern:
 
 ```python
 def write_tip_ledger(entry: TipLedgerEntry) -> Dict[str, str]:
@@ -168,7 +168,7 @@ The commission payment flow:
 ### 2.4 Creator Earnings Categories
 
 The earnings service (`app/services/creator_earnings.py`, lines 22-33) maps reasons to categories:
-<!-- CORRECTED: was "lines 23-34", actually _reason_to_category starts at line 22 -->
+(see `app/services/creator_earnings.py:22`)
 
 ```python
 def _reason_to_category(reason: str) -> str:
@@ -195,8 +195,8 @@ This ensures affiliate earnings appear as a separate line in the earnings dashbo
 
 ### 2.5 Subscription Server Discount Pattern
 
-The subscription server (`app/routers/subscription_server.py`, lines 182-195) has a discount application pattern:
-<!-- CORRECTED: was "lines 182-197", actually _apply_discount ends at line 195 -->
+The subscription server (`app/routers/subscription_server.py`, line 190+) has a discount application pattern:
+<!-- CORRECTED: was "lines 182-195"; `_apply_discount` is at line 190 (see app/routers/subscription_server.py:190) -->
 
 ```python
 def _discount_sk(code: str) -> str:
@@ -895,30 +895,35 @@ def create_order_with_affiliate_check(
 
 ### 4.1 Affiliate Link Management
 
+<!-- NOTE: Actual endpoint paths use `/ui/affiliates/links` (plural), not `/ui/affiliate/links`. See app/routers/affiliate_links.py:66-175. -->
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/ui/affiliate/links` | `require_ui_session` | Create a new affiliate link |
-| GET | `/ui/affiliate/links` | `require_ui_session` | List creator's affiliate links |
-| GET | `/ui/affiliate/links/{link_id}` | `require_ui_session` | Get link detail with stats |
-| PATCH | `/ui/affiliate/links/{link_id}` | `require_ui_session` | Update link (pause, resume, set expiry) |
-| DELETE | `/ui/affiliate/links/{link_id}` | `require_ui_session` | Revoke a link |
+| POST | `/ui/affiliates/links` | `require_ui_session` | Create a new affiliate link (see `:66`) |
+| GET | `/ui/affiliates/links` | `require_ui_session` | List creator's affiliate links (see `:96`) |
+| GET | `/ui/affiliates/links/{link_id}` | `require_ui_session` | Get link detail with stats (see `:106`) |
+| DELETE | `/ui/affiliates/links/{link_id}` | `require_ui_session` | Revoke a link (see `:120`) |
+| GET | `/ui/affiliates/links/{link_id}/stats` | `require_ui_session` | Get link stats (see `:133`) |
+| POST | `/ui/affiliates/links/{link_id}/conversions` | `require_ui_session` | Record a conversion (see `:148`) |
 
 ### 4.2 Click Tracking (Public)
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/r/{tracking_code}` | None | Redirect endpoint: records click, sets cookie, redirects to destination |
+| GET | `/r/{tracking_code}` | None | Redirect endpoint: records click, sets cookie, redirects to destination (see `app/routers/affiliate_links.py:174`) |
 
 ### 4.3 Commission Settings (Product Owner)
 
+<!-- NOTE: Settings endpoints are NOT yet implemented in app/routers/affiliate_links.py — new implementation required. -->
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/ui/affiliate/settings` | `require_ui_session` | Get creator's affiliate settings |
-| PATCH | `/ui/affiliate/settings` | `require_ui_session` | Update default commission rate, attribution window |
-| PUT | `/ui/affiliate/settings/products/{item_id}` | `require_ui_session` | Set per-product commission rate |
-| DELETE | `/ui/affiliate/settings/products/{item_id}` | `require_ui_session` | Remove per-product override |
-| PUT | `/ui/affiliate/settings/affiliates/{user_id}` | `require_ui_session` | Set per-affiliate commission rate |
-| DELETE | `/ui/affiliate/settings/affiliates/{user_id}` | `require_ui_session` | Remove per-affiliate override |
+| GET | `/ui/affiliates/settings` | `require_ui_session` | Get creator's affiliate settings |
+| PATCH | `/ui/affiliates/settings` | `require_ui_session` | Update default commission rate, attribution window |
+| PUT | `/ui/affiliates/settings/products/{item_id}` | `require_ui_session` | Set per-product commission rate |
+| DELETE | `/ui/affiliates/settings/products/{item_id}` | `require_ui_session` | Remove per-product override |
+| PUT | `/ui/affiliates/settings/affiliates/{user_id}` | `require_ui_session` | Set per-affiliate commission rate |
+| DELETE | `/ui/affiliates/settings/affiliates/{user_id}` | `require_ui_session` | Remove per-affiliate override |
 
 ### 4.4 Performance Dashboard
 
@@ -1027,17 +1032,19 @@ class AffiliateDailyStats(BaseModel):
 
 ### 5.1 New Pages and Components
 
-| Component | Path | Purpose |
-|-----------|------|---------|
-| `AffiliatePage` | `frontend/src/pages/affiliate/AffiliatePage.tsx` | Main page with tabs: Links, Performance, Settings |
-| `CreateLinkDialog` | `frontend/src/pages/affiliate/CreateLinkDialog.tsx` | Form to generate a new affiliate link |
-| `LinkPerformanceCard` | `frontend/src/pages/affiliate/LinkPerformanceCard.tsx` | Stats card for a single link |
-| `AffiliateSettingsPanel` | `frontend/src/pages/affiliate/AffiliateSettingsPanel.tsx` | Commission rate and attribution window settings |
-| `ConversionLog` | `frontend/src/pages/affiliate/ConversionLog.tsx` | Table of attributed conversions |
-| `ClickChart` | `frontend/src/pages/affiliate/ClickChart.tsx` | Time series chart of clicks per day |
-| `CopyLinkButton` | `frontend/src/components/shared/CopyLinkButton.tsx` | One-click copy for affiliate short URLs |
-| `QRCodeDisplay` | `frontend/src/pages/affiliate/QRCodeDisplay.tsx` | QR code for affiliate link |
-| `CommissionRateEditor` | `frontend/src/pages/affiliate/CommissionRateEditor.tsx` | Slider/input for commission rate with BPS display |
+<!-- NOTE: The actual page directory is `frontend/src/pages/affiliates/` (plural), not `frontend/src/pages/affiliate/`. Only AffiliateDashboard.tsx exists as a single file. -->
+
+| Component | Path | Status |
+|-----------|------|--------|
+| `AffiliateDashboard` | `frontend/src/pages/affiliates/AffiliateDashboard.tsx` | **EXISTS** (all-in-one page) |
+| `CreateLinkDialog` | inline in AffiliateDashboard.tsx | NOT separate |
+| `LinkPerformanceCard` | inline in AffiliateDashboard.tsx | NOT separate |
+| `AffiliateSettingsPanel` | — | NOT YET IMPLEMENTED |
+| `ConversionLog` | — | NOT YET IMPLEMENTED |
+| `ClickChart` | — | NOT YET IMPLEMENTED |
+| `CopyLinkButton` | — | NOT YET IMPLEMENTED |
+| `QRCodeDisplay` | — | NOT YET IMPLEMENTED |
+| `CommissionRateEditor` | — | NOT YET IMPLEMENTED |
 
 ### 5.2 Integration Points
 
@@ -1051,8 +1058,11 @@ class AffiliateDailyStats(BaseModel):
 ### 5.3 Route
 
 ```tsx
-// App.tsx
-{ path: "/affiliate", element: <AffiliatePage /> }
+// App.tsx — VERIFIED at line 78 (lazy import) and line 189 (route)
+const AffiliateDashboard = lazy(() => import("@/pages/affiliates/AffiliateDashboard"));
+// ...
+<Route path="affiliates" element={<AffiliateDashboard />} />
+// NOTE: route path is "/affiliates" (plural), not "/affiliate"
 ```
 
 ---
@@ -1062,13 +1072,15 @@ class AffiliateDailyStats(BaseModel):
 ### 6.1 affiliate_links Table
 
 ```python
+# scripts/local-ddb-init.py — VERIFIED at line 990
+# NOTE: default table name is "AffiliateLinks" (camelCase), not "affiliate_links"
 TableDef(
-    name="affiliate_links",
-    pk="link_id",
-    gsis=[
-        GsiDef(name="ByAffiliate", pk="GSI1PK", sk="GSI1SK"),
-        GsiDef(name="ByCode", pk="GSI2PK", sk="GSI2SK"),
-        GsiDef(name="ByProduct", pk="GSI3PK", sk="GSI3SK"),
+    _resolve_table_name(S.affiliate_links_table_name, "AffiliateLinks"),
+    "link_id",
+    gsi=[  # NOTE: actual field is `gsi=`, not `gsis=`
+        {"index_name": "ByAffiliate", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+        {"index_name": "ByCode", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+        {"index_name": "ByProduct", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
     ],
     attr_types={"GSI1SK": "N", "GSI3SK": "N"},
 ),
@@ -1077,12 +1089,14 @@ TableDef(
 ### 6.2 affiliate_clicks Table
 
 ```python
+# scripts/local-ddb-init.py — VERIFIED at line 1001
+# NOTE: default table name is "AffiliateClicks" (camelCase)
 TableDef(
-    name="affiliate_clicks",
-    pk="link_id",
-    sk="click_id",
-    gsis=[
-        GsiDef(name="ByVisitor", pk="GSI1PK", sk="GSI1SK"),
+    _resolve_table_name(S.affiliate_clicks_table_name, "AffiliateClicks"),
+    "link_id",
+    "click_id",
+    gsi=[
+        {"index_name": "ByVisitor", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
     ],
     attr_types={"GSI1SK": "N"},
 ),
@@ -1091,9 +1105,19 @@ TableDef(
 ### 6.3 Table Handle Registration
 
 ```python
-# app/core/tables.py
-affiliate_links = ddb.Table(S.affiliate_links_table or "affiliate_links")
-affiliate_clicks = ddb.Table(S.affiliate_clicks_table or "affiliate_clicks")
+# app/core/tables.py — VERIFIED: declarations at lines 112-113, initialization at lines 236-237
+affiliate_links=ddb.Table(S.affiliate_links_table_name),
+affiliate_clicks=ddb.Table(S.affiliate_clicks_table_name),
+```
+
+```python
+# app/core/settings.py — VERIFIED at lines 1436-1441
+affiliate_links_enabled: bool = ...
+affiliate_default_commission_percent: int = 10
+affiliate_max_commission_percent: int = 50
+affiliate_cookie_duration_days: int = 30
+affiliate_links_table_name: str = os.environ.get("DDB_AFFILIATE_LINKS", "AffiliateLinks")
+affiliate_clicks_table_name: str = os.environ.get("DDB_AFFILIATE_CLICKS", "AffiliateClicks")
 ```
 
 ### 6.4 Capacity Estimates
@@ -1245,3 +1269,34 @@ test.beforeAll(async ({ browser }) => {
 - Admin dashboard shows top affiliates by click volume, conversion rate, and commission earned
 - Suspicious patterns flagged: conversion rate >30%, same buyer converting multiple times for same affiliate, clicks from a small number of IPs
 - Admin can revoke any affiliate link immediately, which stops all future clicks and conversions
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/routers/catalog.py` | 54-62 | `cat_pk`, `item_pk`, `item_sk` helpers |
+| `app/services/commerce_order_service.py` | 39 | `create_order` method |
+| `app/services/promo_codes.py` | 85 | `create_promo_code` |
+| `app/services/tip_ledger.py` | 88-150 | `write_tip_ledger` — paired debit/credit |
+| `app/services/creator_earnings.py` | 22-33 | `_reason_to_category` (no "affiliate" category yet) |
+| `app/routers/subscription_server.py` | 190 | `_apply_discount` |
+| `scripts/local-ddb-init.py` | 990-999 | `AffiliateLinks` TableDef with 3 GSIs |
+| `scripts/local-ddb-init.py` | 1001-1009 | `AffiliateClicks` TableDef |
+| `app/core/settings.py` | 1436-1441 | Affiliate feature flags and settings |
+| `app/core/tables.py` | 112-113, 236-237 | Affiliate table handles |
+| `app/main.py` | 117, 452 | Import + registration of `affiliate_links_router` |
+| `app/routers/affiliate_links.py` | 27 | Router: `tags=["affiliate-links"]` |
+| `app/routers/affiliate_links.py` | 66-175 | All endpoint definitions (CRUD, stats, redirect) |
+| `app/services/affiliate_links.py` | 63 | `create_affiliate_link` |
+| `app/services/affiliate_links.py` | 135 | `get_link` |
+| `app/services/affiliate_links.py` | 141 | `get_link_by_code` |
+| `app/services/affiliate_links.py` | 152 | `list_creator_links` |
+| `app/services/affiliate_links.py` | 162 | `delete_link` |
+| `app/services/affiliate_links.py` | 190 | `record_click` |
+| `app/services/affiliate_links.py` | 272 | `record_conversion` |
+| `app/services/affiliate_links.py` | 336 | `get_link_stats` |
+| `frontend/src/App.tsx` | 78, 189 | Lazy import + route for `/affiliates` |
+| `frontend/src/pages/affiliates/AffiliateDashboard.tsx` | all | Main affiliate page |
+| `frontend/src/api/endpoints/affiliates.ts` | all | Frontend API functions |

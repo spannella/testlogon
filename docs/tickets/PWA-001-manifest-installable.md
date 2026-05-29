@@ -1487,3 +1487,26 @@ Note: The `fetch` event handler requirement means that PWA-001 alone will not tr
 install prompt in Chrome. PWA-002 must also be deployed. However, the manifest, icons, and
 install prompt component can be developed and tested independently using Chrome DevTools
 overrides.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `manifest.json` | `frontend/public/manifest.json` | 100 lines | **ALREADY EXISTS** — ticket says "no manifest.json" but it is now present and linked in `index.html:10` |
+| `<link rel="manifest">` | `frontend/index.html` | 10 | **ALREADY EXISTS** — `<link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />` |
+| Icon files (12 PNGs) | `frontend/public/icons/` | — | **ALREADY EXISTS** — 192, 512, maskable, and shortcut icons all present |
+| `favicon.svg` | `frontend/public/favicon.svg` | — | **Verified** |
+| `sw.js` (service worker) | `frontend/public/sw.js` | 576 lines | **Exists** — handles push notifications |
+| `registerServiceWorker()` | `frontend/src/lib/pushSetup.ts` | 11 | **Verified** |
+| SW registration call | `frontend/src/main.tsx` | 34 | **Verified** — calls `registerServiceWorker()` on mount |
+| `OfflineBanner` | `frontend/src/components/shared/OfflineBanner.tsx` | 45 lines | **Exists** (ticket says 33 lines — file grew) |
+| `SessionExpiryWarning` | `frontend/src/components/shared/SessionExpiryWarning.tsx` | — | **Exists** |
+| `ImpersonationBanner` | `frontend/src/components/shared/ImpersonationBanner.tsx` | — | **Exists** |
+| `AppShell` | `frontend/src/components/layout/AppShell.tsx` | 288 lines | **Exists** |
+| Vite config | `frontend/vite.config.ts` | — | **Exists** |
+
+### Key Correction
+
+**This ticket appears to be ALREADY IMPLEMENTED.** The manifest, icons, index.html link, and service worker registration all exist. The ticket's premise ("no PNG icons, no splash screen images, and no `manifest.json`") is no longer accurate. Verify whether an InstallPrompt component and BeforeInstallPrompt event handling also exist before scoping remaining work.

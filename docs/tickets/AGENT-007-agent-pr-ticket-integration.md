@@ -41,13 +41,13 @@ The agent framework (AGENT-003) can drive agents through tickets, and the termin
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Ticket store | `app/services/tickets.py` | `update_ticket_status`, `add_message_to_ticket`; status field on ticket items |
-| Agent orchestrator | `app/services/agent_orchestrator.py` (AGENT-003) | `complete_ticket()`, `claim_ticket()`, `release_ticket()` |
-| Terminal monitor | `app/services/terminal_monitor.py` (AGENT-006) | Completion signal detection, terminal output capture |
-| Alerts service | `app/services/alerts.py` | `audit_event()`, `create_alert()` |
-| Agent memory | `app/services/agent_memory.py` (AGENT-005) | `add_memory()` for recording learnings after ticket completion |
-| Settings | `app/core/settings.py` | GitHub token, webhook secret configuration |
-| Webhook patterns | `app/services/delegation_api.py` | Webhook delivery with HMAC signing; reference for GitHub webhook verification |
+| Ticket store | `app/services/tickets.py` | `update_status` (line 683), `add_message` (line 621); status field on ticket items <!-- NOTE: ticket originally said `update_ticket_status` and `add_message_to_ticket` — actual method names are `update_status` and `add_message` (see app/services/tickets.py:621,683) --> |
+| Agent orchestrator | `app/services/agent_orchestrator.py` (AGENT-003) | <!-- NOTE: does not exist yet — requires AGENT-003 implementation --> `complete_ticket()`, `claim_ticket()`, `release_ticket()` |
+| Terminal monitor | `app/services/terminal_monitor.py` (AGENT-006) | <!-- NOTE: does not exist yet — requires AGENT-006 implementation --> Completion signal detection, terminal output capture |
+| Alerts service | `app/services/alerts.py` | `audit_event()` (line 695) <!-- NOTE: `create_alert()` does NOT exist in alerts.py — new implementation required. `audit_event` signature is `(event, user_sub, request, **fields)` not `(user_id, event, outcome, details)` --> |
+| Agent memory | `app/services/agent_memory.py` (AGENT-005) | <!-- NOTE: does not exist yet — requires AGENT-005 implementation --> `add_memory()` for recording learnings after ticket completion |
+| Settings | `app/core/settings.py` | GitHub token, webhook secret configuration (see app/core/settings.py — no `github_token` or `github_webhook_secret` settings exist yet) |
+| Webhook patterns | `app/services/delegation_api.py` | <!-- NOTE: `delegation_api.py` does NOT exist in the codebase — new implementation required --> Webhook delivery with HMAC signing; reference for GitHub webhook verification |
 
 ### 2.2 Gaps
 
@@ -205,10 +205,10 @@ from uuid import uuid4
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.tickets import TicketStore
-from app.services.agent_orchestrator import complete_ticket as orchestrator_complete
-from app.services.terminal_monitor import get_terminal_output
-from app.services.agent_memory import add_memory
-from app.services.alerts import audit_event, create_alert
+from app.services.agent_orchestrator import complete_ticket as orchestrator_complete  # NOTE: does not exist yet — AGENT-003
+from app.services.terminal_monitor import get_terminal_output  # NOTE: does not exist yet — AGENT-006
+from app.services.agent_memory import add_memory  # NOTE: does not exist yet — AGENT-005
+from app.services.alerts import audit_event  # NOTE: create_alert does not exist; audit_event signature is (event, user_sub, request, **fields)
 
 logger = logging.getLogger(__name__)
 
@@ -315,8 +315,8 @@ def create_pr_from_agent(
     # Transition ticket status
     _transition_ticket_on_pr_created(user_id, worker_id, ticket_id)
 
-    audit_event(user_id, event="agent.pr_created", outcome="success",
-                details={"worker_id": worker_id, "ticket_id": ticket_id, "pr_url": pr_url})
+    audit_event("agent.pr_created", user_id, request=None,
+                worker_id=worker_id, ticket_id=ticket_id, pr_url=pr_url)  # NOTE: corrected signature — (event, user_sub, request, **fields)
 
     return pr_record
 
@@ -396,7 +396,7 @@ def complete_agent_work(
     # Transition ticket status
     status_flow = _get_status_flow(user_id, agent_type)
     new_status = status_flow.get("on_complete", "done")
-    _ticket_store.update_ticket_status(ticket_id, new_status)
+    _ticket_store.update_status(ticket_id=ticket_id, actor_sub=user_id, status=new_status)  # NOTE: method is `update_status` not `update_ticket_status` (see tickets.py:683)
 
     # Trigger cross-agent handoff
     next_agent = status_flow.get("next_agent_type", "")
@@ -613,7 +613,7 @@ def _transition_ticket_on_pr_created(user_id: str, worker_id: str, ticket_id: st
     flow = _get_status_flow(user_id, agent_type)
     new_status = flow.get("on_pr_created")
     if new_status:
-        _ticket_store.update_ticket_status(ticket_id, new_status)
+        _ticket_store.update_status(ticket_id=ticket_id, actor_sub="system", status=new_status)  # NOTE: method is `update_status` not `update_ticket_status` (see tickets.py:683)
 
 
 def _get_status_flow(user_id: str, agent_type: str) -> Dict[str, str]:
@@ -719,7 +719,7 @@ Prefix: `/ui/agent/pr`
 | `GET` | `/ui/agent/pr/status-flow/{agent_type}` | `require_ui_session` | Get status flow config |
 | `PUT` | `/ui/agent/pr/status-flow/{agent_type}` | `require_ui_session` | Set custom status flow config |
 | `POST` | `/ui/agent/webhooks/github` | Webhook auth | Receive GitHub webhook events |
-| `GET` | `/ui/admin/agent/prs` | `require_admin_session` | Admin: list all agent PRs |
+| `GET` | `/ui/admin/agent/prs` | `require_admin_scope(AdminScope.AGENT_ADMIN)` | Admin: list all agent PRs <!-- NOTE: `require_admin_session` does not exist — use `require_admin_scope()` from app/auth/policy.py:84 --> |
 
 ### 3.6 Pydantic Models
 
@@ -847,7 +847,7 @@ Sidebar: "Agent PRs" with `GitPullRequest` icon under "AI Agents" group.
 | File | Change |
 |------|--------|
 | `app/services/agent_pr_integration.py` | Add status flow config, cross-agent handoff, complete_agent_work |
-| `app/services/tickets.py` | Add `update_ticket_status` support for agent-driven transitions |
+| `app/services/tickets.py` | Extend `update_status` (line 683) for agent-driven transitions <!-- NOTE: method is `update_status`, not `update_ticket_status` --> |
 | `scripts/local-ddb-init.py` | Extend agent_workers table for PR# and FLOW# items |
 
 ### Phase 3: Router + Webhooks (2 days)
@@ -961,3 +961,28 @@ Custom status flow configurations are validated against allowed status values. I
 8. Agent memory records learnings from each completed ticket.
 9. Admin endpoint lists all agent-created PRs across users.
 10. Custom status flow configurations can be set per user per agent type.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| TicketStore class | `app/services/tickets.py` | 110 | Main ticket service |
+| `update_status` | `app/services/tickets.py` | 683 | Ticket originally said `update_ticket_status` — actual name is `update_status(ticket_id, actor_sub, status)` |
+| `add_message` | `app/services/tickets.py` | 621 | Ticket originally said `add_message_to_ticket` — actual name is `add_message(ticket_id, sender_sub, sender_role, body, email_targets)` |
+| `get_ticket` | `app/services/tickets.py` | 300 | Returns ticket item dict |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `audit_event(event, user_sub, request, **fields)` — NOT `(user_id, event, outcome, details)` |
+| `create_alert` | `app/services/alerts.py` | — | Does NOT exist; new implementation required |
+| `require_admin_scope` | `app/auth/policy.py` | 84 | Correct admin auth dependency (ticket said `require_admin_session` which does not exist) |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| Settings singleton | `app/core/settings.py` | 1-1494 | No `github_token` or `github_webhook_secret` settings exist yet |
+| Tables singleton | `app/core/tables.py` | — | `T.agent_workers` does NOT exist yet — requires AGENT-002 |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |
+| Router registration | `app/main.py` | 297-465 | No `agent_pr_router` registered yet |
+| `agent_orchestrator.py` | `app/services/` | — | Does NOT exist — requires AGENT-003 |
+| `terminal_monitor.py` | `app/services/` | — | Does NOT exist — requires AGENT-006 |
+| `agent_memory.py` | `app/services/` | — | Does NOT exist — requires AGENT-005 |
+| `delegation_api.py` | `app/services/` | — | Does NOT exist — new implementation required |
+| `agent_workers` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist — requires AGENT-002 |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing table for ticket items |

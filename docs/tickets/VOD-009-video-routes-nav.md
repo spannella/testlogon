@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-009
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-24
 
 ---
@@ -848,13 +848,17 @@ navigation state is managed entirely by React Router's built-in location trackin
 | `frontend/src/components/layout/AppShell.tsx` | Import `Film`, add "Media" group to `MOBILE_NAV_GROUPS` | ~8 new lines |
 | `frontend/src/components/layout/MobileNav.tsx` | Import `Film`, add entry to `MORE_LINKS` | ~2 new lines |
 
-### 10.2 Files to Create (delivered by prior tickets, not this one)
+### 10.2 Files Created by Prior Tickets
+
+<!-- NOTE: ALL files below ALREADY EXIST. -->
 
 | File | Ticket | Status |
 |------|--------|--------|
-| `frontend/src/pages/videos/VideosPage.tsx` | VOD-007 | Pending |
-| `frontend/src/pages/videos/VideoPlayer.tsx` | VOD-008 | Pending |
-| `frontend/src/api/endpoints/videos.ts` | VOD-007 | Pending |
+| `frontend/src/pages/videos/VideosPage.tsx` | VOD-007 | **Done** |
+| `frontend/src/pages/videos/VideoPlayerPage.tsx` | VOD-008 | **Done** (note: actual name is `VideoPlayerPage.tsx`, not `VideoPlayer.tsx`) |
+| `frontend/src/api/endpoints/vod.ts` | VOD-007 | **Done** (note: file is `vod.ts`, not `videos.ts`) |
+
+All routes are already registered in `App.tsx`: `/videos` (line 164), `/videos/:videoId` (line 165), `/gallery/:videoId` (line 163).
 
 This ticket does NOT create these files. It wires them into routing and navigation. If VOD-007/VOD-008 have not yet landed, the lazy imports will cause a chunk-load error when navigating to `/videos`. To unblock development, a placeholder can be committed:
 
@@ -1655,3 +1659,21 @@ The existing search infrastructure (`search-messaging.spec.ts`, `search-files.sp
 be extended to video search. The sidebar "Videos" entry could gain a search icon that opens
 a search dialog, or the global search (`Cmd+K`) could include video results. This is out of
 scope for VOD-009 but the route structure supports it.
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `frontend/src/App.tsx` | 51 | `VideosPage` lazy import |
+| `frontend/src/App.tsx` | 55 | `VideoPlayerPage` lazy import |
+| `frontend/src/App.tsx` | 64 | `GalleryVideoDetailPage` lazy import |
+| `frontend/src/App.tsx` | 163 | `/gallery/:videoId` route |
+| `frontend/src/App.tsx` | 164 | `/videos` route |
+| `frontend/src/App.tsx` | 165 | `/videos/:videoId` route |
+| `frontend/src/App.tsx` | 198 | `/admin/video-review` route |
+| `frontend/src/pages/videos/VideosPage.tsx` | -- | **Already exists** |
+| `frontend/src/pages/videos/VideoPlayerPage.tsx` | -- | **Already exists** |
+| `frontend/src/pages/gallery/GalleryPage.tsx` | -- | **Already exists** |
+| `frontend/src/pages/gallery/GalleryVideoCard.tsx` | -- | **Already exists** |
+| `frontend/src/pages/gallery/VideoDetailPage.tsx` | -- | **Already exists** |
+| `frontend/src/api/endpoints/vod.ts` | -- | **Already exists** (112 lines) |

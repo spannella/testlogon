@@ -812,8 +812,8 @@ When `false`:
 | PRESENCE_TTL_SEC = 120 | `app/routers/messaging.py` | 210 | VERIFIED |
 | DDB_PRESENCE = "UserPresence" | `app/routers/messaging.py` | 172 | VERIFIED |
 | tbl_presence table handle | `app/routers/messaging.py` | 230 | VERIFIED |
-| Heartbeat does NOT emit SSE event | `app/routers/messaging.py` | 11388-11430 | VERIFIED (no fanout call) |
-| No `presence:update` event type in codebase | `app/routers/messaging.py` | full file | VERIFIED (grep 0) |
+| Heartbeat does NOT emit SSE event | `app/routers/messaging.py` | 11654-11676, 11688 | OUTDATED: `presence:update` SSE emission IS IMPLEMENTED at line 11654 (`_fan_presence_to_partners`) which emits `presence:update` event (line 11676). The heartbeat handler at line 11688 calls this fan-out function. |
+| No `presence:update` event type in codebase | `app/routers/messaging.py` | 11676 | INCORRECT: `"type": "presence:update"` EXISTS at line 11676 |
 | GET /presence batch lookup | `app/routers/messaging.py` | 11433-11454 | VERIFIED |
 | HEARTBEAT_INTERVAL_MS = 30_000 | `frontend/src/hooks/usePresence.ts` | 5 | VERIFIED |
 | PRESENCE_POLL_MS = 15_000 | `frontend/src/hooks/usePresence.ts` | 6 | VERIFIED |
@@ -822,7 +822,15 @@ When `false`:
 | useHeartbeat sends every 30s | `frontend/src/hooks/usePresence.ts` | 12-27 | VERIFIED |
 | PresenceDot uses usePresenceStatus | `frontend/src/pages/messages/PresenceDot.tsx` | 14 | VERIFIED |
 | ConversationList renders PresenceDot per DM | `frontend/src/pages/messages/ConversationList.tsx` | 173 | VERIFIED |
-| useMessagingStream EVENT_TYPES has no presence | `frontend/src/hooks/useMessagingStream.ts` | 96-129 | VERIFIED |
+| useMessagingStream EVENT_TYPES has no presence | `frontend/src/hooks/useMessagingStream.ts` | 161 | INCORRECT: `presence:update` IS in EVENT_TYPES at line 161. Handler at lines 89-109 writes directly to React Query cache via `queryClient.setQueryData` and `queryClient.setQueriesData` |
 | fanout_event_to_conversation writes to tbl_events | `app/routers/messaging.py` | 5244-5278 | VERIFIED |
 | _ddb_safe helper exists for event payloads | `app/routers/messaging.py` | various | VERIFIED |
 | _event_id helper generates unique event IDs | `app/routers/messaging.py` | various | VERIFIED |
+
+<!-- CRITICAL NOTE: This ticket's core proposal (SSE-based presence push) has been FULLY IMPLEMENTED:
+- Backend: messaging.py line 11654 _fan_presence_to_partners() emits presence:update SSE events
+- Backend: messaging.py line 11688 presence_heartbeat() calls the fan-out function
+- Frontend: useMessagingStream.ts lines 89-109 handle presence:update, writing to React Query cache
+- Frontend: useMessagingStream.ts line 161 includes presence:update in EVENT_TYPES
+- PresenceDot.tsx already uses usePresenceStatus which benefits from SSE cache updates
+The ticket should be marked as Complete. -->

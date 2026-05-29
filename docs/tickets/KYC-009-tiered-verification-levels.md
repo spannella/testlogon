@@ -13,7 +13,8 @@
 
 ### 1.1 The Gap
 
-The current KYC system (`app/routers/kyc_cases.py`, 1295 lines; `app/services/kyc_cases.py`, 829 lines) implements a binary verification model: a user either has an approved KYC case or they do not. The case lifecycle (`draft -> submitted -> under_review -> approved/rejected -> expired`) determines whether a user passed identity verification, but there is no concept of graduated access based on verification depth.
+The current KYC system (`app/routers/kyc_cases.py`, 1294 lines; `app/services/kyc_cases.py`, 828 lines) implements a binary verification model:
+<!-- NOTE: ticket originally cited 1295 and 829 lines -- actual counts are 1294 and 828 --> a user either has an approved KYC case or they do not. The case lifecycle (`draft -> submitted -> under_review -> approved/rejected -> expired`) determines whether a user passed identity verification, but there is no concept of graduated access based on verification depth.
 
 This means every user who completes KYC gets the same level of platform access, regardless of whether they only verified their email or completed a full enhanced due diligence process with proof of funds and a verification call. The platform cannot distinguish between a casual browser who just signed up and a professional creator who has undergone comprehensive identity checks.
 
@@ -81,15 +82,17 @@ Admin Override:
 
 ### 2.1 User Profile Storage (`app/services/profile.py`)
 
-The profile service stores user data in the `users` table. The `get_profile(user_sub)` function (line 220) returns fields including `display_name`, `bio`, `mailing_address`, `email`, `phone`, etc. There are no `kyc_tier`, `kyc_tier_updated_at`, or `kyc_tier_history` fields. The `apply_profile_update()` function (line 163) handles field normalization and updates.
+The profile service stores user data in the `users` table. The `get_profile(user_sub)` function (see `app/services/profiles.py:220`) returns fields including `display_name`, `bio`, `mailing_address`, `email`, `phone`, etc. There are no `kyc_tier`, `kyc_tier_updated_at`, or `kyc_tier_history` fields. The `apply_profile_update()` function (see `app/services/profiles.py:294`) handles field normalization and updates.
+<!-- NOTE: ticket originally cited apply_profile_update at line 163 -- actual is line 294 -->
 
 ### 2.2 KYC Case Store (`app/services/kyc_cases.py`)
 
-The `KycCaseStore` class manages case lifecycle. `create_case()` (line 97) creates a case with `status="draft"`. The `apply_admin_decision()` (line 534) method sets `status="approved"` or `status="rejected"`. When a case is approved, there is no downstream effect on the user's profile — the approval is recorded only in the `kyc_cases` table. There is no tier elevation logic.
+The `KycCaseStore` class manages case lifecycle. `create_case()` (see `app/services/kyc_cases.py:97`) creates a case with `status="draft"`. The `apply_admin_decision()` (see `app/services/kyc_cases.py:534`) method sets `status="approved"` or `status="rejected"`. When a case is approved, there is no downstream effect on the user's profile -- the approval is recorded only in the `kyc_cases` table. There is no tier elevation logic.
 
 ### 2.3 Auth Dependencies (`app/auth/deps.py`)
 
-The `AuthenticatedUser` class (line 126) has `sub`, `role`, and `admin_profile` fields. There is no `kyc_tier` field. The `require_ui_session` dependency (line 283 in `app/services/sessions.py`) returns a dict with `user_sub`, `role`, and `admin_profile`. Feature gating based on verification level does not exist.
+The `AuthenticatedUser` class (see `app/auth/deps.py:126`) has `sub`, `role`, and `admin_profile` fields. There is no `kyc_tier` field. The `require_ui_session` dependency returns a dict with `user_sub`, `role`, and `admin_profile`. Feature gating based on verification level does not exist.
+<!-- NOTE: require_ui_session is in app/auth/deps.py, not app/services/sessions.py -->
 
 ### 2.4 Feature Access Points That Need Gating
 
@@ -112,7 +115,7 @@ The account registration flow (`app/routers/register.py`) handles email verifica
 
 ### 2.6 Alert System (`app/services/alerts.py`)
 
-`write_alert(user_sub, *, event, outcome, title, details)` (line 355) creates in-app alerts. `audit_event(event, user_sub, request, **fields)` (line 695) writes audit log entries. Both will be used for tier change notifications and audit trails.
+`write_alert(user_sub, *, event, outcome, title, details)` (see `app/services/alerts.py:355`) creates in-app alerts. `audit_event(event, user_sub, request, **fields)` (see `app/services/alerts.py:695`) writes audit log entries. Both will be used for tier change notifications and audit trails.
 
 ---
 
@@ -756,3 +759,45 @@ The `ByKycTier` GSI and new profile fields are additive. Existing code ignores u
 ### 7.3 Endpoint Removal
 
 Remove `app/routers/kyc_tiers.py` import from `app/main.py` and remove `require_kyc_tier` dependencies from gated endpoints.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router | `app/routers/kyc_cases.py` | all | VERIFIED (1294 lines, not 1295 as ticket states) |
+| KYC cases service | `app/services/kyc_cases.py` | all | VERIFIED (828 lines, not 829 as ticket states) |
+| `get_profile()` | `app/services/profiles.py` | 220 | VERIFIED |
+| `apply_profile_update()` | `app/services/profiles.py` | 294 | VERIFIED (ticket cites line 163 -- INCORRECT, actual is 294) |
+| `AuthenticatedUser` class | `app/auth/deps.py` | 126 | VERIFIED |
+| `require_root_session` | `app/auth/deps.py` | 273 | VERIFIED |
+| `Role` enum | `app/auth/roles.py` | 8 | VERIFIED |
+| `AdminScope` class | `app/auth/roles.py` | 14 | VERIFIED |
+| Current admin scopes | `app/auth/roles.py` | 26-30 | VERIFIED: AUTH_SUPPORT, BILLING_SUPPORT, CONTENT_MODERATION, CONTENT_MODERATION_SENIOR |
+| KYC settings | `app/core/settings.py` | 1065-1072 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+
+### Corrections
+
+<!-- NOTE: The ticket states `app/routers/kyc_cases.py` has 1295 lines -- actual count is 1294. -->
+<!-- NOTE: The ticket states `app/services/kyc_cases.py` has 829 lines -- actual count is 828. -->
+<!-- NOTE: The ticket cites `apply_profile_update()` at line 163 of app/services/profiles.py -- actual line is 294. This is a SIGNIFICANT error. -->
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `require_kyc_tier()` dependency | `app/auth/deps.py` | NOT FOUND -- new dependency required |
+| `KYC_VERIFIER` admin scope | `app/auth/roles.py` | NOT FOUND -- new scope required |
+| `app/routers/kyc_tiers.py` | `app/routers/` | NOT FOUND -- new router required |
+| `app/services/kyc_tiers.py` | `app/services/` | NOT FOUND -- new service required |
+| `kyc_tiers_router` registration | `app/main.py` | NOT FOUND -- needs `app.include_router()` |
+| `ByKycTier` GSI on users table | `scripts/local-ddb-init.py` | NOT FOUND -- new GSI required |
+| `KYC_TIER_GATING_ENABLED` feature flag | `app/core/settings.py` | NOT FOUND -- new setting required |
+| `kyc_tier` profile field | `app/services/profiles.py` | NOT FOUND -- new field required |
+| `frontend/src/pages/kyc/KycTierProgressPage.tsx` | `frontend/src/pages/kyc/` | NOT FOUND -- new page required |

@@ -1728,3 +1728,18 @@ Section 512(f) provides remedies against anyone who "knowingly materially misrep
 | Re-uploading removed content under different title | Repeat infringer tracking applies to the user, not the content |
 | Creating new account after ban | Out of scope for this ticket; requires device fingerprinting |
 | Modifying content slightly to avoid detection | Future: content fingerprinting (MOD-006) |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/routers/dmca.py` | — | ALREADY EXISTS: DMCA router (`dmca_router` and `admin_dmca_router`) |
+| `app/main.py` | 93-94, 344-345 | EXISTS: `dmca_router` and `admin_dmca_router` imported and registered |
+| `scripts/local-ddb-init.py` | 454 | EXISTS: `DmcaClaims` table with 4 GSIs (ByClaimantCreatedAt, ByRespondentCreatedAt, ByStatusCreatedAt, ByContentId) |
+| `app/core/settings.py` | 574 | EXISTS: `dmca_claims_table_name` setting |
+| `app/core/settings.py` | 1168-1169 | EXISTS: `dmca_strike_threshold` (3) and `dmca_strike_lookback_days` (365) settings |
+| `app/services/dmca_content_operations.py` | — | ALREADY EXISTS: DMCA content operation logic |
+| `scripts/local-ddb-init.py` | 437 | EXISTS: `UserEnforcementHistory` table definition |
+| `app/auth/policy.py` | 84 | EXISTS: `require_admin_scope()` for admin auth |

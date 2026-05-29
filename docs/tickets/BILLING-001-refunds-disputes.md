@@ -829,7 +829,7 @@ The `stripe-mock` server on port 12111 supports the `POST /v1/refunds` endpoint.
 
 ---
 
-## Appendix: Codebase Citations
+## Codebase References
 
 > **KEY FINDING**: The ticket's premise contains significant factual errors. It claims `StripeRefundReq` is dead code and that no chargeback handling exists. In reality: (1) `refund_payment()` at billing.py:1144-1202 is a fully functional refund endpoint that uses `StripeRefundReq`, creates Stripe refunds, writes reverse ledger entries, applies balance deltas, and logs audit events; (2) Dispute/chargeback handling already exists at billing.py:1464-1543 for `charge.dispute.funds_withdrawn` and `charge.dispute.funds_reinstated` events; (3) A comprehensive **PaymentIncident system** exists across multiple service files with admin endpoints for viewing incidents, uploading dispute evidence, and submitting dispute responses to Stripe/PayPal/CCBill (billing.py:2095-2199). The ticket's true remaining scope is: **a customer-facing self-service refund REQUEST queue** (the existing refund endpoint is admin-only) and **extending the existing dispute infrastructure** with a customer-visible status page.
 
@@ -853,6 +853,10 @@ The `stripe-mock` server on port 12111 supports the `POST /v1/refunds` endpoint.
 | `audit_event()` | VERIFIED | `app/services/alerts.py:492-684` | Master notification dispatch function |
 | TableDef pattern | VERIFIED | `scripts/local-ddb-init.py:28-35` | `TableDef(name, partition_key, sort_key, gsi, attr_types)` |
 | stripe-mock on port 12111 | VERIFIED | CLAUDE.md / dev stack | Supports `POST /v1/refunds` |
-| Proposed settings (refund_requests_table_name, etc.) | DO NOT EXIST YET | Must add to `app/core/settings.py` | Settings dataclass is frozen; follow existing pattern |
-| Proposed table handles | DO NOT EXIST YET | Must add to `app/core/tables.py` | Follow T dataclass pattern at tables.py:94 |
+| Proposed settings (refund_requests_table_name, etc.) | **NOW EXIST** | `app/core/settings.py:1384-1387` | `refund_requests_table_name`, `refund_requests_enabled`, `max_refund_requests_per_month` |
+| Proposed table handles | **NOW EXIST** | `app/core/tables.py:107,231` | `T.refund_requests` handle + wiring |
+| RefundRequests DDB table | **NOW EXISTS** | `scripts/local-ddb-init.py:948` | TableDef with `_resolve_table_name` |
 | `refund_payment()` existing endpoint | EXISTS | `app/routers/billing.py:1144-1202` | Full refund flow: Stripe API call, ledger entry, balance delta, audit event |
+| `refund_requests_router` | **NOW EXISTS** | `app/main.py:158,449` | Import + registration |
+| `app/routers/refund_requests.py` | **NOW EXISTS** | — | Refund requests router |
+| `app/services/refund_requests.py` | **NOW EXISTS** | — | Refund requests service |

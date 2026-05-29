@@ -12,7 +12,7 @@
 
 ### The Gap
 
-The platform has a functional but minimal keyboard shortcut system. The `useGlobalShortcuts` hook (`frontend/src/hooks/useGlobalShortcuts.ts`, line 48) <!-- VERIFIED: useGlobalShortcuts.ts:48 --> registers a global `keydown` listener that matches events against a list of `Shortcut` objects. The `Header` component (`frontend/src/components/layout/Header.tsx`, line 193) <!-- VERIFIED: Header.tsx:193 --> defines 6 shortcuts:
+The platform has a functional but minimal keyboard shortcut system. The `useGlobalShortcuts` hook (`frontend/src/hooks/useGlobalShortcuts.ts`, line 48) <!-- VERIFIED: useGlobalShortcuts.ts:48 --> registers a global `keydown` listener that matches events against a list of `Shortcut` objects. The `Header` component (`frontend/src/components/layout/Header.tsx`, line 205) <!-- CORRECTED: was "line 193"; shortcuts useMemo is at line 205 --> defines 6 shortcuts:
 
 ```typescript
 const shortcuts = React.useMemo<Shortcut[]>(() => [
@@ -25,11 +25,11 @@ const shortcuts = React.useMemo<Shortcut[]>(() => [
 ], [navigate, setTheme, theme]);
 ```
 
-The `ShortcutHelpDialog` (`frontend/src/components/shared/ShortcutHelpDialog.tsx`, line 29) <!-- VERIFIED: ShortcutHelpDialog.tsx:29 --> displays these shortcuts in a modal grouped by category (`General`, `Navigation`, `Actions`, `Messaging`). The E2E tests (`frontend/e2e/keyboard-shortcuts.spec.ts`) verify palette opening (section 73), actions (section 74), overlay display (section 75), Ctrl+Enter send (section 76), and filtering (section 77).
+The `ShortcutHelpDialog` (`frontend/src/components/shared/ShortcutHelpDialog.tsx`, line 48) <!-- CORRECTED: was "line 29"; ShortcutHelpDialog function is at line 48 --> displays these shortcuts in a modal grouped by category (`General`, `Navigation`, `Actions`, `Messaging`). The E2E tests (`frontend/e2e/keyboard-shortcuts.spec.ts`) verify palette opening (section 73), actions (section 74), overlay display (section 75), Ctrl+Enter send (section 76), and filtering (section 77).
 
 What is missing:
 
-1. **Navigation shortcuts**: There are no shortcuts for navigating between pages. Users cannot press `g then m` to go to messages, `g then f` to go to feed, etc. The `SEARCH_PAGES` array (line 79 in `Header.tsx`) <!-- VERIFIED: Header.tsx:79 --> lists 15 navigable pages but none have keyboard shortcuts.
+1. **Navigation shortcuts**: There are no shortcuts for navigating between pages. Users cannot press `g then m` to go to messages, `g then f` to go to feed, etc. The `SEARCH_PAGES` array (line 88 in `Header.tsx`) <!-- CORRECTED: was "line 79"; SEARCH_PAGES is at line 88 --> lists 15 navigable pages but none have keyboard shortcuts.
 
 2. **Page-specific action shortcuts**: Within a page, there are no shortcuts for common actions. For example: `n` for new message/post/ticket, `r` for reply, `e` for edit, `j`/`k` for next/previous item navigation.
 
@@ -37,7 +37,7 @@ What is missing:
 
 4. **Customizable keybindings**: All shortcuts are hardcoded in the `Header` component. Users cannot remap shortcuts to their preferred keys. The `Shortcut` interface (line 3) <!-- VERIFIED: useGlobalShortcuts.ts:3 --> defines `key` as a simple string with no indirection through a user-configurable mapping.
 
-5. **Focus management**: After navigating to a new page via a shortcut, focus is not managed. The user may need to Tab multiple times to reach the main content area. The `AppShell` component (`frontend/src/components/layout/AppShell.tsx`, line 39) <!-- VERIFIED: AppShell.tsx:39 --> has a "Skip to content" link but no programmatic focus management after navigation.
+5. **Focus management**: After navigating to a new page via a shortcut, focus is not managed. The user may need to Tab multiple times to reach the main content area. The `AppShell` component (`frontend/src/components/layout/AppShell.tsx`, line 45) <!-- CORRECTED: was "line 39"; AppShell function is at line 45 --> has a "Skip to content" link but no programmatic focus management after navigation.
 
 6. **Shortcut conflicts**: The current system does not detect or handle conflicts between global shortcuts and page-specific shortcuts. For example, `?` opens the help overlay globally, but a page might want `?` to trigger a context-sensitive help tooltip.
 
@@ -207,7 +207,7 @@ The `getGroupedShortcuts` function (line 72) <!-- VERIFIED: useGlobalShortcuts.t
 
 ### 2.2 ShortcutHelpDialog (`frontend/src/components/shared/ShortcutHelpDialog.tsx`)
 
-The dialog (line 29) <!-- VERIFIED: ShortcutHelpDialog.tsx:29 --> groups shortcuts by category and displays them in a grid:
+The dialog (line 48) <!-- CORRECTED: was "line 29"; ShortcutHelpDialog function at line 48 --> groups shortcuts by category and displays them in a grid:
 
 ```tsx
 {grouped[group]!.map((s) => (
@@ -220,7 +220,7 @@ The dialog (line 29) <!-- VERIFIED: ShortcutHelpDialog.tsx:29 --> groups shortcu
 ))}
 ```
 
-The `formatKey` function (line 11) <!-- VERIFIED: ShortcutHelpDialog.tsx:11 --> translates key identifiers to display labels: `ctrl` becomes `Cmd` on Mac or `Ctrl` on other platforms, single characters are uppercased, and special keys like `escape` become `Esc`.
+The `formatKey` function (line 12) <!-- CORRECTED: was "line 11"; formatKey is at line 12 --> translates key identifiers to display labels: `ctrl` becomes `Cmd` on Mac or `Ctrl` on other platforms, single characters are uppercased, and special keys like `escape` become `Esc`.
 
 ```typescript
 function formatKey(key: string): string {
@@ -242,7 +242,7 @@ function formatKey(key: string): string {
 }
 ```
 
-The `groupOrder` (line 35) <!-- VERIFIED: ShortcutHelpDialog.tsx:35 --> is `["General", "Navigation", "Actions", "Messaging"]`. Currently, the "Navigation" group is empty because no navigation shortcuts are defined.
+The `groupOrder` (line 57) <!-- CORRECTED: was "line 35"; groupOrder is at line 57 --> is `["General", "Navigation", "Actions", "Messaging"]`. Currently, the "Navigation" group is empty because no navigation shortcuts are defined.
 
 ### 2.3 E2E Tests (`frontend/e2e/keyboard-shortcuts.spec.ts`)
 
@@ -258,7 +258,7 @@ These tests must continue to pass after the changes in this ticket.
 
 ### 2.4 ComposeBar Local Shortcuts
 
-The `ComposeBar` component (`frontend/src/pages/messages/ComposeBar.tsx`) handles `Enter` (without Shift) locally via an `onKeyDown` handler on the textarea (line 618) <!-- CORRECTED: was "line 615", actually line 618; also the handler checks `Enter && !e.shiftKey` not `Ctrl+Enter` -->:
+The `ComposeBar` component (`frontend/src/pages/messages/ComposeBar.tsx`) handles `Enter` (without Shift) locally via an `onKeyDown` handler on the textarea (line 618) <!-- VERIFIED: ComposeBar.tsx:618 -->:
 
 ```typescript
 const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -270,13 +270,13 @@ const handleKeyDown = (e: React.KeyboardEvent) => {
 ```
 <!-- CORRECTED: was "Ctrl+Enter" in the snippet, actually the handler fires on Enter without Shift (not Ctrl+Enter). The actual code at line 618-623 uses `e.key === "Enter" && !e.shiftKey`. -->
 
-This is a page-specific shortcut that is NOT registered via `useGlobalShortcuts`. The global `ctrl+enter` shortcut in `Header.tsx` (line 226) has an empty action `() => {}` --- it exists only for display in the help overlay.
+This is a page-specific shortcut that is NOT registered via `useGlobalShortcuts`. The global `ctrl+enter` shortcut in `Header.tsx` (line 238) has an empty action `() => {}` --- it exists only for display in the help overlay.
 
 This pattern (local handler + global display-only registration) should be formalized. The `ShortcutRegistry` should support "display-only" entries that appear in the help dialog but whose action is handled locally by a component.
 
 ### 2.5 AppShell Focus Management (`frontend/src/components/layout/AppShell.tsx`)
 
-The `AppShell` (line 25) <!-- VERIFIED: AppShell.tsx:25 --> renders a "Skip to content" link:
+The `AppShell` (line 45) <!-- CORRECTED: was "line 25"; AppShell function at line 45; "Skip to content" link at line 60 --> renders a "Skip to content" link:
 
 ```tsx
 <a href="#main-content" className="sr-only focus:not-sr-only ...">
@@ -284,9 +284,9 @@ The `AppShell` (line 25) <!-- VERIFIED: AppShell.tsx:25 --> renders a "Skip to c
 </a>
 ```
 
-The main content area has `id="main-content"` (line 67) <!-- VERIFIED: AppShell.tsx:67 -->. However, after a programmatic navigation (e.g., `navigate("/messages")`), focus is not moved to the main content. The user remains focused on whatever element was active before navigation.
+The main content area has `id="main-content"` (line 93) <!-- CORRECTED: was "line 67"; main-content div at line 93 -->. However, after a programmatic navigation (e.g., `navigate("/messages")`), focus is not moved to the main content. The user remains focused on whatever element was active before navigation.
 
-The `main-content` div currently has no `tabIndex` attribute, which means `element.focus()` will not work on it directly. Adding `tabIndex={-1}` (focusable but not in tab order) enables programmatic focus.
+The `main-content` div currently has no `tabIndex` attribute, which means `element.focus()` will not work on it directly. Adding `tabIndex={-1}` (focusable but not in tab order) enables programmatic focus. <!-- NOTE: This claim is outdated — the actual AppShell.tsx line 93 already has `tabIndex={-1}` and `outline-none` on the main-content div. -->
 
 ---
 
@@ -1115,8 +1115,39 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
 3. **Denial of service via rapid keys**: An automated tool could fire thousands of keyboard events per second. The shortcut handler's `e.preventDefault()` call is lightweight and does not pose a DoS risk. Navigation actions are rate-limited by React Router's transition mechanism. The chord handler's timer cleanup (`clearTimeout`) prevents timer accumulation.
 
-4. **Shortcut phishing**: A malicious extension could simulate keyboard events to trigger shortcuts (e.g., programmatic `Ctrl+K` to open the command palette, then type a malicious URL). The command palette's `CommandDialog` only navigates to internal routes from `SEARCH_PAGES` --- it does not accept arbitrary URLs. The search API sanitizes input via `_sanitize_query` (`app/routers/search.py`, line 33) <!-- VERIFIED: search.py:33 -->. Navigation chords only navigate to hardcoded internal routes, not user-provided URLs.
+4. **Shortcut phishing**: A malicious extension could simulate keyboard events to trigger shortcuts (e.g., programmatic `Ctrl+K` to open the command palette, then type a malicious URL). The command palette's `CommandDialog` only navigates to internal routes from `SEARCH_PAGES` --- it does not accept arbitrary URLs. The search API sanitizes input via `_sanitize_query` (`app/routers/search.py`, line 46) <!-- CORRECTED: was "line 33"; _sanitize_query is at line 46 -->. Navigation chords only navigate to hardcoded internal routes, not user-provided URLs.
 
 5. **Custom keybinding size limit**: The server-side validation limits custom keybindings to 100 entries with 100-char labels and 30-char keys. This prevents the preferences record from growing unboundedly. The total serialized size of 100 custom keybindings is approximately 13KB, well within the 64KB DDB item size limit.
 
 6. **CSRF on preferences PATCH**: The preferences PATCH endpoint requires CSRF validation. Custom keybindings are sent as part of the preferences payload and are protected by the same CSRF mechanism as all other preferences.
+
+---
+
+## Codebase References
+
+> **NOTE**: The chord sequence system, chord indicator, and navigation chords have already been implemented. The `useChordShortcuts` and `useChordIndicator` hooks are in `useGlobalShortcuts.ts` and used by `Header.tsx`. Page-specific shortcuts (`usePageShortcuts`), `ShortcutRegistry` singleton, customizable keybindings (`KeybindingEditor`), and the separate `ChordIndicator` component have NOT been implemented yet.
+
+| File | Line(s) | What |
+|------|---------|------|
+| `frontend/src/hooks/useGlobalShortcuts.ts` | 3 | `Shortcut` interface |
+| `frontend/src/hooks/useGlobalShortcuts.ts` | 19 | `normalizeKeyEvent()` |
+| `frontend/src/hooks/useGlobalShortcuts.ts` | 35 | `isInputFocused()` |
+| `frontend/src/hooks/useGlobalShortcuts.ts` | 48 | `useGlobalShortcuts()` hook |
+| `frontend/src/hooks/useGlobalShortcuts.ts` | 72 | `getGroupedShortcuts()` |
+| `frontend/src/hooks/useGlobalShortcuts.ts` | 83 | `ChordMapping` interface |
+| `frontend/src/hooks/useGlobalShortcuts.ts` | 108 | `useChordShortcuts()` hook (chord sequences) |
+| `frontend/src/hooks/useGlobalShortcuts.ts` | 175 | `useChordIndicator()` hook |
+| `frontend/src/components/layout/Header.tsx` | 88 | `SEARCH_PAGES` array (15 navigable pages) |
+| `frontend/src/components/layout/Header.tsx` | 205 | `shortcuts` useMemo (6 global shortcuts) |
+| `frontend/src/components/layout/Header.tsx` | 238 | `ctrl+enter` shortcut (display-only; handled in ComposeBar) |
+| `frontend/src/components/layout/Header.tsx` | 263 | `useChordIndicator()` usage |
+| `frontend/src/components/layout/Header.tsx` | 859-876 | Chord indicator inline UI rendering |
+| `frontend/src/components/shared/ShortcutHelpDialog.tsx` | 12 | `formatKey()` (includes chord "G then M" formatting) |
+| `frontend/src/components/shared/ShortcutHelpDialog.tsx` | 48 | `ShortcutHelpDialog` component |
+| `frontend/src/components/shared/ShortcutHelpDialog.tsx` | 57 | `groupOrder` for display sections |
+| `frontend/src/components/layout/AppShell.tsx` | 45 | `AppShell` component function |
+| `frontend/src/components/layout/AppShell.tsx` | 60 | "Skip to content" link |
+| `frontend/src/components/layout/AppShell.tsx` | 93 | `main-content` div (already has `tabIndex={-1}` and `outline-none`) |
+| `frontend/src/pages/messages/ComposeBar.tsx` | 618 | `handleKeyDown` — Enter without Shift sends message |
+| `app/routers/search.py` | 46 | `_sanitize_query()` |
+| `frontend/e2e/keyboard-shortcuts.spec.ts` | — | E2E tests: sections 73-77 (12 tests) |

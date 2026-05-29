@@ -2399,3 +2399,53 @@ This requires the `og:title`, `og:description`, and `og:image` meta tags to be s
 - **SOC-002**: Feed fan-out (post grid shows same content that fans out to followers)
 - **SOC-003**: User search/discovery (discovery links to profile pages)
 - **SOC-004**: Notification expansion (profile interactions generate notifications)
+
+---
+
+## Codebase References
+
+### Backend — Routers
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `GET /profiles/{identifier}` | `app/routers/profile.py` | 58 | **Verified** — authenticated profile lookup |
+| `_resolve_profile_identifier_to_user_sub()` | `app/routers/profile.py` | 185 | **Verified** |
+| `GET /profile/public/{identifier}` | `app/routers/profile.py` | 295 | **Verified** — public profile endpoint (no auth required) |
+| `GET /profile/public/{identifier}/posts` | `app/routers/profile.py` | 388 | **Verified** — paginated public posts for profile |
+| `profile.py` total | `app/routers/profile.py` | 691 lines | **Verified** |
+| `GET /api/creators/{creator_id}/plans` | `app/routers/subscription_server.py` | 746 | **Verified** — public endpoint, no auth |
+| `POST_AUTHOR#{user_id}` (GSI2) | `app/routers/newsfeed.py` | 3248 | **Verified** — author post index |
+| GSI2 query for author filter | `app/routers/newsfeed.py` | 4254 | **Verified** |
+| `social_router` (`/ui/social/*`) | `app/routers/social.py` | 292 lines | **Exists** — follow/unfollow/counts/status endpoints |
+| `social_router` registration | `app/main.py` | 71, 393 | **Verified** |
+
+### Backend — Services
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `PROFILE_FIELDS` tuple | `app/services/profile.py` | 16 | **Verified** |
+| `PROFILE_FIELD_VISIBILITY` | `app/services/profile.py` | 39+ | **Verified** — classifies fields as public/member/private |
+| `DiscoverabilityState` enum | `app/services/profile_discoverability.py` | 10 | **Verified** |
+| `social.py` (follow service) | `app/services/social.py` | 399 lines | **Exists** — `get_follow_counts()` at line 189, `get_follow_status()` at line 206 |
+
+### DynamoDB (`scripts/local-ddb-init.py`)
+
+| Reference | Line | Status |
+|-----------|------|--------|
+| `profiles` table | 61 | **Verified** — PK = `user_sub` |
+| `app_single_table` (follow data, posts) | 222 | **Verified** |
+| GSI2 (post author index) | 228 | **Verified** |
+| GSI5 (followers reverse index) | 231 | **Verified** |
+
+### Frontend
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `PublicUserProfilePage.tsx` | `frontend/src/pages/profile/PublicUserProfilePage.tsx` | **340 lines** | **Exists** (ticket says ~224 lines — **INCORRECT**, actual is 340) |
+| Route `/u/:identifier` | `frontend/src/App.tsx` | 50, 124 | **Verified** — lazy import at line 50, route at line 124 (behind `showCanonicalProfileRoute` flag) |
+
+### Corrections
+
+1. **`PublicUserProfilePage.tsx` line count**: Ticket says ~224 lines, actual is 340 lines.
+2. **Profile endpoint line numbers**: Need to verify against ticket's specific claims. `GET /ui/profiles/{identifier}` is at line 58 (not 50-51 as ticket may claim). `_resolve_profile_identifier_to_user_sub` is at line 185 (not 177).
+3. **Public profile already partially exists**: `PublicUserProfilePage.tsx` (340 lines) is already implemented with profile display. The ticket's scope may overlap with existing functionality. The remaining work is likely: adding follow button, follower/following counts, follower list tabs, post grid/video tabs, subscription integration, and SEO meta tags.

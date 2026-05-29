@@ -40,14 +40,17 @@ Cart abandonment is a major revenue loss vector in e-commerce. The platform alre
 | Component | Location | Relevance |
 |-----------|----------|-----------|
 | Cart TTL | `app/services/shoppingcart.py:68-75` | `_touch_cart_activity` sets `ttl` epoch on cart records; DynamoDB TTL deletes expired carts |
-| Cart settings | `app/core/settings.py:740-747` | `cart_ttl_days=30`, `cart_abandonment_enabled=True`, `cart_abandonment_threshold_hours=24`, `cart_abandonment_scan_interval_sec=300`, `cart_abandonment_max_reminders=2`, `cart_abandonment_reminder_cooldown_hours=48` |
-| Abandoned cart scan | `app/services/shoppingcart.py:709` | `scan_abandoned_carts(threshold_hours)` -- scans all carts, filters by `last_activity_at`, `reminder_count`, cooldown |
-| Send reminder | `app/services/shoppingcart.py:741` | `send_cart_reminder(cart)` -- writes alert record; updates `reminder_count`, `last_reminder_at` |
-| Background loop | `app/routers/shoppingcart.py:227` | `_cart_abandonment_loop()` -- runs on interval, calls `scan_abandoned_carts` + `send_cart_reminder` |
-| Cart start task | `app/routers/shoppingcart.py:249` | `start_cart_abandonment_task()` -- starts background loop at app startup |
-| Admin stats endpoint | `app/routers/shoppingcart.py:204` | `GET /admin/cart-abandonment/stats` -- calls `get_abandonment_stats()` |
-| Admin scan endpoint | `app/routers/shoppingcart.py:209` | `POST /admin/cart-abandonment/scan` -- manual trigger for scan loop |
-| Cart fields | `app/services/shoppingcart.py:52-65` | `_cart_from_item` extracts `abandoned_at`, `reminder_count` |
+| Cart settings | `app/core/settings.py:742-746` | `cart_abandonment_enabled`, `cart_abandonment_threshold_hours=24`, `cart_abandonment_scan_interval_sec=300`, `cart_abandonment_max_reminders=2`, `cart_abandonment_reminder_cooldown_hours=48` |
+<!-- VERIFIED: app/core/settings.py:742 — cart_abandonment_enabled; :743 — threshold_hours; :744 — scan_interval_sec; :745 — max_reminders; :746 — reminder_cooldown_hours -->
+| Abandoned cart scan | `app/services/shoppingcart.py:709` | `scan_abandoned_carts(threshold_hours)` -- scans all carts |
+<!-- VERIFIED: app/services/shoppingcart.py:709 — scan_abandoned_carts; :741 — send_cart_reminder; :52 — _cart_from_item -->
+| Send reminder | `app/services/shoppingcart.py:741` | `send_cart_reminder(cart)` -- writes alert record |
+| Background loop | `app/routers/shoppingcart.py:227` | `_cart_abandonment_loop()` |
+<!-- VERIFIED: app/routers/shoppingcart.py:227 — _cart_abandonment_loop; :249 — start_cart_abandonment_task; :205 — stats; :210 — scan -->
+| Cart start task | `app/routers/shoppingcart.py:249` | `start_cart_abandonment_task()` |
+| Admin stats endpoint | `app/routers/shoppingcart.py:205` | `GET /admin/cart-abandonment/stats` |
+| Admin scan endpoint | `app/routers/shoppingcart.py:210` | `POST /admin/cart-abandonment/scan` |
+| Cart fields | `app/services/shoppingcart.py:52` | `_cart_from_item` extracts cart fields |
 | SES email | `app/services/alerts.py:473` | `ses.send_email` for email delivery |
 | Alert service | `app/services/alerts.py` | `write_alert` for in-app notifications |
 
@@ -726,3 +729,22 @@ cart_reminders_enabled: bool = os.environ.get("CART_REMINDERS_ENABLED", "true").
 7. Abandonment analytics show total abandoned, recovered, recovery rate, and average cart value.
 8. Cart expiration has a 7-day grace period before permanent deletion.
 9. All 15 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key Functions | Lines |
+|------|--------------|-------|
+| `app/services/shoppingcart.py` | `_cart_from_item`, `scan_abandoned_carts`, `send_cart_reminder` | 52, 709, 741 |
+| `app/routers/shoppingcart.py` | `_cart_abandonment_loop`, `start_cart_abandonment_task`, admin stats/scan | 227, 249, 205, 210 |
+| `app/core/settings.py` | `cart_abandonment_*` settings | 742-746 |
+| `app/main.py` | `app.add_event_handler("startup", start_cart_abandonment_task)` | 473 |
+| `scripts/local-ddb-init.py` | `shopping_cart` table | 67 |
+
+### Files to Create (new implementation)
+| File | Purpose |
+|------|---------|
+| `app/services/cart_reminders.py` | Multi-stage reminder logic, email templates, recovery tokens |
+| `cart_reminder_config` DDB table | Admin-configurable reminder schedule |

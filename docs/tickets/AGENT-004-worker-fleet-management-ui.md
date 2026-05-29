@@ -41,15 +41,15 @@ Managing individual workers through separate API calls (AGENT-002, AGENT-003) is
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Worker provisioner | `app/services/agent_worker_provisioner.py` (AGENT-002) | Worker CRUD, lifecycle |
-| Agent orchestrator | `app/services/agent_orchestrator.py` (AGENT-003) | Agent state, ticket claims, heartbeat |
-| LLM key store | `app/services/llm_provider_keys.py` (AGENT-001) | Key usage stats |
-| Ticket store | `app/services/tickets.py` | Ticket queue queries for capacity planning |
-| SSE patterns | Various routers | `StreamingResponse` + `asyncio.Queue` for real-time push |
-| DataTable component | `frontend/src/components/ui/data-table.tsx` | Reusable table with sorting, filtering |
-| Card/Sheet/Drawer | `frontend/src/components/ui/` | shadcn/ui layout primitives |
-| Cost tracking | `app/services/compute_cost.py` (INFRA-005) | Per-instance cost data |
-| Alerts | `app/services/alerts.py` | Notification infrastructure |
+| Worker provisioner | `app/services/agent_worker_provisioner.py` (AGENT-002) | <!-- NOTE: does not exist yet — requires AGENT-002 --> Worker CRUD, lifecycle |
+| Agent orchestrator | `app/services/agent_orchestrator.py` (AGENT-003) | <!-- NOTE: does not exist yet — requires AGENT-003 --> Agent state, ticket claims, heartbeat |
+| LLM key store | `app/services/llm_provider_keys.py` (AGENT-001) | <!-- NOTE: does not exist yet — requires AGENT-001 --> Key usage stats |
+| Ticket store | `app/services/tickets.py` | Ticket queue queries for capacity planning (verified — `TicketStore` at line 110) |
+| SSE patterns | Various routers | `StreamingResponse` + `asyncio.Queue` for real-time push (verified) |
+| DataTable component | `frontend/src/components/shared/DataTable.tsx` | <!-- NOTE: was `frontend/src/components/ui/data-table.tsx` which does not exist. The actual DataTable is at `frontend/src/components/shared/DataTable.tsx` --> Reusable table with sorting, filtering |
+| Card/Sheet/Drawer | `frontend/src/components/ui/` | shadcn/ui layout primitives (verified — directory exists) |
+| Cost tracking | `app/services/compute_cost.py` (INFRA-005) | <!-- NOTE: does not exist yet — requires INFRA-005 implementation --> Per-instance cost data |
+| Alerts | `app/services/alerts.py` | Notification infrastructure (verified) |
 
 ### 2.2 Gaps
 
@@ -274,7 +274,7 @@ Prefix: `/ui/agent/fleet`
 | `GET` | `/ui/agent/fleet/templates` | `require_ui_session` | List worker templates |
 | `DELETE` | `/ui/agent/fleet/templates/{template_id}` | `require_ui_session` | Delete a template |
 | `POST` | `/ui/agent/fleet/templates/{template_id}/create` | `require_ui_session` | Create worker from template |
-| `GET` | `/ui/admin/agent/fleet` | `require_admin_session` | Admin: aggregate fleet metrics across users |
+| `GET` | `/ui/admin/agent/fleet` | `require_admin_scope(AdminScope.AGENT_MANAGEMENT) <!-- NOTE: `require_admin_session` does not exist; use `require_admin_scope()` from `app/auth/policy.py:84` -->` | Admin: aggregate fleet metrics across users |
 
 ### 3.5 Pydantic Models
 
@@ -478,7 +478,7 @@ Sidebar: "Fleet Dashboard" with `LayoutGrid` icon under "AI Agents" group (prima
 
 ### 6.1 Fleet-Level Authorization
 
-Fleet endpoints only return workers belonging to the authenticated user. Admin fleet endpoint requires `require_admin_session`.
+Fleet endpoints only return workers belonging to the authenticated user. Admin fleet endpoint requires `require_admin_scope(AdminScope.AGENT_MANAGEMENT) <!-- NOTE: `require_admin_session` does not exist; use `require_admin_scope()` from `app/auth/policy.py:84` -->`.
 
 ### 6.2 Bulk Action Safety
 
@@ -1114,3 +1114,19 @@ interface TemplatesSectionProps {
 | 642.3 | Duplicate template labels allowed | Create two templates with same label → both succeed with different template_ids |
 | 642.4 | Template ticket_filter with empty arrays is valid | POST template with `ticket_filter: {"labels": [], "complexity": []}` → 201 |
 | 642.5 | List templates returns empty for new user | Bob (with no templates) GET templates → `{"templates": [], "count": 0}` |
+
+---
+
+## Codebase References
+
+| Reference | Path | Line(s) | Status |
+|-----------|------|---------|--------|
+| Ticket store | `app/services/tickets.py` | 110, 384 | Verified |
+| DataTable component | `frontend/src/components/shared/DataTable.tsx` | entire file | Verified — **not** `frontend/src/components/ui/data-table.tsx` |
+| shadcn/ui components | `frontend/src/components/ui/` | directory | Verified |
+| Alerts service | `app/services/alerts.py` | entire file | Verified |
+| Admin auth pattern | `app/auth/policy.py` | 84 (`require_admin_scope`) | Verified — **not** `require_admin_session` |
+| Worker provisioner | `app/services/agent_worker_provisioner.py` | — | **Does not exist** — requires AGENT-002 |
+| Agent orchestrator | `app/services/agent_orchestrator.py` | — | **Does not exist** — requires AGENT-003 |
+| LLM key store | `app/services/llm_provider_keys.py` | — | **Does not exist** — requires AGENT-001 |
+| Cost tracking | `app/services/compute_cost.py` | — | **Does not exist** — requires INFRA-005 |

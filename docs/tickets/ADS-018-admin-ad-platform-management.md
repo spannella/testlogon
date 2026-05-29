@@ -128,13 +128,12 @@ Advertiser                      Backend                              Admin
 
 ## 2. Current State Analysis
 
-### 2.1 Admin Auth (`app/auth/deps.py`)
+### 2.1 Admin Auth (`app/auth/deps.py`, `app/auth/policy.py`)
 
-The platform has three admin auth dependencies:
-- `require_admin_session`: Requires role >= ADMIN
-- `require_root_session`: Requires role == ROOT
+<!-- NOTE: `require_admin_scope(AdminScope.AD_MANAGEMENT)` does not exist as a standalone function. The actual admin auth pattern is `require_admin_scope(AdminScope.XXX)` from `app/auth/policy.py:84`. See `app/routers/admin_moderation.py:36` for example usage. -->
+The platform uses scope-based admin auth via `require_admin_scope(scope)` (see `app/auth/policy.py:84`), NOT a generic `require_admin_scope(AdminScope.AD_MANAGEMENT)`. Each admin feature defines its own scope. `require_root_session` exists at `app/auth/deps.py:273`.
 
-Ad platform management should use `require_admin_session` for most operations, with `require_root_session` for destructive operations (global kill switch, platform settings).
+Ad platform management should define an `AdminScope.AD_MANAGEMENT` scope (or similar) for most operations, with `require_root_session` for destructive operations (global kill switch, platform settings).
 
 ### 2.2 Existing Admin Patterns
 
@@ -147,17 +146,19 @@ These patterns establish conventions for admin endpoint design.
 
 ### 2.3 Ad Billing (`app/services/billing_shared.py`)
 
-The billing ledger (`T.billing`) stores all ad revenue entries with `entry_type="ad_revenue_credit"`. Platform commission entries have `entry_type="platform_ad_commission"`. These entries can be aggregated for revenue reporting.
+<!-- NOTE: The billing ledger (`T.billing`, see `app/core/tables.py:146`) uses `new_ledger_entry()` (see `billing_shared.py:217`) with a `type` field (not `entry_type`). The specific entry types `ad_revenue_credit` and `platform_ad_commission` do not exist yet — they would need to be added by the ADS-007 (Ad Billing) ticket or this ticket. -->
+The billing ledger (`T.billing`) can store ad revenue entries via `new_ledger_entry()` (see `app/services/billing_shared.py:217`). The `type` field on ledger entries identifies the transaction kind. Ad-specific types like `ad_revenue_credit` and `platform_ad_commission` would need to be defined as part of this feature or ADS-007.
 
 ### 2.4 Ad Impressions (`T.ad_impressions`)
 
-The `AdImpressions` table stores all impression events with `pk=AD_IMP#{date}`. Daily partitions enable efficient date-range aggregation for revenue dashboards.
+The `AdImpressions` table (see `scripts/local-ddb-init.py:831-840`, `app/core/tables.py:217`, `app/core/settings.py:1242`) stores impression events. GSIs: `ByVideoCreatedAt` (pk=`video_id`) and `ByCreatorCreatedAt` (pk=`creator_id`). Daily partitions enable efficient date-range aggregation for revenue dashboards.
 
 ### 2.5 Campaign/Creative Status Flow
 
-Campaigns have `status` field. Current values: `draft`, `active`, `paused`, `completed`, `archived`. Missing: `pending_review`, `rejected`.
+<!-- NOTE: No `ad_campaigns` or `ad_creatives` DDB table, router, or service exists yet in the codebase. The ADS-001 (Advertiser Accounts & Campaign Manager) and ADS-002 (Ad Creative Management) tickets define these but they have not been implemented. The status values described below are from the ADS-001/ADS-002 ticket specs, not from existing code. -->
+Campaigns (per ADS-001 spec) have `status` field. Expected values: `draft`, `active`, `paused`, `completed`, `archived`. This ticket adds: `pending_review`, `rejected`.
 
-Creatives have `status` field. Current values: `draft`, `pending_review`, `approved`, `rejected`. The creative review flow already exists partially — campaigns need the same pattern.
+Creatives (per ADS-002 spec) have `status` field. Expected values: `draft`, `pending_review`, `approved`, `rejected`. The creative review flow is defined in ADS-002 — campaigns need the same pattern.
 
 ### 2.6 Gaps
 
@@ -471,29 +472,29 @@ def generate_financial_report(
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/v1/admin/ads/revenue` | `require_admin_session` | Revenue summary |
-| GET | `/v1/admin/ads/revenue/daily` | `require_admin_session` | Daily revenue time series |
-| GET | `/v1/admin/ads/revenue/by-content` | `require_admin_session` | Revenue by content type |
-| GET | `/v1/admin/ads/revenue/top-earners` | `require_admin_session` | Top earning creators |
-| GET | `/v1/admin/ads/revenue/top-spenders` | `require_admin_session` | Top spending advertisers |
-| GET | `/v1/admin/ads/moderation` | `require_admin_session` | Moderation queue |
-| POST | `/v1/admin/ads/moderation/{type}/{id}/approve` | `require_admin_session` | Approve campaign/creative |
-| POST | `/v1/admin/ads/moderation/{type}/{id}/reject` | `require_admin_session` | Reject campaign/creative |
-| GET | `/v1/admin/ads/moderation/{type}/{id}/history` | `require_admin_session` | Moderation history |
-| GET | `/v1/admin/ads/accounts` | `require_admin_session` | List all advertiser accounts |
-| GET | `/v1/admin/ads/accounts/{id}` | `require_admin_session` | Account details |
-| POST | `/v1/admin/ads/accounts/{id}/suspend` | `require_admin_session` | Suspend account |
-| POST | `/v1/admin/ads/accounts/{id}/unsuspend` | `require_admin_session` | Unsuspend account |
-| PATCH | `/v1/admin/ads/accounts/{id}/credit-limit` | `require_admin_session` | Set credit limit |
-| GET | `/v1/admin/ads/settings` | `require_admin_session` | Get platform ad settings |
+| GET | `/v1/admin/ads/revenue` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Revenue summary |
+| GET | `/v1/admin/ads/revenue/daily` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Daily revenue time series |
+| GET | `/v1/admin/ads/revenue/by-content` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Revenue by content type |
+| GET | `/v1/admin/ads/revenue/top-earners` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Top earning creators |
+| GET | `/v1/admin/ads/revenue/top-spenders` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Top spending advertisers |
+| GET | `/v1/admin/ads/moderation` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Moderation queue |
+| POST | `/v1/admin/ads/moderation/{type}/{id}/approve` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Approve campaign/creative |
+| POST | `/v1/admin/ads/moderation/{type}/{id}/reject` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Reject campaign/creative |
+| GET | `/v1/admin/ads/moderation/{type}/{id}/history` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Moderation history |
+| GET | `/v1/admin/ads/accounts` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | List all advertiser accounts |
+| GET | `/v1/admin/ads/accounts/{id}` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Account details |
+| POST | `/v1/admin/ads/accounts/{id}/suspend` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Suspend account |
+| POST | `/v1/admin/ads/accounts/{id}/unsuspend` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Unsuspend account |
+| PATCH | `/v1/admin/ads/accounts/{id}/credit-limit` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Set credit limit |
+| GET | `/v1/admin/ads/settings` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Get platform ad settings |
 | PATCH | `/v1/admin/ads/settings` | `require_root_session` | Update platform ad settings |
 | POST | `/v1/admin/ads/kill-switch` | `require_root_session` | Toggle global ad kill switch |
-| POST | `/v1/admin/ads/house-ads` | `require_admin_session` | Create house ad |
-| GET | `/v1/admin/ads/house-ads` | `require_admin_session` | List house ads |
-| GET | `/v1/admin/ads/house-ads/{id}` | `require_admin_session` | Get house ad details |
-| PATCH | `/v1/admin/ads/house-ads/{id}` | `require_admin_session` | Update house ad |
-| DELETE | `/v1/admin/ads/house-ads/{id}` | `require_admin_session` | Delete house ad |
-| GET | `/v1/admin/ads/reports/{type}` | `require_admin_session` | Generate financial report |
+| POST | `/v1/admin/ads/house-ads` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Create house ad |
+| GET | `/v1/admin/ads/house-ads` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | List house ads |
+| GET | `/v1/admin/ads/house-ads/{id}` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Get house ad details |
+| PATCH | `/v1/admin/ads/house-ads/{id}` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Update house ad |
+| DELETE | `/v1/admin/ads/house-ads/{id}` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Delete house ad |
+| GET | `/v1/admin/ads/reports/{type}` | `require_admin_scope(AdminScope.AD_MANAGEMENT)` | Generate financial report |
 
 ### 3.11 Pydantic Models
 
@@ -709,7 +710,7 @@ export const generateReport = (type: string, params: { start_date: string; end_d
 
 ### 5.1 Role-Based Access
 
-- Revenue, moderation, accounts, house ads: require ADMIN role (`require_admin_session`)
+- Revenue, moderation, accounts, house ads: require ADMIN role (`require_admin_scope(AdminScope.AD_MANAGEMENT)`)
 - Platform settings, kill switch: require ROOT role (`require_root_session`)
 - Financial reports: require ADMIN role (data is sensitive but not destructive)
 
@@ -849,3 +850,28 @@ export const generateReport = (type: string, params: { start_date: string; end_d
 8. House ads can be created, listed, updated, and deleted with priority-based selection
 9. Financial reports can be generated for advertiser spending, creator earnings, and platform revenue
 10. All 18 E2E tests pass in `frontend/e2e/admin-ads.spec.ts`
+
+---
+
+## Codebase References
+
+| Reference | Path | Line(s) | Status |
+|-----------|------|---------|--------|
+| Admin auth (scope-based) | `app/auth/policy.py` | 84 (`require_admin_scope`) | Verified — use this instead of nonexistent `require_admin_session` |
+| Root session auth | `app/auth/deps.py` | 273 (`require_root_session`) | Verified |
+| Role enum | `app/auth/roles.py` | 8-11 (`Role.ROOT`, `Role.ADMIN`, `Role.USER`) | Verified |
+| AdminScope enum | `app/auth/roles.py` | 26 (`CANONICAL_ADMIN_SCOPES`) | Verified — `AD_MANAGEMENT` scope needs to be added |
+| Billing ledger helper | `app/services/billing_shared.py` | 217 (`new_ledger_entry`) | Verified |
+| Billing table handle | `app/core/tables.py` | 146 (`T.billing`) | Verified |
+| Ad impressions table handle | `app/core/tables.py` | 217 (`T.ad_impressions`) | Verified |
+| Ad impressions DDB table | `scripts/local-ddb-init.py` | 831-840 (`AdImpressions`) | Verified |
+| Ad impressions settings | `app/core/settings.py` | 1242 (`ad_impressions_table_name`) | Verified |
+| Ad placement service | `app/services/ad_placement.py` | (entire file) | Verified — exists (VOD-018) |
+| Admin usage router (pattern ref) | `app/routers/admin_usage.py` | (entire file) | Verified |
+| Router registration pattern | `app/main.py` | 297-465 (`app.include_router(...)`) | Verified |
+| Admin pages directory | `frontend/src/pages/admin/` | (directory) | Verified — exists |
+| Ad campaigns table/service | — | — | **Does not exist** — requires ADS-001 implementation first |
+| Ad creatives table/service | — | — | **Does not exist** — requires ADS-002 implementation first |
+| `ad_house_ads` table | `scripts/local-ddb-init.py` | — | **Does not exist** — new table required |
+| `ad_house_ads_table_name` setting | `app/core/settings.py` | — | **Does not exist** — new setting required |
+| `admin_ads` router | `app/routers/admin_ads.py` | — | **Does not exist** — new file required |

@@ -1011,7 +1011,7 @@ The deletion worker processes sequentially to maintain ordering guarantees. Esti
 | `T.projects` table handle | `app/core/tables.py` | exists | VERIFIED |
 | `T.signature_packets` table handle | `app/core/tables.py` | exists | VERIFIED |
 | `T.video_metadata` table handle | `app/core/tables.py` | exists | VERIFIED |
-| `write_alert()` | `app/services/alerts.py` | 265 | VERIFIED |
+| `write_alert()` | `app/services/alerts.py` | 355 | VERIFIED (was 265; file grew from ~680 to 899 lines) |
 | `TableDef` dataclass | `scripts/local-ddb-init.py` | 29 | VERIFIED |
 | `_resolve_table_name()` | `scripts/local-ddb-init.py` | 38 | VERIFIED |
 | GSI definition format (dict with `index_name`, `partition_key`, `sort_key`) | `scripts/local-ddb-init.py` | throughout | VERIFIED |
@@ -1020,5 +1020,5 @@ The deletion worker processes sequentially to maintain ordering guarantees. Esti
 | Tables dataclass | `app/core/tables.py` | entire file | VERIFIED (proposed new table handles do not exist yet) |
 | `require_ui_session` auth dependency | `app/services/sessions.py` | 283 | VERIFIED |
 | `require_admin_session` | N/A | N/A | CORRECTED: does not exist; use `require_ui_session` + role check |
-| Background task registration pattern | `app/main.py` | 323-328 | VERIFIED |
+| Background task registration pattern | `app/main.py` | 378, 466 | VERIFIED (was 323-328; line drift — `add_event_handler("startup", ...)`) |
 | `now_ts()` | `app/core/time.py` | 2 | VERIFIED |

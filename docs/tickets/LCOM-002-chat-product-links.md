@@ -15,7 +15,9 @@
 
 LCOM-001 introduces a product shelf sidebar that viewers can browse during a live stream. However, the live chat and the product shelf operate as completely independent channels. When a broadcaster demonstrates a product on camera and says "check out this item," viewers must manually scroll through the shelf to find it. There is no mechanism for the broadcaster to **direct attention** to a specific product within the flow of the live chat conversation.
 
-The existing broadcast chat (`app/services/broadcast_chat_store.py`, 247 lines) supports only plain text messages of up to 280 characters. The messaging system (`app/routers/messaging.py`, 12,670 lines) supports rich message kinds — `text`, `image`, `file`, `audio`, `video`, `gallery`, `file_share`, `calendar_share`, `calendar_event`, `meeting_poll`, `video_share` — but broadcast chat is a separate system with no message kind support.
+The existing broadcast chat (`app/services/broadcast_chat_store.py`, ~423 lines) already supports product link messages via `send_product_link_message` (see line 219) and `kind` field on chat items (see `_chat_msg_out` at line 344). The messaging system (`app/routers/messaging.py`) supports rich message kinds — `text`, `image`, `file`, `audio`, `video`, `gallery`, `file_share`, `calendar_share`, `calendar_event`, `meeting_poll`, `video_share` — and broadcast chat now also supports `product_link` kind.
+
+<!-- NOTE: Much of the backend implementation for LCOM-002 already exists. The broadcast_chat_store.py has send_product_link_message (line 219), product_link rate limiting (line 46), and _chat_msg_out handles product_link kind (line 366-367). The broadcast router has the endpoint at line 1442-1446. Frontend ProductLinkCard.tsx and ShelfProductPicker.tsx do NOT exist yet. -->
 
 ### Why This Is Needed
 
@@ -120,7 +122,7 @@ Broadcaster                    Backend                          Viewer(s)
 
 ### 2.1 Broadcast Chat Message Model (`app/services/broadcast_chat_store.py`)
 
-The current chat message DDB item (line 131-141) has these fields:
+The chat message DDB item (see `app/services/broadcast_chat_store.py`) has these fields:
 
 ```python
 item = {
@@ -136,15 +138,15 @@ item = {
 }
 ```
 
-No `kind` field exists. All messages are implicitly `text` kind. The output function `_chat_msg_out` (line 237-247) returns a fixed set of fields.
+The `kind` field and `product_link` support already exist. The output function `_chat_msg_out` (see line 344) includes `kind` and conditional `product_link` handling (see lines 366-367).
 
-### 2.2 Chat Send Endpoint (`app/routers/broadcast.py`, lines 807-850)
+### 2.2 Chat Send Endpoint (`app/routers/broadcast.py`)
 
-The `send_chat_message_route` (line 812) accepts `BroadcastChatSendIn` which has only a `text` field (lines 776-777). The route validates session is live, resolves display name from profile table, then delegates to `_store_send_chat`.
+The `send_chat_message_route` (see line 1301) accepts `BroadcastChatSendIn` (see line 1217). The product link endpoint `send_chat_product_link_route` already exists at line 1442-1446.
 
 ### 2.3 Chat SSE Delivery
 
-Chat messages are published via `broadcast_sse_publish(session_id, {"_type": "chat:message", ...})` (line 146 in `broadcast_chat_store.py`). The SSE stream endpoint (`broadcast_chat_stream_route`, line 898-944) yields events with `event: chat:message` and `event: chat:delete` types. The frontend `BroadcastChat.tsx` component listens for these events.
+Chat messages are published via `broadcast_sse_publish(session_id, {"_type": "chat:message", ...})`. Product link messages use `_type: "chat:product_link"` (see `broadcast_chat_store.py:250`). The SSE stream endpoint (`broadcast_chat_stream_route`, see `app/routers/broadcast.py:1511-1512`) yields events with `event: chat:message`, `event: chat:delete`, and `event: chat:product_link` types.
 
 ### 2.4 Existing Message Kind Pattern (Messaging System)
 
@@ -889,16 +891,17 @@ Key changes:
 
 ### Summary of All Files
 
-| File | Type | Estimated Lines |
-|------|------|-----------------|
-| `app/services/broadcast_chat_store.py` | Modify | +60 |
-| `app/routers/broadcast.py` | Modify | +60 |
-| `frontend/src/api/endpoints/broadcast-chat.ts` | Modify | +20 |
-| `frontend/src/pages/broadcast/ProductLinkCard.tsx` | Create | ~80 |
-| `frontend/src/pages/broadcast/ShelfProductPicker.tsx` | Create | ~100 |
-| `frontend/src/pages/broadcast/BroadcastChat.tsx` | Modify | +40 |
-| `frontend/src/pages/broadcast/ChatOverlay.tsx` | Modify | +15 |
-| **Total** | | **~375** |
+<!-- NOTE: Backend files already have product link support implemented. Frontend components still need creation. -->
+
+| File | Type | Status |
+|------|------|--------|
+| `app/services/broadcast_chat_store.py` | Modified | Already has `send_product_link_message` (line 219), rate limiting (line 46) |
+| `app/routers/broadcast.py` | Modified | Already has `send_chat_product_link_route` (line 1442) |
+| `frontend/src/api/endpoints/broadcast-chat.ts` | Modify | Need to add `ProductLinkData` type and `shareProductInChat` function |
+| `frontend/src/pages/broadcast/ProductLinkCard.tsx` | **Create** | Does not exist yet |
+| `frontend/src/pages/broadcast/ShelfProductPicker.tsx` | **Create** | Does not exist yet |
+| `frontend/src/pages/broadcast/BroadcastChat.tsx` | Modify | Need SSE `chat:product_link` handler and conditional rendering |
+| `frontend/src/pages/broadcast/ChatOverlay.tsx` | Modify | Need compact product link format |
 
 ---
 
@@ -1534,4 +1537,25 @@ BroadcastChat (modified)
 └── ShelfProductPicker (NEW, dialog)
     └── ShelfItemList
         └── ShelfItemButton × N (click to share)
+```
+
+---
+
+## Codebase References
+
+| File | Lines | What was verified |
+|------|-------|-------------------|
+| `app/services/broadcast_chat_store.py` | 46 | `_enforce_product_link_rate_limit` already exists |
+| `app/services/broadcast_chat_store.py` | 219-250 | `send_product_link_message` already implemented |
+| `app/services/broadcast_chat_store.py` | 344 | `_chat_msg_out` function confirmed |
+| `app/services/broadcast_chat_store.py` | 366-367 | `product_link` handling in `_chat_msg_out` confirmed |
+| `app/routers/broadcast.py` | 1217 | `BroadcastChatSendIn` model confirmed |
+| `app/routers/broadcast.py` | 1301 | `send_chat_message_route` confirmed |
+| `app/routers/broadcast.py` | 1442-1446 | `send_chat_product_link_route` already exists |
+| `app/routers/broadcast.py` | 1511-1512 | `broadcast_chat_stream_route` SSE endpoint confirmed |
+| `app/services/broadcast_sse.py` | 29 | `broadcast_sse_publish` confirmed |
+| `frontend/src/pages/broadcast/ProductLinkCard.tsx` | -- | **Does not exist yet** -- new component required |
+| `frontend/src/pages/broadcast/ShelfProductPicker.tsx` | -- | **Does not exist yet** -- new component required |
+| `frontend/src/pages/broadcast/BroadcastChat.tsx` | -- | Exists, needs SSE `chat:product_link` handler |
+| `frontend/src/pages/broadcast/ChatOverlay.tsx` | -- | Exists, needs compact product link rendering |
 ```

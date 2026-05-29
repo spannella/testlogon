@@ -773,3 +773,25 @@ SecurityDashboard                     data-testid="security-dashboard"
 | N2 | Invalid resolution type | POST resolve with resolution="ignore"; 422 |
 | N3 | Resolve non-existent finding | POST resolve with fake finding_id; 404 |
 | N4 | List findings with invalid severity | GET findings?severity=mega; 422 |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| TicketStore class | `app/services/tickets.py` | 110 | For creating remediation tickets |
+| Auth system | `app/auth/deps.py` | — | Cookie auth, CSRF, JWT patterns the agent validates |
+| `require_admin_scope` | `app/auth/policy.py` | 84 | Admin auth dependency for audit trigger endpoints |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| Billing router | `app/routers/billing.py` | — | Confirmed exists; PCI-relevant code for compliance checks |
+| Security hardening runbook | `docs/security-hardening-runbook.md` | — | Confirmed exists; existing security reference |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `(event, user_sub, request, **fields)` |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+| Tables singleton | `app/core/tables.py` | — | `T` object |
+| Router registration | `app/main.py` | 297-465 | No `agent_security_router` registered yet |
+| `agent_security_findings` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — new table proposed in this ticket |
+| `agent_security.py` service | `app/services/` | — | Does NOT exist yet — new implementation in this ticket |
+| `agent_security.py` router | `app/routers/` | — | Does NOT exist yet — new implementation in this ticket |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing table |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |

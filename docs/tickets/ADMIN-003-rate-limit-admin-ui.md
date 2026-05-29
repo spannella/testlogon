@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 7-9 days  
-**Dependencies**: Rate limiting (`rate_limit.py`, `rate_limit_config.py`, `rate_limit_store.py`, `rate_limit_dashboard.py`), admin rate limits router (`admin_rate_limits.py`), admin auth (`auth/deps.py`)
+**Dependencies**: Rate limiting (`rate_limit.py` — see `app/services/rate_limit.py`, `rate_limit_config.py` — see `app/services/rate_limit_config.py`, `rate_limit_store.py` — see `app/services/rate_limit_store.py`, `rate_limit_dashboard.py` — see `app/services/rate_limit_dashboard.py`), admin rate limits router (`admin_rate_limits.py` — see `app/routers/admin_rate_limits.py`, prefix `/ui/admin/rate-limits`, registered in `app/main.py:113,436`), admin auth (`auth/policy.py` — `require_root` at line 63)
+<!-- NOTE: auth/deps.py does not have require_admin_session. The admin_rate_limits.py router uses require_root from app/auth/policy.py:63. -->
 
 ---
 
@@ -151,53 +152,58 @@ Request Flow — CSV Export:
 
 ### 2.1 Rate Limit Config (`app/services/rate_limit_config.py`)
 
-Existing functions:
-- `get_group_config(group)`: Get rate limit config for an endpoint group (with defaults)
-- `save_group_override(group, *, admin_sub, ...)`: Save custom config for a group
-- `get_all_configs()`: Get all configs (default + overrides)
-- `match_path_to_group(path)`: Map request path to rate limit group
+Existing functions (verified):
+- `get_group_config(group)` (line 126): Get rate limit config for an endpoint group (with defaults)
+- `save_group_override(group, *, admin_sub, ...)` (line 164): Save custom config for a group
+- `get_all_configs()` (line 199): Get all configs (default + overrides)
+- `match_path_to_group(path)` (line 212): Map request path to rate limit group
 
 Config fields per group: `requests_per_window`, `window_seconds`, `burst`.
 
 ### 2.2 Rate Limit Store (`app/services/rate_limit_store.py`)
 
-Existing functions:
-- `check_rate_limit(key, group)`: Check if request is within limits
-- `is_blocked(ip)`: Check if IP is blocked
-- `is_allowlisted(ip)`: Check if IP is allowlisted
-- `add_to_blocklist(ip, *, reason, admin_sub)` / `remove_from_blocklist(ip)`
-- `add_to_allowlist(cidr, *, reason, admin_sub)` / `remove_from_allowlist(cidr)`
-- `list_blocklist()` / `list_allowlist()`
+Existing functions (verified):
+- `check_rate_limit(key, group)` (line 26): Check if request is within limits
+- `is_blocked(ip)` (line 86): Check if IP is blocked
+- `is_allowlisted(ip)` (line 99): Check if IP is allowlisted
+- `add_to_blocklist(ip, *, reason, admin_sub)` (line 129) / `remove_from_blocklist(ip)` (line 150)
+- `add_to_allowlist(cidr, *, reason, admin_sub)` (line 154) / `remove_from_allowlist(cidr)` (line 172)
+- `list_blocklist()` (line 176) / `list_allowlist()` (line 188)
 
 ### 2.3 Rate Limit Dashboard (`app/services/rate_limit_dashboard.py`)
 
-Existing functions:
-- `log_rate_limit_event(...)`: Log a rate limit event
-- `query_events(*, start, end, group, source, limit)`: Search events
-- `get_top_offenders(*, hours, limit)`: Top rate limit violators
+Existing functions (verified):
+- `log_rate_limit_event(...)` (line 23): Log a rate limit event
+- `query_events(*, start, end, group, source, limit)` (line 66): Search events
+- `get_top_offenders(*, hours, limit)` (line 116): Top rate limit violators
 
 ### 2.4 Admin Rate Limits Router (`app/routers/admin_rate_limits.py`)
 
-Existing endpoints (requires ROOT role):
-- `GET /config`: Get all rate limit configs
-- `PUT /config`: Update config for a group
-- `GET /events`: Query rate limit events
-- `GET /top-offenders`: Top offenders
-- `POST /blocklist`: Add to blocklist
-- `DELETE /blocklist/{entry_id}`: Remove from blocklist
-- `POST /allowlist`: Add to allowlist
-- `DELETE /allowlist/{entry_id}`: Remove from allowlist
-- `GET /blocklist`: List blocklist
-- `GET /allowlist`: List allowlist
+Existing endpoints (prefix `/ui/admin/rate-limits` — see line 32, auth: `require_root` from `app/auth/policy.py:63`, registered in `app/main.py:113,436`):
+- `GET /config` (line 63): Get all rate limit configs — `get_config()`
+- `PUT /config` (line 93): Update config for a group — `update_config()`
+- `GET /events` (line 132): Query rate limit events — `get_events()`
+- `GET /top-offenders` (line 147): Top offenders — `top_offenders()`
+- `POST /blocklist` (line 160): Add to blocklist — `add_blocklist()`
+- `DELETE /blocklist/{entry_id}` (line 179): Remove from blocklist — `delete_blocklist()`
+- `POST /allowlist` (line 189): Add to allowlist — `add_allowlist_entry()`
+- `DELETE /allowlist/{entry_id}` (line 206): Remove from allowlist — `delete_allowlist_entry()`
+- `GET /blocklist` (line 216): List blocklist — `get_blocklist()`
+- `GET /allowlist` (line 222): List allowlist — `get_allowlist()`
 
-### 2.5 Gaps
+### 2.5 Existing Frontend
 
-1. No frontend UI for any of the above (all 10 endpoints are API-only)
-2. No real-time rate limit hit visualization
-3. No rule diff display (default vs override)
-4. No event log search UI
-5. No event export functionality
-6. No live auto-refreshing dashboard
+A `RateLimitDashboard.tsx` (544 lines) already exists at `frontend/src/pages/admin/RateLimitDashboard.tsx`, registered in `App.tsx` at line 202 (`/admin/rate-limits`). It has blocklist/allowlist management, event log, top offenders, and a `RateLimitConfigPanel` (see `frontend/src/pages/admin/RateLimitConfigPanel.tsx`). An `adminRateLimits.ts` API endpoints file (122 lines) also exists at `frontend/src/api/endpoints/adminRateLimits.ts`.
+
+### 2.6 Gaps
+<!-- NOTE: Several "gaps" are already partially addressed by the existing RateLimitDashboard.tsx. -->
+
+1. ~~No frontend UI for any of the above~~ — **CORRECTED**: A 544-line `RateLimitDashboard.tsx` already exists with blocklist/allowlist CRUD, event log, top offenders, and config panel
+2. No real-time rate limit hit visualization (auto-refreshing live summary)
+3. No rule diff display (default vs override badge)
+4. ~~No event log search UI~~ — partially exists in current dashboard
+5. No event export functionality (CSV export)
+6. No live auto-refreshing dashboard with time series charts
 
 ---
 
@@ -275,11 +281,12 @@ async def export_events(
 ### 3.3 Updated Router: `app/routers/admin_rate_limits.py`
 
 Add 2 new endpoints to existing router:
+<!-- NOTE: Actual router prefix is /ui/admin/rate-limits (line 32 of admin_rate_limits.py), not /v1/admin/rate-limits -->
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/v1/admin/rate-limits/live-summary` | `require_root` | Real-time hit summary |
-| GET | `/v1/admin/rate-limits/events/export` | `require_root` | Event CSV export |
+| GET | `/ui/admin/rate-limits/live-summary` | `require_root` | Real-time hit summary |
+| GET | `/ui/admin/rate-limits/events/export` | `require_root` | Event CSV export |
 
 Full endpoint list (existing + new):
 
@@ -575,8 +582,9 @@ class AllowlistAdd(BaseModel):
 
 ### 3.7 Frontend: Rate Limit Admin Page
 
-**Route**: `/admin/rate-limits` in `frontend/src/App.tsx`  
-**Page**: `frontend/src/pages/admin/rateLimits/RateLimitDashboard.tsx`
+**Route**: `/admin/rate-limits` in `frontend/src/App.tsx` (see line 202 — route already exists)  
+**Page**: `frontend/src/pages/admin/RateLimitDashboard.tsx` (see existing 544-line file — already registered via lazy import at App.tsx line 62)
+<!-- NOTE: The page is at frontend/src/pages/admin/RateLimitDashboard.tsx (not in a rateLimits/ subdirectory). It already has blocklist/allowlist CRUD, event log, top offenders, and a RateLimitConfigPanel. This ticket should extend the existing page rather than creating a new one. -->
 
 #### Frontend Component Tree
 
@@ -827,46 +835,47 @@ interface EventTableProps {
 ```
 
 ### 3.8 Frontend API (`frontend/src/api/endpoints/adminRateLimits.ts`)
+<!-- NOTE: This file already exists (122 lines) with types and API wrappers for rate limit config, events, blocklist, and allowlist. New endpoints (live-summary, events/export) should be added to the existing file. -->
 
 ```typescript
 // Config
 export const getRateLimitConfigs = () =>
-  client.get("/v1/admin/rate-limits/config");
+  client.get("/ui/admin/rate-limits/config");
 
 export const updateRateLimitConfig = (data: RateLimitConfigUpdate) =>
-  client.put("/v1/admin/rate-limits/config", data);
+  client.put("/ui/admin/rate-limits/config", data);
 
 // Events
 export const queryRateLimitEvents = (params: {
   start?: number; end?: number; group?: string; source?: string; limit?: number;
 }) =>
-  client.get("/v1/admin/rate-limits/events", { params });
+  client.get("/ui/admin/rate-limits/events", { params });
 
 export const exportRateLimitEvents = (params: { start: number; end: number; group?: string }) =>
-  client.get("/v1/admin/rate-limits/events/export", { params, responseType: "blob" });
+  client.get("/ui/admin/rate-limits/events/export", { params, responseType: "blob" });
 
 export const getTopOffenders = (params?: { hours?: number; limit?: number }) =>
-  client.get("/v1/admin/rate-limits/top-offenders", { params });
+  client.get("/ui/admin/rate-limits/top-offenders", { params });
 
 export const getLiveSummary = (params?: { hours?: number }) =>
-  client.get("/v1/admin/rate-limits/live-summary", { params });
+  client.get("/ui/admin/rate-limits/live-summary", { params });
 
 // Blocklist
 export const getBlocklist = () =>
-  client.get("/v1/admin/rate-limits/blocklist");
+  client.get("/ui/admin/rate-limits/blocklist");
 
 export const addToBlocklist = (data: { ip: string; reason?: string }) =>
-  client.post("/v1/admin/rate-limits/blocklist", data);
+  client.post("/ui/admin/rate-limits/blocklist", data);
 
 export const removeFromBlocklist = (entryId: string) =>
   client.delete(`/v1/admin/rate-limits/blocklist/${entryId}`);
 
 // Allowlist
 export const getAllowlist = () =>
-  client.get("/v1/admin/rate-limits/allowlist");
+  client.get("/ui/admin/rate-limits/allowlist");
 
 export const addToAllowlist = (data: { cidr: string; reason?: string }) =>
-  client.post("/v1/admin/rate-limits/allowlist", data);
+  client.post("/ui/admin/rate-limits/allowlist", data);
 
 export const removeFromAllowlist = (entryId: string) =>
   client.delete(`/v1/admin/rate-limits/allowlist/${encodeURIComponent(entryId)}`);
@@ -1113,19 +1122,19 @@ export const removeFromAllowlist = (entryId: string) =>
 
 | File | Purpose |
 |------|---------|
-| `frontend/src/api/endpoints/adminRateLimits.ts` | API wrappers |
-| `frontend/src/pages/admin/rateLimits/RateLimitDashboard.tsx` | Rate limit admin page |
 | `frontend/e2e/admin-rate-limits.spec.ts` | E2E tests (30 tests, sections 555-562) |
 
 ## 11. Files to Modify
 
 | File | Change |
 |------|--------|
-| `app/routers/admin_rate_limits.py` | Add `live-summary` and `events/export` endpoints |
+| `app/routers/admin_rate_limits.py` | Add `live-summary` and `events/export` endpoints (see existing router at line 32, prefix `/ui/admin/rate-limits`) |
 | `app/models.py` | Add rate limit admin Pydantic models |
+| `frontend/src/api/endpoints/adminRateLimits.ts` | Add `getLiveSummary` and `exportRateLimitEvents` wrappers to existing 122-line file <!-- NOTE: file already exists --> |
+| `frontend/src/pages/admin/RateLimitDashboard.tsx` | Add Live Dashboard tab and Event Log enhancements to existing 544-line file <!-- NOTE: file already exists at this path, not in a rateLimits/ subdirectory --> |
 | `frontend/src/api/types.ts` | Add rate limit admin TypeScript types |
-| `frontend/src/App.tsx` | Add `/admin/rate-limits` route |
-| `frontend/src/components/layout/Sidebar.tsx` | Add "Rate Limits" admin nav link |
+| `frontend/src/App.tsx` | Route already exists at line 202 — no change needed <!-- NOTE: /admin/rate-limits route already registered --> |
+| `frontend/src/components/layout/Sidebar.tsx` | Add "Rate Limits" admin nav link (if not already present) |
 
 ## 12. Acceptance Criteria
 
@@ -1139,3 +1148,21 @@ export const removeFromAllowlist = (entryId: string) =>
 8. Top offenders ranked by hit count for configurable time window
 9. All endpoints require ROOT role (403 for non-root)
 10. All 30 E2E tests pass in `frontend/e2e/admin-rate-limits.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/rate_limit_config.py` | 126, 164, 199, 212 | Existing: `get_group_config`, `save_group_override`, `get_all_configs`, `match_path_to_group` |
+| `app/services/rate_limit_store.py` | 26, 86, 99, 129, 150, 154, 172, 176, 188 | Existing: `check_rate_limit`, `is_blocked`, `is_allowlisted`, blocklist/allowlist CRUD |
+| `app/services/rate_limit_dashboard.py` | 23, 66, 116 | Existing: `log_rate_limit_event`, `query_events`, `get_top_offenders` |
+| `app/routers/admin_rate_limits.py` | 32, 63-222 | Existing router, prefix `/ui/admin/rate-limits`, 10 endpoints, auth: `require_root` |
+| `app/auth/policy.py` | 63 | `require_root` — used by all admin_rate_limits endpoints |
+| `app/main.py` | 113, 436 | Registration of `admin_rate_limits_router` |
+| `frontend/src/pages/admin/RateLimitDashboard.tsx` | 1-544 | Existing 544-line dashboard with blocklist/allowlist, events, top offenders, config panel |
+| `frontend/src/pages/admin/RateLimitConfigPanel.tsx` | — | Existing config panel component (imported by RateLimitDashboard) |
+| `frontend/src/api/endpoints/adminRateLimits.ts` | 1-122 | Existing 122-line API wrappers with types |
+| `frontend/src/App.tsx` | 62, 202 | Lazy import of RateLimitDashboard (line 62), route `/admin/rate-limits` (line 202) |
+| `scripts/local-ddb-init.py` | 842, 848 | DDB table definitions: `rate_limits` (line 842), `rate_limit_events` (line 848) |

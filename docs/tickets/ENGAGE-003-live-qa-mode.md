@@ -115,9 +115,9 @@ def broadcast_sse_subscribe(session_id: str) -> asyncio.Queue:
 
 Q&A events (`qa:submitted`, `qa:featured`, `qa:answered`, `qa:dismissed`, `qa:upvote`) will be published through this same SSE channel.
 
-### 2.3 Broadcast Router (`app/routers/broadcast.py`) <!-- VERIFIED: app/routers/broadcast.py exists, router at line 64 -->
+### 2.3 Broadcast Router (`app/routers/broadcast.py`) <!-- CORRECTED: router at line 76, not 64 -->
 
-The broadcast router (line 64) is registered with prefix `/broadcast` and has endpoints for session management, chat, muting, and tip goals. The Q&A endpoints will be added to this same router:
+The broadcast router (see `app/routers/broadcast.py:76`) is registered with prefix `/broadcast` and has endpoints for session management, chat, muting, and tip goals. The Q&A endpoints will be added to this same router:
 
 ```python
 router = APIRouter(prefix="/broadcast", tags=["broadcast"])
@@ -193,9 +193,9 @@ def _goal_out(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 ```
 
-### 2.7 Broadcast Session Fields (`app/services/broadcast_store.py`) <!-- VERIFIED: app/services/broadcast_store.py:459 update_session_fields -->
+### 2.7 Broadcast Session Fields (`app/services/broadcast_store.py`) <!-- CORRECTED: update_session_fields is at line 469, not 459 -->
 
-The session record stores configuration flags that the frontend reads to enable/disable features. The `update_session_fields` function (line 459) uses a get-modify-put cycle: <!-- CORRECTED: was "**fields" kwargs pattern, actually takes a single dict argument: update_session_fields(session_id: str, fields: Dict[str, Any]) -->
+The session record stores configuration flags that the frontend reads to enable/disable features. The `update_session_fields` function (see `app/services/broadcast_store.py:469`) uses a get-modify-put cycle: <!-- CORRECTED: was "**fields" kwargs pattern, actually takes a single dict argument: update_session_fields(session_id: str, fields: Dict[str, Any]) -->
 
 ```python
 def update_session_fields(session_id: str, fields: Dict[str, Any]) -> BroadcastSessionModel:
@@ -953,7 +953,7 @@ if new_status == "stopped":
 POST /broadcast/sessions/{session_id}/qa-mode
 ```
 
-Auth: `Depends(require_ui_session)` -- session owner only.
+Auth: `Depends(require_ui_session)` (see `app/services/sessions.py:283`) -- session owner only. <!-- NOTE: require_ui_session is defined in app/services/sessions.py, NOT app/auth/deps.py -->
 
 Request: `{ "enabled": true }`
 Response: `{ "ok": true, "qa_mode_enabled": true }`
@@ -1104,8 +1104,8 @@ export interface QAStats {
 ```typescript
 // frontend/src/api/endpoints/broadcastQA.ts
 
-import client from "../client";
-import type { QAQuestion, QAQueueResponse, QAStats } from "../types";
+import client from "../client";  // BUG: should be `import { api } from "@/api/client"` — client.ts has no default export
+import type { QAQuestion, QAQueueResponse, QAStats } from "../types";  // NOTE: should be `from "@/api/types"`
 
 export const toggleQAMode = async (sessionId: string, enabled: boolean) =>
   client.post(`/broadcast/sessions/${sessionId}/qa-mode`, { enabled }).then(r => r.data);
@@ -1546,3 +1546,30 @@ case "qa:upvote":
 4. **Phase 4** (days 11-14): E2E tests (sections 89-93b), Q&A statistics endpoint, performance testing with simulated high-volume Q&A, QA.
 
 Feature flag: `QA_MODE_ENABLED` (default `false`). When disabled, the Q&A toggle is hidden in the dashboard, and the `qa-mode` endpoint returns 400. The feature flag is checked in both the backend (endpoint handler) and frontend (QAModeToggle visibility).
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | Status |
+|-----|------|---------|--------|
+| Broadcast chat store | `app/services/broadcast_chat_store.py` | 423 lines | VERIFIED |
+| Broadcast SSE | `app/services/broadcast_sse.py` | 49 lines | VERIFIED |
+| `broadcast_sse_publish` | `app/services/broadcast_sse.py` | 29 | VERIFIED |
+| `broadcast_sse_subscribe` | `app/services/broadcast_sse.py` | 11 | VERIFIED |
+| Broadcast router | `app/routers/broadcast.py` | 76 (router def), 3969 lines | VERIFIED (ticket said line 64) |
+| `_CHAT_RATE_LOCK` | `app/services/broadcast_chat_store.py` | 20 | VERIFIED |
+| `_enforce_chat_mute` | `app/services/broadcast_chat_store.py` | 117 | VERIFIED |
+| `_goal_out` | `app/services/broadcast_tip_goals.py` | 189 | VERIFIED |
+| `update_session_fields` | `app/services/broadcast_store.py` | 469 | VERIFIED (ticket said 459) |
+| `send_chat_message` | `app/services/broadcast_chat_store.py` | 136 | VERIFIED |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED (NOT in app/auth/deps.py) |
+| Broadcast Q&A service | `app/services/broadcast_qa.py` | exists (13276 bytes) | VERIFIED |
+| Q&A toggle endpoint | `app/routers/broadcast.py` | 3822 | VERIFIED |
+| Frontend QA API | `frontend/src/api/endpoints/broadcastQA.ts` | exists | VERIFIED (BUG: uses `import client from "../client"` — no default export in client.ts) |
+| QAModeToggle | `frontend/src/pages/broadcast/QAModeToggle.tsx` | exists (1133 bytes) | VERIFIED |
+| QAQuestionInput | `frontend/src/pages/broadcast/QAQuestionInput.tsx` | exists (2230 bytes) | VERIFIED |
+| QAQueuePanel | `frontend/src/pages/broadcast/QAQueuePanel.tsx` | exists (3230 bytes) | VERIFIED |
+| QAQuestionCard | `frontend/src/pages/broadcast/QAQuestionCard.tsx` | exists (2345 bytes) | VERIFIED |
+| QAFeaturedOverlay | `frontend/src/pages/broadcast/QAFeaturedOverlay.tsx` | exists (1110 bytes) | VERIFIED |
+| QAStatsPanel | `frontend/src/pages/broadcast/QAStatsPanel.tsx` | exists (1801 bytes) | VERIFIED |

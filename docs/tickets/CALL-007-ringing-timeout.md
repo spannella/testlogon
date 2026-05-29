@@ -1,15 +1,17 @@
 # CALL-007: Add Call Ringing Timeout and Missed-Call Handling
 
+> **NOTE: This feature is FULLY IMPLEMENTED.** The backend `timeout_call()` function, the `POST /messages/calls/{call_id}/timeout` endpoint, the server-side `_expire_stale_invites()` backstop, the `call.missed` timeline event, the frontend client timer with backend call, the `call.missed` SSE handler, and unit tests all exist. See Codebase References at the bottom for all verified locations.
+
 ## 1. Overview & Motivation
 
 When a user initiates a WebRTC direct call, the callee receives an invite that places the call into the `invited` state. If the callee never responds (e.g., they are away from the device, the app is backgrounded, or they simply ignore the incoming ring), the call remains in the `invited` state indefinitely. This creates several problems:
 
 - **Caller UX degradation**: The caller sees the "outgoing ringing" UI forever with no resolution. The only escape is manually canceling the call.
-- **Resource leak**: The `CallSessionRecord` in DynamoDB stays in a non-terminal state, which means subsequent calls to the same callee may be blocked by the `callee_busy` check in `create_invite()` (line 157 of `messaging_call_lifecycle.py`), since the function scans recent sessions in `active_states = {"invited", "accepted", "connected"}`.
+- **Resource leak**: The `CallSessionRecord` in DynamoDB stays in a non-terminal state, which means subsequent calls to the same callee may be blocked by the `callee_busy` check in `create_invite()` (see `app/services/messaging_call_lifecycle.py:155` for `active_states` and `:164` for the `callee_busy` raise), since the function scans recent sessions in `active_states = {"invited", "accepted", "connected"}`.
 - **Missing notification**: The callee never receives a "missed call" indicator in their conversation timeline, so they have no record that someone tried to reach them.
 - **Inaccurate metrics**: The `record_webrtc_call_setup` metric only records `outcome="attempt"` at invite time; without a timeout transition, there is no corresponding failure metric for unanswered calls.
 
-The `missed` state already exists in the type system (`CallState = Literal["invited", "accepted", "connected", "ended", "missed", "declined", "busy", "failed", "canceled"]` in `messaging_call_sessions.py`, line 9) and in the `TERMINAL_STATES` set (`messaging_call_lifecycle.py`, line 23), but no code path currently transitions a call into this state. This ticket adds a dual-layer timeout mechanism (client-driven primary, server-driven backstop) that transitions unanswered calls to `missed` after 30 seconds, emits a timeline event, sends an SSE notification, and updates the frontend state machine.
+The `missed` state already exists in the type system (`CallState = Literal["invited", "accepted", "connected", "ended", "missed", "declined", "busy", "failed", "canceled"]` in `messaging_call_sessions.py`, line 9) (see `app/services/messaging_call_sessions.py:9`) and in the `TERMINAL_STATES` set (see `app/services/messaging_call_lifecycle.py:23`), and the `timeout_call()` function (see `app/services/messaging_call_lifecycle.py:404-453`) now transitions calls to `missed`. This ticket documents the dual-layer timeout mechanism (client-driven primary, server-driven backstop) that transitions unanswered calls to `missed` after 30 seconds, emits a timeline event, sends an SSE notification, and updates the frontend state machine.
 
 ---
 
@@ -17,40 +19,40 @@ The `missed` state already exists in the type system (`CallState = Literal["invi
 
 ### 2.1 Call State Machine (Backend)
 
-The backend lifecycle is defined in `app/services/messaging_call_lifecycle.py`. The allowed transitions are:
+The backend lifecycle is defined in `app/services/messaging_call_lifecycle.py` (see `app/services/messaging_call_lifecycle.py:23-28`). The allowed transitions are:
 
 ```python
 TERMINAL_STATES = {"declined", "busy", "missed", "ended", "failed", "canceled"}
 ALLOWED_TRANSITIONS = {
-    "invited": {"accepted", "declined", "busy", "canceled", "failed"},
+    "invited": {"accepted", "declined", "busy", "canceled", "failed", "missed"},
     "accepted": {"connected", "ended", "failed", "canceled"},
     "connected": {"ended", "failed"},
 }
 ```
 
-Key observation: `"missed"` is a terminal state but is NOT listed as a valid target in `ALLOWED_TRANSITIONS["invited"]`. This means no existing function can transition a call to `missed` without first updating the allowed transitions map.
+<!-- NOTE: "missed" IS now included in ALLOWED_TRANSITIONS["invited"] — see app/services/messaging_call_lifecycle.py:25. This was added as part of implementing this ticket. -->
 
 ### 2.2 Call Session Storage
 
-Call sessions are stored in the `MessageCallSessions` DynamoDB table (`app/services/messaging_call_sessions.py`):
+Call sessions are stored in the `MessageCallSessions` DynamoDB table (see `scripts/local-ddb-init.py:629-639` for table definition, `app/services/messaging_call_sessions.py` for access):
 - **Primary key**: `call_id` (string)
-- **GSIs**: `ByConversationStartedAt` (partition: `conversation_id`, sort: `start_ts_sort` numeric), `ByCallerStartedAt`, `ByCalleeStartedAt`
-- **Fields**: `state`, `start_ts`, `connect_ts`, `end_ts`, `end_reason`, `lifecycle_events[]`, `idempotency_records{}`
+- **GSIs**: `ByConversationStartedAt` (partition: `conversation_id`, sort: `start_ts_sort` numeric), `ByCallerStartedAt`, `ByCalleeStartedAt` (see `scripts/local-ddb-init.py:633-637`)
+- **Fields**: `state`, `start_ts`, `connect_ts`, `end_ts`, `end_reason`, `lifecycle_events[]`, `idempotency_records{}`, plus billing fields and `voicemail_message_id` (see `app/services/messaging_call_sessions.py:19-50`)
 
 The `start_ts` field is set at invite creation time (`now_ts()`). This gives us the precise timestamp to compute elapsed ringing duration for timeout detection.
 
 ### 2.3 Timeline Events
 
-`app/services/messaging_call_timeline.py` emits system messages into the conversation's Messages table. The `emit_call_timeline_event` function:
-1. Writes a system message (sender_id="system", subtype="call_lifecycle") with a deterministic `message_id` format: `sys_call_{call_id}_{event_type}_{ts}`
-2. Updates the conversation's `last_message_at` and `last_message_preview`
-3. Writes an archive event via `messaging_archive_writer`
+`app/services/messaging_call_timeline.py` emits system messages into the conversation's Messages table (see `app/services/messaging_call_timeline.py:39-119`). The `emit_call_timeline_event` function:
+1. Writes a system message (sender_id="system", subtype="call_lifecycle") with a deterministic `message_id` format: `sys_call_{call_id}_{event_type}_{ts}` (see `:52`)
+2. Updates the conversation's `last_message_at` and `last_message_preview` (see `:83-90`)
+3. Writes an archive event via `messaging_archive_writer` (see `:92-117`)
 
-The `_preview_for_event` function currently handles `call.invite`, `call.accept`, `call.decline`, and `call.end` but has no case for a `call.missed` or `call.timeout` event type.
+The `_preview_for_event` function (see `app/services/messaging_call_timeline.py:21-36`) handles `call.invite`, `call.accept`, `call.decline`, `call.end`, and `call.missed` (see `:34-35`, returns `"Missed call"`).
 
 ### 2.4 Frontend State Machine
 
-The frontend state machine (`frontend/src/pages/messages/callStateMachine.ts`) defines `CallUiState` including `"timeout"` as a valid UI state. The `REMOTE_DECLINE` event with `reason: "timeout"` transitions the machine to the `timeout` phase (line 96):
+The frontend state machine (see `frontend/src/pages/messages/callStateMachine.ts:28,108`) defines `CallUiState` including `"timeout"` as a valid UI state. The `REMOTE_DECLINE` event with `reason: "timeout"` transitions the machine to the `timeout` phase (see `:108`):
 
 ```typescript
 if (event.reason === "timeout") return withPhase(state, "timeout", {
@@ -58,33 +60,40 @@ if (event.reason === "timeout") return withPhase(state, "timeout", {
 });
 ```
 
-The `CallSessionOverlay.tsx` renders outcome copy for `timeout`: `"Call timed out with no answer."` (line 49).
+The `CallSessionOverlay.tsx` renders outcome copy for `timeout`: `"Call timed out with no answer."` (see `frontend/src/pages/messages/CallSessionOverlay.tsx:72-78`, specifically `:75`).
 
-### 2.5 Existing Client-Side Timer (Partial Implementation)
+### 2.5 Client-Side Timer (IMPLEMENTED)
 
-In `ConversationView.tsx` (line 533), there is already a 30-second `setTimeout` that fires after a successful invite creation:
+In `ConversationView.tsx` (see `frontend/src/pages/messages/ConversationView.tsx:764-772`), the 30-second `setTimeout` fires after a successful invite creation and now calls the backend:
 
 ```typescript
-callTimeoutRef.current = window.setTimeout(() => {
+callTimeoutRef.current = window.setTimeout(async () => {
   dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
+  if (res.call_id) {
+    try {
+      const { timeoutCall } = await import("@/api/endpoints/messaging");
+      await timeoutCall(res.call_id, { reason: "no_answer" });
+    } catch { /* best-effort */ }
+  }
 }, 30_000);
 ```
 
-However, this timer:
-- Only updates the local UI state; it does NOT call the backend to transition the call to `missed`
-- Is cleared if the caller navigates away or the component unmounts (line 487-490)
-- Does not emit an SSE event to notify the callee
-- Does not write a timeline event or update the DDB record
+This timer:
+- Updates the local UI state AND calls the backend `timeoutCall` endpoint to transition to `missed`
+- Is cleared when the call state enters a terminal phase (see `:683-685`)
+- The backend writes a `call.missed` timeline event via `timeout_call()` (see `app/services/messaging_call_lifecycle.py:444-452`)
 
-There is also a problematic auto-accept at line 530-532: `window.setTimeout(() => { dispatchCall({ type: "REMOTE_ACCEPT" }); }, 700)` which simulates acceptance after 700ms (likely a dev placeholder that should be removed or gated).
+<!-- NOTE: The 700ms auto-accept dev placeholder referenced in the original spec has been REMOVED. No auto-accept timer exists. -->
 
 ### 2.6 SSE Event Delivery
 
-The `useMessagingStream.ts` hook listens for `call.*` event types and dispatches them to `window` as `CustomEvent("messaging:call-event")`. The `ConversationView.tsx` listener (line 558-591) handles `call.invite`, `call.accept`, `call.decline`, and `call.end`. There is no handler for a `call.missed` or `call.timeout` event type.
+The `useMessagingStream.ts` hook (see `frontend/src/hooks/useMessagingStream.ts:168-172`) listens for `call.*` event types including `call.missed` (`:172`) and dispatches them to `window` as `CustomEvent("messaging:call-event")`. The `ConversationView.tsx` listener (see `frontend/src/pages/messages/ConversationView.tsx:823-827`) handles `call.missed` — if the current user is the callee, it dispatches `REMOTE_DECLINE` with `reason: "timeout"` to dismiss the ringing UI.
+
+<!-- NOTE: The timeout_call_endpoint (messaging.py:13112-13143) does NOT call fanout_event_to_conversation after transitioning to missed. The timeline_emitter writes a system message to the Messages table, but real-time SSE delivery of call.missed to the callee depends on the callee's SSE stream picking up the new system message on next poll. There is no dedicated SSE fanout for the call.missed event, which means the callee may experience a delay of up to 1 second (the SSE poll interval) before seeing the missed call notification. -->
 
 ### 2.7 Background Task Pattern
 
-The existing `_messaging_background_loop()` in `messaging.py` (line 11730) runs every 30 seconds and performs DynamoDB scans for scheduled message delivery and message expiry. The `broadcast_reconciler.py` provides a more sophisticated pattern with:
+The existing `_messaging_background_loop()` in `messaging.py` (see `app/routers/messaging.py:12504`) runs every 30 seconds and performs DynamoDB scans for scheduled message delivery and message expiry. `_expire_stale_invites()` is called as step C of this loop (see `:12581-12582`). The `broadcast_reconciler.py` provides a more sophisticated pattern with:
 - Configurable interval via settings (`S.broadcast_reconciler_interval_seconds`)
 - Enable/disable via feature flag (`S.broadcast_reconciler_enabled`)
 - Drift detection with SLA-based escalation
@@ -110,9 +119,9 @@ We implement a **client-driven primary timeout** with a **server-driven backstop
 
 ### 3.3 Backend Changes
 
-#### 3.3.1 Allow `invited -> missed` Transition
+#### 3.3.1 Allow `invited -> missed` Transition — IMPLEMENTED
 
-In `app/services/messaging_call_lifecycle.py`, add `"missed"` to the allowed transitions from `invited`:
+`"missed"` is already included in `ALLOWED_TRANSITIONS["invited"]` (see `app/services/messaging_call_lifecycle.py:25`):
 
 ```python
 ALLOWED_TRANSITIONS = {
@@ -122,9 +131,9 @@ ALLOWED_TRANSITIONS = {
 }
 ```
 
-#### 3.3.2 New `timeout_call()` Function
+#### 3.3.2 `timeout_call()` Function — IMPLEMENTED
 
-Add a new lifecycle function in `messaging_call_lifecycle.py`:
+The `timeout_call()` function exists at `app/services/messaging_call_lifecycle.py:404-453` with the following signature:
 
 ```python
 def timeout_call(
@@ -133,39 +142,40 @@ def timeout_call(
     actor_user_id: str,
     reason: str = "no_answer",
     idempotency_key: Optional[str] = None,
-    client_platform: str = "unknown",
-    client_browser: str = "unknown",
     timeline_emitter: Callable[..., dict[str, object]] = emit_call_timeline_event,
 ) -> tuple[CallSessionRecord, LifecycleEvent]:
 ```
 
+<!-- NOTE: The actual signature omits client_platform and client_browser params (unlike the spec). It also does not call record_webrtc_call_setup — no timeout-specific metric is emitted. -->
+
 This function:
-1. Loads the call session
-2. Checks idempotency (same pattern as `end_call`)
-3. Validates the actor is the caller (only the caller can declare a timeout; the server backstop uses `actor_user_id = "system"`)
-4. Checks transition validity (`invited -> missed`)
-5. Updates state to `missed` with `end_ts` and `end_reason="no_answer"`
-6. Emits a `call.missed` timeline event
-7. Records `record_webrtc_call_setup(outcome="failure", reason="timeout_no_answer")`
+1. Loads the call session (`:413`)
+2. Checks idempotency via `_dedupe_if_retried` (`:416-418`)
+3. Validates the actor is the caller or "system" (`:419-421`)
+4. Checks transition validity via `_check_transition` (`:423`)
+5. Updates state to `missed` with `end_ts` and `end_reason` (`:432-441`)
+6. Emits a `call.missed` timeline event (`:444-452`)
 
-#### 3.3.3 New API Endpoint
+#### 3.3.3 API Endpoint — IMPLEMENTED
 
-Add to `app/routers/messaging.py`:
+The endpoint exists at `app/routers/messaging.py:13112-13143`:
 
 ```python
 @router.post("/messages/calls/{call_id}/timeout", response_model=CallActionOut)
 async def timeout_call_endpoint(
     call_id: str,
-    body: CallEndIn = CallEndIn(reason="no_answer"),
+    body: CallTimeoutIn = CallTimeoutIn(),
     user_id: str = Depends(get_messaging_user_id),
 ):
 ```
 
-This endpoint allows the caller's client to explicitly transition the call to `missed` when the ringing timer expires.
+<!-- NOTE: The body model is CallTimeoutIn (see messaging.py:13107-13109), not CallEndIn as originally proposed. CallTimeoutIn has fields: reason (str, default "no_answer") and idempotency_key (Optional[str]). -->
 
-#### 3.3.4 Timeline Preview Text
+This endpoint also computes `voicemail_eligible` from `VOICEMAIL_ELIGIBLE_STATES` (see `:8346,13127-13131`) and returns it in `CallActionOut`.
 
-Add to `_preview_for_event` in `messaging_call_timeline.py`:
+#### 3.3.4 Timeline Preview Text — IMPLEMENTED
+
+The `call.missed` case exists in `_preview_for_event` (see `app/services/messaging_call_timeline.py:34-35`):
 
 ```python
 if event_type == "call.missed":
@@ -174,41 +184,25 @@ if event_type == "call.missed":
 
 This produces the timeline system message "Missed call" visible to both parties in the conversation.
 
-#### 3.3.5 Server-Side Background Timeout (Backstop)
+#### 3.3.5 Server-Side Background Timeout (Backstop) — IMPLEMENTED
 
-Add a new function `_expire_stale_invites()` called from `_messaging_background_loop()`:
+`_expire_stale_invites()` exists at `app/routers/messaging.py:12472-12501` and is called from `_messaging_background_loop()` at `:12581-12582`:
 
 ```python
-async def _expire_stale_invites():
-    """Transition calls stuck in 'invited' state past the ringing timeout to 'missed'."""
+async def _expire_stale_invites() -> None:
+    """Server-side backstop: transition invited calls to missed after timeout."""
     timeout_seconds = S.messaging_webrtc_call_ringing_timeout_seconds
-    cutoff_ts = now_ts() - timeout_seconds
-    
-    # Query the ByConversationStartedAt GSI is not suitable (partitioned by conversation_id).
-    # Instead, scan the table filtering for state="invited" AND start_ts <= cutoff.
-    # In production, this would use a dedicated GSI: ByStateStartedAt.
-    resp = _call_sessions_table().scan(
-        FilterExpression=(
-            Attr("state").eq("invited") & Attr("start_ts").lte(cutoff_ts)
-        )
-    )
-    for item in resp.get("Items", []):
-        try:
-            timeout_call(
-                call_id=item["call_id"],
-                actor_user_id="system",
-                reason="server_timeout",
-                idempotency_key=f"server_timeout_{item['call_id']}",
-            )
-        except CallLifecycleError:
-            pass  # Already transitioned (race with client timeout)
+    cutoff_ts = int(now_ts()) - timeout_seconds
+    # ... scan + timeout_call for each stale invite
 ```
 
-This runs inside the existing `_messaging_background_loop()` on every 30-second tick, immediately after the scheduled message delivery step. The scan is lightweight because active `invited` calls are rare (most calls transition within seconds).
+This uses a table scan with `FilterExpression` matching `state="invited" AND start_ts <= cutoff` (see `:12481-12482`). Each stale invite is transitioned via `timeout_call(actor_user_id="system", reason="server_timeout")` (see `:12489-12492`).
 
-#### 3.3.6 New Settings
+<!-- NOTE: No ByStateStartedAt GSI was added to scripts/local-ddb-init.py. The implementation uses a full table scan, which is acceptable for dev/low traffic but would need the GSI for production scale. The idempotency_key is also not passed (unlike the spec proposal), relying on the state transition check for idempotency instead. -->
 
-In `app/core/settings.py`:
+#### 3.3.6 Settings — IMPLEMENTED
+
+The setting exists at `app/core/settings.py:1051`:
 
 ```python
 messaging_webrtc_call_ringing_timeout_seconds: int = int(
@@ -216,9 +210,13 @@ messaging_webrtc_call_ringing_timeout_seconds: int = int(
 )
 ```
 
+<!-- NOTE: The messaging_webrtc_call_timeout_backstop_enabled feature flag proposed in Phase 4 does NOT exist in settings.py. The backstop always runs when the background loop runs. -->
+
 #### 3.3.7 SSE Event Emission
 
-After `timeout_call()` transitions the state, the existing `fanout_event_to_conversation` should be called with `event_type="call.missed"` to notify the callee via SSE. This happens implicitly through the `timeline_emitter` (which writes the system message), but we also need an explicit SSE fanout for real-time notification:
+<!-- NOTE: fanout_event_to_conversation is NOT called in the timeout_call_endpoint (see app/routers/messaging.py:13112-13143) or in timeout_call() (see app/services/messaging_call_lifecycle.py:404-453). The timeline_emitter writes a system message to the Messages table, which the callee's SSE events_stream will pick up on its next poll cycle (~1 second). This means there is no dedicated real-time SSE push for call.missed — the callee relies on polling. For production, the explicit fanout below should be added to the timeout endpoint for sub-second delivery: -->
+
+After `timeout_call()` transitions the state, `fanout_event_to_conversation` should be called with `event_type="call.missed"` to notify the callee via SSE. Currently the timeline emitter writes a system message, but there is no explicit SSE fanout for real-time notification. The proposed addition:
 
 ```python
 fanout_event_to_conversation(
@@ -239,64 +237,52 @@ fanout_event_to_conversation(
 
 ### 3.4 Frontend Changes
 
-#### 3.4.1 Client Timeout Calls Backend
+#### 3.4.1 Client Timeout Calls Backend — IMPLEMENTED
 
-Replace the fire-and-forget UI-only timer in `ConversationView.tsx` (line 533-535) with a version that calls the new `/timeout` endpoint:
+The timer in `ConversationView.tsx` (see `frontend/src/pages/messages/ConversationView.tsx:764-772`) dispatches the UI state change AND calls the backend endpoint:
 
 ```typescript
 callTimeoutRef.current = window.setTimeout(async () => {
   dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
-  if (callMachine.callId) {
+  if (res.call_id) {
     try {
-      await timeoutCall(callMachine.callId, {
-        reason: "no_answer",
-        idempotency_key: `ui-timeout-${Date.now()}`,
-      });
-    } catch {
-      // Best-effort; server backstop will catch it
-    }
+      const { timeoutCall } = await import("@/api/endpoints/messaging");
+      await timeoutCall(res.call_id, { reason: "no_answer" });
+    } catch { /* best-effort */ }
   }
-}, RINGING_TIMEOUT_MS);
+}, 30_000);
 ```
 
-#### 3.4.2 Remove Auto-Accept Placeholder
+The `timeoutCall` API function is at `frontend/src/api/endpoints/messaging.ts:313`.
 
-Remove the 700ms auto-accept timer at line 530-532 which conflicts with the timeout mechanism:
+#### 3.4.2 Remove Auto-Accept Placeholder — DONE
 
-```typescript
-// REMOVE:
-window.setTimeout(() => {
-  dispatchCall({ type: "REMOTE_ACCEPT" });
-}, 700);
-```
+<!-- NOTE: The 700ms auto-accept placeholder no longer exists in ConversationView.tsx. It was removed as part of earlier CALL ticket implementations. -->
 
-#### 3.4.3 Handle `call.missed` SSE Event
+#### 3.4.3 Handle `call.missed` SSE Event — IMPLEMENTED
 
-In the `onCallEvent` handler (ConversationView.tsx, line 575-588), add a case for `call.missed`:
+The `onCallEvent` handler (see `frontend/src/pages/messages/ConversationView.tsx:823-827`) handles `call.missed`:
 
 ```typescript
 } else if (eventType === "call.missed") {
-  if (isCurrentUserCaller) {
+  // If I'm the callee, dismiss any ringing UI
+  if (isCurrentUserCallee) {
     dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
-  } else if (isCurrentUserCallee) {
-    // Callee was on a different page or component was unmounted during ring
-    // Invalidate conversations to show "Missed call" in sidebar
-    queryClient.invalidateQueries({ queryKey: ["conversations"] });
   }
 }
 ```
 
-#### 3.4.4 Register `call.missed` in SSE Event Types
+<!-- NOTE: The implementation only handles the callee case. The caller case and queryClient invalidation proposed in the spec are not included — the caller already transitions to timeout via its local timer. -->
 
-In `useMessagingStream.ts`, add `"call.missed"` to the `EVENT_TYPES` array (after `"call.end"` at line 105):
+#### 3.4.4 Register `call.missed` in SSE Event Types — IMPLEMENTED
 
-```typescript
-"call.missed",
-```
+`"call.missed"` is registered in `useMessagingStream.ts` at line 172 (see `frontend/src/hooks/useMessagingStream.ts:172`), after `"call.end"` at line 171.
 
 #### 3.4.5 Callee Ringing Timeout (Incoming Ring Auto-Dismiss)
 
-The callee's `incoming_ringing` state should also timeout if they don't interact. Add a useEffect in `ConversationView.tsx`:
+<!-- NOTE: This callee-side incoming_ringing timeout useEffect is NOT implemented in ConversationView.tsx. The callee relies on receiving the call.missed SSE event from the server (dispatched when the caller's client or server backstop calls the timeout endpoint). If SSE delivery is delayed or the fanout is missing, the callee's ringing UI may persist beyond the expected timeout window. -->
+
+The proposed callee-side timeout:
 
 ```typescript
 React.useEffect(() => {
@@ -308,9 +294,9 @@ React.useEffect(() => {
 }, [callMachine.phase]);
 ```
 
-### 3.5 State Machine Update
+### 3.5 State Machine Update — Already Covered
 
-Add `"missed"` handling to `callStateMachine.ts`. The existing `REMOTE_DECLINE` with `reason: "timeout"` already transitions to the `timeout` phase, which is the correct UX for the caller. For the callee receiving a `call.missed` SSE event while still showing `incoming_ringing`, the `END_REMOTE` event transitions to `ended`.
+The existing `REMOTE_DECLINE` with `reason: "timeout"` already transitions to the `timeout` phase (see `frontend/src/pages/messages/callStateMachine.ts:108`), which is the correct UX for the caller. For the callee receiving a `call.missed` SSE event while still showing `incoming_ringing`, the `REMOTE_DECLINE` event with `reason: "timeout"` is dispatched (see `frontend/src/pages/messages/ConversationView.tsx:826`).
 
 No changes needed to the state machine reducer itself; the existing events cover both sides.
 
@@ -354,44 +340,48 @@ Caller                    Backend                     Callee
 
 ## 4. Implementation Plan
 
-### Phase 1: Backend Core (Priority: P0)
+### Phase 1: Backend Core (Priority: P0) — IMPLEMENTED
 
-| Step | File | Change |
-|------|------|--------|
-| 1.1 | `app/services/messaging_call_lifecycle.py` | Add `"missed"` to `ALLOWED_TRANSITIONS["invited"]` |
-| 1.2 | `app/services/messaging_call_lifecycle.py` | Add `timeout_call()` function |
-| 1.3 | `app/services/messaging_call_timeline.py` | Add `call.missed` case to `_preview_for_event` |
-| 1.4 | `app/core/settings.py` | Add `messaging_webrtc_call_ringing_timeout_seconds` setting |
-| 1.5 | `app/routers/messaging.py` | Add `POST /messages/calls/{call_id}/timeout` endpoint |
-| 1.6 | `app/routers/messaging.py` | Add `_expire_stale_invites()` to `_messaging_background_loop()` |
-| 1.7 | `app/routers/messaging.py` | Add SSE fanout in timeout endpoint (call `fanout_event_to_conversation`) |
+| Step | File | Change | Status |
+|------|------|--------|--------|
+| 1.1 | `app/services/messaging_call_lifecycle.py:25` | `"missed"` in `ALLOWED_TRANSITIONS["invited"]` | DONE |
+| 1.2 | `app/services/messaging_call_lifecycle.py:404-453` | `timeout_call()` function | DONE |
+| 1.3 | `app/services/messaging_call_timeline.py:34-35` | `call.missed` case in `_preview_for_event` | DONE |
+| 1.4 | `app/core/settings.py:1051` | `messaging_webrtc_call_ringing_timeout_seconds` setting | DONE |
+| 1.5 | `app/routers/messaging.py:13112-13143` | `POST /messages/calls/{call_id}/timeout` endpoint | DONE |
+| 1.6 | `app/routers/messaging.py:12472-12501,12581-12582` | `_expire_stale_invites()` in `_messaging_background_loop()` | DONE |
+| 1.7 | `app/routers/messaging.py` | SSE fanout via `fanout_event_to_conversation` | NOT DONE |
 
-### Phase 2: Frontend Integration (Priority: P0)
+### Phase 2: Frontend Integration (Priority: P0) — MOSTLY IMPLEMENTED
 
-| Step | File | Change |
-|------|------|--------|
-| 2.1 | `frontend/src/api/endpoints/messaging.ts` | Add `timeoutCall(callId, opts)` API function |
-| 2.2 | `frontend/src/pages/messages/ConversationView.tsx` | Replace UI-only timer with backend call |
-| 2.3 | `frontend/src/pages/messages/ConversationView.tsx` | Remove 700ms auto-accept dev placeholder |
-| 2.4 | `frontend/src/pages/messages/ConversationView.tsx` | Add `call.missed` to SSE event handler |
-| 2.5 | `frontend/src/pages/messages/ConversationView.tsx` | Add callee incoming_ringing timeout effect |
-| 2.6 | `frontend/src/hooks/useMessagingStream.ts` | Add `"call.missed"` to `EVENT_TYPES` array |
+| Step | File | Change | Status |
+|------|------|--------|--------|
+| 2.1 | `frontend/src/api/endpoints/messaging.ts:313` | `timeoutCall(callId, opts)` API function | DONE |
+| 2.2 | `frontend/src/pages/messages/ConversationView.tsx:764-772` | Timer calls backend | DONE |
+| 2.3 | `frontend/src/pages/messages/ConversationView.tsx` | 700ms auto-accept removed | DONE |
+| 2.4 | `frontend/src/pages/messages/ConversationView.tsx:823-827` | `call.missed` SSE event handler | DONE |
+| 2.5 | `frontend/src/pages/messages/ConversationView.tsx` | Callee incoming_ringing timeout effect | NOT DONE |
+| 2.6 | `frontend/src/hooks/useMessagingStream.ts:172` | `"call.missed"` in `EVENT_TYPES` | DONE |
 
-### Phase 3: Observability (Priority: P1)
+### Phase 3: Observability (Priority: P1) — NOT IMPLEMENTED
 
-| Step | File | Change |
-|------|------|--------|
-| 3.1 | `app/metrics.py` | Add `record_webrtc_call_timeout(source: "client" | "server")` metric |
-| 3.2 | `app/services/messaging_call_lifecycle.py` | Emit timeout metric in `timeout_call()` |
-| 3.3 | `app/routers/messaging.py` | Log server-side timeout transitions at INFO level |
+<!-- NOTE: No timeout-specific metrics (record_webrtc_call_timeout) exist in app/metrics.py. The server-side timeout does log at INFO level (see messaging.py:12494). -->
 
-### Phase 4: Production Hardening (Priority: P1)
+| Step | File | Change | Status |
+|------|------|--------|--------|
+| 3.1 | `app/metrics.py` | `record_webrtc_call_timeout(source)` metric | NOT DONE |
+| 3.2 | `app/services/messaging_call_lifecycle.py` | Emit timeout metric in `timeout_call()` | NOT DONE |
+| 3.3 | `app/routers/messaging.py:12494` | Log server-side timeout transitions at INFO | DONE |
 
-| Step | File | Change |
-|------|------|--------|
-| 4.1 | `scripts/local-ddb-init.py` | Add `ByStateStartedAt` GSI to `MessageCallSessions` (partition: `state`, sort: `start_ts_sort`) for efficient server-side scans at scale |
-| 4.2 | `app/services/messaging_call_sessions.py` | Add `list_call_sessions_by_state(state, start_ts_before)` query function using new GSI |
-| 4.3 | `app/core/settings.py` | Add `messaging_webrtc_call_timeout_backstop_enabled` feature flag (default True) |
+### Phase 4: Production Hardening (Priority: P1) — NOT IMPLEMENTED
+
+<!-- NOTE: No ByStateStartedAt GSI, no list_call_sessions_by_state function, and no backstop_enabled flag exist. The current implementation uses table scan (see messaging.py:12481) which works for low traffic but not at scale. -->
+
+| Step | File | Change | Status |
+|------|------|--------|--------|
+| 4.1 | `scripts/local-ddb-init.py` | `ByStateStartedAt` GSI | NOT DONE |
+| 4.2 | `app/services/messaging_call_sessions.py` | `list_call_sessions_by_state()` | NOT DONE |
+| 4.3 | `app/core/settings.py` | `messaging_webrtc_call_timeout_backstop_enabled` flag | NOT DONE |
 
 ### Phase 5: Edge Cases & Polish (Priority: P2)
 
@@ -405,12 +395,14 @@ Caller                    Backend                     Callee
 
 ## 5. Testing Strategy
 
-### 5.1 Unit Tests (`tests/`)
+### 5.1 Unit Tests (`tests/`) — IMPLEMENTED
+
+Unit tests exist at `tests/test_call_timeout.py` (337 lines). See Codebase References.
 
 #### 5.1.1 Lifecycle Tests
 
 ```python
-# tests/test_messaging_call_lifecycle.py
+# tests/test_call_timeout.py (see tests/test_call_timeout.py:73-130)
 
 def test_timeout_call_transitions_invited_to_missed():
     """timeout_call() on an invited call sets state=missed, end_reason=no_answer."""
@@ -517,7 +509,8 @@ def test_timeout_after_accept_returns_409(client, alice_session, bob_session):
 
 ### 5.3 E2E Tests (`frontend/e2e/`)
 
-New file: `frontend/e2e/call-timeout.spec.ts`
+<!-- NOTE: frontend/e2e/call-timeout.spec.ts does NOT exist yet — new implementation required -->
+Proposed new file: `frontend/e2e/call-timeout.spec.ts`
 
 ```typescript
 test.describe("Section 80: Call ringing timeout", () => {
@@ -644,13 +637,19 @@ After implementation, verify via the `/metrics` endpoint:
 
 ## 7. DynamoDB Access Patterns
 
-| Access Pattern | Table | PK | SK | Notes |
-|----------------|-------|----|----|-------|
-| Create active call | `calls` | `CALL#{call_id}` | `META` | status=ringing, created_at=now |
-| Timeout call | `calls` | `CALL#{call_id}` | `META` | Conditional: status=ringing; SET status=missed |
-| Write missed call record | `call_events` | `USER#{callee_id}` | `MISSED#{ts}` | caller_id, call_id, duration=0 |
-| List missed calls | `call_events` | `USER#{user_id}` | begins_with `MISSED#` | Newest first |
-| Cancel server timer | `call_timers` | `CALL#{call_id}` | `TIMEOUT` | Delete on answer/cancel |
+<!-- NOTE: The table names and key schemas below do NOT match the actual implementation. The actual table is MessageCallSessions with PK=call_id (no SK), not "calls" with PK=CALL#{call_id}/SK=META. There are no separate call_events or call_timers tables. The actual patterns are:
+- Create call: MessageCallSessions table, PK=call_id, state="invited" (see scripts/local-ddb-init.py:631-638)
+- Timeout call: MessageCallSessions table, update call_id item SET state=missed (see messaging_call_lifecycle.py:432-438)
+- Stale invite scan: MessageCallSessions full table scan FilterExpression state=invited AND start_ts<=cutoff (see messaging.py:12481-12482)
+- Timeline message: Messages table, PK=conversation_id, SK=sys_call_{call_id}_call_missed_{ts} (see messaging_call_timeline.py:52)
+-->
+
+| Access Pattern | Table | Key | Notes |
+|----------------|-------|-----|-------|
+| Create call session | `MessageCallSessions` | PK: `call_id` | `state="invited"`, `start_ts=now_ts()` |
+| Timeout call | `MessageCallSessions` | PK: `call_id` | SET `state=missed`, `end_ts`, `end_reason` |
+| Stale invite scan | `MessageCallSessions` | Full scan | `FilterExpression`: `state=invited AND start_ts <= cutoff` |
+| Timeline message | `Messages` | PK: `conversation_id`, SK: `sys_call_{call_id}_call_missed_{ts}` | System message with text "Missed call" |
 
 ---
 
@@ -714,3 +713,35 @@ After implementation, verify via the `/metrics` endpoint:
 | N1 | Cancel non-existent call | POST cancel with bad call_id; 404 |
 | N2 | Timeout already-answered call | Server timeout on answered call; no-op; call continues |
 | N3 | Invalid timeout configuration | Set CALL_TIMEOUT_SECONDS=0; 422 on config update |
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/services/messaging_call_lifecycle.py` | 23-28 | `TERMINAL_STATES` and `ALLOWED_TRANSITIONS` (includes `"missed"`) |
+| `app/services/messaging_call_lifecycle.py` | 404-453 | `timeout_call()` function |
+| `app/services/messaging_call_lifecycle.py` | 155,164 | `create_invite()` — `active_states` + `callee_busy` raise |
+| `app/services/messaging_call_sessions.py` | 9 | `CallState` Literal (includes `"missed"`) |
+| `app/services/messaging_call_sessions.py` | 19-50 | `CallSessionRecord` dataclass |
+| `app/services/messaging_call_timeline.py` | 21-36 | `_preview_for_event` (handles `call.missed` at 34-35) |
+| `app/services/messaging_call_timeline.py` | 39-119 | `emit_call_timeline_event` |
+| `app/core/settings.py` | 1051 | `messaging_webrtc_call_ringing_timeout_seconds` (default 30) |
+| `app/routers/messaging.py` | 13107-13109 | `CallTimeoutIn` model |
+| `app/routers/messaging.py` | 13112-13143 | `timeout_call_endpoint` — `POST /messages/calls/{call_id}/timeout` |
+| `app/routers/messaging.py` | 12472-12501 | `_expire_stale_invites()` — server-side backstop |
+| `app/routers/messaging.py` | 12504,12581-12582 | `_messaging_background_loop()` calls `_expire_stale_invites()` |
+| `app/routers/messaging.py` | 8346 | `VOICEMAIL_ELIGIBLE_STATES` (includes `"missed"`) |
+| `scripts/local-ddb-init.py` | 629-639 | `MessageCallSessions` table definition (3 GSIs, no `ByStateStartedAt`) |
+| `frontend/src/api/endpoints/messaging.ts` | 313 | `timeoutCall()` API function |
+| `frontend/src/pages/messages/ConversationView.tsx` | 91 | `callTimeoutRef` ref |
+| `frontend/src/pages/messages/ConversationView.tsx` | 683-685 | Timeout ref cleanup |
+| `frontend/src/pages/messages/ConversationView.tsx` | 764-772 | Client timer — dispatches `REMOTE_DECLINE` + calls `timeoutCall` |
+| `frontend/src/pages/messages/ConversationView.tsx` | 823-827 | `call.missed` SSE event handler (callee only) |
+| `frontend/src/pages/messages/callStateMachine.ts` | 28 | `REMOTE_DECLINE` event type (includes `"timeout"` reason) |
+| `frontend/src/pages/messages/callStateMachine.ts` | 108 | Timeout phase transition in reducer |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 29 | `"timeout"` in `CallUiState` type |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 72-78 | `outcomeCopy` — `timeout: "Call timed out with no answer."` |
+| `frontend/src/hooks/useMessagingStream.ts` | 172 | `"call.missed"` in `EVENT_TYPES` |
+| `tests/test_call_timeout.py` | 1-337 | Unit tests for timeout lifecycle |

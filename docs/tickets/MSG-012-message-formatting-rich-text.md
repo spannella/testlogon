@@ -39,14 +39,17 @@ Text-only messages are limiting for technical communication, content sharing, an
 
 ### 2.1 Message Storage
 
-Messages are stored with `text` field as a plain string. The backend performs no text processing — text is stored and returned as-is. Adding formatting support is primarily a frontend rendering concern, with the raw markdown/text stored in the `text` field unchanged.
+Messages are stored with `text` field as a plain string (see `SendTextMessageIn` at `app/routers/messaging.py:1844`). The backend already auto-detects URLs and fetches OG metadata on send (see `_extract_first_url` at line 4661 and `_fetch_link_preview` at line 4674), storing the result in a `preview` field. However, there is no markdown format field or mention system. Adding markdown rendering support is primarily a frontend concern, with the raw markdown/text stored in the `text` field unchanged.
+
+<!-- NOTE: The backend ALREADY has link preview fetching built into send_text_message (lines 7809-7815). A separate /link-preview endpoint as described later in this ticket would be supplementary (e.g., for live preview in the compose bar). -->
 
 ### 2.2 Newsfeed Rich Text
 
-The newsfeed already supports markdown and rich text via `ContentFieldsMixin`:
+The newsfeed already supports markdown and rich text via `ContentFieldsMixin` (see `app/routers/newsfeed.py:1182`):
 - `body_format`: `"plain"`, `"markdown"`, `"richtext"`
 - `body_markdown`: Markdown source
-- `body_rich`: Serialized rich text document
+- `body_rich`: Serialized rich text document (validated by `_validate_rich_body_schema` at line 1165)
+- `body_markdown_html`: Pre-rendered HTML (sanitized by `_sanitize_markdown_html` at line ~1050)
 
 However, messages do not use this mixin. For messaging, a simpler approach is preferred: store the raw text and render markdown on the frontend.
 
@@ -60,9 +63,16 @@ No @mention system exists in the codebase. Mentions require:
 
 ### 2.4 URL Detection
 
-No URL detection or link preview system exists. URL patterns need to be detected in message text and:
-1. Rendered as clickable `<a>` tags
-2. Open Graph metadata fetched for preview cards
+URL detection and link preview ALREADY EXISTS in the backend. On `send_text_message` (see `app/routers/messaging.py:7809-7815`):
+1. `_extract_first_url(text)` (line 4661) extracts the first URL from message text
+2. `_fetch_link_preview(url)` (line 4674) fetches OG metadata via HTTP GET
+3. Result stored in message item as `preview` field (line 7815)
+4. `MessageOut.preview` (line 2342) returns this data to the frontend
+
+The frontend already receives link preview data via `MessageOut.preview`. What's MISSING:
+1. **Frontend rendering** — no `LinkPreviewCard` component exists to render the `preview` data
+2. **On-demand preview endpoint** — the preview is only fetched at send time; no endpoint for live preview in the compose bar
+3. **URL auto-linking in rendered text** — URLs in message text are not rendered as clickable `<a>` tags
 
 ### 2.5 Gaps
 
@@ -289,16 +299,22 @@ The `text` field stores the raw input (including markdown syntax). The `format` 
 
 #### 4.3.1 Message Send Extension
 
-**File**: `app/routers/messaging.py`
+**File**: `app/routers/messaging.py` — extend `SendTextMessageIn` (line 1844)
 
-Extend the text message send model:
+Add new fields to the existing model:
 
 ```python
 class SendTextMessageIn(BaseModel):
-    text: str = Field(..., min_length=1, max_length=10000)
+    text: Optional[str] = Field(default=None, min_length=1, max_length=MESSAGE_TEXT_MAX_CHARS)  # existing
+    body: Optional[str] = None  # existing legacy field
+    reply_to_message_id: Optional[str] = None  # existing
+    preview: Optional[LinkPreviewIn] = None  # existing (line 1851)
+    encryption: Optional[MessageEncryptionEnvelope] = None  # existing
+    # ... other existing fields ...
+
+    # NEW fields:
     format: str = Field(default="plain", pattern=r"^(plain|markdown)$")
     mentioned_user_ids: list[str] = Field(default_factory=list, max_length=50)
-    # ... existing fields (reply_to, tip, lock, expires, send_at, encryption, view_once) ...
 ```
 
 In `send_text_message()`:
@@ -342,54 +358,44 @@ for mentioned_sub in body.mentioned_user_ids:
         )
 ```
 
-#### 4.3.4 Mock OG Parser
+#### 4.3.4 Link Preview Endpoint (On-Demand)
 
-**File**: `app/services/og_parser.py`
+<!-- NOTE: app/services/og_parser.py does NOT exist and is NOT needed. OG parsing already exists inline in messaging.py:
+  - _LinkPreviewParser (HTMLParser subclass, line 4632)
+  - _extract_first_url(text) at line 4661
+  - _fetch_link_preview(url) at line 4674 — makes HTTP GET, parses og:title/og:description/og:image
+  - LinkPreviewIn model at line 1782 (url, title, description, image_url, site_name)
+  - SendTextMessageIn.preview field at line 1851
+  - Auto-fetch on send at lines 7809-7815
+
+The existing _fetch_link_preview does a real HTTP GET (not mock). In dev mode, the request may fail for external URLs but that's acceptable. A mock fallback could be added to _fetch_link_preview for dev_mode. -->
+
+Add a standalone link-preview endpoint for the compose bar live preview:
 
 ```python
-MOCK_OG_DATA = {
-    "example.com": {
-        "title": "Example Domain",
-        "description": "This domain is for use in illustrative examples.",
-        "image": None,
-    },
-    "github.com": {
-        "title": "GitHub: Let's build from here",
-        "description": "GitHub is where over 100 million developers shape the future of software.",
-        "image": "/mock/og/github-preview.png",
-    },
-    # ... more mock domains ...
-}
-
-def fetch_og_metadata(url: str) -> dict | None:
-    """Fetch Open Graph metadata for a URL (mock in dev mode)."""
-    if S.dev_mode:
-        from urllib.parse import urlparse
-        domain = urlparse(url).netloc.replace("www.", "")
-        mock = MOCK_OG_DATA.get(domain)
-        if mock:
-            return {"url": url, **mock}
-        return {"url": url, "title": domain, "description": None, "image": None}
-
-    # Production: HTTP GET + parse <meta property="og:..." /> tags
-    # (not implemented in this ticket — production OG parsing is a separate concern)
-    return None
-
-@router.post("/ui/messaging/link-preview")
-def get_link_preview(body: LinkPreviewIn, ctx=Depends(require_ui_session)):
-    """Fetch link preview metadata for a URL."""
-    og = fetch_og_metadata(body.url)
+# New endpoint in app/routers/messaging.py
+@router.post("/messaging/link-preview")
+def get_link_preview(body: LinkPreviewUrlIn, user_id: str = Depends(get_messaging_user_id)):
+    """Fetch link preview metadata for a URL (for compose bar preview)."""
+    og = _fetch_link_preview(body.url)  # reuse existing function at line 4674
     if not og:
         raise HTTPException(status_code=404, detail="Could not fetch preview")
     return og
+
+class LinkPreviewUrlIn(BaseModel):
+    url: str = Field(..., max_length=2048, pattern=r"^https?://")
 ```
 
 #### 4.3.5 MessageOut Extension
+
+Add to `MessageOut` (see `app/routers/messaging.py:2325`):
 
 ```python
 format: str = "plain"
 mentioned_user_ids: list[str] = Field(default_factory=list)
 ```
+
+Also update `_message_out_from_item()` (line 3766) to populate these fields.
 
 ### 4.4 Pydantic Models
 
@@ -826,20 +832,22 @@ export function extractUrls(text: string): string[] {
 |------|---------|
 | `frontend/src/components/shared/MarkdownRenderer.tsx` | Markdown to JSX renderer |
 | `frontend/src/pages/messages/MentionAutocomplete.tsx` | @mention autocomplete dropdown |
-| `frontend/src/pages/messages/LinkPreviewCard.tsx` | OG link preview card |
+| `frontend/src/pages/messages/LinkPreviewCard.tsx` | OG link preview card (renders existing `MessageOut.preview` data) |
 | `frontend/src/utils/urls.ts` | URL extraction utility |
-| `app/services/og_parser.py` | Mock OG metadata parser |
+
+<!-- NOTE: app/services/og_parser.py is NOT needed as a separate file. OG parsing already exists inline in messaging.py (see _LinkPreviewParser at line 4632, _fetch_link_preview at line 4674). A mock fallback for dev_mode can be added directly to _fetch_link_preview. -->
 
 ### 6.2 Files to Modify
 
 | File | Changes |
 |------|---------|
-| `app/routers/messaging.py` | Add `format`, `mentioned_user_ids` to send; add link-preview endpoint; mention validation |
-| `app/models.py` | Extend SendTextMessageIn and MessageOut |
-| `frontend/src/api/types.ts` | Add `format`, `mentioned_user_ids` to MessageOut |
+| `app/routers/messaging.py` | Add `format`, `mentioned_user_ids` to `SendTextMessageIn` (line 1844) and `MessageOut` (line 2325); add link-preview endpoint; mention validation in `send_text_message` (line 7684) |
+| `frontend/src/api/types.ts` | Add `format`, `mentioned_user_ids` to `MessageOut` interface |
 | `frontend/src/api/endpoints/messaging.ts` | Add `getLinkPreview` API function |
 | `frontend/src/pages/messages/ComposeBar.tsx` | Rich text toggle, live preview, mention autocomplete |
 | `frontend/src/pages/messages/MessageBubble.tsx` | MarkdownRenderer + LinkPreviewCard integration |
+
+<!-- NOTE: app/models.py is NOT the correct location — all messaging Pydantic models are in app/routers/messaging.py (e.g., SendTextMessageIn at line 1844, MessageOut at line 2325). -->
 
 ### 6.3 Step-by-Step Order
 
@@ -1052,3 +1060,57 @@ test.beforeAll(async ({ browser }) => {
 | Ticket | Depends On |
 |--------|-----------|
 | FEED-008 (Enhanced Post Composer) | MarkdownRenderer component |
+
+---
+
+## Codebase References
+
+### Backend — `app/routers/messaging.py`
+| Reference | Line | Notes |
+|-----------|------|-------|
+| `LinkPreviewIn` model | 1782 | Existing model: `url`, `title`, `description`, `image_url`, `site_name` |
+| `SendTextMessageIn` | 1844 | Existing model to extend with `format` and `mentioned_user_ids` fields |
+| `SendTextMessageIn.preview` | 1851 | Already accepts `Optional[LinkPreviewIn]` |
+| `MessageOut` class | 2325 | Add `format` and `mentioned_user_ids` fields |
+| `MessageOut.preview` | 2342 | Already returns `Optional[Dict[str, Any]]` for link previews |
+| `_message_out_from_item(message_item, viewer_user_id)` | 3766 | Extend to populate `format` and `mentioned_user_ids` |
+| `_LinkPreviewParser` (HTMLParser) | 4632 | Existing OG tag parser (parses og:title, og:description, og:image, og:site_name) |
+| `_extract_first_url(text)` | 4661 | Existing URL detection via regex |
+| `_fetch_link_preview(url)` | 4674 | Existing OG metadata fetcher (HTTP GET + parse HTML) |
+| Auto-fetch on send | 7809-7815 | `_serialize_preview` or `_extract_first_url` + `_fetch_link_preview` on `send_text_message` |
+| `send_text_message()` | 7684 | Main send endpoint; add mention validation and `format` storage here |
+
+### Backend — `app/routers/newsfeed.py`
+| Reference | Line | Notes |
+|-----------|------|-------|
+| `ContentFieldsMixin` | 1182 | Rich text support for newsfeed (body_format, body_markdown, body_rich) — NOT used for messaging, but a reference pattern |
+
+### Frontend — Existing Files to Modify
+| File | Notes |
+|------|-------|
+| `frontend/src/pages/messages/MessageBubble.tsx` | Integrate MarkdownRenderer + LinkPreviewCard for `message.preview` data |
+| `frontend/src/pages/messages/ComposeBar.tsx` | Add RichTextToggle, MentionAutocomplete, live preview panel |
+| `frontend/src/api/types.ts` | Add `format`, `mentioned_user_ids` to `MessageOut` interface |
+| `frontend/src/api/endpoints/messaging.ts` | Add `getLinkPreview()` API function |
+
+### Frontend — New Files
+| File | Notes |
+|------|-------|
+| `frontend/src/components/shared/MarkdownRenderer.tsx` | New — markdown-to-JSX renderer |
+| `frontend/src/pages/messages/MentionAutocomplete.tsx` | New — @mention autocomplete dropdown |
+| `frontend/src/pages/messages/LinkPreviewCard.tsx` | New — renders `MessageOut.preview` data as a card |
+| `frontend/src/utils/urls.ts` | New — URL extraction utility for compose bar |
+
+### DynamoDB Tables
+| Table | Notes |
+|-------|-------|
+| `Messages` (PK: `conversation_id`, SK: `message_id`) | Add `format` and `mentioned_user_ids` fields to message items |
+
+### Corrections Applied
+| Original Claim | Correction |
+|----------------|------------|
+| "No URL detection or link preview system exists" | URL detection (`_extract_first_url` at line 4661) and OG fetching (`_fetch_link_preview` at line 4674) ALREADY EXIST; previews auto-fetched on send and stored in `preview` field |
+| `app/services/og_parser.py` as new file | Not needed — OG parsing is inline in `messaging.py` (lines 4632-4722); reuse `_fetch_link_preview` for the new endpoint |
+| `app/models.py` in files to modify | All messaging models are in `app/routers/messaging.py`, not `app/models.py` |
+| `MessageOut.preview` does not exist | It already exists at line 2342 as `Optional[Dict[str, Any]]` |
+| `SendTextMessageIn` needs `preview` field added | Already has `preview: Optional[LinkPreviewIn]` at line 1851 |

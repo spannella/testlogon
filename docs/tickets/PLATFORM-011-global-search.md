@@ -108,11 +108,11 @@ Browser                       FastAPI                         DynamoDB
 
 ### 2.1 Backend Search Aggregator (`app/routers/search.py`)
 
-The existing global search endpoint is at `GET /ui/search` (line 308) <!-- VERIFIED: search.py:308 -->. It accepts `q`, `types`, and `limit` query parameters. The `ALLOWED_TYPES` set (line 26) <!-- CORRECTED: was "line 27", actually line 26 --> currently contains only `{"users", "posts", "catalog", "files"}`.
+The existing global search endpoint is at `GET /ui/search` <!-- VERIFIED: search.py -->. It accepts `q`, `types`, and `limit` query parameters. The `ALLOWED_TYPES` set (line 37) <!-- VERIFIED: search.py:37 --> contains `{"users", "posts", "catalog", "files"}` plus extended types (messages, tickets, contacts, videos, calendar) added at line 39.
 
-The aggregator function `_search_aggregator` (line 248) <!-- VERIFIED: search.py:248 --> uses `ThreadPoolExecutor(max_workers=4)` <!-- VERIFIED: search.py:269 --> with a 2-second per-future timeout and a 5-second overall timeout via `as_completed(futures, timeout=5)` <!-- VERIFIED: search.py:271-274 -->. Each search module returns a dict with `items`, `total_estimate`, and `has_more` fields.
+The aggregator function `_search_aggregator` (line 618) <!-- VERIFIED: search.py:618 --> uses `ThreadPoolExecutor` with per-future timeouts and overall timeout. Each search module returns a dict with `items`, `total_estimate`, and `has_more` fields.
 
-The result items are constructed via `_make_result_item()` (line 44) <!-- VERIFIED: search.py:44 --> which enforces a standard shape:
+The result items are constructed via `_make_result_item()` (line 58) <!-- VERIFIED: search.py:58 --> which enforces a standard shape:
 
 ```python
 def _make_result_item(
@@ -121,7 +121,7 @@ def _make_result_item(
 ) -> Dict[str, Any]:
 ```
 
-The `_sanitize_query()` function (line 33) <!-- VERIFIED: search.py:33 --> does basic cleanup:
+The `_sanitize_query()` function (line 46) <!-- VERIFIED: search.py:46 --> does basic cleanup:
 
 ```python
 def _sanitize_query(q: str) -> str:
@@ -132,11 +132,11 @@ def _sanitize_query(q: str) -> str:
 
 This strips control characters and collapses whitespace but does NOT perform Unicode normalization (NFC/NFKC), which means composed and decomposed forms of the same character may not match.
 
-The `_search_posts` function (line 99) <!-- VERIFIED: search.py:99 --> uses a full table `Scan` with `FilterExpression` containing `contains(body_plain_lc, :tok)` for each query token. It pages through up to 4 scan pages of 500 items each (2000 items max). This is O(table-size), not O(results), and will degrade as the posts table grows.
+The `_search_posts` function (line 113) <!-- VERIFIED: search.py:113 --> uses a full table `Scan` with `FilterExpression` containing `contains(body_plain_lc, :tok)` for each query token. It pages through up to 4 scan pages of 500 items each (2000 items max). This is O(table-size), not O(results), and will degrade as the posts table grows.
 
-The `_search_catalog` function (line 174) <!-- VERIFIED: search.py:174 --> similarly scans the catalog table with 200-item pages. The `_search_files` function (line 223) <!-- VERIFIED: search.py:223 --> delegates to `app.services.filemanager.search_prefix` which uses a prefix-based query (more efficient).
+The `_search_catalog` function (line 188) <!-- VERIFIED: search.py:188 --> similarly scans the catalog table with 200-item pages. The `_search_files` function (line 237) <!-- VERIFIED: search.py:237 --> delegates to `app.services.filemanager.search_prefix` which uses a prefix-based query (more efficient).
 
-The `_search_users` function (line 72) <!-- VERIFIED: search.py:72 --> delegates to `app.services.discovery.search_users` which uses the discovery index.
+The `_search_users` function (line 86) <!-- VERIFIED: search.py:86 --> delegates to `app.services.discovery.search_users` which uses the discovery index.
 
 ### 2.2 Frontend Command Palette (`Header.tsx`)
 

@@ -35,7 +35,8 @@ Feed curation is a basic social platform feature. Without hide functionality, us
 
 ### 2.1 Feed Query
 
-`GET /feed` in `app/routers/newsfeed.py` queries the `GSI1PK = FEED#{viewer_user_id}` index to fetch posts. The response iterates through DDB items and calls `_post_to_dict()` for each. Currently there is no filtering of hidden posts.
+`GET /feed` in `app/routers/newsfeed.py` queries the `GSI1PK = FEED#{viewer_user_id}` index to fetch posts. The response iterates through DDB items and calls `_post_to_dict()` (line 1900) for each. There is a `pk_hide` helper (line 820) and a `hide_post` endpoint (line 4051) that writes hide records. Feed filtering checks hidden status at line 2257.
+<!-- VERIFIED: app/routers/newsfeed.py:820 — pk_hide; :4051 — hide_post; :2257 — hidden post check -->
 
 ### 2.2 Post Storage
 
@@ -47,9 +48,10 @@ The platform uses the `billing` table for per-user key-value data with the patte
 
 ### 2.4 Gaps
 
-1. **No hide endpoint** — no API to hide/unhide posts.
-2. **No hidden post storage** — no DDB records for hidden post IDs.
-3. **No feed filtering** — `GET /feed` doesn't exclude hidden posts.
+<!-- NOTE: Gap 1 is partially closed — hide_post endpoint exists (line 4051) with pk_hide helper (line 820) and feed filtering (line 2257). However, unhide and list-hidden endpoints are still needed. -->
+1. ~~**No hide endpoint**~~ — PARTIALLY DONE: `POST /feed/hide` exists at `app/routers/newsfeed.py:4051`; unhide/DELETE not yet implemented.
+2. ~~**No hidden post storage**~~ — DONE: Uses `pk_hide(user_id)` pattern (line 820), stored in `app_single_table`.
+3. ~~**No feed filtering**~~ — DONE: Feed filtering checks hidden status at line 2257.
 4. **No "Hide" UI** — no option in PostCard overflow menu.
 5. **No hidden posts page** — no management page for reviewing hidden posts.
 6. **No undo mechanism** — no toast with undo capability.
@@ -715,3 +717,26 @@ User clicks "Unhide"
 | Ticket | Depends On |
 |--------|-----------|
 | FEED-007 (Mark Post Interesting) | "Not interesting" triggers hide behavior |
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key References | Lines |
+|------|---------------|-------|
+| `app/routers/newsfeed.py` | `pk_hide` helper | 820 |
+| `app/routers/newsfeed.py` | `HidePostRequest` model | 1482 |
+| `app/routers/newsfeed.py` | `hide_post` endpoint (`POST /feed/hide`) | 4051 |
+| `app/routers/newsfeed.py` | Hidden post check in feed | 2257 |
+| `app/routers/newsfeed.py` | `_post_to_dict` | 1900 |
+| `scripts/local-ddb-init.py` | `app_single_table` definition | 222 |
+| `frontend/src/pages/feed/PostCard.tsx` | Post card component (needs "Hide" menu option) | - |
+
+### Not Yet Implemented
+| Feature | Notes |
+|---------|-------|
+| `DELETE /posts/{id}/hide` (unhide endpoint) | Not yet in codebase |
+| `GET /ui/posts/hidden` (list hidden posts) | Not yet in codebase |
+| Hidden posts management page | No frontend page exists |
+| Undo toast mechanism | Not yet implemented |

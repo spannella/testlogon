@@ -60,10 +60,10 @@ class Settings:
     aws_region: str = os.environ.get("AWS_REGION", "us-east-1")
     ...
 ```
-<!-- CORRECTED: was "line 7-8", actually lines 6-7 (decorator on line 6, class on line 7) -->
+<!-- CORRECTED: was "line 7-8", actually line 7 (class Settings on line 7, no decorator) -->
 
-And the singleton on line 1400:
-<!-- VERIFIED: app/core/settings.py:1400 — S = Settings() -->
+And the singleton on line 1494:
+<!-- CORRECTED: S = Settings() is at line 1494, not 1400 -->
 
 ```python
 S = Settings()
@@ -113,7 +113,7 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
 ```
 
 The `AuthenticatedUser` dataclass (lines 125-129) contains `sub`, `role`, and `admin_profile` but no `tenant_id`:
-<!-- VERIFIED: app/auth/deps.py:125-129 — AuthenticatedUser with sub, role, admin_profile -->
+<!-- CORRECTED: AuthenticatedUser is at line 126, not 125-129 -->
 
 ```python
 # app/auth/deps.py, lines 125-129
@@ -164,7 +164,7 @@ The full middleware stack order (outermost to innermost) after multi-tenancy:
 ### 2.4 DynamoDB Partition Keys (`app/core/tables.py`)
 
 The `Tables` dataclass (line 9) holds references to all DynamoDB tables. Table names come from `Settings`:
-<!-- VERIFIED: app/core/tables.py:9 — Tables dataclass -->
+<!-- CORRECTED: Tables class is at line 10, not 9 -->
 
 ```python
 # app/core/tables.py, lines 112-213
@@ -1259,7 +1259,7 @@ export const useTenantStore = create<TenantStore>((set) => ({
 // frontend/src/providers/TenantBrandingProvider.tsx (new)
 import { useEffect } from "react";
 import { useTenantStore } from "@/stores/tenantStore";
-import { client } from "@/api/client";
+import { api } from "@/api/client";  // NOTE: codebase uses named `api` export
 
 export function TenantBrandingProvider({ children }: { children: React.ReactNode }) {
   const { setBranding, setError, loading } = useTenantStore();
@@ -1311,7 +1311,7 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
 
 ```typescript
 // frontend/src/api/endpoints/tenants.ts (new)
-import { client } from "@/api/client";
+import { api } from "@/api/client";  // NOTE: codebase uses named `api` export
 import type { TenantOut, TenantCreateReq, TenantUpdateReq } from "@/api/types";
 
 export const createTenant = (req: TenantCreateReq) =>
@@ -1683,7 +1683,7 @@ Custom domains require valid TLS certificates. In production, the platform uses 
 ### 9.5 Audit Trail
 
 All tenant management operations (create, update, delete, domain changes) are recorded via `audit_event()` (from `app/services/alerts.py`, line 570) with `event="tenant_*"` prefixes for compliance traceability.
-<!-- VERIFIED: app/services/alerts.py:570 — audit_event function -->
+<!-- CORRECTED: audit_event is at line 695, not 570 -->
 
 ### 9.6 Data Export and Portability
 
@@ -1791,3 +1791,27 @@ A Grafana/CloudWatch dashboard showing:
 - Tenant resolution cache hit rate
 - Storage usage per tenant (bar chart)
 - Active sessions per tenant
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | Status |
+|-----|------|---------|--------|
+| `Settings` class | `app/core/settings.py` | 7 | VERIFIED |
+| `S = Settings()` singleton | `app/core/settings.py` | 1494 | VERIFIED (ticket said 1400) |
+| `AuthenticatedUser` | `app/auth/deps.py` | 126 | VERIFIED (ticket said 125-129) |
+| `get_authenticated_user` | `app/auth/deps.py` | 184 | VERIFIED |
+| `Tables` class | `app/core/tables.py` | 10 | VERIFIED (ticket said 9) |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED |
+| `Role` enum | `app/auth/roles.py` | 8 | VERIFIED |
+| `AdminScope` enum | `app/auth/roles.py` | 14 | VERIFIED |
+| `admin_profile_has_scope` | `app/auth/roles.py` | 118 | VERIFIED |
+| `audit_event` | `app/services/alerts.py` | 695 | VERIFIED (ticket said 570) |
+| `user_pk` | `app/services/billing_shared.py` | 16 | VERIFIED |
+| Tenant middleware | `app/middleware/tenant.py` | exists, registered at `app/main.py:287` | VERIFIED |
+| Tenant core | `app/core/tenant.py` | exists | VERIFIED |
+| Tenant service | `app/services/tenant_service.py` | exists | VERIFIED |
+| Tenant admin router | `app/routers/tenant_admin.py` | exists, registered at `app/main.py:172,463-464` | VERIFIED |
+| Tenant settings | `app/core/settings.py` | 1487-1489 | VERIFIED: tenants, tenant_domains, tenant_members table names |
+| Tenant store (frontend) | `frontend/src/stores/tenantStore.ts` | exists | VERIFIED |

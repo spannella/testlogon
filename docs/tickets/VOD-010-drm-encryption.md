@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-010
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-24
 
 ---
@@ -1126,6 +1126,15 @@ const hls = new Hls({
 
 ## 10. Implementation Plan
 
+<!-- NOTE: The DRM encryption layer has been IMPLEMENTED. Key existing files:
+     - `app/routers/vod_drm.py` (140 lines, prefix `/v1/vod/drm`, registered at main.py:422)
+     - `app/services/vod_drm_keys.py` — `derive_content_key()` (line 57), `derive_key_id()` (line 81), `get_key_uri()` (line 103), `derive_iv()` (line 121), `is_drm_enabled()` (line 142)
+     - `app/services/vod_encryption.py` — `prepare_encryption_params()` (line 48), `get_ffmpeg_encryption_args()` (line 114), `cleanup_encryption_files()` (line 129), `build_encrypted_manifest_ext_x_key()` (line 144)
+     - `app/contracts/drm_entitlement_contract.py` — `DrmEntitlementClaims` (line 13), `DrmLicenseRequest` (line 28), `DrmLicenseResponse` (line 38)
+     - `frontend/e2e/vod-drm.spec.ts` — E2E DRM tests already exist.
+     Note: The spec proposed files like `content_key_derivation.py`, `content_key_store.py`, `drm_key_server.py`, `vod_encryption_orchestrator.py`, and `manifest_rewrite.py`. The actual implementation uses different file names: `vod_drm_keys.py`, `vod_encryption.py`, `vod_drm.py` (router). The ContentKeys DDB table may or may not exist — verify separately.
+-->
+
 ### 10.1 Phase 1 -- AES-128 HLS Encryption
 
 #### Step 1: Settings and Table Definition
@@ -2013,3 +2022,27 @@ seg_00003.ts
 #EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2"
 1080p/index.m3u8
 ```
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/routers/vod_drm.py` | 30 | `APIRouter(prefix="/v1/vod/drm")` |
+| `app/routers/vod_drm.py` | 34 | `get_decryption_key()` endpoint |
+| `app/routers/vod_drm.py` | 107 | `get_drm_info()` endpoint |
+| `app/services/vod_drm_keys.py` | 57 | `derive_content_key()` — HKDF-SHA256 key derivation |
+| `app/services/vod_drm_keys.py` | 81 | `derive_key_id()` |
+| `app/services/vod_drm_keys.py` | 103 | `get_key_uri()` |
+| `app/services/vod_drm_keys.py` | 121 | `derive_iv()` |
+| `app/services/vod_drm_keys.py` | 142 | `is_drm_enabled()` |
+| `app/services/vod_encryption.py` | 48 | `prepare_encryption_params()` |
+| `app/services/vod_encryption.py` | 114 | `get_ffmpeg_encryption_args()` |
+| `app/services/vod_encryption.py` | 129 | `cleanup_encryption_files()` |
+| `app/services/vod_encryption.py` | 144 | `build_encrypted_manifest_ext_x_key()` |
+| `app/contracts/drm_entitlement_contract.py` | 13 | `DrmEntitlementClaims` |
+| `app/contracts/drm_entitlement_contract.py` | 28 | `DrmLicenseRequest` |
+| `app/contracts/drm_entitlement_contract.py` | 38 | `DrmLicenseResponse` |
+| `app/main.py` | 98, 422 | `vod_drm_router` import and registration |
+| `frontend/e2e/vod-drm.spec.ts` | -- | E2E DRM tests |
+| **NOTE** | -- | Spec proposed `content_key_derivation.py`, `content_key_store.py`, `drm_key_server.py` -- actual impl uses `vod_drm_keys.py`, `vod_encryption.py`, `vod_drm.py` |
+| **NOTE** | -- | `ContentKeys` DDB table does NOT exist; DRM keys are derived deterministically via HKDF, not stored in DDB |

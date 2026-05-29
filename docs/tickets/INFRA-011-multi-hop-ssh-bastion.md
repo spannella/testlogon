@@ -13,14 +13,14 @@
 
 ### The Gap
 
-The SSH terminal (`app/routers/browser_ssh_terminal.py`, 1,126 lines) establishes a direct connection from the platform backend to the target host via Paramiko. This works for hosts that are directly reachable from the platform's network. However, many production environments are designed with network segmentation:
+The SSH terminal (`app/routers/browser_ssh_terminal.py`, 1,125 lines — see `app/routers/browser_ssh_terminal.py:1`) establishes a direct connection from the platform backend to the target host via Paramiko. This works for hosts that are directly reachable from the platform's network. However, many production environments are designed with network segmentation:
 
 1. **Private subnets**: Databases, application servers, and internal services sit in private subnets with no public IP addresses.
 2. **Bastion/jump hosts**: A single hardened bastion host sits in a public subnet and acts as the gateway to private hosts.
 3. **Multi-layer networks**: Some architectures have multiple network tiers (DMZ → application → data), each requiring a hop through a gateway.
 
 Currently, the platform cannot reach hosts in private subnets because:
-- The `ParamikoSshBridge` connects directly to `host:port`
+- The `ParamikoSshBridge` (see `app/routers/browser_ssh_terminal.py:60`) connects directly to `host:port`
 - There is no SSH channel forwarding or ProxyJump equivalent
 - Users must manually set up SSH tunnels outside the platform
 
@@ -856,3 +856,31 @@ interface HopStatusProps {
 22. `Bastion selector only shows user's own bastion hosts` -- Alice marks host as bastion. Bob's bastion list does not include Alice's host.
 23. `Connection audit records include all hops` -- Connect via 2-hop chain. Query audit log. Verify 2 `ssh.connect_hop` events.
 24. `Each hop in chain uses different SSH key` -- Configure different keys for bastion and target. Verify chain resolution returns correct key_id per hop.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `ParamikoSshBridge` class | `app/routers/browser_ssh_terminal.py` | 60 | VERIFIED (1125 lines total) |
+| SSH terminal router registration | `app/main.py` | 404 | VERIFIED |
+| `browser_ssh_terminal_enabled` setting | `app/core/settings.py` | 114 | VERIFIED |
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+<!-- NOTE: INFRA-001 (Host Inventory) and INFRA-002 (SSH Key Manager) are dependencies but do not exist yet. Multi-hop/bastion support is entirely new. -->
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `app/services/remote_hosts.py` (INFRA-001) | `app/services/` | NOT FOUND -- new implementation required |
+| SSH key manager (INFRA-002) | `app/services/` | NOT FOUND -- new implementation required |
+| Host `bastion_host_id` field | `app/services/remote_hosts.py` | NOT FOUND -- part of INFRA-001 |
+| `ParamikoSshBridge` multi-hop support | `app/routers/browser_ssh_terminal.py` | NOT FOUND -- requires modification to existing `connect()` method |
+| Bastion chain resolution service | `app/services/` | NOT FOUND -- new implementation required |
+| `frontend/src/pages/remote/BastionSelector.tsx` | `frontend/src/pages/remote/` | NOT FOUND -- new component required |

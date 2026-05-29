@@ -5,7 +5,7 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 8-10 days  
-**Dependencies**: Creator payouts (`creator_payouts.py`), admin payouts router (`admin_payouts.py`), billing ledger (`billing_shared.py`), admin auth (`auth/deps.py`)
+**Dependencies**: Creator payouts (`app/services/creator_payouts.py` — 443 lines; `approve_payout` at `:292`, `reject_payout` at `:321`, `list_payouts_admin` at `:256`), admin payouts router (`app/routers/admin_payouts.py` — 103 lines, prefix `/v1/admin/payouts`; registered at `app/main.py:112,435`), billing ledger (`app/services/billing_shared.py:217`), refund requests router (`app/routers/refund_requests.py`; registered at `app/main.py:158,449`), admin auth (`app/auth/policy.py:63,67`)
 
 ---
 
@@ -1514,3 +1514,18 @@ export const undoBatch = (batchId: string) =>
 10. All 25 E2E tests pass in `frontend/e2e/admin-bulk-ops.spec.ts`
 11. Batch processing completes within latency targets for 200-item batches
 12. Feature flags allow incremental rollout of payouts, refunds, and CSV features
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/services/creator_payouts.py` | 443 total | `get_available_balance` at `:55`, `request_payout` at `:164`, `list_payouts_admin` at `:256`, `approve_payout` at `:292`, `reject_payout` at `:321`, `get_payout_stats` at `:393` |
+| `app/routers/admin_payouts.py` | 103 total | Router prefix `/v1/admin/payouts` at `:32`; list `:35`, stats `:48`, approve `:57`, reject `:73`, complete `:90` |
+| `app/main.py` | :112, :435 | `admin_payouts_router` import and registration |
+| `app/routers/refund_requests.py` | — | Refund requests router; registered at `app/main.py:158,449` |
+| `app/services/billing_shared.py` | :217 | `new_ledger_entry` for ledger writes during payout/refund processing |
+| `app/services/alerts.py` | :355 | `write_alert` for notification on bulk operation completion |
+| `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |
+| `scripts/local-ddb-init.py` | :59 | `billing` table (PK=pk, SK=sk) |

@@ -52,12 +52,14 @@ The toolbar has buttons for Image, File, Poll, Video, and Lock. There is no emoj
 ### 2.2 Available Components
 
 From other tickets:
-- `EmojiPicker` (MSG-006) — shared component
-- `GifPicker` (MSG-008) — shared component
-- `StickerPicker` (MSG-008) — shared component
-- `FindDateTimeComposer` (MSG-009) — date range + time grid composer
-- `CountdownComposerDialog` (MSG-010) — countdown target + event type form
-- `PollComposer` (existing) — poll options + settings
+<!-- NOTE: ALL of the following except PollComposer do NOT exist yet — MSG-006, MSG-008, MSG-009, MSG-010 have not been implemented -->
+- `EmojiPicker` (MSG-006) — **does not exist yet**
+- `GifPicker` (MSG-008) — **does not exist yet**
+- `StickerPicker` (MSG-008) — **does not exist yet**
+- `FindDateTimeComposer` (MSG-009) — **does not exist yet**
+- `CountdownComposerDialog` (MSG-010) — **does not exist yet**
+- `PollComposer` (existing) — available at `frontend/src/pages/feed/PollComposer.tsx`
+<!-- VERIFIED: frontend/src/pages/feed/PollComposer.tsx exists -->
 
 ### 2.3 Gaps
 
@@ -729,8 +731,31 @@ class CreatePostRequest(ContentFieldsMixin):
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| EmojiPicker | MSG-006 | Required |
-| GifPicker, StickerPicker | MSG-008 | Required |
-| FindDateTimeComposer | MSG-009 | Required |
-| CountdownComposerDialog | MSG-010 | Required |
-| PollComposer | Existing | Available |
+| EmojiPicker | MSG-006 | Required — **NOT YET IMPLEMENTED** |
+| GifPicker, StickerPicker | MSG-008 | Required — **NOT YET IMPLEMENTED** |
+| FindDateTimeComposer | MSG-009 | Required — **NOT YET IMPLEMENTED** |
+| CountdownComposerDialog | MSG-010 | Required — **NOT YET IMPLEMENTED** |
+| PollComposer | Existing | Available (`frontend/src/pages/feed/PollComposer.tsx`) |
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Purpose |
+|------|---------|
+| `frontend/src/pages/feed/CreatePost.tsx` | Current post composer |
+| `frontend/src/pages/feed/PollComposer.tsx` | Poll creation sub-composer |
+| `frontend/src/pages/feed/PollCard.tsx` | Poll rendering in PostCard |
+| `frontend/src/pages/feed/VideoPickerDialog.tsx` | Video attachment picker (FEED-001) |
+| `frontend/src/pages/feed/PostCard.tsx` | Post card rendering (for preview mode) |
+| `app/routers/newsfeed.py` | `CreatePostRequest` (line 1276), `create_post` (line 3013) |
+
+### Files That Do NOT Exist Yet (blocking dependencies)
+| File | Dependency |
+|------|-----------|
+| `frontend/src/components/shared/EmojiPicker.tsx` | MSG-006 |
+| `frontend/src/components/shared/GifPicker.tsx` | MSG-008 |
+| `frontend/src/components/shared/StickerPicker.tsx` | MSG-008 |
+| `frontend/src/components/shared/AvailabilityGrid.tsx` | MSG-009 |
+| `frontend/src/pages/messages/CountdownCard.tsx` | MSG-010 |

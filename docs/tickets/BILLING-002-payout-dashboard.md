@@ -102,7 +102,8 @@ Acceptance criteria:
 1. **Zero visibility into earnings**: Creators accumulate tip/subscription/unlock income but have no way to see it without API knowledge. This is the single largest creator experience gap.
 2. **No withdrawal mechanism in UI**: Despite `POST /ui/payouts/request` working perfectly, creators cannot trigger payouts through the interface. They must use curl or a browser console.
 3. **No financial history**: No transaction log means creators cannot reconcile their earnings or track individual income events. Tax reporting is impossible.
-4. **Missing from navigation**: The sidebar Commerce group (`Sidebar.tsx:82-93`) lists Shop, Cart, Billing, Orders, Subscriptions, Analytics, Referrals, Promo Codes -- but not Payouts. Creators do not even know the feature exists.
+4. **Missing from navigation**: The sidebar Commerce group (`Sidebar.tsx:94-107`) lists Shop, Cart, Billing, Orders, Subscriptions, Analytics, Referrals, Promo Codes -- but not Payouts. Creators do not even know the feature exists.
+<!-- NOTE: Payouts sidebar link NOW exists at Sidebar.tsx:105. This pain point has been addressed. -->
 5. **No date-range filtering**: Even through the API, there is no UI surface to explore earnings trends over time.
 
 ---
@@ -167,12 +168,12 @@ def earnings_summary(
 
 **Citation**: `app/routers/creator_earnings.py:19-61` -- summary with `from_ts`/`to_ts` filters; transactions with cursor pagination.
 
-### 3.3 Pydantic Models (`app/models.py:2232-2305`)
+### 3.3 Pydantic Models (`app/models.py:2315-2391`)
 
 All response models are defined and typed. Key models with exact field signatures:
 
 ```python
-# app/models.py:2232-2237
+# app/models.py:2315-2320
 class EarningsBreakdown(BaseModel):
     subscriptions: int = 0
     tips: int = 0
@@ -180,7 +181,7 @@ class EarningsBreakdown(BaseModel):
     vod_purchases: int = 0
     other: int = 0
 
-# app/models.py:2264-2270
+# app/models.py:2347-2353
 class PayoutBalanceOut(BaseModel):
     available_cents: int = 0
     pending_cents: int = 0
@@ -189,13 +190,13 @@ class PayoutBalanceOut(BaseModel):
     currency: str = "USD"
     minimum_payout_cents: int = 1000
 
-# app/models.py:2273-2276
+# app/models.py:2356-2359
 class PayoutRequestIn(BaseModel):
     amount_cents: int = Field(ge=100)
     method: str = "bank_transfer"
     notes: str = Field(default="", max_length=500)
 
-# app/models.py:2279-2290
+# app/models.py:2362-2373
 class PayoutOut(BaseModel):
     payout_id: str
     user_id: str
@@ -210,7 +211,7 @@ class PayoutOut(BaseModel):
     completed_at: Optional[int] = None
 ```
 
-**Citation**: `app/models.py:2232-2305` -- complete model definitions, all fields typed.
+**Citation**: `app/models.py:2315-2391` -- complete model definitions, all fields typed.
 
 ### 3.4 Service Layer (`app/services/creator_payouts.py`)
 
@@ -285,11 +286,12 @@ def _reason_to_category(reason: str) -> str:
 
 ### 3.8 What Does NOT Exist
 
-- No `/payouts` route in `frontend/src/App.tsx` (verified: no "payouts" or "Payouts" string in file)
-- No page component in `frontend/src/pages/` (verified: `ls` shows no payouts directory)
-- No API endpoint wrapper in `frontend/src/api/endpoints/` (verified: grep shows no payout references)
-- No sidebar navigation entry (verified: `Sidebar.tsx` Commerce group at lines 82-93 has no Payouts item)
-- No TypeScript types for payout or earnings responses in `frontend/src/api/types.ts`
+<!-- NOTE: The items below were accurate at ticket-writing time but have since been implemented. -->
+- ~~No `/payouts` route in `frontend/src/App.tsx`~~ — NOW EXISTS at `App.tsx:186` (`<Route path="payouts" element={<PayoutDashboard />} />`) (see `frontend/src/App.tsx:67,186`)
+- ~~No page component in `frontend/src/pages/`~~ — NOW EXISTS: `frontend/src/pages/payouts/PayoutDashboard.tsx`
+- ~~No API endpoint wrapper in `frontend/src/api/endpoints/`~~ — NOW EXISTS: `frontend/src/api/endpoints/payouts.ts`
+- ~~No sidebar navigation entry~~ — NOW EXISTS at `Sidebar.tsx:105` ("Payouts" in Commerce group)
+- No TypeScript types for payout or earnings responses in `frontend/src/api/types.ts` — status unknown, may also have been added
 
 ---
 
@@ -1083,19 +1085,19 @@ The payout request endpoint has implicit rate limiting via the duplicate detecti
 | Payout balance endpoint | `app/routers/creator_payouts.py` | 35-47 | VERIFIED |
 | Payout request endpoint | `app/routers/creator_payouts.py` | 50-76 | VERIFIED |
 | Payout cancel endpoint | `app/routers/creator_payouts.py` | 79-92 | VERIFIED |
-| Payout list endpoint | `app/routers/creator_payouts.py` | 95-105 | VERIFIED |
+| Payout list endpoint | `app/routers/creator_payouts.py` | 95-106 | VERIFIED |
 | Earnings summary endpoint | `app/routers/creator_earnings.py` | 19-37 | VERIFIED |
 | Earnings transactions endpoint | `app/routers/creator_earnings.py` | 40-61 | VERIFIED |
-| PayoutBalanceOut model | `app/models.py` | 2264-2270 | VERIFIED |
-| PayoutRequestIn model (ge=100) | `app/models.py` | 2273-2276 | VERIFIED |
-| PayoutOut model (all fields) | `app/models.py` | 2279-2290 | VERIFIED |
-| PayoutCreateOut model | `app/models.py` | 2293-2297 | VERIFIED |
-| PayoutListOut model | `app/models.py` | 2300-2302 | VERIFIED |
-| PayoutActionOut model | `app/models.py` | 2305-2307 | VERIFIED |
-| EarningsSummaryOut model | `app/models.py` | 2240-2244 | VERIFIED |
-| EarningsBreakdown model | `app/models.py` | 2232-2237 | VERIFIED |
-| EarningsTransactionOut model | `app/models.py` | 2247-2254 | VERIFIED |
-| EarningsTransactionsOut model | `app/models.py` | 2257-2259 | VERIFIED |
+| PayoutBalanceOut model | `app/models.py` | 2347-2353 | VERIFIED |
+| PayoutRequestIn model (ge=100) | `app/models.py` | 2356-2359 | VERIFIED |
+| PayoutOut model (all fields) | `app/models.py` | 2362-2373 | VERIFIED |
+| PayoutCreateOut model | `app/models.py` | 2376-2380 | VERIFIED |
+| PayoutListOut model | `app/models.py` | 2383-2385 | VERIFIED |
+| PayoutActionOut model | `app/models.py` | 2388-2391 | VERIFIED |
+| EarningsSummaryOut model | `app/models.py` | 2323-2327 | VERIFIED |
+| EarningsBreakdown model | `app/models.py` | 2315-2320 | VERIFIED |
+| EarningsTransactionOut model | `app/models.py` | 2330-2337 | VERIFIED |
+| EarningsTransactionsOut model | `app/models.py` | 2340-2342 | VERIFIED |
 | get_available_balance queries billing credits | `app/services/creator_payouts.py` | 55-108 | VERIFIED |
 | _get_active_payout_total sums active payouts | `app/services/creator_payouts.py` | 111-135 | VERIFIED |
 | _has_active_payout duplicate check | `app/services/creator_payouts.py` | 138-161 | VERIFIED |
@@ -1105,11 +1107,13 @@ The payout request endpoint has implicit rate limiting via the duplicate detecti
 | _reason_to_category maps tip prefix to "tips" | `app/services/creator_earnings.py` | 22-33 | VERIFIED |
 | get_earnings_summary aggregates with pagination loop | `app/services/creator_earnings.py` | 47-114 | VERIFIED |
 | get_earnings_transactions with cursor pagination | `app/services/creator_earnings.py` | 117-207 | VERIFIED |
-| S.payout_minimum_cents used in balance | `app/routers/creator_payouts.py` | 46 | VERIFIED |
+| S.payout_minimum_cents used in balance endpoint | `app/routers/creator_payouts.py` | 46 | VERIFIED |
 | S.payout_hold_period_seconds in balance calc | `app/services/creator_payouts.py` | 66 | VERIFIED |
+| S.payout_minimum_cents setting defined | `app/core/settings.py` | 1177 | VERIFIED |
+| S.payout_hold_period_seconds setting defined | `app/core/settings.py` | 1176 | VERIFIED |
 | ACTIVE_PAYOUT_STATES = requested, approved, processing | `app/services/creator_payouts.py` | 24 | VERIFIED |
-| No /payouts route in App.tsx | `frontend/src/App.tsx` | full file | VERIFIED (grep 0 matches) |
-| No payouts directory in pages/ | `frontend/src/pages/` | N/A | VERIFIED (ls shows no dir) |
-| No payout API wrappers | `frontend/src/api/endpoints/` | N/A | VERIFIED (grep 0 matches) |
-| Sidebar Commerce group has no Payouts | `frontend/src/components/layout/Sidebar.tsx` | 82-93 | VERIFIED |
+| /payouts route in App.tsx | `frontend/src/App.tsx` | 67, 186 | VERIFIED (now exists) |
+| PayoutDashboard page component | `frontend/src/pages/payouts/PayoutDashboard.tsx` | exists | VERIFIED (now exists) |
+| Payout API wrappers | `frontend/src/api/endpoints/payouts.ts` | exists | VERIFIED (now exists) |
+| Sidebar Commerce group has Payouts | `frontend/src/components/layout/Sidebar.tsx` | 105 | VERIFIED (now exists) |
 | E2E API tests exist | `frontend/e2e/creator-payouts.spec.ts` | exists | VERIFIED |

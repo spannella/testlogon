@@ -1,7 +1,7 @@
 # VOD-004: Implement FFmpeg Execution with ABR Output and Watermark
 
 **Ticket**: VOD-004
-**Status**: Design
+**Status**: Implemented
 **Author**: Platform Engineering
 **Date**: 2026-05-24
 **Depends on**: VOD-003 (Async Transcode Job Queue and Worker)
@@ -678,12 +678,14 @@ async def _run_ffmpeg_rendition(
 
 ## 4. Implementation Plan
 
-### 4.1 New Files
+### 4.1 Files
 
-| File | Purpose | LOC (est.) |
-|------|---------|-----------|
-| `app/services/ffmpeg_executor.py` | Core executor: subprocess management, progress parsing, error classification, resource limits | ~350 |
-| `app/services/ffmpeg_executor_types.py` | Dataclasses: `FFmpegExecutionResult`, `ProgressSample`, error types | ~60 |
+<!-- NOTE: Both files below ALREADY EXIST in the codebase. -->
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `app/services/ffmpeg_executor.py` | Core executor: `execute_rendition()` (line 70), `classify_error()` (line 510), `validate_output()` (line 531), progress parsing, resource limits (565 lines) | **Already exists** |
+| `app/services/ffmpeg_executor_types.py` | Dataclasses: `ProgressSample`, error types | **Already exists** |
 | `tests/test_ffmpeg_executor.py` | Unit tests (mocked subprocess) | ~300 |
 | `tests/test_ffmpeg_executor_integration.py` | Integration tests (real FFmpeg, short fixture) | ~150 |
 | `tests/fixtures/test_video_2s.mp4` | 2-second 320x240 test video for integration tests | binary |
@@ -692,8 +694,9 @@ async def _run_ffmpeg_rendition(
 
 | File | Change |
 |------|--------|
-| `app/services/ffmpeg_abr_pipeline.py` | Add `build_vod_rendition_ffmpeg_args()` variant that uses VOD-appropriate HLS flags (`hls_playlist_type vod`, `hls_list_size 0`, `independent_segments`). Keep existing function for live use. |
-| `app/services/transcode_worker.py` (from VOD-003) | Import and call `execute_rendition()` instead of raw `asyncio.create_subprocess_exec`. Wire up `on_progress` callback and `cancel_event`. |
+| `app/services/ffmpeg_abr_pipeline.py` | `build_rendition_ffmpeg_args()` at line 50; `write_master_playlist()` at line 145. **Already exists**. |
+| `app/services/transcode_worker.py` | Calls `_run_ffmpeg_for_rendition()` at line 234; uses semaphore at line 80. **Already exists**. |
+| `app/services/ffmpeg_watermark_lifecycle.py` | `prepare_watermark_asset()` (line 23), `patch_watermark_input()` (line 69). **Already exists**. |
 | `app/core/settings.py` | Add `ffmpeg_max_threads_per_job`, `ffmpeg_max_memory_gb`, `ffmpeg_grace_kill_seconds`, `ffmpeg_min_free_disk_gb` |
 | `scripts/local-ddb-init.py` | No changes (table creation handled by VOD-003) |
 
@@ -1115,5 +1118,34 @@ In dev mode, the `asset_uri` field in `WatermarkPolicy` references these files a
 Note: FFmpeg cannot process SVG files directly as overlay inputs. The executor must detect SVG format and either:
 1. Convert to PNG via `rsvg-convert` or ImageMagick before use
 2. Reject SVG with a clear error message instructing the tenant to upload a raster format
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ffmpeg_executor.py` | 70 | `execute_rendition()` — main entry point |
+| `app/services/ffmpeg_executor.py` | 184 | `_validate_and_augment_args()` |
+| `app/services/ffmpeg_executor.py` | 254 | `_inject_rate_control()` |
+| `app/services/ffmpeg_executor.py` | 286 | `_inject_thread_limit()` |
+| `app/services/ffmpeg_executor.py` | 307 | `_build_restricted_env()` |
+| `app/services/ffmpeg_executor.py` | 317 | `_apply_resource_limits()` |
+| `app/services/ffmpeg_executor.py` | 340 | `_read_progress()` |
+| `app/services/ffmpeg_executor.py` | 377 | `_parse_progress_frame()` |
+| `app/services/ffmpeg_executor.py` | 468 | `_terminate_gracefully()` |
+| `app/services/ffmpeg_executor.py` | 493 | `_check_disk_space()` |
+| `app/services/ffmpeg_executor.py` | 510 | `classify_error()` |
+| `app/services/ffmpeg_executor.py` | 531 | `validate_output()` |
+| `app/services/ffmpeg_executor_types.py` | -- | `ProgressSample` and error type dataclasses |
+| `app/services/ffmpeg_abr_pipeline.py` | 50 | `build_rendition_ffmpeg_args()` |
+| `app/services/ffmpeg_abr_pipeline.py` | 145 | `write_master_playlist()` |
+| `app/services/ffmpeg_watermark_lifecycle.py` | 23 | `prepare_watermark_asset()` |
+| `app/services/ffmpeg_watermark_lifecycle.py` | 69 | `patch_watermark_input()` |
+| `app/services/watermark_profile_renderers.py` | 51 | `ffmpeg_watermark_filter()` |
+| `app/services/ffmpeg_manager.py` | 81 | `get_ffmpeg_info()` |
+| `app/services/ffmpeg_manager.py` | 116 | `get_ffmpeg_path()` |
+| `app/services/transcode_worker.py` | 234 | `_run_ffmpeg_for_rendition()` |
+| `app/services/filemanager.py` | 1057 | `_run_media_tool()` (reference subprocess pattern) |
+| `app/core/settings.py` | 1120 | `ffmpeg_binary_path` |
+| `scripts/video/run_abr_transcoder.py` | -- | Script-based parallel rendition launcher |
 
 The recommended approach is (2) for the initial implementation, with SVG-to-PNG conversion as a future enhancement.

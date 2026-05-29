@@ -150,16 +150,16 @@ Data Flow — Stop/Terminate Worker:
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| EC2 launcher | `app/services/ec2_launcher.py` (INFRA-003) | `launch_instance()`, `stop_instance()`, `terminate_instance()`; provides compute VMs |
-| K8s launcher | `app/services/k8s_launcher.py` (INFRA-004) | `launch_pod()`, `delete_pod()`; provides lightweight containers |
-| SSH key manager | `app/services/ssh_key_manager.py` (INFRA-002) | Key generation and host association for SSH access |
-| Host inventory | `app/services/remote_hosts.py` (INFRA-001) | Auto-registered hosts from EC2/K8s launches |
-| LLM key store | `app/services/llm_provider_keys.py` (AGENT-001) | `get_decrypted_api_key()` for injecting LLM credentials |
-| Web terminal | `app/routers/terminal.py` | WebSocket-based SSH terminal in the browser |
-| Mock EC2 store | `app/services/ec2_launcher.py` | `_MockEc2Store` for dev mode |
-| Mock K8s store | `app/services/k8s_launcher.py` | `_MockK8sStore` for dev mode |
-| Settings | `app/core/settings.py` | `S.dev_mode`, table names, etc. |
-| Crypto | `app/core/crypto.py` | KMS decrypt for API keys |
+| EC2 launcher | `app/services/ec2_launcher.py` (INFRA-003) | <!-- NOTE: `app/services/ec2_launcher.py` does not exist yet — requires INFRA-003 implementation --> `launch_instance()`, `stop_instance()`, `terminate_instance()`; provides compute VMs |
+| K8s launcher | `app/services/k8s_launcher.py` (INFRA-004) | <!-- NOTE: `app/services/k8s_launcher.py` does not exist yet — requires INFRA-004 implementation --> `launch_pod()`, `delete_pod()`; provides lightweight containers |
+| SSH key manager | `app/services/ssh_key_manager.py` (INFRA-002) | <!-- NOTE: `app/services/ssh_key_manager.py` does not exist yet — requires INFRA-002 implementation --> Key generation and host association for SSH access |
+| Host inventory | `app/services/remote_hosts.py` (INFRA-001) | <!-- NOTE: `app/services/remote_hosts.py` does not exist yet — requires INFRA-001 implementation --> Auto-registered hosts from EC2/K8s launches |
+| LLM key store | `app/services/llm_provider_keys.py` (AGENT-001) | <!-- NOTE: `app/services/llm_provider_keys.py` does not exist yet — requires AGENT-001 implementation --> `get_decrypted_api_key()` for injecting LLM credentials |
+| Web terminal | `app/routers/browser_ssh_terminal.py` | <!-- NOTE: The ticket referenced `app/routers/terminal.py` which does not exist. The actual SSH terminal router is `app/routers/browser_ssh_terminal.py` (registered in main.py:404) --> WebSocket-based SSH terminal in the browser |
+| Mock EC2 store | `app/services/ec2_launcher.py` (INFRA-003) | <!-- NOTE: does not exist yet --> `_MockEc2Store` for dev mode |
+| Mock K8s store | `app/services/k8s_launcher.py` (INFRA-004) | <!-- NOTE: does not exist yet --> `_MockK8sStore` for dev mode |
+| Settings | `app/core/settings.py` | `S.dev_mode` (line 254), table names, etc. (verified) |
+| Crypto | `app/core/crypto.py` | KMS decrypt for API keys — `kms_decrypt()` at line 22 (verified) |
 
 ### 2.2 Gaps
 
@@ -1502,3 +1502,24 @@ Workers automatically stop after `idle_timeout_seconds` of inactivity to prevent
 8. Workers auto-shutdown after configurable idle timeout.
 9. Web terminal access to worker instances is available via the existing SSH infrastructure.
 10. Compute options (EC2 types, K8s presets) and tool options are listed via API for the creation wizard.
+
+---
+
+## Codebase References
+
+| Reference | Path | Line(s) | Status |
+|-----------|------|---------|--------|
+| SSH terminal router | `app/routers/browser_ssh_terminal.py` | entire file | Verified — **not** `app/routers/terminal.py` (does not exist) |
+| SSH terminal registration | `app/main.py` | 82-85, 404 | Verified |
+| KMS decrypt | `app/core/crypto.py` | 22 | Verified |
+| Settings singleton | `app/core/settings.py` | 254 (`dev_mode`), 1494 (`S = Settings()`) | Verified |
+| DDB init script | `scripts/local-ddb-init.py` | 42 | Verified — new TableDef entry needed |
+| Router registration | `app/main.py` | 297-465 | Verified |
+| EC2 launcher service | `app/services/ec2_launcher.py` | — | **Does not exist** — requires INFRA-003 |
+| K8s launcher service | `app/services/k8s_launcher.py` | — | **Does not exist** — requires INFRA-004 |
+| SSH key manager service | `app/services/ssh_key_manager.py` | — | **Does not exist** — requires INFRA-002 |
+| Host inventory service | `app/services/remote_hosts.py` | — | **Does not exist** — requires INFRA-001 |
+| LLM key store | `app/services/llm_provider_keys.py` | — | **Does not exist** — requires AGENT-001 |
+| INFRA ticket specs | `docs/tickets/INFRA-001-*.md` through `INFRA-005-*.md` | — | Verified — ticket files exist |
+| `agent_workers` DDB table | — | — | **Does not exist** — new table required |
+| `agent_worker_provisioner` service | — | — | **Does not exist** — new file required |

@@ -2248,3 +2248,14 @@ for msg in messages:
 ```
 
 This filter ensures that lottery config and entry items, while co-located in the same table partition, never leak into the chat message SSE stream. They are only accessed via direct GetItem/Query calls with known sort key prefixes.
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/services/broadcast_lottery.py` | — | EXISTS | Lottery service |
+| `app/core/settings.py` | 517-520 | EXISTS | `broadcast_lottery_enabled`, `broadcast_lottery_max_outcomes`, `max_entry_fee_cents`, `max_duration_seconds` |
+| `app/services/broadcast_chat_store.py` | — | EXISTS | Chat store (lottery items co-located) |
+| `frontend/e2e/broadcast-lottery.spec.ts` | — | EXISTS | E2E tests |

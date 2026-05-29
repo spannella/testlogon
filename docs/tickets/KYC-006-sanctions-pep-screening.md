@@ -20,7 +20,7 @@ screen all customers against sanctions lists before onboarding and continuously 
 PEP screening identifies individuals who hold or have held prominent public positions, which
 requires enhanced due diligence.
 
-The existing KYC flow (`app/routers/kyc_cases.py`, `app/services/kyc_cases.py`) processes
+The existing KYC flow (see `app/routers/kyc_cases.py:830` for `submit_kyc_case`, `app/services/kyc_cases.py:534` for `apply_admin_decision`) processes
 identity verification but does not perform any name-based or identity-based screening against
 external watchlists. This creates significant regulatory risk.
 
@@ -149,14 +149,14 @@ external watchlists. This creates significant regulatory risk.
 
 ### 3.1 KYC Case Submission Flow
 
-`submit_kyc_case()` (line 830 of `app/routers/kyc_cases.py`) transitions the case from
+`submit_kyc_case()` (see `app/routers/kyc_cases.py:830`) transitions the case from
 `draft` to `submitted`, builds an evidence snapshot with evidence hash, creates a review
 ticket, and emits audit events. This is the integration point for triggering automatic
 screening.
 
 ### 3.2 Case Status Transitions
 
-From `app/services/kyc_cases.py` (line 17):
+From `app/services/kyc_cases.py` (see `:17` for `_ALLOWED_STATUSES`):
 ```python
 _ALLOWED_STATUSES = {
     "draft", "submitted", "under_review", "needs_more_info",
@@ -169,12 +169,12 @@ Screening results will influence the transition from `submitted` to `under_revie
 
 ### 3.3 User Profile Access
 
-User profile data (full name, DOB, nationality) is accessible via `app/services/profiles.py`.
+User profile data (full name, DOB, nationality) is accessible via `app/services/profiles.py` (see `:220` for `get_profile`, `:294` for `apply_profile_update`).
 Profile change events are tracked via `audit_event()` in profile update endpoints.
 
 ### 3.4 Audit Event Infrastructure
 
-`audit_event()` in `app/services/alerts.py` (line 695) supports arbitrary key-value fields.
+`audit_event()` (see `app/services/alerts.py:695`) supports arbitrary key-value fields.
 Screening events will use namespace `kyc_screening` for filtering and audit trail.
 
 ---
@@ -311,7 +311,7 @@ Mock response structure for a match:
 
 ### 4.4 Submission Integration
 
-In `submit_kyc_case()` (line 830 of `app/routers/kyc_cases.py`), after successful
+In `submit_kyc_case()` (see `app/routers/kyc_cases.py:830`), after successful
 submission and review ticket creation, trigger screening:
 
 ```python
@@ -1344,3 +1344,39 @@ test("173.8 Filter by screen type updates table rows", async ({ page }) => {
 | `frontend/src/api/endpoints/kyc-admin.ts` | Modify | Add screening API functions |
 | `frontend/src/App.tsx` | Modify | Add /admin/kyc/screening route |
 | `frontend/e2e/kyc-screening.spec.ts` | **New** | 20+ E2E tests across sections 170-173 |
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router | `app/routers/kyc_cases.py` | all | VERIFIED (1294 lines) |
+| `submit_kyc_case()` | `app/routers/kyc_cases.py` | 830 | VERIFIED |
+| `_admin_decide_case()` | `app/routers/kyc_cases.py` | 1099 | VERIFIED |
+| KYC cases service | `app/services/kyc_cases.py` | all | VERIFIED (828 lines) |
+| `create_case()` | `app/services/kyc_cases.py` | 97 | VERIFIED |
+| `apply_admin_decision()` | `app/services/kyc_cases.py` | 534 | VERIFIED |
+| `_risk()` function | `app/services/kyc_cases.py` | 664 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+| KYC settings | `app/core/settings.py` | 1065-1072 | VERIFIED |
+| `app/contracts/kyc_cases_contract.py` | `app/contracts/` | exists | VERIFIED |
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+| `write_alert()` | `app/services/alerts.py` | 355 | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `app/services/kyc_screening.py` | `app/services/` | NOT FOUND -- new service required |
+| `kyc_screening_results` DDB table | `scripts/local-ddb-init.py` | NOT FOUND -- new table required |
+| `kyc_screening_results` table handle | `app/core/tables.py` | NOT FOUND -- new handle required |
+| Screening settings (table name, provider) | `app/core/settings.py` | NOT FOUND -- new settings required |
+| 5 screening endpoints in KYC router | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoints required |
+| Screening review request/response models | `app/contracts/kyc_cases_contract.py` | NOT FOUND -- new models required |
+| `frontend/src/pages/admin/KycScreeningQueuePage.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |
+| `/admin/kyc/screening` route | `frontend/src/App.tsx` | NOT FOUND -- new route required |

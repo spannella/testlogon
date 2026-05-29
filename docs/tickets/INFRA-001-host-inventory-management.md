@@ -15,9 +15,9 @@
 
 The platform has two mature remote access systems:
 
-1. **VNC Remote Desktop** (`app/services/vnc_sessions.py`, `app/routers/vnc_sessions.py`): A noVNC browser-based system with JWT session tokens, capability negotiation, timeout policies, and audit logging. Targets are **hardcoded** in `_default_targets()` (line 200) as `TargetConfig` objects with `target_id`, `ws_url`, `allowed_users`, and `capabilities`. There is no DDB table for hosts — the entire target inventory lives in Python code.
+1. **VNC Remote Desktop** (`app/services/vnc_sessions.py` — 583 lines, `app/routers/vnc_sessions.py` — registered at `app/main.py:407`): A noVNC browser-based system with JWT session tokens, capability negotiation, timeout policies, and audit logging. Targets are **hardcoded** in `_default_targets()` (see `app/services/vnc_sessions.py:200`) as `TargetConfig` (see `:24`) objects with `target_id`, `ws_url`, `allowed_users`, and `capabilities`. There is no DDB table for hosts — the entire target inventory lives in Python code. `VncSessionStore` (see `:41`) is in-memory.
 
-2. **SSH Terminal** (`app/routers/browser_ssh_terminal.py`, 1,126 lines): A WebSocket-based Paramiko SSH bridge with per-user session limits, destination policy (host/port whitelist/blacklist), rate limiting, and role-based access. Credentials are supplied per-session via WebSocket (not stored). The user must manually enter hostname, port, and credentials for every connection.
+2. **SSH Terminal** (`app/routers/browser_ssh_terminal.py`, 1,125 lines — registered at `app/main.py:404`): A WebSocket-based Paramiko SSH bridge with per-user session limits (see `:283`), destination policy (host/port whitelist/blacklist), rate limiting, and role-based access (see `:226`). Credentials are supplied per-session via WebSocket (not stored). The user must manually enter hostname, port, and credentials for every connection.
 
 Neither system offers a persistent, user-managed inventory of hosts. Users cannot:
 
@@ -67,6 +67,7 @@ Host Inventory Flow
 ## 2. Current State Analysis
 
 ### 2.1 VNC Target Configuration (`app/services/vnc_sessions.py`, line 200)
+<!-- VERIFIED: _default_targets() at :200, _resolve_target() at :237, TargetConfig at :24, VncSessionStore at :41, STORE singleton at :99 -->
 
 The `_default_targets()` function returns a hardcoded dictionary:
 
@@ -99,7 +100,8 @@ The SSH terminal validates destinations against a whitelist/blacklist policy in 
 
 `VncSessionStore` is an in-memory dictionary (`self._sessions`). It tracks active VNC sessions but does not persist to DDB. It has no concept of a "host" — only `target_id` references the hardcoded targets.
 
-### 2.4 RemoteDesktopPage (`frontend/src/pages/remote/RemoteDesktopPage.tsx`, ~800 lines)
+### 2.4 RemoteDesktopPage (`frontend/src/pages/remote/RemoteDesktopPage.tsx`)
+<!-- VERIFIED: file exists; only file in frontend/src/pages/remote/ (plus .test.tsx) -->
 
 The frontend remote desktop page presents a target selector dropdown populated from a `GET /api/vnc/targets` endpoint (or hardcoded list). There is no "saved hosts" section, no host management UI, and no CSV import.
 
@@ -116,6 +118,7 @@ All tables follow the `TableDef` pattern with `PK`, optional `SK`, GSIs, and `at
 ## 3. Technical Design
 
 ### 3.1 DynamoDB Table: `remote_hosts`
+<!-- NOTE: remote_hosts table does not exist yet in scripts/local-ddb-init.py — new table required -->
 
 ```python
 # scripts/local-ddb-init.py
@@ -168,6 +171,7 @@ TableDef(
 ### 3.2 Settings & Table Handle
 
 **`app/core/settings.py`** — add:
+<!-- NOTE: remote_hosts_table_name does not exist yet in app/core/settings.py — must be added -->
 
 ```python
 remote_hosts_table_name: str = "remote_hosts"
@@ -179,7 +183,8 @@ remote_hosts_table_name: str = "remote_hosts"
 remote_hosts = _table(S.remote_hosts_table_name)
 ```
 
-### 3.3 Service Layer: `app/services/remote_hosts.py`
+### 3.3 Service Layer: `app/services/remote_hosts.py`)
+<!-- NOTE: app/services/remote_hosts.py does not exist yet — new implementation required -->
 
 New file (~250 lines). Core functions:
 
@@ -261,6 +266,7 @@ Dev VNC,192.168.1.100,5900,vnc,Development,linux,Dev desktop,"dev,vnc"
 - Tags parsed as comma-separated within quotes
 
 ### 3.5 API Router: `app/routers/remote_hosts.py`
+<!-- NOTE: app/routers/remote_hosts.py does not exist yet — new implementation required -->
 
 New file (~200 lines). Prefix: `/ui/remote/hosts`. All endpoints use `Depends(require_ui_session)`.
 
@@ -602,7 +608,7 @@ Host records may contain internal IP addresses or DNS names that reveal infrastr
 
 ### 6.4 Audit Trail
 
-`create_host`, `update_host`, `delete_host`, and `import_hosts_csv` all call `audit_event()` from `app/services/alerts.py` with event type `remote_host.*`.
+`create_host`, `update_host`, `delete_host`, and `import_hosts_csv` all call `audit_event()` (see `app/services/alerts.py:695`) from `app/services/alerts.py` with event type `remote_host.*`.
 
 ---
 
@@ -727,3 +733,23 @@ Host records may contain internal IP addresses or DNS names that reveal infrastr
 8. Connection tracking updates `last_connected_at` and `connection_count` on each connect.
 9. Frontend DataTable displays hosts with search, filter, sort, and pagination.
 10. All mutations produce audit events.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| `_default_targets()` | `app/services/vnc_sessions.py` | 200 | Hardcoded VNC targets; must be extended with user-host fallback |
+| `_resolve_target()` | `app/services/vnc_sessions.py` | 237 | Looks up target by ID; needs `user:` prefix support |
+| `TargetConfig` dataclass | `app/services/vnc_sessions.py` | 24 | VNC target definition with ws_url, allowed_users, capabilities |
+| `VncSessionStore` | `app/services/vnc_sessions.py` | 41 | In-memory session tracker; singleton at :99 |
+| VNC router registration | `app/main.py` | 87, 407 | `vnc_sessions_router` |
+| SSH terminal router | `app/routers/browser_ssh_terminal.py` | 1125 lines | WebSocket Paramiko bridge; registered at `app/main.py:404` |
+| `browser_ssh_terminal_enabled()` | `app/routers/browser_ssh_terminal.py` | 216 | Feature flag check |
+| `RemoteDesktopPage` | `frontend/src/pages/remote/RemoteDesktopPage.tsx` | — | Only existing remote page; no HostInventoryPage yet |
+| `audit_event()` | `app/services/alerts.py` | 695 | Audit logging function |
+| `remote_hosts` DDB table | — | — | Does not exist yet in `scripts/local-ddb-init.py` |
+| `remote_hosts_table_name` setting | — | — | Does not exist yet in `app/core/settings.py` |
+| `app/services/remote_hosts.py` | — | — | Does not exist yet |
+| `app/routers/remote_hosts.py` | — | — | Does not exist yet |

@@ -11,6 +11,17 @@
 
 ## 1. Executive Summary
 
+<!-- NOTE: This ticket's "current state" description is OUTDATED. The bookmark system described here has been FULLY IMPLEMENTED:
+  - Backend: app/routers/newsfeed.py:5458-5954 — bookmark CRUD + collections + status endpoint
+  - Frontend: frontend/src/pages/saved/SavedPage.tsx, frontend/src/api/endpoints/bookmarks.ts
+  - PostCard: BookmarkButton integrated at PostCard.tsx:204,232-242
+  - Sidebar: "Saved" link at Sidebar.tsx:89
+  - Route: /saved at App.tsx:154
+  - Types: FeedPost.bookmarked field at types.ts:1969-1970
+  - DDB keys: BOOKMARK#{user_id}, BOOKMARK_LOOKUP#{user_id}, BMCOL#{user_id}
+  All "Files to Create" listed in section 13 either already exist (SavedPage.tsx, bookmarks.ts) or were implemented inline (BookmarkButton is in PostCard.tsx rather than a separate file; bookmark service is in newsfeed.py rather than bookmarks.py).
+-->
+
 The platform currently has no mechanism for users to save content for later viewing. When a user encounters a post or video they want to revisit, their only options are scrolling through their entire feed history, searching by keyword, or sharing the post to a DM conversation with themselves. None of these are satisfactory. Every major social platform (Instagram, Twitter/X, YouTube, TikTok) provides a dedicated bookmark/save feature because it drives repeat engagement: users return to the platform specifically to revisit saved content.
 
 This feature introduces a bookmark system backed by DynamoDB entities in the existing `app_single_table`. Users can bookmark any post or video with a single tap. Bookmarks are organized into collections (folders) that users can create, rename, and delete. A new `/saved` page provides a browsable, filterable view of all saved content. Bookmark icons are added to PostCard and video cards throughout the UI.
@@ -140,13 +151,15 @@ Bookmarks follow the same pattern but with different PK prefix and additional co
 
 ### 3.7 Gaps
 
-1. No bookmark endpoints in any router (grep "bookmark" returns zero)
-2. No `BOOKMARK#` or `BMCOL#` key prefix in the codebase
-3. No `bookmarked` or `bookmark_count` field in `FeedPost` interface
-4. No bookmark icon in PostCard action row
-5. No `/saved` route in `App.tsx`
-6. No "Saved" link in sidebar navigation
-7. No `BookmarkButton` component
+<!-- NOTE: ALL gaps listed below have been resolved. The bookmark system is fully implemented. -->
+
+1. ~~No bookmark endpoints in any router~~ — **RESOLVED**: Bookmark CRUD at `app/routers/newsfeed.py:5483-5624`, collections at `newsfeed.py:5658-5729`
+2. ~~No `BOOKMARK#` or `BMCOL#` key prefix~~ — **RESOLVED**: `pk_bookmark` at `newsfeed.py:5461`, `pk_bookmark_lookup` at `newsfeed.py:5465`, `pk_bmcol` at `newsfeed.py:5654`
+3. ~~No `bookmarked` field in `FeedPost` interface~~ — **RESOLVED**: `bookmarked?: boolean` at `types.ts:1969-1970`
+4. ~~No bookmark icon in PostCard~~ — **RESOLVED**: `Bookmark`/`BookmarkCheck` icons imported at `PostCard.tsx:4`, mutation at `PostCard.tsx:232-242`
+5. ~~No `/saved` route~~ — **RESOLVED**: Route at `App.tsx:154`, lazy-loaded `SavedPage` at `App.tsx:77`
+6. ~~No "Saved" link in sidebar~~ — **RESOLVED**: `Sidebar.tsx:89` with `Bookmark` icon
+7. ~~No `BookmarkButton` component~~ — **RESOLVED**: Bookmark logic integrated directly into `PostCard.tsx:204-242` (inline, not a separate component)
 
 ---
 
@@ -875,13 +888,21 @@ Each user's bookmarks have their own GSI1 partition (`GSI1PK=BOOKMARK#{user_id}`
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| FeedPost has no bookmark field | `frontend/src/api/types.ts` | 1781-1834 | VERIFIED |
-| Newsfeed key builders have no bookmark prefix | `app/routers/newsfeed.py` | 711-793 | VERIFIED |
+| FeedPost has no bookmark field | `frontend/src/api/types.ts` | 1969-1970 | **OUTDATED** — `bookmarked?: boolean` now exists |
+| Newsfeed key builders have no bookmark prefix | `app/routers/newsfeed.py` | 5461-5465 | **OUTDATED** — `pk_bookmark`, `pk_bookmark_lookup` now exist |
 | app_single_table GSIs (6 total) | `scripts/local-ddb-init.py` | 220-226 | VERIFIED: GSI1-GSI5 + GSI_SCHEDULE_DUE |
-| PostCard action row location | `frontend/src/pages/feed/PostCard.tsx` | 512-560 | VERIFIED |
-| PostCard Share2 button at end of row | `frontend/src/pages/feed/PostCard.tsx` | 548-554 | VERIFIED |
-| Sidebar Main group items | `frontend/src/components/layout/Sidebar.tsx` | 72-79 | VERIFIED |
-| No bookmark endpoints in codebase | All routers | -- | VERIFIED: grep for "bookmark" returns zero results |
+| PostCard action row location | `frontend/src/pages/feed/PostCard.tsx` | 586 | VERIFIED (was 512-560, now shifted due to bookmark code added) |
+| PostCard Share2 button | `frontend/src/pages/feed/PostCard.tsx` | 635 | VERIFIED |
+| PostCard BookmarkButton (now exists) | `frontend/src/pages/feed/PostCard.tsx` | 204, 232-242 | **ALREADY IMPLEMENTED** |
+| Sidebar Main group includes "Saved" | `frontend/src/components/layout/Sidebar.tsx` | 89 | **ALREADY IMPLEMENTED** |
+| No bookmark endpoints in codebase | `app/routers/newsfeed.py` | 5483-5729 | **OUTDATED** — full bookmark CRUD + collections endpoints exist |
 | app_single_table used via APP_TABLE env var | `app/routers/newsfeed.py` | 54, 59 | VERIFIED |
 | Social service uses same table pattern | `app/services/social.py` | 19-20 | VERIFIED |
-| LIKE key pattern as reference | `app/routers/newsfeed.py` | 775 | VERIFIED: `pk_like(user_id) = LIKE#{user_id}` |
+| LIKE key pattern as reference | `app/routers/newsfeed.py` | 828-829 | VERIFIED: `pk_like(user_id) = LIKE#{user_id}` |
+| Bookmark CRUD endpoints | `app/routers/newsfeed.py` | 5483 (POST), 5538 (DELETE), 5553 (GET list), 5624 (GET status) | **ALREADY IMPLEMENTED** |
+| Collection endpoints | `app/routers/newsfeed.py` | 5658 (POST), 5695 (GET), 5712 (PATCH), 5729 (DELETE) | **ALREADY IMPLEMENTED** |
+| SavedPage exists | `frontend/src/pages/saved/SavedPage.tsx` | — | **ALREADY IMPLEMENTED** |
+| /saved route exists | `frontend/src/App.tsx` | 77, 154 | **ALREADY IMPLEMENTED** |
+| bookmarks.ts API client exists | `frontend/src/api/endpoints/bookmarks.ts` | — | **ALREADY IMPLEMENTED** |
+| `bookmarks_enabled` setting | `app/core/settings.py` | — | **DOES NOT EXIST** — no feature flag implemented |
+| BookmarkButton as separate component | `frontend/src/components/shared/BookmarkButton.tsx` | — | **DOES NOT EXIST** — bookmark logic is inline in PostCard.tsx |

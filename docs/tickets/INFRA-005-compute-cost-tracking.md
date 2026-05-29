@@ -113,6 +113,7 @@ Compute Billing Flow
 ## 2. Current State Analysis
 
 ### 2.1 Call Billing Pattern (`app/routers/call_billing.py`)
+<!-- VERIFIED: HeartbeatIn at :43, HeartbeatOut at :47, CallBillingStatusOut at :60, call_heartbeat at :148-149 -->
 
 The call billing system provides a proven per-minute billing model:
 
@@ -145,6 +146,7 @@ The `call_heartbeat()` endpoint (line 149) processes per-minute billing ticks. E
 5. Returns accumulated cost and remaining balance
 
 ### 2.2 Billing Table Schema (`billing` table)
+<!-- VERIFIED: billing table at scripts/local-ddb-init.py:59; T.billing at app/core/tables.py:146; apply_wallet_delta at app/services/billing_shared.py:178 -->
 
 ```
 PK: USER#{user_sub}
@@ -156,7 +158,7 @@ SK: BILLING
 Fields: default_payment_method_id (S), wallet_balance_cents (N)
 ```
 
-The wallet balance is tracked as `wallet_balance_cents` on the `BILLING` row. Deductions use `ADD wallet_balance_cents :neg_amount` with a condition expression `wallet_balance_cents >= :amount` to prevent overdraft.
+The wallet balance is tracked as `wallet_balance_cents` on the `WALLET` row (SK=`WALLET`, NOT `BILLING` — see `app/services/billing_shared.py:166` where `WALLET_SK = "WALLET"`). Deductions use `ADD wallet_balance_cents :neg_amount` with a condition expression `wallet_balance_cents >= :amount` to prevent overdraft (see `apply_wallet_delta` at `app/services/billing_shared.py:178`).
 
 ### 2.3 Compute Rate Cards
 
@@ -182,13 +184,14 @@ RESOURCE_PRESETS = {
 
 ### 2.4 Alerts System (`app/services/alerts.py`)
 
-`write_alert(user_sub, *, event, outcome, title, details)` creates in-app alerts. This is the integration point for spending threshold alerts.
+`write_alert()` (see `app/services/alerts.py:355`) creates in-app alerts. This is the integration point for spending threshold alerts.
 
 ---
 
 ## 3. Technical Design
 
 ### 3.1 DynamoDB Table: `compute_billing`
+<!-- NOTE: compute_billing table does not exist yet in scripts/local-ddb-init.py — new table required -->
 
 ```python
 # scripts/local-ddb-init.py
@@ -244,6 +247,7 @@ TableDef(
 | `alerts_sent` | `MONTH#{YYYY-MM}` | Set of thresholds already alerted |
 
 ### 3.3 Service Layer: `app/services/compute_billing.py`
+<!-- NOTE: app/services/compute_billing.py does not exist yet — new implementation required -->
 
 New file (~350 lines):
 
@@ -359,8 +363,9 @@ async def run_compute_billing_timer(*, poll_interval: int = 300):
 ```
 
 ### 3.4 Wallet Deduction
+<!-- NOTE: The code example below uses sk="BILLING" but the actual wallet row uses sk="WALLET" (see billing_shared.py:166). Consider using apply_wallet_delta() from billing_shared.py:178 instead of raw DDB update. -->
 
-Uses the existing `billing` table's `BILLING` row with conditional update:
+Uses the existing `billing` table's `WALLET` row with conditional update:
 
 ```python
 def deduct_from_wallet(user_sub: str, amount_cents: int) -> int:
@@ -957,3 +962,23 @@ Every wallet deduction produces a LEDGER entry with amount, rate, duration, and 
 10. All deductions are atomic with conditional checks to prevent overdraft.
 11. Admin spending overview provides platform-wide totals and per-user breakdown.
 12. Ledger pagination supports cursor-based navigation for large histories.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| `call_heartbeat()` | `app/routers/call_billing.py` | 148-149 | Proven per-minute billing pattern; reusable for compute |
+| `HeartbeatIn/Out` | `app/routers/call_billing.py` | 43, 47 | Per-tick billing model |
+| `CallBillingStatusOut` | `app/routers/call_billing.py` | 60 | Accumulated cost model |
+| `billing` DDB table | `scripts/local-ddb-init.py` | 59 | PK=pk, SK=sk; no GSIs |
+| `T.billing` table handle | `app/core/tables.py` | 146 | `ddb.Table(S.billing_table_name)` |
+| `apply_wallet_delta()` | `app/services/billing_shared.py` | 178 | Atomic wallet balance with overdraft protection |
+| `WALLET_SK` constant | `app/services/billing_shared.py` | 166 | `"WALLET"` — NOT `"BILLING"` as ticket code example shows |
+| `write_alert()` | `app/services/alerts.py` | 355 | In-app alert creation for spending thresholds |
+| `audit_event()` | `app/services/alerts.py` | 695 | Audit logging |
+| `compute_billing` DDB table | — | — | Does not exist yet in `scripts/local-ddb-init.py` |
+| `app/services/compute_billing.py` | — | — | Does not exist yet |
+| EC2 launcher (INFRA-003 dep) | — | — | Does not exist yet; provides `INSTANCE_TYPES` rate card |
+| K8s launcher (INFRA-004 dep) | — | — | Does not exist yet; provides `RESOURCE_PRESETS` rate card |

@@ -38,12 +38,17 @@ Creator trust requires financial transparency. Without visible commission breakd
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Billing shared | `app/services/billing_shared.py:217-248` | `new_ledger_entry` writes credits; `meta` dict is extensible |
-| Creator earnings | `app/services/creator_earnings.py:47-114` | `get_earnings_summary` aggregates credits by category |
-| Earnings transactions | `app/services/creator_earnings.py:117+` | `get_earnings_transactions` returns paginated ledger entries |
-| Tip ledger | `app/services/tip_ledger.py` | Writes paired debit/credit entries for tips |
-| Syndicate split | `app/services/syndicate_revenue_split.py` | Already implements `platform_fee_pct` deduction before splits |
-| Payout balance | `app/services/creator_payouts.py:55-108` | `get_available_balance` sums all credits |
+| Billing shared | `app/services/billing_shared.py:217` | `new_ledger_entry` writes credits; `meta` dict is extensible |
+<!-- VERIFIED: app/services/billing_shared.py:217 — new_ledger_entry -->
+| Creator earnings | `app/services/creator_earnings.py:47` | `get_earnings_summary` aggregates credits by category |
+<!-- VERIFIED: app/services/creator_earnings.py:47 — get_earnings_summary; :117 — get_earnings_transactions -->
+| Earnings transactions | `app/services/creator_earnings.py:117` | `get_earnings_transactions` returns paginated ledger entries |
+| Tip ledger | `app/services/tip_ledger.py:88` | `write_tip_ledger` writes paired debit/credit entries for tips |
+<!-- VERIFIED: app/services/tip_ledger.py:88 — write_tip_ledger -->
+| Syndicate split | `app/services/syndicate_revenue_split.py` | Referenced as implementing `platform_fee_pct` deduction |
+<!-- NOTE: app/services/syndicate_revenue_split.py does NOT exist — this is an incorrect reference. Platform fee logic will need to be newly implemented. -->
+| Payout balance | `app/services/creator_payouts.py:55` | `get_available_balance` sums all credits |
+<!-- VERIFIED: app/services/creator_payouts.py:55 — get_available_balance -->
 | Settings | `app/core/settings.py` | Config via env vars; no commission rate settings yet |
 
 ### 2.2 Current Fee Handling
@@ -53,7 +58,8 @@ Today, platform fees are applied inconsistently:
 1. **Tips**: The full tip amount is credited to the creator. No platform fee deducted.
 2. **Unlocks**: The full unlock price is credited. No platform fee.
 3. **Subscriptions**: Revenue recorded in `subscription_server.py` -- fee handling varies.
-4. **Syndicate splits**: `syndicate_revenue_split.py` deducts `platform_fee_pct` (default 15%) before distributing. This is the only place with explicit fee logic.
+4. **Syndicate splits**: `syndicate_revenue_split.py` referenced as deducting `platform_fee_pct` before distributing.
+<!-- NOTE: app/services/syndicate_revenue_split.py does NOT exist — this claim is incorrect. No existing fee deduction logic found. -->
 
 ### 2.3 Gaps
 
@@ -880,3 +886,29 @@ In-memory rate cache is a single dictionary (~500 bytes). No memory concern. Sum
 7. Rate changes apply to future transactions only.
 8. Non-admin users can view rates and their own summary but cannot update rates.
 9. All 25 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key Functions | Lines |
+|------|--------------|-------|
+| `app/services/billing_shared.py` | `new_ledger_entry` (meta dict extensible) | 217 |
+| `app/services/creator_earnings.py` | `get_earnings_summary`, `get_earnings_transactions` | 47, 117 |
+| `app/services/tip_ledger.py` | `write_tip_ledger` | 88 |
+| `app/services/creator_payouts.py` | `get_available_balance` | 55 |
+| `scripts/local-ddb-init.py` | `billing` table | 59 |
+
+### Files That Do NOT Exist (incorrect references in ticket)
+| File | Status |
+|------|--------|
+| `app/services/syndicate_revenue_split.py` | Does NOT exist -- ticket incorrectly references it as implementing `platform_fee_pct` deduction |
+| `app/services/catalog_orders.py` | Does NOT exist |
+| `app/services/vod_purchases.py` | Does NOT exist (string category name only in `creator_earnings.py:32`) |
+
+### Files to Create (new implementation)
+| File | Purpose |
+|------|---------|
+| `app/services/platform_commission.py` | Commission rate storage, fee calculation, summary aggregation |
+| Commission rates DDB items | Stored in `app_single_table` or dedicated table |

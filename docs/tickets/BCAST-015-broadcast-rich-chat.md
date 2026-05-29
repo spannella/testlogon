@@ -2317,7 +2317,7 @@ Existing events (`chat:message`, `chat:delete`, `chat:mute`) are unchanged excep
 | `BROADCAST_CHAT_TIP_RATE_MS` | `5000` | Tip rate limit interval (ms) |
 | `BROADCAST_CHAT_MAX_REACTIONS_PER_EMOJI` | `1000` | Cap on per-emoji reaction set size |
 
-## Appendix D: Existing File Reference
+## Codebase References
 
 | File | Relevance |
 |------|-----------|
@@ -2331,3 +2331,9 @@ Existing events (`chat:message`, `chat:delete`, `chat:mute`) are unchanged excep
 | `app/services/tip_ledger.py:87` | `write_tip_ledger()` — billing ledger pattern reference | <!-- VERIFIED: :87 -->
 | `app/core/tables.py` | Table handles — `T.broadcast_chat_messages` (line 80), `T.billing` (line 22) | <!-- VERIFIED: tables.py:80 (broadcast_chat_messages), :22 (billing) -->
 | `scripts/local-ddb-init.py` | Table definitions — no changes needed (existing table, additive fields) | <!-- VERIFIED: :557 (BroadcastChatMessages table def) -->
+| `app/services/broadcast_chat_rich.py` | EXISTS | Rich chat message processing |
+| `frontend/e2e/broadcast-chat-rich.spec.ts` | EXISTS | E2E tests for rich chat |
+| `frontend/src/pages/broadcast/ChatReactionBar.tsx` | EXISTS | Reaction UI |
+| `frontend/src/pages/broadcast/ChatReplyQuote.tsx` | EXISTS | Reply quote UI |
+| `frontend/src/pages/broadcast/ChatLockedCard.tsx` | EXISTS | Locked message UI |
+| `frontend/src/pages/broadcast/ChatOverlay.tsx` | EXISTS | Chat overlay component |

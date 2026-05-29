@@ -45,17 +45,19 @@ Internal file sharing via `share_node()` requires the recipient to be a platform
 
 ### 2.1 File Manager Infrastructure
 
-`app/services/filemanager.py` (192KB) provides full file tree management:
+`app/services/filemanager.py` provides full file tree management:
+<!-- VERIFIED: app/services/filemanager.py — share_node:3919, download_file:2609, get_node:450 -->
 - File nodes stored in DDB with `owner_sub`, `node_id`, `file_name`, `s3_key`, `content_type`, `size_bytes`
 - S3 storage for file content (mocked via moto in dev)
-- `share_node()` shares files to other platform users
-- Download: `GET /ui/files/{node_id}/download` streams file content from S3
+- `share_node()` (line 3919) shares files to other platform users
+- Download: `download_file()` (line 2609) streams file content from S3
 
 ### 2.2 KMS / Crypto Infrastructure
 
 `app/core/crypto.py` provides:
-- `kms_encrypt(plaintext: bytes) -> bytes` — encrypt data with KMS
-- `kms_decrypt(ciphertext: bytes) -> bytes` — decrypt data with KMS
+<!-- VERIFIED: app/core/crypto.py:16 — kms_encrypt; kms_decrypt also present -->
+- `kms_encrypt(plaintext: str) -> str` (line 16) — encrypt data with KMS
+- `kms_decrypt(ciphertext: str) -> str` — decrypt data with KMS
 - In dev mode, uses mock KMS server on port 7999
 
 ### 2.3 S3 Storage
@@ -708,7 +710,26 @@ share_links_enabled: bool = os.environ.get("SHARE_LINKS_ENABLED", "true").lower(
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| File manager service | Existing | Available |
-| KMS crypto utilities | Existing | Available (`app/core/crypto.py`) |
+| File manager service | Existing | Available (`app/services/filemanager.py` — `share_node:3919`, `download_file:2609`) |
+| KMS crypto utilities | Existing | Available (`app/core/crypto.py:16` — `kms_encrypt`) |
 | bcrypt | New pip dependency | Add to requirements |
 | cryptography (AESGCM) | New pip dependency | Add to requirements |
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key References | Lines |
+|------|---------------|-------|
+| `app/services/filemanager.py` | `share_node`, `download_file`, `get_node` | 3919, 2609, 450 |
+| `app/core/crypto.py` | `kms_encrypt`, `kms_decrypt` | 16 |
+| `scripts/local-ddb-init.py` | `file_manager` table definition | 158 |
+
+### Files to Create (new implementation)
+| File | Purpose |
+|------|---------|
+| `app/services/file_share_links.py` | Link CRUD, encryption, download logic |
+| `app/routers/file_share_links.py` | API endpoints (authenticated + public) |
+| `file_share_links` DDB table | Table definition in `scripts/local-ddb-init.py` |
+| Frontend share links management page | UI for creating/managing share links |

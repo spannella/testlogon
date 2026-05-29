@@ -37,11 +37,12 @@ With EmojiPicker, GifPicker, and StickerPicker already built for messaging (MSG-
 
 ### 2.1 Comment Model
 
-Comments are created via `POST /posts/{post_id}/comments` in `app/routers/newsfeed.py`. The current `CreateCommentRequest` model:
+Comments are created via `POST /posts/{post_id}/comments` in `app/routers/newsfeed.py` (line 4556). The current `CreateCommentRequest` model (line 1432) extends `ContentFieldsMixin`:
+<!-- VERIFIED: app/routers/newsfeed.py:1432 — CreateCommentRequest(ContentFieldsMixin); :4556 — create_comment -->
 
 ```python
-class CreateCommentRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=5000)
+# NOTE: Actual model uses ContentFieldsMixin, not plain text field
+class CreateCommentRequest(ContentFieldsMixin):
     parent_comment_id: Optional[str] = None
 ```
 
@@ -49,13 +50,16 @@ Comments are stored in DDB with fields: `comment_id`, `post_id`, `user_id`, `tex
 
 ### 2.2 Comment Rendering
 
-`frontend/src/pages/feed/CommentsThread.tsx` renders comments as plain text in `<p>` tags. `CommentRow.tsx` handles individual comment display with author info, tip button, and reply button.
+`frontend/src/pages/feed/CommentsThread.tsx` renders comments as plain text in `<p>` tags.
+<!-- VERIFIED: frontend/src/pages/feed/CommentsThread.tsx exists -->
+<!-- NOTE: frontend/src/pages/feed/CommentRow.tsx does NOT exist as a separate file — comment rendering is inline in CommentsThread.tsx -->
 
 ### 2.3 Available Picker Components
 
-- `EmojiPicker` (MSG-006): `frontend/src/components/shared/EmojiPicker.tsx`
-- `GifPicker` (MSG-008): `frontend/src/components/shared/GifPicker.tsx`
-- `StickerPicker` (MSG-008): `frontend/src/components/shared/StickerPicker.tsx`
+<!-- NOTE: ALL THREE picker components do NOT exist yet — MSG-006 and MSG-008 have not been implemented. These are blocking dependencies. -->
+- `EmojiPicker` (MSG-006): `frontend/src/components/shared/EmojiPicker.tsx` — **does not exist yet**
+- `GifPicker` (MSG-008): `frontend/src/components/shared/GifPicker.tsx` — **does not exist yet**
+- `StickerPicker` (MSG-008): `frontend/src/components/shared/StickerPicker.tsx` — **does not exist yet**
 
 ### 2.4 Gaps
 
@@ -730,7 +734,29 @@ When disabled, the backend rejects `kind=gif` and `kind=sticker` comments with 4
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| EmojiPicker component | MSG-006 | Required |
-| GifPicker component | MSG-008 | Required |
-| StickerPicker component | MSG-008 | Required |
-| `isEmojiOnly()` utility | MSG-006 | Required |
+| EmojiPicker component | MSG-006 | Required — **NOT YET IMPLEMENTED** |
+| GifPicker component | MSG-008 | Required — **NOT YET IMPLEMENTED** |
+| StickerPicker component | MSG-008 | Required — **NOT YET IMPLEMENTED** |
+| `isEmojiOnly()` utility | MSG-006 | Required — **NOT YET IMPLEMENTED** |
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key References | Lines |
+|------|---------------|-------|
+| `app/routers/newsfeed.py` | `CreateCommentRequest` (extends `ContentFieldsMixin`) | 1432 |
+| `app/routers/newsfeed.py` | `create_comment` endpoint | 4556 |
+| `app/routers/newsfeed.py` | `_comment_to_dict` serializer | 2018 |
+| `app/routers/newsfeed.py` | `ContentFieldsMixin` | 1182 |
+| `frontend/src/pages/feed/CommentsThread.tsx` | Comment thread rendering | - |
+| `scripts/local-ddb-init.py` | `app_single_table` definition | 222 |
+
+### Files That Do NOT Exist Yet (blocking dependencies)
+| File | Dependency | Status |
+|------|-----------|--------|
+| `frontend/src/components/shared/EmojiPicker.tsx` | MSG-006 | Not implemented |
+| `frontend/src/components/shared/GifPicker.tsx` | MSG-008 | Not implemented |
+| `frontend/src/components/shared/StickerPicker.tsx` | MSG-008 | Not implemented |
+| `frontend/src/pages/feed/CommentRow.tsx` | Referenced in ticket | Does not exist as separate file (comment rendering is inline in CommentsThread.tsx) |

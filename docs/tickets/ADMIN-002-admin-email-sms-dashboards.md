@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 8-10 days  
-**Dependencies**: Email delivery (`email_delivery.py`), SMS delivery (`sms_delivery.py`), admin email router (`admin_email.py`), admin auth (`auth/deps.py`)
+**Dependencies**: Email delivery (`email_delivery.py` — see `app/services/email_delivery.py`), SMS delivery (`sms_delivery.py` — see `app/services/sms_delivery.py`), admin email router (`admin_email.py` — see `app/routers/admin_email.py`, prefix `/ui/admin/email`, registered in `app/main.py:162,439`), admin SMS router (`admin_sms.py` — see `app/routers/admin_sms.py`, prefix `/ui/admin/sms`, registered in `app/main.py:161,438`), admin auth (`auth/policy.py` — see `app/auth/policy.py`)
+<!-- NOTE: `require_admin_session` does not exist in auth/deps.py. The admin email and SMS routers use `require_admin_or_root` from `app/auth/policy.py:67`. -->
 
 ---
 
@@ -19,7 +20,8 @@ The platform sends emails and SMS messages for notifications, verification codes
 - **SMS** (`sms_delivery.py`): `record_sms_sent`, `record_sms_failure`, `get_sms_delivery_stats`, `list_sms_deliveries`, `list_sms_failures`, `get_suppression_list`, `suppress_sms`, `remove_sms_suppression`
 - **Admin email router** (`admin_email.py`): Stats, deliveries, bounces, complaints, suppression management, template preview, dev log
 
-However, there is no admin-facing dashboard UI that visualizes these metrics. The API endpoints exist but are not consumed by any frontend page. Admins must use raw API calls or the Swagger UI to check delivery health. There is also no SMS admin router (only email has one) and no notification template management UI.
+However, there is no admin-facing dashboard UI that visualizes these metrics. The API endpoints exist but are not consumed by any frontend page. Admins must use raw API calls or the Swagger UI to check delivery health. There is also no notification template management UI.
+<!-- NOTE: An SMS admin router DOES already exist at app/routers/admin_sms.py (prefix /ui/admin/sms, registered in app/main.py:161,438). It provides stats, deliveries, failures, suppression CRUD, and dev log endpoints using require_admin_or_root auth. The claim "no SMS admin router" is incorrect. -->
 
 ### Why This Is Needed
 
@@ -127,7 +129,7 @@ Admin Communications Dashboard (/admin/communications)
 
 Request Flow — Email Stats:
   Browser → GET /v1/admin/email/stats?days=7
-         → require_admin_session (cookie auth + CSRF check)
+         → require_admin_or_root (cookie auth + CSRF check)
          → get_delivery_stats(days=7)
          → DynamoDB Query: PK=EMAIL_STATS, SK between date range
          → aggregate sent/delivered/bounced/complained
@@ -135,7 +137,7 @@ Request Flow — Email Stats:
 
 Request Flow — Template Test Send:
   Browser → POST /v1/admin/notifications/templates/{id}/test-send
-         → require_admin_session (CSRF enforced)
+         → require_admin_or_root (CSRF enforced)
          → notification_templates.test_send(id, recipient, sample_vars)
          → render template with sample_vars
          → email_delivery.send_email() or sms_delivery.send_sms()
@@ -149,49 +151,62 @@ Request Flow — Template Test Send:
 
 ### 2.1 Email Delivery Service (`app/services/email_delivery.py`)
 
-Key functions:
-- `get_delivery_stats(days=7)`: Returns counts for sent, delivered, bounced, complained, failed
-- `list_deliveries(limit, cursor)`: Paginated delivery list
-- `list_bounces(limit, cursor)`: Paginated bounce list
-- `list_complaints(limit, cursor)`: Paginated complaint list
-- `get_suppression_list(limit)`: Suppressed addresses
-- `suppress_email(email, reason)`: Add to suppression list
-- `remove_suppression(email)`: Remove from suppression list
-- `is_suppressed(email)`: Check suppression status
-- `read_dev_email_log(max_entries)`: Dev mode log
+Key functions (verified):
+- `get_delivery_stats(days=7)` (line 221): Returns counts for sent, delivered, bounced, complained, failed
+- `list_deliveries(limit, cursor)` (line 284): Paginated delivery list
+- `list_bounces(limit, cursor)` (line 316): Paginated bounce list
+- `list_complaints(limit, cursor)` (line 337): Paginated complaint list
+- `get_suppression_list(limit)` (line 358): Suppressed addresses
+- `suppress_email(email, reason)` (line 175): Add to suppression list
+- `remove_suppression(email)` (line 205): Remove from suppression list
+- `is_suppressed(email)` (line 193): Check suppression status
+- `read_dev_email_log(max_entries)` (line 373): Dev mode log
 
 ### 2.2 SMS Delivery Service (`app/services/sms_delivery.py`)
 
-Key functions:
-- `get_sms_delivery_stats(days=7)`: SMS delivery statistics
-- `list_sms_deliveries(limit, cursor)`: SMS delivery list
-- `list_sms_failures(limit)`: SMS failure list
-- `get_suppression_list(limit)`: Suppressed phone numbers
-- `suppress_sms(phone, reason)`: Add to suppression
-- `remove_sms_suppression(phone)`: Remove suppression
-- `get_dev_sms_log()`: Dev mode log
+Key functions (verified):
+- `get_sms_delivery_stats(days=7)` (line 226): SMS delivery statistics
+- `list_sms_deliveries(limit, cursor)` (line 302): SMS delivery list
+- `list_sms_failures(limit)` (line 324): SMS failure list
+- `get_suppression_list(limit)` (line 331): Suppressed phone numbers
+- `suppress_sms(phone, reason)` (line 148): Add to suppression
+- `remove_sms_suppression(phone)` (line 179): Remove suppression
+- `get_dev_sms_log()` (line 344): Dev mode log
 
 ### 2.3 Admin Email Router (`app/routers/admin_email.py`)
 
-Existing endpoints:
-- `GET /stats`: Email statistics
-- `GET /deliveries`: Delivery list
-- `GET /bounces`: Bounce list
-- `GET /complaints`: Complaint list
-- `GET /suppressed`: Suppression list
-- `DELETE /suppressed/{email}`: Remove suppression
-- `GET /preview`: Template preview
-- `GET /dev-log`: Dev email log
+Existing endpoints (prefix `/ui/admin/email`, auth: `require_admin_or_root` from `app/auth/policy.py:67`):
+- `GET /stats` (line 26): Email statistics — `email_stats()`
+- `GET /deliveries` (line 35): Delivery list — `email_deliveries()`
+- `GET /bounces` (line 47): Bounce list — `email_bounces()`
+- `GET /complaints` (line 58): Complaint list — `email_complaints()`
+- `GET /suppressed` (line 69): Suppression list — `suppressed_emails()`
+- `DELETE /suppressed/{email}` (line 78): Remove suppression — `unsuppress_email()`
+- `GET /preview` (line 88): Template preview — `email_preview()`
+- `GET /dev-log` (line 113): Dev email log — `dev_email_log()`
+
+### 2.3b Admin SMS Router (`app/routers/admin_sms.py`)
+
+<!-- NOTE: This router already exists, contrary to the Gap section claim. -->
+Existing endpoints (prefix `/ui/admin/sms`, auth: `require_admin_or_root` from `app/auth/policy.py:67`, registered in `app/main.py:161,438`):
+- `GET /stats` (line 24): SMS statistics — `sms_stats()`
+- `GET /deliveries` (line 33): SMS delivery list — `sms_deliveries()`
+- `GET /failures` (line 45): SMS failure list — `sms_failures()`
+- `GET /suppressed` (line 56): Suppression list — `suppressed_list()`
+- `GET /suppressed/{phone}` (line 65): Check suppression — `check_suppression()`
+- `POST /suppressed` (line 74): Add suppression — `suppress_phone()`
+- `DELETE /suppressed/{phone}` (line 84): Remove suppression — `unsuppress_phone()`
+- `GET /dev-log` (line 94): Dev SMS log — `dev_log()`
 
 ### 2.4 Email Templates (`app/services/alert_email_templates.py`)
 
-Template functions for different notification types. Templates are Python functions returning HTML strings — not yet stored in DDB for dynamic editing.
+Template functions for different notification types (see `app/services/alert_email_templates.py` — file exists). Templates are Python functions returning HTML strings — not yet stored in DDB for dynamic editing.
 
 ### 2.5 Gaps
 
 1. No admin dashboard UI for email delivery metrics
 2. No admin dashboard UI for SMS delivery metrics
-3. No SMS admin router (only email has one)
+3. ~~No SMS admin router (only email has one)~~ — **CORRECTED**: An SMS admin router already exists at `app/routers/admin_sms.py` with 8 endpoints (see section 2.3b above)
 4. No notification template management UI
 5. No test send functionality (send test notification to specific address)
 6. No delivery rate charts over time
@@ -203,17 +218,20 @@ Template functions for different notification types. Templates are Python functi
 
 ### 3.1 SMS Admin Router: `app/routers/admin_sms.py`
 
-Mirror the existing email admin router pattern for SMS:
+<!-- NOTE: This router already exists at app/routers/admin_sms.py with prefix /ui/admin/sms (line 20), registered in app/main.py:161,438. It already has 8 endpoints using require_admin_or_root. The paths below should use /ui/admin/sms/ prefix (not /v1/admin/sms/) to match the existing implementation. -->
+
+Existing endpoints (already implemented):
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/v1/admin/sms/stats` | `require_admin_session` | SMS delivery stats |
-| GET | `/v1/admin/sms/deliveries` | `require_admin_session` | SMS delivery list |
-| GET | `/v1/admin/sms/failures` | `require_admin_session` | SMS failure list |
-| GET | `/v1/admin/sms/suppressed` | `require_admin_session` | Suppression list |
-| POST | `/v1/admin/sms/suppressed` | `require_admin_session` | Add suppression |
-| DELETE | `/v1/admin/sms/suppressed/{phone}` | `require_admin_session` | Remove suppression |
-| GET | `/v1/admin/sms/dev-log` | `require_admin_session` | Dev SMS log |
+| GET | `/ui/admin/sms/stats` | `require_admin_or_root` | SMS delivery stats (line 24) |
+| GET | `/ui/admin/sms/deliveries` | `require_admin_or_root` | SMS delivery list (line 33) |
+| GET | `/ui/admin/sms/failures` | `require_admin_or_root` | SMS failure list (line 45) |
+| GET | `/ui/admin/sms/suppressed` | `require_admin_or_root` | Suppression list (line 56) |
+| GET | `/ui/admin/sms/suppressed/{phone}` | `require_admin_or_root` | Check suppression (line 65) |
+| POST | `/ui/admin/sms/suppressed` | `require_admin_or_root` | Add suppression (line 74) |
+| DELETE | `/ui/admin/sms/suppressed/{phone}` | `require_admin_or_root` | Remove suppression (line 84) |
+| GET | `/ui/admin/sms/dev-log` | `require_admin_or_root` | Dev SMS log (line 94) |
 
 ### 3.2 DynamoDB Access Patterns
 
@@ -262,6 +280,7 @@ TableDef(
 | `updated_by` | S | Admin who last updated |
 
 ### 3.4 Template Management Service: `app/services/notification_templates.py`
+<!-- NOTE: app/services/notification_templates.py does not exist yet — new implementation required. The notification_templates DDB table also does not exist in scripts/local-ddb-init.py and must be created. No notification_templates_table_name setting exists in app/core/settings.py, and no table handle in app/core/tables.py. -->
 
 ```python
 """Notification template management (ADMIN-002).
@@ -317,24 +336,26 @@ def seed_default_templates() -> None:
 ```
 
 ### 3.5 Template & Test Send Router
+<!-- NOTE: app/routers/admin_notifications.py does not exist yet — new implementation required. -->
 
 Extend admin email router or create new combined router:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/v1/admin/notifications/templates` | `require_admin_session` | List templates |
-| GET | `/v1/admin/notifications/templates/{id}` | `require_admin_session` | Get template |
-| PATCH | `/v1/admin/notifications/templates/{id}` | `require_admin_session` | Update template |
-| POST | `/v1/admin/notifications/templates/{id}/preview` | `require_admin_session` | Preview template |
-| POST | `/v1/admin/notifications/templates/{id}/test-send` | `require_admin_session` | Test send |
+| GET | `/v1/admin/notifications/templates` | `require_admin_or_root` | List templates |
+| GET | `/v1/admin/notifications/templates/{id}` | `require_admin_or_root` | Get template |
+| PATCH | `/v1/admin/notifications/templates/{id}` | `require_admin_or_root` | Update template |
+| POST | `/v1/admin/notifications/templates/{id}/preview` | `require_admin_or_root` | Preview template |
+| POST | `/v1/admin/notifications/templates/{id}/test-send` | `require_admin_or_root` | Test send |
 
 ### 3.6 API Request/Response Examples
 
-**GET /v1/admin/email/stats?days=7**
+**GET /ui/admin/email/stats?days=7**
+<!-- NOTE: The actual router prefix is /ui/admin/email (see admin_email.py:22), not /v1/admin/email. All email admin API paths below should use /ui/admin/email/. -->
 
 ```json
 // Request
-GET /v1/admin/email/stats?days=7
+GET /ui/admin/email/stats?days=7
 Cookie: ui_session=...; ui_access_token=...; ui_csrf=...
 x-csrf-token: <csrf_token>
 
@@ -352,7 +373,7 @@ x-csrf-token: <csrf_token>
 }
 ```
 
-**GET /v1/admin/email/deliveries?limit=5**
+**GET /ui/admin/email/deliveries?limit=5**
 
 ```json
 // Response 200
@@ -373,7 +394,7 @@ x-csrf-token: <csrf_token>
 }
 ```
 
-**GET /v1/admin/email/bounces?limit=5**
+**GET /ui/admin/email/bounces?limit=5**
 
 ```json
 // Response 200
@@ -393,7 +414,8 @@ x-csrf-token: <csrf_token>
 }
 ```
 
-**POST /v1/admin/email/suppressed**
+**POST /ui/admin/email/suppressed**
+<!-- NOTE: The existing admin_email.py does not have a POST endpoint for adding suppressions. Only DELETE /suppressed/{email} exists. A POST endpoint would need to be added. -->
 
 ```json
 // Request
@@ -412,7 +434,7 @@ x-csrf-token: <csrf_token>
 }
 ```
 
-**DELETE /v1/admin/email/suppressed/spam@test.local**
+**DELETE /ui/admin/email/suppressed/spam@test.local**
 
 ```json
 // Response 200
@@ -423,7 +445,7 @@ x-csrf-token: <csrf_token>
 }
 ```
 
-**GET /v1/admin/sms/stats?days=7**
+**GET /ui/admin/sms/stats?days=7**
 
 ```json
 // Response 200
@@ -438,7 +460,7 @@ x-csrf-token: <csrf_token>
 }
 ```
 
-**GET /v1/admin/sms/failures?limit=5**
+**GET /ui/admin/sms/failures?limit=5**
 
 ```json
 // Response 200
@@ -849,39 +871,40 @@ interface TestSendDialogProps {
 ```
 
 ### 3.10 Frontend API (`frontend/src/api/endpoints/adminCommunications.ts`)
+<!-- NOTE: frontend/src/api/endpoints/adminCommunications.ts does not exist yet — new implementation required. Paths below corrected to use /ui/admin/ prefix to match existing routers. -->
 
 ```typescript
-// Email
+// Email — uses existing admin_email.py router (prefix /ui/admin/email)
 export const getEmailStats = (params?: { days?: number }) =>
-  client.get("/v1/admin/email/stats", { params });
+  client.get("/ui/admin/email/stats", { params });
 export const getEmailDeliveries = (params?: { limit?: number }) =>
-  client.get("/v1/admin/email/deliveries", { params });
+  client.get("/ui/admin/email/deliveries", { params });
 export const getEmailBounces = (params?: { limit?: number }) =>
-  client.get("/v1/admin/email/bounces", { params });
+  client.get("/ui/admin/email/bounces", { params });
 export const getEmailComplaints = (params?: { limit?: number }) =>
-  client.get("/v1/admin/email/complaints", { params });
+  client.get("/ui/admin/email/complaints", { params });
 export const getEmailSuppressions = () =>
-  client.get("/v1/admin/email/suppressed");
+  client.get("/ui/admin/email/suppressed");
 export const removeEmailSuppression = (email: string) =>
-  client.delete(`/v1/admin/email/suppressed/${encodeURIComponent(email)}`);
+  client.delete(`/ui/admin/email/suppressed/${encodeURIComponent(email)}`);
 export const addEmailSuppression = (data: { address: string; reason: string }) =>
-  client.post("/v1/admin/email/suppressed", data);
+  client.post("/ui/admin/email/suppressed", data);
 
-// SMS
+// SMS — uses existing admin_sms.py router (prefix /ui/admin/sms)
 export const getSmsStats = (params?: { days?: number }) =>
-  client.get("/v1/admin/sms/stats", { params });
+  client.get("/ui/admin/sms/stats", { params });
 export const getSmsDeliveries = (params?: { limit?: number }) =>
-  client.get("/v1/admin/sms/deliveries", { params });
+  client.get("/ui/admin/sms/deliveries", { params });
 export const getSmsFailures = (params?: { limit?: number }) =>
-  client.get("/v1/admin/sms/failures", { params });
+  client.get("/ui/admin/sms/failures", { params });
 export const getSmsSuppressions = () =>
-  client.get("/v1/admin/sms/suppressed");
+  client.get("/ui/admin/sms/suppressed");
 export const addSmsSuppression = (data: { address: string; reason: string }) =>
-  client.post("/v1/admin/sms/suppressed", data);
+  client.post("/ui/admin/sms/suppressed", data);
 export const removeSmsSuppression = (phone: string) =>
-  client.delete(`/v1/admin/sms/suppressed/${encodeURIComponent(phone)}`);
+  client.delete(`/ui/admin/sms/suppressed/${encodeURIComponent(phone)}`);
 
-// Templates
+// Templates — new admin_notifications.py router (to be created)
 export const listTemplates = (params?: { channel?: string }) =>
   client.get("/v1/admin/notifications/templates", { params });
 export const getTemplate = (id: string) =>
@@ -900,8 +923,9 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 
 ### Phase 1: Backend — SMS Router (Days 1-2)
 
-1. **`app/routers/admin_sms.py`**: New router mirroring admin_email.py pattern, 7 endpoints.
-2. **`app/main.py`**: Register SMS admin router.
+1. ~~**`app/routers/admin_sms.py`**: New router mirroring admin_email.py pattern, 7 endpoints.~~ — **Already exists** at `app/routers/admin_sms.py` with 8 endpoints (prefix `/ui/admin/sms`).
+2. ~~**`app/main.py`**: Register SMS admin router.~~ — **Already registered** at `app/main.py:161,438`.
+<!-- NOTE: Phase 1 is already complete. The SMS admin router exists and is registered. Skip to Phase 2. -->
 
 ### Phase 2: Backend — Template Management (Days 2-4)
 
@@ -1078,7 +1102,7 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 
 | # | Test | Assertion |
 |---|------|-----------|
-| 1 | `Admin retrieves email delivery stats` | GET `/v1/admin/email/stats` as Root -> 200; `sent >= 5`, `delivery_rate` between 0 and 100, `bounce_rate >= 0` |
+| 1 | `Admin retrieves email delivery stats` | GET `/ui/admin/email/stats` as Root -> 200; `sent >= 5`, `delivery_rate` between 0 and 100, `bounce_rate >= 0` <!-- NOTE: actual prefix is /ui/admin/email, not /v1/admin/email --> |
 | 2 | `Admin lists email deliveries` | GET `/v1/admin/email/deliveries?limit=10` -> 200; array with seeded deliveries |
 | 3 | `Admin lists email bounces` | GET `/v1/admin/email/bounces` -> 200; array with at least 1 bounce entry |
 | 4 | `Non-admin cannot access email stats` | GET as Alice -> 403 |
@@ -1150,11 +1174,11 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 
 | File | Purpose |
 |------|---------|
-| `app/routers/admin_sms.py` | SMS admin router (7 endpoints) |
-| `app/services/notification_templates.py` | Template CRUD, preview, test send |
-| `app/routers/admin_notifications.py` | Template management router (5 endpoints) |
-| `frontend/src/api/endpoints/adminCommunications.ts` | API wrappers |
-| `frontend/src/pages/admin/communications/CommunicationsDashboard.tsx` | Dashboard page |
+| ~~`app/routers/admin_sms.py`~~ | ~~SMS admin router~~ — **Already exists** with 8 endpoints |
+| `app/services/notification_templates.py` | Template CRUD, preview, test send <!-- NOTE: does not exist yet --> |
+| `app/routers/admin_notifications.py` | Template management router (5 endpoints) <!-- NOTE: does not exist yet --> |
+| `frontend/src/api/endpoints/adminCommunications.ts` | API wrappers <!-- NOTE: does not exist yet --> |
+| `frontend/src/pages/admin/communications/CommunicationsDashboard.tsx` | Dashboard page <!-- NOTE: does not exist yet --> |
 | `frontend/e2e/admin-communications.spec.ts` | E2E tests (30 tests, sections 551-558) |
 
 ## 11. Files to Modify
@@ -1162,12 +1186,12 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 | File | Change |
 |------|--------|
 | `app/models.py` | Add communication dashboard Pydantic models |
-| `app/main.py` | Register `admin_sms_router` and `admin_notifications_router` |
-| `app/core/settings.py` | Add `notification_templates_table_name` |
-| `app/core/tables.py` | Add `notification_templates` table handle |
-| `scripts/local-ddb-init.py` | Add `notification_templates` table |
+| `app/main.py` | Register `admin_notifications_router` only (`admin_sms_router` already registered at lines 161, 438) |
+| `app/core/settings.py` | Add `notification_templates_table_name` <!-- NOTE: does not exist yet --> |
+| `app/core/tables.py` | Add `notification_templates` table handle <!-- NOTE: does not exist yet --> |
+| `scripts/local-ddb-init.py` | Add `notification_templates` table <!-- NOTE: does not exist yet --> |
 | `frontend/src/api/types.ts` | Add communication TypeScript types |
-| `frontend/src/App.tsx` | Add `/admin/communications` route |
+| `frontend/src/App.tsx` | Add `/admin/communications` route <!-- NOTE: route does not exist yet --> |
 | `frontend/src/components/layout/Sidebar.tsx` | Add "Communications" admin nav link |
 
 ## 12. Acceptance Criteria
@@ -1182,3 +1206,21 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 8. Test send delivers a notification to a specified address
 9. Non-admin users receive 403 on all endpoints
 10. All 30 E2E tests pass in `frontend/e2e/admin-communications.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/email_delivery.py` | 33, 175, 193, 205, 221, 284, 316, 337, 358, 373 | Existing email delivery service with stats, CRUD, suppression, dev log |
+| `app/services/sms_delivery.py` | 41, 148, 179, 226, 302, 324, 331, 344 | Existing SMS delivery service with stats, CRUD, suppression, dev log |
+| `app/services/alert_email_templates.py` | — | Existing hardcoded email templates (Python functions returning HTML) |
+| `app/routers/admin_email.py` | 22, 26-113 | Existing admin email router, prefix `/ui/admin/email`, 8 endpoints, auth: `require_admin_or_root` |
+| `app/routers/admin_sms.py` | 20, 24-95 | Existing admin SMS router, prefix `/ui/admin/sms`, 8 endpoints, auth: `require_admin_or_root` |
+| `app/auth/policy.py` | 63, 67, 84 | `require_root` (line 63), `require_admin_or_root` (line 67), `require_admin_scope` (line 84) |
+| `app/main.py` | 161-162, 438-439 | Registration of `admin_sms_router` (line 161/438) and `admin_email_router` (line 162/439) |
+| `app/services/notification_templates.py` | — | Does not exist yet — new implementation required |
+| `app/routers/admin_notifications.py` | — | Does not exist yet — new implementation required |
+| `frontend/src/api/endpoints/adminCommunications.ts` | — | Does not exist yet — new implementation required |
+| `frontend/src/pages/admin/communications/` | — | Does not exist yet — new implementation required |

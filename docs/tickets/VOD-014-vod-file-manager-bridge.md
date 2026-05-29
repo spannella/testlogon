@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-014
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-25
 
 ---
@@ -744,9 +744,9 @@ The existing `GET /v1/fs/list` endpoint already returns all node attributes. The
 
 | File | Change Type | Description |
 |------|-------------|-------------|
-| `app/services/vod_file_bridge.py` | New | Bridge service: `link_video_to_filemanager`, `import_file_to_vod`, helpers |
-| `app/routers/vod_bridge.py` | New | 4 endpoints: import, status, folder change, unlink |
-| `app/main.py` | Modify | Register `vod_bridge_router` |
+| `app/services/vod_file_bridge.py` | **Already exists** | `link_video_to_filemanager()` (line 20), `import_file_to_vod()` (line 92), `unlink_video_from_filemanager()` (line 136), `_enqueue_transcode_for_import()` (line 262) |
+| `app/routers/vod_bridge.py` | **Already exists** | 3 endpoints: `api_import_to_vod` (line 41), `api_get_bridge_status` (line 48), `api_unlink` (line 66). Prefix `/ui/vod-bridge`. Models: `ImportToVodIn` (line 19), `ImportToVodOut` (line 24), `BridgeStatusOut` (line 29). |
+| `app/main.py` | **Already done** | `vod_bridge_router` registered at line 428 (import at line 105) |
 | `app/core/settings.py` | Modify | Add `vod_file_bridge_*` settings |
 | `.env.local.example` | Modify | Add bridge env vars |
 | `app/services/transcode_worker.py` | Modify | Add `link_video_to_filemanager` call after status transition |

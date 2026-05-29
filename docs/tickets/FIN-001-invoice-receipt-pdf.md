@@ -48,9 +48,17 @@ The platform processes tips, unlocks, subscription payments, shop purchases, and
 | Shopping cart purchase | `app/services/shoppingcart.py` (`purchase_cart`) | Shop orders generate billing entries + purchase history |
 | `ulidish()` | `app/services/billing_shared.py` | Time-sortable unique ID generator |
 
-### 2.2 Gaps
+### 2.2 Existing Receipt Service
 
-1. **No invoice generation** -- no PDF rendering pipeline; no library (e.g., `reportlab`, `weasyprint`, `fpdf2`) installed.
+<!-- NOTE: app/services/receipts.py ALREADY EXISTS with PDF rendering (get_or_create_receipt:199, _render_pdf:53). This provides basic receipt PDFs for individual transactions. FIN-001 extends this to a full invoice system with sequence numbers, invoice history, and email delivery. -->
+`app/services/receipts.py` provides basic receipt PDF generation:
+- `get_or_create_receipt(user_sub, txn_id)` (line 199) — generates or retrieves a receipt PDF
+- `_render_pdf(lines)` (line 53) — renders a text-based PDF document
+- `_build_receipt_payload(txn_item)` (line 106) — builds receipt data from a transaction item
+
+### 2.3 Gaps
+
+1. ~~**No invoice generation**~~ — PARTIALLY DONE: `app/services/receipts.py` exists with basic PDF rendering. Needs extension to formal invoice format with line items, tax, and business details.
 2. **No invoice number sequence** -- ledger entry IDs are ULIDs, not human-readable invoice numbers (e.g., `INV-2026-00042`).
 3. **No invoice storage** -- generated PDFs are not stored for repeat download.
 4. **No invoice history endpoint** -- `/billing/ledger` returns raw entries without invoice metadata.
@@ -694,7 +702,8 @@ invoices_enabled: bool = os.environ.get("INVOICES_ENABLED", "true").lower() == "
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|
-| `app/services/billing_shared.py` | Exists | `new_ledger_entry` for ledger entry ID correlation |
+| `app/services/billing_shared.py` | Exists (see `new_ledger_entry:217`, `ulidish:209`, `ledger_sk:213`) | Ledger entry ID correlation |
+| `app/services/receipts.py` | Exists (see `get_or_create_receipt:199`, `_render_pdf:53`) | Existing receipt PDF pipeline to extend |
 | `app/routers/messaging.py` | Exists (modify) | Hook invoice creation into tip/unlock flows |
 | `app/routers/newsfeed.py` | Exists (modify) | Hook invoice creation into post tip/unlock flows |
 | `app/services/shoppingcart.py` | Exists (modify) | Hook invoice creation into cart purchase |
@@ -717,3 +726,23 @@ invoices_enabled: bool = os.environ.get("INVOICES_ENABLED", "true").lower() == "
 5. Email delivery sends the PDF as an attachment to the user's email address on file.
 6. Users can only access their own invoices; admins can access all invoices.
 7. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key Functions | Lines |
+|------|--------------|-------|
+| `app/services/billing_shared.py` | `new_ledger_entry`, `ulidish`, `ledger_sk`, `get_wallet_balance` | 217, 209, 213, 169 |
+| `app/services/receipts.py` | `get_or_create_receipt`, `_render_pdf`, `_build_receipt_payload` | 199, 53, 106 |
+| `app/services/tip_ledger.py` | `write_tip_ledger` | 88 |
+| `app/services/creator_earnings.py` | `get_earnings_summary`, `get_earnings_transactions` | 47, 117 |
+| `scripts/local-ddb-init.py` | `billing` table definition | 59 |
+
+### Files to Create (new implementation)
+| File | Purpose |
+|------|---------|
+| `app/services/invoices.py` | Invoice generation, numbering, S3 storage, email delivery |
+| `app/routers/invoices.py` | Invoice history, download, email endpoints |
+| `invoices` DDB table | Table definition in `scripts/local-ddb-init.py` |

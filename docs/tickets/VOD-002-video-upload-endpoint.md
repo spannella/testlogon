@@ -1,7 +1,7 @@
 # VOD-002: Implement Video Upload Endpoint with S3 Presigned URL
 
 **Ticket**: VOD-002
-**Status**: Design
+**Status**: Implemented
 **Author**: Engineering
 **Date**: 2026-05-24
 
@@ -28,7 +28,7 @@ The solution follows a **presigned URL upload pattern** already established in t
 - **Scalability**: Binary data never passes through uvicorn workers. S3 handles throughput.
 - **Reliability**: S3 presigned URLs support multipart upload for very large files. Client retries go to S3, not the backend.
 - **Security**: Presigned URLs are scoped to a specific key, bucket, and content-type. They expire after 15 minutes. The ticket links the presigned key to the authenticated user.
-- **Consistency**: Matches the existing `presign_upload` / `register_presigned_upload` flow in `app/services/filemanager.py` and the `images/presign` flow in `app/routers/messaging.py`.
+- **Consistency**: Matches the existing `presign_upload` / `register_presigned_upload` flow in `app/services/filemanager.py` (see `app/services/filemanager.py:2207` and `:2264`) and the `images/presign` flow in `app/routers/messaging.py` (see `app/routers/messaging.py:7914`).
 
 ---
 
@@ -36,7 +36,7 @@ The solution follows a **presigned URL upload pattern** already established in t
 
 ### S3 Client Infrastructure
 
-**Client creation** (`app/core/aws_clients.py`):
+**Client creation** (`app/core/aws_clients.py:114`):
 ```python
 def s3_client():
     endpoint_url = _s3_endpoint_url()
@@ -49,16 +49,19 @@ def s3_client():
     )
 ```
 
-In dev mode, `_s3_endpoint_url()` returns `None` because moto intercepts all boto3 S3 calls in-process (no external endpoint). The `s3_client()` factory is used by both `app/services/filemanager.py` (line 57: `_s3 = s3_client()`) and `app/routers/messaging.py` (line 218: `s3 = s3_client()`).
+In dev mode, `_s3_endpoint_url()` returns `None` because moto intercepts all boto3 S3 calls in-process (no external endpoint). The `s3_client()` factory is used by both `app/services/filemanager.py` (line 58: `_s3 = s3_client()`) and `app/routers/messaging.py` (line 219: `s3 = s3_client()`).
 
-**Dev-mode S3 mock** (`app/core/dev_s3.py`): Uses `moto.mock_aws()` to patch botocore globally. Buckets are pre-created at startup from `app/main.py` (line 273-278):
+**Dev-mode S3 mock** (`app/core/dev_s3.py`): Uses `moto.mock_aws()` to patch botocore globally. Buckets are pre-created at startup from `app/main.py` (lines 364-370):
 ```python
 _dev_buckets = [b for b in [
     _S.filemgr_bucket,
     os.environ.get("UPLOAD_BUCKET", ""),
     os.environ.get("S3_BUCKET_IMAGES", ""),
+    _S.video_upload_bucket,
+    _S.vod_output_bucket or "vod-output",
 ] if b]
 ```
+<!-- NOTE: The VOD buckets (video_upload_bucket, vod_output_bucket) are ALREADY included in the dev bucket list at main.py:368-369. -->
 
 Current env values: `FILEMGR_BUCKET=local-filemgr`, `UPLOAD_BUCKET=local-uploads`, `S3_BUCKET_IMAGES=local-chat-images`.
 
@@ -66,14 +69,14 @@ Current env values: `FILEMGR_BUCKET=local-filemgr`, `UPLOAD_BUCKET=local-uploads
 
 ### Existing Presigned Upload Flow (File Manager)
 
-**Router** (`app/routers/filemanager.py`, lines 1881-1936):
+**Router** (`app/routers/filemanager.py`, lines 1921-1943):
 
-- `POST /v1/fs/presign-upload` (request model: `PresignUploadIn` with `path` + optional `content_type`)
-- Returns `PresignUploadOut`: `upload_url`, `bucket`, `key`, `ticket_id`, `path`, `content_type`
-- `POST /v1/fs/complete-upload` (request model: `CompleteUploadIn` with `path`, `key`, `ticket_id`, optional `content_type`, `encrypted`, `enc_meta`)
+- `POST /presign-upload` (line 1921, model: `PresignUploadIn` at line 642) with `path` + optional `content_type`
+- Returns `PresignUploadOut` (line 647): `upload_url`, `bucket`, `key`, `ticket_id`, `path`, `content_type`
+- `POST /complete-upload` (line 1942, model: `CompleteUploadIn` at line 656) with `path`, `key`, `ticket_id`, optional `content_type`, `encrypted`, `enc_meta`
 - Returns `{ ok, path, size, content_type }`
 
-**Service** (`app/services/filemanager.py`, lines 2206-2369):
+**Service** (`app/services/filemanager.py`, lines 2207-2369):
 
 `presign_upload(user, path, content_type)`:
 - Generates a UUID-based S3 key: `{user}/objects/{uuid4()}`
@@ -93,10 +96,10 @@ Current env values: `FILEMGR_BUCKET=local-filemgr`, `UPLOAD_BUCKET=local-uploads
 
 ### Existing Presigned Upload Flow (Messaging Images)
 
-**Router** (`app/routers/messaging.py`, lines 7711-7727):
+**Router** (`app/routers/messaging.py`, lines 7914-7930):
 
-- `POST /messaging/conversations/{id}/images/presign` with `SendImagePresignIn` (content_type, filename)
-- Returns `PresignOut`: `upload_url`, `bucket`, `key`, `content_type`
+- `POST /conversations/{conversation_id}/images/presign` (line 7914, model: `SendImagePresignIn` at line 1899)
+- Returns `PresignOut` (line 1904): `upload_url`, `bucket`, `key`, `content_type`
 - S3 key format: `{conversation_id}/{user_id}/{timestamp}_{uuid}_{filename}`
 - Uses `S3_BUCKET_IMAGES` bucket (env: `S3_BUCKET_IMAGES`, default: `my-chat-images`)
 
@@ -198,7 +201,7 @@ class VideoUploadCompleteOut(BaseModel):
 
 ### 3.2 Presigned URL Generation
 
-Following the filemanager pattern (`app/services/filemanager.py:2220-2237`):
+Following the filemanager pattern (`app/services/filemanager.py:2226-2237`):
 
 ```python
 def _generate_video_presigned_url(bucket: str, key: str, content_type: str, user: str, ticket_id: str) -> str:
@@ -311,7 +314,7 @@ Stored in the same table as file manager upload tickets (or a dedicated `vod_upl
 
 ### 3.8 HeadObject Validation on Complete
 
-The confirmation step performs a critical `HeadObject` call (same pattern as `register_presigned_upload` at line 2296 of `app/services/filemanager.py`):
+The confirmation step performs a critical `HeadObject` call (same pattern as `register_presigned_upload` at line 2297 of `app/services/filemanager.py`):
 
 ```python
 head = _s3.head_object(Bucket=bucket, Key=s3_key)
@@ -350,68 +353,69 @@ This prevents:
 
 #### New Files
 
-| File | Purpose |
-|------|---------|
-| `app/routers/vod.py` | Router with presign + complete + list + get + delete endpoints |
-| `app/services/vod_upload.py` | Service layer: presign generation, ticket management, HeadObject validation, asset record creation |
+<!-- NOTE: Both files listed below ALREADY EXIST in the codebase. -->
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `app/routers/vod.py` | Router with presign + complete endpoints (prefix `/ui/videos`, 279 lines) | **Already exists** (see `app/routers/vod.py:30` — `APIRouter(prefix="/ui/videos", tags=["vod"])`) |
+| `app/services/vod_s3_uploader.py` | Service layer: S3 upload, segment transfer, lifecycle management | **Already exists** (not `vod_upload.py` — the actual service file is `vod_s3_uploader.py`) |
 
 #### Modifications to Existing Files
 
 | File | Change |
 |------|--------|
-| `app/main.py` | Register `vod_router` with prefix `/v1/vod`; add VOD bucket to `_dev_buckets` list |
-| `app/core/settings.py` | Add settings: `vod_bucket`, `vod_upload_max_bytes`, `vod_upload_daily_limit_bytes`, `vod_upload_max_concurrent`, `vod_presign_ttl_seconds`, `vod_table_name` |
-| `app/core/tables.py` | Add `T.vod` table handle (or reuse `file_manager` table with VOD prefix) |
-| `app/models.py` | Add Pydantic models: `VideoUploadPresignIn`, `VideoUploadPresignOut`, `VideoUploadCompleteIn`, `VideoUploadCompleteOut`, `VideoAsset` |
-| `scripts/local-ddb-init.py` | Add `vod_uploads` table definition with GSI for user listing |
-| `.env.local.example` | Add `VOD_BUCKET=local-vod`, `VOD_UPLOAD_MAX_BYTES=10737418240` |
+| `app/main.py` | Register `vod_router` — **Already done** at line 97 (import) and line 421 (`app.include_router(vod_router)`). Prefix is `/ui/videos`, NOT `/v1/vod`. VOD buckets already in `_dev_buckets` at lines 368-369. |
+| `app/core/settings.py` | VOD settings **already exist**: `video_upload_bucket` (line 1079), `video_metadata_table_name` (line 1075), `vod_entitlements_table_name` (line 1076), `transcode_jobs_table_name` (line 1082), `vod_output_bucket` (line 1094). Setting names differ from spec — e.g., `video_upload_bucket` not `vod_bucket`. |
+| `app/core/tables.py` | <!-- NOTE: Table handles wired via `app/core/tables.py` — verify T.video_metadata etc. --> |
+| `app/models.py` | <!-- NOTE: VOD Pydantic models are NOT in `app/models.py`. They are defined INLINE in `app/routers/vod.py` (lines 51-66): `VideoUploadPresignIn`, `VideoUploadPresignOut`, `VideoUploadCompleteOut`. Additional models in `app/models_video.py` (e.g., `VideoMetadataModel`, `VideoStatus`, `UpdateVideoIn`). --> |
+| `scripts/local-ddb-init.py` | The table is `VideoMetadata` (not `vod_uploads`/`vod_assets`) — **already exists** at lines 707-737 with GSIs: `ByOwnerCreatedAt`, `ByStatusCreatedAt`, `BySourceBroadcast`, `ByCategory`, `ByGalleryPublished`. |
+| `.env.local.example` | Bucket env var is `VIDEO_UPLOAD_BUCKET` (not `VOD_BUCKET`), default `"local-uploads"`. |
 
 #### Router Structure (`app/routers/vod.py`)
 
-```python
-from fastapi import APIRouter, Depends, HTTPException, Request
-from app.auth.deps import require_ui_session
-from app.services.vod_upload import (
-    presign_video_upload,
-    complete_video_upload,
-    list_user_videos,
-    get_video_asset,
-    delete_video_asset,
-)
+<!-- NOTE: This router ALREADY EXISTS. The actual prefix is `/ui/videos` (not `/v1/vod`).
+     Actual endpoints (see app/routers/vod.py):
+       - POST /ui/videos/upload/presign (line 88, function `vod_presign_upload`)
+       - POST /ui/videos/upload/complete (line 167, function `vod_complete_upload`)
+     Models defined inline: VideoUploadPresignIn (line 51), VideoUploadPresignOut (line 57), VideoUploadCompleteOut (line 64).
+     Video listing, detail, update, and delete are in `app/routers/video_listing.py` (prefix `/ui/videos`, 1539 lines).
+-->
 
-router = APIRouter(prefix="/v1/vod", tags=["vod"])
+```python
+# ACTUAL implementation (differs from original spec):
+router = APIRouter(prefix="/ui/videos", tags=["vod"])
 
 @router.post("/upload/presign")
-def vod_presign(inp: VideoUploadPresignIn, user=Depends(require_ui_session)):
+def vod_presign_upload(inp: VideoUploadPresignIn, user=Depends(require_ui_session)):
     ...
 
 @router.post("/upload/complete")
-def vod_complete(inp: VideoUploadCompleteIn, user=Depends(require_ui_session)):
-    ...
-
-@router.get("/videos")
-def vod_list(user=Depends(require_ui_session)):
-    ...
-
-@router.get("/videos/{video_id}")
-def vod_get(video_id: str, user=Depends(require_ui_session)):
-    ...
-
-@router.delete("/videos/{video_id}")
-def vod_delete(video_id: str, user=Depends(require_ui_session)):
+def vod_complete_upload(video_id: str, user=Depends(require_ui_session)):
     ...
 ```
 
-#### Service Layer (`app/services/vod_upload.py`)
+#### Service Layer
 
-Key functions:
-- `presign_video_upload(user_sub, filename, content_type, file_size_bytes, title, description, folder_path)` - Validates inputs, generates S3 key, creates presigned URL, stores ticket
-- `complete_video_upload(user_sub, ticket_id, key, content_type_override, client_checksum)` - Validates ticket, HeadObject verification, creates asset record, optional media probe
-- `list_user_videos(user_sub, cursor, limit)` - Paginated listing via GSI
-- `get_video_asset(user_sub, video_id)` - Single asset fetch
-- `delete_video_asset(user_sub, video_id)` - Soft-delete asset + S3 object cleanup
+<!-- NOTE: `app/services/vod_upload.py` does not exist. The upload-related service logic is split across:
+     - `app/services/vod_s3_uploader.py` — S3 upload/transfer functions (upload_segment, upload_transcode_outputs, etc.)
+     - `app/services/video_metadata_store.py` — DDB CRUD for video records (create_video, get_video, update_video, list_videos_by_owner, etc.)
+     The presign/complete logic is implemented directly in `app/routers/vod.py` (lines 88-279).
+-->
 
-The S3 client instantiation follows the established pattern:
+Key existing service functions in `app/services/video_metadata_store.py`:
+- `create_video(...)` (line 283) — Creates video record in DDB
+- `get_video(video_id)` (line 323) — Single video fetch
+- `update_video(video_id, updates)` (line 332) — Update video fields
+- `soft_delete_video(video_id)` (line 349) — Soft-delete
+- `list_videos_by_owner(...)` (line 402) — Paginated listing via GSI
+- `delete_video(video_id, owner_user_id)` (line 590) — Hard delete
+
+Key existing functions in `app/services/vod_s3_uploader.py`:
+- `upload_segment(...)` (line 96) — Upload HLS segment to S3
+- `upload_transcode_outputs(...)` (line 142) — Batch upload transcoded files
+- `abort_incomplete_uploads(...)` (line 125) — Cleanup incomplete multipart uploads
+
+The S3 client instantiation follows the established pattern (see `app/services/filemanager.py:33,58`):
 ```python
 from app.core.aws_clients import s3_client
 _s3 = s3_client()
@@ -419,12 +423,14 @@ _s3 = s3_client()
 
 ### 4.2 Frontend Changes
 
-#### New Files
+#### Frontend Files
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/api/endpoints/vod.ts` | API wrapper functions |
-| `frontend/src/pages/vod/VideoUploadPage.tsx` | Upload UI with progress tracking |
+<!-- NOTE: Both files below ALREADY EXIST (though paths differ slightly from spec). -->
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `frontend/src/api/endpoints/vod.ts` | API wrapper functions (112 lines) | **Already exists** — exports `presignVideoUpload`, `completeVideoUpload`, `getVideoDetail`, `listOwnVideos`, `listPublicVideos` |
+| `frontend/src/pages/videos/VideosPage.tsx` | Video management page | **Already exists** at `pages/videos/` (not `pages/vod/`). Also: `VideoPlayerPage.tsx`, `ForYouTab.tsx`, `SimilarVideos.tsx`, `CreatorSuggestions.tsx`, `WatermarkedDownloadButton.tsx` |
 
 #### API Client (`frontend/src/api/endpoints/vod.ts`)
 
@@ -516,50 +522,68 @@ const uploadVideo = async (file: File, title?: string) => {
 };
 ```
 
-### 4.3 Settings Additions (`app/core/settings.py`)
+### 4.3 Settings (`app/core/settings.py`)
+
+<!-- NOTE: The actual settings names differ from this spec. Existing VOD settings: -->
 
 ```python
-# VOD (Video on Demand) upload
-vod_bucket: str = os.environ.get("VOD_BUCKET", "")
-vod_table_name: str = os.environ.get("VOD_TABLE_NAME", "vod_assets")
-vod_upload_max_bytes: int = int(os.environ.get("VOD_UPLOAD_MAX_BYTES", "10737418240"))  # 10 GB
-vod_upload_daily_limit_bytes: int = int(os.environ.get("VOD_UPLOAD_DAILY_LIMIT_BYTES", "53687091200"))  # 50 GB
-vod_upload_max_concurrent: int = int(os.environ.get("VOD_UPLOAD_MAX_CONCURRENT", "5"))
-vod_presign_ttl_seconds: int = int(os.environ.get("VOD_PRESIGN_TTL_SECONDS", "900"))
-vod_allowed_content_types: str = os.environ.get(
-    "VOD_ALLOWED_CONTENT_TYPES",
-    "video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/mpeg,video/ogg"
-)
-vod_thumbnail_enabled: bool = os.environ.get("VOD_THUMBNAIL_ENABLED", "true").lower() in ("1", "true", "yes", "on")
-vod_probe_duration_enabled: bool = os.environ.get("VOD_PROBE_DURATION_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+# ACTUAL existing settings (already in app/core/settings.py):
+video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")   # line 1075
+vod_entitlements_table_name: str = os.environ.get("DDB_VOD_ENTITLEMENTS", "VodEntitlements")  # line 1076
+video_upload_bucket: str = os.environ.get("VIDEO_UPLOAD_BUCKET", "local-uploads")         # line 1079
+transcode_jobs_table_name: str = os.environ.get("DDB_TRANSCODE_JOBS", "TranscodeJobs")    # line 1082
+vod_output_bucket: str = os.environ.get("VOD_OUTPUT_BUCKET", "vod-output")                 # line 1094
+video_views_table_name: str = os.environ.get("DDB_VIDEO_VIEWS", "VideoViews")             # line 1234
+video_likes_table_name: str = os.environ.get("DDB_VIDEO_LIKES", "VideoLikes")             # line 1235
+vod_ad_cpm_cents: int = int(os.environ.get("VOD_AD_CPM_CENTS", "500"))                    # line 1241
+ad_impressions_table_name: str = os.environ.get("DDB_AD_IMPRESSIONS", "AdImpressions")    # line 1242
+watermark_jobs_table_name: str = os.environ.get("WATERMARK_JOBS_TABLE_NAME", "watermark_jobs")  # line 1349
 ```
 
 ### 4.4 DynamoDB Table Definition (`scripts/local-ddb-init.py`)
 
+<!-- NOTE: The table is called `VideoMetadata` (not `vod_assets`). It ALREADY EXISTS at lines 707-737.
+     PK: `video_id`, SK: `video_id` (single-item table pattern).
+     GSIs: ByOwnerCreatedAt, ByStatusCreatedAt, BySourceBroadcast, ByCategory, ByGalleryPublished.
+     The spec's proposed `PK=USER#{user_sub}`, `SK=VIDEO#{video_id}` schema was NOT used.
+     Instead, owner lookup uses the `ByOwnerCreatedAt` GSI with `owner_user_id` as PK.
+-->
+
 ```python
+# ACTUAL table definition (already in scripts/local-ddb-init.py:707-737):
 TableDef(
-    name="vod_assets",
-    pk="PK",
-    sk="SK",
+    _resolve_table_name(S.video_metadata_table_name, "VideoMetadata"),
+    pk="video_id",
+    sk="video_id",
     gsis=[
-        GsiDef(name="GSI1", pk="GSI1PK", sk="GSI1SK"),
+        GsiDef(name="ByOwnerCreatedAt", pk="owner_user_id", sk="created_at"),
+        GsiDef(name="ByStatusCreatedAt", pk="status", sk="created_at"),
+        GsiDef(name="BySourceBroadcast", pk="source_broadcast_session_id", sk="created_at"),
+        GsiDef(name="ByCategory", pk="category", sk="created_at"),
+        GsiDef(name="ByGalleryPublished", pk="gallery_status", sk="published_at"),
     ],
-    attr_types={"GSI1SK": "S"},
+    attr_types={"created_at": "N", "published_at": "N"},
 )
 ```
 
 ### 4.5 Main App Registration (`app/main.py`)
 
+<!-- NOTE: All of this is ALREADY DONE. -->
+
 ```python
+# ACTUAL (already in app/main.py):
+# Import at line 97:
 from app.routers.vod import router as vod_router
+# Registration at line 421:
 app.include_router(vod_router)
 
-# In dev bucket list:
+# Dev bucket list at lines 364-370 already includes VOD buckets:
 _dev_buckets = [b for b in [
     _S.filemgr_bucket,
     os.environ.get("UPLOAD_BUCKET", ""),
     os.environ.get("S3_BUCKET_IMAGES", ""),
-    _S.vod_bucket,  # NEW
+    _S.video_upload_bucket,      # line 368
+    _S.vod_output_bucket or "vod-output",  # line 369
 ] if b]
 ```
 
@@ -641,7 +665,9 @@ class TestVodComplete:
         """Calling complete twice with same ticket returns 403 (ticket already consumed)."""
 ```
 
-### 5.2 E2E Tests (`frontend/e2e/vod-upload.spec.ts`)
+### 5.2 E2E Tests (`frontend/e2e/video-upload.spec.ts`)
+
+<!-- NOTE: The actual E2E test file is `video-upload.spec.ts` (not `vod-upload.spec.ts`). It already exists. -->
 
 Following the established E2E patterns (inject auth, CSRF headers, session-based API calls):
 
@@ -805,14 +831,60 @@ Both Pydantic model validation (returns 422) and server-side enforcement (return
 
 | Path | Role |
 |------|------|
-| `app/core/aws_clients.py` | S3 client factory (`s3_client()`) |
+| `app/core/aws_clients.py:114` | S3 client factory (`s3_client()`) |
 | `app/core/dev_s3.py` | Moto in-process S3 mock activation |
-| `app/core/settings.py` | All configuration including bucket names |
+| `app/core/settings.py:1075-1094` | VOD settings (`video_upload_bucket`, `video_metadata_table_name`, etc.) |
 | `app/routers/s3_mock.py` | Dev-mode HTTP proxy for mock S3 operations |
-| `app/routers/filemanager.py:1881-1936` | Existing presign/complete endpoints (reference implementation) |
-| `app/services/filemanager.py:2206-2369` | Existing presign_upload + register_presigned_upload (reference implementation) |
-| `app/routers/messaging.py:7711-7727` | Image presign endpoint (simpler reference) |
-| `app/main.py:273-278` | Dev bucket list for moto initialization |
-| `frontend/src/api/endpoints/files.ts:235-265` | Frontend presign + complete API wrappers |
-| `frontend/src/pages/files/FilesPage.tsx:808-821` | Frontend presigned upload flow with fetch PUT |
-| `.env.local` | Bucket config: `FILEMGR_BUCKET`, `UPLOAD_BUCKET`, `S3_BUCKET_IMAGES` |
+| `app/routers/vod.py:30` | **Existing** VOD router (prefix `/ui/videos`, models at lines 51-66) |
+| `app/routers/video_listing.py:40` | **Existing** video listing router (prefix `/ui/videos`, 1539 lines) |
+| `app/routers/filemanager.py:1921-1943` | Existing presign/complete endpoints (reference implementation) |
+| `app/services/filemanager.py:2207-2369` | Existing presign_upload + register_presigned_upload (reference implementation) |
+| `app/services/vod_s3_uploader.py` | **Existing** VOD S3 upload service |
+| `app/services/video_metadata_store.py` | **Existing** video DDB CRUD service |
+| `app/models_video.py` | **Existing** VOD Pydantic models (`VideoMetadataModel`, `VideoStatus`, `UpdateVideoIn`) |
+| `app/routers/messaging.py:7914-7930` | Image presign endpoint (simpler reference) |
+| `app/main.py:364-370` | Dev bucket list for moto initialization (already includes VOD buckets) |
+| `app/main.py:97,421` | VOD router import and registration |
+| `scripts/local-ddb-init.py:707-737` | **Existing** `VideoMetadata` DDB table definition |
+| `frontend/src/api/endpoints/vod.ts` | **Existing** frontend VOD API wrappers (112 lines) |
+| `frontend/src/pages/videos/VideosPage.tsx` | **Existing** video management page |
+| `frontend/e2e/video-upload.spec.ts` | **Existing** E2E upload tests |
+| `.env.local` | Bucket config: `VIDEO_UPLOAD_BUCKET`, `VOD_OUTPUT_BUCKET` |
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/core/aws_clients.py` | 114 | `s3_client()` factory |
+| `app/core/settings.py` | 1075 | `video_metadata_table_name` setting |
+| `app/core/settings.py` | 1079 | `video_upload_bucket` setting |
+| `app/core/settings.py` | 1082 | `transcode_jobs_table_name` setting |
+| `app/core/settings.py` | 1094 | `vod_output_bucket` setting |
+| `app/main.py` | 97 | `from app.routers.vod import router as vod_router` |
+| `app/main.py` | 421 | `app.include_router(vod_router)` |
+| `app/main.py` | 364-370 | `_dev_buckets` list with VOD buckets |
+| `app/routers/vod.py` | 30 | `APIRouter(prefix="/ui/videos", tags=["vod"])` |
+| `app/routers/vod.py` | 51-66 | `VideoUploadPresignIn`, `VideoUploadPresignOut`, `VideoUploadCompleteOut` |
+| `app/routers/vod.py` | 88 | `vod_presign_upload` endpoint |
+| `app/routers/vod.py` | 167 | `vod_complete_upload` endpoint |
+| `app/routers/video_listing.py` | 40 | `APIRouter(prefix="/ui/videos", tags=["video-listing"])` |
+| `app/models_video.py` | 7-23 | `VideoStatus`, `VideoVisibility` type aliases |
+| `app/models_video.py` | 36 | `VideoMetadataModel` class |
+| `app/services/video_metadata_store.py` | 283 | `create_video()` |
+| `app/services/video_metadata_store.py` | 323 | `get_video()` |
+| `app/services/video_metadata_store.py` | 402 | `list_videos_by_owner()` |
+| `app/services/vod_s3_uploader.py` | 96 | `upload_segment()` |
+| `app/services/vod_s3_uploader.py` | 142 | `upload_transcode_outputs()` |
+| `app/services/filemanager.py` | 33, 58 | `s3_client` import and instantiation pattern |
+| `app/services/filemanager.py` | 2207 | `presign_upload()` |
+| `app/services/filemanager.py` | 2264 | `register_presigned_upload()` |
+| `app/services/filemanager.py` | 2297 | `head_object()` call for upload validation |
+| `app/routers/messaging.py` | 219 | `s3 = s3_client()` |
+| `app/routers/messaging.py` | 7914 | `presign_image_upload()` endpoint |
+| `app/routers/filemanager.py` | 642-660 | `PresignUploadIn`, `PresignUploadOut`, `CompleteUploadIn` models |
+| `app/routers/filemanager.py` | 1921 | `presign_fs_upload` endpoint |
+| `app/routers/filemanager.py` | 1942 | `complete_fs_upload` endpoint |
+| `scripts/local-ddb-init.py` | 707-737 | `VideoMetadata` table with 5 GSIs |
+| `frontend/src/api/endpoints/vod.ts` | 81-84 | `presignVideoUpload`, `completeVideoUpload` |
+| `frontend/src/pages/videos/VideosPage.tsx` | — | Video management page |
+| `frontend/e2e/video-upload.spec.ts` | — | E2E upload tests |

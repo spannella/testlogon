@@ -1,7 +1,7 @@
 # VOD-007: Build Frontend Video Upload Page
 
 **Ticket**: VOD-007
-**Status**: Design
+**Status**: Implemented
 **Author**: Engineering
 **Date**: 2026-05-24
 
@@ -458,6 +458,13 @@ Non-video files dropped are silently ignored. The drag overlay only appears when
 
 ### 4.1 Files to Create
 
+<!-- NOTE: Key files below ALREADY EXIST. The page directory is `frontend/src/pages/videos/` (not `pages/vod/`).
+     Existing files: VideosPage.tsx, VideoPlayerPage.tsx, ForYouTab.tsx, SimilarVideos.tsx, CreatorSuggestions.tsx, WatermarkedDownloadButton.tsx.
+     API endpoints file: frontend/src/api/endpoints/vod.ts (112 lines).
+     E2E test file: frontend/e2e/video-upload.spec.ts (not vod-upload.spec.ts).
+     Routes in App.tsx: /videos (line 164), /videos/:videoId (line 165).
+-->
+
 | File | Purpose |
 |------|---------|
 | `frontend/src/pages/videos/VideosPage.tsx` | Main page component (upload panel + library grid) |
@@ -805,4 +812,18 @@ test("4.1 Drag overlay appears on file drag", async ({ page }) => {
 | `frontend/src/App.tsx` | Route registration (add `/videos` route here) |
 | `frontend/src/components/layout/Sidebar.tsx` | Navigation sidebar (add "Videos" item here) |
 | `frontend/e2e/files.spec.ts` | Reference: E2E test patterns (injectAuth, CSRF, API helpers) |
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `frontend/src/pages/videos/VideosPage.tsx` | -- | **Already exists**: video management page |
+| `frontend/src/pages/videos/VideoPlayerPage.tsx` | -- | **Already exists**: video player page |
+| `frontend/src/pages/videos/ForYouTab.tsx` | -- | **Already exists**: discovery tab |
+| `frontend/src/pages/videos/SimilarVideos.tsx` | -- | **Already exists**: similar videos component |
+| `frontend/src/pages/videos/WatermarkedDownloadButton.tsx` | -- | **Already exists**: watermarked download UI |
+| `frontend/src/api/endpoints/vod.ts` | 81-84 | **Already exists**: `presignVideoUpload`, `completeVideoUpload` |
+| `frontend/src/App.tsx` | 51, 164 | `VideosPage` lazy import and route (`/videos`) |
+| `frontend/src/App.tsx` | 55, 165 | `VideoPlayerPage` lazy import and route (`/videos/:videoId`) |
+| `frontend/e2e/video-upload.spec.ts` | -- | **Already exists**: E2E upload tests |
 | `docs/tickets/VOD-002-video-upload-endpoint.md` | Backend endpoint specification (API contract) |

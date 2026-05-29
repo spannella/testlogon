@@ -42,13 +42,17 @@ Creator collaboration -- reaction videos, remixes, duets, compilations -- is a m
 |-----------|----------|-----------|
 | License agreements service | `app/services/license_agreements.py` (LICENSE-001) | Agreement upload/metadata; this ticket adds issued license layer on top |
 | Licenses DDB table | `scripts/local-ddb-init.py` (LICENSE-001) | Reuse `licenses` table with new PK/SK patterns for issued licenses |
-| Billing shared | `app/services/billing_shared.py` (260 lines) | `new_ledger_entry`, `apply_wallet_delta`; LICENSE-003 integrates for revenue splits |
-| Subscription access | `app/services/subscription_access.py` | `has_active_subscription`; pattern reference for entitlement checks |
-| Newsfeed fanout | `app/services/newsfeed_fanout.py` | Fan-out patterns; Licensed Content Library notifications could follow similar pattern |
-| Profile service | `app/services/profile.py` | `get_profile(user_id)` for licensor/licensee display names |
-| Alerts service | `app/services/alerts.py` | `write_alert` for license grant/revoke notifications |
-| File manager | `app/services/filemanager.py` | Content metadata access for linking issued licenses to specific files/videos |
-| Auth dependencies | `app/auth/deps.py` | `require_ui_session` returns `{user_sub, role, admin_profile}` |
+| Billing shared | `app/services/billing_shared.py` (~260 lines) | `new_ledger_entry` (line 217); LICENSE-003 integrates for revenue splits |
+| Subscription access | `app/services/subscription_access.py` (82 lines) | `has_active_subscription` (line 55); pattern reference for entitlement checks |
+| Newsfeed fanout | `app/services/newsfeed_fanout.py` (173 lines) | Fan-out patterns; Licensed Content Library notifications could follow similar pattern |
+| Profile service | `app/services/profile.py` (345 lines) | `get_profile(user_id)` (line 220) for licensor/licensee display names |
+| Alerts service | `app/services/alerts.py` (~899 lines) | `write_alert` (line 355) for license grant/revoke notifications |
+| File manager | `app/services/filemanager.py` (~4955 lines) | Content metadata access for linking issued licenses to specific files/videos |
+| Auth dependencies | `app/auth/deps.py` | `require_ui_session` (line 184) returns `{user_sub, role, admin_profile}` |
+
+<!-- NOTE: app/services/license_agreements.py (LICENSE-001) and the licenses DDB table do NOT exist yet — LICENSE-001 is a prerequisite that has not been implemented. -->
+<!-- NOTE: app/services/issued_licenses.py and app/routers/issued_licenses.py do NOT exist yet — new implementation required. -->
+<!-- NOTE: No frontend/src/pages/licenses/ directory exists yet. -->
 
 ### 2.2 Gaps
 
@@ -581,6 +585,8 @@ Add to `frontend/src/App.tsx`:
 
 ### 3.8 Files to Create
 
+<!-- NOTE: None of the files below exist yet — all are new implementation required. The issued_licenses table is not in scripts/local-ddb-init.py, app/core/settings.py, or app/core/tables.py. -->
+
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
 | `app/services/issued_licenses.py` | Issued license service | ~450 |
@@ -758,3 +764,44 @@ Add to `frontend/src/App.tsx`:
 8. Licensors can revoke issued licenses; licensees are notified.
 9. Blanket license revocation removes content from the library.
 10. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+All file paths relative to the repository root.
+
+### Existing Files Referenced (verified)
+- `app/services/billing_shared.py` (~260 lines) — `new_ledger_entry()` at line 217
+- `app/services/subscription_access.py` (82 lines) — `has_active_subscription()` at line 55 (pattern reference)
+- `app/services/newsfeed_fanout.py` (173 lines) — Fan-out pattern reference
+- `app/services/profile.py` (345 lines) — `get_profile()` at line 220
+- `app/services/alerts.py` (899 lines) — `write_alert()` at line 355
+- `app/services/filemanager.py` (4955 lines) — Content metadata access
+- `app/auth/deps.py` — `require_ui_session` at line 184
+- `scripts/local-ddb-init.py` — DynamoDB table definitions
+
+### Dependencies Not Yet Implemented
+- `app/services/license_agreements.py` — LICENSE-001 prerequisite (does not exist)
+- `licenses` DDB table — LICENSE-001 prerequisite (not in `scripts/local-ddb-init.py`)
+
+### Files to Create (none exist yet)
+- `app/services/issued_licenses.py` — Issued license service (~450 lines)
+- `app/routers/issued_licenses.py` — REST API endpoints (~280 lines)
+- `frontend/src/pages/licenses/IssuedLicensesPage.tsx` — Issued licenses page (~250 lines)
+- `frontend/src/pages/licenses/HeldLicensesPage.tsx` — Held licenses page (~150 lines)
+- `frontend/src/pages/licenses/IssueLicenseDialog.tsx` — Issue dialog (~180 lines)
+- `frontend/src/pages/licenses/LicensedLibraryPage.tsx` — Library page (~200 lines)
+- `frontend/src/pages/licenses/LicenseTermsForm.tsx` — Terms form (~100 lines)
+- `frontend/src/components/shared/LicensedBadge.tsx` — Badge component (~30 lines)
+- `frontend/src/api/endpoints/issued-licenses.ts` — API wrappers (~130 lines)
+- `frontend/e2e/license-issuance.spec.ts` — E2E tests (~500 lines)
+
+### Files to Modify (verified to exist)
+- `app/main.py` — Register issued license routers
+- `app/models.py` — Add Issued License Pydantic models
+- `app/core/settings.py` — Add `issued_licenses_table_name` setting
+- `app/core/tables.py` — Add `T.issued_licenses` table handle
+- `scripts/local-ddb-init.py` — Add `issued_licenses` TableDef with 3 GSIs
+- `frontend/src/App.tsx` — Add issued license routes
+- `frontend/src/components/layout/Sidebar.tsx` — Add sub-items under Licenses nav

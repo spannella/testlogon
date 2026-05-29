@@ -12,7 +12,11 @@
 
 ### The Gap
 
-The broadcast system (BCAST-001 through BCAST-009) handles session lifecycle, streaming, recording, product shelves, and scheduling. The newsfeed system (`app/routers/newsfeed.py`, 4000+ lines) handles posts with text, images, video, locking, tipping, reactions, and fan-out to followers (SOC-002). However, **there is no integration between broadcast lifecycle events and the newsfeed**. When a creator schedules or starts a broadcast, no newsfeed post is created. Viewers must independently discover broadcasts through the broadcast dashboard, which has no organic discovery path via the social feed.
+The broadcast system (BCAST-001 through BCAST-009) handles session lifecycle, streaming, recording, product shelves, and scheduling. The newsfeed system (`app/routers/newsfeed.py`, 4000+ lines) handles posts with text, images, video, locking, tipping, reactions, and fan-out to followers (SOC-002). However, **there is no integration between broadcast lifecycle events and the newsfeed**.
+<!-- NOTE: This claim is NOW OUTDATED. Newsfeed promotion service exists:
+  `app/services/broadcast_newsfeed.py`,
+  `app/core/settings.py:1200` (broadcast_newsfeed_promotion_enabled),
+  `frontend/e2e/broadcast-newsfeed.spec.ts` --> When a creator schedules or starts a broadcast, no newsfeed post is created. Viewers must independently discover broadcasts through the broadcast dashboard, which has no organic discovery path via the social feed.
 
 ### Why This Is Needed
 
@@ -1850,3 +1854,15 @@ All other post creation/update/deletion is triggered automatically by broadcast 
 - **SOC-002**: Feed fan-out — distributes broadcast posts to follower feeds
 - **SOC-001**: Follow system — provides the follower list for fan-out
 - **LCOM-001**: Product shelf — product shelf can be mentioned in announcement posts (future enhancement)
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/services/broadcast_newsfeed.py` | — | EXISTS | Newsfeed promotion service |
+| `app/core/settings.py` | 1200 | EXISTS | `broadcast_newsfeed_promotion_enabled` |
+| `frontend/e2e/broadcast-newsfeed.spec.ts` | — | EXISTS | E2E tests |
+| `app/services/broadcast_scheduler.py` | — | EXISTS | Scheduler (triggers promotion on start) |
+| `app/services/broadcast_recording.py` | — | EXISTS | Recording (triggers VOD post on completion) |

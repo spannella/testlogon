@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-012
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-24
 
 ---
@@ -479,12 +479,18 @@ If the estimated size exceeds `VIDEO_DOWNLOAD_MAX_SIZE_BYTES`, generation is ref
 
 ## 4. Implementation Plan
 
-### 4.1 Files to Create
+### 4.1 Files
+
+<!-- NOTE: Key files ALREADY EXIST:
+     - `app/services/vod_mp4_generator.py` — `generate_download_mp4()` (line 18), `mint_video_download_url()` (line 57)
+     - `app/services/vod_download_url.py` does NOT exist — download URL logic is in `vod_mp4_generator.py`
+     - `frontend/e2e/vod-download.spec.ts` — ALREADY EXISTS
+-->
 
 | File | Purpose |
 |------|---------|
-| `app/services/vod_mp4_generator.py` | MP4 generation logic: rendition selection, FFmpeg transcode from source with watermark, S3 upload, metadata update |
-| `app/services/vod_download_url.py` | Download URL generation (dev/CloudFront/presigned modes) |
+| `app/services/vod_mp4_generator.py` | **Already exists**: `generate_download_mp4()` (line 18), `mint_video_download_url()` (line 57) |
+| `app/services/vod_download_url.py` | <!-- NOTE: Does NOT exist. Download URL logic lives in vod_mp4_generator.py:57 --> |
 | `tests/test_vod_mp4_generator.py` | Unit tests for MP4 generation service |
 | `tests/test_vod_download.py` | Unit tests for download endpoint (auth, entitlement, URL generation) |
 | `frontend/e2e/vod-download.spec.ts` | E2E tests for download enable/disable/use flow |

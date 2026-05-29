@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: Medium
 **Estimated effort**: 7-9 days
-**Dependencies**: ADS-001 (Accounts), ADS-004 (Serving — impression data), ADS-007 (Billing — spend data)
+**Dependencies**: ADS-001 (Accounts), ADS-004 (Serving — impression data), ADS-007 (Billing — spend data) — all sibling tickets, not yet implemented
+<!-- NOTE: All ADS dependencies are sibling tickets not yet in the codebase. Existing: creator_analytics.py, ad_impressions table, AnalyticsRollups table. -->
 
 ---
 
@@ -812,3 +813,16 @@ Rollups are computed per-campaign per-hour. For 100 campaigns, the hourly job ex
 | 382.1 | Previous period data returned | GET summary with days=7; previous_period has impressions >= 0 |
 | 382.2 | Change percentages computed | impressions_change_pct is a number (not NaN) |
 | 382.3 | Campaign-scoped comparison | GET summary with campaign_id; metrics scoped to that campaign only |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/creator_analytics.py` | — | Existing creator analytics service (reference pattern for ad analytics) |
+| `app/core/settings.py` | 1334 | Existing `analytics_rollups_table_name` (AnalyticsRollups — for creator analytics, not ad analytics) |
+| `app/services/ad_placement.py` | 222 | Existing `record_ad_impression` — source of impression data |
+| `app/core/tables.py` | 93, 217 | Existing `ad_impressions` table handle |
+| `app/services/ad_analytics.py` | — | Does not exist yet — new implementation required |
+| `ad_analytics_rollups` DDB table | — | Does not exist yet — separate from existing AnalyticsRollups table |

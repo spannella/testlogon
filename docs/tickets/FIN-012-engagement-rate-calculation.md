@@ -45,16 +45,16 @@ Engagement rate is the single most important metric for creator performance. It 
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Per-content engagement | `app/services/creator_analytics.py:610-613` | `engagement_rate = (likes + comments) / views` -- per-content only |
-| Content detail | `app/services/creator_analytics.py:565-638` | `get_content_detail` returns engagement_rate per content item |
-| Top content resolver | `app/services/creator_analytics.py:357-421` | `_resolve_content_details` returns views, likes, comments per content |
-| Analytics overview | `app/services/creator_analytics.py:192-230` | `get_overview` returns period views, revenue, subscribers -- no engagement |
-| Analytics rollups | `app/services/creator_analytics.py:523-563` | `upsert_daily_rollup` updates daily analytics data |
-| Summary sentinel | `app/services/creator_analytics.py:544-563` | `upsert_summary_sentinel` stores cumulative analytics |
-| Analytics models | `app/models.py:2612-2748` | `AnalyticsOverviewOut`, `ContentAnalyticsOut` with `engagement_rate: float` |
-| Newsfeed posts | `app/services/newsfeed.py` | Post metadata with `like_count`, `comment_count`, `view_count`, `share_count` |
-| Video metadata | DDB `video_metadata` table | `view_count`, `like_count`, `comment_count` |
-| Followers | `app/services/followers.py` | `get_follower_count(user_id)` |
+| Per-content engagement | `app/services/creator_analytics.py:610-613` | **Verified** — `engagement_rate = (likes + comments) / views` -- per-content only (see `app/services/creator_analytics.py:610-613`) |
+| Content detail | `app/services/creator_analytics.py:565-638` | **Verified** — `get_content_detail` returns engagement_rate per content item (see `app/services/creator_analytics.py:565`, return at `:632`) |
+| Top content resolver | `app/services/creator_analytics.py:357-421` | **Verified** — `_resolve_content_details` returns views, likes, comments per content (see `app/services/creator_analytics.py:357`). Note: returns `views`, `likes`, `comments` only — no `shares` field. |
+| Analytics overview | `app/services/creator_analytics.py:192-230` | **Verified** — `get_overview` returns period views, revenue, subscribers -- no engagement (see `app/services/creator_analytics.py:192`) |
+| Analytics rollups | `app/services/creator_analytics.py:523-563` | **Verified** — `upsert_daily_rollup` updates daily analytics data (see `app/services/creator_analytics.py:523`) |
+| Summary sentinel | `app/services/creator_analytics.py:544-563` | **Verified** — `upsert_summary_sentinel` stores cumulative analytics (see `app/services/creator_analytics.py:544`) |
+| Analytics models | `app/models.py:2612-2748` | **Verified** — `AnalyticsOverviewOut` at `:2623`, `ContentAnalyticsOut` at `:2732`, both have `engagement_rate: float` field (see `app/models.py:2620,2741`) |
+| Newsfeed posts | `app/routers/newsfeed.py` | Post metadata with `like_count`, `comment_count` (see `app/routers/newsfeed.py:1999-2000`). <!-- NOTE: `app/services/newsfeed.py` does not exist — newsfeed logic lives in `app/routers/newsfeed.py` (monolith router). Also, `view_count` and `share_count` do NOT exist on newsfeed posts — only `like_count` and `comment_count` are stored. `share_count` only exists in `app/services/broadcast_clip.py:141` for broadcast clips. --> |
+| Video metadata | DDB `video_metadata` table | **Verified** — `view_count`, `like_count`, `comment_count` (see `app/services/creator_analytics.py:378` and `scripts/local-ddb-init.py:708`) |
+| Followers | `app/services/social.py:189` | <!-- NOTE: `app/services/followers.py` does not exist as a standalone file. Follower counts are managed by `get_follow_counts(user_id)` in `app/services/social.py:189`, which returns `{follower_count, following_count}`. There is no `get_follower_count(user_id)` function — new implementation required. --> |
 
 ### 2.2 Current Engagement Rate Code
 
@@ -270,7 +270,7 @@ def update_daily_engagement_rollup(user_id: str, date_str: str) -> None:
 
 ### 3.4 Backend Router Extension
 
-**Extend**: `app/routers/creator_analytics.py` (~80 additional lines)
+**Extend**: `app/routers/creator_analytics.py` (currently 314 lines; ~80 additional lines). Router registered at `app/main.py:109,432` with prefix `/ui/analytics` (see `app/routers/creator_analytics.py:51`).
 
 ### 3.5 Router Endpoints
 
@@ -333,7 +333,7 @@ class EngagementPublicOut(BaseModel):
 
 ### 3.7 Integration with Analytics Rollup
 
-The existing `upsert_daily_rollup` function in `creator_analytics.py:523` writes daily rollup records. Extend it to include engagement fields:
+The existing `upsert_daily_rollup` function in `creator_analytics.py:523` (see `app/services/creator_analytics.py:523`) writes daily rollup records to the `AnalyticsRollups` DDB table (see `scripts/local-ddb-init.py:852-861`, `app/core/settings.py:1334`). Extend it to include engagement fields:
 
 ```python
 def upsert_daily_rollup(user_id: str, date_str: str, data: Dict[str, Any]) -> None:
@@ -683,12 +683,12 @@ EngagementSection (in analytics dashboard)
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|
-| `app/services/creator_analytics.py` | Exists | Analytics rollup framework, per-content engagement |
-| `app/routers/creator_analytics.py` | Exists | Router to extend |
-| `app/services/followers.py` | Exists | `get_follower_count` for denominator |
-| `app/services/newsfeed.py` | Exists | Post metadata (likes, comments, shares) |
-| Video metadata DDB table | Exists | Video engagement counts |
-| Analytics rollup DDB records | Exists | Historical engagement storage |
+| `app/services/creator_analytics.py` | Exists (756 lines) | Analytics rollup framework, per-content engagement (see `:523` rollups, `:610` engagement) |
+| `app/routers/creator_analytics.py` | Exists (314 lines) | Router to extend (see `app/main.py:109,432`) |
+| `app/services/social.py` | Exists | `get_follow_counts(user_id)` at `:189` for follower denominator. <!-- NOTE: `app/services/followers.py` does not exist. Use `app/services/social.py:189` `get_follow_counts()` instead. --> |
+| `app/routers/newsfeed.py` | Exists | Post metadata with `like_count`, `comment_count` (at `:1999-2000`). <!-- NOTE: `app/services/newsfeed.py` does not exist — it is a monolith router file. `share_count` is NOT tracked on newsfeed posts. --> |
+| Video metadata DDB table | Exists | Video engagement counts (see `scripts/local-ddb-init.py:708`) |
+| Analytics rollup DDB records | Exists | Historical engagement storage (see `scripts/local-ddb-init.py:852-861`) |
 
 ---
 
@@ -703,3 +703,22 @@ EngagementSection (in analytics dashboard)
 7. Engagement rate is stored in daily analytics rollups for historical tracking.
 8. Engagement rate is not `0.0` when a creator has posts with interactions.
 9. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/services/creator_analytics.py` | 756 total | Per-content engagement at `:610-613`, `get_content_detail` at `:565`, `_resolve_content_details` at `:357`, `get_overview` at `:192`, `upsert_daily_rollup` at `:523`, `upsert_summary_sentinel` at `:544` |
+| `app/routers/creator_analytics.py` | 314 total | Router prefix `/ui/analytics` at `:51`; endpoints: overview `:97`, revenue `:122`, views `:147`, subscribers `:171`, top-content `:195`, audience `:221`, content detail `:244`, refresh `:288` |
+| `app/main.py` | :109, :432 | `creator_analytics_router` import and registration |
+| `app/models.py` | :2620, :2623, :2732, :2741 | `engagement_rate` field at `:2620` (in sub-model), `AnalyticsOverviewOut` at `:2623`, `ContentAnalyticsOut` at `:2732`, `engagement_rate` at `:2741` |
+| `app/services/social.py` | :189 | `get_follow_counts(user_id)` returns `{follower_count, following_count}` |
+| `app/routers/newsfeed.py` | :1999-2000 | `like_count`, `comment_count` on post items; no `share_count` or `view_count` on posts |
+| `app/services/broadcast_clip.py` | :141 | `share_count` only exists here (broadcast clips), not on newsfeed posts |
+| `scripts/local-ddb-init.py` | :708 | `video_metadata` table definition |
+| `scripts/local-ddb-init.py` | :852-861 | `AnalyticsRollups` table definition (PK=pk, SK=sk, GSI: ByDateCreatedAt) |
+| `app/core/settings.py` | :1334 | `analytics_rollups_table_name` setting |
+| `frontend/src/pages/analytics/AnalyticsPage.tsx` | — | Existing analytics dashboard page (to extend with EngagementSection) |
+| `frontend/src/api/endpoints/analytics.ts` | — | Existing analytics API wrappers (to extend) |

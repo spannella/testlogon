@@ -442,26 +442,28 @@ def get_pm_metrics(*, space_id: str | None, period_days: int = 30) -> dict:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| PUT | `/ui/agents/types/{type_id}/pm-config` | `require_admin_session` | Set or update pm_config |
-| GET | `/ui/agents/types/{type_id}/pm-config` | `require_admin_session` | Get current pm_config |
-| POST | `/ui/agents/types/{type_id}/pm-config/validate` | `require_admin_session` | Validate config |
+| PUT | `/ui/agents/types/{type_id}/pm-config` | `require_admin_scope` | Set or update pm_config |
+| GET | `/ui/agents/types/{type_id}/pm-config` | `require_admin_scope` | Get current pm_config |
+| POST | `/ui/agents/types/{type_id}/pm-config/validate` | `require_admin_scope` | Validate config |
 | POST | `/ui/agents/ideas` | `require_ui_session` | Submit a product idea (any authenticated user) |
 | GET | `/ui/agents/ideas` | `require_ui_session` | List ideas (own ideas for users; all for admins) |
 | GET | `/ui/agents/ideas/{idea_id}` | `require_ui_session` | Get idea details |
-| PATCH | `/ui/agents/ideas/{idea_id}` | `require_admin_session` | Update idea status (accept/reject) |
-| GET | `/ui/agents/backlog` | `require_admin_session` | Get prioritized backlog |
-| POST | `/ui/agents/backlog/reprioritize` | `require_admin_session` | Trigger backlog reprioritization |
-| GET | `/ui/agents/sprints` | `require_admin_session` | List sprints |
-| GET | `/ui/agents/sprints/{sprint_id}` | `require_admin_session` | Get sprint details with burndown |
-| POST | `/ui/agents/sprints` | `require_admin_session` | Create new sprint |
-| PATCH | `/ui/agents/sprints/{sprint_id}` | `require_admin_session` | Close sprint |
-| GET | `/ui/agents/reports` | `require_admin_session` | List generated reports |
-| GET | `/ui/agents/reports/{report_id}` | `require_admin_session` | Get report content |
-| GET | `/ui/agents/blockers` | `require_admin_session` | Get current blockers |
-| GET | `/ui/agents/capacity` | `require_admin_session` | Get agent capacity and utilization |
-| GET | `/ui/agents/runs/{run_id}/pm-output` | `require_admin_session` | Get PM run output |
-| GET | `/ui/agents/pm/metrics` | `require_admin_session` | PM metrics dashboard data |
-| GET | `/ui/agents/pm/dashboard` | `require_admin_session` | Aggregated project dashboard data |
+| PATCH | `/ui/agents/ideas/{idea_id}` | `require_admin_scope` | Update idea status (accept/reject) |
+| GET | `/ui/agents/backlog` | `require_admin_scope` | Get prioritized backlog |
+| POST | `/ui/agents/backlog/reprioritize` | `require_admin_scope` | Trigger backlog reprioritization |
+| GET | `/ui/agents/sprints` | `require_admin_scope` | List sprints |
+| GET | `/ui/agents/sprints/{sprint_id}` | `require_admin_scope` | Get sprint details with burndown |
+| POST | `/ui/agents/sprints` | `require_admin_scope` | Create new sprint |
+| PATCH | `/ui/agents/sprints/{sprint_id}` | `require_admin_scope` | Close sprint |
+| GET | `/ui/agents/reports` | `require_admin_scope` | List generated reports |
+| GET | `/ui/agents/reports/{report_id}` | `require_admin_scope` | Get report content |
+| GET | `/ui/agents/blockers` | `require_admin_scope` | Get current blockers |
+| GET | `/ui/agents/capacity` | `require_admin_scope` | Get agent capacity and utilization |
+| GET | `/ui/agents/runs/{run_id}/pm-output` | `require_admin_scope` | Get PM run output |
+| GET | `/ui/agents/pm/metrics` | `require_admin_scope` | PM metrics dashboard data |
+| GET | `/ui/agents/pm/dashboard` | `require_admin_scope` | Aggregated project dashboard data |
+
+<!-- NOTE: `require_admin_session` does not exist in the codebase. The correct admin auth dependency is `require_admin_scope(AdminScope.XXX)` from `app/auth/policy.py:84`. -->
 
 **Key request models**:
 
@@ -822,7 +824,7 @@ let reportId: string;
 
 ## 7. Security Considerations
 
-- **Admin-only for configuration**: PM config, backlog management, sprint management, and reporting endpoints require `require_admin_session`.
+- **Admin-only for configuration**: PM config, backlog management, sprint management, and reporting endpoints require `require_admin_scope()` (see `app/auth/policy.py:84`). <!-- NOTE: was `require_admin_session` which does not exist -->
 - **User-accessible idea submission**: The `/ui/agents/ideas` POST endpoint uses `require_ui_session` (any authenticated user), not admin. Users can only see their own ideas; admins see all.
 - **Priority manipulation prevention**: Only the PM Agent or admins can change ticket priorities. Regular users cannot modify their own tickets' priority labels.
 - **Report access control**: Reports contain sensitive project data (velocity, blockers, agent utilization). Restricted to admin and configured stakeholder_subs.
@@ -869,3 +871,24 @@ let reportId: string;
 | Ticket | Depends On |
 |--------|-----------|
 | All agent types | PM Agent prioritizes their backlogs |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| TicketStore class | `app/services/tickets.py` | 110 | `create_ticket` (215), `update_status` (683), `add_message` (621) |
+| Projects store | `app/services/projects_store.py` | — | Existing project CRUD (confirmed exists) |
+| `require_admin_scope` | `app/auth/policy.py` | 84 | Correct admin auth (ticket originally said `require_admin_session` which does not exist) |
+| `require_ui_session` | `app/services/sessions.py` | — | User auth dependency |
+| `audit_event` | `app/services/alerts.py` | 695 | Signature: `(event, user_sub, request, **fields)` |
+| Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+| Tables singleton | `app/core/tables.py` | — | `T` object |
+| Router registration | `app/main.py` | 297-465 | No `agent_pm_router` registered yet |
+| `agent_types` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `agent_runs` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-001 |
+| `agent_pm.py` service | `app/services/` | — | Does NOT exist yet — new implementation in this ticket |
+| `agent_pm.py` router | `app/routers/` | — | Does NOT exist yet — new implementation in this ticket |
+| `tickets` DDB table | `scripts/local-ddb-init.py` | 494-510 | Existing table |
+| `now_ts` | `app/core/time.py` | — | Unix timestamp helper |

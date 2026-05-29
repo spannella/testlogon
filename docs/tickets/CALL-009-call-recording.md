@@ -1,11 +1,13 @@
 # CALL-009: WebRTC Call Recording with Mutual Consent
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-24  
 **Priority**: Medium  
 **Estimated effort**: 8-12 days  
 **Dependencies**: CALL-002 (RTCPeerConnection), CALL-008 (ICE Restart)
+
+> **NOTE: This feature is FULLY IMPLEMENTED.** Backend: `app/routers/call_recording.py` (576 lines), `app/services/call_recording_store.py` (279 lines). Frontend: `frontend/src/hooks/useCallRecording.ts` (322 lines), recording UI in `CallSessionOverlay.tsx`, state machine fields in `callStateMachine.ts`. Settings in `app/core/settings.py:1157-1165`. DDB table in `scripts/local-ddb-init.py:640-650`. E2E tests in `frontend/e2e/call-recording.spec.ts` (724 lines). See Codebase References at the bottom.
 
 ---
 
@@ -92,7 +94,7 @@ For maximum compatibility, the recording hook will probe `MediaRecorder.isTypeSu
 
 ### 2.3 Stream Access in `useRtcPeerConnection.ts`
 
-The existing hook (lines 85-88) exposes both streams as React state:
+The existing hook (see `frontend/src/hooks/useRtcPeerConnection.ts:85-88`) exposes both streams as React state:
 
 ```typescript
 const [localStream, setLocalStream] = React.useState<MediaStream | null>(null);
@@ -118,6 +120,8 @@ This means the recording hook can access both streams without any refactoring to
 
 ### 2.4 `CallRuntimeResources` Interface
 
+(See `frontend/src/pages/messages/callStateMachine.ts:190-197`.)
+
 ```typescript
 export interface CallRuntimeResources {
   peerConnection?: RTCPeerConnection | null;
@@ -129,11 +133,11 @@ export interface CallRuntimeResources {
 }
 ```
 
-The recording hook will extend this (or maintain its own parallel cleanup) to ensure the `MediaRecorder` is stopped and all Blob data is finalized when `teardownCallResources()` is called.
+The `useCallRecording` hook (see `frontend/src/hooks/useCallRecording.ts`) manages its own cleanup for the `MediaRecorder`.
 
 ### 2.5 Call Session DDB Model
 
-`CallSessionRecord` in `app/services/messaging_call_sessions.py` (lines 18-33):
+`CallSessionRecord` in `app/services/messaging_call_sessions.py` (see `:19-50`, includes billing fields 37-48 and voicemail_message_id at 50):
 
 | Field | Type | Purpose |
 |-------|------|---------|
@@ -164,32 +168,29 @@ The file manager (`app/services/filemanager.py`) implements a presigned upload f
 
 In dev mode (moto), presigned URLs don't resolve to an external host, so a proxy endpoint (`/mock/s3/...`) is used instead (line 2221). The recording upload will follow the same pattern.
 
-### 2.7 `CallSessionOverlay.tsx` UI Layout
+### 2.7 `CallSessionOverlay.tsx` UI Layout — IMPLEMENTED
 
-The overlay (lines 41-55) has a controls panel at the bottom:
+The overlay Props (see `frontend/src/pages/messages/CallSessionOverlay.tsx:42-70`) include recording-related props:
 
 ```typescript
 interface Props {
   session: CallSessionUi;
-  localStream?: MediaStream | null;
-  remoteStream?: MediaStream | null;
-  peerConnection?: RTCPeerConnection | null;
-  isMuted?: boolean;
-  isCameraOff?: boolean;
-  onAccept: () => void;
-  onDecline: () => void;
-  onEnd: () => void;
-  onDismiss: () => void;
-  onToggleMute?: () => void;
-  onToggleCamera?: () => void;
+  // ...streams, mute, camera, accept/decline/end/dismiss...
+  isRecording?: boolean;           // line 58
+  recordingDuration?: number;
+  onRequestRecording?: () => void; // line 60
+  onStopRecording?: () => void;    // line 61
+  recordingEnabled?: boolean;      // line 62
+  showRecordingConsent?: boolean;   // line 63
+  // ...screen share props...
 }
 ```
 
-The controls section (lines 145-182 of `CallControls`) renders in this order: Mute toggle, Camera toggle (video mode only), End Call button. The recording button will be added as a 4th button after End Call in this row.
+The `CallControls` component (see `:150-245`) renders controls in order: Mute, Camera, Record, Screen Share, End Call. The recording button is at `:222-235`, with the "REC" indicator at `:425`.
 
-### 2.8 Signaling Infrastructure
+### 2.8 Signaling Infrastructure — IMPLEMENTED
 
-The signaling endpoint (`POST /messages/calls/{call_id}/signal`) from CALL-001 accepts arbitrary event types within the `ALLOWED_SIGNALING_TYPES` set. For recording, we need to add new event types to this set. The `STATE_ALLOWED_SIGNALING_TYPES` map must also be updated to permit recording events in the `connected` state.
+The signaling types for recording are already in `ALLOWED_SIGNALING_TYPES` (see `app/services/messaging_call_signaling.py:23-27`) and in `STATE_ALLOWED_SIGNALING_TYPES["connected"]` (see `:49-50`).
 
 ---
 
@@ -303,10 +304,11 @@ Alice (initiator)                Backend                        Bob (responder)
 - If the call ends while recording, the recording is automatically finalized
 - Recording requests are only valid in `connected` state
 
-### 3.3 Data Model: `CallRecordings` DynamoDB Table
+### 3.3 Data Model: `CallRecordings` DynamoDB Table — IMPLEMENTED
 
-**Table name**: `CallRecordings` (env: `DDB_CALL_RECORDINGS`)  
-**Partition key**: `recording_id` (String)
+**Table name**: `CallRecordings` (env: `DDB_CALL_RECORDINGS_TABLE`, see `app/core/settings.py:1164`)  
+**Partition key**: `recording_id` (String)  
+(See `scripts/local-ddb-init.py:640-650` for table definition, `app/services/call_recording_store.py:35-55` for `CallRecordingRecord` dataclass)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -394,73 +396,72 @@ WebM files from Chromium/Firefox may not play natively on iOS/Safari devices. A 
 
 For v1, we skip conversion and serve the original WebM/MP4 as-is. The download endpoint returns the file in whatever format was uploaded.
 
-### 3.7 Signaling Event Types
+### 3.7 Signaling Event Types — IMPLEMENTED
 
-Add to `ALLOWED_SIGNALING_TYPES` in `app/services/messaging_call_signaling.py`:
-
-```python
-ALLOWED_SIGNALING_TYPES = {
-    # ... existing types ...
-    "call.recording_request",
-    "call.recording_accept",
-    "call.recording_decline",
-    "call.recording_started",
-    "call.recording_stopped",
-}
-```
-
-Update `STATE_ALLOWED_SIGNALING_TYPES`:
+Recording event types are in `ALLOWED_SIGNALING_TYPES` (see `app/services/messaging_call_signaling.py:23-27`) and in `STATE_ALLOWED_SIGNALING_TYPES["connected"]` (see `:49-50`):
 
 ```python
-STATE_ALLOWED_SIGNALING_TYPES: dict[str, set[str]] = {
-    "invited": {"call.invite", "call.ring", "call.accept", "call.decline", "call.end"},
-    "accepted": {"webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end"},
-    "connected": {
-        "webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end",
-        "call.recording_request", "call.recording_accept", "call.recording_decline",
-        "call.recording_started", "call.recording_stopped",
-    },
-}
+# In ALLOWED_SIGNALING_TYPES (line 23-27):
+"call.recording_request",
+"call.recording_accept",
+"call.recording_decline",
+"call.recording_started",
+"call.recording_stopped",
+
+# In STATE_ALLOWED_SIGNALING_TYPES["connected"] (line 47-52):
+"connected": {
+    "webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end",
+    "call.recording_request", "call.recording_accept", "call.recording_decline",
+    "call.recording_started", "call.recording_stopped",
+    "webrtc.screen_share_start", "webrtc.screen_share_stop",
+},
 ```
 
-### 3.8 State Machine Additions
+### 3.8 State Machine Additions — IMPLEMENTED
 
-New events for `callStateMachine.ts`:
+The state machine (see `frontend/src/pages/messages/callStateMachine.ts`) has recording events and fields:
 
 ```typescript
-export type CallMachineEvent =
-  | // ... existing events ...
-  | { type: "RECORDING_REQUESTED"; recordingId: string; requestedBy: string }
-  | { type: "RECORDING_CONSENT_RECEIVED" }
-  | { type: "RECORDING_DECLINED"; reason?: string }
-  | { type: "RECORDING_STARTED"; recordingId: string }
-  | { type: "RECORDING_STOPPED"; reason?: string };
+// Events (lines 40-45):
+| { type: "RECORDING_REQUESTED"; requestedBy: string }
+| { type: "RECORDING_ACCEPTED"; recordingId: string }
+| { type: "RECORDING_DECLINED" }
+| { type: "RECORDING_STARTED"; recordingId: string }
+| { type: "RECORDING_STOPPED" }
 ```
 
-New state fields in `CallMachineState`:
+<!-- NOTE: The actual events differ slightly from the spec:
+  - RECORDING_REQUESTED has no recordingId (only requestedBy)
+  - RECORDING_CONSENT_RECEIVED is named RECORDING_ACCEPTED
+  - RECORDING_DECLINED has no reason field -->
 
+State fields (see `:17-19`):
 ```typescript
-export interface CallMachineState {
-  // ... existing fields ...
-  recordingState: "idle" | "consent_pending" | "recording" | "stopped";
-  recordingId?: string;
-  recordingRequestedBy?: string;
-}
+recordingState: "idle" | "requesting" | "consent_pending" | "recording" | "stopped";
+recordingId: string | null;
+recordingRequestedBy: string | null;
 ```
+
+<!-- NOTE: The actual recordingState includes an extra "requesting" state not in the original spec. -->
 
 The recording state is orthogonal to the call phase (it only applies during `connected`). Recording events are ignored unless `phase === "connected"`.
 
-### 3.9 Configuration Settings
+### 3.9 Configuration Settings — IMPLEMENTED
+
+(See `app/core/settings.py:1157-1165`.)
 
 | Setting | Env Variable | Default | Purpose |
 |---------|-------------|---------|---------|
-| Feature flag | `CALL_RECORDING_ENABLED` | `false` | Master on/off switch |
+| Feature flag | `CALL_RECORDING_ENABLED` | `true` (default "1") | Master on/off switch |
 | Max duration | `CALL_RECORDING_MAX_DURATION_SECONDS` | `3600` (1 hour) | Auto-stop after this duration |
 | Upload TTL | `CALL_RECORDING_UPLOAD_TTL_SECONDS` | `600` (10 min) | Presigned URL validity |
 | Max file size | `CALL_RECORDING_MAX_FILE_SIZE_BYTES` | `2147483648` (2 GB) | Reject uploads exceeding this |
 | Retention | `CALL_RECORDING_RETENTION_DAYS` | `90` | Auto-delete recordings after this |
 | S3 prefix | `CALL_RECORDING_S3_PREFIX` | `call-recordings/` | S3 key prefix |
 | DDB table name | `DDB_CALL_RECORDINGS_TABLE` | `CallRecordings` | DynamoDB table for recording metadata |
+| Download TTL | `CALL_RECORDING_DOWNLOAD_TTL_SECONDS` | `3600` | Presigned download URL expiry |
+
+<!-- NOTE: The default for CALL_RECORDING_ENABLED is "1" (true) in the actual implementation, NOT "false" as originally specified. Also there is an additional setting call_recording_download_ttl_seconds at line 1165. -->
 
 ### 3.10 Recording Timeline Message
 
@@ -493,81 +494,50 @@ The frontend renders this as a special message bubble:
 
 ## 4. Implementation Plan
 
-### Phase 1: Backend Infrastructure (Days 1-3)
+### Phase 1: Backend Infrastructure (Days 1-3) — IMPLEMENTED
 
-#### New Files
+#### Files (all exist)
 
-| File | Purpose |
-|------|---------|
-| `app/services/call_recording_store.py` | DynamoDB CRUD for `CallRecordings` table |
-| `app/routers/call_recording.py` | HTTP endpoints for recording lifecycle |
+| File | Lines | Purpose |
+|------|-------|---------|
+| `app/services/call_recording_store.py` | 279 | DynamoDB CRUD for `CallRecordings` table |
+| `app/routers/call_recording.py` | 576 | HTTP endpoints for recording lifecycle |
 
-#### `app/services/call_recording_store.py`
+#### `app/services/call_recording_store.py` — IMPLEMENTED (279 lines)
 
-```python
-"""DynamoDB operations for call recording metadata."""
-from __future__ import annotations
-from dataclasses import dataclass
-from typing import Literal, Optional
-from app.core.time import now_ts
+Key components (see `app/services/call_recording_store.py`):
+- `RecordingStatus` Literal type (`:15`)
+- `CallRecordingRecord` dataclass (`:35-55`)
+- `create_recording()` (`:117`)
+- `get_recording()` (`:144`)
+- `get_recordings_for_call()` (`:152`)
+- `get_active_recording_for_call()` (`:163`)
+- `get_recordings_for_conversation()` (`:172`)
+- `update_recording_status()` (`:188`)
 
-RecordingStatus = Literal[
-    "pending_consent", "recording", "uploading", "processing", "ready", "failed", "deleted"
-]
+#### `app/routers/call_recording.py` — IMPLEMENTED (576 lines)
 
-@dataclass
-class CallRecordingRecord:
-    recording_id: str
-    call_id: str
-    conversation_id: str
-    initiated_by: str
-    participants: list[str]
-    status: RecordingStatus
-    s3_key: Optional[str] = None
-    s3_bucket: Optional[str] = None
-    mime_type: Optional[str] = None
-    duration_seconds: Optional[int] = None
-    file_size_bytes: Optional[int] = None
-    consent_ts: Optional[int] = None
-    started_at: Optional[int] = None
-    completed_at: Optional[int] = None
-    created_at: Optional[int] = None
-    updated_at: Optional[int] = None
-    upload_ticket_id: Optional[str] = None
+<!-- NOTE: The actual endpoint paths differ from the original spec. The actual paths are listed below. -->
 
-def create_recording(*, recording_id: str, call_id: str, conversation_id: str,
-                     initiated_by: str, participants: list[str]) -> CallRecordingRecord: ...
+Endpoints (see `app/routers/call_recording.py`):
 
-def update_recording_status(recording_id: str, status: RecordingStatus, **fields) -> CallRecordingRecord: ...
+| Method | Path | Line | Purpose |
+|--------|------|------|---------|
+| `POST` | `/messages/calls/{call_id}/recording/request` | 141 | Request recording (after consent initiation) |
+| `POST` | `/messages/calls/{call_id}/recording/consent` | 183 | Record consent from peer |
+| `POST` | `/messages/calls/{call_id}/recording/decline` | 227 | Decline recording request |
+| `POST` | `/messages/calls/{call_id}/recording/upload/presign` | 258 | Get presigned upload URL |
+| `POST` | `/messages/calls/{call_id}/recording/upload/complete` | 322 | Mark upload complete |
+| `GET` | `/messages/calls/{call_id}/recording` | 396 | Get recording metadata for a call |
+| `GET` | `/messages/recordings` | 439 | List recordings for user |
+| `GET` | `/messages/recordings/{recording_id}/download` | 492 | Get download URL |
+| `DELETE` | `/messages/recordings/{recording_id}` | 528 | Soft-delete a recording |
 
-def get_recording(recording_id: str) -> Optional[CallRecordingRecord]: ...
+Router registered in `app/main.py:102,425`.
 
-def get_recordings_for_call(call_id: str) -> list[CallRecordingRecord]: ...
+#### `scripts/local-ddb-init.py` — IMPLEMENTED
 
-def get_active_recording_for_call(call_id: str) -> Optional[CallRecordingRecord]: ...
-```
-
-#### `app/routers/call_recording.py`
-
-Endpoints:
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/messages/calls/{call_id}/recordings` | Create recording record (after consent) |
-| `GET` | `/messages/calls/{call_id}/recordings` | List recordings for a call |
-| `POST` | `/messages/calls/{call_id}/recordings/{recording_id}/upload-url` | Get presigned upload URL |
-| `POST` | `/messages/calls/{call_id}/recordings/{recording_id}/complete` | Mark upload complete |
-| `GET` | `/messages/calls/{call_id}/recordings/{recording_id}/download` | Get download URL |
-| `DELETE` | `/messages/calls/{call_id}/recordings/{recording_id}` | Soft-delete a recording |
-
-#### Modify: `scripts/local-ddb-init.py`
-
-First, add a new field to `app/core/settings.py`:
-```python
-call_recordings_table_name: str = os.environ.get("DDB_CALL_RECORDINGS_TABLE", "CallRecordings")
-```
-
-Then add the `CallRecordings` table definition using `_resolve_table_name(S.<field>, "Fallback")` (the standard pattern for all tables in this file):
+The settings field exists at `app/core/settings.py:1164` and the table definition is at `scripts/local-ddb-init.py:640-650`:
 
 ```python
 TableDef(
@@ -582,41 +552,28 @@ TableDef(
 ),
 ```
 
-#### Modify: `app/services/messaging_call_signaling.py`
+#### `app/services/messaging_call_signaling.py` — IMPLEMENTED
 
-Add recording event types to `ALLOWED_SIGNALING_TYPES` and update `STATE_ALLOWED_SIGNALING_TYPES["connected"]` to include them.
+Recording event types are in both `ALLOWED_SIGNALING_TYPES` (`:23-27`) and `STATE_ALLOWED_SIGNALING_TYPES["connected"]` (`:49-50`).
 
-> **IMPORTANT**: Recording signaling types (`call.recording_request`, `call.recording_accept`, etc.) MUST be added to BOTH:
-> 1. `ALLOWED_SIGNALING_TYPES` set (top-level validation gate)
-> 2. `STATE_ALLOWED_SIGNALING_TYPES["connected"]` set (per-state validation)
->
-> Both checks are validated in sequence in `messaging_call_signaling.py`. Missing either one will cause 400 errors.
+#### `app/core/settings.py` — IMPLEMENTED
 
-#### Modify: `app/core/settings.py`
+Settings at lines 1157-1165. See section 3.9 above for the full list.
 
-Add settings (note: `Settings` is a `@dataclass(frozen=True)` using `os.environ.get()`, not Pydantic `Field()`):
-```python
-call_recording_enabled: bool = os.environ.get("CALL_RECORDING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
-call_recording_max_duration_seconds: int = int(os.environ.get("CALL_RECORDING_MAX_DURATION_SECONDS", "3600"))
-call_recording_upload_ttl_seconds: int = int(os.environ.get("CALL_RECORDING_UPLOAD_TTL_SECONDS", "600"))
-call_recording_max_file_size_bytes: int = int(os.environ.get("CALL_RECORDING_MAX_FILE_SIZE_BYTES", "2147483648"))
-call_recording_retention_days: int = int(os.environ.get("CALL_RECORDING_RETENTION_DAYS", "90"))
-call_recording_s3_prefix: str = os.environ.get("CALL_RECORDING_S3_PREFIX", "call-recordings/")
-```
+#### `app/main.py` — IMPLEMENTED
 
-#### Modify: `app/main.py`
+`call_recording_router` registered at lines 102, 425.
 
-Register `call_recording_router`.
+### Phase 2: Frontend Recording Hook (Days 4-6) — IMPLEMENTED
 
-### Phase 2: Frontend Recording Hook (Days 4-6)
+#### Files (all exist)
 
-#### New Files
+| File | Lines | Purpose |
+|------|-------|---------|
+| `frontend/src/hooks/useCallRecording.ts` | 322 | MediaRecorder lifecycle, consent flow, upload |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 671 | Consent dialog + REC indicator integrated in overlay |
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/hooks/useCallRecording.ts` | MediaRecorder lifecycle, consent flow, upload |
-| `frontend/src/pages/messages/RecordingConsentDialog.tsx` | Consent UI for the non-initiating participant |
-| `frontend/src/pages/messages/RecordingIndicator.tsx` | Red "REC" badge component |
+<!-- NOTE: No separate RecordingConsentDialog.tsx or RecordingIndicator.tsx files were created. The consent dialog and recording indicator are integrated directly into CallSessionOverlay.tsx (consent dialog around line 435+, REC indicator at line 425). -->
 
 #### `frontend/src/hooks/useCallRecording.ts`
 
@@ -752,18 +709,16 @@ Add recording indicator (top-right of overlay):
 
 Add recording-related fields to `CallMachineState` and events to `CallMachineEvent`. The recording state is orthogonal — it does not affect call phase transitions.
 
-#### Modify: `frontend/src/hooks/useMessagingStream.ts`
+#### `frontend/src/hooks/useMessagingStream.ts` — IMPLEMENTED
 
-Add recording event types to `EVENT_TYPES`:
+Recording event types are in `EVENT_TYPES` at lines 173-177:
 ```typescript
-"call.recording_request",
-"call.recording_accept",
-"call.recording_decline",
-"call.recording_started",
-"call.recording_stopped",
+"call.recording_request",   // line 173
+"call.recording_accept",    // line 174
+"call.recording_decline",   // line 175
+"call.recording_started",   // line 176
+"call.recording_stopped",   // line 177
 ```
-
-> **IMPORTANT**: These types MUST be added to the `EVENT_TYPES` array in `frontend/src/hooks/useMessagingStream.ts`. The EventSource registers `addEventListener` for each entry in this array. Without this registration, the EventSource won't fire `handleEvent` for these typed SSE events, and they will never be received by the client — even though the backend routing logic dispatches any `call.*` event to `messaging:call-event`.
 
 ### Phase 3: Integration & Polish (Days 7-8)
 
@@ -853,7 +808,9 @@ class RecordingCompleteOut(BaseModel):
 
 ## 5. Testing Strategy
 
-### 5.1 Unit Tests: Recording Store (`tests/test_call_recording_store.py`)
+### 5.1 Unit Tests: Recording Store
+
+<!-- NOTE: tests/test_call_recording_store.py does NOT exist — new implementation required -->
 
 | # | Test Case | Assertions |
 |---|-----------|-----------|
@@ -867,7 +824,9 @@ class RecordingCompleteOut(BaseModel):
 | 8 | Soft delete sets status to `deleted` | Status updated, S3 key preserved for admin recovery |
 | 9 | TTL calculated from retention config | `ttl = created_at + retention_days * 86400` |
 
-### 5.2 Unit Tests: Recording Endpoints (`tests/test_call_recording_endpoints.py`)
+### 5.2 Unit Tests: Recording Endpoints
+
+<!-- NOTE: tests/test_call_recording_endpoints.py does NOT exist — new implementation required -->
 
 | # | Test Case | Expected |
 |---|-----------|----------|
@@ -889,7 +848,9 @@ class RecordingCompleteOut(BaseModel):
 | 16 | Delete recording — participant | 200, status=deleted |
 | 17 | Delete recording — non-participant | 403 |
 
-### 5.3 Unit Tests: Consent Protocol Validation (`tests/test_call_recording_consent.py`)
+### 5.3 Unit Tests: Consent Protocol Validation
+
+<!-- NOTE: tests/test_call_recording_consent.py does NOT exist — new implementation required -->
 
 | # | Test Case | Expected |
 |---|-----------|----------|
@@ -900,7 +861,7 @@ class RecordingCompleteOut(BaseModel):
 | 5 | `call.recording_accept` updates recording status | Status -> `recording` |
 | 6 | `call.recording_decline` updates recording status | Status -> `deleted` |
 
-### 5.4 E2E Tests (`frontend/e2e/call-recording.spec.ts`)
+### 5.4 E2E Tests (`frontend/e2e/call-recording.spec.ts`) — IMPLEMENTED (724 lines)
 
 Since real WebRTC media is not available in Playwright, E2E tests focus on the signaling protocol, API endpoints, and UI state transitions.
 
@@ -1074,3 +1035,36 @@ await page.addInitScript(() => {
 3. **Existing call overlay layout**: Adding the Record button must not break the responsive layout of the controls row on mobile viewports.
 4. **Consent dialog z-index**: Must appear above the call overlay (which itself is a fixed-position full-screen element).
 5. **Memory leak on long recordings**: MediaRecorder with `timeslice` parameter collects Blobs in an array. For 1-hour calls this can be 360 chunks. Ensure these are released after concatenation into the final Blob.
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/routers/call_recording.py` | 1-576 | Recording HTTP endpoints (request, consent, decline, upload, complete, download, delete) |
+| `app/routers/call_recording.py` | 141 | `POST /messages/calls/{call_id}/recording/request` |
+| `app/routers/call_recording.py` | 183 | `POST /messages/calls/{call_id}/recording/consent` |
+| `app/routers/call_recording.py` | 258 | `POST /messages/calls/{call_id}/recording/upload/presign` |
+| `app/routers/call_recording.py` | 322 | `POST /messages/calls/{call_id}/recording/upload/complete` |
+| `app/routers/call_recording.py` | 492 | `GET /messages/recordings/{recording_id}/download` |
+| `app/services/call_recording_store.py` | 1-279 | DynamoDB CRUD for CallRecordings table |
+| `app/services/call_recording_store.py` | 15 | `RecordingStatus` Literal type |
+| `app/services/call_recording_store.py` | 35 | `CallRecordingRecord` dataclass |
+| `app/services/call_recording_store.py` | 117 | `create_recording()` |
+| `app/services/messaging_call_signaling.py` | 23-27 | Recording signaling types in `ALLOWED_SIGNALING_TYPES` |
+| `app/services/messaging_call_signaling.py` | 49-50 | Recording types in `STATE_ALLOWED_SIGNALING_TYPES["connected"]` |
+| `app/core/settings.py` | 1157-1165 | Recording settings (enabled, max_duration, upload_ttl, max_file_size, retention, s3_prefix, table, download_ttl) |
+| `app/main.py` | 102, 425 | `call_recording_router` import and registration |
+| `scripts/local-ddb-init.py` | 640-650 | `CallRecordings` table definition (3 GSIs) |
+| `frontend/src/hooks/useCallRecording.ts` | 1-322 | MediaRecorder lifecycle, consent flow, upload |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 42-70 | Props including recording fields |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 222-235 | Recording button in CallControls |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 425 | "REC" indicator badge |
+| `frontend/src/pages/messages/callStateMachine.ts` | 17-19 | `recordingState`, `recordingId`, `recordingRequestedBy` fields |
+| `frontend/src/pages/messages/callStateMachine.ts` | 40-45 | Recording events (REQUESTED, ACCEPTED, DECLINED, STARTED, STOPPED) |
+| `frontend/src/pages/messages/callStateMachine.ts` | 164-183 | Recording state reducer cases |
+| `frontend/src/pages/messages/ConversationView.tsx` | 51, 640 | `useCallRecording` import and usage |
+| `frontend/src/hooks/useMessagingStream.ts` | 173-177 | Recording SSE event types |
+| `frontend/src/lib/featureFlags.ts` | 127 | `isCallRecordingEnabled` flag |
+| `frontend/e2e/call-recording.spec.ts` | 1-724 | E2E tests for call recording |

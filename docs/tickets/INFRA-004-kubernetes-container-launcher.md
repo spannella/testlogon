@@ -72,6 +72,7 @@ K8s Launch Flow
 ## 2. Current State Analysis
 
 ### 2.1 No Kubernetes Client
+<!-- VERIFIED: No kubernetes Python client in codebase; no K8s-related services or routers exist -->
 
 The codebase has no Kubernetes integration. The official `kubernetes` Python client is not in the project's dependencies. For dev mode, a fully in-memory mock is needed — no real K8s cluster required.
 
@@ -98,6 +99,7 @@ Pods auto-register as hosts with `source: "k8s_auto"`. The hostname is the K8s s
 ## 3. Technical Design
 
 ### 3.1 DynamoDB Table: `k8s_pods`
+<!-- NOTE: k8s_pods table does not exist yet in scripts/local-ddb-init.py — new table required -->
 
 ```python
 # scripts/local-ddb-init.py
@@ -163,6 +165,7 @@ IMAGE_ALLOWLIST = {
 ```
 
 ### 3.3 Mock K8s Service: `app/services/k8s_launcher.py`
+<!-- NOTE: app/services/k8s_launcher.py does not exist yet — new implementation required -->
 
 New file (~400 lines). Follows the same mock pattern as INFRA-003:
 
@@ -253,6 +256,7 @@ def check_expired_pods() -> int:
 ```
 
 ### 3.4 API Router: `app/routers/k8s_launcher.py`
+<!-- NOTE: app/routers/k8s_launcher.py does not exist yet — new implementation required -->
 
 New file (~180 lines). Prefix: `/ui/remote/k8s`.
 
@@ -773,4 +777,19 @@ curl -s http://localhost:8000/ui/remote/k8s/pods/p_9f4a2b1c/logs?tail=50 \
 7. SSH key injection works via INFRA-002 key association.
 8. All operations produce audit events.
 9. User isolation via namespaces prevents cross-user access.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| `S.dev_mode` | `app/core/settings.py` | — | Controls mock vs real K8s client |
+| `audit_event()` | `app/services/alerts.py` | 695 | Audit logging for pod lifecycle events |
+| `k8s_pods` DDB table | — | — | Does not exist yet in `scripts/local-ddb-init.py` |
+| `app/services/k8s_launcher.py` | — | — | Does not exist yet |
+| `app/routers/k8s_launcher.py` | — | — | Does not exist yet |
+| `remote_hosts` (INFRA-001 dep) | — | — | Host auto-registration target; does not exist yet |
+| `ssh_key_manager` (INFRA-002 dep) | — | — | Key injection source; does not exist yet |
+| Kubernetes Python client | — | — | Not in project dependencies; must be added for production mode |
 10. Frontend shows real-time pod status with auto-refresh and log viewer.

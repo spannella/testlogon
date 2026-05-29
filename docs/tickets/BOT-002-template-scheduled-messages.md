@@ -41,9 +41,9 @@ Without templates, bots would require custom code for every response. Templates 
 ### 2.1 Existing Infrastructure
 
 - **Bot framework** (BOT-001): `ChatBots` table stores bot records with `trigger_config`; `evaluate_triggers()` determines which template to fire; `send_bot_message()` sends messages with bot identity.
-- **Messaging** (`app/routers/messaging.py`): `send_text_message()` handles text messages. `MessageOut` supports arbitrary `kind` values via Literal union. Scheduled message support exists (`send_at` field, background dispatch loop at 30s intervals).
-- **Broadcast chat** (`app/services/broadcast_chat_store.py`): `send_chat_message()` supports text + product link messages. No template support.
-- **Newsfeed scheduler** (`app/services/newsfeed_scheduler.py`): Background task pattern for scheduled content. Bot scheduler follows the same pattern.
+- **Messaging** (`app/routers/messaging.py`): `send_text_message()` (see `app/routers/messaging.py:7684`) handles text messages. `MessageOut` (see `app/routers/messaging.py:2325`) supports arbitrary `kind` values via Literal union (see line 2330). Scheduled message support exists (`send_at` field on message input models at lines 1853, 1930, 1952, 1994, 2018; background dispatch at `dispatch_due_scheduled_mass_campaigns` line 737).
+- **Broadcast chat** (`app/services/broadcast_chat_store.py`): `send_chat_message()` (see line 136) supports text + product link messages. No template support.
+- **Newsfeed scheduler** (`app/services/newsfeed_scheduler.py`): Background task pattern for scheduled content (see `_query_due_posts` at line 76). Bot scheduler follows the same pattern.
 - **Variable data**: User profiles in `profiles` table; subscription status queryable from `subscriptions` table; creator name from profile.
 
 ### 2.2 Gaps
@@ -398,12 +398,12 @@ In `MessageBubble.tsx`, add below the message text:
 
 | File | Changes |
 |------|---------|
-| `scripts/local-ddb-init.py` | Add `bot_templates` and `bot_scheduled_sends` TableDefs |
-| `app/core/settings.py` | Add `bot_templates_table_name`, `bot_scheduled_sends_table_name` |
-| `app/core/tables.py` | Add table handles |
-| `app/main.py` | Register `bot_template_router`; start bot scheduler task on startup |
-| `app/routers/messaging.py` | Add `quick_replies` field to `MessageOut` |
-| `app/services/chat_bot.py` | Wire `evaluate_triggers()` to template resolution + rendering |
+| `scripts/local-ddb-init.py` | Add `bot_templates` and `bot_scheduled_sends` TableDefs <!-- NOTE: Neither table exists yet — new implementation required --> |
+| `app/core/settings.py` | Add `bot_templates_table_name`, `bot_scheduled_sends_table_name` <!-- NOTE: Neither setting exists yet — new implementation required --> |
+| `app/core/tables.py` | Add table handles <!-- NOTE: Neither handle exists yet — new implementation required --> |
+| `app/main.py` | Register `bot_template_router`; start bot scheduler task on startup <!-- NOTE: Neither registration nor startup task exists yet — new implementation required --> |
+| `app/routers/messaging.py` | Add `quick_replies` field to `MessageOut` <!-- NOTE: quick_replies does not exist on MessageOut at line 2325 — new field required --> |
+| `app/services/chat_bot.py` | Wire `evaluate_triggers()` to template resolution + rendering <!-- NOTE: chat_bot.py does not exist yet — depends on BOT-001 --> |
 | `frontend/src/api/types.ts` | Add `BotTemplate`, `QuickReply`, `BotScheduledSend` types |
 | `frontend/src/api/endpoints/bots.ts` | Add template + schedule API functions |
 | `frontend/src/pages/messages/MessageBubble.tsx` | Render quick-reply buttons on bot messages |
@@ -1144,3 +1144,26 @@ MessageBubble enhancement (for quick replies)
     ├── QuickReplyButton (disabled after first tap)
     └── ...up to 5 buttons
 ```
+
+---
+
+## Codebase References
+
+| Claim | File | Line(s) | Status |
+|-------|------|---------|--------|
+| `send_text_message()` exists | `app/routers/messaging.py` | 7684 | VERIFIED |
+| `MessageOut` model exists | `app/routers/messaging.py` | 2325 | VERIFIED |
+| `MessageOut.kind` Literal union | `app/routers/messaging.py` | 2330 | VERIFIED |
+| `send_at` scheduled message field | `app/routers/messaging.py` | 1853, 1930, 1952 | VERIFIED (on message input models) |
+| Scheduled dispatch background loop | `app/routers/messaging.py` | 737 | VERIFIED (`dispatch_due_scheduled_mass_campaigns`) |
+| `send_chat_message()` in broadcast store | `app/services/broadcast_chat_store.py` | 136 | VERIFIED |
+| `newsfeed_scheduler.py` background pattern | `app/services/newsfeed_scheduler.py` | 76 | VERIFIED (`_query_due_posts`) |
+| No `quick_replies` field on MessageOut | `app/routers/messaging.py` | 2325-2380 | VERIFIED (field does not exist — new implementation required) |
+| No `bot_templates` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (table does not exist — new implementation required) |
+| No `bot_scheduled_sends` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (table does not exist — new implementation required) |
+| No `bot_templates_table_name` setting | `app/core/settings.py` | full file | VERIFIED (setting does not exist — new implementation required) |
+| No `bot_template_router` in main.py | `app/main.py` | full file | VERIFIED (not registered — new implementation required) |
+| No `app/services/bot_template.py` | `app/services/` | N/A | VERIFIED (file does not exist — new implementation required) |
+| No `app/services/bot_scheduler.py` | `app/services/` | N/A | VERIFIED (file does not exist — new implementation required) |
+| No `app/routers/bot_template.py` | `app/routers/` | N/A | VERIFIED (file does not exist — new implementation required) |
+| BOT-001 dependency (chat_bot.py) | `app/services/chat_bot.py` | N/A | NOT YET IMPLEMENTED (depends on BOT-001) |

@@ -1,10 +1,12 @@
 # CALL-012: Group Video Calls
 
-**Status**: Proposed
+**Status**: Implemented (Backend + Frontend partially wired)
 **Author**: Engineering
 **Date**: 2026-05-27
 **Priority**: Medium
 **Estimated effort**: 10-14 days
+
+> **NOTE — Feature is PARTIALLY IMPLEMENTED.** Backend: router (`app/routers/group_calls.py`, 275 lines), service (`app/services/group_call_service.py`, 500 lines), Pydantic models (`app/models.py:3219-3310`), settings (`app/core/settings.py:1412-1417`), DDB table (`GroupCallSessions` in `scripts/local-ddb-init.py:958-968`), table handle (`app/core/tables.py:109,233`), main.py registration (`app/main.py:104,427`). Frontend: `GroupCallOverlay.tsx` (489 lines) exists but `useGroupCall.ts` hook and `ParticipantTile.tsx` do NOT. E2E tests exist (`frontend/e2e/group-calls.spec.ts`, 677 lines). Unit tests do NOT exist (`tests/test_group_calls.py` missing). The spec proposed separate `group_call_sessions.py`, `group_call_lifecycle.py`, and `sfu_signaling.py` service files — the actual implementation consolidates everything into a single `group_call_service.py`.
 
 ---
 
@@ -107,12 +109,9 @@ The frontend adds a `GroupCallView` component with two layout modes (grid and sp
 
 ### Component Interactions
 
-- **`app/services/group_call_sessions.py`** (new): CRUD for group call session records. Creates META row + PARTICIPANT rows. State machine: `created -> active -> ended`.
-<!-- NOTE: Follow the pattern of existing messaging_call_sessions.py (232 lines). CallSessionRecord is a frozen dataclass; group equivalent should use similar pattern with dataclass + DDB serialization helpers. -->
-- **`app/services/group_call_lifecycle.py`** (new): State transition validation. Auto-end on last participant leave. Concurrent call prevention (one active call per conversation).
-<!-- NOTE: Follow the pattern of existing messaging_call_lifecycle.py (461 lines). It defines TERMINAL_STATES, ALLOWED_TRANSITIONS, and uses emit_call_timeline_event() for timeline events. The group lifecycle should mirror this structure. -->
-- **`app/services/sfu_signaling.py`** (new): SFU integration layer. In dev mode, acts as a relay between participants. In prod mode, forwards to external SFU server.
-- **`app/routers/group_calls.py`** (new): REST + WebSocket endpoints. Registered in `app/main.py`.
+- **`app/services/group_call_service.py`** (implemented, 500 lines): Consolidates CRUD, lifecycle, and signaling into a single service file. Exports: `create_group_call`, `join_call`, `leave_call`, `end_call`, `get_call`, `get_active_call_for_conversation`, `list_participants`, `list_call_history`, `relay_signal`, `update_media_state`, `GroupCallError`.
+<!-- NOTE: The spec proposed three separate files (group_call_sessions.py, group_call_lifecycle.py, sfu_signaling.py). The actual implementation consolidates everything into group_call_service.py. group_call_sessions.py, group_call_lifecycle.py, and sfu_signaling.py do NOT exist. -->
+- **`app/routers/group_calls.py`** (implemented, 275 lines): REST endpoints. Registered in `app/main.py:104,427`. Prefix: `/ui/calls/group`.
 <!-- VERIFIED: Router registration pattern in app/main.py. New routers are imported and registered via app.include_router(). See main.py for existing pattern (645 lines). -->
 - **Conversation participants table**: Used to validate that only conversation members can create/join a call.
 <!-- CORRECTED: The ticket says "T.participants" but participants are NOT accessed through the T dataclass. In messaging.py, participants are accessed via tbl_parts = ddb.Table(DDB_PARTICIPANTS) (messaging.py:159,222). DDB_PARTICIPANTS defaults to "Participants" (env var DDB_PARTICIPANTS). The group_calls router must use the same pattern: import ddb from app.core.aws and create a table handle via ddb.Table(os.getenv("DDB_PARTICIPANTS", "Participants")). -->
@@ -144,7 +143,7 @@ TableDef(
 ```
 
 **Settings entry for `app/core/settings.py`:**
-<!-- NOTE: None of these settings exist yet. Must be added to the frozen Settings dataclass at app/core/settings.py (1197 lines). For reference, the existing 1:1 call table setting is at settings.py:1141 (message_call_sessions_table_name). Follow the same pattern for the new group_call_sessions_table_name. -->
+<!-- VERIFIED: All settings now exist at app/core/settings.py:1412-1417. group_call_sessions_table_name:1412, group_calls_enabled:1413, group_call_max_participants:1414, group_call_max_duration_seconds:1415, group_call_sfu_endpoint:1416, group_call_dev_mesh_max_participants:1417. Note: group_calls_enabled defaults to DEV_MODE (enabled in dev), not "false" as spec proposed. Also, group_call_sfu_api_key setting does NOT exist (spec proposed it but implementation omitted). -->
 
 ```python
 group_call_sessions_table_name: str = os.environ.get("DDB_GROUP_CALL_SESSIONS", "GroupCallSessions")
@@ -753,26 +752,31 @@ SFU reduces upload bandwidth to 1 stream per participant (vs. N-1 in mesh). The 
 
 ## Appendix: Codebase Citations
 
-> The ticket correctly identifies the core limitation: the 1:1 call data model structurally prevents group calls. The proposed architecture (separate table, SFU+mesh dual mode, REST+WebSocket signaling) is sound. Key corrections: participants table access pattern, admin auth dependency naming, and timeline event extension requirements.
+> The ticket correctly identifies the core limitation: the 1:1 call data model structurally prevents group calls. The proposed architecture (separate table, SFU+mesh dual mode, REST signaling) is sound. Key corrections: participants table access pattern, admin auth dependency naming, service file consolidation, and implementation status updates.
 
 | Claim / Reference | Status | Actual Location | Notes |
 |---|---|---|---|
-| `CallSessionRecord` has `caller_user_id` / `callee_user_id` | VERIFIED | `app/services/messaging_call_sessions.py:18-48` | Frozen dataclass; also has CALL-011 billing fields and BCAST-011 broadcast_session_id |
+| `CallSessionRecord` has `caller_user_id` / `callee_user_id` | VERIFIED | `app/services/messaging_call_sessions.py:19-48` | Frozen dataclass; also has CALL-011 billing fields |
 | Lifecycle assumes two parties | VERIFIED | `app/services/messaging_call_lifecycle.py:128-397` | `create_invite()`, `accept_invite()`, `end_call()` all two-party |
-| `TERMINAL_STATES`, `ALLOWED_TRANSITIONS` | VERIFIED | `app/services/messaging_call_lifecycle.py` | State machine for 1:1 calls |
-| `messaging_call_timeline.py` exists | VERIFIED | `app/services/messaging_call_timeline.py:39` | `emit_call_timeline_event()` with event types: call.invite, call.accept, call.decline, call.end, call.missed |
+| `TERMINAL_STATES`, `ALLOWED_TRANSITIONS` | VERIFIED | `app/services/messaging_call_lifecycle.py:23-28` | State machine for 1:1 calls |
+| `messaging_call_timeline.py` exists | VERIFIED | `app/services/messaging_call_timeline.py:39` | `emit_call_timeline_event()` |
 | Timeline `_preview_for_event()` | VERIFIED | `messaging_call_timeline.py:21-36` | Returns human-readable strings for call events |
 | `T.participants` for conversation membership | **INCORRECT** | `app/routers/messaging.py:159,222` | Uses `tbl_parts = ddb.Table(DDB_PARTICIPANTS)` directly, NOT through T dataclass |
 | `DDB_PARTICIPANTS` env var | VERIFIED | `messaging.py:159` | `os.getenv("DDB_PARTICIPANTS", "Participants")` |
-| Participants GSI1 for conversation lookup | VERIFIED | `messaging.py:500` | `tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))` |
-| MessageCallSessions table in DDB init | VERIFIED | `scripts/local-ddb-init.py:624-634` | Existing 1:1 call sessions table |
+| MessageCallSessions table in DDB init | VERIFIED | `scripts/local-ddb-init.py:629-639` | Existing 1:1 call sessions table |
 | `message_call_sessions_table_name` setting | VERIFIED | `app/core/settings.py:1141` | `os.environ.get("DDB_MESSAGE_CALL_SESSIONS", "MessageCallSessions")` |
-| `T.message_call_sessions` table handle | VERIFIED | `app/core/tables.py:51/135` | Wired from `S.message_call_sessions_table_name` |
 | `require_ui_session` | VERIFIED | `app/services/sessions.py:283` | Cookie + CSRF auth |
-| `require_admin_or_root` | VERIFIED | `app/auth/policy.py:67` | Correct dependency for admin call termination |
-| Router registration in main.py | VERIFIED | `app/main.py` (645 lines) | `app.include_router()` pattern |
-| Background task pattern | VERIFIED | `app/main.py:326-327, 366-370` | For auto-end timer on max duration |
-| SSE event for messaging | VERIFIED | `app/routers/messaging.py:5192` | `fanout_event_to_conversation()` for call events to conversation members |
-| TableDef pattern | VERIFIED | `scripts/local-ddb-init.py:28-35` | `TableDef(name, pk, sk, gsi, attr_types)` |
-| Proposed settings (group_call_sessions_table_name, etc.) | DO NOT EXIST YET | Must add to `app/core/settings.py` | Follow pattern of message_call_sessions_table_name at line 1141 |
-| Proposed table handle | DOES NOT EXIST YET | Must add to `app/core/tables.py` | Follow T dataclass pattern |
+| Router registration in main.py | VERIFIED | `app/main.py:104,427` | `group_calls_router` imported and registered |
+| **Proposed settings** | **NOW EXIST** | `app/core/settings.py:1412-1417` | All 6 settings present (group_call_sfu_api_key omitted) |
+| **Proposed table handle** | **NOW EXISTS** | `app/core/tables.py:109,233` | `group_call_sessions` handle wired |
+| **GroupCallSessions table** | **NOW EXISTS** | `scripts/local-ddb-init.py:958-968` | PK=pk, SK=sk, 2 GSIs as proposed |
+| **group_call_sessions.py service** | **DOES NOT EXIST** | N/A | Consolidated into `app/services/group_call_service.py` (500 lines) |
+| **group_call_lifecycle.py service** | **DOES NOT EXIST** | N/A | Consolidated into `app/services/group_call_service.py` |
+| **sfu_signaling.py service** | **DOES NOT EXIST** | N/A | Consolidated into `app/services/group_call_service.py` |
+| **group_calls.py router** | **EXISTS** | `app/routers/group_calls.py` (275 lines) | Prefix `/ui/calls/group`, 11 endpoints |
+| **Pydantic models** | **EXIST** | `app/models.py:3219-3310` | 12 model classes for group calls |
+| **GroupCallOverlay.tsx** | **EXISTS** | `frontend/src/pages/messages/GroupCallOverlay.tsx` (489 lines) | Frontend overlay component |
+| **useGroupCall.ts hook** | **DOES NOT EXIST** | N/A | Not yet implemented |
+| **ParticipantTile.tsx** | **DOES NOT EXIST** | N/A | Not yet implemented as separate component |
+| **E2E tests** | **EXIST** | `frontend/e2e/group-calls.spec.ts` (677 lines) | Group call E2E tests |
+| **Unit tests** | **DO NOT EXIST** | N/A | `tests/test_group_calls.py` not created |

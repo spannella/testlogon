@@ -21,7 +21,7 @@ INFRA-003 and INFRA-004 track instance/pod lifecycle status (launching, running,
 4. Receive alerts when an instance becomes unreachable
 5. Configure auto-restart on crash
 
-The platform has an alerts system (`app/services/alerts.py`) with `write_alert()` for in-app notifications, but it is not wired to instance health events. The VNC system in `app/services/vnc_sessions.py` has timeout policies (idle timeout, max session duration) but no health probes.
+The platform has an alerts system (`app/services/alerts.py`) with `write_alert()` (see `app/services/alerts.py:355`) for in-app notifications, but it is not wired to instance health events. The VNC system in `app/services/vnc_sessions.py` has timeout policies (see `app/services/vnc_sessions.py:143`) (idle timeout, max session duration) but no health probes.
 
 ### Why This Matters
 
@@ -99,7 +99,7 @@ This is a timeout policy for VNC sessions (how long before an idle VNC session i
 
 ### 2.4 Alerts System (`app/services/alerts.py`)
 
-`write_alert(user_sub, *, event, outcome, title, details)` creates in-app alerts. This is the integration point for health status change notifications.
+`write_alert(user_sub, *, event, outcome, title, details)` (see `app/services/alerts.py:355`) creates in-app alerts. This is the integration point for health status change notifications.
 
 ---
 
@@ -871,3 +871,34 @@ interface RestartPolicySectionProps {
 26. `Terminated instance health returns unknown` -- Terminate instance. GET health. Verify `health_status: "unknown"`.
 27. `Stopped instance health returns unknown` -- Stop instance. GET health. Verify `health_status: "unknown"` or no health checks run.
 28. `Timeline survives instance stop/start cycle` -- Launch, stop, start. GET timeline. Verify events for all transitions present.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `write_alert()` | `app/services/alerts.py` | 355 | VERIFIED |
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+| `session_timeout_policy()` in VNC | `app/services/vnc_sessions.py` | 143 | VERIFIED |
+| `browser_ssh_terminal_enabled` setting | `app/core/settings.py` | 114 | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+<!-- NOTE: INFRA-003 (EC2 Launcher) and INFRA-004 (K8s Launcher) are dependencies but do not exist yet. All health monitoring infrastructure is new. -->
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| EC2 instance status tracking (INFRA-003) | `app/services/ec2_launcher.py` | NOT FOUND -- new implementation required |
+| K8s pod status tracking (INFRA-004) | `app/services/k8s_launcher.py` | NOT FOUND -- new implementation required |
+| `ec2_instances` DDB table | `scripts/local-ddb-init.py` | NOT FOUND -- new table required |
+| `k8s_pods` DDB table | `scripts/local-ddb-init.py` | NOT FOUND -- new table required |
+| Health check background worker | `app/services/instance_health.py` | NOT FOUND -- new service required |
+| Health check router | `app/routers/instance_health.py` | NOT FOUND -- new router required |
+| `HealthSummaryOut` model | `app/models.py` | NOT FOUND -- new model required |
+| Health/timeline settings (feature flags) | `app/core/settings.py` | NOT FOUND -- new settings required |
+| `frontend/src/pages/remote/InstanceDetailPage.tsx` | `frontend/src/pages/remote/` | NOT FOUND -- new page required |

@@ -5,7 +5,7 @@
 **Date**: 2026-05-29  
 **Priority**: High  
 **Estimated effort**: 8-10 days  
-**Dependencies**: Billing ledger (`billing_shared.py`), payment provider routers (`billing.py`, `billing_ccbill.py`), creator payouts (`creator_payouts.py`)
+**Dependencies**: Billing ledger (`billing_shared.py`; see `app/services/billing_shared.py:217`), payment provider routers (`billing.py`; see `app/main.py:326`, `billing_ccbill.py`; see `app/main.py:314`), creator payouts (`creator_payouts.py`; see `app/services/creator_payouts.py`)
 
 ---
 
@@ -100,39 +100,39 @@ LEDGER#ts#id entries              GET /admin/financials/kpis       KPI Cards
 
 ### 2.1 Billing Ledger (`app/services/billing_shared.py`)
 
-The billing system uses a single `billing` DynamoDB table. Ledger entries are stored with:
+The billing system uses a single `billing` DynamoDB table (see `scripts/local-ddb-init.py:59`, `app/core/settings.py:321`). Ledger entries are stored with:
 - `pk`: `USER#{user_id}`
 - `sk`: `LEDGER#{timestamp}#{entry_id}`
-- Fields: `entry_type`, `amount_cents`, `currency`, `description`, `reason`, `created_at`
+- Fields: `type` (not `entry_type`), `amount_cents`, `state`, `reason`, `ts` <!-- NOTE: The field is `type` not `entry_type` (see `app/services/billing_shared.py:236`). Also, `currency`, `description`, and `created_at` are NOT stored by `new_ledger_entry` — only `type`, `amount_cents`, `state`, `reason`, `ts`, and `entry_id`. Additional fields are passed via the `extra` parameter. -->
 
 Key functions:
-- `new_ledger_entry(...)`: Creates a new ledger row
-- `ledger_sk(ts, entry_id)`: Builds the sort key
-- `settle_or_reverse_ledger(...)`: Settles or reverses existing entries
+- `new_ledger_entry(...)` at `:217` (see `app/services/billing_shared.py:217`): Creates a new ledger row
+- `ledger_sk(ts, entry_id)` at `:213` (see `app/services/billing_shared.py:213`): Builds the sort key
+- `settle_or_reverse_ledger(...)` at `:248` (see `app/services/billing_shared.py:248`): Settles or reverses existing entries
 
-Entry types used across the platform: `tip_debit`, `tip_credit`, `unlock_debit`, `unlock_credit`, `deposit`, `payout_debit`, `subscription_charge`, `platform_commission`, `ad_revenue_credit`, `platform_ad_commission`.
+Entry types used across the platform: `tip_debit`, `tip_credit` (see `app/services/tip_ledger.py:115,136`), `unlock_debit`, `unlock_credit`, `deposit`, `subscription_charge` (see `app/routers/subscription_server.py:228`), `ad_revenue_credit` (see `app/services/ad_placement.py:307`). <!-- NOTE: `payout_debit`, `platform_commission`, and `platform_ad_commission` are not verified as literal strings in the codebase — they may be new or named differently. The `provider` field mentioned later is NOT stored by `new_ledger_entry` itself; it is stored by the billing router on payment method items (see `app/routers/billing.py:809,1618,1726,1834`), not on ledger entries. -->
 
 ### 2.2 Payment Providers
 
 Three payment provider integrations exist:
-- **Stripe** (`app/routers/billing.py`): Primary provider for card payments
-- **PayPal** (mock in dev): Alternative payment method
-- **CCBill** (`app/routers/billing_ccbill.py`): Specialized provider for high-risk categories
+- **Stripe** (`app/routers/billing.py`; see `app/main.py:326`): Primary provider for card payments
+- **PayPal** (mock in dev; PayPal PM creation at `app/routers/billing.py:1726`)
+- **CCBill** (`app/routers/billing_ccbill.py`; see `app/main.py:314`): Specialized provider for high-risk categories
 
-Each provider records transactions in the billing ledger with a `provider` field.
+<!-- NOTE: The `provider` field is stored on payment method items (e.g., `app/routers/billing.py:809,1618,1726,1834`) but NOT on individual ledger entries created by `new_ledger_entry`. To correlate a ledger entry with its payment provider, you would need to join on the user's payment method. This is a design gap that FIN-013 should address — either by adding `provider` to `new_ledger_entry`'s `extra` dict, or by denormalizing it into the ledger entry at write time. -->
 
 ### 2.3 Creator Payouts (`app/services/creator_payouts.py`)
 
-Existing functions:
-- `get_available_balance(user_id)`: Returns available payout balance
-- `request_payout(user_id, amount_cents, ...)`: Creates payout request
-- `list_payouts_admin(status, limit, cursor)`: Admin payout listing
-- `get_payout_stats()`: Returns payout queue statistics
+Existing functions (all **verified**):
+- `get_available_balance(user_id)` at `:55` (see `app/services/creator_payouts.py:55`): Returns available payout balance
+- `request_payout(user_id, amount_cents, ...)` at `:164` (see `app/services/creator_payouts.py:164`): Creates payout request
+- `list_payouts_admin(status, limit, cursor)` at `:256` (see `app/services/creator_payouts.py:256`): Admin payout listing
+- `get_payout_stats()` at `:393` (see `app/services/creator_payouts.py:393`): Returns payout queue statistics
 
-### 2.4 Admin Auth (`app/auth/deps.py`)
+### 2.4 Admin Auth (`app/auth/policy.py`)
 
-- `require_admin_session`: Requires role >= ADMIN — used for read-only dashboards
-- `require_root_session`: Requires role == ROOT — used for destructive operations
+- `require_admin_or_root` at `:67` (see `app/auth/policy.py:67`): Requires role ADMIN or ROOT — used for read-only dashboards. <!-- NOTE: There is no `require_admin_or_root` function. The correct function is `require_admin_or_root` from `app/auth/policy.py:67`. -->
+- `require_root` at `:63` (see `app/auth/policy.py:63`): Requires role ROOT — used for destructive operations. <!-- NOTE: There is no `require_root` function. The correct function is `require_root` from `app/auth/policy.py:63`. The `require_root` referenced in `app/auth/deps.py:273` exists but delegates to the same role check. -->
 
 ### 2.5 Gaps
 
@@ -299,14 +299,14 @@ This GSI allows efficient date-range queries without scanning the entire table.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/v1/admin/financials/kpis` | `require_admin_session` | KPI summary |
-| GET | `/v1/admin/financials/trends` | `require_admin_session` | Time-series trend data |
-| GET | `/v1/admin/financials/providers` | `require_admin_session` | Provider volume breakdown |
-| GET | `/v1/admin/financials/types` | `require_admin_session` | Transaction type breakdown |
-| GET | `/v1/admin/financials/top-creators` | `require_admin_session` | Top creators by revenue |
-| POST | `/v1/admin/financials/rollup` | `require_root_session` | Trigger manual rollup |
-| GET | `/v1/admin/financials/export/csv` | `require_admin_session` | CSV export |
-| GET | `/v1/admin/financials/export/pdf` | `require_admin_session` | PDF export |
+| GET | `/v1/admin/financials/kpis` | `require_admin_or_root` | KPI summary |
+| GET | `/v1/admin/financials/trends` | `require_admin_or_root` | Time-series trend data |
+| GET | `/v1/admin/financials/providers` | `require_admin_or_root` | Provider volume breakdown |
+| GET | `/v1/admin/financials/types` | `require_admin_or_root` | Transaction type breakdown |
+| GET | `/v1/admin/financials/top-creators` | `require_admin_or_root` | Top creators by revenue |
+| POST | `/v1/admin/financials/rollup` | `require_root` | Trigger manual rollup |
+| GET | `/v1/admin/financials/export/csv` | `require_admin_or_root` | CSV export |
+| GET | `/v1/admin/financials/export/pdf` | `require_admin_or_root` | PDF export |
 
 ### 3.5 Pydantic Models (`app/models.py`)
 
@@ -445,9 +445,9 @@ export const exportFinancialPdf = (params: { start_date: string; end_date: strin
 
 ### Phase 1: Backend Data Layer (Days 1-3)
 
-1. **`scripts/local-ddb-init.py`**: Add `financial_rollups` table definition. Add `GSI_LEDGER_DATE` GSI to `billing` table.
-2. **`app/core/settings.py`**: Add `financial_rollups_table_name`.
-3. **`app/core/tables.py`**: Add `financial_rollups` table handle.
+1. **`scripts/local-ddb-init.py`**: Add `financial_rollups` table definition. Add `GSI_LEDGER_DATE` GSI to `billing` table definition at `:59`. <!-- NOTE: The billing table currently has NO GSIs (see `scripts/local-ddb-init.py:59`) — this GSI is new. -->
+2. **`app/core/settings.py`**: Add `financial_rollups_table_name`. <!-- NOTE: No `financial_rollups_table_name` setting exists yet — new setting required. -->
+3. **`app/core/tables.py`**: Add `financial_rollups` table handle. <!-- NOTE: No `financial_rollups` table handle exists yet — new handle required. -->
 4. **`app/services/financial_dashboard.py`**: New file. KPI computation, trend aggregation, provider/type breakdown, top creators, daily rollup, CSV/PDF export.
 5. **`app/services/billing_shared.py`**: Update `new_ledger_entry` to write `ledger_date` field for the new GSI.
 
@@ -659,8 +659,8 @@ financial_dashboard_enabled: bool = os.environ.get("FINANCIAL_DASHBOARD_ENABLED"
 ## 11. Security Considerations
 
 ### 6.1 Role-Based Access
-- All read endpoints require ADMIN role (`require_admin_session`)
-- Manual rollup trigger requires ROOT role (`require_root_session`)
+- All read endpoints require ADMIN role (`require_admin_or_root`)
+- Manual rollup trigger requires ROOT role (`require_root`)
 - Financial data is sensitive; no public or user-level access
 
 ### 6.2 Data Sensitivity
@@ -713,3 +713,21 @@ financial_dashboard_enabled: bool = os.environ.get("FINANCIAL_DASHBOARD_ENABLED"
 7. CSV export produces valid CSV with financial summary data
 8. Non-admin users receive 403 on all endpoints
 9. All 15 E2E tests pass in `frontend/e2e/admin-financials.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/services/billing_shared.py` | 260 total | `ledger_sk` at `:213`, `new_ledger_entry` at `:217`, `settle_or_reverse_ledger` at `:248`; field is `type` not `entry_type` |
+| `app/services/creator_payouts.py` | — | `get_available_balance` at `:55`, `request_payout` at `:164`, `list_payouts_admin` at `:256`, `get_payout_stats` at `:393` |
+| `app/routers/billing.py` | — | Stripe billing router registered at `app/main.py:326`; provider field stored on PM items at `:809,1618,1726,1834` |
+| `app/routers/billing_ccbill.py` | — | CCBill router registered at `app/main.py:314` |
+| `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |
+| `app/auth/deps.py` | :273 | `require_root_session` at `:273` (delegates to role check) |
+| `scripts/local-ddb-init.py` | :59 | `billing` table definition (PK=pk, SK=sk, NO GSIs currently) |
+| `app/core/settings.py` | :321 | `billing_table_name` setting |
+| `app/services/tip_ledger.py` | :115, :136 | Entry types `debit` and `credit` for tips |
+| `app/routers/subscription_server.py` | :228 | Entry type `subscription_charge` |
+| `app/services/ad_placement.py` | :307 | Entry type `ad_revenue_credit` |

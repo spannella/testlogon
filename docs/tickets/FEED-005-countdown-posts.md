@@ -36,10 +36,14 @@ With the CountdownCard component from MSG-010 already built, extending it to new
 
 ### 2.1 Post Creation
 
-Posts are created via `create_post()` in `app/routers/newsfeed.py`. The `CreatePostRequest` model accepts various fields including `image_urls`, `video_id` (FEED-001), scheduling fields (`publish_at`, `schedule_timezone`), and lock fields. Adding countdown fields follows the same extension pattern.
+Posts are created via `create_post()` (line 3013) in `app/routers/newsfeed.py`. The `CreatePostRequest` model (line 1276) accepts various fields including `image_urls`, `video_id` (FEED-001), scheduling fields, and lock fields. Adding countdown fields follows the same extension pattern.
+<!-- VERIFIED: app/routers/newsfeed.py:1276 — CreatePostRequest; :3013 — create_post -->
 
 ### 2.2 CountdownCard Component (MSG-010)
 
+<!-- NOTE: frontend/src/pages/messages/CountdownCard.tsx does NOT exist yet — MSG-010 has not been implemented. -->
+<!-- NOTE: frontend/src/components/shared/CountdownCard.tsx also does NOT exist. -->
+<!-- This is a blocking dependency. New implementation required. -->
 `frontend/src/pages/messages/CountdownCard.tsx` renders a live countdown timer with:
 - Title display
 - Days/hours/minutes/seconds countdown
@@ -759,6 +763,26 @@ countdown_posts_enabled: bool = os.environ.get("COUNTDOWN_POSTS_ENABLED", "true"
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| CountdownCard component | MSG-010 | Required |
-| CreatePostRequest extension | Existing | Available |
-| PostCard rendering | Existing | Available |
+| CountdownCard component | MSG-010 | Required — **NOT YET IMPLEMENTED** (neither `frontend/src/pages/messages/CountdownCard.tsx` nor `frontend/src/components/shared/CountdownCard.tsx` exist) |
+| CreatePostRequest extension | Existing | Available (see `app/routers/newsfeed.py:1276`) |
+| PostCard rendering | Existing | Available (see `frontend/src/pages/feed/PostCard.tsx`) |
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key References | Lines |
+|------|---------------|-------|
+| `app/routers/newsfeed.py` | `CreatePostRequest` | 1276 |
+| `app/routers/newsfeed.py` | `create_post` | 3013 |
+| `app/routers/newsfeed.py` | `_post_to_dict` | 1900 |
+| `frontend/src/pages/feed/PostCard.tsx` | Post card rendering | - |
+| `frontend/src/pages/feed/CreatePost.tsx` | Post composer | - |
+| `scripts/local-ddb-init.py` | `app_single_table` | 222 |
+
+### Files That Do NOT Exist Yet (blocking dependency)
+| File | Purpose | Status |
+|------|---------|--------|
+| `frontend/src/pages/messages/CountdownCard.tsx` | Countdown timer card (MSG-010) | Not implemented |
+| `frontend/src/components/shared/CountdownCard.tsx` | Shared countdown card | Not implemented |

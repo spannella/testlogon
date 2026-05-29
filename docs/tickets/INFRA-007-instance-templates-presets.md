@@ -244,7 +244,7 @@ from typing import Any, Dict, List, Optional
 from boto3.dynamodb.conditions import Key
 from app.core.tables import T
 from app.core.time import now_ts
-from app.services.alerts import audit_event
+from app.services.alerts import audit_event  # see app/services/alerts.py:695
 
 
 def ensure_system_templates() -> int:
@@ -904,3 +904,39 @@ interface TemplateGalleryProps {
 28. `User template is returned with owner_sub set` -- Create and GET. Verify `owner_sub` equals Alice's sub.
 29. `Clone of user template by same user succeeds` -- Alice creates + clones own template. Verify clone `is_system: false`.
 30. `Launch from system template increments use_count` -- Launch from sys-dev-workspace. GET template. Verify `use_count >= 1`.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `browser_ssh_terminal_enabled` setting | `app/core/settings.py` | 114 | VERIFIED |
+| SSH terminal router registration | `app/main.py` | 404 | VERIFIED: `app.include_router(browser_ssh_terminal_router)` |
+| `ParamikoSshBridge` class | `app/routers/browser_ssh_terminal.py` | 60 | VERIFIED (1125 lines total) |
+| VNC session timeout policy | `app/services/vnc_sessions.py` | 143 | VERIFIED |
+| DDB table init script | `scripts/local-ddb-init.py` | exists | VERIFIED (1360 lines) |
+
+### Not Yet Implemented (requires new code)
+
+<!-- NOTE: INFRA-003 (EC2 Launcher) and INFRA-004 (K8s Launcher) are listed as dependencies but their implementation files do not exist yet. The following are all new: -->
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `LaunchInstanceIn` model (INFRA-003) | `app/models.py` or router | NOT FOUND -- new implementation required |
+| `LaunchPodIn` model (INFRA-004) | `app/models.py` or router | NOT FOUND -- new implementation required |
+| `app/services/ec2_launcher.py` | `app/services/` | NOT FOUND -- new implementation required |
+| `app/services/k8s_launcher.py` | `app/services/` | NOT FOUND -- new implementation required |
+| `app/services/remote_hosts.py` | `app/services/` | NOT FOUND -- new implementation required |
+| `instance_templates` DDB table | `scripts/local-ddb-init.py` | NOT FOUND -- new table required |
+| `app/routers/instance_templates.py` | `app/routers/` | NOT FOUND -- new router required |
+| `app/services/instance_templates.py` | `app/services/` | NOT FOUND -- new service required |
+| Instance templates router registration | `app/main.py` | NOT FOUND -- needs `app.include_router()` |
+| Template settings (feature flags) | `app/core/settings.py` | NOT FOUND -- new settings required |
+| `frontend/src/pages/remote/TemplateBrowserPage.tsx` | `frontend/src/pages/remote/` | NOT FOUND -- new page required |
+| `frontend/src/api/endpoints/instance-templates.ts` | `frontend/src/api/endpoints/` | NOT FOUND -- new endpoint file required |
+| `/remote/templates` route | `frontend/src/App.tsx` | NOT FOUND -- new route required |

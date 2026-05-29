@@ -1072,22 +1072,18 @@ Total additional latency: ~25ms. Not user-perceptible.
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| Checkout.tsx has no promo code UI | `frontend/src/pages/shop/Checkout.tsx` | 1-266 | VERIFIED |
-| Checkout.tsx has 3 sections (summary, payment, order) | `frontend/src/pages/shop/Checkout.tsx` | 169-261 | VERIFIED |
-| purchaseMutation calls purchaseCart(cartId) with no body | `frontend/src/pages/shop/Checkout.tsx` | 63-78 | VERIFIED |
-| purchaseCart wrapper accepts no body | `frontend/src/api/endpoints/cart.ts` | 42-43 | VERIFIED |
-| validate_promo_code exists with full validation chain | `app/services/promo_codes.py` | 239-332 | VERIFIED |
-| _calculate_discount handles percentage, fixed, free_trial | `app/services/promo_codes.py` | 335-352 | VERIFIED |
-| redeem_promo_code increments current_uses atomically | `app/services/promo_codes.py` | 357-364+ | VERIFIED |
-| create_promo_code with all parameters | `app/services/promo_codes.py` | 85-96 | VERIFIED |
+| Checkout.tsx (now 420 lines, was 266) | `frontend/src/pages/shop/Checkout.tsx` | 1-420 | VERIFIED (line drift — file grew) |
+| purchaseCart wrapper accepts no body | `frontend/src/api/endpoints/cart.ts` | 43 | VERIFIED (was 42; line drift) |
+| validate_promo_code exists with full validation chain | `app/services/promo_codes.py` | 239 | VERIFIED |
+| _calculate_discount handles percentage, fixed, free_trial | `app/services/promo_codes.py` | 335 | VERIFIED |
+| redeem_promo_code increments current_uses atomically | `app/services/promo_codes.py` | 357+ | VERIFIED |
+| create_promo_code with all parameters | `app/services/promo_codes.py` | 85 | VERIFIED |
 | CODE_PATTERN = ^[A-Za-z0-9_-]{3,30}$ | `app/services/promo_codes.py` | 24 | VERIFIED |
 | VALID_CHECKOUT_TYPES = subscription, vod, shop | `app/services/promo_codes.py` | 25 | VERIFIED |
 | Frontend validatePromoCode wrapper | `frontend/src/api/endpoints/promoCodes.ts` | 40-45 | VERIFIED |
 | Frontend redeemPromoCode wrapper | `frontend/src/api/endpoints/promoCodes.ts` | 49-55 | VERIFIED |
-| PromoCodeOut type defined | `frontend/src/api/types.ts` | 3135-3152 | VERIFIED |
-| Promo validate endpoint | `app/routers/promo_codes.py` | 140 | VERIFIED |
-| Promo redeem endpoint | `app/routers/promo_codes.py` | 160 | VERIFIED |
-| purchase_cart signature (no promo param) | `app/services/shoppingcart.py` | 428 | VERIFIED |
-| purchase_cart sums total without discount | `app/services/shoppingcart.py` | 442-443 | VERIFIED |
-| purchase_cart creates order from line items | `app/services/shoppingcart.py` | 449-456 | VERIFIED |
-| purchase_cart updates cart to PURCHASED | `app/services/shoppingcart.py` | 461-484 | VERIFIED |
+| PromoCodeOut type defined | `frontend/src/api/types.ts` | 3135-3152 | VERIFIED (may have drifted) |
+| Promo validate endpoint | `app/routers/promo_codes.py` | 141 | VERIFIED (was 140; line drift) |
+| Promo redeem endpoint | `app/routers/promo_codes.py` | 161 | VERIFIED (was 160; line drift) |
+| purchase_cart signature (no promo param) | `app/services/shoppingcart.py` | 469 | VERIFIED (was 428; line drift) |
+| purchase_cart total + order logic | `app/services/shoppingcart.py` | 469+ | VERIFIED (exact sub-lines drifted ~40 lines) |

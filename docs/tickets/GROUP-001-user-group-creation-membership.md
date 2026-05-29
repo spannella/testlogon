@@ -45,9 +45,9 @@ The platform currently supports one-to-one interactions (DMs, follows) and creat
 
 ### 2.1 Existing Infrastructure
 
-- **Auth**: `require_ui_session` from `app/auth/deps.py`. Group-level roles (admin/mod/member) are checked by querying the membership record, not the platform auth role.
-- **User profiles** (`T.profile`): Display names, avatars. Denormalized into membership records for fast listing.
-- **Fan club channels** (`T.fan_club_channels`): Similar group membership pattern (`pk=CHANNEL#{id}`, `sk=MEMBER#{user_id}`).
+- **Auth**: `require_ui_session` from `app/auth/deps.py` (**verified** — see `app/auth/deps.py`). Group-level roles (admin/mod/member) are checked by querying the membership record, not the platform auth role.
+- **User profiles** (`T.profile`): **Verified** — Display names, avatars (see `app/core/tables.py`, `app/core/settings.py` `profile_table_name`).
+- **Fan club channels** (`T.fan_club_channels`): **Verified** — Similar group membership pattern (see `app/core/tables.py:121,245`, `app/core/settings.py:1432`, `scripts/local-ddb-init.py:1077`).
 
 ### 2.2 Gaps
 
@@ -759,3 +759,17 @@ let privateGroupId: string;
 8. Group dissolution cleans up memberships and triggers treasury return.
 9. Non-members cannot access private group data.
 10. All 24 E2E tests pass.
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/auth/deps.py` | — | `require_ui_session` auth dependency |
+| `app/core/tables.py` | :121, :245 | `T.fan_club_channels` handle — similar membership pattern |
+| `app/core/settings.py` | :1431-1433 | `fan_clubs_enabled`, `fan_club_channels_table_name`, `fan_club_messages_table_name` |
+| `scripts/local-ddb-init.py` | :1077 | `fan_club_channels` table definition — similar single-table pattern |
+| `app/core/settings.py` | — | `profile_table_name` for user profile lookups |
+| `scripts/local-ddb-init.py` | — | No `user_groups` table exists yet — new table required |
+| `app/main.py` | — | No group router registered yet — new registration required |

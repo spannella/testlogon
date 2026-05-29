@@ -14,7 +14,7 @@
 
 ### 1.1 Problem Statement
 
-The current KYC system (`app/routers/kyc_cases.py`) relies on manual document upload and admin review for identity verification. Users submit scans of passports, national IDs, or driver's licenses, which an admin then manually inspects. This process is slow (average review time in the admin queue can span hours to days), error-prone (visual document inspection cannot detect sophisticated forgeries), and fails to leverage government-issued electronic identity schemes that provide cryptographically signed identity assertions.
+The current KYC system (see `app/routers/kyc_cases.py:48`) relies on manual document upload and admin review for identity verification. Users submit scans of passports, national IDs, or driver's licenses, which an admin then manually inspects. This process is slow (average review time in the admin queue can span hours to days), error-prone (visual document inspection cannot detect sophisticated forgeries), and fails to leverage government-issued electronic identity schemes that provide cryptographically signed identity assertions.
 
 Many countries have deployed eID systems that allow citizens to authenticate their identity digitally with the same legal standing as in-person identity checks. By integrating with these schemes, the platform can:
 
@@ -71,7 +71,7 @@ Mock Flow (dev mode):
 
 ## 2. Current State Analysis
 
-### 2.1 KYC Case Model (`app/contracts/kyc_cases_contract.py`)
+### 2.1 KYC Case Model (see `app/contracts/kyc_cases_contract.py`)
 
 The `KycCaseOut` model (line 52) has no fields for eID verification results. The `files` list stores uploaded documents but has no concept of a cryptographically verified identity assertion. The `status` lifecycle (`draft -> submitted -> under_review -> approved/rejected`) does not account for automated verification bypassing the manual review step.
 
@@ -89,7 +89,8 @@ The platform uses moto for S3/Cognito mocks (port 4566), a Stripe mock (port 121
 
 ### 2.5 OAuth/OIDC Patterns
 
-The platform already has SSO provider integration (`app/routers/sso_providers.py`, admin page at `frontend/src/pages/admin/SsoProvidersPage.tsx`). The eID redirect flow follows a similar pattern: redirect out, callback with code/assertion, validate, extract claims. The implementation can reuse the session-state pattern from the SSO flow.
+The platform already has SSO provider integration (see `app/routers/sso_saml.py`).
+<!-- NOTE: The ticket references app/routers/sso_providers.py which does not exist — the actual SSO router is app/routers/sso_saml.py. The admin page frontend/src/pages/admin/SsoProvidersPage.tsx does exist. --> The eID redirect flow follows a similar pattern: redirect out, callback with code/assertion, validate, extract claims. The implementation can reuse the session-state pattern from the SSO flow.
 
 ---
 
@@ -156,6 +157,7 @@ Data Flow (Mock Mode):
 ```
 
 ### 3.2 New Service: `app/services/kyc_eid_provider.py`
+<!-- NOTE: app/services/kyc_eid_provider.py does not exist yet — new implementation required -->
 
 ```python
 @dataclass
@@ -941,3 +943,20 @@ test("234.5 Mock eID assertion has correct HMAC signature", async ({ page }) => 
 | `frontend/src/components/shared/EidVerificationPanel.tsx` | **New** | Scheme selector and verification start |
 | `frontend/src/components/shared/EidResultCard.tsx` | **New** | Verification result display |
 | `frontend/e2e/kyc-eid.spec.ts` | **New** | 24 E2E tests across sections 231-234 |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router | `app/routers/kyc_cases.py` | 48 | Exists |
+| KYC contracts | `app/contracts/kyc_cases_contract.py` | -- | Exists |
+| SSO SAML router | `app/routers/sso_saml.py` | -- | Exists (ticket incorrectly references `sso_providers.py`) |
+| SSO SAML provider service | `app/services/sso_saml_provider.py` | -- | Exists |
+| SSO admin page | `frontend/src/pages/admin/SsoProvidersPage.tsx` | -- | Exists |
+| KYC case store | `app/services/kyc_cases.py` | 94 | Exists |
+| Crypto helpers | `app/core/crypto.py` | -- | Exists |
+| `app/services/kyc_eid_provider.py` | -- | -- | Does NOT exist — new implementation required |
+| `frontend/src/api/endpoints/kyc-eid.ts` | -- | -- | Does NOT exist — new file required |
+| `frontend/src/components/shared/EidVerificationPanel.tsx` | -- | -- | Does NOT exist — new component required |

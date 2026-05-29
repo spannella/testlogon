@@ -13,7 +13,8 @@
 
 ### 1.1 The Gap
 
-The existing KYC system has a comprehensive backend (`app/routers/kyc_cases.py`, 1295 lines; `app/services/kyc_cases.py`, 829 lines) with a full case lifecycle, document uploads, questionnaire integration, and signature packet linking. However, there is **no dedicated user-facing frontend page** for the KYC process. Users must interact with the KYC system entirely through raw API calls or through indirect integrations (the file manager for uploads, the questionnaires page for intake forms).
+The existing KYC system has a comprehensive backend (`app/routers/kyc_cases.py`, 1294 lines; `app/services/kyc_cases.py`, 828 lines) with a full case lifecycle, document uploads, questionnaire integration, and signature packet linking.
+<!-- NOTE: ticket originally cited 1295 and 829 lines -- actual counts are 1294 and 828 --> However, there is **no dedicated user-facing frontend page** for the KYC process. Users must interact with the KYC system entirely through raw API calls or through indirect integrations (the file manager for uploads, the questionnaires page for intake forms).
 
 This means:
 1. Users have no clear path to start verification -- there is no "Verify Your Identity" page.
@@ -71,24 +72,24 @@ User clicks "Verify Account" (sidebar / tier progress page)
 
 ### 2.1 Existing Backend Endpoints
 
-All necessary backend endpoints already exist in `app/routers/kyc_cases.py`:
+All necessary backend endpoints already exist in `app/routers/kyc_cases.py` (see `app/routers/kyc_cases.py`):
 
-| Endpoint | Purpose | Used in Step |
-|----------|---------|-------------|
-| `POST /v1/kyc/cases` | Create new case | Wizard init |
-| `PATCH /v1/kyc/cases/{id}` | Update draft (intake_profile) | Step 1 |
-| `POST /v1/kyc/cases/{id}/files` | Attach file | Steps 2, 3, 4 |
-| `GET /v1/kyc/cases/{id}/files/validation` | Check required files | Step 7 |
-| `POST /v1/kyc/cases/{id}/start-questionnaire` | Start questionnaire session | Step 5 |
-| `GET /v1/kyc/cases/{id}/questionnaire-status` | Check questionnaire completion | Step 5 |
-| `POST /v1/kyc/cases/{id}/signature-packet` | Create/link signature packet | Step 6 |
-| `GET /v1/kyc/cases/{id}/signature-status` | Check signature completion | Step 6 |
-| `GET /v1/kyc/cases/{id}/readiness` | Check all submit prerequisites | Step 7 |
-| `POST /v1/kyc/cases/{id}/submit` | Submit case for review | Step 7 |
-| `GET /v1/kyc/cases` | List user's cases | Status page |
-| `GET /v1/kyc/cases/{id}` | Get case details | Status page |
+| Endpoint | Purpose | Used in Step | Line |
+|----------|---------|-------------|------|
+| `POST /v1/kyc/cases` | Create new case | Wizard init | see `:519` |
+| `PATCH /v1/kyc/cases/{id}` | Update draft (intake_profile) | Step 1 | |
+| `POST /v1/kyc/cases/{id}/files` | Attach file | Steps 2, 3, 4 | see `:734` |
+| `GET /v1/kyc/cases/{id}/files/validation` | Check required files | Step 7 | see `:791` |
+| `POST /v1/kyc/cases/{id}/start-questionnaire` | Start questionnaire session | Step 5 | see `:625` |
+| `GET /v1/kyc/cases/{id}/questionnaire-status` | Check questionnaire completion | Step 5 | |
+| `POST /v1/kyc/cases/{id}/signature-packet` | Create/link signature packet | Step 6 | see `:1206` |
+| `GET /v1/kyc/cases/{id}/signature-status` | Check signature completion | Step 6 | see `:184` |
+| `GET /v1/kyc/cases/{id}/readiness` | Check all submit prerequisites | Step 7 | see `:223` |
+| `POST /v1/kyc/cases/{id}/submit` | Submit case for review | Step 7 | see `:830` |
+| `GET /v1/kyc/cases` | List user's cases | Status page | |
+| `GET /v1/kyc/cases/{id}` | Get case details | Status page | |
 
-### 2.2 Readiness Check (`app/routers/kyc_cases.py`, line 809)
+### 2.2 Readiness Check (see `app/routers/kyc_cases.py:809`)
 
 The `kyc_readiness()` endpoint returns a comprehensive readiness status:
 
@@ -112,7 +113,7 @@ This is the data source for the wizard's step completion indicators.
 
 Files uploaded through the file manager get a `node_id` which is passed to `POST /{case_id}/files` via `file_node_id`. The wizard needs to handle file upload first (creating a file node) and then attach it to the case.
 
-### 2.4 Admin Metrics (`app/routers/kyc_cases.py`, line 946)
+### 2.4 Admin Metrics (see `app/routers/kyc_cases.py:947` for `get_admin_kyc_metrics`)
 
 `GET /v1/kyc/cases/admin/metrics` returns queue metrics including `processing_time_p50` and `processing_time_p95`. The status page can use a public/user-facing variant of this data to display estimated wait times.
 
@@ -1542,3 +1543,58 @@ test.beforeAll(async ({ browser }) => {
 - Delete `frontend/src/pages/kyc/` directory.
 - The `GET /estimated-wait` backend endpoint can remain (it is a read-only endpoint with no side effects).
 - Draft cases in DynamoDB are unaffected and can be completed via API if the portal is re-enabled.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router | `app/routers/kyc_cases.py` | all | VERIFIED (1294 lines, not 1295 as ticket states) |
+| KYC cases service | `app/services/kyc_cases.py` | all | VERIFIED (828 lines, not 829 as ticket states) |
+| `create_kyc_case()` | `app/routers/kyc_cases.py` | 519 | VERIFIED |
+| `submit_kyc_case()` | `app/routers/kyc_cases.py` | 830 | VERIFIED |
+| `attach_kyc_file()` | `app/routers/kyc_cases.py` | 734 | VERIFIED |
+| `validate_kyc_file_requirements()` | `app/routers/kyc_cases.py` | 791 | VERIFIED |
+| `start_kyc_questionnaire()` | `app/routers/kyc_cases.py` | 625 | VERIFIED |
+| `_readiness_for_case()` | `app/routers/kyc_cases.py` | 223 | VERIFIED |
+| `_signature_status_for_case()` | `app/routers/kyc_cases.py` | 184 | VERIFIED |
+| `create_or_link_signature_packet()` | `app/routers/kyc_cases.py` | 1206 | VERIFIED |
+| `get_admin_kyc_metrics()` | `app/routers/kyc_cases.py` | 947 | VERIFIED (ticket cites line 946 -- off by 1) |
+| `list_cases_by_owner()` | `app/services/kyc_cases.py` | 607 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED (2 GSIs) |
+| KYC settings | `app/core/settings.py` | 1065-1072 | VERIFIED |
+| KYC cases router registration | `app/main.py` | 406 | VERIFIED |
+| `require_ui_session` | `app/auth/deps.py` | exists | VERIFIED |
+| File manager service | `app/services/filemanager.py` | exists | VERIFIED |
+| Questionnaire repository | `app/services/questionnaires_repository.py` | 38 | VERIFIED |
+| Signature packet store | `app/services/signature_packet_store.py` | exists | VERIFIED |
+| Signing page | `frontend/src/pages/signing/SigningPage.tsx` | exists | VERIFIED |
+| Files page | `frontend/src/pages/files/FilesPage.tsx` | exists | VERIFIED |
+| Questionnaires pages | `frontend/src/pages/questionnaires/` | exists | VERIFIED |
+
+### Corrections
+
+<!-- NOTE: The ticket states `app/routers/kyc_cases.py` has 1295 lines -- actual count is 1294. -->
+<!-- NOTE: The ticket states `app/services/kyc_cases.py` has 829 lines -- actual count is 828. -->
+<!-- NOTE: The ticket cites `get_admin_kyc_metrics()` at "line 946" -- actual line is 947. -->
+<!-- NOTE: The "readiness" endpoint is cited at "line 809" -- actual `_readiness_for_case()` is at line 223 and the `kyc_readiness()` route handler needs separate verification. -->
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `GET /v1/kyc/cases/estimated-wait` endpoint | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoint required |
+| `frontend/src/pages/kyc/KycWizard.tsx` | `frontend/src/pages/kyc/` | NOT FOUND -- new page required |
+| `frontend/src/pages/kyc/KycStatusPage.tsx` | `frontend/src/pages/kyc/` | NOT FOUND -- new page required |
+| `frontend/src/pages/kyc/KycHelp.tsx` | `frontend/src/pages/kyc/` | NOT FOUND -- new component required |
+| `frontend/src/pages/kyc/steps/*.tsx` (7 step components) | `frontend/src/pages/kyc/steps/` | NOT FOUND -- new directory + components required |
+| `frontend/src/components/shared/CameraCapture.tsx` | `frontend/src/components/shared/` | NOT FOUND -- new component required |
+| `frontend/src/api/endpoints/kyc.ts` | `frontend/src/api/endpoints/` | NOT FOUND -- new endpoint file required |
+| `/kyc` and `/kyc/status` routes | `frontend/src/App.tsx` | NOT FOUND -- new routes required |
+| Verification sidebar links | `frontend/src/components/layout/Sidebar.tsx` | NOT FOUND -- needs modification |
+| `KYC_SELF_SERVICE_PORTAL_ENABLED` feature flag | `app/core/settings.py` | NOT FOUND -- new setting required |

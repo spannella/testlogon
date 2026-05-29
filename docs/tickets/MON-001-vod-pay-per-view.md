@@ -1580,3 +1580,20 @@ Renders:
 - **MON-002**: Tip ledger integration (same LEDGER# pattern used here for purchase records)
 - **MON-003**: Creator earnings dashboard (will aggregate VOD purchase credits alongside tips)
 - **MON-005**: Subscription-gated VOD (extends `check_vod_entitlement` with subscription lookup)
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/models_video.py` | 36, 93-96 | EXISTS: `VideoMetadataModel` already has `price_cents` (93), `access_mode` (94), `purchase_count` (95), `revenue_cents` (96) fields |
+| `app/services/vod_purchase.py` | 40-674 | ALREADY EXISTS (674 lines): `check_vod_access` (131), `check_entitlement_purchase_only` (316), `check_entitlement` (372), `purchase_video` (398), `list_purchases` (563), `grant_entitlement` (591), `record_playback_complete` (636) |
+| `app/routers/video_listing.py` | 661, 1116-1117, 1184-1185, 1219 | ALREADY EXISTS: `get_video_detail` (661), `purchase_video_endpoint` (1116), `list_purchases_endpoint` (1184), `PATCH /{video_id}/pricing` (1219) — endpoints are in `video_listing.py`, NOT in `vod.py` as this ticket proposes |
+| `scripts/local-ddb-init.py` | 584 | EXISTS: `VodEntitlements` table definition |
+| `app/core/settings.py` | 1076 | EXISTS: `vod_entitlements_table_name` setting |
+| `app/core/tables.py` | 84, 208 | EXISTS: `T.vod_entitlements` table handle |
+| `app/services/playback_entitlements.py` | 234 | EXISTS: `PLAYBACKJWT` for playback token signing |
+| `app/services/billing_shared.py` | — | EXISTS: billing table access patterns |
+| `app/services/subscription_access.py` | 55, 72 | EXISTS: `has_active_subscription` (55), `can_access_creator` (72) — already imported by vod_purchase.py |
+<!-- NOTE: This ticket's service design (vod_purchase.py) and data model changes (price_cents, access_mode on VideoMetadataModel) have been FULLY IMPLEMENTED. The router endpoints exist in video_listing.py rather than vod.py. The ticket should be marked as Complete or moved to verification status. -->

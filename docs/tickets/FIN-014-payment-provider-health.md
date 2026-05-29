@@ -5,7 +5,7 @@
 **Date**: 2026-05-29  
 **Priority**: High  
 **Estimated effort**: 8-10 days  
-**Dependencies**: Webhook infrastructure (`webhook_stats.py`, `webhook_circuit_breaker.py`), billing routers (`billing.py`, `billing_ccbill.py`), admin auth (`auth/deps.py`)
+**Dependencies**: Webhook infrastructure (`app/services/webhook_stats.py`, `app/services/webhook_circuit_breaker.py`), billing routers (`app/routers/billing.py`; see `app/main.py:326`, `app/routers/billing_ccbill.py`; see `app/main.py:314`), admin auth (`app/auth/policy.py`; `require_admin_or_root` at `:67`, `require_root` at `:63`)
 
 ---
 
@@ -88,33 +88,33 @@ Admin Dashboard (/admin/provider-health)
 
 ### 2.1 Webhook Stats (`app/services/webhook_stats.py`)
 
-Existing functions:
-- `record_delivery_stat(...)`: Records success/failure for a webhook delivery
-- `get_endpoint_stats(...)`: Stats for a specific endpoint
-- `get_global_stats(hours=24)`: Global webhook stats for a time window
+Existing functions (all **verified**):
+- `record_delivery_stat(...)` at `:25` (see `app/services/webhook_stats.py:25`): Records success/failure for a webhook delivery
+- `get_endpoint_stats(...)` at `:75` (see `app/services/webhook_stats.py:75`): Stats for a specific endpoint
+- `get_global_stats(hours=24)` at `:124` (see `app/services/webhook_stats.py:124`): Global webhook stats for a time window
 
-Stats are bucketed by hour (`_hour_bucket(ts)`) and stored in DynamoDB.
+Stats are bucketed by hour (`_hour_bucket(ts)` at `:17`; see `app/services/webhook_stats.py:17`) and stored in DynamoDB.
 
 ### 2.2 Circuit Breaker (`app/services/webhook_circuit_breaker.py`)
 
-Existing functions:
-- `get_circuit_state(endpoint)`: Returns `"closed"`, `"open"`, or `"half_open"`
-- `should_attempt_delivery(endpoint, now)`: Whether delivery should be attempted
-- `record_delivery_result(...)`: Updates circuit state based on result
-- `reset_circuit(endpoint_id, user_sub)`: Manually resets circuit
+Existing functions (all **verified**):
+- `get_circuit_state(endpoint)` at `:20` (see `app/services/webhook_circuit_breaker.py:20`): Returns `"closed"`, `"open"`, or `"half_open"`
+- `should_attempt_delivery(endpoint, now)` at `:25` (see `app/services/webhook_circuit_breaker.py:25`): Whether delivery should be attempted
+- `record_delivery_result(...)` at `:53` (see `app/services/webhook_circuit_breaker.py:53`): Updates circuit state based on result
+- `reset_circuit(endpoint_id, user_sub)` at `:157` (see `app/services/webhook_circuit_breaker.py:157`): Manually resets circuit
 
-### 2.3 Webhook Infrastructure
+### 2.3 Webhook Infrastructure (all **verified** to exist)
 
-- `webhook_retry.py`: Retry queue for failed deliveries
-- `webhook_dlq.py`: Dead-letter queue for permanently failed webhooks
-- `webhook_dispatcher.py`: Core webhook dispatch logic
-- `webhook_service.py`: Webhook registration and management
+- `app/services/webhook_retry.py`: Retry queue for failed deliveries
+- `app/services/webhook_dlq.py`: Dead-letter queue for permanently failed webhooks
+- `app/services/webhook_dispatcher.py`: Core webhook dispatch logic
+- `app/services/webhook_service.py`: Webhook registration and management
 
-### 2.4 Payment Provider Adapters
+### 2.4 Payment Provider Adapters (all **verified** to exist)
 
-- `payment_incident_stripe_adapter.py`: Stripe-specific incident handling
-- `payment_incident_paypal_adapter.py`: PayPal-specific incident handling
-- `payment_incident_ccbill_adapter.py`: CCBill-specific incident handling
+- `app/services/payment_incident_stripe_adapter.py`: Stripe-specific incident handling
+- `app/services/payment_incident_paypal_adapter.py`: PayPal-specific incident handling
+- `app/services/payment_incident_ccbill_adapter.py`: CCBill-specific incident handling
 
 ### 2.5 Gaps
 
@@ -270,15 +270,15 @@ def check_and_alert(provider: str) -> Optional[Dict[str, Any]]:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/v1/admin/provider-health` | `require_admin_session` | All providers status |
-| GET | `/v1/admin/provider-health/{provider}` | `require_admin_session` | Single provider status |
-| GET | `/v1/admin/provider-health/{provider}/timeline` | `require_admin_session` | Health timeline |
-| GET | `/v1/admin/provider-health/{provider}/errors` | `require_admin_session` | Error drilldown |
-| GET | `/v1/admin/provider-health/{provider}/config` | `require_admin_session` | Provider config |
-| PATCH | `/v1/admin/provider-health/{provider}/config` | `require_root_session` | Update config |
-| POST | `/v1/admin/provider-health/{provider}/toggle` | `require_root_session` | Enable/disable |
-| GET | `/v1/admin/provider-health/incidents` | `require_admin_session` | Incident log |
-| GET | `/v1/admin/provider-health/{provider}/uptime` | `require_admin_session` | Uptime report |
+| GET | `/v1/admin/provider-health` | `require_admin_or_root` | All providers status |
+| GET | `/v1/admin/provider-health/{provider}` | `require_admin_or_root` | Single provider status |
+| GET | `/v1/admin/provider-health/{provider}/timeline` | `require_admin_or_root` | Health timeline |
+| GET | `/v1/admin/provider-health/{provider}/errors` | `require_admin_or_root` | Error drilldown |
+| GET | `/v1/admin/provider-health/{provider}/config` | `require_admin_or_root` | Provider config |
+| PATCH | `/v1/admin/provider-health/{provider}/config` | `require_root` | Update config |
+| POST | `/v1/admin/provider-health/{provider}/toggle` | `require_root` | Enable/disable |
+| GET | `/v1/admin/provider-health/incidents` | `require_admin_or_root` | Incident log |
+| GET | `/v1/admin/provider-health/{provider}/uptime` | `require_admin_or_root` | Uptime report |
 
 ### 3.4 Pydantic Models (`app/models.py`)
 
@@ -739,3 +739,22 @@ ProviderHealthDashboard
 7. Uptime report calculates availability percentage over configurable period
 8. Non-admin users receive 403; non-root users cannot toggle or configure
 9. All 14 E2E tests pass in `frontend/e2e/admin-provider-health.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/services/webhook_stats.py` | :17, :25, :75, :124 | `_hour_bucket` at `:17`, `record_delivery_stat` at `:25`, `get_endpoint_stats` at `:75`, `get_global_stats` at `:124` |
+| `app/services/webhook_circuit_breaker.py` | :20, :25, :53, :157 | `get_circuit_state` at `:20`, `should_attempt_delivery` at `:25`, `record_delivery_result` at `:53`, `reset_circuit` at `:157` |
+| `app/services/webhook_retry.py` | — | Retry queue for failed webhook deliveries |
+| `app/services/webhook_dlq.py` | — | Dead-letter queue |
+| `app/services/webhook_dispatcher.py` | — | Core dispatch logic |
+| `app/services/webhook_service.py` | — | Webhook registration and management |
+| `app/services/payment_incident_stripe_adapter.py` | — | Stripe incident adapter |
+| `app/services/payment_incident_paypal_adapter.py` | — | PayPal incident adapter |
+| `app/services/payment_incident_ccbill_adapter.py` | — | CCBill incident adapter |
+| `app/routers/billing.py` | — | Stripe billing router; registered at `app/main.py:326` |
+| `app/routers/billing_ccbill.py` | — | CCBill billing router; registered at `app/main.py:314` |
+| `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |

@@ -1,6 +1,6 @@
 # VOD-017: Video Gallery Hub — YouTube-Style Publishing & Discovery
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-27  
 **Priority**: High  
@@ -1041,6 +1041,17 @@ Sidebar addition in `Sidebar.tsx` and `AppShell.tsx`:
 ---
 
 ## 4. Implementation Plan
+
+<!-- NOTE: The gallery feature is FULLY IMPLEMENTED. Key existing files:
+     - `app/services/video_gallery.py` — `publish_to_gallery()` (line 49), `unpublish_from_gallery()` (line 133), `record_view()` (line 152), `toggle_like()` (line 208), `browse_gallery()` (line 264), `search_gallery()` (line 312), `compute_trending_score()` (line 368), `update_trending_score()` (line 381)
+     - `app/services/video_comments.py` — `add_comment()` (line 22), `list_comments()` (line 70), `delete_comment()` (line 112)
+     - `app/routers/video_listing.py` — Gallery-related models: `GalleryVideoItem` (line 358), `GalleryListOut` (line 376), `GallerySearchOut` (line 382), `PublishToGalleryIn` (line 387), `PublishToGalleryOut` (line 394), `ViewRecordOut` (line 402), `LikeToggleOut` (line 407), `VideoCommentIn` (line 416), `VideoCommentOut` (line 420), `CategoriesOut` (line 433)
+     - DDB tables: VideoViews (line 811), VideoLikes (line 821) in local-ddb-init.py
+     - GSIs on VideoMetadata: ByCategory (line 731), ByGalleryPublished (line 735)
+     - Settings: video_views_table_name (1234), video_likes_table_name (1235)
+     - Frontend: GalleryPage.tsx, GalleryVideoCard.tsx, VideoDetailPage.tsx in frontend/src/pages/gallery/
+     - E2E: frontend/e2e/video-gallery.spec.ts
+-->
 
 ### Step 1: Extend VideoMetadataModel
 

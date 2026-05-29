@@ -14,13 +14,13 @@
 
 ### 1.1 Problem Statement
 
-The existing KYC system (`app/routers/kyc_cases.py`, prefix `/v1/kyc/cases`) is designed exclusively for the platform's own users and admins, authenticated via UI session cookies or admin sessions. There is no API surface for external partners, third-party services, or white-label integrations to submit KYC applications, upload documents, or query verification status programmatically.
+The existing KYC system (see `app/routers/kyc_cases.py:48`, prefix `/v1/kyc/cases`) is designed exclusively for the platform's own users and admins, authenticated via UI session cookies or admin sessions. There is no API surface for external partners, third-party services, or white-label integrations to submit KYC applications, upload documents, or query verification status programmatically.
 
 As the platform grows to serve partners who embed the verification flow in their own applications (e.g., a fintech app that uses our KYC infrastructure as a service), a dedicated third-party API is required. This API must:
 
-1. Authenticate via API keys (not session cookies) -- reusing the existing API key infrastructure (`app/services/api_keys.py`, `app/services/api_key_auth_dependency.py`).
+1. Authenticate via API keys (not session cookies) -- reusing the existing API key infrastructure (see `app/services/api_keys.py`, `app/services/api_key_auth_dependency.py` — both exist).
 2. Support the full KYC lifecycle: create application, upload documents, check status, receive webhook callbacks.
-3. Enforce per-key rate limits using the existing rate limiting infrastructure (`app/services/rate_limit.py`).
+3. Enforce per-key rate limits using the existing rate limiting infrastructure (see `app/services/rate_limit.py` — exists).
 4. Provide idempotency guarantees for all mutation endpoints (partners may retry failed requests).
 5. Offer a sandbox mode for integration testing that returns deterministic mock responses.
 
@@ -130,7 +130,7 @@ KYC Status Change Event          Webhook Delivery Service
 
 The platform has a mature API key system:
 
-- **`app/services/api_keys.py`**: Key creation, hashing (with `API_KEY_PEPPER` from `app/core/settings.py`, line 45), revocation, lookup by hash.
+- **`app/services/api_keys.py`**: Key creation, hashing (with `API_KEY_PEPPER` from `app/core/settings.py:45`), revocation, lookup by hash.
 - **`app/services/api_key_auth_dependency.py`**: FastAPI dependency that extracts and validates API keys from `Authorization: Bearer` headers.
 - **`app/services/api_key_authorization.py`**: Scope-based authorization checks.
 - **`app/services/api_key_capabilities.py`**: Feature-capability mapping for API keys.
@@ -149,13 +149,14 @@ The `KycCaseStore` class provides the core CRUD operations: `create_case`, `get_
 
 ### 3.4 Webhook Pattern
 
-The alert system (`app/services/alerts.py`) supports in-app and email notifications. There is no HTTP webhook delivery mechanism yet. KYC-011 (Webhooks & Notifications) establishes the webhook infrastructure; this ticket adds the partner webhook management API.
+The alert system (see `app/services/alerts.py`) supports in-app and email notifications. The webhook system exists (see `app/services/webhook_service.py`, `app/services/webhook_dispatcher.py`) but is not yet wired to KYC events. KYC-011 (Webhooks & Notifications) establishes the webhook infrastructure; this ticket adds the partner webhook management API.
 
 ---
 
 ## 4. Technical Design
 
 ### 4.1 New Router: `app/routers/kyc_api.py`
+<!-- NOTE: app/routers/kyc_api.py does not exist yet — new implementation required -->
 
 ```python
 router = APIRouter(prefix="/api/v1/kyc", tags=["kyc-api"])
@@ -752,7 +753,7 @@ interface CreateApiKeyDialogProps {
 
 - `GET /applications` returns max 50 items per page with cursor-based pagination
 - Webhook logs paginated with 100 items per page
-- All pagination uses DDB `LastEvaluatedKey` via `app/core/cursor.py`
+- All pagination uses DDB `LastEvaluatedKey` via `app/core/cursor.py` (see `app/core/cursor.py` — exists)
 
 ---
 
@@ -962,3 +963,26 @@ test("233.4 Webhook events must be valid event names", async ({ request }) => {
 | `kyc_api_webhook_url_invalid` | 400 | Webhook URL unreachable or invalid format |
 | `kyc_api_missing_idempotency` | 400 | Idempotency-Key header required for mutations |
 | `kyc_api_sandbox_unavailable` | 400 | Sandbox mode not enabled for this API key |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router | `app/routers/kyc_cases.py` | 48 | Exists |
+| API keys service | `app/services/api_keys.py` | -- | Exists |
+| API key auth dependency | `app/services/api_key_auth_dependency.py` | -- | Exists |
+| API key authorization | `app/services/api_key_authorization.py` | -- | Exists |
+| API key capabilities | `app/services/api_key_capabilities.py` | -- | Exists |
+| API key route scope registry | `app/services/api_key_route_scope_registry.py` | -- | Exists |
+| API key policy enforcement | `app/services/api_key_policy_enforcement.py` | -- | Exists |
+| `API_KEY_PEPPER` | `app/core/settings.py` | 45 | Exists |
+| Rate limiting | `app/services/rate_limit.py` | -- | Exists |
+| KYC case store | `app/services/kyc_cases.py` | 94 | Exists |
+| Cursor pagination | `app/core/cursor.py` | -- | Exists |
+| Webhook system | `app/services/webhook_service.py` | -- | Exists |
+| `app/routers/kyc_api.py` | -- | -- | Does NOT exist — new router required |
+| `app/services/kyc_api_service.py` | -- | -- | Does NOT exist — new service required |
+| `app/services/kyc_webhook_delivery.py` | -- | -- | Does NOT exist — new service required |
+| `app/contracts/kyc_api_contract.py` | -- | -- | Does NOT exist — new contracts required |

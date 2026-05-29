@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: Medium
 **Estimated effort**: 7-9 days
-**Dependencies**: ADS-004 (Ad Serving Engine), ADS-002 (Video Creatives), Broadcast system (`app/routers/broadcast.py`)
+**Dependencies**: ADS-004 (Ad Serving Engine — sibling ticket, not yet implemented), ADS-002 (Video Creatives — sibling ticket, not yet implemented), Broadcast system (`app/routers/broadcast.py` — exists)
+<!-- NOTE: ADS-002 and ADS-004 services/tables do not exist yet. The broadcast router (app/routers/broadcast.py) exists and is the integration point. -->
 
 ---
 
@@ -850,3 +851,14 @@ The `_schedule_ad_break_end()` function uses `asyncio.sleep(duration)` to auto-e
 | 372.2 | Non-subscriber sees pre-roll | Unsubscribed viewer joins; pre_roll != null |
 | 372.3 | Subscriber ignores mid-roll SSE | Subscriber connected; ad_break:start received; client should not show overlay |
 | 372.4 | Expired subscription sees ads | Expire Bob's sub; Bob joins; ad_free=false, pre_roll present |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/routers/broadcast.py` | — | Existing broadcast router — integration point for ad breaks |
+| `app/services/ad_placement.py` | 222 | Existing `record_ad_impression` — reused for broadcast ad impressions |
+| `app/services/subscription_access.py` | 55 | `has_active_subscription` — used for ad-free subscriber checks |
+| `app/services/ad_serving.py` | — | Does not exist yet (ADS-004) — required for broadcast ad selection |

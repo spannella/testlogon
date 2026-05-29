@@ -790,3 +790,18 @@ test.afterAll(async () => {
    the notification stream.
 4. **Breadcrumbs**: If a breadcrumb component is added in the future, the broadcast routes
    should participate: `Home > Broadcast > Live > {sessionId}`.
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `frontend/src/components/layout/Sidebar.tsx` | 26, 60, 132, 217 | **ALREADY EXISTS** | Broadcast sidebar entry with Radio icon, gated by `isBroadcastNavigationEnabled()` |
+| `frontend/src/App.tsx` | 56, 166 | **ALREADY EXISTS** | `/broadcast` route with feature flag gate |
+| `frontend/src/pages/broadcast/BroadcastPage.tsx` | — | **ALREADY EXISTS** | Main broadcast page |
+| `frontend/src/pages/broadcast/LivePlayer.tsx` | — | **ALREADY EXISTS** | Live player component |
+| `frontend/src/lib/featureFlags.ts` | — | EXISTS | `isBroadcastNavigationEnabled` feature flag |
+
+### Key Discrepancies
+- This ticket describes adding broadcast to sidebar/nav, but the broadcast sidebar entry, route, and feature flag gate ALREADY EXIST in the codebase

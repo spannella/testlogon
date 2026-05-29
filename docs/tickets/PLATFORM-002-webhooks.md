@@ -971,20 +971,20 @@ webhook_deliveries=ddb.Table(S.webhook_deliveries_table_name),
 
 | Reference | File | Line(s) | Status |
 |-----------|------|---------|--------|
-| `alerts_webhook_url` + 6 related settings | `app/core/settings.py` | 193-199 | VERIFIED |
+| `alerts_webhook_url` setting | `app/core/settings.py` | 203 | VERIFIED |
 | `can_send_alert_channel()` | `app/services/rate_limit.py` | 321 | VERIFIED |
-| `ALERT_EVENT_TYPES` | `app/services/alerts.py` | 46 | VERIFIED |
-| `write_alert()` | `app/services/alerts.py` | 265 | VERIFIED |
-| `send_alert_webhook()` | `app/services/alerts.py` | 397 | VERIFIED |
-| `_post_webhook_with_retry()` | `app/services/alerts.py` | 362 | VERIFIED (3 retries with exponential backoff) |
+| `ALERT_EVENT_TYPES` | `app/services/alerts.py` | 133 | VERIFIED |
+| `write_alert()` | `app/services/alerts.py` | 355 | VERIFIED |
+| `send_alert_webhook()` | `app/services/alerts.py` | 600 | VERIFIED |
+| `_post_webhook_with_retry()` | `app/services/alerts.py` | 565 | VERIFIED (3 retries with exponential backoff) |
 | `kms_encrypt()` | `app/core/crypto.py` | 16 | VERIFIED |
 | `kms_decrypt()` | `app/core/crypto.py` | 22 | VERIFIED |
 | `sha256_str()` | `app/core/crypto.py` | 13 | VERIFIED |
-| `start_scheduled_messages_task()` | `app/routers/messaging.py` | 12020 | VERIFIED |
-| `start_broadcast_scheduler_task()` | `app/services/broadcast_scheduler.py` | 68 | VERIFIED (ticket originally said `run_broadcast_scheduler_loop()` which is the internal loop, not the startup function) |
-| `run_broadcast_scheduler_loop()` | `app/services/broadcast_scheduler.py` | 14 | VERIFIED (internal async loop) |
-| `newsfeed_startup` | `app/routers/newsfeed.py` | 2039 | VERIFIED (registered at main.py:323; ticket said `run_scheduler_loop()` which is the sync scheduler in newsfeed_scheduler.py:369) |
-| Background task registration in main.py | `app/main.py` | 323-328 | VERIFIED |
+| `start_scheduled_messages_task()` | `app/routers/messaging.py` | 12594 | VERIFIED |
+| `start_broadcast_scheduler_task()` | `app/services/broadcast_scheduler.py` | 84 | VERIFIED |
+| `run_broadcast_scheduler_loop()` | `app/services/broadcast_scheduler.py` | 16 | VERIFIED (internal async loop) |
+| `newsfeed_startup` | `app/routers/newsfeed.py` | 2155 | VERIFIED (registered at main.py:374) |
+| Background task registration in main.py | `app/main.py` | 374-378 | VERIFIED |
 | `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED |
 | `require_root_session` | N/A | N/A | CORRECTED: does not exist; use `require_ui_session` + role check |
 | `get_authenticated_user` | `app/auth/deps.py` | 184 | VERIFIED |

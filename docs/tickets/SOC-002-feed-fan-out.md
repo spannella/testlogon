@@ -1425,3 +1425,50 @@ Author          Backend           DDB (app_single_table)       Background Worker
 - **SOC-003**: User search/discovery (may surface popular creators with many followers)
 - **SOC-004**: Notification expansion (notifies followers of new posts)
 - **SOC-005**: Public profile page (shows post grid from author's posts)
+
+---
+
+## Codebase References
+
+### Backend — Services
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `newsfeed_fanout.py` (173 lines) | `app/services/newsfeed_fanout.py` | whole file | **Exists** — already implements fan-out on write |
+| `fan_out_post_to_followers()` | `app/services/newsfeed_fanout.py` | 43 | **Verified** — called from `newsfeed.py:3314-3315` on post create |
+| `_get_all_follower_ids()` | `app/services/newsfeed_fanout.py` | 21 | **Verified** — queries GSI5 `FOLLOWERS#{user_id}`, capped at `MAX_SYNC_FOLLOWERS` |
+| `fan_out_delete_post()` | `app/services/newsfeed_fanout.py` | 78 | **Verified** — deletes FEEDREF items for deleted posts |
+| `social.py` (follow graph) | `app/services/social.py` | 399 lines | **Exists** — `get_followers()` at line 142 provides paginated follower list |
+
+### Backend — Newsfeed Router (`app/routers/newsfeed.py`)
+
+| Reference | Line(s) | Status |
+|-----------|---------|--------|
+| `_write_feed_ref_for_published_post()` | 1818 | **Verified** (ticket says line 1735 — **INCORRECT**, actual is 1818) |
+| Feed query `GET /feed` | 4192 | **Verified** — queries GSI1 with `FEED#{user_id}` at line 4267 (ticket says "around line 4040" — **INCORRECT**, actual is 4192/4267) |
+| Fan-out call on post create | 3314-3315 | **Verified** — `fan_out_post_to_followers(author_id=user_id, post_id=post_id, created_at=created_at)` |
+| Repost FEEDREF writes | 5303-5306 | **Verified** — reposts write own FEEDREF at line 5303 |
+| Repost fan-out to followers | 5324-5344 | **Verified** — iterates `_get_all_follower_ids()` and writes `FEEDREF#{fid}#REPOST#{repost_id}` |
+| `POST_AUTHOR#{user_id}` (GSI2) | 3248 | **Verified** — author index for per-user post queries |
+
+### DynamoDB (`scripts/local-ddb-init.py`)
+
+| Reference | Line | Status |
+|-----------|------|--------|
+| `app_single_table` definition | 222 | **Verified** |
+| GSI1 (`GSI1PK` / `GSI1SK`) — feed refs | 227 | **Verified** |
+| GSI2 (`GSI2PK` / `GSI2SK`) — post author | 228 | **Verified** |
+| GSI5 (`GSI5PK` / `GSI5SK`) — followers | 231 | **Verified** |
+
+### Frontend
+
+| Reference | File | Status |
+|-----------|------|--------|
+| Feed query | `frontend/src/api/endpoints/newsfeed.ts` | **Exists** — calls `GET /feed` |
+| Feed page | `frontend/src/pages/feed/FeedPage.tsx` | **Exists** |
+
+### Corrections
+
+1. **`_write_feed_ref_for_published_post` line**: Ticket says line 1735, actual is line 1818.
+2. **Feed query line**: Ticket says "around line 4040", actual `GET /feed` endpoint is at line 4192, with the GSI1 query at line 4267.
+3. **Fan-out is ALREADY IMPLEMENTED**: `app/services/newsfeed_fanout.py` (173 lines) already provides `fan_out_post_to_followers()`, `_get_all_follower_ids()`, and `fan_out_delete_post()`. The newsfeed router already calls the fan-out service at post creation (line 3314) and repost creation (line 5324). The ticket's scope may need to be re-evaluated to focus on remaining gaps (e.g., async fan-out for large follower counts, batch write optimization, fan-out monitoring/retries).

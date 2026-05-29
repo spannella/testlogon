@@ -1654,3 +1654,52 @@ Estimated time for 10K users: ~200 seconds (3.3 minutes).
 - **SOC-002**: Feed fan-out (discovery drives new follows which drive feed content)
 - **SOC-004**: Notification expansion (new follower notifications drive re-engagement)
 - **SOC-005**: Public profile page (discovery links to profile pages)
+
+---
+
+## Codebase References
+
+### Backend — Services
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `profile_discoverability.py` (80 lines) | `app/services/profile_discoverability.py` | whole file | **Exists** |
+| `DiscoverabilityState` enum | `app/services/profile_discoverability.py` | 10 | **Verified** — `ACTIVE`, `DEACTIVATED`, `DELETED` |
+| `normalize_discoverability_state()` | `app/services/profile_discoverability.py` | 27 | **Verified** |
+| `resolve_discoverability_state()` | `app/services/profile_discoverability.py` | 35 | **Verified** |
+| `get_profile_discoverability_state()` | `app/services/profile_discoverability.py` | 46 | **Verified** |
+| `set_profile_discoverability_state()` | `app/services/profile_discoverability.py` | 62 | **Verified** |
+| `PROFILE_FIELDS` tuple | `app/services/profile.py` | 16 | **Verified** |
+| `social.py` (follow graph) | `app/services/social.py` | 399 lines | **Exists** — `get_follow_counts()` at line 189, `get_mutual_followers()` at line 225 |
+
+### Backend — Messaging Router (search)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `GET /contacts/search` endpoint | `app/routers/messaging.py` | 5674 | **Verified** (ticket says line 5544 — **INCORRECT**, actual is 5674) |
+| `build_prefix_tokens()` | `app/routers/messaging.py` | 2614 | **Verified** (ticket says line 2573 — **INCORRECT**, actual is 2614) |
+| `build_prefix_tokens()` called at sync | `app/routers/messaging.py` | 1535 | **Verified** (ticket says line 1534 — close, actual is 1535) |
+
+### DynamoDB (`scripts/local-ddb-init.py`)
+
+| Reference | Line | Status |
+|-----------|------|--------|
+| `UserSearch` table | 265 | **Verified** — PK = `token` |
+| `profiles` table | 61 | **Verified** — PK = `user_sub` |
+| `app_single_table` (follow data) | 222 | **Verified** |
+| GSI5 (followers reverse index) | 231 | **Verified** |
+
+### Frontend
+
+| Reference | File | Status |
+|-----------|------|--------|
+| `PublicUserProfilePage.tsx` | `frontend/src/pages/profile/PublicUserProfilePage.tsx` | **Exists** (340 lines) |
+| Route `/u/:identifier` | `frontend/src/App.tsx:124` | **Verified** |
+
+### Corrections
+
+1. **`GET /contacts/search` line**: Ticket says line 5544, actual is line 5674 in `messaging.py`.
+2. **`build_prefix_tokens()` line**: Ticket says line 2573, actual is line 2614.
+3. **Discovery endpoints**: The ticket proposes `GET /ui/discover/search`, `GET /ui/discover/suggested`, `GET /ui/discover/trending`, `GET /ui/discover/profile/{user_id}`. None of these exist yet — they are new implementation.
+4. **`TrendingCreators` DDB table**: Not defined in `local-ddb-init.py` — new table required if this design is adopted.
+5. **Frontend discovery page**: No `DiscoverPage.tsx` or similar exists yet — new implementation required.

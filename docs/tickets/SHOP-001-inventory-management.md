@@ -884,16 +884,16 @@ Remove the stock check from `purchase_cart()`. All items revert to unlimited beh
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| CatalogItemOut has no stock fields | `app/models.py` | 538-549 | VERIFIED |
-| CatalogItemCreateIn has no stock fields | `app/models.py` | 519-526 | VERIFIED |
-| CatalogItemPatchIn has no stock fields | `app/models.py` | 529-535 | VERIFIED |
-| create_item stores no stock_count | `app/routers/catalog.py` | 316-331 | VERIFIED |
-| update_item has no stock branch | `app/routers/catalog.py` | 430-465 | VERIFIED |
-| Catalog router is 664 lines with no inventory ops | `app/routers/catalog.py` | 1-664 | VERIFIED |
-| Catalog table definition | `scripts/local-ddb-init.py` | 68 | VERIFIED |
+| CatalogItemOut has no stock fields | `app/models.py` | 573+ | VERIFIED (was 538; line drift) |
+| CatalogItemCreateIn has no stock fields | `app/models.py` | 530+ | VERIFIED (was 519; line drift) |
+| CatalogItemPatchIn has no stock fields | `app/models.py` | 542+ | VERIFIED (was 529; line drift) |
+| create_item stores no stock_count | `app/routers/catalog.py` | 333+ | VERIFIED (was 316; line drift) |
+| update_item has no stock branch | `app/routers/catalog.py` | 492+ | VERIFIED (was 430; line drift) |
+| Catalog router (no inventory ops) | `app/routers/catalog.py` | 1-933 | VERIFIED (was 664 lines; now 933 — router has grown) |
+| Catalog table definition | `scripts/local-ddb-init.py` | 73 | VERIFIED (was 68; line drift) |
 | Catalog table handle | `app/core/tables.py` | 35, 133 | VERIFIED |
-| Catalog table setting | `app/core/settings.py` | 712 | VERIFIED |
-| purchase_cart has no stock check | `app/services/shoppingcart.py` | 428-527 | VERIFIED |
-| ItemEditor has no stock input | `frontend/src/pages/shop/ItemEditor.tsx` | 54-60 | VERIFIED |
-| CatalogItem type has no stock field | `frontend/src/api/types.ts` | 1719-1731 | VERIFIED |
-| write_alert function | `app/services/alerts.py` | 265-301 | VERIFIED |
+| Catalog table setting | `app/core/settings.py` | 749 | VERIFIED (was 712; line drift) |
+| purchase_cart has no stock check | `app/services/shoppingcart.py` | 469+ | VERIFIED (was 428; line drift) |
+| ItemEditor has no stock input | `frontend/src/pages/shop/ItemEditor.tsx` | 352 lines total | VERIFIED |
+| CatalogItem type has no stock field | `frontend/src/api/types.ts` | 1833+ | VERIFIED (was 1719; line drift) |
+| write_alert function | `app/services/alerts.py` | 355+ | VERIFIED (was 265; line drift — file grew from ~680 to 899 lines) |

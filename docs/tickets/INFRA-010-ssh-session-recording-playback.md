@@ -13,7 +13,7 @@
 
 ### The Gap
 
-The SSH terminal (`app/routers/browser_ssh_terminal.py`, 1,126 lines) provides a fully functional browser-based SSH bridge via WebSocket. However, no record of terminal sessions is kept. Once the WebSocket closes:
+The SSH terminal (`app/routers/browser_ssh_terminal.py`, 1,125 lines — see `app/routers/browser_ssh_terminal.py:1`) provides a fully functional browser-based SSH bridge via WebSocket. However, no record of terminal sessions is kept. Once the WebSocket closes:
 
 1. All terminal output is lost — there is no recording or transcript
 2. There is no way to review what commands were executed in past sessions
@@ -21,7 +21,7 @@ The SSH terminal (`app/routers/browser_ssh_terminal.py`, 1,126 lines) provides a
 4. Users cannot replay sessions for training, debugging, or documentation
 5. Admins have no visibility into what users are doing on managed infrastructure
 
-The platform already has S3 storage via moto (`app/core/dev_s3.py`) for file uploads and media, and a file manager service (`app/services/filemanager.py`). Session recordings can be stored as files in S3 using the asciicast format (compatible with the asciinema player), which is a simple JSON-based format for terminal recordings.
+The platform already has S3 storage via moto (see `app/core/dev_s3.py`) for file uploads and media, and a file manager service (see `app/services/filemanager.py`). Session recordings can be stored as files in S3 using the asciicast format (compatible with the asciinema player), which is a simple JSON-based format for terminal recordings.
 
 ### Why This Matters
 
@@ -81,7 +81,7 @@ Server sends:
 - `status`: Connection status updates
 - `error`: Error messages
 
-The `ParamikoSshBridge` class (line ~65) has a `_read_loop()` thread that reads from the SSH channel and buffers output. The WebSocket handler forwards this output to the browser.
+The `ParamikoSshBridge` class (see `app/routers/browser_ssh_terminal.py:60`) has a `_read_loop()` thread that reads from the SSH channel and buffers output. The WebSocket handler forwards this output to the browser.
 
 **Recording hook point**: The `output` messages in the WebSocket handler are the data source for recordings. Each `output` payload contains terminal data that should be captured with a timestamp.
 
@@ -810,3 +810,36 @@ curl -s http://localhost:8000/ui/remote/recordings/rec_4f8a1b2c/stream \
 8. Recording does not impact SSH session performance (events buffered in memory).
 9. All recording access is audit-logged.
 10. Host-level `record_sessions` flag controls recording per host.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `ParamikoSshBridge` class | `app/routers/browser_ssh_terminal.py` | 60 | VERIFIED (1125 lines total) |
+| SSH terminal router registration | `app/main.py` | 404 | VERIFIED |
+| `browser_ssh_terminal_enabled` setting | `app/core/settings.py` | 114 | VERIFIED |
+| S3 mock via moto | `app/core/dev_s3.py` | exists | VERIFIED |
+| File manager service | `app/services/filemanager.py` | exists | VERIFIED |
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+<!-- NOTE: INFRA-001 (Host Inventory) is a dependency but does not exist yet. The host's `record_sessions` flag, remote_hosts.py, and all recording infrastructure are new. -->
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `app/services/remote_hosts.py` (INFRA-001) | `app/services/` | NOT FOUND -- new implementation required |
+| Host `record_sessions` flag | `app/services/remote_hosts.py` | NOT FOUND -- part of INFRA-001 |
+| `ssh_recordings` DDB table | `scripts/local-ddb-init.py` | NOT FOUND -- new table required |
+| `app/routers/ssh_recordings.py` | `app/routers/` | NOT FOUND -- new router required |
+| `app/services/ssh_session_recorder.py` | `app/services/` | NOT FOUND -- new service required |
+| `SessionRecorder` class | n/a | NOT FOUND -- new implementation required |
+| Recording router registration | `app/main.py` | NOT FOUND -- needs `app.include_router()` |
+| Recording settings | `app/core/settings.py` | NOT FOUND -- new settings required |
+| `frontend/src/pages/remote/SessionRecordingsPage.tsx` | `frontend/src/pages/remote/` | NOT FOUND -- new page required |

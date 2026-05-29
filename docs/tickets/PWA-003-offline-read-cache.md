@@ -1647,3 +1647,24 @@ cleanup mitigates this, but users on shared devices should use private browsing 
 | Infinite query page caching complexity | Cache each page independently by URL; React Query reassembles pages |
 | IndexedDB version upgrade in future (PWA-004) | Use `oldVersion` check in `onupgradeneeded` to support incremental migrations |
 | Cache size grows unbounded | `evictOldestForEndpoint` enforces per-endpoint max entries; `getCacheStats` for monitoring |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `offlineCache.ts` | `frontend/src/lib/offlineCache.ts` | 306 lines | **ALREADY EXISTS** — IndexedDB wrapper (open, get, set, clear, evict, stats) |
+| `offlineCacheConfig.ts` | `frontend/src/lib/offlineCacheConfig.ts` | 63 lines | **ALREADY EXISTS** — per-endpoint TTL and max-entries configuration |
+| `withOfflineCache.ts` | `frontend/src/lib/withOfflineCache.ts` | 99 lines | **ALREADY EXISTS** — React Query wrapper factory |
+| `StalenessIndicator` | `frontend/src/components/shared/StalenessIndicator.tsx` | 52 lines | **ALREADY EXISTS** — "Cached X ago" badge |
+| `ConversationView.tsx` | `frontend/src/pages/messages/ConversationView.tsx` | 1461 lines | **Exists** |
+| `ConversationList.tsx` | `frontend/src/pages/messages/ConversationList.tsx` | 356 lines | **Exists** |
+| `FeedPage.tsx` | `frontend/src/pages/feed/FeedPage.tsx` | 18 lines | **Exists** |
+| `offlineStore` | `frontend/src/stores/offlineStore.ts` | 213 lines | **Exists** |
+| `OfflineBanner` | `frontend/src/components/shared/OfflineBanner.tsx` | 45 lines | **Exists** |
+| API client | `frontend/src/api/client.ts` | 309 lines | **Exists** |
+
+### Key Correction
+
+**This ticket appears to be ALREADY IMPLEMENTED.** All four proposed new files (`offlineCache.ts`, `offlineCacheConfig.ts`, `withOfflineCache.ts`, `StalenessIndicator.tsx`) exist with the described functionality.

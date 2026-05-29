@@ -1685,3 +1685,27 @@ python3 scripts/local-keycloak-saml-config.py
 3. Attribute mapping editor
 4. Mock SAML IdP for testing
 5. E2E test suite
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | Status |
+|-----|------|---------|--------|
+| `get_authenticated_user` | `app/auth/deps.py` | 184 | VERIFIED |
+| `create_real_session` | `app/services/sessions.py` | 403 | VERIFIED |
+| `mint_access_token` | `app/services/sessions.py` | 168 | VERIFIED |
+| `set_session_cookies` | `app/services/sessions.py` | 78 | VERIFIED |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED |
+| `_adaptive_login_policy` | `app/routers/ui_session.py` | 38 | VERIFIED |
+| Session start endpoint | `app/routers/ui_session.py` | 63 | VERIFIED |
+| Cognito settings | `app/core/settings.py` | 20-24 | VERIFIED |
+| `_cognito_enabled` | `app/auth/deps.py` | 25 | VERIFIED |
+| `Role` enum | `app/auth/roles.py` | 8 | VERIFIED |
+| `enforce_root_role_invariant` | `app/auth/root_invariant.py` | 22 | VERIFIED |
+| SSO SAML router | `app/routers/sso_saml.py` | exists, registered at `app/main.py:173` | VERIFIED |
+| SAML metadata service | `app/services/sso_saml_metadata.py` | exists | VERIFIED |
+| SAML provider service | `app/services/sso_saml_provider.py` | exists | VERIFIED |
+| SAML roles service | `app/services/sso_saml_roles.py` | exists | VERIFIED |
+| SAML SP service | `app/services/sso_saml_sp.py` | exists | VERIFIED |
+| SAML JIT provisioning | `app/services/sso_saml_jit.py` | exists | VERIFIED |

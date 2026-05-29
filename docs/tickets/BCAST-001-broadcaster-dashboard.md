@@ -13,6 +13,13 @@ minting playback URLs. However, there is currently **zero frontend code** refere
 broadcast endpoints -- the only UI is the admin-gated dev-tools page at
 `/broadcast-devtools` which is limited to ingest health checks.
 
+<!-- NOTE: This claim is NOW OUTDATED. Extensive frontend broadcast code exists:
+  - `frontend/src/pages/broadcast/BroadcastPage.tsx` (main broadcast page, 20+ components)
+  - `frontend/src/api/endpoints/broadcast.ts` and 7 other broadcast endpoint files
+  - Route at `App.tsx:56,166`: `/broadcast` gated by `isBroadcastNavigationEnabled()`
+  - Components: BroadcastChat, LivePlayer, TipGoalBar, ProductShelf, QA panels, etc.
+-->
+
 ### User Stories
 
 1. **As a broadcaster**, I want to create an encoding profile (name, region, rendition
@@ -66,6 +73,8 @@ layer has `list_sessions_by_status` and `list_sessions_by_creator` functions, bu
 not exposed via the router. The implementation plan includes adding a list endpoint (or the
 frontend can poll individual sessions by ID stored in local state until a list endpoint is
 added).
+
+<!-- NOTE: This claim is NOW OUTDATED. `GET /broadcast/sessions` exists at `app/routers/broadcast.py:286` (response_model=BroadcastSessionListOut). The endpoint is implemented and calls the store functions. Additionally, `GET /broadcast/sessions/scheduled` exists at line 300. -->
 
 ### State Machine (`app/services/broadcast_state_machine.py`)
 
@@ -318,19 +327,26 @@ const STATUS_COLORS: Record<BroadcastSessionStatus, string> = {
 ## 4. Implementation Plan
 
 ### 4.1 New Files to Create
+<!-- NOTE: Many of these files ALREADY EXIST under different paths:
+  - `frontend/src/api/endpoints/broadcast.ts` EXISTS (+ 7 other broadcast endpoint files)
+  - `frontend/src/pages/broadcast/BroadcastPage.tsx` EXISTS (NOT `pages/broadcaster/`)
+  - The route is at `/broadcast` not `/broadcaster` (App.tsx:166)
+  - Over 20 broadcast UI components already exist in `frontend/src/pages/broadcast/`
+  Ticket uses `pages/broadcaster/` but actual codebase uses `pages/broadcast/`.
+-->
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/api/endpoints/broadcast.ts` | API endpoint wrappers |
-| `frontend/src/pages/broadcaster/BroadcasterPage.tsx` | Main page component |
-| `frontend/src/pages/broadcaster/SessionCard.tsx` | Session card in grid |
-| `frontend/src/pages/broadcaster/SessionDetailDialog.tsx` | Full session detail |
-| `frontend/src/pages/broadcaster/CreateSessionDialog.tsx` | Create session form |
-| `frontend/src/pages/broadcaster/CreateProfileDialog.tsx` | Create profile form |
-| `frontend/src/pages/broadcaster/ProfileCard.tsx` | Profile card in grid |
-| `frontend/src/pages/broadcaster/AuditLog.tsx` | Audit log table (admin) |
-| `frontend/src/pages/broadcaster/constants.ts` | Status colors, labels |
-| `frontend/e2e/broadcaster.spec.ts` | E2E test suite |
+| File | Purpose | Status |
+|------|---------|--------|
+| `frontend/src/api/endpoints/broadcast.ts` | API endpoint wrappers | **ALREADY EXISTS** |
+| `frontend/src/pages/broadcaster/BroadcasterPage.tsx` | Main page component | **EXISTS** as `pages/broadcast/BroadcastPage.tsx` |
+| `frontend/src/pages/broadcaster/SessionCard.tsx` | Session card in grid | Check if exists in BroadcastPage |
+| `frontend/src/pages/broadcaster/SessionDetailDialog.tsx` | Full session detail | Check if exists in BroadcastPage |
+| `frontend/src/pages/broadcaster/CreateSessionDialog.tsx` | Create session form | Check if exists in BroadcastPage |
+| `frontend/src/pages/broadcaster/CreateProfileDialog.tsx` | Create profile form | Check if exists in BroadcastPage |
+| `frontend/src/pages/broadcaster/ProfileCard.tsx` | Profile card in grid | Check if exists in BroadcastPage |
+| `frontend/src/pages/broadcaster/AuditLog.tsx` | Audit log table (admin) | Check if exists in BroadcastPage |
+| `frontend/src/pages/broadcaster/constants.ts` | Status colors, labels | Check if exists in BroadcastPage |
+| `frontend/e2e/broadcaster.spec.ts` | E2E test suite | Verify |
 
 ### 4.2 API Endpoint Wrappers (`frontend/src/api/endpoints/broadcast.ts`)
 
@@ -476,6 +492,7 @@ Similarly, add a `GET /broadcast/profiles` list endpoint using the profiles tabl
 
 The Vite dev server proxy does NOT currently proxy `/broadcast` to the backend. Add to
 `frontend/vite.config.ts`:
+<!-- NOTE: This is NOW OUTDATED. The `/broadcast` proxy ALREADY EXISTS in vite.config.ts at line 73. -->
 
 ```typescript
 proxy: {
@@ -488,6 +505,11 @@ This is required because the broadcast endpoints do not use the `/ui` or `/api` 
 that are already proxied.
 
 ### 4.5 Route Registration (`frontend/src/App.tsx`)
+<!-- NOTE: This route ALREADY EXISTS at App.tsx:56,166 as:
+  `const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));`
+  `<Route path="broadcast" element={<BroadcastPage />} />`
+  Route is `/broadcast` not `/broadcaster`, gated by `isBroadcastNavigationEnabled()`.
+-->
 
 ```typescript
 // Add lazy import
@@ -751,3 +773,35 @@ test.afterAll(async ({ request }) => {
 | DRM credentials display | Never show raw secrets; only show ARN references (already enforced by `enforce_secret_reference_only`) |
 | Admin-only actions in non-admin sessions | Disable start/stop/delete buttons when `role !== "admin" && role !== "root"` |
 | Large session lists | Pagination support via `has_more` + cursor (future enhancement) |
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/routers/broadcast.py` | 265-505+ | EXISTS | All broadcast endpoints including `GET /sessions` at line 286 |
+| `app/models_broadcast.py` | — | EXISTS | Pydantic models for broadcast |
+| `app/services/broadcast_store.py` | 394, 414 | EXISTS | `list_sessions_by_status`, `list_sessions_by_creator` |
+| `app/services/broadcast_state_machine.py` | — | EXISTS | Status transition validation |
+| `app/services/broadcast_orchestrator.py` | — | EXISTS | Start/stop with provider integration |
+| `app/services/broadcast_playback.py` | — | EXISTS | Playback URL minting |
+| `app/services/broadcast_audit.py` | — | EXISTS | Audit log query/record |
+| `app/services/broadcast_cloudfront.py` | — | EXISTS | CloudFront token validation |
+| `app/routers/broadcast_devtools.py` | — | EXISTS | Dev-only debug endpoint |
+| `frontend/src/api/endpoints/broadcast.ts` | — | **ALREADY EXISTS** | Plus 7 more broadcast endpoint files |
+| `frontend/src/pages/broadcast/BroadcastPage.tsx` | — | **ALREADY EXISTS** | Main broadcast page (NOT `pages/broadcaster/`) |
+| `frontend/src/pages/broadcast/` | — | **ALREADY EXISTS** | 20+ component files (Chat, LivePlayer, Tips, QA, etc.) |
+| `frontend/src/App.tsx` | 56, 166 | **ALREADY EXISTS** | Route at `/broadcast` gated by feature flag |
+| `frontend/vite.config.ts` | 73 | **ALREADY EXISTS** | `/broadcast` proxy to backend |
+| `app/main.py` | 396-398 | EXISTS | `broadcast_router`, `broadcast_clips_router`, `broadcast_devtools_router` registered |
+| `scripts/local-ddb-init.py` | 513-578 | EXISTS | BroadcastProfiles, BroadcastSessions, BroadcastOutputs, etc. tables |
+| `app/core/settings.py` | 452-453 | EXISTS | `broadcast_profiles_table_name`, `broadcast_sessions_table_name` |
+| `app/core/tables.py` | 39-43 | EXISTS | Broadcast table handles |
+
+### Key Discrepancies
+- Ticket says "zero frontend code" but broadcast frontend is fully built (20+ components, 8 endpoint files)
+- Ticket says "no list endpoint" but `GET /broadcast/sessions` exists at `broadcast.py:286`
+- Ticket uses path `pages/broadcaster/` but codebase uses `pages/broadcast/`
+- Ticket proposes route `/broadcaster` but codebase uses `/broadcast`
+- Vite proxy for `/broadcast` already exists

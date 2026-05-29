@@ -1,7 +1,7 @@
 # VOD-005: Upload Transcode Outputs to S3 and Generate Manifest URLs
 
 **Ticket**: VOD-005
-**Status**: Design
+**Status**: Implemented
 **Author**: Platform Engineering
 **Date**: 2026-05-24
 **Dependencies**: VOD-003 (Transcode Job Queue), VOD-002 (Upload Endpoint)
@@ -727,13 +727,15 @@ def ensure_vod_lifecycle_policy(*, s3_client, bucket: str, default_retention_day
 
 ## 4. Implementation Plan
 
-### 4.1 New Files
+### 4.1 Files
 
-| File | Purpose |
-|------|---------|
-| `app/services/vod_s3_upload.py` | Core upload logic: `upload_vod_outputs()`, `upload_segment()`, `abort_incomplete_uploads()`, content-type/cache inference, lifecycle policy |
-| `app/services/vod_thumbnail.py` | Thumbnail extraction: `extract_thumbnails()`, `extract_sprite_sheet()` |
-| `app/services/vod_playback_url.py` | URL generation: `mint_vod_playback_url()`, `mint_vod_cloudfront_playback_url()`, `mint_vod_presigned_playback_url()`, `mint_vod_dev_playback_url()` |
+<!-- NOTE: All files listed below ALREADY EXIST (with slightly different names than the spec proposed). -->
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `app/services/vod_s3_uploader.py` | Core upload logic: `upload_segment()` (line 96), `upload_transcode_outputs()` (line 142), `abort_incomplete_uploads()` (line 125), `ensure_vod_lifecycle_policy()` (line 292) | **Already exists** (not `vod_s3_upload.py`) |
+| `app/services/vod_thumbnail_extractor.py` | Thumbnail extraction: `extract_thumbnails()` (line 25), `upload_thumbnails()` (line 98) | **Already exists** (not `vod_thumbnail.py`) |
+| `app/services/vod_playback_url.py` | URL generation: `mint_vod_playback_url()` (line 40), `validate_vod_playback_token()` (line 65), `_mint_dev_url()` (line 118), `_mint_cloudfront_url()` (line 138), `_mint_presigned_url()` (line 171) | **Already exists** |
 | `tests/test_vod_s3_upload.py` | Unit tests for upload logic |
 | `tests/test_vod_thumbnail.py` | Unit tests for thumbnail extraction |
 | `tests/test_vod_playback_url.py` | Unit tests for URL signing |
@@ -744,8 +746,8 @@ def ensure_vod_lifecycle_policy(*, s3_client, bucket: str, default_retention_day
 |------|--------|
 | `app/core/settings.py` | Add VOD-specific settings (see 4.3) |
 | `app/core/dev_s3.py` / `app/main.py` | Add `vod-output` to `start_s3_mock()` bucket list |
-| `app/services/transcode_worker.py` | Integrate `upload_vod_outputs()` and `extract_thumbnails()` into `execute_transcode_job()` step 3-4 |
-| `app/services/transcode_job_store.py` | Add `complete_job_with_outputs()` function |
+| `app/services/transcode_worker.py` | **Already integrated**: calls upload after transcode at line ~165. |
+| `app/services/transcode_job_store.py` | `complete_job_with_outputs()` **already exists** at line 181. |
 | `scripts/local-ddb-init.py` | No changes (job table from VOD-003 is sufficient) |
 
 ### 4.3 Settings Additions
@@ -1063,3 +1065,26 @@ Upload time at 500 Mbps network: ~8 minutes. With 4-thread multipart: ~2 minutes
 | Network timeout | Yes | Retry file upload from scratch |
 | Disk full (scratch space) | Yes | Clean scratch, retry job on next poll |
 | `ConditionalCheckFailedException` | No | Another worker completed/cancelled; abandon |
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/vod_s3_uploader.py` | 96 | `upload_segment()` |
+| `app/services/vod_s3_uploader.py` | 125 | `abort_incomplete_uploads()` |
+| `app/services/vod_s3_uploader.py` | 142 | `upload_transcode_outputs()` |
+| `app/services/vod_s3_uploader.py` | 292 | `ensure_vod_lifecycle_policy()` |
+| `app/services/vod_thumbnail_extractor.py` | 25 | `extract_thumbnails()` |
+| `app/services/vod_thumbnail_extractor.py` | 98 | `upload_thumbnails()` |
+| `app/services/vod_playback_url.py` | 40 | `mint_vod_playback_url()` |
+| `app/services/vod_playback_url.py` | 65 | `validate_vod_playback_token()` |
+| `app/services/vod_playback_url.py` | 118 | `_mint_dev_url()` |
+| `app/services/vod_playback_url.py` | 138 | `_mint_cloudfront_url()` |
+| `app/services/vod_playback_url.py` | 171 | `_mint_presigned_url()` |
+| `app/services/transcode_job_store.py` | 181 | `complete_job_with_outputs()` |
+| `app/services/transcode_worker.py` | 165 | Upload progress callback integration |
+| `app/core/aws_clients.py` | 114 | `s3_client()` factory |
+| `app/core/settings.py` | 1094 | `vod_output_bucket` setting |
+| `app/main.py` | 369 | `vod_output_bucket` in dev bucket list |
+| `app/services/broadcast_playback.py` | -- | Reference pattern for local playback URLs |
+| `app/services/broadcast_cloudfront.py` | -- | Reference pattern for CloudFront signed URLs |

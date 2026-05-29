@@ -90,6 +90,7 @@ if auth_type == "private_key":
 ```
 
 ### 2.2 KMS Encryption (`app/core/crypto.py`)
+<!-- VERIFIED: kms_encrypt at app/core/crypto.py:16, kms_decrypt at :22; uses S.kms_key_id at :17 -->
 
 ```python
 def kms_encrypt(plaintext: str) -> str:
@@ -123,6 +124,7 @@ The `remote_hosts` table stores host records with fields for SSH key association
 ## 3. Technical Design
 
 ### 3.1 DynamoDB Table: `ssh_keys`
+<!-- NOTE: ssh_keys table does not exist yet in scripts/local-ddb-init.py — new table required -->
 
 ```python
 # scripts/local-ddb-init.py
@@ -172,6 +174,7 @@ ssh_keys = _table(S.ssh_keys_table_name)
 ```
 
 ### 3.3 Service Layer: `app/services/ssh_key_manager.py`
+<!-- NOTE: app/services/ssh_key_manager.py does not exist yet — new implementation required -->
 
 New file (~350 lines). Core functions:
 
@@ -307,6 +310,7 @@ def generate_key(user_sub: str, *, label: str, key_type: str = "ed25519", key_bi
 ```
 
 ### 3.4 SSH Bridge Integration
+<!-- VERIFIED: browser_ssh_terminal.py exists (1125 lines); ParamikoSshBridge at ~line 65; registered at app/main.py:404 -->
 
 Modify `app/routers/browser_ssh_terminal.py` to support a new `authType: "stored_key"` with `keyId` field:
 
@@ -332,6 +336,7 @@ if auth_type == "stored_key":
 The private key is decrypted server-side and passed directly to Paramiko. It never appears in WebSocket messages or frontend state.
 
 ### 3.5 API Router: `app/routers/ssh_key_manager.py`
+<!-- NOTE: app/routers/ssh_key_manager.py does not exist yet — new implementation required -->
 
 New file (~180 lines). Prefix: `/ui/remote/ssh-keys`. All endpoints use `Depends(require_ui_session)`.
 
@@ -706,3 +711,21 @@ Key generation is rate-limited to 5 per minute per user (CPU-intensive for RSA 4
 8. All operations produce audit events.
 9. Per-user key limit is enforced (default: 20).
 10. User isolation: no cross-user key access.
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| `kms_encrypt()` | `app/core/crypto.py` | 16 | Encrypts plaintext using KMS; returns base64 ciphertext |
+| `kms_decrypt()` | `app/core/crypto.py` | 22 | Decrypts base64 ciphertext; returns raw bytes |
+| `kms_key_id` setting | `app/core/crypto.py` | 17 | Uses `S.kms_key_id`; mock KMS on port 7999 |
+| `ParamikoSshBridge` | `app/routers/browser_ssh_terminal.py` | ~65 | SSH WebSocket bridge; accepts `private_key`, `passphrase` params |
+| SSH terminal registration | `app/main.py` | 82-84, 404 | `browser_ssh_terminal_router` |
+| `browser_ssh_terminal_enabled()` | `app/routers/browser_ssh_terminal.py` | 216 | Feature flag check |
+| `audit_event()` | `app/services/alerts.py` | 695 | Audit logging |
+| `ssh_keys` DDB table | — | — | Does not exist yet in `scripts/local-ddb-init.py` |
+| `ssh_keys_table_name` setting | — | — | Does not exist yet in `app/core/settings.py` |
+| `app/services/ssh_key_manager.py` | — | — | Does not exist yet |
+| `app/routers/ssh_key_manager.py` | — | — | Does not exist yet |

@@ -1884,10 +1884,9 @@ No new feature flags needed. The admin endpoints are behind `require_admin_sessi
 | Webhook admin endpoints (4 routes) | `app/routers/webhooks.py` | 182-215 | VERIFIED |
 | `query_due_deliveries` (ByStatus GSI) | `app/services/webhook_service.py` | 815-822 | VERIFIED |
 | Webhook deliveries DDB init (ByStatus, ByUser GSIs) | `scripts/local-ddb-init.py` | 862-871 | VERIFIED |
-| Scheduler poll interval setting (15s) | `app/core/settings.py` | 1256 | VERIFIED |
-| Webhook poll interval setting (10s) | `app/core/settings.py` | 1250 | VERIFIED |
-| `scheduled_actions_max_retries` (3) | `app/core/settings.py` | 1259 | VERIFIED |
-| `scheduled_actions_ttl_days` (90) | `app/core/settings.py` | 1260 | VERIFIED |
-| `webhooks_max_retries` (5) | `app/core/settings.py` | 1248 | VERIFIED |
+| Scheduler poll interval setting (15s) | `app/core/settings.py` | 1327 | VERIFIED |
+| `scheduled_actions_max_retries` (3) | `app/core/settings.py` | 1330 | VERIFIED |
+| `scheduled_actions_ttl_days` (90) | `app/core/settings.py` | 1331 | VERIFIED |
+| `webhooks_max_retries` (5) | `app/core/settings.py` | 1307 | VERIFIED |
 | Prometheus counter/gauge/histogram pattern | `app/metrics.py` | 57-105 | VERIFIED |
 | Noop metric pattern in non-production | `app/metrics.py` | 26-55 | VERIFIED |

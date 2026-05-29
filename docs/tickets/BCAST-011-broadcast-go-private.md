@@ -13,7 +13,14 @@
 
 ### The Gap
 
-During a live broadcast, there is no mechanism for a viewer to escalate from the public broadcast into a private 1-on-1 video call with the creator. The platform has two mature but completely isolated systems: the broadcast infrastructure (`app/routers/broadcast.py`, `app/services/broadcast_store.py`) for one-to-many live streaming, and the messenger call infrastructure (CALL-001 through CALL-010) for private 1-on-1 WebRTC calls. These systems share no state, no UI handoff, and no billing linkage. A viewer who wants a private session with a broadcaster must leave the broadcast entirely, navigate to messages, and initiate a separate call -- losing the broadcast context and requiring the creator to manually manage the transition.
+During a live broadcast, there is no mechanism for a viewer to escalate from the public broadcast into a private 1-on-1 video call with the creator.
+<!-- NOTE: This claim is NOW OUTDATED. Private session infrastructure exists:
+  `app/services/broadcast_private.py`,
+  `app/core/settings.py:1204-1205` (table name, default rate),
+  `scripts/local-ddb-init.py:798-808` (BroadcastPrivateSessions table),
+  `app/core/tables.py:88` (T.broadcast_private_sessions),
+  `frontend/src/api/endpoints/broadcastPrivate.ts`,
+  `frontend/e2e/broadcast-private.spec.ts` --> The platform has two mature but completely isolated systems: the broadcast infrastructure (`app/routers/broadcast.py`, `app/services/broadcast_store.py`) for one-to-many live streaming, and the messenger call infrastructure (CALL-001 through CALL-010) for private 1-on-1 WebRTC calls. These systems share no state, no UI handoff, and no billing linkage. A viewer who wants a private session with a broadcaster must leave the broadcast entirely, navigate to messages, and initiate a separate call -- losing the broadcast context and requiring the creator to manually manage the transition.
 
 The broadcast session state machine (`app/services/broadcast_state_machine.py`) has no concept of a "private" or "paused" state. The valid statuses are: `draft`, `provisioning`, `ready`, `live`, `stopping`, `stopped`, `error`. There is no way to temporarily suspend a live broadcast without fully stopping it, and no mechanism to resume after a private interaction.
 
@@ -1885,3 +1892,16 @@ The recording toggle in the creator's UI is disabled until the viewer has consen
 | CALL-001 through CALL-010 | WebRTC call infrastructure reused for private video |
 | MON-002 | Billing ledger pattern reused for private session billing |
 | MON-003 | Creator earnings dashboard will aggregate private session credits |
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/services/broadcast_private.py` | — | EXISTS | Private session service |
+| `app/core/settings.py` | 1204-1205 | EXISTS | `broadcast_private_sessions_table_name`, `broadcast_private_default_rate_cents_per_min` |
+| `app/core/tables.py` | 88 | EXISTS | `T.broadcast_private_sessions` handle |
+| `scripts/local-ddb-init.py` | 798-808 | EXISTS | BroadcastPrivateSessions table |
+| `frontend/src/api/endpoints/broadcastPrivate.ts` | — | EXISTS | Private session API wrappers |
+| `frontend/e2e/broadcast-private.spec.ts` | — | EXISTS | E2E tests |

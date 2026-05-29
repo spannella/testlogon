@@ -4,19 +4,15 @@
 
 ### Problem Statement
 
-The WebRTC direct call system currently has a complete signaling layer (invite/accept/decline/end lifecycle via `app/services/messaging_call_lifecycle.py`), a frontend state machine (`frontend/src/pages/messages/callStateMachine.ts`), and a call overlay UI (`frontend/src/pages/messages/CallSessionOverlay.tsx`). However, there is **no `getUserMedia()` call anywhere in the frontend codebase**. The call system transitions through `outgoing_inviting -> outgoing_ringing -> connected -> ended` states without ever acquiring microphone or camera access from the user's device.
+The WebRTC direct call system currently has a complete signaling layer (invite/accept/decline/end lifecycle via `app/services/messaging_call_lifecycle.py`), a frontend state machine (`frontend/src/pages/messages/callStateMachine.ts`), and a call overlay UI (`frontend/src/pages/messages/CallSessionOverlay.tsx`). <!-- NOTE: The useMediaCapture hook is now IMPLEMENTED at frontend/src/hooks/useMediaCapture.ts (315 lines). The useMediaDevices hook exists at frontend/src/hooks/useMediaDevices.ts (107 lines). getUserMedia is called via acquireLocalMedia() in frontend/src/lib/webrtc.ts:15. ConversationView.tsx imports and uses useMediaCapture at lines 50 and 94. The E2E test file exists at frontend/e2e/webrtc-media.spec.ts (1375 lines). Unit test files for the hooks do NOT exist yet. -->
 
-This means:
-- No audio is captured or transmitted during an "audio" call.
-- No video is captured or transmitted during a "video" call.
-- The `localStream` and `remoteStream` fields on `CallRuntimeResources` (line 155-157 of `callStateMachine.ts`) are never populated.
-- The `teardownCallResources()` function correctly stops tracks and closes the peer connection, but is operating on null streams.
+The `localStream` and `remoteStream` fields on `CallRuntimeResources` (lines 191-193 of `callStateMachine.ts`, see `frontend/src/pages/messages/callStateMachine.ts:190`) are now populated by the `useRtcPeerConnection` hook and `useMediaCapture` hook.
 
 ### Audio vs Video Modes
 
-The backend defines two call modes via `CallMode = Literal["audio", "video"]` in `app/services/messaging_call_sessions.py` (line 8). The frontend mirrors this as `DirectCallMode = "audio" | "video"` in `frontend/src/api/endpoints/messaging.ts` (line 242). The mode is set at invite creation time via the `initial_mode` parameter and persists on `CallSessionRecord.initial_mode`.
+The backend defines two call modes via `CallMode = Literal["audio", "video"]` in `app/services/messaging_call_sessions.py` (line 8) (see `app/services/messaging_call_sessions.py:8`). The frontend mirrors this as `DirectCallMode = "audio" | "video"` in `frontend/src/api/endpoints/messaging.ts`. The mode is set at invite creation time via the `initial_mode` parameter and persists on `CallSessionRecord.initial_mode`.
 
-The frontend state machine carries this as `CallMachineState.mode` (line 9 of `callStateMachine.ts`), set during `START_OUTGOING` or `INCOMING_INVITE` events. The `CallSessionOverlay` reads this to display mode-appropriate UI copy ("Incoming video call" vs "Incoming audio call") and icons (`Video` vs `PhoneCall`).
+The frontend state machine carries this as `CallMachineState.mode` (line 9 of `callStateMachine.ts`, see `frontend/src/pages/messages/callStateMachine.ts:9`), set during `START_OUTGOING` or `INCOMING_INVITE` events. The `CallSessionOverlay` (see `frontend/src/pages/messages/CallSessionOverlay.tsx`) reads this to display mode-appropriate UI copy and icons.
 
 Media capture constraints differ by mode:
 - **Audio mode**: `{ audio: true, video: false }` -- microphone only.
@@ -32,31 +28,31 @@ Without `getUserMedia`, the entire call flow is purely cosmetic. The state machi
 
 ### Existing Media Infrastructure
 
-The codebase has exactly **two references** to `MediaStream` in the frontend:
+<!-- NOTE: MediaStream usage is now widespread. Key locations:
+- callStateMachine.ts:191-193 — CallRuntimeResources type
+- useRtcPeerConnection.ts:85-86 — localStream/remoteStream state
+- useMediaCapture.ts:125 — stream state
+- lib/webrtc.ts:15 — acquireLocalMedia() calls getUserMedia
+- ConversationView.tsx:94 — mediaCapture hook usage
+-->
 
-1. **`callStateMachine.ts` lines 156-157** -- Type declarations on `CallRuntimeResources`:
-   ```ts
-   export interface CallRuntimeResources {
-     peerConnection?: { close: () => void } | null;
-     localStream?: MediaStream | null;
-     remoteStream?: MediaStream | null;
-     detachListeners?: Array<() => void>;
-     teardownTimers?: Array<number>;
-     cleanedUp?: boolean;
-   }
-   ```
+`CallRuntimeResources` (see `frontend/src/pages/messages/callStateMachine.ts:190`):
+```ts
+export interface CallRuntimeResources {
+  peerConnection?: RTCPeerConnection | null;
+  localStream?: MediaStream | null;
+  remoteStream?: MediaStream | null;
+  detachListeners?: Array<() => void>;
+  teardownTimers?: Array<number>;
+  cleanedUp?: boolean;
+}
+```
 
-2. **`callStateMachine.test.ts` lines 65-66** -- Test mocks that cast plain objects to `MediaStream`:
-   ```ts
-   localStream: { getTracks: () => [{ stop: stopLocal1 }, { stop: stopLocal2 }] } as unknown as MediaStream,
-   remoteStream: { getTracks: () => [{ stop: stopRemote }] } as unknown as MediaStream,
-   ```
-
-There is **no** `navigator.mediaDevices.getUserMedia()` call, no `enumerateDevices()`, no `MediaStreamConstraints` construction, and no permission request handling anywhere in `frontend/src/`.
+`getUserMedia()` is called via `acquireLocalMedia()` in `frontend/src/lib/webrtc.ts:15`. The `useMediaCapture` hook (see `frontend/src/hooks/useMediaCapture.ts:124`) wraps this with permission handling and error categorization.
 
 ### Existing Permission Patterns (Reference Implementation)
 
-The closest permission-request pattern in the codebase is in `frontend/src/pages/alerts/PushDevices.tsx` (lines 46-74), which handles `Notification.requestPermission()`:
+The closest permission-request pattern in the codebase is in `frontend/src/pages/alerts/PushDevices.tsx` (lines 51-62) (see `frontend/src/pages/alerts/PushDevices.tsx:51`), which handles `Notification.requestPermission()`:
 
 ```ts
 const handleEnable = async () => {
@@ -87,30 +83,30 @@ This pattern (check API availability -> check existing permission state -> reque
 
 ### Call Flow Integration Points
 
-The `ConversationView.tsx` (line 83) creates the call state machine:
+The `ConversationView.tsx` (see `frontend/src/pages/messages/ConversationView.tsx`) creates the call state machine:
 ```ts
 const [callMachine, dispatchCall] = React.useReducer(callStateReducer, undefined, createInitialCallMachineState);
 ```
 
 Media capture should be triggered at specific state transitions:
-- **Outgoing call (caller)**: After `START_OUTGOING` dispatches (line 520), before the `callMutation.mutate()` call (line 521). The caller needs local media ready before signaling.
-- **Incoming call (callee)**: After `LOCAL_ACCEPT` dispatches (triggered by the Accept button at line 122 of `CallSessionOverlay.tsx`). The callee acquires media only after agreeing to take the call.
+- **Outgoing call (caller)**: After `START_OUTGOING` dispatches, `mediaCapture.acquire(mode)` is called at line 737 of `ConversationView.tsx` before `callMutation.mutate()`. The caller needs local media ready before signaling.
+- **Incoming call (callee)**: After user clicks Accept, `mediaCapture.acquire(callMachine.mode)` is called at line 1294 of `ConversationView.tsx`.
 
-The `startOutgoingCall` function (line 517 of `ConversationView.tsx`) is the caller-side entry point. The `onAccept` prop passed to `CallSessionOverlay` is the callee-side entry point.
+The `startOutgoingCall` function (see `frontend/src/pages/messages/ConversationView.tsx:737`) is the caller-side entry point. The `onAccept` prop at line 1290 is the callee-side entry point.
 
 ### Feature Flag Gating
 
-WebRTC calls are gated by `isMessagingWebrtcDirectCallEnabled()` from `frontend/src/lib/featureFlags.ts` (line 53). This function checks:
+WebRTC calls are gated by `isMessagingWebrtcDirectCallEnabled()` from `frontend/src/lib/featureFlags.ts` (line 53) (see `frontend/src/lib/featureFlags.ts:53`). This function checks:
 - `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED` (master toggle)
 - `VITE_MESSAGING_WEBRTC_DIRECT_CALL_KILL_SWITCH` (emergency off)
 - `VITE_MESSAGING_WEBRTC_DIRECT_CALL_MODE` (rollout mode: enabled/disabled/selective/internal)
 - Tenant and cohort allow-lists for gradual rollout
 
-The `callsEnabled` computed value (line 466 of `ConversationView.tsx`) determines whether call buttons render.
+The `callsEnabled` computed value in `ConversationView.tsx` determines whether call buttons render.
 
 ### Teardown Path
 
-The `teardownCallResources` function (lines 163-186 of `callStateMachine.ts`) already handles stopping tracks:
+The `teardownCallResources` function (lines 199-222 of `callStateMachine.ts`, see `frontend/src/pages/messages/callStateMachine.ts:199`) already handles stopping tracks:
 ```ts
 for (const stream of [resources.localStream, resources.remoteStream]) {
   for (const track of stream?.getTracks() ?? []) {
@@ -119,7 +115,7 @@ for (const stream of [resources.localStream, resources.remoteStream]) {
 }
 ```
 
-This ensures that once media is acquired, it will be properly released on call end, failure, or component unmount. The effect at line 481 triggers teardown when the machine reaches terminal states (`ended`, `failed`, `failure`, `declined`, `busy`, `timeout`).
+This ensures that once media is acquired, it will be properly released on call end, failure, or component unmount. Teardown is triggered when the machine reaches terminal states.
 
 ---
 
@@ -127,7 +123,8 @@ This ensures that once media is acquired, it will be properly released on call e
 
 ### 3.1 Media Capture Hook: `useMediaCapture`
 
-Create a new hook at `frontend/src/pages/messages/useMediaCapture.ts` that encapsulates all `getUserMedia` logic:
+<!-- NOTE: IMPLEMENTED at frontend/src/hooks/useMediaCapture.ts (315 lines), not at the proposed path. -->
+The hook at `frontend/src/hooks/useMediaCapture.ts` (see line 124) encapsulates all `getUserMedia` logic:
 
 ```ts
 export interface MediaCaptureState {
@@ -305,7 +302,8 @@ The `ideal` constraints allow the browser to select the closest matching resolut
 
 ### 4.1 Phase 1: Core Capture Hook
 
-**File**: `frontend/src/pages/messages/useMediaCapture.ts` (new)
+<!-- NOTE: IMPLEMENTED — frontend/src/hooks/useMediaCapture.ts (315 lines). Exports useMediaCapture() at line 124. -->
+**File**: `frontend/src/hooks/useMediaCapture.ts`
 
 Responsibilities:
 - Expose `acquire(mode)`, `release()`, `toggleMute()`, `toggleCamera()`.
@@ -317,7 +315,8 @@ Responsibilities:
 
 **File**: `frontend/src/pages/messages/ConversationView.tsx`
 
-**Outgoing call flow** (modify `startOutgoingCall` at line 517):
+<!-- NOTE: IMPLEMENTED — see ConversationView.tsx:737-749 for outgoing call media acquisition and ConversationView.tsx:1290-1304 for incoming call accept. -->
+**Outgoing call flow** (see `frontend/src/pages/messages/ConversationView.tsx:737`):
 
 ```ts
 const startOutgoingCall = async (mode: DirectCallMode) => {
@@ -334,9 +333,7 @@ const startOutgoingCall = async (mode: DirectCallMode) => {
   }
   
   // Attach to runtime resources
-  // NOTE: callResourcesRef is currently typed as `{ cleanedUp?: boolean } | null`.
-  // It must be widened to `CallRuntimeResources | null` (from callStateMachine.ts)
-  // before this assignment will type-check.
+  // NOTE: callResourcesRef is now typed as CallRuntimeResources | null (see ConversationView.tsx:92).
   callResourcesRef.current = {
     ...callResourcesRef.current,
     localStream: stream,
@@ -350,7 +347,8 @@ const startOutgoingCall = async (mode: DirectCallMode) => {
 
 **Incoming call flow** (modify `onAccept` handler):
 
-The `onAccept` callback passed to `CallSessionOverlay` (currently dispatches `LOCAL_ACCEPT` at line 82 of `callStateMachine.ts`) needs to be wrapped:
+<!-- NOTE: IMPLEMENTED at ConversationView.tsx:1290-1304 -->
+The `onAccept` callback at `ConversationView.tsx:1290` acquires media before dispatching:
 
 ```ts
 const handleAcceptCall = async () => {
@@ -398,9 +396,9 @@ This allows the overlay UI to show "Requesting camera access..." while the brows
 
 ### 4.4 Phase 4: UI Controls for Mute/Camera Toggle
 
-**File**: `frontend/src/pages/messages/CallSessionOverlay.tsx`
+<!-- NOTE: IMPLEMENTED — CallSessionOverlay.tsx (671 lines) already has isMuted/isCameraOff props (lines 50-51), CallControls component (line 167) with Mic/MicOff and Video/VideoOff buttons, and screen share toggle. -->
 
-Add mute and camera-off buttons to the `isConnected` footer section:
+**File**: `frontend/src/pages/messages/CallSessionOverlay.tsx` (see line 167)
 
 ```tsx
 {isConnected && (
@@ -434,7 +432,8 @@ interface Props {
 
 ### 4.5 Phase 5: Device Enumeration UI
 
-Add a device selector dropdown (shown when connected) that lists available microphones and cameras. This integrates with `useMediaDevices` and calls `switchAudioDevice`/`switchVideoDevice` on selection.
+<!-- NOTE: useMediaDevices hook IMPLEMENTED at frontend/src/hooks/useMediaDevices.ts (107 lines). -->
+Device selector integrates with `useMediaDevices` (see `frontend/src/hooks/useMediaDevices.ts`).
 
 ### 4.6 Phase 6: Integration with CALL-002 (RTCPeerConnection)
 
@@ -498,7 +497,8 @@ Incoming Call (Callee):
 
 ### 5.1 Unit Tests (Vitest)
 
-**File**: `frontend/src/pages/messages/useMediaCapture.test.ts` (new)
+<!-- NOTE: This file does not exist yet — new implementation required. -->
+**File**: `frontend/src/hooks/useMediaCapture.test.ts` (new, proposed path updated)
 
 Mock `navigator.mediaDevices` globally:
 
@@ -578,7 +578,8 @@ it("acquires media when accepting incoming call", async () => {
 
 ### 5.3 E2E Tests (Playwright)
 
-**File**: `frontend/e2e/webrtc-media.spec.ts` (new)
+<!-- NOTE: IMPLEMENTED — frontend/e2e/webrtc-media.spec.ts (1375 lines) already exists. -->
+**File**: `frontend/e2e/webrtc-media.spec.ts`
 
 Playwright supports mocking `getUserMedia` via `page.addInitScript()` and `browserContext.grantPermissions()`:
 
@@ -679,8 +680,8 @@ it("handles devicechange event (hot-plug)", async () => {
 
 | File | Scope | Framework |
 |------|-------|-----------|
-| `frontend/src/pages/messages/useMediaCapture.test.ts` | Hook logic in isolation | Vitest |
-| `frontend/src/pages/messages/useMediaDevices.test.ts` | Device enumeration hook | Vitest |
+| `frontend/src/hooks/useMediaCapture.test.ts` | Hook logic in isolation (does not exist yet) | Vitest |
+| `frontend/src/hooks/useMediaDevices.test.ts` | Device enumeration hook (does not exist yet) | Vitest |
 | `frontend/src/pages/messages/ConversationView.call_flows.test.tsx` | Integration with state machine (extend existing) | Vitest + RTL |
 | `frontend/e2e/webrtc-media.spec.ts` | Full browser integration, permission flows | Playwright |
 
@@ -733,3 +734,32 @@ All unit tests mock `navigator.mediaDevices` at the module level. E2E tests use 
 | `WEBRTC_VIDEO_ENABLED` | `true` | Enable video capture (audio always on) |
 | `WEBRTC_SCREEN_SHARE_ENABLED` | `false` | Enable screen sharing |
 | `WEBRTC_HD_VIDEO_ENABLED` | `false` | Allow 1080p requests (vs 720p max) |
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `frontend/src/hooks/useMediaCapture.ts` | 1-315 | Media capture hook (IMPLEMENTED) |
+| `frontend/src/hooks/useMediaCapture.ts` | 124 | `useMediaCapture()` export |
+| `frontend/src/hooks/useMediaCapture.ts` | 72 | `categorizeError()` — DOMException error classification |
+| `frontend/src/hooks/useMediaCapture.ts` | 50 | `buildConstraints()` — audio/video constraints builder |
+| `frontend/src/hooks/useMediaDevices.ts` | 1-107 | Device enumeration hook (IMPLEMENTED) |
+| `frontend/src/lib/webrtc.ts` | 15 | `acquireLocalMedia()` — getUserMedia wrapper |
+| `frontend/src/lib/webrtc.ts` | 54 | `acquireScreenMedia()` — getDisplayMedia wrapper |
+| `frontend/src/pages/messages/callStateMachine.ts` | 190-222 | `CallRuntimeResources` interface + `teardownCallResources()` |
+| `frontend/src/pages/messages/callStateMachine.ts` | 6-20 | `CallMachineState` interface |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 1-671 | Call UI overlay with mute/camera/recording/screenshare controls |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 167 | `CallControls` component (Mic/MicOff, Video/VideoOff buttons) |
+| `frontend/src/pages/messages/ConversationView.tsx` | 50 | `useMediaCapture` import |
+| `frontend/src/pages/messages/ConversationView.tsx` | 94 | `mediaCapture` hook invocation |
+| `frontend/src/pages/messages/ConversationView.tsx` | 737-749 | Outgoing call — acquire media before invite |
+| `frontend/src/pages/messages/ConversationView.tsx` | 1290-1304 | Incoming call — acquire media on accept |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 159-183 | `acquireLocalMedia()` call + addTrack to RTCPeerConnection |
+| `frontend/src/lib/featureFlags.ts` | 53 | `isMessagingWebrtcDirectCallEnabled()` |
+| `frontend/src/pages/alerts/PushDevices.tsx` | 51-62 | Notification.requestPermission() pattern (reference) |
+| `app/services/messaging_call_sessions.py` | 8 | `CallMode = Literal["audio", "video"]` |
+| `frontend/e2e/webrtc-media.spec.ts` | 1-1375 | E2E media capture tests (IMPLEMENTED) |
+| `frontend/src/hooks/useMediaCapture.test.ts` | — | Does not exist yet — unit tests needed |
+| `frontend/src/hooks/useMediaDevices.test.ts` | — | Does not exist yet — unit tests needed |

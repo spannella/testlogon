@@ -13,7 +13,7 @@
 
 ### 1.1 Purpose
 
-FIN-011 extends the existing collaboration agreement system with full revenue splitting automation, content assignment, split history with audit trail, and a dispute resolution mechanism. The backend already has `app/services/collaborations.py` (399 lines) for agreement lifecycle (create, accept, reject, counter-propose, terminate) and `app/services/collaboration_splits.py` (129 lines) for writing split ledger entries. However, there is no way to assign content items to a collaboration, no automatic trigger for splits when content earns revenue, no split history view, and no dispute mechanism if a collaborator disagrees with a split. This ticket fills those gaps.
+FIN-011 extends the existing collaboration agreement system with full revenue splitting automation, content assignment, split history with audit trail, and a dispute resolution mechanism. The backend already has `app/services/collaborations.py` (412 lines) for agreement lifecycle (create, accept, reject, counter-propose, terminate) and `app/services/collaboration_splits.py` (128 lines) for writing split ledger entries. However, there is no way to assign content items to a collaboration, no automatic trigger for splits when content earns revenue, no split history view, and no dispute mechanism if a collaborator disagrees with a split. This ticket fills those gaps.
 
 ### 1.2 User Stories
 
@@ -40,16 +40,17 @@ The collaboration system today supports agreement negotiation (split percentages
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Collaborations service | `app/services/collaborations.py` (399 lines) | Full agreement lifecycle: create, accept, reject, counter-propose, terminate |
-| Collaboration splits | `app/services/collaboration_splits.py` (129 lines) | `write_collaboration_split_ledger` writes per-collaborator ledger credits |
-| Collaboration agreements table | DDB `collaboration_agreements` | PK=collaboration_id, SK=CURRENT; GSIs: ByInitiator, ByRecipient, ByStatus |
-| Billing shared | `app/services/billing_shared.py` | `new_ledger_entry` for financial records |
+| Collaborations service | `app/services/collaborations.py` (412 lines) | Full agreement lifecycle: create, accept, reject, counter-propose, terminate (see `:93` for `create_collaboration`) |
+| Collaboration splits | `app/services/collaboration_splits.py` (128 lines) | `write_collaboration_split_ledger` at `:16` writes per-collaborator ledger credits |
+| Collaboration agreements table | DDB `collaboration_agreements` (see `scripts/local-ddb-init.py:1064-1074`) | PK=collaboration_id, SK=sk; GSIs: ByInitiator, ByRecipient, ByStatus |
+| Billing shared | `app/services/billing_shared.py` | `new_ledger_entry` at `:217` for financial records |
 | Tip ledger | `app/services/tip_ledger.py` | Content tips with `meta.content_id` |
-| Settings | `app/core/settings.py` | `collaboration_agreements_table_name` |
+| Settings | `app/core/settings.py:1421` | `collaboration_agreements_table_name` |
+| Collaborations router | `app/routers/collaborations.py` (registered in `app/main.py:118,453`) | Existing collaboration endpoints |
 
 ### 2.2 Collaboration Agreement Schema
 
-From `app/services/collaborations.py:93-145`:
+From `app/services/collaborations.py:93` (`create_collaboration`):
 
 ```python
 item = {
@@ -74,7 +75,7 @@ item = {
 
 ### 2.3 Existing Split Logic
 
-From `app/services/collaboration_splits.py:16-113`:
+From `app/services/collaboration_splits.py:16` (`write_collaboration_split_ledger`):
 
 ```python
 def write_collaboration_split_ledger(
@@ -385,7 +386,7 @@ Integration points:
 |------|------|--------|
 | Tip on content | `app/services/tip_ledger.py` | Before writing single credit, check for collaboration; if found, use `execute_content_split` instead |
 | Unlock content | `app/routers/messaging.py` (unlock path) | Check for collaboration; split if found |
-| VOD purchase | `app/services/vod_purchases.py` | Check for collaboration; split if found |
+| VOD purchase | `app/services/vod_purchases.py` | Check for collaboration; split if found <!-- NOTE: `app/services/vod_purchases.py` does not exist yet — VOD purchase earnings flow is currently in `app/services/creator_earnings.py`. New service file required or integrate into existing earnings flow. --> |
 
 **Important**: The split replaces the normal single-creator credit. If content is in a collaboration with a 60/40 split on a $10 tip, Alice gets $6 credit and Bob gets $4 credit (before platform commission). The payer still pays $10.
 
@@ -725,3 +726,21 @@ When assigning content, the service validates that the assigning user is:
 7. Disputes can be resolved by the other collaborator or by admin arbitration.
 8. Non-participants cannot access collaboration revenue data.
 9. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+| Ref | File | Line(s) | What |
+|-----|------|---------|------|
+| 1 | `app/services/collaborations.py` | 93 | `create_collaboration()` — agreement creation with split map |
+| 2 | `app/services/collaborations.py` | 148, 166, 200, 219 | `accept_collaboration`, `reject_collaboration`, `terminate_collaboration`, `counter_propose` |
+| 3 | `app/services/collaboration_splits.py` | 16 | `write_collaboration_split_ledger()` — existing split ledger write |
+| 4 | `app/services/collaboration_splits.py` | 116 | `_update_collab_revenue()` — updates `total_revenue_cents` on agreement |
+| 5 | `app/services/billing_shared.py` | 217 | `new_ledger_entry()` — generic billing ledger entry writer |
+| 6 | `app/services/tip_ledger.py` | — | Tip ledger — integration point for auto splits |
+| 7 | `app/routers/collaborations.py` | — | Existing collaboration endpoints |
+| 8 | `app/main.py` | 118, 453 | `collaborations_router` import and registration |
+| 9 | `scripts/local-ddb-init.py` | 1064-1074 | `collaboration_agreements` table (PK=collaboration_id, SK=sk; 3 GSIs: ByInitiator, ByRecipient, ByStatus) |
+| 10 | `app/core/settings.py` | 1421 | `collaboration_agreements_table_name` setting |
+| 11 | `app/models.py` | 3313-3417 | Existing `CollaborationCreateIn`, `CollaborationOut`, `CollaborationListOut`, etc. |

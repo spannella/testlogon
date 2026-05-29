@@ -2,7 +2,7 @@
 
 **Ticket**: VOD-008
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-24
 
 ---
@@ -389,6 +389,11 @@ HLS.js v1.5+ includes EME support in the main bundle (no separate plugin needed)
 
 ### 4.2 New Files to Create
 
+<!-- NOTE: `VideoPlayerPage.tsx` ALREADY EXISTS at `frontend/src/pages/videos/VideoPlayerPage.tsx`.
+     Route registered in App.tsx at line 55 (lazy import) and line 165 (route `/videos/:videoId`).
+     E2E test: `frontend/e2e/video-player.spec.ts` already exists.
+-->
+
 | File | Description |
 |------|-------------|
 | `frontend/src/pages/videos/VideoPlayerPage.tsx` | Route-level page component |
@@ -707,6 +712,21 @@ The video player must meet WCAG 2.1 AA:
 | `frontend/src/pages/videos/__tests__/useHlsPlayer.test.ts` | New | HLS lifecycle unit tests |
 | `frontend/src/pages/videos/__tests__/QualitySelector.test.tsx` | New | Quality selector unit tests |
 | `frontend/src/pages/videos/__tests__/WatermarkOverlay.test.tsx` | New | Watermark overlay unit tests |
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `frontend/src/pages/videos/VideoPlayerPage.tsx` | -- | **Already exists** |
+| `frontend/src/App.tsx` | 55, 165 | VideoPlayerPage lazy import and route `/videos/:videoId` |
+| `frontend/src/api/endpoints/vod.ts` | 87-90 | `getVideoDetail()`, `listOwnVideos()` |
+| `frontend/e2e/video-player.spec.ts` | -- | **Already exists**: E2E player tests |
+| `app/services/vod_playback_url.py` | 40 | `mint_vod_playback_url()` |
+| `app/services/vod_drm_keys.py` | 57 | `derive_content_key()` |
+| `app/services/vod_drm_keys.py` | 103 | `get_key_uri()` |
+| `app/routers/vod_drm.py` | 30 | DRM router (prefix `/v1/vod/drm`) |
+| `app/routers/vod_drm.py` | 34 | `get_decryption_key()` endpoint |
+| `app/services/ffmpeg_abr_pipeline.py` | 145 | `write_master_playlist()` |
 | `frontend/src/App.tsx` | Modify | Add lazy import + `<Route path="videos/:videoId">` |
 | `frontend/src/components/layout/Sidebar.tsx` | Modify | Add "Videos" nav item with `Film` icon |
 | `frontend/e2e/video-player.spec.ts` | New | E2E tests: sections 110-115 (~20 tests) |

@@ -52,7 +52,7 @@ These limitations push creators to use off-platform tools (Discord, Patreon) for
 ### 2.1 Subscription Plan System
 
 The subscription server (`app/routers/subscription_server.py`) stores plans in the `T.subscriptions` table using a composite key pattern (lines 106-119):
-<!-- VERIFIED: app/routers/subscription_server.py:106 pk_plan, :110 pk_creator, :114 pk_subscriber, :118 pk_subscription -->
+(see `app/routers/subscription_server.py:106` pk_plan, `:110` pk_creator, `:114` pk_subscriber, `:118` pk_subscription)
 
 ```python
 def pk_plan(plan_id: str) -> str:
@@ -68,8 +68,8 @@ def pk_subscription(subscription_id: str) -> str:
     return f"SUB#{subscription_id}"
 ```
 
-Plans are created with `PlanCreateIn` (line 289-298):
-<!-- VERIFIED: app/routers/subscription_server.py:289 PlanCreateIn -->
+Plans are created with `PlanCreateIn` (line 289+):
+(see `app/routers/subscription_server.py:289`)
 
 ```python
 class PlanCreateIn(BaseModel):
@@ -90,7 +90,7 @@ The plan creation endpoint (`POST /api/plans`) writes the plan record to DynamoD
 ### 2.2 Subscription Access Control
 
 The access control service (`app/services/subscription_access.py`, lines 55-69) checks subscription status as a boolean (has/doesn't have active subscription):
-<!-- CORRECTED: was "lines 55-77", actually has_active_subscription is lines 55-69 -->
+(see `app/services/subscription_access.py:55`)
 
 ```python
 def has_active_subscription(subscriber_id: str, creator_id: str) -> bool:
@@ -113,7 +113,7 @@ def has_active_subscription(subscriber_id: str, creator_id: str) -> bool:
 This returns a simple boolean. The fan club system needs a function like `get_subscriber_tier_level(subscriber_id, creator_id) -> Optional[int]` that returns the tier level (1-6) or None.
 
 The `can_access_creator` function (lines 72-77) is the main access gate:
-<!-- VERIFIED: app/services/subscription_access.py:72 can_access_creator -->
+(see `app/services/subscription_access.py:72`)
 
 ```python
 def can_access_creator(subscriber_id: str, creator_id: str) -> bool:
@@ -129,7 +129,7 @@ This will be augmented with `can_access_tier(subscriber_id, creator_id, min_tier
 ### 2.3 Subscription Settings
 
 The subscription access service (`app/services/subscription_access.py`, lines 20-31) manages per-creator subscription settings:
-<!-- CORRECTED: was "lines 20-48", actually get_subscription_settings is lines 20-31 -->
+(see `app/services/subscription_access.py:20`)
 
 ```python
 def get_subscription_settings(creator_id: str) -> Dict[str, Any]:
@@ -150,8 +150,8 @@ The fan club system will extend this with tier configuration stored under the sa
 
 ### 2.4 Broadcast Chat Display Names and Badges
 
-The broadcast chat store (`app/services/broadcast_chat_store.py`, line 136-150) sends messages with `sender_id` and `sender_display_name`:
-<!-- VERIFIED: app/services/broadcast_chat_store.py:136 send_chat_message -->
+The broadcast chat store (`app/services/broadcast_chat_store.py`, line 136+) sends messages with `sender_id` and `sender_display_name`:
+(see `app/services/broadcast_chat_store.py:136`)
 
 ```python
 def send_chat_message(
@@ -168,8 +168,8 @@ def send_chat_message(
 ) -> Dict[str, Any]:
 ```
 
-The `BroadcastChatMessageOut` model (`app/routers/broadcast.py`, line 1233-1263) includes `sender_display_name` but no badge fields:
-<!-- CORRECTED: was "line 1233-1262", actually ends at line 1263 -->
+The `BroadcastChatMessageOut` model (`app/routers/broadcast.py`, line 1247+) includes `sender_display_name` but no badge fields:
+<!-- CORRECTED: was "line 1233-1263"; actual class starts at line 1247 (see app/routers/broadcast.py:1247) -->
 
 ```python
 class BroadcastChatMessageOut(BaseModel):
@@ -200,8 +200,8 @@ broadcast_sse_publish(session_id, {
 
 ### 2.5 Broadcast Chat Mute System
 
-The chat store's mute system (`app/services/broadcast_chat_store.py`, lines 77-131) uses a separate `broadcast_chat_mutes` table
-<!-- VERIFIED: app/services/broadcast_chat_store.py:77 get_mute_status --> with `session_user` as PK. The exclusive chat channel system will follow a similar per-session access pattern but with tier-based access instead of mute-based restriction.
+The chat store's mute system (`app/services/broadcast_chat_store.py`, lines 77+) uses a separate `broadcast_chat_mutes` table
+(see `app/services/broadcast_chat_store.py:77`) with `session_user` as PK. The exclusive chat channel system will follow a similar per-session access pattern but with tier-based access instead of mute-based restriction.
 
 The mute enforcement pattern:
 
@@ -223,7 +223,7 @@ This pattern -- checking a record before allowing a chat action -- is reusable f
 ### 2.6 Profile Identity Resolution
 
 The subscription server (`app/routers/subscription_server.py`, line 147-150) resolves profile identity for display:
-<!-- VERIFIED: app/routers/subscription_server.py:147 attach_creator_profile -->
+(see `app/routers/subscription_server.py:147`)
 
 ```python
 def attach_creator_profile(plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -242,8 +242,7 @@ The subscription server handles lifecycle transitions (activate, cancel, renew) 
 - **On cancel**: Decrement `member_count`, remove from exclusive channels (after grace period)
 - **On upgrade/downgrade**: Update tier association, adjust channel access, update badge
 
-The subscription cycle order emission (`emit_subscription_cycle_order_and_reconcile`, lines 56-80) handles billing reconciliation. Tier changes during a billing cycle use prorated amounts calculated by `_apply_discount` patterns (lines 182-195).
-<!-- CORRECTED: was "lines 182-197", actually _apply_discount is lines 182-195 -->
+The subscription cycle order emission (`emit_subscription_cycle_order_and_reconcile`, line 56+) handles billing reconciliation (see `app/routers/subscription_server.py:56`). Tier changes during a billing cycle use prorated amounts calculated by `_apply_discount` (line 190+) (see `app/routers/subscription_server.py:190`).
 
 ---
 
@@ -922,10 +921,12 @@ A nightly reconciliation job can recount actual subscribers per tier and fix any
 
 ### 4.6 Request/Response Models
 
-```python
-# app/models.py additions
+<!-- NOTE: Models below are mostly implemented at app/models.py:3421-3527. TierOut in actual code does NOT have plan_price_cents, plan_currency, plan_interval fields. TierMemberOut and TierAnalyticsOut do NOT exist yet — new implementation required. -->
 
-class TierBenefit(BaseModel):
+```python
+# app/models.py — ACTUAL at lines 3421-3527
+
+class TierBenefit(BaseModel):  # line 3421
     type: str = Field(..., description="Benefit type: early_access, exclusive_chat, custom_emoji, badge, text, discount, priority_dm")
     label: Optional[str] = Field(default=None, max_length=200, description="Display label for text benefits")
     delay_hours: Optional[int] = Field(default=None, ge=0, le=720, description="Early access delay for non-qualifying tiers")
@@ -959,7 +960,7 @@ class TierUpdateIn(BaseModel):
     active: Optional[bool] = None
 
 
-class TierOut(BaseModel):
+class TierOut(BaseModel):  # line 3455
     tier_id: str
     creator_id: str
     plan_id: str
@@ -974,11 +975,9 @@ class TierOut(BaseModel):
     member_count: int = 0
     sort_order: int = 0
     active: bool = True
-    plan_price_cents: Optional[int] = None
-    plan_currency: Optional[str] = None
-    plan_interval: Optional[str] = None
-    created_at: int
-    updated_at: int
+    # NOTE: plan_price_cents, plan_currency, plan_interval do NOT exist in actual model
+    created_at: int = 0
+    updated_at: int = 0
 
 
 class TierReorderIn(BaseModel):
@@ -1037,6 +1036,7 @@ class MemberBadgeOut(BaseModel):
 
 
 class TierMemberOut(BaseModel):
+    # NOTE: TierMemberOut does NOT exist yet in app/models.py — new implementation required
     user_id: str
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
@@ -1047,6 +1047,7 @@ class TierMemberOut(BaseModel):
 
 
 class TierAnalyticsOut(BaseModel):
+    # NOTE: TierAnalyticsOut does NOT exist yet in app/models.py — new implementation required
     total_members: int = 0
     tiers: List[Dict[str, Any]] = Field(default_factory=list)  # [{tier_id, name, level, member_count, revenue_cents}]
     churn_rate_30d: float = 0.0
@@ -1060,23 +1061,27 @@ class TierAnalyticsOut(BaseModel):
 
 ### 5.1 New Pages and Components
 
-| Component | Path | Purpose |
-|-----------|------|---------|
-| `FanClubPage` | `frontend/src/pages/fan-club/FanClubPage.tsx` | Creator management dashboard for tiers and channels |
-| `TierEditor` | `frontend/src/pages/fan-club/TierEditor.tsx` | Create/edit tier with color picker, emoji selector, benefits list |
-| `TierCard` | `frontend/src/pages/fan-club/TierCard.tsx` | Display card for a single tier (used in creator dashboard and public profile) |
-| `ExclusiveChatView` | `frontend/src/pages/fan-club/ExclusiveChatView.tsx` | Chat interface for exclusive channels (reuses ConversationView patterns) |
-| `MemberBadge` | `frontend/src/components/shared/MemberBadge.tsx` | Inline badge component: colored emoji/icon that renders in chat and comments |
-| `TierSelector` | `frontend/src/components/shared/TierSelector.tsx` | Dropdown for selecting early access tier when creating posts |
-| `ChannelList` | `frontend/src/pages/fan-club/ChannelList.tsx` | List of exclusive channels with access indicators |
-| `TierMemberList` | `frontend/src/pages/fan-club/TierMemberList.tsx` | Paginated member list with search |
-| `TierAnalyticsPanel` | `frontend/src/pages/fan-club/TierAnalyticsPanel.tsx` | Tier distribution charts and churn metrics |
-| `BadgeImageUploader` | `frontend/src/pages/fan-club/BadgeImageUploader.tsx` | Upload/preview custom badge images |
+<!-- NOTE: Only FanClubPage.tsx exists as a single file with all components inline. Other files listed below are NOT separate components yet. -->
+
+| Component | Path | Status |
+|-----------|------|--------|
+| `FanClubPage` | `frontend/src/pages/fan-club/FanClubPage.tsx` | **EXISTS** — all-in-one page |
+| `TierEditor` | `frontend/src/pages/fan-club/TierEditor.tsx` | NOT separate — inline in FanClubPage.tsx |
+| `TierCard` | `frontend/src/pages/fan-club/TierCard.tsx` | NOT separate — inline in FanClubPage.tsx |
+| `ExclusiveChatView` | `frontend/src/pages/fan-club/ExclusiveChatView.tsx` | NOT YET IMPLEMENTED |
+| `MemberBadge` | `frontend/src/components/shared/MemberBadge.tsx` | NOT YET IMPLEMENTED |
+| `TierSelector` | `frontend/src/components/shared/TierSelector.tsx` | NOT YET IMPLEMENTED |
+| `ChannelList` | `frontend/src/pages/fan-club/ChannelList.tsx` | NOT separate — inline in FanClubPage.tsx |
+| `TierMemberList` | `frontend/src/pages/fan-club/TierMemberList.tsx` | NOT YET IMPLEMENTED |
+| `TierAnalyticsPanel` | `frontend/src/pages/fan-club/TierAnalyticsPanel.tsx` | NOT YET IMPLEMENTED |
+| `BadgeImageUploader` | `frontend/src/pages/fan-club/BadgeImageUploader.tsx` | NOT YET IMPLEMENTED |
 
 ### 5.2 Frontend API Types and Endpoints
 
+<!-- NOTE: Types exist at frontend/src/api/types.ts:4136-4214. Endpoint file at frontend/src/api/endpoints/fan-club.ts. -->
+
 ```typescript
-// frontend/src/api/types.ts additions
+// frontend/src/api/types.ts — ACTUAL at lines 4136-4214
 
 export interface TierBenefit {
   type: string;
@@ -1217,8 +1222,8 @@ export async function getPublicTiers(creatorId: string): Promise<TierOut[]> {
 - **MessageBubble.tsx**: Show `MemberBadge` for DM messages when sender has a tier in the recipient's fan club
 - **CommentRow.tsx** (`CommentsThread`): Show `MemberBadge` next to commenter name on newsfeed posts
 - **CreatePost.tsx**: Add `TierSelector` for early access gating
-- **Sidebar.tsx / AppShell.tsx**: Add "Fan Club" nav item
-- **MobileNav.tsx**: Add "Fan Club" to `MORE_LINKS`
+- **Sidebar.tsx**: "Fan Club" nav item **EXISTS** at line 110 (see `frontend/src/components/layout/Sidebar.tsx:110`)
+- **MobileNav.tsx**: "Fan Club" **EXISTS** in `MORE_LINKS` (see `frontend/src/components/layout/MobileNav.tsx`)
 - **Creator profile page**: Show tier cards for potential subscribers
 - **PostCard.tsx**: Show early access indicator ("Early access for VIP+") when content has `early_access_tier_level`
 
@@ -1271,8 +1276,10 @@ export function MemberBadge({ badge, size = "sm", showName = true }: MemberBadge
 ### 5.5 Route
 
 ```tsx
-// App.tsx
-{ path: "/fan-club", element: <FanClubPage /> }
+// App.tsx — VERIFIED at line 80 (lazy import) and line 192 (route)
+const FanClubPage = lazy(() => import("@/pages/fan-club/FanClubPage"));
+// ...
+<Route path="fan-club" element={<FanClubPage />} />
 ```
 
 ---
@@ -1293,12 +1300,12 @@ Access patterns on the subscriptions table for tiers:
 ### 6.2 New Table: fan_club_channels
 
 ```python
-# scripts/local-ddb-init.py
+# scripts/local-ddb-init.py — VERIFIED at line 1076
 TableDef(
-    name="fan_club_channels",
-    pk="channel_id",
-    gsis=[
-        GsiDef(name="ByCreator", pk="creator_id", sk="created_at"),
+    _resolve_table_name(S.fan_club_channels_table_name, "fan_club_channels"),
+    "channel_id",
+    gsi=[  # NOTE: actual field is `gsi=`, not `gsis=`
+        {"index_name": "ByCreator", "partition_key": "creator_id", "sort_key": "created_at"},
     ],
     attr_types={"created_at": "N"},
 ),
@@ -1306,26 +1313,36 @@ TableDef(
 
 Table handle registration:
 ```python
-# app/core/tables.py
-fan_club_channels = ddb.Table(S.fan_club_channels_table or "fan_club_channels")
+# app/core/tables.py — VERIFIED: declaration at line 121, initialization at line 245
+fan_club_channels=ddb.Table(S.fan_club_channels_table_name),
+```
+
+```python
+# app/core/settings.py — VERIFIED at line 1432
+fan_club_channels_table_name: str = os.environ.get("FAN_CLUB_CHANNELS_TABLE_NAME", "fan_club_channels")
 ```
 
 ### 6.3 New Table: fan_club_messages
 
 ```python
-# scripts/local-ddb-init.py
+# scripts/local-ddb-init.py — VERIFIED at line 1085
 TableDef(
-    name="fan_club_messages",
-    pk="channel_id",
-    sk="sort_key",  # "{timestamp}#{message_id}" for chronological ordering
-    gsis=[],
+    _resolve_table_name(S.fan_club_messages_table_name, "fan_club_messages"),
+    "channel_id",
+    "sort_key",  # "{timestamp}#{message_id}" for chronological ordering
 ),
 ```
 
 Table handle registration:
 ```python
-# app/core/tables.py
-fan_club_messages = ddb.Table(S.fan_club_messages_table or "fan_club_messages")
+# app/core/tables.py — VERIFIED: declaration at line 122, initialization at line 246
+fan_club_messages=ddb.Table(S.fan_club_messages_table_name),
+```
+
+```python
+# app/core/settings.py — VERIFIED at lines 1431-1433
+fan_clubs_enabled: bool = os.environ.get("FAN_CLUBS_ENABLED", "1") not in ("0", "false", "False")
+fan_club_messages_table_name: str = os.environ.get("FAN_CLUB_MESSAGES_TABLE_NAME", "fan_club_messages")
 ```
 
 ### 6.4 Capacity Estimates
@@ -1583,3 +1600,39 @@ The creator always has access to their own channels regardless of tier.
 - Early access checks are performed server-side on every content fetch, not just on initial load
 - Shared URLs to early access content respect the tier gate (no "unlisted link" bypass)
 - The `general_release_at` timestamp is computed server-side to prevent client-side clock manipulation
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/routers/subscription_server.py` | 106-118 | `pk_plan`, `pk_creator`, `pk_subscriber`, `pk_subscription` helpers |
+| `app/routers/subscription_server.py` | 147-149 | `attach_creator_profile` — uses `get_profile_identity` |
+| `app/routers/subscription_server.py` | 289 | `PlanCreateIn` model |
+| `app/routers/subscription_server.py` | 56 | `emit_subscription_cycle_order_and_reconcile` |
+| `app/routers/subscription_server.py` | 190 | `_apply_discount` |
+| `app/services/subscription_access.py` | 20-31 | `get_subscription_settings` |
+| `app/services/subscription_access.py` | 55-69 | `has_active_subscription` |
+| `app/services/subscription_access.py` | 72-77 | `can_access_creator` |
+| `app/services/broadcast_chat_store.py` | 77 | `get_mute_status` |
+| `app/services/broadcast_chat_store.py` | 136 | `send_chat_message` |
+| `app/routers/broadcast.py` | 1247 | `BroadcastChatMessageOut` model |
+| `scripts/local-ddb-init.py` | 1076-1083 | `fan_club_channels` TableDef with ByCreator GSI |
+| `scripts/local-ddb-init.py` | 1085-1089 | `fan_club_messages` TableDef |
+| `app/core/settings.py` | 1431 | `fan_clubs_enabled` feature flag |
+| `app/core/settings.py` | 1432-1433 | `fan_club_channels_table_name`, `fan_club_messages_table_name` |
+| `app/core/tables.py` | 121-122, 245-246 | Fan club table handle declarations + initialization |
+| `app/main.py` | 455-456 | `app.include_router(fan_club_router)`, `app.include_router(fan_club_public_router)` |
+| `app/routers/fan_club.py` | 48-49 | Router definitions (no prefix, tags `fan-club` / `fan-club-public`) |
+| `app/routers/fan_club.py` | 54-271 | All endpoint definitions |
+| `app/services/fan_club_tiers.py` | 25-167 | Tier CRUD + member count increment |
+| `app/services/fan_club_badges.py` | 19-120 | `resolve_member_badge`, `get_subscriber_tier_level`, `get_creator_tiers` |
+| `app/services/fan_club_channels.py` | 18-232 | Channel CRUD, message send, access enforcement |
+| `app/services/fan_club_access.py` | 11-38 | `can_view_content`, `compute_general_release_at`, `get_early_access_status` |
+| `app/models.py` | 3421-3527 | All fan club models: TierBenefit, TierCreateIn, TierUpdateIn, TierOut, etc. |
+| `frontend/src/api/types.ts` | 4136-4214 | TypeScript interfaces for fan club |
+| `frontend/src/api/endpoints/fan-club.ts` | all | Frontend API functions |
+| `frontend/src/pages/fan-club/FanClubPage.tsx` | all | Main page (single file, all components inline) |
+| `frontend/src/App.tsx` | 80, 192 | Lazy import + route for `/fan-club` |
+| `frontend/src/components/layout/Sidebar.tsx` | 110 | "Fan Club" nav item |

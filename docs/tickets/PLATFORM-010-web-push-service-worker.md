@@ -1303,20 +1303,22 @@ curl -s -o /dev/null -w "%{http_code} %{content_type}" http://localhost:3000/sw.
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
 | Placeholder token generation | `frontend/src/pages/alerts/PushDevices.tsx` | 65 | VERIFIED: `web-${Date.now()}-${Math.random()...}` |
-| No service worker in public/ | `frontend/public/` | — | VERIFIED: only favicon.svg |
-| No navigator.serviceWorker in frontend | `frontend/src/` | — | VERIFIED: grep returns 0 results |
+| Service worker in public/ | `frontend/public/sw.js` | — | CORRECTED: sw.js now EXISTS |
+| navigator.serviceWorker in frontend | `frontend/src/main.tsx:33`, `PushDevices.tsx:52`, `useServiceWorkerSync.ts:41`, `swMessageHandler.ts:16` | — | CORRECTED: multiple references now exist |
 | Push router endpoints (register/revoke/test/list) | `app/routers/push.py` | 14-43 | VERIFIED |
 | Push router token validation (len < 20) | `app/routers/push.py` | 24 | VERIFIED |
-| Push service functions | `app/services/push.py` | 97-155 | VERIFIED |
-| `fcm_access_token()` JWT assertion | `app/services/push.py` | 27-68 | VERIFIED |
-| `fcm_send()` FCM HTTP v1 API | `app/services/push.py` | 71-90 | VERIFIED |
-| `push_device_id()` SHA-256 hash | `app/services/push.py` | 93-94 | VERIFIED |
-| `upsert_push_device()` 180-day TTL | `app/services/push.py` | 114-126 | VERIFIED |
-| `send_push_for_alert()` calls `fcm_send()` only | `app/services/push.py` | 153 | VERIFIED |
-| `send_push_for_alert()` silent exception | `app/services/push.py` | 154-155 | VERIFIED |
-| `push_enabled` defaults to "0" | `app/core/settings.py` | 228 | VERIFIED |
-| FCM settings (project_id, client_email, private_key) | `app/core/settings.py` | 229-232 | VERIFIED |
-| VAPID key settings exist but empty | `app/core/settings.py` | 1320-1321 | VERIFIED |
+| `fcm_access_token()` JWT assertion | `app/services/push.py` | 30 | VERIFIED |
+| `fcm_send()` FCM HTTP v1 API | `app/services/push.py` | 74 | VERIFIED |
+| `push_device_id()` SHA-256 hash | `app/services/push.py` | 96 | VERIFIED |
+| `list_push_devices()` | `app/services/push.py` | 100 | VERIFIED |
+| `upsert_push_device()` 180-day TTL | `app/services/push.py` | 117 | VERIFIED |
+| `revoke_push_device()` | `app/services/push.py` | 132 | VERIFIED |
+| `web_push_send()` VAPID signing | `app/services/push.py` | 142 | VERIFIED |
+| `send_push_for_alert()` | `app/services/push.py` | 260 | VERIFIED |
+| `push_enabled` defaults to "0" | `app/core/settings.py` | 243 | VERIFIED |
+| FCM settings (project_id, client_email, private_key) | `app/core/settings.py` | 245-247 | VERIFIED |
+| VAPID key settings | `app/core/settings.py` | 1398-1399 | VERIFIED |
+| `web_push_enabled` setting | `app/core/settings.py` | 1401 | VERIFIED |
 | `push_devices` DDB table definition | `scripts/local-ddb-init.py` | 58 | VERIFIED: PK=user_sub, SK=device_id |
 | Push router registered in main.py | `app/main.py` | router include block | VERIFIED |
 | Push API client functions | `frontend/src/api/endpoints/push.ts` | 1-19 | VERIFIED |

@@ -1,7 +1,7 @@
 # VOD-003: Async Transcode Job Queue and Worker
 
 **Ticket**: VOD-003
-**Status**: Design
+**Status**: Implemented
 **Author**: Platform Engineering
 **Date**: 2026-05-24
 
@@ -11,7 +11,7 @@
 
 ### Problem Statement
 
-The video pipeline contract (`app/contracts/video_pipeline_contract.py`) defines a structured job submission schema (`VideoPipelineJobRequest`) and event model (`VideoPipelineJobEvent`) for multi-rendition ABR transcoding. The FFmpeg ABR pipeline (`app/services/ffmpeg_abr_pipeline.py`) provides the building blocks to construct per-rendition FFmpeg command lines with watermark overlays. However, there is no orchestration layer that accepts a job request, persists it, tracks its progress through states (accepted -> running -> completed/failed), manages concurrency, or retries on failure.
+The video pipeline contract (`app/contracts/video_pipeline_contract.py` -- see `VideoPipelineJobRequest` at line 41, `VideoPipelineJobEvent` at line 56) defines a structured job submission schema and event model for multi-rendition ABR transcoding. The FFmpeg ABR pipeline (`app/services/ffmpeg_abr_pipeline.py` -- see `build_rendition_ffmpeg_args()` at line 50, `write_master_playlist()` at line 145) provides the building blocks to construct per-rendition FFmpeg command lines with watermark overlays. However, there is no orchestration layer that accepts a job request, persists it, tracks its progress through states (accepted -> running -> completed/failed), manages concurrency, or retries on failure.
 
 Today, any video processing that happens in the platform occurs either synchronously within a request handler (the `_run_media_tool` function in `app/services/filemanager.py`, used for thumbnail generation and media inspection) or as ad-hoc shell invocations. Neither approach is suitable for long-running multi-rendition transcoding jobs that may take 5-60+ minutes per asset.
 
@@ -32,6 +32,11 @@ Today, any video processing that happens in the platform occurs either synchrono
 The design follows the same dual-mode pattern used throughout the platform:
 
 - **Dev mode** (`S.dev_mode = True`): An in-process asyncio worker loop polls DynamoDB for pending jobs and runs FFmpeg locally via `subprocess`. No external queue infrastructure required. Mirrors the pattern used by `start_broadcast_reconciler_task()`, `start_billing_reconcile_task()`, `start_billing_dunning_task()`, and `start_scheduled_messages_task()`.
+
+<!-- NOTE: The transcode worker ALREADY EXISTS at `app/services/transcode_worker.py`.
+     It implements `transcode_worker_loop()` (line 38), `execute_transcode_job()` (line 86),
+     `_run_ffmpeg_for_rendition()` (line 234), and `start_transcode_worker_task()` (line 334).
+     Registration is at `app/main.py:471`. -->
 
 - **Production mode**: SQS queue + Lambda (or ECS Fargate task) workers. The API writes a job record to DynamoDB and publishes a message to SQS. Workers pull from SQS, perform the transcode, upload outputs to S3, and update the DynamoDB job record. The existing `sqs_client()` factory in `app/core/aws_clients.py` and the SQS poller pattern in `app/routers/newsfeed.py` (lines 1955-1996) provide working precedent for SQS integration.
 
@@ -86,22 +91,24 @@ The broadcast reconciler (`app/services/broadcast_reconciler.py`) is the closest
 
 ### What Does NOT Exist Today
 
-- **No job queue table**: There is no DynamoDB table for transcode jobs.
-- **No worker process**: There is no asyncio task or external worker that picks up and executes transcode jobs.
-- **No progress tracking**: `VideoPipelineJobEvent` defines event types (`job.accepted`, `job.running`, `job.failed`, `job.completed`) but nothing persists or emits them.
-- **No concurrency limiter**: No `asyncio.Semaphore` or similar mechanism exists in the services layer. NOTE: `asyncio.Semaphore` and `asyncio.create_subprocess_exec` are novel patterns in this codebase -- no existing precedent. Existing subprocess calls use synchronous `subprocess.run` or `subprocess.Popen`.
-- **No retry logic**: The existing background loops have bare `except Exception: pass` - they retry on the *next* interval tick but have no per-item retry count or backoff.
-- **No SQS queue for video jobs**: The only SQS integration is the newsfeed SSE fan-out poller (`EVENTS_SQS_URL`) and the Jira outbound sync (`app/services/jira_outbound_sync.py`).
+<!-- NOTE: ALL of the items below have SINCE BEEN IMPLEMENTED. This section is outdated. -->
+
+- **~~No job queue table~~**: `TranscodeJobs` table EXISTS at `scripts/local-ddb-init.py:739-760` with GSIs `ByStatusCreatedAt`, `ByVideoId`, `ByTenantStatus`.
+- **~~No worker process~~**: `app/services/transcode_worker.py` EXISTS with `transcode_worker_loop()` (line 38), `execute_transcode_job()` (line 86), registered at `app/main.py:471`.
+- **~~No progress tracking~~**: `app/services/transcode_job_store.py:update_job_progress()` (line 116) persists progress. `complete_job_with_outputs()` (line 181) records outputs.
+- **~~No concurrency limiter~~**: `_process_job_with_semaphore()` at `app/services/transcode_worker.py:80` uses `asyncio.Semaphore`.
+- **~~No retry logic~~**: `_compute_next_retry_at()` at `app/services/transcode_job_store.py:344` implements exponential backoff. `fail_job()` (line 244) handles retry vs terminal failure.
+- **No SQS queue for video jobs**: The only SQS integration is the newsfeed SSE fan-out poller (`EVENTS_SQS_URL`) and the Jira outbound sync (`app/services/jira_outbound_sync.py`). SQS for transcode is still not implemented (dev mode only).
 
 ### Video Pipeline Components Already Built
 
 The following building blocks are in place and ready for orchestration:
 
-- `app/contracts/video_pipeline_contract.py` - Job request/response/event Pydantic models
-- `app/contracts/video_rendition_profiles.py` - Canonical ABR ladder (1080p/720p/540p/360p)
-- `app/contracts/watermark_policy.py` - Watermark configuration model with validation
-- `app/services/ffmpeg_abr_pipeline.py` - `build_rendition_ffmpeg_args()` constructs FFmpeg CLI for one rendition; `write_master_playlist()` writes the HLS master manifest
-- `app/services/video_pipeline_contract_service.py` - `validate_video_pipeline_job()` validates incoming payloads; `contract_capabilities_snapshot()` returns pipeline metadata
+- `app/contracts/video_pipeline_contract.py` - Job request/response/event Pydantic models (`VideoPipelineJobRequest` at line 41, `VideoPipelineJobEvent` at line 56)
+- `app/contracts/video_rendition_profiles.py` - Canonical ABR ladder (`CanonicalRenditionProfile` TypedDict at line 8, helper functions at lines 60-64)
+- `app/contracts/watermark_policy.py` - Watermark configuration model (`WatermarkPolicy` at line 43, `TenantWatermarkSettings` at line 69)
+- `app/services/ffmpeg_abr_pipeline.py` - `build_rendition_ffmpeg_args()` (line 50) constructs FFmpeg CLI for one rendition; `write_master_playlist()` (line 145) writes the HLS master manifest
+- `app/services/video_pipeline_contract_service.py` - `validate_video_pipeline_job()` (line 17) validates incoming payloads; `contract_capabilities_snapshot()` (line 38) returns pipeline metadata
 - `app/services/video_abr_profile_exports.py` - Exports rendition profiles for FFmpeg and MediaLive
 - `app/services/watermark_profile_renderers.py` - Generates FFmpeg filter strings and MediaLive settings from watermark policy
 
@@ -142,12 +149,17 @@ The following building blocks are in place and ready for orchestration:
                             |   TranscodeJobs DDB   |
                             +-----------------------+
                             | PK: job_id            |
-                            | GSI-Status:           |
+                            | ByStatusCreatedAt:    |
                             |   status / created_at |
-                            | GSI-TenantStatus:     |
+                            | ByVideoId:            |
+                            |   video_id / created_at|
+                            | ByTenantStatus:       |
                             |   tenant_id /         |
                             |   status_created_at   |
                             +-----------------------+
+<!-- NOTE: Actual GSI names (see local-ddb-init.py:739-760) are
+     `ByStatusCreatedAt`, `ByVideoId`, `ByTenantStatus`
+     — not `GSI-Status` and `GSI-TenantStatus` as in the original spec. -->
                                    ^
                                    |
                     +--------------+------------------+
@@ -208,12 +220,16 @@ Retry Flow:
 **Partition key**: `job_id` (S)
 **Sort key**: None (single-item table, one row per job)
 
-**GSIs**:
-- `GSI-TenantStatus`: PK = `tenant_id` (S), SK = `status#created_at` (S)
-  - Enables: "list all pending jobs for tenant X", "list all failed jobs for tenant X"
-- `GSI-Status`: PK = `status` (S), SK = `created_at` (N)
+**GSIs** (actual names from `scripts/local-ddb-init.py:739-760`):
+- `ByStatusCreatedAt`: PK = `status` (S), SK = `created_at` (N)
   - Enables: worker polling for `status=pending` jobs ordered by creation time
   - `attr_types={"created_at": "N"}` required (numeric GSI sort key - see CLAUDE.md gotchas)
+- `ByVideoId`: PK = `video_id` (S), SK = `created_at` (N)
+  - Enables: listing all jobs for a given video
+- `ByTenantStatus`: PK = `tenant_id` (S), SK = `status_created_at` (S)
+  - Enables: "list all pending jobs for tenant X", "list all failed jobs for tenant X"
+<!-- NOTE: The original spec used names `GSI-Status` and `GSI-TenantStatus`.
+     The actual implementation uses `ByStatusCreatedAt`, `ByVideoId`, `ByTenantStatus`. -->
 
 **Item schema**:
 
@@ -705,51 +721,46 @@ curl "http://localhost:8000/ui/transcode-jobs?limit=10" \
 
 ## 4. Implementation Plan
 
-### 4.1 New Files
+### 4.1 Files
 
-| File | Purpose |
-|------|---------|
-| `app/services/transcode_job_store.py` | DynamoDB CRUD for transcode jobs: `create_job()`, `claim_job()`, `update_progress()`, `complete_job()`, `fail_job()`, `cancel_job()`, `get_job()`, `list_jobs_by_tenant()`, `poll_pending_jobs()` |
-| `app/services/transcode_worker.py` | In-process asyncio worker: `transcode_worker_loop()`, `execute_transcode_job()`, `_run_ffmpeg_rendition()`, `_parse_progress()`, `start_transcode_worker_task()` |
-| `app/services/transcode_job_submit.py` | Job submission orchestration: `submit_transcode_job()` validates input, writes DDB record, optionally enqueues to SQS |
-| `app/routers/transcode_jobs.py` | API endpoints: `POST /ui/transcode-jobs` (submit), `GET /ui/transcode-jobs/{job_id}` (status), `GET /ui/transcode-jobs` (list), `DELETE /ui/transcode-jobs/{job_id}` (cancel) |
-| `tests/test_transcode_job_store.py` | Unit tests for the DDB store |
-| `tests/test_transcode_worker.py` | Unit tests for the worker state machine |
-| `tests/test_transcode_job_submit.py` | Unit tests for job submission |
+<!-- NOTE: All backend files listed below ALREADY EXIST. -->
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `app/services/transcode_job_store.py` | DDB CRUD: `create_job()` (line 31), `claim_job()` (line 86), `update_job_progress()` (line 116), `complete_job()` (line 147), `complete_job_with_outputs()` (line 181), `fail_job()` (line 244), `get_job()` (line 75), `list_jobs_by_status()` (line 297), `list_jobs_by_video()` (line 329) | **Already exists** |
+| `app/services/transcode_worker.py` | Asyncio worker: `transcode_worker_loop()` (line 38), `execute_transcode_job()` (line 86), `_run_ffmpeg_for_rendition()` (line 234), `start_transcode_worker_task()` (line 334) | **Already exists** |
+| `app/services/transcode_job_submit.py` | <!-- NOTE: This file does NOT exist. Job submission is handled directly in the router (`app/routers/transcode_jobs.py`). --> | **Does not exist** (logic is in router) |
+| `app/routers/transcode_jobs.py` | API endpoints: router at line 26 (`prefix="/ui/transcode-jobs"`), plus `video_router` at line 151 (`prefix="/ui/videos"`). Models: `SubmitTranscodeJobIn` (line 32), `TranscodeJobOut` (line 41), `TranscodeJobListOut` (line 56). | **Already exists** (205 lines) |
+| `app/services/ffmpeg_executor.py` | FFmpeg subprocess execution: `execute_rendition()` (line 70), `classify_error()` (line 510), `validate_output()` (line 531) | **Already exists** |
 
 ### 4.2 DynamoDB Table Definition
 
-Add to `scripts/local-ddb-init.py`:
+<!-- NOTE: This table ALREADY EXISTS at `scripts/local-ddb-init.py:739-760`. -->
 
 ```python
+# ACTUAL definition (already in scripts/local-ddb-init.py:739-760):
 TableDef(
-    _resolve_table_name(S.transcode_jobs_table_name, "transcode_jobs"),
-    "job_id",
-    gsi=[
-        {
-            "index_name": "GSI-TenantStatus",
-            "partition_key": "tenant_id",
-            "sort_key": "status_created_at",
-        },
-        {
-            "index_name": "GSI-Status",
-            "partition_key": "status",
-            "sort_key": "created_at",
-        },
+    _resolve_table_name(S.transcode_jobs_table_name, "TranscodeJobs"),
+    pk="job_id",
+    sk="job_id",
+    gsis=[
+        GsiDef(name="ByStatusCreatedAt", pk="status", sk="created_at"),
+        GsiDef(name="ByVideoId", pk="video_id", sk="created_at"),
+        GsiDef(name="ByTenantStatus", pk="tenant_id", sk="status_created_at"),
     ],
     attr_types={"created_at": "N"},
-),
+)
 ```
 
-Note: `status_created_at` is a composite sort key string `"{status}#{created_at}"` that enables prefix queries like `begins_with(status_created_at, "pending#")` on the tenant GSI. The `GSI-Status` index uses a numeric `created_at` sort key to support the worker's oldest-first polling.
+Note: `status_created_at` is a composite sort key string `"{status}#{created_at}"` that enables prefix queries like `begins_with(status_created_at, "pending#")` on the tenant GSI. The `ByStatusCreatedAt` index uses a numeric `created_at` sort key to support the worker's oldest-first polling.
 
-### 4.3 Settings additions
+### 4.3 Settings
 
-Add to `app/core/settings.py`:
+<!-- NOTE: `transcode_jobs_table_name` ALREADY EXISTS at `app/core/settings.py:1082`. -->
 
 ```python
-# Transcode worker
-transcode_jobs_table_name: str = os.environ.get("DDB_TRANSCODE_JOBS", "transcode_jobs")
+# ACTUAL existing setting (app/core/settings.py:1082):
+transcode_jobs_table_name: str = os.environ.get("DDB_TRANSCODE_JOBS", "TranscodeJobs")
 transcode_worker_enabled: bool = os.environ.get("TRANSCODE_WORKER_ENABLED", os.environ.get("DEV_MODE", "0")) not in ("0", "false", "False")
 transcode_worker_poll_interval_seconds: int = int(os.environ.get("TRANSCODE_WORKER_POLL_INTERVAL_SECONDS", "10"))
 transcode_max_concurrent_jobs: int = int(os.environ.get("TRANSCODE_MAX_CONCURRENT_JOBS", "2"))
@@ -777,13 +788,13 @@ transcode_jobs=ddb.Table(S.transcode_jobs_table_name),
 
 ### 4.5 Worker Loop Registration in main.py
 
-Add to `app/main.py`, following the existing pattern at line 312:
+<!-- NOTE: ALREADY DONE at `app/main.py:471`. Import at line 101. -->
 
 ```python
-from app.services.transcode_worker import start_transcode_worker_task
-
-# After start_broadcast_reconciler_task registration:
-app.add_event_handler("startup", start_transcode_worker_task)
+# ACTUAL (app/main.py:101, 471):
+from app.routers.transcode_jobs import router as transcode_jobs_router  # also imports worker
+# Registration:
+app.add_event_handler("startup", start_transcode_worker_task)  # line 471
 ```
 
 ### 4.6 Job Store Implementation (`app/services/transcode_job_store.py`)
@@ -1140,7 +1151,9 @@ These tests require `ffmpeg` on PATH (skip with `pytest.mark.skipif(not shutil.w
 
 3. `test_cancelled_job_releases_concurrency_slot` - Start a job, cancel it, verify the semaphore slot is released and the next pending job is picked up immediately.
 
-### 8.5 E2E Test (`frontend/e2e/transcode-jobs.spec.ts`)
+### 8.5 E2E Test (`frontend/e2e/vod-pipeline.spec.ts`)
+
+<!-- NOTE: Actual E2E file is `vod-pipeline.spec.ts`, not `transcode-jobs.spec.ts`. -->
 
 A lightweight E2E test that exercises the API endpoints through the browser context:
 
@@ -1232,3 +1245,42 @@ TranscodeJobsPanel (embedded in VideosPage, VOD-007)
 │   └── Pagination (cursor-based)
 └── EmptyState: "No transcode jobs" (when no jobs exist)
 ```
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/routers/transcode_jobs.py` | 26 | `APIRouter(prefix="/ui/transcode-jobs")` |
+| `app/routers/transcode_jobs.py` | 32, 41, 56 | `SubmitTranscodeJobIn`, `TranscodeJobOut`, `TranscodeJobListOut` |
+| `app/routers/transcode_jobs.py` | 151 | `video_router = APIRouter(prefix="/ui/videos")` |
+| `app/services/transcode_job_store.py` | 31 | `create_job()` |
+| `app/services/transcode_job_store.py` | 75 | `get_job()` |
+| `app/services/transcode_job_store.py` | 86 | `claim_job()` |
+| `app/services/transcode_job_store.py` | 116 | `update_job_progress()` |
+| `app/services/transcode_job_store.py` | 147 | `complete_job()` |
+| `app/services/transcode_job_store.py` | 181 | `complete_job_with_outputs()` |
+| `app/services/transcode_job_store.py` | 244 | `fail_job()` |
+| `app/services/transcode_job_store.py` | 297 | `list_jobs_by_status()` |
+| `app/services/transcode_job_store.py` | 344 | `_compute_next_retry_at()` |
+| `app/services/transcode_worker.py` | 38 | `transcode_worker_loop()` |
+| `app/services/transcode_worker.py` | 80 | `_process_job_with_semaphore()` (asyncio.Semaphore) |
+| `app/services/transcode_worker.py` | 86 | `execute_transcode_job()` |
+| `app/services/transcode_worker.py` | 234 | `_run_ffmpeg_for_rendition()` |
+| `app/services/transcode_worker.py` | 334 | `start_transcode_worker_task()` |
+| `app/services/ffmpeg_executor.py` | 70 | `execute_rendition()` |
+| `app/services/ffmpeg_executor.py` | 510 | `classify_error()` |
+| `app/services/ffmpeg_executor.py` | 531 | `validate_output()` |
+| `app/services/ffmpeg_abr_pipeline.py` | 50 | `build_rendition_ffmpeg_args()` |
+| `app/services/ffmpeg_abr_pipeline.py` | 145 | `write_master_playlist()` |
+| `app/services/vod_s3_uploader.py` | 142 | `upload_transcode_outputs()` |
+| `app/contracts/video_pipeline_contract.py` | 41 | `VideoPipelineJobRequest` |
+| `app/contracts/video_pipeline_contract.py` | 56 | `VideoPipelineJobEvent` |
+| `app/contracts/video_rendition_profiles.py` | 8 | `CanonicalRenditionProfile` |
+| `app/contracts/watermark_policy.py` | 43 | `WatermarkPolicy` |
+| `app/services/video_pipeline_contract_service.py` | 17, 38 | `validate_video_pipeline_job()`, `contract_capabilities_snapshot()` |
+| `app/main.py` | 101 | `from app.routers.transcode_jobs import ...` |
+| `app/main.py` | 423 | `app.include_router(transcode_jobs_router)` |
+| `app/main.py` | 471 | `start_transcode_worker_task` startup registration |
+| `app/core/settings.py` | 1082 | `transcode_jobs_table_name` setting |
+| `scripts/local-ddb-init.py` | 739-760 | `TranscodeJobs` table definition with 3 GSIs |
+| `frontend/e2e/vod-pipeline.spec.ts` | -- | E2E pipeline tests |

@@ -176,9 +176,9 @@ Treasury fully distributed, balance = 0
 
 ### 3.1 Existing Infrastructure
 
-- **Wallet** (`app/services/billing_shared.py`): `billing` table with `pk=USER#{user_sub}`, `sk=WALLET`, `wallet_balance_cents`. `apply_wallet_delta()` atomically updates with overdraft protection via conditional expressions. Reusable for group treasury with `pk=GROUP#{group_id}`.
-- **Ledger**: `new_ledger_entry()` writes `sk=LEDGER#{ts}#{entry_id}` with `amount_cents`, `currency`, `reason`, `direction`. Same function works with group PK.
-- **Group dissolution** (GROUP-001): `dissolve_group()` sets status to `dissolved`. GROUP-004 hooks into this to return funds before membership cleanup.
+- **Wallet** (`app/services/billing_shared.py`): `billing` table (see `scripts/local-ddb-init.py:59`) with `pk=USER#{user_sub}`, `sk=WALLET`, `wallet_balance_cents`. `apply_wallet_delta()` (see `app/services/billing_shared.py:178`) atomically updates with overdraft protection via conditional expressions. Reusable for group treasury with `pk=GROUP#{group_id}`.
+- **Ledger**: `new_ledger_entry()` (see `app/services/billing_shared.py:217`) writes `sk=LEDGER#{ts}#{entry_id}` with `amount_cents`, `reason`, `type`, `state` (NOT `direction` -- the existing function uses `entry_type` parameter mapping to `type` field and `state` field; there is no `direction` field in the existing schema). Same function works with group PK via `key_name`/`key_value` parameters.
+- **Group dissolution** (GROUP-001): `dissolve_group()` sets status to `dissolved`. GROUP-004 hooks into this to return funds before membership cleanup. <!-- NOTE: dissolve_group() does not exist yet — must be created by GROUP-001 -->
 
 ### 3.2 Gaps
 
@@ -212,9 +212,10 @@ Treasury fully distributed, balance = 0
 | 14 | Dissolution: credit personal wallet | `billing` | `USER#{user_sub}` | `SK=WALLET` | None | `ADD wallet_balance_cents :share` |
 | 15 | Dissolution: credit escrow | `billing` | `PLATFORM#ESCROW` | `SK=WALLET` | None | `ADD wallet_balance_cents :donation_share` |
 | 16 | Set fundraising goal | `billing` | `GROUP#{group_id}` | `SK=WALLET` | `attribute_exists(pk)` | `SET fundraising_goal_cents = :goal` |
-| 17 | Verify membership | `user_groups` | `GROUP#{group_id}` | `SK=MEMBER#{user_id}` | None | Cross-table check |
+| 17 | Verify membership | `user_groups` | `GROUP#{group_id}` | `SK=MEMBER#{user_id}` | None | Cross-table check | <!-- NOTE: user_groups table does not exist yet — must be created by GROUP-001 -->
 
 **Key query example -- contribution with overdraft protection:**
+<!-- VERIFIED: T.billing table handle exists at app/core/tables.py:146 -->
 ```python
 # Step 1: Debit personal wallet (atomic, with overdraft check)
 T.billing.update_item(
@@ -262,7 +263,7 @@ Group treasury reuses the `billing` table with `pk=GROUP#{group_id}`, consistent
 |-------|------|-------------|
 | `entry_id` | S | ULID-style ID |
 | `amount_cents` | N | Transaction amount |
-| `direction` | S | `credit` or `debit` |
+| `direction` | S | `credit` or `debit` | <!-- NOTE: Existing billing ledger uses `type` field (via new_ledger_entry's entry_type param), not `direction`. If reusing new_ledger_entry(), map direction to entry_type or add a new `direction` field alongside `type`. -->
 | `reason` | S | Human-readable |
 | `category` | S | `contribution`, `donation`, `ad_spend`, `refund`, `dissolution_return`, `escrow_transfer` |
 | `actor_user_id` | S (optional) | Who performed action |
@@ -284,6 +285,7 @@ Group treasury reuses the `billing` table with `pk=GROUP#{group_id}`, consistent
 Enables pro-rata dissolution calculations.
 
 ### 5.2 Backend Service (`app/services/group_treasury.py`)
+<!-- NOTE: app/services/group_treasury.py does not exist yet — new implementation required -->
 
 | Function | Description |
 |----------|-------------|
@@ -312,6 +314,7 @@ Enables pro-rata dissolution calculations.
 No `withdraw` endpoint exists in the router -- FastAPI returns 404/405. `spend_treasury` validates category against allowlist and only debits the group treasury (does not credit any personal wallet). The only treasury-to-wallet path is `dissolve_treasury`, which is triggered by group dissolution.
 
 ### 5.4 Backend Router (`app/routers/group_treasury.py`)
+<!-- NOTE: app/routers/group_treasury.py does not exist yet — new implementation required -->
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -841,6 +844,7 @@ logger.warning("treasury.overdraft_rejected",
 # app/core/settings.py
 group_treasury_enabled: bool = True  # GROUP_TREASURY_ENABLED env var
 ```
+<!-- NOTE: group_treasury_enabled setting does not exist yet in app/core/settings.py — must be added -->
 
 ### 12.2 Phased Rollout
 
@@ -896,10 +900,10 @@ const { data, fetchNextPage, hasNextPage } = useInfiniteQuery({
 
 | File | Purpose |
 |------|---------|
-| `app/services/group_treasury.py` | Balance, contributions, spending, dissolution |
-| `app/routers/group_treasury.py` | REST endpoints |
-| `frontend/src/pages/groups/GroupTreasuryPage.tsx` | Treasury management page |
-| `frontend/src/pages/groups/TreasuryWidget.tsx` | Balance widget |
+| `app/services/group_treasury.py` | Balance, contributions, spending, dissolution | <!-- new -->
+| `app/routers/group_treasury.py` | REST endpoints | <!-- new -->
+| `frontend/src/pages/groups/GroupTreasuryPage.tsx` | Treasury management page | <!-- new -->
+| `frontend/src/pages/groups/TreasuryWidget.tsx` | Balance widget | <!-- new -->
 
 ### 14.2 Files to Modify
 
@@ -907,7 +911,7 @@ const { data, fetchNextPage, hasNextPage } = useInfiniteQuery({
 |------|---------|
 | `app/main.py` | Register group_treasury router |
 | `app/models.py` | Add treasury Pydantic models |
-| `app/services/user_groups.py` | Hook `dissolve_treasury` into `dissolve_group` |
+| `app/services/user_groups.py` | Hook `dissolve_treasury` into `dissolve_group` | <!-- NOTE: app/services/user_groups.py does not exist yet — must be created by GROUP-001 -->
 | `frontend/src/api/types.ts` | Add treasury types |
 | `frontend/src/api/endpoints/groups.ts` | Add treasury API functions |
 | `frontend/src/App.tsx` | Add route |
@@ -1012,3 +1016,21 @@ let dissolveGroupId: string;
 |--------|-----------|
 | GROUP-003 (Advertising) | `spend_treasury` for campaign funding |
 | GROUP-003 (Fundraising) | `credit_donation` for incoming donations |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| `apply_wallet_delta()` | `app/services/billing_shared.py` | 178 | Atomic wallet balance update with overdraft protection; accepts `table`, `pk`, `delta_cents` |
+| `get_wallet_balance()` | `app/services/billing_shared.py` | 169 | Returns `wallet_balance_cents`, `currency`, `updated_at` |
+| `new_ledger_entry()` | `app/services/billing_shared.py` | 217 | Uses `entry_type` param mapped to `type` field, plus `state`, `reason`; NOT `direction` |
+| `ledger_sk()` | `app/services/billing_shared.py` | 213 | Constructs `LEDGER#{ts}#{entry_id}` sort key |
+| `WALLET_SK` constant | `app/services/billing_shared.py` | 166 | `"WALLET"` — SK value for wallet records |
+| `billing` DDB table | `scripts/local-ddb-init.py` | 59 | PK=pk, SK=sk; no GSIs; stores USER# and GROUP# records |
+| `T.billing` table handle | `app/core/tables.py` | 146 | `ddb.Table(S.billing_table_name)` |
+| `billing_table_name` setting | `app/core/settings.py` | 321 | `DDB_BILLING_TABLE` env var |
+| `user_groups` table | — | — | Does not exist yet; must be created by GROUP-001 |
+| `app/services/user_groups.py` | — | — | Does not exist yet; must be created by GROUP-001 |
+| `group_treasury_enabled` setting | — | — | Does not exist yet in settings.py |

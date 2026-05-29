@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 6-8 days  
-**Dependencies**: ADS-001 (campaign manager), ADS-004 (ad serving engine), ADS-007 (ad billing)
+**Dependencies**: ADS-001 (campaign manager), ADS-004 (ad serving engine), ADS-007 (ad billing) — all sibling tickets, not yet implemented
+<!-- NOTE: All ADS dependencies are sibling tickets not yet in the codebase. -->
 
 ---
 
@@ -738,3 +739,12 @@ export interface BudgetPacing {
 8. DaypartingGrid provides interactive hour/day matrix with drag-select and presets
 9. FlightScheduler provides timeline-based flight configuration with overlap validation
 10. All 12 E2E tests pass in `frontend/e2e/ad-scheduling.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ad_placement.py` | 178 | Existing `get_ad_config` — no scheduling awareness currently |
+| `app/services/ad_scheduling.py` | — | Does not exist yet — new implementation required |

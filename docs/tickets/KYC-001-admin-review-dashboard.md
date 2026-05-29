@@ -15,7 +15,7 @@
 ### Problem Statement
 
 The backend already exposes a complete admin KYC review API at `/v1/kyc/cases/admin/*`
-(implemented in `app/routers/kyc_cases.py`, lines 908-1295), including queue listing with
+(implemented in `app/routers/kyc_cases.py`, lines 908-1294 — see `app/routers/kyc_cases.py:947` for metrics, `:1021` for request-info, `:1099` for approve/reject), including queue listing with
 filters, case detail with timeline, approve/reject/request-info actions, metrics snapshot,
 and retention purge. However, there is **no frontend** for these endpoints. Admins currently
 have no way to review KYC submissions, examine uploaded identity documents, or make approval
@@ -118,25 +118,25 @@ visual document inspection.
 
 ### 3.1 Existing Admin KYC Endpoints
 
-The following endpoints in `app/routers/kyc_cases.py` are fully implemented and tested:
+The following endpoints in `app/routers/kyc_cases.py` are fully implemented and tested (see `app/routers/kyc_cases.py`):
 
 | Endpoint | Method | Line | Purpose |
 |----------|--------|------|---------|
-| `/v1/kyc/cases/admin/queue` | GET | 908 | List cases with status/assignee/risk/wait filters |
-| `/v1/kyc/cases/admin/metrics` | GET | 946 | Funnel counts, review latency, stale queue |
+| `/v1/kyc/cases/admin/queue` | GET | 908 | List cases with status/assignee/risk/wait filters (see `:908`) |
+| `/v1/kyc/cases/admin/metrics` | GET | 946 | Funnel counts, review latency, stale queue (see `:947` for `get_admin_kyc_metrics`) |
 | `/v1/kyc/cases/admin/purge/run` | POST | 972 | Retention purge (dry_run supported) |
 | `/v1/kyc/cases/admin/cases/{case_id}` | GET | 996 | Full case detail with timeline |
-| `/v1/kyc/cases/admin/cases/{case_id}/request-info` | POST | 1020 | Request more info from applicant |
-| `/v1/kyc/cases/admin/cases/{case_id}/approve` | POST | 1184 | Approve case |
-| `/v1/kyc/cases/admin/cases/{case_id}/reject` | POST | 1195 | Reject case |
+| `/v1/kyc/cases/admin/cases/{case_id}/request-info` | POST | 1020 | Request more info from applicant (see `:1021` for `admin_request_more_info`) |
+| `/v1/kyc/cases/admin/cases/{case_id}/approve` | POST | 1183 | Approve case (see `:1183`) <!-- NOTE: ticket originally cited line 1184 -- actual decorator is at 1183 --> |
+| `/v1/kyc/cases/admin/cases/{case_id}/reject` | POST | 1194 | Reject case (see `:1194`) <!-- NOTE: ticket originally cited line 1195 -- actual decorator is at 1194 --> |
 
 ### 3.2 Response Shapes
 
-**Admin queue item** (`KycAdminQueueItem` in `app/contracts/kyc_cases_contract.py`, line 177):
+**Admin queue item** (`KycAdminQueueItem` — see `app/contracts/kyc_cases_contract.py:177`):
 - `kyc_case_id`, `user_sub`, `status`, `assigned_admin_sub`, `created_at`, `updated_at`
 - `waiting_seconds` (computed server-side), `risk_tier` (from `intake_profile`)
 
-**Admin case detail** (`KycAdminCaseDetailOut`, line 201):
+**Admin case detail** (`KycAdminCaseDetailOut` — see `app/contracts/kyc_cases_contract.py:201`):
 - `kyc_case_id`, `user_sub`, `status`
 - `questionnaire_ref` (questionnaire_id, version_id, response_session_id, response_pdf_ref)
 - `files_ref[]` (type, path, verification_state for each file)
@@ -145,7 +145,7 @@ The following endpoints in `app/routers/kyc_cases.py` are fully implemented and 
 - `decision_state` (decision, reason_codes, decided_at)
 - `timeline[]` (event_type, source, created_at, actor_sub, details)
 
-**Metrics** (`KycMetricsSummaryOut`, line 218):
+**Metrics** (`KycMetricsSummaryOut` — see `app/contracts/kyc_cases_contract.py:218`):
 - `funnel_counts` (dict of status -> count)
 - `review_latency_seconds` (p50, p90, p99 percentiles)
 - `stale_queue_count`, `submit_guard_failures_by_reason`
@@ -160,8 +160,8 @@ document viewer will use these URLs for image rendering.
 
 ### 3.4 Auth & Scopes
 
-All admin endpoints check `normalize_role(user.role) in {Role.ADMIN, Role.ROOT}` (line 920).
-The scoped admin check (`_is_scoped_admin_for_case`, line 63) additionally verifies that a
+All admin endpoints check `normalize_role(user.role) in {Role.ADMIN, Role.ROOT}` (see `app/routers/kyc_cases.py:920`).
+The scoped admin check (`_is_scoped_admin_for_case` — see `app/routers/kyc_cases.py:63`) additionally verifies that a
 scoped admin is the assigned reviewer for case detail/actions. ROOT bypasses scope checks.
 
 ### 3.5 Existing Admin Page Structure
@@ -1114,3 +1114,39 @@ test("155.6 Concurrent admin approval triggers version conflict", async () => {
 | `frontend/src/components/layout/Sidebar.tsx` | Modify | Add KYC Review link to admin group |
 | `frontend/src/components/layout/AppShell.tsx` | Modify | Add KYC Review to mobile sidebar |
 | `frontend/e2e/kyc-admin-dashboard.spec.ts` | **New** | 25+ E2E tests across sections 150-155 |
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router (admin endpoints) | `app/routers/kyc_cases.py` | 908-1294 | VERIFIED (1294 lines total, not 1295) |
+| `get_admin_kyc_metrics()` | `app/routers/kyc_cases.py` | 947 | VERIFIED (ticket cites line 946 -- off by 1) |
+| `_admin_decide_case()` | `app/routers/kyc_cases.py` | 1099 | VERIFIED |
+| `admin_request_more_info()` | `app/routers/kyc_cases.py` | 1021 | VERIFIED |
+| `_audit_state_transition()` | `app/routers/kyc_cases.py` | 85 | VERIFIED |
+| KYC cases service | `app/services/kyc_cases.py` | all | VERIFIED (828 lines) |
+| `list_admin_queue()` | `app/services/kyc_cases.py` | 646 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED (2 GSIs: owner-updated-index, status-updated-index) |
+| KYC settings | `app/core/settings.py` | 1065-1072 | VERIFIED: table name, index names, retention days |
+| KYC cases router registration | `app/main.py` | 406 | VERIFIED: `app.include_router(kyc_cases_router)` |
+| `require_root_session` | `app/auth/deps.py` | 273 | VERIFIED |
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+| `e2e_admin_session_setup.py` | project root | exists | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `frontend/src/pages/admin/KycQueuePage.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |
+| `frontend/src/pages/admin/KycCaseDetailPage.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |
+| `frontend/src/pages/admin/KycMetricsDashboard.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |
+| `frontend/src/components/shared/DocumentViewer.tsx` | `frontend/src/components/shared/` | NOT FOUND -- new component required |
+| `frontend/src/api/endpoints/kyc-admin.ts` | `frontend/src/api/endpoints/` | NOT FOUND -- new endpoint file required |
+| Admin KYC routes in App.tsx | `frontend/src/App.tsx` | NOT FOUND -- new routes required |
+| KYC Review sidebar link | `frontend/src/components/layout/Sidebar.tsx` | NOT FOUND -- needs modification |

@@ -59,17 +59,17 @@ The gallery hub (`GET /ui/videos/gallery`) serves a browsable video listing with
 
 ### 3.2 Video View Tracking
 
-`app/services/video_views.py` does not exist as a standalone file. View recording is handled by `record_view_endpoint` in `app/routers/video_listing.py` (line 548). <!-- CORRECTED: was app/services/video_views.py, which does not exist --> Views are stored in the `VideoViews` DynamoDB table (PK=pk, SK=sk) with GSI `ByVideoViewedAt` (partition_key=video_id, sort_key=viewed_at). <!-- VERIFIED: local-ddb-init.py:788-796 --> This is the primary input signal for collaborative filtering.
+`app/services/video_views.py` does not exist as a standalone file. View recording is handled by `record_view_endpoint` in `app/routers/video_listing.py` (see `app/routers/video_listing.py:556`). <!-- CORRECTED: was app/services/video_views.py, which does not exist --> Views are stored in the `VideoViews` DynamoDB table (PK=pk, SK=sk) with GSI `ByVideoViewedAt` (partition_key=video_id, sort_key=viewed_at). <!-- VERIFIED: local-ddb-init.py:810-818 --> This is the primary input signal for collaborative filtering.
 
 ### 3.3 Subscriptions and Follows
 
 - `app/services/subscription_access.py`: Subscription records linking viewers to creators. <!-- VERIFIED: file exists -->
-- `app/services/social.py` (SOC-001): Follow relationships via `get_following()` (line 166). <!-- CORRECTED: was app/services/following.py, which does not exist; actual file is app/services/social.py -->
+- `app/services/social.py` (SOC-001): Follow relationships via `get_following()` (see `app/services/social.py:167`). <!-- CORRECTED: was app/services/following.py, which does not exist; actual file is app/services/social.py -->
 - These provide the social graph signal for "Creators You Might Like".
 
 ### 3.4 Likes
 
-Video likes are tracked in a **separate `VideoLikes` DynamoDB table** (PK=pk, SK=sk) with GSIs `ByVideoLikedAt` and `ByUserLikedAt`. <!-- CORRECTED: was "in the VideoMetadata table via a likes map attribute". Actually VideoLikes is a separate table (local-ddb-init.py:798-807), NOT a map attribute on VideoMetadata. --> These provide a strong positive signal.
+Video likes are tracked in a **separate `VideoLikes` DynamoDB table** (PK=pk, SK=sk) with GSIs `ByVideoLikedAt` and `ByUserLikedAt`. <!-- CORRECTED: was "in the VideoMetadata table via a likes map attribute". Actually VideoLikes is a separate table (local-ddb-init.py:820-829), NOT a map attribute on VideoMetadata. --> These provide a strong positive signal.
 
 ### 3.5 Gaps
 
@@ -301,9 +301,9 @@ recommendations=ddb.Table(S.recommendations_table_name),
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/ui/videos/gallery/for-you` | `require_ui_session` | Personalized "For You" video feed |
-| GET | `/ui/videos/{video_id}/similar` | `require_ui_session` | Similar videos for a specific video |
-| GET | `/ui/discover/creators` | `require_ui_session` | Suggested creators |
+| GET | `/ui/videos/gallery/for-you` | `require_ui_session` (see `app/services/sessions.py:283`) | Personalized "For You" video feed |
+| GET | `/ui/videos/{video_id}/similar` | `require_ui_session` (see `app/services/sessions.py:283`) | Similar videos for a specific video |
+| GET | `/ui/discover/creators` | `require_ui_session` (see `app/services/sessions.py:283`) | Suggested creators |
 | POST | `/internal/recommendations/refresh` | Internal API | Trigger recommendation refresh |
 
 ### 7.2 GET `/ui/videos/gallery/for-you`
@@ -483,10 +483,12 @@ VideoPlayerPage (existing)
 
 ```typescript
 // frontend/src/api/endpoints/recommendations.ts
+// NOTE: actual file uses `import { api } from "../client"` (not `client`)
+// (see frontend/src/api/endpoints/recommendations.ts:1)
 export const useForYou = (limit = 24) => useInfiniteQuery({
   queryKey: ["recommendations", "for-you"],
   queryFn: ({ pageParam }) =>
-    client.get("/ui/videos/gallery/for-you", {
+    api.get("/ui/videos/gallery/for-you", {
       params: { limit, cursor: pageParam }
     }).then(r => r.data),
   getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
@@ -496,7 +498,7 @@ export const useForYou = (limit = 24) => useInfiniteQuery({
 export const useSimilarVideos = (videoId: string, limit = 8) => useQuery({
   queryKey: ["recommendations", "similar", videoId],
   queryFn: () =>
-    client.get(`/ui/videos/${videoId}/similar`, { params: { limit } }).then(r => r.data),
+    api.get(`/ui/videos/${videoId}/similar`, { params: { limit } }).then(r => r.data),
   enabled: !!videoId,
   staleTime: 10 * 60_000,
 });
@@ -504,7 +506,7 @@ export const useSimilarVideos = (videoId: string, limit = 8) => useQuery({
 export const useCreatorSuggestions = (limit = 10) => useQuery({
   queryKey: ["recommendations", "creators"],
   queryFn: () =>
-    client.get("/ui/discover/creators", { params: { limit } }).then(r => r.data),
+    api.get("/ui/discover/creators", { params: { limit } }).then(r => r.data),
   staleTime: 30 * 60_000,  // Cache 30 minutes (changes slowly)
 });
 ```
@@ -532,7 +534,7 @@ export const useCreatorSuggestions = (limit = 10) => useQuery({
 
 ### 9.1 Authentication
 
-- All recommendation endpoints use `require_ui_session`.
+- All recommendation endpoints use `require_ui_session` (see `app/services/sessions.py:283`). <!-- NOTE: require_ui_session is defined in app/services/sessions.py, NOT app/auth/deps.py -->
 - The internal refresh endpoint uses `require_root_session` or is restricted to the internal API network.
 - Pre-computed recommendation lists are user-specific -- a user can only access their own recommendations.
 
@@ -586,7 +588,7 @@ Pre-computation moves the expensive collaborative filtering to the background. A
 ### 10.4 Known Bottlenecks
 
 - **Cold start**: New users have no signals. The trending fallback is functionally acceptable but not personalized. After 5-10 video views, the next refresh cycle generates personalized recommendations.
-- **Video views table scan**: Finding "all users who watched video X" requires querying the VideoViews table by `video_id`. The VideoViews table has PK=pk, SK=sk, and a GSI `ByVideoViewedAt` with `partition_key=video_id`, `sort_key=viewed_at`. <!-- VERIFIED: local-ddb-init.py:788-796. The GSI ByVideoViewedAt supports this access pattern efficiently. -->
+- **Video views table scan**: Finding "all users who watched video X" requires querying the VideoViews table by `video_id`. The VideoViews table has PK=pk, SK=sk, and a GSI `ByVideoViewedAt` with `partition_key=video_id`, `sort_key=viewed_at`. <!-- VERIFIED: local-ddb-init.py:810-818. The GSI ByVideoViewedAt supports this access pattern efficiently. -->
 - **Stale recommendations**: The 6-hour refresh window means new videos don't appear in For You for up to 6 hours. The "New & Noteworthy" boost partially mitigates this.
 
 ---
@@ -732,7 +734,7 @@ Pre-computation moves the expensive collaborative filtering to the background. A
 ### 14.3 Dependency Risks
 
 - **VOD-017 (Video Gallery Hub)**: Must be deployed. Recommendations depend on the gallery page, video metadata, and trending algorithm.
-- **SOC-001 (Follow System)**: Required for creator suggestions. Follow data is in `app/services/social.py` via `get_following()`. <!-- CORRECTED: was implicitly referencing app/services/following.py which does not exist -->
+- **SOC-001 (Follow System)**: Required for creator suggestions. Follow data is in `app/services/social.py` via `get_following()` (see `app/services/social.py:167`). <!-- CORRECTED: was implicitly referencing app/services/following.py which does not exist -->
 - **VideoViews table**: Must exist with queryable access pattern by video_id. <!-- VERIFIED: VideoViews table has GSI `ByVideoViewedAt` with partition_key=video_id, sort_key=viewed_at (local-ddb-init.py:793) -->
 
 ---
@@ -786,27 +788,27 @@ Pre-computation moves the expensive collaborative filtering to the background. A
 
 ## 16. Files to Create
 
-| File | Purpose |
-|------|---------|
-| `app/services/recommendations.py` | Recommendation engine: signal aggregation, collaborative filtering, similarity computation |
-| `app/routers/recommendations.py` | API endpoints for For You, similar videos, creator suggestions |
-| `app/services/recommendation_refresh.py` | Background job for periodic recomputation |
-| `frontend/src/pages/videos/ForYouTab.tsx` | For You tab component |
-| `frontend/src/pages/videos/SimilarVideos.tsx` | Similar Videos section component |
-| `frontend/src/pages/videos/CreatorSuggestions.tsx` | Creator suggestions component |
-| `frontend/src/api/endpoints/recommendations.ts` | API client |
-| `frontend/e2e/recommendations.spec.ts` | E2E tests |
+| File | Purpose | Status |
+|------|---------|--------|
+| `app/services/recommendations.py` | Recommendation engine: signal aggregation, collaborative filtering, similarity computation | DONE (17026 bytes) |
+| `app/routers/recommendations.py` | API endpoints for For You, similar videos, creator suggestions | DONE (11913 bytes, registered in `app/main.py:164-170,411-415`) |
+| `app/services/recommendation_refresh.py` | Background job for periodic recomputation | <!-- NOTE: this file does not exist — refresh logic is inside app/services/recommendations.py:503 (refresh_user_recommendations) --> |
+| `frontend/src/pages/videos/ForYouTab.tsx` | For You tab component | DONE (2136 bytes) |
+| `frontend/src/pages/videos/SimilarVideos.tsx` | Similar Videos section component | DONE (2315 bytes) |
+| `frontend/src/pages/videos/CreatorSuggestions.tsx` | Creator suggestions component | DONE (2135 bytes) |
+| `frontend/src/api/endpoints/recommendations.ts` | API client | DONE (2596 bytes) |
+| `frontend/e2e/recommendations.spec.ts` | E2E tests | DONE (17308 bytes) |
 
 ## 17. Files to Modify
 
 | File | Change |
 |------|--------|
-| `app/main.py` | Register recommendations router; register background refresh job |
-| `app/core/settings.py` | Add `RECO_*` and `recommendations_*` settings |
-| `app/core/tables.py` | Add `recommendations` table handle |
-| `scripts/local-ddb-init.py` | Add `Recommendations` table with TTL enabled |
+| `app/main.py` | Register recommendations router; register background refresh job | DONE (see `app/main.py:164-170,411-415`) |
+| `app/core/settings.py` | Add `RECO_*` and `recommendations_*` settings | DONE (see `app/core/settings.py:1373-1381`) |
+| `app/core/tables.py` | Add `recommendations` table handle | DONE (see `app/core/tables.py:106,230`) |
+| `scripts/local-ddb-init.py` | Add `Recommendations` table with TTL enabled | DONE (see `scripts/local-ddb-init.py:931-936`) |
 | `frontend/src/api/types.ts` | Add recommendation response interfaces |
-| `frontend/src/pages/videos/GalleryPage.tsx` | Add "For You" tab, integrate `CreatorSuggestions` |
+| `frontend/src/pages/gallery/GalleryPage.tsx` | Add "For You" tab, integrate `CreatorSuggestions` | <!-- NOTE: GalleryPage is in pages/gallery/, not pages/videos/ (see App.tsx:63) -->
 | `frontend/src/pages/videos/VideoPlayerPage.tsx` | Add `SimilarVideos` section |
 
 ---
@@ -837,23 +839,40 @@ Pre-computation moves the expensive collaborative filtering to the background. A
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
 | Video Gallery Hub (VOD-017) | `app/routers/video_listing.py` | exists | VERIFIED |
-| `app/services/video_views.py` | N/A | N/A | DOES NOT EXIST (CORRECTED: view tracking is in `app/routers/video_listing.py:548` via `record_view_endpoint`) |
-| VideoViews DDB table schema | `scripts/local-ddb-init.py` | 788-796 | VERIFIED: PK=pk, SK=sk, GSI `ByVideoViewedAt` (partition_key=video_id, sort_key=viewed_at) |
-| VideoLikes DDB table | `scripts/local-ddb-init.py` | 798-807 | VERIFIED: SEPARATE TABLE with PK=pk, SK=sk, GSIs ByVideoLikedAt and ByUserLikedAt (ticket INCORRECTLY said likes are a map attribute on VideoMetadata -- CORRECTED) |
+| `app/services/video_views.py` | N/A | N/A | DOES NOT EXIST (CORRECTED: view tracking is in `app/routers/video_listing.py:556` via `record_view_endpoint`) |
+| VideoViews DDB table schema | `scripts/local-ddb-init.py` | 810-818 | VERIFIED: PK=pk, SK=sk, GSI `ByVideoViewedAt` (partition_key=video_id, sort_key=viewed_at) |
+| VideoLikes DDB table | `scripts/local-ddb-init.py` | 820-829 | VERIFIED: SEPARATE TABLE with PK=pk, SK=sk, GSIs ByVideoLikedAt and ByUserLikedAt (ticket INCORRECTLY said likes are a map attribute on VideoMetadata -- CORRECTED) |
 | `app/services/subscription_access.py` | `app/services/subscription_access.py` | exists | VERIFIED |
 | `app/services/following.py` | N/A | N/A | DOES NOT EXIST (CORRECTED to `app/services/social.py`) |
-| `get_following()` function | `app/services/social.py` | 166-184 | VERIFIED: `get_following(user_id, *, limit=20, cursor=None) -> Tuple[List[Dict], Optional[str]]` |
-| VideoMetadata table | `scripts/local-ddb-init.py` | 702 | VERIFIED: PK=video_id, GSIs: ByOwnerCreatedAt, ByStatusCreatedAt, BySourceBroadcast, ByCategory, ByGalleryPublished |
-| `VideoMetadataModel` | `app/models_video.py` | 35-141 | VERIFIED: includes fields like `view_count`, `like_count`, `category`, `tags`, `trending_score` |
-| `app/core/settings.py` | `app/core/settings.py` | 1-1197 | VERIFIED: frozen dataclass; no `RECO_*` or `recommendations_*` settings exist yet |
-| `app/core/tables.py` | `app/core/tables.py` | 1-177 | VERIFIED: no `recommendations` table handle exists yet |
-| `video_metadata` table handle | `app/core/tables.py` | 76, 160 | VERIFIED |
-| `video_views` table handle | `app/core/tables.py` | 89, 173 | VERIFIED |
-| `video_likes` table handle | `app/core/tables.py` | 90, 174 | VERIFIED |
+| `get_following()` function | `app/services/social.py` | 167 | VERIFIED |
+| VideoMetadata table | `scripts/local-ddb-init.py` | 707 | VERIFIED: PK=video_id, GSIs: ByOwnerCreatedAt, ByStatusCreatedAt, BySourceBroadcast, ByCategory, ByGalleryPublished |
+| `VideoMetadataModel` | `app/models_video.py` | 36-141 | VERIFIED: includes fields like `view_count`, `like_count`, `category`, `tags`, `trending_score` |
+| `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED (NOT in app/auth/deps.py as commonly assumed) |
+| `app/core/settings.py` | `app/core/settings.py` | 1-1494 | VERIFIED: frozen dataclass; RECO_* settings at lines 1373-1381 |
+| `app/core/tables.py` | `app/core/tables.py` | 1-257 | VERIFIED: recommendations table handle at lines 106, 230 |
+| Recommendations DDB table | `scripts/local-ddb-init.py` | 931-936 | VERIFIED: PK=pk, SK=sk |
+| `video_metadata` table handle | `app/core/tables.py` | 76, 200 | VERIFIED |
+| `video_views` table handle | `app/core/tables.py` | 91, 215 | VERIFIED |
+| `video_likes` table handle | `app/core/tables.py` | 92, 216 | VERIFIED |
+| Recommendations router registration | `app/main.py` | 164-170, 411-415 | VERIFIED: 5 sub-routers registered |
+| `app/services/recommendations.py` | `app/services/recommendations.py` | 503 (`refresh_user_recommendations`) | VERIFIED (17026 bytes) |
+| `app/routers/recommendations.py` | `app/routers/recommendations.py` | exists | VERIFIED (11913 bytes) |
+| ForYouTab component | `frontend/src/pages/videos/ForYouTab.tsx` | exists | VERIFIED (2136 bytes) |
+| SimilarVideos component | `frontend/src/pages/videos/SimilarVideos.tsx` | exists | VERIFIED (2315 bytes) |
+| CreatorSuggestions component | `frontend/src/pages/videos/CreatorSuggestions.tsx` | exists | VERIFIED (2135 bytes) |
+| Recommendations API client | `frontend/src/api/endpoints/recommendations.ts` | 1 | VERIFIED: uses `import { api } from "../client"` |
+| GalleryPage (with ForYou tab) | `frontend/src/pages/gallery/GalleryPage.tsx` | 11, 95, 99-101 | VERIFIED: imports ForYouTab, renders in TabsContent |
+| GalleryPage route | `frontend/src/App.tsx` | 63, 162 | VERIFIED |
+| E2E tests | `frontend/e2e/recommendations.spec.ts` | exists | VERIFIED (17308 bytes) |
 
 ### Key Corrections Summary
 
-1. **`app/services/video_views.py` does not exist** -- view tracking is in `app/routers/video_listing.py` via `record_view_endpoint` (line 548).
-2. **Video likes are NOT a map attribute on VideoMetadata** -- they are stored in a separate `VideoLikes` DynamoDB table (local-ddb-init.py:798-807) with its own GSIs.
-3. **`app/services/following.py` does not exist** -- the follow system is in `app/services/social.py` with `get_following()` (line 166).
-4. **VideoViews table has a GSI on video_id** (`ByVideoViewedAt`) which supports the "find users who watched video X" access pattern (local-ddb-init.py:793). The ticket's concern about needing to verify this is resolved.
+1. **`app/services/video_views.py` does not exist** -- view tracking is in `app/routers/video_listing.py` via `record_view_endpoint` (line 556).
+2. **Video likes are NOT a map attribute on VideoMetadata** -- they are stored in a separate `VideoLikes` DynamoDB table (local-ddb-init.py:820-829) with its own GSIs.
+3. **`app/services/following.py` does not exist** -- the follow system is in `app/services/social.py` with `get_following()` (line 167).
+4. **VideoViews table has a GSI on video_id** (`ByVideoViewedAt`) which supports the "find users who watched video X" access pattern (local-ddb-init.py:815). The ticket's concern about needing to verify this is resolved.
+5. **`require_ui_session` is at `app/services/sessions.py:283`**, NOT `app/auth/deps.py`.
+6. **`recommendation_refresh.py` does not exist as a separate file** -- refresh logic is inside `app/services/recommendations.py:503`.
+7. **GalleryPage is at `frontend/src/pages/gallery/GalleryPage.tsx`**, NOT `frontend/src/pages/videos/GalleryPage.tsx`.
+8. **Frontend API uses `api.get(...)` pattern** (from `import { api } from "../client"`), NOT `client.get(...)`.
+9. **All implementation files now exist** -- settings (lines 1373-1381), table handle (lines 106, 230), DDB table (lines 931-936), router registration (lines 164-170, 411-415).

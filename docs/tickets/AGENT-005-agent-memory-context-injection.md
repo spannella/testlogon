@@ -40,12 +40,12 @@ Without persistent memory, every ticket starts from scratch. The agent doesn't k
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Agent orchestrator | `app/services/agent_orchestrator.py` (AGENT-003) | `inject_ticket_context()` generates per-ticket context; memory augments this |
-| Worker provisioner | `app/services/agent_worker_provisioner.py` (AGENT-002) | Worker creation; memory template applied at creation time |
-| Agent workers DDB | `agent_workers` table | Worker records; will reference memory |
-| Terminal infrastructure | `app/routers/terminal.py` | WebSocket SSH terminal; context injected as text via terminal |
-| S3 mock | `app/core/dev_s3.py` | In-process moto S3 for file storage; can store large memory exports |
-| Settings | `app/core/settings.py` | Configuration for memory limits, summarization thresholds |
+| Agent orchestrator | `app/services/agent_orchestrator.py` (AGENT-003) | <!-- NOTE: does not exist yet — requires AGENT-003 --> `inject_ticket_context()` generates per-ticket context; memory augments this |
+| Worker provisioner | `app/services/agent_worker_provisioner.py` (AGENT-002) | <!-- NOTE: does not exist yet — requires AGENT-002 --> Worker creation; memory template applied at creation time |
+| Agent workers DDB | `agent_workers` table | <!-- NOTE: does not exist yet — requires AGENT-002 --> Worker records; will reference memory |
+| Terminal infrastructure | `app/routers/browser_ssh_terminal.py` | <!-- NOTE: was `app/routers/terminal.py` which does not exist. The actual SSH terminal router is `app/routers/browser_ssh_terminal.py` --> WebSocket SSH terminal; context injected as text via terminal (verified) |
+| S3 mock | `app/core/dev_s3.py` | In-process moto S3 for file storage; can store large memory exports (verified) |
+| Settings | `app/core/settings.py` | Configuration for memory limits, summarization thresholds (verified — new settings needed) |
 
 ### 2.2 Gaps
 
@@ -835,3 +835,20 @@ Memory entries are plain text. The context injection payload is text pasted into
 8. Identity templates are available for coder, QA, reviewer, and devops agent types.
 9. Memory entries support CRUD with category filtering.
 10. Token count tracking is accurate and visible in the UI.
+
+---
+
+## Codebase References
+
+| File | Verified | Notes |
+|------|----------|-------|
+| `app/routers/browser_ssh_terminal.py` | Yes | SSH terminal router; context injected as text via terminal |
+| `app/core/dev_s3.py` | Yes | In-process moto S3 for file storage |
+| `app/core/settings.py` | Yes | Configuration singleton `S`; new `agent_memory_table_name` setting needed |
+| `app/core/tables.py` | Yes | Table handles singleton `T`; new `agent_memory` handle needed |
+| `app/core/time.py` | Yes | `now_ts()` for Unix timestamps |
+| `scripts/local-ddb-init.py` | Yes | DDB table definitions; new `agent_memory` TableDef needed |
+| `app/main.py` | Yes | Router registration; new `agent_memory_router` needed |
+| `app/models.py` | Yes | Pydantic models; new memory models needed |
+| `app/services/agent_worker_provisioner.py` | No | Does not exist yet -- requires AGENT-002 |
+| `app/services/agent_orchestrator.py` | No | Does not exist yet -- requires AGENT-003 |

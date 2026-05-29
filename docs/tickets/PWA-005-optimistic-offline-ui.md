@@ -3821,3 +3821,32 @@ when online.
 | **InfiniteData** | React Query's data structure for `useInfiniteQuery`, containing `pages` array |
 | **MessagesPage** | `{ messages: Message[]; next_cursor?: string }` -- one page of messages |
 | **FeedPage** | `{ items: FeedPost[]; next_cursor?: string }` -- one page of feed posts |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `ConversationView.tsx` | `frontend/src/pages/messages/ConversationView.tsx` | 1461 lines | **Exists** — optimistic message at line 309, optimistic image at line 399, offline listener at line 846 |
+| Optimistic message creation | `frontend/src/pages/messages/ConversationView.tsx` | 309-330 | **Verified** — creates optimistic `Message` object with `message_id: "optimistic-..."` and prepends to `pages[0].messages` |
+| Optimistic image message | `frontend/src/pages/messages/ConversationView.tsx` | 399-427 | **Verified** — creates optimistic image message with blob URL |
+| `offlineStore` import | `frontend/src/pages/messages/ConversationView.tsx` | 31 | **Verified** — `useOfflineStore` imported |
+| `ConversationList.tsx` | `frontend/src/pages/messages/ConversationList.tsx` | 356 lines | **Exists** |
+| `FeedPage.tsx` | `frontend/src/pages/feed/FeedPage.tsx` | 18 lines | **Exists** |
+| `CreatePost.tsx` | `frontend/src/pages/feed/CreatePost.tsx` | 1340 lines | **Exists** — imports `useOfflineStore` at line 3, has offline handling |
+| `offlineStore` | `frontend/src/stores/offlineStore.ts` | 213 lines | **Exists** — Zustand store with localStorage persistence |
+| `useOfflineQueue` hook | `frontend/src/hooks/useOfflineQueue.ts` | 133 lines | **Exists** |
+| `OfflineBanner` | `frontend/src/components/shared/OfflineBanner.tsx` | 45 lines | **Exists** |
+| `feedPagination.ts` (`mergeFeedPages`) | `frontend/src/lib/feedPagination.ts` | 19 lines | **Verified** |
+| `offlineCache.ts` (IDB) | `frontend/src/lib/offlineCache.ts` | 306 lines | **Exists** |
+| `syncQueueDb.ts` (sync queue) | `frontend/src/lib/syncQueueDb.ts` | 191 lines | **Exists** |
+| `DeadLetterPanel` | `frontend/src/components/shared/DeadLetterPanel.tsx` | 111 lines | **Exists** |
+| `Message` type | `frontend/src/api/types.ts` | — | **Exists** |
+| API client | `frontend/src/api/client.ts` | 309 lines | **Exists** |
+
+### Key Observations
+
+1. **Optimistic messaging is ALREADY IMPLEMENTED** in `ConversationView.tsx` (lines 309-330 for text, 399-427 for images). The existing implementation prepends optimistic messages to `pages[0]`.
+2. **Offline queue infrastructure exists** (`offlineStore.ts`, `useOfflineQueue.ts`, `syncQueueDb.ts`, `DeadLetterPanel.tsx`).
+3. **The ticket's scope** is to extend these existing patterns to: offline feed post creation, queue status indicators on optimistic messages, auto-reconciliation after reconnect, and unified error handling. Much of the plumbing already exists from PWA-003 and PWA-004.

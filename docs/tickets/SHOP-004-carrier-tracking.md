@@ -1381,4 +1381,4 @@ No new query keys needed. The tracking URL and events are part of the transactio
 | Webhook writes to billing table | `app/routers/ups.py` | 100-106 | VERIFIED: `user_sub="UPS_TRACKING"` |
 | UPS mock endpoints | `app/routers/ups.py` | 121-169 | VERIFIED: token, quote, label, validate |
 | Mock tracking number format | `app/routers/ups.py` | 154 | VERIFIED: `f"1ZMOCK{int(time.time()*1000)}"` |
-| UPS settings | `app/core/settings.py` | 278-283 | VERIFIED: 5 settings |
+| UPS settings | `app/core/settings.py` | 294-298 | VERIFIED: 5 settings (was 278-283; line drift) |

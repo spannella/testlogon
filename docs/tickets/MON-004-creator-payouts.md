@@ -1430,3 +1430,19 @@ AdminPayoutsPage
 - **MON-003**: Earnings dashboard (shows available balance, integrates payout section)
 - **MON-001**: VOD purchase credits (included in payout-eligible balance)
 - **MON-005**: Subscription credits (included in payout-eligible balance)
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/services/creator_payouts.py` | 27-393 | ALREADY EXISTS (443 lines): `get_available_balance` (55), `request_payout` (164), `cancel_payout` (208), `list_user_payouts` (235), `list_payouts_admin` (256), `approve_payout` (292), `reject_payout` (321), `complete_payout` (351), `get_payout_stats` (393) |
+| `app/routers/creator_payouts.py` | 32, 35, 50, 79, 95 | ALREADY EXISTS: router with prefix `/ui/payouts`, `GET /balance` (35), `POST /request` (50), `POST /{id}/cancel` (79), `GET /` list (95) |
+| `app/routers/admin_payouts.py` | — | ALREADY EXISTS: admin payout management router |
+| `app/main.py` | 111-112, 434-435 | EXISTS: `creator_payouts_router` and `admin_payouts_router` imported and registered |
+| `scripts/local-ddb-init.py` | 762 | EXISTS: `CreatorPayouts` table definition |
+| `app/core/settings.py` | 1175-1177 | EXISTS: `creator_payouts_table_name`, `payout_hold_period_seconds` (604800), `payout_minimum_cents` (1000) |
+| `app/core/tables.py` | 86, 210 | EXISTS: `T.creator_payouts` table handle |
+| `app/services/billing_shared.py` | 178 | EXISTS: `apply_wallet_delta()` for wallet operations |
+<!-- NOTE: The payout system (service, router, admin router, DDB table, settings) is FULLY IMPLEMENTED. The frontend page may still need implementation. -->

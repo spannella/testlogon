@@ -1113,3 +1113,59 @@ Admin-only page showing platform-wide analytics.
 10. Non-admin users cannot access admin analytics endpoints (403).
 11. All 24 E2E tests pass.
 12. Rollup computation is idempotent (re-running produces the same result).
+
+---
+
+## Codebase References
+
+### Backend — Services
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `creator_analytics.py` (756 lines) | `app/services/creator_analytics.py` | whole file | **Exists** — ticket says ~720, actual 756 |
+| `get_overview()` | `app/services/creator_analytics.py` | 192 | **Verified** |
+| `get_revenue()` | `app/services/creator_analytics.py` | 233 | **Verified** |
+| `get_views()` | `app/services/creator_analytics.py` | 282 | **Verified** |
+| `get_subscribers()` | `app/services/creator_analytics.py` | 317 | **Verified** |
+| `get_top_content()` | `app/services/creator_analytics.py` | 424 | **Verified** |
+| `get_audience()` | `app/services/creator_analytics.py` | 478 | **Verified** |
+| `upsert_daily_rollup()` | `app/services/creator_analytics.py` | 523 | **Verified** |
+| `upsert_summary_sentinel()` | `app/services/creator_analytics.py` | 544 | **Verified** |
+| `analytics_events.py` | `app/services/analytics_events.py` | — | <!-- NOTE: `analytics_events.py` does not exist yet — new implementation required --> |
+| `analytics_rollup_engine.py` | `app/services/analytics_rollup_engine.py` | — | <!-- NOTE: `analytics_rollup_engine.py` does not exist yet — new implementation required --> |
+
+### Backend — Routers
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `creator_analytics_router` registration | `app/main.py` | 109, 432 | **Verified** |
+| `analytics_refresh()` (rate-limited placeholder) | `app/routers/creator_analytics.py` | 289-314 | **Verified** — returns immediately with message; does NOT trigger real rollup (comment at line 309: "it serves as a rate-limited placeholder") |
+| Router total | `app/routers/creator_analytics.py` | 314 lines | **Verified** |
+
+### Backend — Settings (`app/core/settings.py`)
+
+| Setting | Line | Default | Ticket Claims | Status |
+|---------|------|---------|---------------|--------|
+| `analytics_rollup_interval_seconds` | 1336 | 900 | 900 | **Verified** |
+| `analytics_rollup_lookback_days` | 1337 | **3** | 90 | **INCORRECT** — ticket says "90-day lookback" but the actual default is **3 days**. The refresh endpoint message uses this value: `f"Rollup refresh triggered for {lookback} days"`. Either update the ticket or plan to change the default. |
+
+### DynamoDB Tables (`scripts/local-ddb-init.py`)
+
+| Table | Line | PK / SK | GSIs | Status |
+|-------|------|---------|------|--------|
+| `AnalyticsRollups` | 854 | `pk` / `sk` | ByDateCreatedAt | **Verified** |
+| `analytics_events` | — | — | — | <!-- NOTE: `analytics_events` table does not exist in `local-ddb-init.py` — new TableDef required --> |
+
+### Frontend
+
+| Reference | File | Lines | Status |
+|-----------|------|-------|--------|
+| `AnalyticsPage.tsx` | `frontend/src/pages/analytics/AnalyticsPage.tsx` | 583 lines | **Exists** |
+| Route `/analytics` | `frontend/src/App.tsx` | 184 | **Verified** |
+
+### Corrections
+
+1. **Lookback days default**: Ticket says 90-day lookback, but `app/core/settings.py:1337` sets `analytics_rollup_lookback_days: int = 3`. This is a significant discrepancy — decide whether to change the code default or the ticket.
+2. **`analytics_events` table**: Not defined in `local-ddb-init.py`. Must add a new `TableDef` with appropriate GSIs for time-range queries and TTL.
+3. **`analytics_events.py` and `analytics_rollup_engine.py`**: These service files do not exist — they are new implementations required by this ticket.
+4. **Refresh endpoint**: Currently a no-op placeholder (returns success immediately without computing anything). The ticket's core work is making this functional.

@@ -51,7 +51,7 @@ Key gaps:
 ### 2.1 Analytics API
 
 The creator analytics router (`app/routers/creator_analytics.py`) provides seven endpoints under `/ui/analytics/`:
-<!-- VERIFIED: app/routers/creator_analytics.py:51 router prefix="/ui/analytics" -->
+(see `app/routers/creator_analytics.py:51`)
 
 ```python
 router = APIRouter(prefix="/ui/analytics", tags=["analytics"])
@@ -71,7 +71,7 @@ def analytics_overview(
 ```
 
 The overview endpoint (lines 97-119) returns `period_views`, `period_revenue_cents`, `period_new_subscribers`, `total_subscribers`, and `top_content`.
-<!-- VERIFIED: app/routers/creator_analytics.py:97 analytics_overview --> However, this is date-range scoped with string dates (`YYYY-MM-DD`), not Unix timestamps, which is inconsistent with the earnings API.
+(see `app/routers/creator_analytics.py:97-119`) However, this is date-range scoped with string dates (`YYYY-MM-DD`), not Unix timestamps, which is inconsistent with the earnings API.
 
 Additional analytics endpoints:
 - `GET /ui/analytics/revenue` — revenue time series with granularity (day/week/month)
@@ -81,8 +81,8 @@ Additional analytics endpoints:
 - `GET /ui/analytics/audience` — geographic and device breakdown
 - `POST /ui/analytics/refresh` — trigger on-demand analytics recalculation
 
-The analytics service (`app/services/creator_analytics.py`, lines 78-101) reads from a `T.analytics_rollups` table:
-<!-- CORRECTED: was "lines 78-99", actually _query_rollups is lines 78-101 -->
+The analytics service (`app/services/creator_analytics.py`, line 78+) reads from a `T.analytics_rollups` table:
+(see `app/services/creator_analytics.py:78`)
 
 ```python
 def _query_rollups(user_id: str, from_date: str, to_date: str) -> List[Dict[str, Any]]:
@@ -111,7 +111,7 @@ def earnings_summary(
 ```
 
 The earnings service (`app/services/creator_earnings.py`, lines 47-114) aggregates billing ledger credit entries
-<!-- VERIFIED: app/services/creator_earnings.py:47 get_earnings_summary --> with category breakdown:
+(see `app/services/creator_earnings.py:47`) with category breakdown:
 
 ```python
 def get_earnings_summary(user_id: str, *, from_ts: int = 0, to_ts: int = 0) -> dict:
@@ -138,8 +138,8 @@ The current `Dashboard.tsx` renders a simple card with the user's display name a
 
 ### 2.4 Analytics Refresh Endpoint
 
-The analytics router includes a refresh endpoint (lines 288-314) with per-user rate limiting:
-<!-- VERIFIED: app/routers/creator_analytics.py:288 analytics_refresh -->
+The analytics router includes a refresh endpoint (line 289+) with per-user rate limiting:
+<!-- CORRECTED: was "lines 288-314"; analytics_refresh is at line 289 (see app/routers/creator_analytics.py:289) -->
 
 ```python
 @router.post("/refresh", response_model=AnalyticsRefreshOut)
@@ -158,7 +158,7 @@ def analytics_refresh(session=Depends(require_ui_session)):
 ```
 
 The rate limit is enforced via an in-memory dict (`_refresh_timestamps`).
-<!-- VERIFIED: app/routers/creator_analytics.py:59 _refresh_timestamps, :60 _REFRESH_COOLDOWN_SECONDS --> The mobile dashboard will call this endpoint on pull-to-refresh, displaying a toast on 429 rather than an error state.
+(see `app/routers/creator_analytics.py:59` for `_refresh_timestamps`, `:60` for `_REFRESH_COOLDOWN_SECONDS = 300`) The mobile dashboard will call this endpoint on pull-to-refresh, displaying a toast on 429 rather than an error state.
 
 ### 2.5 Notification System
 
@@ -168,8 +168,8 @@ Existing notification types include: `new_follower`, `new_comment`, `new_tip`, `
 
 ### 2.6 SSE Infrastructure
 
-The broadcast router (`app/routers/broadcast.py`, lines 625-645) implements SSE streaming:
-<!-- VERIFIED: app/routers/broadcast.py:625 broadcast_event_stream_route -->
+The broadcast router (`app/routers/broadcast.py`, lines 639-660+) implements SSE streaming:
+<!-- CORRECTED: was "lines 625-645"; decorator at line 639, function def at line 640 (see app/routers/broadcast.py:639-640) -->
 
 ```python
 @router.get("/sessions/{session_id}/stream")
@@ -843,18 +843,18 @@ class DashboardSSEEvent(BaseModel):
 
 ### 5.1 New Pages and Components
 
-| Component | Path | Purpose |
-|-----------|------|---------|
-| `CreatorDashboard` | `frontend/src/pages/dashboard/CreatorDashboard.tsx` | Main mobile-optimized dashboard page |
-| `EarningsSummaryCard` | `frontend/src/pages/dashboard/EarningsSummaryCard.tsx` | Today's earnings with category breakdown |
-| `AnalyticsSparkline` | `frontend/src/pages/dashboard/AnalyticsSparkline.tsx` | Compact 7-day sparkline chart (views, revenue, subscribers) |
-| `QuickActionBar` | `frontend/src/pages/dashboard/QuickActionBar.tsx` | "New Post" + "Go Live" + "Schedule" buttons |
-| `TopContentList` | `frontend/src/pages/dashboard/TopContentList.tsx` | Top 5 content items with thumbnail and KPI |
-| `MilestoneToast` | `frontend/src/pages/dashboard/MilestoneToast.tsx` | Celebration toast for milestone achievements |
-| `MilestoneSettingsDialog` | `frontend/src/pages/dashboard/MilestoneSettingsDialog.tsx` | Configure milestone notification preferences |
-| `ActiveBroadcastCard` | `frontend/src/pages/dashboard/ActiveBroadcastCard.tsx` | Live broadcast status with viewer count |
-| `KpiCard` | `frontend/src/pages/dashboard/KpiCard.tsx` | Single KPI display card with trend indicator |
-| `PullToRefresh` | `frontend/src/pages/dashboard/PullToRefresh.tsx` | Pull-to-refresh wrapper for mobile touch interaction |
+| Component | Path | Status |
+|-----------|------|--------|
+| `CreatorDashboard` | `frontend/src/pages/dashboard/CreatorDashboard.tsx` | **EXISTS** |
+| `EarningsSummaryCard` | `frontend/src/pages/dashboard/EarningsSummaryCard.tsx` | **EXISTS** |
+| `AnalyticsSparkline` | `frontend/src/pages/dashboard/AnalyticsSparkline.tsx` | NOT YET IMPLEMENTED |
+| `QuickActionBar` | `frontend/src/pages/dashboard/QuickActionBar.tsx` | **EXISTS** |
+| `TopContentList` | `frontend/src/pages/dashboard/TopContentList.tsx` | **EXISTS** |
+| `MilestoneToast` | `frontend/src/pages/dashboard/MilestoneToast.tsx` | NOT YET IMPLEMENTED |
+| `MilestoneSettingsDialog` | `frontend/src/pages/dashboard/MilestoneSettingsDialog.tsx` | **EXISTS** |
+| `ActiveBroadcastCard` | `frontend/src/pages/dashboard/ActiveBroadcastCard.tsx` | NOT YET IMPLEMENTED |
+| `KpiCard` | `frontend/src/pages/dashboard/KpiCard.tsx` | **EXISTS** |
+| `PullToRefresh` | `frontend/src/pages/dashboard/PullToRefresh.tsx` | NOT YET IMPLEMENTED |
 
 ### 5.2 Frontend API Endpoints
 
@@ -1431,3 +1431,36 @@ test("3.1 — Dashboard page loads with KPI cards", async ({ browser }) => {
 - Dashboard SSE subscribers are cleaned up on connection close, error, or replacement.
 - In-memory subscriber maps are bounded by active user count (not total user count).
 - The SSE endpoint uses `StreamingResponse` which holds a TCP connection open. Server-side connection limits should be monitored.
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/routers/creator_analytics.py` | 51 | Router: `prefix="/ui/analytics"` |
+| `app/routers/creator_analytics.py` | 59-60 | `_refresh_timestamps` dict, `_REFRESH_COOLDOWN_SECONDS = 300` |
+| `app/routers/creator_analytics.py` | 97-119 | `analytics_overview` endpoint |
+| `app/routers/creator_analytics.py` | 289 | `analytics_refresh` endpoint |
+| `app/services/creator_analytics.py` | 78 | `_query_rollups` |
+| `app/services/creator_analytics.py` | 192 | `get_overview` |
+| `app/services/creator_earnings.py` | 47-114 | `get_earnings_summary` |
+| `app/routers/broadcast.py` | 639-640 | `broadcast_event_stream_route` SSE endpoint |
+| `app/routers/creator_dashboard.py` | 25 | Router: `tags=["creator-dashboard"]` |
+| `app/routers/creator_dashboard.py` | 66-67 | `dashboard_summary` endpoint |
+| `app/routers/creator_dashboard.py` | 149-150 | `dashboard_refresh` endpoint |
+| `app/routers/creator_dashboard.py` | 169-170 | `dashboard_stream` SSE endpoint |
+| `app/routers/creator_dashboard.py` | 198-199 | `milestones_list` endpoint |
+| `app/routers/creator_dashboard.py` | 208-209 | `milestone_acknowledge` endpoint |
+| `app/routers/creator_dashboard.py` | 232-233 | `milestone_settings_get` endpoint |
+| `app/services/milestones.py` | 49 | `check_milestone` |
+| `app/services/milestones.py` | 101 | `acknowledge_milestone` |
+| `app/services/milestones.py` | 119 | `list_milestones` |
+| `app/services/milestones.py` | 145 | `get_milestone_settings` |
+| `app/services/milestones.py` | 167 | `update_milestone_settings` |
+| `app/services/dashboard_sse.py` | 11 | `dashboard_sse_subscribe` |
+| `app/services/dashboard_sse.py` | 29 | `dashboard_sse_unsubscribe` |
+| `app/services/dashboard_sse.py` | 39 | `dashboard_sse_publish` |
+| `app/main.py` | 110, 433 | Import + registration of `creator_dashboard_router` |
+| `frontend/src/App.tsx` | 85, 183 | Lazy import + route for `/creator-dashboard` |
+| `frontend/src/pages/dashboard/` | all | CreatorDashboard, EarningsSummaryCard, KpiCard, MilestoneSettingsDialog, QuickActionBar, TopContentList |

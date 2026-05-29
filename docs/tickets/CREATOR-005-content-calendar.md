@@ -74,8 +74,7 @@ The lack of a unified view has measurable consequences:
 
 ### 2.1 Newsfeed Post Scheduling
 
-The newsfeed router (`app/routers/newsfeed.py`) supports scheduled posts via the `PostCreateIn` model (lines 1275-1291):
-<!-- VERIFIED: app/routers/newsfeed.py:1275 PostCreateIn publish_at field -->
+The newsfeed router (`app/routers/newsfeed.py`) supports scheduled posts via the `PostCreateIn` model (see `app/routers/newsfeed.py:1297` for `publish_at` field):
 
 ```python
 publish_at: Optional[int] = Field(
@@ -97,11 +96,9 @@ scheduled_at_local: Optional[str] = Field(
 )
 ```
 
-Scheduled posts have `status="scheduled"` and are listed via the `ScheduledPostsResponse` model (lines 1369-1395).
-<!-- VERIFIED: app/routers/newsfeed.py:1369 ScheduledPostsResponse --> The scheduler service (`app/services/newsfeed_scheduler.py`) runs a background loop that publishes due posts.
+Scheduled posts have `status="scheduled"` and are listed via the `ScheduledPostsResponse` model (see `app/routers/newsfeed.py:1396`). The scheduler service (`app/services/newsfeed_scheduler.py`) runs a background loop that publishes due posts.
 
-The scheduler service (lines 234-366) processes due posts by querying a GSI:
-<!-- VERIFIED: app/services/newsfeed_scheduler.py:234 process_due_scheduled_posts -->
+The scheduler service processes due posts by querying a GSI (see `app/services/newsfeed_scheduler.py:234`):
 
 ```python
 def process_due_scheduled_posts(
@@ -125,16 +122,16 @@ DUE_INDEX_PK_VALUE = "SCHEDULED"
 
 **Scheduled Post Ref pattern**: Each scheduled post writes a `ScheduledPostRef` record under the user's PK, with SK `SCHEDULEDPOST#{publish_at:012d}#{post_id}`. This enables the `list_scheduled_posts` endpoint to query posts ordered by publish time without scanning the schedule index globally. The ref has fields: `post_id`, `owner_user_id`, `status`, `publish_at`, `schedule_timezone`, `scheduled_at_local`, `created_at`.
 
-**Listing scheduled posts** (`list_scheduled_posts`, line 3303): Queries `pk=USER#{user_id}` with `sk begins_with SCHEDULEDPOST#`, then batch-fetches the actual post records. This is the pattern the content calendar will reuse.
+**Listing scheduled posts** (`list_scheduled_posts`, see `app/routers/newsfeed.py:3377`): Queries `pk=USER#{user_id}` with `sk begins_with SCHEDULEDPOST#`, then batch-fetches the actual post records. This is the pattern the content calendar will reuse.
 
-**Post cancellation** (`cancel_scheduled_post`, line 3588): Updates the post status from `scheduled` to `cancelled`, removes the GSI attributes (`GSI_SCHEDULE_PK`, `GSI_SCHEDULE_SK`), and deletes the `ScheduledPostRef` record. This is the existing delete path the calendar's cancel button calls.
+**Post cancellation** (`cancel_scheduled_post`, see `app/routers/newsfeed.py:3662`): Updates the post status from `scheduled` to `cancelled`, removes the GSI attributes (`GSI_SCHEDULE_PK`, `GSI_SCHEDULE_SK`), and deletes the `ScheduledPostRef` record. This is the existing delete path the calendar's cancel button calls.
+<!-- NOTE: cancel_scheduled_post uses POST /posts/{post_id}/cancel, not DELETE -->
 
-**Post rescheduling** (`edit_post`, line 3362): The `PATCH /posts/{post_id}` endpoint allows updating `publish_at` on a scheduled post. When `publish_at` changes, the old `ScheduledPostRef` and GSI sort key must be re-written. This is the reschedule path for drag-and-drop.
+**Post rescheduling** (`edit_post`, see `app/routers/newsfeed.py:3437`): The `PATCH /posts/{post_id}` endpoint allows updating `publish_at` on a scheduled post. When `publish_at` changes, the old `ScheduledPostRef` and GSI sort key must be re-written. This is the reschedule path for drag-and-drop.
 
 ### 2.2 Broadcast Scheduling
 
-The broadcast router (`app/routers/broadcast.py`, lines 2039-2107) provides scheduling via:
-<!-- CORRECTED: was "lines 2040-2107", actually decorator starts at line 2039 -->
+The broadcast router (`app/routers/broadcast.py`) provides scheduling via `schedule_session_route` (see `app/routers/broadcast.py:2053`):
 
 ```python
 @router.post("/sessions/{session_id}/schedule", response_model=BroadcastSessionOut)
@@ -162,8 +159,7 @@ def schedule_session_route(
         )
 ```
 
-Rescheduling (lines 2110-2153):
-<!-- VERIFIED: app/routers/broadcast.py:2110 reschedule_session_route -->
+Rescheduling (see `app/routers/broadcast.py:2124`):
 
 ```python
 @router.post("/sessions/{session_id}/reschedule", response_model=BroadcastSessionOut)
@@ -181,13 +177,12 @@ def reschedule_session_route(
         )
 ```
 
-Cancellation (lines 2156-2199) via `cancel_schedule_route`: Transitions `scheduled -> cancelled`, cancels reminders, deletes the BCAST-010 announcement post if present, and records an audit action.
+Cancellation via `cancel_schedule_route` (see `app/routers/broadcast.py:2170`): Transitions `scheduled -> cancelled`, cancels reminders, deletes the BCAST-010 announcement post if present, and records an audit action.
+<!-- NOTE: The actual route path is POST /sessions/{id}/cancel-schedule (with hyphen), not /cancel_schedule -->
 
-**Broadcast listing for calendar**: The `list_scheduled_sessions_by_creator` function (`app/services/broadcast_store.py`, line 442) queries
-<!-- VERIFIED: app/services/broadcast_store.py:442 list_scheduled_sessions_by_creator --> `ByCreatorCreatedAt` GSI with `FilterExpression` for `schedule_status="scheduled"`. Note the CLAUDE.md caveat: `FilterExpression` doesn't reduce page size. This is acceptable for the content calendar since creators rarely have more than a few dozen scheduled broadcasts, but the content calendar service must paginate via `LastEvaluatedKey` to guarantee completeness.
+**Broadcast listing for calendar**: The `list_scheduled_sessions_by_creator` function (see `app/services/broadcast_store.py:452`) queries `ByCreatorCreatedAt` GSI with `FilterExpression` for `schedule_status="scheduled"`. Note the CLAUDE.md caveat: `FilterExpression` doesn't reduce page size. This is acceptable for the content calendar since creators rarely have more than a few dozen scheduled broadcasts, but the content calendar service must paginate via `LastEvaluatedKey` to guarantee completeness.
 
-Scheduled broadcasts are listed via the `ByScheduledAt` GSI (from `app/services/broadcast_store.py`, lines 427-456):
-<!-- VERIFIED: app/services/broadcast_store.py:427 list_due_scheduled_sessions -->
+Scheduled broadcasts are listed via the `ByScheduledAt` GSI (see `app/services/broadcast_store.py:437`):
 
 ```python
 def list_due_scheduled_sessions(*, now: int, limit: int = 10) -> List[BroadcastSessionModel]:
@@ -202,17 +197,17 @@ def list_due_scheduled_sessions(*, now: int, limit: int = 10) -> List[BroadcastS
 
 ### 2.3 VOD Scheduling
 
-The `VideoMetadataModel` (`app/models_video.py`, line 36) currently has a `published_at: Optional[int]` field, `status` (with values `created`, `encoding`, `ready`, `published`, `deleted`), and `visibility` (`private`, `unlisted`, `public`). There is no dedicated `publish_at` (future schedule time) field on the video model.
+The `VideoMetadataModel` (see `app/models_video.py:36`) currently has a `published_at: Optional[int]` field (line 100), `status` (with values `created`, `encoding`, `ready`, `published`, `deleted`), and `visibility` (`private`, `unlisted`, `public`). The `scheduled_publish_at: Optional[int]` field already exists (see `app/models_video.py:104`, comment `# Scheduled Publishing (CREATOR-005)`).
 
 For the content calendar, VOD "scheduled releases" are defined as videos with:
 - `status = "ready"` (encoding complete, ready to publish)
 - `visibility = "private"` (not yet visible to audience)
 - `published_at` is `None` (has not been published yet)
-- A new optional field `scheduled_publish_at: Optional[int]` will be added to `VideoMetadataModel`
+- `scheduled_publish_at` is set to a future Unix timestamp
 
-This means VOD scheduling is currently implicit (creator intends to publish later) rather than explicit (creator sets a future publish date). This ticket adds the explicit scheduling field.
+<!-- NOTE: scheduled_publish_at already exists in VideoMetadataModel (line 104) and is serialized/deserialized in video_metadata_store.py (lines 97, 241) — no new field needed -->
 
-**Video listing for calendar**: Uses `list_videos_by_owner` (`app/services/video_metadata_store.py`, line 398) which queries `ByOwnerCreatedAt` GSI. For the content calendar, we add a `FilterExpression` for `attribute_exists(scheduled_publish_at)` to find only videos with an explicit future release date.
+**Video listing for calendar**: Uses `list_videos_by_owner` (see `app/services/video_metadata_store.py:402`) which queries `ByOwnerCreatedAt` GSI. For the content calendar, a `FilterExpression` for `attribute_exists(scheduled_publish_at)` filters to only videos with an explicit future release date.
 
 ### 2.4 Existing Calendar UI
 
@@ -235,7 +230,7 @@ export default function CalendarPage() {
         </TabsList>
 ```
 
-The `CalendarView.tsx` component (lines 1-100) provides month and week views with event rendering, including helper functions for date calculation:
+The `CalendarView.tsx` component (see `frontend/src/pages/calendar/CalendarView.tsx`, 586 lines total) provides month and week views with event rendering, including helper functions for date calculation:
 
 ```tsx
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -274,8 +269,7 @@ The content calendar will reuse these date utility functions and follow the same
 
 ### 2.5 Scheduled Posts Panel (Frontend)
 
-The `ScheduledPostsPanel` (`frontend/src/pages/feed/ScheduledPostsPanel.tsx`, lines 1-57) provides a list view of scheduled posts with cancel and edit functionality:
-<!-- VERIFIED: frontend/src/pages/feed/ScheduledPostsPanel.tsx exists (166 lines total) -->
+The `ScheduledPostsPanel` (see `frontend/src/pages/feed/ScheduledPostsPanel.tsx`, 166 lines total) provides a list view of scheduled posts with cancel and edit functionality:
 
 ```tsx
 export function ScheduledPostsPanel() {
@@ -309,8 +303,7 @@ This component handles scheduled post data well but only covers posts, not broad
 
 ### 2.6 Broadcast Session List
 
-The broadcast store (`app/services/broadcast_store.py`, lines 442-456) lists scheduled broadcasts for a creator:
-<!-- VERIFIED: app/services/broadcast_store.py:442 list_scheduled_sessions_by_creator -->
+The broadcast store (see `app/services/broadcast_store.py:452`) lists scheduled broadcasts for a creator:
 
 ```python
 def list_scheduled_sessions_by_creator(created_by: str, *, limit: int = 50) -> List[BroadcastSessionModel]:
@@ -354,20 +347,17 @@ from boto3.dynamodb.conditions import Attr, Key
 
 from app.core.aws import ddb
 from app.core.settings import S
+import os
 from app.core.tables import T
 from app.core.time import now_ts
-from app.services.broadcast_store import (
-    BroadcastSessionModel,
-    list_scheduled_sessions_by_creator,
-)
 
 logger = logging.getLogger(__name__)
 
 # ─── Constants ──────────────────────────────────────────────────
 
+APP_TABLE = os.environ.get("APP_TABLE", "app_single_table")  # actual uses env var, not S.app_table_name
 MAX_RANGE_SECONDS = 90 * 86400  # 90 days maximum query window
 CONFLICT_BUFFER_MINUTES = 30
-APP_TABLE = S.app_table_name
 
 ContentType = Literal["post", "broadcast", "vod"]
 
@@ -928,6 +918,7 @@ def _cancel_vod(user_id: str, video_id: str) -> Dict[str, str]:
 
 The router is thin, delegating all logic to the service layer:
 
+<!-- NOTE: The actual router at app/routers/content_calendar.py imports require_ui_session from app.services.sessions, not app.auth.deps -->
 ```python
 """Content calendar router.
 
@@ -940,9 +931,9 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
-from app.auth.deps import require_ui_session
+from app.services.sessions import require_ui_session  # actual import path
 from app.services.content_calendar import (
     get_content_calendar,
     get_today_agenda,
@@ -1361,17 +1352,16 @@ class CancelResult(BaseModel):
 
 ### 5.1 New Pages and Components
 
+<!-- NOTE: ContentCalendarGrid and ContentCalendarItem do not exist as separate files — their functionality is inline in ContentCalendarWeek.tsx and ContentCalendarPage.tsx respectively -->
 | Component | Path | Purpose |
 |-----------|------|---------|
-| `ContentCalendarPage` | `frontend/src/pages/content-calendar/ContentCalendarPage.tsx` | Main page with week/month toggle and calendar grid |
-| `ContentCalendarGrid` | `frontend/src/pages/content-calendar/ContentCalendarGrid.tsx` | Calendar grid with time slots and content items |
-| `ContentCalendarWeek` | `frontend/src/pages/content-calendar/ContentCalendarWeek.tsx` | Weekly view with hour rows and day columns |
-| `ContentCalendarMonth` | `frontend/src/pages/content-calendar/ContentCalendarMonth.tsx` | Monthly view with day cells and item dots |
-| `ContentCalendarItem` | `frontend/src/pages/content-calendar/ContentCalendarItem.tsx` | Draggable card representing a scheduled content item |
-| `ContentCalendarMobileList` | `frontend/src/pages/content-calendar/ContentCalendarMobileList.tsx` | Chronological list view for mobile |
-| `QuickScheduleDialog` | `frontend/src/pages/content-calendar/QuickScheduleDialog.tsx` | Create new scheduled content from time slot click |
-| `ConflictBanner` | `frontend/src/pages/content-calendar/ConflictBanner.tsx` | Warning banner when scheduling conflicts detected |
-| `ContentItemDetail` | `frontend/src/pages/content-calendar/ContentItemDetail.tsx` | Detail panel shown on item click |
+| `ContentCalendarPage` | `frontend/src/pages/content-calendar/ContentCalendarPage.tsx` (11758 bytes) | Main page with week/month toggle and calendar grid |
+| `ContentCalendarWeek` | `frontend/src/pages/content-calendar/ContentCalendarWeek.tsx` (6386 bytes) | Weekly view with hour rows and day columns |
+| `ContentCalendarMonth` | `frontend/src/pages/content-calendar/ContentCalendarMonth.tsx` (4330 bytes) | Monthly view with day cells and item dots |
+| `ContentCalendarMobileList` | `frontend/src/pages/content-calendar/ContentCalendarMobileList.tsx` (3658 bytes) | Chronological list view for mobile |
+| `QuickScheduleDialog` | `frontend/src/pages/content-calendar/QuickScheduleDialog.tsx` (3289 bytes) | Create new scheduled content from time slot click |
+| `ConflictBanner` | `frontend/src/pages/content-calendar/ConflictBanner.tsx` (2328 bytes) | Warning banner when scheduling conflicts detected |
+| `ContentItemDetail` | `frontend/src/pages/content-calendar/ContentItemDetail.tsx` (4684 bytes) | Detail panel shown on item click |
 
 ### 5.2 TypeScript Types
 
@@ -1441,10 +1431,11 @@ export interface ConflictsResponse {
 
 ### 5.3 API Endpoint Functions
 
+<!-- NOTE: Actual file uses `import { api } from "@/api/client"` and `api.get()`/`api.post()` instead of `client.get()`/`client.post()` (see frontend/src/api/endpoints/content-calendar.ts:1) -->
 ```typescript
 // frontend/src/api/endpoints/content-calendar.ts
 
-import client from "../client";
+import { api } from "@/api/client";  // actual import pattern
 import type {
   ContentCalendarResponse,
   TodayAgendaResponse,
@@ -2325,14 +2316,17 @@ function TimeSlot({ date, hour, onDrop, onClick }: Props) {
 ### 5.10 Route
 
 ```tsx
-// App.tsx
-{ path: "/content-calendar", element: <ContentCalendarPage /> }
+// App.tsx (see frontend/src/App.tsx:92 for lazy import, line 144 for route)
+const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
+// ...
+<Route path="content-calendar" element={<ContentCalendarPage />} />
 ```
 
 ### 5.11 Navigation
 
 - Add "Content Calendar" to the Creator Tools section in `Sidebar.tsx` and `AppShell.tsx`
-- Icon: `CalendarDays` from lucide-react
+- Icon: `CalendarClock` from lucide-react (see `frontend/src/components/layout/Sidebar.tsx:120`, `AppShell.tsx:184`, `MobileNav.tsx:72`)
+<!-- NOTE: Actual icon is CalendarClock, not CalendarDays as originally designed -->
 - Also accessible from `ScheduledPostsPanel` via "View Calendar" link
 
 ---
@@ -2375,22 +2369,22 @@ No new write patterns needed.
 
 ### 6.5 VOD Extension: `scheduled_publish_at` Field
 
-The `VideoMetadataModel` in `app/models_video.py` needs a new optional field:
+<!-- NOTE: This field already exists in the codebase — no new implementation required -->
+The `VideoMetadataModel` in `app/models_video.py` already has the field (see `app/models_video.py:104`):
 
 ```python
-# In VideoMetadataModel class (app/models_video.py)
+# In VideoMetadataModel class (app/models_video.py:104)
 scheduled_publish_at: Optional[int] = None  # Unix timestamp for future auto-publish
 ```
 
-Correspondingly, in `video_to_item` (`app/services/video_metadata_store.py`):
+Serialization in `video_to_item` already handles it (see `app/services/video_metadata_store.py:97`, in the `_optional_num_fields` list):
 
 ```python
-# Add to the optional int fields section
-if video.scheduled_publish_at is not None:
-    item["scheduled_publish_at"] = video.scheduled_publish_at
+# Already in the optional int fields section (line 97)
+"scheduled_publish_at",
 ```
 
-And in `video_from_item`:
+And deserialization in `video_from_item` already handles it (see `app/services/video_metadata_store.py:241`):
 
 ```python
 scheduled_publish_at=_int_or_none(item.get("scheduled_publish_at")),
@@ -3179,22 +3173,22 @@ async function createScheduledBroadcast(
 
 ## 10. Implementation Checklist
 
-| Step | Task | Files |
-|------|------|-------|
-| 1 | Add `scheduled_publish_at` field to `VideoMetadataModel` | `app/models_video.py` |
-| 2 | Update `video_to_item` / `video_from_item` serialization | `app/services/video_metadata_store.py` |
-| 3 | Create content calendar service module | `app/services/content_calendar.py` |
-| 4 | Create content calendar router | `app/routers/content_calendar.py` |
-| 5 | Register router in `main.py` | `app/main.py` |
-| 6 | Add Pydantic models | `app/models.py` |
-| 7 | Add TypeScript types | `frontend/src/api/types.ts` |
-| 8 | Add API endpoint functions | `frontend/src/api/endpoints/content-calendar.ts` |
-| 9 | Create `ContentCalendarPage` and sub-components | `frontend/src/pages/content-calendar/*.tsx` |
-| 10 | Add route to `App.tsx` | `frontend/src/App.tsx` |
-| 11 | Add sidebar navigation entry | `frontend/src/components/layout/Sidebar.tsx`, `AppShell.tsx`, `MobileNav.tsx` |
-| 12 | Add "View Calendar" link to `ScheduledPostsPanel` | `frontend/src/pages/feed/ScheduledPostsPanel.tsx` |
-| 13 | Write E2E tests | `frontend/e2e/content-calendar.spec.ts` |
-| 14 | Update file reference docs | `docs/file-reference.md` |
+| Step | Task | Files | Status |
+|------|------|-------|--------|
+| 1 | Add `scheduled_publish_at` field to `VideoMetadataModel` | `app/models_video.py` | DONE (line 104) |
+| 2 | Update `video_to_item` / `video_from_item` serialization | `app/services/video_metadata_store.py` | DONE (lines 97, 241) |
+| 3 | Create content calendar service module | `app/services/content_calendar.py` | DONE (20844 bytes) |
+| 4 | Create content calendar router | `app/routers/content_calendar.py` | DONE (3000 bytes) |
+| 5 | Register router in `main.py` | `app/main.py` | DONE (lines 171, 462) |
+| 6 | Add Pydantic models | `app/models.py` | TODO — response models not yet in `app/models.py` (router returns dicts) |
+| 7 | Add TypeScript types | `frontend/src/api/types.ts` | DONE (lines 4366-4423) |
+| 8 | Add API endpoint functions | `frontend/src/api/endpoints/content-calendar.ts` | DONE (68 lines) |
+| 9 | Create `ContentCalendarPage` and sub-components | `frontend/src/pages/content-calendar/*.tsx` | DONE (7 files) |
+| 10 | Add route to `App.tsx` | `frontend/src/App.tsx` | DONE (lines 92, 144) |
+| 11 | Add sidebar navigation entry | `frontend/src/components/layout/Sidebar.tsx`, `AppShell.tsx`, `MobileNav.tsx` | DONE (lines 120, 184, 72) |
+| 12 | Add "View Calendar" link to `ScheduledPostsPanel` | `frontend/src/pages/feed/ScheduledPostsPanel.tsx` | TODO |
+| 13 | Write E2E tests | `frontend/e2e/content-calendar.spec.ts` | TODO |
+| 14 | Update file reference docs | `docs/file-reference.md` | TODO |
 
 ---
 
@@ -3209,3 +3203,67 @@ async function createScheduledBroadcast(
 | Auto-optimal scheduling | ML-based suggestion for best posting times based on engagement history | Low |
 | Bulk reschedule | Select multiple items and shift them all by N hours/days | Medium |
 | Calendar sharing | Generate a read-only link for team members to view the schedule | Medium |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/routers/content_calendar.py` | 1-99 | Content calendar router (already implemented) |
+| `app/services/content_calendar.py` | 1-580+ | Content calendar service layer (already implemented) |
+| `app/main.py` | 171 | Router import: `from app.routers.content_calendar import router as content_calendar_router` |
+| `app/main.py` | 462 | Router registration: `app.include_router(content_calendar_router)` |
+| `app/routers/newsfeed.py` | 1297 | `PostCreateIn.publish_at` field definition |
+| `app/routers/newsfeed.py` | 1302-1313 | `PostCreateIn.schedule_timezone` and `scheduled_at_local` fields |
+| `app/routers/newsfeed.py` | 1396 | `ScheduledPostsResponse` model |
+| `app/routers/newsfeed.py` | 3377 | `list_scheduled_posts` endpoint |
+| `app/routers/newsfeed.py` | 3437 | `edit_post` endpoint (PATCH /posts/{post_id}) |
+| `app/routers/newsfeed.py` | 3662 | `cancel_scheduled_post` endpoint (POST /posts/{post_id}/cancel) |
+| `app/routers/newsfeed.py` | 772 | `SCHEDULED_POST_REF_PREFIX = "SCHEDULEDPOST"` |
+| `app/routers/newsfeed.py` | 775 | `SCHEDULE_DUE_INDEX_PK_VALUE = "SCHEDULED"` |
+| `app/services/newsfeed_scheduler.py` | 26-29 | DUE_INDEX constants (GSI_SCHEDULE_DUE, PK/SK attrs) |
+| `app/services/newsfeed_scheduler.py` | 234 | `process_due_scheduled_posts` function |
+| `app/routers/broadcast.py` | 154 | `BroadcastScheduleIn` model |
+| `app/routers/broadcast.py` | 160 | `BroadcastRescheduleIn` model |
+| `app/routers/broadcast.py` | 2053 | `schedule_session_route` (POST /sessions/{id}/schedule) |
+| `app/routers/broadcast.py` | 2124 | `reschedule_session_route` (POST /sessions/{id}/reschedule) |
+| `app/routers/broadcast.py` | 2170 | `cancel_schedule_route` (POST /sessions/{id}/cancel-schedule) |
+| `app/services/broadcast_store.py` | 437 | `list_due_scheduled_sessions` (ByScheduledAt GSI) |
+| `app/services/broadcast_store.py` | 452 | `list_scheduled_sessions_by_creator` (ByCreatorCreatedAt GSI) |
+| `app/services/broadcast_store.py` | 469 | `update_session_fields` |
+| `app/services/broadcast_store.py` | 336 | `transition_session_status` |
+| `app/services/broadcast_store.py` | 21 | `now_iso()` helper |
+| `app/services/broadcast_reminders.py` | 63 | `cancel_reminders_for_session` |
+| `app/models_video.py` | 36 | `VideoMetadataModel` class definition |
+| `app/models_video.py` | 100 | `published_at: Optional[int]` field |
+| `app/models_video.py` | 104 | `scheduled_publish_at: Optional[int]` field (already exists) |
+| `app/services/video_metadata_store.py` | 22 | `video_to_item` serialization |
+| `app/services/video_metadata_store.py` | 97 | `scheduled_publish_at` in `_optional_num_fields` |
+| `app/services/video_metadata_store.py` | 176 | `video_from_item` deserialization |
+| `app/services/video_metadata_store.py` | 241 | `scheduled_publish_at` deserialization |
+| `app/services/video_metadata_store.py` | 402 | `list_videos_by_owner` function |
+| `app/core/settings.py` | 1196 | `broadcast_schedule_min_lead_time_seconds` setting |
+| `app/core/tables.py` | 76, 200 | `T.video_metadata` table handle |
+| `frontend/src/pages/content-calendar/ContentCalendarPage.tsx` | all | Main page component (11758 bytes) |
+| `frontend/src/pages/content-calendar/ContentCalendarWeek.tsx` | all | Week view component (6386 bytes) |
+| `frontend/src/pages/content-calendar/ContentCalendarMonth.tsx` | all | Month view component (4330 bytes) |
+| `frontend/src/pages/content-calendar/ContentCalendarMobileList.tsx` | all | Mobile list component (3658 bytes) |
+| `frontend/src/pages/content-calendar/ConflictBanner.tsx` | all | Conflict warning banner (2328 bytes) |
+| `frontend/src/pages/content-calendar/QuickScheduleDialog.tsx` | all | Quick schedule dialog (3289 bytes) |
+| `frontend/src/pages/content-calendar/ContentItemDetail.tsx` | all | Item detail panel (4684 bytes) |
+| `frontend/src/api/endpoints/content-calendar.ts` | 1-68 | API endpoint functions |
+| `frontend/src/api/types.ts` | 4366 | `ContentItemType` type |
+| `frontend/src/api/types.ts` | 4368 | `ContentCalendarItem` interface |
+| `frontend/src/api/types.ts` | 4396 | `ContentCalendarConflict` interface |
+| `frontend/src/api/types.ts` | 4405 | `ContentCalendarResponse` interface |
+| `frontend/src/api/types.ts` | 4413 | `TodayAgendaResponse` interface |
+| `frontend/src/api/types.ts` | 4421 | `ConflictsResponse` interface |
+| `frontend/src/App.tsx` | 92 | Lazy import for `ContentCalendarPage` |
+| `frontend/src/App.tsx` | 144 | Route: `<Route path="content-calendar" ...>` |
+| `frontend/src/components/layout/Sidebar.tsx` | 120 | Sidebar entry with `CalendarClock` icon |
+| `frontend/src/components/layout/AppShell.tsx` | 184 | Mobile sidebar entry |
+| `frontend/src/components/layout/MobileNav.tsx` | 72 | Mobile nav entry |
+| `frontend/src/pages/feed/ScheduledPostsPanel.tsx` | 26 | `ScheduledPostsPanel` component (166 lines) |
+| `frontend/src/pages/calendar/CalendarView.tsx` | 28-80 | Calendar utility functions (DAYS, HOURS, getMonthDays, getWeekDays, isSameDay, eventOnDay) |
+| `frontend/src/pages/calendar/CalendarPage.tsx` | 11 | `CalendarPage` component |

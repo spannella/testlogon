@@ -1827,20 +1827,17 @@ The `send_alert_email()` function is called from the alert fanout path, which ru
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| `send_alert_email()` with SES | `app/services/alerts.py` | 332-353 | VERIFIED |
-| Dev mode logs to `.logs/dev/emails.log` | `app/services/alerts.py` | 340 | VERIFIED |
-| Dev log writer function | `app/services/alerts.py` | 322-329 | VERIFIED |
-| Silent exception: `except Exception: pass` | `app/services/alerts.py` | 352-353 | VERIFIED |
-| Email fanout in alert write | `app/services/alerts.py` | 622-669 | VERIFIED |
-| Email fanout outer exception handler | `app/services/alerts.py` | 670-671 | VERIFIED |
+| `send_alert_email()` with SES | `app/services/alerts.py` | 458 | VERIFIED |
+| Dev mode logs to `.logs/dev/emails.log` | `app/services/alerts.py` | within send_alert_email | VERIFIED |
+| `audit_event()` (master dispatch, routes to email/sms/push) | `app/services/alerts.py` | 695 | VERIFIED |
 | `alerts_email_enabled` default `"0"` | `app/core/settings.py` | 186 | VERIFIED |
 | `alerts_from_email` default empty | `app/core/settings.py` | 185 | VERIFIED |
 | `ses_from_email` setting | `app/core/settings.py` | 179 | VERIFIED |
 | `alerts_email_max_per_window` default 20 | `app/core/settings.py` | 187 | VERIFIED |
 | `alerts_email_window_seconds` default 3600 | `app/core/settings.py` | 188 | VERIFIED |
-| `dev_email_log` default path | `app/core/settings.py` | 246 | VERIFIED |
-| `devtools_email_log_path` default | `app/core/settings.py` | 249 | VERIFIED |
-| `notification_email_templates_enabled` | `app/core/settings.py` | 1314 | VERIFIED |
+| `dev_email_log` default path | `app/core/settings.py` | 261 | VERIFIED |
+| `devtools_email_log_path` default | `app/core/settings.py` | 264 | VERIFIED |
+| `notification_email_templates_enabled` | `app/core/settings.py` | 1392 | VERIFIED |
 | Module-level SES client in aws.py | `app/core/aws.py` | 11-19 | VERIFIED |
 | `sns_client()` lazy import per-call | `app/core/aws.py` | 30-37 | VERIFIED |
 | `alert_email_templates.py` 165 lines, 5 templates | `app/services/alert_email_templates.py` | 1-165 | VERIFIED |

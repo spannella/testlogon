@@ -11,6 +11,8 @@
 
 ## 1. Executive Summary
 
+<!-- NOTE: This feature is PARTIALLY IMPLEMENTED. The reusable components exist: useMultiSelect.ts hook and BulkActionBar.tsx component. Backend batch endpoints exist: catalog bulk-delete (:859), bulk-update (:887) in catalog.py; newsfeed bulk-delete (:5781), bulk-archive (:5809) in newsfeed.py. However, VideoReviewQueuePage has NOT been refactored to use useMultiSelect (still uses inline state at :66, :192-206). The catalog batch endpoint names differ from the spec (bulk-delete/bulk-update vs batch-archive). -->
+
 Bulk operations exist in two places: the admin video review queue (batch approve/reject with multi-select checkboxes) and the file manager (bulk move). The rest of the platform -- posts, catalog items, stories, scheduled actions -- lacks any multi-select or bulk operation UI. Creators managing hundreds of catalog items or posts must operate on each item individually, which is time-consuming and error-prone.
 
 The video review queue's implementation in `VideoReviewQueuePage.tsx` is well-designed: it has `selectedIds` state as a `Set<string>`, select-all/deselect-all functions, per-item checkboxes, and a floating action bar showing the selected count with approve/reject buttons. However, this pattern is implemented entirely inline (not extracted as a reusable hook or component), so each new surface that needs bulk operations must re-implement the same logic from scratch.
@@ -1007,8 +1009,18 @@ None. No new npm packages required.
 | VideoReviewQueue batch approve mutation | `frontend/src/pages/admin/VideoReviewQueuePage.tsx` | 133-147 | VERIFIED |
 | VideoReviewQueue batch reject mutation | `frontend/src/pages/admin/VideoReviewQueuePage.tsx` | 149-175 | VERIFIED |
 | VideoReviewQueue floating selection bar | `frontend/src/pages/admin/VideoReviewQueuePage.tsx` | 256-284 | VERIFIED |
-| VideoReviewQueue checkbox per video | `frontend/src/pages/admin/VideoReviewQueuePage.tsx` | 305-306 | VERIFIED |
-| FilesPage bulk move | `frontend/src/pages/files/FilesPage.tsx` | 866 | VERIFIED |
-| No bulk ops in NewsFeed | `frontend/src/pages/feed/NewsFeed.tsx` | all | VERIFIED |
-| No bulk ops in shop pages | `frontend/src/pages/shop/` | all | VERIFIED |
-| Catalog table handle | `app/core/tables.py` | 133 | VERIFIED |
+| VideoReviewQueue checkbox per video | `frontend/src/pages/admin/VideoReviewQueuePage.tsx` | 306-307 | VERIFIED |
+| FilesPage bulk move | `frontend/src/pages/files/FilesPage.tsx` | 867 | VERIFIED |
+| useMultiSelect hook | `frontend/src/hooks/useMultiSelect.ts` | exists | **ALREADY IMPLEMENTED** |
+| BulkActionBar component | `frontend/src/components/shared/BulkActionBar.tsx` | exists | **ALREADY IMPLEMENTED** |
+| Catalog bulk-delete endpoint | `app/routers/catalog.py` | 859-860 | **ALREADY IMPLEMENTED**: `POST /items/bulk-delete` |
+| Catalog bulk-update endpoint | `app/routers/catalog.py` | 887-888 | **ALREADY IMPLEMENTED**: `POST /items/bulk-update` |
+| Newsfeed bulk-delete endpoint | `app/routers/newsfeed.py` | 5781-5782 | **ALREADY IMPLEMENTED**: `POST /posts/bulk-delete` |
+| Newsfeed bulk-archive endpoint | `app/routers/newsfeed.py` | 5809-5810 | **ALREADY IMPLEMENTED**: `POST /posts/bulk-archive` |
+| Catalog table handle | `app/core/tables.py` | 159 | VERIFIED |
+
+### Notes
+
+- The `useMultiSelect` hook and `BulkActionBar` component already exist but the VideoReviewQueuePage has NOT been refactored to use them (still uses inline selectedIds/toggleSelect/selectAll/deselectAll at lines 66, 192-206). The refactoring step from this ticket is still pending.
+- Backend batch endpoints for both catalog and newsfeed are already implemented (bulk-delete, bulk-update, bulk-archive).
+- The catalog endpoint name differs from the ticket spec: actual is `bulk-delete` and `bulk-update` (not `batch-archive`).

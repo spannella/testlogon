@@ -42,9 +42,10 @@ Live broadcasts with large audiences generate hundreds of chat messages per minu
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Broadcast chat store | `app/services/broadcast_chat_store.py` (~350 lines) | Chat CRUD, muting, rate limiting, message deletion; needs moderator authorization |
+| Broadcast chat store | `app/services/broadcast_chat_store.py` (~423 lines) | Chat CRUD, muting, rate limiting, message deletion; needs moderator authorization |
+<!-- NOTE: broadcast_chat_store.py is ~423 lines, not ~350 lines -->
 | Broadcast chat rich | `app/services/broadcast_chat_rich.py` | Rich chat features (emotes, badges); moderator badges needed |
-| Broadcast store | `app/services/broadcast_store.py` (~470 lines) | Session lifecycle (create, start, stop, schedule); needs delegate authorization |
+| Broadcast store | `app/services/broadcast_store.py` (~480 lines) | Session lifecycle (create, start, stop, schedule); needs delegate authorization |
 | Broadcast orchestrator | `app/services/broadcast_orchestrator.py` | Broadcast state transitions; needs to accept delegate-initiated transitions |
 | Broadcast state machine | `app/services/broadcast_state_machine.py` | State transition validation; delegate transitions use same state machine |
 | Broadcast SSE | `app/services/broadcast_sse.py` | SSE event streaming for broadcast chat; needs moderator event types |
@@ -52,6 +53,7 @@ Live broadcasts with large audiences generate hundreds of chat messages per minu
 | Broadcast scheduler | `app/services/broadcast_scheduler.py` | Scheduled broadcast promotion; delegate-created schedules use same mechanism |
 | Broadcast audit | `app/services/broadcast_audit.py` | Broadcast audit logging; needs delegate attribution |
 | Delegates service | `app/services/delegates.py` (DELEGATE-001) | `require_delegate_permission`, audit logging |
+<!-- NOTE: app/services/delegates.py does not exist yet — depends on DELEGATE-001 completion -->
 
 ### 2.2 Gaps
 
@@ -402,7 +404,7 @@ def _require_broadcast_moderator(session_id: str, moderator_id: str, creator_id:
 
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.auth.deps import require_ui_session
+from app.services.sessions import require_ui_session  # actual location of require_ui_session
 from app.services import delegate_broadcast as svc
 
 router = APIRouter(prefix="/ui/broadcast/delegate", tags=["broadcast-delegation"])
@@ -711,3 +713,21 @@ Bans are session-scoped:
 9. All moderation actions are recorded in the moderation log.
 10. Active moderator list shows online/offline status.
 11. All 16 E2E tests pass.
+
+---
+
+## Codebase References
+
+| File | Line(s) | What | Status |
+|------|---------|------|--------|
+| `app/services/delegates.py` | — | Delegate management (DELEGATE-001 dependency) | NOT YET CREATED |
+| `app/services/broadcast_chat_store.py` | all (423 lines) | Broadcast chat CRUD, muting, rate limiting | EXISTS (modify) |
+| `app/services/broadcast_store.py` | all (480 lines) | Broadcast session lifecycle | EXISTS |
+| `app/services/broadcast_chat_rich.py` | all | Rich chat features (emotes, badges) | EXISTS (modify) |
+| `app/services/broadcast_orchestrator.py` | all | Broadcast state transitions | EXISTS |
+| `app/services/broadcast_state_machine.py` | all | State transition validation | EXISTS |
+| `app/services/broadcast_sse.py` | all (49 lines) | SSE event streaming | EXISTS (modify) |
+| `app/services/broadcast_viewers.py` | all | Viewer tracking | EXISTS (modify) |
+| `app/services/broadcast_scheduler.py` | all | Scheduled broadcast promotion | EXISTS |
+| `app/services/broadcast_audit.py` | all | Broadcast audit logging | EXISTS (modify) |
+| `app/services/sessions.py` | 283 | `require_ui_session` (NOT in app/auth/deps.py) | EXISTS |

@@ -40,16 +40,18 @@ LICENSE-002 established the legal framework (who can use what under which terms)
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Billing shared | `app/services/billing_shared.py` (260 lines) | `new_ledger_entry`, `apply_wallet_delta`, `ledger_sk`; core financial primitives to reuse |
-| Wallet balance | `app/services/billing_shared.py` | `get_wallet_balance`, `ensure_balance_row`; licensor credits deposited to wallet |
+| Billing shared | `app/services/billing_shared.py` (~260 lines) | `new_ledger_entry` (line 217), `apply_wallet_delta` (line 178), `apply_balance_delta` (line 76), `ensure_balance_row` (line 62); core financial primitives to reuse |
 | Issued licenses | `app/services/issued_licenses.py` (LICENSE-002) | `check_license_for_use`, `get_issued_license`; provides active license terms for split calculation |
-| Subscription server | `app/routers/subscription_server.py` (1735 lines) | Invoice/payment patterns; subscription revenue is a qualifying transaction for splits |
+| Subscription server | `app/routers/subscription_server.py` (1852 lines) | Invoice/payment patterns; subscription revenue is a qualifying transaction for splits |
 | Tip processing | `app/routers/messaging.py` | Tip payment flow writes billing ledger; needs hook for license revenue split |
 | Post tips | `app/routers/newsfeed.py` | Post tip flow writes billing ledger; qualifying transaction for license splits |
-| VOD purchase | `app/services/vod_purchase.py` | VOD sale writes billing entry; qualifying transaction |
-| Alerts service | `app/services/alerts.py` | `write_alert` for revenue split notifications |
-| Profile service | `app/services/profile.py` | Display names in revenue dashboard |
+| VOD purchase | `app/services/vod_purchase.py` (674 lines) | VOD sale writes billing entry; qualifying transaction |
+| Alerts service | `app/services/alerts.py` (~899 lines) | `write_alert` (line 355) for revenue split notifications |
+| Profile service | `app/services/profile.py` (345 lines) | `get_profile` (line 220) for display names in revenue dashboard |
 | DDB table init | `scripts/local-ddb-init.py` | `TableDef` pattern with GSIs and `attr_types` |
+
+<!-- NOTE: app/services/issued_licenses.py (LICENSE-002) does NOT exist yet — LICENSE-002 is a prerequisite that has not been implemented. -->
+<!-- NOTE: app/services/license_revenue.py and app/routers/license_revenue.py do NOT exist yet — new implementation required. -->
 
 ### 2.2 Gaps
 
@@ -394,8 +396,12 @@ The revenue split engine is invoked as a hook from existing billing flows. Each 
 
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.auth.deps import require_ui_session, require_admin_session
+from app.auth.deps import require_ui_session
+from app.auth.roles import Role, normalize_role
 from app.services import license_revenue as svc
+
+# NOTE: require_admin_session does NOT exist in app/auth/deps.py.
+# Use require_ui_session + normalize_role(user.role) not in {Role.ADMIN, Role.ROOT} pattern.
 
 router = APIRouter(prefix="/ui/licenses/revenue", tags=["license-revenue"])
 admin_router = APIRouter(prefix="/ui/admin/licenses/revenue", tags=["license-revenue-admin"])
@@ -409,7 +415,7 @@ admin_router = APIRouter(prefix="/ui/admin/licenses/revenue", tags=["license-rev
 | `GET` | `/ui/licenses/revenue/paid` | `require_ui_session` | Get licensee payments summary + transaction list |
 | `GET` | `/ui/licenses/revenue/license/{issued_license_id}` | `require_ui_session` | Get transactions for a specific license |
 | `GET` | `/ui/licenses/revenue/calculate` | `require_ui_session` | Preview split calculation for given terms + amount |
-| `GET` | `/ui/admin/licenses/revenue` | `require_admin_session` | Admin platform-wide revenue audit |
+| `GET` | `/ui/admin/licenses/revenue` | `require_ui_session` + admin role check | Admin platform-wide revenue audit |
 
 ### 3.7 Request/Response Models
 
@@ -636,7 +642,7 @@ Total license revenue splits for a single transaction are capped at 80% of the s
 | Revenue earned / paid | `require_ui_session` | Only own data |
 | Per-license transactions | `require_ui_session` | Must be licensor or licensee of the license |
 | Split preview | `require_ui_session` | Any authenticated user |
-| Admin revenue audit | `require_admin_session` | Platform admin or root only |
+| Admin revenue audit | `require_ui_session` + admin role check | Platform admin or root only |
 
 ### 6.2 Financial Integrity
 
@@ -668,7 +674,7 @@ Total license revenue splits for a single transaction are capped at 80% of the s
 | `app/routers/messaging.py` | Exists (modify) | Hook revenue splits into tip/unlock flows |
 | `app/routers/newsfeed.py` | Exists (modify) | Hook revenue splits into post tip/unlock flows |
 | `app/services/alerts.py` | Exists | Revenue split notifications |
-| `app/auth/deps.py` | Exists | `require_ui_session`, `require_admin_session` |
+| `app/auth/deps.py` | Exists | `require_ui_session` (line 184); admin auth via manual role check pattern |
 | `app/core/tables.py` | Exists (modify) | Add `T.license_revenue` table handle |
 | `scripts/local-ddb-init.py` | Exists (modify) | Add `license_revenue` table definition |
 | LICENSE-005 | Not started | Syndicate open licensing terms feed into split calculation |
@@ -824,3 +830,50 @@ Table Relationships:
 | Transaction lists | React Query | 30 seconds | Invalidated after new split |
 | Split preview calculation | No cache (stateless) | -- | N/A |
 | License terms | In-memory per-request | Request scope | Fetched from issued_licenses |
+
+---
+
+## Codebase References
+
+All file paths relative to the repository root.
+
+### Existing Files Referenced (verified)
+- `app/services/billing_shared.py` (~260 lines) — Core financial primitives
+  - `ensure_balance_row()` at line 62
+  - `apply_balance_delta()` at line 76
+  - `apply_wallet_delta()` at line 178
+  - `new_ledger_entry()` at line 217
+- `app/routers/subscription_server.py` (1852 lines) — Invoice/payment patterns
+- `app/routers/messaging.py` — Tip and unlock flows (hook points for revenue splits)
+- `app/routers/newsfeed.py` — Post tip and unlock flows (hook points)
+- `app/services/vod_purchase.py` (674 lines) — VOD sale billing entries
+- `app/services/alerts.py` (899 lines) — `write_alert()` at line 355
+- `app/services/profile.py` (345 lines) — `get_profile()` at line 220
+- `app/auth/deps.py` — `require_ui_session` at line 184
+  - **`require_admin_session` does NOT exist** — use `require_ui_session` + `normalize_role(user.role) not in {Role.ADMIN, Role.ROOT}` pattern
+- `scripts/local-ddb-init.py` — DynamoDB table definitions
+
+### Dependencies Not Yet Implemented
+- `app/services/issued_licenses.py` — LICENSE-002 prerequisite (does not exist)
+- `issued_licenses` DDB table — LICENSE-002 prerequisite (not in `scripts/local-ddb-init.py`)
+
+### Files to Create (none exist yet)
+- `app/services/license_revenue.py` — Revenue split engine (~400 lines)
+- `app/routers/license_revenue.py` — REST API endpoints (~200 lines)
+- `frontend/src/pages/licenses/LicenseRevenuePage.tsx` — Revenue dashboard (~300 lines)
+- `frontend/src/pages/licenses/RevenueEarnedCard.tsx` — Earned summary (~100 lines)
+- `frontend/src/pages/licenses/RevenuePaidCard.tsx` — Paid summary (~100 lines)
+- `frontend/src/pages/licenses/RevenueTransactionTable.tsx` — Transaction table (~150 lines)
+- `frontend/src/pages/licenses/SplitCalculator.tsx` — Calculator (~80 lines)
+- `frontend/src/api/endpoints/license-revenue.ts` — API wrappers (~80 lines)
+- `frontend/e2e/license-revenue.spec.ts` — E2E tests (~500 lines)
+
+### Files to Modify (verified to exist)
+- `app/main.py` — Register revenue routers
+- `app/models.py` — Add License Revenue Pydantic models
+- `app/core/settings.py` — Add `license_revenue_table_name` setting
+- `app/core/tables.py` — Add `T.license_revenue` table handle
+- `scripts/local-ddb-init.py` — Add `license_revenue` TableDef with 2 GSIs
+- `app/routers/messaging.py` — Hook revenue splits into tip/unlock flows
+- `app/routers/newsfeed.py` — Hook revenue splits into post tip/unlock flows
+- `frontend/src/App.tsx` — Add revenue route

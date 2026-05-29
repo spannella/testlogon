@@ -50,12 +50,14 @@ The platform has grown to depend on FFmpeg in multiple subsystems -- VOD transco
 The codebase references FFmpeg in five distinct patterns:
 
 **Pattern 1: Hardcoded binary name in argument list** (`app/services/ffmpeg_abr_pipeline.py:68`)
+<!-- NOTE: This is OUTDATED. ffmpeg_abr_pipeline.py:14 already imports `from app.services.ffmpeg_manager import get_ffmpeg_path`, and lines 72-75 already use `get_ffmpeg_path()` with a fallback to "ffmpeg". The migration described here has ALREADY been done. -->
 ```python
 args = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y", ...]
 ```
 The string `"ffmpeg"` is hardcoded as the first element of the args list passed to `build_rendition_ffmpeg_args()`. There is no configurable binary path, no version check, and no fallback.
 
-**Pattern 2: Guard-and-skip with `shutil.which`** (`app/services/filemanager.py:1362, 1430, 1481, 1668`)
+**Pattern 2: Guard-and-skip with `shutil.which`** (`app/services/filemanager.py`)
+<!-- NOTE: Only 1 occurrence of shutil.which("ffprobe") found at filemanager.py:1094, not 4 occurrences at lines 1362/1430/1481/1668 as claimed. Verify current line numbers. -->
 ```python
 if not shutil.which("ffmpeg"):
     return None
@@ -832,3 +834,15 @@ def _detect_formats(binary_path: str) -> set[str]:
 | `app/services/filemanager.py` | 1093 | `shutil.which("ffprobe")` | `detect_ffmpeg().path` (derive ffprobe) |
 | `scripts/broadcast-local/ffmpeg-worker.sh` | 30 | bare `ffmpeg` | `${FFMPEG_BINARY_PATH:-ffmpeg}` |
 | `scripts/video/package_vod.sh` | 11 | `command -v ffmpeg` | `${FFMPEG_BINARY_PATH:-ffmpeg}` |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/services/ffmpeg_manager.py` | 36-165 | ALREADY EXISTS: `_parse_version` (36), `_parse_version_tuple` (50), `_parse_codecs` (60), `get_ffmpeg_info` (81), `get_ffmpeg_path` (116), `is_ffmpeg_available` (124), `validate_ffmpeg` (129), `clear_cache` (165). This file implements much of what MEDIA-002 proposes as `ffmpeg_binary.py` |
+| `app/services/ffmpeg_abr_pipeline.py` | 14, 72-75 | ALREADY MIGRATED: imports `get_ffmpeg_path` from `ffmpeg_manager` and uses it with fallback. NOT hardcoded as ticket claims |
+| `app/services/filemanager.py` | 1094 | Only 1 `shutil.which("ffprobe")` occurrence found (not 4 as claimed for ffmpeg) |
+| `app/core/settings.py` | 1120 | EXISTS: `ffmpeg_binary_path` setting with default `"ffmpeg"` |
+| `app/main.py` | 348-358 | EXISTS: FFmpeg startup validation via `ffmpeg_manager.validate_ffmpeg()` |

@@ -11,7 +11,7 @@
 
 ## 1. Executive Summary
 
-The backend has a complete Google Drive integration: a mock API (`google_drive_mock.py` with 10 endpoints), a `GoogleDriveProvider` class (`file_providers.py:366`) that handles file operations via configurable URLs, a credential storage system (`provider_credentials.py:482`), and a file mount system that bridges external providers into the file manager. E2E tests exist for the mock API (`google-drive-mock.spec.ts`). However, there is no frontend UI for connecting a Google Drive account, browsing Drive files, or importing/mounting Drive folders into the file manager.
+The backend has a complete Google Drive integration: a mock API (see `app/routers/google_drive_mock.py` with 10 endpoints), a `GoogleDriveProvider` class (see `app/services/file_providers.py:366`) that handles file operations via configurable URLs, a credential storage system (see `app/services/provider_credentials.py:482`), and a file mount system that bridges external providers into the file manager. E2E tests exist for the mock API (`google-drive-mock.spec.ts`). However, there is no frontend UI for connecting a Google Drive account, browsing Drive files, or importing/mounting Drive folders into the file manager.
 
 This feature adds a "Connect Google Drive" OAuth flow in the Files settings, a Drive file browser dialog for selecting files to import or mount, and integration with the existing file mount system to make Drive files appear in the file manager tree. The Google Drive provider infrastructure represents a significant backend investment (over 750 lines across `GoogleDriveProvider`, credential management, and mock endpoints) that is currently invisible to end users. Without a frontend surface, this entire subsystem is dead code from the user's perspective.
 
@@ -70,9 +70,9 @@ The business case is straightforward: users store documents, images, and videos 
 
 ### 2.2 Pain Points
 
-1. **Backend investment not surfaced**: Over 750 lines of Google Drive provider code (`file_providers.py:366-737`), 300 lines of mock API (`google_drive_mock.py`), and credential management (`provider_credentials.py:482-530`) exist but are invisible to users.
+1. **Backend investment not surfaced**: Over 750 lines of Google Drive provider code (see `app/services/file_providers.py:366`), 300 lines of mock API (see `app/routers/google_drive_mock.py`), and credential management (see `app/services/provider_credentials.py:482`) exist but are invisible to users.
 2. **No import workflow**: Users cannot bring Drive files into the platform without manual download/upload. This is particularly painful for media-heavy creators who store assets in Google Drive.
-3. **No mount browsing**: The mount system supports Google Drive (`filemanager.py:3489-3506`) but there is no UI to create a Drive mount. Only iCloud currently has UI mount support.
+3. **No mount browsing**: The mount system supports Google Drive (see `app/routers/filemanager.py:3530`) but there is no UI to create a Drive mount. Only iCloud currently has UI mount support.
 4. **OAuth flow is backend-only**: The `provider_oauth.py` module handles token exchange, but no frontend initiates or completes the flow.
 
 ---
@@ -219,7 +219,7 @@ Credentials are encrypted with KMS and stored in DynamoDB. The storage schema us
 
 ### 3.4 Google Drive Settings
 
-`app/core/settings.py:818-831` defines the complete Google Drive configuration block:
+`app/core/settings.py:852-868` defines the complete Google Drive configuration block:
 
 ```python
 # OAuth settings
@@ -250,8 +250,8 @@ Key observations:
 - OAuth state TTL is 600 seconds (10 minutes) with HMAC-signed state parameters.
 
 **Citations**:
-- `app/core/settings.py:818-822` -- OAuth settings (scopes, state TTL, signing secret, token URL)
-- `app/core/settings.py:823-831` -- Drive API settings (base URLs, mock toggle, timeout, retry, resumable threshold, mount toggle)
+- `app/core/settings.py:852-859` -- OAuth settings (scopes, state TTL, signing secret, token URL)
+- `app/core/settings.py:860-868` -- Drive API settings (base URLs, mock toggle, timeout, retry, resumable threshold, mount toggle)
 
 ### 3.5 File Mount System
 
@@ -278,9 +278,9 @@ def create_mount_route(body: MountCreateIn, user: str = Depends(_current_user)):
 ```
 
 Additional mount endpoints:
-- `GET /mounts` (line 3509) -- list all mounts for a user
-- `PATCH /mounts/{mount_id}` (line 3517) -- update mount path or provider ref
-- `DELETE /mounts/{mount_id}` (line 3533, if exists) -- remove a mount
+- `GET /mounts` (see `app/routers/filemanager.py:3550`) -- list all mounts for a user
+- `PATCH /mounts/{mount_id}` (see `app/routers/filemanager.py:3558`) -- update mount path or provider ref
+- `DELETE /mounts/{mount_id}` (see `app/routers/filemanager.py:3582`) -- remove a mount
 
 The frontend `FilesPage.tsx` already has mount infrastructure:
 - `mountStatusLabel()` (line 118-125) -- converts status codes to display strings
@@ -289,9 +289,9 @@ The frontend `FilesPage.tsx` already has mount infrastructure:
 - Import of `initiateICloudMount`, `verifyICloudMount`, `listMounts`, `rotateICloudMount`, `revokeICloudMount` from files API (lines 72-76)
 
 **Citations**:
-- `app/routers/filemanager.py:3489-3506` -- `create_mount_route` endpoint
-- `app/routers/filemanager.py:3509-3514` -- `list_mounts_route` endpoint
-- `app/routers/filemanager.py:3517-3533` -- `update_mount_route` endpoint
+- `app/routers/filemanager.py:3530` -- `create_mount_route` endpoint
+- `app/routers/filemanager.py:3550` -- `list_mounts_route` endpoint
+- `app/routers/filemanager.py:3558` -- `update_mount_route` endpoint
 - `frontend/src/pages/files/FilesPage.tsx:118-133` -- mount status helpers
 - `frontend/src/pages/files/FilesPage.tsx:148-164` -- `resolveMountForPath` function
 
@@ -1248,7 +1248,7 @@ Google Drive API has a per-user rate limit of 12,000 queries per minute. The bac
 | `GOOGLE_DRIVE_MOCK_ENABLED` | `false` | Enables mock API for dev/test |
 | `FILEMGR_GOOGLE_DRIVE_MOUNTS_ENABLED` | `false` | Gates mount creation (import-only when false) |
 
-Both flags already exist in `app/core/settings.py:825,831`. No new flags needed.
+Both flags already exist in `app/core/settings.py:862,868`. No new flags needed.
 
 ### 11.2 Rollout Plan
 
@@ -1289,7 +1289,7 @@ Disable the feature by:
 
 ## 13. Dependencies
 
-- **File Manager (existing)**: Mount creation endpoint (`filemanager.py:3489`), file upload API.
+- **File Manager (existing)**: Mount creation endpoint (see `app/routers/filemanager.py:3530`), file upload API.
 - **Provider Credentials (existing)**: `provider_credentials.py` credential storage and retrieval.
 - **Google Drive Mock (existing)**: `google_drive_mock.py` mock API for development.
 - **GoogleDriveProvider (existing)**: `file_providers.py:366` provider class for API calls.
@@ -1352,11 +1352,11 @@ Disable the feature by:
 | Provider credentials system | `app/services/provider_credentials.py` | 482-530 | VERIFIED: `get_provider_auth_context` |
 | Google Drive reconnect check | `app/services/provider_credentials.py` | 496-508 | VERIFIED: `reconnect_required` metadata |
 | Token expiry and refresh | `app/services/provider_credentials.py` | 509-519 | VERIFIED: early refresh at 60s before expiry |
-| OAuth settings | `app/core/settings.py` | 818-822 | VERIFIED: scopes, state TTL, token URL |
-| Google Drive settings | `app/core/settings.py` | 823-831 | VERIFIED: base URLs, mock, timeout, retry, mount toggle |
-| Mount creation endpoint | `app/routers/filemanager.py` | 3489-3506 | VERIFIED: `create_mount_route` |
-| Mount list endpoint | `app/routers/filemanager.py` | 3509-3514 | VERIFIED: `list_mounts_route` |
-| Mount update endpoint | `app/routers/filemanager.py` | 3517-3533 | VERIFIED: `update_mount_route` |
+| OAuth settings | `app/core/settings.py` | 852-859 | VERIFIED: client_id, scopes, state TTL, token URL |
+| Google Drive settings | `app/core/settings.py` | 860-868 | VERIFIED: base URLs, mock, timeout, retry, mount toggle |
+| Mount creation endpoint | `app/routers/filemanager.py` | 3530 | VERIFIED: `create_mount_route` |
+| Mount list endpoint | `app/routers/filemanager.py` | 3550 | VERIFIED: `list_mounts_route` |
+| Mount update endpoint | `app/routers/filemanager.py` | 3558 | VERIFIED: `update_mount_route` |
 | FilesPage mount status helpers | `frontend/src/pages/files/FilesPage.tsx` | 118-133 | VERIFIED: `mountStatusLabel`, `mountStatusVariant` |
 | FilesPage mount path resolution | `frontend/src/pages/files/FilesPage.tsx` | 148-164 | VERIFIED: `resolveMountForPath` |
 | FilesPage iCloud mount imports | `frontend/src/pages/files/FilesPage.tsx` | 72-76 | VERIFIED: iCloud-specific imports |

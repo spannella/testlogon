@@ -5,7 +5,7 @@
 **Date**: 2026-05-29  
 **Priority**: High  
 **Estimated effort**: 10-12 days  
-**Dependencies**: Billing ledger (`billing_shared.py`), payment providers (`billing.py`, `billing_ccbill.py`), rate limiting (`rate_limit.py`), admin auth (`auth/deps.py`)
+**Dependencies**: Billing ledger (`app/services/billing_shared.py:217`), payment providers (`app/routers/billing.py` at `app/main.py:326`, `app/routers/billing_ccbill.py` at `app/main.py:314`), rate limiting (`app/services/rate_limit.py`), admin auth (`app/auth/policy.py:67` `require_admin_or_root`, `:63` `require_root`)
 
 ---
 
@@ -190,11 +190,11 @@ User Transaction                  Fraud Engine                         Admin
 
 ### 2.1 Billing Ledger (`app/services/billing_shared.py`)
 
-All financial transactions are recorded as ledger entries with `entry_type`, `amount_cents`, `user_id`, `created_at`. The ledger provides the raw data source for velocity analysis.
+All financial transactions are recorded as ledger entries (see `app/services/billing_shared.py:217` `new_ledger_entry`). <!-- NOTE: Ledger entries use field `type` not `entry_type`, and store `amount_cents`, `ts`, `state`, `reason` — there is no `user_id` or `created_at` field in the entry itself. The user is identified by the PK `USER#{user_id}`, and `ts` serves as the timestamp. --> The ledger provides the raw data source for velocity analysis.
 
 ### 2.2 Rate Limiting (`app/services/rate_limit.py`)
 
-The rate limiter tracks request counts per IP/user but does not track financial transaction velocity. Its `check_rate_limit` function uses sliding window counters.
+The rate limiter tracks request counts per IP/user but does not track financial transaction velocity. <!-- NOTE: There is no `check_rate_limit` function. The rate limiter uses `rate_limit_or_429(user_sub, factor)` at `:17` and specific wrapper functions like `rate_limit_login_attempt` at `:163`, `rate_limit_admin_action` at `:170`, etc. (see `app/services/rate_limit.py:17`). -->
 
 ### 2.3 Payment Providers
 
@@ -702,8 +702,8 @@ from decimal import Decimal
 from boto3.dynamodb.conditions import Key
 from app.core.tables import T
 from app.core.time import now_ts
-from app.core.cursor import encode_cursor, decode_cursor
-from app.services.alerts import write_alert
+from app.core.cursor import encode_cursor, decode_cursor  # (see app/core/cursor.py:83,92)
+from app.services.alerts import write_alert  # (see app/services/alerts.py:355)
 
 logger = logging.getLogger("fraud_management")
 
@@ -1004,18 +1004,18 @@ def _case_to_dict(item: dict) -> dict:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/v1/admin/fraud/queue` | `require_admin_session` | Flagged transaction queue |
-| POST | `/v1/admin/fraud/flags/{flag_id}/review` | `require_admin_session` | Review flagged tx |
-| GET | `/v1/admin/fraud/users/{user_id}/risk` | `require_admin_session` | User risk profile |
-| POST | `/v1/admin/fraud/users/{user_id}/freeze` | `require_admin_session` | Freeze user |
-| POST | `/v1/admin/fraud/users/{user_id}/unfreeze` | `require_admin_session` | Unfreeze user |
-| POST | `/v1/admin/fraud/cases` | `require_admin_session` | Create fraud case |
-| GET | `/v1/admin/fraud/cases` | `require_admin_session` | List fraud cases |
-| GET | `/v1/admin/fraud/cases/{case_id}` | `require_admin_session` | Get case details |
-| POST | `/v1/admin/fraud/cases/{case_id}/resolve` | `require_admin_session` | Resolve case |
-| GET | `/v1/admin/fraud/config` | `require_admin_session` | Get fraud config |
-| PATCH | `/v1/admin/fraud/config` | `require_root_session` | Update fraud config |
-| GET | `/v1/admin/fraud/stats` | `require_admin_session` | Dashboard statistics |
+| GET | `/v1/admin/fraud/queue` | `require_admin_or_root` | Flagged transaction queue |
+| POST | `/v1/admin/fraud/flags/{flag_id}/review` | `require_admin_or_root` | Review flagged tx |
+| GET | `/v1/admin/fraud/users/{user_id}/risk` | `require_admin_or_root` | User risk profile |
+| POST | `/v1/admin/fraud/users/{user_id}/freeze` | `require_admin_or_root` | Freeze user |
+| POST | `/v1/admin/fraud/users/{user_id}/unfreeze` | `require_admin_or_root` | Unfreeze user |
+| POST | `/v1/admin/fraud/cases` | `require_admin_or_root` | Create fraud case |
+| GET | `/v1/admin/fraud/cases` | `require_admin_or_root` | List fraud cases |
+| GET | `/v1/admin/fraud/cases/{case_id}` | `require_admin_or_root` | Get case details |
+| POST | `/v1/admin/fraud/cases/{case_id}/resolve` | `require_admin_or_root` | Resolve case |
+| GET | `/v1/admin/fraud/config` | `require_admin_or_root` | Get fraud config |
+| PATCH | `/v1/admin/fraud/config` | `require_root` | Update fraud config |
+| GET | `/v1/admin/fraud/stats` | `require_admin_or_root` | Dashboard statistics |
 
 ### 3.6 API Request/Response Examples
 
@@ -2163,3 +2163,21 @@ ORDER BY trigger_count DESC
 10. Fraud evaluation completes within 100ms p99 latency
 11. Dashboard shows real-time queue depth and resolution metrics
 12. Feature flags allow shadow mode, flag-only mode, and full enforcement mode
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/services/billing_shared.py` | :213, :217, :248 | `ledger_sk` at `:213`, `new_ledger_entry` at `:217` (field is `type` not `entry_type`), `settle_or_reverse_ledger` at `:248` |
+| `app/services/rate_limit.py` | :17 | `rate_limit_or_429` at `:17`; no `check_rate_limit` function exists |
+| `app/routers/billing.py` | — | Stripe billing router; registered at `app/main.py:326` |
+| `app/routers/billing_ccbill.py` | — | CCBill router; registered at `app/main.py:314` |
+| `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |
+| `app/services/alerts.py` | :355 | `write_alert` function (used for freeze notifications) |
+| `app/core/cursor.py` | :83, :92 | `encode_cursor` at `:83`, `decode_cursor` at `:92` |
+| `app/core/tables.py` | — | Table handles (`T.billing`, etc.) |
+| `app/core/time.py` | — | `now_ts()` Unix timestamp helper |
+| `scripts/local-ddb-init.py` | :59 | `billing` table definition (PK=pk, SK=sk, no GSIs) |
+| `app/core/settings.py` | :321 | `billing_table_name` setting |

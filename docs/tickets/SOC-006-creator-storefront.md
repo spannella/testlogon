@@ -11,7 +11,9 @@
 
 ## 1. Executive Summary
 
-The current public user profile page (`PublicUserProfilePage.tsx`, 224 lines) displays only basic identity information: display name, title, description, location, cover photo, and member-only contact details. When a viewer visits a creator's profile, they see nothing about the creator's actual content -- no videos, no posts, no subscription tiers, and no way to subscribe. The backend already returns `has_subscription_plans: bool` (profile.py:352-362) but never exposes the actual plan list on the profile page. Video listing (`/ui/videos/creator/{creator_id}`), newsfeed posts (`/profile/public/{identifier}/posts`), and subscription plans (`/api/creators/{creator_id}/plans`) all exist as separate endpoints but are not aggregated on the profile page.
+<!-- NOTE: This ticket's "current state" description is outdated. PublicUserProfilePage.tsx is now 340 lines and already includes tabs (Videos/Posts/About), stats row, FollowButton, PlanBrowser integration, and StorefrontVideoGrid/StorefrontPostsFeed components. The storefront described in this ticket has already been implemented. The files listed in section 14 as "Files to Create" (StorefrontVideoGrid.tsx, StorefrontPostsFeed.tsx, FollowButton.tsx, social.ts) all already exist. -->
+
+The current public user profile page (`PublicUserProfilePage.tsx`, 340 lines) displays only basic identity information: display name, title, description, location, cover photo, and member-only contact details. When a viewer visits a creator's profile, they see nothing about the creator's actual content -- no videos, no posts, no subscription tiers, and no way to subscribe. The backend already returns `has_subscription_plans: bool` (profile.py:354-361) but never exposes the actual plan list on the profile page. Video listing (`/ui/videos/creator/{creator_id}`), newsfeed posts (`/profile/public/{identifier}/posts`), and subscription plans (`/api/creators/{creator_id}/plans`) all exist as separate endpoints but are not aggregated on the profile page.
 
 This ticket transforms the public profile page into a full creator storefront with tabbed content sections (Videos, Posts, About), subscription tier cards with "Subscribe" CTAs, and a follow button. The frontend aggregates existing backend endpoints -- no new backend API endpoints are required. This is purely a frontend feature build that connects existing data sources into a unified creator-facing profile experience.
 
@@ -88,10 +90,11 @@ Creator storefronts are the primary conversion surface for subscription-based pl
 
 ### 2.2 Pain Points
 
-1. **No content showcase**: Creators share profile links externally but the landing page shows only a name and bio -- visitors bounce immediately without seeing content. The current page is 224 lines of purely structural profile data (name, title, description, location, cover photo).
-2. **Subscription conversion gap**: The backend knows a creator has plans (`has_subscription_plans: true` from `profile.py:380`) but never shows them, making organic subscription growth impossible through profile links.
+1. **No content showcase**: Creators share profile links externally but the landing page shows only a name and bio -- visitors bounce immediately without seeing content. The current page is 340 lines and now includes storefront tabs, stats row, follow button, and plan browser integration.
+2. **Subscription conversion gap**: The backend knows a creator has plans (`has_subscription_plans: true` from `profile.py:381`) but never shows them, making organic subscription growth impossible through profile links.
 3. **Fragmented navigation**: A viewer must separately navigate to the gallery, feed, and subscriptions pages to evaluate a creator. There is no single unified storefront experience.
-4. **Follow action buried**: There is no follow/unfollow button on the profile page despite the social graph being fully implemented in `app/services/social.py` (follow at line 31, unfollow at line 101, status at line 205).
+4. **Follow action buried**: There is no follow/unfollow button on the profile page despite the social graph being fully implemented in `app/services/social.py` (follow at line 31, unfollow at line 102, status at line 206).
+<!-- NOTE: FollowButton IS now rendered on the profile page at PublicUserProfilePage.tsx:231-237. This pain point has been addressed. -->
 5. **Wasted API data**: The profile response already includes `follower_count`, `following_count`, `post_count`, `is_following`, `is_followed_by`, `is_mutual`, and `has_subscription_plans` -- none of which are rendered in the current UI.
 
 ### 2.3 Current Profile Page Capabilities
@@ -119,12 +122,12 @@ What it does **NOT** render:
 
 ## 3. Current State Analysis
 
-### 3.1 Public Profile Backend (profile.py:345-384)
+### 3.1 Public Profile Backend (profile.py:295-385)
 
 The `get_public_profile` endpoint assembles a rich profile response:
 
 ```python
-# Check subscription plans (profile.py:352-362)
+# Check subscription plans (profile.py:354-361)
 has_subscription_plans = False
 try:
     plans_resp = T.subscriptions.query(
@@ -136,7 +139,7 @@ try:
 except Exception:
     pass
 
-# Return full profile (profile.py:364-384)
+# Return full profile (profile.py:365-385)
 return {
     "user_id": user_sub,
     "identifier": requested_identifier,
@@ -159,7 +162,7 @@ return {
 }
 ```
 
-The follow status check (lines 345-351) uses `get_follow_status(viewer_sub, user_sub)` from `social.py:205`:
+The follow status check (lines 346-349) uses `get_follow_status(viewer_sub, user_sub)` from `social.py:206`:
 
 ```python
 if viewer_sub and viewer_sub != user_sub:
@@ -173,11 +176,11 @@ if viewer_sub and viewer_sub != user_sub:
 ```
 
 **Citations**:
-- `app/routers/profile.py:345-351` -- follow status check
-- `app/routers/profile.py:352-362` -- subscription plans count query
-- `app/routers/profile.py:364-384` -- full response including `follower_count`, `following_count`, `is_following`, `has_subscription_plans`
+- `app/routers/profile.py:346-349` -- follow status check
+- `app/routers/profile.py:354-361` -- subscription plans count query
+- `app/routers/profile.py:365-385` -- full response including `follower_count`, `following_count`, `is_following`, `has_subscription_plans`
 
-### 3.2 Profile Posts Endpoint (profile.py:386-444)
+### 3.2 Profile Posts Endpoint (profile.py:387-445)
 
 A paginated posts endpoint already exists:
 
@@ -196,16 +199,16 @@ Key implementation details:
 - Uses `GSI2` with `GSI2PK = POST_AUTHOR#{user_sub}` for efficient author-scoped queries.
 - `ScanIndexForward=False` for reverse chronological order.
 - Over-fetches by `limit * 2` to account for filtered posts.
-- Auth-optional: authenticated viewers see followers-only posts if they follow the author (line 419-431).
+- Auth-optional: authenticated viewers see followers-only posts if they follow the author (line 430-431).
 - Supports filter param: "all", "text", "image", "video", "locked".
 - Returns paginated list with `next_cursor`.
 
 **Citations**:
-- `app/routers/profile.py:386-392` -- endpoint definition with filter and pagination params
-- `app/routers/profile.py:419-431` -- auth-optional viewer follow check
-- `app/routers/profile.py:434-443` -- GSI2 query with POST_AUTHOR PK
+- `app/routers/profile.py:387-388` -- endpoint definition with filter and pagination params
+- `app/routers/profile.py:430-431` -- auth-optional viewer follow check
+- `app/routers/profile.py:435-439` -- GSI2 query with POST_AUTHOR PK
 
-### 3.3 Creator Videos Endpoint (video_listing.py:319-330)
+### 3.3 Creator Videos Endpoint (video_listing.py:325-336)
 
 ```python
 @router.get("/creator/{creator_id}", response_model=VideoListOut)
@@ -226,9 +229,9 @@ def list_creator_public_videos(
 
 **Citations**:
 - `app/routers/video_listing.py:40` -- router prefix `/ui/videos`
-- `app/routers/video_listing.py:319-330` -- `list_creator_public_videos` with `require_ui_session`
+- `app/routers/video_listing.py:325-336` -- `list_creator_public_videos` with `require_ui_session`
 
-### 3.4 Subscription Plans Endpoint (subscription_server.py:746-753)
+### 3.4 Subscription Plans Endpoint (subscription_server.py:746-747)
 
 ```python
 @router.get("/api/creators/{creator_id}/plans", response_model=List[PlanOut])
@@ -252,25 +255,25 @@ The social router at `app/routers/social.py` provides:
 
 | Endpoint | Method | Path | Auth | Line |
 |----------|--------|------|------|------|
-| `follow` | POST | `/ui/social/follow` | `require_ui_session` | 103 |
-| `unfollow` | POST | `/ui/social/unfollow` | `require_ui_session` | 122 |
+| `follow` | POST | `/ui/social/follow` | `require_ui_session` | 139 |
+| `unfollow` | POST | `/ui/social/unfollow` | `require_ui_session` | 158 |
 | `list_followers` | GET | `/ui/social/{user_id}/followers` | `require_ui_session` | 129 |
 | `list_following` | GET | `/ui/social/{user_id}/following` | `require_ui_session` | 147 |
 
 Service layer (`app/services/social.py`):
 - `follow_user(follower_id, followed_id)` (line 31) -- creates follow record, increments counts
-- `unfollow_user(follower_id, followed_id)` (line 101) -- removes follow record, decrements counts
-- `is_following(follower_id, target_id)` (line 197) -- boolean check
-- `get_follow_status(viewer_id, target_id)` (line 205) -- returns `{is_following, is_followed_by}`
+- `unfollow_user(follower_id, followed_id)` (line 102) -- removes follow record, decrements counts
+- `is_following(follower_id, target_id)` (line 198) -- boolean check
+- `get_follow_status(viewer_id, target_id)` (line 206) -- returns `{is_following, is_followed_by}`
 
 **Citations**:
-- `app/routers/social.py:103` -- POST `/ui/social/follow`
-- `app/routers/social.py:122` -- POST `/ui/social/unfollow`
+- `app/routers/social.py:139` -- POST `/ui/social/follow`
+- `app/routers/social.py:158` -- POST `/ui/social/unfollow`
 - `app/services/social.py:31` -- `follow_user` implementation
-- `app/services/social.py:101` -- `unfollow_user` implementation
-- `app/services/social.py:205` -- `get_follow_status` returns bidirectional status
+- `app/services/social.py:102` -- `unfollow_user` implementation
+- `app/services/social.py:206` -- `get_follow_status` returns bidirectional status
 
-### 3.6 PlanBrowser Component (PlanBrowser.tsx:1-187)
+### 3.6 PlanBrowser Component (PlanBrowser.tsx)
 
 The subscriber-facing `PlanBrowser` component is fully reusable:
 
@@ -316,7 +319,9 @@ The `CrossUserProfileResp` type (or equivalent) already includes all storefront-
 - `is_followed_by: boolean`
 - `is_mutual: boolean`
 
-### 3.8 Current PublicUserProfilePage Structure (lines 124-224)
+### 3.8 Current PublicUserProfilePage Structure (lines 169-340)
+
+<!-- NOTE: This section is outdated. The page now has Hero Card + Stats Row + FollowButton + PlanBrowser + Tabs (Videos/Posts/About). See lines 169-337. -->
 
 ```typescript
 return (
@@ -507,7 +512,7 @@ function formatDuration(seconds: number): string {
 }
 ```
 
-**Data source**: `GET /ui/videos/creator/{creator_id}` (video_listing.py:319)
+**Data source**: `GET /ui/videos/creator/{creator_id}` (video_listing.py:325)
 **Auth requirement**: Requires `require_ui_session` -- Videos tab only for authenticated viewers.
 
 ### 4.3 New Component: StorefrontPostsFeed
@@ -621,7 +626,7 @@ export function StorefrontPostsFeed({ identifier }: StorefrontPostsFeedProps) {
 }
 ```
 
-**Data source**: `GET /profile/public/{identifier}/posts` (profile.py:386)
+**Data source**: `GET /profile/public/{identifier}/posts` (profile.py:387)
 **Auth requirement**: Auth-optional. Unauthenticated viewers see public posts only.
 
 ### 4.4 New Component: FollowButton
@@ -719,7 +724,8 @@ export function FollowButton({ userId, isFollowing: initialFollowing, onToggle }
 
 ### 4.5 Social API Client
 
-**New file (or add to existing): `frontend/src/api/endpoints/social.ts`**
+<!-- NOTE: frontend/src/api/endpoints/social.ts already exists with follow/unfollow functions -->
+**Existing file: `frontend/src/api/endpoints/social.ts`**
 
 ```typescript
 import { api } from "@/api/client";
@@ -832,7 +838,7 @@ export interface StorefrontVideo {
 
 ### 5.1 GET /profile/public/{identifier}
 
-**Existing** at `app/routers/profile.py:306`.
+**Existing** at `app/routers/profile.py:295`.
 
 Response includes (fields now being rendered):
 ```json
@@ -854,7 +860,7 @@ Response includes (fields now being rendered):
 
 ### 5.2 GET /profile/public/{identifier}/posts
 
-**Existing** at `app/routers/profile.py:386`.
+**Existing** at `app/routers/profile.py:387`.
 
 Query params: `limit` (1-50, default 12), `cursor` (string), `filter` ("all"|"text"|"image"|"video"|"locked")
 
@@ -862,7 +868,7 @@ Response: `{ posts: [...], next_cursor: "..." }`
 
 ### 5.3 GET /ui/videos/creator/{creator_id}
 
-**Existing** at `app/routers/video_listing.py:319`.
+**Existing** at `app/routers/video_listing.py:325`.
 
 Query params: `limit` (1-200, default 50), `cursor` (string)
 
@@ -872,7 +878,7 @@ Response: `{ items: [...], cursor: "..." }`
 
 ### 5.4 GET /api/creators/{creator_id}/plans
 
-**Existing** at `app/routers/subscription_server.py:746`.
+**Existing** at `app/routers/subscription_server.py:746-747`.
 
 No auth required. Returns `List[PlanOut]`.
 
@@ -892,7 +898,7 @@ Response: `{ "ok": true, ... }`
 - **Video listing** requires `require_ui_session` authentication. The Videos tab is ONLY shown to authenticated users. This prevents exposure of video metadata to crawlers or unauthenticated visitors.
 - **Posts endpoint** is auth-optional. Public posts visible to all; followers-only posts visible only to authenticated followers. This respects the author's per-post visibility settings.
 - **Plan listing** is public (no auth required). Plans are inherently marketing content.
-- **Profile data** already respects discoverability settings: HIDDEN/DEACTIVATED/DELETED profiles return 404 (enforced at `profile.py:339-343`).
+- **Profile data** already respects discoverability settings: HIDDEN/DEACTIVATED/DELETED profiles return 404 (enforced in `profile.py` before the response is built).
 
 ### 6.2 Follow Action Security
 
@@ -1111,10 +1117,10 @@ No backend or database changes to revert.
 
 ## 12. Dependencies
 
-- **SOC-001 (Follow System)**: Follow/unfollow endpoints used by FollowButton component. Already implemented in `app/services/social.py` (lines 31, 101).
+- **SOC-001 (Follow System)**: Follow/unfollow endpoints used by FollowButton component. Already implemented in `app/services/social.py` (lines 31, 102).
 - **SOC-005 (Public Profile Page)**: The existing `PublicUserProfilePage` that this ticket extends. Already implemented.
-- **MON-005 (Subscription-Gated VOD)**: Plan listing endpoint used by PlanBrowser integration. Already implemented at `subscription_server.py:746`.
-- **VOD-006 (Video Listing API)**: Creator video listing endpoint at `video_listing.py:319`. Already implemented.
+- **MON-005 (Subscription-Gated VOD)**: Plan listing endpoint used by PlanBrowser integration. Already implemented at `subscription_server.py:746-747`.
+- **VOD-006 (Video Listing API)**: Creator video listing endpoint at `video_listing.py:325`. Already implemented.
 - **Newsfeed System (existing)**: Post data model and rendering patterns used by `StorefrontPostsFeed`.
 
 ---
@@ -1160,23 +1166,27 @@ No backend or database changes to revert.
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| PublicUserProfilePage is 224 lines, shows name/bio only | `frontend/src/pages/profile/PublicUserProfilePage.tsx` | 1-224 | VERIFIED |
-| Single Card layout with no tabs | `frontend/src/pages/profile/PublicUserProfilePage.tsx` | 124-222 | VERIFIED |
-| Action buttons: Message + Add contact | `frontend/src/pages/profile/PublicUserProfilePage.tsx` | 196-213 | VERIFIED |
-| Backend returns `has_subscription_plans` boolean | `app/routers/profile.py` | 352-362, 380 | VERIFIED |
-| Profile response includes follower/following/post counts | `app/routers/profile.py` | 374-379 | VERIFIED |
-| Profile response includes `is_following`, `is_followed_by`, `is_mutual` | `app/routers/profile.py` | 377-379 | VERIFIED |
-| Follow status check uses social.get_follow_status | `app/routers/profile.py` | 345-351 | VERIFIED |
-| Profile posts endpoint exists (auth-optional) | `app/routers/profile.py` | 386-392 | VERIFIED |
-| Profile posts uses GSI2 with POST_AUTHOR PK | `app/routers/profile.py` | 434-443 | VERIFIED |
-| Creator videos endpoint requires auth | `app/routers/video_listing.py` | 319-325 | VERIFIED: `require_ui_session` |
+| PublicUserProfilePage is 224 lines, shows name/bio only | `frontend/src/pages/profile/PublicUserProfilePage.tsx` | 1-340 | **OUTDATED** — now 340 lines; storefront tabs, stats row, FollowButton, and PlanBrowser already integrated |
+| Single Card layout with no tabs | `frontend/src/pages/profile/PublicUserProfilePage.tsx` | 169-337 | **OUTDATED** — page now has Hero Card + Subscription Plans section + Tabs (Videos/Posts/About) |
+| Action buttons: Message + Add contact + FollowButton | `frontend/src/pages/profile/PublicUserProfilePage.tsx` | 228-257 | VERIFIED (FollowButton at 231-237) |
+| Backend returns `has_subscription_plans` boolean | `app/routers/profile.py` | 354-361, 381 | VERIFIED |
+| Profile response includes follower/following/post counts | `app/routers/profile.py` | 375-377 | VERIFIED |
+| Profile response includes `is_following`, `is_followed_by`, `is_mutual` | `app/routers/profile.py` | 378-380 | VERIFIED |
+| Follow status check uses social.get_follow_status | `app/routers/profile.py` | 346-349 | VERIFIED |
+| Profile posts endpoint exists (auth-optional) | `app/routers/profile.py` | 387-388 | VERIFIED |
+| Profile posts uses GSI2 with POST_AUTHOR PK | `app/routers/profile.py` | 435-439 | VERIFIED |
+| Creator videos endpoint requires auth | `app/routers/video_listing.py` | 325 | VERIFIED: `require_ui_session` |
 | Video listing router prefix | `app/routers/video_listing.py` | 40 | VERIFIED: `/ui/videos` |
-| Plans endpoint is public (no auth) | `app/routers/subscription_server.py` | 746-753 | VERIFIED |
-| PlanBrowser accepts creatorId prop | `frontend/src/pages/subscriptions/PlanBrowser.tsx` | 32-34 | VERIFIED |
+| Plans endpoint is public (no auth) | `app/routers/subscription_server.py` | 746-747 | VERIFIED |
+| PlanBrowser accepts creatorId prop | `frontend/src/pages/subscriptions/PlanBrowser.tsx` | 32-33 | VERIFIED |
 | PlanBrowser filters for active plans | `frontend/src/pages/subscriptions/PlanBrowser.tsx` | 66 | VERIFIED: `status === "active"` |
 | PlanBrowser has loading/empty/subscribe states | `frontend/src/pages/subscriptions/PlanBrowser.tsx` | 68-85 | VERIFIED |
-| Social follow endpoint | `app/routers/social.py` | 103 | VERIFIED: POST /ui/social/follow |
-| Social unfollow endpoint | `app/routers/social.py` | 122 | VERIFIED: POST /ui/social/unfollow |
+| Social follow endpoint | `app/routers/social.py` | 139-140 | VERIFIED: POST /ui/social/follow |
+| Social unfollow endpoint | `app/routers/social.py` | 158-159 | VERIFIED: POST /ui/social/unfollow |
 | follow_user service function | `app/services/social.py` | 31 | VERIFIED |
-| unfollow_user service function | `app/services/social.py` | 101 | VERIFIED |
-| get_follow_status service function | `app/services/social.py` | 205 | VERIFIED |
+| unfollow_user service function | `app/services/social.py` | 102 | VERIFIED |
+| get_follow_status service function | `app/services/social.py` | 206 | VERIFIED |
+| FollowButton.tsx (listed as "to create") | `frontend/src/pages/profile/FollowButton.tsx` | — | **ALREADY EXISTS** |
+| social.ts endpoint file (listed as "to create") | `frontend/src/api/endpoints/social.ts` | — | **ALREADY EXISTS** |
+| StorefrontVideoGrid.tsx (listed as "to create") | `frontend/src/pages/profile/StorefrontVideoGrid.tsx` | — | **ALREADY EXISTS** — used at PublicUserProfilePage.tsx:286 |
+| StorefrontPostsFeed.tsx (listed as "to create") | `frontend/src/pages/profile/StorefrontPostsFeed.tsx` | — | **ALREADY EXISTS** — used at PublicUserProfilePage.tsx:291 |

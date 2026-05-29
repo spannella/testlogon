@@ -13,7 +13,7 @@
 
 ### 1.1 The Gap
 
-The current KYC admin system provides an admin queue (`GET /v1/kyc/cases/admin/queue`) and a basic metrics snapshot (`GET /v1/kyc/cases/admin/metrics`, line 946 in `app/routers/kyc_cases.py`). The metrics endpoint returns counts by status, average processing time, and percentile data. However, this is an operational dashboard, not a compliance reporting tool.
+The current KYC admin system provides an admin queue (`GET /v1/kyc/cases/admin/queue`) and a basic metrics snapshot (`GET /v1/kyc/cases/admin/metrics` — see `app/routers/kyc_cases.py:947` for `get_admin_kyc_metrics`). The metrics endpoint returns counts by status, average processing time, and percentile data. However, this is an operational dashboard, not a compliance reporting tool.
 
 Regulatory compliance requires:
 1. **Periodic reports** (monthly/quarterly) showing KYC volumes, approval/rejection rates, and processing times.
@@ -62,9 +62,9 @@ Admin Compliance Dashboard
 
 ## 2. Current State Analysis
 
-### 2.1 Existing Metrics (`app/routers/kyc_cases.py`, line 946)
+### 2.1 Existing Metrics (see `app/routers/kyc_cases.py:947`)
 
-The `get_admin_kyc_metrics()` endpoint calls `STORE.get_metrics_snapshot()` (line 701 in `app/services/kyc_cases.py`) which scans the admin queue and computes:
+The `get_admin_kyc_metrics()` endpoint calls `STORE.get_metrics_snapshot()` (see `app/services/kyc_cases.py:701`) which scans the admin queue and computes:
 - `total_cases`: count by status
 - `processing_time_p50`, `processing_time_p95`: percentiles
 - `stale_count`: cases pending longer than `stale_after_seconds` (default 48h)
@@ -73,11 +73,11 @@ This is a real-time snapshot, not a historical report. There is no date-range fi
 
 ### 2.2 Audit Log (`app/services/alerts.py`)
 
-`audit_event()` (line 695) writes structured audit entries. KYC events use the `_audit_state_transition()` helper which records `event_name`, `actor_sub`, `case_id`, `from_status`, `to_status`, `action`. These are stored in the audit log table but there is no bulk query/export endpoint.
+`audit_event()` (see `app/services/alerts.py:695`) writes structured audit entries. KYC events use the `_audit_state_transition()` helper (see `app/routers/kyc_cases.py:85`) which records `event_name`, `actor_sub`, `case_id`, `from_status`, `to_status`, `action`. These are stored in the audit log table but there is no bulk query/export endpoint.
 
 ### 2.3 Existing Export Infrastructure
 
-The codebase has `app/routers/csv_export.py` and `app/routers/audit_export.py` which handle CSV generation and download. The CSV export router provides signed S3 URLs for generated files. This pattern should be reused for KYC report exports.
+The codebase has `app/routers/csv_export.py` (see `app/routers/csv_export.py`) and `app/routers/audit_export.py` (see `app/routers/audit_export.py`) which handle CSV generation and download. The CSV export router provides signed S3 URLs for generated files. This pattern should be reused for KYC report exports.
 
 ### 2.4 KYC Cases Table GSIs
 
@@ -91,9 +91,9 @@ For compliance reports that need date-range queries across all cases, a new GSI 
 
 The billing system (`app/routers/billing.py`) maintains transaction ledger entries. SAR generation needs to cross-reference KYC status with transaction history to identify suspicious patterns.
 
-### 2.6 Retention Purge (`app/services/kyc_cases.py`, line 747)
+### 2.6 Retention Purge (see `app/services/kyc_cases.py:747`)
 
-The `run_retention_purge()` method handles data deletion based on `kyc_retention_rejected_days` (30), `kyc_retention_expired_days` (7), and `kyc_retention_approved_days` (365) from settings. The retention report should expose this schedule and current compliance status.
+The `run_retention_purge()` method handles data deletion based on `kyc_retention_rejected_days` (30), `kyc_retention_expired_days` (7), and `kyc_retention_approved_days` (365) from settings (see `app/core/settings.py:1065-1072`). The retention report should expose this schedule and current compliance status.
 
 ---
 
@@ -1706,3 +1706,51 @@ test.beforeAll(async ({ browser }) => {
 - Delete `app/services/kyc_reporting.py` and `app/routers/kyc_reporting.py`.
 - SAR records stored with `pk=SAR#*` are independent and can remain inert in the table.
 - No DynamoDB schema changes need to be reverted.
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| `get_admin_kyc_metrics()` | `app/routers/kyc_cases.py` | 947 | VERIFIED (ticket cites line 946 -- off by 1) |
+| KYC cases service | `app/services/kyc_cases.py` | all | VERIFIED (828 lines) |
+| `list_cases_by_owner()` | `app/services/kyc_cases.py` | 607 | VERIFIED |
+| `list_admin_queue()` | `app/services/kyc_cases.py` | 646 | VERIFIED |
+| `_status_pk()` helper | `app/services/kyc_cases.py` | 48 | VERIFIED |
+| `_updated_sk()` helper | `app/services/kyc_cases.py` | 40 | VERIFIED |
+| `run_retention_purge()` | `app/services/kyc_cases.py` | 747 | VERIFIED |
+| `kyc_retention_rejected_days` setting | `app/core/settings.py` | 1068 | VERIFIED: default 30 |
+| `kyc_retention_expired_days` setting | `app/core/settings.py` | 1069 | VERIFIED: default 7 |
+| `kyc_retention_approved_days` setting | `app/core/settings.py` | 1070 | VERIFIED: default 365 |
+| `kyc_cases_status_index_name` setting | `app/core/settings.py` | 1067 | VERIFIED |
+| `kyc_cases` DDB table (status-updated-index GSI) | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+| `audit_event()` | `app/services/alerts.py` | 695 | VERIFIED |
+| CSV export router | `app/routers/csv_export.py` | exists | VERIFIED |
+| Audit export router | `app/routers/audit_export.py` | exists | VERIFIED |
+| `require_root_session` | `app/auth/deps.py` | 273 | VERIFIED |
+| `app/contracts/kyc_cases_contract.py` | `app/contracts/` | exists | VERIFIED |
+
+### Corrections
+
+<!-- NOTE: The ticket cites `get_admin_kyc_metrics()` at "line 946" -- actual line is 947. -->
+<!-- NOTE: The ticket references `STORE.get_metrics_snapshot()` at "line 701" -- this should be verified; the STORE pattern uses class methods on the KYC case store. -->
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| `app/services/kyc_reporting.py` | `app/services/` | NOT FOUND -- new service required (~400 lines) |
+| `app/routers/kyc_reporting.py` | `app/routers/` | NOT FOUND -- new router required (~200 lines) |
+| `kyc_reporting_router` registration | `app/main.py` | NOT FOUND -- needs `app.include_router()` |
+| `SarRequest`, `ExportRequest` models | `app/contracts/kyc_cases_contract.py` | NOT FOUND -- new models required |
+| `KYC_COMPLIANCE_REPORTS_ENABLED` feature flag | `app/core/settings.py` | NOT FOUND -- new setting required |
+| `KYC_SAR_GENERATION_ENABLED` feature flag | `app/core/settings.py` | NOT FOUND -- new setting required |
+| SAR storage items (pk=SAR#*) | `kyc_cases` table | NOT FOUND -- new item pattern (no schema change needed) |
+| `frontend/src/pages/admin/KycComplianceDashboard.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |
+| `frontend/src/api/endpoints/kyc-reporting.ts` | `frontend/src/api/endpoints/` | NOT FOUND -- new endpoint file required |
+| `/admin/kyc/compliance` route | `frontend/src/App.tsx` | NOT FOUND -- new route required |

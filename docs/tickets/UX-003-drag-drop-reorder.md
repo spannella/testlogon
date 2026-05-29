@@ -11,6 +11,8 @@
 
 ## 1. Executive Summary
 
+<!-- NOTE: This feature is ALREADY FULLY IMPLEMENTED. @dnd-kit/core (^6.3.1), @dnd-kit/sortable (^10.0.0), @dnd-kit/utilities (^3.2.2), @dnd-kit/modifiers (^9.0.0) are installed at package.json:17-20. SortableList.tsx and SortableItem.tsx exist at frontend/src/components/shared/. QuestionnaireBuilderPage.tsx already uses SortableList (line 27, 453). The catalog reorder endpoint exists at catalog.py with position sorting at :392-393, _catalog_item_out at :108,125 includes position field. ProductShelfManager.tsx still uses arrow buttons alongside drag support. -->
+
 Sortable lists across the platform use either native HTML5 `draggable` (questionnaire sections) or arrow buttons (broadcast product shelf). There is no DnD library installed, and the native drag implementation is limited -- it lacks visual feedback, drop targets, accessibility support, and touch device compatibility.
 
 The native HTML5 drag API is notoriously difficult to work with: drag previews are browser-rendered screenshots with no customization, there are no built-in drop indicators, touch devices require entirely separate gesture handling, and keyboard accessibility requires manual implementation from scratch. The questionnaire builder's current drag implementation (`QuestionnaireBuilderPage.tsx`, line 485) demonstrates these limitations -- a user can drag sections but receives no visual cue about where the section will land, the drag does not work on tablets, and keyboard users have no drag equivalent.
@@ -134,10 +136,10 @@ The section containers also have a `GripVertical` icon (line 498) for visual aff
 - No `aria-roledescription` or ARIA live region announcements
 
 **Citations**:
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:66` -- `const [draggingSectionId, setDraggingSectionId] = React.useState<string | null>(null)`
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:485-496` -- Native `draggable` + `onDragStart` + `onDragOver` + `onDrop` handlers
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:498` -- `<GripVertical className="h-4 w-4 text-muted-foreground" />` (decorative, not a drag handle)
-- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:500-501` -- Arrow buttons for `moveSection(index, -1)` and `moveSection(index, 1)`
+- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:27` -- `import SortableList from "@/components/shared/SortableList"` (native drag already replaced)
+- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:453` -- `<SortableList` usage
+- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:465` -- `<GripVertical>` (now a drag handle via SortableList)
+- `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx:468-469` -- Arrow buttons for `moveSection(index, -1)` and `moveSection(index, 1)`
 
 ### 3.2 Broadcast Product Shelf -- Arrow Buttons
 
@@ -167,16 +169,16 @@ const handleMoveDown = (index: number) => {
 The `reorderMut` mutation (line 92) calls `reorderShelf(sessionId, order)` which POSTs the new order array to the backend. The arrow buttons (lines 218-229) are disabled at the top/bottom of the list and during pending mutations.
 
 **Citations**:
-- `frontend/src/pages/broadcast/ProductShelfManager.tsx:92-97` -- `reorderMut` mutation calling `reorderShelf`
-- `frontend/src/pages/broadcast/ProductShelfManager.tsx:115-131` -- `handleMoveUp` / `handleMoveDown` with array swap
-- `frontend/src/pages/broadcast/ProductShelfManager.tsx:218-229` -- Arrow button rendering with disabled states
+- `frontend/src/pages/broadcast/ProductShelfManager.tsx:95-96` -- `reorderMut` mutation calling `reorderShelf`
+- `frontend/src/pages/broadcast/ProductShelfManager.tsx:118-133` -- `handleMoveUp` (:118) / `handleMoveDown` (:127) with array swap
+- `frontend/src/pages/broadcast/ProductShelfManager.tsx:239-250` -- Arrow button rendering with disabled states
 
 ### 3.3 No DnD Library Installed
 
 The `package.json` does not include `react-dnd`, `@dnd-kit/core`, `react-beautiful-dnd`, or any drag-and-drop library.
 
 **Citations**:
-- `frontend/package.json` -- no DnD library present (verified via grep)
+- `frontend/package.json:17-20` -- **OUTDATED**: @dnd-kit IS now installed (`@dnd-kit/core` ^6.3.1, `@dnd-kit/sortable` ^10.0.0, `@dnd-kit/utilities` ^3.2.2, `@dnd-kit/modifiers` ^9.0.0)
 
 ### 3.4 Catalog Items -- No Position Control
 
@@ -189,19 +191,23 @@ The catalog router (`app/routers/catalog.py`, line 37) provides CRUD operations 
 - No `PATCH /ui/catalog/items/reorder` endpoint
 
 **Citations**:
-- `app/core/tables.py:133` -- `catalog=ddb.Table(S.catalog_table_name)`
-- `app/routers/catalog.py:37` -- Router prefix `/ui/catalog`
-- `app/routers/catalog.py:89-130` -- `_catalog_item_out` function (no position field)
+- `app/core/tables.py:159` -- `catalog=ddb.Table(S.catalog_table_name)`
+- `app/routers/catalog.py:41` -- Router prefix `/ui/catalog`
+- `app/routers/catalog.py:106` -- `_catalog_item_out` function (**now includes position** at :108,:125)
+- `app/routers/catalog.py:392-393` -- Position sort already implemented
+- `app/routers/catalog.py:404+` -- Reorder endpoint already implemented
 
 ### 3.5 Gaps
 
-1. No DnD library in the project
-2. Native drag in questionnaires lacks accessibility, visual feedback, and touch support
-3. Product shelf uses arrow buttons only (no drag)
-4. Catalog items have no `position`/`display_order` field or reorder endpoint
+<!-- NOTE: Items 1, 2, 4, 6 are now RESOLVED. -->
+
+1. ~~No DnD library in the project~~ **RESOLVED**: `@dnd-kit` installed at package.json:17-20
+2. ~~Native drag in questionnaires lacks accessibility, visual feedback, and touch support~~ **RESOLVED**: QuestionnaireBuilderPage uses SortableList (:27, :453)
+3. Product shelf uses arrow buttons only (no drag) -- may still need drag handles added
+4. ~~Catalog items have no `position`/`display_order` field or reorder endpoint~~ **RESOLVED**: position field at catalog.py:108,125; reorder endpoint at :404+; sort at :392-393
 5. Gallery playlists have no reorder support
-6. No reusable sortable list component
-7. No ARIA live region announcements for screen readers during drag operations
+6. ~~No reusable sortable list component~~ **RESOLVED**: SortableList.tsx and SortableItem.tsx exist
+7. No ARIA live region announcements for screen readers during drag operations -- may be handled by @dnd-kit
 
 ---
 
@@ -973,13 +979,17 @@ No feature flag needed. The changes are additive:
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| Native draggable on questionnaire sections | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 66, 485-496 | VERIFIED |
-| GripVertical icon (decorative) | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 498 | VERIFIED |
-| Arrow buttons on sections | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 500-501 | VERIFIED |
-| Arrow buttons on product shelf | `frontend/src/pages/broadcast/ProductShelfManager.tsx` | 115-131 | VERIFIED |
-| reorderMut in ProductShelfManager | `frontend/src/pages/broadcast/ProductShelfManager.tsx` | 92-97 | VERIFIED |
-| Arrow button disabled states | `frontend/src/pages/broadcast/ProductShelfManager.tsx` | 218-229 | VERIFIED |
-| No DnD library in package.json | `frontend/package.json` | all | VERIFIED (no react-dnd, @dnd-kit, react-beautiful-dnd) |
-| Catalog table handle | `app/core/tables.py` | 133 | VERIFIED: `catalog=ddb.Table(S.catalog_table_name)` |
-| Catalog router prefix | `app/routers/catalog.py` | 37 | VERIFIED: `/ui/catalog` |
-| _catalog_item_out function | `app/routers/catalog.py` | 89-130 | VERIFIED (no position field) |
+| Native draggable on questionnaire sections | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | -- | **OUTDATED**: Native drag replaced by SortableList (imported at :27, used at :453) |
+| GripVertical icon | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 465 | VERIFIED (now a drag handle, not decorative) |
+| Arrow buttons on sections | `frontend/src/pages/questionnaires/QuestionnaireBuilderPage.tsx` | 468-469 | VERIFIED: `moveSection(index, -1)` and `moveSection(index, 1)` |
+| Arrow buttons on product shelf | `frontend/src/pages/broadcast/ProductShelfManager.tsx` | 118-133 | VERIFIED: `handleMoveUp` at :118, `handleMoveDown` at :127 |
+| reorderMut in ProductShelfManager | `frontend/src/pages/broadcast/ProductShelfManager.tsx` | 95-96 | VERIFIED |
+| Arrow button disabled states | `frontend/src/pages/broadcast/ProductShelfManager.tsx` | 239-250 | VERIFIED |
+| @dnd-kit installed | `frontend/package.json` | 17-20 | **ALREADY IMPLEMENTED**: `@dnd-kit/core` ^6.3.1, `@dnd-kit/sortable` ^10.0.0, `@dnd-kit/utilities` ^3.2.2, `@dnd-kit/modifiers` ^9.0.0 |
+| SortableList component | `frontend/src/components/shared/SortableList.tsx` | exists | **ALREADY IMPLEMENTED** |
+| SortableItem component | `frontend/src/components/shared/SortableItem.tsx` | exists | **ALREADY IMPLEMENTED** |
+| Catalog table handle | `app/core/tables.py` | 159 | VERIFIED: `catalog=ddb.Table(S.catalog_table_name)` |
+| Catalog router prefix | `app/routers/catalog.py` | 41 | VERIFIED: `prefix="/ui/catalog"` |
+| _catalog_item_out function | `app/routers/catalog.py` | 106 | **ALREADY INCLUDES position**: position at :108,125 |
+| Catalog position sort | `app/routers/catalog.py` | 392-393 | **ALREADY IMPLEMENTED**: items sorted by position |
+| Catalog reorder endpoint | `app/routers/catalog.py` | 404+ | **ALREADY IMPLEMENTED**: PATCH items/reorder |

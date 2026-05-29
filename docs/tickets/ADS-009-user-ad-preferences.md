@@ -6,7 +6,8 @@
 **Date**: 2026-05-29
 **Priority**: Medium
 **Estimated effort**: 5-7 days
-**Dependencies**: ADS-004 (Ad Serving Engine), ADS-005 (Sponsored Posts — hide feedback)
+**Dependencies**: ADS-004 (Ad Serving Engine — sibling ticket, not yet implemented), ADS-005 (Sponsored Posts — sibling ticket, not yet implemented)
+<!-- NOTE: ADS-004 and ADS-005 services/tables do not exist yet. Existing: ad_placement.py for ad-free subscriber check. -->
 
 ---
 
@@ -698,3 +699,13 @@ curl -X POST http://localhost:8000/ui/ads/feedback \
 | 385.2 | Ad-free user sees no ads | Set ad-free; should_serve_ad returns serve=false |
 | 385.3 | Expired ad-free reverts to full_ads | Set until_ts to past; GET prefs; ad_level=full_ads |
 | 385.4 | Reduced ads user sees fewer ads | Set reduced_ads; serve with overlay; serve=false reason=reduced |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ad_placement.py` | 178 | Existing `get_ad_config()` — checks subscriber ad-free status |
+| `app/services/subscription_access.py` | 55 | Existing `has_active_subscription` — used for per-creator ad-free checks |
+| `app/services/user_ad_prefs.py` | — | Does not exist yet — new implementation required |

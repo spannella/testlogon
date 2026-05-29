@@ -1151,7 +1151,7 @@ test.describe("Broadcast Chat Load", () => {
 | `BROADCAST_CHAT_HISTORY_DEFAULT_LIMIT` | `100` | Default messages loaded on page entry |
 | `BROADCAST_CHAT_OVERLAY_ENABLED` | `true` | Feature flag for overlay rendering |
 
-## Appendix D: Existing File Reference
+## Codebase References
 
 | File | Relevance |
 |------|-----------|
@@ -1169,3 +1169,17 @@ test.describe("Broadcast Chat Load", () => {
 | `frontend/src/pages/messages/ConversationView.tsx` | Message list rendering + auto-scroll |
 | `app/services/profile.py` | `get_profile_identity()` for display name resolution |
 | `e2e_admin_session_setup.py` | Test session seeding for E2E |
+
+### Verification Status
+<!-- All files above VERIFIED to exist in codebase. Additionally: -->
+| File | Status | Notes |
+|------|--------|-------|
+| `app/services/broadcast_chat_store.py` | EXISTS | Chat message CRUD |
+| `app/services/broadcast_chat_rich.py` | EXISTS | Rich chat message support |
+| `app/core/settings.py:492-496` | EXISTS | Chat settings (table name, rate limit, max length, history limit) |
+| `app/core/tables.py:80-81` | EXISTS | `T.broadcast_chat_messages`, `T.broadcast_chat_mutes` |
+| `scripts/local-ddb-init.py:557-563` | EXISTS | BroadcastChatMessages, BroadcastChatMutes tables |
+| `frontend/src/pages/broadcast/BroadcastChat.tsx` | EXISTS | Chat UI component |
+| `frontend/src/api/endpoints/broadcast-chat.ts` | EXISTS | Chat API endpoint wrappers |
+| `frontend/e2e/broadcast-chat.spec.ts` | EXISTS | E2E tests |
+| `frontend/e2e/broadcast-chat-rich.spec.ts` | EXISTS | Rich chat E2E tests |

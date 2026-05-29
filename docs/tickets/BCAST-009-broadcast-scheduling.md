@@ -15,6 +15,15 @@
 The broadcast system (`app/routers/broadcast.py`, 1279 lines) currently supports a linear session lifecycle: `draft -> provisioning -> ready -> live -> stopping -> stopped`. A broadcaster creates a session via `POST /broadcast/sessions`, which initializes it in `draft` status. Starting requires an explicit `POST /broadcast/sessions/{id}/start` call, which provisions infrastructure and transitions to `live` immediately.
 
 There is **no mechanism to schedule a broadcast for a future date/time**. Broadcasters cannot:
+<!-- NOTE: This claim is NOW OUTDATED. Scheduling infrastructure exists:
+  `app/services/broadcast_scheduler.py` (background loop, auto-starts at scheduled_at),
+  `app/services/broadcast_reminders.py` (reminder dispatch),
+  `app/main.py:131,378-379` (scheduler + reminder tasks registered at startup),
+  `app/routers/broadcast.py:300` (GET /sessions/scheduled endpoint),
+  `scripts/local-ddb-init.py:517` (BroadcastSessions ByScheduledAt GSI),
+  `scripts/local-ddb-init.py:771` (BroadcastReminders table),
+  `frontend/src/api/endpoints/broadcastSchedule.ts`,
+  `frontend/e2e/broadcast-scheduling.spec.ts` -->
 
 1. Announce an upcoming broadcast in advance so viewers can plan to attend
 2. Have the system automatically start a broadcast at the scheduled time
@@ -2259,3 +2268,20 @@ This adds one DDB read per reminder dispatch, which is acceptable given the low 
 **Impact on frontend display**: If the user's browser updates its timezone database (via OS update), the displayed local time for the broadcast will change to reflect the new rules. For example, if DST is abolished and the broadcast was scheduled during what would have been the DST period, the displayed time shifts by 1 hour. The underlying start time is unchanged.
 
 **Mitigation**: None needed. The frontend always displays the correct local time for the user's current timezone rules. If the rules change, the display updates accordingly, which is the correct behavior.
+
+---
+
+## Codebase References
+
+| File | Line(s) | Status | Notes |
+|------|---------|--------|-------|
+| `app/services/broadcast_scheduler.py` | 1, 16, 25 | EXISTS | Background scheduler loop, `broadcast_scheduler_enabled` check |
+| `app/services/broadcast_reminders.py` | — | EXISTS | Reminder dispatch service |
+| `app/core/settings.py` | 1197 | EXISTS | `broadcast_reminders_table_name` |
+| `app/core/tables.py` | 87 | EXISTS | `T.broadcast_reminders` handle |
+| `scripts/local-ddb-init.py` | 771-779 | EXISTS | BroadcastReminders table |
+| `scripts/local-ddb-init.py` | 517-525 | EXISTS | BroadcastSessions with `ByScheduledAt` GSI |
+| `app/main.py` | 131, 378-379 | EXISTS | `start_broadcast_scheduler_task`, `start_broadcast_reminder_task` |
+| `app/routers/broadcast.py` | 300 | EXISTS | `GET /sessions/scheduled` endpoint |
+| `frontend/src/api/endpoints/broadcastSchedule.ts` | — | EXISTS | Schedule API endpoint wrappers |
+| `frontend/e2e/broadcast-scheduling.spec.ts` | — | EXISTS | E2E tests |

@@ -1045,27 +1045,26 @@ scheduled_actions=ddb.Table(S.scheduled_actions_table_name),
 
 | Reference | File | Line(s) | Status |
 |-----------|------|---------|--------|
-| `_messaging_background_loop()` | `app/routers/messaging.py` | 11953 | VERIFIED |
-| `start_scheduled_messages_task()` | `app/routers/messaging.py` | 12020 | VERIFIED |
-| Message scheduling filter: `status="scheduled"` + `deliver_at <= now_ts()` | `app/routers/messaging.py` | 11959 | CORRECTED: ticket said `scheduled=True` and `send_at <= now`; actual is `Attr("status").eq("scheduled") & Attr("deliver_at").lte(now_ts())` |
-| `_deliver_scheduled_message()` | `app/routers/messaging.py` | 11819 | VERIFIED |
-| `run_broadcast_scheduler_loop()` | `app/services/broadcast_scheduler.py` | 14 | VERIFIED (async, polls `ByScheduledAt` GSI) |
-| `start_broadcast_scheduler_task()` | `app/services/broadcast_scheduler.py` | 68 | VERIFIED |
-| `run_broadcast_reminder_loop()` | `app/services/broadcast_scheduler.py` | 73 | VERIFIED |
+| `_messaging_background_loop()` | `app/routers/messaging.py` | 12504 | VERIFIED (was 11953; line drift) |
+| `start_scheduled_messages_task()` | `app/routers/messaging.py` | 12594 | VERIFIED (was 12020; line drift) |
+| Message scheduling filter: `status="scheduled"` + `deliver_at <= now_ts()` | `app/routers/messaging.py` | 12504+ | CORRECTED: ticket said `scheduled=True` and `send_at <= now`; actual is `Attr("status").eq("scheduled") & Attr("deliver_at").lte(now_ts())` |
+| `_deliver_scheduled_message()` | `app/routers/messaging.py` | 12370 | VERIFIED (was 11819; line drift) |
+| `run_broadcast_scheduler_loop()` | `app/services/broadcast_scheduler.py` | 16 | VERIFIED (was 14; line drift) |
+| `start_broadcast_scheduler_task()` | `app/services/broadcast_scheduler.py` | 84 | VERIFIED (was 68; line drift) |
+| `run_broadcast_reminder_loop()` | `app/services/broadcast_scheduler.py` | 89 | VERIFIED (was 73; line drift) |
 | Broadcast poll interval | `app/services/broadcast_scheduler.py` | 27 | VERIFIED: configurable via `S.broadcast_scheduler_poll_interval_seconds` |
-| `broadcast_scheduler_enabled` setting | `app/core/settings.py` | 1148 | VERIFIED |
-| `BroadcastSessions` `ByScheduledAt` GSI | `scripts/local-ddb-init.py` | 517 | VERIFIED (with `attr_types={"scheduled_at": "N"}`) |
+| `broadcast_scheduler_enabled` setting | `app/core/settings.py` | 1194 | VERIFIED (was 1148; line drift) |
+| `BroadcastSessions` `ByScheduledAt` GSI | `scripts/local-ddb-init.py` | 522 | VERIFIED (was 517; line drift, with `attr_types={"scheduled_at": "N"}`) |
 | `run_scheduler_loop()` (newsfeed) | `app/services/newsfeed_scheduler.py` | 369 | VERIFIED (sync function with configurable `interval_seconds`) |
 | `process_due_scheduled_posts()` (newsfeed) | `app/services/newsfeed_scheduler.py` | 234 | VERIFIED |
-| `newsfeed_startup` (registered in main.py:323) | `app/routers/newsfeed.py` | 2039 | VERIFIED |
-| `newsfeed_scheduling_api_enabled` setting | `app/core/settings.py` | 958 | VERIFIED |
-| `newsfeed_scheduling_worker_enabled` setting | `app/core/settings.py` | 959 | VERIFIED |
-| `app_single_table` `GSI_SCHEDULE_DUE` GSI | `scripts/local-ddb-init.py` | 224 | VERIFIED (`partition_key: GSI_SCHEDULE_PK`, `sort_key: GSI_SCHEDULE_SK`) |
-| `create_post()` | `app/routers/newsfeed.py` | 2866 | CORRECTED: ticket said `app/services/newsfeed_feed_query.py`; actually in `app/routers/newsfeed.py`. Note: this is a FastAPI endpoint function (`def create_post(req: CreatePostRequest, user_id: UserIdDep)`) |
-| `create_file_share_message()` | `app/routers/messaging.py` | 8224 | CORRECTED: ticket said `create_file_share_message_internal()`; actual name is `create_file_share_message()` |
-| `update_product_price()` | N/A | N/A | CORRECTED: does not exist. Nearest equivalent is `update_item()` in `app/routers/catalog.py:430` (FastAPI endpoint accepting `CatalogItemPatchIn`). No `catalog_products.py` service file exists; catalog service is `catalog_commercialization.py` (different purpose). |
-| `write_alert()` | `app/services/alerts.py` | 265 | VERIFIED |
-| Background task registration pattern | `app/main.py` | 323-328 | VERIFIED |
+| `newsfeed_scheduling_api_enabled` setting | `app/core/settings.py` | 995 | VERIFIED (was 958; line drift) |
+| `newsfeed_scheduling_worker_enabled` setting | `app/core/settings.py` | 996 | VERIFIED (was 959; line drift) |
+| `app_single_table` `GSI_SCHEDULE_DUE` GSI | `scripts/local-ddb-init.py` | 229 | VERIFIED (was 224; line drift) |
+| `create_post()` | `app/routers/newsfeed.py` | 3013 | CORRECTED: ticket said `app/services/newsfeed_feed_query.py`; actually in `app/routers/newsfeed.py` (was 2866; line drift) |
+| `create_file_share_message()` | `app/routers/messaging.py` | 8726 | CORRECTED: ticket said `create_file_share_message_internal()`; actual name is `create_file_share_message()` (was 8224; line drift) |
+| `update_product_price()` | N/A | N/A | CORRECTED: does not exist. Nearest equivalent is `update_item()` in `app/routers/catalog.py:492` (FastAPI endpoint accepting `CatalogItemPatchIn`). No `catalog_products.py` service file exists. |
+| `write_alert()` | `app/services/alerts.py` | 355 | VERIFIED (was 265; file grew from ~680 to 899 lines) |
+| Background task registration pattern | `app/main.py` | 378, 466 | VERIFIED (was 323-328; line drift) |
 | `require_ui_session` | `app/services/sessions.py` | 283 | VERIFIED |
 | `now_ts()` | `app/core/time.py` | 2 | VERIFIED |
 | `TableDef` dataclass | `scripts/local-ddb-init.py` | 29 | VERIFIED |

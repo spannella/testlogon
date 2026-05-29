@@ -11,7 +11,16 @@
 
 ## 1. Executive Summary
 
-The platform has search capabilities scattered across individual modules, each with its own endpoint, query syntax, and UI. Users searching for "photography" must separately check the user discovery page, the catalog, the file manager, and their alerts. There is no unified search experience, no `/search` route, and no search results page. The existing command palette (`Header.tsx`) only navigates to pages by name -- it does not search content.
+The platform has search capabilities scattered across individual modules, each with its own endpoint, query syntax, and UI. Users searching for "photography" must separately check the user discovery page, the catalog, the file manager, and their alerts. <!-- NOTE: This ticket's "current state" description is OUTDATED. Global search has been FULLY IMPLEMENTED:
+  - Backend: app/routers/search.py — registered at main.py:73,395
+  - Aggregator: _search_aggregator function (search.py:618) fans out to users, posts, videos, catalog, files, messages, tickets, contacts, calendar
+  - Search history: POST/GET/DELETE /ui/search/history endpoints (search.py:820-855)
+  - Frontend: SearchPage at frontend/src/pages/search/SearchPage.tsx, route at App.tsx:153
+  - API client: frontend/src/api/endpoints/search.ts
+  All "Files to Create" listed in section 13 already exist.
+-->
+
+There is no unified search experience, no `/search` route, and no search results page. The existing command palette (`Header.tsx`) only navigates to pages by name -- it does not search content.
 
 This feature introduces a unified search endpoint `GET /ui/search` that aggregates results from existing per-module search functions, a new `/search` page with tabbed results (Posts, Videos, Users, Files, Catalog), and an enhanced header search bar that triggers content search in addition to page navigation. The backend fans out a single query to multiple search services in parallel, merges results, and returns a unified response with type-tagged results.
 
@@ -51,6 +60,7 @@ Global search is fundamental UX -- every major platform has it. Without it, user
 | Alerts | `GET /ui/alerts/search?q=...` | Alert text search | `app/routers/alerts.py:124-125` |
 | Purchases | `/ui/purchase-history/transactions/search` | Transaction search | `frontend/src/api/endpoints/purchases.ts:20-24` |
 
+<!-- NOTE: Post search now exists in app/routers/search.py:113 (_search_posts). Video search at search.py:490 (_search_videos). Newsfeed.py is 5954 lines, not 4998. -->
 **Missing search**: Posts/newsfeed has NO search endpoint at all (`app/routers/newsfeed.py` has 4998 lines, none with search). Videos have no text search endpoint.
 
 ---
@@ -1001,18 +1011,22 @@ CommandDialog (existing, enhanced)
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| No /search route in App.tsx | `frontend/src/App.tsx` | 84-154 | VERIFIED |
-| Header command palette code | `frontend/src/components/layout/Header.tsx` | 105, 138-148, 364-386 | VERIFIED |
-| CommandDialog only searches pages | `frontend/src/components/layout/Header.tsx` | 366-383 | VERIFIED: placeholder "Search pages..." |
+| No /search route in App.tsx | `frontend/src/App.tsx` | 153 | **OUTDATED** — `/search` route exists, lazy-loaded at line 54 |
+| Search router registered | `app/main.py` | 73, 395 | **ALREADY IMPLEMENTED** |
+| Search aggregator endpoint | `app/routers/search.py` | 797 (GET ""), 618 (_search_aggregator) | **ALREADY IMPLEMENTED** |
+| Search history endpoints | `app/routers/search.py` | 820 (POST), 833 (GET), 843 (DELETE item), 855 (DELETE all) | **ALREADY IMPLEMENTED** |
+| Per-module search: users | `app/routers/search.py` | 86 (_search_users) | **ALREADY IMPLEMENTED** |
+| Per-module search: posts | `app/routers/search.py` | 113 (_search_posts) | **ALREADY IMPLEMENTED** |
+| Per-module search: videos | `app/routers/search.py` | 490 (_search_videos) | **ALREADY IMPLEMENTED** |
+| Per-module search: catalog | `app/routers/search.py` | 188 (_search_catalog) | **ALREADY IMPLEMENTED** |
+| Per-module search: files | `app/routers/search.py` | 237 (_search_files) | **ALREADY IMPLEMENTED** |
+| Per-module search: messages | `app/routers/search.py` | 262 (_search_messages) | **ALREADY IMPLEMENTED** |
+| Per-module search: tickets | `app/routers/search.py` | 374 (_search_tickets) | **ALREADY IMPLEMENTED** |
+| Per-module search: contacts | `app/routers/search.py` | 441 (_search_contacts) | **ALREADY IMPLEMENTED** |
+| Per-module search: calendar | `app/routers/search.py` | 555 (_search_calendar) | **ALREADY IMPLEMENTED** |
+| SearchPage frontend | `frontend/src/pages/search/SearchPage.tsx` | — | **ALREADY IMPLEMENTED** |
+| Search API client | `frontend/src/api/endpoints/search.ts` | — | **ALREADY IMPLEMENTED** (per MEMORY.md search E2E tests) |
 | Discovery search endpoint | `app/routers/discovery.py` | 19-27 | VERIFIED |
-| Discovery search_users function | `app/services/discovery.py` | 99 | VERIFIED |
 | Catalog search endpoint | `app/routers/catalog.py` | 379-408 | VERIFIED |
-| File search_prefix function | `app/services/filemanager.py` | 947 | VERIFIED |
-| File search_text function | `app/services/filemanager.py` | 1861 | VERIFIED |
-| Alerts search endpoint | `app/routers/alerts.py` | 124-125 | VERIFIED |
-| No post search in newsfeed router | `app/routers/newsfeed.py` | all 4998 lines | VERIFIED: grep returns 0 results |
-| Frontend searchDiscoverUsers | `frontend/src/api/endpoints/discovery.ts` | 34-37 | VERIFIED |
-| Frontend searchCatalogItems | `frontend/src/api/endpoints/cart.ts` | 77-78 | VERIFIED |
-| Frontend searchFiles/searchText | `frontend/src/api/endpoints/files.ts` | 19-26 | VERIFIED |
-| Ctrl+K handler | `frontend/src/components/layout/Header.tsx` | 138-148 | VERIFIED |
 | app_single_table GSI3 exists | `scripts/local-ddb-init.py` | 223 | VERIFIED |
+| Newsfeed router line count | `app/routers/newsfeed.py` | — | VERIFIED: 5954 lines (not 4998 as stated in ticket) |

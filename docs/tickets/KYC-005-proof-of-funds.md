@@ -20,7 +20,7 @@ The existing KYC system verifies identity (selfie, ID documents) and optionally 
 about the **source of funds** -- where a user's money comes from -- and in higher-risk
 scenarios, **proof of funds** -- evidence that the user has the funds they claim.
 
-The platform already has a questionnaire system (`app/services/questionnaires_repository.py`)
+The platform already has a questionnaire system (see `app/services/questionnaires_repository.py:38` for `DynamoQuestionnaireRepository`)
 integrated with KYC cases. This ticket extends the KYC flow with a dedicated source-of-funds
 questionnaire, financial document uploads with structured metadata, and risk scoring based
 on the responses.
@@ -164,19 +164,19 @@ The KYC case has a `questionnaire` nested object:
 }
 ```
 
-`start_kyc_questionnaire()` (line 625 of `app/routers/kyc_cases.py`) creates a questionnaire
+`start_kyc_questionnaire()` (see `app/routers/kyc_cases.py:625`) creates a questionnaire
 response session linked to the case via `POST /v1/kyc/cases/{id}/questionnaire/start`.
-The questionnaire system (`app/services/questionnaires_repository.py`,
+The questionnaire system (see `app/services/questionnaires_repository.py:38`,
 `DynamoQuestionnaireRepository`) supports arbitrary question sets with response tracking.
 
 ### 3.2 Current File Types
 
-`_KYC_ALLOWED_FILE_TYPES` = `{"selfie", "id_front", "id_back", "proof_of_address"}`.
+`_KYC_ALLOWED_FILE_TYPES` (see `app/routers/kyc_cases.py:51`) = `{"selfie", "id_front", "id_back", "proof_of_address"}`.
 Financial documents are not currently in this set. This ticket adds new allowed types.
 
 ### 3.3 KYC Case Readiness
 
-`_readiness_for_case()` (line 223) checks three requirements: `questionnaire_submitted`,
+`_readiness_for_case()` (see `app/routers/kyc_cases.py:223`) checks three requirements: `questionnaire_submitted`,
 `required_files`, `signature_completed`. Source-of-funds will add a fourth requirement for
 enhanced/high_risk profiles.
 
@@ -1501,3 +1501,35 @@ test("169.9 Risk flags visible to admin in case detail", async () => {
 | `frontend/src/pages/admin/KycCaseDetailPage.tsx` | Modify | Add Financial Verification tab |
 | `frontend/src/api/endpoints/kyc-admin.ts` | Modify | Add source-of-funds API functions |
 | `frontend/e2e/kyc-source-of-funds.spec.ts` | **New** | 15+ E2E tests across sections 167-169 |
+
+---
+
+## Codebase References
+
+> **Verification performed**: 2026-05-29
+
+### Verified (EXISTS in codebase)
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router | `app/routers/kyc_cases.py` | all | VERIFIED (1294 lines) |
+| `_readiness_for_case()` | `app/routers/kyc_cases.py` | 223 | VERIFIED |
+| `submit_kyc_case()` | `app/routers/kyc_cases.py` | 830 | VERIFIED |
+| `start_kyc_questionnaire()` | `app/routers/kyc_cases.py` | 625 | VERIFIED |
+| KYC cases service | `app/services/kyc_cases.py` | all | VERIFIED (828 lines) |
+| `_risk()` function | `app/services/kyc_cases.py` | 664 | VERIFIED |
+| `kyc_cases` DDB table | `scripts/local-ddb-init.py` | 91-96 | VERIFIED |
+| KYC settings | `app/core/settings.py` | 1065-1072 | VERIFIED |
+| `app/contracts/kyc_cases_contract.py` | `app/contracts/` | exists | VERIFIED |
+| `DynamoQuestionnaireRepository` | `app/services/questionnaires_repository.py` | 38 | VERIFIED |
+
+### Not Yet Implemented (requires new code)
+
+| Reference | Expected Location | Status |
+|-----------|-------------------|--------|
+| Source-of-funds endpoints (4 endpoints) | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoints required |
+| `source_of_funds` field on KYC case | `app/services/kyc_cases.py` | NOT FOUND -- new field handling required |
+| SOF risk flag computation | `app/services/kyc_cases.py` | NOT FOUND -- new logic in `_risk()` required |
+| Financial doc request/response models | `app/contracts/kyc_cases_contract.py` | NOT FOUND -- new models required |
+| `frontend/src/pages/kyc/KycCaseForm.tsx` | `frontend/src/pages/kyc/` | NOT FOUND -- new page required |
+| `frontend/src/pages/admin/KycCaseDetailPage.tsx` financial tab | `frontend/src/pages/admin/` | NOT FOUND -- page does not exist yet (KYC-001 dependency) |

@@ -5,7 +5,16 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 7-9 days  
-**Dependencies**: Billing ledger (`billing_shared.py`), admin auth (`auth/deps.py`), financial rollups (FIN-013)
+**Dependencies**: Billing ledger (`app/services/billing_shared.py:217`), admin auth (`app/auth/policy.py:63` `require_root`), financial rollups (FIN-013)
+
+<!-- NOTE: A substantial audit export system ALREADY EXISTS in the codebase:
+- `app/services/audit_export.py` (46 lines) — export record model with CSV/NDJSON formatting
+- `app/services/audit_export_pipeline.py` (249 lines) — export pipeline (job creation, execution)
+- `app/routers/audit_export.py` (192 lines) — REST API at `/ui/admin/audit-exports` with POST (create), GET (list), GET /{id}, GET /{id}/download
+- Registered in `app/main.py:157,448` as `audit_export_router`
+- DDB table `AuditExports` already exists in `scripts/local-ddb-init.py:1044-1053` (PK=export_id, SK=sk, GSIs: status-created-index, user-created-index)
+- Settings exist in `app/core/settings.py:1451-1467`: `audit_export_enabled`, `audit_export_table_name`, `audit_export_max_date_range_days`, `audit_export_s3_bucket`, etc.
+- This ticket should extend the existing system rather than creating it from scratch. -->
 
 ---
 
@@ -148,18 +157,30 @@ Admin Export System (/admin/audit-export)
 
 ### 2.1 Billing Ledger (`app/services/billing_shared.py`)
 
-Ledger entries stored in `billing` table:
+Ledger entries stored in `billing` table (see `scripts/local-ddb-init.py:59`, `app/core/settings.py:321`):
 - `pk`: `USER#{user_id}`, `sk`: `LEDGER#{timestamp}#{entry_id}`
-- Fields: `entry_type`, `amount_cents`, `currency`, `description`, `reason`, `created_at`, `provider`
-- Key functions: `new_ledger_entry(...)`, `settle_or_reverse_ledger(...)`
+- Fields: `type`, `amount_cents`, `state`, `reason`, `ts` <!-- NOTE: field is `type` not `entry_type`; `currency`, `description`, `created_at`, and `provider` are NOT standard fields in `new_ledger_entry` — see `app/services/billing_shared.py:236`. -->
+- Key functions: `new_ledger_entry(...)` at `:217`, `settle_or_reverse_ledger(...)` at `:248` (see `app/services/billing_shared.py`)
 
-### 2.2 Existing Admin Payout Router (`app/routers/admin_payouts.py`)
+### 2.2 Existing Audit Export System (ALREADY EXISTS)
 
-The admin payouts router provides payout listing and approval but no export functionality.
+An audit export system already exists:
+- **Service**: `app/services/audit_export.py` (46 lines) + `app/services/audit_export_pipeline.py` (249 lines)
+- **Router**: `app/routers/audit_export.py` (192 lines) — prefix `/ui/admin/audit-exports`, registered at `app/main.py:157,448`
+  - `POST /ui/admin/audit-exports` — create export (categories, format csv/ndjson, date range)
+  - `GET /ui/admin/audit-exports` — list exports
+  - `GET /ui/admin/audit-exports/{export_id}` — get export details
+  - `GET /ui/admin/audit-exports/{export_id}/download` — download export file
+- **DDB Table**: `AuditExports` at `scripts/local-ddb-init.py:1044-1053` (PK=export_id, SK=sk, GSIs: status-created-index, user-created-index)
+- **Settings**: `app/core/settings.py:1451-1467` — `audit_export_enabled`, `audit_export_table_name`, `audit_export_max_date_range_days` (90), `audit_export_s3_bucket`, `audit_export_url_ttl_seconds`, `audit_export_worker_enabled`, etc.
 
-### 2.3 FIN-013 Financial Rollups
+### 2.3 Existing Admin Payout Router (`app/routers/admin_payouts.py`)
 
-FIN-013 introduces daily rollup data and a `GSI_LEDGER_DATE` on the billing table, enabling date-range queries across all users. This GSI is a prerequisite for efficient audit exports.
+The admin payouts router (**verified** to exist) provides payout listing and approval but no export functionality.
+
+### 2.4 FIN-013 Financial Rollups
+
+FIN-013 introduces daily rollup data and a `GSI_LEDGER_DATE` on the billing table, enabling date-range queries across all users. <!-- NOTE: This GSI does NOT yet exist — the billing table at `scripts/local-ddb-init.py:59` currently has NO GSIs. -->
 
 ### 2.4 Gaps
 
@@ -1501,8 +1522,8 @@ export const deleteSchedule = (scheduleId: string) =>
 
 | File | Purpose |
 |------|---------|
-| `app/services/audit_export.py` | CSV/PDF export generation, schedule management |
-| `app/routers/admin_audit_export.py` | Admin audit export API (9 endpoints) |
+| `app/services/audit_export.py` | <!-- NOTE: ALREADY EXISTS (46 lines). Extend with CSV/PDF billing-specific export, schedule management. --> |
+| `app/routers/admin_audit_export.py` | <!-- NOTE: An audit export router ALREADY EXISTS at `app/routers/audit_export.py` (192 lines, registered at `app/main.py:448`). Either extend it or create a separate billing-specific router. --> |
 | `frontend/src/api/endpoints/adminAuditExport.ts` | API wrappers |
 | `frontend/src/pages/admin/audit/AuditExportPage.tsx` | Export page |
 | `frontend/e2e/admin-audit-export.spec.ts` | E2E tests (24 tests, sections 535-540) |
@@ -1513,9 +1534,9 @@ export const deleteSchedule = (scheduleId: string) =>
 |------|--------|
 | `app/models.py` | Add audit export Pydantic models |
 | `app/main.py` | Register `admin_audit_export_router` |
-| `app/core/settings.py` | Add `audit_exports_table_name` |
-| `app/core/tables.py` | Add `audit_exports` table handle |
-| `scripts/local-ddb-init.py` | Add `audit_exports` table |
+| `app/core/settings.py` | <!-- NOTE: `audit_export_table_name` ALREADY EXISTS at `:1452`. No new setting needed for the table name, though scheduled report settings may be new. --> |
+| `app/core/tables.py` | <!-- NOTE: Verify if `audit_exports` table handle already exists. --> |
+| `scripts/local-ddb-init.py` | <!-- NOTE: `AuditExports` table ALREADY EXISTS at `:1044-1053`. May need to add schedule-specific GSIs. --> |
 | `frontend/src/api/types.ts` | Add audit export TypeScript types |
 | `frontend/src/App.tsx` | Add `/admin/audit-export` route |
 | `frontend/src/components/layout/Sidebar.tsx` | Add "Audit Export" admin nav link |
@@ -1534,3 +1555,20 @@ export const deleteSchedule = (scheduleId: string) =>
 10. Export generation completes within latency targets for each size tier
 11. SHA-256 checksum verifiable on every download
 12. Feature flags allow incremental rollout of CSV, PDF, and scheduling features
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/services/audit_export.py` | 46 total | **ALREADY EXISTS** — export record model with `to_csv_row` at `:29`, `to_ndjson_dict` at `:41` |
+| `app/services/audit_export_pipeline.py` | 249 total | **ALREADY EXISTS** — export pipeline (job creation, execution, S3 upload) |
+| `app/routers/audit_export.py` | 192 total | **ALREADY EXISTS** — router at prefix `/ui/admin/audit-exports` with `:64` POST, `:102` GET list, `:123` GET detail, `:137` GET download |
+| `app/main.py` | :157, :448 | `audit_export_router` import and registration |
+| `scripts/local-ddb-init.py` | :1044-1053 | `AuditExports` table (PK=export_id, SK=sk, GSIs: status-created-index, user-created-index) |
+| `app/core/settings.py` | :1451-1467 | `audit_export_enabled` at `:1451`, `audit_export_table_name` at `:1452`, `audit_export_max_date_range_days` at `:1453`, `audit_export_s3_bucket` at `:1455`, `audit_export_worker_enabled` at `:1465` |
+| `app/services/billing_shared.py` | :217, :248 | `new_ledger_entry` at `:217`, `settle_or_reverse_ledger` at `:248` |
+| `app/routers/admin_payouts.py` | — | Existing admin payout router |
+| `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |
+| `scripts/local-ddb-init.py` | :59 | `billing` table (PK=pk, SK=sk, NO GSIs) |

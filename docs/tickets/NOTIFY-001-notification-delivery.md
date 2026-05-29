@@ -742,31 +742,33 @@ async function subscribeToPush() {
 
 | Claim | Verified? | File:Line | Notes |
 |-------|-----------|-----------|-------|
-| `write_alert()` | Yes | `app/services/alerts.py:265-303` | Writes to T.alerts, calls sse_publish_alert() |
-| `sse_publish_alert()` | Yes | `app/services/alerts.py:83-94` | In-memory pubsub via `_SSE_SUBSCRIBERS` dict of asyncio.Queue sets |
-| `sse_subscribe()` | Yes | `app/services/alerts.py:63-70` | Queue maxsize=200; no per-user connection limit enforced |
-| `send_alert_email()` | Yes | `app/services/alerts.py:315-336` | Dev mode logs to file; prod uses SES. Already functional. |
-| `send_alert_sms()` | Yes | `app/services/alerts.py:338-355` | Dev mode logs to file; prod uses SNS. |
-| `send_push_for_alert()` | Yes | `app/services/push.py:136-155` | Reads push prefs, queries T.push_devices, calls fcm_send() |
-| `fcm_send()` | Yes | `app/services/push.py:71-90` | FCM HTTP v1 API. Requires fcm_project_id, fcm_client_email, fcm_private_key settings. |
-| `get_alert_prefs()` | Yes | `app/services/alerts.py:181-199` | Returns dict with emails, sms_numbers, *_event_types lists, webhook_urls |
-| `set_alert_prefs()` | Yes | `app/services/alerts.py:201-263` | Validates against ALERT_EVENT_TYPES, normalizes emails/phones |
-| `ALERT_EVENT_TYPES` | Yes | `app/services/alerts.py:46-57` | List of ~28 event type strings |
-| `audit_event()` | Yes | `app/services/alerts.py:492-684` | Master dispatch function: writes alert, sends email/sms/push/webhook per prefs |
+| `write_alert()` | Yes | `app/services/alerts.py:355` | Writes to T.alerts, calls sse_publish_alert() |
+| `sse_publish_alert()` | Yes | `app/services/alerts.py:173` | In-memory pubsub via `_SSE_SUBSCRIBERS` dict of asyncio.Queue sets |
+| `sse_subscribe()` | Yes | `app/services/alerts.py:153` | Queue maxsize=200; no per-user connection limit enforced |
+| `send_alert_email()` | Yes | `app/services/alerts.py:458` | Dev mode logs to file; prod uses SES. Already functional. |
+| `send_alert_sms()` | Yes | `app/services/alerts.py:481` | Dev mode logs to file; prod uses SNS. |
+| `send_push_for_alert()` | Yes | `app/services/push.py:260` | Reads push prefs, queries T.push_devices, calls fcm_send() |
+| `fcm_send()` | Yes | `app/services/push.py:74` | FCM HTTP v1 API |
+| `get_alert_prefs()` | Yes | `app/services/alerts.py:271` | Returns dict with emails, sms_numbers, *_event_types lists, webhook_urls |
+| `set_alert_prefs()` | Yes | `app/services/alerts.py:291` | Validates against ALERT_EVENT_TYPES, normalizes emails/phones |
+| `ALERT_EVENT_TYPES` | Yes | `app/services/alerts.py:133` | List of ~28 event type strings |
+| `audit_event()` | Yes | `app/services/alerts.py:695` | Master dispatch function: writes alert, sends email/sms/push/webhook per prefs |
 | `can_send_alert_channel()` | Yes | `app/services/rate_limit.py:321` | Rate limits alert channel delivery |
 | T.alerts table | Yes | `app/core/tables.py:19/103` | PK=user_sub, SK=alert_id. alerts_table_name at settings.py:76 |
 | T.alert_prefs table | Yes | `app/core/tables.py:20/104` | PK=user_sub (no SK). alert_prefs_table_name at settings.py:77 |
 | T.push_devices table | Yes | `app/core/tables.py:21/105` | PK=user_sub, SK=device_id. push_devices_table_name at settings.py:227 |
-| `upsert_push_device()` | Yes | `app/services/push.py:114-126` | Writes to T.push_devices with TTL (180 days) |
-| `revoke_push_device()` | Yes | `app/services/push.py:129-133` | Deletes from T.push_devices |
-| `list_push_devices()` | Yes | `app/services/push.py:97-111` | Queries T.push_devices by user_sub |
-| `render_ticket_email_template()` | Yes | `app/services/alerts.py:144-178` | Existing email template pattern for ticket events |
-| `UnreadCountResponse` model | Yes | `app/models.py:2342-2344` | Already defined |
-| `MarkAllReadResponse` model | Yes | `app/models.py:2347-2349` | Already defined |
-| `AlertTypePreference` model | Yes | `app/models.py:2328-2334` | Already defined |
-| `AlertTypePreferenceUpdate` model | Yes | `app/models.py:2318-2325` | Already defined |
-| NOTIFICATION_DISPATCH_ENABLED setting | **Not found** | `app/core/settings.py` | Does not exist yet; must be added |
-| VAPID_PUBLIC_KEY setting | **Not found** | `app/core/settings.py` | Does not exist yet; must be added |
+| `upsert_push_device()` | Yes | `app/services/push.py:117` | Writes to T.push_devices with TTL (180 days) |
+| `revoke_push_device()` | Yes | `app/services/push.py:132` | Deletes from T.push_devices |
+| `list_push_devices()` | Yes | `app/services/push.py:100` | Queries T.push_devices by user_sub |
+| `render_ticket_email_template()` | Yes | `app/services/alerts.py:234` | Existing email template pattern for ticket events |
+| `UnreadCountResponse` model | Yes | `app/models.py:2527` | Already defined |
+| `MarkAllReadResponse` model | Yes | `app/models.py:2532` | Already defined |
+| `AlertTypePreference` model | Yes | `app/models.py:2513` | Already defined |
+| `AlertTypePreferenceUpdate` model | Yes | `app/models.py:2503` | Already defined |
+| `notification_dispatch_enabled` setting | Yes | `app/core/settings.py:1391` | `NOTIFICATION_DISPATCH_ENABLED` env var, defaults to `True` |
+| `vapid_public_key` setting | Yes | `app/core/settings.py:1398` | `VAPID_PUBLIC_KEY` env var |
+| `vapid_private_key` setting | Yes | `app/core/settings.py:1399` | `VAPID_PRIVATE_KEY` env var |
+| `web_push_enabled` setting | Yes | `app/core/settings.py:1401` | `WEB_PUSH_ENABLED` env var, defaults to `True` |
 
 **Key finding**: The backend notification dispatch pipeline is MORE COMPLETE than the ticket claims. `audit_event()` already routes to email, SMS, push, and webhook channels based on user preferences. The main gaps are: (1) frontend SSE hook and notification bell, (2) unread count sentinel, (3) toast notifications, (4) VAPID/web push subscription flow. The proposed `notification_dispatcher.py` would largely duplicate logic already in `audit_event()`.
 

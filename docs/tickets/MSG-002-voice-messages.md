@@ -897,3 +897,21 @@ voice_message_waveform_samples: int = int(os.environ.get("VOICE_MESSAGE_WAVEFORM
 6. **`_message_out_from_item(item)` signature is wrong** -- actual signature is `_message_out_from_item(message_item: dict, viewer_user_id: str)`.
 7. **Pydantic models are in `app/routers/messaging.py`, not `app/models.py`** -- `SendTextMessageIn` (line 1843), `CreateImageMessageIn` (line 1910), `MessageOut` (line 2286) are all defined inline in the router file.
 8. **`lottery` is not in the kind Literal** -- the actual value is `video_share` at that position (line 2291).
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/routers/messaging.py` | 8164 | ALREADY EXISTS: `presign_voice_message()` endpoint |
+| `app/routers/messaging.py` | 8195 | ALREADY EXISTS: `create_voice_message()` endpoint |
+| `app/routers/messaging.py` | 1937-1943 | ALREADY EXISTS: `PresignVoiceMessageRequest` and `CreateVoiceMessageRequest` models |
+| `app/routers/messaging.py` | 1949, 1971 | EXISTS: `waveform_data: List[float]` field with validation (min 10, max 200 samples) |
+| `app/routers/messaging.py` | 2330 | EXISTS: `kind` Literal includes `"voice_message"` |
+| `app/routers/messaging.py` | 3950-3966 | EXISTS: voice message rendering in `_message_out_from_item` with waveform data |
+| `app/routers/messaging.py` | 8231-8247 | EXISTS: waveform processing (clamping, Decimal conversion) |
+| `app/core/settings.py` | 1280-1283 | EXISTS: `voice_message_enabled`, `voice_message_max_duration_seconds` (300), `voice_message_max_size_bytes`, `voice_message_waveform_samples` (100) |
+| `frontend/src/pages/messages/VoiceRecorder.tsx` | — | ALREADY EXISTS: voice recorder component |
+| `frontend/src/pages/messages/WaveformPlayer.tsx` | — | ALREADY EXISTS: waveform playback component |
+<!-- NOTE: Voice messages are FULLY IMPLEMENTED in backend (endpoints, models, waveform processing, settings) and frontend (VoiceRecorder, WaveformPlayer). This ticket should be marked as Complete. -->

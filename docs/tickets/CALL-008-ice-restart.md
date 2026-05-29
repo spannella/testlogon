@@ -1,5 +1,7 @@
 # CALL-008: ICE Restart and Mid-Call Reconnection
 
+> **NOTE: This feature is FULLY IMPLEMENTED.** The ICE state monitoring with grace period, `performIceRestart()` with TURN credential refresh, the state machine reconnection flow, SSE `webrtc.*` event registration, and E2E tests all exist. See Codebase References at the bottom for all verified locations.
+
 ## 1. Overview & Motivation
 
 ### Why ICE Restart Matters
@@ -29,20 +31,20 @@ Without ICE restart, any of these conditions terminates the call permanently. Th
 
 ### 2.1 Call State Machine (`frontend/src/pages/messages/callStateMachine.ts`)
 
-The state machine defines the full reconnection flow in terms of events and phase transitions:
+The state machine (see `frontend/src/pages/messages/callStateMachine.ts:6-20`) defines the full reconnection flow:
 
 ```typescript
-// Lines 6-17: Machine state tracking reconnection
+// Lines 6-20: Machine state tracking reconnection
 export interface CallMachineState {
   phase: CallUiState;           // "reconnecting" is the key phase here
-  retryCount: number;           // starts at 0, incremented on each RECONNECT_ATTEMPT
-  maxRetries: number;           // hardcoded to 2
-  isOnline: boolean;            // tracks navigator.onLine
-  isTabVisible: boolean;        // tracks document.visibilityState
+  retryCount: number;           // starts at 0 (line 52)
+  maxRetries: number;           // hardcoded to 2 (line 53)
+  isOnline: boolean;            // tracks navigator.onLine (line 54)
+  isTabVisible: boolean;        // tracks document.visibilityState (line 55)
 }
 ```
 
-**CONNECTION_LOST event** (lines 99-101): Transitions from `connected`, `outgoing_connecting`, or `outgoing_ringing` into `reconnecting`. This is the trigger point where ICE restart should initiate.
+**CONNECTION_LOST event** (see `:111-113`): Transitions from `connected`, `outgoing_connecting`, or `outgoing_ringing` into `reconnecting`:
 
 ```typescript
 case "CONNECTION_LOST": {
@@ -51,7 +53,7 @@ case "CONNECTION_LOST": {
 }
 ```
 
-**RECONNECT_ATTEMPT event** (lines 103-108): The actual retry logic. Checks three conditions before allowing a reconnection attempt:
+**RECONNECT_ATTEMPT event** (see `:115-120`): The actual retry logic. Checks three conditions before allowing a reconnection attempt:
 1. `state.isOnline` must be true (browser has network connectivity)
 2. `state.isTabVisible` must be true (tab is not backgrounded)
 3. `state.retryCount < state.maxRetries` (max 2 attempts)
@@ -68,7 +70,7 @@ case "RECONNECT_ATTEMPT": {
 }
 ```
 
-**CONNECT event** (lines 89-91): Resets `retryCount` to 0 on successful reconnection, transitioning to `connected`:
+**CONNECT event** (see `:102-103`): Resets `retryCount` to 0 on successful reconnection, transitioning to `connected`:
 
 ```typescript
 case "CONNECT": {
@@ -77,11 +79,11 @@ case "CONNECT": {
 }
 ```
 
-**NETWORK_OFFLINE / NETWORK_ONLINE events** (lines 110-123): These interact with the reconnection flow. `NETWORK_OFFLINE` from an active call moves to `reconnecting`. `NETWORK_ONLINE` while in `reconnecting` automatically moves to `outgoing_connecting`, effectively auto-triggering a restart without incrementing `retryCount`.
+**NETWORK_OFFLINE / NETWORK_ONLINE events** (see `:122-134`): These interact with the reconnection flow. `NETWORK_OFFLINE` from an active call moves to `reconnecting` (`:124-125`). `NETWORK_ONLINE` while in `reconnecting` automatically moves to `outgoing_connecting` (`:131-132`), effectively auto-triggering a restart without incrementing `retryCount`.
 
-### 2.2 Reconnection Timer (`ConversationView.tsx`, lines 475-479)
+### 2.2 Reconnection Timer (`ConversationView.tsx`) — IMPLEMENTED
 
-A `useEffect` fires a 1-second timer whenever the machine enters `reconnecting` phase:
+A `useEffect` fires a 1-second timer whenever the machine enters `reconnecting` phase (see `frontend/src/pages/messages/ConversationView.tsx:689-693`):
 
 ```typescript
 React.useEffect(() => {
@@ -91,11 +93,11 @@ React.useEffect(() => {
 }, [callMachine.phase]);
 ```
 
-This is currently theoretical -- it dispatches `RECONNECT_ATTEMPT` after 1 second in `reconnecting`, but since there is no real `RTCPeerConnection`, nothing actually performs the ICE restart. The timer acts as a "debounce" to avoid reacting to transient disconnects.
+This dispatches `RECONNECT_ATTEMPT` after 1 second in `reconnecting`. The `useRtcPeerConnection` hook (see `frontend/src/hooks/useRtcPeerConnection.ts:460-464`) detects the transition to `outgoing_connecting` with `retryCount > 0` and calls `performIceRestart()`.
 
-### 2.3 Network and Visibility Event Wiring (`ConversationView.tsx`, lines 594-612)
+### 2.3 Network and Visibility Event Wiring (`ConversationView.tsx`) — IMPLEMENTED
 
-The `useEffect` block registers browser event listeners that dispatch to the call state machine:
+The `useEffect` block (see `frontend/src/pages/messages/ConversationView.tsx:836-850`) registers browser event listeners that dispatch to the call state machine:
 
 ```typescript
 const onOffline = () => dispatchCall({ type: "NETWORK_OFFLINE" });
@@ -107,84 +109,79 @@ const onVisibility = () => {
     dispatchCall({ type: "TAB_HIDDEN" });
   }
 };
-window.addEventListener("offline", onOffline);
-window.addEventListener("online", onOnline);
-document.addEventListener("visibilitychange", onVisibility);
 ```
 
-These correctly feed into the state machine, but they currently cannot trigger an actual ICE restart because no `RTCPeerConnection` exists.
+These feed into the state machine and can now trigger an actual ICE restart via the `useRtcPeerConnection` hook's `performIceRestart` callback (see `frontend/src/hooks/useRtcPeerConnection.ts:416-456`).
 
-### 2.4 Teardown (`callStateMachine.ts`, lines 163-186)
+### 2.4 Teardown (`callStateMachine.ts`) — IMPLEMENTED
 
-The `teardownCallResources` function handles cleanup:
+The `teardownCallResources` function (see `frontend/src/pages/messages/callStateMachine.ts:199-222`) handles cleanup:
 
 ```typescript
 export function teardownCallResources(resources?: CallRuntimeResources | null): void {
   if (!resources || resources.cleanedUp) return;
-  for (const timerId of resources.teardownTimers ?? []) window.clearTimeout(timerId);
-  for (const detach of resources.detachListeners ?? []) { try { detach(); } catch {} }
-  for (const stream of [resources.localStream, resources.remoteStream]) {
-    for (const track of stream?.getTracks() ?? []) track.stop();
-  }
-  resources.peerConnection?.close();
-  resources.cleanedUp = true;
+  // ...clears timers, detaches listeners, stops tracks, closes peerConnection
 }
 ```
 
-The `CallRuntimeResources` interface (lines 154-161) already provisions a `peerConnection` slot. Teardown is invoked when the machine reaches terminal states (`ended`, `failed`, `failure`, `declined`, `busy`, `timeout`, `idle`) via the effect on lines 481-485.
+The `CallRuntimeResources` interface (see `:190-197`) provisions a `peerConnection` slot. Teardown is invoked when the machine reaches terminal states via the effect at `ConversationView.tsx:695-699`.
 
-### 2.5 Backend Signaling (`app/services/messaging_call_signaling.py`)
+### 2.5 Backend Signaling (`app/services/messaging_call_signaling.py`) — IMPLEMENTED
 
-The `route_signaling_event` function (lines 162-333) routes arbitrary signaling events between call participants. It validates:
-1. Event type is in `ALLOWED_SIGNALING_TYPES` (line 14) which includes `webrtc.offer`, `webrtc.answer`, and `webrtc.ice_candidate`
+The `route_signaling_event` function (see `app/services/messaging_call_signaling.py:186-356`) routes arbitrary signaling events between call participants. It validates:
+1. Event type is in `ALLOWED_SIGNALING_TYPES` (see `:14`, 17 types) which includes `webrtc.offer`, `webrtc.answer`, and `webrtc.ice_candidate`
 2. Sender matches authenticated actor
 3. Both sender and recipient are conversation participants
 4. Call session exists and is in a state that allows the event type
 
-**Critical for ICE restart**: The `STATE_ALLOWED_SIGNALING_TYPES` map (lines 29-33) shows that `webrtc.offer` is allowed in both `accepted` AND `connected` states:
+**Critical for ICE restart**: The `STATE_ALLOWED_SIGNALING_TYPES` map (see `:41-57`) shows that `webrtc.offer` is allowed in both `accepted` AND `connected` states:
 
 ```python
 STATE_ALLOWED_SIGNALING_TYPES: dict[str, set[str]] = {
     "invited": {"call.invite", "call.ring", "call.accept", "call.decline", "call.end"},
-    "accepted": {"webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end"},
-    "connected": {"webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end"},
+    "accepted": {"webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end",
+                 "webrtc.screen_share_start", "webrtc.screen_share_stop"},
+    "connected": {"webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end",
+                  "call.recording_*", "webrtc.screen_share_*"},
+    # Terminal states also allow voicemail signals (CALL-014)
 }
 ```
 
-This means the backend already supports re-offers during an active call -- which is exactly what ICE restart requires. No backend signaling changes are needed. A new `webrtc.offer` with `iceRestart: true` in the payload can be routed while the call session state is `connected`.
+This means the backend supports re-offers during an active call -- exactly what ICE restart requires. No backend signaling changes needed.
 
-### 2.6 TURN Credentials (`app/services/messaging_turn_credentials.py`)
+### 2.6 TURN Credentials (`app/services/messaging_turn_credentials.py`) — IMPLEMENTED
 
-TURN credentials are issued via `POST /messages/calls/{call_id}/turn-credentials` and are valid for the configured TTL (default 600 seconds). During ICE restart, fresh TURN credentials may be needed if the original allocation has expired. The endpoint checks that the call state is in `ELIGIBLE_STATES = {"invited", "accepted", "connected"}`, so credentials can be re-fetched during an active call.
+TURN credentials are issued via `POST /messages/calls/{call_id}/turn-credentials` (see `app/routers/messaging.py:12835-12893`) and are valid for the configured TTL (default 600 seconds, see `app/core/settings.py:1050`). The service (see `app/services/messaging_turn_credentials.py:15,199`) checks that the call state is in `ELIGIBLE_STATES = {"invited", "accepted", "connected"}`, so credentials can be re-fetched during an active call for ICE restart. The `performIceRestart` function in `useRtcPeerConnection.ts` calls `fetchTurnCredentials` before creating the restart offer (see `:421-433`).
 
-### 2.7 SSE Event Delivery (`frontend/src/hooks/useMessagingStream.ts`)
+### 2.7 SSE Event Delivery (`frontend/src/hooks/useMessagingStream.ts`) — IMPLEMENTED
 
-The SSE stream listens for `call.invite`, `call.accept`, `call.decline`, and `call.end` event types (lines 102-106). However, it does NOT currently listen for `webrtc.offer`, `webrtc.answer`, or `webrtc.ice_candidate`. These WebRTC signaling events will need to be added to the `EVENT_TYPES` array and dispatched as `messaging:call-event` CustomEvents for the `RTCPeerConnection` hook to consume.
+The SSE stream (see `frontend/src/hooks/useMessagingStream.ts:148-184`) listens for `call.*` event types (`:168-180`) AND `webrtc.offer`, `webrtc.answer`, `webrtc.ice_candidate` (`:181-183`). The `call.*` events are dispatched as `messaging:call-event` CustomEvents (`:121-130`), while `webrtc.*` events are dispatched as a separate `messaging:webrtc-signal` CustomEvent (`:132-141`). The `useRtcPeerConnection` hook listens for `messaging:webrtc-signal` events.
 
-### 2.8 What Is Theoretical vs Real
+### 2.8 Implementation Status — ALL IMPLEMENTED
 
-| Component | Status |
-|-----------|--------|
-| State machine phases (reconnecting, failure) | Fully implemented, tested |
-| Retry logic (maxRetries=2, retryCount) | Fully implemented |
-| Network offline/online detection | Fully wired to state machine |
-| Tab visibility detection | Fully wired to state machine |
-| 1-second debounce timer for reconnect | Implemented |
-| `teardownCallResources()` | Implemented |
-| Backend signaling for re-offers in `connected` state | Supported by existing code |
-| TURN credential re-issuance during active call | Supported |
-| Actual `RTCPeerConnection` instance | Does NOT exist yet (CALL-002) |
-| `iceConnectionState` monitoring | Does NOT exist yet |
-| SDP offer creation with `iceRestart: true` | Does NOT exist yet |
-| WebRTC signaling events in SSE stream | Not registered in `EVENT_TYPES` |
+| Component | Status | Location |
+|-----------|--------|----------|
+| State machine phases (reconnecting, failure) | IMPLEMENTED | `callStateMachine.ts:111-120` |
+| Retry logic (maxRetries=2, retryCount) | IMPLEMENTED | `callStateMachine.ts:52-53,115-120` |
+| Network offline/online detection | IMPLEMENTED | `ConversationView.tsx:836-850` |
+| Tab visibility detection | IMPLEMENTED | `ConversationView.tsx:839-844` |
+| 1-second debounce timer for reconnect | IMPLEMENTED | `ConversationView.tsx:689-693` |
+| `teardownCallResources()` | IMPLEMENTED | `callStateMachine.ts:199-222` |
+| Backend signaling for re-offers in `connected` state | IMPLEMENTED | `messaging_call_signaling.py:47-52` |
+| TURN credential re-issuance during active call | IMPLEMENTED | `messaging_turn_credentials.py:15` |
+| `RTCPeerConnection` instance | IMPLEMENTED | `useRtcPeerConnection.ts:69-518` |
+| `iceConnectionState` monitoring with grace period | IMPLEMENTED | `useRtcPeerConnection.ts:212-246` |
+| SDP offer creation with `iceRestart: true` | IMPLEMENTED | `useRtcPeerConnection.ts:436-438` |
+| WebRTC signaling events in SSE stream | IMPLEMENTED | `useMessagingStream.ts:132-141,181-183` |
+| E2E tests | IMPLEMENTED | `webrtc-ice-restart.spec.ts` (777 lines) |
 
 ---
 
 ## 3. Technical Design
 
-### 3.1 Detecting ICE Failure
+### 3.1 Detecting ICE Failure — IMPLEMENTED
 
-When the `RTCPeerConnection` is instantiated (per CALL-002), its `iceConnectionState` and `connectionState` must be monitored. The detection logic:
+The `useRtcPeerConnection` hook (see `frontend/src/hooks/useRtcPeerConnection.ts:212-246`) monitors `iceConnectionState` with a 3-second grace period (constant `ICE_DISCONNECT_GRACE_MS` at `:20`). The detection logic:
 
 ```typescript
 // Inside useRtcPeerConnection hook (to be created in CALL-002)
@@ -218,9 +215,9 @@ The 3-second grace period for `disconnected` is critical: brief network blips (s
 
 The `failed` state is definitive -- the ICE agent has exhausted all candidate pairs and cannot reach the remote peer. This requires an ICE restart.
 
-### 3.2 Triggering ICE Restart
+### 3.2 Triggering ICE Restart — IMPLEMENTED
 
-Once `CONNECTION_LOST` is dispatched, the state machine enters `reconnecting`. After the 1-second debounce timer fires `RECONNECT_ATTEMPT`, the machine moves to `outgoing_connecting` (if conditions are met). At this point, the RTCPeerConnection hook should perform the ICE restart:
+Once `CONNECTION_LOST` is dispatched, the state machine enters `reconnecting`. After the 1-second debounce timer fires `RECONNECT_ATTEMPT`, the machine moves to `outgoing_connecting` (if conditions are met). The `useRtcPeerConnection` hook detects `phase === "outgoing_connecting" && retryCount > 0` (see `frontend/src/hooks/useRtcPeerConnection.ts:460-464`) and calls `performIceRestart()` (see `:416-456`):
 
 ```typescript
 // React to phase === "outgoing_connecting" && retryCount > 0
@@ -351,19 +348,13 @@ function handleRemoteOffer(payload: { sdp: string; type: string; iceRestart?: bo
 }
 ```
 
-### 3.5 UI States During Reconnection
+### 3.5 UI States During Reconnection — IMPLEMENTED
 
-The `CallSessionOverlay.tsx` already handles the `reconnecting` state with appropriate copy:
+The `CallSessionOverlay.tsx` handles the `reconnecting` state with appropriate copy (see `frontend/src/pages/messages/CallSessionOverlay.tsx:616-617`):
 
 ```typescript
-// Line 83: Already shows "Reconnecting to {peerName}..."
-{session.state === "reconnecting" && `Reconnecting to ${session.peerName}…`}
-```
-
-And `outgoing_connecting` (used during the actual restart attempt):
-```typescript
-// Line 82
 {session.state === "outgoing_connecting" && `Connecting to ${session.peerName}…`}
+{session.state === "reconnecting" && `Reconnecting to ${session.peerName}…`}
 ```
 
 The UI flow during ICE restart:
@@ -402,12 +393,11 @@ React.useEffect(() => {
 }, [callMachine.phase, callMachine.retryCount]);
 ```
 
-### 3.7 Fallback: End Call on Failure
+### 3.7 Fallback: End Call on Failure — IMPLEMENTED
 
-When the state machine reaches `failure`, the existing teardown logic kicks in:
+When the state machine reaches `failure`, the existing teardown logic kicks in (see `frontend/src/pages/messages/ConversationView.tsx:695-699`):
 
 ```typescript
-// ConversationView.tsx lines 481-485
 React.useEffect(() => {
   if (["ended", "failed", "failure", "declined", "busy", "timeout", "idle"].includes(callMachine.phase)) {
     teardownCallResources(callResourcesRef.current);
@@ -441,65 +431,38 @@ For ICE restart, this means:
 
 ## 4. Implementation Plan
 
-### Phase 1: SSE Event Registration (Prerequisite)
+### Phase 1: SSE Event Registration (Prerequisite) — IMPLEMENTED
 
 **File**: `frontend/src/hooks/useMessagingStream.ts`
 
-Add WebRTC signaling events to the `EVENT_TYPES` array (line 85-106):
+WebRTC signaling events are in the `EVENT_TYPES` array at lines 181-183 (see `frontend/src/hooks/useMessagingStream.ts:181-183`).
 
-```typescript
-const EVENT_TYPES = [
-  // ... existing types ...
-  "call.invite",
-  "call.accept",
-  "call.decline",
-  "call.end",
-  // Add these:
-  "webrtc.offer",
-  "webrtc.answer",
-  "webrtc.ice_candidate",
-];
-```
+<!-- NOTE: The implementation uses SEPARATE CustomEvent names: call.* events dispatch "messaging:call-event" (lines 121-130) and webrtc.* events dispatch "messaging:webrtc-signal" (lines 132-141). This differs from the spec proposal which suggested combining them into a single "messaging:call-event" dispatch. The useRtcPeerConnection hook listens for "messaging:webrtc-signal" events separately. -->
 
-These events are already dispatched to `window` as `messaging:call-event` CustomEvents (lines 69-77) when `eventType.startsWith("call.")`. Expand the condition to also match `eventType.startsWith("webrtc.")`:
+### Phase 2: ICE State Monitoring in RTCPeerConnection Hook — IMPLEMENTED
 
-```typescript
-if (eventType.startsWith("call.") || eventType.startsWith("webrtc.")) {
-  window.dispatchEvent(
-    new CustomEvent("messaging:call-event", {
-      detail: { ...data, event_type: eventType },
-    }),
-  );
-}
-```
+**File**: `frontend/src/hooks/useRtcPeerConnection.ts` (see `:212-246`)
 
-### Phase 2: ICE State Monitoring in RTCPeerConnection Hook
+<!-- NOTE: The actual file path is frontend/src/hooks/useRtcPeerConnection.ts, NOT frontend/src/pages/messages/useRtcPeerConnection.ts as originally proposed. -->
 
-**File**: `frontend/src/pages/messages/useRtcPeerConnection.ts` (new file from CALL-002)
+The `iceconnectionstatechange` listener with 3-second grace period (`ICE_DISCONNECT_GRACE_MS` at `:20`) is implemented at lines 216-246. The `connectionstatechange` listener is at lines 204-210.
 
-Add `iceconnectionstatechange` listener with 3-second grace period for `disconnected` and immediate escalation for `failed`. Wire up `connectionstatechange` as a secondary signal. Store the grace period timer in `CallRuntimeResources.teardownTimers` for cleanup.
+### Phase 3: ICE Restart Trigger — IMPLEMENTED
 
-### Phase 3: ICE Restart Trigger
+**File**: `frontend/src/hooks/useRtcPeerConnection.ts`
 
-**File**: `frontend/src/pages/messages/useRtcPeerConnection.ts`
+The `useEffect` at lines 460-464 watches `phase === "outgoing_connecting"` and `retryCount > 0`. The `performIceRestart` callback (`:416-456`) performs:
+1. Fetches fresh TURN credentials via `fetchTurnCredentials` (`:421-433`)
+2. Updates `RTCPeerConnection` configuration with new ICE servers (`:429`)
+3. Calls `pc.createOffer({ iceRestart: true })` (`:437`)
+4. Sets local description (`:438`)
+5. Sends offer via `sendSignalingEvent` (`:452`)
 
-Add a `useEffect` that watches `callMachine.phase === "outgoing_connecting"` and `callMachine.retryCount > 0`. When triggered:
-1. Fetch fresh TURN credentials via `POST /messages/calls/{call_id}/turn-credentials`
-2. Update `RTCPeerConnection` configuration with new ICE servers
-3. Call `pc.createOffer({ iceRestart: true })`
-4. Set local description
-5. Send offer via signaling endpoint
+### Phase 4: Remote Offer Handling — IMPLEMENTED
 
-### Phase 4: Remote Offer Handling
+**File**: `frontend/src/hooks/useRtcPeerConnection.ts`
 
-**File**: `frontend/src/pages/messages/useRtcPeerConnection.ts`
-
-In the `messaging:call-event` listener, handle `webrtc.offer` events when a call is already active:
-1. Check if `payload.iceRestart === true`
-2. Set remote description from the offer
-3. Create and set local answer
-4. Send answer via signaling
-5. Let ICE agent re-gather candidates (they trickle automatically)
+The `messaging:webrtc-signal` listener in the hook handles `webrtc.offer` events when a call is already active. It sets remote description, creates an answer, sets local description, and sends the answer via signaling. ICE candidates trickle automatically via the `onicecandidate` handler (see `:249-269`).
 
 ### Phase 5: Automatic call.end on Failure
 
@@ -531,16 +494,18 @@ CALL-008 Phase 3 (restart trigger)  +  Phase 4 (answer handling)
 CALL-008 Phase 5 (auto-end)  +  Phase 6 (backoff)
 ```
 
-### Files Modified
+### Files Modified — ALL IMPLEMENTED
 
-| File | Change |
-|------|--------|
-| `frontend/src/hooks/useMessagingStream.ts` | Add `webrtc.*` to EVENT_TYPES, expand dispatch condition |
-| `frontend/src/pages/messages/useRtcPeerConnection.ts` | ICE state monitoring, restart trigger, offer handling |
-| `frontend/src/pages/messages/ConversationView.tsx` | Auto-end on failure, optional timer backoff |
-| `frontend/src/pages/messages/callStateMachine.ts` | No changes needed (logic already supports restart flow) |
-| `app/services/messaging_call_signaling.py` | No changes needed (already routes offers in `connected` state) |
-| `app/services/messaging_turn_credentials.py` | No changes needed (already issues creds in `connected` state) |
+| File | Change | Status |
+|------|--------|--------|
+| `frontend/src/hooks/useMessagingStream.ts` | `webrtc.*` in EVENT_TYPES + `messaging:webrtc-signal` dispatch | DONE |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | ICE monitoring, restart trigger, offer handling | DONE |
+| `frontend/src/pages/messages/ConversationView.tsx` | Teardown on failure, reconnect timer | DONE |
+| `frontend/src/pages/messages/callStateMachine.ts` | No changes needed (logic supports restart flow) | N/A |
+| `app/services/messaging_call_signaling.py` | No changes needed (routes offers in `connected` state) | N/A |
+| `app/services/messaging_turn_credentials.py` | No changes needed (issues creds in `connected` state) | N/A |
+
+<!-- NOTE: The actual hook file path is frontend/src/hooks/useRtcPeerConnection.ts, not frontend/src/pages/messages/useRtcPeerConnection.ts as originally proposed in the spec. -->
 
 ---
 
@@ -548,7 +513,7 @@ CALL-008 Phase 5 (auto-end)  +  Phase 6 (backoff)
 
 ### 5.1 Unit Tests: State Machine Reconnection Logic
 
-**File**: `frontend/src/pages/messages/callStateMachine.test.ts` (existing or new)
+**File**: `frontend/src/pages/messages/callStateMachine.test.ts` (exists, 202 lines)
 
 These tests validate the state machine in isolation (no `RTCPeerConnection` needed):
 
@@ -565,7 +530,8 @@ These tests validate the state machine in isolation (no `RTCPeerConnection` need
 
 ### 5.2 Unit Tests: ICE Restart Hook Logic
 
-**File**: `frontend/src/pages/messages/useRtcPeerConnection.test.ts`
+<!-- NOTE: frontend/src/hooks/useRtcPeerConnection.test.ts does NOT exist — new implementation required -->
+**File**: `frontend/src/hooks/useRtcPeerConnection.test.ts` (proposed)
 
 Using mocked `RTCPeerConnection`:
 
@@ -580,7 +546,7 @@ Using mocked `RTCPeerConnection`:
 
 ### 5.3 Integration Tests: ConversationView Call Flows
 
-**File**: `frontend/src/pages/messages/ConversationView.call_flows.test.tsx` (existing)
+**File**: `frontend/src/pages/messages/ConversationView.call_flows.test.tsx` (exists, 189 lines)
 
 Extend the existing test suite:
 
@@ -588,9 +554,9 @@ Extend the existing test suite:
 2. **Auto-end on failure**: Verify `endCall` mutation is called when machine reaches `failure`.
 3. **Network restore triggers restart**: Simulate `offline` event -> verify "Reconnecting", then `online` event -> verify restart initiated.
 
-### 5.4 E2E Tests
+### 5.4 E2E Tests — IMPLEMENTED
 
-**File**: `frontend/e2e/webrtc-ice-restart.spec.ts` (new)
+**File**: `frontend/e2e/webrtc-ice-restart.spec.ts` (exists, 777 lines)
 
 Since E2E tests cannot create real WebRTC connections (no second browser with media), these tests focus on the signaling and state machine integration:
 
@@ -727,3 +693,34 @@ The existing metrics infrastructure in `app/metrics.py` records signaling events
 | N1 | ICE restart disabled by flag | Set flag=false; disconnect goes straight to "Call failed" |
 | N2 | All TURN servers unreachable | Restart fails; clean termination |
 | N3 | Peer offline permanently | All retries exhaust; "Call ended" after max retries * backoff |
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 20 | `ICE_DISCONNECT_GRACE_MS` constant (3000ms) |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 69-518 | `useRtcPeerConnection` hook (full implementation) |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 204-210 | `connectionstatechange` listener |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 212-246 | `iceconnectionstatechange` listener with grace period |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 249-269 | ICE candidate trickle handler |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 416-456 | `performIceRestart()` — TURN refresh + `createOffer({iceRestart:true})` |
+| `frontend/src/hooks/useRtcPeerConnection.ts` | 460-464 | `useEffect` trigger for ICE restart on `outgoing_connecting` + `retryCount > 0` |
+| `frontend/src/pages/messages/callStateMachine.ts` | 13-16 | `retryCount`, `maxRetries`, `isOnline`, `isTabVisible` fields |
+| `frontend/src/pages/messages/callStateMachine.ts` | 52-55 | Initial values (retryCount=0, maxRetries=2) |
+| `frontend/src/pages/messages/callStateMachine.ts` | 111-113 | `CONNECTION_LOST` event handler |
+| `frontend/src/pages/messages/callStateMachine.ts` | 115-120 | `RECONNECT_ATTEMPT` event handler |
+| `frontend/src/pages/messages/callStateMachine.ts` | 122-134 | `NETWORK_OFFLINE` / `NETWORK_ONLINE` handlers |
+| `frontend/src/pages/messages/callStateMachine.ts` | 199-222 | `teardownCallResources` |
+| `frontend/src/pages/messages/ConversationView.tsx` | 689-693 | 1-second reconnect debounce timer |
+| `frontend/src/pages/messages/ConversationView.tsx` | 695-699 | Teardown on terminal states |
+| `frontend/src/pages/messages/ConversationView.tsx` | 836-850 | Network offline/online/visibility event wiring |
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | 616-617 | Reconnecting / Connecting UI copy |
+| `frontend/src/hooks/useMessagingStream.ts` | 121-141 | `call.*` and `webrtc.*` event dispatch (separate CustomEvent names) |
+| `frontend/src/hooks/useMessagingStream.ts` | 181-183 | `webrtc.offer/answer/ice_candidate` in EVENT_TYPES |
+| `app/services/messaging_call_signaling.py` | 41-57 | `STATE_ALLOWED_SIGNALING_TYPES` (webrtc.offer allowed in connected) |
+| `app/services/messaging_turn_credentials.py` | 15 | `ELIGIBLE_STATES` for TURN credential refresh |
+| `frontend/e2e/webrtc-ice-restart.spec.ts` | 1-777 | E2E tests for ICE restart |
+| `frontend/src/pages/messages/callStateMachine.test.ts` | 1-202 | State machine unit tests |
+| `frontend/src/pages/messages/ConversationView.call_flows.test.tsx` | 1-189 | Integration tests |

@@ -1729,3 +1729,20 @@ Admin                   Frontend                 Backend                  Dynamo
 | User floods queue with trivial uploads to overwhelm reviewers | Rate-limit video uploads per user (existing VOD pipeline limit) |
 | User re-submits rejected video repeatedly | Track `prior_rejections_count` in detail view; after 3 rejections, auto-escalate to senior moderator |
 | User uploads content that passes review then replaces the file | Videos are immutable after encoding -- the S3 key is locked once encoding completes; any "replacement" is a new upload that enters the queue independently |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `app/routers/admin_video_review.py` | — | ALREADY EXISTS: admin video review router is registered |
+| `app/main.py` | 92, 343 | EXISTS: `admin_video_review_router` imported and registered |
+| `scripts/local-ddb-init.py` | 707 | EXISTS: `VideoMetadata` table definition with `ByStatusCreatedAt` GSI |
+| `app/core/settings.py` | 1075 | EXISTS: `video_metadata_table_name` setting |
+| `app/core/settings.py` | 558 | EXISTS: `moderation_tickets_table_name` setting |
+| `scripts/local-ddb-init.py` | 364 | EXISTS: `ModerationTickets` table definition |
+| `scripts/local-ddb-init.py` | 396 | EXISTS: `ModerationActions` table definition |
+| `scripts/local-ddb-init.py` | 416 | EXISTS: `ModerationAuditLog` table definition |
+| `app/auth/policy.py` | 84 | EXISTS: `require_admin_scope(AdminScope.CONTENT_MODERATION)` for admin auth |
+| `app/models_video.py` | 36 | EXISTS: `VideoMetadataModel` with status, visibility fields |

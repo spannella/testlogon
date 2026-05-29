@@ -160,9 +160,9 @@ POST /ui/groups/{group_id}/posts/{post_id}/pin
 
 ### 3.1 Existing Infrastructure
 
-- **Newsfeed** (`app/routers/newsfeed.py`): Posts stored in `app_single_table` with `PK=POST#{post_id}`, `SK=META`. `_post_to_dict()` (line ~1900) maps DDB items to `FeedPost` shape with `viewer_id` for lock/reaction resolution.
-- **Fan-out** (`app/services/newsfeed_fanout.py`): `fan_out_post_to_followers()` writes per-follower `FEED#{follower_id}` index records. Group posts use a different pattern — scoped to `GROUPFEED#{group_id}`, not fanned out.
-- **PostCard** (`frontend/src/pages/feed/PostCard.tsx`): Renders posts with reactions, comments, tips, locks, overflow menu. Reusable for group context with additional badges.
+- **Newsfeed** (`app/routers/newsfeed.py`): Posts stored in `app_single_table` (see `scripts/local-ddb-init.py:222`) with `PK=POST#{post_id}`, `SK=META`. `_post_to_dict()` (see `app/routers/newsfeed.py:1900`) maps DDB items to `FeedPost` shape with `viewer_id` for lock/reaction resolution. Table accessed via `APP_TABLE` env var (see `app/routers/newsfeed.py:54`).
+- **Fan-out** (`app/services/newsfeed_fanout.py`): `fan_out_post_to_followers()` (see `app/services/newsfeed_fanout.py:43`) writes per-follower `FEED#{follower_id}` index records. Group posts use a different pattern — scoped to `GROUPFEED#{group_id}`, not fanned out.
+- **PostCard** (`frontend/src/pages/feed/PostCard.tsx`): Renders posts with reactions, comments, tips, locks, overflow menu. Reusable for group context with additional badges. <!-- VERIFIED: file exists at frontend/src/pages/feed/PostCard.tsx -->
 - **Comments & Reactions**: Comments at `PK=COMMENTS#{post_id}`, reactions as DDB map on post item. Both reference `post_id`, not feed context — group-agnostic.
 
 ### 3.2 Gaps
@@ -184,16 +184,16 @@ POST /ui/groups/{group_id}/posts/{post_id}/pin
 | 2 | Write group feed index | `app_single_table` | `GROUPFEED#{group_id}` | `{created_at}#{post_id}` | None | `post_id, user_id, audience, pinned` |
 | 3 | Query group feed (chronological) | `app_single_table` | `GROUPFEED#{group_id}` | `ScanIndexForward=False` | `FilterExpression: audience=public` (for non-members) | `post_id, audience, pinned` |
 | 4 | Batch-fetch full posts | `app_single_table` | `POST#{post_id}` (batch) | `SK=META` | None | All post fields |
-| 5 | Check membership | `user_groups` | `GROUP#{group_id}` | `SK=MEMBER#{user_id}` | None | `role, status` |
+| 5 | Check membership | `user_groups` | `GROUP#{group_id}` | `SK=MEMBER#{user_id}` | None | `role, status` | <!-- NOTE: user_groups table does not exist yet — must be created by GROUP-001 -->
 | 6 | Pin post update | `app_single_table` | `POST#{post_id}` | `SK=META` | `attribute_exists(pk) AND group_id = :gid` | None |
 | 7 | Update feed index (pin) | `app_single_table` | `GROUPFEED#{group_id}` | `{created_at}#{post_id}` | None | `pinned` field update |
 | 8 | Delete post + index | `app_single_table` | Both `POST#{post_id}` and `GROUPFEED#{group_id}` | Two deletes | Verify author/admin/mod | None |
 | 9 | Count pinned posts | `app_single_table` | `GROUPFEED#{group_id}` | Full scan with filter | `FilterExpression: pinned = :true` | Count only |
-| 10 | Get group metadata | `user_groups` | `GROUP#{group_id}` | `SK=META` | None | `name, description, member_count, cover_image_url` |
+| 10 | Get group metadata | `user_groups` | `GROUP#{group_id}` | `SK=META` | None | `name, description, member_count, cover_image_url` | <!-- NOTE: user_groups table does not exist yet — must be created by GROUP-001 -->
 
 **Key query example — group feed**:
 ```python
-response = T.app_single.query(
+response = T.app_single.query(  # NOTE: T.app_single table handle not found in app/core/tables.py — newsfeed.py uses ddb.Table(APP_TABLE) directly (see app/routers/newsfeed.py:59); group_feed.py should follow same pattern
     KeyConditionExpression="pk = :pk",
     ExpressionAttributeValues={":pk": f"GROUPFEED#{group_id}"},
     ScanIndexForward=False,
@@ -205,7 +205,7 @@ post_ids = [r["post_id"] for r in index_records]
 
 # BatchGetItem for full posts
 keys = [{"pk": f"POST#{pid}", "sk": "META"} for pid in post_ids]
-posts = batch_get_items(T.app_single, keys)
+posts = batch_get_items(T.app_single, keys)  # NOTE: batch_get_items is not a standalone function — newsfeed.py uses ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": keys}}) directly (see app/routers/newsfeed.py:3413)
 ```
 
 ---
@@ -235,6 +235,7 @@ Group posts are stored in `app_single_table` alongside regular posts, with addit
 Written alongside the post record. Enables efficient group feed queries without scanning all posts.
 
 ### 5.2 Backend Service (`app/services/group_feed.py`)
+<!-- NOTE: app/services/group_feed.py does not exist yet — new implementation required -->
 
 ```python
 def create_group_post(*, group_id: str, user_id: str, text: str,
@@ -279,6 +280,7 @@ Existing endpoints work without modification on group posts (same `post_id` patt
 - `POST /ui/posts/{post_id}/unlock` — locked post unlock
 
 ### 5.4 `_post_to_dict` Enhancement (`app/routers/newsfeed.py`)
+<!-- VERIFIED: _post_to_dict exists at app/routers/newsfeed.py:1900; return dict includes like_count, comment_count, tip_total_cents, reactions_counts, my_reactions (lines 1999-2004) -->
 
 Add group context fields when `post.get("group_id")` is present:
 
@@ -293,6 +295,7 @@ if post.get("group_id"):
 ```
 
 ### 5.5 Backend Router (`app/routers/group_feed.py`)
+<!-- NOTE: app/routers/group_feed.py does not exist yet — new implementation required -->
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -303,7 +306,7 @@ if post.get("group_id"):
 | DELETE | `/ui/groups/{group_id}/posts/{post_id}/pin` | `require_ui_session` | Unpin |
 | DELETE | `/ui/groups/{group_id}/posts/{post_id}` | `require_ui_session` | Delete post |
 
-Register both `router` (authenticated, prefix `/ui/groups`) and `public_group_feed_router` (prefix `/public/groups`) in `main.py`.
+Register both `router` (authenticated, prefix `/ui/groups`) and `public_group_feed_router` (prefix `/public/groups`) in `main.py` (see `app/main.py` for existing router registration pattern).
 
 ---
 
@@ -662,6 +665,7 @@ interface AudienceToggleProps {
 ---
 
 ## 10. Frontend Types (`frontend/src/api/types.ts`)
+<!-- VERIFIED: FeedPost interface exists at frontend/src/api/types.ts:1915 -->
 
 ```typescript
 export interface GroupFeedPost extends FeedPost {
@@ -679,6 +683,7 @@ export interface GroupFeedResponse {
 ```
 
 ### Frontend API (`frontend/src/api/endpoints/groups.ts`)
+<!-- NOTE: frontend/src/api/endpoints/groups.ts does not exist yet — new implementation required -->
 
 ```typescript
 export const createGroupPost = (groupId: string, data: {
@@ -708,10 +713,11 @@ export const deleteGroupPost = (groupId: string, postId: string) =>
 
 ## 11. Frontend Pages
 
-- **GroupPage** (`frontend/src/pages/groups/GroupPage.tsx`): Route `/groups/:groupId`. Header with cover image, name, description, member count. Join/Leave/Settings buttons. Feed section using `PostCard`. Post composer for members with audience toggle. Non-member view: public posts + "Join to see all posts" CTA. Pinned posts at top with "Pinned" badge. `data-testid="group-page"`.
+- **GroupPage** (`frontend/src/pages/groups/GroupPage.tsx`): <!-- NOTE: frontend/src/pages/groups/ directory does not exist yet — new implementation required --> Route `/groups/:groupId`. Header with cover image, name, description, member count. Join/Leave/Settings buttons. Feed section using `PostCard`. Post composer for members with audience toggle. Non-member view: public posts + "Join to see all posts" CTA. Pinned posts at top with "Pinned" badge. `data-testid="group-page"`.
 - **GroupPostComposer** (`frontend/src/pages/groups/GroupPostComposer.tsx`): Inline composer above feed. Text area + body format + image upload + audience toggle + lock price. `data-testid="group-post-composer"`.
 
 ### PostCard Enhancement (`frontend/src/pages/feed/PostCard.tsx`)
+<!-- VERIFIED: PostCard.tsx exists at frontend/src/pages/feed/PostCard.tsx -->
 
 Add group context badge and pin badge:
 
@@ -796,6 +802,7 @@ logger.warning("group_feed.pin_limit_reached",
 # app/core/settings.py
 group_feed_enabled: bool = True  # GROUP_FEED_ENABLED env var
 ```
+<!-- NOTE: group_feed_enabled setting does not exist yet in app/core/settings.py — must be added -->
 
 ```python
 # app/routers/group_feed.py
@@ -862,20 +869,20 @@ const { data, fetchNextPage, hasNextPage, isFetchingNextPage } =
 
 | File | Purpose |
 |------|---------|
-| `app/services/group_feed.py` | Group feed CRUD, pin/unpin, audience filtering |
-| `app/routers/group_feed.py` | Authenticated + public feed endpoints |
-| `frontend/src/pages/groups/GroupPage.tsx` | Group profile page with feed |
-| `frontend/src/pages/groups/GroupPostComposer.tsx` | Post composer |
+| `app/services/group_feed.py` | Group feed CRUD, pin/unpin, audience filtering | <!-- new -->
+| `app/routers/group_feed.py` | Authenticated + public feed endpoints | <!-- new -->
+| `frontend/src/pages/groups/GroupPage.tsx` | Group profile page with feed | <!-- new -->
+| `frontend/src/pages/groups/GroupPostComposer.tsx` | Post composer | <!-- new -->
 
 ### 15.2 Files to Modify
 
 | File | Changes |
 |------|---------|
-| `app/routers/newsfeed.py` | Add group fields to `_post_to_dict()` |
-| `app/main.py` | Register group_feed routers |
-| `frontend/src/api/types.ts` | Add `GroupFeedPost`, `GroupFeedResponse` |
-| `frontend/src/api/endpoints/groups.ts` | Add feed API functions |
-| `frontend/src/pages/feed/PostCard.tsx` | Group badge, pin badge, pin/unpin menu |
+| `app/routers/newsfeed.py` | Add group fields to `_post_to_dict()` (see `:1900`) |
+| `app/main.py` | Register group_feed routers (see existing pattern `:326`) |
+| `frontend/src/api/types.ts` | Add `GroupFeedPost`, `GroupFeedResponse` (extends `FeedPost` at `:1915`) |
+| `frontend/src/api/endpoints/groups.ts` | Add feed API functions <!-- new file --> |
+| `frontend/src/pages/feed/PostCard.tsx` | Group badge, pin badge, pin/unpin menu <!-- VERIFIED: exists --> |
 | `frontend/src/App.tsx` | Add `/groups/:groupId` route |
 
 ---
@@ -974,3 +981,22 @@ let pinnedPostId: string;
 | Ticket | Depends On |
 |--------|-----------|
 | GROUP-003 (Advertising) | Group feed for ad placement context |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Notes |
+|-----------|------|---------|-------|
+| `_post_to_dict()` | `app/routers/newsfeed.py` | 1900 | Maps DDB post item to FeedPost shape; returns like_count, comment_count, tip_total_cents, reactions_counts, my_reactions |
+| `APP_TABLE` env var | `app/routers/newsfeed.py` | 54 | `os.environ.get("APP_TABLE", "app_single_table")` |
+| `tbl = ddb.Table(APP_TABLE)` | `app/routers/newsfeed.py` | 59 | Direct DynamoDB resource table handle (not via T.app_single) |
+| `ddb.batch_get_item()` | `app/routers/newsfeed.py` | 3413 | Existing BatchGetItem pattern for fetching multiple posts |
+| `fan_out_post_to_followers()` | `app/services/newsfeed_fanout.py` | 43 | Writes FEED#{follower_id} index records; group posts should NOT use this |
+| `app_single_table` DDB definition | `scripts/local-ddb-init.py` | 222 | PK=pk, SK=sk; stores POST#{post_id}/META records |
+| `FeedPost` interface | `frontend/src/api/types.ts` | 1915 | Base interface for GroupFeedPost extension |
+| `PostCard` component | `frontend/src/pages/feed/PostCard.tsx` | — | Existing post renderer; needs group badge + pin badge additions |
+| `user_groups` table | — | — | Does not exist yet; created by GROUP-001 dependency |
+| `group_feed_enabled` setting | — | — | Does not exist yet in `app/core/settings.py`; must be added |
+| `app/services/group_feed.py` | — | — | Does not exist yet; new implementation |
+| `app/routers/group_feed.py` | — | — | Does not exist yet; new implementation |

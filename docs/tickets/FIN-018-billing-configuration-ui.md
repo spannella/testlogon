@@ -5,7 +5,14 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 7-9 days  
-**Dependencies**: Billing ledger (`billing_shared.py`), creator payouts (`creator_payouts.py`), admin auth (`auth/deps.py`)
+**Dependencies**: Billing ledger (`app/services/billing_shared.py:217`), creator payouts (`app/services/creator_payouts.py`), admin auth (`app/auth/policy.py:63,67`)
+
+<!-- NOTE: Billing fee settings currently exist as env vars in `app/core/settings.py`:
+- `call_billing_platform_fee_percent` at `:1186` (env: CALL_BILLING_PLATFORM_FEE_PERCENT, default 20)
+- `payout_minimum_cents` at `:1177` (env: PAYOUT_MINIMUM_CENTS, default 1000)
+- `affiliate_default_commission_percent` at `:1437` (env: AFFILIATE_DEFAULT_COMMISSION_PERCENT, default 10)
+- `affiliate_max_commission_percent` at `:1438` (env: AFFILIATE_MAX_COMMISSION_PERCENT, default 50)
+There is NO `platform_fee_bps` setting — tip/unlock platform fees are not parameterized as a global BPS setting. The ticket's proposal to move these to DDB is correct; the env var locations above are where the existing values live. -->
 
 ---
 
@@ -1279,3 +1286,18 @@ In dev mode (single uvicorn worker), cache invalidation is instant — `update_b
 9. All 22 E2E tests pass in `frontend/e2e/admin-billing-config.spec.ts`
 10. Config reads from cache add < 1ms overhead to transactions
 11. Feature flags allow gradual migration from env vars to DDB config
+
+---
+
+## Codebase References
+
+| File | Lines | What |
+|------|-------|------|
+| `app/core/settings.py` | :1177 | `payout_minimum_cents` (env: PAYOUT_MINIMUM_CENTS, default 1000) |
+| `app/core/settings.py` | :1186 | `call_billing_platform_fee_percent` (env: CALL_BILLING_PLATFORM_FEE_PERCENT, default 20) |
+| `app/core/settings.py` | :1437-1438 | `affiliate_default_commission_percent` (default 10), `affiliate_max_commission_percent` (default 50) |
+| `app/models.py` | :2353 | `minimum_payout_cents: int = 1000` in payout model |
+| `app/services/billing_shared.py` | :217 | `new_ledger_entry` — where fee calculations would be applied |
+| `app/services/creator_payouts.py` | — | Currently uses env-var-based minimum payout |
+| `app/routers/admin_payouts.py` | 103 total | Admin payout router at `/v1/admin/payouts`; registered at `app/main.py:112,435` |
+| `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |

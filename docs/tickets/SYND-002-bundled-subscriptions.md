@@ -1219,3 +1219,16 @@ These additional tests cover concurrency and boundary conditions:
 6. Subscribers can cancel bundles; access continues until period end.
 7. My Bundles page lists all active bundle subscriptions with included creators.
 8. All 25 E2E tests pass.
+
+---
+
+## Codebase References
+
+| Claim | File | Line(s) | Status |
+|-------|------|---------|--------|
+| No syndicate/bundle code exists | All files | — | VERIFIED: grep "syndicate" returns zero results |
+| subscription_server.py (stated 1735 lines) | `app/routers/subscription_server.py` | — | **LINE COUNT OUTDATED**: now 1852 lines |
+| subscription_access.py (stated 80 lines) | `app/services/subscription_access.py` | — | VERIFIED: 82 lines |
+| `has_active_subscription` function | `app/services/subscription_access.py` | 55 | VERIFIED |
+| `can_access_creator` function | `app/services/subscription_access.py` | 72 | VERIFIED |
+| billing_shared.py exists | `app/services/billing_shared.py` | — | VERIFIED (260 lines) |

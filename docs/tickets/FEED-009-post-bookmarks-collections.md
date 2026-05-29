@@ -49,11 +49,13 @@ The route `/saved` is mentioned in CLAUDE.md as potentially already in the sideb
 
 ### 2.4 Gaps
 
-1. **No `post_bookmarks` DDB table** — no storage for bookmarks or collections.
-2. **No bookmark endpoints** — no API to save, unsave, or manage bookmarks.
-3. **No collection CRUD** — no API to create, rename, or delete collections.
-4. **No bookmark icon on PostCard** — no UI affordance for saving.
-5. **No Saved Posts page** — no page for browsing saved posts by collection.
+<!-- NOTE: Gaps 1-2 are partially closed — basic bookmarks already exist in app/routers/newsfeed.py (lines 5461-5618) using app_single_table with BOOKMARK# prefix. Frontend: frontend/src/api/endpoints/bookmarks.ts and frontend/src/pages/saved/SavedPage.tsx exist. Collections are NOT yet implemented. -->
+
+1. ~~**No `post_bookmarks` DDB table**~~ — PARTIALLY DONE: Bookmarks use `app_single_table` with `pk=BOOKMARK#{user_id}` (line 5461) and `pk=BOOKMARK_LOOKUP#{user_id}` (line 5465). No separate table needed. Collections not yet implemented.
+2. ~~**No bookmark endpoints**~~ — DONE: `POST /ui/bookmarks` (line 5483) and `DELETE /ui/bookmarks/{content_type}/{content_id}` (line 5538) exist. `GET /ui/bookmarks` (line 5553) lists bookmarks.
+3. **No collection CRUD** — no API to create, rename, or delete collections (new feature needed).
+4. **No bookmark icon on PostCard** — needs UI integration.
+5. ~~**No Saved Posts page**~~ — DONE: `frontend/src/pages/saved/SavedPage.tsx` exists.
 6. **No bookmark state in feed response** — posts don't indicate if they're bookmarked by the viewer.
 
 ---
@@ -698,4 +700,29 @@ curl -X GET "http://localhost:8000/ui/posts/bookmarks?collection_id=default" \
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| None | — | Uses existing post infrastructure |
+| None | — | Uses existing post + bookmark infrastructure |
+
+---
+
+## Codebase References
+
+### Existing Files (verified)
+| File | Key References | Lines |
+|------|---------------|-------|
+| `app/routers/newsfeed.py` | `pk_bookmark` helper | 5461 |
+| `app/routers/newsfeed.py` | `pk_bookmark_lookup` helper | 5465 |
+| `app/routers/newsfeed.py` | `POST /ui/bookmarks` (`create_bookmark`) | 5483 |
+| `app/routers/newsfeed.py` | `DELETE /ui/bookmarks/{content_type}/{content_id}` (`delete_bookmark`) | 5538 |
+| `app/routers/newsfeed.py` | `GET /ui/bookmarks` (`list_bookmarks`) | 5553 |
+| `frontend/src/api/endpoints/bookmarks.ts` | Bookmark API client | - |
+| `frontend/src/pages/saved/SavedPage.tsx` | Saved posts page (exists, may need collection support) | - |
+| `scripts/local-ddb-init.py` | `app_single_table` | 222 |
+
+### Not Yet Implemented
+| Feature | Notes |
+|---------|-------|
+| Collection CRUD (create, rename, delete, reorder) | New endpoints and DDB items needed |
+| `collection_id` field on bookmark items | Existing bookmarks have no collection concept |
+| Collection sidebar in SavedPage | UI enhancement needed |
+| Move bookmark between collections | New endpoint needed |
+| `is_bookmarked` field in feed post response | Not in `_post_to_dict` yet |

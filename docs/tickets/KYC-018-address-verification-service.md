@@ -14,7 +14,7 @@
 
 ### 1.1 Problem Statement
 
-The KYC case system (`app/routers/kyc_cases.py`, 1295 lines) accepts proof of residency documents (KYC-004) but has no mechanism to independently verify that the address a user provides actually exists, matches the submitted documents, or conforms to the official postal format for the user's country. Admins must manually cross-reference addresses against external postal databases, which is slow, inconsistent, and does not scale.
+The KYC case system (see `app/routers/kyc_cases.py:48`, ~1294 lines) accepts proof of residency documents (KYC-004) but has no mechanism to independently verify that the address a user provides actually exists, matches the submitted documents, or conforms to the official postal format for the user's country. Admins must manually cross-reference addresses against external postal databases, which is slow, inconsistent, and does not scale.
 
 Address verification is a core component of robust KYC compliance. Regulatory frameworks (FATF, 4AMLD/5AMLD, FinCEN) require financial service providers to verify the residential address of customers. A user could submit a proof of residency document showing one address while entering a different address in their profile, and the system has no way to detect this discrepancy.
 
@@ -145,11 +145,12 @@ The `KycCaseOut` model (line 52) contains an `intake_profile` field (string, opt
 
 The `KycFileAttachmentRequest` model supports `file_type` values of `"selfie"`, `"id_front"`, `"id_back"`, `"proof_of_address"`. The proof_of_address attachment is stored but not parsed or compared against the user's entered address.
 
-### 3.3 User Profile Service (`app/services/user_profile.py`)
+### 3.3 User Profile Service (`app/services/profile.py`)
+<!-- NOTE: The ticket originally referenced app/services/user_profile.py which does not exist. The actual file is app/services/profile.py -->
 
 User profiles are stored in the `users` DDB table with address fields. The profile can be updated at any time, and there is no notification/webhook mechanism when address fields change.
 
-### 3.4 Existing Address Normalization (`app/core/normalize.py`)
+### 3.4 Existing Address Normalization (see `app/core/normalize.py:20`)
 
 The `normalize.py` module provides normalization for emails, phone numbers, CIDR ranges, and IP addresses, but has no address normalization capabilities.
 
@@ -158,6 +159,7 @@ The `normalize.py` module provides normalization for emails, phone numbers, CIDR
 ## 4. Technical Design
 
 ### 4.1 New Service: `app/services/kyc_address_verification.py`
+<!-- NOTE: app/services/kyc_address_verification.py does not exist yet — new implementation required -->
 
 ```python
 class AddressVerificationResult:
@@ -580,11 +582,12 @@ Address verification results are stored as nested attributes on the KYC case ite
 
 Add a post-update hook to user profile updates. When address fields (`address_line_1`, `city`, `state`, `postal_code`, `country`) change on the user profile, find any active KYC cases for the user and reset their `address_verification.status` to `pending`.
 
-Implementation: extend `app/services/user_profile.py` `update_profile` function to compare old/new address fields and call `AddressVerificationService.invalidate_verification` if changed.
+Implementation: extend `app/services/profile.py` `update_profile` function
+<!-- NOTE: The ticket references app/services/user_profile.py which does not exist — the correct file is app/services/profile.py --> to compare old/new address fields and call `AddressVerificationService.invalidate_verification` if changed.
 
 ### 4.8 Integration with KYC Case Readiness
 
-Extend `_readiness_for_case` in `app/routers/kyc_cases.py`:
+Extend `_readiness_for_case` in `app/routers/kyc_cases.py` (see line 223):
 
 ```python
 # Check address verification for tier_2+
@@ -945,7 +948,8 @@ test("221.3 Concurrent verification requests return consistent result", async ({
 | `app/services/kyc_address_verification.py` | **New** | Address verification, geocoding, postal validation, cross-reference |
 | `app/routers/kyc_cases.py` | Modify | Add 4 address verification endpoints; extend readiness check |
 | `app/contracts/kyc_cases_contract.py` | Modify | Add `AddressVerificationResult` model, request/response types |
-| `app/services/user_profile.py` | Modify | Add post-update hook for address change detection |
+| `app/services/profile.py` | Modify | Add post-update hook for address change detection |
+<!-- NOTE: app/services/user_profile.py does not exist — correct file is app/services/profile.py -->
 | `app/core/normalize.py` | Modify | Add address normalization/standardization helpers |
 | `app/core/settings.py` | Modify | Add `kyc_address_verification_enabled` flag |
 | `frontend/src/api/endpoints/kyc-cases.ts` | Modify | Add `verifyAddress`, `getAddressVerification`, `validatePostalCode` |
@@ -953,3 +957,18 @@ test("221.3 Concurrent verification requests return consistent result", async ({
 | `frontend/src/components/shared/AddressVerificationBadge.tsx` | **New** | Status badge component |
 | `frontend/src/components/shared/PostalCodeInput.tsx` | **New** | Country-aware postal code input |
 | `frontend/e2e/kyc-address-verification.spec.ts` | **New** | 22 E2E tests across sections 218-221 |
+
+---
+
+## Codebase References
+
+| Reference | File | Line(s) | Status |
+|-----------|------|---------|--------|
+| KYC cases router | `app/routers/kyc_cases.py` | 48 | Exists (~1294 lines) |
+| `KycFileAttachmentRequest` | `app/contracts/kyc_cases_contract.py` | 133 | Exists |
+| `_readiness_for_case()` | `app/routers/kyc_cases.py` | 223 | Exists |
+| Address normalization | `app/core/normalize.py` | 20 | Exists (email, phone, CIDR only — no address normalization yet) |
+| Profile service | `app/services/profile.py` | -- | Exists (ticket incorrectly references `user_profile.py`) |
+| `app/services/kyc_address_verification.py` | -- | -- | Does NOT exist — new implementation required |
+| `frontend/src/components/shared/AddressVerificationBadge.tsx` | -- | -- | Does NOT exist — new component required |
+| `frontend/src/components/shared/PostalCodeInput.tsx` | -- | -- | Does NOT exist — new component required |

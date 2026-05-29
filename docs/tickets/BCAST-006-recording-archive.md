@@ -8,6 +8,11 @@ The broadcast system currently supports live streaming with RTMP ingest, ABR tra
 and signed playback URLs. When a session stops (transitions from `live` -> `stopping` ->
 `stopped`), the S3 archive prefix is stored in `BroadcastOutputModel.s3_archive_prefix`
 but there is **no mechanism** to:
+<!-- NOTE: This claim is NOW OUTDATED. Recording infrastructure exists:
+  `app/services/broadcast_recording.py`, `app/services/broadcast_recording_worker.py`,
+  `app/services/broadcast_archive.py`, BroadcastRecordings table (DDB init:567),
+  `T.broadcast_recordings` (tables.py:82), `broadcast_recordings_table_name` (settings.py:1137),
+  `frontend/e2e/broadcast-recording.spec.ts` -->
 
 1. Register the archive as a playable VOD asset
 2. Generate a signed URL for post-live playback
@@ -986,3 +991,22 @@ class BroadcastRecordingOut(BaseModel):
 | `tests/test_broadcast_recording.py` | Unit tests (NEW) |
 | `tests/test_broadcast_recording_worker.py` | Worker unit tests (NEW) |
 | `frontend/e2e/broadcast-recording.spec.ts` | E2E tests (NEW) |
+
+---
+
+## Codebase References
+
+| File | Status | Notes |
+|------|--------|-------|
+| `app/services/broadcast_recording.py` | EXISTS | Recording service |
+| `app/services/broadcast_recording_worker.py` | EXISTS | Background recording worker |
+| `app/services/broadcast_archive.py` | EXISTS | S3 archive helpers |
+| `app/core/settings.py:1137` | EXISTS | `broadcast_recordings_table_name` |
+| `app/core/settings.py:480-482` | EXISTS | Archive bucket, prefix, retention settings |
+| `app/core/tables.py:82` | EXISTS | `T.broadcast_recordings` handle |
+| `scripts/local-ddb-init.py:567-576` | EXISTS | BroadcastRecordings table with GSI |
+| `frontend/e2e/broadcast-recording.spec.ts` | EXISTS | E2E tests |
+| `frontend/src/api/endpoints/broadcast.ts` | EXISTS | API wrappers |
+
+### Key Note
+- Ticket references `frontend/src/pages/broadcaster/SessionDetailDialog.tsx` but broadcast pages are at `frontend/src/pages/broadcast/` (not `broadcaster/`). No `SessionDetailDialog.tsx` exists as a separate file; session detail may be inline in `BroadcastPage.tsx`.

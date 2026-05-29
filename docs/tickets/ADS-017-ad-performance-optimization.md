@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 7-9 days  
-**Dependencies**: ADS-001 (campaign manager), ADS-002 (ad creative management), ADS-004 (ad serving), ADS-007 (ad billing), ADS-008 (ad analytics)
+**Dependencies**: ADS-001 (campaign manager), ADS-002 (ad creative management), ADS-004 (ad serving), ADS-007 (ad billing), ADS-008 (ad analytics) — all sibling tickets, not yet implemented
+<!-- NOTE: All ADS dependencies are sibling tickets not yet in the codebase. -->
 
 ---
 
@@ -903,3 +904,13 @@ export interface BudgetRecommendation {
 8. Performance alerts trigger on CTR drop, ROAS drop, and budget overpacing
 9. Auto-optimize can be applied as a one-click action or selectively (rotate only, pause only)
 10. All 12 E2E tests pass in `frontend/e2e/ad-optimization.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/services/ad_placement.py` | 25, 222, 279 | Existing: `DEV_AD_CREATIVES` (line 25), `record_ad_impression` (line 222), `_credit_ad_revenue` (line 279) |
+| `app/core/tables.py` | 93 | Existing `ad_impressions` table handle |
+| `app/services/ad_optimization.py` | — | Does not exist yet — new implementation required |

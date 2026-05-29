@@ -42,7 +42,8 @@ The `EmojiPicker` component (`frontend/src/components/shared/EmojiPicker.tsx`) r
 
 ### 2.2 S3 File Storage
 
-The platform uses S3 (mocked via moto in dev) for file storage. Custom emoji images will be uploaded to a dedicated S3 prefix: `emojis/{scope}/{emoji_id}.{ext}`. The upload follows the same pattern as watermark uploads in `app/services/watermark_store.py` — direct file upload via multipart form data.
+The platform uses S3 (mocked via moto in dev) for file storage. Custom emoji images will be uploaded to a dedicated S3 prefix: `emojis/{scope}/{emoji_id}.{ext}`. The upload follows the same pattern as watermark uploads.
+<!-- NOTE: `app/services/watermark_store.py` does not exist. Watermark-related logic is spread across `app/services/transcode_job_store.py:36` (watermark_policy field) and `app/services/ffmpeg_abr_pipeline.py:8-45` (watermark_template_values). The S3 upload pattern should follow the image upload in `app/routers/messaging.py` (create_image_message) instead. -->
 
 ### 2.3 Image Processing
 
@@ -50,11 +51,11 @@ No server-side image resizing exists in the codebase. Custom emoji validation wi
 
 ### 2.4 Reactions System
 
-Reactions are stored as a map on the message record: `reactions: { "😀": { "user_sub_1": True } }`. For custom emojis, the reaction key will be the shortcode prefixed with `custom:` to distinguish from Unicode emojis: `reactions: { "custom:my_cat": { "user_sub_1": True } }`.
+Reactions are stored as a map on the message record: `reactions: { "😀": { "user_sub_1": True } }` (see `app/routers/messaging.py:10088` for `react_to_message()`, and `:5363` for `_reaction_summaries()`). For custom emojis, the reaction key will be the shortcode prefixed with `custom:` to distinguish from Unicode emojis: `reactions: { "custom:my_cat": { "user_sub_1": True } }`.
 
 ### 2.5 Gaps
 
-1. **No `custom_emojis` DynamoDB table** — no storage for custom emoji metadata.
+1. **No `custom_emojis` DynamoDB table** — no storage for custom emoji metadata. (VERIFIED: table not defined in `scripts/local-ddb-init.py`; no `ddb_custom_emojis_table` setting in `app/core/settings.py`.)
 2. **No upload endpoint** — no way to upload emoji images.
 3. **No custom emoji resolution** — message rendering doesn't know how to resolve custom shortcodes to images.
 4. **No admin emoji management** — no bulk upload or global scope management.
@@ -210,7 +211,8 @@ async def upload_global_emoji(
     alt_text: str = Form(default=""),
     category: str = Form(default="Uncategorized"),
     file: UploadFile = File(...),
-    ctx=Depends(require_admin_session),
+    ctx=Depends(require_admin_scope(AdminScope.CONTENT_MODERATION)),
+    # NOTE: `require_admin_session` does not exist — use `require_admin_scope()` from `app/auth/policy.py:84`
 ):
     """Upload a global custom emoji (admin only)."""
 
@@ -760,3 +762,22 @@ EmojiPicker (modified from MSG-006)
 | EmojiPicker custom tab fetch | React Query (staleTime: 5 min) | Single fetch per session |
 | Pillow image dimension check at upload | < 50ms for 128x128 PNG | Negligible |
 | Custom emoji count check (GSI2 query) | 1 RCU per upload | Constant cost |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `scripts/local-ddb-init.py` | — | No `custom_emojis` table definition exists — **new table required** |
+| `app/core/settings.py` | — | No `ddb_custom_emojis_table` or custom emoji settings exist — **new settings required** |
+| `app/auth/policy.py` | 84 | `require_admin_scope()` is the correct admin auth dependency (NOT `require_admin_session` which does not exist) |
+| `app/routers/messaging.py` | 5363, 10088 | Reaction system: `_reaction_summaries()` and `react_to_message()` — reactions stored as DDB map |
+| `app/routers/messaging.py` | 2330 | Message `kind` Literal — currently includes `text`, `image`, `file`, `audio`, `video`, `gallery`, `file_share`, `calendar_share`, `calendar_event`, `meeting_poll`, `video_share`, `voice_message`, `voicemail` — no custom emoji kind needed (custom emojis appear as shortcodes in text) |
+| `frontend/src/pages/messages/MessageBubble.tsx` | 79, 805-818 | `QUICK_EMOJIS` reaction picker — will need "Custom" section |
+| `frontend/src/components/shared/EmojiPicker.tsx` | — | **Does not exist** — MSG-006 dependency must be implemented first |
+| `app/services/watermark_store.py` | — | **Does not exist** — ticket incorrectly references this for S3 upload pattern; use `messaging.py` image upload pattern instead |
+| `app/services/custom_emojis.py` | — | **Does not exist** — new service required |
+| `app/routers/custom_emojis.py` | — | **Does not exist** — new router required |
+| `app/main.py` | — | No custom emoji router registered — **registration required** |
+| `frontend/src/api/endpoints/emojis.ts` | — | **Does not exist** — new API client required |

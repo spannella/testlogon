@@ -41,12 +41,14 @@ Consistent posting schedules are critical for creator revenue and audience reten
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
-| Newsfeed router | `app/routers/newsfeed.py` (~800 lines) | Post CRUD, comments, reactions, locking, scheduling, drafts; all need delegation support |
+| Newsfeed router | `app/routers/newsfeed.py` (~5954 lines) | Post CRUD, comments, reactions, locking, scheduling, drafts; all need delegation support |
+<!-- NOTE: Newsfeed router is ~5954 lines, not ~800 lines -->
 | Newsfeed fanout | `app/services/newsfeed_fanout.py` | `fan_out_post_to_followers` for content distribution; delegated posts use same fan-out |
 | Newsfeed scheduler | `app/services/newsfeed_scheduler.py` | Scheduled post promotion; delegated scheduled posts use same mechanism |
 | Newsfeed polls | `app/services/newsfeed_polls.py` | Poll CRUD; delegates with `feed_post` can create polls |
 | Newsfeed feed query | `app/services/newsfeed_feed_query.py` | Feed query patterns; delegates need creator-scoped queries |
 | Delegates service | `app/services/delegates.py` (DELEGATE-001) | `require_delegate_permission`, audit logging |
+<!-- NOTE: app/services/delegates.py does not exist yet — depends on DELEGATE-001 completion -->
 | Feed page | `frontend/src/pages/feed/FeedPage.tsx` | Newsfeed UI; needs delegate mode for post creation and moderation |
 | CreatePost | `frontend/src/pages/feed/CreatePost.tsx` | Post creation form; needs "posting as @creator" mode |
 | PostCard | `frontend/src/pages/feed/PostCard.tsx` | Post display; needs moderation action buttons for delegates |
@@ -303,7 +305,7 @@ def _get_feed_delegation_settings(creator_id: str) -> Dict[str, Any]:
 
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.auth.deps import require_ui_session
+from app.services.sessions import require_ui_session  # actual location of require_ui_session
 from app.services import delegate_feed as svc
 
 router = APIRouter(prefix="/ui/newsfeed/delegate", tags=["newsfeed-delegation"])
@@ -479,6 +481,7 @@ Add to `frontend/src/App.tsx`:
 
 ### 3.8 Files to Create
 
+<!-- NOTE: None of these files exist yet — all require new implementation. Depends on DELEGATE-001. -->
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
 | `app/services/delegate_feed.py` | Feed delegation service | ~350 |
@@ -807,3 +810,26 @@ curl -X POST http://localhost:8000/ui/feed/posts/post-abc-123/approve \
 1. **Week 1**: Enable for test creators. Draft-approval only. No moderation.
 2. **Week 2**: Enable moderation. Monitor abuse rate.
 3. **Week 3**: Full rollout.
+
+---
+
+## Codebase References
+
+| File | Line(s) | What | Status |
+|------|---------|------|--------|
+| `app/services/delegate_feed.py` | — | Feed delegation service | NOT YET CREATED |
+| `app/routers/delegate_feed.py` | — | Feed delegation router | NOT YET CREATED |
+| `app/services/delegates.py` | — | Delegate management (DELEGATE-001 dependency) | NOT YET CREATED |
+| `app/routers/newsfeed.py` | all (5954 lines) | Newsfeed endpoints needing delegation | EXISTS |
+| `app/services/newsfeed_fanout.py` | all | Fan-out for delegate-published posts | EXISTS |
+| `app/services/newsfeed_scheduler.py` | all | Scheduler for delegated scheduled posts | EXISTS |
+| `app/services/newsfeed_polls.py` | all | Poll CRUD for delegate poll creation | EXISTS |
+| `app/services/newsfeed_feed_query.py` | all | Feed query patterns | EXISTS |
+| `app/services/sessions.py` | 283 | `require_ui_session` (NOT in app/auth/deps.py) | EXISTS |
+| `app/services/profile.py` | 220 | `get_profile(user_sub)` | EXISTS |
+| `frontend/src/pages/feed/FeedPage.tsx` | all | Newsfeed UI | EXISTS |
+| `frontend/src/pages/feed/CreatePost.tsx` | all | Post creation form | EXISTS |
+| `frontend/src/pages/feed/PostCard.tsx` | all | Post display component | EXISTS |
+| `frontend/src/pages/feed/DelegateFeedPage.tsx` | — | Delegate feed management | NOT YET CREATED |
+| `frontend/src/pages/feed/DraftApprovalQueue.tsx` | — | Draft approval queue | NOT YET CREATED |
+| `frontend/e2e/delegates-newsfeed.spec.ts` | — | E2E tests | NOT YET CREATED |

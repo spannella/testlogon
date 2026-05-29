@@ -49,10 +49,12 @@ Emoji are the most universal form of expression in messaging. Every major messag
 - Reply-to banner
 
 There is no emoji button or picker. Users rely on their OS-level emoji input (Ctrl+. on Windows, Cmd+Ctrl+Space on macOS).
+<!-- NOTE: ComposeBar.tsx already has a toolbar row with meeting poll support (see `frontend/src/pages/messages/ComposeBar.tsx:160` for meetingPollOpen state, :1777 for MeetingPollComposer integration). The emoji button would follow the same pattern. -->
 
 ### 2.2 Message Bubble Rendering
 
 `frontend/src/pages/messages/MessageBubble.tsx` renders message content as plain text in a `<p>` tag. Unicode emojis render at the same font size as regular text, making them small and hard to read when sent alone. There is no detection of emoji-only messages for enlarged rendering.
+<!-- NOTE: MessageBubble already has an inline emoji *reaction* picker — a `QUICK_EMOJIS` array (line 79: `["👍", "❤️", "😂", "😮", "😢", "🙏"]`) with `emojiPickerOpen` state (line 412) and a popover (lines 800-818). This is for reactions only, NOT for composing. The new EmojiPicker component (MSG-006) is for the ComposeBar and is a separate, richer component. -->
 
 ### 2.3 Emoji Data
 
@@ -65,19 +67,19 @@ No emoji dataset exists in the codebase. A comprehensive emoji dataset is needed
 
 ### 2.4 Backend Message Processing
 
-`app/routers/messaging.py` accepts message text as a plain string via `send_text_message()`. The backend performs no emoji processing — text is stored and returned as-is. Shortcode replacement can be handled entirely on the frontend (before send) to keep the backend stateless.
+`app/routers/messaging.py` accepts message text as a plain string via `send_text_message()` (see `app/routers/messaging.py:3308`). The backend performs no emoji processing — text is stored and returned as-is. Shortcode replacement can be handled entirely on the frontend (before send) to keep the backend stateless.
 
 ### 2.5 Newsfeed Compose
 
-`frontend/src/pages/feed/CreatePost.tsx` also has a text input that would benefit from the same emoji picker. Building the `EmojiPicker` as a shared component in `components/shared/` allows both surfaces to use it.
+`frontend/src/pages/feed/CreatePost.tsx` (see `frontend/src/pages/feed/CreatePost.tsx:110`) also has a text input that would benefit from the same emoji picker. Building the `EmojiPicker` as a shared component in `components/shared/` allows both surfaces to use it.
 
 ### 2.6 Gaps
 
-1. **No emoji picker component** — users have no in-app way to browse and select emojis.
-2. **No emoji dataset** — no structured data for categories, search, skin tones.
-3. **No shortcode replacement** — `:smile:` is sent as literal text.
+1. **No emoji picker component** — users have no in-app way to browse and select emojis. (VERIFIED: no `EmojiPicker` component exists in `frontend/src/components/shared/`. The only emoji UI is the inline `QUICK_EMOJIS` reaction picker in `MessageBubble.tsx:79-818`.)
+2. **No emoji dataset** — no structured data for categories, search, skin tones. (VERIFIED: no `frontend/src/data/` directory exists.)
+3. **No shortcode replacement** — `:smile:` is sent as literal text. (VERIFIED: no `frontend/src/utils/` directory exists.)
 4. **No emoji-only large rendering** — single-emoji messages look the same as text.
-5. **No recent/frequently-used tracking** — no localStorage persistence for emoji usage.
+5. **No recent/frequently-used tracking** — no localStorage persistence for emoji usage. (VERIFIED: no `emojiStore` exists in `frontend/src/stores/`.)
 
 ---
 
@@ -710,3 +712,20 @@ Total impact on initial page load: ~2 KB (utilities only). The ~128 KB emoji dat
 | `frontend/src/pages/feed/PostCard.tsx` | Modify | +5 | Emoji-only detection |
 | `app/core/settings.py` | Modify | +1 | `emoji_shortcodes_enabled` flag |
 | `frontend/e2e/emoji-messages.spec.ts` | **New** | ~200 | 15 E2E tests (sections 284-286) |
+
+---
+
+## Codebase References
+
+| File | Line(s) | What was verified |
+|------|---------|-------------------|
+| `frontend/src/pages/messages/ComposeBar.tsx` | 18, 160, 1777 | EXISTS — has MeetingPollComposer integration pattern to follow; no emoji button exists yet |
+| `frontend/src/pages/messages/MessageBubble.tsx` | 79, 412, 795-818 | EXISTS — `QUICK_EMOJIS` array for inline reaction picker; `emojiPickerOpen` state; no emoji-only detection |
+| `frontend/src/pages/feed/CreatePost.tsx` | 110 | EXISTS — `CreatePost` component; no emoji picker integration yet |
+| `frontend/src/pages/feed/PostCard.tsx` | 190 | EXISTS — `PostCard` component; no emoji-only detection |
+| `app/routers/messaging.py` | 3308 | EXISTS — `send_text_message()` accepts plain text; no emoji processing |
+| `app/core/settings.py` | — | No `emoji_shortcodes_enabled` or similar setting exists yet — **new implementation required** |
+| `frontend/src/components/shared/EmojiPicker.tsx` | — | **Does not exist** — new component required |
+| `frontend/src/data/emoji-data.ts` | — | **Does not exist** — `frontend/src/data/` directory does not exist; needs creation |
+| `frontend/src/utils/emoji.ts` | — | **Does not exist** — `frontend/src/utils/` directory does not exist; needs creation |
+| `frontend/src/stores/emojiStore.ts` | — | **Does not exist** — no emoji store in `frontend/src/stores/` |

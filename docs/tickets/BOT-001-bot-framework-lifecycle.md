@@ -40,17 +40,17 @@ Creators who receive hundreds of DMs daily cannot respond to every message perso
 
 ### 2.1 Existing Infrastructure
 
-- **Messaging** (`app/routers/messaging.py`): `send_text_message()` (line ~7684) creates message items in the Messages table with `sender_id`, `kind`, `text`. `_message_out_from_item()` (line ~3766) maps DDB items to `MessageOut`. The `MessageOut` model has `sender_id`, `kind`, and extensible fields.
-- **Conversations** (`app/routers/messaging.py`): `ConversationOut` (line ~1729) includes participant list, conversation type (`dm`, `group`), and metadata.
-- **Broadcast chat** (`app/services/broadcast_chat_store.py`): `send_chat_message()` writes messages to the broadcast chat table with `sender_id`, `sender_display_name`, `sender_badge`.
-- **Message kinds**: `MessageOut.kind` already supports many kinds (`text`, `image`, `file`, `calendar_share`, etc.) via a `Literal` union.
+- **Messaging** (`app/routers/messaging.py`): `send_text_message()` (see `app/routers/messaging.py:7684`) creates message items in the Messages table with `sender_id`, `kind`, `text`. `_message_out_from_item()` (see `app/routers/messaging.py:3766`) maps DDB items to `MessageOut`. The `MessageOut` model (see `app/routers/messaging.py:2325`) has `sender_id`, `kind`, and extensible fields.
+- **Conversations** (`app/routers/messaging.py`): `ConversationOut` (see `app/routers/messaging.py:1729`) includes participant list, conversation type (`dm`, `group`), and metadata.
+- **Broadcast chat** (`app/services/broadcast_chat_store.py`): `send_chat_message()` (see `app/services/broadcast_chat_store.py:136`) writes messages to the broadcast chat table with `sender_id`, `sender_display_name`, `sender_badge`.
+- **Message kinds**: `MessageOut.kind` (see `app/routers/messaging.py:2330`) already supports many kinds (`text`, `image`, `file`, `calendar_share`, etc.) via a `Literal` union.
 - **Profiles** (`app/services/`): User profiles stored in `profiles` table with `user_sub` PK.
 - **SSE events** (`app/routers/messaging.py`): Real-time message delivery via SSE stream; bot messages can use the same channel.
 
 ### 2.2 Gaps
 
 1. No bot entity model or storage -- no way to define a bot with its own identity.
-2. No `sender_type` field on messages to distinguish bot messages from human messages.
+2. No `sender_type` field on messages to distinguish bot messages from human messages. <!-- NOTE: Confirmed — MessageOut at messaging.py:2325 has no sender_type, bot_id, bot_name, or bot_avatar_url fields. These are new additions required. -->
 3. No bot-to-conversation assignment mechanism.
 4. No trigger configuration system to determine when a bot should respond.
 5. No bot management UI for creators.
@@ -407,16 +407,16 @@ When `message.sender_type === "bot"`:
 
 | File | Changes |
 |------|---------|
-| `scripts/local-ddb-init.py` | Add `chat_bots` and `bot_assignments` TableDefs |
-| `app/core/settings.py` | Add `chat_bots_table_name`, `bot_assignments_table_name` |
-| `app/core/tables.py` | Add `chat_bots`, `bot_assignments` table handles |
-| `app/main.py` | Register `chat_bot_router` |
+| `scripts/local-ddb-init.py` | Add `chat_bots` and `bot_assignments` TableDefs <!-- NOTE: Neither table exists yet in local-ddb-init.py — new implementation required --> |
+| `app/core/settings.py` | Add `chat_bots_table_name`, `bot_assignments_table_name` <!-- NOTE: Neither setting exists yet — new implementation required --> |
+| `app/core/tables.py` | Add `chat_bots`, `bot_assignments` table handles <!-- NOTE: Neither table handle exists yet — new implementation required --> |
+| `app/main.py` | Register `chat_bot_router` <!-- NOTE: No bot router registered yet in main.py — new implementation required --> |
 | `app/routers/messaging.py` | Add `sender_type`, `bot_id`, `bot_name`, `bot_avatar_url` to `MessageOut`; populate in `_message_out_from_item()` |
 | `frontend/src/api/types.ts` | Add `ChatBot`, `BotAssignment`, `BotTriggerConfig` types; extend `MessageOut` |
 | `frontend/src/pages/messages/MessageBubble.tsx` | Render bot badge and avatar for bot messages |
 | `frontend/src/components/layout/Sidebar.tsx` | Add "Bots" nav link |
 | `frontend/src/components/layout/AppShell.tsx` | Add "Bots" to mobile sidebar |
-| `frontend/src/pages/messages/MobileNav.tsx` | Add "Bots" to MORE_LINKS |
+| `frontend/src/components/layout/MobileNav.tsx` | Add "Bots" to MORE_LINKS (see `MobileNav.tsx:64` for `MORE_LINKS` array) |
 | `frontend/src/App.tsx` | Add `/bots` route |
 
 ---
@@ -1103,3 +1103,28 @@ MessageBubble enhancement (for bot messages)
 ├── MessageContent (standard text/image rendering)
 └── BotBackground (slightly different tint: bg-muted/50)
 ```
+
+---
+
+## Codebase References
+
+| Claim | File | Line(s) | Status |
+|-------|------|---------|--------|
+| `send_text_message()` exists | `app/routers/messaging.py` | 7684 | VERIFIED |
+| `_message_out_from_item()` exists | `app/routers/messaging.py` | 3766 | VERIFIED |
+| `MessageOut` model exists | `app/routers/messaging.py` | 2325 | VERIFIED |
+| `MessageOut.kind` Literal union | `app/routers/messaging.py` | 2330 | VERIFIED (text, image, file, audio, video, gallery, file_share, calendar_share, calendar_event, meeting_poll, video_share, voice_message, voicemail) |
+| `ConversationOut` model | `app/routers/messaging.py` | 1729 | VERIFIED |
+| `send_chat_message()` in broadcast store | `app/services/broadcast_chat_store.py` | 136 | VERIFIED |
+| No `sender_type` field on MessageOut | `app/routers/messaging.py` | 2325-2380 | VERIFIED (field does not exist — new implementation required) |
+| No `chat_bots` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (table does not exist — new implementation required) |
+| No `bot_assignments` DDB table | `scripts/local-ddb-init.py` | full file | VERIFIED (table does not exist — new implementation required) |
+| No `chat_bots_table_name` setting | `app/core/settings.py` | full file | VERIFIED (setting does not exist — new implementation required) |
+| No `bot_framework_enabled` setting | `app/core/settings.py` | full file | VERIFIED (setting does not exist — new implementation required) |
+| No `chat_bot_router` in main.py | `app/main.py` | full file | VERIFIED (not registered — new implementation required) |
+| No `app/services/chat_bot.py` | `app/services/` | N/A | VERIFIED (file does not exist — new implementation required) |
+| No `app/routers/chat_bot.py` | `app/routers/` | N/A | VERIFIED (file does not exist — new implementation required) |
+| No `frontend/src/pages/bots/` dir | `frontend/src/pages/` | N/A | VERIFIED (directory does not exist — new implementation required) |
+| No `frontend/src/api/endpoints/bots.ts` | `frontend/src/api/endpoints/` | N/A | VERIFIED (file does not exist — new implementation required) |
+| `MORE_LINKS` array in MobileNav | `frontend/src/components/layout/MobileNav.tsx` | 64 | VERIFIED |
+| Sidebar Commerce group | `frontend/src/components/layout/Sidebar.tsx` | 94-107 | VERIFIED |

@@ -11,6 +11,17 @@
 
 ## 1. Executive Summary
 
+<!-- NOTE: This ticket's "current state" description is OUTDATED. The repost system described here has been FULLY IMPLEMENTED:
+  - Backend: app/routers/newsfeed.py — POST /posts/{post_id}/repost (line 5233), DELETE (line 5351), GET (line 5409)
+  - _post_to_dict includes repost_count (line 2009) and reposted_by_me (line 2010)
+  - Feed query resolves repost attribution (lines 4249-4361)
+  - pk_repost key builder at line 5225, pk_repost_lookup at line 1886
+  - Frontend: RepostButton.tsx exists, integrated into PostCard.tsx at line 622-626
+  - Types: FeedPost has repost_count (1972), reposted_by_me (1974), reposted_by (1976), repost_quote (1978)
+  - SharePostDialog still exists for DM-based sharing (complementary)
+  All "Files to Create" listed in section 13 already exist (RepostButton.tsx).
+-->
+
 The platform currently supports sharing posts only via direct message. The `SharePostDialog` component (`frontend/src/pages/feed/SharePostDialog.tsx`) sends a link preview to a selected conversation using `sendTextMessage()`. There is no public repost mechanism: a user cannot amplify a post to their own followers' feeds. This is the social media equivalent of having "email to a friend" but not "retweet".
 
 Public reposts are a critical virality driver. On Twitter/X, retweets account for roughly 25% of all timeline content. Without reposts, content on this platform can only reach users who directly follow the original author or who happen to see it in a DM. Creators have no organic amplification beyond their own follower base. The lack of a repost feature directly limits content distribution, creator growth, and platform engagement metrics.
@@ -137,16 +148,18 @@ The repost fan-out will follow the same pattern: for each follower of the repost
 
 ### 3.7 Newsfeed Router Length
 
-`app/routers/newsfeed.py` is ~4998 lines. The repost endpoints will be added near the existing social endpoints (around line 2657). The `_post_to_dict()` function (line 1792) needs to be extended.
+`app/routers/newsfeed.py` is ~5954 lines. The repost endpoints have already been added starting at line 5221. The `_post_to_dict()` function already includes `repost_count` and `reposted_by_me` fields.
 
 ### 3.8 Gaps
 
-1. No repost endpoint in the newsfeed router (grep "repost" returns 0 in `app/routers/newsfeed.py`)
-2. No `pk_repost()` key builder (lines 711-793)
-3. No `repost_count` field on post metadata items
-4. No `reposted_by_me` field in `_post_to_dict()` output
-5. No `RepostButton` component in the frontend
-6. No feed reference type `REPOST#` in the fan-out system
+<!-- NOTE: ALL gaps listed below have been resolved. The repost system is fully implemented. -->
+
+1. ~~No repost endpoint~~ — **RESOLVED**: POST at `newsfeed.py:5233`, DELETE at `newsfeed.py:5351`, GET at `newsfeed.py:5409`
+2. ~~No `pk_repost()` key builder~~ — **RESOLVED**: `pk_repost` at `newsfeed.py:5225`, `pk_repost_lookup` at `newsfeed.py:1886`
+3. ~~No `repost_count` field~~ — **RESOLVED**: Included in `_post_to_dict()` at `newsfeed.py:2009`
+4. ~~No `reposted_by_me` field~~ — **RESOLVED**: Included in `_post_to_dict()` at `newsfeed.py:2010`
+5. ~~No `RepostButton` component~~ — **RESOLVED**: `frontend/src/pages/feed/RepostButton.tsx` exists, imported in `PostCard.tsx:31`, rendered at `PostCard.tsx:622-626`
+6. ~~No feed reference type `REPOST#`~~ — **RESOLVED**: Feed query resolves repost refs at `newsfeed.py:4249-4361`
 7. No deduplication logic for reposts in feed queries
 
 ---
@@ -869,16 +882,19 @@ No new DDB table needed. No new GSI needed. Repost entities use the existing `ap
 
 | Claim | File | Line(s) | Status |
 |-------|------|---------|--------|
-| SharePostDialog uses sendTextMessage | `frontend/src/pages/feed/SharePostDialog.tsx` | 48-57 | VERIFIED |
-| FeedPost has no repost fields | `frontend/src/api/types.ts` | 1781-1834 | VERIFIED |
-| No repost endpoint in newsfeed router | `app/routers/newsfeed.py` | all 4998 lines | VERIFIED: grep "repost" returns 0 |
-| Key builders have no repost prefix | `app/routers/newsfeed.py` | 711-793 | VERIFIED |
-| PostCard action row location | `frontend/src/pages/feed/PostCard.tsx` | 512-560 | VERIFIED |
-| PostCard Share2 button | `frontend/src/pages/feed/PostCard.tsx` | 548-554 | VERIFIED |
-| get_followers() function | `app/services/social.py` | 141-163 | VERIFIED |
-| _is_blocked() function | `app/services/social.py` | 393-398 | VERIFIED |
-| backfill_feed_on_follow called from social.py | `app/services/social.py` | 86-88 | VERIFIED |
+| SharePostDialog uses sendTextMessage | `frontend/src/pages/feed/SharePostDialog.tsx` | — | VERIFIED (file exists) |
+| FeedPost has no repost fields | `frontend/src/api/types.ts` | 1972-1978 | **OUTDATED** — `repost_count`, `reposted_by_me`, `reposted_by`, `repost_quote` all exist |
+| No repost endpoint in newsfeed router | `app/routers/newsfeed.py` | 5233, 5351, 5409 | **OUTDATED** — POST/DELETE/GET repost endpoints exist |
+| Key builders have no repost prefix | `app/routers/newsfeed.py` | 1886, 5225 | **OUTDATED** — `pk_repost_lookup` and `pk_repost` exist |
+| PostCard action row location | `frontend/src/pages/feed/PostCard.tsx` | 586 | VERIFIED (shifted from 512 due to added code) |
+| PostCard RepostButton (now exists) | `frontend/src/pages/feed/PostCard.tsx` | 622-626 | **ALREADY IMPLEMENTED** |
+| RepostButton component | `frontend/src/pages/feed/RepostButton.tsx` | — | **ALREADY IMPLEMENTED** |
+| get_followers() function | `app/services/social.py` | 142 | VERIFIED |
+| _is_blocked() function | `app/services/social.py` | 394 | VERIFIED |
+| backfill_feed_on_follow called from social.py | `app/services/social.py` | 87-88 | VERIFIED |
 | Feed GSI1 key pattern | `app/routers/newsfeed.py` | GSI1PK=FEED# | VERIFIED |
-| SQS event queue config | `app/routers/newsfeed.py` | 57 | VERIFIED: EVENTS_SQS_URL |
 | app_single_table used for newsfeed | `app/routers/newsfeed.py` | 54, 59 | VERIFIED |
-| PostCard Tip button between MessageCircle and Share2 | `frontend/src/pages/feed/PostCard.tsx` | 539-547 | VERIFIED |
+| _post_to_dict includes repost_count | `app/routers/newsfeed.py` | 2008-2010 | **ALREADY IMPLEMENTED** |
+| Feed repost attribution resolution | `app/routers/newsfeed.py` | 4249-4361 | **ALREADY IMPLEMENTED** |
+| _check_reposted_by_me helper | `app/routers/newsfeed.py` | 1875-1880 | **ALREADY IMPLEMENTED** |
+| Newsfeed router is 5954 lines (not 4998) | `app/routers/newsfeed.py` | — | VERIFIED: 5954 lines |

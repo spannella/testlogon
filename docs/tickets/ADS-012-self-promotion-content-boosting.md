@@ -5,7 +5,8 @@
 **Date**: 2026-05-29  
 **Priority**: Medium  
 **Estimated effort**: 6-8 days  
-**Dependencies**: ADS-001 (advertiser accounts & campaign manager), ADS-005 (newsfeed sponsored posts), ADS-007 (ad billing & financial engine)
+**Dependencies**: ADS-001 (advertiser accounts & campaign manager), ADS-005 (newsfeed sponsored posts), ADS-007 (ad billing & financial engine) — all sibling tickets, not yet implemented
+<!-- NOTE: All ADS dependencies are sibling tickets. Existing: app/routers/newsfeed.py, app/services/video_metadata_store.py. -->
 
 ---
 
@@ -990,3 +991,14 @@ Creating a boost involves 4 sequential DDB writes (wallet deduct, ledger entry, 
 6. Non-owners cannot boost or view boost details
 7. Duplicate boosts on the same content are rejected (409)
 8. All 22 E2E tests pass in `frontend/e2e/content-boost.spec.ts`
+
+---
+
+## Codebase References
+
+| File | Line(s) | What |
+|------|---------|------|
+| `app/routers/newsfeed.py` | — | Existing newsfeed router (5954 lines) — integration point |
+| `app/services/video_metadata_store.py` | — | Existing video metadata service |
+| `app/core/settings.py` | 1075 | Existing `video_metadata_table_name` |
+| `app/services/content_boost.py` | — | Does not exist yet — new implementation required |
