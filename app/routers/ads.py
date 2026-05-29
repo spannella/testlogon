@@ -1,7 +1,3 @@
-"""Advertiser account + campaign endpoints, plus admin review (ADS-001)."""
-from __future__ import annotations
-
-from fastapi import APIRouter, Depends, HTTPException
 """Advertiser account + campaign + creative endpoints, plus admin review (ADS-001/002)."""
 from __future__ import annotations
 

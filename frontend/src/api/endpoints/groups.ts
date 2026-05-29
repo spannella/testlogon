@@ -22,7 +22,7 @@ export const discoverGroups = (params?: {
   query?: string;
   topic?: string;
   limit?: number;
-}) => api.get<GroupListOut>("/ui/groups/discover", { params });
+}) => api.get<GroupListOut>("/ui/groups/discover", params as Record<string, string>);
 
 export const getGroup = (groupId: string) =>
   api.get<UserGroup>(`/ui/groups/${groupId}`);

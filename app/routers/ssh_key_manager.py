@@ -11,7 +11,7 @@ from typing import Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth.deps import require_ui_session
+from app.services.sessions import require_ui_session
 from app.models import (
     AssociateKeyIn,
     GenerateSshKeyIn,

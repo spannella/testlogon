@@ -91,7 +91,6 @@ export const setAdConfig = (
 
 // ─── Advertiser Campaign Manager (ADS-001) ────────────────────────────────
 
-import type { AdAccount, Campaign } from "../types";
 import type { AdAccount, AdCreative, Campaign } from "../types";
 
 /** Create a new advertiser account */
@@ -169,16 +168,14 @@ export const updateCreative = (campaignId: string, creativeId: string, data: Par
 
 /** Delete a creative */
 export const deleteCreative = (campaignId: string, creativeId: string) =>
-  api.delete<{ ok: boolean }>(`/ui/ads/campaigns/${campaignId}/creatives/${creativeId}`);
+  api.del<{ ok: boolean }>(`/ui/ads/campaigns/${campaignId}/creatives/${creativeId}`);
 
 /** Upload an asset (image/video/thumbnail) for a creative */
 export const uploadCreativeAsset = (campaignId: string, creativeId: string, file: File, assetType: string = "image") => {
   const form = new FormData();
   form.append("file", file);
   form.append("asset_type", assetType);
-  return api.post<{ url: string }>(`/ui/ads/campaigns/${campaignId}/creatives/${creativeId}/upload`, form, {
-    headers: { "Content-Type": "multipart/form-data" },
-  });
+  return api.post<{ url: string }>(`/ui/ads/campaigns/${campaignId}/creatives/${creativeId}/upload`, form);
 };
 
 /** Submit a creative for admin review */
