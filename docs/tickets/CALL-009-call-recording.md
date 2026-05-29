@@ -806,235 +806,94 @@ class RecordingCompleteOut(BaseModel):
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests: Recording Store
+### Unit Tests (pytest)
 
-<!-- NOTE: tests/test_call_recording_store.py does NOT exist — new implementation required -->
+**Test file**: `tests/test_call_9.py`
 
-| # | Test Case | Assertions |
-|---|-----------|-----------|
-| 1 | Create recording with valid data | Record created, status=`pending_consent`, timestamps set |
-| 2 | Update status transitions (happy path) | `pending_consent` -> `recording` -> `uploading` -> `ready` |
-| 3 | Invalid status transition rejected | `ready` -> `recording` raises ValueError |
-| 4 | Get recording by ID | Returns correct record |
-| 5 | Get recordings for call (GSI query) | Returns all recordings sorted by created_at |
-| 6 | Get active recording (status filter) | Returns only `recording` status records |
-| 7 | Duplicate recording_id rejected | ConditionalCheckFailed on second create |
-| 8 | Soft delete sets status to `deleted` | Status updated, S3 key preserved for admin recovery |
-| 9 | TTL calculated from retention config | `ttl = created_at + retention_days * 86400` |
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-### 5.2 Unit Tests: Recording Endpoints
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-<!-- NOTE: tests/test_call_recording_endpoints.py does NOT exist — new implementation required -->
+### Integration Tests
 
-| # | Test Case | Expected |
-|---|-----------|----------|
-| 1 | Create recording — happy path | 201, recording_id returned |
-| 2 | Create recording — feature disabled | 403 |
-| 3 | Create recording — call not connected | 409, "call must be in connected state" |
-| 4 | Create recording — not a participant | 403 |
-| 5 | Create recording — duplicate active recording | 409, "recording already active" |
-| 6 | Upload URL — happy path | 200, presigned URL + ticket_id |
-| 7 | Upload URL — file too large | 400, "exceeds maximum file size" |
-| 8 | Upload URL — recording not found | 404 |
-| 9 | Complete — happy path | 200, status=ready, download_url populated |
-| 10 | Complete — S3 object missing | 400, "upload not found in storage" |
-| 11 | Complete — size mismatch | 400, "file size mismatch" |
-| 12 | Download — happy path (participant) | 302, Location header with presigned URL |
-| 13 | Download — not participant | 403 |
-| 14 | Download — recording not ready | 404 |
-| 15 | Download — admin access (non-participant) | 302, allowed |
-| 16 | Delete recording — participant | 200, status=deleted |
-| 17 | Delete recording — non-participant | 403 |
+Cross-service tests with real DynamoDB Local:
 
-### 5.3 Unit Tests: Consent Protocol Validation
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-<!-- NOTE: tests/test_call_recording_consent.py does NOT exist — new implementation required -->
+### E2E Tests (Playwright)
 
-| # | Test Case | Expected |
-|---|-----------|----------|
-| 1 | Recording signaling events allowed in connected state | Routed successfully |
-| 2 | Recording signaling events rejected in accepted state | `invalid_state` error |
-| 3 | Recording signaling events rejected in ended state | `invalid_state` error |
-| 4 | `call.recording_request` payload validated | Must include `requested_by` |
-| 5 | `call.recording_accept` updates recording status | Status -> `recording` |
-| 6 | `call.recording_decline` updates recording status | Status -> `deleted` |
+**Test file**: `frontend/e2e/call-9.spec.ts`
 
-### 5.4 E2E Tests (`frontend/e2e/call-recording.spec.ts`) — IMPLEMENTED (724 lines)
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-Since real WebRTC media is not available in Playwright, E2E tests focus on the signaling protocol, API endpoints, and UI state transitions.
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-**Section 90: Recording Consent API (6 tests)**
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-```typescript
-test("Alice can request recording on an active call", async () => {
-  // Seed call in connected state, send recording_request signaling event
-  // Verify 200, event delivered to Bob
-});
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-test("Bob can accept recording request", async () => {
-  // Send recording_accept signaling event from Bob
-  // Verify 200, event delivered to Alice
-});
+### Test Data Requirements
 
-test("Bob can decline recording request", async () => {
-  // Send recording_decline signaling event from Bob
-  // Verify 200, event delivered to Alice
-});
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-test("Recording request rejected when call not connected", async () => {
-  // Call in 'accepted' state, send recording_request
-  // Verify 409
-});
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-test("Only one active recording per call", async () => {
-  // Create recording, try to create second -> 409
-});
+### CI/Pipeline
 
-test("Either party can stop recording", async () => {
-  // Send recording_stopped from Bob (non-initiator)
-  // Verify 200, event delivered
-});
-```
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
-**Section 91: Recording Upload & Download API (7 tests)**
+---
 
-```typescript
-test("Get presigned upload URL for recording", async () => {
-  // POST upload-url with mime_type and file_size
-  // Verify 200, upload_url and ticket_id returned
-});
+## Dependencies & Merge Safety
 
-test("Upload URL rejected for oversized file", async () => {
-  // POST with file_size > max
-  // Verify 400
-});
+### Depends On
 
-test("Complete recording upload", async () => {
-  // Upload a small WebM to the presigned URL (via S3 mock)
-  // POST complete with ticket_id, duration, size
-  // Verify 200, status=ready
-});
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-002 | RTCPeerConnection for MediaRecorder integration | Implemented | No -- must merge after |
+| CALL-008 | ICE restart for recording during reconnection | Implemented | Yes |
 
-test("Download URL accessible by both participants", async () => {
-  // Alice requests download -> 302
-  // Bob requests download -> 302
-});
+### Depended On By
 
-test("Download URL rejected for non-participant", async () => {
-  // Charlie requests download -> 403
-});
+| Ticket | What It Needs |
+|---|---|
+| CALL-010 | Recording hook for ConversationView integration |
 
-test("Complete rejected when S3 object missing", async () => {
-  // POST complete without uploading -> 400
-});
+### Merge Strategy
 
-test("Delete recording soft-deletes record", async () => {
-  // DELETE endpoint -> status=deleted
-  // Subsequent download -> 404
-});
-```
+Sequential after CALL-002. New backend endpoints + frontend hook + DDB table.
 
-**Section 92: Recording UI State (5 tests)**
+### Merge Checklist
 
-```typescript
-test("Record button visible during connected call", async () => {
-  // Simulate connected state via CustomEvent dispatch
-  // Verify Record button visible in overlay
-});
-
-test("Consent dialog shown when peer requests recording", async () => {
-  // Dispatch call.recording_request CustomEvent
-  // Verify RecordingConsentDialog visible
-});
-
-test("REC indicator shown after consent", async () => {
-  // Dispatch call.recording_accept CustomEvent
-  // Verify red REC badge visible
-});
-
-test("REC indicator disappears when recording stopped", async () => {
-  // Dispatch call.recording_stopped CustomEvent
-  // Verify REC badge removed
-});
-
-test("Recording system message appears in conversation after call", async () => {
-  // Seed a completed recording in DDB
-  // Navigate to conversation
-  // Verify "Call Recording" system message with download button
-});
-```
-
-### 5.5 MediaRecorder Mocking in Playwright
-
-Chromium supports fake media devices via launch flags. **NOTE**: These flags are NOT currently configured in `playwright.config.ts` — the config only uses `{ ...devices["Desktop Chrome"] }` with no `launchOptions` or `args`. The following change MUST be added to `playwright.config.ts` as a prerequisite for the E2E recording tests:
-
-```typescript
-projects: [
-  {
-    name: "chromium",
-    use: {
-      ...devices["Desktop Chrome"],
-      launchOptions: {
-        args: [
-          "--use-fake-device-for-media-stream",
-          "--use-fake-ui-for-media-stream",
-        ],
-      },
-    },
-  },
-],
-```
-
-For recording-specific tests, the `MediaRecorder` constructor can be mocked via `page.addInitScript`:
-
-```typescript
-await page.addInitScript(() => {
-  const originalMediaRecorder = window.MediaRecorder;
-  window.MediaRecorder = class MockMediaRecorder extends originalMediaRecorder {
-    constructor(stream: MediaStream, options?: MediaRecorderOptions) {
-      super(stream, options);
-      // Expose for test assertions
-      (window as any).__mockMediaRecorder = this;
-    }
-  };
-});
-```
-
-### 5.6 Edge Cases
-
-| Scenario | Expected Behavior |
-|----------|------------------|
-| One party hangs up during recording | Recording auto-stops, Blob finalized, upload initiated by the remaining party |
-| Network interruption during recording | MediaRecorder continues locally (it records from local stream objects). If ICE restart succeeds, remote stream resumes in recording. If call fails, recording stops at disconnection point. |
-| Very long call (>1 hour) | Auto-stop at `CALL_RECORDING_MAX_DURATION_SECONDS`. Toast notification: "Maximum recording duration reached." |
-| Consent declined mid-request | Initiator sees "Recording declined" toast. No recording created. Button returns to "Record" state. |
-| Tab backgrounded during recording | Browser may throttle `requestAnimationFrame` (canvas freezes). Audio continues. On tab restore, canvas resumes. The recording will have frozen video frames during background period. Acceptable for v1. |
-| Browser crash during recording | Recording data is lost (MediaRecorder data is in-memory). Future enhancement: periodic flush to IndexedDB. |
-| Large recording upload on slow connection | Upload progress shown. If browser is closed, IndexedDB fallback attempts resume on next load. |
-| Both parties press Record simultaneously | First `recording_request` signaling event wins. Second party's request is suppressed (they receive a consent dialog instead of sending a request). The hook checks if a consent dialog is already showing before sending a new request. |
-| Recording during ICE restart | MediaRecorder records from the stream objects, not the network transport. During ICE restart, `remoteStream` tracks go muted (no frames/audio), producing silence/black in the recording. When ICE reconnects, the tracks resume. This is acceptable — the recording reflects what the user experienced. |
-| Safari MP4 recording | Safari uses `video/mp4` container. Upload proceeds identically. No conversion needed for Safari-produced files. |
-
-### 5.7 Performance Considerations
-
-| Metric | Target | Notes |
-|--------|--------|-------|
-| Recording CPU overhead | <15% additional | Canvas rendering at 30fps + MediaRecorder encoding |
-| Memory usage during recording | <200 MB for 1-hour call | MediaRecorder flushes to Blob periodically (every 10s via `timeslice` parameter) |
-| Upload size (1-hour video call) | ~500-700 MB | At 1.5 Mbps video + 128 kbps audio |
-| Upload size (1-hour audio-only call) | ~55 MB | At 128 kbps audio only |
-| Upload time (500 MB on 10 Mbps uplink) | ~7 minutes | Progress indicator shown |
-| S3 storage cost per recording (1 hour video) | ~$0.015/month | Standard tier, before lifecycle rules |
-
-### 5.8 Regression Concerns
-
-1. **Call teardown must wait for recording finalization**: `teardownCallResources` should call `recorder.stop()` and wait for the `dataavailable` event before stopping tracks. Otherwise the final recording chunk is lost.
-2. **Stream track removal during recording**: If a user disables camera mid-recording, the video track is removed from the peer connection. The canvas loop must handle `null` video gracefully (draw black frame for that participant).
-3. **Existing call overlay layout**: Adding the Record button must not break the responsive layout of the controls row on mobile viewports.
-4. **Consent dialog z-index**: Must appear above the call overlay (which itself is a fixed-position full-screen element).
-5. **Memory leak on long recordings**: MediaRecorder with `timeslice` parameter collects Blobs in an array. For 1-hour calls this can be 360 chunks. Ensure these are released after concatenation into the final Blob.
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

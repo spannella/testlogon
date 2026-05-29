@@ -781,3 +781,70 @@ EmojiPicker (modified from MSG-006)
 | `app/routers/custom_emojis.py` | — | **Does not exist** — new router required |
 | `app/main.py` | — | No custom emoji router registered — **registration required** |
 | `frontend/src/api/endpoints/emojis.ts` | — | **Does not exist** — new API client required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_custom_emojis.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_upload_personal_emoji` | Upload personal emoji |
+| 2 | `test_upload_global_emoji_admin` | Upload global emoji admin |
+| 3 | `test_shortcode_uniqueness` | Shortcode uniqueness |
+| 4 | `test_image_size_validation` | Image size validation |
+| 5 | `test_personal_scope_isolation` | Personal scope isolation |
+| 6 | `test_delete_emoji_shows_fallback` | Delete emoji shows fallback |
+| 7 | `test_emoji_in_reactions` | Emoji in reactions |
+| 8 | `test_category_grouping` | Category grouping |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/custom-emojis.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~14 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `CUSTOM_EMOJIS_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| MSG-006 | Emoji Messages for EmojiPicker component | Hard |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Sequential -- requires MSG-006 merged first. Custom tab integrates into EmojiPicker from MSG-006.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: CUSTOM_EMOJIS_ENABLED=true
+- [ ] Service file created/modified: `app/services/custom_emojis.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/custom-emojis.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_custom_emojis.py`

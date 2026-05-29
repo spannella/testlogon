@@ -617,201 +617,94 @@ React.useEffect(() => {
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests: `callStateMachine.test.ts` additions
+### Unit Tests (pytest)
 
-Add tests verifying that `teardownCallResources` does NOT interfere with `track.enabled` toggling (existing test only verifies `stop()` is called):
+**Test file**: `tests/test_call_5.py`
 
-```ts
-it("teardown does not re-enable disabled tracks before stopping them", () => {
-  const track = { enabled: false, stop: vi.fn() };
-  const resources = {
-    localStream: { getTracks: () => [track] } as unknown as MediaStream,
-    remoteStream: null,
-    peerConnection: null,
-    cleanedUp: false,
-  };
-  teardownCallResources(resources);
-  expect(track.stop).toHaveBeenCalledTimes(1);
-  // enabled state is irrelevant after stop(), but verify no unintended mutation
-  expect(track.enabled).toBe(false);
-});
-```
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-### 5.2 Unit Tests: New file `CallSessionOverlay.test.tsx`
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-Test the overlay component in isolation with mocked streams:
+### Integration Tests
 
-```ts
-describe("CallSessionOverlay media controls", () => {
-  const mockAudioTrack = { enabled: true, stop: vi.fn(), kind: "audio" };
-  const mockVideoTrack = { enabled: true, stop: vi.fn(), kind: "video" };
-  const mockLocalStream = {
-    getAudioTracks: () => [mockAudioTrack],
-    getVideoTracks: () => [mockVideoTrack],
-    getTracks: () => [mockAudioTrack, mockVideoTrack],
-  } as unknown as MediaStream;
+Cross-service tests with real DynamoDB Local:
 
-  it("renders mute button when connected", () => {
-    render(<CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />);
-    expect(screen.getByRole("button", { name: "Mute microphone" })).toBeInTheDocument();
-  });
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-  it("toggles audio track enabled state on mute click", async () => {
-    render(<CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />);
-    await userEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
-    expect(mockAudioTrack.enabled).toBe(false);
-    expect(screen.getByRole("button", { name: "Unmute microphone" })).toBeInTheDocument();
-  });
+### E2E Tests (Playwright)
 
-  it("toggles video track enabled state on camera click", async () => {
-    render(<CallSessionOverlay session={connectedVideoSession} localStream={mockLocalStream} ... />);
-    await userEvent.click(screen.getByRole("button", { name: "Turn off camera" }));
-    expect(mockVideoTrack.enabled).toBe(false);
-    expect(screen.getByRole("button", { name: "Turn on camera" })).toBeInTheDocument();
-  });
+**Test file**: `frontend/e2e/call-5.spec.ts`
 
-  it("does not render camera button for audio-only calls", () => {
-    render(<CallSessionOverlay session={connectedAudioSession} localStream={mockLocalStream} ... />);
-    expect(screen.queryByRole("button", { name: /camera/i })).not.toBeInTheDocument();
-  });
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-  it("displays duration timer that increments", async () => {
-    vi.useFakeTimers();
-    render(<CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />);
-    expect(screen.getByText("00:00")).toBeInTheDocument();
-    await act(() => { vi.advanceTimersByTime(65_000); });
-    expect(screen.getByText("01:05")).toBeInTheDocument();
-    vi.useRealTimers();
-  });
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-  it("resets timer when call ends", async () => {
-    const { rerender } = render(
-      <CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />
-    );
-    await act(() => { vi.advanceTimersByTime(30_000); });
-    rerender(<CallSessionOverlay session={endedSession} localStream={null} ... />);
-    // Timer should not be visible in ended state
-    expect(screen.queryByText(/\d{2}:\d{2}/)).not.toBeInTheDocument();
-  });
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-  it("shows quality indicator with good/fair/poor states", () => {
-    // Render with mocked peerConnection that returns stats
-    render(<CallSessionOverlay session={connectedSession} peerConnection={mockPc} ... />);
-    expect(screen.getByLabelText(/connection/i)).toBeInTheDocument();
-  });
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-  it("handles keyboard shortcut M for mute toggle", async () => {
-    render(<CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />);
-    fireEvent.keyDown(document, { key: "m" });
-    expect(mockAudioTrack.enabled).toBe(false);
-  });
+### Test Data Requirements
 
-  it("handles keyboard shortcut V for camera toggle in video mode", async () => {
-    render(<CallSessionOverlay session={connectedVideoSession} localStream={mockLocalStream} ... />);
-    fireEvent.keyDown(document, { key: "v" });
-    expect(mockVideoTrack.enabled).toBe(false);
-  });
-});
-```
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-### 5.3 Integration Tests: `ConversationView.call_flows.test.tsx` additions
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-Add tests verifying that the overlay receives `localStream` and that toggling controls works end-to-end through ConversationView:
+### CI/Pipeline
 
-```ts
-it("passes localStream to overlay when call is connected", async () => {
-  // Setup: Populate callResourcesRef with a mock stream
-  // Trigger: Start outgoing call -> connect
-  // Assert: Mute button is rendered in the overlay
-});
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
-it("mute toggle disables audio track through ConversationView integration", async () => {
-  // Setup: Connected call with localStream populated
-  // Action: Click mute button
-  // Assert: track.enabled === false
-});
-```
+---
 
-### 5.4 E2E Tests: `frontend/e2e/call-media-controls.spec.ts`
+## Dependencies & Merge Safety
 
-Since actual WebRTC connections cannot be established in Playwright (no real peer), E2E tests focus on:
+### Depends On
 
-1. **UI presence**: When a call reaches connected state (via mocked SSE events), the control bar renders with mute, camera (for video), end, timer, and quality indicator.
-2. **Button state toggling**: Clicking mute changes `aria-pressed` and swaps the icon.
-3. **Keyboard shortcuts**: Pressing `M` toggles mute state.
-4. **Timer format**: Timer displays and increments (using fake timers or waiting 2 seconds).
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-003 | Local media tracks for mute/camera toggle | Implemented | No -- must merge after |
+| CALL-004 | Media rendering in overlay | Implemented | No -- must merge after |
 
-```ts
-test.describe("Section XX: Call media controls", () => {
-  test("shows mute and end buttons when audio call is connected", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto(`/messages/${convoId}`);
-    // Simulate connected call via custom event dispatch
-    await page.evaluate(() => {
-      window.dispatchEvent(new CustomEvent("messaging:call-event", {
-        detail: { event_type: "call.invite", conversation_id: "...", mode: "audio", ... }
-      }));
-    });
-    // Accept the call
-    await page.getByRole("button", { name: "Accept call" }).click();
-    // Verify controls
-    await expect(page.getByRole("button", { name: "Mute microphone" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "End call" })).toBeVisible();
-    await expect(page.getByText(/\d{2}:\d{2}/)).toBeVisible();
-  });
+### Depended On By
 
-  test("shows camera toggle only for video calls", async ({ page }) => {
-    // Same setup with mode: "video"
-    await expect(page.getByRole("button", { name: "Turn off camera" })).toBeVisible();
-  });
+| Ticket | What It Needs |
+|---|---|
+| CALL-006 | Media controls for E2E testing |
 
-  test("mute button toggles aria-pressed", async ({ page }) => {
-    // Connected state
-    const muteBtn = page.getByRole("button", { name: "Mute microphone" });
-    await expect(muteBtn).toHaveAttribute("aria-pressed", "false");
-    await muteBtn.click();
-    await expect(page.getByRole("button", { name: "Unmute microphone" })).toHaveAttribute("aria-pressed", "true");
-  });
+### Merge Strategy
 
-  test("timer increments each second", async ({ page }) => {
-    // Connected state, wait 2 seconds
-    await expect(page.getByText("00:00")).toBeVisible();
-    await page.waitForTimeout(2100);
-    await expect(page.getByText("00:02")).toBeVisible();
-  });
-});
-```
+Sequential after CALL-003/004. Frontend component changes only.
 
-### 5.5 Manual Testing Checklist
+### Merge Checklist
 
-| Scenario | Steps | Expected Result |
-|----------|-------|-----------------|
-| Mute during audio call | Connect audio call -> click Mic button | Icon changes to MicOff, button turns red, remote party hears silence |
-| Unmute during audio call | While muted -> click Mic button | Icon changes to Mic, button returns to secondary, audio resumes |
-| Camera off during video call | Connect video call -> click Camera button | Icon changes to CameraOff, local PiP shows placeholder, remote sees frozen last frame or black |
-| Camera on during video call | While camera off -> click Camera button | Icon changes to Camera, local PiP resumes live feed |
-| End call via control bar | While connected -> click End (red) button | Call ends, teardown fires, overlay transitions to "ended" state |
-| Timer accuracy | Connect call, wait 5 min | Timer shows ~05:00 (within 1s drift) |
-| Timer reset on reconnect | Connected -> network drop -> reconnect | Timer continues from original start (does not reset on reconnection) |
-| Timer reset on new call | End call -> start new call -> connect | Timer starts fresh at 00:00 |
-| Quality indicator: good | Localhost-to-localhost call (RTT <10ms) | Green signal icon, tooltip "Good connection" |
-| Quality indicator: poor | Throttle network to 3G in DevTools | Red signal icon, tooltip "Poor connection" |
-| Keyboard: M to mute | Press M while overlay focused | Same as clicking mute button |
-| Keyboard: V to toggle camera | Press V during video call | Same as clicking camera button |
-| Accessibility: screen reader | Navigate controls with VoiceOver/NVDA | Buttons announce "Mute microphone, toggle button, not pressed" |
-
-### 5.6 Edge Cases to Cover
-
-1. **`localStream` is null** (stream not yet acquired when overlay renders connected): All toggle buttons should be disabled. Timer still runs.
-2. **Stream has no audio tracks** (permissions denied for microphone): Mute button disabled with tooltip "No microphone available".
-3. **Stream has no video tracks** (audio call or permissions denied): Camera button not rendered.
-4. **Rapid toggle clicking**: Debounce not needed (track.enabled is synchronous), but verify no React state race.
-5. **Call reconnects after mute**: Mute state should persist across reconnection because `localStream` instance persists (tracks are reused, not re-acquired).
-6. **Tab hidden during call**: Timer should continue running (uses `setInterval` not `requestAnimationFrame`). Quality polling pauses (tab hidden -> interval may be throttled by browser, which is acceptable).
-7. **`peerConnection.getStats()` throws**: Quality hook catches errors and returns `"unknown"`.
-8. **Multiple audio tracks** (rare, e.g., tab capture + mic): All audio tracks are toggled together.
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

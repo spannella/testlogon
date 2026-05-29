@@ -1144,6 +1144,45 @@ test.afterAll(async () => {
 
 ---
 
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| SOC-001 (Follow System) | Follow/unfollow endpoints (`/ui/social/follow`, `/ui/social/unfollow`) and `get_follow_status` service used by FollowButton on storefront | Soft -- storefront renders without follow button if unavailable |
+| SOC-005 (Public Profile Page) | Base `PublicUserProfilePage.tsx` and `GET /profile/public/{identifier}` endpoint that this ticket extends | Hard -- storefront builds directly on the existing profile infrastructure |
+| SOC-006 (Creator Storefront Base) | `StorefrontVideoGrid`, `StorefrontPostsFeed`, `FollowButton` components reused in the tabbed layout | Hard -- these components are embedded in the new storefront tabs |
+| MON-005 (Subscription Plans) | `GET /api/creators/{id}/plans` public endpoint consumed by the Plans tab | Soft -- Plans tab hidden if no plans exist; endpoint already implemented |
+| VOD-006 (Video Listing API) | `GET /ui/videos/creator/{id}` endpoint consumed by StorefrontVideoGrid in Videos tab | Soft -- Videos tab shows empty state if endpoint unavailable |
+| Catalog System (existing) | `shopping_catalog` DDB table with GSI1 (`GSI1PK`/`GSI1SK`) for public catalog queries by creator | Soft -- Shop tab hidden if `has_shop_items` is false |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| UX-003 (Drag & Drop Reorder) | Storefront featured content carousel as the reorder target for pinned items |
+| UX-004 (Bulk Operations) | Storefront context for bulk video/post management actions |
+| SOCIAL-005 (Tip Leaderboards) | Storefront as the display surface for leaderboard badges on creator profiles |
+
+### Merge Strategy
+
+Feature-flag-gated -- `VITE_CREATOR_STOREFRONT_ENABLED` controls the frontend route; `S.storefront_shop_enabled` gates the shop tab backend. Both default to `true` in dev. Profile schema extensions (`featured_content`, `social_links`, `storefront_settings`) are additive fields on existing DDB items and do not require migration. The `shopping_catalog` table GSI1 already exists; no new GSI creation needed. Can be merged after SOC-005 and SOC-006 are in place.
+
+### Merge Checklist
+
+- [ ] `storefront_shop_enabled` setting added to `app/core/settings.py`
+- [ ] `VITE_CREATOR_STOREFRONT_ENABLED` added to `frontend/.env.local`
+- [ ] New endpoints registered in `app/main.py` (storefront, featured, social-links, storefront-settings, public shop)
+- [ ] Profile service extended with `get_featured_content`, `set_featured_content`, `update_social_links`, `update_storefront_settings`
+- [ ] `public_catalog.py` service created for ByCreator GSI queries on `shopping_catalog` table
+- [ ] Frontend types added to `api/types.ts` (StorefrontOut, SocialLinks, StorefrontSettings, FeaturedContentItem, PublicCatalogItemOut)
+- [ ] Frontend route `/creator/:identifier` added to `App.tsx`
+- [ ] E2E tests pass (27 tests across sections 527--531)
+- [ ] No breaking changes to existing `/profile/:identifier` route (redirect or coexist)
+
+---
+
 ## Codebase References
 
 All references verified against the codebase as of 2026-05-29.

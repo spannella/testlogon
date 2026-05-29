@@ -1020,3 +1020,83 @@ X-RateLimit-Reset: 1748520460
 | `app/services/delegate_broadcast.py` | — | Broadcast delegation (DELEGATE-004) | NOT YET CREATED |
 | `app/core/settings.py` | all | Configuration for rate limits, webhook settings | EXISTS (modify) |
 | `scripts/local-ddb-init.py` | all | Needs GSI additions for api_keys table | EXISTS (modify) |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_delegation_api.py`
+
+| # | Test Function | Description | Mocks |
+|---|--------------|-------------|-------|
+| 1 | `test_create_delegation_api_key` | Key created with delegation_scope and pending status | moto DDB |
+| 2 | `test_approve_delegation_key` | Status transitions to active | moto DDB |
+| 3 | `test_validate_key_permission_scope` | 403 when key lacks required permission | moto DDB |
+| 4 | `test_per_key_rate_limit` | 429 after exceeding rate_limit_rpm | moto DDB |
+| 5 | `test_webhook_url_must_be_https` | ValueError for http:// URL | moto DDB |
+| 6 | `test_webhook_delivery_signed` | HMAC-SHA256 signature on payload | moto DDB |
+| 7 | `test_rate_limit_headers` | X-RateLimit-* headers present in response | moto DDB |
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Full API key lifecycle: create, approve, use, revoke | delegation_api, api_keys, delegates |
+| 2 | Webhook delivery: register, trigger event, verify delivery log | delegation_api |
+| 3 | Cross-service: API key used for chat, feed, and broadcast | delegation_api, delegate_chat/feed/broadcast |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/delegates-api.spec.ts`
+
+Tests use `injectAuth(page, identity)` for cookie-based auth and include CSRF headers (`x-csrf-token`) on all POST/PUT/DELETE requests. Negative tests cover 401 (unauthenticated), 403 (wrong role/user), 404 (not found), 409 (conflict), and 422 (validation) responses. Edge cases include duplicate operations (idempotency), concurrent access, and feature-flag-disabled behavior.
+
+**Total E2E tests**: 16
+
+### Test Data Requirements
+
+- DDB seeds: required tables created via `scripts/local-ddb-init.py`
+- Test users: Alice, Bob, Root, Charlie via `e2e_session_setup.py` / `e2e_admin_session_setup.py`
+- Feature flag: `DELEGATION_API_ENABLED` in `.env.local`
+
+### CI/Pipeline
+
+- Feature flag: `DELEGATION_API_ENABLED` must be enabled for tests to run
+- Serial execution: run with `--workers 1` to avoid shared state conflicts
+- Retry safety: tests use unique timestamps/UUIDs per run; safe to retry on failure
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Status | What It Provides |
+|--------|--------|-----------------|
+| DELEGATE-001 | Required | Delegation infrastructure, permission checks |
+| DELEGATE-002 | Required | Chat delegation service |
+| DELEGATE-003 | Required | Feed delegation service |
+| DELEGATE-004 | Required | Broadcast delegation service |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| (none currently) | -- |
+
+### Merge Strategy
+
+**Sequential (after DELEGATE-001 through 004)** -- Changes are additive (new service files, new router, new frontend pages). Shared infrastructure files (`main.py`, `settings.py`, `tables.py`, `local-ddb-init.py`) receive only additive modifications.
+
+### Merge Checklist
+
+- [ ] `app/services/delegation_api.py` created
+- [ ] `app/routers/delegation_api.py` with UI + API routers registered in `main.py`
+- [ ] `ByDelegationCreator` GSI added to api_keys table
+- [ ] Rate limit headers on all `/api/delegate/*` responses
+- [ ] All 16 E2E tests pass
+- [ ] Feature flag `DELEGATION_API_ENABLED` added to `.env.local.example`
+- [ ] All E2E tests pass
+- [ ] No regressions in existing test suite

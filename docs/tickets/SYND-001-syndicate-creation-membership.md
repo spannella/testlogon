@@ -758,6 +758,106 @@ When `member_count` reaches 0 after a leave/remove:
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_syndicates.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_create_syndicate_writes_meta_and_member` | Create syndicate writes meta and member verified |
+| 2 | `test_create_syndicate_creator_is_admin` | Create syndicate creator is admin verified |
+| 3 | `test_invite_creates_pending_invite` | Invite creates pending invite verified |
+| 4 | `test_accept_invite_adds_member` | Accept invite adds member verified |
+| 5 | `test_decline_invite_updates_status` | Decline invite updates status verified |
+| 6 | `test_join_request_creates_pending_request` | Join request creates pending request verified |
+| 7 | `test_approve_request_adds_member` | Approve request adds member verified |
+| 8 | `test_reject_request_updates_status` | Reject request updates status verified |
+| 9 | `test_leave_syndicate_removes_member` | Leave syndicate removes member verified |
+| 10 | `test_auto_dissolution_on_last_member_leave` | Auto dissolution on last member leave verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Create syndicate -> invite member -> accept -> member count increments -> member appears in list
+2. Admin transfer -> old admin becomes member -> new admin can invite
+3. Last member leaves -> syndicate status=archived -> discovery query excludes it
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/syndicates.spec.ts`
+**Sections**: 1-5 (15 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Create syndicate | 201; syndicate appears in My Syndicates |
+| 2 | Invite member | 201; invitee sees pending invite |
+| 3 | Accept invite | 200; member added; count increments |
+| 4 | Decline invite | 200; invite status=declined |
+| 5 | Join request | 201; admin sees pending request |
+| 6 | Approve join request | 200; requester added as member |
+| 7 | Leave syndicate | 200; membership removed |
+| 8 | Transfer admin | 200; new admin can manage |
+| 9 | Remove member | 200; member removed from list |
+| 10 | Auto-dissolution | Last leave archives syndicate |
+
+**Negative tests**: 400 self-invite, 404 syndicate not found, 403 non-admin actions, 409 already member, 409 already invited
+
+**Edge cases**: Invite expired user, concurrent join requests, admin leaves with 1 other member (auto-promote)
+
+### Test Data Requirements
+
+- **DDB seeds**: New syndicates table created by local-ddb-init.py; user profiles for Alice/Bob/Charlie
+- **Test users**: Alice (admin), Bob (invitee/member), Charlie (join requester)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: SYNDICATES_ENABLED=true
+- **Serial execution**: All subsequent SYND tests depend on syndicates table existing
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| Auth system (existing) | require_ui_session for authenticated endpoints |
+| Profile service (existing) | get_profile() for member display names |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SYND-002 | Bundled subscriptions require membership infrastructure |
+| SYND-003 | Revenue splitting requires member roster |
+| SYND-004 | Treasury requires syndicate membership for contributions |
+| SYND-005 | Syndicate page requires syndicate existence and member list |
+| SYND-006 | Advertising requires syndicate treasury and membership |
+
+### Merge Strategy: **Sequential**
+
+Foundation for all SYND-* tickets. Must merge first. Creates new syndicates DDB table.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Codebase References
 
 | Claim | File | Line(s) | Status |

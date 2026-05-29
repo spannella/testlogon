@@ -977,3 +977,72 @@ test.beforeAll(async ({ browser }) => {
 | `app/services/kyc_tiers.py` (KYC-009) | -- | -- | Does NOT exist — dependency on KYC-009 |
 | `frontend/src/pages/admin/KycMonitoringDashboard.tsx` | -- | -- | Does NOT exist — new implementation required |
 | `frontend/src/api/endpoints/kyc-monitoring.ts` | -- | -- | Does NOT exist — new file required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_kyc_monitoring.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_create_review_schedule_sets_correct_frequency` | Create review schedule sets correct frequency |
+| 2 | `test_create_review_schedule_stores_grace_deadline` | Create review schedule stores grace deadline |
+| 3 | `test_get_review_schedule_returns_none_for_missing` | Get review schedule returns none for missing |
+| 4 | `test_create_trigger_event_updates_status` | Create trigger event updates status |
+| 5 | `test_create_trigger_event_rejects_invalid_type` | Create trigger event rejects invalid type |
+| 6 | `test_list_trigger_events_ordered_desc` | List trigger events ordered desc |
+| 7 | `test_complete_review_resets_schedule` | Complete review resets schedule |
+| 8 | `test_run_review_checker_dry_run` | Run review checker dry run |
+| 9 | `test_run_review_checker_enters_grace_period` | Run review checker enters grace period |
+| 10 | `test_run_rescreening_disabled_skipped` | Run rescreening disabled skipped |
+
+### Integration Tests
+
+1. KYC case approval creates review schedule with correct frequency
+2. Profile country change creates trigger event and sets needs_review
+3. Large transaction over threshold triggers event and alert
+4. Review checker transitions overdue -> grace_period -> downgraded
+5. Dashboard returns correct upcoming/overdue counts
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- DDB table: `kyc_review_schedule` created in `scripts/local-ddb-init.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `KYC_RESCREENING_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| KYC-006 | Sanctions & PEP Screening service for re-screening | Hard |
+| KYC-008 | Risk Scoring Engine for risk_tier input | Hard |
+| KYC-009 | Tiered Verification Levels for tier downgrade | Hard |
+| KYC-011 | Notifications for review due/overdue alerts | Soft |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| KYC-024 | Analytics dashboard aggregates monitoring data |
+
+### Merge Strategy
+**Sequential -- requires KYC-006, KYC-008, and KYC-009 merged first. Auto-downgrade imports from kyc_tiers.py (KYC-009); rescreening calls screening service (KYC-006).**
+
+### Merge Checklist
+- [ ] DDB table `kyc_review_schedule` added to `scripts/local-ddb-init.py`
+- [ ] Feature flags configured in `.env.local`: KYC_RESCREENING_ENABLED=true
+- [ ] Service file created/modified: `app/services/kyc_monitoring.py`
+- [ ] Router registered in `app/main.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_kyc_monitoring.py`

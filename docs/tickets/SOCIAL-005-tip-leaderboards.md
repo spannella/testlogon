@@ -1029,6 +1029,101 @@ Set `TIP_LEADERBOARD_ENABLED=false`. Background loop stops. API returns empty da
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_tip_leaderboard.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_aggregate_tips_groups_by_tipper` | Aggregate tips groups by tipper verified |
+| 2 | `test_aggregate_tips_respects_7d_period` | Aggregate tips respects 7d period verified |
+| 3 | `test_aggregate_tips_all_period` | Aggregate tips all period verified |
+| 4 | `test_ranking_by_total_cents_descending` | Ranking by total cents descending verified |
+| 5 | `test_tip_count_is_correct` | Tip count is correct verified |
+| 6 | `test_last_tip_at_is_most_recent` | Last tip at is most recent verified |
+| 7 | `test_precomputed_write_read_roundtrip` | Precomputed write read roundtrip verified |
+| 8 | `test_limit_parameter_caps_results` | Limit parameter caps results verified |
+| 9 | `test_non_tip_credits_excluded` | Non tip credits excluded verified |
+| 10 | `test_empty_leaderboard_returns_empty_list` | Empty leaderboard returns empty list verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Write tip ledger entries for 3 tippers then aggregate — correct ranking by total_cents
+2. Pre-computed leaderboard expires (TTL) then on-demand fallback recomputes fresh data
+3. Profile enrichment adds display_name and avatar_url from profiles table
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/tip-leaderboard.spec.ts`
+**Sections**: 1-3 (11 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Endpoint returns 200 for valid creator | 200; supporters array present |
+| 2 | Period filter changes results | ?period=7d returns different list than ?period=all |
+| 3 | Limit parameter respected | ?limit=5 returns at most 5 |
+| 4 | Supporters ordered by total_cents desc | First >= second |
+| 5 | Endpoint returns 401 without auth | 401 |
+| 6 | Top Supporters card visible on analytics page | /analytics; heading visible |
+| 7 | Period toggle changes data | Click 7d; list re-renders |
+| 8 | Empty state shown when no tips | No tips received message |
+
+**Negative tests**: 401 unauthenticated, 422 invalid period param, empty supporters for unknown creator (200 not 404)
+
+**Edge cases**: Creator with 1 tipper, 100+ tippers capped at 50, multiple tippers with identical total (stable sort), deactivated tipper account shows user_id fallback
+
+### Test Data Requirements
+
+- **DDB seeds**: Tip ledger credit entries in billing table (pk=USER#{creator}, sk=LEDGER#...); profile records for tippers
+- **Test users**: Alice (creator/recipient), Bob (top tipper), Charlie (second tipper)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: TIP_LEADERBOARD_ENABLED=true (default)
+- **Serial execution**: Background refresh loop test should verify idempotent recomputation
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| MON-002 | Tip Ledger — provides paired debit/credit entries that this feature aggregates |
+| MON-003 | Creator Earnings Dashboard — same billing table and credit entry format |
+| Profile service (existing) | get_profile() for display name enrichment |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SOC-005 | Leaderboard widget on public profile page |
+
+### Merge Strategy: **Independent**
+
+Read-only aggregation of existing billing data. No schema changes. Feature-flag gated.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

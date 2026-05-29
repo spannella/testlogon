@@ -801,3 +801,94 @@ Remove `app/routers/kyc_tiers.py` import from `app/main.py` and remove `require_
 | `KYC_TIER_GATING_ENABLED` feature flag | `app/core/settings.py` | NOT FOUND -- new setting required |
 | `kyc_tier` profile field | `app/services/profiles.py` | NOT FOUND -- new field required |
 | `frontend/src/pages/kyc/KycTierProgressPage.tsx` | `frontend/src/pages/kyc/` | NOT FOUND -- new page required |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_tiers.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_evaluate_tier_unverified`
+  - `test_evaluate_tier_basic`
+  - `test_evaluate_tier_enhanced`
+  - `test_evaluate_tier_full`
+  - `test_tier_upgrade_on_component_completion`
+  - `test_tier_downgrade_on_expiry`
+  - `test_tier_limits_enforcement`
+  - `test_get_tier_requirements`
+
+### Integration Tests
+
+  - Component completion triggers automatic tier re-evaluation
+  - Transaction limits enforced based on current tier level
+  - Tier change creates audit trail entry
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/kyc-tiers.spec.ts`
+**Test count**: 12
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_submissions (tier records)` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_TIERS_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| KYC-001 | Admin KYC Review Dashboard | Tier status displayed in dashboard |
+| KYC-008 | Risk Scoring Engine | Risk score determines verification tier |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| KYC-011 | KYC Webhooks & Notifications | Tier changes trigger webhooks |
+| KYC-013 | User Self-Service Portal | Users see their current tier and requirements |
+| KYC-015 | Business/Corporate KYB | Business accounts have separate tier structure |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after KYC-001, KYC-008. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 12 E2E tests pass with `npx playwright test kyc-tiers.spec.ts`

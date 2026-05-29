@@ -910,6 +910,91 @@ TranscodeWorker → vod_file_bridge.link_video_to_filemanager():
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_vod_014.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_vod_014_crud` | Vod 014 crud verified |
+| 2 | `test_vod_014_validation` | Vod 014 validation verified |
+| 3 | `test_vod_014_auth` | Vod 014 auth verified |
+| 4 | `test_vod_014_not_found` | Vod 014 not found verified |
+| 5 | `test_vod_014_edge_cases` | Vod 014 edge cases verified |
+| 6 | `test_vod_014_integration` | Vod 014 integration verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. VOD File Manager Bridge integrates with video metadata CRUD lifecycle
+2. End-to-end flow from video creation through vod file manager bridge feature
+3. Error propagation from video metadata service to vod file manager bridge layer
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/vod-014.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | VOD File Manager Bridge API returns 200 | 200; expected fields present |
+| 2 | VOD File Manager Bridge handles invalid input | 422 or 400 response |
+| 3 | VOD File Manager Bridge requires auth | 401 without session |
+| 4 | VOD File Manager Bridge UI renders | Page loads; key elements visible |
+| 5 | VOD File Manager Bridge integrates with video metadata | Video data correctly referenced |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 video not found, 422 invalid input
+
+**Edge cases**: Video in processing state, deleted video reference, concurrent operations
+
+### Test Data Requirements
+
+- **DDB seeds**: Video metadata records from VOD-001; related vod file manager bridge test data
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: VOD_ENABLED=true
+- **Serial execution**: Must run after VOD-001 video metadata table is created and seeded
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| VOD-001 | Video metadata model |
+| File manager (existing) | File node system for bridging |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Sequential**
+
+Requires VOD-001 video metadata model. Can merge after VOD-001.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: File Change Summary
 
 | File | Change Type | Description |

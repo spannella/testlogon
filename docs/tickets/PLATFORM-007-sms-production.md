@@ -1589,3 +1589,83 @@ The `_estimate_segments()` function runs in O(n) where n = message length. For t
 | India | $0.02680 | |
 
 Source: AWS SNS SMS pricing page (subject to change). The `SMS_COST_PER_SEGMENT_USD` setting allows configuration per deployment region.
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_sms_delivery.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_platform_007_create` | Create primary entity; 201 |
+| 2 | `test_platform_007_read` | Read back entity; correct fields |
+| 3 | `test_platform_007_update` | Update entity; 200; changes reflected |
+| 4 | `test_platform_007_delete` | Delete entity; 200/204 |
+| 5 | `test_platform_007_auth_required` | No auth; 401 |
+| 6 | `test_platform_007_validation` | Invalid input; 422 |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | End-to-end happy path through all layers | router + service + DDB |
+| 2 | Error handling propagates correctly | router + service layer |
+| 3 | Feature flag disables functionality | settings + router |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/sms-delivery.spec.ts` -- 16 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Tests cover API CRUD, UI rendering, negative cases (401/403/404/422), and edge cases.
+
+**Negative/edge tests**: 401 unauthenticated, 403 insufficient role, 404 not found, 422 validation error, 409 conflict
+
+### Test Data Requirements
+
+- DDB seeds: feature-specific tables via setup scripts
+- Test users: Alice, Bob, Root, Charlie (admin)
+- Sessions via `e2e_admin_session_setup.py`
+
+### CI/Pipeline
+
+- Feature flags: Feature-specific flags (see Rollout Plan section)
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| PLATFORM-006 | Pattern | Follows same delivery tracking pattern as email |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | No downstream dependents identified |
+
+### Merge Strategy
+
+**Independent** -- No prerequisites. Mirrors PLATFORM-006 for SMS channel.
+
+### Merge Checklist
+
+- [ ] Backend service and router implemented
+- [ ] DDB tables created in local-ddb-init.py (if new)
+- [ ] Frontend types added to api/types.ts
+- [ ] Frontend page/component created
+- [ ] Route added to App.tsx
+- [ ] E2E pass: `npx playwright test e2e/sms-delivery.spec.ts`

@@ -1031,307 +1031,100 @@ Revenue attribution requires querying billing ledger entries with `meta.content_
 
 ---
 
-## 7. Testing Plan
+## Testing Strategy
 
-### 7.1 Unit Tests (pytest)
+### Unit Tests (pytest)
 
-**File**: `tests/test_creator_analytics.py` (extend existing)
+**Test file**: `tests/test_creator_analytics_depth.py`
 
-```python
-# tests/test_creator_analytics_depth.py
+**Mock setup**: moto mock for DynamoDB (`analytics_rollups`, `video_metadata`, `newsfeed`, `billing` tables). Seed video/post items with known engagement counts.
 
-import pytest
-from decimal import Decimal
-from moto import mock_dynamodb
-from app.services.creator_analytics import (
-    _resolve_content_details,
-    get_top_content,
-    get_content_detail,
-    _get_content_revenue_breakdown,
-    _to_int,
-)
+| Test Function | Description |
+|---|---|
+| `test_resolve_video_title` | Seed video metadata; `_resolve_content_details` returns real title |
+| `test_resolve_post_title_truncated` | Post body > 60 chars truncated with `...` |
+| `test_falls_back_to_id_for_missing_content` | Non-existent ID returns `content_id` as title |
+| `test_engagement_rate_computed_correctly` | Video with 100 views, 8 likes, 2 comments; rate = 0.10 |
+| `test_engagement_rate_zero_when_no_views` | Zero views returns 0.0 without division error |
+| `test_content_detail_returns_view_time_series` | Seed video; `get_content_detail` returns non-empty time series |
+| `test_content_detail_revenue_breakdown` | Seed tip + unlock ledger entries; breakdown has both categories |
+| `test_content_detail_403_for_non_owner` | User A requests User B's video; returns `{"error": "forbidden"}` |
+| `test_content_detail_none_for_missing` | Non-existent content_id returns None |
+| `test_post_content_detail_title` | Post content detail returns truncated body as title |
 
+### Integration Tests
 
-class TestResolveContentDetails:
-    """Tests for _resolve_content_details() title + engagement resolution."""
+Cross-service tests with real DynamoDB Local:
 
-    def test_resolves_video_title(self, video_metadata_table):
-        """Pass vid_xxx; returns {"title": "Video Title", "views": N, ...}."""
-        _seed_video("vid_test1", title="My First Video", view_count=100, like_count=10)
-        result = _resolve_content_details(["vid_test1"])
-        assert result["vid_test1"]["title"] == "My First Video"
-        assert result["vid_test1"]["views"] == 100
-        assert result["vid_test1"]["likes"] == 10
+1. `get_top_content` with title resolution performs BatchGetItem to `video_metadata` and returns real titles
+2. Per-content detail endpoint queries view time series from `VideoViews` `ByVideoViewedAt` GSI
+3. Revenue breakdown scans billing ledger with `content_id` filter and aggregates by reason
 
-    def test_resolves_post_title_truncated(self, newsfeed_table):
-        """Pass post_xxx; body > 60 chars truncated with '...'."""
-        long_body = "A" * 100
-        _seed_post("post_test1", body_plain=long_body)
-        result = _resolve_content_details(["post_test1"])
-        assert result["post_test1"]["title"] == "A" * 60 + "..."
+### E2E Tests (Playwright)
 
-    def test_resolves_post_title_short(self, newsfeed_table):
-        """Pass post_xxx; body <= 60 chars returned as-is."""
-        _seed_post("post_test2", body_plain="Short post body")
-        result = _resolve_content_details(["post_test2"])
-        assert result["post_test2"]["title"] == "Short post body"
+**Test file**: `frontend/e2e/analytics-depth.spec.ts`
 
-    def test_falls_back_to_id_for_missing_content(self):
-        """Pass non-existent ID; returns {"title": cid}."""
-        result = _resolve_content_details(["vid_nonexistent"])
-        assert result["vid_nonexistent"]["title"] == "vid_nonexistent"
-        assert result["vid_nonexistent"]["views"] == 0
+**Auth pattern**: `injectAuth(page, "alice")` for cookie auth; CSRF header for POST requests
 
-    def test_handles_mixed_video_and_post_ids(self, video_metadata_table, newsfeed_table):
-        """Pass mix of vid_ and post_ IDs; both resolved correctly."""
-        _seed_video("vid_mix1", title="Video One", view_count=50)
-        _seed_post("post_mix1", body_plain="Post One")
-        result = _resolve_content_details(["vid_mix1", "post_mix1"])
-        assert result["vid_mix1"]["title"] == "Video One"
-        assert result["post_mix1"]["title"] == "Post One"
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Top content table shows non-zero engagement rate | Seed rollup + video with likes; engagement column > "0.0%" |
+| 2 | Engagement rate formatted as percentage | Column shows `X.X%` format matching `/\d+\.\d%/` |
+| 3 | Top content shows real video titles | Title column does NOT contain `vid_` prefix |
+| 4 | Post titles are truncated body previews | Post title contains `...` if > 60 chars |
+| 5 | Missing content falls back gracefully | Rollup with non-existent content_id; table renders without errors |
+| 6 | Clicking row navigates to detail page | Click row; URL changes to `/analytics/content/{id}` |
+| 7 | Content detail shows summary cards | Views, Revenue, Engagement, Interactions cards visible |
+| 8 | View trend chart renders on detail page | Chart area visible; SVG path elements present |
+| 9 | Revenue breakdown shows categories | Tips, Unlocks labels visible; at least one non-zero |
+| 10 | Back button returns to analytics | Click Back icon; URL is `/analytics` |
+| 11 | Content with no revenue shows zero | All revenue categories show `$0.00` |
+| 12 | GET content detail returns correct shape | Response has `content_id`, `title`, `engagement_rate`, `view_time_series`, `revenue_breakdown` |
+| 13 | Non-existent content returns 404 | GET returns 404 |
+| 14 | Non-owned content returns 403 | GET returns 403 |
 
-    def test_handles_empty_list(self):
-        """Pass empty list; returns empty dict."""
-        result = _resolve_content_details([])
-        assert result == {}
+**Negative tests**: 404 non-existent content, 403 non-owned content, 401 unauthenticated, 400 invalid date range
 
-    def test_handles_post_with_empty_body(self, newsfeed_table):
-        """Post with empty body falls back to post_id as title."""
-        _seed_post("post_empty", body_plain="")
-        result = _resolve_content_details(["post_empty"])
-        assert result["post_empty"]["title"] == "post_empty"
+**Edge cases**: Zero views (division by zero guard), empty body post, deleted content in rollup, mixed video+post IDs
 
+### Test Data Requirements
 
-class TestGetTopContentFixed:
-    """Tests for get_top_content() after engagement + title fixes."""
+Seed `video_metadata` with known titles/engagement counts. Seed `analytics_rollups` with `top_content_ids` referencing those videos/posts. Seed billing LEDGER entries with `content_id` in meta.
 
-    def test_returns_real_engagement_rate(self, analytics_tables, video_metadata_table):
-        """Seed video with 100 views, 10 likes; engagement_rate = 0.10."""
-        _seed_video("vid_engage", title="Engaging", view_count=100, like_count=8, comment_count=2)
-        _seed_rollup("creator1", "2026-05-01", top_content_ids=["vid_engage"], total_views=100)
-        result = get_top_content("creator1", "2026-05-01", "2026-05-31")
-        item = result["items"][0]
-        assert item["engagement_rate"] == 0.10  # (8+2)/100
+**Test users**: Alice (USER, content owner), Bob (USER, non-owner for 403 test)
 
-    def test_returns_real_title(self, analytics_tables, video_metadata_table):
-        """Seed video with title 'My Video'; title field = 'My Video'."""
-        _seed_video("vid_titled", title="My Amazing Video", view_count=50)
-        _seed_rollup("creator1", "2026-05-01", top_content_ids=["vid_titled"], total_views=50)
-        result = get_top_content("creator1", "2026-05-01", "2026-05-31")
-        assert result["items"][0]["title"] == "My Amazing Video"
+### CI/Pipeline
 
-    def test_engagement_rate_zero_when_no_views(self, analytics_tables, video_metadata_table):
-        """No views; engagement_rate = 0.0 (no division by zero)."""
-        _seed_video("vid_noviews", title="No Views", view_count=0, like_count=5)
-        _seed_rollup("creator1", "2026-05-01", top_content_ids=["vid_noviews"], total_views=0)
-        result = get_top_content("creator1", "2026-05-01", "2026-05-31")
-        assert result["items"][0]["engagement_rate"] == 0.0
-
-    def test_title_does_not_contain_vid_prefix(self, analytics_tables, video_metadata_table):
-        """Title should never be a raw content_id starting with vid_."""
-        _seed_video("vid_noraw", title="Real Title", view_count=10)
-        _seed_rollup("creator1", "2026-05-01", top_content_ids=["vid_noraw"])
-        result = get_top_content("creator1", "2026-05-01", "2026-05-31")
-        assert not result["items"][0]["title"].startswith("vid_")
-
-
-class TestGetContentDetail:
-    """Tests for the per-content detail endpoint."""
-
-    def test_returns_view_time_series(self, analytics_tables, video_metadata_table):
-        """Seed views on 3 dates; time_series has entries."""
-        _seed_video("vid_detail", title="Detail Video", view_count=300, owner_user_id="creator1")
-        result = get_content_detail("creator1", "vid_detail", "2026-05-01", "2026-05-31")
-        assert result is not None
-        assert len(result["view_time_series"]) > 0
-
-    def test_returns_revenue_breakdown(self, analytics_tables, video_metadata_table, billing_table):
-        """Seed tip + unlock credits; breakdown has both."""
-        _seed_video("vid_revenue", title="Revenue Video", owner_user_id="creator1")
-        _seed_ledger("creator1", content_id="vid_revenue", reason="Tip sent", amount=500)
-        _seed_ledger("creator1", content_id="vid_revenue", reason="Unlock", amount=300)
-        result = get_content_detail("creator1", "vid_revenue", "2026-05-01", "2026-05-31")
-        assert result["revenue_breakdown"]["tips"] == 500
-        assert result["revenue_breakdown"]["unlocks"] == 300
-
-    def test_returns_403_for_non_owner(self, video_metadata_table):
-        """User A requests analytics for User B's video; returns forbidden."""
-        _seed_video("vid_other", title="Other's Video", owner_user_id="creator2")
-        result = get_content_detail("creator1", "vid_other", "2026-05-01", "2026-05-31")
-        assert result == {"error": "forbidden"}
-
-    def test_returns_none_for_missing_content(self):
-        """Non-existent content_id returns None."""
-        result = get_content_detail("creator1", "vid_missing", "2026-05-01", "2026-05-31")
-        assert result is None
-
-    def test_zero_revenue_returns_zero_breakdown(self, video_metadata_table):
-        """New video with no revenue; all breakdown fields = 0."""
-        _seed_video("vid_norev", title="New Video", owner_user_id="creator1")
-        result = get_content_detail("creator1", "vid_norev", "2026-05-01", "2026-05-31")
-        assert result["revenue_breakdown"]["tips"] == 0
-        assert result["revenue_breakdown"]["unlocks"] == 0
-        assert result["revenue_breakdown"]["vod"] == 0
-
-    def test_post_content_detail(self, newsfeed_table):
-        """Post content detail returns truncated body as title."""
-        _seed_post("post_detail", body_plain="My amazing post about cooking", author_id="creator1")
-        result = get_content_detail("creator1", "post_detail", "2026-05-01", "2026-05-31")
-        assert result is not None
-        assert result["title"] == "My amazing post about cooking"
-        assert result["content_type"] == "post"
-```
-
-### 7.2 E2E Tests
-
-**File**: `frontend/e2e/analytics-depth.spec.ts`
-
-**Section 1: Engagement Rate Fix (4 tests)**
-
-| # | Test Title | Setup | Assertion |
-|---|-----------|-------|-----------|
-| 1 | `Top content table shows non-zero engagement rate` | Seed rollup + video with likes | Navigate to /analytics; table has engagement column; value > "0.0%" for content with likes |
-| 2 | `Engagement rate formatted as percentage` | Seed rollup + video | Column shows "X.X%" format (regex `/\d+\.\d%/`) |
-| 3 | `Top content table sortable by engagement` | Seed 2 items with different engagement | Click engagement header; verify order changes |
-| 4 | `Engagement rate zero for content with no views` | Seed video with 0 views | Engagement column shows "0.0%" |
-
-**Section 2: Title Resolution Fix (3 tests)**
-
-| # | Test Title | Setup | Assertion |
-|---|-----------|-------|-----------|
-| 5 | `Top content table shows real video titles` | Seed rollup + video with title | Title column does NOT contain "vid_" prefix; shows actual title |
-| 6 | `Post titles are truncated body previews` | Seed rollup + post with long body | Post title visible, contains "..." if >60 chars; not a raw post_id |
-| 7 | `Missing content falls back gracefully` | Seed rollup with non-existent content_id | Table renders without errors; title may be raw ID |
-
-**Section 3: Per-Content Drill-down (5 tests)**
-
-| # | Test Title | Setup | Assertion |
-|---|-----------|-------|-----------|
-| 8 | `Clicking top content row navigates to detail page` | Seed rollup + video | Click row; URL changes to /analytics/content/{id} |
-| 9 | `Content detail page shows summary cards` | Navigate to detail | Views, Revenue, Engagement, Likes/Comments cards visible |
-| 10 | `View trend chart renders on detail page` | Seed view data | Chart area visible; at least one data element in SVG |
-| 11 | `Revenue breakdown shows categories` | Seed tip + unlock ledger entries | Tips, Unlocks labels visible; at least one non-zero |
-| 12 | `Back button returns to analytics page` | Navigate to detail | Click Back icon; URL is /analytics |
-
-**Section 4: Empty/Edge States (3 tests)**
-
-| # | Test Title | Setup | Assertion |
-|---|-----------|-------|-----------|
-| 13 | `Content with no revenue shows zero breakdown` | Seed video with no ledger entries | All revenue categories show $0.00 |
-| 14 | `New creator with no content shows empty top content` | No rollup data seeded | "No content data yet" message or empty table |
-| 15 | `Content detail returns 403 for non-owner` | Try accessing other user's content | API returns 403; page shows error |
-
-**Section 5: API Contract (3 tests)**
-
-| # | Test Title | Setup | Assertion |
-|---|-----------|-------|-----------|
-| 16 | `GET /ui/analytics/content/{id} returns correct shape` | Seed video + rollup | Response has content_id, title, total_views, engagement_rate, view_time_series, revenue_breakdown |
-| 17 | `Content detail respects date range params` | Seed data over 60 days | from_date/to_date params filter view_time_series dates |
-| 18 | `Content detail for non-existent content returns 404` | No content seeded | GET returns 404 |
+`ANALYTICS_ROLLUP_ENABLED=true`. Serial execution. Retry-safe (idempotent reads).
 
 ---
 
-## 8. Migration & Rollback
+## Dependencies & Merge Safety
 
-### 8.1 Backward Compatibility
+### Depends On
 
-- The `engagement_rate` field already exists in `AnalyticsTopContentItem` (models.py:2468). Changing it from 0.0 to a real value is non-breaking for any API consumer.
-- The `title` field already exists. Changing from raw ID to resolved title is non-breaking.
-- The new `/content/{content_id}` endpoint is additive -- no existing endpoint changes.
-- No new DDB tables are required. The feature reads from existing tables (`video_metadata`, `newsfeed`, `billing`, `video_views`).
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| ANALYTICS-001 | Analytics rollups table, top-content endpoint, AnalyticsPage, React Query hooks | Implemented | No -- must merge after |
 
-### 8.2 Feature Flag
+### Depended On By
 
-No feature flag needed for the bug fixes (engagement rate and title resolution). These are correctness improvements to existing behavior.
+No downstream dependents identified.
 
-For the new per-content detail endpoint, it is purely additive and has no risk of breaking existing functionality.
+### Merge Strategy
 
-### 8.3 Rollback
+Sequential after ANALYTICS-001. Modifies `creator_analytics.py` (service + router), `AnalyticsPage.tsx`, and `App.tsx`. No new DDB tables required.
 
-- If title resolution causes performance issues: revert `_resolve_content_details` to a no-op that returns `{cid: {"title": cid, "views": 0, "likes": 0, "comments": 0}}`. This restores the original (buggy) behavior.
-- If per-content endpoint has issues: remove the route; table rows go back to non-clickable. Frontend route removed from App.tsx.
-- No DDB schema changes required for any of the three fixes.
-- The Pydantic models (`ContentAnalyticsOut`, etc.) can remain in `models.py` even if the endpoint is removed -- unused models are harmless.
+### Merge Checklist
 
-### 8.4 Rollout Stages
-
-| Stage | Description | Risk |
-|-------|-------------|------|
-| 1 | Deploy engagement rate fix + title resolution (backend only) | Low -- existing endpoint returns better data |
-| 2 | Deploy frontend table enhancements (click handler, engagement column) | Low -- additive UI changes |
-| 3 | Deploy per-content detail endpoint + frontend page | Medium -- new endpoint with cross-table queries |
-
----
-
-## 9. Acceptance Criteria
-
-1. Top content table shows real engagement rates (likes + comments / views) instead of 0.0%.
-2. Top content table shows human-readable titles (video titles, truncated post bodies) instead of raw content IDs.
-3. Top content table rows are clickable and navigate to `/analytics/content/{contentId}`.
-4. Per-content detail page shows summary cards (views, revenue, engagement rate, likes, comments).
-5. Per-content detail page shows a view trend line chart with date range selector.
-6. Per-content detail page shows revenue breakdown by source (tips, unlocks, VOD).
-7. Per-content endpoint verifies ownership (only the content creator can view analytics for their content).
-8. Division by zero is handled gracefully (engagement_rate = 0 when views = 0).
-9. Engagement rate column is added to the frontend table header.
-10. Content detail for non-existent content returns 404.
-11. Content detail for non-owned content returns 403.
-12. All 18 E2E tests pass.
-13. All existing analytics E2E tests continue to pass (no regressions).
-
----
-
-## 10. Implementation Timeline
-
-### Phase 1: Backend Fixes (Days 1-3)
-
-| Day | Task |
-|-----|------|
-| 1 | Implement `_resolve_content_details()` with BatchGetItem for videos and individual get_item for posts. Fix `get_top_content()` to use resolved titles and computed engagement rates. Write unit tests for title resolution. |
-| 2 | Implement `get_content_detail()` service function. Add `_get_content_view_time_series()` with VideoViews GSI query. Add `_get_content_revenue_breakdown()` with billing ledger scan. Write unit tests for content detail. |
-| 3 | Add `GET /ui/analytics/content/{content_id}` endpoint with ownership verification, date range validation, and granularity support. Add `ContentAnalyticsOut`, `ContentAnalyticsViewsItem`, `ContentAnalyticsRevenueBreakdown` Pydantic models. Run all unit tests. |
-
-### Phase 2: Frontend Fixes (Days 4-7)
-
-| Day | Task |
-|-----|------|
-| 4 | Make top content table rows clickable with `navigate()` handler. Add engagement rate column to table header and body. Add `cursor-pointer` and `hover:bg-muted/50` styling. |
-| 5 | Create `ContentAnalyticsPage.tsx` with header (back button, thumbnail, title, type badge), summary cards (views, revenue, engagement, interactions), and date range selector. |
-| 6 | Add view trend AreaChart using recharts (same style as existing AnalyticsPage charts). Add revenue breakdown visualization (PieChart or horizontal bar). Handle empty states. |
-| 7 | Add route to App.tsx with lazy import. Add API client function `getAnalyticsContentDetail`. Add TypeScript types. Test all date range combinations. UI polish (responsive layout, loading skeletons). |
-
-### Phase 3: E2E Tests + QA (Days 8-10)
-
-| Day | Task |
-|-----|------|
-| 8 | Write E2E tests sections 1-2 (engagement rate fix, title resolution fix). Seed test analytics rollup data and video/post metadata. |
-| 9 | Write E2E tests sections 3-4 (per-content drill-down, empty/edge states). Test ownership verification E2E. |
-| 10 | Write E2E tests section 5 (API contract). Run full test suite. Performance testing for title resolution latency with 20 items. Manual QA of chart rendering, date range filtering, and responsive layout. |
-
----
-
-## 11. Dependencies
-
-- **ANALYTICS-001 (Creator Analytics Dashboard)**: The existing analytics endpoints and page that this ticket enhances. Must be stable.
-- **VOD-001 (Video Metadata Model)**: Video metadata table for title resolution. The `video_metadata` table must have `title`, `view_count`, `like_count`, `comment_count` fields.
-- **MON-002 (Tip Ledger Integration)**: Billing credits for per-content revenue calculation. Revenue breakdown depends on `meta.content_id` being set on billing ledger entries.
-- **Video Views Table**: The `ByVideoViewedAt` GSI on the video views table (`scripts/local-ddb-init.py:788-796`) is required for per-video view time series.
-
----
-
-## Appendix A: DynamoDB Read/Write Estimates
-
-| Operation | Table | Read/Write | Units per Call | Frequency |
-|-----------|-------|-----------|----------------|-----------|
-| `get_top_content` (fixed) | `analytics_rollups` | Read | 1-30 RCU (rollup query) | Per dashboard load |
-| `_resolve_content_details` | `video_metadata` | Read | 1-20 RCU (BatchGetItem) | Per dashboard load |
-| `_resolve_content_details` | `newsfeed` | Read | 1-20 RCU (individual get_item) | Per dashboard load |
-| `get_content_detail` | `video_metadata` or `newsfeed` | Read | 1 RCU (single get_item) | Per detail page load |
-| `_get_content_view_time_series` | `video_views` | Read | 1-10 RCU (GSI query) | Per detail page load |
-| `_get_content_revenue_breakdown` | `billing` | Read | 1-8 RCU (query + filter, up to 4 pages) | Per detail page load |
-
-Total additional DDB reads per dashboard load: ~40-70 RCU (up from ~30 RCU without the fix).
-Total DDB reads per content detail page: ~20-30 RCU.
+- [ ] `_resolve_content_details()` and `get_content_detail()` added to `app/services/creator_analytics.py`
+- [ ] `GET /ui/analytics/content/{content_id}` endpoint added to router
+- [ ] `ContentAnalyticsOut` and related models added to `app/models.py`
+- [ ] Top content table rows clickable with engagement column in `AnalyticsPage.tsx`
+- [ ] `ContentDetailPage.tsx` created at `/analytics/content/:contentId`
+- [ ] `getAnalyticsContentDetail` added to `frontend/src/api/endpoints/analytics.ts`
+- [ ] E2E test `analytics-depth.spec.ts` passes in CI
+- [ ] No breaking changes to existing analytics endpoints
 
 ## Codebase References
 

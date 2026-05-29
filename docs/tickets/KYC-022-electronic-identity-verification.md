@@ -960,3 +960,73 @@ test("234.5 Mock eID assertion has correct HMAC signature", async ({ page }) => 
 | `app/services/kyc_eid_provider.py` | -- | -- | Does NOT exist — new implementation required |
 | `frontend/src/api/endpoints/kyc-eid.ts` | -- | -- | Does NOT exist — new file required |
 | `frontend/src/components/shared/EidVerificationPanel.tsx` | -- | -- | Does NOT exist — new component required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_kyc_eid.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_create_session_returns_redirect` | Create session returns redirect |
+| 2 | `test_process_callback_extracts_fields` | Process callback extracts fields |
+| 3 | `test_validate_signature_mock_returns_true` | Validate signature mock returns true |
+| 4 | `test_compare_with_profile_matching` | Compare with profile matching |
+| 5 | `test_compare_with_profile_discrepancy` | Compare with profile discrepancy |
+| 6 | `test_supported_schemes_list` | Supported schemes list |
+| 7 | `test_supported_schemes_filter_country` | Supported schemes filter country |
+| 8 | `test_auto_tier_upgrade_on_high_assurance` | Auto tier upgrade on high assurance |
+| 9 | `test_critical_discrepancy_blocks_upgrade` | Critical discrepancy blocks upgrade |
+| 10 | `test_session_expiry_cleanup` | Session expiry cleanup |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/kyc-eid.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~24 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `KYC_EID_ENABLED=true`, `KYC_EID_MOCK_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| KYC-002 | ID Document Verification/OCR for comparison | Soft |
+| KYC-009 | Tiered Verification Levels for auto-upgrade | Hard |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Feature-flag-gated -- KYC_EID_ENABLED=false by default. Mock provider runs in dev mode. No existing endpoints modified.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: KYC_EID_ENABLED=true, KYC_EID_MOCK_ENABLED=true
+- [ ] Service file created/modified: `app/services/kyc_eid_provider.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/kyc-eid.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_kyc_eid.py`

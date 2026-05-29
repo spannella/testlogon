@@ -1004,3 +1004,73 @@ Translation values are stored as plain text and rendered by React JSX, which aut
 | Profile service | `app/services/profile.py` | -- | Exists (ticket incorrectly references `user_profile.py`) |
 | `app/services/kyc_i18n.py` | -- | -- | Does NOT exist — new implementation required |
 | `app/routers/kyc_i18n.py` | -- | -- | Does NOT exist — new router required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_kyc_i18n.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_translate_returns_value_for_language` | Translate returns value for language |
+| 2 | `test_translate_falls_back_to_english` | Translate falls back to english |
+| 3 | `test_translate_batch_multiple_keys` | Translate batch multiple keys |
+| 4 | `test_set_translation_stores_in_ddb` | Set translation stores in ddb |
+| 5 | `test_delete_translation_removes` | Delete translation removes |
+| 6 | `test_coverage_report_calculates_pct` | Coverage report calculates pct |
+| 7 | `test_resolve_locale_profile_first` | Resolve locale profile first |
+| 8 | `test_resolve_locale_accept_language_fallback` | Resolve locale accept language fallback |
+| 9 | `test_localize_questionnaire_replaces_labels` | Localize questionnaire replaces labels |
+| 10 | `test_localize_email_substitutes_variables` | Localize email substitutes variables |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/kyc-i18n.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~24 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `I18N_KYC_LOCALIZATION_ENABLED=true`, `I18N_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| KYC-017 | Document Signing Template Library for template localization | Soft |
+| KYC-013 | User Self-Service Portal for localized UI | Soft |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Feature-flag-gated -- I18N_KYC_LOCALIZATION_ENABLED=false by default. Translation infrastructure is additive; no existing code modified until flag enabled.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: I18N_KYC_LOCALIZATION_ENABLED=true, I18N_ENABLED=true
+- [ ] Service file created/modified: `app/services/kyc_i18n.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/kyc-i18n.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_kyc_i18n.py`

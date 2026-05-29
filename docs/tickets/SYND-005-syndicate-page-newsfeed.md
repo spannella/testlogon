@@ -1206,6 +1206,99 @@ The GSSYND GSI uses `GSSYND_SK` (numeric `created_at`) as sort key with `ScanInd
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_syndicate_page.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_syndicate_page_returns_metadata` | Syndicate page returns metadata verified |
+| 2 | `test_syndicate_feed_includes_member_posts` | Syndicate feed includes member posts verified |
+| 3 | `test_syndicate_feed_excludes_non_member_posts` | Syndicate feed excludes non member posts verified |
+| 4 | `test_member_post_shared_to_syndicate_feed` | Member post shared to syndicate feed verified |
+| 5 | `test_follow_syndicate_adds_to_user_feed` | Follow syndicate adds to user feed verified |
+| 6 | `test_unfollow_syndicate_removes_from_feed` | Unfollow syndicate removes from feed verified |
+| 7 | `test_syndicate_page_shows_member_list` | Syndicate page shows member list verified |
+| 8 | `test_syndicate_feed_pagination` | Syndicate feed pagination verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Member posts to syndicate feed -> appears in syndicate page timeline and syndicate followers' feeds
+2. Follow syndicate -> member posts appear in personal feed; unfollow removes them
+3. Syndicate page shows metadata + member list + aggregated newsfeed
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/syndicate-page.spec.ts`
+**Sections**: 1-4 (12 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Syndicate page loads with metadata | Name, description, member count visible |
+| 2 | Syndicate feed shows member posts | Posts from members appear in feed |
+| 3 | Follow syndicate | 200; syndicate feed items appear in personal feed |
+| 4 | Unfollow syndicate | 200; items removed from feed |
+| 5 | Syndicate page shows member list | Member avatars and names visible |
+| 6 | Syndicate feed pagination | Load more returns additional posts |
+| 7 | Non-member post excluded from feed | Post from non-member absent |
+| 8 | Syndicate page for archived syndicate | Shows archived status banner |
+
+**Negative tests**: 404 non-existent syndicate, 401 unauthenticated, 404 archived syndicate feed (or empty)
+
+**Edge cases**: Syndicate with 0 posts, newly joined member's historical posts (backfill?), member leaves mid-page-load
+
+### Test Data Requirements
+
+- **DDB seeds**: Syndicate from SYND-001 with members; posts from members; syndicate follow records
+- **Test users**: Alice (admin/poster), Bob (member/poster), Charlie (syndicate follower)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: SYNDICATES_ENABLED=true
+- **Serial execution**: Must run after SYND-001 syndicate and membership setup
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| SYND-001 | Syndicate metadata and membership for page rendering |
+| Newsfeed (existing) | Post creation and feed query patterns |
+| Newsfeed fan-out (existing) | Content distribution to syndicate followers |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SYND-006 | Advertising campaigns displayed on syndicate page |
+
+### Merge Strategy: **Sequential**
+
+Requires SYND-001 for syndicate data. Extends newsfeed with syndicate-scoped feed.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Codebase References
 
 ### Verified Existing Infrastructure

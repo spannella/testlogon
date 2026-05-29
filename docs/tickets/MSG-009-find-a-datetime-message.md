@@ -1178,3 +1178,68 @@ test.beforeAll(async ({ browser }) => {
 | `frontend/src/components/shared/AvailabilityGrid.tsx` | — | **Does not exist** — new shared component required |
 | `frontend/src/pages/messages/FindDateTimeCard.tsx` | — | **Does not exist** — new component required |
 | `frontend/src/pages/messages/FindDateTimeResult.tsx` | — | **Does not exist** — new component required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_find_datetime.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_create_find_datetime_request` | Create find datetime request |
+| 2 | `test_submit_availability_ranges` | Submit availability ranges |
+| 3 | `test_update_availability_replaces` | Update availability replaces |
+| 4 | `test_compute_overlap_heat_map` | Compute overlap heat map |
+| 5 | `test_close_poll_returns_best_windows` | Close poll returns best windows |
+| 6 | `test_deadline_auto_closes` | Deadline auto closes |
+| 7 | `test_result_message_top3_windows` | Result message top3 windows |
+| 8 | `test_participant_count_in_overlap` | Participant count in overlap |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/find-datetime.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~14 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `FIND_DATETIME_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Independent -- new message kind=find_datetime. DDB storage uses existing calendar table pattern. No modification to existing message kinds.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: FIND_DATETIME_ENABLED=true
+- [ ] Service file created/modified: `app/services/find_datetime.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/find-datetime.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_find_datetime.py`

@@ -1138,3 +1138,73 @@ Audit records are append-only and cannot be deleted (no DELETE endpoint).
 | `app/services/kyc_assignment.py` | -- | -- | Does NOT exist — new implementation required |
 | `frontend/src/api/endpoints/kyc-admin.ts` | -- | -- | Does NOT exist — new file required |
 | `frontend/src/components/shared/WorkloadDashboard.tsx` | -- | -- | Does NOT exist — new component required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_kyc_assignment.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_auto_assign_selects_highest_score` | Auto assign selects highest score |
+| 2 | `test_auto_assign_skips_off_duty` | Auto assign skips off duty |
+| 3 | `test_auto_assign_returns_none_when_no_eligible` | Auto assign returns none when no eligible |
+| 4 | `test_manual_reassign_records_audit` | Manual reassign records audit |
+| 5 | `test_set_availability_toggle` | Set availability toggle |
+| 6 | `test_check_sla_compliance_detects_breach` | Check sla compliance detects breach |
+| 7 | `test_escalate_case_increments_level` | Escalate case increments level |
+| 8 | `test_sla_config_crud` | Sla config crud |
+| 9 | `test_scoring_prefers_lower_workload` | Scoring prefers lower workload |
+| 10 | `test_scoring_prefers_matching_expertise` | Scoring prefers matching expertise |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/kyc-assignment.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~24 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `KYC_ASSIGNMENT_ENABLED=true`, `KYC_SLA_CHECKER_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| KYC-001 | Admin Review Dashboard for queue integration | Hard |
+| KYC-008 | Risk Scoring Engine for tier-based assignment | Soft |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Feature-flag-gated -- KYC_ASSIGNMENT_ENABLED=false by default. Assignment endpoints are additive to existing KYC router.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: KYC_ASSIGNMENT_ENABLED=true, KYC_SLA_CHECKER_ENABLED=true
+- [ ] Service file created/modified: `app/services/kyc_assignment.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/kyc-assignment.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_kyc_assignment.py`

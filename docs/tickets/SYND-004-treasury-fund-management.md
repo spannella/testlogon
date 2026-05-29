@@ -791,6 +791,101 @@ After Alice left (balance = $30, Alice net now = $20):
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_treasury.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_contribute_deducts_from_personal_wallet` | Contribute deducts from personal wallet verified |
+| 2 | `test_contribute_credits_treasury_balance` | Contribute credits treasury balance verified |
+| 3 | `test_contribution_tracking_per_member` | Contribution tracking per member verified |
+| 4 | `test_treasury_balance_query` | Treasury balance query verified |
+| 5 | `test_spend_deducts_from_treasury` | Spend deducts from treasury verified |
+| 6 | `test_no_admin_withdrawal` | No admin withdrawal verified |
+| 7 | `test_proportional_refund_on_leave` | Proportional refund on leave verified |
+| 8 | `test_full_refund_on_dissolution` | Full refund on dissolution verified |
+| 9 | `test_no_negative_balance` | No negative balance verified |
+| 10 | `test_contribution_ledger_entries` | Contribution ledger entries verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Member contributes -> personal wallet debited -> treasury credited -> both ledger entries written
+2. Member leaves -> proportional refund calculated -> personal wallet credited -> treasury debited
+3. Syndicate dissolves -> all remaining balance refunded proportionally to all contributors
+4. Treasury spend on advertising -> balance decremented -> spend recorded in ledger
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/treasury.spec.ts`
+**Sections**: 1-4 (12 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Contribute to treasury | 200; personal wallet debited; treasury credited |
+| 2 | Treasury balance reflects contribution | GET treasury shows correct balance |
+| 3 | My contributions shows history | GET my-contributions returns itemized list |
+| 4 | Spend from treasury | 200; balance decremented |
+| 5 | No admin withdrawal | No withdraw endpoint exists; spend restricted to advertising |
+| 6 | Proportional refund on leave | Leave; personal wallet credited proportionally |
+| 7 | Full refund on dissolution | All contributors receive refund |
+| 8 | Insufficient balance rejected | 400; cannot spend more than balance |
+
+**Negative tests**: 400 contribute more than personal wallet balance, 400 spend exceeding treasury balance, 403 non-member contribution, 404 syndicate not found
+
+**Edge cases**: Contribute $0.01, refund rounding with 3 contributors, treasury at $0 after full spend then member leaves (no refund)
+
+### Test Data Requirements
+
+- **DDB seeds**: Syndicate from SYND-001; personal wallet balances in billing table; treasury balance items
+- **Test users**: Alice (admin), Bob/Charlie (contributing members)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: SYNDICATES_ENABLED=true
+- **Serial execution**: Refund tests must run after contribution tests seed treasury balance
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| SYND-001 | Syndicate membership — member verification for contributions |
+| Billing shared (existing) | apply_wallet_delta and new_ledger_entry for fund transfers |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SYND-006 | Advertising campaigns spend from treasury |
+
+### Merge Strategy: **Sequential**
+
+Requires SYND-001 for membership. Uses existing billing table with TREASURY# prefix.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Codebase References
 
 | Claim | File | Line(s) | Status |

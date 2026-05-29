@@ -1660,6 +1660,93 @@ be extended to video search. The sidebar "Videos" entry could gain a search icon
 a search dialog, or the global search (`Cmd+K`) could include video results. This is out of
 scope for VOD-009 but the route structure supports it.
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_vod_009.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_vod_009_crud` | Vod 009 crud verified |
+| 2 | `test_vod_009_validation` | Vod 009 validation verified |
+| 3 | `test_vod_009_auth` | Vod 009 auth verified |
+| 4 | `test_vod_009_not_found` | Vod 009 not found verified |
+| 5 | `test_vod_009_edge_cases` | Vod 009 edge cases verified |
+| 6 | `test_vod_009_integration` | Vod 009 integration verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Video Routes & Navigation integrates with video metadata CRUD lifecycle
+2. End-to-end flow from video creation through video routes & navigation feature
+3. Error propagation from video metadata service to video routes & navigation layer
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/vod-009.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Video Routes & Navigation API returns 200 | 200; expected fields present |
+| 2 | Video Routes & Navigation handles invalid input | 422 or 400 response |
+| 3 | Video Routes & Navigation requires auth | 401 without session |
+| 4 | Video Routes & Navigation UI renders | Page loads; key elements visible |
+| 5 | Video Routes & Navigation integrates with video metadata | Video data correctly referenced |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 video not found, 422 invalid input
+
+**Edge cases**: Video in processing state, deleted video reference, concurrent operations
+
+### Test Data Requirements
+
+- **DDB seeds**: Video metadata records from VOD-001; related video routes & navigation test data
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: VOD_ENABLED=true
+- **Serial execution**: Must run after VOD-001 video metadata table is created and seeded
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| VOD-001 | Video metadata for route data |
+| VOD-008 | Player page component for video route |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| VOD-017 | Gallery hub uses video routes |
+
+### Merge Strategy: **Sequential**
+
+Requires VOD-001 video metadata model. Also depends on VOD-008.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Codebase References
 
 | File | Line(s) | What |

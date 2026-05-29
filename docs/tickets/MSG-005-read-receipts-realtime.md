@@ -968,3 +968,54 @@ If issues arise after deployment:
 | MessageBubble imports ReadReceipts | `frontend/src/pages/messages/MessageBubble.tsx` | 63 | VERIFIED |
 
 <!-- NOTE: The SSE message:viewed handler IS ALREADY IMPLEMENTED in useMessagingStream.ts lines 112-118. The EVENT_TYPES array includes message:viewed at line 156. The remaining work from this ticket is adding the DeliveryStatus checkmark component and the checkmark UI in MessageBubble — the SSE plumbing is already complete. -->
+
+---
+
+## Testing Strategy
+
+### Unit Tests
+No backend unit tests required (frontend-only changes). Behavior verified via E2E tests.
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/read-receipts-realtime.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~10 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Independent -- frontend-only changes to consume existing message:viewed SSE events. Backend already emits the events.**
+
+### Merge Checklist
+- [ ] Service file created/modified: `frontend/src/hooks/useMessagingStream.ts (modified)`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/read-receipts-realtime.spec.ts`

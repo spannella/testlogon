@@ -1239,3 +1239,91 @@ test("193.7 Tier upgrade event dispatched when KYC case approved with tier chang
 | `ByRole` GSI on users table (for admin notifications) | `scripts/local-ddb-init.py` | VERIFY -- may or may not exist |
 | `frontend/src/pages/kyc/KycNotificationPrefs.tsx` | `frontend/src/pages/kyc/` | NOT FOUND -- new page required |
 | `frontend/src/api/endpoints/kyc-notifications.ts` | `frontend/src/api/endpoints/` | NOT FOUND -- new endpoint file required |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_webhooks.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_register_webhook_endpoint`
+  - `test_dispatch_verification_approved_event`
+  - `test_dispatch_tier_changed_event`
+  - `test_webhook_retry_on_failure`
+  - `test_webhook_signature_hmac`
+  - `test_list_webhook_delivery_log`
+  - `test_deactivate_webhook`
+
+### Integration Tests
+
+  - Submission approval dispatches webhook to registered endpoint
+  - Tier upgrade dispatches tier_changed event with old and new tier
+  - Failed delivery retried with exponential backoff
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/kyc-webhooks.spec.ts`
+**Test count**: 10
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_webhooks` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_WEBHOOKS_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| KYC-001 | Admin KYC Review Dashboard | Dashboard actions trigger webhook events |
+| KYC-009 | Tiered Verification Levels | Tier changes trigger webhooks |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after KYC-001, KYC-009. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 10 E2E tests pass with `npx playwright test kyc-webhooks.spec.ts`

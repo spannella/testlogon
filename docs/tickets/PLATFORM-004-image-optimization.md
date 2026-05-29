@@ -833,3 +833,89 @@ A one-time backfill script can regenerate variants for existing post images:
 | FeedPost has no image_variants | `frontend/src/api/types.ts` | 1781-1834 | VERIFIED |
 | FFmpeg used for video poster | `app/services/filemanager.py` | 1379-1391 | VERIFIED |
 | UPLOAD_BUCKET (duplicate entry removed) | — | — | See line 56 above |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_image_optimization.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_generate_variants_jpeg` | sm, md, lg keys; all image/webp |
+| 2 | `test_correct_dimensions` | sm<=480, md<=960, lg<=1920 |
+| 3 | `test_preserves_aspect_ratio` | Ratio within 1px of original |
+| 4 | `test_png_with_alpha` | RGBA produces valid WebP with transparency |
+| 5 | `test_skip_larger_than_original` | 400x300 image; only sm generated |
+| 6 | `test_handles_corrupt_image` | Returns empty dict, no exception |
+| 7 | `test_upload_returns_variants` | POST /uploads/image returns variants dict |
+| 8 | `test_feature_flag_disables` | IMAGE_OPTIMIZATION_ENABLED=0; variants={} |
+| 9 | `test_cache_headers_immutable` | Variant GET returns max-age=31536000 |
+| 10 | `test_decompression_bomb` | 10000x10000 image; empty variants |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Upload generates variants and stores in S3 | newsfeed router + image_optimization + S3 mock |
+| 2 | Post with variants includes image_variants in response | newsfeed router + DDB posts |
+| 3 | Variant cache headers differ from original | newsfeed router + S3 streaming response |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/image-optimization.spec.ts` -- 9 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Sections: 1 (upload API, 5 tests), 2 (responsive image UI, 4 tests)
+
+**Negative/edge tests**: Small image skips large variants, corrupt image degrades gracefully, feature flag disables generation
+
+### Test Data Requirements
+
+- DDB seeds: posts table
+- S3 mock (moto) for upload/variant storage
+- Test image files (JPEG, PNG)
+- Pillow>=10.0.0 installed
+
+### CI/Pipeline
+
+- Feature flags: IMAGE_OPTIMIZATION_ENABLED=true
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Standalone feature |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | No downstream dependents identified |
+
+### Merge Strategy
+
+**Independent** -- No prerequisites. Requires adding Pillow dependency.
+
+### Merge Checklist
+
+- [ ] Pillow>=10.0.0 in requirements.txt
+- [ ] image_optimization.py service created
+- [ ] upload_image() generates variants
+- [ ] _post_to_dict returns image_variants
+- [ ] ResponsiveImage.tsx with srcset
+- [ ] PostCard uses ResponsiveImage with loading=lazy
+- [ ] E2E pass: `npx playwright test e2e/image-optimization.spec.ts`

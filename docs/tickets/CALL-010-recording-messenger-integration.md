@@ -474,282 +474,91 @@ For v1, the toast notification ("Call recording saved.") plus the conversation i
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests: Hook Instantiation (`tests/test_call_recording_integration.py`)
+### Unit Tests (pytest)
 
-These tests verify the backend endpoints work when called in the correct sequence (the consent protocol).
+**Test file**: `tests/test_call_10.py`
 
-| # | Test Case | Assertions |
-|---|-----------|-----------|
-| 1 | Request recording on connected call | 200, `recording_id` returned, status=`pending_consent` |
-| 2 | Consent to recording request | 200, status=`recording`, `started_at` set |
-| 3 | Decline recording request | 200, recording soft-deleted |
-| 4 | Request recording when feature disabled | 503, `feature_disabled` code |
-| 5 | Request recording when call not connected | 409, `invalid_state` code |
-| 6 | Self-consent rejected | 400, `self_consent` code |
-| 7 | Presign upload for active recording | 200, `upload_url` returned |
-| 8 | Complete upload | 200, status=`ready` |
-| 9 | Download by participant | 200, `download_url` returned |
-| 10 | Download by non-participant | 403 |
-| 11 | List recordings with conversation_id filter | 200, filtered results |
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-### 5.2 E2E Tests (`frontend/e2e/call-recording-integration.spec.ts`)
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-Since real WebRTC media is not available in Playwright's Chromium, E2E tests focus on the API protocol and UI state assertions using CustomEvent injection. Tests use `injectAuth` for cookie-based session auth and `page.request` for API calls.
+### Integration Tests
 
-**Section 95: Recording Consent Protocol via API (6 tests)**
+Cross-service tests with real DynamoDB Local:
 
-```typescript
-test("95.1 Request recording returns recording_id", async () => {
-  // Seed a call in 'connected' state via DDB
-  // POST /messages/calls/{callId}/recording/request
-  // Assert 200, response has recording_id and status="pending_consent"
-});
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-test("95.2 Consent transitions to recording status", async () => {
-  // POST /messages/calls/{callId}/recording/consent (as Bob)
-  // Assert 200, status="recording", started_at > 0
-});
+### E2E Tests (Playwright)
 
-test("95.3 Decline removes pending recording", async () => {
-  // Create new recording request
-  // POST /messages/calls/{callId}/recording/decline (as Bob)
-  // Assert 200, ok=true
-  // GET recording -> status="deleted"
-});
+**Test file**: `frontend/e2e/call-10.spec.ts`
 
-test("95.4 Duplicate recording request rejected", async () => {
-  // Create recording in 'recording' status
-  // POST another /recording/request
-  // Assert 409, code="recording_already_active"
-});
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-test("95.5 Non-participant cannot request recording", async () => {
-  // POST /recording/request as Charlie (not in call)
-  // Assert 403
-});
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-test("95.6 Recording request on non-connected call rejected", async () => {
-  // Seed call in 'accepted' state
-  // POST /recording/request
-  // Assert 409, code="invalid_state"
-});
-```
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-**Section 96: Recording Upload & Download (5 tests)**
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-```typescript
-test("96.1 Presign upload returns URL", async () => {
-  // Recording in 'recording' status
-  // POST /recording/upload/presign with content_type + file_size_bytes
-  // Assert 200, upload_url starts with /mock/s3/
-});
+### Test Data Requirements
 
-test("96.2 Complete upload transitions to ready", async () => {
-  // POST /recording/upload/complete
-  // Assert status="ready"
-});
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-test("96.3 Download URL accessible by both participants", async () => {
-  // GET /messages/recordings/{recordingId}/download as Alice
-  // Assert 200, download_url present
-  // GET as Bob -> also 200
-});
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-test("96.4 Download rejected for non-participant", async () => {
-  // GET /messages/recordings/{recordingId}/download as Charlie
-  // Assert 403
-});
+### CI/Pipeline
 
-test("96.5 List recordings filtered by conversation", async () => {
-  // GET /messages/recordings?conversation_id={convoId}
-  // Assert items array contains the seeded recording
-});
-```
-
-**Section 97: Recording UI State via CustomEvent Injection (6 tests)**
-
-These tests verify that the overlay shows the correct recording UI by dispatching synthetic `messaging:call-event` CustomEvents to simulate SSE events, and asserting that the overlay's recording elements become visible.
-
-```typescript
-test("97.1 Record button visible during connected call", async () => {
-  // Navigate to conversation, dispatch call.invite + call.accept events
-  // to transition overlay to connected state
-  // Assert: getByRole("button", { name: "Record call" }) is visible
-});
-
-test("97.2 Record button hidden when feature disabled", async () => {
-  // Same as 97.1 but with VITE_CALL_RECORDING_ENABLED=false
-  // Assert: Record button NOT visible
-});
-
-test("97.3 Consent dialog appears on recording_request event", async () => {
-  // Dispatch call.recording_request CustomEvent with requested_by=alice
-  // Assert: getByTestId("recording-consent-dialog") is visible
-  // Assert: text contains "wants to record this call"
-});
-
-test("97.4 REC indicator appears after consent", async () => {
-  // Dispatch call.recording_accept CustomEvent
-  // Assert: getByTestId("recording-indicator") is visible
-  // Assert: text contains "REC"
-});
-
-test("97.5 REC indicator disappears on recording_stopped", async () => {
-  // Dispatch call.recording_stopped CustomEvent
-  // Assert: recording-indicator NOT visible
-});
-
-test("97.6 Consent decline button sends decline", async () => {
-  // Dispatch call.recording_request
-  // Click "Decline recording" button
-  // Assert: consent dialog dismissed
-  // Assert: POST /recording/decline was called (via waitForResponse)
-});
-```
-
-**Important E2E test patterns**:
-
-- **Seeding call state**: Use `page.request.post()` to create a call invite, then directly update the DDB `CallSessions` table to set `state: "connected"`.
-- **CustomEvent dispatch**: Use `page.evaluate()` to dispatch `messaging:call-event` with the appropriate `event_type` and `detail` fields. This bypasses the SSE pipeline but exercises the same code path in `useCallRecording` and `ConversationView`.
-- **Overlay visibility**: The `CallSessionOverlay` renders as a `<Dialog>` when `session.state !== "idle"`. To get it into `connected` state, dispatch the sequence: `call.invite` -> update DDB -> dispatch `call.accept` event. Or directly set up the call state via DDB seeding + event injection.
-
-### 5.3 Edge Case Tests
-
-| # | Scenario | Test Approach |
-|---|----------|---------------|
-| 1 | Call ends during recording | Dispatch `call.end` while `isRecording=true`. Assert: recording state transitions to `stopping`/`uploading` (via hook's `isConnected` effect). |
-| 2 | Recording request timeout | Send recording request, wait 30+ seconds without consent. Assert: state returns to `idle`. (Timeout handled in `useCallRecording` if implemented; otherwise, manual decline needed.) |
-| 3 | Both parties press Record simultaneously | Both send `recording_request`. First one wins (backend returns `recording_already_active` for the second). Assert: second party sees consent dialog (from first party's request via SSE). |
-| 4 | Upload failure | Mock the presigned URL to return 500. Assert: `recordingState` transitions to `"error"`. Assert: error toast shown. |
-
-### 5.4 Regression Concerns
-
-| Risk | Mitigation |
-|------|-----------|
-| `useCallRecording` hook runs on every render even when no call is active | The hook's `enabled` param is `false` when `callsEnabled` is false or recording flag is off. All internal effects check `enabled` before registering listeners. |
-| Recording props break overlay layout on mobile | The `CallControls` component already handles the Record button layout (line 193-210 of `CallSessionOverlay.tsx`). No new layout code needed. |
-| `stopRecording()` called after streams are torn down | Modified `onEnd`/`onDismiss` to call `stopRecording()` BEFORE `teardownCallResources()`. MediaRecorder's `stop()` triggers a final `dataavailable` synchronously. |
-| Hook's internal SSE listener conflicts with state machine dispatches | No conflict: hook is source of truth, state machine is passive mirror via `useEffect` sync. No duplicate event handling. |
-| Toast spam from recording state transitions | Toast IDs (`"recording-upload"`) ensure only one toast per transition. `toast.loading` replaces itself when called with same ID. |
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
 ---
 
-## 6. File Change Summary
+## Dependencies & Merge Safety
 
-### Modified Files
+### Depends On
 
-| File | Changes |
-|------|---------|
-| `frontend/src/pages/messages/ConversationView.tsx` | Import `useCallRecording` + `isCallRecordingEnabled`. Instantiate hook. Add state-sync `useEffect`. Add `beforeunload` listener. Add upload-progress toast `useEffect`. Pass 8 recording props to `<CallSessionOverlay>`. Modify `onEnd` and `onDismiss` to call `stopRecording()` first. |
-| `frontend/src/lib/featureFlags.ts` | Add `callRecordingEnabled`, `callRecordingKillSwitch`, `isCallRecordingEnabled()` |
-| `frontend/.env.local.example` | Add `VITE_CALL_RECORDING_ENABLED=true` |
-| `frontend/.env.local` | Add `VITE_CALL_RECORDING_ENABLED=true` |
-| `app/routers/call_recording.py` | Add `conversation_id` query param to `list_user_recordings` |
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-009 | useCallRecording hook and CallSessionOverlay recording props | Implemented | No -- must merge after |
 
-### New Files
+### Depended On By
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/pages/messages/RecordingsPanel.tsx` | Sheet/panel component listing past recordings for a conversation with download buttons |
-| `frontend/e2e/call-recording-integration.spec.ts` | E2E tests: sections 95-97 (17 tests) |
+No downstream dependents identified.
 
-### No Changes Needed
+### Merge Strategy
 
-| File | Reason |
-|------|--------|
-| `frontend/src/hooks/useCallRecording.ts` | Already complete; handles SSE events internally |
-| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Already accepts all recording props |
-| `frontend/src/pages/messages/callStateMachine.ts` | Already has recording events and state fields |
-| `frontend/src/hooks/useMessagingStream.ts` | Already registers all 5 recording SSE event types |
-| `app/services/call_recording_store.py` | Already complete |
-| `app/services/messaging_call_signaling.py` | Already has recording types in both allow-lists |
+Sequential after CALL-009. Integration glue code in ConversationView.tsx. Feature-flag-gated.
 
----
+### Merge Checklist
 
-## 7. Data Flow Diagram
-
-```
-                          ConversationView.tsx
-                    ┌─────────────────────────────────────────┐
-                    │                                         │
-                    │  useCallRecording({                     │
-                    │    callId: callMachine.callId,           │
-                    │    userId,                               │
-                    │    localStream: rtcLocalStream,          │
-                    │    remoteStream: rtcRemoteStream,        │
-                    │    isConnected: phase === "connected",   │
-                    │    enabled: callRecordingEnabled,        │
-                    │  })                                      │
-                    │       │                                  │
-                    │       ▼                                  │
-                    │  ┌──────────────────────┐                │
-                    │  │  useCallRecording    │                │
-                    │  │  (internal state)    │                │
-                    │  │                      │ ◄─── SSE call.recording_* events
-                    │  │  recordingState ─────┼────────────┐   │
-                    │  │  duration ───────────┼──────────┐ │   │
-                    │  │  consentPendingFrom ─┼────────┐ │ │   │
-                    │  │  requestRecording ───┼──────┐ │ │ │   │
-                    │  │  respondToRequest ───┼────┐ │ │ │ │   │
-                    │  │  stopRecording ──────┼──┐ │ │ │ │ │   │
-                    │  └──────────────────────┘  │ │ │ │ │ │   │
-                    │                            │ │ │ │ │ │   │
-                    │  useEffect (sync) ─────────┼─┼─┼─┼─┼─┼──┤
-                    │       │                    │ │ │ │ │ │   │
-                    │       ▼                    │ │ │ │ │ │   │
-                    │  dispatchCall(RECORDING_*) │ │ │ │ │ │   │
-                    │       │                    │ │ │ │ │ │   │
-                    │       ▼                    ▼ ▼ ▼ ▼ ▼ ▼   │
-                    │  <CallSessionOverlay                     │
-                    │    isRecording={state === "recording"}    │
-                    │    recordingDuration={duration}           │
-                    │    onRequestRecording={requestRecording}  │
-                    │    onStopRecording={stopRecording}        │
-                    │    recordingEnabled={flag}                │
-                    │    showRecordingConsent={...}             │
-                    │    recordingConsentFrom={...}             │
-                    │    onConsentRecording={respondToRequest}  │
-                    │  />                                      │
-                    └─────────────────────────────────────────┘
-                                      │
-                                      ▼
-                    ┌─────────────────────────────────────────┐
-                    │         CallSessionOverlay              │
-                    │                                         │
-                    │  ┌─────────────────────────┐            │
-                    │  │     CallControls        │            │
-                    │  │  [Mute] [Camera] [End]  │            │
-                    │  │  [Record/Stop]          │ ◄── recordingEnabled
-                    │  └─────────────────────────┘            │
-                    │                                         │
-                    │  ┌─ Recording Indicator ──┐             │
-                    │  │  ● REC 02:34           │ ◄── isRecording + duration
-                    │  └────────────────────────┘             │
-                    │                                         │
-                    │  ┌─ Consent Dialog ───────┐             │
-                    │  │  "X wants to record"   │ ◄── showRecordingConsent
-                    │  │  [Decline] [Allow]     │             │
-                    │  └────────────────────────┘             │
-                    └─────────────────────────────────────────┘
-```
-
----
-
-## 8. Acceptance Criteria
-
-1. When `VITE_CALL_RECORDING_ENABLED=true` and a 1-on-1 call is in `connected` state, the Record button is visible in the call controls.
-2. Pressing Record sends a `POST /recording/request` and the remote peer sees a consent dialog.
-3. Accepting the consent dialog starts the MediaRecorder (both audio tracks mixed) and shows the red "REC" indicator to both peers.
-4. Declining the consent dialog dismisses it and the initiator is notified (via SSE event -> hook state -> toast).
-5. Pressing Stop Recording stops the MediaRecorder, assembles the Blob, uploads via presigned URL, and transitions to `complete` state with a success toast.
-6. Ending the call while recording is active auto-stops and uploads the recording.
-7. The `beforeunload` prompt appears when navigating away during an active recording.
-8. Past recordings for a conversation are accessible via a "Recordings" menu item in the conversation dropdown.
-9. Both call participants can download a completed recording.
-10. When `VITE_CALL_RECORDING_ENABLED=false`, no recording UI appears and the hook is inert.
-11. All 17 E2E tests pass in sections 95-97.
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

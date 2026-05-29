@@ -1044,449 +1044,90 @@ ingest UI can POST metrics).
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests: `tests/test_broadcast_viewers.py`
+### Unit Tests (pytest)
 
-```python
-"""Unit tests for broadcast viewer tracking."""
-import pytest
-from unittest.mock import patch, MagicMock
-from app.services.broadcast_viewers import (
-    register_viewer,
-    touch_viewer,
-    unregister_viewer,
-    get_viewer_count,
-)
+**Test file**: `tests/test_broadcast_viewers_health.py`
 
-class TestRegisterViewer:
-    def test_register_creates_item_and_returns_count(self, mock_ddb):
-        result = register_viewer("session-1", "user-alice", user_agent="Chrome/120")
-        assert result["viewer_id"].startswith("user-alice#")
-        assert result["session_id"] == "session-1"
-        assert result["viewer_count"] >= 1
+**Mock setup**: moto mock for DynamoDB (`BroadcastViewers`, `BroadcastHealthSnapshots` tables). Patch `now_ts()` for TTL testing.
 
-    def test_register_publishes_sse_event(self, mock_ddb, mock_sse_publish):
-        register_viewer("session-1", "user-alice")
-        mock_sse_publish.assert_called_once()
-        call_args = mock_sse_publish.call_args[0]
-        assert call_args[0] == "session-1"
-        assert call_args[1]["_type"] == "viewer_count"
-        assert call_args[1]["delta"] == 1
+| Test Function | Description |
+|---|---|
+| `test_heartbeat_increments_viewer_count` | POST heartbeat; GET count returns 1 |
+| `test_heartbeat_dedup_same_device` | Two heartbeats same device_id; count still 1 |
+| `test_expired_viewers_decremented` | Heartbeat TTL expires; count drops to 0 |
+| `test_health_snapshot_persisted` | POST health metrics; snapshot stored in DDB with correct fields |
+| `test_health_history_returns_sorted` | Seed 5 snapshots; GET returns newest first |
+| `test_health_status_green_yellow_red` | Bitrate thresholds classify as good/degraded/critical |
 
-    def test_multiple_tabs_same_user_creates_unique_viewer_ids(self, mock_ddb):
-        r1 = register_viewer("session-1", "user-alice")
-        r2 = register_viewer("session-1", "user-alice")
-        assert r1["viewer_id"] != r2["viewer_id"]
+### Integration Tests
 
-class TestTouchViewer:
-    def test_touch_extends_ttl(self, mock_ddb):
-        result = register_viewer("session-1", "user-alice")
-        count = touch_viewer("session-1", result["viewer_id"])
-        assert isinstance(count, int)
+Cross-service tests with real DynamoDB Local:
 
-    def test_touch_nonexistent_raises(self, mock_ddb):
-        with pytest.raises(Exception):
-            touch_viewer("session-1", "nonexistent#abc")
+1. Heartbeat -> viewer count increment -> TTL expiry -> count decrement
+2. Health snapshot write -> query history -> verify sorted by timestamp
+3. Concurrent heartbeats from different devices -> count equals unique device count
 
-class TestUnregisterViewer:
-    def test_unregister_decrements_count(self, mock_ddb):
-        r1 = register_viewer("session-1", "user-alice")
-        r2 = register_viewer("session-1", "user-bob")
-        count_after = unregister_viewer("session-1", r1["viewer_id"])
-        assert count_after == 1  # Only bob remains
+### E2E Tests (Playwright)
 
-    def test_unregister_publishes_negative_delta(self, mock_ddb, mock_sse_publish):
-        r = register_viewer("session-1", "user-alice")
-        mock_sse_publish.reset_mock()
-        unregister_viewer("session-1", r["viewer_id"])
-        call_args = mock_sse_publish.call_args[0]
-        assert call_args[1]["delta"] == -1
+**Test file**: `frontend/e2e/broadcast-health.spec.ts`
 
-class TestGetViewerCount:
-    def test_empty_session_returns_zero(self, mock_ddb):
-        assert get_viewer_count("nonexistent-session") == 0
+**Auth pattern**: `injectAuth(page, "alice")` for viewer; `injectAuth(page, "root")` for broadcaster
 
-    def test_count_matches_registered_viewers(self, mock_ddb):
-        register_viewer("session-1", "user-alice")
-        register_viewer("session-1", "user-bob")
-        register_viewer("session-1", "user-charlie")
-        assert get_viewer_count("session-1") == 3
-```
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Viewer count badge shows on player page | Navigate to watch page; ViewerCountBadge visible with count >= 0 |
+| 2 | Heartbeat endpoint accepts valid payload | POST heartbeat -> 200 |
+| 3 | Health indicator shows green for good stream | Seed healthy metrics; green indicator visible |
+| 4 | Health indicator shows red for critical stream | Seed 0 bitrate; red indicator visible |
+| 5 | Health history returns snapshots | GET health history returns array of snapshot objects |
+| 6 | Viewer count decrements after disconnect | Send heartbeat, wait TTL, verify count drops |
+| 7 | Unauthenticated heartbeat returns 401 | No session -> 401 |
+| 8 | Health endpoint requires session owner | Non-owner GET health -> 403 |
 
-### 5.2 Unit Tests: `tests/test_broadcast_health.py`
+**Negative tests**: 401 unauthenticated, 403 non-owner health access, 404 non-existent session
 
-```python
-"""Unit tests for broadcast health metrics."""
-import pytest
-from app.services.broadcast_health import (
-    classify_connection_quality,
-    store_health_snapshot,
-    get_latest_health,
-    get_health_history,
-)
+**Edge cases**: TTL-based viewer expiry, concurrent heartbeats, zero-bitrate health snapshot, rapid heartbeat dedup
 
-class TestClassifyConnectionQuality:
-    @pytest.mark.parametrize("drop,bitrate,loss,expected", [
-        (0.05, 6000, 0, "excellent"),
-        (0.3, 3000, 0, "good"),
-        (1.5, 1500, 1, "fair"),
-        (4.0, 800, 3, "poor"),
-        (10.0, 200, 10, "critical"),
-        (0.0, 500, 0, "good"),  # low bitrate but no drops
-        (6.0, 8000, 0, "critical"),  # high drops despite good bitrate
-    ])
-    def test_quality_classification(self, drop, bitrate, loss, expected):
-        assert classify_connection_quality(drop, bitrate, loss) == expected
+### Test Data Requirements
 
-class TestStoreHealthSnapshot:
-    def test_stores_and_returns_snapshot(self, mock_ddb):
-        result = store_health_snapshot(
-            "session-1",
-            ingest_bitrate_kbps=4500,
-            ingest_framerate=30.0,
-            dropped_frames=5,
-            dropped_frames_pct=0.02,
-        )
-        assert result["session_id"] == "session-1"
-        assert result["connection_quality"] == "excellent"
-        assert result["viewer_count"] >= 0
+Create live broadcast session in `beforeAll`. Seed viewer heartbeats via API.
 
-    def test_publishes_health_update_sse(self, mock_ddb, mock_sse_publish):
-        store_health_snapshot(
-            "session-1",
-            ingest_bitrate_kbps=1200,
-            ingest_framerate=24.0,
-            dropped_frames=100,
-            dropped_frames_pct=1.5,
-        )
-        call_args = mock_sse_publish.call_args[0]
-        assert call_args[1]["_type"] == "health_update"
-        assert call_args[1]["connection_quality"] == "fair"
+**Test users**: Alice (USER, viewer), Root (ROOT, broadcaster/session owner)
 
-class TestGetLatestHealth:
-    def test_returns_most_recent_snapshot(self, mock_ddb):
-        store_health_snapshot("s1", ingest_bitrate_kbps=1000, ingest_framerate=30,
-                            dropped_frames=0, dropped_frames_pct=0)
-        store_health_snapshot("s1", ingest_bitrate_kbps=2000, ingest_framerate=30,
-                            dropped_frames=0, dropped_frames_pct=0)
-        latest = get_latest_health("s1")
-        assert latest["ingest_bitrate_kbps"] == 2000
+### CI/Pipeline
 
-    def test_returns_none_for_nonexistent(self, mock_ddb):
-        assert get_latest_health("nonexistent") is None
-
-class TestGetHealthHistory:
-    def test_returns_snapshots_in_range(self, mock_ddb):
-        # Store multiple snapshots and query a range
-        for i in range(10):
-            store_health_snapshot("s1", ingest_bitrate_kbps=1000+i*100,
-                                ingest_framerate=30, dropped_frames=i,
-                                dropped_frames_pct=i*0.1)
-        history = get_health_history("s1", limit=5)
-        assert len(history) == 5
-```
-
-### 5.3 Unit Tests: `tests/test_broadcast_sse.py`
-
-```python
-"""Unit tests for broadcast SSE pub/sub."""
-import asyncio
-import pytest
-from app.services.broadcast_sse import (
-    broadcast_sse_subscribe,
-    broadcast_sse_unsubscribe,
-    broadcast_sse_publish,
-    broadcast_sse_subscriber_count,
-)
-
-class TestBroadcastSse:
-    def test_subscribe_creates_queue(self):
-        q = broadcast_sse_subscribe("session-1")
-        assert isinstance(q, asyncio.Queue)
-        assert broadcast_sse_subscriber_count("session-1") == 1
-        broadcast_sse_unsubscribe("session-1", q)
-
-    def test_publish_delivers_to_all_subscribers(self):
-        q1 = broadcast_sse_subscribe("session-1")
-        q2 = broadcast_sse_subscribe("session-1")
-        broadcast_sse_publish("session-1", {"viewer_count": 5})
-        assert q1.get_nowait() == {"viewer_count": 5}
-        assert q2.get_nowait() == {"viewer_count": 5}
-        broadcast_sse_unsubscribe("session-1", q1)
-        broadcast_sse_unsubscribe("session-1", q2)
-
-    def test_publish_to_nonexistent_session_is_noop(self):
-        broadcast_sse_publish("no-such-session", {"data": 1})  # Should not raise
-
-    def test_unsubscribe_removes_queue(self):
-        q = broadcast_sse_subscribe("session-1")
-        broadcast_sse_unsubscribe("session-1", q)
-        assert broadcast_sse_subscriber_count("session-1") == 0
-
-    def test_full_queue_drops_subscriber(self):
-        q = broadcast_sse_subscribe("session-1")
-        # Fill queue to capacity
-        for i in range(100):
-            q.put_nowait({"i": i})
-        # Next publish should evict the full queue
-        broadcast_sse_publish("session-1", {"overflow": True})
-        assert broadcast_sse_subscriber_count("session-1") == 0
-```
-
-### 5.4 E2E Tests: `frontend/e2e/broadcast-health.spec.ts`
-
-Following the established E2E patterns from `broadcaster.spec.ts` (BCAST-001):
-
-```typescript
-import { test, expect, type Page } from "@playwright/test";
-
-// Test structure: 6 sections, ~24 tests total
-
-// Section 90: Viewer Join/Leave API (5 tests)
-test.describe("Section 90: Viewer Join/Leave API", () => {
-  test("joining a live session returns viewer_id and count", ...);
-  test("heartbeat extends viewer TTL and returns count", ...);
-  test("explicit leave decrements viewer count", ...);
-  test("joining non-existent session returns 404", ...);
-  test("multiple viewers produce accurate count", ...);
-});
-
-// Section 91: Viewer Count via Polling (4 tests)
-test.describe("Section 91: Viewer Count Polling", () => {
-  test("GET viewer count returns 0 for session with no viewers", ...);
-  test("GET viewer count reflects active viewers", ...);
-  test("viewer count decreases after TTL expiry (simulated)", ...);
-  test("viewer count is accurate with concurrent joins and leaves", ...);
-});
-
-// Section 92: Health Report + Retrieval API (5 tests)
-test.describe("Section 92: Health Metrics API", () => {
-  test("POST health report stores snapshot", ...);
-  test("GET health returns latest snapshot", ...);
-  test("GET health history returns multiple snapshots", ...);
-  test("connection_quality is classified correctly from report data", ...);
-  test("health report for non-live session returns 409", ...);
-});
-
-// Section 93: Broadcast SSE Stream (4 tests)
-test.describe("Section 93: Broadcast SSE Stream", () => {
-  test("SSE stream emits hello event on connect", ...);
-  test("viewer join triggers viewer_count event on stream", ...);
-  test("health report triggers health_update event on stream", ...);
-  test("SSE stream returns 404 for non-existent session", ...);
-});
-
-// Section 94: Viewer Count Badge UI (3 tests)
-test.describe("Section 94: Viewer Count UI", () => {
-  test("broadcaster dashboard shows viewer count badge", ...);
-  test("viewer count updates in real-time when new viewer joins", ...);
-  test("viewer count shows 0 viewers for draft session", ...);
-});
-
-// Section 95: Stream Health Indicator UI (3 tests)
-test.describe("Section 95: Health Indicator UI", () => {
-  test("health indicator shows green for excellent quality", ...);
-  test("health indicator shows red for critical quality", ...);
-  test("health tooltip shows bitrate and dropped frame details", ...);
-});
-```
-
-### 5.5 E2E Test Patterns and Helpers
-
-```typescript
-// Helper: create a live session for testing
-async function createLiveSession(page: Page, identity: string): Promise<string> {
-  const profileResp = await apiPost(page, identity, "/broadcast/profiles", {
-    name: `Health Test Profile ${Date.now()}`,
-    region: "us-east-1",
-    rendition_preset: "720p_3mbps",
-  });
-  const profile = await profileResp.json();
-
-  const sessionResp = await apiPost(page, identity, "/broadcast/sessions", {
-    profile_id: profile.id,
-    ingest_url: "rtmp://localhost:1935/live",
-    stream_key_ref: "arn:aws:secretsmanager:us-east-1:123456:secret:test-key",
-  });
-  const session = await sessionResp.json();
-
-  // Start the session (transitions: draft -> provisioning -> ready -> live)
-  await apiPost(page, identity, `/broadcast/sessions/${session.id}/start`, {
-    reason: "e2e-test",
-  });
-
-  // Wait for live status (local provider is instant)
-  await expect.poll(async () => {
-    const r = await apiGet(page, `/broadcast/sessions/${session.id}`);
-    const d = await r.json();
-    return d.status;
-  }, { timeout: 10000 }).toBe("live");
-
-  return session.id;
-}
-
-// Helper: simulate multiple viewers joining
-async function simulateViewers(
-  page: Page,
-  identity: string,
-  sessionId: string,
-  count: number,
-): Promise<string[]> {
-  const viewerIds: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const resp = await apiPost(page, identity, `/broadcast/sessions/${sessionId}/viewers/join`);
-    const data = await resp.json();
-    viewerIds.push(data.viewer_id);
-  }
-  return viewerIds;
-}
-
-// Helper: report health metrics
-async function reportHealth(
-  page: Page,
-  identity: string,
-  sessionId: string,
-  metrics: Partial<{
-    ingest_bitrate_kbps: number;
-    ingest_framerate: number;
-    dropped_frames: number;
-    dropped_frames_pct: number;
-    output_errors: number;
-    input_loss_seconds: number;
-  }>,
-) {
-  return apiPost(page, identity, `/broadcast/sessions/${sessionId}/health/report`, {
-    ingest_bitrate_kbps: 4500,
-    ingest_framerate: 30,
-    dropped_frames: 0,
-    dropped_frames_pct: 0,
-    output_errors: 0,
-    input_loss_seconds: 0,
-    ...metrics,
-  });
-}
-```
-
-### 5.6 SSE Testing Strategy
-
-Testing SSE in Playwright requires special handling since `EventSource` is not directly
-observable. The approach:
-
-1. **API-level verification**: Call viewer join/health report endpoints and verify the
-   returned data (viewer count, quality classification). This confirms the backend logic
-   works.
-
-2. **SSE stream consumption via page.evaluate**: Create an EventSource in the browser
-   context and collect events into a page-level array:
-   ```typescript
-   await page.evaluate((sessionId) => {
-     (window as any).__sseEvents = [];
-     const es = new EventSource(`/broadcast/sessions/${sessionId}/stream`);
-     es.addEventListener("viewer_count", (e) => {
-       (window as any).__sseEvents.push(JSON.parse((e as MessageEvent).data));
-     });
-     (window as any).__sseClose = () => es.close();
-   }, sessionId);
-
-   // Trigger viewer join
-   await apiPost(page, identity, `/broadcast/sessions/${sessionId}/viewers/join`);
-
-   // Wait for SSE event to arrive
-   await expect.poll(async () => {
-     return page.evaluate(() => (window as any).__sseEvents.length);
-   }).toBeGreaterThan(0);
-
-   // Verify event content
-   const events = await page.evaluate(() => (window as any).__sseEvents);
-   expect(events[0].viewer_count).toBeGreaterThan(0);
-
-   // Cleanup
-   await page.evaluate(() => (window as any).__sseClose());
-   ```
-
-3. **UI-level verification**: After BCAST-001 creates the dashboard page, verify that
-   the `ViewerCountBadge` text updates when a viewer joins (by watching the DOM element
-   via `expect(locator).toHaveText(...)`).
-
-### 5.7 Simulating Viewer TTL Expiry
-
-DynamoDB TTL deletion in local mode is not instant (it can take minutes). For tests:
-
-1. **Don't rely on TTL auto-delete**. Instead, test the explicit `leave` endpoint for
-   count decrement.
-2. **Test the heartbeat mechanism** by verifying that `touch_viewer` updates the
-   `expires_at` field (verify via GET viewer count remains stable after heartbeat).
-3. **Simulate expiry** by directly deleting the viewer record in DDB and verifying the
-   count decreases on next query:
-   ```typescript
-   // Direct DDB cleanup simulating TTL
-   await request.delete(`/broadcast/sessions/${sessionId}/viewers/leave?viewer_id=${viewerId}`);
-   const countResp = await apiGet(page, `/broadcast/sessions/${sessionId}/viewers/count`);
-   const data = await countResp.json();
-   expect(data.viewer_count).toBe(expectedCount);
-   ```
-
-### 5.8 Test Data Isolation
-
-- All test sessions use timestamp-suffixed profile names to avoid collisions.
-- `afterAll` deletes all created sessions and profiles.
-- Viewer records auto-expire via TTL (60s), but tests explicitly clean up via `leave`.
-- Health snapshots auto-expire after 7 days (TTL) -- no cleanup needed for test isolation.
-
-### 5.9 Flakiness Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| SSE event delivery timing | Use `expect.poll()` with 5s timeout, not fixed waits |
-| Viewer count race (join + count in parallel) | Single-threaded test execution; assert after `await` completes |
-| Local provider instant transitions | Don't assert intermediate states (provisioning/ready); go straight to "live" |
-| DynamoDB eventual consistency | Use `ConsistentRead=True` in all viewer/health queries |
-| Shared session from prior test run | Use `Date.now()` in profile names; create fresh sessions per section |
-| Admin role requirement for start/stop | Always use `root` identity for lifecycle operations |
+Serial execution. `BROADCAST_PROVIDER=local`. Retry-safe.
 
 ---
 
-## Appendix A: Endpoint Summary
+## Dependencies & Merge Safety
 
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/broadcast/sessions/{id}/viewers/join` | `require_ui_session` | Register viewer, return viewer_id + count |
-| POST | `/broadcast/sessions/{id}/viewers/heartbeat` | `require_ui_session` | Extend TTL, return count |
-| POST | `/broadcast/sessions/{id}/viewers/leave` | `require_ui_session` | Unregister viewer, return count |
-| GET | `/broadcast/sessions/{id}/viewers/count` | `require_ui_session` | Get current viewer count |
-| GET | `/broadcast/sessions/{id}/health` | `require_ui_session` | Get latest health snapshot |
-| GET | `/broadcast/sessions/{id}/health/history` | admin/root | Get health snapshot history |
-| POST | `/broadcast/sessions/{id}/health/report` | `require_ui_session` | Submit health metrics (broadcaster client) |
-| GET | `/broadcast/sessions/{id}/stream` | `require_ui_session` | SSE stream (viewer_count + health_update events) |
+### Depends On
 
-## Appendix B: DynamoDB Table Additions
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-001 | Broadcast session endpoints | Implemented | Yes |
+| BCAST-002 | Viewer player page for badge display | Implemented | Yes |
 
-```python
-# In scripts/local-ddb-init.py, add after existing broadcast tables:
+### Depended On By
 
-TableDef(
-    _resolve_table_name(S.broadcast_viewers_table_name, "BroadcastViewers"),
-    "session_id", "viewer_id",
-    attr_types={"joined_at": "N", "last_heartbeat": "N", "expires_at": "N"},
-),
-TableDef(
-    _resolve_table_name(S.broadcast_health_snapshots_table_name, "BroadcastHealthSnapshots"),
-    "session_id", "snapshot_ts",
-    attr_types={"snapshot_ts": "N"},
-),
-```
+| Ticket | What It Needs |
+|---|---|
+| BCAST-005 | Viewer count context for chat rate limiting |
 
-## Appendix C: Metrics Additions
+### Merge Strategy
 
-```python
-# In app/metrics.py, add:
+Parallel-safe with BCAST-005. New DDB tables (`BroadcastViewers`, `BroadcastHealthSnapshots`), new services, new frontend components.
 
-"broadcast_viewer_joins_total"       # Counter: labels=[session_id]
-"broadcast_viewer_leaves_total"      # Counter: labels=[session_id, reason(explicit|ttl)]
-"broadcast_health_reports_total"     # Counter: labels=[session_id, connection_quality]
-"broadcast_viewer_count_gauge"       # Gauge: labels=[session_id] (current active viewers)
-```
+### Merge Checklist
+
+- [ ] DDB tables added to `scripts/local-ddb-init.py`
+- [ ] Table handles `T.broadcast_viewers`, `T.broadcast_health_snapshots` in `tables.py`
+- [ ] ViewerCountBadge and StreamHealthIndicator components created
+- [ ] E2E test passes in CI
+- [ ] No breaking changes to existing broadcast endpoints
 
 ---
 

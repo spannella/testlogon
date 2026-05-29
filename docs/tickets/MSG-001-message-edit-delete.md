@@ -719,3 +719,68 @@ When `mode="edit"`:
 | `app/routers/messaging.py` | 10273 | EXISTS: edit history queried from `tbl_edits` |
 | `scripts/local-ddb-init.py` | 276 | EXISTS: `MessageEdits` table definition |
 | `app/routers/messaging.py` | 1264 | EXISTS: `ENCRYPTED_EDIT_ERROR_CODE` — encrypted message edit restriction |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_message_edit_delete.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_edit_message_within_window` | Edit message within window |
+| 2 | `test_edit_after_window_rejected` | Edit after window rejected |
+| 3 | `test_edit_encrypted_message_rejected` | Edit encrypted message rejected |
+| 4 | `test_delete_for_me_soft_deletes` | Delete for me soft deletes |
+| 5 | `test_revoke_for_all_redacts_content` | Revoke for all redacts content |
+| 6 | `test_edit_stores_history` | Edit stores history |
+| 7 | `test_admin_can_delete_any` | Admin can delete any |
+| 8 | `test_sse_event_on_edit` | Sse event on edit |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/message-edit-delete.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~15 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `MESSAGE_EDIT_WINDOW_MINUTES=15`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Independent -- edit/delete already partially implemented. Extensions are additive to existing PATCH/DELETE endpoints.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: MESSAGE_EDIT_WINDOW_MINUTES=15
+- [ ] Service file created/modified: `app/routers/messaging.py (existing endpoints)`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/message-edit-delete.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_message_edit_delete.py`

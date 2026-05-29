@@ -1108,3 +1108,88 @@ The IP extraction should rely on `TRUSTED_PROXY_CIDRS` to determine which `X-For
 | `_resolve_table_name()` | `scripts/local-ddb-init.py` | 38 | VERIFIED |
 | Settings dataclass | `app/core/settings.py` | entire file | VERIFIED (proposed new settings do not exist yet) |
 | Tables dataclass | `app/core/tables.py` | entire file | VERIFIED (proposed new table handles do not exist yet) |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_rate_limit_store.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_check_allows_below_limit` | Requests below limit succeed |
+| 2 | `test_check_rejects_above_limit` | Requests above limit rejected |
+| 3 | `test_counter_resets_after_window` | Counter resets after window expires |
+| 4 | `test_extract_ip_x_forwarded` | X-Forwarded-For with trusted proxy extracted |
+| 5 | `test_layer1_returns_429_headers` | 429 with Retry-After, X-RateLimit-* headers |
+| 6 | `test_layer2_bypasses_admin` | Admin role bypasses per-endpoint limit |
+| 7 | `test_blocklisted_ip_403` | Blocklisted IP gets 403 |
+| 8 | `test_allowlisted_ip_bypasses` | Allowlisted IP bypasses Layer 1 |
+| 9 | `test_fail_open_on_ddb_error` | DDB unreachable; request allowed |
+| 10 | `test_config_override_precedence` | DDB override takes precedence over defaults |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Layer 1 + Layer 2 combined enforcement | middleware + dependency + DDB rate_limits table |
+| 2 | Admin config update changes live limits | admin router + rate_limit_config + DDB |
+| 3 | Event logging writes to rate_limit_events | middleware + events table |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/rate-limiting.spec.ts` -- 19 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Sections: A (global IP limit, 4), B (per-endpoint group, 5), C (headers, 3), D (admin API, 4), E (admin UI, 3)
+
+**Negative/edge tests**: 429 with Retry-After header, admin 403 for non-root, rate limit resets after window
+
+### Test Data Requirements
+
+- DDB seeds: rate_limits, rate_limit_events tables
+- Test users: Alice (USER), Charlie (ADMIN), Root
+- Sessions via `e2e_admin_session_setup.py`
+
+### CI/Pipeline
+
+- Feature flags: RATE_LIMIT_GLOBAL_ENABLED, RATE_LIMIT_PER_ENDPOINT_ENABLED, RATE_LIMIT_DASHBOARD_ENABLED
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Standalone infrastructure feature |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| PLATFORM-002 | Uses | Webhooks can use per-endpoint rate limit groups |
+| PLATFORM-006 | Uses | Email delivery benefits from rate limit middleware |
+
+### Merge Strategy
+
+**Independent** -- Foundation infrastructure. Should be merged early as other features benefit from rate limiting.
+
+### Merge Checklist
+
+- [ ] rate_limits + rate_limit_events DDB tables in local-ddb-init.py
+- [ ] Layer 1 global IP middleware in app/middleware/rate_limit.py
+- [ ] Layer 2 per-endpoint dependency in rate_limit_dependency()
+- [ ] X-RateLimit-* response headers on all responses
+- [ ] Admin dashboard at /admin/rate-limits
+- [ ] E2E pass: `npx playwright test e2e/rate-limiting.spec.ts`

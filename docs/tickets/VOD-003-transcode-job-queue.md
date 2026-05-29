@@ -1175,6 +1175,66 @@ ffmpeg -f lavfi -i testsrc=duration=2:size=320x240:rate=30 -c:v libx264 -pix_fmt
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+| Test | Description |
+|------|-------------|
+| `test_create_job_stores_all_fields` | Verify all fields from `VideoPipelineJobRequest` are persisted including `status_created_at` and `ttl` |
+| `test_claim_job_succeeds_for_pending` | Create pending job, claim it; verify `status=running` and `worker_id` set |
+| `test_claim_job_fails_if_already_claimed` | Two concurrent claims; first succeeds, second returns `False` |
+| `test_claim_job_respects_next_retry_at` | Job with `next_retry_at` in the future cannot be claimed |
+| `test_complete_job_sets_output_fields` | Verify `output_hls_manifest_uri`, `completed_at`, `status=completed` after completion |
+| `test_complete_job_fails_if_wrong_worker` | Worker B cannot complete a job owned by Worker A |
+| `test_fail_job_increments_attempt_and_sets_retry` | Retryable failure: `status=pending`, `attempt` incremented, `next_retry_at` set |
+| `test_fail_job_terminal_when_max_attempts_exhausted` | After `max_attempts` failures: `status=failed`, no `next_retry_at` |
+| `test_cancel_job_from_pending` | Cancel pending job; verify `status=cancelled` |
+| `test_poll_pending_jobs_returns_oldest_first` | Create 5 jobs with staggered `created_at`; poll returns FIFO order |
+
+**Framework**: pytest + moto (DynamoDB mock)
+**Test file**: `tests/test_transcode_job_store.py`
+
+### Integration Tests
+
+| Scenario | Services | Assertion |
+|----------|----------|-----------|
+| Worker loop picks up pending job | `transcode_worker.py` + `transcode_job_store.py` | Pending job claimed and processed within 2 poll cycles |
+| Worker respects concurrency semaphore | `transcode_worker.py` | With `max_concurrent=1`, only 1 job running at a time |
+| FFmpeg crash triggers retry | `transcode_worker.py` + `ffmpeg_executor.py` | Job transitions pending -> running -> pending with `attempt=1` |
+| Source not found is non-retryable | `transcode_worker.py` | Nonexistent S3 key causes immediate `status=failed` |
+| Exponential backoff calculation | `_compute_next_retry_at()` | attempt=0 -> 30-37s; attempt=1 -> 60-75s; capped at 600s |
+
+### E2E Tests (Playwright)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Submit transcode job returns 201 | POST with valid body; response has `job_id`, `status=pending` |
+| 2 | Get job status returns progress | GET after submission; response has `progress_pct`, `current_rendition` |
+| 3 | Cancel pending job | DELETE; response `status=cancelled` |
+| 4 | List jobs includes submitted job | GET list; contains the submitted job |
+| 5 | Cancelled job cannot be cancelled again | DELETE cancelled job; 409 |
+| 6 | Pagination works for job list | Submit 5 jobs; list with `limit=2`; cursor returned |
+| 7 | Job submission validates rendition spec | POST with empty `renditions` list; 422 |
+| 8 | Per-tenant throttle rejects excess jobs | Submit beyond `max_per_tenant` limit; 429 |
+
+**Auth**: `injectAuth(page, "alice")` + CSRF header
+**Test file**: `frontend/e2e/vod-pipeline.spec.ts`
+
+### Test Data Requirements
+- DDB tables: `TranscodeJobs` (with GSIs `ByStatusCreatedAt`, `ByVideoId`, `ByTenantStatus`)
+- `attr_types={"created_at": "N"}` for numeric GSI sort key
+- Test users: Alice (USER), Bob (USER), Root (ROOT)
+- Short test video fixture: `tests/fixtures/test_video.mp4` (2-second, 320x240, ~30KB)
+
+### CI/Pipeline
+- Feature flag: `TRANSCODE_WORKER_ENABLED=true` in dev mode
+- Serial execution with `workers: 1`
+- Retry-safe (each test submits fresh jobs with unique `asset_id`)
+- Integration tests require `ffmpeg` on PATH (skip gracefully if unavailable)
+
+---
+
 ## Appendix A: Configuration Reference
 
 | Env Variable | Default (dev) | Default (prod) | Description |

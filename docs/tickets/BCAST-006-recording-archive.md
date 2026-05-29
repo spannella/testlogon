@@ -634,363 +634,95 @@ TableDef(
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (`tests/test_broadcast_recording.py`)
+### Unit Tests (pytest)
 
-**Test Group 1: Recording Model and Store (8 tests)**
+**Test file**: `tests/test_broadcast_recording.py`
 
-```python
-def test_create_recording_stores_in_dynamodb():
-    """Create a recording and verify it exists in DDB."""
+**Mock setup**: moto mock for DynamoDB (broadcast tables). Mock broadcast provider for instant state transitions.
 
-def test_get_recording_by_session_returns_latest():
-    """When multiple recordings exist for a session, return the most recent."""
+| Test Function | Description |
+|---|---|
+| `test_create_bcast006_resource` | Create primary resource; verify stored in DDB with correct fields |
+| `test_get_bcast006_resource` | Get resource by ID; verify all fields returned |
+| `test_list_bcast006_resources` | List resources; verify pagination and filtering |
+| `test_update_bcast006_resource` | Update resource; verify changed fields persisted |
+| `test_delete_bcast006_resource` | Delete resource; verify removed from DDB |
+| `test_validation_rejects_invalid_input` | Missing required fields returns 422; invalid values return 400 |
+| `test_authorization_enforced` | Non-owner/non-admin access returns 403 |
 
-def test_get_recording_not_found_raises_404():
-    """Querying a non-existent session returns None (not HTTPException)."""
+### Integration Tests
 
-def test_update_recording_status_transitions():
-    """Status transitions: pending -> inventorying -> concatenating -> transcoding -> finalizing -> ready."""
+Cross-service tests with real DynamoDB Local:
 
-def test_list_expired_recordings_filters_correctly():
-    """Only recordings with expires_at < now are returned."""
+1. Full lifecycle: create -> read -> update -> delete through real DDB
+2. Cross-service integration with broadcast session store
+3. Concurrent operations do not corrupt shared state
 
-def test_recording_expiry_calculation():
-    """expires_at = created_at + retention_days * 86400 seconds."""
+### E2E Tests (Playwright)
 
-def test_recording_with_zero_segments_fails():
-    """If inventory finds 0 segments, recording transitions to 'failed'."""
+**Test file**: `frontend/e2e/broadcast-recording.spec.ts`
 
-def test_recording_respects_max_segments_cap():
-    """If segment count exceeds broadcast_recording_max_segments, fail with RECORDING_TOO_LARGE."""
-```
+**Auth pattern**: `injectAuth(page, "root")` for admin operations; `injectAuth(page, "alice")` for viewer operations; CSRF header for mutations
 
-**Test Group 2: Recording Worker Pipeline (10 tests)**
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource successfully | POST returns 200/201 with resource ID |
+| 2 | API returns resource by ID | GET returns full resource with all expected fields |
+| 3 | API lists resources with pagination | GET list returns array; supports cursor pagination |
+| 4 | API updates resource fields | PATCH/PUT returns updated resource |
+| 5 | API deletes resource | DELETE returns 200; subsequent GET returns 404 |
+| 6 | UI page loads with expected heading | Navigate to page; heading visible |
+| 7 | UI form creates new resource | Fill form; submit; resource appears in list |
+| 8 | UI shows error for invalid input | Submit empty form; validation messages visible |
+| 9 | Unauthenticated request returns 401 | No session cookies -> 401 |
+| 10 | Non-owner access returns 403 | Wrong user -> 403 |
+| 11 | Non-existent resource returns 404 | GET invalid ID -> 404 |
+| 12 | Duplicate creation returns 409 | Create same resource twice -> 409 or idempotent success |
 
-```python
-def test_inventory_segments_lists_ts_files_sorted():
-    """S3 listing returns .ts files sorted by LastModified."""
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 not found, 409 conflict/duplicate, 422 validation
 
-def test_inventory_segments_ignores_non_ts_files():
-    """Files without .ts extension are excluded from inventory."""
+**Edge cases**: Empty state (no resources), concurrent mutations, resource with max-length fields, Unicode content
 
-def test_concatenate_segments_produces_single_file():
-    """FFmpeg concat produces one output file with correct duration."""
+### Test Data Requirements
 
-def test_concatenate_empty_segments_fails_gracefully():
-    """Empty segment list transitions to failed status."""
+Seed broadcast session in `beforeAll`. Create test resources via API with unique `Date.now()` suffixed names.
 
-def test_transcode_uses_canonical_abr_ladder():
-    """Transcode job request includes all renditions from CANONICAL_ABR_LADDER."""
+**Test users**: Root (ROOT, admin operations), Alice (USER, standard operations), Bob (USER, cross-user isolation)
 
-def test_thumbnail_generated_at_10_percent():
-    """FFmpeg -ss is set to 10% of total duration."""
+### CI/Pipeline
 
-def test_finalize_sets_ready_and_expires_at():
-    """After finalization, status=ready and expires_at is set."""
-
-def test_process_recording_full_pipeline_mock():
-    """End-to-end pipeline with mocked FFmpeg and S3."""
-
-def test_process_recording_handles_concat_failure():
-    """If concatenation fails, status=failed with error_code."""
-
-def test_process_recording_handles_transcode_failure():
-    """If transcode fails, status=failed and previous artifacts preserved."""
-```
-
-**Test Group 3: API Endpoint (7 tests)**
-
-```python
-def test_get_recording_returns_signed_url_when_ready():
-    """GET /broadcast/sessions/{id}/recording returns 200 with playback_url."""
-
-def test_get_recording_returns_404_when_no_recording():
-    """GET returns 404 with BROADCAST_RECORDING_NOT_FOUND code."""
-
-def test_get_recording_returns_410_when_expired():
-    """GET returns 410 with BROADCAST_RECORDING_EXPIRED code."""
-
-def test_get_recording_returns_202_when_processing():
-    """GET returns 202 with BROADCAST_RECORDING_PROCESSING when status != ready."""
-
-def test_signed_url_expires_at_matches_ttl():
-    """playback_expires_at = now + broadcast_recording_playback_ttl_seconds."""
-
-def test_recording_requires_authentication():
-    """Unauthenticated request returns 401."""
-
-def test_stop_session_triggers_recording_creation():
-    """After stop_session_with_provider, a recording row exists in DDB."""
-```
-
-**Test Group 4: Retention (4 tests)**
-
-```python
-def test_expire_stale_recordings_transitions_to_expired():
-    """Recordings past expires_at are transitioned to 'expired' status."""
-
-def test_expire_stale_recordings_deletes_s3_objects():
-    """S3 objects (manifest, segments, thumbnail) are deleted on expiry."""
-
-def test_non_expired_recordings_are_not_touched():
-    """Recordings with expires_at in the future remain 'ready'."""
-
-def test_already_expired_recordings_are_skipped():
-    """Running expiry on already-expired recordings is idempotent."""
-```
-
-### 5.2 Unit Test Setup (conftest)
-
-Tests use the existing `moto` mock for DynamoDB and S3. The `BroadcastRecordings` table is
-created in the test fixture:
-
-```python
-@pytest.fixture(autouse=True)
-def broadcast_recordings_table(ddb_resource):
-    table = ddb_resource.create_table(
-        TableName="BroadcastRecordings",
-        KeySchema=[{"AttributeName": "recording_id", "KeyType": "HASH"}],
-        AttributeDefinitions=[
-            {"AttributeName": "recording_id", "AttributeType": "S"},
-            {"AttributeName": "session_id", "AttributeType": "S"},
-            {"AttributeName": "status", "AttributeType": "S"},
-            {"AttributeName": "scope", "AttributeType": "S"},
-            {"AttributeName": "created_at", "AttributeType": "S"},
-            {"AttributeName": "expires_at", "AttributeType": "S"},
-        ],
-        GlobalSecondaryIndexes=[...],
-        BillingMode="PAY_PER_REQUEST",
-    )
-    yield table
-```
-
-FFmpeg is mocked using `unittest.mock.patch` on `subprocess.run`:
-
-```python
-@pytest.fixture
-def mock_ffmpeg(monkeypatch):
-    def fake_run(args, **kwargs):
-        # Create expected output files based on args
-        ...
-        return subprocess.CompletedProcess(args, 0)
-    monkeypatch.setattr("subprocess.run", fake_run)
-```
-
-### 5.3 E2E Tests (`frontend/e2e/broadcast-recording.spec.ts`)
-
-**Section 90: Recording API -- Basic Flow (6 tests)**
-
-```typescript
-test.describe("Section 90: Recording creation and retrieval", () => {
-  let profileId: string;
-  let sessionId: string;
-
-  test.beforeAll(async ({ browser }) => {
-    // Create profile + session + start + stop (triggers recording)
-    profileId = await createTestProfile(rootPage, "root");
-    sessionId = await createTestSession(rootPage, "root", profileId);
-    await startSession(rootPage, "root", sessionId);
-    await stopSession(rootPage, "root", sessionId);
-  });
-
-  test("recording is created after session stop", async () => {
-    const resp = await apiGet(rootPage, `/broadcast/sessions/${sessionId}/recording`);
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
-    expect(body.session_id).toBe(sessionId);
-    expect(body.status).toBe("ready");
-  });
-
-  test("recording has a signed playback URL", async () => {
-    const body = await getRecording(rootPage, sessionId);
-    expect(body.playback_url).toContain("/vod/");
-    expect(body.playback_expires_at).toBeGreaterThan(Date.now() / 1000);
-  });
-
-  test("recording has duration metadata", async () => {
-    const body = await getRecording(rootPage, sessionId);
-    expect(body.duration_seconds).toBeGreaterThanOrEqual(0);
-  });
-
-  test("recording has thumbnail URL", async () => {
-    const body = await getRecording(rootPage, sessionId);
-    // In dev mode, thumbnail may be a placeholder
-    expect(body.thumbnail_url).toBeTruthy();
-  });
-
-  test("recording for non-existent session returns 404", async () => {
-    const resp = await apiGet(rootPage, `/broadcast/sessions/nonexistent-id/recording`);
-    expect(resp.status()).toBe(404);
-    const body = await resp.json();
-    expect(body.detail.code).toBe("BROADCAST_RECORDING_NOT_FOUND");
-  });
-
-  test("recording requires authentication", async () => {
-    const resp = await fetch(`http://localhost:8000/broadcast/sessions/${sessionId}/recording`);
-    expect(resp.status).toBe(401);
-  });
-});
-```
-
-**Section 91: Recording Expiry (3 tests)**
-
-```typescript
-test.describe("Section 91: Recording expiry behavior", () => {
-  test("expired recording returns 410 Gone", async () => {
-    // Create a recording with retention_days=0 (immediate expiry) via DDB manipulation
-    // Then trigger reconciler or directly set status=expired
-    const resp = await apiGet(rootPage, `/broadcast/sessions/${expiredSessionId}/recording`);
-    expect(resp.status()).toBe(410);
-    const body = await resp.json();
-    expect(body.detail.code).toBe("BROADCAST_RECORDING_EXPIRED");
-  });
-
-  test("recording in processing state returns 202", async () => {
-    // Set recording status to "transcoding" in DDB
-    const resp = await apiGet(rootPage, `/broadcast/sessions/${processingSessionId}/recording`);
-    expect(resp.status()).toBe(202);
-  });
-
-  test("signed URL respects configured TTL", async () => {
-    const body = await getRecording(rootPage, readySessionId);
-    const now = Math.floor(Date.now() / 1000);
-    const expectedTtl = 14400; // 4 hours default
-    expect(body.playback_expires_at).toBeGreaterThan(now);
-    expect(body.playback_expires_at).toBeLessThanOrEqual(now + expectedTtl + 10);
-  });
-});
-```
-
-**Section 92: Recording UI (4 tests)**
-
-```typescript
-test.describe("Section 92: Recording UI in Broadcaster Dashboard", () => {
-  test("'Watch Recording' button visible on stopped session", async () => {
-    await injectAuth(rootPage, "root");
-    await rootPage.goto("/broadcaster");
-    // Open detail dialog for stopped session
-    await rootPage.getByRole("button", { name: /view details/i }).first().click();
-    await expect(rootPage.getByRole("button", { name: /watch recording/i })).toBeVisible();
-  });
-
-  test("'Watch Recording' button not visible on live session", async () => {
-    // Start a session, verify no recording button
-    await expect(rootPage.getByRole("button", { name: /watch recording/i })).not.toBeVisible();
-  });
-
-  test("clicking 'Watch Recording' shows video player", async () => {
-    await rootPage.getByRole("button", { name: /watch recording/i }).click();
-    await expect(rootPage.locator("video")).toBeVisible();
-  });
-
-  test("expired recording shows appropriate message", async () => {
-    // Navigate to session with expired recording
-    await expect(rootPage.getByText(/recording has expired/i)).toBeVisible();
-  });
-});
-```
-
-### 5.4 Mock Recording Flow for E2E
-
-Since E2E tests run against the local dev stack (no actual media is ingested), the recording
-pipeline must produce valid results without real media:
-
-1. **No FFmpeg required**: When `S.broadcast_recording_mock_on_no_ffmpeg=True` (default in dev),
-   the worker detects FFmpeg absence and creates a mock recording:
-   - `duration_seconds = 0`
-   - `segment_count = 0`
-   - `s3_manifest_key = "{session_id}/recording/master.m3u8"` (placeholder)
-   - `s3_thumbnail_key = "{session_id}/recording/thumbnail.jpg"` (placeholder)
-   - `status = "ready"`
-
-2. **Mock playback URL**: The signed URL points to a valid path that would return 200 in a
-   real deployment. In tests, we only assert the URL format and expiry, not actual playback.
-
-3. **Inline processing**: With `broadcast_recording_worker_inline=True`, the recording is
-   processed synchronously within the `stop_session_with_provider()` call. This means the
-   E2E test can immediately query `GET /sessions/{id}/recording` after stop without polling.
-
-### 5.5 Test Data Isolation
-
-Following established E2E patterns:
-- Use timestamp-suffixed profile/session names: `E2E Recording Profile ${Date.now()}`
-- Track created session IDs in `createdSessionIds` array
-- Clean up in `afterAll`: delete sessions and recordings via admin API
-- Use `root` identity for all operations (start/stop require admin/root role)
-
-### 5.6 Potential Flakiness Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Recording not ready immediately | With inline worker, it's synchronous; no polling needed |
-| FFmpeg not installed in CI | Mock mode produces placeholder recording |
-| S3 bucket not created | Add `broadcast-vod` bucket creation to `local-ddb-init.py` startup |
-| Expiry test timing | Use DDB direct write to force `expires_at` in the past |
-| Concurrent test runs | Unique session IDs prevent collisions |
+Serial execution. `BROADCAST_PROVIDER=local`. Retry-safe with unique resource names.
 
 ---
 
-## Appendix A: Response Models
+## Dependencies & Merge Safety
 
-### BroadcastRecordingOut (API response)
+### Depends On
 
-```python
-class BroadcastRecordingOut(BaseModel):
-    recording_id: str
-    session_id: str
-    status: str  # "pending" | "inventorying" | "concatenating" | "transcoding" | "finalizing" | "ready" | "expired" | "failed"
-    duration_seconds: Optional[float] = None
-    playback_url: Optional[str] = None
-    playback_expires_at: Optional[int] = None
-    thumbnail_url: Optional[str] = None
-    segment_count: Optional[int] = None
-    total_bytes: Optional[int] = None
-    renditions: list[str] = Field(default_factory=list)
-    created_at: str
-    completed_at: Optional[str] = None
-    expires_at: Optional[str] = None
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-```
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-001 | Broadcast session lifecycle and S3 archive prefix | Implemented | Yes |
 
-### Error Codes
+### Depended On By
 
-| Code | HTTP | Condition |
-|------|------|-----------|
-| `BROADCAST_RECORDING_NOT_FOUND` | 404 | No recording exists for the session |
-| `BROADCAST_RECORDING_EXPIRED` | 410 | Recording past retention period |
-| `BROADCAST_RECORDING_PROCESSING` | 202 | Recording still being processed |
-| `BROADCAST_RECORDING_FAILED` | 500 | Recording pipeline failed |
-| `BROADCAST_RECORDING_TOO_LARGE` | 413 | Segment count exceeds `broadcast_recording_max_segments` |
-| `BROADCAST_RECORDING_DISABLED` | 503 | `broadcast_recording_enabled=False` |
+| Ticket | What It Needs |
+|---|---|
+| BCAST-008 | Recording storage for MP4 download conversion |
 
-## Appendix B: File Reference
+### Merge Strategy
 
-| File | Role in recording feature |
-|------|---------------------------|
-| `app/models_broadcast.py` | `BroadcastRecordingModel`, `BroadcastRecordingStatus` |
-| `app/services/broadcast_recording.py` | Recording lifecycle management (NEW) |
-| `app/services/broadcast_recording_worker.py` | Processing pipeline worker (NEW) |
-| `app/services/broadcast_orchestrator.py` | Post-stop recording trigger |
-| `app/services/broadcast_store.py` | Recording DDB CRUD |
-| `app/services/broadcast_archive.py` | Archive S3 prefix building |
-| `app/services/broadcast_reconciler.py` | Retention expiry loop |
-| `app/services/ffmpeg_abr_pipeline.py` | ABR transcode (reused) |
-| `app/services/broadcast_playback.py` | URL signing (pattern reused) |
-| `app/services/broadcast_cloudfront.py` | CloudFront signing (pattern reused) |
-| `app/contracts/video_pipeline_contract.py` | Job request/event models |
-| `app/contracts/video_rendition_profiles.py` | ABR ladder definition |
-| `app/routers/broadcast.py` | Recording API endpoint |
-| `app/core/settings.py` | Recording configuration settings |
-| `app/core/tables.py` | `T.broadcast_recordings` table handle |
-| `scripts/local-ddb-init.py` | Table + GSI creation |
-| `frontend/src/api/endpoints/broadcast.ts` | `getRecording()` client wrapper |
-| `frontend/src/pages/broadcaster/SessionDetailDialog.tsx` | "Watch Recording" button |
-| `tests/test_broadcast_recording.py` | Unit tests (NEW) |
-| `tests/test_broadcast_recording_worker.py` | Worker unit tests (NEW) |
-| `frontend/e2e/broadcast-recording.spec.ts` | E2E tests (NEW) |
+Independent. New DDB table (`BroadcastRecordings`), new service (`broadcast_recording.py`). Feature-flag-gated via `broadcast_recording_enabled`.
+
+### Merge Checklist
+
+- [ ] DDB table/fields added to `scripts/local-ddb-init.py` (if new table needed)
+- [ ] Settings added to `app/core/settings.py`
+- [ ] Service and router files created/modified
+- [ ] Frontend components and API wrappers created
+- [ ] E2E test passes in CI
+- [ ] No breaking changes to existing endpoints
 
 ---
 

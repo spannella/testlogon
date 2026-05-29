@@ -1261,3 +1261,70 @@ test("217.6 Template list sorts by updated_at descending", async ({ page }) => {
 | `app/contracts/kyc_templates_contract.py` | -- | -- | Does NOT exist — new file required |
 | `frontend/src/pages/admin/KycTemplatesPage.tsx` | -- | -- | Does NOT exist — new page required |
 | `frontend/src/api/endpoints/kyc-templates.ts` | -- | -- | Does NOT exist — new file required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_kyc_templates.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_create_template_stores_metadata` | Create template stores metadata |
+| 2 | `test_upload_version_stores_pdf_in_s3` | Upload version stores pdf in s3 |
+| 3 | `test_activate_deactivates_siblings` | Activate deactivates siblings |
+| 4 | `test_get_active_by_slug_returns_latest` | Get active by slug returns latest |
+| 5 | `test_duplicate_slug_raises_409` | Duplicate slug raises 409 |
+| 6 | `test_render_replaces_placeholders` | Render replaces placeholders |
+| 7 | `test_render_missing_fields_uses_fallback` | Render missing fields uses fallback |
+| 8 | `test_archive_sets_all_versions_archived` | Archive sets all versions archived |
+| 9 | `test_required_for_tier_filters_correctly` | Required for tier filters correctly |
+| 10 | `test_preview_uses_mock_data` | Preview uses mock data |
+
+### Integration Tests
+
+1. Create + upload + activate + render => signature packet created
+2. Case readiness includes missing templates for tier_2
+3. Deactivate all templates => render-for-case returns 400
+4. Non-admin user cannot create templates (403)
+5. Archived template excluded from active list
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- DDB table: `kyc_templates` created in `scripts/local-ddb-init.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `KYC_TEMPLATE_LIBRARY_ENABLED=true`, `KYC_TEMPLATE_RENDER_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| KYC-009 | Tiered Verification Levels for tier definitions | Hard |
+| KYC-007 | Enhanced Document Signing infrastructure | Hard |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| KYC-020 | Multi-language support localizes template content |
+
+### Merge Strategy
+**Sequential -- requires KYC-009 and KYC-007 merged first. Template rendering creates signature packets via KYC-007 infrastructure.**
+
+### Merge Checklist
+- [ ] DDB table `kyc_templates` added to `scripts/local-ddb-init.py`
+- [ ] Feature flags configured in `.env.local`: KYC_TEMPLATE_LIBRARY_ENABLED=true, KYC_TEMPLATE_RENDER_ENABLED=true
+- [ ] Service file created/modified: `app/services/kyc_templates.py`
+- [ ] Router registered in `app/main.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_kyc_templates.py`

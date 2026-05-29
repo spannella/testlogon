@@ -942,6 +942,106 @@ class TestIsAnyBlock:
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_blocking.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_block_creates_forward_entity` | Block creates forward entity verified |
+| 2 | `test_block_creates_reverse_entity` | Block creates reverse entity verified |
+| 3 | `test_block_auto_unfollows_both_directions` | Block auto unfollows both directions verified |
+| 4 | `test_unblock_removes_both_entities` | Unblock removes both entities verified |
+| 5 | `test_self_block_raises_error` | Self block raises error verified |
+| 6 | `test_duplicate_block_raises_error` | Duplicate block raises error verified |
+| 7 | `test_is_any_block_bidirectional` | Is any block bidirectional verified |
+| 8 | `test_get_blocked_users_returns_enriched_list` | Get blocked users returns enriched list verified |
+| 9 | `test_get_blocked_users_paginates` | Get blocked users paginates verified |
+| 10 | `test_get_blocked_set_returns_set` | Get blocked set returns set verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Block user then DM creation returns 403; unblock restores DM creation
+2. Block user then GET /feed excludes blocked user's posts; unblock restores them
+3. Block auto-unfollows both directions — follower/following counts decrement
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/user-blocking.spec.ts`
+**Sections**: 1-6 (25 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Alice blocks Bob | 200; ok=true, status=blocked |
+| 2 | Duplicate block returns 409 | 409 |
+| 3 | Alice cannot block herself | 400 |
+| 4 | Block status shows is_blocked_by_me=true | GET /block-status returns true |
+| 5 | Alice unblocks Bob | 200; status=unblocked |
+| 6 | Block auto-unfollows both directions | GET /status -> is_following=false |
+| 7 | DM creation fails when blocked | 403 |
+| 8 | After unblock DM creation works | 200 |
+| 9 | Blocked user's posts hidden from feed | Alice GET /feed -> Bob's post absent |
+| 10 | Blocked users page loads | /settings/blocked; heading visible |
+| 11 | Blocked user appears in list with unblock button | Display name + Unblock button visible |
+| 12 | Empty state when no blocks | You haven't blocked anyone message |
+
+**Negative tests**: 400 self-block, 409 already blocked, 404 target not found, 403 DM creation when blocked, 403 message send when blocked
+
+**Edge cases**: Block-unblock rapid cycling (rate limited), group chat message filtering for blocked user, existing DM after block shows disabled state
+
+### Test Data Requirements
+
+- **DDB seeds**: Alice and Bob with mutual follows; DM conversation; posts from both users
+- **Test users**: Alice (blocker), Bob (blocked), Charlie (unrelated observer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: USER_BLOCKING_ENABLED=true (default)
+- **Serial execution**: Feed enforcement tests must run after block is confirmed active
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| Social service (existing) | _is_blocked() infrastructure in app/services/social.py |
+| Messaging router (existing) | find_or_create_dm() needs block check added |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SOCIAL-002 | Repost blocked user's content returns 403 |
+| SOCIAL-003 | Search results filter out blocked users |
+| SOCIAL-006 | Tag discovery filters blocked users' posts |
+
+### Merge Strategy: **Independent**
+
+Uses existing app_single_table with BLOCKED# prefix. Core safety feature — merge early.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

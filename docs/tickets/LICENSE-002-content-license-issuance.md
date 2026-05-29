@@ -805,3 +805,74 @@ All file paths relative to the repository root.
 - `scripts/local-ddb-init.py` — Add `issued_licenses` TableDef with 3 GSIs
 - `frontend/src/App.tsx` — Add issued license routes
 - `frontend/src/components/layout/Sidebar.tsx` — Add sub-items under Licenses nav
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_license_issuance.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_issue_per_user_license` | Issue per user license |
+| 2 | `test_issue_blanket_license` | Issue blanket license |
+| 3 | `test_set_terms_profit_share` | Set terms profit share |
+| 4 | `test_revoke_license` | Revoke license |
+| 5 | `test_list_licenses_held` | List licenses held |
+| 6 | `test_browse_licensed_content_library` | Browse licensed content library |
+| 7 | `test_update_blanket_terms` | Update blanket terms |
+| 8 | `test_licensed_badge_on_content` | Licensed badge on content |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/license-issuance.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~16 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `LICENSE_ISSUANCE_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| LICENSE-001 | Agreement management infrastructure | Soft |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| LICENSE-003 | Revenue Sharing reads license terms |
+| LICENSE-004 | License Request workflow creates IssuedLicense |
+| LICENSE-005 | Syndicate Open Licensing auto-creates licenses |
+
+### Merge Strategy
+**Independent -- can merge before LICENSE-001 since it creates its own license records. LICENSE-001 is only needed for agreement-backed licenses.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: LICENSE_ISSUANCE_ENABLED=true
+- [ ] Service file created/modified: `app/services/license_issuance.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/license-issuance.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_license_issuance.py`

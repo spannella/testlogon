@@ -796,6 +796,68 @@ test("4.1 Drag overlay appears on file drag", async ({ page }) => {
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+| Test | Description |
+|------|-------------|
+| `test_uploadReducer_ADD_FILES_creates_items` | Reducer creates one `UploadItem` per file with `idle` status and correct initial state |
+| `test_uploadReducer_SET_PROGRESS_updates` | Progress value between 0-1 correctly stored; `bytesUploaded` updated |
+| `test_uploadReducer_CANCEL_transitions_state` | Status transitions to `cancelled`; xhr reference nulled |
+| `test_uploadReducer_SET_ERROR_stores_message` | Error message preserved in state |
+| `test_uploadReducer_REMOVE_deletes_item` | Item no longer in array after removal |
+| `test_validateVideoFile_accepts_mp4` | Returns `null` for valid `video/mp4` file |
+| `test_validateVideoFile_rejects_pdf` | Returns error string for `application/pdf` |
+| `test_validateVideoFile_rejects_over_10GB` | Returns size error for oversized file |
+| `test_validateVideoFile_rejects_empty` | Returns "File is empty" for 0-byte file |
+| `test_formatDuration_seconds_to_mmss` | `222` formats to `"3:42"` |
+
+**Framework**: Vitest (frontend unit tests)
+**Test files**: `frontend/src/pages/videos/__tests__/uploadReducer.test.ts`, `frontend/src/pages/videos/__tests__/uploadUtils.test.ts`
+
+### Integration Tests
+
+| Scenario | Services | Assertion |
+|----------|----------|-----------|
+| Presign -> S3 PUT -> complete flow | Frontend XHR + backend vod.py + moto S3 | Video asset record created with correct `size_bytes` and `content_type` |
+| Client-side validation rejects before presign | Frontend validation | Non-video MIME type shows toast error; no API call made |
+| Cancel during S3 PUT | Frontend XHR abort | Item transitions to `cancelled`; presigned ticket expires naturally |
+
+### E2E Tests (Playwright)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Presign returns upload URL for valid video | 200; `upload_url` truthy |
+| 2 | Presign rejects non-video content type | 422 |
+| 3 | Full presign -> PUT -> complete flow | 200; asset has `video_id` |
+| 4 | Page loads with "Videos" heading | `getByRole("heading", { name: "Videos" })` visible |
+| 5 | Empty state shown when no videos | "No videos yet" text visible |
+| 6 | File input accepts video files | Click upload button; attach file; presign request sent |
+| 7 | Upload progress bar appears during upload | Progress element visible during PUT |
+| 8 | Upload completes and video appears in grid | After complete, video card appears |
+| 9 | Cancel button aborts in-progress upload | Click cancel; status shows "Cancelled" |
+| 10 | Edit title via card menu | Menu -> Edit -> save -> title updated |
+| 11 | Delete video via card menu | Menu -> Delete -> confirm -> card removed |
+| 12 | Drag overlay appears on file drag | Dispatch drag events; "Drop video" text visible |
+
+**Auth**: `injectAuth(page, "alice")` + CSRF header
+**Test file**: `frontend/e2e/video-upload.spec.ts`
+
+### Test Data Requirements
+- DDB tables: `VideoMetadata`, `sessions`
+- S3 bucket: `video_upload_bucket` (`local-uploads`) pre-created by moto
+- Test users: Alice (USER)
+- Sessions seeded by `e2e_session_setup.py`
+
+### CI/Pipeline
+- Feature flag: None required (`/videos` route is additive)
+- Serial execution with `workers: 1`
+- Retry-safe (each upload uses a fresh presign ticket and unique filename)
+- `beforeunload` handler prevents accidental test teardown during active uploads
+
+---
+
 ## Appendix: File Reference
 
 | Path | Role |

@@ -1036,3 +1036,81 @@ tax_forms_enabled: bool = os.environ.get("TAX_FORMS_ENABLED", "false").lower() =
 | `tax_forms` DDB table | Table definition in `scripts/local-ddb-init.py` |
 | Frontend W-9 form page | TIN input, tax info display |
 | Frontend 1099 download page | Annual form download |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_tax_forms.py`
+
+| # | Test Function | Description | Mocks |
+|---|--------------|-------------|-------|
+| 1 | `test_fin_008_create_basic` | Core creation logic succeeds with valid inputs | moto DDB |
+| 2 | `test_fin_008_validation_rejects_invalid` | 400/422 for invalid inputs | moto DDB |
+| 3 | `test_fin_008_pagination` | Cursor-based pagination returns correct pages | moto DDB |
+| 4 | `test_fin_008_auth_required` | 401 for unauthenticated requests | moto DDB |
+| 5 | `test_fin_008_forbidden_wrong_user` | 403 when non-owner accesses restricted resource | moto DDB |
+| 6 | `test_fin_008_not_found` | 404 for non-existent resource | moto DDB |
+| 7 | `test_fin_008_duplicate_rejected` | 409 for duplicate creation | moto DDB |
+| 8 | `test_fin_008_feature_flag_off` | Feature disabled returns 404 when flag is off | moto DDB |
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Full CRUD lifecycle: create, read, update, delete | Service layer, DDB |
+| 2 | Cross-service interaction with dependent features | Multiple service modules |
+| 3 | Concurrent access patterns do not corrupt data | Service layer, parallel requests |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/tax-forms.spec.ts`
+
+Tests use `injectAuth(page, identity)` for cookie-based auth and include CSRF headers (`x-csrf-token`) on all POST/PUT/DELETE requests. Negative tests cover 401 (unauthenticated), 403 (wrong role/user), 404 (not found), 409 (conflict), and 422 (validation) responses. Edge cases include duplicate operations (idempotency), concurrent access, and feature-flag-disabled behavior.
+
+**Total E2E tests**: 12
+
+### Test Data Requirements
+
+- DDB seeds: required tables created via `scripts/local-ddb-init.py`
+- Test users: Alice, Bob, Root, Charlie via `e2e_session_setup.py` / `e2e_admin_session_setup.py`
+- Feature flag: `TAX_FORMS_ENABLED` in `.env.local`
+
+### CI/Pipeline
+
+- Feature flag: `TAX_FORMS_ENABLED` must be enabled for tests to run
+- Serial execution: run with `--workers 1` to avoid shared state conflicts
+- Retry safety: tests use unique timestamps/UUIDs per run; safe to retry on failure
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Status | What It Provides |
+|--------|--------|-----------------|
+| (none) | -- | This ticket has no upstream ticket dependencies |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| (none currently) | -- |
+
+### Merge Strategy
+
+**Independent** -- Changes are additive (new service files, new router, new frontend pages). Shared infrastructure files (`main.py`, `settings.py`, `tables.py`, `local-ddb-init.py`) receive only additive modifications.
+
+### Merge Checklist
+
+- [ ] All new DDB tables/GSIs added to `scripts/local-ddb-init.py`
+- [ ] Settings added to `app/core/settings.py`
+- [ ] Table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Frontend routes added to `App.tsx`
+- [ ] Feature flag `TAX_FORMS_ENABLED` added to `.env.local.example`
+- [ ] All E2E tests pass
+- [ ] No regressions in existing test suite

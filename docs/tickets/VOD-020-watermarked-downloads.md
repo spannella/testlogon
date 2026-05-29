@@ -1085,6 +1085,92 @@ If the feature is permanently removed:
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_vod_020.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_vod_020_crud` | Vod 020 crud verified |
+| 2 | `test_vod_020_validation` | Vod 020 validation verified |
+| 3 | `test_vod_020_auth` | Vod 020 auth verified |
+| 4 | `test_vod_020_not_found` | Vod 020 not found verified |
+| 5 | `test_vod_020_edge_cases` | Vod 020 edge cases verified |
+| 6 | `test_vod_020_integration` | Vod 020 integration verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Watermarked Downloads integrates with video metadata CRUD lifecycle
+2. End-to-end flow from video creation through watermarked downloads feature
+3. Error propagation from video metadata service to watermarked downloads layer
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/vod-020.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Watermarked Downloads API returns 200 | 200; expected fields present |
+| 2 | Watermarked Downloads handles invalid input | 422 or 400 response |
+| 3 | Watermarked Downloads requires auth | 401 without session |
+| 4 | Watermarked Downloads UI renders | Page loads; key elements visible |
+| 5 | Watermarked Downloads integrates with video metadata | Video data correctly referenced |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 video not found, 422 invalid input
+
+**Edge cases**: Video in processing state, deleted video reference, concurrent operations
+
+### Test Data Requirements
+
+- **DDB seeds**: Video metadata records from VOD-001; related watermarked downloads test data
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: VOD_ENABLED=true
+- **Serial execution**: Must run after VOD-001 video metadata table is created and seeded
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| VOD-001 | Video metadata |
+| VOD-012 | Download infrastructure |
+| S3 mock (existing) | Watermarked file storage |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Sequential**
+
+Requires VOD-001 video metadata model. Also depends on VOD-012.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

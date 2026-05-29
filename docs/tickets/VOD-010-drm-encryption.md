@@ -1846,6 +1846,94 @@ The 16-byte key file written for FFmpeg (`enc.key`) must be securely deleted aft
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_vod_010.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_vod_010_crud` | Vod 010 crud verified |
+| 2 | `test_vod_010_validation` | Vod 010 validation verified |
+| 3 | `test_vod_010_auth` | Vod 010 auth verified |
+| 4 | `test_vod_010_not_found` | Vod 010 not found verified |
+| 5 | `test_vod_010_edge_cases` | Vod 010 edge cases verified |
+| 6 | `test_vod_010_integration` | Vod 010 integration verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. DRM Encryption integrates with video metadata CRUD lifecycle
+2. End-to-end flow from video creation through drm encryption feature
+3. Error propagation from video metadata service to drm encryption layer
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/vod-010.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | DRM Encryption API returns 200 | 200; expected fields present |
+| 2 | DRM Encryption handles invalid input | 422 or 400 response |
+| 3 | DRM Encryption requires auth | 401 without session |
+| 4 | DRM Encryption UI renders | Page loads; key elements visible |
+| 5 | DRM Encryption integrates with video metadata | Video data correctly referenced |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 video not found, 422 invalid input
+
+**Edge cases**: Video in processing state, deleted video reference, concurrent operations
+
+### Test Data Requirements
+
+- **DDB seeds**: Video metadata records from VOD-001; related drm encryption test data
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: VOD_ENABLED=true
+- **Serial execution**: Must run after VOD-001 video metadata table is created and seeded
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| VOD-001 | Video metadata model for encryption key storage |
+| KMS mock (existing) | scripts/mock_kms_server.py for key management |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| VOD-008 | Player uses DRM for protected playback |
+| VOD-012 | MP4 download may need DRM-free variant |
+
+### Merge Strategy: **Sequential**
+
+Requires VOD-001 video metadata model. Can merge after VOD-001.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix A: Configuration Reference
 
 | Environment Variable | Default | Description |

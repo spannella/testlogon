@@ -975,6 +975,92 @@ No feature flag needed. The changes are additive:
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_drag_drop_reorder.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_reorder_files_updates_sort_order` | Reorder files updates sort order verified |
+| 2 | `test_reorder_sidebar_items_persists` | Reorder sidebar items persists verified |
+| 3 | `test_drag_between_folders` | Drag between folders verified |
+| 4 | `test_reorder_with_invalid_index` | Reorder with invalid index verified |
+| 5 | `test_concurrent_reorder_conflict` | Concurrent reorder conflict verified |
+| 6 | `test_reorder_preserves_other_metadata` | Reorder preserves other metadata verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Drag file to new position -> PATCH order -> GET returns new order
+2. Drag sidebar item -> order saved to profile preferences -> reload preserves order
+3. Drag file between folders -> parent_id updated + sort_order set
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/drag-drop-reorder.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Drag file to reorder | Drag handle; drop at new position; order persisted |
+| 2 | Drag sidebar item | Drag nav item; new position saved |
+| 3 | Drag between folders | File moved to target folder |
+| 4 | Undo reorder | Ctrl+Z reverts to previous order |
+| 5 | Keyboard reorder | Alt+Arrow keys move selected item |
+| 6 | Reorder persists on reload | Reload page; order unchanged |
+
+**Negative tests**: 400 invalid target index, 404 item not found, 403 reorder in read-only folder
+
+**Edge cases**: Drag to same position (no-op), rapid successive drags, drag during upload
+
+### Test Data Requirements
+
+- **DDB seeds**: Files in file manager with sort_order; sidebar preferences
+- **Test users**: Alice
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: None
+- **Serial execution**: Drag tests use Playwright mouse events which are order-sensitive
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| File manager (existing) | Node ordering in filemanager.py |
+| Sidebar (existing) | Navigation item ordering |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Independent**
+
+UI enhancement with backend order persistence. No schema migration.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

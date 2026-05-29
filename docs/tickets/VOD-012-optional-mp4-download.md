@@ -813,6 +813,93 @@ test("123.3 File size displayed next to download button", async ({ page }) => {
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_vod_012.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_vod_012_crud` | Vod 012 crud verified |
+| 2 | `test_vod_012_validation` | Vod 012 validation verified |
+| 3 | `test_vod_012_auth` | Vod 012 auth verified |
+| 4 | `test_vod_012_not_found` | Vod 012 not found verified |
+| 5 | `test_vod_012_edge_cases` | Vod 012 edge cases verified |
+| 6 | `test_vod_012_integration` | Vod 012 integration verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Optional MP4 Download integrates with video metadata CRUD lifecycle
+2. End-to-end flow from video creation through optional mp4 download feature
+3. Error propagation from video metadata service to optional mp4 download layer
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/vod-012.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Optional MP4 Download API returns 200 | 200; expected fields present |
+| 2 | Optional MP4 Download handles invalid input | 422 or 400 response |
+| 3 | Optional MP4 Download requires auth | 401 without session |
+| 4 | Optional MP4 Download UI renders | Page loads; key elements visible |
+| 5 | Optional MP4 Download integrates with video metadata | Video data correctly referenced |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 video not found, 422 invalid input
+
+**Edge cases**: Video in processing state, deleted video reference, concurrent operations
+
+### Test Data Requirements
+
+- **DDB seeds**: Video metadata records from VOD-001; related optional mp4 download test data
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: VOD_ENABLED=true
+- **Serial execution**: Must run after VOD-001 video metadata table is created and seeded
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| VOD-001 | Video metadata for download permission flag |
+| S3 mock (existing) | moto for file serving |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| VOD-020 | Watermarked downloads extend download capability |
+
+### Merge Strategy: **Sequential**
+
+Requires VOD-001 video metadata model. Can merge after VOD-001.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix A: Configuration Reference
 
 | Environment Variable | Default | Description |

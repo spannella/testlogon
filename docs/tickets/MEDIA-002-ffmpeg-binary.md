@@ -846,3 +846,61 @@ def _detect_formats(binary_path: str) -> set[str]:
 | `app/services/filemanager.py` | 1094 | Only 1 `shutil.which("ffprobe")` occurrence found (not 4 as claimed for ffmpeg) |
 | `app/core/settings.py` | 1120 | EXISTS: `ffmpeg_binary_path` setting with default `"ffmpeg"` |
 | `app/main.py` | 348-358 | EXISTS: FFmpeg startup validation via `ffmpeg_manager.validate_ffmpeg()` |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_ffmpeg_manager.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_detect_ffmpeg_binary` | Detect ffmpeg binary |
+| 2 | `test_validate_version_minimum` | Validate version minimum |
+| 3 | `test_version_parse_format` | Version parse format |
+| 4 | `test_health_check_reports_status` | Health check reports status |
+| 5 | `test_missing_binary_returns_none` | Missing binary returns none |
+| 6 | `test_provisioning_strategy_local` | Provisioning strategy local |
+| 7 | `test_startup_validation_logs_warning` | Startup validation logs warning |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `FFMPEG_VALIDATION_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| MOD-001 | Video review needs FFmpeg for thumbnail extraction |
+
+### Merge Strategy
+**Independent -- utility infrastructure. No functional dependencies. Improves health checks for existing FFmpeg-dependent features.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: FFMPEG_VALIDATION_ENABLED=true
+- [ ] Service file created/modified: `app/services/ffmpeg_manager.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_ffmpeg_manager.py`

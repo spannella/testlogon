@@ -877,3 +877,70 @@ All file paths relative to the repository root.
 - `app/models.py` — Add License Request Pydantic models
 - `scripts/local-ddb-init.py` — Add GSI4 to `issued_licenses` table
 - `frontend/src/App.tsx` — Add request routes
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_license_requests.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_create_request_with_terms` | Create request with terms |
+| 2 | `test_approve_creates_issued_license` | Approve creates issued license |
+| 3 | `test_deny_with_reason` | Deny with reason |
+| 4 | `test_counter_offer_sets_negotiating` | Counter offer sets negotiating |
+| 5 | `test_accept_counter_creates_license` | Accept counter creates license |
+| 6 | `test_withdraw_request` | Withdraw request |
+| 7 | `test_expire_stale_requests_30_days` | Expire stale requests 30 days |
+| 8 | `test_list_requests_sent_and_received` | List requests sent and received |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/license-requests.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~14 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `LICENSE_REQUESTS_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| LICENSE-002 | Content License Issuance for IssuedLicense creation on approval | Hard |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Sequential -- requires LICENSE-002 merged first. Approved requests auto-create IssuedLicense records.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: LICENSE_REQUESTS_ENABLED=true
+- [ ] Service file created/modified: `app/services/license_requests.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/license-requests.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_license_requests.py`

@@ -1273,3 +1273,68 @@ test.beforeAll(async ({ browser }) => {
 | `app/routers/sticker_collections.py` | — | **Does not exist** — new router required |
 | `frontend/src/components/shared/GifPicker.tsx` | — | **Does not exist** — new component required |
 | `frontend/src/components/shared/StickerPicker.tsx` | — | **Does not exist** — new component required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_gif_sticker_messages.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_send_gif_message` | Send gif message |
+| 2 | `test_send_sticker_message` | Send sticker message |
+| 3 | `test_gif_search_mock_results` | Gif search mock results |
+| 4 | `test_create_sticker_collection` | Create sticker collection |
+| 5 | `test_favorite_collection` | Favorite collection |
+| 6 | `test_search_stickers_by_alt_text` | Search stickers by alt text |
+| 7 | `test_gif_renders_with_alt` | Gif renders with alt |
+| 8 | `test_sticker_fixed_size` | Sticker fixed size |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/gif-sticker-messages.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~14 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `GIF_MESSAGES_ENABLED=true`, `STICKER_MESSAGES_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Independent -- new message kinds (gif, sticker). Mock GIF API in dev mode. Sticker collections stored in new DDB table.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: GIF_MESSAGES_ENABLED=true, STICKER_MESSAGES_ENABLED=true
+- [ ] Service file created/modified: `app/services/sticker_collections.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/gif-sticker-messages.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_gif_sticker_messages.py`

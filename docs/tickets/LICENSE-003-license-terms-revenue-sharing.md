@@ -877,3 +877,72 @@ All file paths relative to the repository root.
 - `app/routers/messaging.py` — Hook revenue splits into tip/unlock flows
 - `app/routers/newsfeed.py` — Hook revenue splits into post tip/unlock flows
 - `frontend/src/App.tsx` — Add revenue route
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_license_revenue.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_calculate_revenue_split_pct` | Calculate revenue split pct |
+| 2 | `test_calculate_fixed_cost` | Calculate fixed cost |
+| 3 | `test_write_bilateral_ledger_entries` | Write bilateral ledger entries |
+| 4 | `test_licensor_credit_increases_balance` | Licensor credit increases balance |
+| 5 | `test_licensee_debit_recorded` | Licensee debit recorded |
+| 6 | `test_profit_share_after_platform_fee` | Profit share after platform fee |
+| 7 | `test_aggregate_earnings_by_license` | Aggregate earnings by license |
+| 8 | `test_admin_audit_platform_wide` | Admin audit platform wide |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/license-revenue.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~14 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `LICENSE_REVENUE_SHARING_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| LICENSE-002 | Content License Issuance for license records and terms | Hard |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| LICENSE-005 | Syndicate licensing uses same revenue split logic |
+
+### Merge Strategy
+**Sequential -- requires LICENSE-002 merged first. Revenue splits reference IssuedLicense terms (profit_share_pct, revenue_share_pct, fixed_cost_cents).**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: LICENSE_REVENUE_SHARING_ENABLED=true
+- [ ] Service file created/modified: `app/services/license_revenue.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/license-revenue.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_license_revenue.py`

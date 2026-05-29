@@ -1597,3 +1597,73 @@ Renders:
 | `app/services/billing_shared.py` | — | EXISTS: billing table access patterns |
 | `app/services/subscription_access.py` | 55, 72 | EXISTS: `has_active_subscription` (55), `can_access_creator` (72) — already imported by vod_purchase.py |
 <!-- NOTE: This ticket's service design (vod_purchase.py) and data model changes (price_cents, access_mode on VideoMetadataModel) have been FULLY IMPLEMENTED. The router endpoints exist in video_listing.py rather than vod.py. The ticket should be marked as Complete or moved to verification status. -->
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_vod_ppv.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_set_video_price` | Set video price |
+| 2 | `test_purchase_creates_entitlement` | Purchase creates entitlement |
+| 3 | `test_check_entitlement_returns_true` | Check entitlement returns true |
+| 4 | `test_check_entitlement_no_purchase` | Check entitlement no purchase |
+| 5 | `test_playback_gated_without_entitlement` | Playback gated without entitlement |
+| 6 | `test_billing_ledger_debit_written` | Billing ledger debit written |
+| 7 | `test_creator_credit_written` | Creator credit written |
+| 8 | `test_free_video_no_entitlement_needed` | Free video no entitlement needed |
+| 9 | `test_idempotent_purchase` | Idempotent purchase |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/vod-ppv.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~16 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `VOD_PPV_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| MEDIA-001 | Shared player for VOD playback | Soft |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| MON-005 | Subscription-gated VOD extends entitlement check |
+
+### Merge Strategy
+**Independent -- new entitlement table and endpoints. Playback path extended with entitlement check (additive). Feature-flag-gated.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: VOD_PPV_ENABLED=true
+- [ ] Service file created/modified: `app/services/vod_entitlements.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/vod-ppv.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_vod_ppv.py`

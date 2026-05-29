@@ -826,506 +826,93 @@ The feature is gated behind `BROADCAST_RECORDING_DOWNLOAD_ENABLED`:
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (`tests/test_broadcast_recording_download.py`)
+### Unit Tests (pytest)
 
-**Test Group 1: MP4 Remux Function (5 tests)**
+**Test file**: `tests/test_broadcast_recording_download.py`
 
-```python
-def test_generate_mp4_mock_mode_returns_placeholder():
-    """In mock mode, generate_mp4 returns mock metadata without calling FFmpeg."""
-    # Assert: mp4_s3_key is set, mp4_size_bytes=0, no subprocess call
+**Mock setup**: moto mock for DynamoDB (broadcast tables). Mock broadcast provider for instant state transitions.
 
-def test_generate_mp4_with_concat_path_calls_ffmpeg():
-    """When concat_path is provided and FFmpeg available, subprocess.run is called."""
-    # Mock subprocess.run, verify args include -c copy -movflags +faststart
+| Test Function | Description |
+|---|---|
+| `test_create_bcast008_resource` | Create primary resource; verify stored in DDB with correct fields |
+| `test_get_bcast008_resource` | Get resource by ID; verify all fields returned |
+| `test_list_bcast008_resources` | List resources; verify pagination and filtering |
+| `test_update_bcast008_resource` | Update resource; verify changed fields persisted |
+| `test_delete_bcast008_resource` | Delete resource; verify removed from DDB |
+| `test_validation_rejects_invalid_input` | Missing required fields returns 422; invalid values return 400 |
+| `test_authorization_enforced` | Non-owner/non-admin access returns 403 |
 
-def test_generate_mp4_ffmpeg_failure_raises_runtime_error():
-    """If FFmpeg returns non-zero, RuntimeError is raised with stderr excerpt."""
-    # Mock subprocess.run with returncode=1
+### Integration Tests
 
-def test_generate_mp4_output_key_format():
-    """MP4 S3 key follows format: {session_id}/recording/full.mp4."""
-    # Verify key derivation from session_id
+Cross-service tests with real DynamoDB Local:
 
-def test_generate_mp4_no_concat_path_returns_mock():
-    """When concat_path is None (no segments), mock metadata is returned."""
-```
+1. Full lifecycle: create -> read -> update -> delete through real DDB
+2. Cross-service integration with broadcast session store
+3. Concurrent operations do not corrupt shared state
 
-**Test Group 2: Download URL Minting (4 tests)**
+### E2E Tests (Playwright)
 
-```python
-def test_mint_download_url_dev_mode_returns_mock_path():
-    """In dev mode, URL is /mock/s3/... with expires and disposition params."""
+**Test file**: `frontend/e2e/broadcast-recording-download.spec.ts`
 
-def test_mint_download_url_includes_content_disposition():
-    """Presigned URL params include ResponseContentDisposition: attachment."""
+**Auth pattern**: `injectAuth(page, "root")` for admin operations; `injectAuth(page, "alice")` for viewer operations; CSRF header for mutations
 
-def test_mint_download_url_respects_ttl_setting():
-    """download_expires_at = now + broadcast_recording_download_ttl_seconds."""
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource successfully | POST returns 200/201 with resource ID |
+| 2 | API returns resource by ID | GET returns full resource with all expected fields |
+| 3 | API lists resources with pagination | GET list returns array; supports cursor pagination |
+| 4 | API updates resource fields | PATCH/PUT returns updated resource |
+| 5 | API deletes resource | DELETE returns 200; subsequent GET returns 404 |
+| 6 | UI page loads with expected heading | Navigate to page; heading visible |
+| 7 | UI form creates new resource | Fill form; submit; resource appears in list |
+| 8 | UI shows error for invalid input | Submit empty form; validation messages visible |
+| 9 | Unauthenticated request returns 401 | No session cookies -> 401 |
+| 10 | Non-owner access returns 403 | Wrong user -> 403 |
+| 11 | Non-existent resource returns 404 | GET invalid ID -> 404 |
+| 12 | Duplicate creation returns 409 | Create same resource twice -> 409 or idempotent success |
 
-def test_mint_download_url_filename_contains_session_id():
-    """Filename is 'recording-{session_id_prefix}.mp4'."""
-```
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 not found, 409 conflict/duplicate, 422 validation
 
-**Test Group 3: Download Endpoint Auth + Permissions (8 tests)**
+**Edge cases**: Empty state (no resources), concurrent mutations, resource with max-length fields, Unicode content
 
-```python
-def test_download_requires_authentication():
-    """Unauthenticated request returns 401."""
+### Test Data Requirements
 
-def test_download_returns_404_no_recording():
-    """Session with no recording returns 404."""
+Seed broadcast session in `beforeAll`. Create test resources via API with unique `Date.now()` suffixed names.
 
-def test_download_returns_410_expired_recording():
-    """Expired recording returns 410 Gone."""
-
-def test_download_returns_202_processing_recording():
-    """Recording still processing returns 202."""
-
-def test_download_returns_404_no_mp4():
-    """Recording ready but mp4_s3_key empty returns 404 with MP4_NOT_AVAILABLE."""
+**Test users**: Root (ROOT, admin operations), Alice (USER, standard operations), Bob (USER, cross-user isolation)
 
-def test_broadcaster_can_download_own_recording():
-    """Broadcaster (created_by matches user_sub) gets 200 with download URL."""
+### CI/Pipeline
 
-def test_other_user_cannot_download_broadcaster_recording():
-    """Non-owner, non-viewer request returns 403."""
-
-def test_viewer_download_forbidden_when_disabled():
-    """viewer=true returns 403 when allow_viewer_download=false."""
-```
-
-**Test Group 4: Viewer Download Permissions (5 tests)**
-
-```python
-def test_viewer_download_allowed_when_enabled():
-    """viewer=true returns 200 when allow_viewer_download=true."""
-
-def test_toggle_viewer_download_on():
-    """PATCH with allow_viewer_download=true updates the record."""
-
-def test_toggle_viewer_download_off():
-    """PATCH with allow_viewer_download=false updates the record."""
-
-def test_toggle_requires_ownership():
-    """Non-owner PATCH returns 403."""
-
-def test_toggle_returns_404_no_recording():
-    """PATCH on non-existent session returns 404."""
-```
-
-**Test Group 5: Feature Flag (3 tests)**
-
-```python
-def test_download_disabled_returns_503():
-    """When BROADCAST_RECORDING_DOWNLOAD_ENABLED=false, returns 503."""
-
-def test_mp4_not_generated_when_auto_generate_disabled():
-    """When BROADCAST_RECORDING_MP4_AUTO_GENERATE=false, generate_mp4 is skipped."""
-
-def test_pipeline_completes_without_mp4_when_disabled():
-    """Recording reaches ready status even when MP4 generation is disabled."""
-```
-
-### 5.2 Unit Test Setup
-
-Tests use the existing `moto` mock for DynamoDB with the `BroadcastRecordings` table:
-
-```python
-@pytest.fixture(autouse=True)
-def recording_table(ddb_resource, monkeypatch):
-    """Create BroadcastRecordings table and patch settings."""
-    table = ddb_resource.create_table(
-        TableName="BroadcastRecordings",
-        KeySchema=[{"AttributeName": "recording_id", "KeyType": "HASH"}],
-        AttributeDefinitions=[
-            {"AttributeName": "recording_id", "AttributeType": "S"},
-            {"AttributeName": "session_id", "AttributeType": "S"},
-            {"AttributeName": "status", "AttributeType": "S"},
-            {"AttributeName": "scope", "AttributeType": "S"},
-            {"AttributeName": "created_at", "AttributeType": "N"},
-            {"AttributeName": "expires_at", "AttributeType": "N"},
-        ],
-        GlobalSecondaryIndexes=[...],
-        BillingMode="PAY_PER_REQUEST",
-    )
-    monkeypatch.setattr("app.core.settings.S.broadcast_recording_download_enabled", True)
-    monkeypatch.setattr("app.core.settings.S.broadcast_recording_download_ttl_seconds", 14400)
-    yield table
-
-
-@pytest.fixture
-def ready_recording(recording_table):
-    """Create a recording in 'ready' status with mp4_s3_key set."""
-    from app.services.broadcast_recording import create_recording, update_recording_status
-    rec = create_recording(session_id="sess_test123", profile_id="prof_1", created_by="user_broadcaster")
-    update_recording_status(rec.recording_id, "ready",
-        mp4_s3_key="sess_test123/recording/full.mp4",
-        mp4_size_bytes=1048576,
-        mp4_generated_at=int(time.time()),
-        s3_manifest_key="sess_test123/recording/master.m3u8",
-    )
-    return get_recording(rec.recording_id)
-```
-
-FFmpeg is mocked using `unittest.mock.patch` on `subprocess.run`:
-
-```python
-@pytest.fixture
-def mock_ffmpeg(monkeypatch):
-    def fake_run(args, **kwargs):
-        # Create a dummy output file if -i and output path are present
-        if len(args) > 2 and args[-1].endswith(".mp4"):
-            Path(args[-1]).write_bytes(b"\x00" * 1024)
-        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-    monkeypatch.setattr("subprocess.run", fake_run)
-```
-
-### 5.3 E2E Tests (`frontend/e2e/broadcast-recording-download.spec.ts`)
-
-**Section 93: Recording Download API -- Broadcaster Flow (7 tests)**
-
-```typescript
-test.describe("Section 93: Broadcaster recording download", () => {
-  let sessionId: string;
-
-  test.beforeAll(async ({ browser }) => {
-    // Create profile + session + start + stop (triggers recording with MP4)
-    const rootPage = await newIdentityPage(browser, "root");
-    profileId = await createTestProfile(rootPage, "root");
-    sessionId = await createTestSession(rootPage, "root", profileId);
-    await startSession(rootPage, "root", sessionId);
-    await stopSession(rootPage, "root", sessionId);
-  });
-
-  test("93.1 download endpoint returns presigned URL for broadcaster", async () => {
-    const resp = await apiGet(rootPage, `/broadcast/sessions/${sessionId}/recording/download`);
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
-    expect(body.download_url).toContain("/mock/s3/broadcast-vod/");
-    expect(body.download_url).toContain("full.mp4");
-    expect(body.download_expires_at).toBeGreaterThan(Math.floor(Date.now() / 1000));
-    expect(body.filename).toContain("recording-");
-    expect(body.content_type).toBe("video/mp4");
-  });
-
-  test("93.2 download URL expires within configured TTL", async () => {
-    const body = await (await apiGet(rootPage, `/broadcast/sessions/${sessionId}/recording/download`)).json();
-    const now = Math.floor(Date.now() / 1000);
-    const maxTtl = 14400 + 10; // 4 hours + 10s tolerance
-    expect(body.download_expires_at - now).toBeLessThanOrEqual(maxTtl);
-    expect(body.download_expires_at - now).toBeGreaterThan(0);
-  });
-
-  test("93.3 recording response includes download_available=true", async () => {
-    const resp = await apiGet(rootPage, `/broadcast/sessions/${sessionId}/recording`);
-    const body = await resp.json();
-    expect(body.download_available).toBe(true);
-    expect(body.allow_viewer_download).toBe(false);
-  });
-
-  test("93.4 download for non-existent session returns 404", async () => {
-    const resp = await apiGet(rootPage, `/broadcast/sessions/nonexistent-session/recording/download`);
-    expect(resp.status()).toBe(404);
-  });
-
-  test("93.5 download requires authentication", async () => {
-    const resp = await fetch(`http://localhost:8000/broadcast/sessions/${sessionId}/recording/download`);
-    expect(resp.status).toBe(401);
-  });
-
-  test("93.6 non-owner cannot download broadcaster recording", async () => {
-    // Alice tries to download root's recording
-    const resp = await apiGet(alicePage, `/broadcast/sessions/${sessionId}/recording/download`);
-    expect(resp.status()).toBe(403);
-    const body = await resp.json();
-    expect(body.detail.code).toBe("BROADCAST_RECORDING_DOWNLOAD_FORBIDDEN");
-  });
-
-  test("93.7 file_size_bytes is returned in response", async () => {
-    const body = await (await apiGet(rootPage, `/broadcast/sessions/${sessionId}/recording/download`)).json();
-    expect(typeof body.file_size_bytes).toBe("number");
-    expect(body.file_size_bytes).toBeGreaterThanOrEqual(0);
-  });
-});
-```
-
-**Section 94: Viewer Download Permissions (6 tests)**
-
-```typescript
-test.describe("Section 94: Viewer download permissions", () => {
-  test("94.1 viewer download disabled by default", async () => {
-    const resp = await apiGet(alicePage, `/broadcast/sessions/${sessionId}/recording/download?viewer=true`);
-    expect(resp.status()).toBe(403);
-    const body = await resp.json();
-    expect(body.detail.code).toBe("BROADCAST_RECORDING_DOWNLOAD_FORBIDDEN");
-  });
-
-  test("94.2 broadcaster enables viewer download", async () => {
-    const resp = await apiPatch(rootPage, "root",
-      `/broadcast/sessions/${sessionId}/recording/download-settings`,
-      { allow_viewer_download: true }
-    );
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
-    expect(body.allow_viewer_download).toBe(true);
-  });
-
-  test("94.3 viewer can download after broadcaster enables it", async () => {
-    const resp = await apiGet(alicePage, `/broadcast/sessions/${sessionId}/recording/download?viewer=true`);
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
-    expect(body.download_url).toContain("full.mp4");
-  });
-
-  test("94.4 broadcaster disables viewer download", async () => {
-    const resp = await apiPatch(rootPage, "root",
-      `/broadcast/sessions/${sessionId}/recording/download-settings`,
-      { allow_viewer_download: false }
-    );
-    expect(resp.status()).toBe(200);
-    expect((await resp.json()).allow_viewer_download).toBe(false);
-  });
-
-  test("94.5 viewer download blocked again after disable", async () => {
-    const resp = await apiGet(alicePage, `/broadcast/sessions/${sessionId}/recording/download?viewer=true`);
-    expect(resp.status()).toBe(403);
-  });
-
-  test("94.6 non-owner cannot toggle viewer download", async () => {
-    const resp = await apiPatch(alicePage, "alice",
-      `/broadcast/sessions/${sessionId}/recording/download-settings`,
-      { allow_viewer_download: true }
-    );
-    expect(resp.status()).toBe(403);
-  });
-});
-```
-
-**Section 95: Download Edge Cases (5 tests)**
-
-```typescript
-test.describe("Section 95: Download edge cases", () => {
-  test("95.1 download for expired recording returns 410", async () => {
-    // Directly set recording status to "expired" in DDB
-    await setRecordingStatus(expiredSessionId, "expired");
-    const resp = await apiGet(rootPage, `/broadcast/sessions/${expiredSessionId}/recording/download`);
-    expect(resp.status()).toBe(410);
-  });
-
-  test("95.2 download for processing recording returns 202", async () => {
-    // Create a recording stuck in "processing" state
-    const resp = await apiGet(rootPage, `/broadcast/sessions/${processingSessionId}/recording/download`);
-    expect(resp.status()).toBe(202);
-  });
-
-  test("95.3 recording response shows allow_viewer_download state", async () => {
-    // Verify the GET /recording endpoint reflects download settings
-    await apiPatch(rootPage, "root",
-      `/broadcast/sessions/${sessionId}/recording/download-settings`,
-      { allow_viewer_download: true }
-    );
-    const body = await (await apiGet(rootPage, `/broadcast/sessions/${sessionId}/recording`)).json();
-    expect(body.allow_viewer_download).toBe(true);
-  });
-
-  test("95.4 download URL contains correct filename", async () => {
-    const body = await (await apiGet(rootPage, `/broadcast/sessions/${sessionId}/recording/download`)).json();
-    expect(body.filename).toMatch(/^recording-[a-z0-9]+\.mp4$/);
-  });
-
-  test("95.5 multiple download requests produce fresh URLs", async () => {
-    const body1 = await (await apiGet(rootPage, `/broadcast/sessions/${sessionId}/recording/download`)).json();
-    // Small delay to ensure different timestamp
-    await new Promise(r => setTimeout(r, 1100));
-    const body2 = await (await apiGet(rootPage, `/broadcast/sessions/${sessionId}/recording/download`)).json();
-    // URLs should be different (different expiry timestamps)
-    expect(body1.download_expires_at).not.toBe(body2.download_expires_at);
-  });
-});
-```
-
-**Section 96: Download UI (4 tests)**
-
-```typescript
-test.describe("Section 96: Download Recording UI", () => {
-  test("96.1 'Download MP4' button visible on stopped session with recording", async () => {
-    await injectAuth(rootPage, "root");
-    await rootPage.goto("/broadcaster");
-    await rootPage.getByRole("button", { name: /view details/i }).first().click();
-    await expect(rootPage.getByRole("button", { name: /download mp4/i })).toBeVisible();
-  });
-
-  test("96.2 'Download MP4' button not visible on live session", async () => {
-    // Navigate to a live session detail
-    await expect(rootPage.getByRole("button", { name: /download mp4/i })).not.toBeVisible();
-  });
-
-  test("96.3 viewer download toggle visible to broadcaster", async () => {
-    await expect(rootPage.getByLabel(/allow viewer download/i)).toBeVisible();
-  });
-
-  test("96.4 viewer sees download button only when enabled", async () => {
-    // NOTE: /broadcast/watch/{sessionId} does NOT exist yet — must be created as part of
-    // BCAST-008, OR this test should be adapted to use the existing SessionDetailDialog
-    // (which currently links directly to the playback URL, not a dedicated viewer page).
-    // Enable viewer download, then check from Alice's page
-    await apiPatch(rootPage, "root",
-      `/broadcast/sessions/${sessionId}/recording/download-settings`,
-      { allow_viewer_download: true }
-    );
-    await injectAuth(alicePage, "alice");
-    await alicePage.goto(`/broadcast/watch/${sessionId}`);  // Route must be created
-    await expect(alicePage.getByRole("button", { name: /download recording/i })).toBeVisible();
-  });
-});
-```
-
-### 5.4 Mock Recording Flow for E2E
-
-Since E2E tests run against the local dev stack (no real media exists), the MP4 generation
-step produces mock metadata:
-
-1. `generate_mp4()` detects mock mode → returns `{ mp4_s3_key: "{session_id}/recording/full.mp4", mp4_size_bytes: 0, mp4_generated_at: <now> }`
-2. `finalize_recording()` persists these values in DDB
-3. `GET .../recording/download` sees `mp4_s3_key` is non-empty → mints a mock presigned URL
-4. Tests verify URL format, auth behavior, and permission logic (not actual file download)
-
-For tests that need to verify actual download behavior (e.g., testing `Content-Disposition`),
-seed a small MP4 file into moto S3:
-
-```typescript
-// In test setup:
-const smallMp4 = Buffer.from([
-  0x00, 0x00, 0x00, 0x1C, 0x66, 0x74, 0x79, 0x70,  // ftyp box header
-  0x69, 0x73, 0x6F, 0x6D, 0x00, 0x00, 0x02, 0x00,  // isom brand
-  // ... minimal valid MP4 header
-]);
-// Upload via internal/dev endpoint or DDB manipulation
-```
-
-### 5.5 Test Data Isolation
-
-Following established E2E patterns:
-- Use timestamp-suffixed session names: `E2E Download Test ${Date.now()}`
-- Track created session IDs for cleanup in `afterAll`
-- Use `root` identity for broadcaster operations
-- Use `alice` identity for viewer operations
-- Download permission changes are scoped to specific sessions (no cross-test interference)
-
-### 5.6 Potential Flakiness Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Recording not ready (MP4 not generated) | Inline worker in dev mode processes synchronously; MP4 step is instant in mock mode |
-| FFmpeg not installed in CI | Mock mode produces placeholder MP4 metadata |
-| Timing-dependent URL expiry assertions | Use >= / <= comparisons with 10s tolerance |
-| Concurrent test runs modifying same session | Unique session IDs per test run |
-| Viewer download toggle race | Assert on API response before checking viewer page |
+Serial execution. `BROADCAST_PROVIDER=local`. Retry-safe with unique resource names.
 
 ---
 
-## Appendix A: Response Models
+## Dependencies & Merge Safety
 
-### BroadcastRecordingOut (updated)
+### Depends On
 
-```python
-class BroadcastRecordingOut(BaseModel):
-    recording_id: str
-    session_id: str
-    status: str
-    duration_seconds: Optional[float] = None
-    playback_url: Optional[str] = None
-    playback_expires_at: Optional[int] = None
-    thumbnail_url: Optional[str] = None
-    segment_count: Optional[int] = None
-    total_bytes: Optional[int] = None
-    renditions: list = Field(default_factory=list)
-    created_at: int
-    completed_at: Optional[int] = None
-    expires_at: Optional[int] = None
-    # Download fields (BCAST-008)
-    allow_download: bool = True
-    allow_viewer_download: bool = False
-    download_available: bool = False       # True when mp4_s3_key is non-empty and status=ready
-    mp4_size_bytes: Optional[int] = None   # File size for display
-```
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-006 | Recording VOD archive with `s3_concatenated_key` | Implemented | No -- must merge after |
 
-### BroadcastRecordingDownloadOut
+### Depended On By
 
-```python
-class BroadcastRecordingDownloadOut(BaseModel):
-    download_url: str                      # Presigned S3 URL
-    download_expires_at: int               # Unix timestamp
-    file_size_bytes: int                   # MP4 file size in bytes
-    filename: str                          # e.g., "recording-abc123def4.mp4"
-    content_type: str = "video/mp4"        # MIME type
-```
+No downstream dependents identified.
 
-### BroadcastRecordingDownloadSettingsIn
+### Merge Strategy
 
-```python
-class BroadcastRecordingDownloadSettingsIn(BaseModel):
-    allow_viewer_download: bool
-```
+Sequential after BCAST-006. Adds download endpoint and remux logic. Feature-flag-gated via `broadcast_recording_download_enabled`.
 
-### Error Codes
+### Merge Checklist
 
-| Code | HTTP | Condition |
-|------|------|-----------|
-| `BROADCAST_RECORDING_NOT_FOUND` | 404 | No recording exists for the session |
-| `BROADCAST_RECORDING_EXPIRED` | 410 | Recording past retention period |
-| `BROADCAST_RECORDING_PROCESSING` | 202 | Recording still being processed |
-| `BROADCAST_RECORDING_MP4_NOT_AVAILABLE` | 404 | Recording ready but MP4 not generated |
-| `BROADCAST_RECORDING_DOWNLOAD_FORBIDDEN` | 403 | Viewer download not allowed, or non-owner |
-| `BROADCAST_RECORDING_DOWNLOAD_DISABLED` | 503 | Feature disabled via setting |
-
----
-
-## Appendix B: Configuration Reference
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `BROADCAST_RECORDING_DOWNLOAD_ENABLED` | `true` | Master switch for MP4 download feature |
-| `BROADCAST_RECORDING_DOWNLOAD_TTL_SECONDS` | `14400` | Presigned download URL lifetime (4 hours) |
-| `BROADCAST_RECORDING_MP4_AUTO_GENERATE` | `true` | Auto-generate MP4 during recording pipeline |
-| `BROADCAST_RECORDINGS_TABLE` | `BroadcastRecordings` | DynamoDB table (existing) |
-| `BROADCAST_RECORDING_VOD_BUCKET` | `broadcast-vod` | S3 bucket for recording files (existing) |
-
----
-
-## Appendix C: File Reference
-
-| File | Role in MP4 download feature |
-|------|------------------------------|
-| `app/services/broadcast_recording.py` | Recording store + download URL minting |
-| `app/services/broadcast_recording_worker.py` | MP4 remux pipeline step |
-| `app/routers/broadcast.py` | Download + settings endpoints |
-| `app/core/settings.py` | Feature configuration |
-| `frontend/src/api/endpoints/broadcast.ts` | API client wrappers |
-| `frontend/src/pages/broadcast/BroadcastPage.tsx` | Download button + toggle UI (in inline `SessionDetailDialog` component) |
-| `tests/test_broadcast_recording_download.py` | Unit tests (NEW) |
-| `frontend/e2e/broadcast-recording-download.spec.ts` | E2E tests (NEW) |
-
----
-
-## Appendix D: FFmpeg Remux Performance Estimates
-
-The MP4 remux (`-c copy -movflags +faststart`) performs no encoding. Performance is bounded
-by disk I/O and S3 transfer speeds:
-
-| Recording Duration | Approx .ts Size | Remux Time (local SSD) | Remux Time (S3 → local → S3) |
-|-------------------|-----------------|------------------------|-------------------------------|
-| 30 minutes | ~1 GB | ~3 seconds | ~20 seconds |
-| 1 hour | ~2 GB | ~6 seconds | ~40 seconds |
-| 2 hours | ~4 GB | ~12 seconds | ~80 seconds |
-| 4 hours | ~8 GB | ~25 seconds | ~160 seconds |
-
-The `+faststart` flag adds a second pass that relocates the moov atom. For very large files
-(>4GB), this requires reading and rewriting the file header, adding 1-5 seconds to the
-operation. Total time remains well under the recording pipeline's existing transcode step.
+- [ ] DDB table/fields added to `scripts/local-ddb-init.py` (if new table needed)
+- [ ] Settings added to `app/core/settings.py`
+- [ ] Service and router files created/modified
+- [ ] Frontend components and API wrappers created
+- [ ] E2E test passes in CI
+- [ ] No breaking changes to existing endpoints
 
 ---
 

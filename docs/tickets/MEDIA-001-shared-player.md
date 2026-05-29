@@ -1136,3 +1136,67 @@ describe("MediaPlayer accessibility", () => {
 | `app/services/ffmpeg_abr_pipeline.py` | 14 | EXISTS: ABR pipeline uses `get_ffmpeg_path()` from `ffmpeg_manager` |
 | `app/services/playback_entitlements.py` | 234 | EXISTS: `PLAYBACKJWT` constant for playback token type |
 | `app/contracts/video_rendition_profiles.py` | — | EXISTS: rendition profile definitions |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_media_player.py (minimal)`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_hls_config_defaults` | Hls config defaults |
+| 2 | `test_drm_key_system_config` | Drm key system config |
+| 3 | `test_quality_level_mapping` | Quality level mapping |
+| 4 | `test_error_recovery_strategy` | Error recovery strategy |
+| 5 | `test_live_mode_disables_seek` | Live mode disables seek |
+| 6 | `test_vod_mode_enables_seek` | Vod mode enables seek |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/media-player.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~10 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| MOD-001 | Video Review Queue uses MediaPlayer for preview |
+| MON-001 | VOD Pay-Per-View uses MediaPlayer for playback |
+
+### Merge Strategy
+**Independent -- pure frontend component. No backend changes. Can merge at any time.**
+
+### Merge Checklist
+- [ ] Service file created/modified: `frontend/src/components/shared/MediaPlayer.tsx`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/media-player.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_media_player.py (minimal)`

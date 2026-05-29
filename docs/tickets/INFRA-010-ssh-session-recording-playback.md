@@ -843,3 +843,90 @@ curl -s http://localhost:8000/ui/remote/recordings/rec_4f8a1b2c/stream \
 | Recording router registration | `app/main.py` | NOT FOUND -- needs `app.include_router()` |
 | Recording settings | `app/core/settings.py` | NOT FOUND -- new settings required |
 | `frontend/src/pages/remote/SessionRecordingsPage.tsx` | `frontend/src/pages/remote/` | NOT FOUND -- new page required |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_session_recording.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_start_recording`
+  - `test_append_recording_chunk`
+  - `test_stop_recording`
+  - `test_list_recordings_for_host`
+  - `test_get_recording_metadata`
+  - `test_playback_stream`
+  - `test_delete_recording`
+
+### Integration Tests
+
+  - SSH terminal session writes recording chunks to S3
+  - Recording metadata stored in session_recordings DDB table
+  - Playback endpoint streams asciicast data from S3
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/session-recording.spec.ts`
+**Test count**: 10
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `session_recordings` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `SESSION_RECORDING_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| INFRA-001 | Host Inventory Management | Recordings linked to host records |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after INFRA-001. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 10 E2E tests pass with `npx playwright test session-recording.spec.ts`

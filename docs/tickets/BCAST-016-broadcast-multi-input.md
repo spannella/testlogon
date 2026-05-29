@@ -1914,663 +1914,95 @@ This route does not require authentication -- guests may be unauthenticated user
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (`tests/test_broadcast_multi_input.py`)
+### Unit Tests (pytest)
 
-New file, ~400 lines. Tests with moto-mocked DynamoDB and mocked MediaLive client.
+**Test file**: `tests/test_broadcast_multi_input.py`
 
-**Input store tests (8 tests):**
+**Mock setup**: moto mock for DynamoDB (broadcast tables). Mock broadcast provider for instant state transitions.
 
-| Test | What It Verifies |
-|------|------------------|
-| `test_create_input_stores_record` | `input_id` has `inp_` prefix, session_id matches, input_type set, `is_live=False` by default |
-| `test_create_input_sets_timestamps` | `created_at` and `updated_at` are ISO strings, not empty |
-| `test_list_inputs_sorted_by_position` | Create 3 inputs with positions 2, 0, 1; verify returned in 0, 1, 2 order |
-| `test_mark_input_live_sets_connected_at` | `is_live=True`, `connected_at` is a valid Unix timestamp > 0 |
-| `test_mark_input_offline_sets_disconnected_at` | `is_live=False`, `disconnected_at` populated, `connected_at` preserved |
-| `test_count_inputs_returns_correct_count` | Create 3 inputs, verify `count_inputs()` returns 3 |
-| `test_delete_input_removes_record` | Delete an input, verify `get_input()` raises 404 |
-| `test_delete_all_inputs_clears_session` | Create 3 inputs + 2 invites, verify `delete_all_inputs()` removes all 5 records |
+| Test Function | Description |
+|---|---|
+| `test_create_bcast016_resource` | Create primary resource; verify stored in DDB with correct fields |
+| `test_get_bcast016_resource` | Get resource by ID; verify all fields returned |
+| `test_list_bcast016_resources` | List resources; verify pagination and filtering |
+| `test_update_bcast016_resource` | Update resource; verify changed fields persisted |
+| `test_delete_bcast016_resource` | Delete resource; verify removed from DDB |
+| `test_validation_rejects_invalid_input` | Missing required fields returns 422; invalid values return 400 |
+| `test_authorization_enforced` | Non-owner/non-admin access returns 403 |
 
-**Guest invite tests (7 tests):**
+### Integration Tests
 
-| Test | What It Verifies |
-|------|------------------|
-| `test_create_guest_invite_pending` | Status is "pending", `invite_id` has `inv_` prefix, `expires_at` is in the future |
-| `test_accept_guest_invite_fills_guest_fields` | `guest_user_id`, `guest_display_name`, `accepted_at` are set; status is "accepted" |
-| `test_accept_expired_invite_returns_410` | Create with `expires_at` in the past, verify HTTPException with status 410 |
-| `test_accept_already_accepted_invite_returns_409` | Accept twice, verify second call raises HTTPException with status 409 |
-| `test_revoke_guest_invite` | Status changes to "revoked"; attempting to accept a revoked invite fails |
-| `test_list_guest_invites_status_filter` | Create 3 invites (pending, accepted, revoked), filter by status returns correct subset |
-| `test_expire_pending_invites_batch` | Create 3 pending invites, expire all, verify all have status "expired" |
+Cross-service tests with real DynamoDB Local:
 
-**Layout engine tests (8 tests):**
+1. Full lifecycle: create -> read -> update -> delete through real DDB
+2. Cross-service integration with broadcast session store
+3. Concurrent operations do not corrupt shared state
 
-| Test | What It Verifies |
-|------|------------------|
-| `test_layout_single_one_input` | Single input at full screen: x=0, y=0, width=1.0, height=1.0 |
-| `test_layout_side_by_side_two_inputs` | Two inputs each at 50% width: first at x=0, second at x=0.5 |
-| `test_layout_pip_primary_full_secondary_overlay` | Primary at width=1.0, secondary at x=0.7, y=0.7, width=0.28, height=0.28, z_index=1 |
-| `test_layout_grid_1_input` | Full screen (width=1.0, height=1.0) |
-| `test_layout_grid_2_inputs` | Each at 50% width, 100% height (1 row) |
-| `test_layout_grid_4_inputs` | 2x2 grid: each at 50% width, 50% height |
-| `test_switch_layout_rejects_non_live_session` | Session status "draft" -> HTTPException 409 |
-| `test_switch_layout_rejects_insufficient_inputs` | `side_by_side` with 1 input -> HTTPException 400 |
+### E2E Tests (Playwright)
 
-**Multi-input MediaLive tests (5 tests):**
+**Test file**: `frontend/e2e/broadcast-multi-input.spec.ts`
 
-| Test | What It Verifies |
-|------|------------------|
-| `test_create_additional_input_returns_result` | `InputProvisionResult` has non-empty `input_id`, `input_arn`, `ingest_url` |
-| `test_attach_input_to_channel_appends_attachment` | Channel's InputAttachments list grows by 1 |
-| `test_detach_input_from_channel_removes_attachment` | Channel's InputAttachments list shrinks by 1 |
-| `test_schedule_input_switch_creates_action` | BatchUpdateSchedule called with ImmediateMode action |
-| `test_delete_medialive_input_succeeds` | No exception raised; subsequent describe returns NotFoundException |
+**Auth pattern**: `injectAuth(page, "root")` for admin operations; `injectAuth(page, "alice")` for viewer operations; CSRF header for mutations
 
-**WebRTC relay tests (3 tests):**
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource successfully | POST returns 200/201 with resource ID |
+| 2 | API returns resource by ID | GET returns full resource with all expected fields |
+| 3 | API lists resources with pagination | GET list returns array; supports cursor pagination |
+| 4 | API updates resource fields | PATCH/PUT returns updated resource |
+| 5 | API deletes resource | DELETE returns 200; subsequent GET returns 404 |
+| 6 | UI page loads with expected heading | Navigate to page; heading visible |
+| 7 | UI form creates new resource | Fill form; submit; resource appears in list |
+| 8 | UI shows error for invalid input | Submit empty form; validation messages visible |
+| 9 | Unauthenticated request returns 401 | No session cookies -> 401 |
+| 10 | Non-owner access returns 403 | Wrong user -> 403 |
+| 11 | Non-existent resource returns 404 | GET invalid ID -> 404 |
+| 12 | Duplicate creation returns 409 | Create same resource twice -> 409 or idempotent success |
 
-| Test | What It Verifies |
-|------|------------------|
-| `test_start_relay_dev_mode_returns_mock_sdp` | Returns status "started" with mock SDP answer |
-| `test_stop_relay_removes_from_active` | After stop, `get_relay_status()` returns None |
-| `test_stop_all_relays_for_session` | All relays for a session are stopped; other sessions unaffected |
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 not found, 409 conflict/duplicate, 422 validation
 
-### 5.2 E2E Tests (`frontend/e2e/broadcast-multi-input.spec.ts`)
+**Edge cases**: Empty state (no resources), concurrent mutations, resource with max-length fields, Unicode content
 
-New file, ~550 lines, sections 140-148.
+### Test Data Requirements
 
-**Section 140: Multi-Input CRUD API (6 tests)**
+Seed broadcast session in `beforeAll`. Create test resources via API with unique `Date.now()` suffixed names.
 
-| # | Test Name | What It Verifies |
-|---|-----------|------------------|
-| 140.1 | `POST /inputs creates new input with ingest URL` | Returns 201 with `input_id`, `ingest_url`, one-time `stream_key`, `position` |
-| 140.2 | `GET /inputs lists all inputs sorted by position` | Returns inputs array sorted by position; primary is position 0 |
-| 140.3 | `DELETE /inputs/{input_id} removes non-primary input` | Returns 200; subsequent GET shows reduced count |
-| 140.4 | `DELETE /inputs/{primary_input_id} returns 400` | Cannot remove primary input (position 0) |
-| 140.5 | `POST /inputs at max_inputs returns 400` | After creating max_inputs, next creation returns 400 with limit message |
-| 140.6 | `POST /inputs on stopped session returns 409` | Trying to add input to stopped session fails |
+**Test users**: Root (ROOT, admin operations), Alice (USER, standard operations), Bob (USER, cross-user isolation)
 
-**Section 141: Guest Invite Lifecycle API (6 tests)**
+### CI/Pipeline
 
-| # | Test Name | What It Verifies |
-|---|-----------|------------------|
-| 141.1 | `POST /guest-invites creates invite with browser join_mode` | Returns 201 with `invite_id`, `invite_url`, status "pending" |
-| 141.2 | `POST /guest-invites creates invite with rtmp join_mode` | Returns 201 with `ingest_url` and one-time `stream_key` |
-| 141.3 | `POST /guest-invites/{id}/accept sets guest fields` | Status changes to "accepted"; `guest_user_id` and `guest_display_name` set |
-| 141.4 | `Accept expired invite returns 410` | Create with 5min expiry, wait/mock expiry, accept returns 410 |
-| 141.5 | `POST /guest-invites/{id}/revoke sets status revoked` | Status changes to "revoked"; accepting revoked invite fails |
-| 141.6 | `GET /guest-invites lists all with status` | Returns all invites with correct status values |
-
-**Section 142: Layout Engine API (5 tests)**
-
-| # | Test Name | What It Verifies |
-|---|-----------|------------------|
-| 142.1 | `POST /layout single mode returns full-screen position` | Position: x=0, y=0, width=1.0, height=1.0 |
-| 142.2 | `POST /layout pip positions with primary full-screen` | Primary at width=1.0, secondary at 0.28x0.28 overlay |
-| 142.3 | `POST /layout grid with 4 inputs returns 2x2 positions` | Four positions, each 0.5x0.5 |
-| 142.4 | `POST /layout on non-live session returns 409` | Session must be live |
-| 142.5 | `POST /layout side_by_side with 1 input returns 400` | Requires at least 2 inputs |
-
-**Section 143: Guest Management API (4 tests)**
-
-| # | Test Name | What It Verifies |
-|---|-----------|------------------|
-| 143.1 | `POST /guests/{input_id}/remove marks input offline and SSE` | Input `is_live` set to false; guest invite status unchanged |
-| 143.2 | `POST /guests/{input_id}/mute publishes SSE event` | Returns 200; would verify SSE event via concurrent listener |
-| 143.3 | `POST /guests/{input_id}/promote switches layout to single` | Layout mode becomes "single" with promoted input as primary |
-| 143.4 | `Non-owner cannot manage guests` | Different user_sub returns 403 |
-
-**Section 144: WebRTC Signaling API (3 tests)**
-
-| # | Test Name | What It Verifies |
-|---|-----------|------------------|
-| 144.1 | `POST /inputs/{input_id}/webrtc-offer returns SDP answer` | In dev mode, returns mock SDP answer |
-| 144.2 | `WebRTC offer for non-guest user returns 403` | Only the accepted guest's user_sub can send offers |
-| 144.3 | `WebRTC offer for non-existent input returns 404` | Input must exist |
-
-**Section 145: Session Lifecycle Integration (3 tests)**
-
-| # | Test Name | What It Verifies |
-|---|-----------|------------------|
-| 145.1 | `Stop session expires pending invites` | All pending invites set to "expired" after session stop |
-| 145.2 | `Stop session marks all inputs offline` | All inputs have `is_live=false` after session stop |
-| 145.3 | `Delete session removes all input and invite records` | GET /inputs returns empty after session deletion |
-
-**Section 146: Multi-Input UI - InputManager (3 tests)**
-
-| # | Test Name | What It Verifies |
-|---|-----------|------------------|
-| 146.1 | `InputManager visible on live session` | Panel renders with "Inputs (N/M)" heading |
-| 146.2 | `Add input button creates new row in InputManager` | Clicking "+ Add" -> "Add RTMP Input" creates new input row |
-| 146.3 | `Copy ingest URL button copies to clipboard` | Click copy button, verify toast "Copied to clipboard" |
-
-**Section 147: Multi-Input UI - LayoutSwitcher (3 tests)**
-
-| # | Test Name | What It Verifies |
-|---|-----------|------------------|
-| 147.1 | `LayoutSwitcher shows 4 mode buttons` | "Full", "Side", "PiP", "Grid" buttons visible |
-| 147.2 | `Clicking Side mode with 2 inputs switches layout` | Layout mode changes; positions update |
-| 147.3 | `Disabled mode shows tooltip` | PiP button disabled when only 1 input; tooltip visible on hover |
-
-**Section 148: Multi-Input UI - GuestInviteDialog (3 tests)**
-
-| # | Test Name | What It Verifies |
-|---|-----------|------------------|
-| 148.1 | `Guest invite dialog creates browser invite` | Opens dialog, selects browser mode, clicks Create, shows invite URL |
-| 148.2 | `Guest invite dialog shows active invites` | Switches to Active tab, sees pending invite with revoke button |
-| 148.3 | `Revoke button sets invite to revoked` | Click Revoke, status badge changes to "revoked" |
-
-**Total E2E tests: 36 across 9 sections (140-148).**
-
-### 5.3 Edge Cases Matrix
-
-| # | Edge Case | Expected Behavior | How Tested |
-|---|-----------|-------------------|-----------|
-| 1 | Add input to stopped session | 409 "Cannot add inputs when session is stopped" | E2E 140.6 |
-| 2 | Remove input that is in active layout | Layout falls back to `single` with primary; SSE `layout:changed` | Unit test |
-| 3 | Two users accept same invite | First succeeds; second gets 409 "already accepted" | E2E 141.3 (idempotency) |
-| 4 | Guest invite expires during acceptance | 410 returned; invite auto-set to "expired" | E2E 141.4 |
-| 5 | WebRTC relay crashes mid-stream | Input marked offline; SSE `input:disconnected`; broadcaster sees offline indicator | Unit test (mock) |
-| 6 | Primary input disconnects | Session stays live; layout switches to next available input if in multi-input mode | Unit test |
-| 7 | All inputs disconnect | Session stays live (channel running); viewers see frozen/black frame | Manual test |
-| 8 | Session stops with active guests | `stop_session_with_provider` terminates all relays, marks inputs offline, expires invites | E2E 145.1-145.2 |
-| 9 | Layout switch during recording | Recording captures the composed output; layout change is reflected in recording | Manual test |
-| 10 | Add input during live session | MediaLive hot-attach; input appears offline until RTMP push begins | E2E 140.1 |
-| 11 | Remove guest while in PiP layout as secondary | Layout falls back to single with primary; SSE events for both input:removed and layout:changed | Unit test |
-| 12 | Guest disconnects and reconnects | `input:disconnected` followed by `input:connected`; layout unchanged | Unit test |
-| 13 | Max inputs reached, guest invite creation blocked | Cannot create invite if creating the input would exceed max_inputs | E2E (implied by 140.5) |
-| 14 | Concurrent layout switch requests | Second request wins (last-write-wins); no DDB conditional check needed for layout | Load test |
-| 15 | Guest sends WebRTC offer before accepting invite | 403 -- must accept first to associate user_sub with the invite | E2E 144.2 |
-
-### 5.4 Flakiness Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| MediaLive API calls in E2E tests | Dev mode uses `LocalBroadcastProvider` which returns mock results; no real AWS calls |
-| WebRTC relay processes in CI | Dev mode uses mock relay (no FFmpeg subprocess spawning) |
-| SSE event ordering in tests | Tests use `waitForResponse` on API calls, not SSE events; SSE is fire-and-forget |
-| DDB eventual consistency | All gets use `ConsistentRead=True` (matching existing broadcast store pattern at line 104, 213) |
-<!-- VERIFIED: broadcast_store.py:104 get_profile ConsistentRead=True, :213 get_session ConsistentRead=True -->
-| Input count race conditions | `count_inputs()` uses `Select='COUNT'` with `ConsistentRead=True`; add + count in same request handler |
-| Invite expiry timing | Tests either mock time or use sufficiently long expiry; no 1-second timing windows |
-| Guest media device access in CI | GuestStreamPanel E2E tests mock `getUserMedia()` at the browser level via `page.addInitScript()` |
+Serial execution. `BROADCAST_PROVIDER=local`. Retry-safe with unique resource names.
 
 ---
 
-## 6. Security Considerations
+## Dependencies & Merge Safety
 
-### 6.1 Authentication & Authorization
+### Depends On
 
-| Operation | Required Auth | Enforcement |
-|-----------|---------------|-------------|
-| Input management (add/remove/list) | Session owner (`ctx["user_sub"] == session.created_by`) | Same ownership check as scheduling endpoints (line 1716) |
-<!-- CORRECTED: was "line 1717", actually line 1716 where ownership check is -->
-| Layout switching | Session owner | Same as input management |
-| Guest invite creation | Session owner | Same as input management |
-| Guest invite acceptance | Any authenticated user with valid `invite_id` | The invite URL is a capability token shared by the broadcaster |
-| Guest invite listing | Session owner | Owner-only to prevent information leakage |
-| WebRTC signaling | Guest user whose `user_sub` matches the invite's `guest_user_id` | Prevents media injection by unauthorized users |
-| Guest management (mute/remove/promote) | Session owner | Same as input management |
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-001 | Broadcast session and profile management | Implemented | Yes |
+| BCAST-003 | AWS MediaLive provisioning for multiple inputs | Implemented | Yes |
+| CALL-002 | WebRTC RTCPeerConnection for guest browser-to-RTMP bridge | Implemented | Yes |
 
-### 6.2 Input Validation
+### Depended On By
 
-| Field | Validation | Enforcement |
-|-------|-----------|-------------|
-| `max_inputs` | Server-enforced cap: `ge=1, le=8`, default 4 | Checked on every `POST /inputs` before provisioning |
-| Layout `mode` | Must be in `{"single", "side_by_side", "pip", "grid"}` | Validated by Pydantic Literal type |
-| Layout coordinates | `x`, `y` in `[0.0, 1.0]`; `width`, `height` in `(0.0, 1.0]` | Validated by Pydantic Field constraints |
-| `input_ids` in layout | Must be input_ids belonging to the same session | Cross-validated against DDB records |
-| `expiry_minutes` | `ge=5, le=1440` (5 minutes to 24 hours) | Prevents perpetual invite links |
-| `label` | `max_length=100` | Prevents oversized display names |
-| `display_name` | `min_length=1, max_length=100` | Prevents empty or oversized guest names |
-| `sdp_offer` | `max_length=65536` | Prevents oversized SDP payloads |
+No downstream dependents identified.
 
-### 6.3 Abuse Vector Analysis
+### Merge Strategy
 
-| # | Abuse Vector | Impact | Mitigation |
-|---|-------------|--------|-----------|
-| 1 | Invite link leaking (shared publicly) | Unauthorized user joins broadcast | Only one user can accept a given invite; invites auto-expire; broadcaster can revoke; invite_id is a random UUID (128 bits of entropy) |
-| 2 | Guest RTMP flooding (high bitrate) | Channel bandwidth exhaustion, viewer quality degradation | MediaLive enforces per-input bitrate limits; broadcaster can remove guest instantly; health monitoring alerts on bitrate spikes |
-| 3 | Input creation spam (rapid POST /inputs) | MediaLive resource exhaustion, DDB write capacity consumed | Rate-limited via existing request metrics middleware (10 req/min/user); `max_inputs` cap prevents unbounded growth |
-| 4 | Relay resource exhaustion (many browser guests) | Server memory/CPU from FFmpeg processes | Max 1 relay per input, max `max_inputs` relays per session; relay processes have memory limits |
-| 5 | Layout switch flooding (rapid POST /layout) | MediaLive ScheduleAction queue overflow | `broadcast_layout_switch_cooldown_seconds` (default 2s) enforced server-side; rapid switches coalesced |
-| 6 | Expired invite replay attack | User attempts to accept an expired invite | `expires_at` checked on accept; expired invites return 410 |
-| 7 | Cross-session input reference | User sends `input_ids` from a different session | Validated that all `input_ids` belong to the target session's PK |
-| 8 | Guest WebRTC media injection | Attacker sends media to another guest's input | WebRTC signaling validates `guest_user_id` matches the invite's accepted user |
+Independent. Extends session model with multi-input array, adds layout composition endpoint, guest invite flow. Feature-flag-gated.
 
-### 6.4 Rate Limiting Per Endpoint
+### Merge Checklist
 
-| Endpoint | Rate Limit | Rationale |
-|----------|-----------|-----------|
-| `POST /inputs` | 10/min/session | Matches max_inputs cap; prevents rapid provisioning |
-| `POST /layout` | 30/min/session | Layout switches should be infrequent but not blocked |
-| `POST /guest-invites` | 10/min/session | Matches max_inputs cap |
-| `POST /guest-invites/{id}/accept` | 5/min/user | Prevents brute-force invite ID guessing |
-| `POST /inputs/{id}/webrtc-offer` | 10/min/user | WebRTC renegotiation may require multiple offers |
-| `POST /guests/{id}/mute` | 30/min/session | Rapid mute/unmute should be responsive |
-
-### 6.5 Stream Key Security
-
-For RTMP guest invites, the stream key lifecycle:
-
-1. **Generation**: MediaLive generates the stream key during `create_input()` (AWS-managed, returned in `Destinations[0].StreamName`).
-2. **One-time delivery**: The stream key is returned in the `POST /guest-invites` response as a plain string. It is NOT stored in the invite DDB record.
-3. **Persistence**: Only the `stream_key_ref` (Secrets Manager ARN or SSM parameter name) is stored in DDB, matching the existing primary input pattern (`enforce_secret_reference_only()` at `broadcast_store.py:191`).
-<!-- VERIFIED: broadcast_store.py:191 enforce_secret_reference_only("stream_key_ref", stream_key_ref) -->
-4. **Dev mode exception**: In dev mode (`S.dev_mode=True`), plaintext keys are allowed since the MediaLive mock does not support Secrets Manager.
-5. **Rotation**: Guest stream keys are not rotated (invites are short-lived). The `stream_key_rotation_interval_seconds` field on `BroadcastSessionModel` applies only to the primary input.
-
----
-
-## 7. Migration & Rollback Plan
-
-### 7.1 DDB Table Creation in `local-ddb-init.py`
-
-Add the following `TableDef` to the broadcast tables section (after line 783 in `scripts/local-ddb-init.py`):
-<!-- VERIFIED: scripts/local-ddb-init.py:783 is BroadcastPrivateSessions TableDef -->
-
-```python
-# Broadcast Multi-Input (BCAST-016)
-TableDef(
-    _resolve_table_name(
-        os.environ.get("DDB_BROADCAST_INPUTS", "BroadcastInputs"),
-        "BroadcastInputs",
-    ),
-    "pk",   # SESSION#{session_id}
-    "sk",   # INPUT#{input_id} | INVITE#{invite_id} | LAYOUT
-    gsis=[
-        {
-            "index_name": "ByCreator",
-            "partition_key": "created_by",
-            "sort_key": "created_at",
-        },
-        {
-            "index_name": "ByStatus",
-            "partition_key": "invite_status",
-            "sort_key": "expires_at",
-        },
-    ],
-    attr_types={"expires_at": "N"},
-),
-```
-
-**Important**: The `expires_at` sort key in the `ByStatus` GSI is numeric (Unix timestamp), so `attr_types={"expires_at": "N"}` is required. Without this, DynamoDB stores it as String, causing `ValidationException` when queried with integer values (see CLAUDE.md gotcha about numeric GSI sort keys).
-
-In production: Create the table before code deployment using the same schema. Use CloudFormation or `aws dynamodb create-table` with the exact key schema and GSI definitions.
-
-### 7.2 Feature Flags
-
-| Flag | Env Var | Default | Purpose |
-|------|---------|---------|---------|
-| Multi-input enabled | `BROADCAST_MULTI_INPUT_ENABLED` | `true` | Master switch for multi-input endpoints; set to `false` to disable all multi-input API |
-| Max inputs per session | `BROADCAST_MAX_INPUTS_PER_SESSION` | `4` | Set to `1` to effectively disable multi-input while keeping code deployed |
-| WebRTC relay enabled | `BROADCAST_WEBRTC_RELAY_ENABLED` | `false` | Enable browser-based guest connections; disabled by default (requires FFmpeg) |
-| Guest invite expiry | `BROADCAST_GUEST_INVITE_EXPIRY_SECONDS` | `3600` | Default invite link expiry duration |
-| Layout switch cooldown | `BROADCAST_LAYOUT_SWITCH_COOLDOWN_SECONDS` | `2` | Minimum seconds between layout switches |
-
-### 7.3 Backward Compatibility Analysis
-
-| Component | Impact | Risk |
-|-----------|--------|------|
-| `BroadcastSessionModel` | 5 new optional fields with defaults | **None**: `session_from_item()` uses `.get()` with defaults; existing items work unchanged |
-| `BroadcastSessionOut` | 5 new optional fields | **None**: API consumers that don't expect these fields ignore them (JSON forward-compat) |
-| `BroadcastActionAuditEventModel` | 11 new Literal values added to `action` | **None**: Pydantic Literal is output-side; existing audit queries don't filter by action type |
-| Frontend `BroadcastSession` interface | 5 new optional fields | **None**: TypeScript optional fields are backward-compatible |
-| `BroadcastInputs` table | New table, no changes to existing tables | **None**: New table is additive |
-| `broadcast_mediolive.py` | No changes to existing functions | **None**: `provision_mediolive_input_and_channel()` unchanged |
-| `broadcast_orchestrator.py` | Additional operations in start/stop/delete | **Low**: New operations are additive (create primary input record, cleanup); if they fail, existing behavior is preserved |
-| SSE events | New event types | **None**: Frontend SSE handlers ignore unknown event types |
-
-### 7.4 Rollback Steps
-
-1. **Immediate mitigation**: Set `BROADCAST_MAX_INPUTS_PER_SESSION=1` to disable new input creation. Existing sessions continue with current inputs.
-2. **Active sessions**: Multi-input sessions that are already live continue to work until they stop. Layout remains at whatever was last set.
-3. **Frontend rollback**: Revert the frontend bundle. InputManager, LayoutSwitcher, and GuestInviteDialog are self-contained components that don't affect the rest of BroadcastPage.
-4. **Backend rollback**: Revert backend code. The new endpoints return 404 (router not registered). `BroadcastInputs` table remains with orphaned data but is harmless -- no existing code reads it.
-5. **Data cleanup** (optional): Run a cleanup script to delete all records from the `BroadcastInputs` table:
-   ```python
-   # scripts/cleanup_broadcast_inputs.py
-   import boto3
-   ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001")
-   table = ddb.Table("BroadcastInputs")
-   scan = table.scan(Select="ALL_ATTRIBUTES")
-   with table.batch_writer() as batch:
-       for item in scan.get("Items", []):
-           batch.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
-   ```
-6. **Table deletion** (optional, production only): Drop the `BroadcastInputs` table after confirming no code references it.
-
-### 7.5 Deployment Order
-
-1. Create `BroadcastInputs` DDB table (production: CloudFormation/CLI; dev: `local-ddb-init.py` handles it)
-2. Deploy backend with `BROADCAST_MAX_INPUTS_PER_SESSION=1` (code deployed but effectively disabled)
-3. Deploy frontend (new components are lazy-loaded and won't render without backend support)
-4. Set `BROADCAST_MAX_INPUTS_PER_SESSION=4` to enable multi-input
-5. Monitor error rates and SSE event delivery for 1 hour
-6. Set `BROADCAST_WEBRTC_RELAY_ENABLED=true` to enable browser guests (requires FFmpeg on server)
-
----
-
-## 8. Acceptance Criteria
-
-### Multi-Input Provisioning
-
-1. A broadcaster can add up to `max_inputs` (default 4) RTMP inputs via `POST /sessions/{id}/inputs`. Each input receives a unique `input_id`, `ingest_url`, and MediaLive input ARN.
-2. The primary input (position 0) is created automatically during session provisioning by the orchestrator and cannot be removed via the API.
-3. Inputs can be added to sessions in `draft`, `scheduled`, `ready`, or `live` status. Adding to `stopped`, `cancelled`, or `error` returns 409 with the current status in the error message.
-4. Removing an input detaches it from the MediaLive channel, deletes the MediaLive resource, and removes the DDB record. If the removed input was in the active layout, layout falls back to `single` with the primary input.
-5. `GET /sessions/{id}/inputs` returns all inputs sorted by position with `is_live` status, `ingest_url`, and `connected_at` timestamps.
-6. Exceeding `max_inputs` returns 400 with the message "Maximum N inputs per session" where N is the configured limit.
-7. Each input's `ingest_url` and one-time `stream_key` are returned on creation but the stream key is never returned again (only `stream_key_ref` is persisted).
-8. The `count` and `max_inputs` fields in the list response allow the frontend to show "Inputs (3/4)" and disable the add button when full.
-
-### Layout Switching
-
-9. Four layout modes are available via `POST /sessions/{id}/layout`: `single` (full-screen), `side_by_side` (50/50 horizontal), `pip` (main + small overlay), `grid` (2x2 adaptive).
-10. Layout switching is only permitted when session status is `live` or `private` (409 otherwise).
-11. `side_by_side` and `pip` require at least 2 inputs (400 otherwise with descriptive message).
-12. `pip` mode places `primary_input_id` full-screen (width=1.0, height=1.0) with the secondary input at bottom-right (x=0.7, y=0.7, width=0.28, height=0.28, z_index=1).
-13. `grid` mode adaptively places 1-4 inputs: 1 input = full screen, 2 inputs = side by side, 3 inputs = 2x2 with one cell empty, 4 inputs = 2x2 grid.
-14. The response includes computed `positions` with normalized coordinates (`x`, `y`, `width`, `height`, `z_index`).
-15. Layout changes are broadcast to all SSE subscribers via `layout:changed` event with the full position set.
-16. `GET /sessions/{id}/layout` returns the current layout configuration without modifying it.
-17. A layout switch cooldown of `BROADCAST_LAYOUT_SWITCH_COOLDOWN_SECONDS` (default 2s) prevents rapid switching.
-
-### Guest Co-Streaming
-
-18. Broadcaster creates guest invites via `POST /sessions/{id}/guest-invites` with `join_mode` (browser/rtmp), `label`, and `expiry_minutes` (5-1440 range).
-19. RTMP invites include `ingest_url` and one-time `stream_key` (not stored in plaintext in DDB).
-20. Browser invites include `invite_url` pointing to `/broadcast/{sessionId}/guest/{inviteId}`.
-21. Guest accepts via `POST /guest-invites/{invite_id}/accept` with `display_name`. Expired invites return 410; already-accepted return 409; revoked invites return 409.
-22. Only one user can accept a given invite. The first `accept` call wins.
-23. Broadcaster can revoke pending invites. Revoking an already-accepted invite does not disconnect the guest (use remove for that).
-24. Broadcaster can remove an active guest via `POST /guests/{input_id}/remove`. This marks the input offline and publishes `guest:removed` SSE event.
-25. Broadcaster can mute/unmute a guest via `POST /guests/{input_id}/mute`. This publishes `guest:muted` SSE event (audio control is client-side).
-26. Promoting a guest via `POST /guests/{input_id}/promote` switches the layout to `single` with that guest's input as the primary.
-
-### Browser Guest (WebRTC Relay)
-
-27. When `BROADCAST_WEBRTC_RELAY_ENABLED=true`, browser guests use `getUserMedia()` + WebRTC PeerConnection to the relay server. The relay converts WebRTC to RTMP push to the guest's allocated MediaLive input.
-28. In dev mode, relay is mocked. Signaling endpoints (`/webrtc-offer`, `/ice-candidate`) are functional for testing the handshake but no real media flows.
-29. Relay terminates when the guest leaves, is removed by the broadcaster, or the session stops.
-30. Only the accepted guest's `user_sub` can send WebRTC signaling messages to their assigned input (403 for others).
-
-### Session Lifecycle Integration
-
-31. On session stop: all relay processes terminated, all inputs marked `is_live=false` with `disconnected_at`, all pending invites set to "expired".
-32. On session delete: all input, invite, and layout records deleted from `BroadcastInputs` table.
-33. Primary input is created in `BroadcastInputs` during session provisioning; its `position=0` and `input_type="primary"`.
-
-### SSE Event Delivery
-
-34. All 12 SSE event types listed in section 3.10 are published via `broadcast_sse_publish()` at the appropriate trigger points.
-35. SSE events are delivered to all connected subscribers within the same SSE queue timeout (15s ping interval).
-
-### Testing
-
-36. All E2E tests (sections 140-148) pass with 0 flakes on 3 consecutive runs.
-37. Unit tests cover: input CRUD, guest invite lifecycle (including expiry and conflict), layout positions for all 4 modes, layout validation, PiP primary ordering, WebRTC relay mock, and multi-input MediaLive operations.
-38. At least 36 E2E tests and 31 unit tests pass.
-
----
-
-## 9. Error Handling Matrix
-
-### API Error Responses
-
-| Endpoint | Condition | HTTP Status | Error Code | Error Message |
-|----------|----------|------------|------------|---------------|
-| `POST /inputs` | Session not found | 404 | (FastAPI default) | "broadcast session not found" |
-| `POST /inputs` | Not session owner | 403 | (inline) | "Only the broadcaster can add inputs." |
-| `POST /inputs` | Session stopped/error/cancelled | 409 | (inline) | "Cannot add inputs when session is {status}." |
-| `POST /inputs` | Max inputs reached | 400 | (inline) | "Maximum N inputs per session." |
-| `POST /inputs` | MediaLive provisioning failure | 500 | (provider error) | Wrapped provider exception |
-| `DELETE /inputs/{id}` | Input not found | 404 | (FastAPI default) | "Input not found" |
-| `DELETE /inputs/{id}` | Cannot remove primary | 400 | CANNOT_REMOVE_PRIMARY | "Cannot remove the primary input (position 0)." |
-| `POST /layout` | Session not live/private | 409 | (inline) | "Layout switching requires a live session." |
-| `POST /layout` | Invalid mode | 400 | (inline) | "Invalid layout mode: X. Valid: grid, pip, side_by_side, single" |
-| `POST /layout` | Insufficient inputs for mode | 400 | (inline) | "Layout 'X' requires at least 2 inputs, got 1." |
-| `POST /layout` | Cooldown not elapsed | 429 | LAYOUT_SWITCH_COOLDOWN | "Layout switch cooldown: wait N seconds." |
-| `POST /guest-invites` | Not session owner | 403 | (inline) | "Only the broadcaster can create guest invites." |
-| `POST /guest-invites` | No available input slots | 400 | (inline) | "No available input slots for a new guest." |
-| `POST /guest-invites/{id}/accept` | Invite not found | 404 | (FastAPI default) | "Guest invite not found" |
-| `POST /guest-invites/{id}/accept` | Invite expired | 410 | INVITE_EXPIRED | "This invite has expired." |
-| `POST /guest-invites/{id}/accept` | Invite already accepted | 409 | INVITE_ALREADY_ACCEPTED | "This invite has already been accepted." |
-| `POST /guest-invites/{id}/accept` | Invite revoked | 409 | INVITE_REVOKED | "This invite has been revoked." |
-| `POST /guest-invites/{id}/revoke` | Not session owner | 403 | (inline) | "Only the broadcaster can revoke invites." |
-| `POST /guests/{id}/remove` | Not session owner | 403 | (inline) | "Only the broadcaster can remove guests." |
-| `POST /guests/{id}/remove` | Input not found | 404 | (FastAPI default) | "Input not found" |
-| `POST /inputs/{id}/webrtc-offer` | Relay disabled | 503 | WEBRTC_RELAY_DISABLED | "WebRTC relay is not enabled." |
-| `POST /inputs/{id}/webrtc-offer` | User not the accepted guest | 403 | (inline) | "Only the accepted guest can send WebRTC offers." |
-| `POST /inputs/{id}/webrtc-offer` | Relay already running | 409 | RELAY_ALREADY_RUNNING | "Relay already active for this input." |
-
-### Internal Error Handling
-
-| Component | Failure Mode | Recovery Strategy |
-|-----------|-------------|------------------|
-| `create_additional_input()` | MediaLive `ThrottlingException` | Retry with exponential backoff (4 attempts via `_with_retry`) |
-| `attach_input_to_channel()` | Channel in non-updatable state | Return error to caller; input created but not attached; can retry |
-| `schedule_input_switch()` | BatchUpdateSchedule fails | Log error; layout state in DDB may be inconsistent with channel; next switch attempt resolves |
-| `start_relay()` | FFmpeg process fails to start | Return error; input marked as offline; guest sees error in GuestStreamPanel |
-| `stop_all_relays_for_session()` | One relay fails to stop (process kill fails) | Log warning; continue stopping other relays; orphaned process eventually times out |
-| `accept_guest_invite()` | DDB conditional check fails (race condition) | Return 409; first acceptor wins |
-| DDB write capacity exceeded | Provisioned throughput exceeded | DDB auto-scaling handles this; boto3 retries with backoff |
-
----
-
-## 10. Performance & Capacity Planning
-
-### 10.1 AWS MediaLive Limits
-
-| Resource | Default Limit | Per-Session Usage | Headroom |
-|----------|--------------|-------------------|----------|
-| Inputs per region | 100 | 1-8 per session | ~12-100 concurrent sessions per region |
-| Input attachments per channel | 20 | 1-8 per session | Well within limit |
-| ScheduleActions per channel | 1000 active | 1 per layout switch | Effectively unlimited for manual switching |
-| Channels per region | 5 (default, can request increase) | 1 per session | Request increase for production |
-| Input security groups per region | 5 (default) | 1 per session | Request increase for production |
-
-### 10.2 Concurrent Input Capacity
-
-| Scenario | Inputs | MediaLive Channels | Monthly Cost Est. |
-|----------|--------|-------------------|-------------------|
-| 10 sessions, 2 inputs each | 20 | 10 | ~$3,000 (on-demand) |
-| 10 sessions, 4 inputs each | 40 | 10 | ~$3,000 (same channel cost; inputs are free) |
-| 50 sessions, 4 inputs each | 200 | 50 | ~$15,000 (requires limit increase) |
-| 100 sessions, 8 inputs each | 800 | 100 | ~$30,000 (requires limit increase) |
-
-**Key insight**: MediaLive charges per channel, not per input. Adding inputs is free. The cost driver is concurrent channels, not concurrent inputs.
-
-### 10.3 DynamoDB Capacity
-
-| Operation | Frequency | WCU Impact | RCU Impact |
-|-----------|-----------|-----------|-----------|
-| Create input | Low (during setup) | 1 WCU per input | 0 |
-| List inputs | Medium (5s polling) | 0 | 1 RCU per query (< 4KB response) |
-| Mark input live/offline | Low (on connect/disconnect) | 1 WCU | 1 RCU (read-modify-write) |
-| Save layout | Low (manual switches) | 1 WCU | 0 |
-| Create/accept invite | Low | 1 WCU each | 1 RCU each |
-| Delete all inputs (on session stop) | Very low | 1 WCU per item | 1 RCU (scan) |
-
-**Estimate**: 50 concurrent live sessions with 4 inputs each, 5s input polling = 10 RCU sustained. Well within DynamoDB on-demand mode.
-
-### 10.4 SSE Event Throughput
-
-| Event Source | Events/Second (Peak) | Subscriber Count (Peak) | Total Events/Second |
-|-------------|---------------------|------------------------|---------------------|
-| Input connection status changes | 0.1 per session | 100 viewers per session | 10 per session |
-| Layout switches | 0.5 per session (manual) | 100 viewers per session | 50 per session |
-| Guest join/leave | 0.05 per session | 100 viewers per session | 5 per session |
-
-SSE events are delivered in-process via `asyncio.Queue`. With `maxsize=100` per subscriber, a burst of 100 events is absorbed before any are dropped. Dead (disconnected) subscribers are auto-cleaned on `QueueFull`.
-
-### 10.5 WebRTC Relay Resource Usage
-
-| Resource | Per Relay Process | Max Per Server (4 inputs/session, 50 sessions) |
-|----------|------------------|-----------------------------------------------|
-| FFmpeg CPU | ~0.5 vCPU (WebRTC decode + RTMP encode) | 100 vCPU (200 relays) |
-| FFmpeg Memory | ~100MB | 20GB (200 relays) |
-| Network bandwidth | 2-5 Mbps per relay | 400-1000 Mbps |
-
-**Recommendation**: For production with > 20 concurrent browser guests, run relay processes on dedicated instances (not the API server). The `relay_process_id` field on `BroadcastInputModel` supports this by decoupling relay management from the API process.
-
----
-
-## 11. Edge Cases Deep Dive
-
-### 11.1 Guest Disconnects Mid-Stream
-
-**Scenario**: Guest A is streaming via RTMP and their internet drops while in a side_by_side layout.
-
-**Sequence**:
-1. MediaLive detects input loss (no incoming packets for 5+ seconds)
-2. Health monitoring detects `input_loss_seconds > 0` for Guest A's input
-3. Backend marks input as offline: `mark_input_live(session_id, input_id, is_live=False)`
-4. SSE event `input:disconnected` published with `disconnected_at` timestamp
-5. Frontend `InputManager` updates Guest A's status badge from LIVE (green) to OFFLINE (gray)
-6. **Layout does NOT auto-switch**: The broadcaster maintains control. MediaLive shows the last frame or black for the disconnected input. The broadcaster can manually switch to `single` or remove the guest.
-7. If the guest reconnects (RTMP push resumes), MediaLive detects the new stream. `input:connected` event published. Status badge returns to LIVE.
-
-**Why no auto-switch**: Auto-switching would surprise the broadcaster and viewers during brief network glitches. The broadcaster knows best when to adapt the layout. A future enhancement could add an optional "auto-fallback" setting.
-
-### 11.2 Layout Switch During Recording
-
-**Scenario**: Session is live with recording enabled. Broadcaster switches from `single` to `side_by_side`.
-
-**Behavior**:
-- MediaLive records the **composed output** (what viewers see), not individual inputs.
-- The InputSwitch ScheduleAction takes effect immediately. MediaLive transitions the encoder pipeline to the new input configuration.
-- The recording (HLS segments written to S3) captures the transition as a hard cut. There is a brief (~1 frame) moment where the output may show black or the old layout.
-- The recording pipeline (BCAST-006) processes segments chronologically. The layout change is preserved in the final MP4.
-
-**Limitation**: There is no way to retroactively apply a layout change to already-recorded segments. The recording reflects the broadcast exactly as viewers saw it.
-
-### 11.3 Multiple Guests Accept Same Invite (Race Condition)
-
-**Scenario**: Broadcaster shares an invite link in a group chat. Two guests click "Accept" simultaneously.
-
-**Resolution**:
-- `accept_guest_invite()` uses a DDB conditional update: `ConditionExpression = Attr("status").eq("pending")`
-- The first write succeeds and sets `status = "accepted"`
-- The second write fails the condition check (status is now "accepted", not "pending")
-- The second caller receives HTTP 409 with message "This invite has already been accepted"
-- This is atomic at the DDB level -- no application-level locking needed
-
-### 11.4 Session Stops While Guest Has Active WebRTC Relay
-
-**Scenario**: Session owner clicks "Stop" while Guest B is streaming via browser (WebRTC relay).
-
-**Sequence**:
-1. `stop_session_with_provider()` called
-2. **Added by this ticket**: `stop_all_relays_for_session(session_id)` called
-3. Each relay process receives SIGTERM (graceful shutdown)
-4. If process doesn't exit within 5 seconds, SIGKILL is sent
-5. All inputs marked offline via `mark_input_live(is_live=False)`
-6. All pending invites expired via `expire_pending_invites()`
-7. Channel is stopped via provider
-8. Recording pipeline triggered (records composed output up to the stop point)
-9. SSE events published: `input:disconnected` for each input
-10. Guest B's `GuestStreamPanel` receives a connection error on the PeerConnection; shows "Broadcast ended" message
-
-### 11.5 Input Added During Live Session (Hot-Attach)
-
-**Scenario**: Broadcaster adds a new RTMP input while the session is already live.
-
-**Sequence**:
-1. `POST /sessions/{id}/inputs` called
-2. `create_additional_input()` creates a new MediaLive input
-3. `attach_input_to_channel()` calls `UpdateChannel` to add the new InputAttachment
-4. MediaLive hot-attaches the input. The channel continues running uninterrupted.
-5. The new input is in `DETACHED` or `IDLE` state until RTMP push begins
-6. DDB record created with `is_live=False`
-7. SSE event `input:added` published
-8. Frontend shows new input row with OFFLINE status
-9. When the broadcaster (or guest) starts pushing RTMP to the new ingest URL:
-   - MediaLive detects the incoming stream
-   - Input transitions to `ATTACHED` / receiving state
-   - Health monitoring or MediaLive events trigger `mark_input_live(is_live=True)`
-   - SSE event `input:connected` published
-   - Frontend shows LIVE status
-
-### 11.6 Primary Input Removed by Accident
-
-**Protection**: The API explicitly rejects deletion of the primary input:
-
-```python
-if input_record.position == 0 and input_record.input_type == "primary":
-    raise HTTPException(status_code=400, detail="Cannot remove the primary input (position 0).")
-```
-
-The primary input is the broadcaster's own camera/encoder. Removing it would leave the channel with no guaranteed input source. If the broadcaster wants to swap their primary source, they should use layout switching to bring a different input to full-screen, not remove the primary.
-
-### 11.7 Guest Joins But Never Pushes Media
-
-**Scenario**: Guest accepts an invite (browser mode) but never clicks "Start Broadcasting" in the GuestStreamPanel, or their camera/mic permissions are denied.
-
-**Behavior**:
-- The invite status is "accepted" and the input record exists in DDB
-- `is_live` remains `false` on the input
-- The input appears as OFFLINE in the InputManager
-- The broadcaster can include the OFFLINE input in a layout (MediaLive shows black/last-frame for inputs with no incoming media)
-- After a configurable timeout (or broadcaster decision), the broadcaster can remove the guest
-- The invite and input remain until explicitly cleaned up or session stops
-
-### 11.8 Network Partition Between Backend and MediaLive
-
-**Scenario**: The backend loses connectivity to the MediaLive API during a layout switch.
-
-**Behavior**:
-- `schedule_input_switch()` fails after 4 retry attempts
-- The layout state in DDB is NOT updated (layout switch is atomic: DDB update only happens after MediaLive succeeds)
-- The error propagates to the API response (500)
-- The frontend shows a toast error "Failed to switch layout"
-- The current layout remains unchanged on both MediaLive and in DDB
-- Subsequent layout switch attempts will succeed once connectivity is restored
-
----
-
-## 12. Observability
-
-### 12.1 Prometheus Metrics
-
-Add to `app/metrics.py`:
-
-| Metric | Type | Labels | Purpose |
-|--------|------|--------|---------|
-| `broadcast_inputs_total` | Gauge | `session_id`, `status` | Current input count per session by live/offline status |
-| `broadcast_input_provision_latency_seconds` | Histogram | `result` (success/failure) | MediaLive input creation latency |
-| `broadcast_layout_switch_total` | Counter | `mode`, `result` | Layout switch count by mode and success/failure |
-| `broadcast_guest_invite_total` | Counter | `join_mode`, `status` | Invite creation/acceptance/revocation count |
-| `broadcast_relay_active` | Gauge | `session_id` | Active WebRTC relay process count |
-
-### 12.2 Structured Logging
-
-All new service functions log at INFO level with structured fields:
-
-```python
-logger.info("Input created", extra={
-    "session_id": session_id,
-    "input_id": input_id,
-    "input_type": input_type,
-    "position": position,
-})
-```
-
-Error cases log at WARNING or ERROR with exception details:
-
-```python
-logger.warning("Guest invite acceptance conflict", extra={
-    "session_id": session_id,
-    "invite_id": invite_id,
-    "attempted_by": guest_user_id,
-    "current_status": current_status,
-})
-```
-
-### 12.3 Audit Trail
-
-All 11 new audit actions are recorded via `record_broadcast_action()` with relevant metadata. The audit trail is queryable via the existing `GET /broadcast/admin/audit` endpoint with actor and time range filters.
+- [ ] DDB table/fields added to `scripts/local-ddb-init.py` (if new table needed)
+- [ ] Settings added to `app/core/settings.py`
+- [ ] Service and router files created/modified
+- [ ] Frontend components and API wrappers created
+- [ ] E2E test passes in CI
+- [ ] No breaking changes to existing endpoints
 
 ---
 

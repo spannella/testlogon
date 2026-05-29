@@ -1380,3 +1380,95 @@ test("173.8 Filter by screen type updates table rows", async ({ page }) => {
 | Screening review request/response models | `app/contracts/kyc_cases_contract.py` | NOT FOUND -- new models required |
 | `frontend/src/pages/admin/KycScreeningQueuePage.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |
 | `/admin/kyc/screening` route | `frontend/src/App.tsx` | NOT FOUND -- new route required |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_screening.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_screen_against_sanctions_list`
+  - `test_screen_against_pep_list`
+  - `test_fuzzy_name_matching`
+  - `test_screen_result_match_found`
+  - `test_screen_result_no_match`
+  - `test_periodic_rescreening`
+  - `test_false_positive_dismissal`
+  - `test_screening_audit_trail`
+
+### Integration Tests
+
+  - New user registration triggers automatic screening
+  - Screening match flags user for admin review
+  - Dismissed false positive does not re-trigger on rescan
+  - Screening results stored with match confidence score
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/kyc-screening.spec.ts`
+**Test count**: 12
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_screening_results` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_SCREENING_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| KYC-001 | Admin KYC Review Dashboard | Screening results reviewed through dashboard |
+| KYC-002 | Identity Document Verification | Extracted name/DOB from documents used for screening |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| KYC-008 | Risk Scoring Engine | Screening results feed risk score |
+| KYC-012 | Compliance Reporting | Screening results included in compliance reports |
+| KYC-015 | Business/Corporate KYB | Business entity screening uses same engine |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after KYC-001, KYC-002. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 12 E2E tests pass with `npx playwright test kyc-screening.spec.ts`

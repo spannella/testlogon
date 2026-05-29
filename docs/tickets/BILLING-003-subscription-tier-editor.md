@@ -1006,219 +1006,89 @@ The frontend sends `X-User-Id` from `useAuthStore.getState().userId` via the `us
 
 ---
 
-## 9. Testing Plan
+## Testing Strategy
 
-### 9.1 E2E Tests
+### Unit Tests (pytest)
 
-**Test file**: `frontend/e2e/tier-manager.spec.ts`
+**Test file**: `tests/test_subscription_tier_editor.py`
 
-**Section 1: Plan CRUD UI (6 tests)**
+**Mock setup**: moto mock for DynamoDB (billing tables). stripe-mock on port 12111 for payment provider calls.
 
-| # | Test | Setup | Assertion |
-|---|------|-------|-----------|
-| 1 | Navigate to /subscriptions/manage shows TierManager | injectAuth(alice) | "Subscription Tiers" heading visible |
-| 2 | Create Plan dialog opens and submits | Click "Create Plan"; fill form; submit | New plan appears in list with "active" badge |
-| 3 | Edit Plan dialog pre-fills existing data | Click Edit on plan | Name/price pre-populated; change name; save; list updated |
-| 4 | Archive Plan with confirmation | Click Archive; confirm dialog | Status badge changes to "archived" |
-| 5 | Archived plan shows in list with "archived" badge | After archive | Archived plan visible with grey badge |
-| 6 | Reactivate archived plan | Click Reactivate on archived plan | Status changes back to "active" |
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_get_resource_by_id` | Get resource; verify all fields returned |
+| `test_list_resources` | List with pagination; verify count and order |
+| `test_update_resource` | Update fields; verify changes persisted |
+| `test_delete_or_cancel_resource` | Delete/cancel; verify status change |
+| `test_validation_rejects_invalid` | Missing/invalid fields return 400/422 |
+| `test_authorization_enforced` | Non-owner/non-admin returns 403 |
 
-**Section 2: Plan Validation (4 tests)**
+### Integration Tests
 
-| # | Test | Setup | Assertion |
-|---|------|-------|-----------|
-| 7 | Name too short shows validation error | Enter 1-char name | "at least 2 characters" error visible |
-| 8 | Price of 0 shows validation error | Enter $0.00 | "Price must be greater than 0" error visible |
-| 9 | Annual price shown only for monthly plans | Select "Yearly" interval | Annual price field hidden |
-| 10 | Asset paths are editable | Add 2 asset paths; remove 1; submit | Plan has 1 asset |
+Cross-service tests with real DynamoDB Local:
 
-**Section 3: Discount Code Management (5 tests)**
+1. Full lifecycle through real DDB
+2. Cross-service with billing ledger validation
+3. Concurrent requests handled correctly
 
-| # | Test | Setup | Assertion |
-|---|------|-------|-----------|
-| 11 | Navigate to Discount Codes tab | Click "Discount Codes" tab | Table or empty state visible |
-| 12 | Create discount code | Fill form: "SAVE20", 20%, "once"; submit | Code appears in table with "Active" badge |
-| 13 | Repeating discount requires duration_months | Select "Repeating" duration | duration_months field appears; submit without it fails |
-| 14 | Disable discount code | Click Disable on active code; confirm | Status changes to "Disabled" (red badge) |
-| 15 | Disabled code shown in table | After disable | Code visible with red badge |
+### E2E Tests (Playwright)
 
-**Section 4: Preview Tab (2 tests)**
+**Test file**: `frontend/e2e/subscription-tier-editor.spec.ts`
 
-| # | Test | Setup | Assertion |
-|---|------|-------|-----------|
-| 16 | Preview tab shows PlanBrowser view | Click "Preview" tab | Plan cards visible with Subscribe buttons |
-| 17 | Only active plans shown in preview | After archiving a plan | Preview tab does not show archived plan |
+**Auth pattern**: `injectAuth(page, "alice")` for customer; `injectAuth(page, "root")` for admin; CSRF header for mutations
 
-**Section 5: Navigation (2 tests)**
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource | POST returns 200/201 with ID |
+| 2 | API returns resource by ID | GET returns full resource |
+| 3 | API lists with pagination | GET list returns array |
+| 4 | API updates resource | PATCH returns updated resource |
+| 5 | UI page loads with heading | Navigate to page; heading visible |
+| 6 | UI form submits successfully | Fill form; submit; success toast |
+| 7 | UI shows validation errors | Submit invalid; error messages visible |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-owner returns 403 | Wrong user -> 403 |
+| 10 | Not found returns 404 | Invalid ID -> 404 |
+| 11 | Duplicate returns 409 | Create twice -> 409 |
 
-| # | Test | Setup | Assertion |
-|---|------|-------|-----------|
-| 18 | Tier Manager visible in sidebar | Navigate to any page | Sidebar shows "Tier Manager" link |
-| 19 | Sidebar link navigates correctly | Click "Tier Manager" link | URL is /subscriptions/manage |
+**Negative tests**: 401 unauthenticated, 403 non-owner/non-admin, 404 not found, 409 conflict, 422 validation
 
-### 9.2 Test Implementation Details
+**Edge cases**: Zero balance payout attempt, refund exceeding original amount, concurrent refund requests
 
-Auth pattern (matching existing subscription tests):
+### Test Data Requirements
 
-```typescript
-// Subscription server uses X-User-Id, not cookie auth
-const ALICE_SUB = sessions["alice"].user_sub;
+Seed billing data via DDB `put_item` in `beforeAll`. Use unique IDs per test run.
 
-// Plan creation via API
-const createResp = await request.post(`/api/creators/${ALICE_SUB}/plans`, {
-  headers: { "X-User-Id": ALICE_SUB, "Content-Type": "application/json" },
-  data: {
-    name: `Test Plan ${Date.now()}`,
-    price_cents: 999,
-    interval: "month",
-  },
-});
-expect(createResp.ok()).toBeTruthy();
-const plan = await createResp.json();
+**Test users**: Alice (USER, customer), Charlie (ADMIN, queue management), Root (ROOT, admin operations)
 
-// UI verification
-await page.goto("/subscriptions/manage");
-await expect(page.getByText(plan.name)).toBeVisible();
-```
+### CI/Pipeline
 
-### 9.3 Unit Tests
-
-No new backend code -- existing `subscription_server` tests cover the API layer. The frontend is tested via E2E tests.
+Serial execution. `stripe-mock` on port 12111. Retry-safe.
 
 ---
 
-## 10. Performance Considerations
+## Dependencies & Merge Safety
 
-### 10.1 Query Efficiency
+### Depends On
 
-- `listPlans(creatorId)` returns all plans (active + archived). The frontend filters locally. At typical volumes (< 20 plans per creator), this is efficient.
-- `listDiscounts(creatorId)` queries all items under `CREATOR#{creatorId}` and filters for `DISCOUNT#` prefix. This is a DDB Query (not Scan) -- efficient even at 1000+ items per creator.
+No upstream dependencies. This ticket is self-contained.
 
-### 10.2 React Query Caching
+### Depended On By
 
-| Key | staleTime | Rationale |
-|-----|-----------|-----------|
-| `["creator-plans", userId]` | 30s | Plans change infrequently; short stale time for edit responsiveness |
-| `["creator-discounts", userId]` | 30s | Same rationale |
-| `["plans", userId]` | 60s | Preview tab; subscriber-facing cache |
+No downstream dependents identified.
 
-### 10.3 Optimistic Updates
+### Merge Strategy
 
-Plan archiving and discount disabling use optimistic updates:
+Independent. Frontend page + minor backend enhancements. Subscription plan CRUD endpoints already exist.
 
-```typescript
-const archiveMut = useMutation({
-  mutationFn: (planId) => archivePlan(planId),
-  onMutate: async (planId) => {
-    await queryClient.cancelQueries({ queryKey: ["creator-plans", userId] });
-    const prev = queryClient.getQueryData(["creator-plans", userId]);
-    queryClient.setQueryData(["creator-plans", userId], (old) =>
-      old?.map((p) => (p.plan_id === planId ? { ...p, status: "archived" } : p)),
-    );
-    return { prev };
-  },
-  onError: (err, planId, ctx) => {
-    queryClient.setQueryData(["creator-plans", userId], ctx?.prev);
-  },
-  onSettled: () => {
-    queryClient.invalidateQueries({ queryKey: ["creator-plans", userId] });
-  },
-});
-```
+### Merge Checklist
 
----
-
-## 11. Migration & Rollout
-
-### 11.1 No Backend Changes
-
-This is a purely frontend ticket. All backend endpoints already exist and are tested. No database migration needed.
-
-### 11.2 Route Registration
-
-Add the `/subscriptions/manage` route to `App.tsx` inside the authenticated route group. The route is only accessible to authenticated users.
-
-### 11.3 Sidebar Addition
-
-Add "Tier Manager" link to the Commerce group in `Sidebar.tsx`. Position it after the existing "Subscriptions" link.
-
-### 11.4 Rollback
-
-Remove the route from `App.tsx` and the sidebar link from `Sidebar.tsx`. Delete the three new component files. No backend or database changes to revert.
-
-### 11.5 Backwards Compatibility
-
-- No breaking changes to existing APIs.
-- The `PlanBrowser` component is unchanged (it's reused in the Preview tab).
-- Existing subscription flows (subscriber-facing) are unaffected.
-
----
-
-## 12. Acceptance Criteria
-
-1. `/subscriptions/manage` route renders the TierManager page.
-2. Creators can create a new subscription plan with name, description, price, interval, and optional annual pricing.
-3. Creators can edit an existing plan's name, description, price, and assets.
-4. Creators can archive a plan (with confirmation dialog), and the plan shows as "archived" in the list.
-5. Creators can reactivate an archived plan.
-6. Discount Codes tab shows all codes with create, list, and disable functionality.
-7. Repeating discounts require a `duration_months` value (enforced by both frontend and backend).
-8. Preview tab shows the subscriber-facing PlanBrowser view with only active plans.
-9. Form validation prevents invalid input (empty name, zero price, missing duration_months for repeating).
-10. "Tier Manager" link appears in the sidebar Commerce group.
-11. Price input is in dollars; conversion to cents happens on submit.
-12. Discount codes are auto-uppercased.
-13. All 19 E2E tests pass.
-
----
-
-## 13. Dependencies
-
-- **MON-005 (Subscription-Gated VOD)**: Backend plan CRUD endpoints. Already fully implemented in `subscription_server.py:706-812`.
-- **PlanBrowser.tsx**: Existing subscriber-facing component reused for Preview tab. No changes needed.
-- **Subscription API client** (`subscriptions.ts`): Extended with new functions but existing functions unchanged.
-- **shadcn/ui components**: Tabs, Dialog, AlertDialog, Card, Badge, Button, Input, Select, Textarea -- all already in the project.
-- **React Hook Form + Zod**: Already used throughout the codebase for form validation.
-
----
-
-## 14. Open Questions & Risks
-
-### 14.1 Open Questions
-
-1. **Price change impact on existing subscribers**: When a creator changes `price_cents`, does it affect existing subscribers at their next renewal? The backend likely applies the plan's current price at renewal time. Should the UI warn creators about this?
-2. **Plan deletion**: The backend has no delete endpoint (only archive). Should there be one? Deleting a plan with active subscribers is destructive. Archive is safer.
-3. **Subscriber count**: Should plan cards show how many active subscribers each tier has? This would require a new backend query or a count field on the plan item.
-4. **Asset picker**: Should the asset paths input be a file picker (browsing the file manager) or a text input? A file picker would be better UX but requires integrating the `FilePickerDialog` component.
-5. **Multi-currency**: Should creators be able to set different prices for different currencies? Currently each plan has a single `currency` field.
-
-### 14.2 Risks
-
-1. **X-User-Id auth pattern**: The subscription server uses `X-User-Id` header auth, not cookie-based session auth. The frontend must correctly send this header via the `userIdHeader()` helper. If the auth store's `userId` is null or incorrect, all mutations will fail with 403.
-2. **Discount code overwrites**: `ddb_put_item` is unconditional -- creating a discount code with an existing code name silently overwrites it. The frontend should warn, but a race condition between two browser tabs could still cause unexpected overwrites.
-3. **PlanBrowser reuse in Preview tab**: The PlanBrowser's `subscribe` mutation uses `subPost` which sends `X-User-Id`. If a creator subscribes to their own plan in the preview, it would create a self-subscription. Consider disabling Subscribe buttons in the Preview tab or adding a "You are previewing your own plans" banner.
-
----
-
-## 15. Files to Create
-
-| File | Purpose | Estimated Lines |
-|------|---------|-----------------|
-| `frontend/src/pages/subscriptions/TierManager.tsx` | Main page: plan list with create/edit/archive/preview | ~300 |
-| `frontend/src/pages/subscriptions/PlanEditor.tsx` | Create/edit form dialog for a single plan | ~250 |
-| `frontend/src/pages/subscriptions/DiscountCodeManager.tsx` | Discount code table with create form | ~200 |
-| `frontend/e2e/tier-manager.spec.ts` | E2E tests (19 tests) | ~400 |
-
-## 16. Files to Modify
-
-| File | Change |
-|------|--------|
-| `frontend/src/api/endpoints/subscriptions.ts` | Add `createPlan`, `updatePlan`, `archivePlan`, `createDiscount`, `listDiscounts`, `disableDiscount` functions |
-| `frontend/src/api/types.ts` | Add `PlanCreateReq`, `PlanUpdateReq`, `DiscountCodeCreateReq`, `DiscountCode` interfaces |
-| `frontend/src/App.tsx` | Add `<Route path="subscriptions/manage" element={<TierManager />} />` |
-| `frontend/src/components/layout/Sidebar.tsx` | Add "Tier Manager" nav item under Commerce group |
-| `frontend/src/components/layout/AppShell.tsx` | Add "Tier Manager" to MobileSidebar |
-| `frontend/src/components/layout/MobileNav.tsx` | Add "Tier Manager" to MORE_LINKS |
+- [ ] Route `/subscriptions/manage` added to `App.tsx`
+- [ ] TierManager, PlanEditor, DiscountCodeManager components created
+- [ ] Sidebar entry added under Monetization group
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing subscription API
 
 ---
 

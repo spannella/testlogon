@@ -994,3 +994,84 @@ webhook_deliveries=ddb.Table(S.webhook_deliveries_table_name),
 | `attr_types` for numeric GSI sort keys | `scripts/local-ddb-init.py` | e.g., 247, 517 | VERIFIED (critical for `next_retry_at` and `created_at` GSI sort keys) |
 | Settings dataclass | `app/core/settings.py` | entire file | VERIFIED (proposed new settings do not exist yet) |
 | Tables dataclass | `app/core/tables.py` | entire file | VERIFIED (proposed new table handles do not exist yet) |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_webhooks.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_create_endpoint` | Endpoint created with KMS-encrypted secret |
+| 2 | `test_create_http_rejected` | HTTP URL rejected; 400 |
+| 3 | `test_max_endpoint_limit` | 11th endpoint; 409 |
+| 4 | `test_hmac_signature` | Signature matches expected HMAC-SHA256 |
+| 5 | `test_retry_schedule` | Failed delivery scheduled with correct backoff |
+| 6 | `test_dead_letter_after_max` | 5th failure moves to dead_letter |
+| 7 | `test_auto_disable_threshold` | 50th consecutive failure disables endpoint |
+| 8 | `test_success_resets_count` | Successful delivery resets failure_count |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Event dispatch matches endpoints by type | webhook service + webhook_endpoints table |
+| 2 | Delivery retry with exponential backoff | dispatcher + webhook_deliveries table |
+| 3 | Auto-disable triggers user alert | webhook service + alerts service |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/webhooks.spec.ts` -- 22 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Sections: A (CRUD API, 6), B (delivery API, 5), C (signature, 3), D (admin API, 4), E (UI, 4)
+
+**Negative/edge tests**: 400 HTTP URL, 409 max endpoints, 403 non-admin on admin endpoints
+
+### Test Data Requirements
+
+- DDB seeds: webhook_endpoints, webhook_deliveries tables
+- Test users: Alice, Root
+- KMS mock required on port 7999
+
+### CI/Pipeline
+
+- Feature flags: WEBHOOKS_ENABLED=true
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Standalone feature |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| PLATFORM-001 | Optional | Rate limiting for webhook test endpoints |
+
+### Merge Strategy
+
+**Independent** -- No prerequisites. Parallel to alerts system.
+
+### Merge Checklist
+
+- [ ] webhook_endpoints + webhook_deliveries tables in local-ddb-init.py
+- [ ] Webhook CRUD router registered
+- [ ] Background dispatcher task in main.py
+- [ ] HMAC signing with KMS-encrypted secrets
+- [ ] E2E pass: `npx playwright test e2e/webhooks.spec.ts`

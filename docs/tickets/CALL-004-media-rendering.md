@@ -678,264 +678,93 @@ This is a Tailwind arbitrary property for mirroring the local video preview. Tai
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (Vitest/Jest)
+### Unit Tests (pytest)
 
-#### VideoRenderer srcObject binding
+**Test file**: `tests/test_call_4.py`
 
-```tsx
-// Test: srcObject is set when stream prop is provided
-it("sets srcObject on the video element when stream changes", () => {
-  const stream = new MediaStream();
-  render(<VideoRenderer stream={stream} />);
-  const video = screen.getByRole("video") ?? document.querySelector("video");
-  expect(video.srcObject).toBe(stream);
-});
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-// Test: srcObject is cleared on unmount
-it("clears srcObject on unmount", () => {
-  const stream = new MediaStream();
-  const { unmount } = render(<VideoRenderer stream={stream} />);
-  const video = document.querySelector("video")!;
-  unmount();
-  expect(video.srcObject).toBeNull();
-});
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-// Test: srcObject updates when stream changes
-it("updates srcObject when stream prop changes", () => {
-  const stream1 = new MediaStream();
-  const stream2 = new MediaStream();
-  const { rerender } = render(<VideoRenderer stream={stream1} />);
-  const video = document.querySelector("video")!;
-  expect(video.srcObject).toBe(stream1);
-  rerender(<VideoRenderer stream={stream2} />);
-  expect(video.srcObject).toBe(stream2);
-});
-```
+### Integration Tests
 
-#### AudioRenderer
+Cross-service tests with real DynamoDB Local:
 
-```tsx
-it("renders a hidden audio element with srcObject bound", () => {
-  const stream = new MediaStream();
-  render(<AudioRenderer stream={stream} />);
-  const audio = document.querySelector("audio")!;
-  expect(audio.srcObject).toBe(stream);
-  expect(audio.className).toContain("hidden");
-  expect(audio.autoplay).toBe(true);
-});
-```
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-#### CallTimer
+### E2E Tests (Playwright)
 
-```tsx
-it("increments every second when running=true", async () => {
-  vi.useFakeTimers();
-  render(<CallTimer running />);
-  expect(screen.getByLabelText("Call duration").textContent).toBe("00:00");
-  vi.advanceTimersByTime(3000);
-  expect(screen.getByLabelText("Call duration").textContent).toBe("00:03");
-  vi.useRealTimers();
-});
+**Test file**: `frontend/e2e/call-4.spec.ts`
 
-it("resets to 00:00 when running changes to false", () => {
-  vi.useFakeTimers();
-  const { rerender } = render(<CallTimer running />);
-  vi.advanceTimersByTime(5000);
-  rerender(<CallTimer running={false} />);
-  expect(screen.getByLabelText("Call duration").textContent).toBe("00:00");
-  vi.useRealTimers();
-});
-```
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-#### CallControls
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-```tsx
-it("shows camera toggle only for video mode", () => {
-  const { rerender } = render(
-    <CallControls mode="audio" isMuted={false} isCameraOff={false}
-      onToggleMute={vi.fn()} onToggleCamera={vi.fn()} onEnd={vi.fn()} isBusy={false} />
-  );
-  expect(screen.queryByLabelText("Mute microphone")).toBeInTheDocument();
-  expect(screen.queryByLabelText("Turn camera off")).not.toBeInTheDocument();
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-  rerender(
-    <CallControls mode="video" isMuted={false} isCameraOff={false}
-      onToggleMute={vi.fn()} onToggleCamera={vi.fn()} onEnd={vi.fn()} isBusy={false} />
-  );
-  expect(screen.queryByLabelText("Turn camera off")).toBeInTheDocument();
-});
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-it("shows destructive variant when muted", () => {
-  render(
-    <CallControls mode="audio" isMuted={true} isCameraOff={false}
-      onToggleMute={vi.fn()} onToggleCamera={vi.fn()} onEnd={vi.fn()} isBusy={false} />
-  );
-  const muteBtn = screen.getByLabelText("Unmute microphone");
-  expect(muteBtn.className).toContain("destructive");
-});
-```
+### Test Data Requirements
 
-### 5.2 Integration Tests (Connected State Rendering)
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-```tsx
-it("renders video layout when connected in video mode", () => {
-  const session: CallSessionUi = {
-    state: "connected",
-    direction: "outgoing",
-    mode: "video",
-    peerName: "Bob",
-    callId: "call-123",
-  };
-  render(
-    <CallSessionOverlay
-      session={session}
-      localStream={new MediaStream()}
-      remoteStream={new MediaStream()}
-      onAccept={vi.fn()} onDecline={vi.fn()} onEnd={vi.fn()} onDismiss={vi.fn()}
-    />
-  );
-  expect(screen.getByLabelText("Video call")).toBeInTheDocument();
-  expect(screen.getByLabelText("Remote video")).toBeInTheDocument();
-  expect(screen.getByLabelText("Local video preview")).toBeInTheDocument();
-  expect(screen.getByLabelText("End call")).toBeInTheDocument();
-  expect(screen.getByLabelText("Mute microphone")).toBeInTheDocument();
-  expect(screen.getByLabelText("Turn camera off")).toBeInTheDocument();
-  expect(screen.getByLabelText("Call duration")).toBeInTheDocument();
-});
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-it("renders audio layout when connected in audio mode", () => {
-  const session: CallSessionUi = {
-    state: "connected",
-    direction: "outgoing",
-    mode: "audio",
-    peerName: "Alice",
-    callId: "call-456",
-  };
-  render(
-    <CallSessionOverlay
-      session={session}
-      remoteStream={new MediaStream()}
-      onAccept={vi.fn()} onDecline={vi.fn()} onEnd={vi.fn()} onDismiss={vi.fn()}
-    />
-  );
-  expect(screen.getByLabelText("Audio call")).toBeInTheDocument();
-  expect(screen.getByText("Alice")).toBeInTheDocument();
-  expect(screen.getByText("Connected")).toBeInTheDocument();
-  expect(screen.queryByLabelText("Remote video")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Turn camera off")).not.toBeInTheDocument();
-});
-```
+### CI/Pipeline
 
-### 5.3 E2E Tests (Playwright)
-
-E2E testing of real WebRTC media requires mock `getUserMedia`. Playwright supports this via `page.context().grantPermissions(["camera", "microphone"])` and Chrome's `--use-fake-device-for-media-stream` flag.
-
-Add to `playwright.config.ts` launch options:
-
-```ts
-use: {
-  launchOptions: {
-    args: [
-      '--use-fake-device-for-media-stream',
-      '--use-fake-ui-for-media-stream',
-    ],
-  },
-}
-```
-
-<!-- NOTE: frontend/e2e/webrtc-call-media.spec.ts does not exist yet. Related tests exist in webrtc-media.spec.ts (1375 lines) and webrtc-calls.spec.ts (661 lines). -->
-#### Test scenarios for `frontend/e2e/webrtc-call-media.spec.ts`:
-
-1. **Video call shows remote video element when connected**: Start video call, verify `video[aria-label="Remote video"]` is visible
-2. **Video call shows local PiP**: Verify `video[aria-label="Local video preview"]` is visible in connected state
-3. **Audio call hides video elements**: Start audio call, verify no video elements rendered, verify hidden `<audio>` element exists
-4. **Mute toggle disables audio track**: Click mute button, verify button changes to `aria-label="Unmute microphone"` with destructive style
-5. **Camera off hides local PiP video**: Click camera off, verify PiP shows `VideoOff` icon instead of video
-6. **Call timer increments**: Verify timer text changes from "00:00" to "00:01" after ~1 second
-7. **End call clears srcObject**: End call, verify streams are cleaned up (overlay transitions to "ended" state)
-8. **Dialog expands for video calls**: Verify dialog content has wider max-width class in video mode vs audio mode
-9. **No-video fallback shows avatar**: When remote stream has no video tracks, verify avatar fallback is displayed
-
-### 5.4 srcObject Cleanup Verification
-
-Critical to verify that no memory leaks occur:
-
-```tsx
-it("does not leak MediaStream tracks after component unmounts", () => {
-  const audioTrack = { stop: vi.fn(), enabled: true, kind: "audio", addEventListener: vi.fn(), removeEventListener: vi.fn() };
-  const videoTrack = { stop: vi.fn(), enabled: true, kind: "video", addEventListener: vi.fn(), removeEventListener: vi.fn() };
-  const stream = {
-    getTracks: () => [audioTrack, videoTrack],
-    getAudioTracks: () => [audioTrack],
-    getVideoTracks: () => [videoTrack],
-  } as unknown as MediaStream;
-
-  const { unmount } = render(<VideoRenderer stream={stream} />);
-  unmount();
-  // The overlay itself does not stop tracks (that is teardownCallResources' job),
-  // but it must null out srcObject to release the element's reference.
-  const video = document.querySelector("video");
-  // After unmount, the DOM element is removed, but we verify the effect cleanup ran.
-});
-```
-
-### 5.5 Visual Regression Testing
-
-Use Playwright's `toHaveScreenshot()` for layout verification:
-
-```ts
-test("video call connected layout matches snapshot", async ({ page }) => {
-  // Navigate to a conversation and trigger a connected video call state
-  await injectAuth(page, "alice");
-  // ... trigger call and mock connected state ...
-  await expect(page.getByLabelText("Video call")).toHaveScreenshot("video-call-connected.png", {
-    maxDiffPixelRatio: 0.05,
-  });
-});
-```
-
-### 5.6 Edge Cases to Test
-
-| Scenario | Expected Behavior |
-|----------|-------------------|
-| `remoteStream` is null during connected state | Show avatar fallback, play no audio |
-| `localStream` is null (permission denied) | Hide PiP entirely, show toast warning |
-| Remote video track becomes muted mid-call | Transition to avatar fallback smoothly |
-| Browser tab hidden during video call | Streams continue (no track.stop), timer pauses display update |
-| Dialog dismissed via Escape key | `onDismiss` fires, streams remain (user may want to keep call active) |
-| Network reconnection during call | Overlay shows "Reconnecting..." then transitions back to connected with streams |
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
 ---
 
-## Appendix: Complete Updated Props Interface
+## Dependencies & Merge Safety
 
-```typescript
-export interface CallSessionUi {
-  state: CallUiState;
-  direction: "incoming" | "outgoing";
-  mode: DirectCallMode;
-  peerName: string;
-  callId?: string;
-  reasonMessage?: string;
-}
+### Depends On
 
-interface Props {
-  session: CallSessionUi;
-  isBusy?: boolean;
-  localStream?: MediaStream | null;
-  remoteStream?: MediaStream | null;
-  isMuted?: boolean;
-  isCameraOff?: boolean;
-  onAccept: () => void;
-  onDecline: () => void;
-  onEnd: () => void;
-  onDismiss: () => void;
-  onToggleMute?: () => void;
-  onToggleCamera?: () => void;
-}
-```
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-003 | Local and remote MediaStream objects | Implemented | No -- must merge after |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|---|---|
+| CALL-005 | Media rendering for control overlay |
+
+### Merge Strategy
+
+Sequential after CALL-003. Frontend component changes only.
+
+### Merge Checklist
+
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

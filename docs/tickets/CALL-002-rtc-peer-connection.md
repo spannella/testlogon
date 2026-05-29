@@ -651,181 +651,94 @@ Caller Browser          Backend SSE          Callee Browser
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests with Mocked RTCPeerConnection
+### Unit Tests (pytest)
 
-<!-- NOTE: This file does not exist yet — new implementation required. -->
-**File**: `frontend/src/hooks/useRtcPeerConnection.test.ts`
+**Test file**: `tests/test_call_2.py`
 
-Use Vitest + `@testing-library/react-hooks` (or `renderHook` from `@testing-library/react`). Mock `RTCPeerConnection` globally:
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-```typescript
-class MockRTCPeerConnection {
-  localDescription: RTCSessionDescription | null = null;
-  remoteDescription: RTCSessionDescription | null = null;
-  connectionState: RTCPeerConnectionState = "new";
-  iceConnectionState: RTCIceConnectionState = "new";
-  iceGatheringState: RTCIceGatheringState = "new";
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-  onicecandidate: ((event: RTCPeerConnectionIceEvent) => void) | null = null;
-  ontrack: ((event: RTCTrackEvent) => void) | null = null;
-  onconnectionstatechange: (() => void) | null = null;
+### Integration Tests
 
-  createOffer = vi.fn().mockResolvedValue({ type: "offer", sdp: "v=0\r\n..." });
-  createAnswer = vi.fn().mockResolvedValue({ type: "answer", sdp: "v=0\r\n..." });
-  setLocalDescription = vi.fn().mockResolvedValue(undefined);
-  setRemoteDescription = vi.fn().mockResolvedValue(undefined);
-  addIceCandidate = vi.fn().mockResolvedValue(undefined);
-  addTrack = vi.fn();
-  close = vi.fn();
-  restartIce = vi.fn();
+Cross-service tests with real DynamoDB Local:
 
-  // Helper to simulate state changes in tests
-  simulateConnectionState(state: RTCPeerConnectionState) {
-    this.connectionState = state;
-    this.onconnectionstatechange?.();
-  }
-}
-```
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-**Test cases**:
+### E2E Tests (Playwright)
 
-1. **Caller creates offer and sends via signaling**
-   - Verify `createOffer()` called when role=caller and phase=outgoing_ringing
-   - Verify `setLocalDescription()` called with the offer
-   - Verify `sendSignalingEvent` called with type `"webrtc.offer"`
+**Test file**: `frontend/e2e/call-2.spec.ts`
 
-2. **Callee receives offer and sends answer**
-   - Dispatch `messaging:call-event` with `event_type: "webrtc.offer"`
-   - Verify `setRemoteDescription()` called with offer SDP
-   - Verify `createAnswer()` called
-   - Verify `sendSignalingEvent` called with type `"webrtc.answer"`
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-3. **ICE candidates trickled bidirectionally**
-   - Trigger `onicecandidate` on mock PC → verify signaling POST
-   - Dispatch `messaging:call-event` with `event_type: "webrtc.ice_candidate"` → verify `addIceCandidate` called
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-4. **ICE candidate buffering before remote description**
-   - Send ICE candidate events before offer/answer exchange completes
-   - Verify candidates are buffered (not applied)
-   - After remote description set, verify buffered candidates are flushed
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-5. **Connection state monitoring**
-   - Simulate `connectionState = "connected"` → verify `onConnect` callback fired
-   - Simulate `connectionState = "disconnected"` → verify `onConnectionLost` callback fired
-   - Simulate `connectionState = "failed"` → verify `onFail` callback fired
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-6. **TURN credential fetch failure**
-   - Mock `fetchTurnCredentials` to reject → verify `onFail` dispatched
+### Test Data Requirements
 
-7. **getUserMedia permission denied**
-   - Mock `navigator.mediaDevices.getUserMedia` to reject with `NotAllowedError`
-   - Verify `onFail` dispatched with meaningful message
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-8. **Cleanup on unmount**
-   - Render hook, then unmount → verify `pc.close()` called, tracks stopped
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-9. **ICE restart on reconnect**
-   - Transition phase from `"connected"` to `"reconnecting"` back to `"outgoing_connecting"`
-   - Verify `pc.restartIce()` called and new offer created with `iceRestart: true`
+### CI/Pipeline
 
-10. **Idempotent teardown**
-    - Call teardown multiple times → verify no double-close errors
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
-### 5.2 E2E Tests with Fake Media
+---
 
-<!-- NOTE: IMPLEMENTED — frontend/e2e/webrtc-calls.spec.ts (661 lines) already exists. -->
-**File**: `frontend/e2e/webrtc-calls.spec.ts`
+## Dependencies & Merge Safety
 
-Playwright supports granting media permissions and using fake media devices:
+### Depends On
 
-```typescript
-const context = await browser.newContext({
-  permissions: ["microphone", "camera"],
-  // Chromium flag for fake media
-  args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
-});
-```
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-001 | Signaling HTTP endpoint for offer/answer/ICE relay | Implemented | No -- must merge after |
 
-However, true peer-to-peer WebRTC in Playwright requires two browser contexts on the same machine -- which works because both connect to `localhost`. The backend signaling relay (via DynamoDB Events table + SSE) connects them.
+### Depended On By
 
-**E2E test scenarios**:
+| Ticket | What It Needs |
+|---|---|
+| CALL-003 | RTCPeerConnection for media track attachment |
+| CALL-006 | Peer connection for E2E media tests |
 
-1. **Audio call connects end-to-end** (caller + callee)
-   - Alice starts audio call with Bob
-   - Bob accepts
-   - Both see "Connected" state
-   - Alice ends call
-   - Both see "Call ended" state
+### Merge Strategy
 
-2. **Video call connects**
-   - Same as above with mode=video
-   - Verify video tracks present in remote stream
+Sequential after CALL-001. Frontend hook + utility library. No backend changes.
 
-3. **Call declined by callee**
-   - Alice starts call, Bob declines
-   - Alice sees "Call declined" state
+### Merge Checklist
 
-4. **Call timeout** (no answer within 30s)
-   - Alice starts call, Bob does not accept
-   - After 30s timeout, Alice sees "Call timed out"
-
-5. **Network interruption simulated**
-   - After connection established, simulate offline event on Alice's browser
-   - Verify reconnecting state
-   - Simulate online event
-   - Verify reconnection attempt
-
-6. **ICE restart after disconnection**
-   - After connection, close the `RTCPeerConnection` on one side via `page.evaluate`
-   - Verify the other side enters reconnecting state and attempts ICE restart
-
-<!-- NOTE: The signaling endpoint now exists (POST /messages/calls/{call_id}/signal) and the E2E test file exists with 661 lines. -->
-
-### 5.3 Edge Cases to Test
-
-| Edge Case | Expected Behavior |
-|-----------|-------------------|
-| `getUserMedia` not available (HTTP, no camera) | `onFail` with "Media devices unavailable" |
-| TURN credentials expired mid-call | ICE restart fetches fresh credentials |
-| Offer received before local media acquired | Buffer offer, apply after media ready |
-| Browser tab backgrounded during ICE gathering | Continue gathering (browsers throttle but don't stop) |
-| Peer sends offer but callee hasn't accepted via API yet | Buffer offer until phase is `outgoing_connecting` |
-| Multiple rapid offer/answer exchanges (glare) | Use `signalingState` to detect and handle rollback |
-| `RTCPeerConnection` constructor throws (CSP blocks) | Catch, dispatch FAIL |
-| TURN server unreachable | `iceConnectionState = "failed"` after timeout, dispatch FAIL |
-| Call ended while ICE still gathering | `teardownCallResources` stops everything cleanly |
-| Component unmounts during `getUserMedia` prompt | AbortController cancels; cleanup fires |
-
-### 5.4 SDP Offer/Answer Glare Handling
-
-If both peers simultaneously create an offer (e.g., during ICE restart), the "polite peer" pattern should be implemented:
-
-```typescript
-// Caller is always the "impolite" peer (their offer wins)
-// Callee is always the "polite" peer (rolls back own offer if collision)
-const isPolite = role === "callee";
-
-// On receiving an offer when we have a pending local offer:
-if (pc.signalingState === "have-local-offer" && isPolite) {
-  await pc.setLocalDescription({ type: "rollback" });
-  await pc.setRemoteDescription(remoteOffer);
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  // Send answer
-}
-```
-
-### 5.5 Performance Metrics (Future)
-
-The hook should emit timing metrics for observability:
-- Time from hook activation to `connectionState === "connected"` (ICE + DTLS total)
-- TURN credential fetch latency
-- Number of ICE candidates exchanged
-- Whether final connection is relay (TURN) or direct (STUN/host)
-
-These can be sent to the existing metrics endpoint or logged to console in dev mode. The backend already has `TURN_CREDENTIAL_ISSUE_LATENCY` and `messaging_webrtc_signaling_latency_seconds` histograms (defined in `app/metrics.py` lines 706-751), so frontend timing complements server-side observability.
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

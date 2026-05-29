@@ -773,3 +773,86 @@ async function subscribeToPush() {
 **Key finding**: The backend notification dispatch pipeline is MORE COMPLETE than the ticket claims. `audit_event()` already routes to email, SMS, push, and webhook channels based on user preferences. The main gaps are: (1) frontend SSE hook and notification bell, (2) unread count sentinel, (3) toast notifications, (4) VAPID/web push subscription flow. The proposed `notification_dispatcher.py` would largely duplicate logic already in `audit_event()`.
 
 **Schema migration note**: The existing alert_prefs schema uses flat lists (email_event_types, push_event_types, etc.) not nested per_type dicts. The ticket's proposed schema would need to be reconciled with the existing format.
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_notification_delivery.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_unread_count_starts_zero` | New user; get_unread_count returns 0 |
+| 2 | `test_increment_unread` | Increment; count becomes 1, then 2 |
+| 3 | `test_mark_all_read_resets` | Increment to 5; mark_all_read; count=0 |
+| 4 | `test_dispatcher_routes_email` | Email pref enabled; send_alert_email called |
+| 5 | `test_dispatcher_skips_disabled` | Email disabled; NOT called |
+| 6 | `test_push_subscription_save` | Save subscription; DDB row exists |
+| 7 | `test_push_subscription_limit` | Save 6; only 5 remain (oldest evicted) |
+| 8 | `test_sse_includes_toast_priority` | Security alert; SSE has toast_priority=high |
+| 9 | `test_dispatcher_failure_nonblocking` | Email raise; write_alert still succeeds |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Alert triggers SSE + unread increment atomically | alerts service + DDB + SSE |
+| 2 | Push delivery to web push subscription | push service + push_devices table |
+| 3 | Email template selection for event type | alerts service + alert_email_templates |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/notifications.spec.ts` -- 20 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Sections: A (unread count API, 5 tests), B (SSE stream, 4), C (push subscription, 4), D (preferences, 3), E (bell UI, 4)
+
+**Negative/edge tests**: No cookies 401, disabled channel skips, mark-all-read rate limit 429
+
+### Test Data Requirements
+
+- DDB seeds: alerts, alert_prefs, push_devices tables
+- Test users: Alice, Bob, Root (for SSE + push tests)
+- Sessions via `e2e_admin_session_setup.py`
+
+### CI/Pipeline
+
+- Feature flags: NOTIFICATION_DISPATCH_ENABLED, NOTIFICATION_TOAST_ENABLED
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| PLATFORM-010 | Optional | Web push service worker for background push delivery |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| SOC-004 | Extends | Notification expansion builds on bell/SSE infrastructure |
+
+### Merge Strategy
+
+**Independent** -- Can merge without prerequisites. PLATFORM-010 enhances push but not required.
+
+### Merge Checklist
+
+- [ ] UNREAD_COUNT sentinel logic in alerts table
+- [ ] GET /ui/alerts/unread-count + POST /ui/alerts/mark-all-read
+- [ ] useNotificationStream SSE hook with auto-reconnect
+- [ ] NotificationBell in Header with badge + dropdown
+- [ ] NotificationToast for high-priority events
+- [ ] E2E pass: `npx playwright test e2e/notifications.spec.ts`

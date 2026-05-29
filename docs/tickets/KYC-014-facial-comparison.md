@@ -1553,3 +1553,91 @@ test.beforeAll(async ({ browser }) => {
 | `frontend/src/pages/kyc/` | -- | -- | Does NOT exist — new directory/files required |
 | `frontend/src/api/endpoints/kyc-face.ts` | -- | -- | Does NOT exist — new file required |
 | `frontend/e2e/kyc-face-comparison.spec.ts` | -- | -- | Does NOT exist — new test file required |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_facial.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_capture_selfie`
+  - `test_extract_face_from_selfie`
+  - `test_compare_faces_match`
+  - `test_compare_faces_no_match`
+  - `test_comparison_confidence_score`
+  - `test_liveness_detection_on_selfie`
+  - `test_store_comparison_result`
+
+### Integration Tests
+
+  - Selfie capture triggers facial comparison against stored ID photo
+  - Comparison result stored with confidence score in kyc_documents
+  - Admin reviews comparison result with side-by-side images
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/kyc-facial.spec.ts`
+**Test count**: 10
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_documents (facial comparison results)` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_FACIAL_COMPARISON_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| KYC-010 | Passport & National ID Scanner | Extracted ID photo used as reference |
+| KYC-013 | User Self-Service Portal | Selfie capture in self-service flow |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after KYC-010, KYC-013. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 10 E2E tests pass with `npx playwright test kyc-facial.spec.ts`

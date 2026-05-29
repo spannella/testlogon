@@ -986,3 +986,72 @@ test("233.4 Webhook events must be valid event names", async ({ request }) => {
 | `app/services/kyc_api_service.py` | -- | -- | Does NOT exist — new service required |
 | `app/services/kyc_webhook_delivery.py` | -- | -- | Does NOT exist — new service required |
 | `app/contracts/kyc_api_contract.py` | -- | -- | Does NOT exist — new contracts required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_kyc_api.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_create_application_stores_record` | Create application stores record |
+| 2 | `test_get_application_by_id` | Get application by id |
+| 3 | `test_lookup_by_external_id` | Lookup by external id |
+| 4 | `test_submit_transitions_status` | Submit transitions status |
+| 5 | `test_idempotency_returns_existing` | Idempotency returns existing |
+| 6 | `test_idempotency_conflict_different_body` | Idempotency conflict different body |
+| 7 | `test_sandbox_returns_deterministic` | Sandbox returns deterministic |
+| 8 | `test_webhook_register_stores` | Webhook register stores |
+| 9 | `test_rate_limit_enforced` | Rate limit enforced |
+| 10 | `test_scope_validation_rejects_missing` | Scope validation rejects missing |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/kyc-api.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~28 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `KYC_API_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| KYC-011 | Webhooks & Notifications for webhook delivery | Hard |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Feature-flag-gated -- KYC_API_ENABLED=false by default. New router at /api/v1/kyc with no overlap to existing /v1/kyc/cases prefix.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: KYC_API_ENABLED=true
+- [ ] Service file created/modified: `app/services/kyc_api_service.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/kyc-api.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_kyc_api.py`

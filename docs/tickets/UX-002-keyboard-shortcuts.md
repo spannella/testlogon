@@ -923,6 +923,93 @@ None. No new npm packages required.
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_keyboard_shortcuts.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_shortcut_registry_stores_bindings` | Shortcut registry stores bindings verified |
+| 2 | `test_shortcut_conflict_detection` | Shortcut conflict detection verified |
+| 3 | `test_shortcut_context_scoping` | Shortcut context scoping verified |
+| 4 | `test_shortcut_disabled_in_input_fields` | Shortcut disabled in input fields verified |
+| 5 | `test_custom_shortcut_persistence` | Custom shortcut persistence verified |
+| 6 | `test_default_shortcuts_loaded` | Default shortcuts loaded verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Register global shortcut -> press key -> navigation occurs
+2. Shortcut in text input field -> shortcut suppressed -> normal typing
+3. Custom shortcut saved -> reload -> custom binding active
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/keyboard-shortcuts.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Ctrl+K opens search | Press Ctrl+K; CommandDialog visible |
+| 2 | G then M navigates to messages | Press g then m; URL is /messages |
+| 3 | Shortcut disabled in text input | Focus input; press shortcut; no navigation |
+| 4 | ? opens shortcut help | Press ?; help dialog visible |
+| 5 | Esc closes dialogs | Open dialog; press Esc; dialog closed |
+| 6 | Custom shortcut binding | Rebind shortcut; new key works |
+
+**Negative tests**: Shortcut conflict warning, invalid key combination rejected
+
+**Edge cases**: Modifier keys on Mac vs Windows, rapid key sequences, shortcut during modal
+
+### Test Data Requirements
+
+- **DDB seeds**: Default shortcut registry
+- **Test users**: Alice
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: None
+- **Serial execution**: Tests must ensure no keyboard event leakage between tests
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| Header (existing) | CommandDialog for Ctrl+K search |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SOCIAL-001 | Ctrl+D bookmark shortcut (deferred) |
+
+### Merge Strategy: **Independent**
+
+Frontend-only feature. No backend changes required.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

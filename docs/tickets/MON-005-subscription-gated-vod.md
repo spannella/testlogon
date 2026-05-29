@@ -2470,3 +2470,69 @@ When NOT subscribed, renders nothing (returns null). The subscribe CTA is on ind
 | `scripts/local-ddb-init.py` | 584 | EXISTS: `VodEntitlements` table with GSIs |
 | `app/core/settings.py` | 1076 | EXISTS: `vod_entitlements_table_name` setting |
 <!-- NOTE: MON-005's core functionality (subscription-aware entitlement checks via access_mode) is ALREADY IMPLEMENTED in app/services/vod_purchase.py check_vod_access(). The ticket should be marked as Complete or verified against remaining frontend work. -->
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_subscription_gated_vod.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_subscriber_access_free` | Subscriber access free |
+| 2 | `test_non_subscriber_requires_purchase` | Non subscriber requires purchase |
+| 3 | `test_subscriber_only_mode_blocks_purchase` | Subscriber only mode blocks purchase |
+| 4 | `test_access_mode_free_for_all` | Access mode free for all |
+| 5 | `test_ppv_only_ignores_subscription` | Ppv only ignores subscription |
+| 6 | `test_expired_subscription_no_access` | Expired subscription no access |
+| 7 | `test_entitlement_check_priority_order` | Entitlement check priority order |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/subscription-gated-vod.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~12 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `SUBSCRIPTION_VOD_GATING_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| MON-001 | VOD Pay-Per-View for entitlement infrastructure | Hard |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Sequential -- requires MON-001 merged first. Extends check_vod_entitlement() with subscription awareness.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: SUBSCRIPTION_VOD_GATING_ENABLED=true
+- [ ] Service file created/modified: `app/services/vod_entitlements.py (extended)`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/subscription-gated-vod.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_subscription_gated_vod.py`

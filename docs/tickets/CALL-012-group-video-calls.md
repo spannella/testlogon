@@ -593,160 +593,93 @@ SFU reduces upload bandwidth to 1 stream per participant (vs. N-1 in mesh). The 
 
 ---
 
-## 10. Testing Strategy
+## Testing Strategy
 
-### Unit Tests (`tests/test_group_calls.py`)
+### Unit Tests (pytest)
 
-| Test | Description |
-|------|-------------|
-| `test_create_group_call` | Create call in group conversation; assert META row created with state=created. |
-| `test_create_fails_dm_conversation` | Create in 2-person conversation; assert 400. |
-| `test_create_concurrent_call_rejected` | Create two calls in same conversation; assert 409 on second. |
-| `test_join_transitions_to_active` | Create call; first join; assert state=active, current_participant_count=1. |
-| `test_join_increments_count` | Three participants join; assert count=3. |
-| `test_join_at_capacity_rejected` | Set max=3; 3 join; 4th gets 409. |
-| `test_join_non_member_rejected` | Non-conversation-member tries to join; assert 403. |
-| `test_leave_decrements_count` | Participant leaves; assert count decremented, left_at set. |
-| `test_last_leave_auto_ends` | All participants leave; assert state=ended, end_reason="all_left". |
-| `test_end_by_creator` | Creator ends; assert state=ended, all participants get left_at. |
-| `test_end_by_non_creator_rejected` | Non-creator tries to end; assert 403. |
-| `test_end_by_admin_allowed` | Admin ends another creator's call; assert success. |
-| `test_signal_relay` | Participant sends signal; assert relay to target_user_id. |
-| `test_signal_non_participant_rejected` | Non-participant sends signal; assert 403. |
-| `test_participant_list_includes_left` | After leave, participant still in list with left_at set. |
-| `test_call_duration_calculated` | End call; assert duration_seconds = end_ts - start_ts. |
-| `test_timeline_event_on_start` | First join; assert conversation timeline message for "Group call started". |
-| `test_timeline_event_on_end` | End call; assert timeline message for "Group call ended". |
+**Test file**: `tests/test_call_12.py`
 
-### E2E Test Matrix (`frontend/e2e/group-calls.spec.ts`)
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-**Section A: Group Call API (8 tests)**
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | Create a group call in a group conversation | 201, call_id present, state=created |
-| 2 | Second participant joins the call | 200, participant count=2, state=active |
-| 3 | Third participant joins -- count updates | 200, participant count=3 |
-| 4 | Participant leaves -- count decrements, left_at set | 200, count decremented |
-| 5 | Call creator ends call for all -- state=ended | 200, state=ended |
-| 6 | Non-conversation member cannot join (403) | 403 |
-| 7 | Cannot join when call is at max capacity (409) | Create with max=2; 2 join; 3rd gets 409 |
-| 8 | Cannot create concurrent call in same conversation (409) | 409 |
+### Integration Tests
 
-**Section B: Group Call Lifecycle (4 tests)**
+Cross-service tests with real DynamoDB Local:
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | Call state transitions: created -> active (on first join) -> ended | Verify state at each step |
-| 2 | Last participant leaving auto-ends the call | All leave; GET call; state=ended |
-| 3 | Get call status returns correct participant list | GET call; participants array matches joined users |
-| 4 | Call timeline events recorded for join/leave/end | List conversation messages; find system messages |
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-**Section C: Signaling API (4 tests)**
+### E2E Tests (Playwright)
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | Signal message (offer) is relayed to target participant | POST signal; assert relayed_to field |
-| 2 | Signal message (answer) is relayed back | POST signal with type=answer; 200 |
-| 3 | ICE candidate exchange works bidirectionally | POST ice_candidate; 200 both ways |
-| 4 | Signal rejected for non-participant (403) | Non-participant POST signal; 403 |
+**Test file**: `frontend/e2e/call-12.spec.ts`
 
-**Section D: Group Call UI (4 tests)**
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | "Start Call" button visible in group conversation header | Navigate to group conversation; button visible |
-| 2 | Grid view renders tiles for each participant | Start call; join; assert video tiles present |
-| 3 | Mute/camera toggle updates local media status | Click mute button; assert mic-off indicator visible |
-| 4 | "Leave" button removes user from call and returns to conversation | Click Leave; assert call overlay dismissed |
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
+
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
+
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
+
+### Test Data Requirements
+
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
+
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
+
+### CI/Pipeline
+
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
 ---
 
-## 11. Monitoring & Alerting
+## Dependencies & Merge Safety
 
-### Metrics to Track
+### Depends On
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `group_call_created_total` | Counter | `mode` (audio/video) | Calls created |
-| `group_call_participant_joined_total` | Counter | - | Join events |
-| `group_call_participant_left_total` | Counter | `reason` (voluntary/disconnect) | Leave events |
-| `group_call_ended_total` | Counter | `reason` (creator_end/all_left/timeout) | Call end events |
-| `group_call_duration_seconds` | Histogram | `mode` | Call duration distribution |
-| `group_call_peak_participants` | Histogram | - | Peak concurrent participants per call |
-| `group_call_signal_messages_total` | Counter | `type` (offer/answer/ice) | Signaling message count |
-| `group_call_active_count` | Gauge | - | Currently active group calls |
-| `group_call_ws_connections_active` | Gauge | - | Active WebSocket connections |
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-002 | RTCPeerConnection for mesh/SFU connections | Implemented | Yes |
 
-### Alert Thresholds
+### Depended On By
 
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| High call failure rate | `group_call_created_total` grows but `group_call_participant_joined_total` does not | Warning |
-| SFU unreachable | SFU health check fails for > 1 minute | Critical |
-| WebSocket connection limit | `group_call_ws_connections_active` > 750 (of 1000 limit) | Warning |
-| Call timeout spike | `group_call_ended_total{reason="timeout"}` > 10 in 1 hour | Warning |
+| Ticket | What It Needs |
+|---|---|
+| CALL-013 | Group call overlay for screen share integration |
 
----
+### Merge Strategy
 
-## 12. Open Questions & Risks
+Independent. New group call system (backend + frontend). New DDB table (`GroupCallSessions`).
 
-### Unresolved Decisions
+### Merge Checklist
 
-1. **SFU provider selection**: mediasoup, Janus, LiveKit, or Twilio? Each has different deployment complexity, pricing, and feature sets. Recommendation: Start with LiveKit (SaaS option with self-hosted fallback). Dev mode uses mesh; the SFU integration is behind `GROUP_CALL_SFU_ENDPOINT`.
-
-2. **Screen sharing participant limit**: Should screen sharing count toward the participant limit? Should only one person share at a time? Recommendation: One screen share at a time (simplifies layout). The screen share stream replaces the sharer's video stream in the SFU forward path.
-
-3. **Recording integration**: CALL-009 (call recording) currently works for 1:1 calls. Should group call recording use the same recording infrastructure? Recommendation: Defer to a follow-up ticket. Group recording requires the SFU to output a composite stream, which is SFU-specific.
-
-4. **Rejoin after disconnect**: If a participant's browser crashes, should they be able to rejoin the same call? Recommendation: Yes. The PARTICIPANT row remains with `left_at=0` for 2 minutes after disconnect (grace period). A rejoin within the grace period resumes the same participant row.
-
-### Technical Risks
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| SFU server latency adds media delay | Poor call quality (>300ms one-way) | Choose SFU in same region as backend; monitor `group_call_signal_messages_total` for retry patterns |
-| WebRTC TURN relay bandwidth costs | High bandwidth bills for relayed connections | Use TURN only as fallback; configure ICE to prefer direct connections |
-| Browser WebRTC compatibility | Different behavior across Chrome/Firefox/Safari | Test on all three browsers; use adapter.js polyfill |
-| Mesh mode audio echo | Echo in dev mode without proper AEC | Rely on browser's built-in Acoustic Echo Cancellation; recommend headphones |
-
----
-
-## 13. Implementation Timeline
-
-### Phase 1: Backend Data Model + REST API (Days 1-4)
-
-| Day | Task |
-|-----|------|
-| 1 | Add table definition, settings, table handle. Create `app/services/group_call_sessions.py` with CRUD operations. Create Pydantic models. |
-| 2 | Create `app/services/group_call_lifecycle.py` with state machine (created -> active -> ended). Implement auto-end on last leave, concurrent call prevention, duration limit. |
-| 3 | Create `app/routers/group_calls.py` with all REST endpoints (create, join, leave, end, get, participants, signal). Register in `app/main.py`. |
-| 4 | Extend `messaging_call_timeline.py` for group call timeline events. Write unit tests for all backend logic. |
-
-### Phase 2: Signaling + WebSocket (Days 5-6)
-
-| Day | Task |
-|-----|------|
-| 5 | Create `app/services/sfu_signaling.py` with dev mesh relay mode. Implement WebSocket endpoint in `group_calls.py`. |
-| 6 | Implement SFU integration layer (production mode). Write unit tests for signaling relay, WebSocket lifecycle, and SFU health checks. |
-
-### Phase 3: Frontend Call UI (Days 7-10)
-
-| Day | Task |
-|-----|------|
-| 7 | Create `useGroupCall.ts` hook (peer connection management, getUserMedia, signaling). |
-| 8 | Create `GroupCallView.tsx`, `ParticipantTile.tsx`, `GridLayout` and `SpeakerLayout` components. |
-| 9 | Create `GroupCallControls.tsx` (mute, camera, screen, layout switch, leave, end). Create `ParticipantList.tsx` sidebar. |
-| 10 | Integrate with conversation header (Start Call button, Active Call banner). Active speaker detection. Layout responsive tuning. |
-
-### Phase 4: E2E Tests + Polish (Days 11-14)
-
-| Day | Task |
-|-----|------|
-| 11 | Write E2E tests Section A (API) and Section B (Lifecycle). |
-| 12 | Write E2E tests Section C (Signaling) and Section D (UI). |
-| 13 | Cross-browser testing (Chrome, Firefox, Safari). Mobile viewport testing. |
-| 14 | Performance testing with 8 participants in dev mesh mode. Bug fixes. Final code review. |
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

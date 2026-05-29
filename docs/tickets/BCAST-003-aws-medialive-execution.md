@@ -646,152 +646,93 @@ on all of them. Phase 5 is a minor enhancement after Phase 3.
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (moto-mocked)
+### Unit Tests (pytest)
 
-**File**: `tests/test_broadcast_medialive_ops.py`
+**Test file**: `tests/test_broadcast_medialive_ops.py`
 
-Use `moto` to mock MediaLive and MediaPackage. moto supports `create_channel`,
-`start_channel`, `stop_channel`, `describe_channel`, `delete_channel`, `create_input`,
-`delete_input` for MediaLive, and all MediaPackage CRUD operations.
+**Mock setup**: moto mock for MediaLive and MediaPackage. Use `moto.mock_medialive()` + `moto.mock_mediapackage()` context managers. Provision test channel via existing `provision_mediolive_input_and_channel()`.
 
-| Test Case | What It Validates |
-|-----------|-------------------|
-| `test_start_channel_idle_to_running` | start_channel called, polling returns RUNNING |
-| `test_start_channel_already_running` | Returns `already_running=True`, no start call |
-| `test_start_channel_timeout` | Mocked describe always returns STARTING -> error result |
-| `test_stop_channel_running_to_idle` | stop_channel called, polling returns IDLE |
-| `test_stop_channel_already_idle` | Short-circuits, returns `already_stopped=True` |
-| `test_status_maps_running_to_live` | describe returns RUNNING -> state="live" |
-| `test_status_maps_idle_to_ready` | describe returns IDLE -> state="ready" |
-| `test_status_not_found` | NotFoundException -> state="error" |
-| `test_teardown_full_cleanup` | Deletes endpoint, pkg channel, ML channel, ML input |
-| `test_teardown_partial_failure` | One delete fails -> partial_errors in result |
-| `test_teardown_stops_running_channel` | Channel was RUNNING -> stops then deletes |
-| `test_retry_on_throttling` | Inject Throttling errors -> retries succeed |
-| `test_poll_respects_timeout` | Ensure no infinite loop |
+| Test Function | Description |
+|---|---|
+| `test_start_channel_idle_to_running` | Start channel; poll returns RUNNING; result state='live' |
+| `test_start_channel_already_running` | Returns `already_running=True`; no start API call |
+| `test_start_channel_timeout` | Mock describe always returns STARTING; result state='error' |
+| `test_stop_channel_running_to_idle` | Stop channel; poll returns IDLE; result state='stopped' |
+| `test_stop_channel_already_idle` | Returns `already_stopped=True` |
+| `test_status_maps_running_to_live` | describe returns RUNNING; mapped state='live' |
+| `test_status_maps_idle_to_ready` | describe returns IDLE; mapped state='ready' |
+| `test_status_not_found` | NotFoundException -> state='error', error='channel_not_found' |
+| `test_teardown_full_cleanup` | Deletes endpoint, MediaPackage channel, MediaLive channel, input |
+| `test_teardown_partial_failure` | One delete fails; partial_errors in result |
+| `test_retry_on_throttling` | Inject ThrottlingException; retries succeed after backoff |
 
-**Fixture pattern**:
-```python
-@pytest.fixture
-def medialive_resources():
-    """Provision a channel via the existing provision function, return IDs."""
-    with moto.mock_medialive(), moto.mock_mediapackage():
-        result = provision_mediolive_input_and_channel(
-            session_id="test-session-1",
-            correlation_id="test-corr",
-            idempotency_key="test-idem",
-        )
-        yield result
-```
+### Integration Tests
 
-Note: moto's MediaLive mock transitions channels instantly (CREATING -> IDLE on create,
-IDLE -> RUNNING on start). To test timeout behavior, we need to either:
-- Patch `_poll_channel_state` to inject intermediate states
-- Or use `unittest.mock.patch` on the boto3 client's `describe_channel` to return
-  `"STARTING"` N times before `"RUNNING"`
+Cross-service tests with real DynamoDB Local:
 
-### 5.2 Integration Tests (real AWS, staging account)
+1. Full lifecycle: provision -> start (wait RUNNING) -> stop (wait IDLE) -> teardown (verify resources deleted)
+2. Status mapping: start channel, query status, verify provider returns 'live'
+3. Teardown running channel: stops first, then deletes all resources
 
-**File**: `tests/integration/test_broadcast_aws_live.py` (skipped in CI unless
-`AWS_INTEGRATION_TESTS=1`)
+### E2E Tests (Playwright)
 
-These tests use a dedicated staging AWS account with:
-- A MediaLive IAM role pre-created
-- Service quotas sufficient for 2 concurrent channels
-- Cost controls: channels auto-deleted by test teardown + a CloudWatch alarm on
-  MediaLive billing > $5/day
+**Test file**: `frontend/e2e/broadcast-aws-errors.spec.ts`
 
-| Test Case | Duration | What It Validates |
-|-----------|----------|-------------------|
-| `test_full_lifecycle` | ~3 min | provision -> start (wait RUNNING) -> stop (wait IDLE) -> teardown |
-| `test_start_idempotent` | ~2 min | Start twice -> second returns already_running |
-| `test_teardown_running` | ~3 min | Teardown while RUNNING -> stops then deletes |
-| `test_status_reflects_real_state` | ~2 min | Start, query status, verify "live" |
+**Auth pattern**: `injectAuth(page, "root")` for admin operations; mock backend error injection via dev endpoint
 
-### 5.3 E2E Tests (Playwright, local provider)
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Start failure shows error state | Inject start timeout; UI shows error badge on session card |
+| 2 | Stop failure shows retry option | Inject stop failure; error message with retry button |
+| 3 | Teardown partial failure shows warning | Delete response includes partial error warning |
+| 4 | Status drift transitions to error | Provider returns different state than DDB; after SLA, session -> error |
+| 5 | Session card shows correct status mapping | RUNNING -> green 'live' badge; IDLE -> blue 'ready' badge |
+| 6 | Provisioning timeout transitions to error | Session stuck in provisioning > 300s -> error |
+| 7 | Idempotent start on already-live session | POST start on live session returns 200 with current state |
+| 8 | Admin-only operations enforced | Alice (USER) start -> 403; Root start -> 200 |
 
-The existing E2E test infrastructure uses `BROADCAST_PROVIDER=local`. Wiring the AWS
-provider does not change local-mode behavior. However, we should add a new E2E spec that
-validates the orchestrator's error handling when the provider returns error results:
+**Negative tests**: 403 non-admin start/stop, 409 invalid state transition, 500 AWS transient error with retry
 
-**File**: `frontend/e2e/broadcast-aws-errors.spec.ts`
+**Edge cases**: Channel in transitional state (STARTING/STOPPING), NotFoundException after delete, concurrent start requests
 
-These tests use the mock backend with a patched `AwsBroadcastProvider` that simulates
-various failure modes (inject via a dev-mode endpoint like
-`POST /internal/broadcast/simulate-failure`):
+### Test Data Requirements
 
-| Test | Scenario |
-|------|----------|
-| Start fails with timeout | UI shows error state, session transitions to "error" |
-| Stop fails | UI shows error, retry button available |
-| Teardown partial failure | Delete response includes warning |
-| Status returns drift | After 120s, session moves to error (reconciler test) |
+Create broadcast session via API in `beforeAll`. For error simulation tests, use `/internal/broadcast/simulate-failure` dev endpoint.
 
-### 5.4 Reconciler Tests
+**Test users**: Root (ROOT, admin operations), Alice (USER, permission checks)
 
-**File**: `tests/test_broadcast_reconciler.py` (extend existing)
+### CI/Pipeline
 
-| Test Case | What It Validates |
-|-----------|-------------------|
-| `test_drift_detected_with_real_status` | Mock provider.status returns "ready" when DB says "live" -> drift counter increments |
-| `test_drift_resolves_before_sla` | Provider state corrects itself within 120s -> no error transition |
-| `test_stale_provisioning_session` | Session stuck in "provisioning" > 300s -> error |
-
-### 5.5 Cost Safety Tests
-
-To prevent accidental cost leakage in CI:
-
-1. **Teardown fixture**: Every integration test that creates AWS resources uses a
-   `pytest.fixture` with `yield` + cleanup in the `finally` block.
-2. **Account-level janitor**: A scheduled Lambda (outside this codebase) scans for
-   MediaLive channels tagged `retention=broadcast` older than 1 hour and force-deletes
-   them.
-3. **Billing alarm**: CloudWatch alarm on `AWS/MediaLive` `ActiveChannels` metric > 2
-   for > 10 minutes triggers SNS notification.
-
-### 5.6 Metrics Validation
-
-After deployment, verify these existing metrics fire correctly:
-
-- `record_broadcast_provision_latency(provider="aws", result="success"|"failure", elapsed_seconds=...)` -- already instrumented
-- `record_broadcast_session_action(provider="aws", action="start"|"stop"|"delete", result="success"|"failure")` -- already instrumented
-- `record_broadcast_drift_incident(provider="aws", incident_type="state_drift")` -- fires when reconciler detects real drift
-- `record_broadcast_input_loss(provider="aws", reason=...)` -- fires when status contains "input" + "loss"
-- `record_broadcast_output_error(provider="aws", reason=...)` -- fires when live channel reports error/failed
-
-### 5.7 Test Matrix Summary
-
-| Layer | Count | Mocking | CI Gate |
-|-------|-------|---------|---------|
-| Unit (moto) | ~15 tests | Full mock | Always |
-| Integration (AWS) | ~4 tests | None (real AWS) | Manual/nightly |
-| E2E (Playwright) | ~4 tests | Mock backend | Always |
-| Reconciler | ~3 tests | Patched provider | Always |
-| **Total** | **~26 tests** | | |
+`BROADCAST_PROVIDER=local` for E2E (AWS tests run in integration suite only). Serial execution. Retry-safe.
 
 ---
 
-## Appendix: File Reference
+## Dependencies & Merge Safety
 
-| File | Role in This Ticket |
-|------|-------------------|
-| `app/services/broadcast_provider.py` | Primary target -- replace stubs |
-| `app/services/broadcast_mediolive.py` | Add start/stop/describe/delete functions |
-| `app/services/broadcast_mediapackage.py` | Add delete functions |
-| `app/services/broadcast_orchestrator.py` | Consumer of provider; no changes needed |
-| `app/services/broadcast_reconciler.py` | Add logging; behavior auto-activates |
-| `app/services/broadcast_state_machine.py` | Defines valid transitions; no changes |
-| `app/services/broadcast_store.py` | Add `aws_channel_id` field to output model |
-| `app/services/broadcast_archive.py` | Existing S3 archive helpers; no changes |
-| `app/services/broadcast_cloudfront.py` | Existing CloudFront signing; no changes |
-| `app/models_broadcast.py` | Add new optional fields to `BroadcastOutputModel` |
-| `app/core/settings.py` | Add timeout/poll settings |
-| `app/routers/broadcast.py` | No changes (consumes orchestrator) |
-| `tests/test_broadcast_medialive_ops.py` | New unit test file |
-| `tests/integration/test_broadcast_aws_live.py` | New integration test file |
-| `frontend/e2e/broadcast-aws-errors.spec.ts` | New E2E error scenario tests |
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-001 | Broadcast session CRUD and state machine | Implemented | Yes |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+
+Independent backend change. Replaces stub implementations in `broadcast_provider.py`. No frontend changes. Feature-flag-gated via `BROADCAST_PROVIDER=aws`.
+
+### Merge Checklist
+
+- [ ] All four AWS provider methods (`start`, `stop`, `status`, `teardown`) implemented in `broadcast_provider.py`
+- [ ] Polling helpers (`_poll_channel_state`, `_poll_input_state`) added to `broadcast_mediolive.py`
+- [ ] Timeout settings added to `app/core/settings.py`
+- [ ] Unit tests pass with moto mocks
+- [ ] Integration tests pass against staging AWS (nightly CI only)
+- [ ] No breaking changes to local provider or existing endpoints
 
 ---
 

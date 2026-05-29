@@ -1746,3 +1746,72 @@ Admin                   Frontend                 Backend                  Dynamo
 | `scripts/local-ddb-init.py` | 416 | EXISTS: `ModerationAuditLog` table definition |
 | `app/auth/policy.py` | 84 | EXISTS: `require_admin_scope(AdminScope.CONTENT_MODERATION)` for admin auth |
 | `app/models_video.py` | 36 | EXISTS: `VideoMetadataModel` with status, visibility fields |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_video_review_queue.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_list_pending_videos_oldest_first` | List pending videos oldest first |
+| 2 | `test_approve_video_transitions_status` | Approve video transitions status |
+| 3 | `test_reject_video_with_reason` | Reject video with reason |
+| 4 | `test_batch_approve_multiple` | Batch approve multiple |
+| 5 | `test_audit_log_records_decision` | Audit log records decision |
+| 6 | `test_non_admin_cannot_access` | Non admin cannot access |
+| 7 | `test_filter_by_uploader` | Filter by uploader |
+| 8 | `test_pagination_cursor` | Pagination cursor |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/video-review-queue.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~15 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `VIDEO_REVIEW_QUEUE_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| MEDIA-001 | Shared player for video preview | Hard |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| MOD-002 | DMCA takedown may flag videos for review |
+
+### Merge Strategy
+**Sequential -- requires MEDIA-001 for admin video preview. Endpoints are additive to existing admin moderation router.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: VIDEO_REVIEW_QUEUE_ENABLED=true
+- [ ] Service file created/modified: `app/services/video_review.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/video-review-queue.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_video_review_queue.py`

@@ -2020,3 +2020,68 @@ Admin           Backend                UserEnforcement     AccountState      Aud
 | `scripts/local-ddb-init.py` | 437 | EXISTS: `UserEnforcementHistory` table definition |
 | `app/auth/policy.py` | 84 | EXISTS: `require_admin_scope(AdminScope.CONTENT_MODERATION)` |
 | `app/services/alerts.py` | 355 | EXISTS: `write_alert()` for notifications |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_user_appeals.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_submit_appeal_creates_record` | Submit appeal creates record |
+| 2 | `test_one_appeal_per_enforcement` | One appeal per enforcement |
+| 3 | `test_one_pending_appeal_at_time` | One pending appeal at time |
+| 4 | `test_admin_approve_appeal_reverses` | Admin approve appeal reverses |
+| 5 | `test_admin_deny_appeal` | Admin deny appeal |
+| 6 | `test_rate_limited_submissions` | Rate limited submissions |
+| 7 | `test_appeal_links_to_enforcement` | Appeal links to enforcement |
+| 8 | `test_appeal_history_paginated` | Appeal history paginated |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/user-appeals.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~14 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `APPEALS_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Independent -- new appeal endpoints additive to existing moderation system. No modification of existing enforcement flow required.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: APPEALS_ENABLED=true
+- [ ] Service file created/modified: `app/services/appeals_service.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/user-appeals.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_user_appeals.py`

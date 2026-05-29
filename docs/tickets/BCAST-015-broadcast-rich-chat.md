@@ -1557,765 +1557,95 @@ Phase F is deferred to a follow-up ticket. Public broadcast chat does not need E
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (`tests/test_broadcast_chat_rich.py`)
+### Unit Tests (pytest)
 
-New file, ~400 lines, using `moto` for DynamoDB mocking.
+**Test file**: `tests/test_broadcast_rich_chat.py`
 
-```python
-import pytest
-import time
-from decimal import Decimal
-from moto import mock_dynamodb
-from app.services.broadcast_chat_rich import (
-    react_to_chat_message,
-    unlock_chat_message,
-    tip_chat_message,
-    consume_view_once_chat_message,
-    reset_rich_rate_limits,
-    ALLOWED_REACTIONS,
-)
-from app.services.broadcast_chat_store import (
-    send_chat_message,
-    get_chat_history,
-)
+**Mock setup**: moto mock for DynamoDB (broadcast tables). Mock broadcast provider for instant state transitions.
 
+| Test Function | Description |
+|---|---|
+| `test_create_bcast015_resource` | Create primary resource; verify stored in DDB with correct fields |
+| `test_get_bcast015_resource` | Get resource by ID; verify all fields returned |
+| `test_list_bcast015_resources` | List resources; verify pagination and filtering |
+| `test_update_bcast015_resource` | Update resource; verify changed fields persisted |
+| `test_delete_bcast015_resource` | Delete resource; verify removed from DDB |
+| `test_validation_rejects_invalid_input` | Missing required fields returns 422; invalid values return 400 |
+| `test_authorization_enforced` | Non-owner/non-admin access returns 403 |
 
-@mock_dynamodb
-class TestReactions:
-    """Phase A: Reaction unit tests."""
+### Integration Tests
 
-    def setup_method(self):
-        reset_rich_rate_limits()
-        # Create BroadcastChatMessages table
-        ...
+Cross-service tests with real DynamoDB Local:
 
-    def test_add_reaction_creates_entry_in_reactions_map(self, chat_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "Hello!")
-        result = react_to_chat_message(
-            "sess_1", msg["message_id"], "bob", "🔥", "add"
-        )
-        assert result["ok"] is True
-        assert result["reactions_counts"]["🔥"] == 1
+1. Full lifecycle: create -> read -> update -> delete through real DDB
+2. Cross-service integration with broadcast session store
+3. Concurrent operations do not corrupt shared state
 
-    def test_add_same_reaction_twice_does_not_duplicate(self, chat_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "Hello!")
-        react_to_chat_message("sess_1", msg["message_id"], "bob", "🔥", "add")
-        react_to_chat_message("sess_1", msg["message_id"], "bob", "🔥", "add")
-        # DDB set semantics: adding same user twice = still 1
-        result = react_to_chat_message(
-            "sess_1", msg["message_id"], "charlie", "🔥", "add"
-        )
-        assert result["reactions_counts"]["🔥"] == 2
+### E2E Tests (Playwright)
 
-    def test_remove_reaction_decrements_count(self, chat_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "Hello!")
-        react_to_chat_message("sess_1", msg["message_id"], "bob", "🔥", "add")
-        react_to_chat_message("sess_1", msg["message_id"], "charlie", "🔥", "add")
-        result = react_to_chat_message(
-            "sess_1", msg["message_id"], "bob", "🔥", "remove"
-        )
-        assert result["reactions_counts"]["🔥"] == 1
+**Test file**: `frontend/e2e/broadcast-rich-chat.spec.ts`
 
-    def test_invalid_emoji_rejected(self, chat_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "Hello!")
-        with pytest.raises(Exception) as exc_info:
-            react_to_chat_message("sess_1", msg["message_id"], "bob", "🍕", "add")
-        assert "400" in str(exc_info.value.status_code)
+**Auth pattern**: `injectAuth(page, "root")` for admin operations; `injectAuth(page, "alice")` for viewer operations; CSRF header for mutations
 
-    def test_reaction_rate_limit(self, chat_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "Hello!")
-        react_to_chat_message("sess_1", msg["message_id"], "bob", "🔥", "add")
-        # Immediately react again — should be rate limited
-        with pytest.raises(Exception) as exc_info:
-            react_to_chat_message("sess_1", msg["message_id"], "bob", "👍", "add")
-        assert "429" in str(exc_info.value.status_code)
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource successfully | POST returns 200/201 with resource ID |
+| 2 | API returns resource by ID | GET returns full resource with all expected fields |
+| 3 | API lists resources with pagination | GET list returns array; supports cursor pagination |
+| 4 | API updates resource fields | PATCH/PUT returns updated resource |
+| 5 | API deletes resource | DELETE returns 200; subsequent GET returns 404 |
+| 6 | UI page loads with expected heading | Navigate to page; heading visible |
+| 7 | UI form creates new resource | Fill form; submit; resource appears in list |
+| 8 | UI shows error for invalid input | Submit empty form; validation messages visible |
+| 9 | Unauthenticated request returns 401 | No session cookies -> 401 |
+| 10 | Non-owner access returns 403 | Wrong user -> 403 |
+| 11 | Non-existent resource returns 404 | GET invalid ID -> 404 |
+| 12 | Duplicate creation returns 409 | Create same resource twice -> 409 or idempotent success |
 
-    def test_reaction_on_deleted_message_rejected(self, chat_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "Hello!")
-        from app.services.broadcast_chat_store import delete_chat_message
-        delete_chat_message("sess_1", msg["message_id"], "admin")
-        # _find_sort_key may still find it, but message is deleted
-        # Behavior: reaction succeeds at DDB level but _find_sort_key
-        # filters deleted=True messages — depends on implementation.
-        # If _find_sort_key returns None for deleted messages: 400.
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 not found, 409 conflict/duplicate, 422 validation
 
+**Edge cases**: Empty state (no resources), concurrent mutations, resource with max-length fields, Unicode content
 
-@mock_dynamodb
-class TestReplies:
-    """Phase B: Reply unit tests."""
+### Test Data Requirements
 
-    def test_reply_stores_parent_reference(self, chat_table):
-        parent = send_chat_message("sess_1", "alice", "Alice", "Original message")
-        # Extended send_chat_message with reply_to_message_id
-        child = send_chat_message(
-            "sess_1", "bob", "Bob", "Reply to Alice",
-            reply_to_message_id=parent["message_id"],
-        )
-        assert child.get("reply_to_message_id") == parent["message_id"]
+Seed broadcast session in `beforeAll`. Create test resources via API with unique `Date.now()` suffixed names.
 
-    def test_reply_includes_denormalized_preview(self, chat_table):
-        parent = send_chat_message("sess_1", "alice", "Alice", "Original message")
-        child = send_chat_message(
-            "sess_1", "bob", "Bob", "Reply to Alice",
-            reply_to_message_id=parent["message_id"],
-        )
-        preview = child.get("reply_to_preview")
-        assert preview is not None
-        assert preview["sender_display_name"] == "Alice"
-        assert preview["text"] == "Original message"
+**Test users**: Root (ROOT, admin operations), Alice (USER, standard operations), Bob (USER, cross-user isolation)
 
-    def test_reply_to_nonexistent_message_rejected(self, chat_table):
-        with pytest.raises(Exception):
-            send_chat_message(
-                "sess_1", "bob", "Bob", "Reply to nothing",
-                reply_to_message_id="cm_nonexistent",
-            )
+### CI/Pipeline
 
-    def test_reply_preview_truncates_long_text(self, chat_table):
-        long_text = "A" * 280  # max chat message length
-        parent = send_chat_message("sess_1", "alice", "Alice", long_text)
-        child = send_chat_message(
-            "sess_1", "bob", "Bob", "Reply",
-            reply_to_message_id=parent["message_id"],
-        )
-        assert len(child["reply_to_preview"]["text"]) <= 100
-
-
-@mock_dynamodb
-class TestExpiry:
-    """Phase C: Expiring message unit tests."""
-
-    def test_expiring_message_stores_expires_at(self, chat_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "Flash code: SAVE50",
-            expires_in_seconds=60,
-        )
-        assert msg.get("expires_at") is not None
-        assert msg["expires_at"] > int(time.time())
-
-    def test_expired_message_text_redacted_in_history(self, chat_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "Flash code: SAVE50",
-            expires_in_seconds=10,
-        )
-        # Simulate time passing by modifying expires_at to the past
-        from app.core.tables import T
-        from app.services.broadcast_chat_store import _find_sort_key
-        sk = _find_sort_key("sess_1", msg["message_id"])
-        T.broadcast_chat_messages.update_item(
-            Key={"session_id": "sess_1", "sort_key": sk},
-            UpdateExpression="SET expires_at = :ea",
-            ExpressionAttributeValues={":ea": 1},  # epoch = long expired
-        )
-        history = get_chat_history("sess_1", limit=10)
-        expired_msg = next(
-            m for m in history["messages"]
-            if m["message_id"] == msg["message_id"]
-        )
-        assert expired_msg.get("expired") is True
-        assert expired_msg.get("text") is None
-
-
-@mock_dynamodb
-class TestLocking:
-    """Phase D: Locked message unit tests."""
-
-    def test_locked_message_hides_text_for_non_sender(self, chat_table, billing_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "SECRET CODE",
-            lock_price_cents=500,
-            lock_description="Unlock for the code",
-        )
-        # In _chat_msg_out_rich with viewer != broadcaster:
-        # text should be None, is_unlocked should be False
-        # (Tested via chat_msg_out_rich function directly)
-
-    def test_unlock_reveals_text(self, chat_table, billing_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "SECRET CODE",
-            lock_price_cents=500,
-        )
-        # Inject payment method for alice
-        billing_table.put_item(Item={
-            "pk": "USER#alice",
-            "sk": "PM#pm_test_123",
-            "payment_method_id": "pm_test_123",
-        })
-        result = unlock_chat_message(
-            "sess_1", msg["message_id"], "alice", "pm_test_123", "broadcaster",
-        )
-        assert result["ok"] is True
-        assert result["text"] == "SECRET CODE"
-        assert result["amount_cents"] == 500
-
-    def test_unlock_writes_billing_debit_and_credit(self, chat_table, billing_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "SECRET",
-            lock_price_cents=500,
-        )
-        billing_table.put_item(Item={
-            "pk": "USER#alice",
-            "sk": "PM#pm_123",
-            "payment_method_id": "pm_123",
-        })
-        unlock_chat_message("sess_1", msg["message_id"], "alice", "pm_123", "broadcaster")
-
-        # Check debit
-        from boto3.dynamodb.conditions import Key
-        debit_resp = billing_table.query(
-            KeyConditionExpression=Key("pk").eq("USER#alice") & Key("sk").begins_with("LEDGER#")
-        )
-        assert len(debit_resp["Items"]) >= 1
-        assert debit_resp["Items"][0]["type"] == "debit"
-        assert int(debit_resp["Items"][0]["amount_cents"]) == 500
-
-        # Check credit (80% of 500 = 400 after 20% platform fee)
-        credit_resp = billing_table.query(
-            KeyConditionExpression=Key("pk").eq("USER#broadcaster") & Key("sk").begins_with("LEDGER#")
-        )
-        assert len(credit_resp["Items"]) >= 1
-        assert credit_resp["Items"][0]["type"] == "credit"
-        assert int(credit_resp["Items"][0]["amount_cents"]) == 400
-
-    def test_double_unlock_rejected(self, chat_table, billing_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "SECRET",
-            lock_price_cents=500,
-        )
-        billing_table.put_item(Item={
-            "pk": "USER#alice", "sk": "PM#pm_123", "payment_method_id": "pm_123",
-        })
-        unlock_chat_message("sess_1", msg["message_id"], "alice", "pm_123", "broadcaster")
-        with pytest.raises(Exception) as exc_info:
-            unlock_chat_message("sess_1", msg["message_id"], "alice", "pm_123", "broadcaster")
-        assert "Already unlocked" in str(exc_info.value.detail)
-
-    def test_sender_cannot_unlock_own_message(self, chat_table, billing_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "SECRET",
-            lock_price_cents=500,
-        )
-        with pytest.raises(Exception) as exc_info:
-            unlock_chat_message(
-                "sess_1", msg["message_id"], "broadcaster", "pm_123", "broadcaster",
-            )
-        assert "Sender cannot unlock" in str(exc_info.value.detail)
-
-
-@mock_dynamodb
-class TestTips:
-    """Phase D: Tip unit tests."""
-
-    def test_tip_increments_total(self, chat_table, billing_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "Great stream!")
-        billing_table.put_item(Item={
-            "pk": "USER#bob", "sk": "PM#pm_bob", "payment_method_id": "pm_bob",
-        })
-        result = tip_chat_message(
-            "sess_1", msg["message_id"], "bob", "Bob", 500, "pm_bob", "broadcaster",
-        )
-        assert result["ok"] is True
-        assert result["new_total_cents"] == 500
-
-    def test_multiple_tips_accumulate(self, chat_table, billing_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "Great stream!")
-        billing_table.put_item(Item={
-            "pk": "USER#bob", "sk": "PM#pm_bob", "payment_method_id": "pm_bob",
-        })
-        billing_table.put_item(Item={
-            "pk": "USER#charlie", "sk": "PM#pm_charlie", "payment_method_id": "pm_charlie",
-        })
-        tip_chat_message("sess_1", msg["message_id"], "bob", "Bob", 500, "pm_bob", "broadcaster")
-        time.sleep(5.1)  # clear tip rate limit
-        result = tip_chat_message(
-            "sess_1", msg["message_id"], "charlie", "Charlie", 300, "pm_charlie", "broadcaster",
-        )
-        assert result["new_total_cents"] == 800
-
-    def test_cannot_tip_own_message(self, chat_table, billing_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "My message")
-        with pytest.raises(Exception) as exc_info:
-            tip_chat_message(
-                "sess_1", msg["message_id"], "alice", "Alice", 500, "pm_123", "broadcaster",
-            )
-        assert "Cannot tip your own message" in str(exc_info.value.detail)
-
-
-@mock_dynamodb
-class TestViewOnce:
-    """Phase E: View-once unit tests."""
-
-    def test_view_once_consume_returns_text(self, chat_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "Secret reveal!",
-            view_once=True,
-        )
-        result = consume_view_once_chat_message("sess_1", msg["message_id"], "alice")
-        assert result["ok"] is True
-        assert result["text"] == "Secret reveal!"
-        assert result["view_once_consumed"] is True
-
-    def test_view_once_double_consume_rejected(self, chat_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "Secret reveal!",
-            view_once=True,
-        )
-        consume_view_once_chat_message("sess_1", msg["message_id"], "alice")
-        with pytest.raises(Exception) as exc_info:
-            consume_view_once_chat_message("sess_1", msg["message_id"], "alice")
-        assert "Already viewed" in str(exc_info.value.detail)
-
-    def test_view_once_sender_cannot_consume(self, chat_table):
-        msg = send_chat_message(
-            "sess_1", "broadcaster", "Broadcaster", "Secret",
-            view_once=True,
-        )
-        with pytest.raises(Exception) as exc_info:
-            consume_view_once_chat_message("sess_1", msg["message_id"], "broadcaster")
-        assert "Sender does not need" in str(exc_info.value.detail)
-
-    def test_non_view_once_message_rejected(self, chat_table):
-        msg = send_chat_message("sess_1", "alice", "Alice", "Normal message")
-        with pytest.raises(Exception) as exc_info:
-            consume_view_once_chat_message("sess_1", msg["message_id"], "bob")
-        assert "not view-once" in str(exc_info.value.detail)
-```
-
-### 5.2 E2E Tests (`frontend/e2e/broadcast-chat-rich.spec.ts`)
-<!-- NEW: to be created -->
-
-New file, ~600 lines. Each section maps to a phase.
-
-**Section 150: Chat Reactions API (6 tests)**:
-
-1. `Viewer adds a reaction to a chat message`
-   - Send a chat message, react with "🔥"
-   - Assert 200 with `reactions_counts: { "🔥": 1 }`
-2. `Multiple viewers react with same emoji — count increments`
-   - Two viewers react with "🔥"
-   - Assert count is 2
-3. `Viewer removes their reaction — count decrements`
-   - Add then remove a reaction
-   - Assert count is 0 or emoji absent from counts
-4. `Invalid emoji rejected with 400`
-   - React with "🍕"
-   - Assert 400
-5. `Reaction rate limit enforced`
-   - React twice within 500ms
-   - Assert second request returns 429
-6. `Reactions appear in chat history`
-   - React to a message, fetch history
-   - Assert message in history has `reactions_counts` with the emoji
-
-**Section 151: Chat Replies API (4 tests)**:
-
-1. `Reply stores reply_to_message_id and preview`
-   - Send parent message, send reply with `reply_to_message_id`
-   - Assert reply has `reply_to_message_id` and `reply_to_preview`
-2. `Reply preview truncates long parent text to 100 chars`
-   - Send 280-char parent, reply to it
-   - Assert `reply_to_preview.text` is 100 chars
-3. `Reply to nonexistent message returns 400`
-   - Send reply with `reply_to_message_id: "cm_nonexistent"`
-   - Assert 400
-4. `Reply to deleted message returns 400`
-   - Send parent, delete it, reply to it
-   - Assert 400
-
-**Section 152: Expiring Messages API (4 tests)**:
-
-1. `Broadcaster sends expiring message with expires_at set`
-   - Send with `expires_in_seconds: 60`
-   - Assert response has `expires_at > now`
-2. `Expired message text is redacted in chat history`
-   - Send with short expiry, wait or mock expiry
-   - Fetch history, assert `expired: true` and `text: null`
-3. `Non-broadcaster cannot send expiring messages`
-   - Viewer sends with `expires_in_seconds: 60`
-   - Assert 403
-4. `Expiring message SSE event includes expires_at`
-   - Open SSE stream, send expiring message
-   - Assert `chat:message` event includes `expires_at`
-
-**Section 153: Locked Messages API (6 tests)**:
-
-1. `Broadcaster sends locked message — viewer sees text=null`
-   - Send with `lock_price_cents: 500`
-   - Fetch history as viewer, assert `text: null`, `is_unlocked: false`
-2. `Broadcaster sees own locked message text`
-   - Fetch history as broadcaster
-   - Assert `text: "SECRET"`, `is_unlocked: true`
-3. `Viewer unlocks message with valid PM`
-   - Inject PM for viewer, POST .../unlock
-   - Assert 200 with revealed text
-4. `Unlock writes billing debit and credit entries`
-   - Unlock, query billing table
-   - Assert DEBIT for viewer, CREDIT for broadcaster
-5. `Double unlock returns 400`
-   - Unlock twice
-   - Assert second returns 400 "Already unlocked"
-6. `Unlock without valid PM returns 400`
-   - POST .../unlock with non-existent PM
-   - Assert 400 "Payment method not found"
-
-**Section 154: Chat Tips API (4 tests)**:
-
-1. `Viewer tips a chat message`
-   - Inject PM, POST .../tip with `amount_cents: 500`
-   - Assert 200 with `new_total_cents: 500`
-2. `Multiple tips accumulate`
-   - Two viewers tip the same message
-   - Assert `new_total_cents` reflects sum
-3. `Cannot tip own message`
-   - Sender tips their own message
-   - Assert 400
-4. `Tip SSE event published with correct amounts`
-   - Open SSE stream, send tip
-   - Assert `chat:tip` event with correct fields
-
-**Section 155: View-Once API (4 tests)**:
-
-1. `Broadcaster sends view-once message`
-   - Send with `view_once: true`
-   - Assert message in history has `view_once: true`, `text: null`
-2. `Viewer consumes view-once — gets text in response`
-   - POST .../view
-   - Assert 200 with revealed text
-3. `Double consume rejected`
-   - Consume twice
-   - Assert second returns 400 "Already viewed"
-4. `Sender does not need to consume own view-once`
-   - Broadcaster POSTs .../view on own message
-   - Assert 400
-
-**Section 156: Chat Rich UI (6 tests)**:
-
-1. `Reaction bar renders under messages`
-   - Navigate to broadcast chat, send message
-   - Assert reaction emoji buttons visible
-2. `Clicking reaction emoji toggles it`
-   - Click "🔥", assert highlighted + count shows "1"
-   - Click again, assert unhighlighted + count gone
-3. `Reply quote shown when replying to a message`
-   - Click reply icon on a message
-   - Assert compose bar shows quoted parent text
-4. `Locked message shows lock card with price`
-   - Broadcaster sends locked message
-   - Assert viewer sees "🔒" and "Unlock for $X.XX"
-5. `Expiring message shows countdown timer`
-   - Broadcaster sends message with `expires_in_seconds: 120`
-   - Assert timer badge visible (e.g., "Expires in 1:59")
-6. `View-once message shows tap-to-reveal card`
-   - Broadcaster sends view-once message
-   - Assert viewer sees "Tap to view once" button
-
-### 5.3 Test Data Isolation
-
-- Each test run creates a fresh broadcast session with a unique session ID.
-- Chat messages are scoped to `session_id` (PK) — no cross-run pollution.
-- Rate limit state is in-memory and cleared between test sections via `reset_rich_rate_limits()`.
-- Payment methods are injected per-test-section in `beforeAll` and cleaned up in `afterAll` via `cleanupAllPaymentMethods(userSub)`.
-
-### 5.4 Flakiness Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Reaction rate limit state from previous test | Call `reset_rich_rate_limits()` in `beforeAll`; use separate session IDs per section |
-| Expiry timing in E2E tests | Use `expires_in_seconds: 120` (long) for non-expiry tests; modify `expires_at` via DDB for expiry verification tests |
-| SSE event ordering | Register SSE listener BEFORE triggering the action; use `waitForResponse` pattern |
-| Tip rate limit across tests | Use `time.sleep(5.1)` between tip tests or `reset_rich_rate_limits()` in each test |
-| DDB eventual consistency | Use `ConsistentRead=True` where available; for history queries, re-fetch with retry |
-| `_find_sort_key` scan limit | `_find_sort_key` scans with `Limit=200`. If a session has >200 messages (from accumulated test runs), the find may miss. Use fresh sessions per section |
+Serial execution. `BROADCAST_PROVIDER=local`. Retry-safe with unique resource names.
 
 ---
 
-## 6. Security Considerations
+## Dependencies & Merge Safety
 
-### 6.1 Authentication & Authorization
+### Depends On
 
-All rich messaging endpoints require `require_ui_session` (cookie auth with CSRF, or Bearer token). Authorization matrix:
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-005 | Base chat store and SSE delivery | Implemented | Yes |
+| BCAST-012 | Private chat tiers for scoped delivery | Implemented | Yes |
+| MON-002 | Tip ledger for locked/tipped messages | Implemented | Yes |
 
-| Action | Who Can Perform | Enforcement |
-|--------|----------------|-------------|
-| React to message | Any authenticated viewer | Session must be live or stopped |
-| Send reply | Any non-muted viewer | `_enforce_chat_mute()` before send |
-| Send expiring message | Broadcaster only | `ctx["user_sub"] == session.created_by` |
-| Send locked message | Broadcaster only | Same as above |
-| Send view-once message | Broadcaster only | Same as above |
-| Unlock message | Any viewer except sender | `msg.sender_id != user_id` check |
-| Tip message | Any viewer except sender | Same as above |
-| Consume view-once | Any viewer except sender | `msg.sender_id != user_id` check |
+### Depended On By
 
-### 6.2 Payment Method Validation
+No downstream dependents identified.
 
-Unlock and tip endpoints validate the PM against `T.billing` before processing:
+### Merge Strategy
 
-```python
-pm_item = T.billing.get_item(
-    Key={"pk": f"USER#{user_id}", "sk": f"PM#{payment_method_id}"}
-).get("Item")
-if not pm_item:
-    raise HTTPException(400, "Payment method not found")
-```
+Sequential after BCAST-005 and BCAST-012. Extends chat item schema with reactions, replies, expiry, locking fields.
 
-This matches the existing pattern in `app/routers/messaging.py` (unlock_message, line 12496) and `app/routers/newsfeed.py` (unlock_post).
-<!-- VERIFIED: app/routers/messaging.py:12496 (PM validation in unlock_message) -->
+### Merge Checklist
 
-### 6.3 Rate Abuse Prevention
-
-- **Reactions**: 1 per 500ms per user per session. In-memory bucket, separate from text rate limit.
-- **Unlocks**: 1 per 2 seconds per user per session. Prevents accidental double-unlock.
-- **Tips**: 1 per 5 seconds per user per session. Prevents accidental double-tip.
-- **View-once consumption**: No rate limit (one-shot per message per user, DDB set prevents duplicates).
-- **Locked message creation**: Subject to the existing text message rate limit (1 per 2s).
-
-### 6.4 SSE Content Visibility
-
-The `chat:unlock` SSE event includes the revealed `text` field. This means all SSE subscribers technically receive the unlocked text in the event payload. Mitigations:
-
-1. **SSE connections require authentication** — only viewers with valid sessions receive events.
-2. **Client-side filtering** — the frontend only displays the text to the viewer whose `user_id` matches the event.
-3. **Future hardening** — for stricter isolation, the `text` field could be omitted from the SSE event, requiring the viewer to re-fetch the message via GET after unlock. This adds latency but removes text exposure from the SSE stream.
-
-For view-once, the text is NOT included in the SSE event (`chat:view_once_consumed` only contains `message_id` and `user_id`). The text is returned only in the HTTP response to the consume request.
-
-### 6.5 Broadcaster-Only Feature Enforcement
-
-Expiring, locked, and view-once messages can only be created by the broadcaster. This is enforced at the router level:
-
-```python
-session = get_session(session_id)
-if inp.expires_in_seconds or inp.lock_price_cents or inp.view_once:
-    if ctx["user_sub"] != session.created_by:
-        raise HTTPException(403, "Only the broadcaster can send special messages")
-```
-
-A regular viewer sending a chat message with `lock_price_cents: 500` receives a 403 error. This prevents viewers from creating paywalled messages on someone else's broadcast.
-
-### 6.6 DDB Item Size
-
-Adding rich fields increases the maximum DDB item size. Worst case per message:
-- Base fields: ~500 bytes
-- `reactions`: 6 emoji x up to 1000 users x ~40 bytes per user_id = ~240KB
-
-This exceeds the DDB 400KB item limit. Mitigation: cap the per-emoji reaction set size at 1000 users. Beyond 1000 reactions on a single emoji, additional reactions are accepted but the user set is not expanded (count is approximated). This limit is unlikely to be hit in practice (most broadcast chats have <100 concurrent viewers), but the cap prevents a single hot message from exceeding DDB limits.
-
-```python
-MAX_REACTIONS_PER_EMOJI = 1000
-
-# Before adding:
-current_set = item.get("reactions", {}).get(emoji, set())
-if len(current_set) >= MAX_REACTIONS_PER_EMOJI:
-    # Reaction accepted logically but not stored in the set.
-    # Count is already at max — increment a separate counter field.
-    logger.info("reaction_set_capped session=%s msg=%s emoji=%s", ...)
-    return  # still publish SSE event with approximate count
-```
-
-### 6.7 Tip Amount Limits
-
-Tips are capped at `$1,000.00` per tip (`ge=1, le=100_000` cents). The `_write_chat_billing()` function writes the debit/credit immediately (settled state). In production, this would go through a real payment processor with fraud checks. In dev mode, the billing ledger is written directly to DDB.
-
----
-
-## 7. Migration & Rollback Plan
-
-### 7.1 Schema Changes
-
-All changes are additive and backward-compatible:
-
-- **DDB items**: New optional fields (`reactions`, `reply_to_message_id`, `reply_to_preview`, `expires_at`, `lock_price_cents`, `lock_description`, `unlocked_by`, `tip_amount_cents`, `tip_total_cents`, `view_once`, `view_once_seen`) are added to existing `broadcast_chat_messages` table items. No table schema changes required -- DDB is schemaless. Existing items without these fields continue to work.
-
-- **No new DDB tables**: All data is stored in the existing `broadcast_chat_messages` table and `billing` table. No new table definitions needed in `scripts/local-ddb-init.py`.
-
-- **Pydantic models**: `BroadcastChatSendIn` and `BroadcastChatMessageOut` are extended with optional fields. All new fields have defaults, so existing API clients sending the old payload format continue to work.
-
-- **New service file**: `app/services/broadcast_chat_rich.py` is a new file that does not modify existing files. It imports from `broadcast_chat_store.py` but does not change its exports.
-
-### 7.2 Rollback per Phase
-
-Each phase can be rolled back independently:
-
-| Phase | Rollback Action | Data Impact |
-|-------|----------------|-------------|
-| A (Reactions) | Remove react endpoint + ChatReactionBar component. Existing `reactions` maps on messages are harmless (ignored by old `_chat_msg_out`). | None — stale reactions maps expire with TTL |
-| B (Replies) | Remove `reply_to_message_id` from send input. Existing replies still render in old UI (unknown fields ignored). | None |
-| C (Expiry) | Remove `expires_in_seconds` from send input. Existing expired messages still have `expires_at` but old `_chat_msg_out` ignores it (text shown permanently). | Expired messages become permanently visible again |
-| D (Locking) | Remove unlock/tip endpoints. Existing locked messages remain locked permanently (no unlock path). Clear `lock_price_cents` on affected messages via DDB script if needed. | Locked messages stuck locked until manual cleanup |
-| E (View-Once) | Remove view endpoint. Existing view-once messages remain with `view_once: true` but no consume path. Old `_chat_msg_out` ignores the flag (text shown to all). | View-once messages become permanently visible |
-
-### 7.3 Feature Flags
-
-Each phase can be gated behind an environment variable:
-
-| Variable | Default | Controls |
-|----------|---------|----------|
-| `BROADCAST_CHAT_REACTIONS_ENABLED` | `true` | Phase A — reaction endpoint enabled |
-| `BROADCAST_CHAT_REPLIES_ENABLED` | `true` | Phase B — reply field accepted on send |
-| `BROADCAST_CHAT_EXPIRY_ENABLED` | `true` | Phase C — expires_in_seconds accepted on send |
-| `BROADCAST_CHAT_LOCKING_ENABLED` | `true` | Phase D — lock/unlock/tip endpoints enabled |
-| `BROADCAST_CHAT_VIEW_ONCE_ENABLED` | `true` | Phase E — view-once flag and consume endpoint |
-
-When disabled, the corresponding fields are stripped from the send input (silently ignored), and the endpoints return 404.
-
----
-
-## 8. Acceptance Criteria
-
-### Phase A — Reactions
-
-| # | Criterion | Pass Condition |
-|---|-----------|----------------|
-| AC-A1 | Viewer can add a reaction to a chat message | POST `/chat/{id}/react` with `action: "add"` returns 200 with updated counts |
-| AC-A2 | Viewer can remove their reaction | POST with `action: "remove"` decrements count |
-| AC-A3 | Only allowed emoji accepted | `{ emoji: "🍕" }` returns 400 |
-| AC-A4 | Reaction counts shown in chat history | GET `/chat` includes `reactions_counts` on messages with reactions |
-| AC-A5 | SSE `chat:reaction` event published | Event includes `message_id`, `emoji`, `action`, `counts` |
-| AC-A6 | Rate limit: 1 reaction per 500ms | Second reaction within 500ms returns 429 |
-| AC-A7 | Muted users can still react | Muted user POST `/react` returns 200 (not 403) |
-| AC-A8 | All Section 150 E2E tests pass | 6 tests |
-
-### Phase B — Replies
-
-| # | Criterion | Pass Condition |
-|---|-----------|----------------|
-| AC-B1 | Reply stores parent reference | Message item has `reply_to_message_id` matching parent |
-| AC-B2 | Reply includes denormalized preview | `reply_to_preview` has `sender_display_name` and truncated `text` |
-| AC-B3 | Reply to nonexistent message rejected | Returns 400 |
-| AC-B4 | Reply preview in SSE event | `chat:message` SSE event includes `reply_to_message_id` and `reply_to_preview` |
-| AC-B5 | All Section 151 E2E tests pass | 4 tests |
-
-### Phase C — Expiring Messages
-
-| # | Criterion | Pass Condition |
-|---|-----------|----------------|
-| AC-C1 | Broadcaster sends expiring message | `expires_at` stored and returned in response |
-| AC-C2 | Expired text redacted in history | After `expires_at`, history returns `text: null`, `expired: true` |
-| AC-C3 | Non-broadcaster cannot send expiring | Returns 403 for regular viewers |
-| AC-C4 | Sender sees own expired message text | Broadcaster fetching their own expired message still sees text |
-| AC-C5 | All Section 152 E2E tests pass | 4 tests |
-
-### Phase D — Locked Messages and Tips
-
-| # | Criterion | Pass Condition |
-|---|-----------|----------------|
-| AC-D1 | Locked message hides text for non-sender | History returns `text: null`, `is_unlocked: false`, `lock_price_cents` shown |
-| AC-D2 | Sender always sees locked text | Broadcaster fetching their own locked message sees full text |
-| AC-D3 | Unlock reveals text and writes billing | POST `/unlock` returns text; billing DEBIT and CREDIT entries written |
-| AC-D4 | Double unlock rejected | Second unlock returns 400 "Already unlocked" |
-| AC-D5 | Invalid PM rejected | Unlock with non-existent PM returns 400 |
-| AC-D6 | Tip increments total | POST `/tip` increments `tip_total_cents` atomically |
-| AC-D7 | Cannot tip own message | Returns 400 |
-| AC-D8 | Tip SSE event published | `chat:tip` event includes `tipper_display_name`, `amount_cents`, `new_total_cents` |
-| AC-D9 | Tip writes billing entries | DEBIT for tipper, CREDIT for broadcaster (minus 20% platform fee) |
-| AC-D10 | All Section 153 E2E tests pass | 6 tests |
-| AC-D11 | All Section 154 E2E tests pass | 4 tests |
-
-### Phase E — View-Once
-
-| # | Criterion | Pass Condition |
-|---|-----------|----------------|
-| AC-E1 | View-once message hides text in history | `text: null`, `view_once: true` in history output |
-| AC-E2 | Consume returns text exactly once | POST `/view` returns full text; second POST returns 400 |
-| AC-E3 | Sender does not need to consume | POST `/view` from sender returns 400 |
-| AC-E4 | SSE event does not contain text | `chat:view_once_consumed` event has `message_id` and `user_id` only, no `text` |
-| AC-E5 | Non-broadcaster cannot send view-once | Returns 403 |
-| AC-E6 | All Section 155 E2E tests pass | 4 tests |
-
-### Phase F — Encrypted (deferred)
-
-Phase F is not part of this ticket. A follow-up ticket will cover encryption for BCAST-012 private chat tiers if needed. The acceptance criteria will be defined in that ticket.
-
-### Overall
-
-| # | Criterion | Pass Condition |
-|---|-----------|----------------|
-| AC-O1 | All Section 156 (UI) E2E tests pass | 6 tests |
-| AC-O2 | Existing BCAST-005 chat tests still pass | No regressions in broadcast-chat.spec.ts | <!-- VERIFIED: frontend/e2e/broadcast-chat.spec.ts exists -->
-| AC-O3 | Unit tests pass | All tests in `test_broadcast_chat_rich.py` pass |
-| AC-O4 | No breaking changes to existing chat API | Old `BroadcastChatSendIn` payloads (text-only) still work |
-
----
-
-## 9. Performance Considerations
-
-### 9.1 Reaction Hot Spots
-
-In a popular broadcast with 1000+ concurrent viewers, a single message could receive hundreds of reactions within seconds. The DDB `ADD reactions.{emoji} :u` operation is atomic and scales well for moderate concurrency. However, if a single message receives >100 concurrent `ADD` operations per second, DDB write throttling may occur on the partition.
-
-**Mitigation**: The 500ms per-user rate limit prevents any single user from creating more than 2 reactions per second. With 1000 viewers, the theoretical maximum is 2000 writes/second on a single item — within DDB's burst capacity for a hot partition (up to 3000 WCU with adaptive capacity). For higher scale, reaction counts could be aggregated in-memory and flushed to DDB in batches (sacrificing real-time accuracy for throughput).
-
-### 9.2 `_find_sort_key` Scan Cost
-
-The `_find_sort_key()` function queries the `session_id` partition with a `FilterExpression` on `message_id`. This scans up to `Limit=200` items. In a busy broadcast with thousands of messages, the scan may consume significant RCU.
-
-**Mitigation**: Add a GSI on `message_id` as the sort key (with `session_id` as PK). This turns the `_find_sort_key` scan into a direct key lookup. Alternatively, clients can send the `sort_key` (which they received in the send response or SSE event) along with the `message_id` in react/unlock/tip/view requests, eliminating the need for the scan entirely:
-
-```python
-class BroadcastChatReactIn(BaseModel):
-    emoji: str
-    action: Literal["add", "remove"] = "add"
-    sort_key: Optional[str] = None  # Optional: avoids _find_sort_key scan
-```
-
-### 9.3 Per-Viewer `_chat_msg_out_rich()` Cost
-
-The `chat_msg_out_rich()` function checks per-viewer state (reactions membership, unlock status, view-once consumption) for every message in the history response. For a history of 100 messages with reactions, this involves iterating each message's `reactions` map. With the fixed emoji set of 6, this is at most 600 set-membership checks per history request — negligible.
-
-For locked messages, the `unlocked_by` map check is O(1) (dict key lookup). For view-once, the `view_once_seen` set check is O(1). No significant performance impact.
-
----
-
-## 10. Related Tickets
-
-| Ticket | Relationship |
-|--------|-------------|
-| BCAST-005 | Base chat infrastructure extended by this ticket |
-| BCAST-012 | Private chat tiers — rich features apply to private chat messages too |
-| MON-002 | Tip Ledger Integration — billing pattern reused for unlock/tip |
-| MON-003 | Creator Earnings Dashboard — aggregates unlock/tip revenue |
-| LCOM-002 | Chat Product Links — existing `kind="product_link"` is unaffected |
-| MSG-001 | Message Edit/Delete — messenger pattern reference (not adopted for broadcast chat; broadcast chat uses soft-delete only) |
-
----
-
-## Appendix A: API Reference Summary
-
-| Method | Path | Auth | Phase | Purpose |
-|--------|------|------|-------|---------|
-| POST | `/broadcast/sessions/{id}/chat` | `require_ui_session` | B,C,D,E | Send message (extended with reply, expiry, lock, view-once, tip) |
-| GET | `/broadcast/sessions/{id}/chat` | `require_ui_session` | A,B,C,D,E | Load history (extended output model) |
-| POST | `/broadcast/sessions/{id}/chat/{msg_id}/react` | `require_ui_session` | A | Add/remove reaction |
-| POST | `/broadcast/sessions/{id}/chat/{msg_id}/unlock` | `require_ui_session` | D | Unlock locked message |
-| POST | `/broadcast/sessions/{id}/chat/{msg_id}/tip` | `require_ui_session` | D | Tip a message |
-| POST | `/broadcast/sessions/{id}/chat/{msg_id}/view` | `require_ui_session` | E | Consume view-once message |
-
-## Appendix B: SSE Event Types (New)
-
-| Event | Phase | Payload | Trigger |
-|-------|-------|---------|---------|
-| `chat:reaction` | A | `{ message_id, emoji, action, user_id, counts }` | Reaction add/remove |
-| `chat:unlock` | D | `{ message_id, user_id, text }` | Message unlocked |
-| `chat:tip` | D | `{ message_id, tipper_id, tipper_display_name, amount_cents, new_total_cents }` | Tip sent |
-| `chat:view_once_consumed` | E | `{ message_id, user_id }` | View-once consumed |
-
-Existing events (`chat:message`, `chat:delete`, `chat:mute`) are unchanged except that `chat:message` now includes additional optional fields in its payload.
-
-## Appendix C: Configuration (New)
-
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `BROADCAST_CHAT_REACTIONS_ENABLED` | `true` | Feature flag for Phase A |
-| `BROADCAST_CHAT_REPLIES_ENABLED` | `true` | Feature flag for Phase B |
-| `BROADCAST_CHAT_EXPIRY_ENABLED` | `true` | Feature flag for Phase C |
-| `BROADCAST_CHAT_LOCKING_ENABLED` | `true` | Feature flag for Phase D |
-| `BROADCAST_CHAT_VIEW_ONCE_ENABLED` | `true` | Feature flag for Phase E |
-| `BROADCAST_CHAT_REACTION_RATE_MS` | `500` | Reaction rate limit interval (ms) |
-| `BROADCAST_CHAT_UNLOCK_RATE_MS` | `2000` | Unlock rate limit interval (ms) |
-| `BROADCAST_CHAT_TIP_RATE_MS` | `5000` | Tip rate limit interval (ms) |
-| `BROADCAST_CHAT_MAX_REACTIONS_PER_EMOJI` | `1000` | Cap on per-emoji reaction set size |
+- [ ] DDB table/fields added to `scripts/local-ddb-init.py` (if new table needed)
+- [ ] Settings added to `app/core/settings.py`
+- [ ] Service and router files created/modified
+- [ ] Frontend components and API wrappers created
+- [ ] E2E test passes in CI
+- [ ] No breaking changes to existing endpoints
 
 ## Codebase References
 

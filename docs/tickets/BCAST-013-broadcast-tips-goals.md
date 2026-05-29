@@ -1769,566 +1769,94 @@ The `BroadcastPage` dashboard (`frontend/src/pages/broadcast/BroadcastPage.tsx`)
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (`tests/test_broadcast_tips.py`) <!-- NEW: to be created -->
+### Unit Tests (pytest)
 
-New file, ~250 lines. Tests service functions with moto-mocked DynamoDB.
+**Test file**: `tests/test_broadcast_tips.py`
 
-```python
-import pytest
-from moto import mock_dynamodb
-from unittest.mock import patch, MagicMock
+**Mock setup**: moto mock for DynamoDB (broadcast tables). Mock broadcast provider for instant state transitions.
 
-from app.services.broadcast_tip_store import (
-    send_tip_message,
-    get_tip_summary,
-    _validate_payment_method,
-    _increment_session_tip_totals,
-    _enforce_tip_rate_limit,
-    reset_tip_rate_limits,
-)
-from app.services.broadcast_tip_goals import (
-    create_goal,
-    list_goals,
-    get_goal,
-    update_goal,
-    delete_goal,
-    advance_goal_progress,
-    MAX_GOALS_PER_SESSION,
-)
+| Test Function | Description |
+|---|---|
+| `test_create_bcast013_resource` | Create primary resource; verify stored in DDB with correct fields |
+| `test_get_bcast013_resource` | Get resource by ID; verify all fields returned |
+| `test_list_bcast013_resources` | List resources; verify pagination and filtering |
+| `test_update_bcast013_resource` | Update resource; verify changed fields persisted |
+| `test_delete_bcast013_resource` | Delete resource; verify removed from DDB |
+| `test_validation_rejects_invalid_input` | Missing required fields returns 422; invalid values return 400 |
+| `test_authorization_enforced` | Non-owner/non-admin access returns 403 |
 
+### Integration Tests
 
-# ─── Tip Message Tests ─────────────────────────────────────────
+Cross-service tests with real DynamoDB Local:
 
-def test_send_tip_writes_ledger_entries(broadcast_tables, billing_tables):
-    """Verify send_tip_message writes debit + credit to billing table."""
-    _seed_payment_method("viewer1", "pm_test_123")
-    _seed_session("s1", created_by="broadcaster1")
-    result = send_tip_message(
-        session_id="s1",
-        user_id="viewer1",
-        display_name="Viewer One",
-        amount_cents=500,
-        payment_method_id="pm_test_123",
-        broadcaster_id="broadcaster1",
-    )
-    assert result["kind"] == "tip"
-    assert result["tip_amount_cents"] == 500
-    assert result["tip_currency"] == "USD"
-    # Verify billing entries
-    debit_items = _query_billing("USER#viewer1", "LEDGER#")
-    assert len(debit_items) == 1
-    assert debit_items[0]["amount_cents"] == 500
-    assert debit_items[0]["type"] == "debit"
-    credit_items = _query_billing("USER#broadcaster1", "LEDGER#")
-    assert len(credit_items) == 1
-    assert credit_items[0]["amount_cents"] == 500
-    assert credit_items[0]["type"] == "credit"
+1. Full lifecycle: create -> read -> update -> delete through real DDB
+2. Cross-service integration with broadcast session store
+3. Concurrent operations do not corrupt shared state
 
+### E2E Tests (Playwright)
 
-def test_send_tip_increments_session_totals(broadcast_tables, billing_tables):
-    """Two tips should increment tip_total_cents and tip_count atomically."""
-    _seed_payment_method("viewer1", "pm1")
-    _seed_session("s1", created_by="broadcaster1")
-    send_tip_message(session_id="s1", user_id="viewer1", display_name="V1",
-                     amount_cents=100, payment_method_id="pm1", broadcaster_id="broadcaster1")
-    reset_tip_rate_limits()
-    send_tip_message(session_id="s1", user_id="viewer1", display_name="V1",
-                     amount_cents=200, payment_method_id="pm1", broadcaster_id="broadcaster1")
-    session = _get_session("s1")
-    assert int(session.get("tip_total_cents", 0)) == 300
-    assert int(session.get("tip_count", 0)) == 2
+**Test file**: `frontend/e2e/broadcast-tips.spec.ts`
 
+**Auth pattern**: `injectAuth(page, "root")` for admin operations; `injectAuth(page, "alice")` for viewer operations; CSRF header for mutations
 
-def test_send_tip_rejects_self_tip(broadcast_tables, billing_tables):
-    """Broadcaster cannot tip their own broadcast."""
-    _seed_payment_method("broadcaster1", "pm1")
-    _seed_session("s1", created_by="broadcaster1")
-    with pytest.raises(HTTPException) as exc_info:
-        send_tip_message(session_id="s1", user_id="broadcaster1",
-                         display_name="BC", amount_cents=100,
-                         payment_method_id="pm1", broadcaster_id="broadcaster1")
-    assert exc_info.value.status_code == 400
-    assert "CANNOT_TIP_SELF" in str(exc_info.value.detail)
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource successfully | POST returns 200/201 with resource ID |
+| 2 | API returns resource by ID | GET returns full resource with all expected fields |
+| 3 | API lists resources with pagination | GET list returns array; supports cursor pagination |
+| 4 | API updates resource fields | PATCH/PUT returns updated resource |
+| 5 | API deletes resource | DELETE returns 200; subsequent GET returns 404 |
+| 6 | UI page loads with expected heading | Navigate to page; heading visible |
+| 7 | UI form creates new resource | Fill form; submit; resource appears in list |
+| 8 | UI shows error for invalid input | Submit empty form; validation messages visible |
+| 9 | Unauthenticated request returns 401 | No session cookies -> 401 |
+| 10 | Non-owner access returns 403 | Wrong user -> 403 |
+| 11 | Non-existent resource returns 404 | GET invalid ID -> 404 |
+| 12 | Duplicate creation returns 409 | Create same resource twice -> 409 or idempotent success |
 
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 not found, 409 conflict/duplicate, 422 validation
 
-def test_send_tip_rejects_invalid_pm(broadcast_tables, billing_tables):
-    """Non-existent payment method returns 400."""
-    _seed_session("s1", created_by="broadcaster1")
-    with pytest.raises(HTTPException) as exc_info:
-        send_tip_message(session_id="s1", user_id="viewer1",
-                         display_name="V1", amount_cents=100,
-                         payment_method_id="pm_nonexistent",
-                         broadcaster_id="broadcaster1")
-    assert exc_info.value.status_code == 400
+**Edge cases**: Empty state (no resources), concurrent mutations, resource with max-length fields, Unicode content
 
+### Test Data Requirements
 
-def test_send_tip_rejects_below_minimum(broadcast_tables, billing_tables):
-    """Tip below 100 cents returns 400."""
-    _seed_payment_method("viewer1", "pm1")
-    _seed_session("s1", created_by="broadcaster1")
-    with pytest.raises(HTTPException) as exc_info:
-        send_tip_message(session_id="s1", user_id="viewer1",
-                         display_name="V1", amount_cents=50,
-                         payment_method_id="pm1", broadcaster_id="broadcaster1")
-    assert exc_info.value.status_code == 400
-    assert "TIP_TOO_SMALL" in str(exc_info.value.detail)
+Seed broadcast session in `beforeAll`. Create test resources via API with unique `Date.now()` suffixed names.
 
+**Test users**: Root (ROOT, admin operations), Alice (USER, standard operations), Bob (USER, cross-user isolation)
 
-def test_tip_rate_limit(broadcast_tables, billing_tables):
-    """Two tips within 3 seconds returns 429."""
-    _seed_payment_method("viewer1", "pm1")
-    _seed_session("s1", created_by="broadcaster1")
-    send_tip_message(session_id="s1", user_id="viewer1",
-                     display_name="V1", amount_cents=100,
-                     payment_method_id="pm1", broadcaster_id="broadcaster1")
-    with pytest.raises(HTTPException) as exc_info:
-        send_tip_message(session_id="s1", user_id="viewer1",
-                         display_name="V1", amount_cents=100,
-                         payment_method_id="pm1", broadcaster_id="broadcaster1")
-    assert exc_info.value.status_code == 429
+### CI/Pipeline
 
-
-# ─── Tip Summary Tests ──────────────────────────────────────────
-
-def test_tip_summary_aggregates_correctly(broadcast_tables, billing_tables):
-    """Summary returns correct total, count, top tippers, and recent tips."""
-    _seed_payment_method("v1", "pm1")
-    _seed_payment_method("v2", "pm2")
-    _seed_session("s1", created_by="bc1")
-    send_tip_message(session_id="s1", user_id="v1", display_name="V1",
-                     amount_cents=500, payment_method_id="pm1", broadcaster_id="bc1")
-    reset_tip_rate_limits()
-    send_tip_message(session_id="s1", user_id="v2", display_name="V2",
-                     amount_cents=200, payment_method_id="pm2", broadcaster_id="bc1")
-    reset_tip_rate_limits()
-    send_tip_message(session_id="s1", user_id="v1", display_name="V1",
-                     amount_cents=300, payment_method_id="pm1", broadcaster_id="bc1")
-    summary = get_tip_summary("s1")
-    assert summary["total_cents"] == 1000
-    assert summary["tip_count"] == 3
-    assert len(summary["top_tippers"]) == 2
-    assert summary["top_tippers"][0]["user_id"] == "v1"
-    assert summary["top_tippers"][0]["total_cents"] == 800
-    assert len(summary["recent_tips"]) == 3
-
-
-# ─── Goal Tests ─────────────────────────────────────────────────
-
-def test_create_goal_succeeds(goal_tables):
-    """Creating a goal returns the goal with zero progress."""
-    goal = create_goal(session_id="s1", label="Dance break", target_cents=1000, actor="bc1")
-    assert goal["label"] == "Dance break"
-    assert goal["target_cents"] == 1000
-    assert goal["current_cents"] == 0
-    assert goal["reached"] is False
-
-
-def test_create_goal_max_limit(goal_tables):
-    """Creating more than MAX_GOALS_PER_SESSION goals returns 409."""
-    for i in range(MAX_GOALS_PER_SESSION):
-        create_goal(session_id="s1", label=f"Goal {i}", target_cents=1000, actor="bc1")
-    with pytest.raises(HTTPException) as exc_info:
-        create_goal(session_id="s1", label="Too many", target_cents=1000, actor="bc1")
-    assert exc_info.value.status_code == 409
-
-
-def test_advance_goal_fills_in_order(goal_tables):
-    """Tips fill goals in sort_order. Overflow spills to next goal."""
-    create_goal(session_id="s1", label="G1", target_cents=500, sort_order=0, actor="bc1")
-    create_goal(session_id="s1", label="G2", target_cents=1000, sort_order=1, actor="bc1")
-    updated = advance_goal_progress("s1", 600)
-    assert len(updated) == 2
-    assert updated[0]["current_cents"] == 500  # G1 filled
-    assert updated[0]["reached"] is True
-    assert updated[1]["current_cents"] == 100  # overflow to G2
-    assert updated[1]["reached"] is False
-
-
-def test_advance_goal_reached_event(goal_tables):
-    """When a goal is reached, SSE goal:reached event is published."""
-    create_goal(session_id="s1", label="G1", target_cents=100, actor="bc1")
-    with patch("app.services.broadcast_tip_goals.broadcast_sse_publish") as mock_sse:
-        advance_goal_progress("s1", 100)
-        reached_calls = [c for c in mock_sse.call_args_list
-                        if c[0][1].get("_type") == "goal:reached"]
-        assert len(reached_calls) == 1
-
-
-def test_delete_goal(goal_tables):
-    """Deleting a goal removes it from the table."""
-    goal = create_goal(session_id="s1", label="G1", target_cents=100, actor="bc1")
-    delete_goal("s1", goal["goal_id"])
-    goals = list_goals("s1")
-    assert len(goals) == 0
-
-
-def test_update_goal(goal_tables):
-    """Updating a goal modifies only the specified fields."""
-    goal = create_goal(session_id="s1", label="Old Label", target_cents=100, actor="bc1")
-    updated = update_goal("s1", goal["goal_id"], label="New Label")
-    assert updated["label"] == "New Label"
-    assert updated["target_cents"] == 100  # unchanged
-```
-
-### 5.2 E2E Tests (`frontend/e2e/broadcast-tips.spec.ts`) <!-- NEW: to be created -->
-
-New file, ~600 lines, sections 131-137.
-
-**Test Setup (`beforeAll`)**:
-
-```typescript
-let rootPage: Page;
-let alicePage: Page;
-const TS = Date.now();
-let profileId: string;
-let sessionId: string;
-
-const ALICE_SUB = sessions.alice.user_sub;
-const ROOT_SUB = sessions.root.user_sub;
-
-test.beforeAll(async ({ browser }) => {
-  rootPage = await browser.newPage();
-  await injectAuth(rootPage, "root");
-
-  alicePage = await browser.newPage();
-  await injectAuth(alicePage, "alice");
-
-  // Create broadcast profile
-  const profileResp = await apiPost(rootPage, "root", "/broadcast/profiles", {
-    name: `tip-test-profile-${TS}`,
-    region: "us-east-1",
-    rendition_preset: "720p",
-  });
-  profileId = profileResp.id;
-
-  // Create and start session
-  const sessionResp = await apiPost(rootPage, "root", "/broadcast/sessions", {
-    profile_id: profileId,
-  });
-  sessionId = sessionResp.id;
-
-  // Transition to live (provisioning -> ready -> live)
-  await apiPost(rootPage, "root", `/broadcast/sessions/${sessionId}/start`, {
-    reason: "e2e-tip-test",
-  });
-
-  // Seed Alice's payment method
-  await seedPaymentMethod(ALICE_SUB, "pm_alice_tip_test");
-});
-```
-
-**Section 131: Broadcast Tip API — Basic (6 tests)**:
-
-1. `Alice sends a $5 tip to the broadcaster` — POST `/chat/tip` with `amount_cents: 500`, verify 201 response with `kind: "tip"`, `tip_amount_cents: 500`.
-2. `Tip appears in chat history` — GET `/chat` and verify the tip message is in the `messages` array with `kind: "tip"`.
-3. `Session tip_total_cents is incremented` — GET `/sessions/{id}` and verify `tip_total_cents: 500`, `tip_count: 1`.
-4. `Second tip increments total` — Send another $10 tip, verify `tip_total_cents: 1500`, `tip_count: 2`.
-5. `Tip with optional text includes text in response` — Send tip with `text: "Great stream!"`, verify response includes the text.
-6. `Tip ledger has debit entry for Alice` — Query billing table for `USER#${ALICE_SUB}` and verify a debit entry with `reason: "Tip: broadcast"` and `amount_cents: 500`.
-
-**Section 132: Broadcast Tip Validation (6 tests)**:
-
-1. `Tip below $1 minimum returns 400` — Send with `amount_cents: 50`, expect 400 with code `TIP_TOO_SMALL`.
-2. `Tip above $1000 maximum returns 400` — Send with `amount_cents: 200000`, expect 400 with code `TIP_TOO_LARGE`.
-3. `Tip with invalid payment method returns 400` — Send with `payment_method_id: "pm_nonexistent"`, expect 400.
-4. `Broadcaster cannot tip own broadcast` — Root sends tip to own session, expect 400 with code `CANNOT_TIP_SELF`.
-5. `Tip on non-live session returns 403` — Stop the session first, attempt tip, expect 403 with code `BROADCAST_NOT_LIVE`.
-6. `Tip rate limit returns 429 on rapid tips` — Send two tips in quick succession (within 3s), expect 429 on second.
-
-**Section 133: Tip Summary API (4 tests)**:
-
-1. `Tip summary returns correct total and count` — GET `/tips/summary`, verify `total_cents` and `tip_count` match accumulated tips.
-2. `Top tippers are sorted by total descending` — Have Alice and Bob (via separate seeded PM) both tip, verify Alice's total is first if larger.
-3. `Recent tips are sorted by created_at descending` — Verify `recent_tips[0]` is the most recent tip.
-4. `Summary with no tips returns zero values` — Fresh session with no tips, verify `total_cents: 0`, `tip_count: 0`, empty arrays.
-
-**Section 134: Tip Goal CRUD API (7 tests)**:
-
-1. `Broadcaster creates a tip goal` — POST `/goals` with `{label: "Dance break", target_cents: 5000}`, verify 201 with `goal_id`, `current_cents: 0`, `reached: false`.
-2. `List goals returns created goals` — GET `/goals`, verify the goal is in the list.
-3. `Broadcaster creates a second goal with higher sort_order` — Create with `sort_order: 1`, verify list is ordered correctly.
-4. `Broadcaster updates goal label` — PATCH `/goals/{id}` with `{label: "New label"}`, verify updated.
-5. `Broadcaster deletes a goal` — DELETE `/goals/{id}`, verify 200 and goal is gone from list.
-6. `Non-creator cannot create goals` — Alice (viewer) attempts POST `/goals`, expect 403.
-7. `Maximum 5 goals per session` — Create 5 goals, attempt 6th, expect 409 with code `MAX_GOALS_REACHED`.
-
-**Section 135: Tip Goal Progress (5 tests)**:
-
-1. `Tip advances goal progress` — Create goal with `target_cents: 1000`. Send $5 tip. Verify goal `current_cents: 500`.
-2. `Tip reaching goal marks it as reached` — Send enough tips to reach `target_cents`. Verify `reached: true` and `reached_at` is set.
-3. `Overflow spills to next goal` — Create two goals (G1: $5, G2: $10). Send $8 tip. Verify G1 reached ($5), G2 has $3 progress.
-4. `Already-reached goals are skipped` — Goal G1 already reached. New tip goes to G2 only.
-5. `Goal progress with no goals is a no-op` — Send tip with no goals set. Verify no errors, session totals still increment.
-
-**Section 136: Tip Config API (3 tests)**:
-
-1. `Broadcaster disables tipping` — PATCH `/tips/config` with `{tip_enabled: false}`. Verify session response has `tip_enabled: false`.
-2. `Tip on disabled-tipping session returns 403` — With tipping disabled, attempt tip, expect 403 with code `TIPPING_DISABLED`.
-3. `Broadcaster sets custom min/max` — PATCH `/tips/config` with `{tip_min_cents: 500, tip_max_cents: 50000}`. Verify $4.99 tip rejected, $5.00 accepted.
-
-**Section 137: Broadcast Tips UI (5 tests)**:
-
-1. `Tip button is visible on live broadcast page` — Navigate to `/broadcast/live/{sessionId}` as Alice. Verify `getByRole("button", { name: /tip/i })` is visible.
-2. `Tip dialog opens with amount presets` — Click tip button. Verify dialog with `$1`, `$5`, `$10`, `$25` buttons.
-3. `Tip dialog shows payment method selector` — Verify dropdown with Alice's seeded PM.
-4. `Goal progress bar renders with correct percentage` — Create a goal, send some tips, navigate. Verify progress bar element with correct width style.
-5. `Tip button is hidden for broadcaster` — Navigate as root (session creator). Verify tip button is not visible.
-
-### 5.3 Edge Cases
-
-| Edge Case | Expected Behavior |
-|-----------|-------------------|
-| Tip during session status transition (live -> stopping) | Tip is accepted if session is still `"live"` at validation time. If status changed between check and write, tip message is written but SSE may not be received by disconnecting viewers. |
-| Two viewers tip simultaneously | Each tip writes its own ledger entries independently. `ADD` expression on session totals is atomic. Both tips are counted correctly. |
-| Tip with amount_cents = 100 (exact minimum) | Accepted. Boundary value is inclusive (`ge=100`). |
-| Tip with amount_cents = 100000 (exact maximum) | Accepted. Boundary value is inclusive (`le=100000`). |
-| Goal with target_cents = current_cents (already met) | `advance_goal_progress` marks it as reached and publishes `goal:reached` event. |
-| Delete goal with progress | Goal is deleted regardless of progress. Tip total on session is unaffected. |
-| Viewer with no payment methods | Tip dialog shows "Add a payment method in Billing" message. Send button is disabled. |
-| Muted viewer attempts to tip | Returns 403 with code `BROADCAST_CHAT_MUTED` (same as regular chat). |
-| Very large tip ($1000) followed by rate limit | Tip is accepted. Rate limit prevents a second tip within 3 seconds but does not retroactively block the first. |
-| Session stopped — tip summary still accessible | GET `/tips/summary` works for any session regardless of status. Historical data persists. |
-| Goal overflow exceeds all goals | Extra amount beyond all goals is not tracked anywhere (it adds to session `tip_total_cents` but not to any goal). This is intentional — goals track threshold milestones, not total allocation. |
-
-### 5.4 Flakiness Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Tip rate limit blocking sequential tests | Call `reset_tip_rate_limits()` in service-level tests. In E2E, wait 3.5 seconds between tips or use `test.setTimeout(60_000)`. |
-| SSE events not received before assertion | For UI tests asserting tip visibility in chat, use `page.waitForResponse` matching the POST `/chat/tip` endpoint. For goal progress, poll the GET `/goals` endpoint. |
-| Session state accumulation from prior runs | Each test run creates a fresh session with unique profile name (`TS` suffix). |
-| Tip summary aggregation timing | Summary queries DDB directly (not SSE). A short delay (500ms) after the last tip ensures the `_increment_session_tip_totals` update has propagated. |
-| Goal progress SSE race with assertion | Do not assert SSE event content directly. Instead, assert the goal state via GET `/goals` after a short delay. |
+Serial execution. `BROADCAST_PROVIDER=local`. Retry-safe with unique resource names.
 
 ---
 
-## 6. Security Considerations
+## Dependencies & Merge Safety
 
-### 6.1 Authentication & Authorization
+### Depends On
 
-- **Send tip**: Requires `require_ui_session` (cookie-based session). Only viewers who are authenticated can tip. The tipper's identity is derived from the session (`ctx["user_sub"]`), not from request body, preventing identity spoofing.
-- **Tip config**: Only the session creator (`ctx["user_sub"] == session.created_by`) can modify tip settings. Viewers cannot disable or change tip limits.
-- **Goal CRUD**: Only the session creator can create, update, or delete goals. Viewers can list goals (read-only).
-- **Tip summary**: Available to any authenticated user. Contains aggregate data only — individual tipper `user_id` values are exposed, but display names are already public in chat.
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-005 | Live chat for tip message delivery | Implemented | Yes |
+| MON-002 | Tip ledger for debit/credit entries | Implemented | Yes |
 
-### 6.2 Payment Method Validation
+### Depended On By
 
-Payment methods are validated against the billing table before every tip. The query pattern matches the existing messaging tip flow (`app/routers/messaging.py` lines 12378-12392): <!-- VERIFIED: messaging.py:12378-12392 -->
+No downstream dependents identified.
 
-1. Query `T.billing` with `pk=USER#{user_id}`.
-2. Filter items with `sk` starting with `"PM#"`.
-3. Extract `payment_method_id` from each item.
-4. Verify the submitted `payment_method_id` is in the set.
+### Merge Strategy
 
-This prevents users from submitting arbitrary PM IDs that belong to other users.
+Parallel-safe with BCAST-012. Adds `kind='tip'` to chat messages, tip goal tracking on session record, and tip leaderboard integration.
 
-### 6.3 Input Validation
+### Merge Checklist
 
-| Field | Validation | Rationale |
-|-------|-----------|-----------|
-| `amount_cents` | `ge=100, le=100000` | Prevents dust tips and unreasonably large tips. $1 min, $1000 max. |
-| `text` | `max_length=280` | Same as regular chat messages. Prevents abuse via long strings. |
-| `payment_method_id` | `min_length=1, max_length=200` | Must be non-empty and bounded. |
-| `currency` | `pattern=r"^[A-Z]{3}$"` | ISO 4217 format enforcement. |
-| `goal.label` | `min_length=1, max_length=200` | Non-empty, bounded. |
-| `goal.target_cents` | `ge=100, le=10000000` | $1 min, $100K max target. |
-| `goal.sort_order` | `ge=0, le=4` | Max 5 goals, orders 0-4. |
-
-### 6.4 Abuse Vectors
-
-| Attack | Mitigation |
-|--------|------------|
-| Tip spam (rapid fire) | 3-second rate limit per user per session. Rate limit response includes `retry_after_ms`. |
-| Tip text abuse (hate speech, spam) | Tip text is a chat message — existing chat moderation (mute, delete) applies. Moderators can delete tip messages. |
-| Fake payment method IDs | PM validation against billing table. Non-existent PM returns 400. |
-| Self-tipping for leaderboard manipulation | Explicit self-tip check (`user_id == broadcaster_id`) returns 400. |
-| Goal manipulation by non-creator | All goal mutation endpoints verify `ctx["user_sub"] == session.created_by`. |
-| Concurrent goal progress corruption | DynamoDB `ADD` expression is atomic. Two concurrent tips both add correctly. |
-| Billing ledger manipulation | Ledger writes are append-only (`put_item`). No update or delete API for ledger entries. |
-
-### 6.5 Financial Controls
-
-- **Idempotency**: Each tip generates a unique `tip_payment_id` (`bctip_{uuid}`). In production, this ID should be used as an idempotency key for the payment processor to prevent double-charging on retries.
-- **Ledger consistency**: Debit and credit entries are written separately (not in a transaction). If one write fails, the tip is partially recorded. The existing `write_tip_ledger()` pattern (lines 108-147 in `tip_ledger.py`) logs warnings on write failures but does not propagate exceptions. <!-- VERIFIED: tip_ledger.py:108-147 (try/except blocks for debit and credit writes) --> This is consistent with the existing messaging tip behavior.
-- **Currency enforcement**: Only USD is supported in v1. The `currency` field defaults to `"USD"` and the Pydantic validator ensures it matches the ISO 4217 pattern. Multi-currency support would require exchange rate logic and is out of scope.
-
----
-
-## 7. Migration & Rollback Plan
-
-### 7.1 DDB Changes
-
-1. **New table `BroadcastTipGoals`**: Created by `scripts/local-ddb-init.py`. In production, create via `aws dynamodb create-table` before code deploy. Simple PK/SK table, no GSIs.
-2. **New attributes on `BroadcastSessions`**: `tip_total_cents`, `tip_count`, `tip_enabled`, `tip_min_cents`, `tip_max_cents` are new attributes on existing items. DynamoDB is schemaless — no migration needed. Existing sessions will have these fields absent; `session_from_item()` defaults them to `0`/`True`/`100`/`100000`.
-3. **New attributes on `BroadcastChatMessages`**: `tip_amount_cents`, `tip_currency`, `tip_payment_id` on items with `kind="tip"`. No schema change.
-
-### 7.2 Schema Backward Compatibility
-
-- All new fields on `BroadcastSessionModel` have defaults (`tip_total_cents=0`, `tip_count=0`, `tip_enabled=True`, `tip_min_cents=100`, `tip_max_cents=100000`). Existing sessions without these fields work correctly.
-- `BroadcastChatMessageOut` gains optional tip fields (all `Optional` with `None` defaults). Existing clients that do not read these fields are unaffected.
-- The `_chat_msg_out()` helper only adds tip fields when `kind == "tip"`. Existing text and product_link messages are unchanged.
-- `TipLedgerEntry.content_type` validation is expanded from 3 to 4 allowed values. Existing code that passes `"message"`, `"post"`, or `"comment"` is unaffected.
-
-### 7.3 Feature Flag
-
-- `BROADCAST_TIPPING_ENABLED` (default `"true"`): Controls whether the tip endpoint is active. When `"false"`, `POST /chat/tip` returns 403 with code `TIPPING_DISABLED`.
-- Per-session `tip_enabled` flag: Broadcasters can disable tipping for individual sessions.
-- Both flags must be `true` for tipping to work.
-
-### 7.4 Rollback Steps
-
-1. Set `BROADCAST_TIPPING_ENABLED=false` to disable tipping globally. Existing tip data remains in DDB.
-2. Revert frontend to remove tip UI components. Chat history with `kind="tip"` messages will show as plain text messages (graceful degradation — the text field still contains any tip message text).
-3. Revert backend endpoints. Existing `BroadcastTipGoals` table and tip attributes on sessions are orphaned but harmless.
-4. No data migration needed on rollback. Tip ledger entries in the billing table are permanent financial records and should not be deleted.
-
-### 7.5 Zero-Downtime Deployment
-
-- Backend endpoints are additive (new routes + modified models with optional fields).
-- No existing endpoint behavior is changed.
-- New DDB table creation is independent of application deployment.
-- Frontend changes are bundled in the Vite build.
-- The `ADD` expression for session tip totals works correctly even if the attribute does not exist on the item (DynamoDB `ADD` on a non-existent numeric attribute treats it as 0).
-
----
-
-## 8. Acceptance Criteria
-
-### Tipping Core
-
-1. A viewer can send a tip (100-100000 cents) to a live broadcast by submitting `POST /broadcast/sessions/{id}/chat/tip` with `amount_cents`, `payment_method_id`, and optional `text`. The response is a 201 with `kind: "tip"` and the tip amount fields populated.
-2. The tipper's payment method is validated against the billing table before the tip is processed. An invalid or missing PM returns HTTP 400 with code `PAYMENT_METHOD_NOT_FOUND`.
-3. Each tip writes paired debit (tipper) and credit (broadcaster) entries to the billing table with `reason: "Tip: broadcast"` and the session ID in metadata.
-4. The broadcaster's own attempt to tip their broadcast returns HTTP 400 with code `CANNOT_TIP_SELF`.
-5. Tips below the minimum (default 100 cents) return HTTP 400 with code `TIP_TOO_SMALL`. Tips above the maximum (default 100000 cents) return HTTP 400 with code `TIP_TOO_LARGE`.
-6. Tips on a non-live session return HTTP 403 with code `BROADCAST_NOT_LIVE`.
-7. Tips are rate-limited to one per 3 seconds per user per session. Exceeding the limit returns HTTP 429 with code `BROADCAST_TIP_RATE_LIMITED` and `retry_after_ms`.
-8. Muted users cannot tip (HTTP 403 with code `BROADCAST_CHAT_MUTED`).
-
-### Tip Monitor / Running Total
-
-9. Each tip atomically increments `tip_total_cents` and `tip_count` on the session record using DynamoDB `ADD` expressions (no read-before-write race).
-10. After each tip, a `tip:total_update` SSE event is published to all session subscribers containing `tip_total_cents`, `tip_count`, and the latest tip's sender info.
-11. `GET /broadcast/sessions/{id}/tips/summary` returns the session tip total, count, top tippers (aggregated by user, sorted by total descending), and recent tips (sorted by time descending).
-12. The tip summary endpoint is accessible to all authenticated users and works for sessions in any status (including stopped).
-
-### Tip Goals
-
-13. A broadcaster can create up to 5 tip goals per session via `POST /broadcast/sessions/{id}/goals` with `label` and `target_cents`.
-14. Attempting to create a 6th goal returns HTTP 409 with code `MAX_GOALS_REACHED`.
-15. Goals can be created when the session is in `draft`, `scheduled`, `ready`, or `live` status.
-16. `GET /broadcast/sessions/{id}/goals` returns all goals ordered by `sort_order` then `created_at`.
-17. When a tip is received, goal progress is advanced sequentially by sort_order. Each goal fills up to its `target_cents` before overflow spills to the next goal.
-18. When a goal's `current_cents` reaches or exceeds `target_cents`, it is marked `reached: true` and a `goal:reached` SSE event is published.
-19. Progress updates for each affected goal publish `goal:progress` SSE events with the applied amount and current state.
-20. Only the session creator can create, update, or delete goals. Viewers get HTTP 403.
-
-### Tip Configuration
-
-21. A broadcaster can enable/disable tipping and set custom min/max amounts via `PATCH /broadcast/sessions/{id}/tips/config`.
-22. When tipping is disabled (`tip_enabled: false`), `POST /chat/tip` returns HTTP 403 with code `TIPPING_DISABLED`.
-
-### Chat Integration
-
-23. Tip messages appear in chat history (`GET /broadcast/sessions/{id}/chat`) alongside regular messages, with `kind: "tip"` and tip amount fields.
-24. The SSE chat polling stream (`/chat/stream`) dispatches tip messages with event type `chat:tip`.
-25. Tip messages in the chat are rendered with a highlighted card (gold background, amount badge) in the frontend.
-
-### Frontend Components
-
-26. The `BroadcastTipButton` is visible to viewers on live broadcasts and hidden for the broadcaster. It opens a dialog with amount presets ($1, $5, $10, $25), custom input, and payment method selector.
-27. The `TipTicker` overlay shows recent tips sliding in with animations and fading out after 8 seconds.
-28. The `TipGoalBar` renders a progress bar with the goal label, current/target amounts, and percentage. Reaching the target triggers a visual celebration.
-29. The `BroadcastTipSummary` (full variant) shows running total, top supporters, and recent tips to the broadcaster. The compact variant shows a one-line summary to viewers.
-
-### Testing
-
-30. All E2E tests (sections 131-137) pass with 0 flakes on 3 consecutive runs.
-31. Unit tests cover: tip message creation + ledger write, session total increment, PM validation, rate limiting, self-tip prevention, amount validation, goal CRUD, goal progress advancement with overflow, and goal reached detection.
-
----
-
-## 9. Error Handling Matrix
-
-| Error Condition | HTTP Status | Error Code | User Message | Recovery |
-|----------------|-------------|------------|--------------|----------|
-| Tip below minimum | 400 | `TIP_TOO_SMALL` | "Minimum tip is $1.00 (100 cents)." | Increase tip amount |
-| Tip above maximum | 400 | `TIP_TOO_LARGE` | "Maximum tip is $1,000.00 (100000 cents)." | Decrease tip amount |
-| Self-tip attempt | 400 | `CANNOT_TIP_SELF` | "You cannot tip your own broadcast." | N/A |
-| Invalid payment method | 400 | `PAYMENT_METHOD_NOT_FOUND` | "Payment method not found. Add a payment method in Billing." | Add PM in billing settings |
-| Session not live | 403 | `BROADCAST_NOT_LIVE` | "Chat is only available while the broadcast is live" | Wait for broadcast to go live |
-| Tipping disabled | 403 | `TIPPING_DISABLED` | "Tipping is disabled for this broadcast." | N/A |
-| User is muted | 403 | `BROADCAST_CHAT_MUTED` | "You are temporarily muted in this chat." | Wait for mute to expire |
-| Not session creator (goal CRUD) | 403 | `NOT_SESSION_CREATOR` | "Only the broadcaster can manage goals." | Use the broadcaster's session |
-| Tip rate limited | 429 | `BROADCAST_TIP_RATE_LIMITED` | "You can send one tip every 3 seconds." | Wait `retry_after_ms` |
-| Max goals reached | 409 | `MAX_GOALS_REACHED` | "Maximum 5 goals per session." | Delete an existing goal first |
-| Goal not found | 404 | `GOAL_NOT_FOUND` | "Tip goal not found." | Check goal_id |
-| Session not found | 404 | (FastAPI default) | "broadcast session not found" | Check session_id |
-| Invalid currency code | 422 | (Pydantic validation) | "String should match pattern '^[A-Z]{3}$'" | Use valid ISO 4217 code |
-
----
-
-## 10. Performance & Capacity Planning
-
-### 10.1 Throughput
-
-| Operation | Expected Rate | DDB Cost |
-|-----------|--------------|----------|
-| Send tip (peak) | 10-50 tips/second per session | 3 WCU per tip (chat message + session ADD + goal ADD) |
-| Tip summary query | 1-5 requests/second per session | 5-50 RCU (scans tip messages with FilterExpression) |
-| Goal progress update | 10-50/second (follows tip rate) | 1 WCU per goal updated |
-| List goals | 1-5 requests/second | 1 RCU (max 5 items) |
-
-### 10.2 Hot Partition Analysis
-
-- **BroadcastChatMessages**: Partition key is `session_id`. A popular broadcast with 1000+ tips shares a partition with all other chat messages. DynamoDB's 10GB/3000 RCU per partition is not a concern for 7-day-TTL messages.
-- **BroadcastSessions**: The `ADD` expression on `tip_total_cents` hits the same item for every tip. At 50 tips/second, this is 50 WCU on a single item. DDB can handle this (3000 WCU per partition), but at extreme scale (1000+ tips/second), adaptive capacity may be needed.
-- **BroadcastTipGoals**: Max 5 items per session. Negligible DDB load.
-
-### 10.3 Tip Summary Scan Cost
-
-`_query_tip_messages()` uses `FilterExpression` on `kind="tip"`. For a session with 10,000 chat messages (1,000 tips, 9,000 text), DynamoDB reads up to 1MB per page before filtering. With ~200 bytes per message, one page holds ~5,000 messages. The filter returns ~500 tip messages per page. For 10,000 messages, 2 pages are needed (2 x ~1MB reads). At 4KB per RCU, this costs ~500 RCU.
-
-**Optimization for high-traffic sessions**: If tip summary becomes a hot endpoint, consider a GSI on `BroadcastChatMessages` with partition key `session_id` and sort key `kind#created_at` to enable efficient tip-only queries. This adds WCU cost on every message write but eliminates the FilterExpression scan. Not needed for v1.
-
----
-
-## 11. Appendix: API Reference Summary
-
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/broadcast/sessions/{id}/chat/tip` | Session (viewer) | Send a tip in broadcast chat |
-| GET | `/broadcast/sessions/{id}/tips/summary` | Session (any) | Get tip summary (total, top tippers, recent) |
-| PATCH | `/broadcast/sessions/{id}/tips/config` | Session (creator) | Configure tipping (enable/disable, min/max) |
-| POST | `/broadcast/sessions/{id}/goals` | Session (creator) | Create a tip goal |
-| GET | `/broadcast/sessions/{id}/goals` | Session (any) | List tip goals |
-| PATCH | `/broadcast/sessions/{id}/goals/{goal_id}` | Session (creator) | Update a tip goal |
-| DELETE | `/broadcast/sessions/{id}/goals/{goal_id}` | Session (creator) | Delete a tip goal |
-
-## 12. Appendix: Configuration
-
-| Setting | Default | Env Var | Purpose |
-|---------|---------|---------|---------|
-| `broadcast_tipping_enabled` | `true` | `BROADCAST_TIPPING_ENABLED` | Global feature flag |
-| `broadcast_tip_rate_limit_ms` | `3000` | `BROADCAST_TIP_RATE_LIMIT_MS` | Minimum ms between tips per user per session |
-| `broadcast_tip_min_cents` | `100` | `BROADCAST_TIP_MIN_CENTS` | Default minimum tip ($1.00) |
-| `broadcast_tip_max_cents` | `100000` | `BROADCAST_TIP_MAX_CENTS` | Default maximum tip ($1,000) |
-| `broadcast_tip_goals_max_per_session` | `5` | `BROADCAST_TIP_GOALS_MAX` | Maximum goals per session |
-| `broadcast_tip_goals_table_name` | `BroadcastTipGoals` | `DDB_BROADCAST_TIP_GOALS` | DDB table for tip goals |
-
-## 13. Appendix: Related Tickets
-
-| Ticket | Relationship | Detail |
-|--------|-------------|--------|
-| BCAST-005 | Prerequisite | Live chat infrastructure (messages, muting, SSE) |
-| MON-002 | Prerequisite | Tip ledger integration (debit/credit billing entries) |
-| SOCIAL-005 | Enhancement | Tip leaderboards — broadcast tips feed into creator leaderboard |
-| BCAST-009 | Parallel | Scheduling — goals can be pre-configured on scheduled broadcasts |
-| BCAST-011 | Parallel | Go-private — tips during private sessions use the same system |
-| MON-003 | Downstream | Creator earnings dashboard includes broadcast tip revenue |
-| MON-004 | Downstream | Creator payouts include broadcast tip credits |
+- [ ] DDB table/fields added to `scripts/local-ddb-init.py` (if new table needed)
+- [ ] Settings added to `app/core/settings.py`
+- [ ] Service and router files created/modified
+- [ ] Frontend components and API wrappers created
+- [ ] E2E test passes in CI
+- [ ] No breaking changes to existing endpoints
 
 ---
 

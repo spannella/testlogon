@@ -1007,6 +1007,104 @@ CommandDialog (existing, enhanced)
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_global_search.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_aggregator_returns_results_from_all_modules` | Aggregator returns results from all modules verified |
+| 2 | `test_type_filter_users_only` | Type filter users only verified |
+| 3 | `test_type_filter_posts_and_catalog` | Type filter posts and catalog verified |
+| 4 | `test_module_timeout_returns_partial_results` | Module timeout returns partial results verified |
+| 5 | `test_post_search_finds_matching_body` | Post search finds matching body verified |
+| 6 | `test_post_search_excludes_unpublished` | Post search excludes unpublished verified |
+| 7 | `test_post_search_excludes_locked_body` | Post search excludes locked body verified |
+| 8 | `test_file_search_scoped_to_requesting_user` | File search scoped to requesting user verified |
+| 9 | `test_empty_query_returns_400` | Empty query returns 400 verified |
+| 10 | `test_query_too_long_returns_400` | Query too long returns 400 verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Search aggregator fans out to users + posts + files in parallel; results merged within 3s timeout
+2. Post search finds post by body keyword across app_single_table scan
+3. File search scoped to authenticated user — Alice's files not in Bob's results
+4. Locked post body redacted as [Locked] in search results
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/global-search.spec.ts`
+**Sections**: 1-5 (25 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Search returns results across types | 200; results has users/posts/videos/catalog/files |
+| 2 | Type filter restricts results | types=users -> only users non-empty |
+| 3 | Empty query returns 400 | 400 response |
+| 4 | Post search finds seeded post | Unique body keyword found in results.posts |
+| 5 | File search scoped to user | Alice file not in Bob's results |
+| 6 | Full post search with pagination | limit=3 returns 3 posts + cursor |
+| 7 | Search page loads from URL param | /search?q=test; input pre-filled; results shown |
+| 8 | Tab switching works | Click Users tab; only user results visible |
+| 9 | Ctrl+K opens search dialog | CommandDialog visible |
+| 10 | View all results navigates to search page | URL becomes /search?q=... |
+
+**Negative tests**: 400 empty query, 400 query >200 chars, 401 unauthenticated, 429 rate limited (30/min), 504 partial results on module timeout
+
+**Edge cases**: Module timeout returns partial flag, search with special characters, blocked users filtered from results
+
+### Test Data Requirements
+
+- **DDB seeds**: Seeded posts with unique keywords; uploaded files for Alice; catalog items; user profiles
+- **Test users**: Alice (searcher), Bob (content author)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: GLOBAL_SEARCH_ENABLED=true (default)
+- **Serial execution**: Post search tests depend on seeded posts being indexed
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| Discovery service (existing) | search_users() for user search results |
+| Catalog router (existing) | search_items() for catalog search |
+| File manager (existing) | search_prefix() and search_text() for file search |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SOC-005 | Profile discovery through search results |
+
+### Merge Strategy: **Independent**
+
+Aggregates existing search endpoints. No schema changes. Safe to merge independently.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

@@ -614,188 +614,91 @@ MESSAGING_WEBRTC_SIGNALING_MAX_PAYLOAD_BYTES=8192
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (`tests/test_messaging_call_signaling_endpoint.py`)
+### Unit Tests (pytest)
 
-<!-- NOTE: This file does not exist yet — new implementation required. The existing tests/test_messaging_call_signaling.py (517 lines) covers the service layer but not the HTTP endpoint layer. -->
+**Test file**: `tests/test_call_1.py`
 
-New file, ~300 lines. Tests the HTTP layer using the FastAPI test client.
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-**Test cases**:
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-1. **Happy path: webrtc.offer delivery**
-   - Seed a call session in "accepted" state
-   - POST valid offer envelope
-   - Assert 200, status="delivered", delivered_to=recipient
+### Integration Tests
 
-2. **Happy path: webrtc.answer delivery**
-   - Same setup, send answer from callee to caller
-   - Assert 200, delivered
+Cross-service tests with real DynamoDB Local:
 
-3. **Happy path: webrtc.ice_candidate delivery**
-   - Send ICE candidate in both directions
-   - Assert 200 each time
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-4. **Duplicate delivery (idempotent)**
-   - Send same event_id twice
-   - First returns "delivered", second returns "duplicate"
-   - Both return 200 (not error)
+### E2E Tests (Playwright)
 
-5. **Feature disabled (kill switch)**
-   - Set `messaging_webrtc_direct_call_kill_switch=True`
-   - Assert 403, code="feature_disabled"
+**Test file**: `frontend/e2e/call-1.spec.ts`
 
-6. **Feature disabled (not enabled)**
-   - Set `messaging_webrtc_direct_call_enabled=False`
-   - Assert 403, code="feature_disabled"
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-7. **Invalid type rejected**
-   - Send `type: "call.invite"` (lifecycle event, not allowed through this endpoint)
-   - Assert 422 (Pydantic validation) or 400
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-8. **Stale timestamp**
-   - Set `sent_at` to 5 minutes ago
-   - Assert 400, code="stale_timestamp"
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-9. **Replay nonce rejected**
-   - Send valid event, then send different event with same nonce
-   - Assert 409, code="replay_detected"
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-10. **Call not found**
-    - Use non-existent call_id in URL
-    - Assert 404, code="call_not_found"
+### Test Data Requirements
 
-11. **Invalid state (offer while invited)**
-    - Call in "invited" state, send webrtc.offer
-    - Assert 409, code="invalid_state"
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-12. **Non-participant rejected**
-    - Authenticated as user C, try to send signaling for call between A and B
-    - Assert 403, code="forbidden"
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-13. **Recipient not in call**
-    - Send to a user who is in the conversation but not in this call
-    - Assert 403, code="forbidden"
+### CI/Pipeline
 
-14. **Payload too large**
-    - Send payload exceeding 8KB
-    - Assert 400, code="validation_error"
-
-15. **Rate limit exceeded**
-    - Send 61 events within 10 seconds
-    - Assert 429 on the 61st
-
-16. **Auth required (no session)**
-    - Send request without authentication
-    - Assert 401 or 403
-
-17. **CSRF required (cookie auth)**
-    - Send with cookie auth but missing CSRF header
-    - Assert 403
-
-### 5.2 E2E Tests (`frontend/e2e/webrtc-signaling.spec.ts`)
-
-<!-- NOTE: This file does not exist yet — new implementation required. -->
-
-New file, ~400 lines. Tests the full round-trip: HTTP POST -> DynamoDB -> SSE stream -> frontend event.
-
-**Section 80: Signaling API (10 tests)**:
-
-1. `Alice sends webrtc.offer to Bob after call accepted` -- verify 200 + ack
-2. `Bob sends webrtc.answer back to Alice` -- verify 200 + ack
-3. `Alice sends ICE candidate to Bob` -- verify 200 + ack
-4. `Bob sends ICE candidate to Alice` -- verify 200 + ack
-5. `Duplicate event_id returns status=duplicate` -- verify idempotency
-6. `Signaling rejected before call accepted (state=invited)` -- verify 409
-7. `Signaling rejected after call ended` -- verify 409
-8. `Non-participant cannot send signaling` -- verify 403
-9. `Invalid type (call.invite) rejected` -- verify 422
-10. `Stale timestamp rejected` -- verify 400
-
-**Section 81: SSE Delivery (5 tests)**:
-
-1. `Bob receives webrtc.offer via SSE after Alice sends it` -- POST from Alice, poll Bob's SSE stream, verify event arrives
-2. `Alice receives webrtc.answer via SSE after Bob sends it` -- reverse direction
-3. `ICE candidates arrive via SSE within 2 seconds` -- timing assertion
-4. `Frontend dispatches "messaging:webrtc-signal" custom event` -- inject page listener, verify CustomEvent fires
-5. `Multiple ICE candidates arrive in order` -- send 5 candidates, verify they arrive in FIFO order by event_id
-
-**Section 82: Rate Limiting (3 tests)**:
-
-1. `61st signaling event in 10s window returns 429` -- burst 61 requests
-2. `Rate limit resets after window expires` -- send 60, wait 10s, send 1 more -- should succeed
-3. `Rate limit is per-user (Bob unaffected by Alice's rate)` -- Alice exhausts limit, Bob can still send
-
-**Test Setup (beforeAll)**:
-- Seed sessions via `e2e_admin_session_setup.py`
-- Create a DM conversation between Alice and Bob
-- Create a call via `POST /messages/calls/invite`
-- Accept the call via `POST /messages/calls/{id}/accept`
-- This puts the call in "accepted" state, enabling webrtc.* signaling
-
-### 5.3 Edge Cases to Cover
-
-1. **Concurrent offer/answer race**: Both peers send offer simultaneously. The service layer allows this (both are valid in "accepted" state). The frontend must handle "glare" (simultaneous offers) -- out of scope for this ticket but the backend should not block it.
-
-2. **Large SDP payloads**: A typical SDP offer is 2-4KB. Ensure the 8KB limit is sufficient for video calls with multiple codecs and ICE candidates embedded in the SDP.
-
-3. **ICE candidate trickle burst**: A typical peer discovers 10-30 ICE candidates within 1-3 seconds. The rate limit (60/10s) accommodates this with headroom.
-
-4. **Network partition recovery**: If the SSE connection drops and reconnects, the `after` cursor parameter ensures missed signaling events are replayed from the Events table (TTL = 7 days, far exceeding any realistic reconnection window).
-
-5. **Call state transitions during signaling**: A call can be ended while ICE candidates are still being sent. The service layer correctly returns `invalid_state` for post-terminal signaling attempts. The frontend should handle 409 gracefully (not retry, just log).
-
-6. **Clock skew between client and server**: The 120-second skew window (`MAX_SIGNALING_SKEW_SECONDS`) is generous enough for mobile clients with slightly drifted clocks but tight enough to prevent replay of old events.
-
-7. **Nonce collision**: The 8-128 character nonce space with 600s TTL makes collision probability negligible for legitimate use. The conditional write guarantees at-most-once delivery regardless.
-
-### 5.4 Performance/Load Testing Notes
-
-For production deployment, consider:
-- Load test with 100 concurrent calls (200 signaling streams) to verify DynamoDB throughput
-- Measure p99 end-to-end latency (POST to SSE delivery) under load
-- Verify TTL cleanup removes old nonce guards and signaling events correctly
-- Monitor `messaging_webrtc_signaling_events_total` and `messaging_webrtc_signaling_latency_seconds` metrics (already wired in the service layer)
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
 ---
 
-## Appendix A: Sequence Diagram — Full Signaling Flow
+## Dependencies & Merge Safety
 
-```
-Caller Frontend          Backend                    DynamoDB              Callee Frontend
-    |                       |                          |                       |
-    |-- POST /signal ------>|                          |                       |
-    |   {type:offer, ...}   |-- put_item(nonce) ------>|                       |
-    |                       |<-- ok -------------------|                       |
-    |                       |-- put_item(event) ------>|                       |
-    |                       |<-- ok -------------------|                       |
-    |<-- 200 {ack} ---------|                          |                       |
-    |                       |                          |                       |
-    |                       |   [SSE poll_ms later]    |                       |
-    |                       |                          |<-- query(user=callee) -|
-    |                       |                          |-- Items: [offer] ---->|
-    |                       |                          |                       |
-    |                       |                          |  CustomEvent fired:   |
-    |                       |                          |  "messaging:webrtc-signal"
-    |                       |                          |                       |
-    |                       |<-- POST /signal ---------|                       |
-    |                       |   {type:answer, ...}     |                       |
-    |                       |-- put_item(nonce) ------>|                       |
-    |                       |-- put_item(event) ------>|                       |
-    |                       |-- 200 {ack} ------------>|                       |
-    |                       |                          |                       |
-    |<-- SSE webrtc.answer--|<-- query(user=caller) ---|                       |
-    |                       |                          |                       |
-    |   [ICE trickle begins in both directions]        |                       |
-```
+### Depends On
 
-## Appendix B: Related Tickets
+No upstream dependencies. This ticket is self-contained.
 
-- **CALL-002**: Reduce SSE poll interval for active calls (adaptive polling)
-- **CALL-003**: WebSocket upgrade path for signaling (sub-100ms latency)
-- **CALL-004**: Signaling event delivery confirmation (read receipts for ICE)
-- **CALL-005**: Group call signaling (mesh/SFU topology negotiation)
+### Depended On By
+
+| Ticket | What It Needs |
+|---|---|
+| CALL-002 | Signaling endpoint for SDP/ICE exchange |
+
+### Merge Strategy
+
+Independent. New signaling endpoint on existing call router. No new DDB tables.
+
+### Merge Checklist
+
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

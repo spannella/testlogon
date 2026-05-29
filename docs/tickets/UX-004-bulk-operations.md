@@ -999,6 +999,97 @@ None. No new npm packages required.
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_bulk_operations.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_bulk_delete_files` | Bulk delete files verified |
+| 2 | `test_bulk_move_files` | Bulk move files verified |
+| 3 | `test_bulk_read_conversations` | Bulk read conversations verified |
+| 4 | `test_bulk_delete_conversations` | Bulk delete conversations verified |
+| 5 | `test_bulk_dismiss_alerts` | Bulk dismiss alerts verified |
+| 6 | `test_bulk_operation_partial_failure` | Bulk operation partial failure verified |
+| 7 | `test_bulk_operation_max_items` | Bulk operation max items verified |
+| 8 | `test_bulk_select_all` | Bulk select all verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Select 10 files -> bulk delete -> all removed from file manager
+2. Select conversations -> bulk mark read -> unread counts update
+3. Bulk operation with 1 failure -> partial success response with error details
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/bulk-operations.spec.ts`
+**Sections**: 1-4 (12 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Select multiple files with checkbox | Checkboxes visible; count badge updates |
+| 2 | Bulk delete files | Click Delete; confirm; files removed |
+| 3 | Bulk move files to folder | Select; Move to; files in new folder |
+| 4 | Select all on page | Select All checkbox; all items checked |
+| 5 | Bulk mark conversations read | Select; Mark Read; unread badges cleared |
+| 6 | Bulk dismiss alerts | Select; Dismiss; alerts removed |
+| 7 | Bulk action toolbar appears on selection | Toolbar with actions visible |
+| 8 | Deselect all clears selection | Click Deselect; toolbar hidden |
+
+**Negative tests**: 400 empty selection, 400 exceeds max bulk items (100), 403 bulk delete on shared folder, 404 item not found in batch
+
+**Edge cases**: Mixed success/failure in batch, select items across pages, concurrent bulk ops
+
+### Test Data Requirements
+
+- **DDB seeds**: Files, conversations, and alerts seeded for Alice
+- **Test users**: Alice
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: None
+- **Serial execution**: Bulk delete tests must verify items are actually removed before asserting
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| File manager (existing) | Bulk delete/move endpoints |
+| Messages (existing) | Bulk read/delete conversations |
+| Alerts (existing) | Bulk dismiss alerts |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Independent**
+
+UI patterns with backend batch endpoints. Each module's bulk ops are independent.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

@@ -878,6 +878,103 @@ No new DDB table needed. No new GSI needed. Repost entities use the existing `ap
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_reposts.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_repost_creates_entity_and_increments_count` | Repost creates entity and increments count verified |
+| 2 | `test_repost_own_post_returns_400` | Repost own post returns 400 verified |
+| 3 | `test_duplicate_repost_returns_409` | Duplicate repost returns 409 verified |
+| 4 | `test_undo_repost_deletes_entity_and_decrements_count` | Undo repost deletes entity and decrements count verified |
+| 5 | `test_repost_locked_post_returns_403` | Repost locked post returns 403 verified |
+| 6 | `test_quote_repost_stores_quote_text` | Quote repost stores quote text verified |
+| 7 | `test_list_reposts_returns_correct_users` | List reposts returns correct users verified |
+| 8 | `test_reposted_by_me_correct_per_viewer` | Reposted by me correct per viewer verified |
+| 9 | `test_fanout_creates_feed_refs_for_followers` | Fanout creates feed refs for followers verified |
+| 10 | `test_undo_repost_removes_fanout_refs` | Undo repost removes fanout refs verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Repost fans out feed refs to all followers via newsfeed_fanout; follower GET /feed includes repost with attribution
+2. Undo repost removes fan-out refs from all followers' feeds
+3. Block user then attempt repost returns 403; unblock then repost succeeds
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/reposts.spec.ts`
+**Sections**: 1-3 (16 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Alice reposts Bob's post | 201; repost_count incremented |
+| 2 | Alice reposts same post again returns 409 | 409 |
+| 3 | Alice undoes repost | 200; repost_count decremented |
+| 4 | Alice cannot repost own post | 400 |
+| 5 | Quote repost stores quote | 201; GET /reposts shows quote text |
+| 6 | Repost appears in follower's feed | Bob's feed shows reposted_by attribution |
+| 7 | Feed repost has original post content | body, image_urls from original present |
+| 8 | Repost button visible on PostCard | Repeat2 icon visible |
+| 9 | Repost button disabled on own posts | Tooltip: Cannot repost your own post |
+| 10 | Click repost toggles icon color | Icon turns green after repost |
+
+**Negative tests**: 400 self-repost, 403 locked post, 403 blocked user, 409 already reposted, 404 non-existent post, 400 quote >500 chars, 429 rate limited
+
+**Edge cases**: Repost of deleted post shows [Post no longer available], deduplication when 2 followed users repost same post, undo repost with >100 followers (async fan-out cleanup)
+
+### Test Data Requirements
+
+- **DDB seeds**: Alice and Bob with mutual follow; seeded posts; social graph entries in app_single_table
+- **Test users**: Alice (reposter), Bob (author), Charlie (follower of Alice)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: REPOSTS_ENABLED=true (default)
+- **Serial execution**: Fan-out tests must wait for async batch writes to complete
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| SOC-001 | Follow system — get_followers() for fan-out; is_following() for feed delivery |
+| Newsfeed fan-out (existing) | app/services/newsfeed_fanout.py for feed reference writes |
+| SOCIAL-004 | Blocking service — _is_blocked() to prevent repost of blocked user's content |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SOCIAL-006 | Hashtag extraction applies to quote repost text |
+
+### Merge Strategy: **Sequential**
+
+Requires SOC-001 follow system for fan-out. SOCIAL-004 blocking check is optional but recommended.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

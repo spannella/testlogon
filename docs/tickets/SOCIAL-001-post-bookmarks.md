@@ -884,6 +884,101 @@ Each user's bookmarks have their own GSI1 partition (`GSI1PK=BOOKMARK#{user_id}`
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_bookmarks.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_create_bookmark_writes_correct_ddb_item` | Create bookmark writes correct ddb item verified |
+| 2 | `test_duplicate_bookmark_returns_409` | Duplicate bookmark returns 409 verified |
+| 3 | `test_delete_bookmark_removes_item` | Delete bookmark removes item verified |
+| 4 | `test_list_bookmarks_returns_newest_first` | List bookmarks returns newest first verified |
+| 5 | `test_list_bookmarks_filters_by_content_type` | List bookmarks filters by content type verified |
+| 6 | `test_list_bookmarks_filters_by_collection_id` | List bookmarks filters by collection id verified |
+| 7 | `test_bookmark_status_returns_correct_booleans` | Bookmark status returns correct booleans verified |
+| 8 | `test_create_collection_writes_entity` | Create collection writes entity verified |
+| 9 | `test_delete_collection_moves_bookmarks_to_default` | Delete collection moves bookmarks to default verified |
+| 10 | `test_max_bookmarks_limit_enforced` | Max bookmarks limit enforced verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Bookmark a post then verify content_preview populated from app_single_table POST#{id}/META
+2. Delete a bookmarked post then verify bookmark list shows [Post removed] placeholder
+3. Bookmark status batch check returns correct booleans for mix of bookmarked and non-bookmarked posts
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/bookmarks.spec.ts`
+**Sections**: 1-4 (19 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Alice bookmarks a post | 201; bookmark appears in GET /bookmarks |
+| 2 | Duplicate bookmark returns 409 | 409 response |
+| 3 | Alice removes bookmark | 200; bookmark gone from list |
+| 4 | Bookmark status check returns correct state | statuses map with true/false |
+| 5 | List bookmarks with content_type filter | Only posts returned |
+| 6 | Create collection | 201; appears in GET /bookmark-collections |
+| 7 | Rename collection | 200; name updated |
+| 8 | Delete collection moves bookmarks to default | Bookmarks still exist with collection_id=default |
+| 9 | Saved page loads and shows bookmarks | Navigate to /saved; bookmark cards visible |
+| 10 | Content type tabs filter correctly | Click Posts tab; only post bookmarks |
+| 11 | Bookmark icon visible on PostCard | Feed page; bookmark icon outline visible |
+| 12 | Click bookmark icon toggles state | Icon changes to filled after click |
+
+**Negative tests**: 409 duplicate bookmark, 404 non-existent content, 400 max bookmarks exceeded, 400 max collections exceeded, 400 collection name >100 chars
+
+**Edge cases**: Bookmark a post then author deletes it, collection with 0 items, batch status check with 0 items
+
+### Test Data Requirements
+
+- **DDB seeds**: Seeded posts in app_single_table with POST#{id}/META; Alice and Bob sessions
+- **Test users**: Alice (bookmarker), Bob (post author)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: BOOKMARKS_ENABLED=true (default)
+- **Serial execution**: Collection delete test must run after bookmark-into-collection test
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| Newsfeed (existing) | Post metadata lookup for content preview enrichment |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Independent**
+
+Self-contained feature using existing app_single_table. No schema migration needed.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

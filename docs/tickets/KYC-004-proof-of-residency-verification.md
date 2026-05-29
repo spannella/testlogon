@@ -774,3 +774,90 @@ test("166.7 Removing last valid doc re-fails the gate", async () => {
 | Address extraction from PoA documents | `app/services/kyc_document_verification.py` | NOT FOUND -- depends on KYC-002 |
 | PoA-specific validation (issuer date, document age) | `app/routers/kyc_cases.py` | NOT FOUND -- new validation logic required |
 | Readiness gate for residency document | `app/routers/kyc_cases.py:223` | NOT FOUND -- `_readiness_for_case()` needs modification |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_residency.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_upload_residency_document`
+  - `test_extract_address_from_document`
+  - `test_validate_document_recency`
+  - `test_accepted_document_types`
+  - `test_reject_expired_document`
+  - `test_address_normalization`
+
+### Integration Tests
+
+  - Residency document upload reuses KYC-002 document infrastructure
+  - Address extraction feeds into user profile address field
+  - Admin review shows extracted address alongside document image
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/kyc-residency.spec.ts`
+**Test count**: 10
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_documents (residency document records)` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_RESIDENCY_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| KYC-001 | Admin KYC Review Dashboard | Residency docs reviewed through dashboard |
+| KYC-002 | Identity Document Verification | Shares document upload/OCR infrastructure |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| KYC-008 | Risk Scoring Engine | Residency verification status feeds risk score |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after KYC-001, KYC-002. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 10 E2E tests pass with `npx playwright test kyc-residency.spec.ts`

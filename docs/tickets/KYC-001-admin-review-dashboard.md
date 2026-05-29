@@ -1150,3 +1150,100 @@ test("155.6 Concurrent admin approval triggers version conflict", async () => {
 | `frontend/src/api/endpoints/kyc-admin.ts` | `frontend/src/api/endpoints/` | NOT FOUND -- new endpoint file required |
 | Admin KYC routes in App.tsx | `frontend/src/App.tsx` | NOT FOUND -- new routes required |
 | KYC Review sidebar link | `frontend/src/components/layout/Sidebar.tsx` | NOT FOUND -- needs modification |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_review.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_list_pending_submissions`
+  - `test_get_submission_detail`
+  - `test_approve_submission`
+  - `test_reject_submission_with_reason`
+  - `test_request_additional_info`
+  - `test_assign_reviewer`
+  - `test_submission_audit_trail`
+  - `test_filter_by_status`
+
+### Integration Tests
+
+  - Submission approval updates user verification status
+  - Rejection sends notification to user with reason
+  - Audit trail records reviewer identity and timestamp for each action
+  - Dashboard stats count pending/approved/rejected submissions
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/admin-kyc.spec.ts`
+**Test count**: 15
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_submissions` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| (none) | — | This ticket has no blocking dependencies |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| KYC-002 | Identity Document Verification | Reviewed through admin dashboard |
+| KYC-003 | Liveness Video Verification | Reviewed through admin dashboard |
+| KYC-004 | Proof of Residency | Reviewed through admin dashboard |
+| KYC-005 | Proof of Funds | Reviewed through admin dashboard |
+| KYC-006 | Sanctions & PEP Screening | Results viewed in admin dashboard |
+| KYC-007 | Enhanced Document Signing | Signing status viewed in admin dashboard |
+| KYC-008 | Risk Scoring Engine | Risk scores displayed in admin dashboard |
+| KYC-009 | Tiered Verification Levels | Tier status displayed in admin dashboard |
+| KYC-011 | KYC Webhooks & Notifications | Events triggered from dashboard actions |
+
+### Merge Strategy
+
+**Independent**
+
+This ticket can be merged independently of other tickets. It introduces new tables/endpoints without modifying existing ones in a breaking way.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 15 E2E tests pass with `npx playwright test admin-kyc.spec.ts`

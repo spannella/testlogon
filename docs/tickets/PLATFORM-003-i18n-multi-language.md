@@ -1011,3 +1011,85 @@ translations=ddb.Table(S.translations_table_name),
 | Sidebar navigation | `frontend/src/components/layout/Sidebar.tsx` | exists | VERIFIED (hardcoded English navigation labels) |
 | `AppShell.tsx` | `frontend/src/components/layout/AppShell.tsx` | exists | VERIFIED |
 | `MobileNav.tsx` | `frontend/src/components/layout/MobileNav.tsx` | exists | VERIFIED |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_i18n.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_translate_english` | English key returns English value |
+| 2 | `test_translate_spanish` | Spanish key returns Spanish value |
+| 3 | `test_translate_fallback` | Missing Spanish falls back to English |
+| 4 | `test_translate_interpolation` | Substitution with kwargs works |
+| 5 | `test_translate_missing_key` | Unknown key returns key itself |
+| 6 | `test_locale_from_profile` | Profile locale takes priority |
+| 7 | `test_locale_from_header` | Accept-Language used without profile locale |
+| 8 | `test_locale_validation` | Invalid locale codes rejected; 400 |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Profile locale persists across sessions | profile service + DDB profiles table |
+| 2 | Admin translation override takes precedence | i18n router + translations table |
+| 3 | RTL locale sets dir=rtl on responses | i18n config + frontend RTLProvider |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/i18n.spec.ts` -- 20 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Sections: A (locale detection, 4), B (translation rendering, 5), C (RTL, 3), D (date/currency formatting, 4), E (admin management, 4)
+
+**Negative/edge tests**: Unsupported locale falls back to English, missing translation shows English, invalid locale rejected
+
+### Test Data Requirements
+
+- DDB seeds: translations table, profiles table with locale field
+- Test users: Alice, Root
+- Translation files: en.json, es.json, ar.json
+
+### CI/Pipeline
+
+- Feature flags: I18N_ENABLED, I18N_RTL_ENABLED, I18N_ADMIN_MANAGEMENT_ENABLED
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Standalone feature |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | No downstream dependents identified |
+
+### Merge Strategy
+
+**Independent** -- No prerequisites. Large scope (200+ component files) but no schema conflicts.
+
+### Merge Checklist
+
+- [ ] react-i18next installed and HelmetProvider wraps app
+- [ ] English source file with ~400 keys
+- [ ] RTLProvider with dir=rtl for Arabic/Hebrew
+- [ ] Backend translate() module with JSON files
+- [ ] Admin translation CRUD endpoints
+- [ ] E2E pass: `npx playwright test e2e/i18n.spec.ts`

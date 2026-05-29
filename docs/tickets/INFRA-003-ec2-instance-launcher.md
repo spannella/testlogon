@@ -728,3 +728,94 @@ All instance records use `user_sub` as the DDB partition key. No cross-user acce
 | `app/routers/ec2_launcher.py` | — | — | Does not exist yet |
 | `remote_hosts` (INFRA-001 dep) | — | — | Host auto-registration target; does not exist yet |
 | `ssh_key_manager` (INFRA-002 dep) | — | — | Key injection source; does not exist yet |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_ec2_launcher.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_launch_instance_mock_mode`
+  - `test_launch_instance_registers_in_host_inventory`
+  - `test_launch_instance_injects_ssh_key`
+  - `test_stop_instance`
+  - `test_terminate_instance`
+  - `test_list_instances_for_user`
+  - `test_auto_terminate_idle_instance`
+  - `test_per_user_instance_limit`
+
+### Integration Tests
+
+  - Launch creates EC2 instance and auto-registers host in remote_hosts table
+  - SSH key public portion injected into instance user-data
+  - Background idle checker terminates instances idle > 2 hours
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/ec2-launcher.spec.ts`
+**Test count**: 14
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `ec2_instances` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `EC2_LAUNCHER_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| INFRA-001 | Host Inventory Management | Auto-registers launched instances |
+| INFRA-002 | SSH Key Manager | Injects SSH public key via user-data |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| INFRA-005 | Compute Cost Tracking | Tracks EC2 instance runtime costs |
+| INFRA-009 | Security Groups | Manages security groups for launched instances |
+| INFRA-012 | Admin Compute Dashboard | Aggregates EC2 instance data |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after INFRA-001, INFRA-002. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 14 E2E tests pass with `npx playwright test ec2-launcher.spec.ts`

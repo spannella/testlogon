@@ -982,3 +982,90 @@ Every wallet deduction produces a LEDGER entry with amount, rate, duration, and 
 | `app/services/compute_billing.py` | — | — | Does not exist yet |
 | EC2 launcher (INFRA-003 dep) | — | — | Does not exist yet; provides `INSTANCE_TYPES` rate card |
 | K8s launcher (INFRA-004 dep) | — | — | Does not exist yet; provides `RESOURCE_PRESETS` rate card |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_compute_costs.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_record_cost_event_ec2`
+  - `test_record_cost_event_k8s`
+  - `test_get_user_cost_summary`
+  - `test_get_cost_breakdown_by_instance_type`
+  - `test_daily_cost_rollup`
+  - `test_cost_alert_threshold_exceeded`
+
+### Integration Tests
+
+  - EC2 instance start/stop events trigger cost records
+  - K8s container lifecycle events trigger cost records
+  - User cost summary aggregates across all compute resources
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/compute-costs.spec.ts`
+**Test count**: 12
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `compute_costs` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `COMPUTE_COST_TRACKING_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| INFRA-003 | EC2 Instance Launcher | Tracks EC2 instance runtime |
+| INFRA-004 | K8s Container Launcher | Tracks container runtime |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| INFRA-012 | Admin Compute Dashboard | Aggregates cost data for admin view |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after INFRA-003, INFRA-004. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 12 E2E tests pass with `npx playwright test compute-costs.spec.ts`

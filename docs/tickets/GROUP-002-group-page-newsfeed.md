@@ -1000,3 +1000,91 @@ let pinnedPostId: string;
 | `group_feed_enabled` setting | — | — | Does not exist yet in `app/core/settings.py`; must be added |
 | `app/services/group_feed.py` | — | — | Does not exist yet; new implementation |
 | `app/routers/group_feed.py` | — | — | Does not exist yet; new implementation |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_group_feed.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_create_group_post_member_only`
+  - `test_create_group_post_non_member_403`
+  - `test_list_group_feed_member_sees_all`
+  - `test_list_group_feed_non_member_sees_public_only`
+  - `test_pin_post_admin_only`
+  - `test_pinned_posts_appear_first`
+  - `test_delete_post_by_moderator`
+  - `test_delete_post_non_mod_403`
+
+### Integration Tests
+
+  - Group post creation writes GROUPFEED index record and POST record
+  - Feed query applies membership-based audience filtering
+  - Pin/unpin updates pinned_at field and affects sort order
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/group-feed.spec.ts`
+**Test count**: 14
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `app_single_table (GROUPFEED index records)` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `GROUP_FEED_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| GROUP-001 | User Group Creation & Membership | Requires group membership for post creation and feed access |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after GROUP-001. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 14 E2E tests pass with `npx playwright test group-feed.spec.ts`

@@ -1202,6 +1202,72 @@ No backend or database changes to revert.
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+| Test | Description |
+|------|-------------|
+| `test_get_public_profile_returns_storefront_fields` | Verify profile response includes `follower_count`, `following_count`, `post_count`, `is_following`, `has_subscription_plans` |
+| `test_get_public_profile_follow_status_for_viewer` | Authenticated viewer sees correct `is_following` based on social graph record |
+| `test_get_public_profile_unauth_returns_false_follow` | Unauthenticated request returns `is_following: false`, `is_followed_by: false` |
+| `test_get_public_profile_posts_pagination` | Posts endpoint returns paginated results with `next_cursor` for cursor-based navigation |
+| `test_get_public_profile_posts_filter_by_type` | Filter param `image` returns only image posts; `video` only video posts |
+| `test_follow_user_increments_count` | `follow_user()` increments target's `follower_count` and follower's `following_count` |
+| `test_unfollow_user_decrements_count` | `unfollow_user()` decrements counts atomically |
+| `test_list_creator_plans_public_no_auth` | Plans endpoint at `/api/creators/{id}/plans` returns plans without authentication |
+
+**Framework**: pytest + moto (DynamoDB mock)
+**Test files**: `tests/test_profile.py`, `tests/test_social.py`, `tests/test_video_listing.py`, `tests/test_subscription_server.py`
+
+### Integration Tests
+
+| Scenario | Services | Assertion |
+|----------|----------|-----------|
+| Profile + follow status | `profile.py` + `social.py` | `get_public_profile` returns correct `is_following` based on social graph |
+| Profile + plans flag | `profile.py` + `subscription_server.py` | `has_subscription_plans` reflects actual plan count in subscriptions table |
+| Posts endpoint + auth-optional | `profile.py` | Authenticated followers see followers-only posts; unauthenticated see only public |
+
+### E2E Tests (Playwright)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Tabs visible on authenticated profile view | Videos, Posts, About tabs all visible |
+| 2 | Videos tab shows video grid for creator with videos | Video card visible after clicking Videos tab |
+| 3 | Posts tab shows post cards | Post card visible after clicking Posts tab |
+| 4 | About tab shows bio and location | Bio text and location text visible |
+| 5 | Subscription plans section shown when creator has plans | "Subscription Plans" heading visible |
+| 6 | Follow button visible on other user's profile | Follow button visible when viewing another user |
+| 7 | Clicking Follow changes state to Following | POST `/ui/social/follow` sent; "Following" button visible |
+| 8 | Clicking Following (unfollow) reverts to Follow | Hover + click; "Follow" button reappears |
+| 9 | Follow button not visible on own profile | No follow button on own profile page |
+| 10 | Videos tab shows empty state when no videos | "No videos yet" text visible |
+| 11 | Posts tab shows empty state when no posts | "No posts yet" text visible |
+| 12 | Posts tab supports filter pills | Click "Images" filter pill; results filtered |
+| 13 | Subscribe button on plan card triggers subscription | POST to subscription endpoint; success toast |
+| 14 | Unauthenticated user sees Posts and About tabs | No auth; Posts and About tabs visible |
+| 15 | Videos tab hidden for unauthenticated users | Videos tab not visible without auth |
+| 16 | Subscribe button prompts login for unauthenticated | Click Subscribe; redirect to `/login` |
+| 17 | Stats row shows follower/following/post counts | "followers", "following", "posts" text visible |
+| 18 | Stats row formats large numbers | "1.5K" visible for count of 1500 |
+
+**Auth**: `injectAuth(page, "alice")` for cookie-based session; CSRF via `x-csrf-token` header for POST requests
+**Test file**: `frontend/e2e/creator-storefront.spec.ts`
+
+### Test Data Requirements
+- Bob's profile seeded with `display_name`, `description`, `location`, follower/following/post counts via DDB update in `beforeAll`
+- Bob's videos seeded via API call `POST /ui/videos` in `beforeAll`
+- Bob's posts seeded via API call `POST /feed` in `beforeAll`
+- Bob's subscription plans seeded in DDB `subscriptions` table (`PK=CREATOR#bob_sub, SK=PLAN#{id}`)
+- Test users: Alice (USER), Bob (USER), Root (ROOT)
+
+### CI/Pipeline
+- Feature flag: None required (frontend-only change; no backend feature flag gating)
+- Serial execution with `workers: 1`
+- Retry-safe (idempotent test setup, unique timestamp-suffixed content identifiers)
+
+---
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

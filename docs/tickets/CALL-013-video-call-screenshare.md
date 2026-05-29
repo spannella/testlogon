@@ -1364,546 +1364,93 @@ Wire the `useScreenShare` hook into the call overlays:
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests
+### Unit Tests (pytest)
 
-**`frontend/src/lib/__tests__/webrtc.test.ts`** (extend existing):
+**Test file**: `tests/test_call_13.py`
 
-| # | Test | Description |
-|---|------|-------------|
-| 1 | `acquireScreenMedia returns stream on success` | Mock `getDisplayMedia` to return a MediaStream; verify stream is returned |
-| 2 | `acquireScreenMedia throws NotFoundError when API unavailable` | Set `navigator.mediaDevices.getDisplayMedia` to undefined; verify NotFoundError |
-| 3 | `acquireScreenMedia throws NotAllowedError on denial` | Mock `getDisplayMedia` to reject with NotAllowedError; verify it propagates |
-| 4 | `acquireScreenMedia passes resolution constraints` | Mock `getDisplayMedia`; verify constraints argument includes `width: { ideal: 1920 }` |
-| 5 | `acquireScreenMedia passes frameRate constraints` | Mock `getDisplayMedia`; verify constraints include `frameRate: { ideal: 15, max: 30 }` |
-| 6 | `acquireScreenMedia wraps non-DOMException errors` | Mock `getDisplayMedia` to throw a TypeError; verify AbortError DOMException wrapping |
-| 7 | `isScreenShareSupported returns true when API present` | Mock `getDisplayMedia` as function; verify returns true |
-| 8 | `isScreenShareSupported returns false when API absent` | Set `getDisplayMedia` to undefined; verify returns false |
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-**`frontend/src/hooks/__tests__/useScreenShare.test.ts`** (new):
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-| # | Test | Description |
-|---|------|-------------|
-| 1 | `toggleScreenShare acquires screen and replaces track` | Mock PC with getSenders; verify replaceTrack called with screen track |
-| 2 | `toggleScreenShare restores camera track when stopping` | Start share then toggle off; verify replaceTrack called with camera track |
-| 3 | `track.onended restores camera track` | Simulate screen track ended event; verify camera track restored and onShareStop called |
-| 4 | `cleanup stops screen tracks on unmount` | Unmount hook while sharing; verify screen track `.stop()` called |
-| 5 | `toggleScreenShare handles permission denied` | Mock acquireScreenMedia to throw NotAllowedError; verify onError called, isSharing stays false |
-| 6 | `toggleScreenShare handles API unavailable` | Mock acquireScreenMedia to throw NotFoundError; verify onError called |
-| 7 | `concurrent toggles are debounced` | Call toggle twice rapidly; verify acquireScreenMedia called only once |
-| 8 | `camera-off state preserved after share stops` | Start with camera off (track.enabled=false); share then stop; verify restored camera track has enabled=false |
-| 9 | `stopScreenShare is no-op when not sharing` | Call stopScreenShare without starting; verify no errors, no replaceTrack calls |
-| 10 | `isSupported reflects browser capability` | Test with and without getDisplayMedia; verify isSupported value |
-| 11 | `toggleScreenShare sets contentHint to detail` | Start share; verify screen track's contentHint is set to "detail" |
-| 12 | `onShareStart callback fires on successful share` | Start share; verify onShareStart was called |
-| 13 | `onShareStop callback fires on manual stop` | Start then stop share; verify onShareStop was called |
-| 14 | `enabled=false triggers automatic stop` | Start share; set enabled to false; verify share stops automatically |
-| 15 | `no-op when peerConnection is null` | Call toggle with null PC; verify onError called with "No active peer connection" |
-| 16 | `no-op when peerConnection is closed` | Call toggle with closed PC; verify onError called |
+### Integration Tests
 
-### 5.2 Backend Unit Tests
+Cross-service tests with real DynamoDB Local:
 
-**`tests/test_messaging_call_signaling.py`** (extend existing):
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-| # | Test | Description |
-|---|------|-------------|
-| 1 | `screen_share_start accepted in connected state` | Send `webrtc.screen_share_start` with call in `connected` state; verify `SignalingAck` returned with status `"delivered"` |
-| 2 | `screen_share_stop accepted in connected state` | Send `webrtc.screen_share_stop` with call in `connected` state; verify `SignalingAck` returned |
-| 3 | `screen_share_start rejected in invited state` | Send `webrtc.screen_share_start` with call in `invited` state; verify `SignalingValidationError` with code `"invalid_state"` |
-| 4 | `screen_share_start rejected in accepted state` | Send `webrtc.screen_share_start` with call in `accepted` state; verify `SignalingValidationError` with code `"invalid_state"` |
-| 5 | `screen_share_start rejected in ended state` | Send `webrtc.screen_share_start` with call in `ended` state; verify rejected |
-| 6 | `screen_share_stop rejected in invited state` | Send `webrtc.screen_share_stop` with call in `invited` state; verify rejected |
-| 7 | `screen_share signaling enforces participant check` | Send `webrtc.screen_share_start` from non-participant; verify `SignalingValidationError` with code `"forbidden"` |
-| 8 | `screen_share signaling enforces replay guard` | Send same nonce twice; verify second is rejected with code `"replay_detected"` |
+### E2E Tests (Playwright)
 
-**`tests/test_group_call_service.py`** (extend existing):
+**Test file**: `frontend/e2e/call-13.spec.ts`
 
-| # | Test | Description |
-|---|------|-------------|
-| 1 | `update_media_state sets screen true` | Call `update_media_state(call_id, user_id, screen=True)`; verify returned media has `screen: True` |
-| 2 | `update_media_state rejects concurrent screen share` | Set participant A's screen=True; attempt participant B screen=True; verify `GroupCallError` with status 409 |
-| 3 | `update_media_state allows same user to re-set screen true` | Set participant A's screen=True; re-set A's screen=True; verify success (idempotent) |
-| 4 | `update_media_state sets screen false` | Set screen=True then screen=False; verify participant media_status.screen is False |
-| 5 | `_check_screen_share_conflict returns None when no conflict` | No participants sharing; verify returns None |
-| 6 | `_check_screen_share_conflict returns user_id on conflict` | Participant A sharing; check for participant B; verify returns A's user_id |
-| 7 | `_check_screen_share_conflict ignores left participants` | Participant A was sharing but left; check for participant B; verify returns None |
-| 8 | `screen share state reset when participant leaves` | Set screen=True; leave call; rejoin; verify media_status.screen is False on rejoin |
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-### 5.3 E2E Tests
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-**File**: `frontend/e2e/call-screenshare.spec.ts` (new)
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-E2E testing of screen sharing is inherently limited because Playwright cannot trigger `getDisplayMedia()` (no browser picker automation). However, we can test the signaling, state management, and UI with mock approaches.
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-**Section 1: Screen Share Signaling API (1:1 calls)** (4 tests)
+### Test Data Requirements
 
-| # | Test | Approach |
-|---|------|----------|
-| 1.1 | POST screen_share_start signal accepted in connected state | Create call, advance to connected, send signaling event via API; verify 200 |
-| 1.2 | POST screen_share_stop signal accepted in connected state | After start event, send stop event via API; verify 200 |
-| 1.3 | POST screen_share_start rejected in invited state | Create call (invited), attempt signal; expect 409 with `invalid_state` |
-| 1.4 | POST screen_share_start rejected for non-participant | Use third user not in call; expect 403 |
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-**Section 2: Group Call Screen Share Media State** (6 tests)
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-| # | Test | Approach |
-|---|------|----------|
-| 2.1 | PATCH media with screen=true updates participant state | Create group call, join, PATCH media; GET call, verify screen=true on participant |
-| 2.2 | PATCH media with screen=false clears screen state | After 2.1, PATCH screen=false; verify screen=false |
-| 2.3 | Concurrent screen share prevented | Two participants both PATCH screen=true; second should get 409 |
-| 2.4 | Same user can re-set screen=true (idempotent) | PATCH screen=true twice; both should succeed (200) |
-| 2.5 | Screen state not preserved after leave and rejoin | Set screen=true, leave call, rejoin; verify screen=false on fresh join |
-| 2.6 | Screen state visible to other participants via GET | User A sets screen=true; User B calls GET /call_id; verify A's media_status.screen=true |
+### CI/Pipeline
 
-**Section 3: Screen Share UI Elements - 1:1 Calls** (5 tests)
-
-| # | Test | Approach |
-|---|------|----------|
-| 3.1 | Screen share button visible in 1:1 video call overlay | Navigate to connected video call mock; check `[data-testid="toggle-screen-share"]` exists |
-| 3.2 | Screen share button hidden in 1:1 audio call overlay | Navigate to connected audio call; check no `[data-testid="toggle-screen-share"]` |
-| 3.3 | Screen share button has correct aria-label (not sharing) | Verify `aria-label="Share screen"` |
-| 3.4 | Screen share button has correct aria-label (sharing) | Mock sharing state; verify `aria-label="Stop sharing screen"` |
-| 3.5 | "Sharing your screen" banner visible when sharing | Mock local sharing state; verify banner element exists |
-
-**Section 4: Screen Share UI Elements - Group Calls** (4 tests)
-
-| # | Test | Approach |
-|---|------|----------|
-| 4.1 | Screen share button visible in group call overlay | Join group call; check `[data-testid="toggle-screen-share"]` exists |
-| 4.2 | Screen share button has blue active state when sharing | Mock localMedia.screen=true; verify button has bg-blue-600 class |
-| 4.3 | MonitorUp badge on sharer's tile | Mock participant with screen=true; verify MonitorUp icon visible on their tile |
-| 4.4 | Screen share button disabled state during API call | Test button disabled while mediaMut is pending |
-
-**Section 5: Presentation Mode Layout (Group)** (4 tests)
-
-| # | Test | Approach |
-|---|------|----------|
-| 5.1 | Layout switches to presentation when participant has screen=true | Mock participant data with screen=true; verify presentation layout container renders |
-| 5.2 | Layout reverts when screen sharing stops | Set screen=true then false in mock data; verify grid layout restored |
-| 5.3 | Layout toggle disabled during presentation mode | While participant has screen=true; check layout toggle button is disabled |
-| 5.4 | "is presenting" label shows sharer name | Mock participant with screen=true; verify text includes participant's display_name |
-
-**Section 6: Signaling Event Content Validation** (4 tests)
-
-| # | Test | Approach |
-|---|------|----------|
-| 6.1 | screen_share_start payload contains display_surface | Send event with payload; verify it is stored correctly in Events table |
-| 6.2 | screen_share_stop payload contains reason | Send event with `reason: "user_stopped"`; verify stored |
-| 6.3 | screen_share_start has valid nonce | Verify 32-char hex nonce in delivered event |
-| 6.4 | screen_share events respect MAX_SIGNALING_PAYLOAD_BYTES | Send event with oversized payload; verify 400 error |
-
-**Section 7: Feature Flag** (3 tests)
-
-| # | Test | Approach |
-|---|------|----------|
-| 7.1 | Screen share signaling works when flag enabled | Enable flag, send event; verify success |
-| 7.2 | Screen share button hidden when flag disabled | Set VITE_MESSAGING_SCREEN_SHARE_ENABLED=false; verify button not rendered |
-| 7.3 | Group media update still accepts screen when flag disabled | Backend does not block PATCH media even with flag off; verify |
-
-**Total E2E tests**: 30
-
-### 5.4 Manual Testing Checklist
-
-- [ ] **MT-01**: Chrome: Start screen share, verify browser picker appears with tab/window/screen options
-- [ ] **MT-02**: Chrome: Share a tab, verify remote peer sees tab content
-- [ ] **MT-03**: Chrome: Click "Stop sharing" in browser chrome bar, verify share stops cleanly and browser indicator disappears
-- [ ] **MT-04**: Chrome: Share a window, minimize the window, verify remote peer sees the minimized window content (or black frame)
-- [ ] **MT-05**: Firefox: Start screen share, verify picker appears
-- [ ] **MT-06**: Firefox: Verify shared content reaches remote peer
-- [ ] **MT-07**: Safari: Start screen share, verify picker appears
-- [ ] **MT-08**: Safari: Verify user gesture requirement is met (button click triggers picker)
-- [ ] **MT-09**: iOS Safari: Verify screen share button is hidden (API unavailable)
-- [ ] **MT-10**: Android Chrome: Verify screen share is available (if device supports it)
-- [ ] **MT-11**: Group call: Start sharing, verify other participants see screen content and MonitorUp badge
-- [ ] **MT-12**: Group call: Second participant tries to share, verify error toast with sharer's name
-- [ ] **MT-13**: Group call: First sharer stops, second participant can now share
-- [ ] **MT-14**: 1:1 call: Start sharing, verify peer sees screen in presentation layout with object-contain
-- [ ] **MT-15**: 1:1 call: Verify "Peer is sharing their screen" banner appears for remote peer
-- [ ] **MT-16**: 1:1 call: Stop sharing, verify layout reverts to normal
-- [ ] **MT-17**: End call while sharing: verify browser "sharing" indicator disappears immediately
-- [ ] **MT-18**: Camera off + share: verify camera stays off after share stops
-- [ ] **MT-19**: Recording + share: verify MediaRecorder captures screen content (CALL-009 integration)
-- [ ] **MT-20**: Share during poor connection: verify adaptive bitrate still works (connection quality indicator may drop)
-- [ ] **MT-21**: Multiple monitor setup: verify user can select which screen to share
-- [ ] **MT-22**: Rapid toggle (click share, cancel picker, click share again): verify no broken state
-- [ ] **MT-23**: Feature flag disabled: verify screen share button is not visible
-- [ ] **MT-24**: Verify shared screen text (code, slides) is readable at the remote peer's end
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
 ---
 
-## 6. Browser Compatibility Matrix
+## Dependencies & Merge Safety
 
-### 6.1 `getDisplayMedia()` Support
+### Depends On
 
-| Browser | Version | `getDisplayMedia` | `displaySurface` hint | `preferCurrentTab` | Tab Audio | `contentHint` | Notes |
-|---------|---------|------------------|----------------------|-------------------|-----------|---------------|-------|
-| Chrome | 72+ | Yes | Yes (104+) | Yes (104+) | Yes (tab only) | Yes | Best support; most features |
-| Chrome | 107+ | Yes | Yes | Yes | Yes | Yes | `selfBrowserSurface: "include"/"exclude"` |
-| Firefox | 66+ | Yes | Yes (partial) | No | No | Yes (71+) | Shows single dropdown picker |
-| Firefox | 91+ | Yes | Yes | No | No | Yes | ESR version with full support |
-| Safari | 13+ | Yes | Limited | No | No | No | Requires user gesture; picker less customizable |
-| Safari | 16+ | Yes | Limited | No | No | Partial | Improved stability |
-| Edge | 79+ | Yes | Yes | Yes | Yes | Yes | Chromium-based; mirrors Chrome |
-| Opera | 60+ | Yes | Yes | Yes | Yes | Yes | Chromium-based; mirrors Chrome |
-| Android Chrome | 72+ | Partial | Partial | No | No | Partial | Requires `MediaProjection` permission; not all devices |
-| iOS Safari | Any | No | N/A | N/A | N/A | N/A | WebKit limitation; `getDisplayMedia` undefined |
-| iOS Chrome | Any | No | N/A | N/A | N/A | N/A | Uses WebKit engine on iOS; same limitation |
-| Android Firefox | Any | No | N/A | N/A | N/A | N/A | `getDisplayMedia` not implemented |
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-002 | RTCPeerConnection for track replacement | Implemented | Yes |
+| CALL-005 | Media controls for share button | Implemented | Yes |
+| CALL-012 | Group call overlay for presentation layout | Implemented | Yes |
 
-### 6.2 `replaceTrack()` Support
+### Depended On By
 
-| Browser | Version | `replaceTrack` | Notes |
-|---------|---------|---------------|-------|
-| Chrome | 65+ | Yes | Works reliably; no renegotiation needed |
-| Firefox | 49+ | Yes | Works reliably |
-| Safari | 11+ | Yes | Works reliably |
-| Edge | 79+ | Yes | Chromium-based |
+No downstream dependents identified.
 
-`replaceTrack()` is widely supported across all modern browsers that support WebRTC. There are no known compatibility issues.
+### Merge Strategy
 
-### 6.3 Browser-Specific Quirks
+Sequential after CALL-005/012. Extends both 1:1 and group call overlays with screen share.
 
-**Chrome**:
-- The picker has three tabs: "Entire Screen", "Window", "Chrome Tab". The `displaySurface` hint can pre-select which tab is shown.
-- `preferCurrentTab: true` adds a "This Tab" option at the top of the Chrome Tab picker.
-- Chrome shows a persistent blue bar at the top of the shared tab/window.
-- `getDisplayMedia` can be called from a cross-origin iframe if the `display-capture` permission policy is set.
+### Merge Checklist
 
-**Firefox**:
-- The picker shows a single dropdown with all available screens, windows, and tabs.
-- No `preferCurrentTab` support -- always shows the full picker.
-- Firefox shows a blue persistent notification bar in the browser.
-- Firefox requires the call to originate from a user gesture (like Chrome and Safari).
-
-**Safari**:
-- The picker UI is simpler: shows available screens and application windows.
-- Safari does not support tab-level sharing (only full screen or application window).
-- Safari's `getDisplayMedia` is stricter about user gesture requirements.
-- `displaySurface` and `contentHint` support is limited.
-
----
-
-## 7. Error Handling Matrix
-
-| Error | Source | Recovery Action | User Feedback |
-|-------|--------|----------------|---------------|
-| `NotAllowedError` from `getDisplayMedia` | User cancelled the browser picker dialog | No state change; `isSharing` stays false | Toast: "Screen sharing was cancelled" |
-| `NotFoundError` from `getDisplayMedia` | Browser does not support screen sharing (iOS Safari) | Screen share button hidden via `isSupported` | Button not visible; no message needed |
-| `AbortError` from `getDisplayMedia` | Browser aborted the request (rare) | No state change | Toast: "Screen sharing failed. Please try again." |
-| `InvalidStateError` from `replaceTrack` | Peer connection is closed or in wrong state | Stop screen stream tracks; reset state | Toast: "Cannot share screen: call connection lost" |
-| `TypeError` from `getSenders()` | Peer connection is null | Do not attempt share | Toast: "No active peer connection" |
-| No video sender found | Audio-only call or no video transceiver | Do not attempt share | Toast: "No video sender available. Is camera enabled?" |
-| HTTP 409 from `PATCH media` (group) | Another participant is already sharing | Do not acquire screen media; reset state | Toast: "{name} is already sharing their screen" |
-| HTTP 400 from `PATCH media` (group) | User not an active participant | Reset state | Toast: "You are not an active participant in this call" |
-| HTTP 409 from signaling endpoint (1:1) | Call state does not allow screen share events | Share already started locally; send stop | Toast: "Screen sharing is not available in this call state" |
-| `track.ended` event | User clicked browser "Stop sharing" bar | Restore camera track; send stop signal; reset state | Blue "Sharing" badge disappears; no toast needed |
-| Browser picker timeout | User left the picker open too long (some browsers auto-cancel) | Reset `acquiringRef`; no state change | Same as `NotAllowedError` handling |
-| `getDisplayMedia` returns stream with no video tracks | Edge case; should not happen in practice | Stop stream tracks; reset state | Toast: "No video track in screen capture" |
-| Network error sending signaling event | Network issue during `sendSignalingEvent` | Share continues locally; remote may not see layout change | Console warning; no user-visible error (best-effort signaling) |
-
----
-
-## 8. Performance Considerations
-
-### 8.1 Bandwidth Impact
-
-| Content Type | Typical Resolution | Typical Bitrate | Motion Level | Notes |
-|-------------|-------------------|----------------|-------------|-------|
-| Camera video | 1280x720 | 500-1500 kbps | High (face movement) | Good balance of quality and bandwidth |
-| Screen - static slides | 1920x1080 | 200-500 kbps | Very low (slide transitions only) | Low motion = high compression efficiency |
-| Screen - text/code | 1920x1080 | 800-1500 kbps | Low (scrolling, cursor) | Fine detail requires higher bitrate for text readability |
-| Screen - video playback | 1920x1080 | 2000-4000 kbps | High (video content) | Worst case; sharing a playing video in a tab |
-| Screen - full desktop | 2560x1440 | 1000-3000 kbps | Variable | Depends on user activity |
-
-**Key insight**: Screen sharing of static or low-motion content (slides, documents) actually uses LESS bandwidth than camera video because the encoder achieves better compression on static frames. However, screen sharing of video content or rapid scrolling can consume significantly MORE bandwidth.
-
-### 8.2 Resolution Constraints Strategy
-
-For screen content, text readability requires higher resolution than camera video. The constraints in `acquireScreenMedia()`:
-
-```typescript
-{
-  video: {
-    width: { ideal: 1920 },
-    height: { ideal: 1080 },
-    frameRate: { ideal: 15, max: 30 },
-  },
-}
-```
-
-**`frameRate: { ideal: 15, max: 30 }`**: Screen content is typically low-motion. 15fps is sufficient for slides and documents, saving ~50% bandwidth compared to 30fps. The `max: 30` allows the browser to increase framerate for video content or fast scrolling if the bandwidth allows it.
-
-**Resolution vs. bandwidth tradeoff**: The WebRTC encoder automatically scales resolution down if bandwidth is insufficient. For screen content, we prioritize resolution over framerate (a sharp but slow-updating slide is better than a smooth but blurry slide). The `contentHint = "detail"` on the screen track communicates this preference to the encoder.
-
-### 8.3 CPU Impact
-
-- **Encoding**: Switching from camera to screen may increase CPU usage because screen content at 1920x1080 has more pixels than camera at 1280x720. The encoder works harder to maintain quality at higher resolution.
-- **Hardware acceleration**: Chrome uses hardware-accelerated encoding (VAAPI on Linux, VideoToolbox on macOS, Media Foundation on Windows) for VP8/VP9/H.264. Screen capture typically goes through the same hardware encoder path.
-- **Capture overhead**: `getDisplayMedia` capture itself has minimal CPU overhead -- the browser's compositor provides frames directly. No pixel processing is needed.
-- **Camera track while sharing**: The camera track is preserved in `cameraTrackRef` but NOT being encoded or sent. This means zero CPU overhead from the camera while screen sharing. The camera hardware may or may not continue capturing (browser-dependent), but no encoding occurs.
-
-### 8.4 Memory Impact
-
-- **Screen stream**: One additional `MediaStream` object with one `MediaStreamTrack`. Minimal memory (~few KB for metadata). The actual video frames are managed by the browser's media pipeline and not stored in JS heap.
-- **Camera track ref**: One `MediaStreamTrack` reference. Minimal memory.
-- **State**: A few boolean state variables and refs. Negligible.
-
-### 8.5 Network Adaptation
-
-When bandwidth drops during screen sharing:
-1. WebRTC's GCC (Google Congestion Control) detects increased RTT or packet loss.
-2. The encoder reduces bitrate and/or resolution (`scaleResolutionDownBy` increases).
-3. For screen content with `contentHint = "detail"`, the encoder prefers reducing framerate over reducing resolution (preserving text sharpness).
-4. The `ConnectionQualityIndicator` in the overlay reflects the degraded quality.
-5. If bandwidth is critically low, the encoder may reduce resolution below readable text thresholds. There is no application-level fallback for this -- it is a fundamental network limitation.
-
----
-
-## 9. Edge Cases Deep Dive
-
-### 9.1 Tab Audio Sharing
-
-**Problem**: Chrome allows users to check "Share tab audio" when sharing a browser tab. This produces a `MediaStream` with both a video track AND an audio track. If the audio track is present, it needs to be handled.
-
-**v1 approach**: We request `audio: false` in the constraints, which tells the browser NOT to show the audio checkbox in the picker. If the browser ignores this hint and still produces an audio track, we simply ignore it (do not add it to the peer connection). The remote peer continues to hear the sharer's microphone audio, not the tab audio.
-
-**Future enhancement**: To support tab audio, we would need to:
-1. Set `audio: true` in constraints
-2. Use `addTrack(audioTrack)` on the peer connection (not `replaceTrack`, since the audio sender already has the mic track)
-3. Mix the tab audio with the mic audio using `AudioContext.createMediaStreamSource()` + `createMediaStreamDestination()`
-4. Or replace the audio track with a mixed stream
-
-### 9.2 Multiple Monitors
-
-**Problem**: Users with multiple monitors may see all screens listed in the browser picker. After selecting one, the captured track has the resolution of that specific monitor.
-
-**Handling**: No special handling needed. The browser picker handles multi-monitor selection natively. The `getSettings().displaySurface` will be `"monitor"` regardless of which screen is selected. The resolution may vary (e.g., 3840x2160 for a 4K monitor, 1920x1080 for a secondary 1080p monitor). The encoder handles this via the `width/height` constraints and adaptive bitrate.
-
-### 9.3 Permission Denial Recovery
-
-**Problem**: If the user denies permission, the `NotAllowedError` is caught and a toast is shown. But some browsers (Chrome) remember the denial and block future `getDisplayMedia` calls with `NotAllowedError` without showing the picker again.
-
-**Handling**: Unlike `getUserMedia` where `Permissions.query()` can check the permission state, `getDisplayMedia` does not have a persistent permission model -- each call always shows the picker (unless the browser has a bug). If the user reports that clicking the button does nothing, the recovery path is:
-1. Refresh the page (clears any transient state)
-2. Check browser site settings (though screen sharing does not typically have a per-site permission)
-3. Try a different sharing source (window instead of screen)
-
-### 9.4 Screen Share During Recording (CALL-009)
-
-**Problem**: If a call is being recorded (via CALL-009's `MediaRecorder`) and the user starts screen sharing, does the recording capture the screen content?
-
-**Handling**: Yes, automatically. `MediaRecorder` records the tracks on the `MediaStream` it was given. Since `replaceTrack()` changes the content flowing through the same `RTCRtpSender`, the `MediaRecorder` sees the new content. However, there is a subtlety:
-- `MediaRecorder` records the LOCAL stream (what the user is sending), not the remote stream.
-- If the remote peer is screen sharing, the local recording captures the remote screen content via the remote stream.
-- If the local user is screen sharing, their recording captures their own screen content (since the local stream's video track was replaced).
-
-No code changes to CALL-009 are needed.
-
-### 9.5 Screen Share + ICE Restart
-
-**Problem**: If an ICE restart occurs while screen sharing, is the screen share preserved?
-
-**Handling**: Yes. `performIceRestart()` (useRtcPeerConnection.ts:416-456) creates a new offer with `{ iceRestart: true }` but does NOT modify the tracks on the senders.
-<!-- VERIFIED: performIceRestart at useRtcPeerConnection.ts:416-456. Only creates offer and setLocalDescription, does not touch senders/tracks. --> The `RTCRtpSender` objects persist across ICE restarts. The screen track continues to be sent after the ICE restart completes. The SDP exchange during ICE restart describes the same media sections, just with fresh ICE candidates.
-
-### 9.6 Screen Share + Connection Loss
-
-**Problem**: If the connection drops while screen sharing, what happens when it recovers?
-
-**Handling**: The existing ICE disconnection grace period (3 seconds, useRtcPeerConnection.ts line 21) applies. If the connection recovers within the grace period, the screen share continues seamlessly. If it does not recover:
-1. `onConnectionLost` is called (line 228)
-<!-- CORRECTED: was "line 229", actually onConnectionLostRef.current?.() at line 228 -->
-2. The call state machine transitions to "reconnecting"
-3. The screen share hook detects the disabled state and calls `stopScreenShare()`
-4. When the connection is re-established (via ICE restart), the user would need to manually start sharing again
-
-### 9.7 Presenter Minimizes Shared Window
-
-**Problem**: If the user is sharing a window and minimizes it, the captured content may become blank/black or show a thumbnail (browser-dependent).
-
-**Handling**: This is a browser-level behavior:
-- Chrome: Shows a thumbnail of the minimized window (gray/static). The track remains active.
-- Firefox: May show the last visible frame or blank. The track remains active.
-- Safari: Varies by OS version.
-
-There is no application-level fix for this. The screen track does not fire `ended` when a window is minimized -- it continues producing frames (even if those frames are blank).
-
-### 9.8 Both Participants Share Simultaneously (1:1 Call)
-
-**Problem**: In a 1:1 call, both participants could press "Share Screen" at the same time. Unlike group calls, there is no backend prevention.
-
-**Handling**: Both shares work correctly but the UX is suboptimal (both see the other's screen, nobody sees a camera). For v1, this is allowed because:
-1. Each participant controls their own sender independently
-2. `replaceTrack()` on one side does not affect the other side's sender
-3. The signaling events inform each peer, so both UIs switch to presentation mode
-4. The result is: both see each other's screens in presentation mode (no camera feeds visible)
-
-A future enhancement could add a UI warning ("You are both sharing screens") or auto-stop the local share when the remote peer starts sharing.
-
----
-
-## 10. Security Considerations
-
-### 10.1 Permission Model
-
-Screen sharing requires explicit user action in every browser. The `getDisplayMedia()` API:
-- **Cannot be called without a user gesture** (click event). Browsers reject programmatic calls without transient activation.
-- **Always shows the native picker dialog** -- the application cannot select what to share on behalf of the user.
-- **Cannot capture content from other origins' iframes** without explicit `display-capture` permission policy.
-
-This means there is no risk of silently capturing a user's screen without their knowledge.
-
-### 10.2 Signaling Validation
-
-The screen share signaling events (`webrtc.screen_share_start`, `webrtc.screen_share_stop`) go through the same validation pipeline as all other signaling events in `route_signaling_event()` (messaging_call_signaling.py:171-341):
-- **Participant verification**: Both sender and recipient must be participants of the conversation (lines 207-209)
-- **Call participant verification**: Both must be participants of the specific call (lines 225-231)
-- **Call state validation**: Events are only accepted in the `connected` state (lines 236-239)
-- **Replay protection**: Nonce deduplication prevents duplicate delivery (lines 241-249)
-- **Timestamp skew check**: Events with stale timestamps (>120s skew) are rejected (lines 117-119)
-- **Payload size limit**: `MAX_SIGNALING_PAYLOAD_BYTES = 8192` prevents oversized payloads (lines 264-266)
-- **Sender identity verification**: `sender_user_id` must match the authenticated actor (lines 198-200)
-<!-- VERIFIED: All line references in this section match messaging_call_signaling.py source. -->
-
-### 10.3 Group Call Screen Share Authorization
-
-The `PATCH /{call_id}/media` endpoint already validates:
-- The user is authenticated via `_get_user()` (cookie auth + CSRF, group_calls.py:53-67)
-- The user is an active participant of the call (validated in `update_media_state()`, group_call_service.py:367-368)
-<!-- VERIFIED: _get_user at group_calls.py:53-67. update_media_state participant check at group_call_service.py:367-368. -->
-
-The simultaneous-share prevention (409 response) is a business rule, not a security control. Even if bypassed, the worst case is two participants sharing simultaneously, which is a UX issue but not a security vulnerability.
-
-### 10.4 Content Sensitivity
-
-Screen sharing exposes whatever content is on the user's screen/tab/window to all call participants. This is inherent to the feature and is mitigated by:
-- The browser's native picker dialog which clearly shows what will be shared
-- The persistent "Sharing your screen" indicator in the call overlay
-- The browser's native "Stop sharing" bar that appears during sharing
-- The ability to share a specific tab or window instead of the full screen
-
-No additional content filtering or DLP (Data Loss Prevention) is implemented in v1. Enterprise customers may request this in the future.
-
-### 10.5 Rate Limiting
-
-Screen share toggle actions go through the existing signaling rate limiter (1:1 calls, messaging.py:12939-12964) or the media update endpoint rate limiter (group calls). The signaling rate limit of 60 events per 10-second window is more than sufficient -- screen share generates at most 2 signaling events per toggle (start + stop). No additional rate limiting is needed since `getDisplayMedia()` itself is inherently rate-limited by requiring a user gesture.
-<!-- VERIFIED: Rate limiter at messaging.py:12939-12964. SIGNALING_RATE_LIMIT_MAX=60, SIGNALING_RATE_LIMIT_WINDOW_SECONDS=10. -->
-
----
-
-## 11. Migration & Rollback Plan
-
-### 11.1 Feature Flag
-
-A new feature flag `MESSAGING_SCREEN_SHARE_ENABLED` controls the availability of screen sharing:
-
-**Backend** (`app/core/settings.py`):
-```python
-messaging_screen_share_enabled: bool = field(
-    default_factory=lambda: os.environ.get("MESSAGING_SCREEN_SHARE_ENABLED", "true").lower() in ("1", "true", "yes"),
-)
-```
-
-**Frontend** (`.env.local`):
-```
-VITE_MESSAGING_SCREEN_SHARE_ENABLED=true
-```
-
-When disabled:
-- The screen share button is not rendered in either overlay
-- The backend still accepts `screen` in media updates (group calls) and screen share signaling events (1:1 calls) to avoid breaking clients that may have cached the old UI
-- No behavioral change for existing calls
-
-### 11.2 Deployment Order
-
-1. **Backend first**: Deploy the signaling type additions and simultaneous-share prevention. These are backward-compatible -- no existing functionality is affected.
-2. **Frontend second**: Deploy the UI changes. The screen share button only appears if `getDisplayMedia` is available AND the feature flag is enabled.
-
-### 11.3 Rollback
-
-- **Frontend rollback**: Revert the frontend deploy. Screen share buttons disappear. Any in-progress screen shares will continue at the WebRTC level (the track replacement already happened) but the UI will not show presentation mode. The call will function normally once the share track ends.
-- **Backend rollback**: Remove the new signaling types from `ALLOWED_SIGNALING_TYPES`. Any in-flight `webrtc.screen_share_start` events will be rejected with `unsupported signaling type`. This is safe because the screen share itself is a client-side `replaceTrack()` operation that does not depend on the signaling event being delivered -- the signaling is only for layout hints.
-- **Feature flag**: Set `MESSAGING_SCREEN_SHARE_ENABLED=false` to disable without a code deploy.
-
-### 11.4 Database Migration
-
-**No database migration is required.** The `group_call_sessions` table already has the `screen` field in participant media status (stored as a nested map attribute in DDB). The 1:1 call session record does not need a new field -- screen share state is ephemeral and communicated via signaling events.
-
----
-
-## 12. Acceptance Criteria
-
-### Functional Requirements
-
-- [ ] **AC-1**: A user in a connected 1:1 video call can click a "Share screen" button in the call controls bar.
-- [ ] **AC-2**: Clicking the button triggers the browser's native screen/window/tab picker dialog.
-- [ ] **AC-3**: After selecting a source, the remote peer sees the shared screen content instead of the camera feed.
-- [ ] **AC-4**: The remote peer's layout switches to presentation mode (screen share content large with `object-contain`, camera feed in PiP).
-- [ ] **AC-5**: The local user sees a "Sharing your screen" indicator in the call overlay.
-- [ ] **AC-6**: The remote peer sees a "Peer is sharing their screen" indicator.
-- [ ] **AC-7**: Clicking the screen share button again (or clicking "Stop sharing" in the browser chrome) stops the share and restores the camera feed.
-- [ ] **AC-8**: The layout reverts to normal after screen sharing stops.
-- [ ] **AC-9**: In a group call, a participant can share their screen using the screen share button in the controls bar.
-- [ ] **AC-10**: In a group call, the layout switches to presentation mode (screen share content 75-80% width, participant cameras in sidebar strip).
-- [ ] **AC-11**: In a group call, only one participant can share at a time. A second participant attempting to share receives a toast error with the current sharer's name.
-- [ ] **AC-12**: In a group call, the `MonitorUp` icon badge appears on the sharer's participant tile in the sidebar.
-- [ ] **AC-13**: Screen share works correctly when the camera is turned off (camera-off state is preserved when sharing stops).
-- [ ] **AC-14**: The screen share button is hidden in audio-only calls.
-- [ ] **AC-15**: The screen share button is hidden on browsers that do not support `getDisplayMedia` (e.g., iOS Safari).
-- [ ] **AC-16**: Both participants in a 1:1 call can share simultaneously (each sees the other's screen).
-- [ ] **AC-17**: The shared screen's text content (code, documents, slides) is readable on the remote peer's display.
-- [ ] **AC-18**: The screen share button shows a blue active state (bg-blue-600) when sharing is active.
-
-### Signaling & State
-
-- [ ] **AC-19**: `webrtc.screen_share_start` signaling event is accepted in the `connected` call state and rejected in `invited`/`accepted`/terminal states.
-- [ ] **AC-20**: `webrtc.screen_share_stop` signaling event is accepted in the `connected` call state.
-- [ ] **AC-21**: Screen share signaling events pass through the full validation pipeline (participant check, call state check, replay protection, timestamp skew, payload size).
-- [ ] **AC-22**: The `CallSignalingIn` regex pattern in the messaging router allows screen share event types.
-- [ ] **AC-23**: Group call `PATCH /{call_id}/media` with `screen: true` returns 409 when another active participant is already sharing.
-- [ ] **AC-24**: Group call `PATCH /{call_id}/media` with `screen: true` succeeds idempotently when the same user re-sets it.
-
-### Non-Functional Requirements
-
-- [ ] **AC-25**: `replaceTrack()` is used instead of renegotiation -- no new SDP offer/answer exchange occurs when starting or stopping a screen share.
-- [ ] **AC-26**: The browser's "sharing" indicator bar disappears immediately when sharing stops (screen tracks are `.stop()`-ed).
-- [ ] **AC-27**: If the call ends while sharing, the screen share is stopped automatically and the browser indicator bar disappears.
-- [ ] **AC-28**: The feature is gated behind `MESSAGING_SCREEN_SHARE_ENABLED` and can be disabled without a code deploy.
-- [ ] **AC-29**: Screen content is encoded with `contentHint = "detail"` to prioritize sharpness over smoothness.
-- [ ] **AC-30**: The screen share framerate defaults to `ideal: 15, max: 30` to optimize bandwidth for static content.
-
-### Test Coverage
-
-- [ ] **AC-31**: Backend unit tests cover new signaling types accepted/rejected in correct call states (4+ tests).
-- [ ] **AC-32**: Backend unit tests cover simultaneous screen share prevention (409) in group calls (4+ tests).
-- [ ] **AC-33**: Frontend unit tests cover `acquireScreenMedia()` success and error paths (4+ tests).
-- [ ] **AC-34**: Frontend unit tests cover `useScreenShare` hook lifecycle -- start, stop, track.onended, cleanup, debounce, camera restoration (10+ tests).
-- [ ] **AC-35**: E2E tests cover screen share signaling API (1:1) and media state API (group) (10+ tests).
-- [ ] **AC-36**: E2E tests verify screen share button visibility/hiding based on call mode and browser support (5+ tests).
-- [ ] **AC-37**: E2E tests verify presentation mode layout switching and reversion (4+ tests).
-
----
-
-## Appendix A: File Change Summary
-
-| File | Action | Status |
-|------|--------|--------|
-| `frontend/src/lib/webrtc.ts` | Add `acquireScreenMedia()` + `isScreenShareSupported()` | **DONE** (149 lines, lines 54-97 added) |
-| `frontend/src/hooks/useScreenShare.ts` | New hook | **DONE** (219 lines) |
-| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add screen share button, presentation layout, indicators | **DONE** (671 lines; props lines 66-68, button lines 192-206, indicators lines 433-445) |
-| `frontend/src/pages/messages/GroupCallOverlay.tsx` | Add screen share button, presentation layout, conflict handling | **DONE** (489 lines; toggleScreenShare line 243, presentation layout lines 301-311, button lines 396-401) |
-| `app/services/messaging_call_signaling.py` | Add signaling types to allowed sets | **DONE** (lines 28-29, 45, 51) |
-| `app/routers/messaging.py` | Update CallSignalingIn type regex | **DONE** (line 13152) |
-| `app/services/group_call_service.py` | Add simultaneous-share prevention | **DONE** (`_check_screen_share_conflict` lines 357-375, enforcement lines 387-391) |
-| `app/core/settings.py` | Add feature flag | **DONE** (`messaging_screen_share_enabled` at line 1052) |
-| `frontend/e2e/call-screenshare.spec.ts` | New E2E test file | **DONE** (517 lines) |
-| `frontend/src/hooks/useRtcPeerConnection.ts` | Handle screen share signaling events | **Status unknown — needs detailed line check** |
-| `frontend/src/pages/messages/ConversationView.tsx` | Wire useScreenShare hook | **Status unknown — needs detailed line check** |
-| `frontend/src/lib/__tests__/webrtc.test.ts` | Extend with screen media tests | **NOT VERIFIED** |
-| `frontend/src/hooks/__tests__/useScreenShare.test.ts` | New unit test file | **NOT VERIFIED** |
-| `tests/test_messaging_call_signaling.py` | Extend with screen share signaling tests | **NOT VERIFIED** |
-| `tests/test_group_call_service.py` | Extend with screen share conflict tests | **NOT VERIFIED** |
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ## Appendix B: Codebase Citations
 
