@@ -4612,6 +4612,8 @@ export interface LlmProviderInfo {
 
 export interface LlmProviderListOut {
   providers: LlmProviderInfo[];
+}
+
 // --- Advertiser Accounts & Campaigns (ADS-001) ---
 
 export interface AdAccount {
@@ -4641,6 +4643,8 @@ export interface Campaign {
   end_date?: number | null;
   created_at: number;
   updated_at: number;
+}
+
 // ─── Delegates (DELEGATE-001) ──────────────────────────────────
 
 export interface DelegateAddReq {
@@ -4702,6 +4706,8 @@ export interface DelegateAuditOut {
   event_id: string;
   actor_id: string;
   actor_type: string;
+}
+
 // -- Syndicates (SYND-001) --
 
 export interface SyndicateOut {
@@ -4754,11 +4760,15 @@ export interface PermissionPresetOut {
   key: string;
   label: string;
   permissions: string[];
+}
+
 export interface SyndicateUserEntry {
   syndicate_id: string;
   syndicate_name: string;
   role: string;
   joined_at: number;
+}
+
 // ---------------------------------------------------------------------------
 // Bot Framework (BOT-001)
 // ---------------------------------------------------------------------------
@@ -4803,6 +4813,8 @@ export interface BotStats {
   message_count: number;
   last_active_at?: number;
   assignment_count: number;
+}
+
 // -- User Groups (GROUP-001) --
 
 export interface UserGroup {
@@ -4838,6 +4850,8 @@ export interface GroupListOut {
 export interface GroupMemberListOut {
   members: GroupMember[];
   count: number;
+}
+
 // ─── SSH Key Manager (INFRA-002) ─────────────────────────────────
 
 export interface SshKeyOut {
