@@ -3878,3 +3878,76 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# -- Delegates (DELEGATE-001) --
+
+class DelegateAddIn(BaseModel):
+    delegate_id: str = Field(min_length=1, max_length=255, description="User ID or email of the delegate")
+    permissions: List[str] = Field(min_length=1, description="List of permission keys")
+    preset: Optional[str] = Field(None, description="Permission preset key")
+    label: str = Field(default="", max_length=200, description="Optional label for the delegate")
+
+
+class DelegateUpdatePermissionsIn(BaseModel):
+    permissions: List[str] = Field(min_length=1)
+    preset: Optional[str] = None
+
+
+class DelegateInviteRespondIn(BaseModel):
+    accept: bool
+
+
+class DelegateSettingsIn(BaseModel):
+    require_acceptance: bool = True
+    max_delegates: int = Field(default=10, ge=1, le=20)
+    default_preset: Optional[str] = None
+    delegate_tag_enabled: bool = True
+    delegate_tag_format: str = Field(default="[via @{delegate_name}]", max_length=100)
+
+
+class DelegateOut(BaseModel):
+    delegate_id: str
+    creator_id: str
+    permissions: List[str] = Field(default_factory=list)
+    preset: Optional[str] = None
+    status: str = ""
+    label: str = ""
+    show_delegate_tag: bool = True
+    delegate_tag_format: str = "[via @{delegate_name}]"
+    invited_at: int = 0
+    accepted_at: int = 0
+    updated_at: int = 0
+
+
+class ManagedCreatorOut(BaseModel):
+    creator_id: str
+    permissions: List[str] = Field(default_factory=list)
+    preset: Optional[str] = None
+    status: str = ""
+    label: str = ""
+    accepted_at: int = 0
+
+
+class DelegateSettingsOut(BaseModel):
+    require_acceptance: bool = True
+    max_delegates: int = 10
+    default_preset: Optional[str] = None
+    delegate_tag_enabled: bool = True
+    delegate_tag_format: str = "[via @{delegate_name}]"
+
+
+class DelegateAuditOut(BaseModel):
+    event_id: str
+    actor_id: str
+    actor_type: str = ""
+    action: str = ""
+    target_id: str = ""
+    details: Optional[Dict[str, Any]] = None
+    ts: int = 0
+
+
+class PermissionPresetOut(BaseModel):
+    key: str
+    label: str
+    permissions: List[str]

@@ -4492,3 +4492,76 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ─── Delegates (DELEGATE-001) ──────────────────────────────────
+
+export interface DelegateAddReq {
+  delegate_id: string;
+  permissions: string[];
+  preset?: string;
+  label?: string;
+}
+
+export interface DelegateUpdatePermissionsReq {
+  permissions: string[];
+  preset?: string;
+}
+
+export interface DelegateInviteRespondReq {
+  accept: boolean;
+}
+
+export interface DelegateSettingsReq {
+  require_acceptance: boolean;
+  max_delegates: number;
+  default_preset?: string;
+  delegate_tag_enabled: boolean;
+  delegate_tag_format: string;
+}
+
+export interface DelegateOut {
+  delegate_id: string;
+  creator_id: string;
+  permissions: string[];
+  preset?: string;
+  status: string;
+  label: string;
+  show_delegate_tag: boolean;
+  delegate_tag_format: string;
+  invited_at: number;
+  accepted_at: number;
+  updated_at: number;
+}
+
+export interface ManagedCreatorOut {
+  creator_id: string;
+  permissions: string[];
+  preset?: string;
+  status: string;
+  label: string;
+  accepted_at: number;
+}
+
+export interface DelegateSettingsOut {
+  require_acceptance: boolean;
+  max_delegates: number;
+  default_preset?: string;
+  delegate_tag_enabled: boolean;
+  delegate_tag_format: string;
+}
+
+export interface DelegateAuditOut {
+  event_id: string;
+  actor_id: string;
+  actor_type: string;
+  action: string;
+  target_id: string;
+  details?: Record<string, unknown>;
+  ts: number;
+}
+
+export interface PermissionPresetOut {
+  key: string;
+  label: string;
+  permissions: string[];
+}
