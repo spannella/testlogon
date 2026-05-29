@@ -96,6 +96,55 @@ Rate Limit Admin UI (/admin/rate-limits)
     └── Export as CSV
 ```
 
+### Architecture & Data Flow
+
+```
+┌─────────────────┐    ┌──────────────────────┐    ┌──────────────────┐
+│   Admin UI       │───▶│  FastAPI Router       │───▶│  DynamoDB Tables  │
+│  (React + Tabs)  │    │  admin_rate_limits.py │    │  rate_limit_conf  │
+│                  │    │                       │    │  rate_limit_store │
+│  Rules | Block   │    │  GET  /config         │    │  rate_limit_dash  │
+│  Allow | Live    │    │  PUT  /config         │    │                  │
+│  Events          │    │  GET  /events         │    └──────────────────┘
+└──────┬───────────┘    │  GET  /live-summary   │
+       │                │  POST /blocklist      │
+       │ React Query    │  POST /allowlist      │
+       │ refetchInterval│  GET  /events/export  │
+       │ =15s (live)    └───────────┬───────────┘
+       │                            │
+       ▼                            ▼
+┌─────────────────┐    ┌──────────────────────┐
+│  Auto-refresh    │    │  Service Layer        │
+│  useQuery({     │    │  rate_limit_config    │
+│   refetchInterval│    │  rate_limit_store     │
+│   : 15000       │    │  rate_limit_dashboard │
+│  })             │    └──────────────────────┘
+└─────────────────┘
+
+Request Flow — Config Update:
+  Browser → PUT /v1/admin/rate-limits/config
+         → require_root (cookie auth + CSRF check)
+         → save_group_override(group, requests_per_window, window_seconds, burst)
+         → DDB PutItem: PK=RATE_CONFIG, SK=GROUP#{group_name}
+         → return updated config with is_override=true
+
+Request Flow — Live Summary:
+  Browser → GET /v1/admin/rate-limits/live-summary?hours=1
+         → require_root
+         → query_events(start=now-3600, end=now, limit=1000)
+         → _group_by(events, "group") → by_group counts
+         → _top_n(events, "source_ip", 20) → top sources
+         → _bucket_by_time(events, 300) → 5-min time series
+         → return LiveSummary JSON
+
+Request Flow — CSV Export:
+  Browser → GET /v1/admin/rate-limits/events/export?start=X&end=Y
+         → require_root
+         → query_events(start, end, limit=10000)
+         → _events_to_csv(events)
+         → return Response(media_type="text/csv")
+```
+
 ---
 
 ## 2. Current State Analysis
@@ -205,7 +254,25 @@ async def export_events(
     )
 ```
 
-### 3.2 Updated Router: `app/routers/admin_rate_limits.py`
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK / GSI | Query Type | Example |
+|---------------|-------|-----|----------|------------|---------|
+| Get all rate limit configs | `rate_limit_config` | `RATE_CONFIG` | SK begins_with `GROUP#` | Query | All endpoint group configs |
+| Get single group config | `rate_limit_config` | `RATE_CONFIG` | SK = `GROUP#{group_name}` | GetItem | Config for "messaging" group |
+| Save group override | `rate_limit_config` | `RATE_CONFIG` | SK = `GROUP#{group_name}` | PutItem | Update messaging limits |
+| Delete group override (reset) | `rate_limit_config` | `RATE_CONFIG` | SK = `GROUP#{group_name}` | DeleteItem | Reset messaging to defaults |
+| List blocklist entries | `rate_limit_store` | `BLOCKLIST` | SK begins_with `IP#` | Query | All blocked IPs |
+| Add to blocklist | `rate_limit_store` | `BLOCKLIST` | SK = `IP#{ip_address}` | PutItem | Block 192.168.1.100 |
+| Remove from blocklist | `rate_limit_store` | `BLOCKLIST` | SK = `IP#{ip_address}` | DeleteItem | Unblock IP |
+| List allowlist entries | `rate_limit_store` | `ALLOWLIST` | SK begins_with `CIDR#` | Query | All allowed CIDRs |
+| Add to allowlist | `rate_limit_store` | `ALLOWLIST` | SK = `CIDR#{cidr}` | PutItem | Allow 10.0.0.0/8 |
+| Remove from allowlist | `rate_limit_store` | `ALLOWLIST` | SK = `CIDR#{cidr}` | DeleteItem | Remove exemption |
+| Query events by time range | `rate_limit_dashboard` | `EVENTS#{date}` | SK between start and end timestamps | Query (range) | Events in last hour |
+| Query events by group | `rate_limit_dashboard` | `EVENTS#{date}` | FilterExpression on `group` | Query + Filter | Events for "auth" group |
+| Get top offenders | `rate_limit_dashboard` | `OFFENDERS` | SK descending, Limit=N | Query | Top 20 offenders by count |
+
+### 3.3 Updated Router: `app/routers/admin_rate_limits.py`
 
 Add 2 new endpoints to existing router:
 
@@ -231,21 +298,200 @@ Full endpoint list (existing + new):
 | POST | `/allowlist` | `require_root` | Add to allowlist |
 | DELETE | `/allowlist/{entry_id}` | `require_root` | Remove from allowlist |
 
-### 3.3 Pydantic Models (`app/models.py`)
+### 3.4 API Request/Response Examples
+
+**GET /v1/admin/rate-limits/config**
+
+```json
+// Response 200
+{
+  "groups": [
+    {
+      "group": "messaging",
+      "requests_per_window": 100,
+      "window_seconds": 60,
+      "burst": 20,
+      "is_override": false
+    },
+    {
+      "group": "auth",
+      "requests_per_window": 10,
+      "window_seconds": 60,
+      "burst": 5,
+      "is_override": false
+    },
+    {
+      "group": "search",
+      "requests_per_window": 200,
+      "window_seconds": 60,
+      "burst": 50,
+      "is_override": true
+    }
+  ]
+}
+```
+
+**PUT /v1/admin/rate-limits/config**
+
+```json
+// Request
+{
+  "group": "messaging",
+  "requests_per_window": 200,
+  "window_seconds": 60,
+  "burst": 40
+}
+
+// Response 200
+{
+  "ok": true,
+  "group": "messaging",
+  "requests_per_window": 200,
+  "window_seconds": 60,
+  "burst": 40,
+  "is_override": true,
+  "updated_by": "root.admin@testdev.local",
+  "updated_at": 1748500000
+}
+```
+
+**GET /v1/admin/rate-limits/events?limit=5&group=auth**
+
+```json
+// Response 200
+{
+  "events": [
+    {
+      "timestamp": 1748499900,
+      "path": "/ui/auth/login",
+      "group": "auth",
+      "source_ip": "203.0.113.42",
+      "user_id": null,
+      "action": "limited",
+      "remaining": 0
+    },
+    {
+      "timestamp": 1748499850,
+      "path": "/ui/auth/register",
+      "group": "auth",
+      "source_ip": "198.51.100.17",
+      "user_id": null,
+      "action": "allowed",
+      "remaining": 3
+    }
+  ],
+  "next_cursor": "eyJsYXN0..."
+}
+```
+
+**GET /v1/admin/rate-limits/live-summary?hours=1**
+
+```json
+// Response 200
+{
+  "by_group": {
+    "auth": 45,
+    "messaging": 12,
+    "search": 8,
+    "billing": 3
+  },
+  "by_source": [
+    {"source_ip": "203.0.113.42", "count": 28},
+    {"source_ip": "198.51.100.17", "count": 15},
+    {"source_ip": "192.0.2.99", "count": 7}
+  ],
+  "time_series": [
+    {"bucket": "2026-05-29T14:00", "count": 12},
+    {"bucket": "2026-05-29T14:05", "count": 8},
+    {"bucket": "2026-05-29T14:10", "count": 15},
+    {"bucket": "2026-05-29T14:15", "count": 22}
+  ],
+  "total_hits": 68,
+  "window_hours": 1
+}
+```
+
+**POST /v1/admin/rate-limits/blocklist**
+
+```json
+// Request
+{
+  "ip": "192.168.1.100",
+  "reason": "Automated bot attack detected"
+}
+
+// Response 201
+{
+  "entry_id": "blk_a1b2c3d4",
+  "ip": "192.168.1.100",
+  "reason": "Automated bot attack detected",
+  "admin_sub": "root.admin@testdev.local",
+  "added_at": 1748500100
+}
+```
+
+**POST /v1/admin/rate-limits/allowlist**
+
+```json
+// Request
+{
+  "cidr": "10.0.0.0/8",
+  "reason": "Internal monitoring infrastructure"
+}
+
+// Response 201
+{
+  "entry_id": "alw_e5f6g7h8",
+  "cidr": "10.0.0.0/8",
+  "reason": "Internal monitoring infrastructure",
+  "admin_sub": "root.admin@testdev.local",
+  "added_at": 1748500200
+}
+```
+
+**GET /v1/admin/rate-limits/top-offenders?hours=24&limit=5**
+
+```json
+// Response 200
+[
+  {"source_ip": "203.0.113.42", "hit_count": 1247, "last_hit_at": 1748499900},
+  {"source_ip": "198.51.100.17", "hit_count": 856, "last_hit_at": 1748499800},
+  {"source_ip": "192.0.2.99", "hit_count": 342, "last_hit_at": 1748499700}
+]
+```
+
+**GET /v1/admin/rate-limits/events/export?start=1748400000&end=1748500000**
+
+```
+// Response 200 (text/csv)
+timestamp,path,group,source_ip,user_id,action,remaining
+1748499900,/ui/auth/login,auth,203.0.113.42,,limited,0
+1748499850,/ui/auth/register,auth,198.51.100.17,,allowed,3
+...
+```
+
+### 3.5 Pydantic Models (`app/models.py`)
 
 ```python
 class RateLimitGroupConfig(BaseModel):
     group: str
-    requests_per_window: int
-    window_seconds: int
-    burst: int
+    requests_per_window: int = Field(ge=1, le=100000)
+    window_seconds: int = Field(ge=1, le=86400)
+    burst: int = Field(ge=0, le=10000)
     is_override: bool  # True if custom, False if default
 
 class RateLimitConfigUpdate(BaseModel):
-    group: str
+    group: str = Field(min_length=1, max_length=100)
     requests_per_window: Optional[int] = Field(default=None, ge=1, le=100000)
     window_seconds: Optional[int] = Field(default=None, ge=1, le=86400)
     burst: Optional[int] = Field(default=None, ge=0, le=10000)
+
+    @field_validator("group", mode="before")
+    @classmethod
+    def normalize_group(cls, v):
+        if isinstance(v, str):
+            return v.strip().lower().replace(" ", "_")
+        return v
 
 class RateLimitEvent(BaseModel):
     timestamp: int
@@ -278,18 +524,179 @@ class AllowlistEntry(BaseModel):
     added_at: int
 
 class BlocklistAdd(BaseModel):
-    ip: str = Field(min_length=1)
+    ip: str = Field(min_length=1, max_length=45)
     reason: str = Field(default="", max_length=500)
+
+    @field_validator("ip", mode="before")
+    @classmethod
+    def validate_ip_format(cls, v):
+        """Basic IP format validation."""
+        if isinstance(v, str):
+            v = v.strip()
+            parts = v.split(".")
+            if len(parts) != 4:
+                raise ValueError("IP must be IPv4 format (x.x.x.x)")
+        return v
 
 class AllowlistAdd(BaseModel):
-    cidr: str = Field(min_length=1)
+    cidr: str = Field(min_length=1, max_length=49)
     reason: str = Field(default="", max_length=500)
+
+    @field_validator("cidr", mode="before")
+    @classmethod
+    def validate_cidr_format(cls, v):
+        """Basic CIDR format validation."""
+        if isinstance(v, str):
+            v = v.strip()
+            if "/" not in v:
+                raise ValueError("CIDR must include prefix length (e.g., 10.0.0.0/8)")
+        return v
 ```
 
-### 3.4 Frontend: Rate Limit Admin Page
+### 3.6 Error Handling Matrix
+
+| Scenario | HTTP Status | Error Message | Recovery Action |
+|----------|-------------|---------------|-----------------|
+| Non-root user accesses any endpoint | 403 | "Forbidden: root role required" | Escalate to root role |
+| Invalid group name (empty) | 422 | "group must have at least 1 character" | Provide valid group name |
+| requests_per_window out of range | 422 | "requests_per_window must be >= 1 and <= 100000" | Adjust value within range |
+| window_seconds out of range | 422 | "window_seconds must be >= 1 and <= 86400" | Use 1-86400 range |
+| burst exceeds maximum | 422 | "burst must be >= 0 and <= 10000" | Lower burst value |
+| Invalid IP format for blocklist | 422 | "IP must be IPv4 format (x.x.x.x)" | Provide valid IPv4 |
+| Invalid CIDR format for allowlist | 422 | "CIDR must include prefix length (e.g., 10.0.0.0/8)" | Include /prefix |
+| Self-block (admin's own IP) | 400 | "Cannot block your own IP address" | Use a different IP |
+| Blocklist entry not found | 404 | "Blocklist entry not found" | Verify entry_id |
+| Allowlist entry not found | 404 | "Allowlist entry not found" | Verify entry_id |
+| Blocklist capacity exceeded (>10000) | 400 | "Maximum 10000 blocklist entries" | Remove old entries first |
+| Event query range too large (>30 days) | 400 | "Event query range must not exceed 30 days" | Narrow the time range |
+| Export query returns too many events | 200 | Returns first 10000 events (truncated) | Narrow the date range |
+| Live summary with invalid hours | 422 | "hours must be >= 1 and <= 24" | Use 1-24 range |
+| DynamoDB query timeout | 500 | "Internal server error" | Retry; check DDB health |
+
+### 3.7 Frontend: Rate Limit Admin Page
 
 **Route**: `/admin/rate-limits` in `frontend/src/App.tsx`  
 **Page**: `frontend/src/pages/admin/rateLimits/RateLimitDashboard.tsx`
+
+#### Frontend Component Tree
+
+```
+RateLimitDashboard
+├── Tabs (shadcn/ui)
+│   ├── TabsTrigger "Rules"
+│   ├── TabsTrigger "Blocklist"
+│   ├── TabsTrigger "Allowlist"
+│   ├── TabsTrigger "Live Dashboard"
+│   └── TabsTrigger "Event Log"
+│
+├── TabsContent "rules"
+│   └── Card
+│       ├── CardHeader → "Rate Limit Rules by Endpoint Group"
+│       └── CardContent
+│           ├── Table
+│           │   ├── TableHeader (Group | Requests/Window | Window(s) | Burst | Status | Actions)
+│           │   └── TableBody
+│           │       └── TableRow (per config)
+│           │           ├── TableCell → group name
+│           │           ├── TableCell → requests_per_window
+│           │           ├── TableCell → window_seconds
+│           │           ├── TableCell → burst
+│           │           ├── TableCell → Badge (Custom | Default)
+│           │           └── TableCell → Button("Edit") + Button("Reset", conditional)
+│           └── EditRuleDialog (open, config, onSave, onCancel)
+│
+├── TabsContent "blocklist"
+│   └── Card
+│       ├── CardHeader → "IP Blocklist" + Button("Block IP")
+│       └── CardContent
+│           ├── SearchInput (filter blocklist entries)
+│           ├── BlocklistTable (entries, onRemove)
+│           └── AddBlockDialog (open, onAdd)
+│
+├── TabsContent "allowlist"
+│   └── Card
+│       ├── CardHeader → "IP/CIDR Allowlist" + Button("Add Exemption")
+│       └── CardContent
+│           ├── AllowlistTable (entries, onRemove)
+│           └── AddAllowDialog (open, onAdd)
+│
+├── TabsContent "live"
+│   ├── KpiCardRow
+│   │   ├── KpiCard (title="Total Hits (1h)", value)
+│   │   ├── KpiCard (title="Top Group", value)
+│   │   └── KpiCard (title="Top Source", value)
+│   ├── HitTimelineChart (data={time_series})
+│   └── div.grid
+│       ├── GroupHitsChart (data={by_group})
+│       └── TopSourcesTable (data={by_source})
+│
+└── TabsContent "events"
+    └── Card
+        ├── CardHeader → "Event Log" + Button("Export CSV")
+        └── CardContent
+            ├── EventSearchForm (onSearch)
+            │   ├── DateRangePicker (start, end)
+            │   ├── Select (group filter)
+            │   └── Input (source IP/user filter)
+            └── EventTable (events, onLoadMore)
+```
+
+#### TypeScript Props Interfaces
+
+```typescript
+interface EditRuleDialogProps {
+  open: boolean;
+  config: RateLimitGroupConfig | null;
+  onSave: (group: string, updates: RateLimitConfigUpdate) => void;
+  onCancel: () => void;
+}
+
+interface BlocklistTableProps {
+  entries: BlocklistEntry[];
+  onRemove: (entryId: string) => void;
+  loading?: boolean;
+}
+
+interface AllowlistTableProps {
+  entries: AllowlistEntry[];
+  onRemove: (entryId: string) => void;
+  loading?: boolean;
+}
+
+interface AddBlockDialogProps {
+  open: boolean;
+  onAdd: (data: { ip: string; reason?: string }) => void;
+  onOpenChange: (open: boolean) => void;
+}
+
+interface HitTimelineChartProps {
+  data: Array<{ bucket: string; count: number }>;
+  loading?: boolean;
+}
+
+interface GroupHitsChartProps {
+  data: Record<string, number>;
+}
+
+interface TopSourcesTableProps {
+  data: Array<{ source_ip: string; count: number }>;
+}
+
+interface EventSearchFormProps {
+  onSearch: (params: {
+    start?: number;
+    end?: number;
+    group?: string;
+    source?: string;
+  }) => void;
+}
+
+interface EventTableProps {
+  events: RateLimitEvent[];
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+}
+```
 
 ```tsx
 <Tabs defaultValue="rules">
@@ -419,7 +826,7 @@ class AllowlistAdd(BaseModel):
 </Tabs>
 ```
 
-### 3.5 Frontend API (`frontend/src/api/endpoints/adminRateLimits.ts`)
+### 3.8 Frontend API (`frontend/src/api/endpoints/adminRateLimits.ts`)
 
 ```typescript
 // Config
@@ -484,11 +891,144 @@ export const removeFromAllowlist = (entryId: string) =>
 
 ### Phase 3: E2E Tests (Days 7-9)
 
-8. **`frontend/e2e/admin-rate-limits.spec.ts`**: 15 tests across 4 sections.
+8. **`frontend/e2e/admin-rate-limits.spec.ts`**: 30 tests across 8 sections.
 
 ---
 
-## 5. E2E Test Plan
+## 5. Observability
+
+### 5.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|------------|------|--------|-------------|
+| `admin_rate_limit_config_update_total` | counter | `group`, `admin_sub` | Config overrides applied |
+| `admin_rate_limit_config_reset_total` | counter | `group`, `admin_sub` | Config reset to defaults |
+| `admin_blocklist_add_total` | counter | `admin_sub` | IPs added to blocklist |
+| `admin_blocklist_remove_total` | counter | `admin_sub` | IPs removed from blocklist |
+| `admin_allowlist_add_total` | counter | `admin_sub` | CIDRs added to allowlist |
+| `admin_allowlist_remove_total` | counter | `admin_sub` | CIDRs removed from allowlist |
+| `admin_live_summary_requests_total` | counter | `admin_sub` | Live dashboard queries |
+| `admin_events_export_total` | counter | `admin_sub` | CSV exports triggered |
+
+### 5.2 Logging Events
+
+| Event | Level | Fields | Trigger |
+|-------|-------|--------|---------|
+| `admin_rate_config_updated` | INFO | `group`, `old_values`, `new_values`, `admin_sub` | Config override saved |
+| `admin_rate_config_reset` | INFO | `group`, `admin_sub` | Config reset to default |
+| `admin_blocklist_ip_added` | WARN | `ip`, `reason`, `admin_sub` | IP blocked |
+| `admin_blocklist_ip_removed` | INFO | `ip`, `admin_sub` | IP unblocked |
+| `admin_allowlist_cidr_added` | INFO | `cidr`, `reason`, `admin_sub` | CIDR exempted |
+| `admin_allowlist_cidr_removed` | INFO | `cidr`, `admin_sub` | CIDR exemption removed |
+| `admin_self_block_attempt` | WARN | `ip`, `admin_sub` | Admin tried to block own IP |
+| `admin_events_export` | INFO | `start`, `end`, `event_count`, `admin_sub` | CSV export generated |
+
+### 5.3 Alerting Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Blocklist size critical | `blocklist_count > 8000` (80% of 10K limit) | MEDIUM | Notify admin to clean up stale entries |
+| Rate limit hits spike | `total_hits > 500` in 5-minute window | HIGH | Possible DDoS; auto-suggest top offenders for blocking |
+| Config override divergence | Any group override > 10x default value | LOW | Review for potential misconfiguration |
+
+---
+
+## 6. Rollout Plan
+
+### Phase 1: Backend (Feature Flag: `ADMIN_RATE_LIMITS_UI_ENABLED=false`)
+
+| Step | Action | Validation |
+|------|--------|------------|
+| 1 | Deploy `live-summary` and `events/export` endpoints | API tests pass; Swagger shows new endpoints |
+| 2 | Validate existing 10 endpoints work with new models | No regressions |
+
+### Phase 2: Frontend (Feature Flag: `ADMIN_RATE_LIMITS_UI_ENABLED=true`)
+
+| Step | Action | Validation |
+|------|--------|------------|
+| 3 | Deploy RateLimitDashboard with Rules tab only | Config table renders; edit dialog works |
+| 4 | Enable Blocklist and Allowlist tabs | CRUD operations work end-to-end |
+| 5 | Enable Live Dashboard tab | Auto-refresh shows real-time data |
+| 6 | Enable Event Log tab with export | Search and CSV export functional |
+
+### Phase 3: GA (Remove Feature Flag)
+
+| Step | Action | Validation |
+|------|--------|------------|
+| 7 | Enable for all root users | All 30 E2E tests pass |
+| 8 | Monitor live dashboard performance | No latency regression |
+| 9 | Remove feature flag | Clean deploy |
+
+### Feature Flags Table
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `ADMIN_RATE_LIMITS_UI_ENABLED` | `false` | Gates `/admin/rate-limits` route visibility |
+| `RATE_LIMIT_LIVE_REFRESH_INTERVAL` | `15000` (ms) | Auto-refresh interval for live dashboard tab |
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Latency Targets
+
+| Endpoint | Target P50 | Target P99 | Notes |
+|----------|-----------|-----------|-------|
+| GET /config | < 100ms | < 300ms | Query all configs; small result set |
+| PUT /config | < 100ms | < 250ms | Single PutItem |
+| GET /events | < 200ms | < 600ms | Range query with limit; may require pagination |
+| GET /events/export | < 2000ms | < 5000ms | Up to 10K events; CSV generation |
+| GET /top-offenders | < 150ms | < 400ms | Pre-aggregated query |
+| GET /live-summary | < 300ms | < 800ms | 1-hour event scan + aggregation |
+| GET /blocklist | < 100ms | < 300ms | Query with begins_with |
+| POST /blocklist | < 100ms | < 250ms | Single PutItem |
+| DELETE /blocklist | < 100ms | < 250ms | Single DeleteItem |
+| GET /allowlist | < 100ms | < 300ms | Query with begins_with |
+
+### 7.2 Caching Strategy
+
+- **Configs**: React Query `staleTime: 30_000` (30s). Configs rarely change; stale data is acceptable for display.
+- **Blocklist/Allowlist**: React Query `staleTime: 15_000` (15s). Mutations invalidate the cache immediately.
+- **Live Summary**: React Query `refetchInterval: 15_000` (15s auto-refresh). Stale time 0 for always-fresh data.
+- **Events**: React Query `staleTime: 10_000` (10s). Search results cached until new search submitted.
+- **Top Offenders**: React Query `staleTime: 60_000` (60s). Updated less frequently.
+- **No backend caching**: All queries hit DDB directly. Live summary aggregation is computed on each request.
+
+### 7.3 Pagination
+
+- **Event log**: Cursor-based pagination using `LastEvaluatedKey` from DDB. Default `limit=50`, max `limit=200`.
+- **Blocklist/Allowlist**: Non-paginated (expected < 10K entries). Full scan with `Limit=10000`.
+- **CSV export**: Single large query with `limit=10000`. Exported as streaming response.
+- **Live summary**: Non-paginated. Capped at 1000 recent events for aggregation.
+
+---
+
+## 8. Security Considerations
+
+### 8.1 Role-Based Access
+- All rate limit admin endpoints require ROOT role (not just ADMIN)
+- Rate limit configuration is a security-critical function — misconfiguration can enable DDoS or lock out legitimate users
+
+### 8.2 Blocklist Safety
+- Blocklist additions take effect immediately (next request from that IP is rejected)
+- Self-blocking prevention: the admin's own IP cannot be added to the blocklist
+- Blocklist entries logged with admin identity and reason
+- Maximum 10,000 blocklist entries to prevent memory exhaustion
+
+### 8.3 Config Safety
+- Minimum values enforced: `requests_per_window >= 1`, `window_seconds >= 1`
+- Maximum values enforced to prevent effectively disabling rate limits
+- Config changes take effect immediately (no restart required)
+- Reset-to-default option removes overrides without breaking the system
+
+### 8.4 Event Log Privacy
+- Event logs contain IP addresses (PII in some jurisdictions)
+- Event logs should not be cached (Cache-Control: no-store)
+- CSV exports should be transmitted over HTTPS only
+
+---
+
+## 9. E2E Test Plan
 
 **Test file**: `frontend/e2e/admin-rate-limits.spec.ts`
 
@@ -532,42 +1072,52 @@ export const removeFromAllowlist = (entryId: string) =>
 | 14 | `Live summary includes top sources` | Response `by_source` is array of `{source_ip, count}` objects |
 | 15 | `Non-root cannot access live summary` | GET as Alice -> 403 |
 
+**Section 559: Input Validation Edge Cases (4 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 16 | `Invalid IP format rejected for blocklist` | POST with `{ip: "not-an-ip"}` -> 422; validation error |
+| 17 | `Invalid CIDR format rejected for allowlist` | POST with `{cidr: "10.0.0.0"}` (no prefix) -> 422 |
+| 18 | `Config update with zero requests_per_window rejected` | PUT with `requests_per_window: 0` -> 422 |
+| 19 | `Config update with negative burst rejected` | PUT with `burst: -1` -> 422 |
+
+**Section 560: Concurrent Operations (3 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 20 | `Duplicate blocklist add is idempotent` | POST same IP twice; both return success; list has one entry for that IP |
+| 21 | `Config update during event query does not fail` | PUT config + GET events concurrently; both succeed |
+| 22 | `Blocklist remove of non-existent entry returns 404` | DELETE random entry_id -> 404 |
+
+**Section 561: Authorization Boundary Tests (4 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 23 | `Regular user cannot add to blocklist` | Alice POST blocklist -> 403 |
+| 24 | `Regular user cannot remove from allowlist` | Alice DELETE allowlist -> 403 |
+| 25 | `Regular user cannot export events` | Alice GET events/export -> 403 |
+| 26 | `Regular user cannot update config` | Alice PUT config -> 403 |
+
+**Section 562: Rate Limit Dashboard UI (4 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 27 | `Dashboard loads with Rules tab` | Root navigates to `/admin/rate-limits`; "Rules" tab active; config table visible with endpoint groups |
+| 28 | `Blocklist tab shows entries` | Click "Blocklist" tab; blocklist table visible; seeded entry present |
+| 29 | `Live dashboard shows summary` | Click "Live Dashboard" tab; KPI cards visible; "Total Hits" card present |
+| 30 | `Event log tab with search` | Click "Event Log" tab; search form visible; event table visible |
+
 ---
 
-## 6. Security Considerations
-
-### 6.1 Role-Based Access
-- All rate limit admin endpoints require ROOT role (not just ADMIN)
-- Rate limit configuration is a security-critical function — misconfiguration can enable DDoS or lock out legitimate users
-
-### 6.2 Blocklist Safety
-- Blocklist additions take effect immediately (next request from that IP is rejected)
-- Self-blocking prevention: the admin's own IP cannot be added to the blocklist
-- Blocklist entries logged with admin identity and reason
-- Maximum 10,000 blocklist entries to prevent memory exhaustion
-
-### 6.3 Config Safety
-- Minimum values enforced: `requests_per_window >= 1`, `window_seconds >= 1`
-- Maximum values enforced to prevent effectively disabling rate limits
-- Config changes take effect immediately (no restart required)
-- Reset-to-default option removes overrides without breaking the system
-
-### 6.4 Event Log Privacy
-- Event logs contain IP addresses (PII in some jurisdictions)
-- Event logs should not be cached (Cache-Control: no-store)
-- CSV exports should be transmitted over HTTPS only
-
----
-
-## 7. Files to Create
+## 10. Files to Create
 
 | File | Purpose |
 |------|---------|
 | `frontend/src/api/endpoints/adminRateLimits.ts` | API wrappers |
 | `frontend/src/pages/admin/rateLimits/RateLimitDashboard.tsx` | Rate limit admin page |
-| `frontend/e2e/admin-rate-limits.spec.ts` | E2E tests (15 tests, sections 555-558) |
+| `frontend/e2e/admin-rate-limits.spec.ts` | E2E tests (30 tests, sections 555-562) |
 
-## 8. Files to Modify
+## 11. Files to Modify
 
 | File | Change |
 |------|--------|
@@ -577,7 +1127,7 @@ export const removeFromAllowlist = (entryId: string) =>
 | `frontend/src/App.tsx` | Add `/admin/rate-limits` route |
 | `frontend/src/components/layout/Sidebar.tsx` | Add "Rate Limits" admin nav link |
 
-## 9. Acceptance Criteria
+## 12. Acceptance Criteria
 
 1. Rate limit rules displayed per endpoint group with current values and override status
 2. Root can edit rules (requests per window, window duration, burst) with immediate effect
@@ -588,4 +1138,4 @@ export const removeFromAllowlist = (entryId: string) =>
 7. Event export generates valid CSV
 8. Top offenders ranked by hit count for configurable time window
 9. All endpoints require ROOT role (403 for non-root)
-10. All 15 E2E tests pass in `frontend/e2e/admin-rate-limits.spec.ts`
+10. All 30 E2E tests pass in `frontend/e2e/admin-rate-limits.spec.ts`

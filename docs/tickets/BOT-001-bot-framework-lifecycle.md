@@ -260,7 +260,7 @@ def evaluate_triggers(*, bot: dict, conversation_id: str,
 | POST | `/ui/bots/{bot_id}/avatar/presign` | `require_ui_session` | Presign S3 upload for bot avatar |
 | GET | `/ui/bots/{bot_id}/stats` | `require_ui_session` | Bot message count + last active |
 
-**Request models** (`app/routers/chat_bot.py`):
+**Key request models**:
 
 ```python
 class CreateBotIn(BaseModel):
@@ -270,41 +270,15 @@ class CreateBotIn(BaseModel):
     personality: Literal["friendly", "professional", "casual", "custom"] = "friendly"
     custom_personality: Optional[str] = Field(default=None, max_length=2000)
 
-class UpdateBotIn(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=50)
-    avatar_url: Optional[str] = None
-    description: Optional[str] = Field(default=None, max_length=500)
-    personality: Optional[Literal["friendly", "professional", "casual", "custom"]] = None
-    custom_personality: Optional[str] = Field(default=None, max_length=2000)
-    trigger_config: Optional[Dict[str, Any]] = None
-
 class UpdateBotStatusIn(BaseModel):
     status: Literal["active", "paused", "disabled"]
 
 class AssignBotIn(BaseModel):
     target_type: Literal["conversation", "broadcast", "all_dms", "all_groups", "all_broadcasts"]
     target_id: Optional[str] = None  # Required for conversation/broadcast
-
-class BotOut(BaseModel):
-    bot_id: str
-    creator_id: str
-    name: str
-    avatar_url: Optional[str] = None
-    description: Optional[str] = None
-    personality: str
-    custom_personality: Optional[str] = None
-    status: str
-    trigger_config: Optional[Dict[str, Any]] = None
-    created_at: int
-    updated_at: int
-    message_count: int = 0
-
-class BotAssignmentOut(BaseModel):
-    bot_id: str
-    target_type: str
-    target_id: Optional[str] = None
-    created_at: int
 ```
+
+Additional models: `UpdateBotIn` (all fields optional + `trigger_config`). Response models: `BotOut` (mirrors DDB record fields), `BotAssignmentOut` (bot_id, target_type, target_id, created_at).
 
 Register in `app/main.py`:
 
@@ -554,3 +528,578 @@ let conversationId: string;
 | BOT-002 (Templates) | Bot framework for template storage and trigger evaluation |
 | BOT-003 (Content Promotion) | Bot framework for content delivery and scheduling |
 | BOT-004 (AI Chat) | Bot framework for AI bot configuration and message routing |
+
+---
+
+## 10. Architecture & Data Flow
+
+```
+                    Bot Framework Overview
+  ┌───────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │ Creator Config │────>│ POST /ui/bots      │────>│  DynamoDB     │
+  │ UI (BotPage)   │     │ (bot_router.py)    │     │  bots table   │
+  │                │     │                    │     │               │
+  │ name, avatar,  │     │ create_bot()       │     │ PK=BOT#id    │
+  │ trigger_config,│     │ validate_config()  │     │ SK=META       │
+  │ assignment     │     │ store to DDB       │     │               │
+  └───────────────┘     └────────────────────┘     └──────────────┘
+
+                    Bot Trigger Evaluation Flow
+  ┌───────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │ Incoming Event │────>│ Trigger Evaluator  │────>│ Match?        │
+  │                │     │                    │     │               │
+  │ message_sent   │     │ For each bot:      │     │ Yes → execute │
+  │ user_joined    │     │  evaluate triggers │     │   bot action  │
+  │ subscription   │     │  against event     │     │               │
+  │ _created       │     │  context           │     │ No → skip     │
+  │ schedule_tick  │     │                    │     │               │
+  └───────────────┘     └────────────────────┘     └──────────────┘
+                                │
+                                v
+  ┌───────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │ Bot Action     │────>│ Action Executor    │────>│ Messaging     │
+  │ send_message   │     │                    │     │ send_text_msg │
+  │ send_template  │     │ Render template    │     │               │
+  │ ai_respond     │     │ Resolve variables  │     │ SSE events    │
+  │ api_webhook    │     │ Execute action     │     │ to recipients │
+  └───────────────┘     └────────────────────┘     └──────────────┘
+```
+
+---
+
+## 11. Observability
+
+### 11.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `bot_created_total` | Counter | `creator_id` | Number of bots created |
+| `bot_trigger_evaluated_total` | Counter | `bot_id`, `trigger_type` | Trigger evaluations performed |
+| `bot_trigger_matched_total` | Counter | `bot_id`, `trigger_type` | Triggers that matched and fired |
+| `bot_action_executed_total` | Counter | `bot_id`, `action_type`, `status` | Actions executed (success/fail) |
+| `bot_action_latency_ms` | Histogram | `bot_id`, `action_type` | Time to execute a bot action |
+| `bot_status_transitions_total` | Counter | `from_status`, `to_status` | Bot status changes |
+| `bot_assignment_count` | Gauge | `bot_id` | Number of active assignments per bot |
+
+### 11.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Bot created | INFO | `bot_id`, `creator_id`, `name`, `trigger_count` |
+| Bot status changed | INFO | `bot_id`, `from_status`, `to_status`, `reason` |
+| Trigger evaluated (matched) | DEBUG | `bot_id`, `trigger_type`, `event_type`, `context` |
+| Trigger evaluated (no match) | DEBUG | `bot_id`, `trigger_type`, `event_type` |
+| Action executed | INFO | `bot_id`, `action_type`, `target_conversation`, `duration_ms` |
+| Action failed | ERROR | `bot_id`, `action_type`, `error`, `target_conversation` |
+| Bot assigned to conversation | INFO | `bot_id`, `conversation_id`, `assigned_by` |
+| Bot unassigned from conversation | INFO | `bot_id`, `conversation_id`, `reason` |
+
+### 11.3 Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Bot action failure rate high | > 10% failures for any bot in 1 hour | High |
+| Trigger evaluation backlog | > 500 pending evaluations | Medium |
+| Bot stuck in "starting" state | > 5 minutes in starting state | Medium |
+| Excessive bot assignments | > 1000 active assignments for one bot | Low |
+
+---
+
+## 12. Rollout Plan
+
+### 12.1 Feature Flag
+
+```python
+# app/core/settings.py
+bot_framework_enabled: bool = os.environ.get("BOT_FRAMEWORK_ENABLED", "true").lower() == "true"
+```
+
+### 12.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: CRUD only | Bot creation, config, assignment without trigger execution | 2 days | Unit tests pass; UI functional |
+| Phase 2: Manual triggers | Trigger evaluation on manual API call (no auto-fire) | 2 days | Triggers evaluate correctly |
+| Phase 3: Auto triggers | Background trigger evaluation on real events | 2 days | E2E tests pass; no excessive firing |
+| Phase 4: GA | Full bot lifecycle with all trigger types | Permanent | All tests pass; monitoring clean |
+
+---
+
+## 13. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Trigger evaluation per event | < 50ms | Cache active bot configs; evaluate in-memory |
+| Bot CRUD operations | < 100ms p95 | Single DDB put/get; no joins |
+| Listing bots for creator | < 100ms | GSI query on creator_id; paginated |
+| Assignment scan | < 200ms | GSI query on bot_id for assigned conversations |
+| Concurrent trigger fires | Handle 50+ events/sec | Async evaluation; rate limit per bot to 10 fires/sec |
+| Bot config cache TTL | 60 seconds | In-process cache; invalidated on config update |
+
+---
+
+## 14. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|----------|-------------|------------|---------------|-----------------|
+| Bot not found | 404 | `bot_not_found` | "Bot not found" | Redirect to bot list |
+| Bot name already exists | 409 | `name_conflict` | "A bot with this name already exists" | Suggest alternative name |
+| Invalid trigger config | 422 | `invalid_trigger` | "Invalid trigger configuration" | Show inline form errors |
+| Max bots per creator exceeded | 400 | `bot_limit` | "Maximum 20 bots per creator" | Show limit reached |
+| Assignment to non-existent conversation | 404 | `conversation_not_found` | "Conversation not found" | Show error; refresh list |
+| Bot already assigned to conversation | 409 | `already_assigned` | "Bot is already assigned to this conversation" | No-op; show info toast |
+| Trigger evaluation error | 500 (internal) | `trigger_error` | Logged internally | Skip trigger; continue with others |
+| Action execution timeout | 504 | `action_timeout` | "Bot action timed out" | Retry once; log failure |
+
+---
+
+## 15. API Request/Response Examples
+
+**Create a bot**:
+
+```
+POST /ui/bots
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "name": "Welcome Bot",
+  "description": "Sends welcome messages to new subscribers",
+  "avatar_url": "/mock/s3/avatars/welcome-bot.png",
+  "triggers": [
+    {
+      "type": "subscription_created",
+      "conditions": {"plan_type": "any"}
+    }
+  ],
+  "actions": [
+    {
+      "type": "send_template",
+      "template_id": "tpl_welcome_001"
+    }
+  ]
+}
+```
+
+**Response (201)**:
+```json
+{
+  "bot_id": "bot_abc123",
+  "name": "Welcome Bot",
+  "description": "Sends welcome messages to new subscribers",
+  "status": "active",
+  "trigger_count": 1,
+  "action_count": 1,
+  "assignment_count": 0,
+  "created_at": 1748520100,
+  "creator_id": "alice@test.local"
+}
+```
+
+**Assign bot to conversation**:
+
+```
+POST /ui/bots/bot_abc123/assignments
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "conversation_id": "conv_xyz789"
+}
+```
+
+**Response (201)**:
+```json
+{
+  "assignment_id": "asgn_d4e5f6",
+  "bot_id": "bot_abc123",
+  "conversation_id": "conv_xyz789",
+  "status": "active",
+  "assigned_at": 1748520200
+}
+```
+
+**Update bot status**:
+
+```
+PATCH /ui/bots/bot_abc123
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "status": "paused"
+}
+```
+
+**Response (200)**:
+```json
+{
+  "bot_id": "bot_abc123",
+  "status": "paused",
+  "previous_status": "active",
+  "updated_at": 1748520300
+}
+```
+
+---
+
+## 16. Architecture Diagram
+
+```
+                       Bot Framework — System Architecture
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                            Platform Frontend                                │
+  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐  │
+  │  │ BotManagerPage    │  │ BotEditorDialog  │  │ BotAssignmentsDialog     │  │
+  │  │                   │  │                  │  │                          │  │
+  │  │ - bot cards       │  │ - name/avatar    │  │ - conversation picker    │  │
+  │  │ - status badges   │  │ - personality    │  │ - wildcard scopes        │  │
+  │  │ - pause/resume    │  │ - trigger config │  │ - assignment list        │  │
+  │  │ - create/delete   │  │ - custom prompt  │  │ - remove assignment      │  │
+  │  └────────┬─────────┘  └────────┬─────────┘  └─────────────┬────────────┘  │
+  │           │                     │                           │               │
+  │  ┌────────┴─────────────────────┴───────────────────────────┴────────────┐  │
+  │  │                     React Query + Axios Client                        │  │
+  │  │    createBot() | listBots() | updateBot() | assignBot() | deleteBot() │  │
+  │  └───────────────────────────────────┬──────────────────────────────────┘  │
+  └──────────────────────────────────────┼──────────────────────────────────────┘
+                                         │ HTTP (CSRF + cookies)
+  ┌──────────────────────────────────────┼──────────────────────────────────────┐
+  │                           FastAPI Backend                                   │
+  │  ┌───────────────────────────────────┴──────────────────────────────────┐  │
+  │  │              app/routers/chat_bot.py                                  │  │
+  │  │   POST /bots    GET /bots    PUT /bots/{id}    DELETE /bots/{id}     │  │
+  │  │   PATCH /bots/{id}/status    POST /bots/{id}/assignments             │  │
+  │  │   GET /bots/{id}/assignments DELETE /bots/{id}/assignments/{sk}      │  │
+  │  │   POST /bots/{id}/avatar/presign    GET /bots/{id}/stats             │  │
+  │  └───────────────────────────────────┬──────────────────────────────────┘  │
+  │                                      │                                     │
+  │  ┌───────────────────────────────────┴──────────────────────────────────┐  │
+  │  │              app/services/chat_bot.py (Business Logic)                │  │
+  │  │                                                                       │  │
+  │  │   create_bot()    get_bot()    list_bots()    update_bot()            │  │
+  │  │   update_bot_status()    delete_bot()                                 │  │
+  │  │   assign_bot()    unassign_bot()    list_assignments()                │  │
+  │  │   get_bots_for_conversation()                                         │  │
+  │  │   send_bot_message()    evaluate_triggers()                           │  │
+  │  └───────────────────────────────────┬──────────────────────────────────┘  │
+  │                                      │                                     │
+  │  ┌───────────────────┐  ┌────────────┴──────┐  ┌──────────────────────┐  │
+  │  │ Trigger Evaluator │  │ DynamoDB Tables   │  │ Messaging Pipeline   │  │
+  │  │                   │  │                   │  │                      │  │
+  │  │ keyword match     │  │ chat_bots         │  │ send_text_message()  │  │
+  │  │ first_message     │  │ PK=CREATOR#id     │  │ _message_out_from_  │  │
+  │  │ @mention          │  │ SK=BOT#bot_id     │  │   item()             │  │
+  │  │ idle timeout      │  │                   │  │                      │  │
+  │  │ all_messages      │  │ bot_assignments   │  │ SSE events           │  │
+  │  │ cron scheduled    │  │ PK=BOT#bot_id     │  │ sender_type="bot"    │  │
+  │  │                   │  │ SK=CONV#/SCOPE#   │  │ bot_name, bot_avatar │  │
+  │  └───────────────────┘  └───────────────────┘  └──────────────────────┘  │
+  │                                                                            │
+  │  Message Processing Pipeline (on incoming message):                        │
+  │  ┌────────────────────────────────────────────────────────────────────────┐│
+  │  │  1. Incoming message received via POST /messages                       ││
+  │  │  2. get_bots_for_conversation(conversation_id)                         ││
+  │  │     └─ GSI1 query on bot_assignments + wildcard scope check            ││
+  │  │  3. For each active bot:                                               ││
+  │  │     └─ evaluate_triggers(bot, conversation_id, incoming_message)       ││
+  │  │        └─ Walk priority_order; check keyword/mention/first_msg/etc.    ││
+  │  │  4. If trigger matched → template_id returned                          ││
+  │  │  5. send_bot_message(bot_id, conversation_id, rendered_text)           ││
+  │  │     └─ sender_type="bot", bot_id, bot_name, bot_avatar_url            ││
+  │  │  6. SSE event pushed to conversation participants                      ││
+  │  └────────────────────────────────────────────────────────────────────────┘│
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 17. DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | GSI | Example |
+|---|---------------|-------|---------------|-----|---------|
+| 1 | Create bot | `chat_bots` | `PK=CREATOR#{creator_id}, SK=BOT#{bot_id}` | -- | `put_item` with status=active |
+| 2 | Get bot by bot_id | `chat_bots` | `GSI1PK=BOT#{bot_id}, GSI1SK=META` | GSI1 | Lookup bot without knowing creator |
+| 3 | List bots for creator | `chat_bots` | `PK=CREATOR#{creator_id}, SK begins_with("BOT#")` | -- | All bots for the creator |
+| 4 | Count bots for creator | `chat_bots` | `PK=CREATOR#{creator_id}, SK begins_with("BOT#")` + Select=COUNT | -- | Enforce max 10 bots limit |
+| 5 | Update bot config | `chat_bots` | `PK=CREATOR#{creator_id}, SK=BOT#{bot_id}` | -- | `update_item` with ConditionExpression on ownership |
+| 6 | Update bot status | `chat_bots` | `PK=CREATOR#{creator_id}, SK=BOT#{bot_id}` | -- | `update_item` status + updated_at |
+| 7 | Delete bot | `chat_bots` | `PK=CREATOR#{creator_id}, SK=BOT#{bot_id}` | -- | `delete_item` |
+| 8 | Assign bot to conversation | `bot_assignments` | `PK=BOT#{bot_id}, SK=CONV#{conversation_id}` | -- | `put_item` |
+| 9 | Assign bot to wildcard scope | `bot_assignments` | `PK=BOT#{bot_id}, SK=SCOPE#ALL_DMS` | -- | `put_item` |
+| 10 | List assignments for bot | `bot_assignments` | `PK=BOT#{bot_id}, SK begins_with("CONV#" or "SCOPE#" or "BCAST#")` | -- | All assignments |
+| 11 | Find bots for conversation | `bot_assignments` | `GSI1PK=CONV#{conversation_id}` | GSI1 | Which bots are assigned to this conversation |
+| 12 | Delete all assignments for bot | `bot_assignments` | `PK=BOT#{bot_id}` (query + batch delete) | -- | Cascade delete on bot deletion |
+| 13 | Increment bot message count | `chat_bots` | `PK=CREATOR#{creator_id}, SK=BOT#{bot_id}` | -- | `update_item` ADD message_count 1 |
+
+**Example DynamoDB item (ChatBots)**:
+
+```json
+{
+  "pk": {"S": "CREATOR#alice_sub_123"},
+  "sk": {"S": "BOT#b1c2d3e4f5a6"},
+  "bot_id": {"S": "b1c2d3e4f5a6"},
+  "creator_id": {"S": "alice_sub_123"},
+  "name": {"S": "Sales Bot"},
+  "avatar_url": {"S": "/mock/s3/avatars/sales-bot.png"},
+  "description": {"S": "Handles pricing questions and upsells premium features"},
+  "personality": {"S": "professional"},
+  "status": {"S": "active"},
+  "trigger_config": {"M": {
+    "triggers": {"L": [
+      {"M": {"type": {"S": "keyword"}, "keywords": {"L": [{"S": "price"}, {"S": "cost"}, {"S": "how much"}]}, "response_template_id": {"S": "tpl_pricing"}}},
+      {"M": {"type": {"S": "first_message"}, "response_template_id": {"S": "tpl_welcome"}}}
+    ]},
+    "priority_order": {"L": [{"S": "keyword"}, {"S": "first_message"}]}
+  }},
+  "created_at": {"N": "1748520100"},
+  "updated_at": {"N": "1748520100"},
+  "message_count": {"N": "1247"},
+  "GSI1PK": {"S": "BOT#b1c2d3e4f5a6"},
+  "GSI1SK": {"S": "META"}
+}
+```
+
+**Example DynamoDB item (BotAssignments)**:
+
+```json
+{
+  "pk": {"S": "BOT#b1c2d3e4f5a6"},
+  "sk": {"S": "CONV#conv_abc123"},
+  "bot_id": {"S": "b1c2d3e4f5a6"},
+  "creator_id": {"S": "alice_sub_123"},
+  "target_type": {"S": "conversation"},
+  "target_id": {"S": "conv_abc123"},
+  "created_at": {"N": "1748520200"},
+  "GSI1PK": {"S": "CONV#conv_abc123"},
+  "GSI1SK": {"S": "BOT#b1c2d3e4f5a6"}
+}
+```
+
+---
+
+## 18. Pydantic Models
+
+```python
+# In app/models.py
+
+from pydantic import BaseModel, Field, model_validator
+from typing import Optional, List, Dict, Any, Literal
+
+
+class CreateBotIn(BaseModel):
+    """Request model for creating a chat bot."""
+    name: str = Field(..., min_length=1, max_length=50)
+    avatar_url: Optional[str] = Field(
+        default=None, max_length=2048,
+        description="S3 URL for bot avatar image"
+    )
+    description: Optional[str] = Field(
+        default=None, max_length=500,
+        description="Bot description visible to users"
+    )
+    personality: Literal["friendly", "professional", "casual", "custom"] = Field(
+        default="friendly",
+        description="Personality preset for bot tone"
+    )
+    custom_personality: Optional[str] = Field(
+        default=None, max_length=2000,
+        description="Free-text personality instructions (only when personality=custom)"
+    )
+
+    @model_validator(mode="after")
+    def validate_custom_personality(self):
+        if self.personality == "custom" and not self.custom_personality:
+            raise ValueError("custom_personality is required when personality is 'custom'")
+        if self.personality != "custom" and self.custom_personality:
+            raise ValueError("custom_personality should only be set when personality is 'custom'")
+        return self
+
+
+class UpdateBotIn(BaseModel):
+    """Request model for updating a chat bot."""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    avatar_url: Optional[str] = Field(default=None, max_length=2048)
+    description: Optional[str] = Field(default=None, max_length=500)
+    personality: Optional[Literal["friendly", "professional", "casual", "custom"]] = None
+    custom_personality: Optional[str] = Field(default=None, max_length=2000)
+    trigger_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Trigger rules configuration"
+    )
+
+
+class UpdateBotStatusIn(BaseModel):
+    """Request model for changing bot status."""
+    status: Literal["active", "paused", "disabled"]
+
+
+class AssignBotIn(BaseModel):
+    """Request model for assigning a bot to a target."""
+    target_type: Literal["conversation", "broadcast", "all_dms", "all_groups", "all_broadcasts"]
+    target_id: Optional[str] = Field(
+        default=None, max_length=100,
+        description="Conversation or broadcast ID (required for conversation/broadcast types)"
+    )
+
+    @model_validator(mode="after")
+    def validate_target_id(self):
+        if self.target_type in ("conversation", "broadcast") and not self.target_id:
+            raise ValueError("target_id is required for conversation and broadcast assignments")
+        return self
+
+
+class BotTriggerRule(BaseModel):
+    """A single trigger rule definition."""
+    type: Literal["keyword", "first_message", "mention", "all_messages", "idle", "scheduled"]
+    keywords: Optional[List[str]] = Field(default=None, max_length=50)
+    response_template_id: Optional[str] = Field(default=None, max_length=100)
+    idle_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+    cron: Optional[str] = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_trigger_fields(self):
+        if self.type == "keyword" and not self.keywords:
+            raise ValueError("keywords list is required for keyword triggers")
+        if self.type == "idle" and self.idle_minutes is None:
+            raise ValueError("idle_minutes is required for idle triggers")
+        if self.type == "scheduled" and not self.cron:
+            raise ValueError("cron expression is required for scheduled triggers")
+        return self
+
+
+class BotTriggerConfigIn(BaseModel):
+    """Trigger configuration for a bot."""
+    triggers: List[BotTriggerRule] = Field(..., max_length=20)
+    priority_order: List[str] = Field(
+        default_factory=lambda: ["keyword", "mention", "first_message", "idle", "all_messages"]
+    )
+
+
+class BotOut(BaseModel):
+    """Response model for a chat bot."""
+    bot_id: str
+    creator_id: str
+    name: str
+    avatar_url: Optional[str] = None
+    description: Optional[str] = None
+    personality: str = "friendly"
+    custom_personality: Optional[str] = None
+    status: str = "active"
+    trigger_config: Optional[Dict[str, Any]] = None
+    created_at: int = 0
+    updated_at: int = 0
+    message_count: int = 0
+
+
+class BotAssignmentOut(BaseModel):
+    """Response model for a bot assignment."""
+    bot_id: str
+    target_type: str
+    target_id: Optional[str] = None
+    created_at: int = 0
+
+
+class BotStatsOut(BaseModel):
+    """Response model for bot statistics."""
+    message_count: int = 0
+    last_active_at: Optional[int] = None
+    assignment_count: int = 0
+    trigger_match_count_24h: int = 0
+```
+
+---
+
+## 19. Frontend Component Tree
+
+```
+/bots — BotManagerPage
+├── PageHeader
+│   ├── <h1> "Chat Bots"
+│   ├── BotCountBadge ("3 bots")
+│   └── CreateBotButton → opens BotEditorDialog (mode="create")
+├── BotGrid
+│   └── BotCard (one per bot)
+│       ├── AvatarDisplay (bot avatar or fallback robot icon)
+│       ├── BotName (<h3>)
+│       ├── Description (truncated to 2 lines)
+│       ├── StatusBadge
+│       │   ├── green dot + "Active" (status=active)
+│       │   ├── yellow dot + "Paused" (status=paused)
+│       │   └── gray dot + "Disabled" (status=disabled)
+│       ├── PersonalityBadge (friendly / professional / casual / custom)
+│       ├── StatsRow
+│       │   ├── MessageCountIcon + count
+│       │   ├── AssignmentCountIcon + count
+│       │   └── LastActiveTimestamp
+│       ├── TriggerSummary (e.g., "3 triggers: keyword, first_message, idle")
+│       └── ActionsRow
+│           ├── EditButton → opens BotEditorDialog (mode="edit")
+│           ├── AssignmentsButton → opens BotAssignmentsDialog
+│           ├── PauseResumeButton (toggles active <-> paused)
+│           └── DeleteButton (with confirmation dialog)
+├── EmptyState (if no bots)
+│   ├── Robot illustration
+│   ├── "No bots yet"
+│   └── "Create your first bot" button
+└── BotLimitWarning (if approaching 10 bot limit)
+
+BotEditorDialog (shared dialog for create + edit)
+├── DialogHeader ("New Bot" or "Edit Bot")
+├── IdentitySection
+│   ├── AvatarUpload (click to upload, drag-and-drop, presigned S3)
+│   ├── NameInput (<Input> max 50 chars)
+│   └── DescriptionTextarea (<Textarea> max 500 chars)
+├── PersonalitySection
+│   ├── PersonalityRadioGroup
+│   │   ├── Radio: "Friendly" (warm, approachable tone)
+│   │   ├── Radio: "Professional" (formal, business tone)
+│   │   ├── Radio: "Casual" (laid-back, conversational)
+│   │   └── Radio: "Custom" (free-text instructions)
+│   └── CustomPersonalityTextarea (visible only when custom selected)
+├── TriggerConfigSection
+│   ├── TriggerList
+│   │   └── TriggerRow (one per trigger)
+│   │       ├── TypeSelect (keyword / first_message / mention / all_messages / idle / scheduled)
+│   │       ├── KeywordsInput (visible for keyword type, comma-separated)
+│   │       ├── IdleMinutesInput (visible for idle type)
+│   │       ├── CronInput (visible for scheduled type)
+│   │       ├── TemplateSelect (dropdown of bot templates, links to BOT-002)
+│   │       └── RemoveTriggerButton
+│   ├── AddTriggerButton
+│   └── PriorityOrderSortable (drag to reorder trigger priority)
+├── SaveButton
+└── CancelButton
+
+BotAssignmentsDialog
+├── DialogHeader ("Bot Assignments — {bot_name}")
+├── CurrentAssignmentsList
+│   └── AssignmentRow (one per assignment)
+│       ├── TargetIcon (conversation icon / broadcast icon / wildcard icon)
+│       ├── TargetLabel
+│       │   ├── Conversation: conversation name + participant count
+│       │   ├── Broadcast: broadcast session name
+│       │   └── Wildcard: "All DMs" / "All Groups" / "All Broadcasts"
+│       ├── CreatedAtTimestamp
+│       └── RemoveButton (X icon)
+├── AddAssignmentSection
+│   ├── TargetTypeSelect
+│   │   ├── Option: "Specific Conversation"
+│   │   ├── Option: "Specific Broadcast"
+│   │   ├── Option: "All DMs" (wildcard)
+│   │   ├── Option: "All Groups" (wildcard)
+│   │   └── Option: "All Broadcasts" (wildcard)
+│   ├── ConversationPicker (visible for specific conversation)
+│   │   ├── SearchInput (filter conversations by name)
+│   │   └── ConversationList (scrollable, selectable)
+│   └── AssignButton
+└── CloseButton
+
+MessageBubble enhancement (for bot messages)
+├── BotAvatarDisplay (instead of user avatar when sender_type="bot")
+├── BotNameRow
+│   ├── BotName text
+│   └── Badge variant="outline" → "Bot"
+├── MessageContent (standard text/image rendering)
+└── BotBackground (slightly different tint: bg-muted/50)
+```

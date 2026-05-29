@@ -68,9 +68,79 @@ Today, platform fees are applied inconsistently:
 
 ## 3. Technical Design
 
-### 3.1 Data Model
+### 3.1 Architecture & Data Flow
 
-#### 3.1.1 Commission Rate Configuration (Billing Table)
+```
+Commission Rate Retrieval Flow
+──────────────────────────────
+
+  ┌──────────────┐     GET /commission/rates     ┌──────────────────┐
+  │  Creator UI  │ ─────────────────────────────▶ │  platform_       │
+  │ (Commission  │                                │  commission.py   │
+  │   Page)      │ ◀───────────────────────────── │  router          │
+  └──────────────┘     CommissionRatesOut          └────────┬─────────┘
+                                                           │
+                                                           ▼
+                                                  ┌──────────────────┐
+                                                  │  platform_       │
+                                                  │  commission.py   │
+                                                  │  service         │
+                                                  └────────┬─────────┘
+                                                           │
+                                    ┌──────────────────────┼──────────────────────┐
+                                    ▼                      ▼                      ▼
+                           ┌──────────────┐    ┌────────────────┐    ┌──────────────────┐
+                           │ Billing DDB  │    │ Billing DDB    │    │ Billing DDB      │
+                           │ PK=PLATFORM  │    │ PK=PLATFORM    │    │ PK=USER#{uid}    │
+                           │ SK=COMMISSION │    │ SK=COMMISSION_ │    │ SK=LEDGER#...    │
+                           │   _RATES     │    │   AUDIT#...    │    │ (meta.gross_*)   │
+                           └──────────────┘    └────────────────┘    └──────────────────┘
+
+
+Fee Calculation Integration Flow
+────────────────────────────────
+
+  User pays $10 tip on content
+       │
+       ▼
+  ┌──────────────────┐
+  │ tip_ledger.py    │
+  │ (or unlock /     │
+  │  subscription)   │
+  └────────┬─────────┘
+           │ calls calculate_commission("tips", 1000)
+           ▼
+  ┌──────────────────┐
+  │ platform_        │  ← reads rate from DDB (PK=PLATFORM, SK=COMMISSION_RATES)
+  │ commission.py    │
+  │ service          │  returns {gross: 1000, fee: 200, net: 800, rate: 20}
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │ billing_shared   │  new_ledger_entry(amount_cents=800,
+  │ .py              │    meta={gross_amount_cents: 1000,
+  │                  │          platform_fee_cents: 200,
+  │                  │          platform_fee_pct: 20})
+  └──────────────────┘
+```
+
+### 3.2 Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table | PK | SK / GSI | Operation | Example |
+|---|---------------|-------|----|---------|-----------|---------| 
+| 1 | Get current rates | billing | `PLATFORM` | `COMMISSION_RATES` | GetItem | `get_commission_rates()` → returns rates map |
+| 2 | Update rates | billing | `PLATFORM` | `COMMISSION_RATES` | PutItem | `update_commission_rates(admin_id, new_rates)` → overwrites |
+| 3 | Write audit entry | billing | `PLATFORM` | `COMMISSION_AUDIT#{ts}#{id}` | PutItem | Logged on every rate change |
+| 4 | List audit log | billing | `PLATFORM` | `begins_with("COMMISSION_AUDIT#")` | Query(SIF=False) | `get_rate_audit_log(limit=50)` |
+| 5 | Get user ledger with meta | billing | `USER#{user_id}` | `begins_with("LEDGER#")` | Query(SIF=False) | Paginated; filter `meta.gross_amount_cents exists` |
+| 6 | Aggregate user commissions | billing | `USER#{user_id}` | `begins_with("LEDGER#")` | Query + filter | Sum meta.gross/fee/net for date range |
+| 7 | Seed default rates | billing | `PLATFORM` | `COMMISSION_RATES` | PutItem(if_not_exists) | Called on first startup if no rates exist |
+| 8 | Get single audit entry | billing | `PLATFORM` | `COMMISSION_AUDIT#{ts}#{id}` | GetItem | Admin drill-down on specific rate change |
+
+### 3.3 Data Model
+
+#### 3.3.1 Commission Rate Configuration (Billing Table)
 
 **PK**: `PLATFORM`, **SK**: `COMMISSION_RATES`
 
@@ -93,7 +163,7 @@ Default rates:
 }
 ```
 
-#### 3.1.2 Commission Rate Audit Log (Billing Table)
+#### 3.3.2 Commission Rate Audit Log (Billing Table)
 
 **PK**: `PLATFORM`, **SK**: `COMMISSION_AUDIT#{timestamp}#{audit_id}`
 
@@ -106,7 +176,7 @@ Default rates:
 | `changed_by` | S | Admin user ID |
 | `created_at` | N | Timestamp |
 
-#### 3.1.3 Enhanced Ledger Entry Meta
+#### 3.3.3 Enhanced Ledger Entry Meta
 
 Existing ledger entries gain three new fields in `meta`:
 
@@ -121,7 +191,7 @@ meta = {
 
 The `amount_cents` on the ledger entry remains the net (creator's share). The gross and fee are in `meta` for display purposes.
 
-### 3.2 Backend Service
+### 3.4 Backend Service
 
 **New file**: `app/services/platform_commission.py` (~250 lines)
 
@@ -189,11 +259,11 @@ def get_rate_audit_log(limit: int = 50) -> list:
     ...
 ```
 
-### 3.3 Backend Router
+### 3.5 Backend Router
 
 **New file**: `app/routers/platform_commission.py` (~120 lines)
 
-### 3.4 Router Endpoints
+### 3.6 Router Endpoints
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -202,7 +272,134 @@ def get_rate_audit_log(limit: int = 50) -> list:
 | `GET` | `/ui/commission/rates/audit` | `require_admin_session` | Get rate change audit log |
 | `GET` | `/ui/commission/summary` | `require_ui_session` | Get commission summary for authenticated creator |
 
-### 3.5 Request/Response Models
+### 3.7 API Request/Response Examples
+
+#### GET /ui/commission/rates
+
+**Request**:
+```http
+GET /ui/commission/rates HTTP/1.1
+Cookie: ui_session=...; ui_access_token=...
+```
+
+**Response** (200):
+```json
+{
+  "rates": {
+    "tips": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0},
+    "unlocks": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0},
+    "subscriptions": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0},
+    "shop_sales": {"rate_pct": 15, "min_fee_cents": 0, "max_fee_cents": 0},
+    "vod_purchases": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0},
+    "call_revenue": {"rate_pct": 25, "min_fee_cents": 0, "max_fee_cents": 0}
+  },
+  "updated_at": 1748534400,
+  "updated_by": "root.admin@testdev.local"
+}
+```
+
+#### PUT /ui/commission/rates
+
+**Request**:
+```http
+PUT /ui/commission/rates HTTP/1.1
+Cookie: ui_session=...; ui_access_token=...
+x-csrf-token: <csrf_token>
+Content-Type: application/json
+
+{
+  "rates": {
+    "tips": {"rate_pct": 18, "min_fee_cents": 10, "max_fee_cents": 5000},
+    "unlocks": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0}
+  }
+}
+```
+
+**Response** (200):
+```json
+{
+  "rates": {
+    "tips": {"rate_pct": 18, "min_fee_cents": 10, "max_fee_cents": 5000},
+    "unlocks": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0},
+    "subscriptions": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0},
+    "shop_sales": {"rate_pct": 15, "min_fee_cents": 0, "max_fee_cents": 0},
+    "vod_purchases": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0},
+    "call_revenue": {"rate_pct": 25, "min_fee_cents": 0, "max_fee_cents": 0}
+  },
+  "updated_at": 1748534500,
+  "updated_by": "root.admin@testdev.local"
+}
+```
+
+#### GET /ui/commission/rates/audit
+
+**Request**:
+```http
+GET /ui/commission/rates/audit?limit=10 HTTP/1.1
+Cookie: ui_session=...; ui_access_token=...
+```
+
+**Response** (200):
+```json
+{
+  "items": [
+    {
+      "audit_id": "aud_abc123",
+      "action": "rates_updated",
+      "changed_by": "root.admin@testdev.local",
+      "created_at": 1748534500,
+      "previous_rates": {"tips": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0}},
+      "new_rates": {"tips": {"rate_pct": 18, "min_fee_cents": 10, "max_fee_cents": 5000}}
+    }
+  ]
+}
+```
+
+#### GET /ui/commission/summary
+
+**Request**:
+```http
+GET /ui/commission/summary?from_ts=1746057600&to_ts=1748736000 HTTP/1.1
+Cookie: ui_session=...; ui_access_token=...
+```
+
+**Response** (200):
+```json
+{
+  "total_gross_cents": 150000,
+  "total_fee_cents": 30000,
+  "total_net_cents": 120000,
+  "breakdown": [
+    {
+      "transaction_type": "tips",
+      "gross_cents": 80000,
+      "fee_cents": 16000,
+      "net_cents": 64000,
+      "rate_pct": 20,
+      "transaction_count": 42
+    },
+    {
+      "transaction_type": "unlocks",
+      "gross_cents": 50000,
+      "fee_cents": 10000,
+      "net_cents": 40000,
+      "rate_pct": 20,
+      "transaction_count": 25
+    },
+    {
+      "transaction_type": "shop_sales",
+      "gross_cents": 20000,
+      "fee_cents": 4000,
+      "net_cents": 16000,
+      "rate_pct": 15,
+      "transaction_count": 8
+    }
+  ],
+  "currency": "USD"
+}
+```
+
+### 3.8 Request/Response Models
 
 **Add to `app/models.py`**:
 
@@ -214,6 +411,11 @@ class CommissionRateEntry(BaseModel):
     min_fee_cents: int = Field(default=0, ge=0)
     max_fee_cents: int = Field(default=0, ge=0)
 
+    class Config:
+        json_schema_extra = {
+            "example": {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0}
+        }
+
 class CommissionRatesOut(BaseModel):
     rates: Dict[str, CommissionRateEntry] = Field(default_factory=dict)
     updated_at: int = 0
@@ -221,6 +423,15 @@ class CommissionRatesOut(BaseModel):
 
 class CommissionRatesUpdateIn(BaseModel):
     rates: Dict[str, CommissionRateEntry]
+
+    @field_validator("rates")
+    @classmethod
+    def validate_rates_keys(cls, v: Dict[str, CommissionRateEntry]) -> Dict[str, CommissionRateEntry]:
+        allowed = {"tips", "unlocks", "subscriptions", "shop_sales", "vod_purchases", "call_revenue"}
+        for key in v:
+            if key not in allowed:
+                raise ValueError(f"Unknown transaction type: {key}. Allowed: {allowed}")
+        return v
 
 class CommissionSummaryBreakdown(BaseModel):
     transaction_type: str
@@ -244,9 +455,29 @@ class CommissionAuditEntry(BaseModel):
     created_at: int
     previous_rates: Dict[str, Any] = Field(default_factory=dict)
     new_rates: Dict[str, Any] = Field(default_factory=dict)
+
+class CommissionAuditListOut(BaseModel):
+    items: List[CommissionAuditEntry] = Field(default_factory=list)
 ```
 
-### 3.6 Integration with Existing Billing Flows
+### 3.9 Error Handling Matrix
+
+| # | Scenario | HTTP Status | Error Code | Error Message | Recovery |
+|---|----------|-------------|------------|---------------|----------|
+| 1 | Non-admin tries PUT rates | 403 | `forbidden` | "Admin role required" | Use admin account |
+| 2 | Invalid rate_pct (negative) | 422 | `validation_error` | "rate_pct must be >= 0" | Fix input value |
+| 3 | Invalid rate_pct (>100) | 422 | `validation_error` | "rate_pct must be <= 100" | Fix input value |
+| 4 | Unknown transaction type | 422 | `validation_error` | "Unknown transaction type: X" | Use allowed types |
+| 5 | No rates configured (first request) | 200 | — | Returns DEFAULT_RATES | Automatic fallback |
+| 6 | Summary with no transactions | 200 | — | All totals = 0, empty breakdown | Expected empty state |
+| 7 | Invalid from_ts > to_ts | 400 | `invalid_range` | "from_ts must be before to_ts" | Swap dates |
+| 8 | Unauthenticated request | 401 | `unauthorized` | "Authentication required" | Login first |
+| 9 | Session expired | 401 | `session_expired` | "Session has expired" | Re-login |
+| 10 | max_fee_cents < min_fee_cents | 422 | `validation_error` | "max_fee_cents must be >= min_fee_cents" | Fix input |
+| 11 | DDB write fails (audit) | 500 | `internal_error` | "Failed to write audit log" | Retry; rate update still succeeds |
+| 12 | DDB read fails (rates) | 500 | `internal_error` | "Failed to read commission rates" | Fallback to DEFAULT_RATES |
+
+### 3.10 Integration with Existing Billing Flows
 
 Each billing flow that writes a creator credit must be updated to:
 
@@ -264,14 +495,14 @@ Integration points:
 | Shop sale credits | `app/services/catalog_orders.py` | Deduct fee; add meta |
 | VOD purchase credits | `app/services/vod_purchases.py` | Deduct fee; add meta |
 
-### 3.7 Frontend Components
+### 3.11 Frontend Components
 
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
 | `frontend/src/pages/billing/CommissionPage.tsx` | Commission rates + summary dashboard | ~300 |
 | `frontend/src/api/endpoints/commission.ts` | API wrappers | ~35 |
 
-**Component tree for CommissionPage**:
+### 3.12 Frontend Component Tree
 
 ```
 CommissionPage
@@ -302,11 +533,46 @@ CommissionPage
     └── Button: "Save Rates"
 ```
 
-### 3.8 Billing History Enhancement
+**TypeScript Props Interfaces**:
+
+```typescript
+interface CommissionPageProps {}
+
+interface SummaryGridProps {
+  totalGrossCents: number;
+  totalFeeCents: number;
+  totalNetCents: number;
+  isLoading: boolean;
+}
+
+interface BreakdownTableProps {
+  breakdown: CommissionSummaryBreakdown[];
+  isLoading: boolean;
+}
+
+interface RateTableProps {
+  rates: Record<string, CommissionRateEntry>;
+  isLoading: boolean;
+}
+
+interface AdminRateEditorProps {
+  currentRates: Record<string, CommissionRateEntry>;
+  onSave: (rates: Record<string, CommissionRateEntry>) => void;
+  isSaving: boolean;
+}
+
+interface DateRangePickerProps {
+  fromTs: number;
+  toTs: number;
+  onChange: (from: number, to: number) => void;
+}
+```
+
+### 3.13 Billing History Enhancement
 
 The existing billing history page (`frontend/src/pages/billing/`) should be enhanced to show gross/fee/net columns when commission meta is present on a transaction. This is a display-only change in the existing `BillingHistory` component.
 
-### 3.9 Files to Create
+### 3.14 Files to Create
 
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
@@ -314,9 +580,9 @@ The existing billing history page (`frontend/src/pages/billing/`) should be enha
 | `app/routers/platform_commission.py` | Commission API endpoints | ~120 |
 | `frontend/src/pages/billing/CommissionPage.tsx` | Commission dashboard UI | ~300 |
 | `frontend/src/api/endpoints/commission.ts` | API wrappers | ~35 |
-| `frontend/e2e/fin-commission.spec.ts` | E2E tests | ~380 |
+| `frontend/e2e/fin-commission.spec.ts` | E2E tests | ~500 |
 
-### 3.10 Files to Modify
+### 3.15 Files to Modify
 
 | File | Change |
 |------|--------|
@@ -342,13 +608,168 @@ net_amount_cents = gross_amount_cents - platform_fee_cents
 
 If `min_fee_cents > 0`, the fee is at least that amount (unless gross is 0). If `max_fee_cents > 0`, the fee is capped at that amount. This allows "minimum $0.50 fee" or "maximum $50 fee" configurations.
 
+```python
+def calculate_commission(transaction_type: str, gross_amount_cents: int) -> Dict[str, int]:
+    rates = get_commission_rates()
+    rate_entry = rates["rates"].get(transaction_type, {"rate_pct": 20, "min_fee_cents": 0, "max_fee_cents": 0})
+    rate_pct = rate_entry["rate_pct"]
+    min_fee = rate_entry.get("min_fee_cents", 0)
+    max_fee = rate_entry.get("max_fee_cents", 0)
+
+    if gross_amount_cents <= 0:
+        return {"gross_amount_cents": 0, "platform_fee_cents": 0, "net_amount_cents": 0, "rate_pct": rate_pct}
+
+    fee = floor(gross_amount_cents * rate_pct / 100)
+
+    if min_fee > 0 and fee < min_fee:
+        fee = min(min_fee, gross_amount_cents)  # cannot exceed gross
+    if max_fee > 0 and fee > max_fee:
+        fee = max_fee
+
+    net = gross_amount_cents - fee
+    return {
+        "gross_amount_cents": gross_amount_cents,
+        "platform_fee_cents": fee,
+        "net_amount_cents": net,
+        "rate_pct": rate_pct,
+    }
+```
+
 ### 4.3 Retroactivity
 
 Rate changes apply to future transactions only. Existing ledger entries retain their original `platform_fee_pct` in meta. The summary endpoint calculates totals from stored meta values, not current rates.
 
 ---
 
-## 5. E2E Test Plan
+## 5. Observability
+
+### 5.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `commission_fee_total_cents` | Counter | `transaction_type` | Total fee cents collected |
+| `commission_gross_total_cents` | Counter | `transaction_type` | Total gross cents processed |
+| `commission_net_total_cents` | Counter | `transaction_type` | Total net cents credited |
+| `commission_rate_update_count` | Counter | `admin_id` | Number of rate changes |
+| `commission_summary_latency_ms` | Histogram | — | Latency of summary aggregation |
+| `commission_calculation_count` | Counter | `transaction_type` | Number of fee calculations |
+| `commission_rates_cache_hits` | Counter | — | In-memory rate cache hits |
+| `commission_rates_cache_misses` | Counter | — | Cache misses requiring DDB read |
+
+### 5.2 Structured Logging
+
+```python
+logger.info(
+    "commission.calculated",
+    extra={
+        "transaction_type": "tips",
+        "gross_cents": 1000,
+        "fee_cents": 200,
+        "net_cents": 800,
+        "rate_pct": 20,
+        "user_id": user_id,
+    }
+)
+
+logger.info(
+    "commission.rates_updated",
+    extra={
+        "admin_id": admin_user_id,
+        "changed_types": ["tips"],
+        "audit_id": audit_id,
+    }
+)
+```
+
+### 5.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Fee calculation failure | `commission_calculation_errors > 0` in 5 min | High | Page on-call; revenue may be mis-credited |
+| Rate update spike | `commission_rate_update_count > 5` in 1 hour | Medium | Notify admin channel; possible misconfiguration |
+| Summary aggregation slow | `commission_summary_latency_ms p95 > 5000` | Low | Scale read capacity on billing table |
+| Zero-rate applied unexpectedly | `commission_fee_total_cents = 0` for 1 hour during active transactions | High | Check DDB rates record; may be corrupted |
+
+---
+
+## 6. Rollout Plan
+
+### 6.1 Feature Flag
+
+```python
+# app/core/settings.py
+commission_visibility_enabled: bool = bool(os.environ.get("COMMISSION_VISIBILITY_ENABLED", "false").lower() in ("1", "true"))
+```
+
+### 6.2 Phased Rollout
+
+| Phase | Scope | Duration | Gate |
+|-------|-------|----------|------|
+| 1 | Internal/dev only | 3 days | `COMMISSION_VISIBILITY_ENABLED=true` on dev |
+| 2 | Admin rate management | 2 days | Admin can configure rates; no creator-facing display yet |
+| 3 | Creator commission summary | 3 days | Creators see fees on existing billing; commission page live |
+| 4 | Full rollout | Ongoing | Remove feature flag; all new transactions include commission meta |
+
+### 6.3 Rollback Plan
+
+1. Set `COMMISSION_VISIBILITY_ENABLED=false` — hides commission page in UI.
+2. Fee calculation continues to return results but `meta` fields not written to ledger entries.
+3. Existing commission meta in historical entries remains untouched.
+4. No database migration needed for rollback.
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Latency Targets
+
+| Operation | Target P50 | Target P95 | Strategy |
+|-----------|-----------|-----------|----------|
+| GET rates | < 5 ms | < 20 ms | In-memory cache with 60s TTL |
+| PUT rates | < 50 ms | < 200 ms | Single DDB PutItem + audit write |
+| GET summary | < 200 ms | < 1000 ms | Paginated ledger scan + aggregation |
+| calculate_commission | < 1 ms | < 5 ms | In-memory cached rates, integer math only |
+
+### 7.2 Caching Strategy
+
+Commission rates change infrequently (days/weeks). Cache in module-level variable with 60-second TTL:
+
+```python
+_rates_cache: Optional[Dict] = None
+_rates_cache_ts: int = 0
+RATES_CACHE_TTL = 60
+
+def get_commission_rates() -> Dict[str, Any]:
+    global _rates_cache, _rates_cache_ts
+    now = now_ts()
+    if _rates_cache and (now - _rates_cache_ts) < RATES_CACHE_TTL:
+        return _rates_cache
+    item = T.billing.get_item(Key={"pk": "PLATFORM", "sk": "COMMISSION_RATES"}).get("Item")
+    if not item:
+        _rates_cache = {"rates": DEFAULT_RATES, "updated_at": 0, "updated_by": ""}
+    else:
+        _rates_cache = item
+    _rates_cache_ts = now
+    return _rates_cache
+```
+
+Cache is invalidated on `update_commission_rates()` by setting `_rates_cache = None`.
+
+### 7.3 Summary Aggregation
+
+The `get_commission_summary` function scans ledger entries with `meta.gross_amount_cents` present. For creators with thousands of entries, this could be slow. Mitigations:
+
+1. **Date range filter**: Always require `from_ts` and `to_ts` to limit scan scope.
+2. **Pagination**: DDB query with `Limit=500` per page, max 4 pages (2000 entries).
+3. **Future optimization**: Daily aggregation rollup (similar to FIN-013) would eliminate per-request scanning.
+
+### 7.4 Memory Management
+
+In-memory rate cache is a single dictionary (~500 bytes). No memory concern. Summary aggregation uses streaming accumulation (not loading all entries into memory).
+
+---
+
+## 8. E2E Test Plan
 
 **File**: `frontend/e2e/fin-commission.spec.ts`
 
@@ -388,13 +809,32 @@ Rate changes apply to future transactions only. Existing ledger entries retain t
 | 566.3 | Admin sees rate update form | Root navigates to commission page; editable rate inputs visible |
 | 566.4 | Date range filter updates summary | Change date range; summary cards update with new values |
 
-**Total E2E tests: 16**
+### Section 567: Edge Cases & Negative Tests (5 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 567.1 | Rate with min_fee_cents enforces minimum | Set min_fee=50; send $1 tip (100 cents); fee >= 50 regardless of rate |
+| 567.2 | Rate with max_fee_cents caps maximum | Set max_fee=100; send $100 tip (10000 cents); fee = 100 |
+| 567.3 | Concurrent rate updates don't corrupt data | Two rapid PUTs; final GET returns one of the two sets (last-writer-wins) |
+| 567.4 | Summary with no transactions returns zeros | New user with no transactions; GET summary; all totals = 0 |
+| 567.5 | Audit log ordered newest first | Multiple rate updates; GET audit; first entry has latest created_at |
+
+### Section 568: Rollup & Rate Audit (4 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 568.1 | Audit log includes before and after snapshots | PUT rates changing tips from 20 to 15; audit entry has previous_rates.tips.rate_pct=20, new_rates.tips.rate_pct=15 |
+| 568.2 | Multiple rate changes produce multiple audit entries | PUT 3 times; GET audit; >= 3 entries |
+| 568.3 | Partial rate update preserves other rates | PUT only tips rate; GET rates; unlocks, subscriptions unchanged |
+| 568.4 | Rate changes do not alter historical ledger entries | Change rate; GET old ledger entry; meta.platform_fee_pct still shows old rate |
+
+**Total E2E tests: 25**
 
 ---
 
-## 6. Security Considerations
+## 9. Security Considerations
 
-### 6.1 Auth Requirements
+### 9.1 Auth Requirements
 
 | Endpoint | Auth | Authorization |
 |----------|------|---------------|
@@ -403,14 +843,14 @@ Rate changes apply to future transactions only. Existing ledger entries retain t
 | GET rates/audit | `require_admin_session` | Admin only |
 | GET summary | `require_ui_session` | Returns only caller's data |
 
-### 6.2 Financial Integrity
+### 9.2 Financial Integrity
 
 - Fee calculations use integer arithmetic only (no floating-point currency math).
 - The invariant `platform_fee_cents + net_amount_cents == gross_amount_cents` is enforced.
 - Rate changes are audited with before/after snapshots.
 - Historical ledger entries are immutable; rate changes do not alter past transactions.
 
-### 6.3 Data Access
+### 9.3 Data Access
 
 - Commission summary queries are scoped to `USER#{caller_user_id}`.
 - Rate configuration is platform-wide (single record), readable by all creators.
@@ -418,7 +858,7 @@ Rate changes apply to future transactions only. Existing ledger entries retain t
 
 ---
 
-## 7. Dependencies
+## 10. Dependencies
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|
@@ -429,7 +869,7 @@ Rate changes apply to future transactions only. Existing ledger entries retain t
 
 ---
 
-## 8. Acceptance Criteria
+## 11. Acceptance Criteria
 
 1. Commission rates are stored in DynamoDB and returned via API.
 2. Admin can update rates; changes are audit-logged.
@@ -439,4 +879,4 @@ Rate changes apply to future transactions only. Existing ledger entries retain t
 6. Fee calculation uses integer arithmetic with correct rounding.
 7. Rate changes apply to future transactions only.
 8. Non-admin users can view rates and their own summary but cannot update rates.
-9. All 16 E2E tests pass.
+9. All 25 E2E tests pass.

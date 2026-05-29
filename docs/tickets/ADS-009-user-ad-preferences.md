@@ -463,3 +463,238 @@ test.beforeAll(async ({ browser }) => {
 | Ticket | Depends On |
 |--------|-----------|
 | ADS-010 (Content Provider) | User prefs complement creator ad controls |
+
+---
+
+## 9. Architecture & Data Flow
+
+```
+User Ad Preference Evaluation
+─────────────────────────────
+
+  serve_ad(user_id, surface, ...)
+       │
+       ▼
+  ┌────────────────────────────────────┐
+  │  should_serve_ad(user_sub, cat)    │
+  │                                    │
+  │  1. get_ad_prefs(user_sub)         │
+  │     → billing table GET            │
+  │     PK=USER#{sub}, SK=AD_PREFS    │
+  │                                    │
+  │  2. Check ad_level:                │
+  │     ├─ ad_free → return {serve: F} │
+  │     ├─ reduced_ads → limits apply  │
+  │     └─ full_ads → normal limits    │
+  │                                    │
+  │  3. Check excluded_categories:     │
+  │     ├─ cat in excluded → skip      │
+  │     └─ cat not excluded → pass     │
+  │                                    │
+  │  4. Return {serve, reduced, reason}│
+  └────────────────────────────────────┘
+
+  Platform Ad-Free Subscription Flow
+  ────────────────────────────────────
+
+  User subscribes to ad-free plan
+       │
+       ▼
+  Subscription system processes payment
+       │
+       ▼
+  set_platform_ad_free(user_sub, until_ts)
+       │
+       ▼
+  billing table UPDATE:
+    AD_PREFS: ad_level="ad_free"
+              platform_ad_free_until=ts
+       │
+       ▼
+  All subsequent serve_ad() → {serve: false}
+```
+
+---
+
+## 10. API Request/Response Examples
+
+### 10.1 Get Preferences
+
+```bash
+curl http://localhost:8000/ui/ads/preferences \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=jwt_tok"
+```
+
+**Response (200)**:
+```json
+{
+  "ad_level": "full_ads",
+  "excluded_categories": [],
+  "personalized": true,
+  "platform_ad_free_until": 0
+}
+```
+
+### 10.2 Update Preferences
+
+```bash
+curl -X PATCH http://localhost:8000/ui/ads/preferences \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok" \
+  -d '{
+    "ad_level": "reduced_ads",
+    "excluded_categories": ["gambling", "alcohol"],
+    "personalized": false
+  }'
+```
+
+**Response (200)**:
+```json
+{
+  "ad_level": "reduced_ads",
+  "excluded_categories": ["gambling", "alcohol"],
+  "personalized": false,
+  "platform_ad_free_until": 0,
+  "updated_at": 1748534400
+}
+```
+
+### 10.3 Ad Feedback
+
+```bash
+curl -X POST http://localhost:8000/ui/ads/feedback \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok" \
+  -d '{
+    "creative_id": "cre_abc123",
+    "campaign_id": "camp_xyz",
+    "feedback_type": "not_relevant",
+    "reason": "Not interested in this product"
+  }'
+```
+
+**Response (200)**:
+```json
+{"ok": true}
+```
+
+---
+
+## 11. Error Handling Matrix
+
+| # | Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|----------------|-------------|------------|---------------------|-----------------|
+| 1 | Invalid ad_level | 400 | `INVALID_AD_LEVEL` | "ad_level must be full_ads or reduced_ads." | Use valid value |
+| 2 | Set ad_free without subscription | 400 | `AD_FREE_REQUIRES_SUBSCRIPTION` | "ad_free requires a platform subscription." | Subscribe first |
+| 3 | Invalid category | 400 | `INVALID_CATEGORY` | "Invalid ad categories: [{cat}]." | Use valid enum values |
+| 4 | Invalid feedback_type | 400 | `INVALID_FEEDBACK_TYPE` | "Invalid feedback type." | Use: hide, not_relevant, repetitive, offensive |
+| 5 | Missing creative_id | 422 | `MISSING_FIELD` | "creative_id is required." | Include creative_id |
+| 6 | Platform ad-free expired | -- | -- | Prefs auto-revert to full_ads on GET | Renew subscription |
+
+---
+
+## 12. Observability
+
+### 12.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `ad_pref_updated_total` | Counter | `field` (ad_level, categories, personalized) | Preference updates |
+| `ad_pref_level_gauge` | Gauge | `level` (full/reduced/ad_free) | Current user distribution by level |
+| `ad_pref_category_excluded_total` | Counter | `category` | Category exclusion frequency |
+| `ad_feedback_submitted_total` | Counter | `feedback_type` | Feedback submissions |
+| `ad_serve_blocked_by_pref_total` | Counter | `reason` | Ads blocked by user prefs |
+
+### 12.2 Log Events
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| `ad_pref_updated` | INFO | user_sub, field, old_value, new_value |
+| `ad_pref_ad_free_set` | INFO | user_sub, until_ts |
+| `ad_pref_ad_free_expired` | INFO | user_sub |
+| `ad_serve_blocked` | DEBUG | user_sub, reason, creative_id |
+| `ad_feedback_recorded` | INFO | user_sub, creative_id, feedback_type |
+
+### 12.3 Alerting Rules
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Mass ad-free opt-in | >10% of users switch to ad_free in 1 hour | P2 |
+| Feedback spike | >50 feedbacks for single creative in 15 min | P3 |
+| Pref update errors | >5% error rate on PATCH preferences | P3 |
+
+---
+
+## 13. Rollout Plan
+
+### 13.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `USER_AD_PREFS_ENABLED` | `false` | Enable user ad preference management |
+| `PLATFORM_AD_FREE_PLAN_ENABLED` | `false` | Enable platform ad-free subscription |
+
+### 13.2 Phased Deployment
+
+| Phase | Scope | Duration | Details |
+|-------|-------|----------|---------|
+| Phase 1: Backend + Pref Enforcement | Internal | Week 1 | Deploy user_ad_prefs service. Wire should_serve_ad() into serving engine. Prefs default to full_ads. |
+| Phase 2: Preferences UI | All users | Week 2 | AdPreferencesSection deployed in Settings. Category exclusions and reduced_ads mode available. |
+| Phase 3: Ad-Free Plan | All users | Week 3 | `PLATFORM_AD_FREE_PLAN_ENABLED=true`. Ad-free subscription plan visible in billing. Full GA. |
+
+---
+
+## 14. Performance Considerations
+
+### 14.1 Latency Targets
+
+| Endpoint | Target p50 | Target p99 |
+|----------|-----------|-----------|
+| GET /preferences | 20ms | 100ms |
+| PATCH /preferences | 50ms | 200ms |
+| should_serve_ad() (inline) | 5ms | 20ms |
+| POST /feedback | 30ms | 100ms |
+
+### 14.2 Caching Strategy
+
+| Data | Cache | staleTime | Invalidation |
+|------|-------|-----------|-------------|
+| User ad prefs | React Query | 60_000ms | On PATCH mutation |
+| User ad prefs (server, in serve_ad) | In-memory LRU | 60s TTL | On update |
+| Feedback dialog state | Local React state | -- | On submit |
+
+### 14.3 Preference Read Hot Path
+
+`should_serve_ad()` is called on every ad request. To avoid a DDB read per request, user preferences are cached in an in-memory LRU cache with 60s TTL. Cache key is `user_sub`. The cache is invalidated when `update_ad_prefs()` or `set_platform_ad_free()` is called. For dev mode with single-worker uvicorn, this provides consistent caching.
+
+---
+
+## 15. Expanded E2E Tests
+
+### 15.1 Section 383: Input Validation (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 383.1 | Invalid ad_level rejected | PATCH ad_level="premium"; 400 |
+| 383.2 | ad_free requires subscription | PATCH ad_level="ad_free"; 400; "requires subscription" |
+| 383.3 | Invalid category rejected | PATCH excluded_categories=["invalid_cat"]; 400 |
+| 383.4 | Empty category array accepted | PATCH excluded_categories=[]; 200 |
+
+### 15.2 Section 384: Authorization Boundary (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 384.1 | Unauthenticated GET preferences | GET without session; 401 |
+| 384.2 | Unauthenticated PATCH preferences | PATCH without session; 401 |
+| 384.3 | Cannot view other user's preferences | No cross-user access (prefs are session-scoped) |
+
+### 15.3 Section 385: Ad-Free Lifecycle (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 385.1 | Set platform ad-free (internal) | Direct DDB write: platform_ad_free_until=future; GET prefs; ad_level=ad_free |
+| 385.2 | Ad-free user sees no ads | Set ad-free; should_serve_ad returns serve=false |
+| 385.3 | Expired ad-free reverts to full_ads | Set until_ts to past; GET prefs; ad_level=full_ads |
+| 385.4 | Reduced ads user sees fewer ads | Set reduced_ads; serve with overlay; serve=false reason=reduced |

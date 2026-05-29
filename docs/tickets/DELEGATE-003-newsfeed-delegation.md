@@ -667,3 +667,143 @@ When `require_post_approval` is true and a delegate creates a scheduled post:
 8. Creator feed delegation settings are persisted and enforced.
 9. Scheduled posts created by delegates respect the approval workflow.
 10. All 16 E2E tests pass.
+
+---
+
+## 9. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                 Newsfeed Delegation Architecture                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+  Delegate User                     Creator Account
+       │                                │
+       │ "Managing @creator" mode       │
+       ▼                                │
+  ┌──────────────────────────┐          │
+  │ Delegate Actions:        │          │
+  │ feed_post → create/edit  │          │
+  │ feed_moderate → comments │          │
+  │ feed_read → analytics    │          │
+  └────────┬─────────────────┘          │
+           │                            │
+           ▼                            │
+  ┌──────────────────────────┐          │
+  │ Draft/Approval Workflow  │          │
+  │                          │          │
+  │ delegate creates draft ──┤          │
+  │                          │     ┌────┴────┐
+  │ creator reviews ─────────┼────▶│ Approve │
+  │                          │     │ Reject  │
+  │ approved → publish       │     └─────────┘
+  │ + fanout to followers    │
+  └──────────────────────────┘
+```
+
+---
+
+## 10. DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | Notes |
+|----------------|-------|----|----|-------|
+| Check feed delegation | `delegates` | `CREATOR#{id}` | `DELEGATE#{id}` | Verify feed_post/moderate/read |
+| Create draft post | `posts` | `USER#{creator_id}` | `POST#{post_id}` | status=draft, delegate_sub set |
+| List drafts for approval | `posts` | -- | -- | GSI: `DraftApprovalQueue`, status=pending_approval |
+| Approve draft | `posts` | `USER#{creator_id}` | `POST#{post_id}` | Conditional: status=pending_approval |
+| Moderate comment | `comments` | `POST#{post_id}` | `COMMENT#{id}` | SET hidden=true by delegate |
+| Audit delegated posts | `posts` | `USER#{creator_id}` | begins_with `POST#` | Filter: delegate_sub is not null |
+
+---
+
+## 11. API Request/Response Examples
+
+```bash
+# --- POST /ui/feed/posts (as delegate, creates draft) ---
+curl -X POST http://localhost:8000/ui/feed/posts \
+  -H "Cookie: ui_session=delegate_sess; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "X-Managing-Creator: creator-sub-001" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "New content dropping this weekend!", "media_urls": []}'
+
+# Response 201:
+{
+  "post_id": "post-abc-123",
+  "author_id": "creator-sub-001",
+  "text": "New content dropping this weekend!",
+  "status": "pending_approval",
+  "delegate_sub": "delegate-sub-001",
+  "created_at": 1748534400
+}
+
+# --- POST /ui/feed/posts/{post_id}/approve (creator approves) ---
+curl -X POST http://localhost:8000/ui/feed/posts/post-abc-123/approve \
+  -H "Cookie: ui_session=creator_sess; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123"
+
+# Response 200:
+{
+  "post_id": "post-abc-123",
+  "status": "published",
+  "published_at": 1748534500
+}
+```
+
+---
+
+## 12. Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| No feed_post permission | 403 | `NO_FEED_POST_PERMISSION` | "No permission to post on this feed." | Request permission |
+| No feed_moderate permission | 403 | `NO_FEED_MODERATE_PERMISSION` | "No permission to moderate comments." | Request permission |
+| Draft not found | 404 | `DRAFT_NOT_FOUND` | "Draft post not found." | Verify post_id |
+| Draft already approved | 409 | `ALREADY_APPROVED` | "This draft was already approved." | View published post |
+| Draft already rejected | 409 | `ALREADY_REJECTED` | "This draft was already rejected." | Create new draft |
+| Non-creator tries to approve | 403 | `NOT_CREATOR` | "Only the creator can approve drafts." | Ask creator to approve |
+
+---
+
+## 13. Observability & Monitoring
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `delegate_feed_posts_total` | Counter | `status={draft,published}` | Posts created by delegates |
+| `delegate_feed_approvals_total` | Counter | `result={approved,rejected}` | Approval decisions |
+| `delegate_feed_moderations_total` | Counter | `action={hide,delete,pin}` | Comment moderation actions |
+| `delegate_draft_queue_gauge` | Gauge | -- | Pending drafts awaiting approval |
+
+### Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Approval queue backlog | > 20 pending drafts | P3 |
+| High rejection rate | > 50% rejections in 7d | P3 |
+
+---
+
+## 14. Performance Considerations
+
+| Concern | Mitigation |
+|---------|-----------|
+| Draft approval queue query | GSI with status filter; efficient query |
+| Fan-out on approval | Same fan-out as creator publish; no extra cost |
+| Permission check per action | Cache delegate permissions 30s TTL |
+| Scheduled draft approval | Scheduled posts wait in draft until approved; publish at scheduled time |
+
+---
+
+## 15. Rollout Plan
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `FEED_DELEGATION_ENABLED` | `false` | Master kill switch |
+| `FEED_DRAFT_APPROVAL_REQUIRED` | `true` | Require creator approval for delegate posts |
+| `FEED_DELEGATE_MODERATION_ENABLED` | `false` | Allow delegates to moderate comments |
+
+### Canary
+
+1. **Week 1**: Enable for test creators. Draft-approval only. No moderation.
+2. **Week 2**: Enable moderation. Monitor abuse rate.
+3. **Week 3**: Full rollout.

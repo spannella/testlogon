@@ -32,6 +32,116 @@ AGENT-002 bridges compute infrastructure (EC2 instances / K8s pods) and AI codin
 
 Manual agent setup is a multi-step process: launch an EC2 instance, SSH in, install Node.js, install Claude Code CLI (`npm install -g @anthropic-ai/claude-code`), export the API key, clone the repo, and run `claude`. This takes 10-15 minutes and is error-prone. AGENT-002 reduces this to a single API call that completes in under 60 seconds, enabling the fleet management (AGENT-004) and autonomous agent loop (AGENT-003) that follow.
 
+### 1.4 Architecture Diagram
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              FRONTEND (React)                               │
+│                                                                              │
+│  ┌──────────────────────┐  ┌────────────────────┐  ┌─────────────────────┐  │
+│  │  WorkerCreateWizard  │  │   WorkersPage      │  │  WorkerDetailPanel  │  │
+│  │  ┌────────────────┐  │  │  ┌──────────────┐  │  │  ┌───────────────┐  │  │
+│  │  │ AgentTypeSelect│  │  │  │ WorkerTable  │  │  │  │ StatusBadge   │  │  │
+│  │  │ ToolSelector   │  │  │  │ StatusFilter │  │  │  │ ProvisionLog  │  │  │
+│  │  │ ComputeSelect  │  │  │  │ CreateButton │  │  │  │ LifecycleBar  │  │  │
+│  │  │ LlmKeyPicker   │  │  │  └──────────────┘  │  │  │ TerminalLink  │  │  │
+│  │  │ ConfigForm     │  │  │                     │  │  └───────────────┘  │  │
+│  │  └────────────────┘  │  └────────────────────┘  └─────────────────────┘  │
+│  └──────────────────────┘                                                    │
+│                              │  Axios + CSRF                                 │
+└──────────────────────────────┼───────────────────────────────────────────────┘
+                               │
+                        Vite Proxy :3000 → :8000
+                               │
+┌──────────────────────────────┼───────────────────────────────────────────────┐
+│                      BACKEND (FastAPI :8000)                                 │
+│                               │                                              │
+│  ┌────────────────────────────▼─────────────────────────────────────────┐    │
+│  │         app/routers/agent_workers.py  (9 endpoints)                  │    │
+│  │  POST /ui/agent/workers          — create worker                     │    │
+│  │  GET  /ui/agent/workers          — list workers                      │    │
+│  │  GET  /ui/agent/workers/{id}     — get worker                        │    │
+│  │  POST /ui/agent/workers/{id}/stop   — stop                           │    │
+│  │  POST /ui/agent/workers/{id}/start  — restart                        │    │
+│  │  DELETE /ui/agent/workers/{id}      — terminate                      │    │
+│  │  GET  /ui/agent/workers/{id}/provision-log — log                     │    │
+│  │  GET  /ui/agent/workers/tools       — tool list                      │    │
+│  │  GET  /ui/agent/workers/compute-options — compute options            │    │
+│  └────────┬──────────────┬───────────────┬──────────────────────────────┘    │
+│           │              │               │                                   │
+│  ┌────────▼──────────┐  │  ┌────────────▼──────────────────────────┐        │
+│  │ agent_worker_     │  │  │  Background: _provision_worker_bg()   │        │
+│  │ provisioner.py    │  │  │  1. launch compute                     │        │
+│  │                   │  │  │  2. install tool (SSH/cloud-init)      │        │
+│  │  create_worker()  │  │  │  3. inject API key                     │        │
+│  │  list_workers()   │  │  │  4. verify tool                        │        │
+│  │  stop_worker()    │  │  │  5. mark ready                         │        │
+│  │  start_worker()   │  │  └────────────┬──────────────────────────┘        │
+│  │  terminate_worker │  │               │                                   │
+│  └───────┬───────────┘  │               │                                   │
+│          │              │               │                                   │
+│  ┌───────▼──────────────▼───────────────▼──────────────────────────────┐    │
+│  │                    DEPENDENCY SERVICES                               │    │
+│  │  ┌──────────────┐  ┌───────────────┐  ┌───────────────────────┐     │    │
+│  │  │ ec2_launcher  │  │ k8s_launcher  │  │ llm_provider_keys    │     │    │
+│  │  │ (INFRA-003)   │  │ (INFRA-004)   │  │ (AGENT-001)          │     │    │
+│  │  │ launch/stop/  │  │ launch_pod/   │  │ get_decrypted_api_   │     │    │
+│  │  │ terminate     │  │ delete_pod    │  │ key()                │     │    │
+│  │  └───────┬───────┘  └──────┬────────┘  └──────────┬────────────┘     │    │
+│  │          │                 │                       │                  │    │
+│  │  ┌───────▼───────┐  ┌─────▼─────┐   ┌────────────▼────────────┐     │    │
+│  │  │ ssh_key_mgr   │  │ remote_   │   │ crypto.py               │     │    │
+│  │  │ (INFRA-002)   │  │ hosts.py  │   │ KMS decrypt             │     │    │
+│  │  └───────────────┘  │ (INFRA-001│   └─────────────────────────┘     │    │
+│  │                      └───────────┘                                   │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└──────────────────────────────┼───────────────────────────────────────────────┘
+                               │
+┌──────────────────────────────┼───────────────────────────────────────────────┐
+│                     INFRASTRUCTURE LAYER                                     │
+│                               │                                              │
+│  ┌────────────────────────────▼──────────────────────────────────────────┐   │
+│  │                    DynamoDB (:8001)                                    │   │
+│  │   Table: agent_workers                                                │   │
+│  │   ┌──────────────────────────────────────────────────────────────┐    │   │
+│  │   │ PK: USER#{user_id}   SK: WORKER#{worker_id}                 │    │   │
+│  │   │ GSI: ByStatus (pk + worker_status)                          │    │   │
+│  │   │ GSI: ByCreatedAt (pk + created_at)                          │    │   │
+│  │   │ GSI: ByAgentType (pk + agent_type)                          │    │   │
+│  │   └──────────────────────────────────────────────────────────────┘    │   │
+│  └───────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ┌──────────────────────┐  ┌──────────────────────┐                         │
+│  │  EC2 (or Moto mock)  │  │  K8s (or mock store)  │                        │
+│  │  Compute instances   │  │  Ephemeral pods       │                        │
+│  └──────────────────────┘  └──────────────────────┘                         │
+│                                                                              │
+│  ┌──────────────────────┐                                                   │
+│  │  KMS (or mock KMS)   │  API key decrypt-at-provision-time                │
+│  └──────────────────────┘                                                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Data Flow — Create Worker:
+  1. User fills WorkerCreateWizard (agent type, tool, compute, LLM key)
+  2. POST /ui/agent/workers with CSRF token
+  3. Router validates session, calls create_worker()
+  4. Service checks worker limit, validates LLM key exists via AGENT-001
+  5. Decrypts API key from KMS for injection into startup script
+  6. Launches EC2/K8s via INFRA-003/INFRA-004 with startup user-data script
+  7. Writes WORKER item to DDB with status="provisioning"
+  8. Returns 201 immediately; background task continues provisioning
+  9. Background: SSH into instance, run install, verify tool, mark ready
+ 10. Frontend polls GET /ui/agent/workers/{id} until status="ready"
+
+Data Flow — Stop/Terminate Worker:
+  1. User clicks Stop/Terminate on WorkerDetailPanel
+  2. POST ../stop or DELETE ../{id} with CSRF
+  3. Service calls ec2 stop_instance/terminate_instance (or k8s delete_pod)
+  4. Updates DDB worker_status to "stopped" or "terminated"
+  5. Downstream: AGENT-003 agent loop detects status change and exits
+```
+
 ---
 
 ## 2. Current State Analysis
@@ -112,6 +222,137 @@ TableDef(
 | `terminated_at` | N | Unix timestamp of termination |
 | `template_id` | S | Worker template used for creation (optional) |
 | `error_message` | S | Last error message if status=error |
+
+### 3.1.2 DynamoDB Access Patterns
+
+| # | Operation | Table / Index | PK | SK / Condition | Projection | Frequency |
+|---|-----------|---------------|----|----|------------|-----------|
+| AP-1 | Get worker by ID | `agent_workers` (base) | `USER#{user_id}` | `WORKER#{worker_id}` | Full item | Every API call |
+| AP-2 | List all workers for user | `agent_workers` (base) | `USER#{user_id}` | `begins_with(sk, "WORKER#")` | All fields | Workers page load |
+| AP-3 | List workers by status | `ByStatus` GSI | `USER#{user_id}` | `worker_status = :status` | worker_id, label, agent_type, tool | Filter dropdown |
+| AP-4 | List workers by creation date | `ByCreatedAt` GSI | `USER#{user_id}` | `created_at BETWEEN :start AND :end` | All fields | Sort by newest |
+| AP-5 | List workers by agent type | `ByAgentType` GSI | `USER#{user_id}` | `agent_type = :type` | worker_id, label, status | Type filter |
+| AP-6 | Count active workers (limit check) | `ByStatus` GSI | `USER#{user_id}` | `worker_status IN (provisioning, installing, ready, running)` | worker_id only | Before create |
+| AP-7 | Update worker status | `agent_workers` (base) | `USER#{user_id}` | `WORKER#{worker_id}` | N/A (update) | State transitions |
+| AP-8 | Append provision log entry | `agent_workers` (base) | `USER#{user_id}` | `WORKER#{worker_id}` | N/A (list_append) | During provisioning |
+| AP-9 | Find idle workers for auto-shutdown | `ByStatus` GSI | `USER#{user_id}` | `worker_status = "ready"` then filter `last_activity_at < threshold` | worker_id, last_activity_at, idle_timeout | Background task (every 5 min) |
+
+#### Example DynamoDB Items
+
+**Worker item — Ready EC2 Claude Code worker:**
+
+```json
+{
+  "pk": {"S": "USER#a1b2c3d4-e5f6-7890-abcd-ef1234567890"},
+  "sk": {"S": "WORKER#w_8f3a1b2c4d5e6f7890abcdef12345678"},
+  "worker_id": {"S": "w_8f3a1b2c4d5e6f7890abcdef12345678"},
+  "user_id": {"S": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"},
+  "label": {"S": "Coder Agent #1"},
+  "agent_type": {"S": "coder"},
+  "tool": {"S": "claude_code"},
+  "tool_version": {"S": "1.0.23"},
+  "compute_type": {"S": "ec2"},
+  "compute_instance_id": {"S": "i-0abcdef1234567890"},
+  "instance_type": {"S": "t3.medium"},
+  "llm_key_id": {"S": "k_abc123def456"},
+  "llm_provider": {"S": "anthropic"},
+  "host_id": {"S": "h_fedcba0987654321"},
+  "public_ip": {"S": "54.123.45.67"},
+  "worker_status": {"S": "ready"},
+  "provision_log": {"L": [
+    {"M": {"step": {"S": "compute_launch"}, "status": {"S": "done"}, "ts": {"N": "1748520000"}, "detail": {"S": "i-0abcdef1234567890"}}},
+    {"M": {"step": {"S": "tool_install"}, "status": {"S": "done"}, "ts": {"N": "1748520045"}, "detail": {"S": "claude-code@1.0.23"}}},
+    {"M": {"step": {"S": "key_inject"}, "status": {"S": "done"}, "ts": {"N": "1748520048"}, "detail": {"S": ""}}},
+    {"M": {"step": {"S": "verify"}, "status": {"S": "done"}, "ts": {"N": "1748520052"}, "detail": {"S": "v1.0.23"}}}
+  ]},
+  "repo_url": {"S": "https://github.com/acme/webapp.git"},
+  "branch_convention": {"S": "agent/{worker_id}/{ticket_id}"},
+  "idle_timeout_seconds": {"N": "7200"},
+  "last_activity_at": {"N": "1748520120"},
+  "created_at": {"N": "1748519990"},
+  "started_at": {"N": "1748520052"},
+  "stopped_at": {"N": "0"},
+  "terminated_at": {"N": "0"},
+  "template_id": {"S": ""},
+  "error_message": {"S": ""}
+}
+```
+
+**Worker item — Error state (provisioning failed):**
+
+```json
+{
+  "pk": {"S": "USER#a1b2c3d4-e5f6-7890-abcd-ef1234567890"},
+  "sk": {"S": "WORKER#w_99887766aabbccdd11223344eeff5566"},
+  "worker_id": {"S": "w_99887766aabbccdd11223344eeff5566"},
+  "user_id": {"S": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"},
+  "label": {"S": "QA Agent #2"},
+  "agent_type": {"S": "qa"},
+  "tool": {"S": "codex"},
+  "tool_version": {"S": ""},
+  "compute_type": {"S": "ec2"},
+  "compute_instance_id": {"S": "i-0fedcba9876543210"},
+  "instance_type": {"S": "t3.large"},
+  "llm_key_id": {"S": "k_xyz789"},
+  "llm_provider": {"S": "openai"},
+  "host_id": {"S": ""},
+  "public_ip": {"S": ""},
+  "worker_status": {"S": "error"},
+  "provision_log": {"L": [
+    {"M": {"step": {"S": "compute_launch"}, "status": {"S": "done"}, "ts": {"N": "1748521000"}, "detail": {"S": "i-0fedcba9876543210"}}},
+    {"M": {"step": {"S": "tool_install"}, "status": {"S": "error"}, "ts": {"N": "1748521060"}, "detail": {"S": "npm install failed: ENOSPC no space left on device"}}}
+  ]},
+  "repo_url": {"S": ""},
+  "branch_convention": {"S": "agent/{worker_id}/{ticket_id}"},
+  "idle_timeout_seconds": {"N": "3600"},
+  "last_activity_at": {"N": "0"},
+  "created_at": {"N": "1748521000"},
+  "started_at": {"N": "0"},
+  "stopped_at": {"N": "0"},
+  "terminated_at": {"N": "0"},
+  "template_id": {"S": ""},
+  "error_message": {"S": "npm install failed: ENOSPC no space left on device"}
+}
+```
+
+**Worker item — K8s Codex worker (stopped):**
+
+```json
+{
+  "pk": {"S": "USER#a1b2c3d4-e5f6-7890-abcd-ef1234567890"},
+  "sk": {"S": "WORKER#w_aabbccdd11223344eeff556677889900"},
+  "worker_id": {"S": "w_aabbccdd11223344eeff556677889900"},
+  "user_id": {"S": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"},
+  "label": {"S": "Codex Fast Worker"},
+  "agent_type": {"S": "coder"},
+  "tool": {"S": "codex"},
+  "tool_version": {"S": "0.9.5"},
+  "compute_type": {"S": "k8s"},
+  "compute_instance_id": {"S": "pod-agent-a1b2c3d4"},
+  "instance_type": {"S": "standard-2cpu-4gb"},
+  "llm_key_id": {"S": "k_openai_prod"},
+  "llm_provider": {"S": "openai"},
+  "host_id": {"S": "h_k8s_pod_a1b2c3d4"},
+  "public_ip": {"S": "10.0.5.42"},
+  "worker_status": {"S": "stopped"},
+  "provision_log": {"L": [
+    {"M": {"step": {"S": "compute_launch"}, "status": {"S": "done"}, "ts": {"N": "1748510000"}, "detail": {"S": "pod-agent-a1b2c3d4"}}},
+    {"M": {"step": {"S": "tool_install"}, "status": {"S": "done"}, "ts": {"N": "1748510008"}, "detail": {"S": "codex@0.9.5"}}},
+    {"M": {"step": {"S": "key_inject"}, "status": {"S": "done"}, "ts": {"N": "1748510009"}, "detail": {"S": ""}}},
+    {"M": {"step": {"S": "verify"}, "status": {"S": "done"}, "ts": {"N": "1748510011"}, "detail": {"S": "v0.9.5"}}}
+  ]},
+  "repo_url": {"S": "https://github.com/acme/api-service.git"},
+  "branch_convention": {"S": "agent/{worker_id}/{ticket_id}"},
+  "idle_timeout_seconds": {"N": "1800"},
+  "last_activity_at": {"N": "1748515000"},
+  "created_at": {"N": "1748510000"},
+  "started_at": {"N": "1748510011"},
+  "stopped_at": {"N": "1748518000"},
+  "terminated_at": {"N": "0"},
+  "template_id": {"S": "tmpl_fast_codex"},
+  "error_message": {"S": ""}
+}
+```
 
 ### 3.2 Tool Installation Scripts
 
@@ -569,31 +810,673 @@ Sidebar: "Workers" with `Bot` icon under "AI Agents" group.
 
 ---
 
-## 6. Security Considerations
+## 6. API Request/Response Examples
 
-### 6.1 API Key Injection
+### 6.1 Create Worker
+
+```bash
+curl -s -X POST http://localhost:3000/ui/agent/workers \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=ses_abc123; ui_csrf=csrf_tok_1; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_1" \
+  -d '{
+    "label": "Coder Agent #1",
+    "agent_type": "coder",
+    "tool": "claude_code",
+    "compute_type": "ec2",
+    "instance_type": "t3.medium",
+    "llm_key_id": "k_abc123def456",
+    "repo_url": "https://github.com/acme/webapp.git",
+    "branch_convention": "agent/{worker_id}/{ticket_id}",
+    "idle_timeout_seconds": 7200
+  }'
+```
+
+**Response (201 Created):**
+
+```json
+{
+  "worker_id": "w_8f3a1b2c4d5e6f7890abcdef12345678",
+  "user_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "label": "Coder Agent #1",
+  "agent_type": "coder",
+  "tool": "claude_code",
+  "tool_version": "",
+  "compute_type": "ec2",
+  "compute_instance_id": "i-0abcdef1234567890",
+  "instance_type": "t3.medium",
+  "llm_key_id": "k_abc123def456",
+  "llm_provider": "anthropic",
+  "host_id": "",
+  "public_ip": "",
+  "worker_status": "provisioning",
+  "provision_log": [
+    {"step": "compute_launch", "status": "running", "ts": 1748520000, "detail": ""}
+  ],
+  "repo_url": "https://github.com/acme/webapp.git",
+  "branch_convention": "agent/{worker_id}/{ticket_id}",
+  "idle_timeout_seconds": 7200,
+  "last_activity_at": 0,
+  "created_at": 1748520000,
+  "started_at": 0,
+  "stopped_at": 0,
+  "terminated_at": 0,
+  "template_id": "",
+  "error_message": ""
+}
+```
+
+### 6.2 List Workers
+
+```bash
+curl -s http://localhost:3000/ui/agent/workers \
+  -H "Cookie: ui_session=ses_abc123; ui_csrf=csrf_tok_1; ui_access_token=eyJ..."
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "workers": [
+    {
+      "worker_id": "w_8f3a1b2c4d5e6f7890abcdef12345678",
+      "label": "Coder Agent #1",
+      "agent_type": "coder",
+      "tool": "claude_code",
+      "tool_version": "1.0.23",
+      "compute_type": "ec2",
+      "instance_type": "t3.medium",
+      "worker_status": "ready",
+      "created_at": 1748520000,
+      "last_activity_at": 1748520120
+    }
+  ],
+  "count": 1
+}
+```
+
+### 6.3 Get Worker Details
+
+```bash
+curl -s http://localhost:3000/ui/agent/workers/w_8f3a1b2c4d5e6f7890abcdef12345678 \
+  -H "Cookie: ui_session=ses_abc123; ui_csrf=csrf_tok_1; ui_access_token=eyJ..."
+```
+
+**Response (200 OK):** Full `WorkerOut` object (see create response above with all fields populated).
+
+### 6.4 Stop Worker
+
+```bash
+curl -s -X POST http://localhost:3000/ui/agent/workers/w_8f3a1b2c4d5e6f7890abcdef12345678/stop \
+  -H "Cookie: ui_session=ses_abc123; ui_csrf=csrf_tok_1; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_1"
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "worker_id": "w_8f3a1b2c4d5e6f7890abcdef12345678",
+  "worker_status": "stopped",
+  "stopped_at": 1748525000,
+  "label": "Coder Agent #1"
+}
+```
+
+### 6.5 Start (Restart) Worker
+
+```bash
+curl -s -X POST http://localhost:3000/ui/agent/workers/w_8f3a1b2c4d5e6f7890abcdef12345678/start \
+  -H "Cookie: ui_session=ses_abc123; ui_csrf=csrf_tok_1; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_1"
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "worker_id": "w_8f3a1b2c4d5e6f7890abcdef12345678",
+  "worker_status": "ready",
+  "started_at": 1748526000
+}
+```
+
+### 6.6 Terminate Worker
+
+```bash
+curl -s -X DELETE http://localhost:3000/ui/agent/workers/w_8f3a1b2c4d5e6f7890abcdef12345678 \
+  -H "Cookie: ui_session=ses_abc123; ui_csrf=csrf_tok_1; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_1"
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "worker_id": "w_8f3a1b2c4d5e6f7890abcdef12345678",
+  "worker_status": "terminated",
+  "terminated_at": 1748530000
+}
+```
+
+### 6.7 Get Provision Log
+
+```bash
+curl -s http://localhost:3000/ui/agent/workers/w_8f3a1b2c4d5e6f7890abcdef12345678/provision-log \
+  -H "Cookie: ui_session=ses_abc123; ui_csrf=csrf_tok_1; ui_access_token=eyJ..."
+```
+
+**Response (200 OK):**
+
+```json
+[
+  {"step": "compute_launch", "status": "done", "ts": 1748520000, "detail": "i-0abcdef1234567890"},
+  {"step": "tool_install", "status": "done", "ts": 1748520045, "detail": "claude-code@1.0.23"},
+  {"step": "key_inject", "status": "done", "ts": 1748520048, "detail": ""},
+  {"step": "verify", "status": "done", "ts": 1748520052, "detail": "v1.0.23"}
+]
+```
+
+### 6.8 List Available AI Tools
+
+```bash
+curl -s http://localhost:3000/ui/agent/workers/tools \
+  -H "Cookie: ui_session=ses_abc123; ui_csrf=csrf_tok_1; ui_access_token=eyJ..."
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "tools": [
+    {
+      "tool": "claude_code",
+      "display_name": "Claude Code",
+      "description": "Anthropic's autonomous coding CLI",
+      "install_time_seconds": 45,
+      "required_provider": "anthropic"
+    },
+    {
+      "tool": "codex",
+      "display_name": "OpenAI Codex",
+      "description": "OpenAI's code generation CLI",
+      "install_time_seconds": 40,
+      "required_provider": "openai"
+    },
+    {
+      "tool": "custom",
+      "display_name": "Custom Tool",
+      "description": "User-provided tool with custom install script",
+      "install_time_seconds": 0,
+      "required_provider": ""
+    }
+  ]
+}
+```
+
+### 6.9 List Compute Options
+
+```bash
+curl -s http://localhost:3000/ui/agent/workers/compute-options \
+  -H "Cookie: ui_session=ses_abc123; ui_csrf=csrf_tok_1; ui_access_token=eyJ..."
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "options": [
+    {"compute_type": "ec2", "instance_type": "t3.medium", "vcpu": 2, "memory_gb": 4.0, "cost_cents_per_min": 0.7, "startup_seconds": 45},
+    {"compute_type": "ec2", "instance_type": "t3.large", "vcpu": 2, "memory_gb": 8.0, "cost_cents_per_min": 1.4, "startup_seconds": 45},
+    {"compute_type": "ec2", "instance_type": "m5.xlarge", "vcpu": 4, "memory_gb": 16.0, "cost_cents_per_min": 3.2, "startup_seconds": 60},
+    {"compute_type": "k8s", "instance_type": "standard-2cpu-4gb", "vcpu": 2, "memory_gb": 4.0, "cost_cents_per_min": 0.5, "startup_seconds": 8},
+    {"compute_type": "k8s", "instance_type": "standard-4cpu-8gb", "vcpu": 4, "memory_gb": 8.0, "cost_cents_per_min": 1.0, "startup_seconds": 8}
+  ]
+}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| # | Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|---------------|-------------|------------|---------------------|----------------|
+| E-1 | LLM key not found | 400 | `llm_key_not_found` | "The selected LLM key does not exist. Please select another key." | User selects a different key in the wizard |
+| E-2 | LLM key belongs to wrong provider | 400 | `llm_key_provider_mismatch` | "The selected key is for {provider}, but {tool} requires {required_provider}." | User selects a compatible key |
+| E-3 | Worker limit reached | 409 | `worker_limit_reached` | "You have reached the maximum of {limit} active workers. Terminate an existing worker first." | User terminates an existing worker |
+| E-4 | Invalid agent type | 422 | `validation_error` | "Invalid agent_type. Must be one of: coder, qa, reviewer, devops, custom." | Fix request body |
+| E-5 | Invalid tool | 422 | `validation_error` | "Invalid tool. Must be one of: claude_code, codex, custom." | Fix request body |
+| E-6 | Invalid compute type | 422 | `validation_error` | "Invalid compute_type. Must be ec2 or k8s." | Fix request body |
+| E-7 | EC2 launch failure | 500 | `compute_launch_failed` | "Failed to launch compute instance. Please try again." | Retry; check AWS quotas if persistent |
+| E-8 | K8s pod launch failure | 500 | `compute_launch_failed` | "Failed to launch container. Please try again." | Retry; check K8s cluster capacity |
+| E-9 | Tool installation timeout | 500 | `tool_install_timeout` | "Tool installation timed out after 120 seconds." | Retry with different instance type; check network |
+| E-10 | Tool verification failed | 500 | `tool_verify_failed` | "Tool installed but verification failed. Check worker provision log for details." | Inspect provision log; may need different instance AMI |
+| E-11 | KMS decryption failure | 500 | `key_decrypt_failed` | "Failed to decrypt LLM API key. Please re-add the key." | User re-adds the key in AGENT-001 |
+| E-12 | Stop non-running worker | 400 | `invalid_worker_state` | "Cannot stop worker in state: {state}. Worker must be 'ready' or 'running'." | Wait for provisioning to complete first |
+| E-13 | Start non-stopped worker | 400 | `invalid_worker_state` | "Cannot start worker in state: {state}. Worker must be 'stopped'." | Stop the worker first |
+| E-14 | Terminate already terminated | 400 | `invalid_worker_state` | "Worker is already terminated." | No action needed |
+| E-15 | Worker not found | 404 | `worker_not_found` | "Worker not found." | Check worker_id |
+| E-16 | Session expired | 401 | `unauthorized` | "Session expired. Please log in again." | Re-login |
+| E-17 | Missing CSRF token | 403 | `csrf_missing` | "CSRF token required." | Include x-csrf-token header |
+| E-18 | Custom tool missing install commands | 400 | `custom_tool_no_commands` | "Custom tool requires at least one install command." | Provide custom_install_commands |
+| E-19 | Instance type not available | 400 | `instance_type_unavailable` | "Instance type {type} is not available in the current region." | Select a different instance type |
+| E-20 | Startup script too large | 400 | `script_too_large` | "Custom install commands exceed 16KB limit." | Reduce script size |
+
+---
+
+## 8. Observability & Monitoring
+
+### 8.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `agent_worker_create_total` | Counter | `tool`, `compute_type`, `agent_type` | Total worker creation requests |
+| `agent_worker_create_errors` | Counter | `error_code` | Worker creation failures |
+| `agent_worker_provision_duration_seconds` | Histogram | `tool`, `compute_type` | Time from create to ready (buckets: 10, 30, 60, 90, 120, 180) |
+| `agent_worker_provision_step_duration_seconds` | Histogram | `step` | Duration of each provisioning step |
+| `agent_workers_active` | Gauge | `status`, `tool` | Currently active workers by status |
+| `agent_worker_idle_shutdown_total` | Counter | `tool` | Workers auto-stopped due to idle timeout |
+| `agent_worker_lifecycle_total` | Counter | `action` (stop/start/terminate) | Worker lifecycle operations |
+
+### 8.2 Log Events
+
+| Event | Level | Fields | When |
+|-------|-------|--------|------|
+| `worker.created` | INFO | `worker_id`, `user_id`, `tool`, `compute_type`, `instance_type` | After DDB write |
+| `worker.provision.step` | INFO | `worker_id`, `step`, `status`, `duration_ms` | Each provisioning step completion |
+| `worker.provision.error` | ERROR | `worker_id`, `step`, `error`, `traceback` | Provisioning step failure |
+| `worker.ready` | INFO | `worker_id`, `total_provision_seconds`, `tool_version` | Worker reaches ready state |
+| `worker.stopped` | INFO | `worker_id`, `uptime_seconds` | Worker stopped (manual or idle) |
+| `worker.started` | INFO | `worker_id` | Stopped worker restarted |
+| `worker.terminated` | INFO | `worker_id`, `lifetime_seconds` | Worker terminated |
+| `worker.idle_shutdown` | WARN | `worker_id`, `idle_seconds`, `threshold` | Auto-shutdown due to idle timeout |
+| `worker.limit_reached` | WARN | `user_id`, `current_count`, `max_limit` | User hit worker limit |
+
+### 8.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High provision failure rate | `rate(agent_worker_create_errors[5m]) / rate(agent_worker_create_total[5m]) > 0.3` | P2 | Check EC2/K8s service health; inspect recent provision logs |
+| Provisioning stuck | `agent_worker_provision_duration_seconds{quantile="0.99"} > 180` | P3 | Investigate slow instance launches; check AMI availability |
+| Worker count anomaly | `agent_workers_active{status="ready"} > 50` (platform-wide) | P3 | Verify no runaway creation; check billing impact |
+| Idle workers accumulating | `agent_workers_active{status="ready"} - rate(agent_worker_lifecycle_total{action="terminate"}[1h]) > 20` | P4 | Review idle timeout settings; send user notifications |
+
+### 8.4 Dashboard Queries
+
+```promql
+# Provisioning success rate (last hour)
+1 - (sum(rate(agent_worker_create_errors[1h])) / sum(rate(agent_worker_create_total[1h])))
+
+# Average provision time by tool
+histogram_quantile(0.5, rate(agent_worker_provision_duration_seconds_bucket[1h]))
+
+# Active workers by status
+agent_workers_active
+
+# Worker creation rate
+sum(rate(agent_worker_create_total[1h])) by (tool)
+```
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `AGENT_WORKERS_ENABLED` | `false` | Master toggle — hides Workers nav item and returns 404 from all endpoints |
+| `AGENT_WORKERS_K8S_ENABLED` | `false` | Enable K8s compute option (EC2 only when false) |
+| `AGENT_WORKERS_CUSTOM_TOOL_ENABLED` | `false` | Allow custom tool installations (security-sensitive) |
+
+### 9.2 Migration Steps
+
+| Phase | Action | Duration | Rollback |
+|-------|--------|----------|----------|
+| 1. Schema | Run `local-ddb-init.py` to create `agent_workers` table with 3 GSIs | 1 min | Drop table (no data yet) |
+| 2. Backend | Deploy `agent_worker_provisioner.py` + `agent_workers.py` router; flag OFF | Instant | Remove router registration from `main.py` |
+| 3. Internal alpha | Enable `AGENT_WORKERS_ENABLED=true` for internal team accounts only | 3 days | Flip flag to false |
+| 4. EC2 GA | Enable for all users; K8s still behind flag | 1 week | Disable flag; terminate any active workers via admin API |
+| 5. K8s beta | Enable `AGENT_WORKERS_K8S_ENABLED=true` for beta users | 1 week | Flip K8s flag; K8s workers gracefully terminated |
+| 6. Full GA | Enable all flags; remove flag checks in next release | Permanent | N/A |
+
+### 9.3 Canary Deployment
+
+- Deploy backend changes behind feature flag to 100% of instances
+- Enable for 1% of users (internal + beta) for 48 hours
+- Monitor provisioning success rate, provision latency, error rates
+- If error rate > 5%: disable flag, investigate
+- Ramp: 1% -> 10% -> 50% -> 100% over 2 weeks
+
+---
+
+## 10. Performance Considerations
+
+### 10.1 Provisioning Latency Budget
+
+| Step | Target (EC2) | Target (K8s) | Notes |
+|------|-------------|-------------|-------|
+| Input validation + limit check | < 10ms | < 10ms | DDB GetItem + conditional check |
+| LLM key decryption (KMS) | < 50ms | < 50ms | KMS Decrypt API; mock is instant |
+| Startup script construction | < 5ms | < 5ms | String concatenation; no I/O |
+| Compute launch (API call) | 30-45s | 3-8s | EC2 RunInstances vs K8s CreatePod |
+| Tool installation (SSH) | 30-60s | 10-20s | npm install over network; K8s uses pre-built image layers |
+| Tool verification | 2-5s | 2-5s | Run `claude --version` or equivalent |
+| **Total provision time** | **60-120s** | **15-35s** | K8s is 4x faster due to container reuse |
+
+### 10.2 DynamoDB Capacity
+
+| Operation | RCU/WCU | Frequency | Daily Estimate |
+|-----------|---------|-----------|----------------|
+| Create worker (PutItem) | 1 WCU | ~50/day (platform) | 50 WCU |
+| Update provision step (UpdateItem) | 1 WCU | ~4 per create | 200 WCU |
+| Get worker (GetItem) | 0.5 RCU (eventual) | ~500/day (polling) | 250 RCU |
+| List workers (Query) | 1-5 RCU | ~200/day | 1000 RCU |
+| Idle check scan (GSI Query) | 5-20 RCU | 288/day (every 5 min) | 5760 RCU |
+
+On-demand DDB pricing handles this easily. For provisioned mode, 10 RCU + 5 WCU is sufficient for up to ~100 concurrent users.
+
+### 10.3 Caching Strategy
+
+| Data | Cache Location | TTL | Invalidation |
+|------|---------------|-----|--------------|
+| Tool list | Frontend (React Query) | 24h (staleTime) | Rarely changes; manual refetch |
+| Compute options | Frontend (React Query) | 1h (staleTime) | Cost updates; manual refetch |
+| Worker list | Frontend (React Query) | 30s (staleTime) | Invalidate on create/stop/start/terminate mutation |
+| Worker detail (polling) | Frontend (React Query) | 5s (refetchInterval during provisioning) | Stop polling once status=ready |
+
+### 10.4 Rate Limiting
+
+| Endpoint | Limit | Window | Reason |
+|----------|-------|--------|--------|
+| POST `/ui/agent/workers` | 5 | 1 hour | Prevent compute resource abuse |
+| POST `/{id}/stop` | 10 | 1 minute | Prevent rapid state cycling |
+| POST `/{id}/start` | 10 | 1 minute | Prevent rapid state cycling |
+| GET `/ui/agent/workers` | 60 | 1 minute | Standard read limit |
+| GET `/{id}/provision-log` | 30 | 1 minute | Polling during provisioning |
+
+### 10.5 Background Task Efficiency
+
+The idle worker checker runs every 5 minutes and queries the `ByStatus` GSI for `worker_status="ready"` per user. At scale (1000+ users), this becomes a table scan unless we add a global secondary index with `GSI1PK = STATUS#{worker_status}`. For the initial rollout, per-user queries are acceptable (most users have < 5 workers).
+
+---
+
+## 11. Frontend Component Tree
+
+```
+WorkersPage
+├── PageHeader
+│   ├── h1 "Agent Workers"
+│   └── Button "Create Worker" → opens WorkerCreateWizard
+├── WorkerFilters
+│   ├── Select (status filter: all, provisioning, ready, running, stopped, error, terminated)
+│   └── Select (agent type filter: all, coder, qa, reviewer, devops, custom)
+├── WorkerTable
+│   ├── DataTable (columns: label, agent_type, tool, status, compute, created_at, actions)
+│   └── WorkerRow (for each worker)
+│       ├── Badge (status: color-coded)
+│       ├── Tooltip (hover: public_ip, instance_type)
+│       ├── DropdownMenu (actions)
+│       │   ├── MenuItem "View Details" → navigates to detail
+│       │   ├── MenuItem "Open Terminal" → opens /remote/ssh/{host_id}
+│       │   ├── MenuItem "Stop" (if ready/running)
+│       │   ├── MenuItem "Start" (if stopped)
+│       │   └── MenuItem "Terminate" → ConfirmDialog
+│       └── ProvisionProgress (if provisioning/installing)
+│           └── Progress bar with step labels
+├── WorkerDetailPanel (slide-over or separate page)
+│   ├── WorkerHeader
+│   │   ├── h2 "{label}"
+│   │   ├── Badge (status)
+│   │   └── LifecycleButtons (Stop / Start / Terminate)
+│   ├── WorkerInfo
+│   │   ├── Field "Agent Type" → agent_type
+│   │   ├── Field "Tool" → tool (tool_version)
+│   │   ├── Field "Compute" → compute_type / instance_type
+│   │   ├── Field "LLM Key" → llm_provider / llm_key_id
+│   │   ├── Field "Public IP" → public_ip
+│   │   ├── Field "Repository" → repo_url (link)
+│   │   └── Field "Idle Timeout" → idle_timeout_seconds formatted
+│   ├── ProvisionLog
+│   │   └── Timeline (provision_log entries)
+│   │       └── TimelineEntry
+│   │           ├── Icon (check / spinner / x based on status)
+│   │           ├── Label (step name)
+│   │           ├── Detail text
+│   │           └── Timestamp
+│   └── TerminalButton
+│       └── Button "Open Terminal" → window.open(/remote/ssh/{host_id})
+└── EmptyState (when no workers)
+    ├── Icon (Bot)
+    ├── h3 "No workers yet"
+    ├── p "Create your first agent worker to get started."
+    └── Button "Create Worker"
+
+WorkerCreateWizard (Dialog)
+├── DialogHeader "Create Agent Worker"
+├── Stepper (5 steps, progress indicator)
+├── Step 1: AgentTypeSelector
+│   └── CardGrid (5 cards: Coder, QA, Reviewer, DevOps, Custom)
+│       └── AgentTypeCard
+│           ├── Icon
+│           ├── Title
+│           └── Description
+├── Step 2: ToolSelector
+│   └── CardGrid (loaded from GET /tools)
+│       └── ToolCard
+│           ├── Icon (tool logo)
+│           ├── Title (display_name)
+│           ├── Description
+│           └── Badge "Required: {required_provider}"
+├── Step 3: ComputeSelector
+│   └── DataTable (loaded from GET /compute-options)
+│       └── ComputeOptionRow
+│           ├── Badge (ec2 / k8s)
+│           ├── Text (instance_type)
+│           ├── Text (vcpu + memory_gb)
+│           ├── Text (cost_cents_per_min formatted)
+│           └── Text (startup_seconds)
+├── Step 4: LlmKeySelector
+│   └── Select (dropdown of keys from AGENT-001, filtered by required_provider)
+│       └── Option "{provider} - {label} (****{last4})"
+├── Step 5: ConfigForm
+│   ├── Input "Label" (required)
+│   ├── Input "Repository URL" (optional)
+│   ├── Input "Branch Convention" (default: agent/{worker_id}/{ticket_id})
+│   ├── Slider "Idle Timeout" (10 min - 24 hr)
+│   └── CostEstimate
+│       └── p "Estimated cost: ${cost}/hour"
+├── NavigationButtons
+│   ├── Button "Back" (step > 1)
+│   ├── Button "Next" (step < 5)
+│   └── Button "Create Worker" (step 5, disabled until valid)
+└── DialogFooter
+```
+
+### 11.1 TypeScript Interfaces
+
+```typescript
+// frontend/src/api/types.ts
+
+export interface CreateWorkerIn {
+  label: string;
+  agent_type: "coder" | "qa" | "reviewer" | "devops" | "custom";
+  tool: "claude_code" | "codex" | "custom";
+  compute_type: "ec2" | "k8s";
+  instance_type: string;
+  llm_key_id: string;
+  repo_url?: string;
+  branch_convention?: string;
+  idle_timeout_seconds?: number;
+  template_id?: string;
+  custom_install_commands?: string[];
+  custom_env_var?: string;
+  custom_verify_command?: string;
+}
+
+export interface ProvisionStep {
+  step: string;
+  status: "running" | "done" | "error";
+  ts: number;
+  detail: string;
+}
+
+export interface Worker {
+  worker_id: string;
+  user_id: string;
+  label: string;
+  agent_type: string;
+  tool: string;
+  tool_version: string;
+  compute_type: string;
+  compute_instance_id: string;
+  instance_type: string;
+  llm_key_id: string;
+  llm_provider: string;
+  host_id: string;
+  public_ip: string;
+  worker_status: "provisioning" | "installing" | "ready" | "running" | "stopped" | "error" | "terminated";
+  provision_log: ProvisionStep[];
+  repo_url: string;
+  branch_convention: string;
+  idle_timeout_seconds: number;
+  last_activity_at: number;
+  created_at: number;
+  started_at: number;
+  stopped_at: number;
+  terminated_at: number;
+  template_id: string;
+  error_message: string;
+}
+
+export interface WorkerList {
+  workers: Worker[];
+  count: number;
+}
+
+export interface ToolInfo {
+  tool: string;
+  display_name: string;
+  description: string;
+  install_time_seconds: number;
+  required_provider: string;
+}
+
+export interface ComputeOption {
+  compute_type: "ec2" | "k8s";
+  instance_type: string;
+  vcpu: number;
+  memory_gb: number;
+  cost_cents_per_min: number;
+  startup_seconds: number;
+}
+```
+
+### 11.2 State Management
+
+```typescript
+// React Query keys and hooks
+
+const workerKeys = {
+  all: ["agent-workers"] as const,
+  list: (filters?: { status?: string; agent_type?: string }) =>
+    [...workerKeys.all, "list", filters] as const,
+  detail: (id: string) => [...workerKeys.all, "detail", id] as const,
+  provisionLog: (id: string) => [...workerKeys.all, "provision-log", id] as const,
+  tools: () => [...workerKeys.all, "tools"] as const,
+  computeOptions: () => [...workerKeys.all, "compute-options"] as const,
+};
+
+// useWorkers() — list with optional filters
+// useWorker(id) — single worker detail, refetchInterval=5s when provisioning
+// useCreateWorker() — mutation, invalidates list on success
+// useStopWorker() — mutation, invalidates list + detail
+// useStartWorker() — mutation, invalidates list + detail
+// useTerminateWorker() — mutation with confirmation dialog, invalidates list
+// useProvisionLog(id) — refetchInterval=3s when provisioning
+// useTools() — staleTime=24h
+// useComputeOptions() — staleTime=1h
+```
+
+---
+
+## 12. Expanded E2E Test Details
+
+Expanding the original 4 sections (18 tests) to 6 sections (28 tests) with edge cases, negative tests, and concurrent access tests.
+
+**Section 627: Compute & Tool Options API (4 tests)**
+
+1. `List available AI tools` -- GET `/ui/agent/workers/tools`. Verify at least 2 tools: `claude_code` with `display_name: "Claude Code"`, `codex` with `display_name: "OpenAI Codex"`. Each has `install_time_seconds > 0`.
+2. `List compute options` -- GET `/ui/agent/workers/compute-options`. Verify at least 2 EC2 options and at least 1 K8s option. Each has `vcpu`, `memory_gb`, `cost_cents_per_min`.
+3. `Compute options include startup time` -- Verify K8s options have `startup_seconds < 10` and EC2 options have `startup_seconds > 20`.
+4. `Tools include required_provider` -- Verify `claude_code` has `required_provider: "anthropic"`, `codex` has `required_provider: "openai"`, `custom` has `required_provider: ""`.
+
+**Section 628: Worker CRUD API (7 tests)**
+
+5. `Alice creates a Claude Code worker on EC2` -- POST `/ui/agent/workers` with `agent_type: "coder"`, `tool: "claude_code"`, `compute_type: "ec2"`, `instance_type: "t3.medium"`, `llm_key_id` from setup. Verify 201 with `worker_id`, `worker_status` in `["provisioning", "installing", "ready"]`, `tool: "claude_code"`, `compute_type: "ec2"`.
+6. `Worker provisioning completes to ready` -- Poll GET `/ui/agent/workers/{worker_id}` until `worker_status === "ready"` (max 10s). Verify `provision_log` has at least 3 entries, `public_ip` is non-empty, `host_id` is non-empty.
+7. `Alice lists workers` -- GET `/ui/agent/workers`. Verify `count >= 1`, first worker has matching `worker_id`.
+8. `Alice creates a K8s Codex worker` -- POST with `tool: "codex"`, `compute_type: "k8s"`, `instance_type: "standard-2cpu-4gb"`, `llm_key_id` for OpenAI key. Verify 201, `compute_type: "k8s"`.
+9. `Alice cannot exceed worker limit` -- Create workers until hitting `MAX_WORKERS_PER_USER`. Attempt one more, verify 409 or 400 with message about limit.
+10. `Invalid LLM key_id returns 400` -- POST with `llm_key_id: "nonexistent_key"`. Verify 400 error about LLM key not found.
+11. `Provider mismatch returns 400` -- Create worker with `tool: "claude_code"` but `llm_key_id` pointing to an OpenAI key. Verify 400 about provider mismatch.
+
+**Section 629: Worker Lifecycle API (6 tests)**
+
+12. `Alice stops a running worker` -- POST `/ui/agent/workers/{worker_id}/stop`. Verify `worker_status: "stopped"`, `stopped_at > 0`.
+13. `Alice starts a stopped worker` -- POST `/ui/agent/workers/{worker_id}/start`. Verify `worker_status` transitions to `ready`.
+14. `Alice terminates a worker` -- DELETE `/ui/agent/workers/{worker_id}`. Verify `worker_status: "terminated"`, `terminated_at > 0`.
+15. `Cannot stop an already terminated worker` -- POST `/stop` on terminated worker. Verify 400/409 with error about invalid state.
+16. `Cannot start a provisioning worker` -- POST `/start` on a worker still in `provisioning` state. Verify 400 about invalid state.
+17. `Provision log shows all steps` -- GET `/ui/agent/workers/{worker_id}/provision-log`. Verify list with entries for `compute_launch`, `tool_install`, `key_inject`, `verify`. Each entry has `step`, `status`, `ts`.
+
+**Section 630: Worker Creation UI (5 tests)**
+
+18. `Workers page renders empty state` -- Navigate to `/agents/workers`. Verify "No workers" empty state message visible.
+19. `Create Worker wizard shows agent type selector` -- Click "Create Worker" button. Verify cards for "Coder", "QA", "Reviewer", "DevOps" are visible.
+20. `Wizard progresses through all steps` -- Select "Coder" agent type, click Next. Select "Claude Code" tool, click Next. Select compute option, click Next. Verify LLM key dropdown is visible.
+21. `Complete wizard creates worker` -- Fill all steps, submit. Verify new row appears in workers table with status badge.
+22. `Worker row shows provisioning progress` -- Verify status badge transitions (provisioning -> installing -> ready) with polling.
+
+**Section 631: Input Validation & Edge Cases (3 tests)**
+
+23. `Empty label returns 422` -- POST with `label: ""`. Verify 422 validation error.
+24. `Invalid agent_type returns 422` -- POST with `agent_type: "hacker"`. Verify 422.
+25. `Custom tool without install commands returns 400` -- POST with `tool: "custom"`, `custom_install_commands: []`. Verify 400 about missing install commands.
+
+**Section 632: Concurrent Access & Stress (3 tests)**
+
+26. `Parallel worker creation respects limit` -- Send 6 concurrent POST requests to create workers (limit is 5). Verify exactly 5 succeed and 1 fails with limit error. Total workers count equals 5.
+27. `Simultaneous stop and terminate` -- Send stop and terminate concurrently for the same worker. Verify one succeeds and the other fails (or terminate wins). Final state is `terminated`.
+28. `Rapid start-stop cycling` -- Stop then immediately start a worker 3 times. Verify final state is consistent (`ready` or `stopped`), no error state from race conditions.
+
+---
+
+## 13. Security Considerations
+
+### 13.1 API Key Injection
 
 LLM API keys are decrypted from KMS only during provisioning and injected as environment variables in the instance's `.bashrc`. The decrypted key is never stored in DynamoDB, never logged, and is available only within the instance's shell environment.
 
-### 6.2 Worker Isolation
+### 13.2 Worker Isolation
 
 Each worker runs on a separate EC2 instance or K8s pod with its own network namespace. Workers cannot access each other's environments or API keys.
 
-### 6.3 Startup Script Validation
+### 13.3 Startup Script Validation
 
 Custom install commands are limited to 16KB total. Shell metacharacter injection is mitigated by writing commands to a script file rather than passing via command-line arguments.
 
-### 6.4 Worker Limit
+### 13.4 Worker Limit
 
 Per-user maximum (default: 5) prevents resource abuse. Configurable via `S.agent_max_workers_per_user`.
 
-### 6.5 Idle Auto-Shutdown
+### 13.5 Idle Auto-Shutdown
 
 Workers automatically stop after `idle_timeout_seconds` of inactivity to prevent cost accumulation. The background checker runs every 5 minutes.
 
 ---
 
-## 7. Dependencies
+## 14. Dependencies
 
 | Dependency | Type | Description |
 |------------|------|-------------|
@@ -607,7 +1490,7 @@ Workers automatically stop after `idle_timeout_seconds` of inactivity to prevent
 
 ---
 
-## 8. Acceptance Criteria
+## 15. Acceptance Criteria
 
 1. Users can create agent workers with a single API call specifying agent type, tool, compute, and LLM key.
 2. Provisioning automatically installs the selected AI tool (Claude Code or Codex) on the compute instance.

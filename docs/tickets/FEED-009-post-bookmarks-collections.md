@@ -512,28 +512,44 @@ test.beforeAll(async ({ browser }) => {
 | 338.3 | Unbookmarked post has is_bookmarked=false | Unbookmark; GET feed; `is_bookmarked=false` |
 | 338.4 | List bookmarks paginates correctly | Bookmark 5 posts; list with limit; verify cursor-based pagination |
 
-### 5.6 Section 339: Bookmark UI (4 tests)
+### 5.6 Section 339: Bookmark UI (6 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
 | 339.1 | Bookmark button visible on PostCard | Navigate to feed; `[data-testid="bookmark-button"]` visible |
 | 339.2 | Clicking bookmark saves post | Click bookmark button; icon changes to filled state |
-| 339.3 | Saved Posts page shows bookmarked posts | Navigate to `/saved`; bookmarked post visible |
-| 339.4 | Collection sidebar shows collections with counts | Collection list visible; "Saved" with correct count |
+| 339.3 | Clicking filled bookmark unbookmarks post | Click again; icon returns to outline; post removed from saved |
+| 339.4 | Saved Posts page shows bookmarked posts | Navigate to `/saved`; bookmarked post visible |
+| 339.5 | Collection sidebar shows collections with counts | Collection list visible; "Saved" with correct count |
+| 339.6 | Create collection dialog works | Click "+ New"; enter name; confirm; collection appears in sidebar |
+
+### 5.7 Section 340: Bookmark Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 340.1 | Bookmark a locked post | POST bookmark on locked post; 201; post appears in saved list with lock indicator |
+| 340.2 | Creator deletes bookmarked post | Alice deletes post; Bob's bookmark list shows it as missing/removed |
+| 340.3 | Two users bookmark same post | Alice and Bob both bookmark; each has independent record |
+| 340.4 | Rapid bookmark/unbookmark toggle | Toggle 5 times quickly; final state matches last action |
 
 ---
 
-## 6. Error Handling
+## 6. Error Handling Matrix
 
-| Scenario | Status | Detail |
-|----------|--------|--------|
-| Post not found | 404 | "Post not found" |
-| Collection not found | 404 | "Collection not found" |
-| Delete default collection | 400 | "Cannot delete default collection" |
-| Rename default collection | 400 | "Cannot rename default collection" |
-| Max collections exceeded | 400 | "Maximum collection limit reached" |
-| Collection name too long | 422 | Pydantic validation |
-| Bookmark non-existent post | 404 | "Post not found" |
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Post not found | 404 | `not_found` | "Post not found" | Redirect to feed |
+| Collection not found | 404 | `collection_not_found` | "Collection not found" | Refresh collections list |
+| Delete default collection | 400 | `cannot_delete_default` | "Cannot delete default collection" | Hide delete button for default |
+| Rename default collection | 400 | `cannot_rename_default` | "Cannot rename default collection" | Hide rename for default |
+| Max collections exceeded (50) | 400 | `max_collections` | "Maximum of 50 collections reached" | Delete unused or upgrade |
+| Max bookmarks per collection | 400 | `max_bookmarks` | "Collection is full (1000 max)" | Move bookmarks to other collections |
+| Collection name too long | 422 | `validation_error` | "Name must be 100 characters or less" | Show inline error |
+| Duplicate collection name | 409 | `duplicate_name` | "Collection name already exists" | Show inline error |
+| Bookmark non-existent post | 404 | `not_found` | "Post not found" | Remove stale entry |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Redirect to login |
+| CSRF mismatch | 403 | `csrf_invalid` | "Invalid CSRF token" | Refresh page |
+| Rate limited | 429 | `rate_limited` | "Too many requests" | Retry after backoff |
 
 ---
 
@@ -543,21 +559,142 @@ test.beforeAll(async ({ browser }) => {
 - Post creators cannot see who bookmarked their posts
 - Collection names are user-scoped (no global namespace)
 - Bookmark state (`is_bookmarked`) is only included in the bookmarking user's feed response
+- No cross-user access (PK is user_sub; DDB key conditions enforce isolation)
+- Rate limiting prevents bulk bookmark abuse (50 operations/min)
 
 ---
 
 ## 8. Performance Considerations
 
-| Concern | Mitigation |
-|---------|-----------|
-| Fetching bookmarked IDs for feed annotation | Single DDB query with begins_with "BM#"; results cached per request |
-| Many bookmarks | Cursor-based pagination in list endpoint; max 1000 per collection |
-| Post data freshness in bookmark list | Bookmarks store denormalized preview; full post data fetched at list time |
-| Collection count accuracy | Atomic counter updates via DynamoDB ADD |
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Fetching bookmarked IDs for feed | < 20ms | Single DDB query with begins_with "BM#"; cached per request |
+| Many bookmarks (>500) | < 100ms per page | Cursor-based pagination; max 1000 per collection |
+| Post data freshness | Eventual (seconds) | Denormalized preview for fast list; full data on detail view |
+| Collection count accuracy | Atomic | DynamoDB ADD for counter updates |
+| Bookmark toggle perceived latency | Instant | Optimistic UI update in React Query cache |
+| Feed annotation overhead | < 10ms | Set lookup O(1) per post |
 
 ---
 
-## 9. Dependencies
+## 9. Observability
+
+### 9.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `bookmark_created_total` | Counter | `collection_type` (default/custom) | Bookmarks created |
+| `bookmark_removed_total` | Counter | — | Bookmarks removed |
+| `bookmark_moved_total` | Counter | — | Bookmarks moved between collections |
+| `collection_created_total` | Counter | — | Collections created |
+| `collection_deleted_total` | Counter | — | Collections deleted |
+| `bookmark_list_latency_ms` | Histogram | — | Bookmark list query latency |
+
+### 9.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Post bookmarked | INFO | `user_sub`, `post_id`, `collection_id` |
+| Post unbookmarked | INFO | `user_sub`, `post_id` |
+| Collection created | INFO | `user_sub`, `collection_id`, `name` |
+| Collection deleted | INFO | `user_sub`, `collection_id`, `bookmarks_moved` |
+| Max collections reached | WARN | `user_sub`, `count` |
+
+### 9.3 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Bookmark list slow | p95 > 500ms | Medium | Check DDB throughput |
+| High bookmark error rate | > 5% of ops fail | High | Check DDB health |
+| Bulk bookmark abuse | > 200 bookmarks/hour from single user | Medium | Review and rate limit |
+
+---
+
+## 10. Rollout Plan
+
+### 10.1 Feature Flag
+
+```python
+# app/core/settings.py
+post_bookmarks_enabled: bool = os.environ.get("POST_BOOKMARKS_ENABLED", "true").lower() == "true"
+```
+
+### 10.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend + table | Deploy DDB table + endpoints; flag OFF | 1 day | Unit tests pass |
+| Phase 2: Internal | Enable for internal accounts | 3 days | E2E pass; QA sign-off |
+| Phase 3: Canary 10% | Enable for 10% of users | 3 days | Error rate < 0.1% |
+| Phase 4: GA | Enable for all users | Permanent | Adoption metrics healthy |
+
+### 10.3 Migration
+
+1. Create `post_bookmarks` table via `scripts/local-ddb-init.py`
+2. No data migration needed (new empty table)
+3. Default collection auto-created on first user access
+
+### 10.4 Rollback
+
+1. Set `POST_BOOKMARKS_ENABLED=false`
+2. Bookmark data preserved in DDB (dormant)
+3. BookmarkButton hidden; SavedPostsPage shows empty
+4. Re-enabling restores all data
+
+---
+
+## 11. API Request/Response Examples
+
+**Bookmark a post** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/posts/p_abc123/bookmark \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_bob; ui_csrf=csrf_b; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_b" \
+  -d '{"collection_id": "default"}'
+```
+
+**Response (201)**:
+```json
+{"post_id": "p_abc123", "collection_id": "default", "saved_at": 1748520500}
+```
+
+**Create a collection** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/posts/bookmark-collections \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_bob; ui_csrf=csrf_b; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_b" \
+  -d '{"name": "Recipes"}'
+```
+
+**Response (201)**:
+```json
+{"collection_id": "coll_a1b2c3", "name": "Recipes", "created_at": 1748520600, "bookmark_count": 0, "sort_order": 1}
+```
+
+**List bookmarks in collection** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/ui/posts/bookmarks?collection_id=default" \
+  -H "Cookie: ui_session=sess_bob; ui_csrf=csrf_b; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "bookmarks": [
+    {"post_id": "p_abc123", "collection_id": "default", "saved_at": 1748520500, "post": {"post_id": "p_abc123", "body": "Great recipe!", "like_count": 10}}
+  ],
+  "next_cursor": null
+}
+```
+
+---
+
+## 12. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|

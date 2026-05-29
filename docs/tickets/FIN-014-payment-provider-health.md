@@ -492,9 +492,200 @@ export const getProviderUptime = (provider: string, params?: { days?: number }) 
 | 13 | `Root re-enables a provider` | POST toggle with `{enabled: true}` -> 200; `enabled: true` |
 | 14 | `Non-root cannot toggle provider` | POST toggle as Charlie -> 403 |
 
+**Section 531: Provider Health Edge Cases (5 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 15 | `Timeline with no data returns empty` | GET timeline for provider with no snapshots; 200; empty data array |
+| 16 | `Uptime for new provider is 100%` | New provider with no incidents; uptime_pct = 100.0 |
+| 17 | `Error drilldown empty when no errors` | GET errors for healthy provider; error_types empty; recent_failures empty |
+| 18 | `Disable already-disabled provider` | Toggle enabled=false twice; second returns 200; still disabled (idempotent) |
+| 19 | `Incident create and resolve` | POST new incident; POST resolve; incident has end_time |
+
+**Total E2E tests: 19**
+
 ---
 
-## 6. Security Considerations
+## 6. API Request/Response Examples
+
+**Get all provider statuses** (curl):
+
+```bash
+curl -X GET http://localhost:8000/v1/admin/provider-health \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_r; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+[
+  {
+    "provider": "stripe",
+    "status": "healthy",
+    "enabled": true,
+    "success_rate": 99.7,
+    "avg_latency_ms": 234,
+    "total_success": 4521,
+    "total_failure": 14,
+    "last_check_at": 1748520100
+  },
+  {
+    "provider": "paypal",
+    "status": "degraded",
+    "enabled": true,
+    "success_rate": 95.2,
+    "avg_latency_ms": 890,
+    "total_success": 1230,
+    "total_failure": 62,
+    "last_check_at": 1748520100
+  }
+]
+```
+
+**Get provider timeline** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/v1/admin/provider-health/stripe/timeline?hours=24" \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_r; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "data": [
+    {"hour": "2026-05-29T00:00:00Z", "success": 189, "failure": 1, "avg_latency_ms": 220},
+    {"hour": "2026-05-29T01:00:00Z", "success": 195, "failure": 0, "avg_latency_ms": 210}
+  ]
+}
+```
+
+**Toggle provider** (curl):
+
+```bash
+curl -X POST http://localhost:8000/v1/admin/provider-health/paypal/toggle \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_r; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_r" \
+  -d '{"enabled": false, "reason": "Scheduled maintenance window"}'
+```
+
+**Response (200)**:
+```json
+{"provider": "paypal", "enabled": false, "toggled_at": 1748520500, "reason": "Scheduled maintenance window"}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Unknown provider | 404 | `provider_not_found` | "Provider not found" | Check provider name |
+| Non-admin access | 403 | `forbidden` | "Admin access required" | Use admin account |
+| Non-root config update | 403 | `root_required` | "Root access required" | Use root account |
+| Non-root toggle | 403 | `root_required` | "Root access required" | Use root account |
+| Invalid threshold | 422 | `validation_error` | "Threshold must be > 0" | Fix value |
+| Provider already disabled | 200 | — | Idempotent toggle | No action needed |
+
+---
+
+## 8. Observability
+
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `provider_health_check_total` | Counter | `provider`, `status` | Health checks |
+| `provider_success_rate` | Gauge | `provider` | Current success rate |
+| `provider_latency_ms` | Histogram | `provider` | Payment latency |
+| `provider_toggled_total` | Counter | `provider`, `enabled` | Toggle events |
+| `provider_incident_total` | Counter | `provider` | Incidents created |
+
+### 8.2 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Provider degraded | Success rate < configured threshold | High | Auto-alert admins; investigate |
+| Provider down | Success rate < 50% for > 5 min | Critical | Consider auto-disable; page oncall |
+| High latency | avg_latency > configured threshold | Medium | Monitor; may indicate degradation |
+| Incident unresolved > 4h | Open incident duration > 4 hours | High | Escalate |
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flag
+
+```python
+provider_health_enabled: bool = os.environ.get("PROVIDER_HEALTH_ENABLED", "true").lower() == "true"
+```
+
+### 9.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend | Deploy health check service + table | 2 days | Unit tests pass |
+| Phase 2: Internal | Enable dashboard; verify real provider data | 3 days | All 19 E2E pass |
+| Phase 3: GA | Visible to all admins | Permanent | Accurate health data |
+
+### 9.3 Rollback
+
+1. Set flag OFF — dashboard unavailable
+2. Health check background job stops writing
+3. Existing data preserved
+
+---
+
+## 10. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Health check frequency | Every 5 min per provider | Background loop; lightweight DDB write |
+| Timeline query | < 100ms | GSI on provider + hour |
+| Error drilldown | < 200ms | Query last 100 failures from DDB |
+| Uptime calculation | < 100ms | Count incidents in date range |
+| Dashboard load | < 500ms | Parallel queries for all providers |
+
+---
+
+## 11. Frontend Component Tree
+
+```
+ProviderHealthDashboard
+├── ProviderStatusGrid (row of status cards)
+│   └── ProviderStatusCard (for each provider)
+│       ├── StatusIndicator (green/yellow/red dot)
+│       ├── ProviderName
+│       ├── SuccessRate (percentage)
+│       ├── AvgLatency (ms)
+│       ├── EnabledBadge (on/off)
+│       └── LastChecked (relative time)
+├── Tabs
+│   ├── TimelineTab
+│   │   ├── ProviderSelector (dropdown)
+│   │   ├── TimeRangeSelector (6h/12h/24h/48h/7d)
+│   │   └── TimelineChart (stacked bar: success + failure per hour)
+│   ├── ErrorsTab
+│   │   ├── ErrorTypeDistribution (pie chart)
+│   │   └── RecentFailuresTable (timestamp, error_type, details)
+│   ├── IncidentsTab
+│   │   └── IncidentTimeline (vertical timeline of incidents)
+│   ├── UptimeTab
+│   │   ├── UptimePercentage (large display)
+│   │   └── UptimeCalendar (heatmap of daily availability)
+│   └── ConfigTab (root only)
+│       ├── AlertThresholdForm
+│       │   ├── ErrorRateInput
+│       │   └── LatencyInput
+│       └── ProviderToggleSection
+│           ├── EnableToggle
+│           ├── ReasonInput
+│           └── ConfirmationDialog
+└── ExportButton (CSV download of health data)
+```
+
+---
+
+## 12. Security Considerations
 
 ### 6.1 Role-Based Access
 - Read-only endpoints (status, timeline, errors, incidents, uptime): ADMIN role

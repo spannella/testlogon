@@ -553,3 +553,262 @@ test.beforeAll(async ({ browser }) => {
 ### 8.1 Downstream Dependents
 
 None — ADS-008 is a terminal analytics consumer.
+
+---
+
+## 9. Architecture & Data Flow
+
+```
+Analytics Pipeline
+──────────────────
+
+  Ad Impression Event
+  (from ADS-004 serving engine)
+       │
+       ▼
+  ┌────────────────────────────────────┐
+  │  ad_impressions table              │
+  │  PK=AD_IMP#{date}                 │
+  │  SK=VIDEO#{vid}#{user}#{ts}       │
+  │  Raw event: creative_id, campaign, │
+  │  surface, click, skip, complete    │
+  └──────────┬─────────────────────────┘
+             │
+             ▼ (background rollup job, hourly)
+  ┌────────────────────────────────────┐
+  │  compute_hourly_rollup()           │
+  │                                    │
+  │  1. Scan raw impressions for hour  │
+  │  2. Aggregate: impressions, clicks │
+  │     skips, completes, spend        │
+  │  3. Group by creative, surface     │
+  │  4. Write rollup to DDB           │
+  └──────────┬─────────────────────────┘
+             │
+             ▼
+  ┌────────────────────────────────────┐
+  │  ad_analytics_rollups table        │
+  │  PK=CAMP#{campaign_id}            │
+  │  SK=ROLLUP#{period}#{date}        │
+  │                                    │
+  │  Periods: hourly, daily,           │
+  │           weekly, monthly          │
+  └──────────┬─────────────────────────┘
+             │
+             ▼ (API request)
+  ┌────────────────────────────────────┐
+  │  Dashboard API Endpoints           │
+  │                                    │
+  │  GET /summary  → KPI cards         │
+  │  GET /timeseries → line chart      │
+  │  GET /breakdown → creative/surface │
+  │  GET /export → CSV download        │
+  └────────────────────────────────────┘
+
+  Period Comparison Logic
+  ───────────────────────
+  Current: days [today-30 .. today]
+  Previous: days [today-60 .. today-30]
+
+  change_pct = (current - previous) / previous * 100
+```
+
+---
+
+## 10. API Request/Response Examples
+
+### 10.1 Analytics Summary
+
+```bash
+curl "http://localhost:8000/ui/ads/analytics/summary?account_id=adv_alice&days=7" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=jwt_tok"
+```
+
+**Response (200)**:
+```json
+{
+  "impressions": 14253,
+  "clicks": 321,
+  "ctr_pct": 2.25,
+  "spend_cents": 71265,
+  "cpa_cents": 222,
+  "effective_cpm_cents": 5000,
+  "completes": 8500,
+  "skips": 3200,
+  "completion_rate_pct": 59.64,
+  "previous_period": {
+    "impressions": 12700,
+    "clicks": 295,
+    "spend_cents": 61900
+  },
+  "impressions_change_pct": 12.2,
+  "clicks_change_pct": 8.8,
+  "spend_change_pct": 15.1,
+  "days": 7
+}
+```
+
+### 10.2 Time Series
+
+```bash
+curl "http://localhost:8000/ui/ads/analytics/timeseries?account_id=adv_alice&days=7&granularity=daily" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=jwt_tok"
+```
+
+**Response (200)**:
+```json
+[
+  {"date": "2026-05-22", "impressions": 1800, "clicks": 42, "spend_cents": 9000, "completes": 1100, "ctr_pct": 2.33},
+  {"date": "2026-05-23", "impressions": 2100, "clicks": 48, "spend_cents": 10500, "completes": 1300, "ctr_pct": 2.29},
+  {"date": "2026-05-24", "impressions": 1950, "clicks": 45, "spend_cents": 9750, "completes": 1200, "ctr_pct": 2.31}
+]
+```
+
+### 10.3 CSV Export
+
+```bash
+curl "http://localhost:8000/ui/ads/analytics/export?account_id=adv_alice&days=7" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=jwt_tok"
+```
+
+**Response (200, Content-Type: text/csv)**:
+```
+date,impressions,clicks,ctr_pct,spend_cents,completes
+2026-05-22,1800,42,2.33,9000,1100
+2026-05-23,2100,48,2.29,10500,1300
+```
+
+---
+
+## 11. Error Handling Matrix
+
+| # | Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|----------------|-------------|------------|---------------------|-----------------|
+| 1 | Account not found | 404 | `ACCOUNT_NOT_FOUND` | "Account not found." | Verify account_id |
+| 2 | Not account owner | 403 | `NOT_ACCOUNT_OWNER` | "You do not own this account." | Use owning credentials |
+| 3 | Invalid granularity | 400 | `INVALID_GRANULARITY` | "Granularity must be hourly, daily, weekly, or monthly." | Use valid value |
+| 4 | Invalid dimension | 400 | `INVALID_DIMENSION` | "Dimension must be creative, surface, or targeting." | Use valid value |
+| 5 | No data for period | 200 | -- | Returns zero-filled summary / empty array | Normal (no error) |
+| 6 | CSV export failure | 500 | `EXPORT_FAILED` | "Export failed. Try again." | Retry request |
+| 7 | Days out of range | 400 | `INVALID_DAYS` | "days must be between 1 and 365." | Use valid range |
+| 8 | Rollup computation fails | -- | -- | Summary shows stale data (last successful rollup) | Background retry |
+
+---
+
+## 12. Observability
+
+### 12.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `ad_analytics_summary_requests_total` | Counter | `account_id` | Summary endpoint calls |
+| `ad_analytics_timeseries_requests_total` | Counter | `granularity` | Timeseries endpoint calls |
+| `ad_analytics_breakdown_requests_total` | Counter | `dimension` | Breakdown endpoint calls |
+| `ad_analytics_export_requests_total` | Counter | -- | CSV export downloads |
+| `ad_analytics_rollup_computed_total` | Counter | `period` | Rollup computations completed |
+| `ad_analytics_rollup_duration_ms` | Histogram | `period` | Time to compute a rollup |
+| `ad_analytics_query_duration_ms` | Histogram | `endpoint` | API query latency |
+
+### 12.2 Log Events
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| `analytics_summary_served` | INFO | account_id, campaign_id, days |
+| `analytics_timeseries_served` | INFO | account_id, granularity, data_points |
+| `analytics_breakdown_served` | INFO | account_id, dimension, entries |
+| `analytics_export_served` | INFO | account_id, days, rows |
+| `rollup_computed` | INFO | campaign_id, period, date, impressions, clicks |
+| `rollup_failed` | ERROR | campaign_id, period, error |
+
+### 12.3 Alerting Rules
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Rollup job missed | No rollup for any campaign in 2 hours | P2 |
+| Analytics API errors | >5% error rate on analytics endpoints in 15 min | P3 |
+| Summary query slow | p99 > 3s for summary endpoint | P3 |
+
+---
+
+## 13. Rollout Plan
+
+### 13.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `AD_ANALYTICS_ENABLED` | `false` | Enable analytics endpoints |
+| `AD_ANALYTICS_ROLLUP_ENABLED` | `false` | Enable background rollup computation |
+
+### 13.2 Phased Deployment
+
+| Phase | Scope | Duration | Details |
+|-------|-------|----------|---------|
+| Phase 1: Rollup Pipeline | Internal | Week 1 | Deploy rollup table, computation job. Populate historical rollups. Verify data accuracy. |
+| Phase 2: API Endpoints | Advertisers | Week 2 | `AD_ANALYTICS_ENABLED=true`. Summary, timeseries, breakdown, export live. |
+| Phase 3: Dashboard UI | All users | Week 3 | AdAnalyticsDashboard deployed. Charts, date range picker, CSV export button. |
+
+---
+
+## 14. Performance Considerations
+
+### 14.1 Latency Targets
+
+| Endpoint | Target p50 | Target p99 |
+|----------|-----------|-----------|
+| GET /summary | 80ms | 400ms |
+| GET /timeseries | 60ms | 300ms |
+| GET /breakdown | 80ms | 400ms |
+| GET /export (CSV) | 200ms | 1000ms |
+| compute_hourly_rollup() | 500ms | 3000ms |
+
+### 14.2 Caching Strategy
+
+| Data | Cache | staleTime | Invalidation |
+|------|-------|-----------|-------------|
+| Summary (7d) | React Query | 60_000ms | On date range change |
+| Summary (30d) | React Query | 120_000ms | On date range change |
+| Time series | React Query | 60_000ms | On granularity/date change |
+| Breakdown | React Query | 60_000ms | On dimension change |
+| Rollup data (server) | DDB (pre-computed) | Hourly recompute | On rollup job completion |
+
+### 14.3 Rollup Scalability
+
+Rollups are computed per-campaign per-hour. For 100 campaigns, the hourly job executes 100 computations. Each computation queries the raw impressions table for that campaign's events. To avoid hot partitions, the `ad_impressions` table uses date-based PK partitioning (`AD_IMP#{date}`). Daily/weekly/monthly rollups are aggregated from hourly rollups, not from raw data.
+
+---
+
+## 15. Expanded E2E Tests
+
+### 15.1 Section 379: Input Validation (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 379.1 | Invalid granularity rejected | GET timeseries with granularity=minutely; 400 |
+| 379.2 | Invalid dimension rejected | GET breakdown with dimension=country; 400 |
+| 379.3 | Days=0 rejected | GET summary with days=0; 400 |
+| 379.4 | Days=400 rejected | GET summary with days=400; 400 |
+
+### 15.2 Section 380: Authorization Boundary (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 380.1 | Non-owner cannot view summary | Bob GET Alice's account summary; 403 |
+| 380.2 | Non-owner cannot export CSV | Bob GET Alice's export; 403 |
+| 380.3 | Non-owner cannot view breakdown | Bob GET Alice's breakdown; 403 |
+
+### 15.3 Section 381: Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 381.1 | Empty account returns zero-filled summary | New account with no data; GET summary; impressions=0, ctr_pct=0 |
+| 381.2 | Time series with no data returns empty array | GET timeseries for new campaign; 200; [] |
+| 381.3 | CSV export with no data returns headers only | GET export for new campaign; header row present, no data rows |
+| 381.4 | Breakdown with single creative | One creative only; breakdown returns single entry |
+
+### 15.4 Section 382: Period Comparison (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 382.1 | Previous period data returned | GET summary with days=7; previous_period has impressions >= 0 |
+| 382.2 | Change percentages computed | impressions_change_pct is a number (not NaN) |
+| 382.3 | Campaign-scoped comparison | GET summary with campaign_id; metrics scoped to that campaign only |

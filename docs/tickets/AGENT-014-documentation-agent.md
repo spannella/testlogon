@@ -35,7 +35,52 @@ Documentation is the most universally neglected aspect of software projects. Cod
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  Documentation Agent System Architecture                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+  │ PR Merge     │  │ Schedule     │  │ Manual       │
+  │ Webhook      │  │ Trigger      │  │ Trigger      │
+  │ (GitHub)     │  │ (cron/daily) │  │ (UI click)   │
+  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+         │                 │                  │
+         └─────────────────┼──────────────────┘
+                           ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │             Doc Agent Core (agent_docs.py)               │
+  │                                                          │
+  │  ┌─────────────────┐  ┌─────────────────────────────┐  │
+  │  │ Freshness Check │  │ PR Impact Assessment        │  │
+  │  │ - git log hashes│  │ - changed_files → source_refs│  │
+  │  │ - compare stored│  │ - identify gaps              │  │
+  │  │ - flag stale    │  │ - create update tickets      │  │
+  │  └─────────────────┘  └─────────────────────────────┘  │
+  │                                                          │
+  │  ┌─────────────────┐  ┌─────────────────────────────┐  │
+  │  │ Doc Generation  │  │ Coverage Tracking           │  │
+  │  │ - read codebase │  │ - register artifacts        │  │
+  │  │ - apply template│  │ - compute scores            │  │
+  │  │ - write docs    │  │ - aggregate summary         │  │
+  │  └─────────────────┘  └─────────────────────────────┘  │
+  └──────────┬──────────────────┬──────────────────┬────────┘
+             │                  │                  │
+             ▼                  ▼                  ▼
+  ┌──────────────────┐ ┌──────────────┐ ┌──────────────────┐
+  │ DocCoverage      │ │ DocTemplates │ │ Ticket System    │
+  │ Table (DDB)      │ │ Table (DDB)  │ │                  │
+  │ pk=USER#id       │ │ pk=USER#id   │ │ type:documentation│
+  │ sk=DOC#path      │ │ sk=TMPL#id   │ │ inline doc       │
+  └──────────────────┘ └──────────────┘ │ requests         │
+                                        └──────────────────┘
+```
+
+---
+
+## 3. Current State Analysis
 
 ### 2.1 Existing Infrastructure
 
@@ -144,7 +189,41 @@ Stored as a DDB map on the agent registry entry (`doc_config` field):
 }
 ```
 
-### 3.2 Backend Service (`app/services/agent_docs.py`)
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | GSI | Notes |
+|----------------|-------|----|----|-----|-------|
+| Get doc record | `agent_doc_coverage` | `USER#{user_id}` | `DOC#{doc_path}` | -- | Single item |
+| List all docs for user | `agent_doc_coverage` | `USER#{user_id}` | begins_with `DOC#` | -- | All tracked docs |
+| List docs by type | `agent_doc_coverage` | -- | -- | `GSI1PK=USER#{id}#TYPE#{type}, GSI1SK=last_updated` | Filter by doc_type |
+| List stale docs | `agent_doc_coverage` | -- | -- | `GSI2PK=USER#{id}#STALE#true, GSI2SK=stale_since` | Oldest-stale first |
+| Update freshness | `agent_doc_coverage` | `USER#{user_id}` | `DOC#{doc_path}` | -- | SET is_stale, source_hashes |
+| Get template | `agent_doc_templates` | `USER#{user_id}` | `TMPL#{template_id}` | -- | Single item |
+| List templates | `agent_doc_templates` | `USER#{user_id}` | begins_with `TMPL#` | -- | All templates |
+
+**Example DynamoDB item -- doc coverage record:**
+
+```json
+{
+  "pk": {"S": "USER#alice-sub-001"},
+  "sk": {"S": "DOC#docs/api/messaging.md"},
+  "doc_path": {"S": "docs/api/messaging.md"},
+  "doc_type": {"S": "api"},
+  "source_refs": {"S": "[\"app/routers/messaging.py\", \"app/services/messaging.py\"]"},
+  "source_hashes": {"S": "{\"app/routers/messaging.py\": \"abc123\", \"app/services/messaging.py\": \"def456\"}"},
+  "coverage_score": {"N": "0.85"},
+  "is_stale": {"BOOL": false},
+  "last_verified": {"N": "1748534400"},
+  "last_updated": {"N": "1748520000"},
+  "created_at": {"N": "1748400000"},
+  "GSI1PK": {"S": "USER#alice-sub-001#TYPE#api"},
+  "GSI1SK": {"N": "1748520000"},
+  "GSI2PK": {"S": "USER#alice-sub-001#STALE#false"},
+  "GSI2SK": {"N": "1748520000"}
+}
+```
+
+### 3.3 Backend Service (`app/services/agent_docs.py`)
 
 ```python
 def check_freshness(*, user_id: str) -> dict:
@@ -299,7 +378,187 @@ export interface PrImpactAssessment {
 }
 ```
 
-### 3.5 Frontend API (`frontend/src/api/endpoints/agents.ts`)
+### 3.5 API Request/Response Examples
+
+```bash
+# --- GET /ui/agents/docs/coverage ---
+curl http://localhost:8000/ui/agents/docs/coverage \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "overall_coverage": 0.82,
+  "total_docs": 15,
+  "stale_docs": 3,
+  "by_type": {
+    "api": {"count": 8, "avg_coverage": 0.90, "stale_count": 1},
+    "architecture": {"count": 3, "avg_coverage": 0.75, "stale_count": 2},
+    "user_guide": {"count": 2, "avg_coverage": 0.70, "stale_count": 0},
+    "readme": {"count": 2, "avg_coverage": 0.85, "stale_count": 0}
+  }
+}
+
+# --- POST /ui/agents/docs/assess-pr ---
+curl -X POST http://localhost:8000/ui/agents/docs/assess-pr \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "Content-Type: application/json" \
+  -d '{"changed_files": ["app/routers/messaging.py", "app/services/messaging.py"]}'
+
+# Response 200:
+{
+  "docs_to_update": [
+    {"doc_path": "docs/api/messaging.md", "doc_type": "api", "is_stale": true}
+  ],
+  "uncovered_files": [],
+  "impact_level": "medium"
+}
+
+# --- POST /ui/agents/docs/register ---
+curl -X POST http://localhost:8000/ui/agents/docs/register \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "doc_path": "docs/api/billing.md",
+    "doc_type": "api",
+    "source_refs": ["app/routers/billing.py", "app/services/billing.py"],
+    "coverage_score": 0.95
+  }'
+
+# Response 201:
+{
+  "doc_path": "docs/api/billing.md",
+  "doc_type": "api",
+  "source_refs": ["app/routers/billing.py", "app/services/billing.py"],
+  "coverage_score": 0.95,
+  "is_stale": false,
+  "last_verified": 1748534400,
+  "last_updated": 1748534400,
+  "created_at": 1748534400
+}
+```
+
+### 3.6 Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal, Optional, List, Dict
+
+
+class RegisterDocIn(BaseModel):
+    doc_path: str = Field(..., min_length=1, max_length=500)
+    doc_type: Literal["api", "architecture", "user_guide", "adr", "readme", "inline"]
+    source_refs: List[str] = Field(default_factory=list, max_length=50)
+    coverage_score: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class UpdateDocIn(BaseModel):
+    source_refs: Optional[List[str]] = Field(default=None, max_length=50)
+    coverage_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class AssessPrIn(BaseModel):
+    changed_files: List[str] = Field(..., min_length=1, max_length=200)
+
+
+class DocCoverageOut(BaseModel):
+    doc_path: str
+    doc_type: str
+    source_refs: List[str]
+    coverage_score: float
+    is_stale: bool
+    stale_since: Optional[int] = None
+    last_verified: int
+    last_updated: int
+    created_at: int
+
+
+class DocCoverageSummaryOut(BaseModel):
+    overall_coverage: float = Field(ge=0.0, le=1.0)
+    total_docs: int = Field(ge=0)
+    stale_docs: int = Field(ge=0)
+    by_type: Dict[str, dict]
+
+
+class PrImpactOut(BaseModel):
+    docs_to_update: List[DocCoverageOut]
+    uncovered_files: List[str]
+    impact_level: Literal["none", "low", "medium", "high"]
+
+
+class CreateDocTemplateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    doc_type: Literal["api", "architecture", "user_guide", "adr", "readme"]
+    template_body: str = Field(..., min_length=1, max_length=10000)
+    required_sections: List[str] = Field(default_factory=list, max_length=20)
+
+
+class DocTemplateOut(BaseModel):
+    template_id: str
+    name: str
+    doc_type: str
+    template_body: str
+    required_sections: List[str]
+    created_at: int
+
+
+class UpdateDocConfigIn(BaseModel):
+    trigger_on_pr_merge: Optional[bool] = None
+    freshness_check_frequency: Optional[Literal["hourly", "daily", "weekly"]] = None
+    freshness_check_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
+    min_coverage_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    create_tickets_for_inline_docs: Optional[bool] = None
+    ignored_paths: Optional[List[str]] = None
+```
+
+### 3.7 Frontend Component Tree
+
+```
+DocCoveragePage                        data-testid="doc-coverage-page"
+├── div.grid.grid-cols-2.lg:grid-cols-4
+│   ├── StatCard "Overall Coverage" → overall_coverage as %
+│   ├── StatCard "Total Docs" → total_docs
+│   ├── StatCard "Stale Docs" → stale_docs (red if > 0)
+│   └── StatCard "Fresh Docs" → total - stale (green)
+├── Card "Coverage by Type"
+│   └── BarChart (by_type keys vs avg_coverage)
+├── Tabs
+│   ├── TabsTrigger "All Docs"
+│   ├── TabsTrigger "Stale Only"
+│   └── TabsTrigger "By Type"
+├── DataTable (all docs)
+│   ├── columns: [doc_path, doc_type, coverage_score, is_stale, last_updated]
+│   ├── coverage_score → Progress bar
+│   ├── is_stale → Badge (red "Stale" / green "Fresh")
+│   └── sortable by coverage_score, last_updated
+└── Button "Run Freshness Check" → POST freshness-check
+
+StaleDocsPanel                         data-testid="stale-docs-panel"
+├── Alert "These docs need attention"
+└── ul
+    └── staleDocs.map(doc =>
+        ├── li
+        │   ├── span.font-mono (doc.doc_path)
+        │   ├── span "stale for {duration}" in red
+        │   ├── span "changed source: {files}"
+        │   └── Button "Refresh" → triggers agent update
+    )
+
+DocTemplatesPage                       data-testid="doc-templates-page"
+├── Button "New Template"
+├── DataTable
+│   ├── columns: [name, doc_type, required_sections count, created_at]
+│   └── row click → edit dialog
+└── Dialog "Create/Edit Template"
+    ├── Input (name)
+    ├── Select (doc_type)
+    ├── Textarea (template_body) with markdown preview
+    ├── Input[] (required_sections) add/remove
+    └── Button "Save"
+```
+
+### 3.8 Frontend API (`frontend/src/api/endpoints/agents.ts`)
 
 Standard wrappers: `getDocCoverage()`, `listDocCoverageDetails()`, `listStaleDocs()`, `triggerFreshnessCheck()`, `registerDoc(data)`, `updateDocRecord(docPath, data)`, `assessPrImpact(changedFiles)`, `listDocTemplates(docType?)`, `createDocTemplate(data)`, `updateDocTemplate(id, data)`, `deleteDocTemplate(id)`, `updateDocConfig(config)`.
 
@@ -388,6 +647,26 @@ let templateId: string;
 | 678.3 | Stale docs panel shows flagged docs | Click "Stale" filter or tab; `[data-testid="stale-docs-panel"]` visible (may show "No stale docs") |
 | 678.4 | Templates page CRUD | Navigate `/agents/docs/templates`; `[data-testid="doc-templates-page"]` visible; create template via form; template appears in list |
 
+### 5.7 Expanded E2E Test Details
+
+#### Section 679: Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 679.1 | Register duplicate doc path | POST register same doc_path twice; 409 |
+| 679.2 | Coverage summary with no docs | DELETE all docs; GET coverage; overall_coverage=0, total_docs=0 |
+| 679.3 | Assess PR with no matching docs | POST assess-pr with unrelated files; docs_to_update=[], impact_level="none" |
+| 679.4 | Template with empty required_sections | POST template with empty required_sections; 201; accepted |
+
+#### Section 680: Negative Tests (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 680.1 | Other user cannot access docs | Bob GETs Alice's coverage; 403 or empty |
+| 680.2 | Invalid doc_type | POST register with doc_type="invalid"; 422 |
+| 680.3 | Coverage score out of range | POST register with coverage_score=1.5; 422 |
+| 680.4 | Delete nonexistent template | DELETE template with bad ID; 404 |
+
 ---
 
 ## 6. Error Handling
@@ -403,9 +682,68 @@ let templateId: string;
 | Template body too long | 422 | "template_body must not exceed 10000 characters" |
 | Agent not configured | 404 | "No Documentation Agent configured for this user" |
 
+### 6.2 Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| Doc not found | 404 | `DOC_NOT_FOUND` | "Documentation record not found." | Verify doc_path |
+| Duplicate registration | 409 | `DOC_ALREADY_EXISTS` | "Already registered." | Update existing record instead |
+| Template not found | 404 | `TEMPLATE_NOT_FOUND` | "Template not found." | Verify template_id |
+| Invalid doc_type | 422 | `INVALID_DOC_TYPE` | "Invalid doc_type: {value}." | Use valid enum |
+| Coverage out of range | 422 | `SCORE_OUT_OF_RANGE` | "coverage_score must be 0.0-1.0." | Fix value |
+| Empty changed_files | 422 | `NO_CHANGED_FILES` | "Provide at least one changed file." | Add file paths |
+| Template body too long | 422 | `BODY_TOO_LONG` | "Max 10000 characters." | Shorten template |
+| Path traversal | 422 | `INVALID_PATH` | "Path must be relative, no ../." | Use relative paths |
+| Agent not configured | 404 | `DOC_AGENT_NOT_CONFIGURED` | "No Documentation Agent configured." | Create agent first |
+
 ---
 
-## 7. Security Considerations
+## 7. Observability & Monitoring
+
+### 7.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `doc_freshness_checks_total` | Counter | -- | Freshness check runs |
+| `doc_stale_count_gauge` | Gauge | -- | Currently stale docs |
+| `doc_coverage_gauge` | Gauge | `doc_type` | Average coverage by type |
+| `doc_templates_total` | Gauge | -- | Active templates count |
+| `doc_pr_assessments_total` | Counter | `impact_level` | PR impact assessments |
+| `doc_inline_tickets_created_total` | Counter | -- | Inline doc tickets created |
+
+### 7.2 Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Stale doc count > 50% | stale/total > 0.5 | P2 |
+| Coverage below threshold | overall_coverage < min_threshold | P3 |
+| Freshness check failed | No check in 48h | P3 |
+
+---
+
+## 8. Rollout Plan
+
+### 8.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `DOC_AGENT_ENABLED` | `false` | Master kill switch |
+| `DOC_PR_TRIGGER_ENABLED` | `false` | Auto-trigger on PR merge |
+| `DOC_INLINE_TICKETS_ENABLED` | `false` | Create tickets for missing inline docs |
+
+### 8.2 Canary
+
+1. **Week 1**: Enable freshness checking only. No doc writing or ticket creation.
+2. **Week 2**: Enable `DOC_INLINE_TICKETS_ENABLED`. Monitor ticket creation rate.
+3. **Week 3**: Enable `DOC_PR_TRIGGER_ENABLED`. Full automation.
+
+### 8.3 Rollback
+
+Set `DOC_AGENT_ENABLED=false`. Existing coverage records remain.
+
+---
+
+## 9. Security Considerations
 
 - **Ownership enforcement**: All doc coverage and template operations scoped to the authenticated user's `user_id`. Cross-tenant access is blocked.
 - **Source file path validation**: `source_refs` paths are validated to ensure they are relative paths within the repository root. Absolute paths and path traversal (`../`) are rejected to prevent information leakage.

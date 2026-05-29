@@ -53,6 +53,41 @@ Connection Profile Flow
   |     4. VNC: auto-create session with profile params
 ```
 
+### Detailed Data Flow Diagram
+
+```
+  +------------------+         +-------------------+
+  |  HostInventory   |  click  | ConnectionProfile |
+  |  Page            | ------> | Dialog            |
+  +--------+---------+         +---------+---------+
+           |                             |
+           |  GET /hosts/{id}/profile    |  PATCH /hosts/{id}/profile
+           v                             v
+  +--------+---------+         +---------+---------+
+  |  remote_hosts    |         |  remote_hosts     |
+  |  table (DDB)     |<--------  table (DDB)       |
+  |  PK=user_sub     |         |  same item,       |
+  |  SK=HOST#{id}    |         |  profile fields   |
+  +--------+---------+         +-------------------+
+           |
+           |  GET /hosts/{id}/quick-connect
+           v
+  +--------+---------+         +---------+---------+
+  |  Quick Connect   |         | SSH Terminal      |
+  |  Params Builder  | ------> | WebSocket         |
+  |  (merge host +   |         | handler           |
+  |   profile + key) |         | (auto-connect)    |
+  +------------------+         +-------------------+
+           |
+           |  record_recent_connection()
+           v
+  +------------------+
+  |  RECENT#{sub}    |
+  |  (same table,    |
+  |   singleton item)|
+  +------------------+
+```
+
 ---
 
 ## 2. Current State Analysis
@@ -114,7 +149,19 @@ Add connection profile fields to existing host items. No new table needed.
 | `sk` | `RECENT#{user_sub}` | Singleton item per user |
 | `recent_connections` | L[M] | Last 10 connections: `[{host_id, label, hostname, port, protocol, connected_at}]` |
 
-### 3.2 Service Layer: `app/services/connection_profiles.py`
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Table/GSI | PK | SK / Filter | Example |
+|---|---|---|---|---|
+| Get connection profile for a host | Main table | `user_sub` | `sk = "HOST#{host_id}"` | Alice's profile for host abc |
+| Update profile fields on host | Main table | `user_sub` | `sk = "HOST#{host_id}"` | PATCH terminal_cols=120 |
+| Get recent connections | Main table | `user_sub` | `sk = "RECENT#{user_sub}"` | Alice's last 10 connections |
+| Update recent connections list | Main table | `user_sub` | `sk = "RECENT#{user_sub}"` | Prepend new connection, cap at 10 |
+| Get quick-connect params | Main table | `user_sub` | `sk = "HOST#{host_id}"` | Merge host + profile + key ref |
+| List pinned connections | Main table | `user_sub` | FilterExpression `is_pinned = true` | Alice's pinned hosts |
+| Get all hosts with profiles | Main table | `user_sub` | `begins_with(sk, "HOST#")` | All host records with profile fields |
+
+### 3.3 Service Layer: `app/services/connection_profiles.py`
 
 New file (~200 lines):
 
@@ -174,7 +221,7 @@ def get_quick_connect_params(user_sub: str, host_id: str) -> Dict[str, Any]:
     Terminal settings included for both."""
 ```
 
-### 3.3 VNC Password Encryption
+### 3.4 VNC Password Encryption
 
 ```python
 def update_connection_profile(user_sub, host_id, *, vnc_password=None, **kwargs):
@@ -189,7 +236,7 @@ def update_connection_profile(user_sub, host_id, *, vnc_password=None, **kwargs)
 
 The VNC password is encrypted with KMS before storage. When building quick-connect params for VNC, the password is decrypted server-side and passed to the VNC session creation flow. It is never returned to the frontend in plaintext.
 
-### 3.4 API Endpoints
+### 3.5 API Endpoints
 
 Extend `app/routers/remote_hosts.py` (from INFRA-001) with profile-specific endpoints:
 
@@ -201,7 +248,89 @@ Extend `app/routers/remote_hosts.py` (from INFRA-001) with profile-specific endp
 | `GET` | `/ui/remote/connections/recent` | — | `RecentConnectionsOut` | List recent connections |
 | `DELETE` | `/ui/remote/connections/recent` | — | `{"ok": true}` | Clear recent list |
 
-#### Pydantic Models
+### 3.6 API Request/Response Examples
+
+**PATCH /ui/remote/hosts/{id}/profile**
+
+Request:
+```json
+{
+  "default_username": "ubuntu",
+  "auth_method": "key_ref",
+  "ssh_key_id": "key_abc123",
+  "terminal_cols": 120,
+  "terminal_rows": 40,
+  "terminal_font_size": 16,
+  "terminal_color_scheme": "monokai",
+  "auto_connect": true
+}
+```
+
+Response:
+```json
+{
+  "host_id": "host_abc123",
+  "default_username": "ubuntu",
+  "auth_method": "key_ref",
+  "ssh_key_id": "key_abc123",
+  "has_vnc_password": false,
+  "vnc_display_label": "",
+  "vnc_ws_url_override": "",
+  "terminal_cols": 120,
+  "terminal_rows": 40,
+  "terminal_font_size": 16,
+  "terminal_color_scheme": "monokai",
+  "auto_connect": true
+}
+```
+
+**GET /ui/remote/hosts/{id}/quick-connect**
+
+```json
+{
+  "host_id": "host_abc123",
+  "hostname": "10.0.0.1",
+  "port": 22,
+  "protocol": "ssh",
+  "username": "ubuntu",
+  "auth_method": "key_ref",
+  "ssh_key_id": "key_abc123",
+  "terminal_cols": 120,
+  "terminal_rows": 40,
+  "terminal_font_size": 16,
+  "terminal_color_scheme": "monokai",
+  "auto_connect": true,
+  "vnc_target_id": "",
+  "vnc_display_label": ""
+}
+```
+
+**GET /ui/remote/connections/recent**
+
+```json
+{
+  "connections": [
+    {
+      "host_id": "host_abc123",
+      "label": "Dev Server",
+      "hostname": "10.0.0.1",
+      "port": 22,
+      "protocol": "ssh",
+      "connected_at": 1748520600
+    },
+    {
+      "host_id": "host_def456",
+      "label": "VNC Desktop",
+      "hostname": "10.0.0.2",
+      "port": 5900,
+      "protocol": "vnc",
+      "connected_at": 1748510000
+    }
+  ]
+}
+```
+
+### 3.7 Pydantic Models
 
 ```python
 class UpdateProfileIn(BaseModel):
@@ -260,7 +389,21 @@ class RecentConnectionsOut(BaseModel):
     connections: List[RecentConnection]
 ```
 
-### 3.5 SSH Auto-Connect Mode
+### 3.8 Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|---|---|---|---|---|
+| Host not found | 404 | `host_not_found` | "Host {id} not found" | Verify host ID exists |
+| Host belongs to another user | 404 | `host_not_found` | "Host {id} not found" | User isolation enforced |
+| Invalid auth_method value | 422 | `validation_error` | "auth_method must be password, key, or key_ref" | Correct input |
+| ssh_key_id references non-existent key | 400 | `key_not_found` | "SSH key {id} not found" | Upload key first (INFRA-002) |
+| VNC password too long (>128 chars) | 422 | `validation_error` | "vnc_password max_length is 128" | Shorten password |
+| terminal_cols out of range (<40 or >300) | 422 | `validation_error` | "terminal_cols must be 40-300" | Use valid range |
+| Quick-connect missing required username | 400 | `profile_incomplete` | "No username configured for this host" | Set default_username first |
+| KMS encryption failure | 500 | `encryption_error` | "Failed to encrypt VNC password" | Check KMS mock is running |
+| Recent connections list at max (10) | 200 | N/A | Oldest entry silently dropped | Normal LIFO behavior |
+
+### 3.9 SSH Auto-Connect Mode
 
 When `auto_connect=True` and all required params are available (hostname, port, username, and either a stored key or saved password), the SSH terminal frontend:
 
@@ -271,7 +414,7 @@ When `auto_connect=True` and all required params are available (hostname, port, 
 
 The frontend detects auto-connect via query params: `/remote/ssh?host_id={id}&auto=true`. It fetches the quick-connect params from `GET /ui/remote/hosts/{id}/quick-connect` and proceeds without user input.
 
-### 3.6 Frontend Components
+### 3.10 Frontend Components
 
 #### ConnectionProfileDialog (`frontend/src/pages/remote/ConnectionProfileDialog.tsx`)
 
@@ -290,14 +433,77 @@ Widget component (~100 lines):
 - Rendered at the top of HostInventoryPage (INFRA-001)
 - Horizontal scrollable card list showing last 10 connections
 - Each card: host label, hostname:port, protocol badge, "2 hours ago" relative time
-- Click → quick-connect to that host
+- Click -> quick-connect to that host
 - "Clear" button to remove all recent entries
+
+#### Frontend Component Tree
+
+```
+HostInventoryPage
+├── RecentConnectionsList
+│   ├── RecentCard (props: { connection: RecentConnection, onClick: () => void })
+│   │   ├── Badge (protocol: SSH | VNC)
+│   │   └── TimeAgo (props: { timestamp: number })
+│   └── ClearButton
+├── DataTable (existing host list)
+│   └── HostRow (existing)
+│       └── DropdownMenu
+│           ├── "Connect" -> QuickConnect flow
+│           ├── "Edit Profile" -> ConnectionProfileDialog
+│           └── "Edit Host" -> existing edit
+└── ConnectionProfileDialog
+    ├── SshSettingsSection
+    │   ├── Input (username)
+    │   ├── Select (auth method)
+    │   └── Select (SSH key dropdown)
+    ├── VncSettingsSection (conditional: protocol === "vnc")
+    │   ├── Input (VNC password, type=password)
+    │   ├── Input (display label)
+    │   └── Input (WebSocket URL override)
+    ├── TerminalSettingsSection
+    │   ├── NumberInput (columns: 40-300)
+    │   ├── NumberInput (rows: 10-100)
+    │   ├── Slider (font size: 8-32)
+    │   └── Select (color scheme with preview swatches)
+    └── Switch (auto-connect toggle)
+```
+
+#### TypeScript Props Interfaces
+
+```typescript
+interface ConnectionProfileDialogProps {
+  hostId: string;
+  protocol: "ssh" | "vnc";
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+interface RecentConnectionsListProps {
+  connections: RecentConnection[];
+  onConnect: (hostId: string) => void;
+  onClear: () => void;
+}
+
+interface RecentCardProps {
+  connection: RecentConnection;
+  onClick: () => void;
+}
+
+interface TerminalSettingsProps {
+  cols: number;
+  rows: number;
+  fontSize: number;
+  colorScheme: string;
+  onChange: (settings: TerminalSettings) => void;
+}
+```
 
 #### Frontend Integration Points
 
 ```typescript
 // In HostInventoryPage: add RecentConnectionsList above the DataTable
-// In host row actions: add "Edit Profile" menu item → opens ConnectionProfileDialog
+// In host row actions: add "Edit Profile" menu item -> opens ConnectionProfileDialog
 // In Connect button: use quick-connect endpoint to get params, respect auto_connect flag
 ```
 
@@ -334,7 +540,7 @@ Widget component (~100 lines):
 
 | File | Change |
 |------|--------|
-| `frontend/e2e/connection-profiles.spec.ts` | New file: ~15 tests in 3 sections |
+| `frontend/e2e/connection-profiles.spec.ts` | New file: ~30 tests in 5 sections |
 
 ---
 
@@ -347,7 +553,7 @@ Widget component (~100 lines):
 3. `Set terminal settings` — PATCH with `terminal_cols: 120`, `terminal_rows: 40`, `terminal_font_size: 16`, `terminal_color_scheme: "monokai"`. GET, verify all values.
 4. `Enable auto-connect` — PATCH with `auto_connect: true`. GET, verify `auto_connect: true`.
 5. `Get quick-connect params includes all profile fields` — Set profile with username + key + terminal settings. GET `/quick-connect`. Verify `username`, `ssh_key_id`, `terminal_cols`, `auto_connect` all populated.
-6. `Profile fields are user-isolated` — Alice sets profile on her host. Bob cannot GET Alice's profile → 404.
+6. `Profile fields are user-isolated` — Alice sets profile on her host. Bob cannot GET Alice's profile -> 404.
 
 **Section 262: Recent Connections API (4 tests)**
 
@@ -363,6 +569,25 @@ Widget component (~100 lines):
 13. `Recent connections widget shows recent hosts` — Record 2 connections. Navigate to `/remote/hosts`. Verify recent cards visible above table.
 14. `Click recent connection navigates to SSH terminal` — Click a recent SSH connection card. Verify navigation to SSH terminal page with params.
 15. `Quick-connect button respects auto-connect` — Set `auto_connect: true` on host. Click Connect. Verify no connection form shown (immediate WebSocket attempt).
+
+**Section 264: Profile Validation and Edge Cases (8 tests)**
+
+16. `PATCH with invalid auth_method returns 422` — Send `auth_method: "magic"`. Expect 422 validation error.
+17. `PATCH with out-of-range terminal_cols returns 422` — Send `terminal_cols: 10` (below min 40). Expect 422.
+18. `PATCH with out-of-range terminal_font_size returns 422` — Send `terminal_font_size: 2` (below min 8). Expect 422.
+19. `PATCH with invalid color_scheme returns 422` — Send `terminal_color_scheme: "neon"`. Expect 422.
+20. `PATCH profile on non-existent host returns 404` — Use fake host_id. Expect 404.
+21. `Quick-connect without username returns 400` — No default_username set. GET quick-connect. Expect 400 profile_incomplete.
+22. `VNC password field is never returned in plaintext` — Set VNC password, GET profile. Verify `vnc_password` field absent, only `has_vnc_password: true`.
+23. `Clearing VNC password sets has_vnc_password to false` — PATCH with `vnc_password: ""`. GET profile. Verify `has_vnc_password: false`.
+
+**Section 265: Auto-Connect Integration (5 tests)**
+
+24. `Auto-connect SSH navigates directly to terminal` — Set auto_connect=true + username + key. Navigate to `/remote/ssh?host_id={id}&auto=true`. Verify terminal view rendered (no connection form).
+25. `Auto-connect without stored key falls back to form` — Set auto_connect=true but no ssh_key_id. Navigate. Verify connection form is shown.
+26. `Auto-connect VNC creates session automatically` — Set auto_connect=true on VNC host with password. Navigate. Verify VNC session created.
+27. `Recent connection recorded after successful connect` — Complete a quick-connect. GET recent. Verify new entry at top of list.
+28. `Quick-connect params include last_connection_params on subsequent connects` — Connect, then GET quick-connect again. Verify last_connection_params populated.
 
 **Test Setup**:
 
@@ -385,23 +610,115 @@ test.beforeAll(async ({ browser }) => {
 
 ---
 
-## 6. Security Considerations
+## 6. Observability
 
-### 6.1 VNC Password Encryption
+### 6.1 Metrics
 
-VNC passwords are encrypted with KMS before storage. The `ProfileOut` model returns `has_vnc_password: bool` instead of the actual password. The password is only decrypted server-side when building quick-connect params for a VNC session.
+| Metric Name | Type | Labels | Description |
+|---|---|---|---|
+| `connection_profile_update_total` | Counter | `field_type` | Profile updates by field |
+| `quick_connect_total` | Counter | `protocol`, `auto_connect` | Quick connect attempts |
+| `quick_connect_duration_seconds` | Histogram | `protocol` | Time from click to connected |
+| `recent_connection_record_total` | Counter | `protocol` | Connections added to recent list |
+| `auto_connect_fallback_total` | Counter | `reason` | Auto-connect fallbacks to form |
 
-### 6.2 Password Storage Decision
+### 6.2 Logging
 
-SSH passwords are **not stored** — only key references (`key_ref` auth method). Users who prefer password auth must enter it each time. This is a deliberate security decision: passwords are more sensitive than key references and would require additional protection (rotation, breach detection).
+```json
+{
+  "logger": "connection_profiles",
+  "level": "INFO",
+  "event": "quick_connect",
+  "user_sub": "alice_sub",
+  "host_id": "host_abc123",
+  "protocol": "ssh",
+  "auto_connect": true,
+  "auth_method": "key_ref"
+}
+```
 
-### 6.3 Auto-Connect Security
+### 6.3 Alerting
 
-Auto-connect requires that the host has a stored SSH key associated (not just a password). This ensures that auto-connect does not store or transmit passwords automatically.
+| Alert | Condition | Severity |
+|---|---|---|
+| KMS encryption errors | > 5 in 5 minutes | Critical |
+| Quick-connect failure rate | > 20% in 10 minutes | Warning |
 
 ---
 
-## 7. Acceptance Criteria
+## 7. Performance Considerations
+
+### 7.1 Latency Targets
+
+| Operation | Target | Notes |
+|---|---|---|
+| GET /profile | < 50ms | Single DDB GetItem |
+| PATCH /profile | < 100ms | Single DDB UpdateItem |
+| GET /quick-connect | < 150ms | GetItem + key lookup |
+| GET /recent | < 50ms | Single DDB GetItem |
+| Record recent | < 100ms | Read-modify-write on singleton item |
+
+### 7.2 Caching
+
+- Profile data is small (< 1KB per host) and changes infrequently. No caching needed beyond DDB's built-in performance.
+- Recent connections list is a singleton item, always fresh on read.
+
+### 7.3 VNC Password Encryption Cost
+
+KMS encrypt/decrypt adds ~20-50ms latency. This is acceptable since it only occurs on profile save (encrypt) and quick-connect (decrypt), not on every page load.
+
+---
+
+## 8. Rollout Plan
+
+### Phase 1: Profile Storage (no UI changes)
+
+- Deploy profile fields on host items
+- Profile endpoints available but not yet called by frontend
+- Existing connection flow unchanged
+
+### Phase 2: Profile Dialog
+
+- Add ConnectionProfileDialog to host inventory
+- Users can set profiles but must still manually connect
+
+### Phase 3: Quick Connect + Recent
+
+- Enable quick-connect endpoint
+- Add RecentConnectionsList widget
+- Auto-connect mode available
+
+### Feature Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `CONNECTION_PROFILES_ENABLED` | `true` | Enable profile endpoints |
+| `AUTO_CONNECT_ENABLED` | `true` | Enable auto-connect mode |
+| `RECENT_CONNECTIONS_MAX` | `10` | Maximum recent connections stored |
+
+---
+
+## 9. Security Considerations
+
+### 9.1 VNC Password Encryption
+
+VNC passwords are encrypted with KMS before storage. The `ProfileOut` model returns `has_vnc_password: bool` instead of the actual password. The password is only decrypted server-side when building quick-connect params for a VNC session.
+
+### 9.2 Password Storage Decision
+
+SSH passwords are **not stored** — only key references (`key_ref` auth method). Users who prefer password auth must enter it each time. This is a deliberate security decision: passwords are more sensitive than key references and would require additional protection (rotation, breach detection).
+
+### 9.3 Auto-Connect Security
+
+Auto-connect requires that the host has a stored SSH key associated (not just a password). This ensures that auto-connect does not store or transmit passwords automatically.
+
+### 9.4 User Isolation
+
+All profile data is scoped to `user_sub` as the DDB partition key. No user can read or modify another user's connection profiles.
+
+---
+
+## 10. Acceptance Criteria
 
 1. Users can set a default username, auth method, and terminal preferences per host.
 2. VNC passwords are KMS-encrypted and never exposed via the API.
@@ -413,3 +730,5 @@ Auto-connect requires that the host has a stored SSH key associated (not just a 
 8. Terminal settings (cols, rows, font, color scheme) persist per-connection.
 9. Profile data is user-isolated via DDB partition key.
 10. Frontend integrates profile editing and recent connections into the host inventory page.
+11. Profile validation rejects out-of-range values for terminal settings.
+12. Auto-connect falls back to connection form when required params are missing.

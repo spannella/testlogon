@@ -39,8 +39,8 @@ In dev mode, all eID flows are handled by a mock provider that returns determini
 ```
 User Flow:
 
-1. User opens KYC case → selects "Verify with eID" → picks their country/scheme
-2. Backend creates an eID verification session → returns redirect URL
+1. User opens KYC case -> selects "Verify with eID" -> picks their country/scheme
+2. Backend creates an eID verification session -> returns redirect URL
 3. User redirects to eID provider (national identity portal / BankID app)
 4. User authenticates with their eID credentials
 5. eID provider redirects back to platform callback URL with signed assertion
@@ -50,7 +50,7 @@ User Flow:
 
 Mock Flow (dev mode):
 
-1. User selects "Verify with eID" → picks scheme
+1. User selects "Verify with eID" -> picks scheme
 2. Backend returns redirect to mock eID endpoint (POST /mock/eid/verify)
 3. Mock endpoint returns a pre-built signed assertion with deterministic data
 4. Same validation/storage path as production
@@ -95,7 +95,67 @@ The platform already has SSO provider integration (`app/routers/sso_providers.py
 
 ## 3. Technical Design
 
-### 3.1 New Service: `app/services/kyc_eid_provider.py`
+### 3.1 Architecture Diagram
+
+```
++-------------------+      +-------------------+      +--------------------+
+|   React Frontend  |      |   FastAPI Backend  |      |   eID Provider     |
+|                   |      |                   |      |   (Mock in Dev)    |
+|  EidVerification  | ---> | POST /eid/start   | ---> |                    |
+|  Panel            |      |   Creates session  |      |                    |
+|                   |      |   Returns redirect |      |                    |
+|  Browser redirect | ---> |                   |      | GET /authorize     |
+|  to eID provider  |      |                   |      |   User authenticates|
+|                   |      |                   |      |   with eID creds   |
+|                   |      | GET /eid/callback  | <--- | Redirect back      |
+|                   |      |   Validates assert |      | with signed assert |
+|  EidResultCard    | <--- |   Updates case     |      |                    |
+|  shows result     |      |   Auto-upgrades    |      |                    |
++-------------------+      +-------------------+      +--------------------+
+                                    |
+                                    v
+                           +-------------------+
+                           |   DynamoDB Tables  |
+                           |                   |
+                           | kyc_cases table:   |
+                           |  EID_SESSION#{id}  |
+                           |  EID_ASSERT#{case} |
+                           |  Case item update  |
+                           +-------------------+
+
+Data Flow (Mock Mode):
+
+  Frontend                    Backend                     Mock Provider
+     |                          |                              |
+     | POST /eid/start          |                              |
+     | {scheme: "bankid"}       |                              |
+     |------------------------->|                              |
+     |                          | create EID_SESSION item      |
+     |                          | generate redirect URL        |
+     | <-- {redirect_url}       |                              |
+     |                          |                              |
+     | browser.redirect(url)    |                              |
+     |----------------------------------------------------->   |
+     |                          |     POST /mock/eid/verify    |
+     |                          |     {session_id: "..."}      |
+     |                          |                              |
+     |                          | GET /eid/callback            |
+     |                          | ?session_id=...&assertion=...|
+     |                          | <----------------------------|
+     |                          |                              |
+     |                          | validate assertion signature |
+     |                          | extract identity fields      |
+     |                          | compare with user profile    |
+     |                          | store EID_ASSERT item        |
+     |                          | update case: eid_verification|
+     |                          | auto-upgrade tier if eligible|
+     |                          |                              |
+     | redirect to /kyc/case/X  |                              |
+     | <------------------------|                              |
+     |                          |                              |
+```
+
+### 3.2 New Service: `app/services/kyc_eid_provider.py`
 
 ```python
 @dataclass
@@ -145,7 +205,7 @@ class EidProviderService:
         """Retrieve a verification session by ID."""
 ```
 
-### 3.2 Mock eID Provider
+### 3.3 Mock eID Provider
 
 In dev mode (`S.dev_mode == True`), the mock endpoint simulates the eID provider:
 
@@ -169,7 +229,7 @@ async def mock_eid_verify(body: MockEidRequest):
     """
 ```
 
-### 3.3 DynamoDB Storage
+### 3.4 DynamoDB Storage
 
 eID verification sessions and assertions are stored in the `kyc_cases` table using single-table design:
 
@@ -182,9 +242,9 @@ Attributes:
   user_sub (S)
   scheme (S)
   callback_url (S)
-  status (S)               — "pending" | "completed" | "expired" | "failed"
+  status (S)               -- "pending" | "completed" | "expired" | "failed"
   created_at (N)
-  ttl (N)                  — DDB TTL, 1 hour from creation
+  ttl (N)                  -- DDB TTL, 1 hour from creation
 
 # Completed assertion (permanent, linked to case)
 PK: EID_ASSERT#{case_id}
@@ -197,9 +257,9 @@ Attributes:
   verified_fields (M)
   assurance_level (S)
   issued_at (N)
-  raw_assertion (S)        — Base64
+  raw_assertion (S)        -- Base64
   signature_valid (BOOL)
-  discrepancies (L)        — From profile comparison
+  discrepancies (L)        -- From profile comparison
 ```
 
 The KYC case item is also updated with an `eid_verification` sub-object:
@@ -217,44 +277,181 @@ The KYC case item is also updated with an `eid_verification` sub-object:
 }
 ```
 
-### 3.4 Router Endpoints
+### 3.5 DynamoDB Access Patterns
+
+| Access Pattern | PK | SK / Index | Operation | Notes |
+|---|---|---|---|---|
+| Create eID session | `EID_SESSION#{session_id}` | `META` | PutItem | TTL=1h for auto-cleanup |
+| Get eID session by ID | `EID_SESSION#{session_id}` | `META` | GetItem | Used during callback processing |
+| Update session status | `EID_SESSION#{session_id}` | `META` | UpdateItem | Status transitions: pending->completed/failed |
+| Store assertion | `EID_ASSERT#{case_id}` | `{scheme}#{assertion_id}` | PutItem | Permanent record for audit |
+| List assertions for case | `EID_ASSERT#{case_id}` | begins_with(scheme) | Query | View all eID verifications on a case |
+| Get latest assertion for case | `EID_ASSERT#{case_id}` | ScanIndexForward=False, Limit=1 | Query | Most recent verification |
+| Update case with eID result | Case PK/SK | -- | UpdateItem | Adds `eid_verification` map to case |
+
+**Example DynamoDB items:**
+
+Session item:
+```json
+{
+  "pk": "EID_SESSION#es_abc123def456",
+  "sk": "META",
+  "case_id": "kyc_case_001",
+  "user_sub": "alice-uuid",
+  "scheme": "bankid",
+  "callback_url": "https://platform.example.com/v1/kyc/eid/callback",
+  "status": "pending",
+  "created_at": 1748520000,
+  "ttl": 1748523600
+}
+```
+
+Assertion item:
+```json
+{
+  "pk": "EID_ASSERT#kyc_case_001",
+  "sk": "bankid#ea_789xyz",
+  "assertion_id": "ea_789xyz",
+  "scheme": "bankid",
+  "issuer": "SE-BANKID-PROD",
+  "subject_id": "SE:198001012345",
+  "verified_fields": {
+    "first_name": "John",
+    "last_name": "Doe",
+    "date_of_birth": "1990-01-15",
+    "nationality": "SE",
+    "document_number": "MOCK-a1b2c3d4",
+    "document_type": "national_id",
+    "issuing_country": "SE"
+  },
+  "assurance_level": "high",
+  "issued_at": 1748520100,
+  "raw_assertion": "eyJhbGciOiJIUz...",
+  "signature_valid": true,
+  "discrepancies": []
+}
+```
+
+### 3.6 Router Endpoints
 
 Add to `app/routers/kyc_cases.py`:
 
 ```python
 # eID verification endpoints
 POST /v1/kyc/cases/{case_id}/eid/start
-  — Start eID verification session
-  — Auth: require_ui_session (case owner)
-  — Body: { "scheme": "eidas" | "digid" | "bankid" | "aadhaar" }
-  — Response: { "session_id": str, "redirect_url": str, "expires_at": int }
+  -- Start eID verification session
+  -- Auth: require_ui_session (case owner)
+  -- Body: { "scheme": "eidas" | "digid" | "bankid" | "aadhaar" }
+  -- Response: { "session_id": str, "redirect_url": str, "expires_at": int }
 
 GET /v1/kyc/eid/callback
-  — eID provider callback (receives assertion)
-  — Auth: none (callback from external provider)
-  — Query params: session_id, assertion (base64)
-  — Redirects to: /kyc/cases/{case_id}?eid=success|failed
+  -- eID provider callback (receives assertion)
+  -- Auth: none (callback from external provider)
+  -- Query params: session_id, assertion (base64)
+  -- Redirects to: /kyc/cases/{case_id}?eid=success|failed
 
 GET /v1/kyc/cases/{case_id}/eid/status
-  — Get eID verification status for a case
-  — Auth: require_ui_session (case owner or admin)
-  — Response: { "eid_verification": { scheme, assertion_id, assurance_level, verified_at, discrepancies } }
+  -- Get eID verification status for a case
+  -- Auth: require_ui_session (case owner or admin)
+  -- Response: { "eid_verification": { scheme, assertion_id, assurance_level, verified_at, discrepancies } }
 
 GET /v1/kyc/eid/schemes
-  — List supported eID schemes
-  — Auth: require_ui_session
-  — Query params: ?country= (optional filter)
-  — Response: { "schemes": [{ id, name, countries, assurance_level }] }
+  -- List supported eID schemes
+  -- Auth: require_ui_session
+  -- Query params: ?country= (optional filter)
+  -- Response: { "schemes": [{ id, name, countries, assurance_level }] }
 
 # Mock endpoint (dev mode only)
 POST /mock/eid/verify
-  — Mock eID provider
-  — Auth: none
-  — Body: { "session_id": str }
-  — Response: { "assertion": str, "signature": str }
+  -- Mock eID provider
+  -- Auth: none
+  -- Body: { "session_id": str }
+  -- Response: { "assertion": str, "signature": str }
 ```
 
-### 3.5 Auto Tier Upgrade Logic
+### 3.7 API Request/Response Examples
+
+**Start eID verification:**
+```bash
+curl -X POST http://localhost:8000/v1/kyc/cases/kyc_case_001/eid/start \
+  -H "Cookie: ui_session=sess_abc; ui_csrf=csrf_xyz; ui_access_token=tok_..." \
+  -H "x-csrf-token: csrf_xyz" \
+  -H "Content-Type: application/json" \
+  -d '{"scheme": "bankid"}'
+
+# Response 200:
+{
+  "session_id": "es_abc123def456",
+  "redirect_url": "http://localhost:8000/mock/eid/verify?session_id=es_abc123def456",
+  "expires_at": 1748523600
+}
+
+# Error 400 - unsupported scheme:
+{
+  "detail": "Unsupported eID scheme: foobar. Supported: eidas, digid, bankid, aadhaar"
+}
+
+# Error 403 - not case owner:
+{
+  "detail": "Only the case owner can start eID verification"
+}
+
+# Error 409 - eID already completed:
+{
+  "detail": "Case already has a completed eID verification. Start a new session to re-verify."
+}
+```
+
+**Get eID verification status:**
+```bash
+curl http://localhost:8000/v1/kyc/cases/kyc_case_001/eid/status \
+  -H "Cookie: ui_session=sess_abc; ui_csrf=csrf_xyz; ui_access_token=tok_..."
+
+# Response 200 (verified):
+{
+  "eid_verification": {
+    "scheme": "bankid",
+    "assertion_id": "ea_789xyz",
+    "assurance_level": "high",
+    "verified_at": 1748520100,
+    "auto_tier_upgrade": true,
+    "discrepancies": [],
+    "verified_fields": {
+      "first_name": "John",
+      "last_name": "Doe",
+      "date_of_birth": "1990-01-15",
+      "nationality": "SE"
+    }
+  }
+}
+
+# Response 200 (not yet verified):
+{
+  "eid_verification": null
+}
+```
+
+**List supported eID schemes:**
+```bash
+curl "http://localhost:8000/v1/kyc/eid/schemes?country=SE" \
+  -H "Cookie: ui_session=sess_abc; ui_csrf=csrf_xyz; ui_access_token=tok_..."
+
+# Response 200:
+{
+  "schemes": [
+    {
+      "id": "bankid",
+      "name": "BankID",
+      "countries": ["SE", "NO"],
+      "assurance_level": "high",
+      "auth_flow": "mobile_app_qr",
+      "description": "Authenticate with your Swedish or Norwegian BankID"
+    }
+  ]
+}
+```
+
+### 3.8 Auto Tier Upgrade Logic
 
 When `process_callback` succeeds and the assertion has `assurance_level` >= "substantial":
 
@@ -284,7 +481,7 @@ def _handle_successful_eid(case_id: str, assertion: EidAssertion):
         # The readiness check recognizes eID as equivalent to id_front + id_back + selfie
 ```
 
-### 3.6 Discrepancy Detection
+### 3.9 Discrepancy Detection
 
 After extracting identity fields from the eID assertion, compare with the user's profile:
 
@@ -302,12 +499,142 @@ discrepancies = eid_svc.compare_with_profile(
 
 If any discrepancy has severity `"critical"` (e.g., DOB mismatch), the auto-upgrade is blocked and the case is flagged for admin review.
 
-### 3.7 Frontend Components
+### 3.10 Pydantic Models
 
-- `EidVerificationPanel` — Shows available eID schemes for the user's country, "Verify with eID" button
-- `EidSchemeSelector` — Radio group listing supported schemes with logos and descriptions
-- `EidStatusBadge` — Shows verification status (pending, verified, failed)
-- `EidResultCard` — Displays verified fields, discrepancies, assurance level after successful verification
+```python
+# -- eID Verification (KYC-022) -- Add to app/models.py or app/contracts/kyc_cases_contract.py
+
+class StartEidVerificationIn(BaseModel):
+    scheme: str = Field(..., pattern=r"^(eidas|digid|bankid|aadhaar)$",
+                        description="eID scheme identifier")
+
+    class Config:
+        json_schema_extra = {"example": {"scheme": "bankid"}}
+
+
+class StartEidVerificationOut(BaseModel):
+    session_id: str
+    redirect_url: str
+    expires_at: int
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "session_id": "es_abc123def456",
+                "redirect_url": "http://localhost:8000/mock/eid/verify?session_id=es_abc123def456",
+                "expires_at": 1748523600,
+            }
+        }
+
+
+class EidSchemeOut(BaseModel):
+    id: str
+    name: str
+    countries: list[str]
+    assurance_level: str  # "low", "substantial", "high"
+    auth_flow: str  # "browser_redirect", "mobile_app_qr", "otp_biometric"
+    description: str = ""
+
+
+class EidSchemesListOut(BaseModel):
+    schemes: list[EidSchemeOut]
+
+
+class EidVerifiedFields(BaseModel):
+    first_name: str = ""
+    last_name: str = ""
+    date_of_birth: str = ""  # ISO date
+    nationality: str = ""  # ISO 3166-1 alpha-2
+    document_number: str = ""
+    document_type: str = ""
+    issuing_country: str = ""
+
+
+class EidDiscrepancy(BaseModel):
+    field: str
+    profile_value: str
+    eid_value: str
+    severity: str  # "match", "warning", "critical"
+
+
+class EidVerificationOut(BaseModel):
+    scheme: str
+    assertion_id: str
+    assurance_level: str
+    verified_at: int
+    auto_tier_upgrade: bool = False
+    discrepancies: list[EidDiscrepancy] = Field(default_factory=list)
+    verified_fields: EidVerifiedFields | None = None
+
+
+class EidStatusOut(BaseModel):
+    eid_verification: EidVerificationOut | None = None
+
+
+class MockEidRequest(BaseModel):
+    session_id: str = Field(..., min_length=1)
+
+
+class MockEidResponse(BaseModel):
+    assertion: str  # Base64 encoded assertion payload
+    signature: str  # HMAC-SHA256 signature
+```
+
+### 3.11 Frontend Components
+
+- `EidVerificationPanel` -- Shows available eID schemes for the user's country, "Verify with eID" button
+- `EidSchemeSelector` -- Radio group listing supported schemes with logos and descriptions
+- `EidStatusBadge` -- Shows verification status (pending, verified, failed)
+- `EidResultCard` -- Displays verified fields, discrepancies, assurance level after successful verification
+
+**Frontend Component Tree:**
+
+```
+KycCaseDetailPage
+  +-- CaseStatusHeader
+  +-- EidVerificationSection
+  |     +-- {case.eid_verification ? <EidResultCard /> : <EidVerificationPanel />}
+  |     |
+  |     +-- EidVerificationPanel
+  |     |     +-- EidSchemeSelector
+  |     |     |     +-- RadioGroup (one radio per scheme)
+  |     |     |     +-- SchemeDescription (logo + text per scheme)
+  |     |     +-- Button("Verify with eID")
+  |     |     +-- LoadingSpinner (while redirect in progress)
+  |     |
+  |     +-- EidResultCard
+  |           +-- EidStatusBadge (verified/failed icon)
+  |           +-- VerifiedFieldsTable (name, DOB, nationality, doc number)
+  |           +-- AssuranceLevelBadge ("High" / "Substantial")
+  |           +-- DiscrepancyAlert (if discrepancies present)
+  |           +-- Button("Re-verify with different scheme") [optional]
+  |
+  +-- DocumentUploadSection (hidden if eID satisfied Tier 2)
+  +-- CaseSubmitButton
+```
+
+**TypeScript Props Interfaces:**
+
+```typescript
+interface EidVerificationPanelProps {
+  caseId: string;
+  userCountry?: string;
+}
+
+interface EidSchemeSelectorProps {
+  schemes: EidScheme[];
+  selectedScheme: string | null;
+  onSelect: (schemeId: string) => void;
+}
+
+interface EidStatusBadgeProps {
+  status: "pending" | "verified" | "failed";
+}
+
+interface EidResultCardProps {
+  verification: EidVerification;
+}
+```
 
 Integration into existing KYC case detail page (user-facing):
 
@@ -340,12 +667,132 @@ export const getEidSchemes = (country?: string) =>
 
 ---
 
-## 4. E2E Test Plan
+## 4. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|---|---|---|---|
+| Unsupported eID scheme | 400 | `eid_unsupported_scheme` | "This eID scheme is not supported. Please select from the available options." | Show scheme selector with valid options |
+| Case not found | 404 | `case_not_found` | "KYC case not found." | Navigate to KYC cases list |
+| Not case owner | 403 | `eid_not_owner` | "Only the case owner can start eID verification." | Show error message |
+| Case already has eID | 409 | `eid_already_verified` | "This case already has a completed eID verification." | Show option to re-verify |
+| Session expired | 400 | `eid_session_expired` | "Your eID session has expired. Please start a new verification." | Auto-restart verification flow |
+| Assertion signature invalid | 400 | `eid_invalid_signature` | "The eID assertion could not be verified. Please try again." | Retry from start |
+| Assertion expired | 400 | `eid_assertion_expired` | "The eID assertion has expired. Please re-authenticate." | Retry from start |
+| Critical profile discrepancy | 200 (with flag) | `eid_discrepancy_critical` | "We found a discrepancy between your eID data and profile. An admin will review." | Wait for admin review |
+| Mock provider unavailable | 500 | `eid_provider_error` | "The identity verification service is temporarily unavailable." | Retry after delay |
+| User cancels eID flow | 400 | `eid_user_cancelled` | "You cancelled the eID verification. You can try again at any time." | Return to case detail |
+| Rate limit exceeded | 429 | `rate_limit` | "Too many verification attempts. Please wait before trying again." | Wait and retry |
+| Case not in draft status | 400 | `eid_case_not_draft` | "eID verification can only be started on draft cases." | Contact support |
+
+---
+
+## 5. Observability & Monitoring
+
+### 5.1 Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `kyc_eid_sessions_created_total` | Counter | `scheme` | Total eID sessions initiated |
+| `kyc_eid_verifications_completed_total` | Counter | `scheme`, `result` (success/failure) | Completed verification flows |
+| `kyc_eid_verification_latency_seconds` | Histogram | `scheme` | Time from session creation to callback completion |
+| `kyc_eid_auto_tier_upgrades_total` | Counter | `from_tier`, `to_tier` | Automatic tier upgrades via eID |
+| `kyc_eid_discrepancies_total` | Counter | `field`, `severity` | Profile discrepancies detected |
+| `kyc_eid_session_expirations_total` | Counter | `scheme` | Sessions that expired without completion |
+| `kyc_eid_mock_requests_total` | Counter | -- | Mock provider requests (dev mode only) |
+
+### 5.2 Log Events
+
+| Event | Level | Fields | Description |
+|---|---|---|---|
+| `eid.session.created` | INFO | `session_id`, `case_id`, `scheme`, `user_sub` | New verification session |
+| `eid.callback.received` | INFO | `session_id`, `scheme`, `assertion_id` | Callback received from provider |
+| `eid.assertion.validated` | INFO | `assertion_id`, `scheme`, `assurance_level` | Assertion signature verified |
+| `eid.assertion.invalid` | WARN | `session_id`, `scheme`, `reason` | Invalid assertion received |
+| `eid.tier.upgraded` | INFO | `case_id`, `from_tier`, `to_tier`, `scheme` | Auto tier upgrade |
+| `eid.discrepancy.detected` | WARN | `case_id`, `field`, `severity`, `profile_value`, `eid_value` | Profile mismatch |
+| `eid.session.expired` | INFO | `session_id`, `scheme` | TTL cleanup |
+
+### 5.3 Alerting Rules
+
+| Alert | Condition | Severity |
+|---|---|---|
+| eID verification failure rate spike | `eid_verifications_completed{result=failure}` > 50% over 30 min | P2 |
+| eID session expiration rate high | `eid_session_expirations / eid_sessions_created` > 40% over 1 hour | P3 |
+| eID provider latency high | P95 of `eid_verification_latency_seconds` > 30s for 10 min | P3 |
+| Critical discrepancy spike | `eid_discrepancies{severity=critical}` > 10 in 1 hour | P2 |
+| Zero eID completions | `eid_verifications_completed` = 0 for 24 hours (expected > 0) | P3 |
+
+---
+
+## 6. Rollout Plan
+
+### 6.1 Feature Flags
+
+| Flag | Default (Dev) | Default (Prod) | Description |
+|---|---|---|---|
+| `KYC_EID_ENABLED` | `true` | `false` | Master enable for eID verification |
+| `KYC_EID_MOCK_ENABLED` | `true` | `false` | Enable mock eID provider |
+| `KYC_EID_AUTO_TIER_UPGRADE` | `true` | `true` | Auto-upgrade tier on successful eID |
+| `KYC_EID_SCHEMES` | `eidas,digid,bankid,aadhaar` | `eidas,bankid` | Comma-separated enabled schemes |
+| `KYC_EID_MOCK_SIGNING_KEY` | `dev-mock-key` | N/A | HMAC key for mock assertion signing |
+
+### 6.2 Phased Deployment
+
+| Phase | Scope | Duration | Success Criteria |
+|---|---|---|---|
+| Phase 1: Backend only | Deploy service + endpoints behind `KYC_EID_ENABLED=false` | 1 day | No runtime errors, endpoints return 404 |
+| Phase 2: Internal testing | Enable for internal admin users only (allowlist) | 3 days | 10+ successful mock verifications, no data corruption |
+| Phase 3: Limited rollout | Enable for 10% of users via feature flag | 5 days | Error rate < 5%, avg latency < 10s, zero critical bugs |
+| Phase 4: Full rollout | Enable for all users | Ongoing | Monitor discrepancy rates and support tickets |
+
+### 6.3 Rollback Procedure
+
+1. Set `KYC_EID_ENABLED=false` -- endpoints return 404, frontend hides eID panel
+2. Existing eID verifications remain on cases (read-only, no new verifications)
+3. Cases auto-upgraded via eID retain their tier (no automatic downgrade)
+4. If data corruption suspected: run `scripts/kyc_eid_cleanup.py` to remove eID data from affected cases
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Query Cost Analysis
+
+| Operation | DDB Operations | Estimated Cost |
+|---|---|---|
+| Create eID session | 1 PutItem | 1 WCU |
+| Process callback | 1 GetItem + 1 PutItem + 1 UpdateItem (case) + 1 PutItem (assertion) | 4 WCU + 1 RCU |
+| Get eID status | 1 GetItem (case) | 1 RCU |
+| List schemes | In-memory, no DDB | 0 |
+| Compare with profile | 1 GetItem (user profile) | 1 RCU |
+
+### 7.2 Caching Strategy
+
+| Data | Cache | TTL | Invalidation |
+|---|---|---|---|
+| Supported schemes list | In-memory (constant) | Never expires | Application restart |
+| eID session data | No cache (short-lived) | -- | TTL cleanup by DDB |
+| Case eID status | React Query client-side | 30 seconds | Invalidated on callback completion |
+| Mock assertion data | No cache needed | -- | Stateless mock |
+
+### 7.3 Rate Limiting
+
+| Endpoint | Limit | Window | Notes |
+|---|---|---|---|
+| POST /eid/start | 5 per user | 15 minutes | Prevent session flooding |
+| GET /eid/callback | 10 per session_id | 5 minutes | Allow retries |
+| GET /eid/status | 30 per user | 1 minute | Standard read rate |
+| GET /eid/schemes | 30 per user | 1 minute | Standard read rate |
+| POST /mock/eid/verify | 20 per IP | 1 minute | Dev-mode only |
+
+---
+
+## 8. E2E Test Plan
 
 **Test file**: `frontend/e2e/kyc-eid.spec.ts`
-**Total**: ~15 tests across 3 sections (231-233)
+**Total**: ~24 tests across 4 sections (231-234)
 
-### Section 231: eID Session & Mock Flow (6 tests)
+### Section 231: eID Session & Mock Flow (8 tests)
 
 ```typescript
 test("231.1 Start eID verification returns redirect URL", async ({ page }) => {
@@ -377,9 +824,17 @@ test("231.6 Expired session returns error on callback", async ({ page }) => {
   // Create session, wait for expiry (or set TTL to 0 in mock)
   // GET callback -> error redirect with eid=failed
 });
+
+test("231.7 Invalid session_id returns 404 on callback", async ({ page }) => {
+  // GET callback with nonexistent session_id -> 404
+});
+
+test("231.8 Unsupported scheme returns 400", async ({ page }) => {
+  // POST /eid/start with scheme="foobar" -> 400
+});
 ```
 
-### Section 232: Auto Tier Upgrade & Discrepancy Detection (5 tests)
+### Section 232: Auto Tier Upgrade & Discrepancy Detection (6 tests)
 
 ```typescript
 test("232.1 Successful eID auto-upgrades case to tier_2", async ({ page }) => {
@@ -406,9 +861,14 @@ test("232.5 Critical discrepancy blocks auto-upgrade", async ({ page }) => {
   // Set profile DOB to "2000-01-01" (differs from mock "1990-01-15")
   // Complete eID -> auto_tier_upgrade=false, case flagged for review
 });
+
+test("232.6 Tier 2 case is not downgraded by discrepancy", async ({ page }) => {
+  // Case already at tier_2, eID with discrepancy
+  // Case stays at tier_2 (no downgrade)
+});
 ```
 
-### Section 233: eID Status & Admin View (4 tests)
+### Section 233: eID Status & Admin View (5 tests)
 
 ```typescript
 test("233.1 Get eID verification status for case", async ({ page }) => {
@@ -428,11 +888,45 @@ test("233.4 Second eID verification replaces first", async ({ page }) => {
   // Complete eID with bankid, then start and complete with eidas
   // GET status -> scheme="eidas" (latest)
 });
+
+test("233.5 Case not in draft status rejects eID start", async ({ page }) => {
+  // Submit case, then try POST /eid/start -> 400
+});
+```
+
+### Section 234: Concurrent Access & Edge Cases (5 tests)
+
+```typescript
+test("234.1 Two simultaneous eID sessions for same case - second replaces first", async ({ page }) => {
+  // Start session A, start session B (both for same case)
+  // Complete session B -> succeeds
+  // Complete session A -> fails (session replaced)
+});
+
+test("234.2 eID verification with all schemes returns correct mock data", async ({ page }) => {
+  // For each scheme: start + complete
+  // Each has correct nationality and fields for the scheme
+});
+
+test("234.3 Rate limit prevents session flooding", async ({ page }) => {
+  // Start 6 sessions in rapid succession (limit is 5 per 15 min)
+  // 6th returns 429
+});
+
+test("234.4 eID callback is idempotent", async ({ page }) => {
+  // Complete callback twice with same session_id
+  // Second call returns same result without error
+});
+
+test("234.5 Mock eID assertion has correct HMAC signature", async ({ page }) => {
+  // Verify the mock assertion's HMAC-SHA256 signature using the mock signing key
+  // Signature matches expected value
+});
 ```
 
 ---
 
-## 5. File Change Summary
+## 9. File Change Summary
 
 | File | Change Type | Description |
 |------|-------------|-------------|
@@ -446,4 +940,4 @@ test("233.4 Second eID verification replaces first", async ({ page }) => {
 | `frontend/src/api/types.ts` | Modify | Add `EidVerification`, `EidScheme` types |
 | `frontend/src/components/shared/EidVerificationPanel.tsx` | **New** | Scheme selector and verification start |
 | `frontend/src/components/shared/EidResultCard.tsx` | **New** | Verification result display |
-| `frontend/e2e/kyc-eid.spec.ts` | **New** | 15 E2E tests across sections 231-233 |
+| `frontend/e2e/kyc-eid.spec.ts` | **New** | 24 E2E tests across sections 231-234 |

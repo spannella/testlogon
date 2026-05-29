@@ -523,3 +523,351 @@ Metrics are per-user-scoped. No user can view another user's instance metrics. A
 8. Metrics auto-refresh every 10 seconds.
 9. Health data is user-isolated.
 10. All health and restart events produce audit log entries.
+
+---
+
+## 8. Architecture & Data Flow
+
+```
+  Background Health Checker (asyncio loop, every 30s)
+       │
+       ├── Query ec2_instances table: status="running"
+       │     └── For each instance:
+       │           │
+       │           ├── _probe_instance(hostname, port=22)
+       │           │     ├── dev_mode? → _mock_health_probe() → random(healthy/degraded/unreachable)
+       │           │     └── prod? → TCP connect to SSH port, 5s timeout
+       │           │
+       │           ├── Compare old health_status vs new
+       │           │     └── Changed? → _handle_health_change()
+       │           │           ├── record_timeline_event(status_changed)
+       │           │           └── write_alert() if degraded/unreachable
+       │           │
+       │           ├── Update DDB: health_status, last_health_check_at, health_check_count
+       │           │     └── If unreachable: increment consecutive_failures
+       │           │     └── If healthy: reset consecutive_failures to 0
+       │           │
+       │           ├── _check_restart_policy()
+       │           │     └── consecutive_failures >= 3 AND auto_restart_enabled AND restart_count < max_restarts?
+       │           │           ├── stop_instance() + start_instance()
+       │           │           ├── record_timeline_event(restarted)
+       │           │           └── increment restart_count
+       │           │
+       │           └── Generate mock metrics (_mock_metrics())
+       │                 └── cpu_percent, memory_percent, disk_percent, network I/O
+       │
+       └── Query k8s_pods table: status="running"
+             └── Same flow as EC2
+```
+
+---
+
+## 9. Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table / GSI | PK | SK | Operation | Notes |
+|---|---------------|-------------|----|----|-----------|-------|
+| 1 | Get instance health fields | `ec2_instances` | `user_sub` | `INSTANCE#{instance_id}` | GetItem (projection: health_*) | Returns health status + counters |
+| 2 | Update health status after probe | `ec2_instances` | `user_sub` | `INSTANCE#{instance_id}` | UpdateItem SET health_status, last_health_check_at, etc. | Conditional on attribute_exists |
+| 3 | Write timeline event | `ec2_instances` | `user_sub` | `TIMELINE#{instance_id}#{timestamp}#{event_id}` | PutItem | Append-only timeline |
+| 4 | List timeline events | `ec2_instances` | `user_sub` | begins_with `TIMELINE#{instance_id}#` | Query (ScanIndexForward=False, Limit) | Newest first |
+| 5 | Find all running instances | `ec2_instances` GSI `ByStatus` | `status` = "running" | `user_sub` | Query | Used by health checker background task |
+| 6 | Increment restart count | `ec2_instances` | `user_sub` | `INSTANCE#{instance_id}` | UpdateItem ADD restart_count :one | Atomic counter |
+| 7 | Update restart policy | `ec2_instances` | `user_sub` | `INSTANCE#{instance_id}` | UpdateItem SET auto_restart_enabled, max_restarts | User-initiated |
+| 8 | Get pod health (K8s) | `k8s_pods` | `user_sub` | `POD#{pod_id}` | GetItem | Same pattern as EC2 |
+
+---
+
+## 10. API Request/Response Examples
+
+**GET /ui/remote/instances/ec2/{id}/health**
+
+```bash
+curl http://localhost:8000/ui/remote/instances/ec2/i-abc123/health \
+  -H "Cookie: ui_session=sess_xxx; ui_access_token=jwt_xxx"
+```
+
+Response (200):
+```json
+{
+  "resource_id": "i-abc123",
+  "resource_type": "ec2",
+  "health_status": "healthy",
+  "last_health_check_at": 1748520030,
+  "health_check_count": 142,
+  "consecutive_failures": 0,
+  "uptime_seconds": 7234,
+  "restart_count": 0,
+  "max_restarts": 3,
+  "auto_restart_enabled": true
+}
+```
+
+**GET /ui/remote/instances/ec2/{id}/metrics**
+
+Response (200):
+```json
+{
+  "resource_id": "i-abc123",
+  "cpu_percent": 34.2,
+  "memory_percent": 48.7,
+  "memory_used_mb": 1996,
+  "memory_total_mb": 4096,
+  "disk_percent": 22.3,
+  "disk_used_gb": 11.2,
+  "disk_total_gb": 50.0,
+  "network_in_mbps": 2.45,
+  "network_out_mbps": 0.87,
+  "timestamp": 1748520040
+}
+```
+
+**GET /ui/remote/instances/ec2/{id}/timeline?limit=5**
+
+Response (200):
+```json
+{
+  "events": [
+    {
+      "event_id": "evt_a1b2c3",
+      "event_type": "health_ok",
+      "timestamp": 1748520030,
+      "details": {"probe_target": "10.0.1.5:22"},
+      "health_status_before": "healthy",
+      "health_status_after": "healthy"
+    },
+    {
+      "event_id": "evt_d4e5f6",
+      "event_type": "launched",
+      "timestamp": 1748512800,
+      "details": {"instance_type": "t3.small", "ami_id": "ami-ubuntu-2204"},
+      "health_status_before": "",
+      "health_status_after": "unknown"
+    }
+  ],
+  "count": 2
+}
+```
+
+**PATCH /ui/remote/instances/ec2/{id}/restart-policy**
+
+```json
+// Request
+{ "auto_restart_enabled": true, "max_restarts": 5 }
+
+// Response (200)
+{
+  "resource_id": "i-abc123",
+  "auto_restart_enabled": true,
+  "max_restarts": 5,
+  "restart_count": 0
+}
+```
+
+---
+
+## 11. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Instance not found | 404 | `instance_not_found` | "Instance not found" | Verify instance ID |
+| Instance belongs to another user | 403 | `forbidden` | "Access denied" | Use your own instances |
+| Invalid resource type in path | 400 | `invalid_resource_type` | "Resource type must be 'ec2' or 'k8s'" | Fix URL path |
+| max_restarts > 10 | 422 | `validation_error` | "Max restarts must be 0-10" | Reduce value |
+| max_restarts < 0 | 422 | `validation_error` | "Max restarts must be 0-10" | Use non-negative value |
+| Timeline limit exceeds 200 | 422 | `validation_error` | "Limit must be 1-200" | Reduce limit |
+| Health check of terminated instance | 200 | N/A | Returns `health_status: "unknown"` | Instance is terminated |
+| Metrics of stopped instance | 200 | N/A | Returns all zeros | Start instance first |
+| Unauthenticated request | 401 | `unauthorized` | "Authentication required" | Log in |
+| Background health checker DDB error | N/A (logged) | N/A | No user impact | Check DDB connectivity |
+
+---
+
+## 12. Frontend Component Tree
+
+```
+InstanceDetailPage
+├── PageHeader
+│   ├── BackButton → navigate to instance list
+│   ├── ResourceLabel (instance name)
+│   ├── HealthBadge (green/yellow/red circle)
+│   │   └── Tooltip: "Healthy" / "Degraded" / "Unreachable"
+│   └── UptimeCounter ("Up for 2h 34m" or "Last seen 5m ago")
+├── MetricsRow (horizontal card layout, auto-refresh 10s)
+│   ├── CpuGauge
+│   │   ├── CircularProgress (color: green < 70%, yellow 70-90%, red > 90%)
+│   │   └── Label ("CPU 34.2%")
+│   ├── MemoryGauge
+│   │   ├── CircularProgress
+│   │   └── Label ("Memory 48.7% — 1.9GB / 4.0GB")
+│   ├── DiskGauge
+│   │   ├── CircularProgress
+│   │   └── Label ("Disk 22.3%")
+│   └── NetworkCard
+│       ├── InRate ("↓ 2.45 Mbps")
+│       └── OutRate ("↑ 0.87 Mbps")
+├── TimelineSection
+│   ├── SectionHeader ("Event Timeline")
+│   └── TimelineList (scrollable, newest first)
+│       └── TimelineItem[]
+│           ├── EventIcon (rocket/check/x/refresh/stop per event_type)
+│           ├── EventTitle (human-readable event_type)
+│           ├── Timestamp (relative, e.g., "2 minutes ago")
+│           └── ExpandableDetails (JSON detail view)
+├── RestartPolicySection
+│   ├── SectionHeader ("Auto-Restart Policy")
+│   ├── AutoRestartToggle (Switch component)
+│   ├── MaxRestartsInput (number input, 0-10)
+│   ├── RestartCountDisplay ("Restarts used: 0 / 5")
+│   └── SaveButton
+└── ActionsRow
+    ├── ConnectButton (SSH/VNC)
+    ├── StopButton
+    └── TerminateButton (with confirmation dialog)
+```
+
+**Props interfaces:**
+
+```typescript
+interface HealthBadgeProps {
+  status: "healthy" | "degraded" | "unreachable" | "unknown";
+}
+
+interface MetricGaugeProps {
+  label: string;
+  value: number;       // percentage 0-100
+  detail?: string;     // e.g. "1.9GB / 4.0GB"
+}
+
+interface TimelineItemProps {
+  event: TimelineEvent;
+}
+
+interface RestartPolicySectionProps {
+  resourceId: string;
+  resourceType: "ec2" | "k8s";
+  currentPolicy: RestartPolicyOut;
+  onSave: (policy: RestartPolicyIn) => void;
+}
+```
+
+---
+
+## 13. Observability
+
+### 13.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `health_check_total` | Counter | `resource_type`, `result` (healthy/degraded/unreachable) | Health probe outcomes |
+| `health_status_change_total` | Counter | `resource_type`, `from_status`, `to_status` | Status transitions |
+| `auto_restart_total` | Counter | `resource_type` | Auto-restarts triggered |
+| `auto_restart_exhausted_total` | Counter | `resource_type` | Resources that exceeded max restarts |
+| `health_checker_duration_seconds` | Histogram | | Time to complete one full health check cycle |
+| `timeline_events_written_total` | Counter | `event_type` | Timeline events recorded |
+
+### 13.2 Structured Logging
+
+| Log Event | Level | Fields | Trigger |
+|-----------|-------|--------|---------|
+| `health.probe_completed` | DEBUG | `resource_id`, `result`, `duration_ms` | Each probe |
+| `health.status_changed` | INFO | `resource_id`, `from`, `to`, `user_sub` | Health transition |
+| `health.auto_restart` | WARN | `resource_id`, `restart_number`, `max_restarts` | Auto-restart triggered |
+| `health.restart_exhausted` | ERROR | `resource_id`, `user_sub`, `restart_count` | Max restarts exceeded |
+| `health.checker_cycle` | DEBUG | `ec2_count`, `k8s_count`, `duration_ms` | Health checker loop |
+
+### 13.3 Alerting
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Health checker not running | No `health.checker_cycle` log in 5 minutes | Critical | Restart backend |
+| High unreachable rate | > 20% of probes return unreachable in 10 min | Warning | Check network / instance health |
+| Auto-restart storm | > 5 auto-restarts in 10 minutes | Warning | Check underlying infrastructure |
+
+---
+
+## 14. Performance Considerations
+
+### 14.1 Latency Targets
+
+| Operation | Target P95 | Notes |
+|-----------|-----------|-------|
+| Health summary GET | < 50ms | Single DDB GetItem |
+| Metrics GET | < 50ms | Single GetItem (or mock generation) |
+| Timeline GET (50 events) | < 150ms | DDB Query with Limit |
+| Restart policy PATCH | < 100ms | Single UpdateItem |
+| Health checker full cycle | < 10s | Parallel probes for all running instances |
+
+### 14.2 Health Checker Scalability
+
+- The health checker queries all running instances per cycle. With 1000 running instances, this requires ~1000 DDB queries + 1000 TCP probes.
+- TCP probes run concurrently via `asyncio.gather()` with a semaphore (max 50 concurrent probes) to avoid socket exhaustion.
+- In dev mode, mock probes are instant (no network I/O), so the checker handles any instance count.
+
+### 14.3 Metrics Refresh
+
+- Frontend polls metrics every 10 seconds via `useQuery({ refetchInterval: 10_000 })`.
+- Each poll is a single DDB GetItem (< 1ms at DDB level).
+- 100 concurrent users viewing detail pages = 10 requests/second = negligible DDB load.
+
+---
+
+## 15. Rollout Plan
+
+### 15.1 Feature Flags
+
+| Flag | Environment Variable | Default | Description |
+|------|---------------------|---------|-------------|
+| `instance_health_enabled` | `INSTANCE_HEALTH_ENABLED` | `true` | Master switch for health monitoring |
+| `auto_restart_enabled` | `INSTANCE_AUTO_RESTART_ENABLED` | `true` | Enable auto-restart on failure |
+| `health_check_interval` | `HEALTH_CHECK_INTERVAL_SECONDS` | `30` | Seconds between health checker cycles |
+
+### 15.2 Phased Rollout
+
+**Phase 1 (Day 1-2)**: Health checker service + mock probes + mock metrics. Background task registered in `main.py`.
+
+**Phase 2 (Day 3-4)**: API endpoints (4 routes). Timeline event recording on launch/stop/terminate.
+
+**Phase 3 (Day 5-6)**: Frontend InstanceDetailPage with health badge, metrics, timeline, restart policy.
+
+**Phase 4 (Day 7)**: E2E tests. Production rollout with auto-restart disabled initially.
+
+### 15.3 Rollback
+
+1. Set `INSTANCE_HEALTH_ENABLED=false` -- background checker stops, API returns 400.
+2. Health fields on instance items remain but are stale.
+3. Frontend hides health features when flag is off.
+
+---
+
+## 16. Expanded E2E Tests
+
+### Section 267: Health & Metrics API (5 tests) -- existing
+
+1-5. (As defined above in Section 5)
+
+### Section 268: Timeline API (5 tests) -- existing
+
+6-10. (As defined above in Section 5)
+
+### Section 269: Instance Detail UI (5 tests) -- existing
+
+11-15. (As defined above in Section 5)
+
+### Section 270: Health Edge Cases & Auto-Restart (8 tests)
+
+16. `Health check count increments on each probe` -- Launch instance, wait for at least 1 health check cycle. GET health. Verify `health_check_count >= 1`.
+17. `Consecutive failures reset to 0 when healthy` -- Instance that was degraded becomes healthy. Verify `consecutive_failures: 0`.
+18. `Auto-restart disabled by default on new instances` -- Launch instance. GET health. Verify `auto_restart_enabled: false` (default).
+19. `Enable auto-restart, verify persists after reload` -- PATCH restart policy, reload page, GET health. Verify settings match.
+20. `max_restarts=0 disables auto-restart even if enabled` -- Set `auto_restart_enabled: true, max_restarts: 0`. Instance failure does not trigger restart.
+21. `K8s pod health returns same schema as EC2` -- Launch K8s pod. GET `/ui/remote/instances/k8s/{id}/health`. Verify same `HealthSummaryOut` fields.
+22. `Metrics return non-negative values` -- GET metrics. Verify all numeric fields >= 0.
+23. `Timeline events include resource_id in details` -- GET timeline after launch. Verify event details contain the instance/pod ID.
+
+### Section 271: Multi-Instance Health Isolation (5 tests)
+
+24. `Alice cannot view Bob's instance health` -- Bob launches instance. Alice tries GET health. Verify 403 or 404.
+25. `Alice cannot modify Bob's restart policy` -- PATCH Bob's instance restart policy as Alice. Verify 403.
+26. `Terminated instance health returns unknown` -- Terminate instance. GET health. Verify `health_status: "unknown"`.
+27. `Stopped instance health returns unknown` -- Stop instance. GET health. Verify `health_status: "unknown"` or no health checks run.
+28. `Timeline survives instance stop/start cycle` -- Launch, stop, start. GET timeline. Verify events for all transitions present.

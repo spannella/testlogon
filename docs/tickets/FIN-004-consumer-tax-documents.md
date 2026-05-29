@@ -61,9 +61,64 @@ The platform processes significant financial transactions (tips, subscriptions, 
 
 ## 3. Technical Design
 
-### 3.1 DynamoDB Schema
+### 3.1 Architecture & Data Flow
 
-#### 3.1.1 Tax Documents Table
+```
+                        +--------------------+
+                        |   TaxDocumentsPage |
+                        |   (React)          |
+                        +--------+-----------+
+                                 |
+                  +--------------+--------------+
+                  |              |               |
+           GET /summary   GET /summary/pdf  GET /receipts/zip
+                  |              |               |
+                  v              v               v
+         +-------+-------+  +---+---+    +------+------+
+         | tax_documents  |  | fpdf2 |    | zipfile     |
+         | router         |  | (PDF) |    | (stdlib)    |
+         +-------+-------+  +---+---+    +------+------+
+                 |               |               |
+                 v               v               v
+         +-------+-------+------+-------+-------+-------+
+         |           tax_documents service               |
+         |  compute_spending_summary()                   |
+         |  generate_tax_summary_pdf()                   |
+         |  export_receipts_zip()                        |
+         +-------+-------+------+-------+-------+-------+
+                 |               |               |
+                 v               v               v
+         +-------+-------+ +----+----+  +-------+-------+
+         | billing table  | | S3      |  | profile svc   |
+         | LEDGER# range  | | invoices|  | user name/email|
+         | query          | | fetch   |  |               |
+         +---------+------+ +---------+  +---------------+
+
+Request Flow (Summary):
+  1. Frontend sends GET /ui/tax-documents/summary?year=2026
+  2. Router extracts user_sub from session, computes date range
+  3. Service queries billing table LEDGER# entries in range
+  4. Service classifies each entry into tax category
+  5. Service aggregates totals per category
+  6. Response returned as SpendingSummaryOut JSON
+
+Request Flow (PDF):
+  1. Frontend sends GET /ui/tax-documents/summary/pdf?year=2026
+  2. Router calls compute_spending_summary for data
+  3. Router calls generate_tax_summary_pdf with summary + user info
+  4. PDF bytes returned with Content-Type: application/pdf
+
+Request Flow (ZIP):
+  1. Frontend sends GET /ui/tax-documents/receipts/zip?year=2026
+  2. Router queries invoice records in date range from billing table
+  3. For each invoice, fetch PDF from S3
+  4. Bundle into in-memory ZIP archive
+  5. Return ZIP bytes with Content-Type: application/zip
+```
+
+### 3.2 DynamoDB Schema
+
+#### 3.2.1 Tax Documents Table
 
 **Table name**: `tax_documents` (new table)
 **PK**: `pk` (S), **SK**: `sk` (S)
@@ -75,7 +130,20 @@ The platform processes significant financial transactions (tips, subscriptions, 
 
 No GSIs needed -- all queries are by user PK.
 
-#### 3.1.2 TableDef Entry
+#### 3.2.2 Detailed DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK / Condition | GSI | Notes |
+|----------------|-------|-----|----------------|-----|-------|
+| Get cached annual summary | tax_documents | `USER#{user_sub}` | `sk = CACHE#{year}` | None | Single GetItem |
+| List generated documents | tax_documents | `USER#{user_sub}` | `begins_with(sk, "DOC#")` | None | Query with SK prefix |
+| List documents for a year | tax_documents | `USER#{user_sub}` | `begins_with(sk, "DOC#{year}#")` | None | Narrower SK prefix |
+| Query ledger by date range | billing | `USER#{user_sub}` | `between(sk, "LEDGER#{from}#", "LEDGER#{to}#~")` | None | Range query on SK |
+| Get invoice records | billing | `USER#{user_sub}` | `begins_with(sk, "INVOICE#")` + filter on created_at | None | Filter for date range |
+| Admin: get user summary | tax_documents | `USER#{target_sub}` | `sk = CACHE#{year}` | None | Same as user query with admin auth |
+| Write document record | tax_documents | `USER#{user_sub}` | `DOC#{year}#{doc_id}` | None | PutItem |
+| Write cache record | tax_documents | `USER#{user_sub}` | `CACHE#{year}` | None | PutItem (overwrite) |
+
+#### 3.2.3 TableDef Entry
 
 ```python
 TableDef(
@@ -83,7 +151,7 @@ TableDef(
 ),
 ```
 
-#### 3.1.3 Example DynamoDB Items
+#### 3.2.4 Example DynamoDB Items
 
 **Tax document record**:
 ```json
@@ -130,7 +198,7 @@ TableDef(
 }
 ```
 
-### 3.2 Category Classification
+### 3.3 Category Classification
 
 Billing ledger entries are classified into tax categories by their `type` and `reason` fields:
 
@@ -163,7 +231,7 @@ def classify_category(entry: Dict[str, Any]) -> Optional[str]:
     return "other"
 ```
 
-### 3.3 Backend Service
+### 3.4 Backend Service
 
 **New file**: `app/services/tax_documents.py` (~350 lines)
 
@@ -257,7 +325,7 @@ def admin_get_user_summary(
     """Admin: compute spending summary for any user."""
 ```
 
-### 3.4 Backend Router
+### 3.5 Backend Router
 
 **New file**: `app/routers/tax_documents.py` (~200 lines)
 
@@ -271,7 +339,7 @@ router = APIRouter(prefix="/ui/tax-documents", tags=["tax-documents"])
 admin_router = APIRouter(prefix="/ui/admin/tax-documents", tags=["tax-documents-admin"])
 ```
 
-### 3.5 Router Endpoints
+### 3.6 Router Endpoints
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -282,7 +350,113 @@ admin_router = APIRouter(prefix="/ui/admin/tax-documents", tags=["tax-documents-
 | `GET` | `/ui/tax-documents/history` | `require_ui_session` | List previously generated documents |
 | `GET` | `/ui/admin/tax-documents/summary` | `require_admin_session` | Admin: get any user's spending summary |
 
-### 3.6 Request/Response Models
+### 3.7 API Request/Response Examples
+
+**GET /ui/tax-documents/summary?year=2026**
+
+Request:
+```
+GET /ui/tax-documents/summary?year=2026 HTTP/1.1
+Cookie: ui_session=...; ui_access_token=...; ui_csrf=...
+```
+
+Response (200):
+```json
+{
+  "date_from": 1767225600,
+  "date_to": 1798761599,
+  "categories": [
+    {"category": "subscriptions", "total_cents": 12000, "transaction_count": 12},
+    {"category": "tips", "total_cents": 5000, "transaction_count": 8},
+    {"category": "purchases", "total_cents": 25000, "transaction_count": 5},
+    {"category": "unlocks", "total_cents": 3500, "transaction_count": 7},
+    {"category": "deposits", "total_cents": 10000, "transaction_count": 2},
+    {"category": "other", "total_cents": 0, "transaction_count": 0}
+  ],
+  "grand_total_cents": 55500,
+  "transaction_count": 34,
+  "currency": "usd"
+}
+```
+
+**GET /ui/tax-documents/summary/pdf?year=2026**
+
+Request:
+```
+GET /ui/tax-documents/summary/pdf?year=2026 HTTP/1.1
+Cookie: ui_session=...; ui_access_token=...; ui_csrf=...
+```
+
+Response (200):
+```
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="spending-summary-2026.pdf"
+
+%PDF-1.4 ... (binary PDF content)
+```
+
+**GET /ui/tax-documents/receipts/zip?date_from=1767225600&date_to=1798761599**
+
+Response (200):
+```
+Content-Type: application/zip
+Content-Disposition: attachment; filename="receipts-2026.zip"
+
+PK... (binary ZIP content)
+```
+
+**GET /ui/tax-documents/comparison?year=2026**
+
+Response (200):
+```json
+{
+  "current_year": 2026,
+  "previous_year": 2025,
+  "current_summary": {
+    "date_from": 1767225600,
+    "date_to": 1798761599,
+    "categories": [...],
+    "grand_total_cents": 55500,
+    "transaction_count": 34,
+    "currency": "usd"
+  },
+  "previous_summary": {
+    "date_from": 1735689600,
+    "date_to": 1767225599,
+    "categories": [...],
+    "grand_total_cents": 37000,
+    "transaction_count": 22,
+    "currency": "usd"
+  },
+  "change_pct": 50.0
+}
+```
+
+**GET /ui/tax-documents/history**
+
+Response (200):
+```json
+{
+  "documents": [
+    {
+      "doc_id": "td_abc123",
+      "doc_type": "annual_summary",
+      "year": 2025,
+      "date_from": 1735689600,
+      "date_to": 1767225599,
+      "grand_total_cents": 37000,
+      "transaction_count": 22,
+      "created_at": 1748520100
+    }
+  ]
+}
+```
+
+**GET /ui/admin/tax-documents/summary?user_sub=alice@test.local&year=2026**
+
+Response (200): Same shape as user summary endpoint.
+
+### 3.8 Request/Response Models
 
 **Add to `app/models.py`**:
 
@@ -323,7 +497,25 @@ class TaxDocumentListOut(BaseModel):
     documents: List[TaxDocumentOut] = Field(default_factory=list)
 ```
 
-### 3.7 Tax Summary PDF Layout
+### 3.9 Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|----------------|-------------|------------|---------------|-----------------|
+| Missing date range params | 422 | `validation_error` | "Either 'year' or both 'date_from' and 'date_to' are required" | Provide valid params |
+| `date_from` > `date_to` | 422 | `validation_error` | "date_from must be before date_to" | Fix date range |
+| Year in the future | 422 | `validation_error` | "Year cannot be in the future" | Use current or past year |
+| Year before platform launch | 422 | `validation_error` | "No data available before 2024" | Use valid year |
+| No billing data in range | 200 | N/A | Returns zero totals (not an error) | N/A |
+| Invoice PDF not found in S3 | 500 | `internal_error` | "Failed to retrieve receipt" | Retry; contact support |
+| ZIP exceeds 500 receipts | 400 | `too_many_receipts` | "Too many receipts (max 500). Use a narrower date range." | Narrow date range |
+| User not authenticated | 401 | `unauthorized` | "Authentication required" | Login |
+| Admin endpoint, non-admin caller | 403 | `forbidden` | "Admin access required" | Use admin account |
+| Admin: target user_sub not found | 404 | `user_not_found` | "User not found" | Verify user_sub |
+| PDF generation failure | 500 | `pdf_generation_error` | "Failed to generate PDF" | Retry; check logs |
+| Rate limit exceeded (PDF) | 429 | `rate_limited` | "Too many requests. Try again in {N} seconds." | Wait and retry |
+| Rate limit exceeded (ZIP) | 429 | `rate_limited` | "ZIP export limited to 5 per hour" | Wait and retry |
+
+### 3.10 Tax Summary PDF Layout
 
 ```
 +--------------------------------------------+
@@ -352,7 +544,7 @@ class TaxDocumentListOut(BaseModel):
 +--------------------------------------------+
 ```
 
-### 3.8 Frontend Components
+### 3.11 Frontend Components
 
 **New files**:
 
@@ -361,37 +553,113 @@ class TaxDocumentListOut(BaseModel):
 | `frontend/src/pages/billing/TaxDocumentsPage.tsx` | Tax documents main page | ~350 |
 | `frontend/src/api/endpoints/taxDocuments.ts` | API wrappers | ~60 |
 
-**Component tree**:
+**Component tree with props interfaces**:
 
 ```
 TaxDocumentsPage
 ├── Header: "Tax Documents" with FileText icon
-├── Date range selector
+├── DateRangeSelector
+│   ├── Props: { value: {year?: number, from?: number, to?: number},
+│   │           onChange: (range) => void, presets: number[] }
 │   ├── Year preset buttons: "2024" / "2025" / "2026"
 │   └── Custom range: DatePicker (from) + DatePicker (to)
-├── Spending Summary Card
+├── SpendingSummaryCard
+│   ├── Props: { summary: SpendingSummaryOut, isLoading: boolean }
 │   ├── Grand total (large display)
 │   ├── Transaction count
-│   └── Category breakdown (horizontal bar chart or table)
+│   └── CategoryBreakdownTable
+│       ├── Props: { categories: SpendingCategoryOut[] }
 │       ├── Subscriptions: $120.00 (12 transactions)
 │       ├── Tips: $50.00 (8 transactions)
 │       ├── Purchases: $250.00 (5 transactions)
 │       ├── Unlocks: $35.00 (7 transactions)
 │       └── Deposits: $100.00 (2 transactions)
-├── Year Comparison Card
+├── YearComparisonCard
+│   ├── Props: { comparison: YearComparisonOut | null, isLoading: boolean }
 │   ├── Current year total vs. previous year total
 │   ├── Change percentage (green/red arrow)
 │   └── Per-category comparison bars
-├── Action buttons
-│   ├── "Download Summary PDF" (FileDown icon)
-│   └── "Export All Receipts (ZIP)" (Archive icon)
-└── Document History
+├── ActionButtons
+│   ├── DownloadPdfButton
+│   │   └── Props: { year?: number, dateFrom?: number, dateTo?: number,
+│   │               isLoading: boolean, onClick: () => void }
+│   └── ExportZipButton
+│       └── Props: { year?: number, dateFrom?: number, dateTo?: number,
+│                   isLoading: boolean, onClick: () => void }
+└── DocumentHistoryTable
+    ├── Props: { documents: TaxDocumentOut[], isLoading: boolean }
     └── Table of previously generated documents
         ├── Date, type, period, total, download link
         └── Empty state: "No documents generated yet"
 ```
 
-### 3.9 Frontend Routes
+**Frontend TypeScript interfaces** (add to `frontend/src/api/types.ts`):
+
+```typescript
+export interface SpendingCategory {
+  category: string;
+  total_cents: number;
+  transaction_count: number;
+}
+
+export interface SpendingSummary {
+  date_from: number;
+  date_to: number;
+  categories: SpendingCategory[];
+  grand_total_cents: number;
+  transaction_count: number;
+  currency: string;
+}
+
+export interface YearComparison {
+  current_year: number;
+  previous_year: number;
+  current_summary: SpendingSummary;
+  previous_summary: SpendingSummary;
+  change_pct: number;
+}
+
+export interface TaxDocument {
+  doc_id: string;
+  doc_type: string;
+  year?: number;
+  date_from: number;
+  date_to: number;
+  grand_total_cents: number;
+  transaction_count: number;
+  created_at: number;
+}
+
+export interface TaxDocumentList {
+  documents: TaxDocument[];
+}
+```
+
+**Frontend API wrappers** (`frontend/src/api/endpoints/taxDocuments.ts`):
+
+```typescript
+import api from "../client";
+
+export const getSpendingSummary = (params: {
+  year?: number; date_from?: number; date_to?: number;
+}) => api.get<SpendingSummary>("/ui/tax-documents/summary", { params });
+
+export const downloadSummaryPdf = (params: {
+  year?: number; date_from?: number; date_to?: number;
+}) => api.get("/ui/tax-documents/summary/pdf", { params, responseType: "blob" });
+
+export const downloadReceiptsZip = (params: {
+  year?: number; date_from?: number; date_to?: number;
+}) => api.get("/ui/tax-documents/receipts/zip", { params, responseType: "blob" });
+
+export const getYearComparison = (year: number) =>
+  api.get<YearComparison>("/ui/tax-documents/comparison", { params: { year } });
+
+export const getDocumentHistory = () =>
+  api.get<TaxDocumentList>("/ui/tax-documents/history");
+```
+
+### 3.12 Frontend Routes
 
 Add to `frontend/src/App.tsx`:
 
@@ -401,7 +669,7 @@ Add to `frontend/src/App.tsx`:
 
 Add "Tax Documents" link to billing navigation.
 
-### 3.10 Files to Create
+### 3.13 Files to Create
 
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
@@ -409,9 +677,9 @@ Add "Tax Documents" link to billing navigation.
 | `app/routers/tax_documents.py` | REST API endpoints | ~200 |
 | `frontend/src/pages/billing/TaxDocumentsPage.tsx` | Tax documents UI | ~350 |
 | `frontend/src/api/endpoints/taxDocuments.ts` | API wrappers | ~60 |
-| `frontend/e2e/tax-documents.spec.ts` | E2E tests | ~450 |
+| `frontend/e2e/tax-documents.spec.ts` | E2E tests | ~550 |
 
-### 3.11 Files to Modify
+### 3.14 Files to Modify
 
 | File | Change |
 |------|--------|
@@ -466,11 +734,122 @@ For users with many receipts, ZIP generation could be slow. Mitigations:
 
 ---
 
-## 5. E2E Test Plan
+## 5. Observability
+
+### 5.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `tax_doc_summary_requests` | Counter | `year`, `custom_range` | Summary requests by type |
+| `tax_doc_pdf_generated` | Counter | `doc_type` | PDF generation count |
+| `tax_doc_zip_exported` | Counter | `receipt_count_bucket` | ZIP exports by size bucket |
+| `tax_doc_summary_latency_ms` | Histogram | `cache_hit` | Summary computation latency |
+| `tax_doc_pdf_latency_ms` | Histogram | | PDF generation latency |
+| `tax_doc_zip_latency_ms` | Histogram | `receipt_count_bucket` | ZIP generation latency |
+| `tax_doc_cache_hit_rate` | Gauge | | Cache hit ratio for annual summaries |
+| `tax_doc_ledger_entries_scanned` | Histogram | | Entries scanned per summary request |
+
+### 5.2 Logging
+
+```python
+logger.info("tax_summary_computed", extra={
+    "user_sub": user_sub,
+    "date_from": date_from,
+    "date_to": date_to,
+    "grand_total_cents": summary["grand_total_cents"],
+    "transaction_count": summary["transaction_count"],
+    "cache_hit": cache_hit,
+    "duration_ms": duration_ms,
+})
+
+logger.info("tax_pdf_generated", extra={
+    "user_sub": user_sub,
+    "year": year,
+    "file_size_bytes": len(pdf_bytes),
+    "duration_ms": duration_ms,
+})
+
+logger.warning("tax_zip_too_many_receipts", extra={
+    "user_sub": user_sub,
+    "receipt_count": receipt_count,
+    "max_receipts": 500,
+})
+```
+
+### 5.3 Alerting
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High PDF generation failure rate | > 5% of PDF requests fail in 5 min window | P2 | Check S3 connectivity and fpdf2 errors |
+| ZIP export timeouts | > 3 ZIP requests timeout in 10 min | P3 | Review S3 latency; check receipt count |
+| Ledger scan performance | Summary computation > 5s | P3 | Check billing table size; consider pre-aggregation |
+| Rate limit spike | > 50 rate-limited requests in 1 hour | P4 | Review for abuse; adjust limits if legitimate |
+
+---
+
+## 6. Rollout Plan
+
+### 6.1 Feature Flag
+
+```python
+# app/core/settings.py
+tax_documents_enabled: bool = os.environ.get("TAX_DOCUMENTS_ENABLED", "false").lower() == "true"
+```
+
+### 6.2 Phased Rollout
+
+| Phase | Duration | Scope | Criteria to Advance |
+|-------|----------|-------|---------------------|
+| 1. Backend only | 2 days | API endpoints deployed, feature flag off | All unit tests pass; manual API smoke test |
+| 2. Internal testing | 3 days | Feature flag on for admin/root users only | Admin generates summaries for test accounts; no errors |
+| 3. Beta | 5 days | Feature flag on for 10% of users (by user_sub hash) | < 1% error rate; p99 latency < 3s for summary |
+| 4. General availability | Ongoing | Feature flag on for all users | Monitor for 48 hours at 100%; remove feature flag |
+
+### 6.3 Rollback
+
+If critical issues arise:
+1. Set `TAX_DOCUMENTS_ENABLED=false` -- endpoints return 503 "Feature temporarily unavailable"
+2. No data migration needed -- cached summaries and document records are safe to leave in place
+3. Frontend route remains but shows "Coming soon" state when API returns 503
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Latency Targets
+
+| Endpoint | Target p50 | Target p99 | Max Acceptable |
+|----------|-----------|-----------|----------------|
+| GET /summary | 200ms | 1500ms | 5000ms |
+| GET /summary/pdf | 500ms | 2000ms | 5000ms |
+| GET /receipts/zip | 2000ms | 10000ms | 60000ms |
+| GET /comparison | 400ms | 3000ms | 10000ms |
+| GET /history | 100ms | 500ms | 2000ms |
+
+### 7.2 Caching Strategy
+
+- **Annual summary cache**: Past-year summaries stored in `CACHE#{year}` record. Single GetItem (< 10ms) vs. full ledger scan.
+- **PDF caching**: Generated PDFs stored in S3 with key `tax-docs/{user_sub}/{year}-annual-summary.pdf`. Check S3 first; regenerate only if missing or invalidated.
+- **No client-side caching**: Tax data may change (current year); set `Cache-Control: no-store` on all responses.
+
+### 7.3 Pagination Approach
+
+- **Ledger scan**: Uses DDB pagination with `LastEvaluatedKey`. Loop until exhausted. For users with thousands of transactions, this may require 3-5 DDB pages (1MB each).
+- **Document history**: `Limit=20` with cursor-based pagination for `/history` endpoint.
+- **ZIP export**: No pagination -- limited to 500 receipts. Enforced server-side; larger ranges return 400.
+
+### 7.4 Memory Management
+
+- PDF generation: `fpdf2` generates PDFs in memory. For a typical summary (< 1 page), memory usage is < 1MB.
+- ZIP export: ZIP buffer is held in memory. For 500 invoices at ~50KB each, worst case is ~25MB. Use `io.BytesIO` and stream directly to response.
+
+---
+
+## 8. E2E Test Plan
 
 **File**: `frontend/e2e/tax-documents.spec.ts`
 
-### Section 551: Spending Summary API (5 tests)
+### Section 551: Spending Summary API (8 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
@@ -479,16 +858,21 @@ For users with many receipts, ZIP generation could be slow. Mitigations:
 | 551.3 | Empty period returns zero totals | GET summary for a year with no transactions. `grand_total_cents: 0`, `categories` array has entries with `total_cents: 0`. |
 | 551.4 | Credits are excluded from spending summary | Seed a credit entry (e.g., refund). GET summary. Credit amount not included in `grand_total_cents`. |
 | 551.5 | Summary counts distinct transactions | Multiple ledger entries from different categories. `transaction_count` equals total debit entries in range. |
+| 551.6 | Subscription entries classified correctly | Seed entry with reason "Subscription renewal". GET summary. `subscriptions.total_cents` includes this entry. |
+| 551.7 | Other category captures unclassified debits | Seed entry with reason "Platform fee refund adjustment". GET summary. `other.total_cents` includes this entry. |
+| 551.8 | Large transaction count returns accurate total | Seed 50 debit entries. GET summary. `transaction_count` equals 50 and `grand_total_cents` matches sum. |
 
-### Section 552: Tax Summary PDF API (3 tests)
+### Section 552: Tax Summary PDF API (5 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
 | 552.1 | PDF download returns binary content | GET `/ui/tax-documents/summary/pdf?year=2026`; `Content-Type: application/pdf`; body starts with `%PDF`. |
 | 552.2 | PDF filename includes year | Response `Content-Disposition` header contains `spending-summary-2026.pdf`. |
 | 552.3 | Custom range PDF uses date range in filename | GET with `date_from` + `date_to`; filename contains date range. |
+| 552.4 | PDF for empty period still generates | GET PDF for year with no transactions; 200; valid PDF returned with zero totals. |
+| 552.5 | Consecutive PDF requests return consistent data | GET PDF twice for same year; file sizes match (deterministic generation). |
 
-### Section 553: Receipts ZIP Export and Comparison API (4 tests)
+### Section 553: Receipts ZIP Export and Comparison API (7 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
@@ -496,8 +880,11 @@ For users with many receipts, ZIP generation could be slow. Mitigations:
 | 553.2 | ZIP contains expected number of receipts | Generate 3 invoices in date range. ZIP file contains 3 PDF entries. |
 | 553.3 | Year comparison returns both years | GET `/ui/tax-documents/comparison?year=2026`; response has `current_year: 2026`, `previous_year: 2025`, both summaries populated. |
 | 553.4 | Change percentage calculated correctly | Seed 2025 with $100 total, 2026 with $150 total. `change_pct` approximately 50.0. |
+| 553.5 | Comparison with no prior year data returns zero previous | Seed only 2026 data. `previous_summary.grand_total_cents` is 0. |
+| 553.6 | Negative change percentage when spending decreases | Seed 2025 with $200 total, 2026 with $100 total. `change_pct` approximately -50.0. |
+| 553.7 | ZIP export fails gracefully when no invoices exist | GET ZIP for year with no invoices; 200; empty ZIP or 400 with helpful message. |
 
-### Section 554: Admin and Document History API (4 tests)
+### Section 554: Admin and Document History API (6 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
@@ -505,14 +892,27 @@ For users with many receipts, ZIP generation could be slow. Mitigations:
 | 554.2 | Non-admin cannot access admin endpoint | Alice GET `/ui/admin/tax-documents/summary`; 403. |
 | 554.3 | Document history lists generated documents | After generating 2 summaries, GET `/ui/tax-documents/history`; `documents` array has 2 entries. |
 | 554.4 | Only own documents visible | Bob GET `/ui/tax-documents/history`; does not contain Alice's documents. |
+| 554.5 | Admin missing user_sub returns 422 | Root GET `/ui/admin/tax-documents/summary?year=2026` (no user_sub); 422. |
+| 554.6 | Admin with invalid user_sub returns 404 | Root GET with `user_sub=nonexistent`; 404. |
 
-**Total E2E tests: 16**
+### Section 555: Tax Documents UI (6 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 555.1 | Tax Documents page loads | Navigate to `/billing/tax-documents`; page heading "Tax Documents" visible. |
+| 555.2 | Year preset buttons are visible | Buttons for 2024, 2025, 2026 visible on page. |
+| 555.3 | Selecting a year updates summary display | Click "2026" preset; summary card shows grand total and categories. |
+| 555.4 | Download PDF button triggers download | Click "Download Summary PDF"; intercept response; content-type is application/pdf. |
+| 555.5 | Year comparison card shows delta | Navigate with seeded data; comparison card shows percentage change. |
+| 555.6 | Document history table populates | After generating a summary; history table shows at least one row. |
+
+**Total E2E tests: 32**
 
 ---
 
-## 6. Security Considerations
+## 9. Security Considerations
 
-### 6.1 Auth Requirements
+### 9.1 Auth Requirements
 
 | Endpoint | Auth | Authorization |
 |----------|------|---------------|
@@ -523,14 +923,14 @@ For users with many receipts, ZIP generation could be slow. Mitigations:
 | Document history | `require_ui_session` | Only own documents |
 | Admin summary | `require_admin_session` | Admin or root role |
 
-### 6.2 Data Protection
+### 9.2 Data Protection
 
 - Tax documents contain sensitive financial data. S3 storage uses server-side encryption.
 - S3 keys include `user_sub` path prefix; no cross-user access possible.
 - Generated PDFs include disclaimer: "This document is for informational purposes only."
 - ZIP exports are capped at 500 files to prevent resource exhaustion.
 
-### 6.3 Rate Limiting
+### 9.3 Rate Limiting
 
 - Summary API: max 30 requests per user per minute.
 - PDF generation: max 10 requests per user per minute.
@@ -539,7 +939,7 @@ For users with many receipts, ZIP generation could be slow. Mitigations:
 
 ---
 
-## 7. Dependencies
+## 10. Dependencies
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|
@@ -555,7 +955,7 @@ For users with many receipts, ZIP generation could be slow. Mitigations:
 
 ---
 
-## 8. Acceptance Criteria
+## 11. Acceptance Criteria
 
 1. Annual spending summary correctly aggregates billing ledger debit entries by category (subscriptions, tips, purchases, unlocks, deposits).
 2. Custom date-range queries filter entries accurately using the `LEDGER#` SK timestamp format.
@@ -564,4 +964,6 @@ For users with many receipts, ZIP generation could be slow. Mitigations:
 5. Year-over-year comparison shows both years' summaries and a percentage change.
 6. Past-year summaries are cached; current-year summaries are computed fresh.
 7. Users can only access their own tax documents; admins can access any user's data.
-8. All 16 E2E tests pass.
+8. All 32 E2E tests pass.
+9. Feature flag controls rollout; endpoints return 503 when disabled.
+10. Observability metrics and logging are in place for all endpoints.

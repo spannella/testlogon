@@ -567,7 +567,119 @@ Key generation is rate-limited to 5 per minute per user (CPU-intensive for RSA 4
 
 ---
 
-## 7. Migration & Rollback
+## 7. Observability & Monitoring
+
+### 7.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `ssh_key_generated_total` | Counter | `key_type` | Keys generated (ed25519/rsa) |
+| `ssh_key_uploaded_total` | Counter | `key_type`, `passphrase_protected` | Keys uploaded |
+| `ssh_key_deleted_total` | Counter | — | Keys deleted |
+| `ssh_key_decrypted_total` | Counter | — | Keys decrypted for SSH connections |
+| `ssh_key_decrypt_latency_seconds` | Histogram | — | KMS decryption latency |
+| `ssh_key_association_total` | Counter | `action` (associate/disassociate) | Key-host linking events |
+| `ssh_key_upload_rejected_total` | Counter | `reason` (invalid_pem/passphrase_missing/max_keys) | Upload failures |
+| `ssh_key_count` | Gauge | `key_type` | Current key count per user (sampled) |
+
+### 7.2 Structured Log Events
+
+```json
+{"logger": "ssh_key_manager", "level": "info", "event": "key_generated", "user_sub": "alice-uuid", "key_id": "k_abc123", "key_type": "ed25519", "bits": 256}
+
+{"logger": "ssh_key_manager", "level": "info", "event": "key_uploaded", "user_sub": "alice-uuid", "key_id": "k_def456", "key_type": "rsa", "bits": 4096, "passphrase_protected": false}
+
+{"logger": "ssh_key_manager", "level": "info", "event": "key_decrypted", "user_sub": "alice-uuid", "key_id": "k_abc123", "target_host": "10.0.1.10", "target_port": 22}
+
+{"logger": "ssh_key_manager", "level": "warn", "event": "upload_rejected", "user_sub": "alice-uuid", "reason": "invalid_pem", "detail": "Could not parse private key"}
+
+{"logger": "ssh_key_manager", "level": "warn", "event": "max_keys_reached", "user_sub": "alice-uuid", "current_count": 20, "max_allowed": 20}
+```
+
+### 7.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| KMS decrypt failures | `rate(ssh_key_decrypt_errors_total[5m]) > 5` | Critical | Check KMS key status |
+| High decrypt latency | `p99(ssh_key_decrypt_latency_seconds) > 2s` | Warning | KMS throttling; consider caching |
+| Key upload spike | `rate(ssh_key_uploaded_total[1h]) > 50` per user | Warning | Possible automated key testing |
+| Invalid PEM uploads | `rate(ssh_key_upload_rejected_total{reason=invalid_pem}[1h]) > 20` | Warning | User education or UI issue |
+
+---
+
+## 8. Rollout Plan
+
+### Phase 1: Backend (Days 1-2)
+
+- **Feature flag**: `SSH_KEY_MANAGER_ENABLED=false`
+- Deploy DDB table, service, router behind flag
+- All endpoints return 404 when flag is off
+- Test KMS encrypt/decrypt cycle with mock KMS
+
+### Phase 2: Internal Beta (Days 3-4)
+
+- **Feature flag**: `SSH_KEY_MANAGER_ENABLED=true` for internal users
+- Deploy frontend pages
+- Test generate + upload + stored_key SSH connection end-to-end
+- Validate key never appears in WebSocket messages or browser devtools
+
+### Phase 3: GA (Day 5+)
+
+- **Feature flag**: `SSH_KEY_MANAGER_ENABLED=true` for all users
+- Monitor KMS decrypt latency and key usage patterns
+- **Rollback**: Set flag to false; users fall back to pasting keys manually
+
+---
+
+## 9. Performance Considerations
+
+### 9.1 Latency Targets
+
+| Operation | Target p50 | Target p99 | Notes |
+|-----------|-----------|-----------|-------|
+| Generate Ed25519 key | < 50ms | < 150ms | Fast key generation |
+| Generate RSA 4096 key | < 500ms | < 2s | CPU-intensive |
+| Upload key | < 100ms | < 300ms | Parse + KMS encrypt |
+| List keys | < 30ms | < 80ms | Query + no decrypt |
+| Decrypt key (SSH connect) | < 50ms | < 200ms | KMS API call |
+| Associate key | < 20ms | < 60ms | 2 DDB updates |
+
+### 9.2 DynamoDB Costs
+
+| Operation | RCU | WCU | Notes |
+|-----------|-----|-----|-------|
+| Get key metadata | 0.5 | — | Single item |
+| List keys | 2.0 | — | All keys for user (max 20) |
+| Generate/upload | — | 1.0 | Single put |
+| Associate/disassociate | — | 2.0 | Update key + host |
+| Delete | — | 1.0 | Single delete |
+
+### 9.3 Caching
+
+- **Key metadata**: React Query `staleTime: 30s`. Invalidate on generate/upload/delete.
+- **KMS decrypted keys**: NOT cached (security). Each SSH connection triggers a fresh KMS decrypt.
+- **Public keys**: Can be cached longer (60s staleTime) since they don't change.
+
+### 9.4 Scalability
+
+- Per-user key limit (20) keeps DDB item count bounded.
+- KMS API rate: 10,000 requests/sec per key (shared limit). Platform-wide SSH connections are well under this.
+- RSA key generation: CPU-bound. Rate-limit to 5/min per user to prevent DoS.
+- Encrypted blob size: RSA 4096 PEM is ~3.2KB. KMS-encrypted blob is ~4.5KB base64. Well within DDB 400KB item limit.
+- Key listing is O(n) where n=user's keys (max 20). No pagination needed.
+
+### 9.5 Rate Limiting
+
+| Action | Limit | Window | Key |
+|--------|-------|--------|-----|
+| Generate key | 5 | 1 minute | user_sub |
+| Upload key | 10 | 1 minute | user_sub |
+| List keys | 60 | 1 minute | user_sub |
+| Decrypt (SSH connect) | 30 | 1 minute | user_sub |
+
+---
+
+## 10. Migration & Rollback
 
 ### 7.1 DDB Changes
 

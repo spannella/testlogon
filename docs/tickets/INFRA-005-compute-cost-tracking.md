@@ -69,6 +69,45 @@ Compute Billing Flow
              - Per-user breakdown
 ```
 
+### Detailed Data Flow Diagram
+
+```
+                  +-----------+
+                  |  Frontend |
+                  | (React)   |
+                  +-----+-----+
+                        |
+          GET /ui/remote/billing/*
+                        |
+                        v
+              +---------+---------+
+              |   API Router      |
+              | compute_billing   |
+              | .py (FastAPI)     |
+              +---------+---------+
+                        |
+          +-------------+-------------+
+          |             |             |
+          v             v             v
+  +-------+---+ +------+----+ +------+------+
+  | compute   | | billing   | | alerts      |
+  | _billing  | | table     | | table       |
+  | table     | | (wallet)  | | (alerts)    |
+  +-----------+ +-----------+ +-------------+
+       ^                            |
+       |                            v
+  +----+---+                  +-----------+
+  | Timer  |                  | User gets |
+  | (bg    |                  | in-app    |
+  | task)  |                  | alert     |
+  +--------+                  +-----------+
+       |
+       +-- Reads running instances from ec2_instances / k8s_pods tables
+       +-- Writes LEDGER entries to compute_billing table
+       +-- Deducts from wallet via billing table conditional update
+       +-- Terminates instances on zero balance via ec2_launcher / k8s_launcher
+```
+
 ---
 
 ## 2. Current State Analysis
@@ -165,6 +204,17 @@ TableDef(
 )
 ```
 
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Table/GSI | PK | SK / Filter | Example |
+|---|---|---|---|---|
+| Get all ledger entries for user | Main table | `user_sub` | `begins_with(sk, "LEDGER#")` | All billing events for Alice |
+| Get entries for a specific resource | GSI: ByResourceId | `resource_id` | `created_at BETWEEN :start AND :end` | All charges for instance `i-abc123` |
+| Get monthly summary for user | GSI: ByMonth | `user_sub` | `month_key = "2026-05"` | May 2026 spending summary |
+| Get budget for user | Main table | `user_sub` | `sk = "BUDGET"` | Alice's monthly budget config |
+| Get monthly running total | Main table | `user_sub` | `sk = "MONTH#2026-05"` | Running total for May |
+| List all users with budgets | Scan | `sk = "BUDGET"` | FilterExpression | Admin report (infrequent) |
+
 **Ledger entry schema**:
 
 | Field | Type | Description |
@@ -193,7 +243,7 @@ TableDef(
 | `current_month_total_cents` | `MONTH#{YYYY-MM}` | Running total for the month |
 | `alerts_sent` | `MONTH#{YYYY-MM}` | Set of thresholds already alerted |
 
-### 3.2 Service Layer: `app/services/compute_billing.py`
+### 3.3 Service Layer: `app/services/compute_billing.py`
 
 New file (~350 lines):
 
@@ -308,7 +358,7 @@ async def run_compute_billing_timer(*, poll_interval: int = 300):
         await asyncio.sleep(poll_interval)
 ```
 
-### 3.3 Wallet Deduction
+### 3.4 Wallet Deduction
 
 Uses the existing `billing` table's `BILLING` row with conditional update:
 
@@ -330,7 +380,7 @@ def deduct_from_wallet(user_sub: str, amount_cents: int) -> int:
         raise InsufficientBalanceError(f"Wallet balance insufficient for {amount_cents}c deduction")
 ```
 
-### 3.4 Spending Alerts
+### 3.5 Spending Alerts
 
 When a billing event pushes the monthly total past a threshold percentage of the budget:
 
@@ -364,7 +414,7 @@ def check_spending_alerts(user_sub: str) -> List[str]:
     return alerts_to_send
 ```
 
-### 3.5 API Router: `app/routers/compute_billing.py`
+### 3.6 API Router: `app/routers/compute_billing.py`
 
 New file (~150 lines). Prefix: `/ui/remote/billing`.
 
@@ -376,7 +426,132 @@ New file (~150 lines). Prefix: `/ui/remote/billing`.
 | `GET` | `/ui/remote/billing/budget` | — | `BudgetOut` | Get budget settings |
 | `PATCH` | `/ui/remote/billing/budget` | `UpdateBudgetIn` | `BudgetOut` | Update budget (admin) |
 
-#### Pydantic Models
+### 3.7 API Request/Response Examples
+
+**GET /ui/remote/billing/summary?month=2026-05**
+
+```json
+{
+  "month": "2026-05",
+  "total_cents": 2345,
+  "budget_cents": 5000,
+  "budget_pct": 46.9,
+  "ec2_total_cents": 1800,
+  "k8s_total_cents": 545,
+  "resource_count": 3
+}
+```
+
+**GET /ui/remote/billing/ledger?limit=3&resource_id=i-abc123**
+
+```json
+{
+  "entries": [
+    {
+      "entry_id": "e_9f3a2b1c",
+      "resource_type": "ec2",
+      "resource_id": "i-abc123",
+      "resource_label": "Dev Workspace",
+      "instance_type_or_preset": "t3.small",
+      "event": "periodic_tick",
+      "amount_cents": 2,
+      "duration_minutes": 5.0,
+      "rate_cents_per_min": 0.4,
+      "wallet_balance_after": 7655,
+      "created_at": 1748520600
+    },
+    {
+      "entry_id": "e_1d4e5f6a",
+      "resource_type": "ec2",
+      "resource_id": "i-abc123",
+      "resource_label": "Dev Workspace",
+      "instance_type_or_preset": "t3.small",
+      "event": "periodic_tick",
+      "amount_cents": 2,
+      "duration_minutes": 5.0,
+      "rate_cents_per_min": 0.4,
+      "wallet_balance_after": 7657,
+      "created_at": 1748520300
+    },
+    {
+      "entry_id": "e_aa00bb11",
+      "resource_type": "ec2",
+      "resource_id": "i-abc123",
+      "resource_label": "Dev Workspace",
+      "instance_type_or_preset": "t3.small",
+      "event": "instance_start",
+      "amount_cents": 0,
+      "duration_minutes": 0,
+      "rate_cents_per_min": 0.4,
+      "wallet_balance_after": 7659,
+      "created_at": 1748520000
+    }
+  ],
+  "count": 3,
+  "cursor": "eyJzayI6IkxFREdFUiMxNzQ4NTIwMDAwI2VfYWEwMGJiMTEifQ=="
+}
+```
+
+**GET /ui/remote/billing/breakdown?month=2026-05**
+
+```json
+{
+  "resources": [
+    {
+      "resource_id": "i-abc123",
+      "resource_label": "Dev Workspace",
+      "resource_type": "ec2",
+      "instance_type_or_preset": "t3.small",
+      "total_cents": 1800,
+      "total_minutes": 4500.0,
+      "status": "running"
+    },
+    {
+      "resource_id": "pod-def456",
+      "resource_label": "ML Experiment",
+      "resource_type": "k8s",
+      "instance_type_or_preset": "large",
+      "total_cents": 545,
+      "total_minutes": 908.3,
+      "status": "terminated"
+    }
+  ],
+  "month": "2026-05"
+}
+```
+
+**GET /ui/remote/billing/budget**
+
+```json
+{
+  "budget_monthly_cents": 5000,
+  "alert_thresholds": [50, 80, 100],
+  "current_month_total_cents": 2345,
+  "current_month_pct": 46.9
+}
+```
+
+**PATCH /ui/remote/billing/budget**
+
+Request:
+```json
+{
+  "budget_monthly_cents": 10000,
+  "alert_thresholds": [25, 50, 75, 100]
+}
+```
+
+Response:
+```json
+{
+  "budget_monthly_cents": 10000,
+  "alert_thresholds": [25, 50, 75, 100],
+  "current_month_total_cents": 2345,
+  "current_month_pct": 23.45
+}
+```
+
+### 3.8 Pydantic Models
 
 ```python
 class SpendingSummaryOut(BaseModel):
@@ -430,7 +605,22 @@ class UpdateBudgetIn(BaseModel):
     alert_thresholds: Optional[List[int]] = None
 ```
 
-### 3.6 Frontend Components
+### 3.9 Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|---|---|---|---|---|
+| Wallet balance insufficient for charge | 402 | `insufficient_balance` | "Wallet balance insufficient for {amount}c deduction" | Auto-terminate resource; user adds funds |
+| Budget not found for user | 200 | N/A | Returns defaults (5000 cents, [50,80,100]) | Budget is auto-created with defaults |
+| Invalid month format in query | 400 | `invalid_month_format` | "Month must be in YYYY-MM format" | Client corrects format |
+| Resource ID not found in ledger | 200 | N/A | Returns empty entries list | Normal — no billing events yet |
+| Budget amount below minimum (100c) | 422 | `validation_error` | "budget_monthly_cents must be >= 100" | Client adjusts value |
+| Budget amount above maximum (1Mc) | 422 | `validation_error` | "budget_monthly_cents must be <= 1000000" | Client adjusts value |
+| Non-admin tries to set budget | 403 | `forbidden` | "Admin role required" | Use admin session |
+| Timer fails to bill an instance | N/A | Internal | Logged; retried next cycle | Automatic retry on next 5-min tick |
+| Duplicate billing entry (timer restart) | N/A | N/A | Skipped (minutes < 1) | Idempotent via last_billed_at check |
+| Rate card lookup fails (unknown type) | 500 | `unknown_resource_type` | "No rate card for {type}" | Admin adds rate card config |
+
+### 3.10 Frontend Components
 
 #### ComputeBillingPage (`frontend/src/pages/remote/ComputeBillingPage.tsx`)
 
@@ -441,6 +631,67 @@ New page (~400 lines):
 - **Daily spending chart**: Bar chart showing daily compute costs for the current month (using recharts or similar)
 - **Ledger tab**: Scrollable ledger entries with timestamp, resource, event type, amount, balance-after
 - **Month selector**: Navigate to previous months
+
+#### Frontend Component Tree
+
+```
+ComputeBillingPage
+├── SpendingHeader
+│   ├── MonthSelector (props: { month: string, onChange: (m: string) => void })
+│   ├── BudgetMeter (props: { totalCents: number, budgetCents: number, thresholds: number[] })
+│   └── SpendingSummaryCards (props: { ec2Total: number, k8sTotal: number, resourceCount: number })
+├── Tabs
+│   ├── TabPanel: "Breakdown"
+│   │   └── ResourceBreakdownTable (props: { resources: ResourceBreakdownEntry[], month: string })
+│   │       └── DataTable (shadcn)
+│   │           └── ResourceRow
+│   │               ├── Badge (EC2 | K8s)
+│   │               └── StatusBadge (running | stopped | terminated)
+│   ├── TabPanel: "Ledger"
+│   │   └── BillingLedger (props: { entries: BillingLedgerEntry[], cursor?: string, onLoadMore: () => void })
+│   │       └── InfiniteScroll
+│   │           └── LedgerRow
+│   │               ├── EventBadge (start | tick | stop)
+│   │               └── AmountCell
+│   └── TabPanel: "Budget"
+│       └── BudgetSettings (props: { budget: BudgetOut, onSave: (b: UpdateBudgetIn) => void })
+│           ├── Input (budget amount)
+│           ├── ThresholdEditor (props: { thresholds: number[] })
+│           └── Button ("Save Budget")
+└── DailySpendingChart (props: { data: { day: string, cents: number }[] })
+```
+
+#### TypeScript Props Interfaces
+
+```typescript
+interface BudgetMeterProps {
+  totalCents: number;
+  budgetCents: number;
+  thresholds: number[];
+}
+
+interface ResourceBreakdownTableProps {
+  resources: ResourceBreakdownEntry[];
+  month: string;
+}
+
+interface BillingLedgerProps {
+  entries: BillingLedgerEntry[];
+  cursor?: string;
+  onLoadMore: () => void;
+  isLoading: boolean;
+}
+
+interface BudgetSettingsProps {
+  budget: BudgetOut;
+  onSave: (data: UpdateBudgetIn) => Promise<void>;
+  isAdmin: boolean;
+}
+
+interface DailySpendingChartProps {
+  data: Array<{ day: string; cents: number }>;
+}
+```
 
 #### Route & Navigation
 
@@ -487,7 +738,7 @@ Sidebar: "Compute Billing" with `Receipt` icon under Infrastructure group.
 
 | File | Change |
 |------|--------|
-| `frontend/e2e/compute-billing.spec.ts` | New file: ~18 tests in 4 sections |
+| `frontend/e2e/compute-billing.spec.ts` | New file: ~30 tests in 6 sections |
 
 ---
 
@@ -523,6 +774,24 @@ Sidebar: "Compute Billing" with `Receipt` icon under Infrastructure group.
 17. `Resource breakdown table shows active resources` — Verify table rows with resource names and cost totals.
 18. `Ledger tab shows billing entries` — Click "Ledger" tab. Verify entries with timestamps, amounts, event types.
 
+**Section 261: Negative and Edge Cases (6 tests)**
+
+19. `Budget below minimum (100 cents) returns 422` — PATCH `/budget` with `budget_monthly_cents: 50`. Expect 422 validation error.
+20. `Budget above maximum (1M cents) returns 422` — PATCH `/budget` with `budget_monthly_cents: 2000000`. Expect 422.
+21. `Non-admin cannot set budget for another user` — Alice tries PATCH as USER role. Expect 403.
+22. `Invalid month format returns 400` — GET `/summary?month=May-2026`. Expect 400.
+23. `Ledger for user with no billing history returns empty` — GET `/ledger` for new user. Verify `entries: [], count: 0`.
+24. `Simultaneous billing ticks do not double-charge` — Trigger billing tick twice quickly. Verify only one charge for the period (idempotent via last_billed_at).
+
+**Section 262: Admin Spending Overview (6 tests)**
+
+25. `Admin can view platform-wide spending totals` — GET `/ui/remote/billing/admin/summary` as root. Verify aggregated totals across all users.
+26. `Admin can view per-user spending breakdown` — GET `/ui/remote/billing/admin/users?month=2026-05`. Verify list of users with their totals.
+27. `Admin can view a specific user's ledger` — GET `/ui/remote/billing/admin/users/{sub}/ledger`. Verify entries for that user.
+28. `Regular user cannot access admin endpoints` — Alice GET `/ui/remote/billing/admin/summary`. Expect 403.
+29. `Admin summary includes resource type breakdown` — Verify ec2_total_cents and k8s_total_cents at platform level.
+30. `Admin can export billing report as CSV` — GET `/ui/remote/billing/admin/export?month=2026-05&format=csv`. Verify CSV content-type and structure.
+
 **Test Setup**:
 
 ```typescript
@@ -539,23 +808,142 @@ test.beforeAll(async ({ browser }) => {
 
 ---
 
-## 6. Security Considerations
+## 6. Observability
 
-### 6.1 Budget Modification
+### 6.1 Metrics
 
-Only admins (via `require_admin_session`) can modify another user's budget. Users can view their own budget and spending but cannot change the limit.
+| Metric Name | Type | Labels | Description |
+|---|---|---|---|
+| `compute_billing_tick_total` | Counter | `resource_type`, `event` | Total billing tick events processed |
+| `compute_billing_tick_duration_seconds` | Histogram | — | Time to process one billing timer cycle |
+| `compute_billing_deduction_cents` | Counter | `resource_type` | Total cents deducted from wallets |
+| `compute_billing_auto_terminate_total` | Counter | `resource_type` | Resources auto-terminated for zero balance |
+| `compute_billing_alert_total` | Counter | `threshold_pct` | Spending alerts sent |
+| `compute_billing_wallet_error_total` | Counter | `error_type` | Wallet deduction failures |
 
-### 6.2 Wallet Deduction Atomicity
+### 6.2 Logging
 
-The conditional update `wallet_balance_cents >= :amount` prevents overdraft. If the check fails, the resource is auto-terminated rather than allowing negative balance.
+All billing events produce structured JSON log entries:
 
-### 6.3 Billing Timer Idempotency
+```json
+{
+  "logger": "compute_billing",
+  "level": "INFO",
+  "event": "billing_tick",
+  "user_sub": "alice_sub",
+  "resource_id": "i-abc123",
+  "resource_type": "ec2",
+  "amount_cents": 2,
+  "duration_minutes": 5.0,
+  "wallet_balance_after": 7655,
+  "timestamp": 1748520600
+}
+```
 
-Each billing tick records `last_billed_at` on the resource. If the timer runs twice for the same period (e.g., during a restart), the second run sees `minutes < 1` and skips. Entry IDs are UUIDs, preventing duplicate entries.
+Critical events (auto-terminate, budget exhausted) log at WARNING level.
+
+### 6.3 Alerting Rules
+
+| Alert | Condition | Severity | Action |
+|---|---|---|---|
+| Billing timer stalled | No billing ticks for > 15 minutes | Critical | Restart backend; investigate |
+| High wallet error rate | > 10 wallet errors in 5 minutes | Warning | Check DDB throttling |
+| Mass auto-termination | > 5 auto-terminates in 1 minute | Warning | Possible billing bug; investigate |
 
 ---
 
-## 7. Acceptance Criteria
+## 7. Performance Considerations
+
+### 7.1 Latency Targets
+
+| Operation | Target | Notes |
+|---|---|---|
+| GET /summary | < 200ms | Single DDB query on MONTH# item |
+| GET /ledger | < 300ms | Paginated query, limit 100 |
+| GET /breakdown | < 500ms | Aggregation query, may scan multiple items |
+| Billing timer cycle | < 30s | Must complete before next 5-min interval |
+| Wallet deduction | < 50ms | Single conditional update |
+
+### 7.2 Caching Strategy
+
+- **Monthly summary**: Cached in the `MONTH#{YYYY-MM}` item; updated atomically on each billing event via `ADD current_month_total_cents :amount`. No need to re-aggregate.
+- **Budget settings**: Cached in memory per-user for the duration of a billing timer cycle (5 min TTL). Budget changes are infrequent.
+- **Rate cards**: Static in-memory map. No DDB lookup needed.
+
+### 7.3 Pagination
+
+- Ledger entries use DDB `LastEvaluatedKey` cursor encoding via `app/core/cursor.py`.
+- Default page size: 100 entries, max: 500.
+- Resource breakdown is not paginated (max ~50 resources per user in practice).
+
+### 7.4 Billing Timer Scalability
+
+- Timer runs in the single backend process (dev mode single-worker constraint).
+- For production, the timer should use a distributed lock (DDB conditional write) to prevent multiple workers from billing the same resources.
+- Each cycle processes all running resources sequentially. With 1000 running resources at 50ms per deduction, a cycle takes ~50 seconds — within the 5-minute interval.
+
+---
+
+## 8. Rollout Plan
+
+### Phase 1: Shadow Mode (Feature Flag: `compute_billing_enabled=false`)
+
+- Deploy billing service and timer
+- Timer runs and logs billing events but does NOT deduct from wallets
+- Validates rate calculations against expected values
+- Duration: 1 week
+
+### Phase 2: Opt-In Beta (Feature Flag: `compute_billing_beta_users`)
+
+- Enable billing deductions for a list of beta user_subs
+- Monitor for billing accuracy, wallet deduction correctness
+- Frontend displays billing page with "Beta" badge
+- Duration: 1 week
+
+### Phase 3: General Availability
+
+- Enable `compute_billing_enabled=true` for all users
+- All new instance launches include billing from the start
+- Budget defaults apply to all users
+- Admin override budget endpoint available
+
+### Feature Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `COMPUTE_BILLING_ENABLED` | `false` | Master toggle for compute billing |
+| `COMPUTE_BILLING_POLL_INTERVAL` | `300` | Timer interval in seconds |
+| `COMPUTE_BILLING_BETA_USERS` | `""` | Comma-separated user_subs for beta |
+| `COMPUTE_BILLING_AUTO_TERMINATE` | `true` | Auto-terminate on zero balance |
+| `COMPUTE_BILLING_DEFAULT_BUDGET` | `5000` | Default monthly budget in cents |
+
+---
+
+## 9. Security Considerations
+
+### 9.1 Budget Modification
+
+Only admins (via `require_admin_session`) can modify another user's budget. Users can view their own budget and spending but cannot change the limit.
+
+### 9.2 Wallet Deduction Atomicity
+
+The conditional update `wallet_balance_cents >= :amount` prevents overdraft. If the check fails, the resource is auto-terminated rather than allowing negative balance.
+
+### 9.3 Billing Timer Idempotency
+
+Each billing tick records `last_billed_at` on the resource. If the timer runs twice for the same period (e.g., during a restart), the second run sees `minutes < 1` and skips. Entry IDs are UUIDs, preventing duplicate entries.
+
+### 9.4 Rate Card Integrity
+
+Rate cards are defined in code (not user-configurable). Users cannot manipulate the rate used for billing. Any rate card change requires a code deployment.
+
+### 9.5 Audit Trail
+
+Every wallet deduction produces a LEDGER entry with amount, rate, duration, and balance-after. This creates a complete, immutable audit trail for all compute charges.
+
+---
+
+## 10. Acceptance Criteria
 
 1. EC2 and K8s resources generate billing ledger entries (start, periodic tick, stop).
 2. Per-minute charges are calculated from rate cards and deducted from wallet.
@@ -567,3 +955,5 @@ Each billing tick records `last_billed_at` on the resource. If the timer runs tw
 8. Frontend displays spending dashboard with budget meter, breakdown, and ledger.
 9. Billing timer runs as a background task with configurable interval.
 10. All deductions are atomic with conditional checks to prevent overdraft.
+11. Admin spending overview provides platform-wide totals and per-user breakdown.
+12. Ledger pagination supports cursor-based navigation for large histories.

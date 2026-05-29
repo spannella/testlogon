@@ -481,11 +481,178 @@ If creators have content categories (e.g., "fitness", "cooking", "tech"), benchm
 | 586.3 | Trend indicator shows direction | Trend arrow (up/down/stable) visible next to rate |
 | 586.4 | Public profile toggle persists setting | Toggle switch; reload page; switch remains in toggled state |
 
-**Total E2E tests: 16**
+### Section 587: Engagement Edge Cases (5 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 587.1 | Creator with 0 posts gets rate 0 | No posts in period; engagement_rate = 0.0 |
+| 587.2 | Self-tipping doesn't inflate rate | Creator tips own post; tip_indicator still 0 for that post |
+| 587.3 | Deleted post excluded from calculation | Delete a post with likes; recalculate; rate excludes it |
+| 587.4 | Engagement rate capped at 100% | Post with more interactions than followers; rate capped at 100.0 |
+| 587.5 | Public engagement off returns 404 | Disable public; GET public endpoint; 404 |
+
+**Total E2E tests: 21**
 
 ---
 
-## 6. Security Considerations
+## 6. API Request/Response Examples
+
+**Get engagement rate** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/ui/engagement?period_days=30" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "engagement_rate": 4.2,
+  "total_interactions": 840,
+  "total_posts": 20,
+  "follower_count": 1000,
+  "period_days": 30,
+  "breakdown": {
+    "likes": 500,
+    "comments": 220,
+    "shares": 80,
+    "tips": 40
+  },
+  "trend": "up",
+  "trend_delta": 0.8
+}
+```
+
+**Get engagement time series** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/ui/engagement/history?period_days=30&granularity=day" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "items": [
+    {"date": "2026-05-01", "engagement_rate": 3.5, "interactions": 35},
+    {"date": "2026-05-02", "engagement_rate": 4.1, "interactions": 41}
+  ]
+}
+```
+
+**Get platform benchmarks** (curl):
+
+```bash
+curl -X GET http://localhost:8000/ui/engagement/benchmarks \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "average_rate": 3.2,
+  "median_rate": 2.8,
+  "p25_rate": 1.5,
+  "p75_rate": 5.0,
+  "sample_size": 450,
+  "my_rate": 4.2,
+  "my_percentile": "top 25%"
+}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| No posts in period | 200 | — | engagement_rate = 0.0 | Normal; create posts |
+| Invalid period_days | 422 | `validation_error` | "period_days must be 7, 14, 30, 60, or 90" | Use valid value |
+| Public endpoint disabled | 404 | `not_public` | "Engagement data not available" | Creator hasn't opted in |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Log in |
+| Benchmark computation pending | 200 | — | Returns empty benchmarks; sample_size=0 | Wait for daily job |
+
+---
+
+## 8. Observability
+
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `engagement_rate_calculated_total` | Counter | `period` | Rate calculations |
+| `engagement_benchmark_computed_total` | Counter | — | Benchmark computations |
+| `engagement_public_enabled_total` | Counter | — | Public toggles |
+| `engagement_rate_value` | Histogram | — | Distribution of rates |
+
+### 8.2 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Benchmark job failed | Job didn't complete in 24h | Medium | Check job logs |
+| Rate calculation errors | > 5% of calcs fail | High | Check DDB queries |
+| Gaming detected | Rate > 50% for creator with > 100 followers | Medium | Review interactions |
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flag
+
+```python
+engagement_rate_enabled: bool = os.environ.get("ENGAGEMENT_RATE_ENABLED", "true").lower() == "true"
+```
+
+### 9.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend | Deploy calculation logic; flag OFF | 2 days | Unit tests pass |
+| Phase 2: Internal | Enable for internal; seed benchmark | 3 days | All 21 E2E pass |
+| Phase 3: Canary 10% | Enable for 10% of creators | 3 days | Rates look reasonable |
+| Phase 4: GA | Enable for all | Permanent | Benchmarks populated |
+
+---
+
+## 10. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Rate calculation | < 200ms | Query post interactions from analytics rollup (pre-aggregated) |
+| Benchmark computation | < 30s for 10K creators | Batch scan; compute percentiles in-memory |
+| Time series query | < 50ms | GSI on user_sub + date |
+| Public endpoint | < 20ms | Single GetItem for cached rate |
+
+---
+
+## 11. Frontend Component Tree
+
+```
+EngagementSection (in analytics dashboard)
+├── EngagementRateCard
+│   ├── RateValue (large percentage display)
+│   ├── TrendIndicator (up/down/stable arrow + delta)
+│   └── PeriodSelector (7d, 14d, 30d, 60d, 90d)
+├── EngagementChart (line chart)
+│   ├── TimeSeriesData (rate over time)
+│   └── GranularityToggle (day/week)
+├── BreakdownCards (row)
+│   ├── LikesCard
+│   ├── CommentsCard
+│   ├── SharesCard
+│   └── TipsCard
+├── BenchmarkComparison
+│   ├── PercentileBar (visual percentile position)
+│   ├── PlatformAverage (reference line)
+│   └── MyPosition (highlighted)
+└── PublicProfileToggle
+    ├── Switch (on/off)
+    └── Description text
+```
+
+---
+
+## 12. Security Considerations
 
 ### 6.1 Auth Requirements
 

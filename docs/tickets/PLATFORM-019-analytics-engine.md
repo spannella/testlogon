@@ -33,9 +33,72 @@ Creators cannot make informed decisions about their content, pricing, or marketi
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
 
-### 2.1 Existing Infrastructure
+```
+ Event Sources                    Analytics Events Table          Rollup Engine
+ ─────────────                    ──────────────────────          ────────────
+                                                                      │
+ POST /posts/{id}/reactions  ──┐                                      │
+ POST /posts/{id}/comments  ──┤                                      │
+ POST /posts/{id}/tip       ──┤  record_*()                          │
+ POST /posts/{id}/unlock    ──┤ ──────────► analytics_events         │
+ POST /messages/{id}/tip    ──┤             PK: CREATOR#{id}         │
+ POST /messages/{id}/unlock ──┤             SK: EVT#{ts}#{evt}       │
+ GET  /profile/public/{id}  ──┤             GSI1: DATE#{YYYY-MM-DD}  │
+ GET  /videos/{id}          ──┤                    │                  │
+ Subscribe (new)            ──┤                    │                  │
+ Subscribe (cancel)         ──┤                    │     ┌────────────┘
+ POST catalog purchase      ──┘                    │     │
+                                                   │     │  Hourly bg task:
+                                                   ▼     ▼  compute_daily_rollups()
+                                              ┌──────────────────┐
+                                              │  Query GSI1 for  │
+                                              │  DATE#{today}    │
+                                              │  Group by creator│
+                                              └────────┬─────────┘
+                                                       │
+                                                       ▼
+                                              analytics_rollups
+                                              PK: CREATOR#{id}
+                                              SK: DAILY#{date}
+                                              ─────────────────
+                                              total_views: 1523
+                                              revenue_cents: 15800
+                                              revenue_by_source:
+                                                subs: 8500
+                                                tips: 4200
+                                                unlocks: 2100
+                                                shop: 1000
+                                              engagement_rate: 0.084
+                                              new_subscribers: 12
+                                              churn_rate: 0.006
+                                                       │
+                            ┌──────────────────────────┼───────────────────────┐
+                            │                          │                       │
+                            ▼                          ▼                       ▼
+                   WEEKLY#{year}-W{wk}        MONTHLY#{year}-{mo}       SUMMARY (lifetime)
+                   (Sunday midnight job)      (1st of month job)        (updated each daily)
+
+ ═══════════════════════════════════════════════════════════════════════════════
+                                         │
+ Creator Dashboard                       │        Admin Dashboard
+ ──────────────────                      │        ───────────────
+                                         │
+ GET /ui/analytics/overview  ◄───────────┤──────► GET /ui/admin/analytics/overview
+ GET /ui/analytics/revenue   ◄───────────┤          (PK=PLATFORM, SK=DAILY#{date})
+ GET /ui/analytics/views     ◄───────────┤──────► GET /ui/admin/analytics/revenue
+ GET /ui/analytics/subscribers ◄─────────┤──────► GET /ui/admin/analytics/creators
+ GET /ui/analytics/top-content ◄─────────┤
+ GET /ui/analytics/audience  ◄───────────┤
+ POST /ui/analytics/refresh  ─────────── triggers compute_daily_rollups(today)
+```
+
+---
+
+## 3. Current State Analysis
+
+### 3.1 Existing Infrastructure
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
@@ -51,7 +114,7 @@ Creators cannot make informed decisions about their content, pricing, or marketi
 | Refresh endpoint | `app/routers/creator_analytics.py:288-307` | Rate-limited to 1 per 5 min; returns success immediately without processing |
 | Settings | `app/core/settings.py` | `analytics_rollup_lookback_days` (default 90) |
 
-### 2.2 Gaps
+### 3.2 Gaps
 
 1. **No event ingestion** -- platform events (page views, tips, unlocks, subscriptions) are recorded in their respective tables but never fed into the analytics pipeline.
 2. **No rollup computation** -- `upsert_daily_rollup()` exists but is never called. The daily rollup rows are always empty or stale.
@@ -64,45 +127,73 @@ Creators cannot make informed decisions about their content, pricing, or marketi
 
 ---
 
-## 3. Technical Design
+## 4. DynamoDB Access Patterns
 
-### 3.1 DynamoDB Schema
+### 4.1 Analytics Events Table (New)
 
-#### 3.1.1 Analytics Events Table (new)
+| # | Operation | Table | Key / Index | Condition | Frequency |
+|---|-----------|-------|-------------|-----------|-----------|
+| 1 | Record event | `analytics_events` | PK=`CREATOR#{id}`, SK=`EVT#{ts}#{evt_id}` | None | Per API call |
+| 2 | Query events by date (rollup) | `analytics_events` | GSI1: PK=`DATE#{YYYY-MM-DD}`, SK=`CREATOR#{id}#{ts}` | Paginated | Hourly (rollup job) |
+| 3 | Query creator events for date | `analytics_events` | PK=`CREATOR#{id}`, SK begins_with `EVT#{date_prefix}` | None | On-demand (debug) |
 
-**Table name**: `analytics_events`
-**PK**: `pk` (S), **SK**: `sk` (S)
+### 4.2 Analytics Rollups Table (Existing, Extended)
 
-Raw event storage for analytics-relevant actions. Events are written inline during API calls and consumed by the rollup job.
+| # | Operation | Table | Key / Index | Condition | Frequency |
+|---|-----------|-------|-------------|-----------|-----------|
+| 1 | Upsert daily rollup | `analytics_rollups` | PK=`CREATOR#{id}`, SK=`DAILY#{date}` | None | Hourly per creator |
+| 2 | Get overview (date range) | `analytics_rollups` | PK=`CREATOR#{id}`, SK between `DAILY#{from}` and `DAILY#{to}` | None | Per dashboard load |
+| 3 | Get summary | `analytics_rollups` | PK=`CREATOR#{id}`, SK=`SUMMARY` | None | Per dashboard load |
+| 4 | Upsert weekly rollup | `analytics_rollups` | PK=`CREATOR#{id}`, SK=`WEEKLY#{year}-W{week}` | None | Weekly job |
+| 5 | Upsert monthly rollup | `analytics_rollups` | PK=`CREATOR#{id}`, SK=`MONTHLY#{year}-{month}` | None | Monthly job |
+| 6 | Platform daily rollup | `analytics_rollups` | PK=`PLATFORM`, SK=`DAILY#{date}` | None | Hourly |
+| 7 | Platform summary | `analytics_rollups` | PK=`PLATFORM`, SK=`SUMMARY` | None | Per admin load |
 
-| PK Pattern | SK Pattern | Purpose | Key Fields |
-|------------|------------|---------|------------|
-| `CREATOR#{creator_id}` | `EVT#{timestamp}#{event_id}` | Raw event | `event_type`, `content_id`, `content_type`, `viewer_id`, `amount_cents`, `currency`, `metadata` |
+### 4.3 Example DynamoDB Items
 
-**GSI1** (`GSI1PK` / `GSI1SK`): Query events by date for rollup processing.
-- `GSI1PK`: `DATE#{YYYY-MM-DD}`
-- `GSI1SK`: `CREATOR#{creator_id}#{timestamp}`
-- Projected: ALL
+**Raw Analytics Event:**
 
-**TTL**: `ttl_epoch` -- events expire after 90 days (raw events are disposable once rolled up).
+```json
+{
+  "pk": "CREATOR#alice@test.local",
+  "sk": "EVT#1748520000#evt_abc123",
+  "event_id": "evt_abc123",
+  "event_type": "page_view",
+  "content_id": "post_xyz789",
+  "content_type": "post",
+  "viewer_id": "bob@test.local",
+  "amount_cents": 0,
+  "currency": "USD",
+  "metadata": {},
+  "created_at": 1748520000,
+  "GSI1PK": "DATE#2026-05-29",
+  "GSI1SK": "CREATOR#alice@test.local#1748520000",
+  "ttl_epoch": 1756296000
+}
+```
 
-#### 3.1.2 Analytics Rollups Table (existing, extend)
+**Revenue Event:**
 
-Existing table: `T.analytics_rollups`
-PK: `pk` (S), SK: `sk` (S)
+```json
+{
+  "pk": "CREATOR#alice@test.local",
+  "sk": "EVT#1748520100#evt_def456",
+  "event_id": "evt_def456",
+  "event_type": "revenue",
+  "content_id": "msg_aaa111",
+  "content_type": "message",
+  "viewer_id": "bob@test.local",
+  "amount_cents": 500,
+  "currency": "USD",
+  "metadata": {"source": "tip"},
+  "created_at": 1748520100,
+  "GSI1PK": "DATE#2026-05-29",
+  "GSI1SK": "CREATOR#alice@test.local#1748520100",
+  "ttl_epoch": 1756296100
+}
+```
 
-Add new SK patterns for extended rollups:
-
-| PK Pattern | SK Pattern | Purpose | Key Fields |
-|------------|------------|---------|------------|
-| `CREATOR#{user_id}` | `DAILY#{date}` | Daily metrics (existing) | Extended with `revenue_by_source`, `engagement_rate`, `churn_count`, `retention_rate` |
-| `CREATOR#{user_id}` | `WEEKLY#{year}-W{week}` | Weekly aggregate | Same fields as DAILY, aggregated |
-| `CREATOR#{user_id}` | `MONTHLY#{year}-{month}` | Monthly aggregate | Same fields as DAILY, aggregated |
-| `CREATOR#{user_id}` | `SUMMARY` | Lifetime totals (existing) | Extended with `total_revenue_cents`, `total_views`, `lifetime_churn_rate` |
-| `PLATFORM` | `DAILY#{date}` | Platform-wide daily stats | `total_creators`, `total_users`, `total_revenue_cents`, `total_views`, `active_creators` |
-| `PLATFORM` | `SUMMARY` | Platform lifetime stats | `total_users`, `total_creators`, `total_revenue_all_time_cents` |
-
-#### 3.1.3 Daily Rollup Item (extended)
+**Daily Rollup Item (extended):**
 
 ```json
 {
@@ -137,7 +228,65 @@ Add new SK patterns for extended rollups:
 }
 ```
 
-#### 3.1.4 TableDef Entry (analytics_events)
+**Platform Daily Rollup:**
+
+```json
+{
+  "pk": "PLATFORM",
+  "sk": "DAILY#2026-05-29",
+  "total_creators": 245,
+  "active_creators_today": 82,
+  "total_users": 12500,
+  "total_revenue_cents": 485000,
+  "total_views": 125000,
+  "new_subscriptions": 340,
+  "cancelled_subscriptions": 48,
+  "created_at": 1748520000,
+  "updated_at": 1748523600
+}
+```
+
+---
+
+## 5. Technical Design
+
+### 5.1 DynamoDB Schema
+
+#### 5.1.1 Analytics Events Table (new)
+
+**Table name**: `analytics_events`
+**PK**: `pk` (S), **SK**: `sk` (S)
+
+Raw event storage for analytics-relevant actions. Events are written inline during API calls and consumed by the rollup job.
+
+| PK Pattern | SK Pattern | Purpose | Key Fields |
+|------------|------------|---------|------------|
+| `CREATOR#{creator_id}` | `EVT#{timestamp}#{event_id}` | Raw event | `event_type`, `content_id`, `content_type`, `viewer_id`, `amount_cents`, `currency`, `metadata` |
+
+**GSI1** (`GSI1PK` / `GSI1SK`): Query events by date for rollup processing.
+- `GSI1PK`: `DATE#{YYYY-MM-DD}`
+- `GSI1SK`: `CREATOR#{creator_id}#{timestamp}`
+- Projected: ALL
+
+**TTL**: `ttl_epoch` -- events expire after 90 days (raw events are disposable once rolled up).
+
+#### 5.1.2 Analytics Rollups Table (existing, extend)
+
+Existing table: `T.analytics_rollups`
+PK: `pk` (S), SK: `sk` (S)
+
+Add new SK patterns for extended rollups:
+
+| PK Pattern | SK Pattern | Purpose | Key Fields |
+|------------|------------|---------|------------|
+| `CREATOR#{user_id}` | `DAILY#{date}` | Daily metrics (existing) | Extended with `revenue_by_source`, `engagement_rate`, `churn_count`, `retention_rate` |
+| `CREATOR#{user_id}` | `WEEKLY#{year}-W{week}` | Weekly aggregate | Same fields as DAILY, aggregated |
+| `CREATOR#{user_id}` | `MONTHLY#{year}-{month}` | Monthly aggregate | Same fields as DAILY, aggregated |
+| `CREATOR#{user_id}` | `SUMMARY` | Lifetime totals (existing) | Extended with `total_revenue_cents`, `total_views`, `lifetime_churn_rate` |
+| `PLATFORM` | `DAILY#{date}` | Platform-wide daily stats | `total_creators`, `total_users`, `total_revenue_cents`, `total_views`, `active_creators` |
+| `PLATFORM` | `SUMMARY` | Platform lifetime stats | `total_users`, `total_creators`, `total_revenue_all_time_cents` |
+
+#### 5.1.3 TableDef Entry (analytics_events)
 
 ```python
 TableDef(
@@ -149,7 +298,7 @@ TableDef(
 ),
 ```
 
-### 3.2 Event Ingestion
+### 5.2 Event Ingestion
 
 **New file: `app/services/analytics_events.py`** (~200 lines)
 
@@ -164,7 +313,7 @@ Lightweight event recording functions called inline from existing API handlers. 
 
 All events share the same DDB item shape: `pk=CREATOR#{creator_id}`, `sk=EVT#{ts}#{evt_id}`, plus GSI1 keys `GSI1PK=DATE#{YYYY-MM-DD}`, `GSI1SK=CREATOR#{creator_id}#{ts}` for the rollup job to query by date.
 
-### 3.3 Event Instrumentation Points
+### 5.3 Event Instrumentation Points
 
 Add `record_*()` calls to existing handlers:
 
@@ -182,7 +331,7 @@ Add `record_*()` calls to existing handlers:
 | Subscription service (cancel) | `record_subscriber_event(creator_id, subscriber_id, "cancelled")` | Subscription cancelled |
 | `app/routers/catalog.py` POST purchase | `record_revenue_event(creator_id, "shop", amount)` | Shop item purchased |
 
-### 3.4 Rollup Computation Engine
+### 5.4 Rollup Computation Engine
 
 **New file: `app/services/analytics_rollup_engine.py`** (~300 lines)
 
@@ -202,13 +351,13 @@ Background job that aggregates raw events into daily, weekly, and monthly rollup
 **Engagement rate formula**: `engagement_actions / views` where engagement_actions = count of `engagement_*` events.
 **Churn rate formula**: `cancelled_subscribers / max(new_subscribers + cancelled_subscribers, 1)`.
 
-### 3.5 Refresh Endpoint Enhancement
+### 5.5 Refresh Endpoint Enhancement
 
 **Modify `app/routers/creator_analytics.py`**:
 
 Replace the placeholder refresh (line 307: "it serves as a rate-limited placeholder") with a call to `compute_daily_rollups()` for today and yesterday. Keep existing rate limit (1 per 5 minutes). Import `compute_daily_rollups` from `analytics_rollup_engine`. Return `AnalyticsRefreshOut(ok=True, refreshed_at=now_ts())`.
 
-### 3.6 Admin Platform Analytics
+### 5.6 Admin Platform Analytics
 
 **New endpoints in `app/routers/creator_analytics.py`**:
 
@@ -218,31 +367,295 @@ Replace the placeholder refresh (line 307: "it serves as a rate-limited placehol
 | `GET` | `/ui/admin/analytics/revenue` | `require_admin_session` | Platform-wide revenue time series |
 | `GET` | `/ui/admin/analytics/creators` | `require_admin_session` | Top creators by revenue/views with time range |
 
-### 3.7 Request/Response Models
+---
 
-**Add to `app/models.py`**:
+## 6. API Request/Response Examples
+
+### 6.1 Creator Analytics Overview
+
+```bash
+curl "http://localhost:8000/ui/analytics/overview?from=2026-05-22&to=2026-05-29" \
+  -H "Cookie: ui_session=alice_session; ui_csrf=csrf_val"
+```
+
+**Response (200):**
+```json
+{
+  "period_views": 12450,
+  "period_revenue_cents": 89500,
+  "period_subscribers_net": 42,
+  "total_subscribers": 456,
+  "engagement_rate": 0.0842,
+  "revenue_by_source": {
+    "subscriptions": 52000,
+    "tips": 22500,
+    "unlocks": 11000,
+    "shop": 4000,
+    "other": 0
+  },
+  "period_start": "2026-05-22",
+  "period_end": "2026-05-29",
+  "currency": "USD"
+}
+```
+
+### 6.2 Trigger Analytics Refresh
+
+```bash
+curl -X POST http://localhost:8000/ui/analytics/refresh \
+  -H "Cookie: ui_session=alice_session; ui_csrf=csrf_val" \
+  -H "x-csrf-token: csrf_val"
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "refreshed_at": 1748523600,
+  "dates_refreshed": ["2026-05-28", "2026-05-29"]
+}
+```
+
+**Response (429, rate limited):**
+```json
+{
+  "detail": "Refresh rate limited. Try again in 4 minutes."
+}
+```
+
+### 6.3 Top Content with Engagement Rate
+
+```bash
+curl "http://localhost:8000/ui/analytics/top-content?from=2026-05-22&to=2026-05-29&limit=5" \
+  -H "Cookie: ui_session=alice_session; ui_csrf=csrf_val"
+```
+
+**Response (200):**
+```json
+{
+  "items": [
+    {
+      "content_id": "vid_abc123",
+      "content_type": "video",
+      "title": "Summer Tutorial",
+      "views": 4500,
+      "likes": 320,
+      "comments": 85,
+      "revenue_cents": 12000,
+      "engagement_rate": 0.09
+    },
+    {
+      "content_id": "post_xyz789",
+      "content_type": "post",
+      "title": "Behind the scenes...",
+      "views": 2800,
+      "likes": 450,
+      "comments": 120,
+      "revenue_cents": 5500,
+      "engagement_rate": 0.2036
+    }
+  ],
+  "total": 2
+}
+```
+
+### 6.4 Admin Platform Overview
+
+```bash
+curl "http://localhost:8000/ui/admin/analytics/overview?from=2026-05-22&to=2026-05-29" \
+  -H "Cookie: ui_session=root_session; ui_csrf=root_csrf"
+```
+
+**Response (200):**
+```json
+{
+  "total_users": 12500,
+  "total_creators": 245,
+  "active_creators_today": 82,
+  "total_revenue_cents": 4850000,
+  "period_revenue_cents": 485000,
+  "period_views": 125000,
+  "currency": "USD"
+}
+```
+
+### 6.5 Admin Top Creators
+
+```bash
+curl "http://localhost:8000/ui/admin/analytics/creators?from=2026-05-22&to=2026-05-29&limit=10" \
+  -H "Cookie: ui_session=root_session; ui_csrf=root_csrf"
+```
+
+**Response (200):**
+```json
+{
+  "creators": [
+    {
+      "creator_id": "alice@test.local",
+      "display_name": "Alice Creator",
+      "period_revenue_cents": 89500,
+      "period_views": 12450,
+      "subscriber_count": 456
+    },
+    {
+      "creator_id": "bob@test.local",
+      "display_name": "Bob Studio",
+      "period_revenue_cents": 67200,
+      "period_views": 8900,
+      "subscriber_count": 312
+    }
+  ]
+}
+```
+
+### 6.6 Revenue Time Series
+
+```bash
+curl "http://localhost:8000/ui/analytics/revenue?from=2026-05-22&to=2026-05-29" \
+  -H "Cookie: ui_session=alice_session; ui_csrf=csrf_val"
+```
+
+**Response (200):**
+```json
+{
+  "time_series": [
+    {
+      "date": "2026-05-22",
+      "revenue_cents": 12000,
+      "revenue_by_source": {"subscriptions": 7000, "tips": 3000, "unlocks": 1500, "shop": 500}
+    },
+    {
+      "date": "2026-05-23",
+      "revenue_cents": 13500,
+      "revenue_by_source": {"subscriptions": 7000, "tips": 4200, "unlocks": 1800, "shop": 500}
+    }
+  ],
+  "total_cents": 89500,
+  "currency": "USD"
+}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| # | Scenario | HTTP Status | Error Code | Detail | Recovery |
+|---|----------|-------------|------------|--------|----------|
+| 1 | Invalid date range (from > to) | 422 | `validation_error` | "from date must be before to date" | Fix date range |
+| 2 | Date range exceeds 90 days | 422 | `validation_error` | "Date range cannot exceed 90 days" | Narrow range |
+| 3 | Refresh rate limited | 429 | `rate_limited` | "Refresh rate limited. Try again in N minutes." | Wait for cooldown |
+| 4 | Non-admin access admin analytics | 403 | `forbidden` | "Admin access required" | Use admin account |
+| 5 | Creator analytics for deleted user | 404 | `not_found` | "Creator not found" | Check creator ID |
+| 6 | Rollup engine DDB error | 500 | `internal_error` | "Analytics computation failed" | Retry; check DDB |
+| 7 | Event ingestion failure (non-blocking) | N/A | N/A | Logged but does not fail parent request | Automatic; events catch up on next rollup |
+| 8 | Missing content_id in top-content | 200 | N/A | Returns items with content_id but empty title | Expected for deleted content |
+| 9 | Unauthenticated request | 401 | `unauthorized` | "Authentication required" | Log in first |
+| 10 | CSRF token missing on refresh | 403 | `csrf_error` | "CSRF token missing" | Include x-csrf-token |
+| 11 | Invalid limit parameter | 422 | `validation_error` | "limit must be between 1 and 100" | Use valid limit |
+| 12 | Admin revenue with no data | 200 | N/A | Returns empty time_series array | Expected when no activity |
+
+---
+
+## 8. Pydantic Model Definitions
 
 ```python
 # -- Analytics Engine (PLATFORM-019) --
 
+from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
+
 class AnalyticsRefreshOut(BaseModel):
+    """Response for POST /ui/analytics/refresh."""
     ok: bool = True
     refreshed_at: int = 0
+    dates_refreshed: List[str] = Field(default_factory=list)
+
+    class Config:
+        json_schema_extra = {
+            "example": {"ok": True, "refreshed_at": 1748523600, "dates_refreshed": ["2026-05-28", "2026-05-29"]}
+        }
+
 
 class AnalyticsEventIn(BaseModel):
+    """Client-side event submission (for explicit page view tracking)."""
     event_type: str = Field(..., pattern="^(page_view|engagement_like|engagement_comment|engagement_reaction|engagement_share)$")
     content_id: str = Field(default="", max_length=100)
     content_type: str = Field(default="", max_length=50)
     metadata: Optional[Dict[str, str]] = None
 
+
 class RevenueBySourceOut(BaseModel):
+    """Revenue breakdown by source type."""
     subscriptions: int = 0
     tips: int = 0
     unlocks: int = 0
     shop: int = 0
     other: int = 0
 
+
+class OverviewOut(BaseModel):
+    """Creator analytics overview for a date range."""
+    period_views: int = 0
+    period_revenue_cents: int = 0
+    period_subscribers_net: int = 0
+    total_subscribers: int = 0
+    engagement_rate: float = 0.0
+    revenue_by_source: RevenueBySourceOut = Field(default_factory=RevenueBySourceOut)
+    period_start: str = ""
+    period_end: str = ""
+    currency: str = "USD"
+
+
+class TopContentItemOut(BaseModel):
+    """A single content item in top content ranking."""
+    content_id: str
+    content_type: str = ""
+    title: str = ""
+    views: int = 0
+    likes: int = 0
+    comments: int = 0
+    revenue_cents: int = 0
+    engagement_rate: float = 0.0
+
+
+class TopContentOut(BaseModel):
+    """Top content list response."""
+    items: List[TopContentItemOut] = Field(default_factory=list)
+    total: int = 0
+
+
+class RevenueDayOut(BaseModel):
+    """Single day in revenue time series."""
+    date: str
+    revenue_cents: int = 0
+    revenue_by_source: RevenueBySourceOut = Field(default_factory=RevenueBySourceOut)
+
+
+class RevenueTimeSeriesOut(BaseModel):
+    """Revenue time series response."""
+    time_series: List[RevenueDayOut] = Field(default_factory=list)
+    total_cents: int = 0
+    currency: str = "USD"
+
+
+class SubscribersDayOut(BaseModel):
+    """Single day in subscriber time series."""
+    date: str
+    new_subscribers: int = 0
+    cancelled_subscribers: int = 0
+    net_change: int = 0
+    total: int = 0
+
+
+class SubscribersTimeSeriesOut(BaseModel):
+    """Subscriber growth/churn time series."""
+    time_series: List[SubscribersDayOut] = Field(default_factory=list)
+    period_net_change: int = 0
+    total_subscribers: int = 0
+
+
 class AdminPlatformOverviewOut(BaseModel):
+    """Admin platform-wide analytics overview."""
     total_users: int = 0
     total_creators: int = 0
     active_creators_today: int = 0
@@ -251,18 +664,278 @@ class AdminPlatformOverviewOut(BaseModel):
     period_views: int = 0
     currency: str = "USD"
 
+
 class AdminTopCreatorOut(BaseModel):
+    """A single creator in admin top creators list."""
     creator_id: str
     display_name: str = ""
     period_revenue_cents: int = 0
     period_views: int = 0
     subscriber_count: int = 0
 
+
 class AdminCreatorsOut(BaseModel):
+    """Admin top creators list response."""
     creators: List[AdminTopCreatorOut] = Field(default_factory=list)
 ```
 
-### 3.8 Frontend Changes
+---
+
+## 9. Frontend Component Tree
+
+```
+AnalyticsPage (Creator)
+├── PageHeader
+│   ├── Title: "Analytics"
+│   ├── DateRangePicker (from/to)
+│   └── Button: "Refresh" → POST /refresh (loading spinner)
+├── OverviewCards (4 cards in grid)
+│   ├── Card: "Views" (period_views, trend arrow)
+│   ├── Card: "Revenue" (formatted currency, trend arrow)
+│   ├── Card: "Subscribers" (total + net change)
+│   └── Card: "Engagement" (engagement_rate as percentage)
+├── RevenueChart (line chart + stacked area)
+│   ├── X-axis: dates
+│   ├── Y-axis: revenue in dollars
+│   ├── Lines: subscriptions, tips, unlocks, shop
+│   └── Tooltip: per-source breakdown
+├── RevenueBySourcePie (donut chart)
+│   ├── Segments: subscriptions, tips, unlocks, shop
+│   └── Center: total revenue
+├── ViewsChart (line chart)
+│   ├── X-axis: dates
+│   ├── Y-axis: view count
+│   └── Line: total_views per day
+├── SubscribersChart (dual-axis bar + line)
+│   ├── Bars: new_subscribers (green), cancelled (red)
+│   └── Line: cumulative total
+├── TopContentTable
+│   ├── Columns: Title, Views, Likes, Comments, Revenue, Engagement Rate
+│   ├── Row click → navigate to /analytics/content/{id}
+│   └── Sort by: views (default), revenue, engagement_rate
+├── ChurnMetricsCard
+│   ├── Churn rate (percentage)
+│   ├── Retention rate (percentage)
+│   └── Trend indicator
+└── AudienceDemographics
+    ├── CountryMap or BarChart (top 10 countries)
+    └── DevicePieChart (desktop/mobile/tablet split)
+
+AdminAnalyticsPage
+├── PageHeader: "Platform Analytics" (admin only)
+├── OverviewCards (5 cards)
+│   ├── Card: "Total Users"
+│   ├── Card: "Total Creators"
+│   ├── Card: "Active Creators (today)"
+│   ├── Card: "Period Revenue"
+│   └── Card: "Period Views"
+├── PlatformRevenueChart (time series)
+└── TopCreatorsTable
+    ├── Columns: Creator, Revenue, Views, Subscribers
+    └── Sortable by each column
+```
+
+### 9.1 State Management
+
+```typescript
+// React Query keys
+const ANALYTICS_KEYS = {
+  overview: (from: string, to: string) => ["analytics", "overview", from, to],
+  revenue: (from: string, to: string) => ["analytics", "revenue", from, to],
+  views: (from: string, to: string) => ["analytics", "views", from, to],
+  subscribers: (from: string, to: string) => ["analytics", "subscribers", from, to],
+  topContent: (from: string, to: string) => ["analytics", "top-content", from, to],
+  audience: (from: string, to: string) => ["analytics", "audience", from, to],
+  adminOverview: (from: string, to: string) => ["admin", "analytics", "overview", from, to],
+  adminRevenue: (from: string, to: string) => ["admin", "analytics", "revenue", from, to],
+  adminCreators: (from: string, to: string) => ["admin", "analytics", "creators", from, to],
+};
+
+// Refresh mutation invalidates all analytics queries
+const useRefreshAnalytics = () => useMutation({
+  mutationFn: () => api.post("/ui/analytics/refresh"),
+  onSuccess: () => {
+    queryClient.invalidateQueries({ queryKey: ["analytics"] });
+    toast.success("Analytics refreshed");
+  },
+});
+```
+
+---
+
+## 10. Observability & Monitoring
+
+### 10.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `analytics_events_ingested_total` | Counter | `event_type` | Raw events written to analytics_events table |
+| `analytics_events_ingestion_errors_total` | Counter | `event_type` | Event write failures (non-blocking) |
+| `analytics_rollup_duration_seconds` | Histogram | `scope` (daily/weekly/monthly) | Time to compute rollups |
+| `analytics_rollup_creators_processed` | Gauge | None | Number of creators processed in last rollup |
+| `analytics_rollup_events_processed` | Counter | None | Total events consumed per rollup cycle |
+| `analytics_refresh_total` | Counter | `trigger` (manual/scheduled) | Rollup triggers |
+| `analytics_admin_queries_total` | Counter | `endpoint` | Admin analytics endpoint usage |
+
+### 10.2 Log Events
+
+| Event | Level | Fields | Trigger |
+|-------|-------|--------|---------|
+| `analytics.event_recorded` | DEBUG | `creator_id`, `event_type`, `content_id` | Event successfully written |
+| `analytics.event_write_failed` | WARN | `creator_id`, `event_type`, `error` | Event write failed (non-blocking) |
+| `analytics.rollup_started` | INFO | `date`, `trigger` | Rollup computation begins |
+| `analytics.rollup_completed` | INFO | `date`, `creators_count`, `events_count`, `duration_ms` | Rollup computation ends |
+| `analytics.rollup_failed` | ERROR | `date`, `error` | Rollup computation failed |
+| `analytics.refresh_triggered` | INFO | `creator_id`, `dates` | Manual refresh by creator |
+| `analytics.refresh_rate_limited` | WARN | `creator_id` | Refresh attempt blocked by rate limit |
+
+### 10.3 Alert Thresholds
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Rollup job stale | No `analytics.rollup_completed` event in 2 hours | P2 Critical | Check background task; restart if crashed |
+| High event ingestion failure rate | >5% of `analytics_events_ingestion_errors_total` | P3 Warning | Check DDB throughput; increase capacity |
+| Rollup duration spike | P99 > 300 seconds | P3 Warning | Check event volume; optimize queries |
+| Zero events for active platform | No events ingested in 1 hour during business hours | P3 Warning | Check instrumentation; verify API calls trigger recording |
+| Admin analytics latency | P95 > 5 seconds for admin overview | P4 Info | Consider caching or pre-computing |
+
+---
+
+## 11. Rollup Aggregation Architecture
+
+### 11.1 Time-Series Hierarchy
+
+```
+Raw Events (90-day TTL)
+    │
+    ▼  (hourly background job)
+Daily Rollups (DAILY#{date})
+    │
+    ▼  (weekly job, Sunday midnight UTC)
+Weekly Rollups (WEEKLY#{year}-W{week})
+    │
+    ▼  (monthly job, 1st of month UTC)
+Monthly Rollups (MONTHLY#{year}-{month})
+    │
+    ▼  (updated on each daily rollup)
+Summary Sentinel (SUMMARY) — lifetime totals
+```
+
+### 11.2 Rollup Idempotency
+
+Rollup computation is idempotent: re-running for the same date overwrites the daily row with fresh aggregates from raw events. This means:
+- Hourly runs refine the current day's numbers.
+- The `/refresh` endpoint can safely re-trigger computation.
+- Late-arriving events (e.g., webhook-delayed subscription events) are captured on the next run.
+
+### 11.3 Engagement Rate Calculation
+
+Currently hardcoded to 0.0. New formula:
+
+```
+engagement_rate = (likes + comments + reactions + shares) / views
+```
+
+Per-content: computed from `content_metrics[cid]` in the daily rollup.
+Per-creator: computed as total engagement actions / total views across all content for the period.
+
+### 11.4 Churn Rate Calculation
+
+```
+churn_rate = cancelled_subscribers / (new_subscribers + cancelled_subscribers)
+retention_rate = 1 - churn_rate
+```
+
+If no subscriber activity: churn_rate = 0, retention_rate = 1.0.
+
+### 11.5 Platform Rollup
+
+Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across all creators. Used by admin analytics dashboard. Updated during the same rollup job that processes creator rollups.
+
+---
+
+## 12. Rollout Plan
+
+### Phase 1: Event Ingestion (Days 1-3)
+
+- **Feature flag**: `ANALYTICS_ENGINE_V2_ENABLED=false`
+- Create `analytics_events` table in `local-ddb-init.py`
+- Implement `analytics_events.py` with `record_*()` functions
+- Add instrumentation calls to existing handlers (newsfeed, messaging, profile, subscriptions)
+- Events written in shadow mode (no read path changes)
+- Unit tests for all `record_*()` functions
+
+### Phase 2: Rollup Engine (Days 4-7)
+
+- Implement `analytics_rollup_engine.py` with `compute_daily_rollups()`
+- Register background task in `main.py`
+- Replace refresh placeholder with real computation
+- Verify rollup idempotency
+- **Feature flag**: `ANALYTICS_ENGINE_V2_ENABLED=true` in staging
+
+### Phase 3: Admin Dashboard + Frontend (Days 8-10)
+
+- Add admin analytics endpoints
+- Create `AdminAnalyticsPage.tsx`
+- Update `AnalyticsPage.tsx` with revenue breakdown chart, engagement rate column
+- Wire refresh button to show loading state
+- E2E tests
+
+### Phase 4: Canary and Full Rollout (Days 11-15)
+
+- Deploy to 10% canary
+- Monitor: rollup duration, event ingestion rate, DDB throughput
+- Verify: engagement_rate is non-zero for active creators
+- **Rollback**: Disable background task + revert refresh to no-op
+- Ramp to 100% after 3 days of stable canary
+
+### Migration Steps
+
+No data migration. The `analytics_events` table is new. The `analytics_rollups` table already exists; new fields are added dynamically (DynamoDB is schemaless). Old rollup items without `revenue_by_source` or `engagement_rate` fields are handled by `.get()` with defaults.
+
+---
+
+## 13. Performance Considerations
+
+### 13.1 Query Costs
+
+| Operation | DDB Reads | DDB Writes | Latency Target |
+|-----------|-----------|------------|----------------|
+| Record single event | 0 | 1 | <50ms (inline, non-blocking) |
+| Rollup: query day events | 1-100 (paginated GSI1) | 0 | <30s for 100K events |
+| Rollup: write daily per creator | 0 | 1 per creator | <10ms each |
+| Rollup: write platform daily | 0 | 1 | <10ms |
+| Dashboard overview (7-day range) | 7 (one per day) | 0 | <200ms |
+| Top content | 7 (daily rollups) + aggregation | 0 | <300ms |
+| Admin overview | 7 (PLATFORM daily) | 0 | <200ms |
+| Admin top creators | Scan DAILY rows, group by creator | 0 | <500ms |
+
+### 13.2 Caching Strategy
+
+- **Event ingestion**: No caching (write-through to DDB).
+- **Dashboard reads**: React Query with 5-minute stale time. Manual refresh invalidates all keys.
+- **Admin dashboard**: React Query with 10-minute stale time (admin views less latency-sensitive).
+- **Rollup results**: DDB items are the cache. Re-computation overwrites stale data.
+
+### 13.3 Rate Limiting
+
+| Operation | Limit | Window | Notes |
+|-----------|-------|--------|-------|
+| Analytics refresh | 1 per user | 5 minutes | Existing limit, preserved |
+| Analytics read endpoints | 60 per user | 1 minute | Standard read rate |
+| Admin analytics | 30 per admin | 1 minute | Lower limit for heavy queries |
+| Event ingestion | None (inline) | N/A | Bounded by parent API call rate |
+
+### 13.4 DDB Cost Optimization
+
+- Raw events are write-heavy but short-lived (90-day TTL auto-deletes).
+- GSI1 on events is used only by the rollup job (hourly, batch scan). No user-facing queries hit this GSI.
+- Content metrics in rollup items are capped at 50 entries to prevent item size explosion (DDB 400KB limit).
+- Rollup reads are the hot path; daily rollups are single `get_item` per date (1 RCU each).
+
+---
+
+## 14. Frontend Changes
 
 **Modify `frontend/src/pages/analytics/AnalyticsPage.tsx`** (~40 lines added):
 
@@ -273,20 +946,7 @@ class AdminCreatorsOut(BaseModel):
 
 **New file: `frontend/src/pages/admin/AdminAnalyticsPage.tsx`** (~200 lines):
 
-Admin-only page showing platform-wide analytics:
-
-```
-AdminAnalyticsPage
-├── Overview Cards
-│   ├── Total Users
-│   ├── Total Creators
-│   ├── Active Creators (today)
-│   ├── Period Revenue
-│   └── Period Views
-├── Revenue Time Series Chart (platform-wide)
-├── Top Creators Table
-│   └── Creator name, revenue, views, subscribers
-```
+Admin-only page showing platform-wide analytics.
 
 **Add to `frontend/src/App.tsx`**:
 
@@ -294,7 +954,9 @@ AdminAnalyticsPage
 <Route path="/admin/analytics" element={<AdminAnalyticsPage />} />
 ```
 
-### 3.9 Files to Create
+---
+
+## 15. Files to Create
 
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
@@ -304,7 +966,7 @@ AdminAnalyticsPage
 | `frontend/src/api/endpoints/admin-analytics.ts` | Admin analytics API wrappers | ~30 |
 | `frontend/e2e/analytics-engine.spec.ts` | E2E tests | ~500 |
 
-### 3.10 Files to Modify
+## 16. Files to Modify
 
 | File | Change |
 |------|--------|
@@ -325,60 +987,7 @@ AdminAnalyticsPage
 
 ---
 
-## 4. Rollup Aggregation Architecture
-
-### 4.1 Time-Series Hierarchy
-
-```
-Raw Events (90-day TTL)
-    │
-    ▼  (hourly background job)
-Daily Rollups (DAILY#{date})
-    │
-    ▼  (weekly job, Sunday midnight UTC)
-Weekly Rollups (WEEKLY#{year}-W{week})
-    │
-    ▼  (monthly job, 1st of month UTC)
-Monthly Rollups (MONTHLY#{year}-{month})
-    │
-    ▼  (updated on each daily rollup)
-Summary Sentinel (SUMMARY) — lifetime totals
-```
-
-### 4.2 Rollup Idempotency
-
-Rollup computation is idempotent: re-running for the same date overwrites the daily row with fresh aggregates from raw events. This means:
-- Hourly runs refine the current day's numbers.
-- The `/refresh` endpoint can safely re-trigger computation.
-- Late-arriving events (e.g., webhook-delayed subscription events) are captured on the next run.
-
-### 4.3 Engagement Rate Calculation
-
-Currently hardcoded to 0.0. New formula:
-
-```
-engagement_rate = (likes + comments + reactions + shares) / views
-```
-
-Per-content: computed from `content_metrics[cid]` in the daily rollup.
-Per-creator: computed as total engagement actions / total views across all content for the period.
-
-### 4.4 Churn Rate Calculation
-
-```
-churn_rate = cancelled_subscribers / (new_subscribers + cancelled_subscribers)
-retention_rate = 1 - churn_rate
-```
-
-If no subscriber activity: churn_rate = 0, retention_rate = 1.0.
-
-### 4.5 Platform Rollup
-
-Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across all creators. Used by admin analytics dashboard. Updated during the same rollup job that processes creator rollups.
-
----
-
-## 5. E2E Test Plan
+## 17. E2E Test Plan
 
 **File**: `frontend/e2e/analytics-engine.spec.ts`
 
@@ -391,7 +1000,7 @@ Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across 
 | 535.3 | Reaction engagement event is recorded | POST reaction on a post; verify engagement_reaction event |
 | 535.4 | Subscriber event is recorded on subscription | Subscribe to a plan; verify subscriber_new event |
 
-### Section 536: Rollup Computation API (4 tests)
+### Section 536: Rollup Computation API (5 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
@@ -399,8 +1008,9 @@ Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across 
 | 536.2 | Revenue breakdown by source is populated | Seed tip + subscription events; refresh; GET revenue; `revenue_by_source` has non-zero `tips` and `subscriptions` |
 | 536.3 | Engagement rate is computed correctly | Seed 10 views + 3 reactions; refresh; GET top-content; `engagement_rate` is approximately 0.3 |
 | 536.4 | Refresh rate limiting returns 429 | POST refresh; immediately POST again; 429 |
+| 536.5 | Rollup is idempotent | Refresh twice; verify same values (no double-counting) |
 
-### Section 537: Analytics Dashboard API (4 tests)
+### Section 537: Analytics Dashboard API (5 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
@@ -408,8 +1018,9 @@ Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across 
 | 537.2 | Subscribers endpoint returns growth data | GET `/ui/analytics/subscribers`; response has `time_series` with `new_subscribers`, `cancelled` |
 | 537.3 | Top content includes engagement rate | GET `/ui/analytics/top-content`; response items have `engagement_rate` field that is not 0.0 (after seeding) |
 | 537.4 | Content detail returns per-content metrics | GET `/ui/analytics/content/{id}`; response has `view_time_series`, `revenue_breakdown` |
+| 537.5 | Revenue time series returns per-source breakdown | GET `/ui/analytics/revenue`; each day has `revenue_by_source` with non-zero values |
 
-### Section 538: Admin Platform Analytics API (4 tests)
+### Section 538: Admin Platform Analytics API (5 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
@@ -417,14 +1028,25 @@ Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across 
 | 538.2 | Admin top creators returns sorted list | Root GET `/ui/admin/analytics/creators`; response has `creators` array sorted by `period_revenue_cents` desc |
 | 538.3 | Non-admin cannot access admin analytics | Alice GET `/ui/admin/analytics/overview`; 403 |
 | 538.4 | Admin revenue time series returns daily data | Root GET `/ui/admin/analytics/revenue?from=2026-05-28&to=2026-05-29`; response has time_series array |
+| 538.5 | Admin overview with no data returns zeroes | Root GET admin overview for future date range; all metrics are 0 |
 
-**Total E2E tests: 16**
+### Section 539: Analytics UI (5 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 539.1 | Analytics page renders overview cards | Navigate to `/analytics`; 4 overview cards visible with labels |
+| 539.2 | Refresh button triggers computation | Click "Refresh"; loading spinner shown; data updates |
+| 539.3 | Revenue breakdown chart visible | Revenue by source chart renders with colored segments |
+| 539.4 | Top content table shows engagement rate column | Table has "Engagement" column with percentage values |
+| 539.5 | Date range picker changes displayed data | Change date range; overview cards update with new values |
+
+**Total E2E tests: 24**
 
 ---
 
-## 6. Security Considerations
+## 18. Security Considerations
 
-### 6.1 Auth Requirements
+### 18.1 Auth Requirements
 
 | Endpoint | Auth | Authorization |
 |----------|------|---------------|
@@ -433,26 +1055,26 @@ Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across 
 | `GET /ui/admin/analytics/*` | `require_admin_session` | Admin/Root only |
 | Page view recording | None (inline) | Implicit from API call context |
 
-### 6.2 Data Isolation
+### 18.2 Data Isolation
 
 - Creators can only query their own analytics data (PK includes their user_sub).
 - Admin endpoints aggregate across creators but do not expose individual user identities to non-admin roles.
 - Raw events in `analytics_events` table include `viewer_id` but this is never exposed via the analytics read API (only aggregated counts).
 
-### 6.3 Privacy
+### 18.3 Privacy
 
 - Page view events record `viewer_id` only for authenticated users; anonymous views use "anon".
 - Viewer IDs are used only for unique viewer counting; they are not exposed in API responses.
 - Raw events have 90-day TTL; they are automatically deleted by DDB TTL after rollup.
 
-### 6.4 Rate Limiting
+### 18.4 Rate Limiting
 
 - Analytics refresh: max 1 per user per 5 minutes (existing).
 - Analytics read endpoints: max 60 per user per minute.
 - Admin analytics: max 30 per admin per minute.
 - Event ingestion is inline (no separate rate limit; bounded by the rate of the triggering API call).
 
-### 6.5 DDB Cost Optimization
+### 18.5 DDB Cost Optimization
 
 - Raw events are write-heavy but short-lived (90-day TTL).
 - Rollup reads are the hot path; daily rollups are a single DDB get_item per date.
@@ -461,7 +1083,7 @@ Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across 
 
 ---
 
-## 7. Dependencies
+## 19. Dependencies
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|
@@ -477,7 +1099,7 @@ Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across 
 
 ---
 
-## 8. Acceptance Criteria
+## 20. Acceptance Criteria
 
 1. Platform events (page views, tips, reactions, comments, subscriptions) are recorded as raw analytics events.
 2. Background rollup job runs hourly and computes daily aggregates from raw events.
@@ -489,5 +1111,5 @@ Platform-wide daily rollup (PK=`PLATFORM`, SK=`DAILY#{date}`) aggregates across 
 8. Admin platform-wide analytics dashboard shows aggregate metrics.
 9. Raw events expire after 90 days via DDB TTL.
 10. Non-admin users cannot access admin analytics endpoints (403).
-11. All 16 E2E tests pass.
+11. All 24 E2E tests pass.
 12. Rollup computation is idempotent (re-running produces the same result).

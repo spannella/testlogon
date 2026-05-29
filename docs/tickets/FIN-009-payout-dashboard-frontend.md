@@ -64,7 +64,39 @@ The backend payout system is fully operational (`request_payout`, `approve_payou
 | `POST` | `/ui/payouts/admin/{id}/reject` | `require_admin_session` | Complete |
 | `GET` | `/ui/payouts/admin/stats` | `require_admin_session` | Complete |
 
-### 2.3 Existing Frontend (Stub)
+### 2.3 Pydantic Models
+
+```python
+# In app/models.py
+
+class PayoutRequestIn(BaseModel):
+    amount_cents: int = Field(..., ge=2500, description="Minimum $25.00")
+    payout_method_id: str
+    note: Optional[str] = Field(default=None, max_length=500)
+
+class PayoutBalanceOut(BaseModel):
+    available_cents: int = 0
+    pending_cents: int = 0
+    hold_cents: int = 0
+    total_earned_cents: int = 0
+
+class PayoutOut(BaseModel):
+    payout_id: str
+    amount_cents: int
+    currency: str = "usd"
+    status: str  # requested, approved, rejected, processing, completed, cancelled
+    payout_method_id: str
+    created_at: int
+    completed_at: Optional[int] = None
+    reject_reason: Optional[str] = None
+
+class PayoutMethodIn(BaseModel):
+    method_type: str = Field(..., pattern=r"^(bank_transfer|paypal|wire)$")
+    label: str = Field(..., max_length=100)
+    details: Dict[str, str]  # type-specific: bank_name, account_last4, paypal_email, etc.
+```
+
+### 2.4 Existing Frontend (Stub)
 
 The current `PayoutDashboard.tsx` (623 lines) includes:
 - Balance display cards (available, pending, hold, total earned)
@@ -438,11 +470,148 @@ Each step shows the timestamp and actor (if applicable). Steps not yet reached a
 | 574.5 | Add Method dialog creates a method | Click "Add Method"; fill form; submit; new method appears in list |
 | 574.6 | Admin Queue tab visible for admin user | Root navigates to /payouts; "Admin Queue" tab visible |
 
-**Total E2E tests: 18**
+### Section 575: Payout Edge Cases & Negative Tests (5 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 575.1 | Request payout with zero balance | POST request; 400; "Insufficient balance" |
+| 575.2 | Request exceeds available balance | POST amount > available; 400; error message |
+| 575.3 | Duplicate active payout request | Request payout; request again before first processed; 409; "Active payout exists" |
+| 575.4 | Delete default payout method fails | DELETE default method; 400; "Cannot delete default method" |
+| 575.5 | Admin rejects payout — creator sees rejected status | Admin rejects; creator GET history; status="rejected" with reason |
+
+### Section 576: Concurrent Access Tests (3 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 576.1 | Two creators request payouts simultaneously | Both succeed with distinct payout IDs |
+| 576.2 | Admin approves while creator cancels | Race condition: whichever completes first wins; other gets 400 |
+| 576.3 | Balance recalculation after payout | Request and complete payout; available balance reduced by payout amount |
+
+**Total E2E tests: 26**
 
 ---
 
-## 6. Security Considerations
+## 6. API Request/Response Examples
+
+**Request a payout** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/payouts/request \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_a" \
+  -d '{"amount_cents": 5000, "payout_method_id": "pm_bank_123"}'
+```
+
+**Response (201)**:
+```json
+{
+  "payout_id": "po_abc123",
+  "amount_cents": 5000,
+  "currency": "usd",
+  "status": "requested",
+  "payout_method_id": "pm_bank_123",
+  "created_at": 1748520100
+}
+```
+
+**Get payout balance** (curl):
+
+```bash
+curl -X GET http://localhost:8000/ui/payouts/balance \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "available_cents": 15000,
+  "pending_cents": 5000,
+  "hold_cents": 2000,
+  "total_earned_cents": 45000
+}
+```
+
+**Admin approve payout** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/admin/payouts/po_abc123/approve \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_r; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_r"
+```
+
+**Response (200)**:
+```json
+{"ok": true, "payout_id": "po_abc123", "status": "approved"}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Insufficient balance | 400 | `insufficient_balance` | "Insufficient balance for payout" | Earn more or reduce amount |
+| Below minimum threshold | 400 | `below_minimum` | "Minimum payout is $25.00" | Increase amount |
+| Active payout exists | 409 | `active_payout_exists` | "You already have a pending payout" | Wait or cancel existing |
+| Cancel non-pending payout | 400 | `cannot_cancel` | "Only pending payouts can be cancelled" | No action |
+| Delete default method | 400 | `cannot_delete_default` | "Set another method as default first" | Change default then delete |
+| Payout not found | 404 | `not_found` | "Payout not found" | Check payout ID |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Log in |
+| Non-admin access to admin | 403 | `forbidden` | "Admin access required" | Use admin account |
+
+---
+
+## 8. Observability
+
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `payout_requested_total` | Counter | `method_type` | Payouts requested |
+| `payout_approved_total` | Counter | — | Payouts approved by admin |
+| `payout_rejected_total` | Counter | `reason` | Payouts rejected |
+| `payout_completed_total` | Counter | — | Payouts completed |
+| `payout_amount_cents` | Histogram | — | Payout amounts |
+| `payout_processing_latency_hours` | Histogram | — | Time from request to completion |
+
+### 8.2 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Payout queue backlog | > 50 pending payouts for > 24h | High | Admin review queue |
+| High rejection rate | > 20% of payouts rejected | Medium | Review rejection reasons |
+| Payout amount anomaly | Single payout > $10,000 | High | Manual review required |
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flag
+
+```python
+payout_dashboard_enabled: bool = os.environ.get("PAYOUT_DASHBOARD_ENABLED", "true").lower() == "true"
+```
+
+### 9.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend | Deploy payout endpoints; flag OFF | 2 days | Unit tests pass |
+| Phase 2: Internal | Enable dashboard for internal | 3 days | All 26 E2E pass |
+| Phase 3: Canary | Enable for 10% of creators | 3 days | No financial errors |
+| Phase 4: GA | Enable for all | Permanent | Admin workflow smooth |
+
+### 9.3 Rollback
+
+1. Set flag OFF — dashboard shows read-only balance
+2. Pending payouts remain in queue (admin can still process via API)
+3. No financial data loss
+
+---
+
+## 10. Security Considerations
 
 ### 6.1 Auth Requirements
 
@@ -467,7 +636,55 @@ Each step shows the timestamp and actor (if applicable). Steps not yet reached a
 
 ---
 
-## 7. Dependencies
+## 11. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Balance computation | < 100ms | Sum ledger entries in DDB; cache result per request |
+| Payout history list | < 50ms for 100 payouts | GSI on user_sub + created_at; paginated |
+| Admin queue query | < 200ms for 500 pending | GSI on status + created_at |
+| Batch complete throughput | 50 payouts/batch | Sequential processing with error isolation |
+| Dashboard initial load | < 500ms | Parallel queries: balance + history + methods + schedule |
+| Optimistic UI for cancel | Instant | Remove from cache before API response |
+
+---
+
+## 12. Frontend Component Tree
+
+```
+PayoutDashboard
+├── BalanceCards (row of 4 stat cards)
+│   ├── AvailableBalanceCard
+│   ├── PendingBalanceCard
+│   ├── HoldBalanceCard
+│   └── TotalEarnedCard
+├── RequestPayoutButton → opens RequestPayoutDialog
+│   ├── AmountInput
+│   ├── PayoutMethodSelector
+│   └── ConfirmButton
+├── Tabs
+│   ├── PayoutHistoryTab
+│   │   └── PayoutTable
+│   │       └── PayoutRow (status badge, amount, date, method, cancel button)
+│   ├── PayoutMethodsTab
+│   │   ├── MethodCard (for each method)
+│   │   │   ├── MethodDetails (type, label, last4/email)
+│   │   │   ├── DefaultBadge (if is_default)
+│   │   │   └── Actions (set default, edit, delete)
+│   │   └── AddMethodButton → AddMethodDialog
+│   ├── PayoutScheduleTab
+│   │   ├── NextPayoutCard
+│   │   ├── ScheduleSettings (frequency, minimum threshold)
+│   │   └── AutoPayoutToggle
+│   └── AdminQueueTab (root/admin only)
+│       └── AdminPayoutTable
+│           └── AdminPayoutRow (approve button, reject button with reason input)
+└── BatchCompleteButton (admin only)
+```
+
+---
+
+## 13. Dependencies
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|

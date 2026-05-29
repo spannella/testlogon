@@ -83,6 +83,45 @@ Subscription Tier Manager (/subscriptions/manage)
     └── Delete (only if zero subscribers)
 ```
 
+### Architecture & Data Flow
+
+```
+┌──────────────────┐     ┌────────────────────────┐     ┌────────────────────┐
+│  React Frontend  │     │  FastAPI Backend        │     │  DynamoDB          │
+│  TierManager.tsx │────>│  /v1/subscriptions/     │────>│  billing table     │
+│                  │<────│  tiers/*                 │<────│  PK=CREATOR#{}     │
+│  - TierCard      │     │                          │     │  SK=TIER#{}        │
+│  - TierDialog    │     │  tier_management.py      │     │                    │
+│  - TierPreview   │     │  (service layer)         │     │  GSI: TiersByOrder │
+│  - Analytics     │     │                          │     │                    │
+└──────────────────┘     └────────────────────────┘     └────────────────────┘
+
+Request Flow — Create Tier:
+  Browser → POST /v1/subscriptions/tiers
+    → require_ui_session (cookie auth + CSRF)
+    → TierCreate model validation
+    → tier_management.create_tier()
+    → DynamoDB PutItem (CREATOR#{id}, TIER#{uuid})
+    → 201 + TierOut response
+
+Request Flow — Reorder Tiers:
+  Browser → PUT /v1/subscriptions/tiers/reorder
+    → require_ui_session
+    → TierReorder model validation
+    → tier_management.reorder_tiers()
+    → DynamoDB BatchWriteItem (update display_order for each tier)
+    → 200 + updated tier list
+
+Request Flow — Analytics:
+  Browser → GET /v1/subscriptions/tiers/analytics
+    → require_ui_session
+    → tier_management.get_tier_analytics()
+    → DynamoDB Query (CREATOR#, SK begins_with TIER#)
+    → DynamoDB Query (subscription table for counts)
+    → Aggregate in Python
+    → 200 + TierAnalytics response
+```
+
 ---
 
 ## 2. Current State Analysis
@@ -146,7 +185,20 @@ Extend existing subscription data with tier management fields. Using the existin
 | `updated_at` | N | When tier was last updated |
 | `archived_at` | N | When tier was archived (null if active) |
 
-### 3.2 Tier Management Service: `app/services/tier_management.py`
+### 3.2 Detailed DynamoDB Access Patterns
+
+| Access Pattern | PK | SK / GSI | Query | Example |
+|---------------|-----|----------|-------|---------|
+| Get single tier | `CREATOR#{creator_id}` | `TIER#{tier_id}` | GetItem | Get Gold tier for creator abc123 |
+| List all tiers for creator | `CREATOR#{creator_id}` | `begins_with("TIER#")` | Query | List all tiers sorted by SK |
+| List active tiers only | `CREATOR#{creator_id}` | `begins_with("TIER#")` + FilterExpression `status = :active` | Query + Filter | Subscriber-facing tier list |
+| Update tier fields | `CREATOR#{creator_id}` | `TIER#{tier_id}` | UpdateItem | Change price, description |
+| Delete tier (zero subs) | `CREATOR#{creator_id}` | `TIER#{tier_id}` | DeleteItem with ConditionExpression `subscriber_count = :zero` | Remove unused tier |
+| Reorder tiers | `CREATOR#{creator_id}` | Multiple `TIER#` keys | BatchWriteItem (transact) | Set new display_order values |
+| Increment subscriber count | `CREATOR#{creator_id}` | `TIER#{tier_id}` | UpdateItem `ADD subscriber_count :one` | New subscription |
+| Decrement subscriber count | `CREATOR#{creator_id}` | `TIER#{tier_id}` | UpdateItem `ADD subscriber_count :neg_one` | Subscription cancelled |
+
+### 3.3 Tier Management Service: `app/services/tier_management.py`
 
 ```python
 """Subscription tier management for creators (ADMIN-001).
@@ -237,7 +289,7 @@ def preview_tiers(
     ...
 ```
 
-### 3.3 Router: `app/routers/tier_management.py`
+### 3.4 Router: `app/routers/tier_management.py`
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -252,7 +304,150 @@ def preview_tiers(
 | GET | `/v1/subscriptions/tiers/analytics` | `require_ui_session` | Tier analytics |
 | GET | `/v1/subscriptions/tiers/preview` | `require_ui_session` | Subscriber-facing preview |
 
-### 3.4 Pydantic Models (`app/models.py`)
+### 3.5 API Request/Response Examples
+
+**POST /v1/subscriptions/tiers** — Create tier:
+```json
+// Request
+{
+  "name": "Silver Tier",
+  "price_cents": 999,
+  "billing_cycle": "monthly",
+  "description": "Access to exclusive posts and early releases",
+  "benefits": ["Exclusive posts", "Early access", "Monthly Q&A"],
+  "access_level": "premium"
+}
+
+// Response 201
+{
+  "tier_id": "tier_a1b2c3d4",
+  "name": "Silver Tier",
+  "price_cents": 999,
+  "billing_cycle": "monthly",
+  "description": "Access to exclusive posts and early releases",
+  "benefits": ["Exclusive posts", "Early access", "Monthly Q&A"],
+  "access_level": "premium",
+  "display_order": 1,
+  "status": "active",
+  "subscriber_count": 0,
+  "created_at": 1748534400,
+  "updated_at": 1748534400,
+  "archived_at": null
+}
+```
+
+**PATCH /v1/subscriptions/tiers/{tier_id}** — Update tier:
+```json
+// Request
+{
+  "description": "Best value tier — all benefits included",
+  "price_cents": 1499
+}
+
+// Response 200
+{
+  "tier_id": "tier_a1b2c3d4",
+  "name": "Silver Tier",
+  "price_cents": 1499,
+  "billing_cycle": "monthly",
+  "description": "Best value tier — all benefits included",
+  "benefits": ["Exclusive posts", "Early access", "Monthly Q&A"],
+  "access_level": "premium",
+  "display_order": 1,
+  "status": "active",
+  "subscriber_count": 5,
+  "created_at": 1748534400,
+  "updated_at": 1748620800,
+  "archived_at": null
+}
+```
+
+**POST /v1/subscriptions/tiers/{tier_id}/archive** — Archive tier:
+```json
+// Response 200
+{
+  "tier_id": "tier_a1b2c3d4",
+  "status": "archived",
+  "archived_at": 1748620900,
+  "subscriber_count": 5
+}
+```
+
+**PUT /v1/subscriptions/tiers/reorder** — Reorder tiers:
+```json
+// Request
+{
+  "tier_ids": ["tier_platinum", "tier_gold", "tier_silver"]
+}
+
+// Response 200
+[
+  {"tier_id": "tier_platinum", "display_order": 0},
+  {"tier_id": "tier_gold", "display_order": 1},
+  {"tier_id": "tier_silver", "display_order": 2}
+]
+```
+
+**GET /v1/subscriptions/tiers/analytics** — Tier analytics:
+```json
+// Response 200
+{
+  "tiers": [
+    {
+      "tier_id": "tier_gold",
+      "name": "Gold Tier",
+      "subscriber_count": 42,
+      "revenue_cents": 419958,
+      "churn_rate": 0.05
+    },
+    {
+      "tier_id": "tier_silver",
+      "name": "Silver Tier",
+      "subscriber_count": 108,
+      "revenue_cents": 1078920,
+      "churn_rate": 0.08
+    }
+  ],
+  "total_subscribers": 150,
+  "total_revenue_cents": 1498878,
+  "growth_series": [
+    {"date": "2026-05-01", "count": 140},
+    {"date": "2026-05-08", "count": 145},
+    {"date": "2026-05-15", "count": 148},
+    {"date": "2026-05-22", "count": 150}
+  ]
+}
+```
+
+**DELETE /v1/subscriptions/tiers/{tier_id}** — Delete tier (zero subscribers):
+```json
+// Response 200
+{"ok": true, "tier_id": "tier_bronze", "deleted": true}
+
+// Response 409 (has subscribers)
+{"detail": "Cannot delete tier with 42 active subscribers. Archive instead."}
+```
+
+### 3.6 Error Handling Matrix
+
+| Scenario | HTTP Status | Error Message | Recovery Action |
+|----------|-------------|---------------|-----------------|
+| Tier not found | 404 | `Tier not found` | Verify tier_id belongs to current user |
+| Tier name empty | 422 | `name: ensure this value has at least 1 characters` | Provide a non-empty name |
+| Price below minimum | 422 | `price_cents: ensure this value is greater than or equal to 100` | Set price >= $1.00 |
+| Price above maximum | 422 | `price_cents: ensure this value is less than or equal to 100000` | Set price <= $1,000.00 |
+| Invalid billing cycle | 422 | `billing_cycle: string does not match regex` | Use monthly, quarterly, or yearly |
+| Invalid access level | 422 | `access_level: string does not match regex` | Use basic, premium, or vip |
+| Too many benefits | 422 | `benefits: ensure this value has at most 20 items` | Reduce benefits list to 20 or fewer |
+| Delete tier with subscribers | 409 | `Cannot delete tier with N active subscribers` | Archive the tier instead |
+| Archive already-archived tier | 400 | `Tier is already archived` | No action needed |
+| Unarchive active tier | 400 | `Tier is already active` | No action needed |
+| Reorder with invalid tier IDs | 400 | `tier_ids contains unknown tier ID: X` | Use only valid tier IDs for this creator |
+| Reorder with duplicate IDs | 422 | `tier_ids must contain unique values` | Remove duplicates |
+| Non-owner access | 403 | `Not authorized to manage this creator's tiers` | Only the creator can manage their own tiers |
+| CSRF token missing | 403 | `CSRF token required` | Include x-csrf-token header |
+
+### 3.7 Pydantic Models (`app/models.py`)
 
 ```python
 class TierCreate(BaseModel):
@@ -262,6 +457,16 @@ class TierCreate(BaseModel):
     description: str = Field(default="", max_length=500)
     benefits: List[str] = Field(default_factory=list, max_length=20)
     access_level: str = Field(default="basic", pattern=r"^(basic|premium|vip)$")
+
+    @field_validator("benefits")
+    @classmethod
+    def validate_benefits(cls, v: List[str]) -> List[str]:
+        for b in v:
+            if len(b) > 200:
+                raise ValueError("Each benefit must be 200 characters or fewer")
+            if not b.strip():
+                raise ValueError("Benefits must not be empty strings")
+        return v
 
 class TierUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=100)
@@ -289,6 +494,13 @@ class TierOut(BaseModel):
 class TierReorder(BaseModel):
     tier_ids: List[str] = Field(min_length=1)
 
+    @field_validator("tier_ids")
+    @classmethod
+    def validate_unique(cls, v: List[str]) -> List[str]:
+        if len(v) != len(set(v)):
+            raise ValueError("tier_ids must contain unique values")
+        return v
+
 class TierAnalytics(BaseModel):
     tiers: List[Dict[str, Any]]
     total_subscribers: int
@@ -300,10 +512,87 @@ class TierPreviewOut(BaseModel):
     creator_id: str
 ```
 
-### 3.5 Frontend: Tier Manager Page
+### 3.8 Frontend: Tier Manager Page
 
 **Route**: `/subscriptions/manage` in `frontend/src/App.tsx`  
 **Page**: `frontend/src/pages/subscriptions/TierManager.tsx`
+
+#### Frontend Component Tree
+
+```
+TierManager
+├── PageHeader
+│   ├── h1 "Subscription Tiers"
+│   ├── Button "Preview" (opens TierPreviewDialog)
+│   └── Button "Create Tier" (opens TierDialog in create mode)
+│
+├── TierCardList (draggable container for reorder)
+│   └── TierCard (one per tier)
+│       ├── CardHeader
+│       │   ├── CardTitle (tier name)
+│       │   ├── Price display (formatted)
+│       │   ├── StatusBadge ("active" | "archived")
+│       │   └── DropdownMenu (Edit, Archive/Unarchive, Delete)
+│       └── CardContent
+│           ├── Description paragraph
+│           ├── BenefitsList (check icons + text)
+│           └── Stats row (subscriber count, access level)
+│
+├── TierAnalyticsSection
+│   ├── StatsCards (total subscribers, total revenue)
+│   └── TierRevenueChart (bar/pie chart)
+│
+├── TierDialog (create/edit modal)
+│   ├── Input name
+│   ├── Input price_cents (with $ formatting)
+│   ├── Select billing_cycle
+│   ├── Textarea description
+│   ├── BenefitsEditor (add/remove list items)
+│   ├── Select access_level
+│   └── Footer (Save / Cancel buttons)
+│
+└── TierPreviewDialog (subscriber-facing preview)
+    ├── TierComparisonTable
+    └── TierCardPreview (per tier)
+```
+
+#### Props Interfaces
+
+```typescript
+interface TierManagerProps {}
+
+interface TierCardProps {
+  tier: TierOut;
+  onEdit: (tier: TierOut) => void;
+  onArchive: (tierId: string) => void;
+  onDelete: (tierId: string) => void;
+  isDragging?: boolean;
+}
+
+interface TierDialogProps {
+  open: boolean;
+  tier: TierOut | null;  // null = create mode
+  onSave: (data: TierCreate | TierUpdate) => void;
+  onCancel: () => void;
+}
+
+interface TierPreviewDialogProps {
+  open: boolean;
+  tiers: TierPreviewOut[];
+  onClose: () => void;
+}
+
+interface TierAnalyticsSectionProps {
+  analytics: TierAnalytics;
+  isLoading: boolean;
+}
+
+interface BenefitsEditorProps {
+  benefits: string[];
+  onChange: (benefits: string[]) => void;
+  maxItems?: number;  // default 20
+}
+```
 
 ```tsx
 <div className="space-y-6">
@@ -361,7 +650,7 @@ class TierPreviewOut(BaseModel):
 </div>
 ```
 
-### 3.6 TierCard Component
+### 3.9 TierCard Component
 
 ```tsx
 <Card className={tier.status === "archived" ? "opacity-60" : ""}>
@@ -403,7 +692,7 @@ class TierPreviewOut(BaseModel):
 </Card>
 ```
 
-### 3.7 Frontend API (`frontend/src/api/endpoints/tierManagement.ts`)
+### 3.10 Frontend API (`frontend/src/api/endpoints/tierManagement.ts`)
 
 ```typescript
 export const createTier = (data: TierCreate) =>
@@ -437,6 +726,57 @@ export const previewTiers = () =>
   client.get("/v1/subscriptions/tiers/preview");
 ```
 
+### 3.11 Frontend TypeScript Types
+
+```typescript
+export interface TierCreate {
+  name: string;
+  price_cents: number;
+  billing_cycle: "monthly" | "quarterly" | "yearly";
+  description?: string;
+  benefits?: string[];
+  access_level?: "basic" | "premium" | "vip";
+}
+
+export interface TierUpdate {
+  name?: string;
+  price_cents?: number;
+  billing_cycle?: "monthly" | "quarterly" | "yearly";
+  description?: string;
+  benefits?: string[];
+  access_level?: "basic" | "premium" | "vip";
+}
+
+export interface TierOut {
+  tier_id: string;
+  name: string;
+  price_cents: number;
+  billing_cycle: string;
+  description: string;
+  benefits: string[];
+  access_level: string;
+  display_order: number;
+  status: "active" | "archived";
+  subscriber_count: number;
+  created_at: number;
+  updated_at: number;
+  archived_at: number | null;
+}
+
+export interface TierAnalytics {
+  tiers: Array<{
+    tier_id: string;
+    name: string;
+    subscriber_count: number;
+    revenue_cents: number;
+    churn_rate: number;
+  }>;
+  total_subscribers: number;
+  total_revenue_cents: number;
+  growth_series: Array<{ date: string; count: number }>;
+}
+```
+
 ---
 
 ## 4. Implementation Plan
@@ -462,7 +802,7 @@ export const previewTiers = () =>
 
 ### Phase 4: E2E Tests (Days 7-9)
 
-11. **`frontend/e2e/tier-manager.spec.ts`**: 16 tests across 4 sections.
+11. **`frontend/e2e/tier-manager.spec.ts`**: 30 tests across 7 sections.
 
 ---
 
@@ -510,6 +850,40 @@ export const previewTiers = () =>
 | 15 | `Delete tier with subscribers returns 409` | Seed a subscriber for Gold tier, then DELETE -> 409 |
 | 16 | `Price validation rejects zero` | POST with `{name: "Free", price_cents: 0}` -> 422 |
 
+**Section 547b: Input Validation Edge Cases (5 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 17 | `Name exceeding 100 chars rejected` | POST with name of 101 chars -> 422 |
+| 18 | `Price above $1000 rejected` | POST with `price_cents: 100001` -> 422 |
+| 19 | `Benefits exceeding 20 items rejected` | POST with 21 benefits -> 422 |
+| 20 | `Invalid billing cycle rejected` | POST with `billing_cycle: "biannual"` -> 422 |
+| 21 | `Empty name rejected` | POST with `name: ""` -> 422 |
+
+**Section 548b: Concurrent & Idempotency (4 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 22 | `Archive already-archived tier returns 400` | Archive Gold, then archive again -> 400 |
+| 23 | `Unarchive already-active tier returns 400` | Unarchive active tier -> 400 |
+| 24 | `Reorder with unknown tier ID returns 400` | PUT reorder with fake ID -> 400 |
+| 25 | `Reorder with duplicate IDs returns 422` | PUT reorder with same ID twice -> 422 |
+
+**Section 549b: Authorization & CSRF (3 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 26 | `Bob cannot manage Alice's tiers` | Bob POST create tier -> creates for Bob (scoped to session user) |
+| 27 | `Unauthenticated user gets 401` | Request without session cookie -> 401 |
+| 28 | `Missing CSRF on POST returns 403` | POST without x-csrf-token header -> 403 |
+
+**Section 550b: UI Tests (2 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 29 | `Tier manager page renders tier cards` | Navigate to `/subscriptions/manage`; heading "Subscription Tiers" visible; at least one tier card rendered |
+| 30 | `Create tier dialog opens and submits` | Click "Create Tier"; fill name, price, billing cycle; click Save; new tier appears in list |
+
 ---
 
 ## 6. Security Considerations
@@ -536,7 +910,96 @@ export const previewTiers = () =>
 
 ---
 
-## 7. Files to Create
+## 7. Observability
+
+### 7.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `tier_created_total` | counter | `creator_id`, `billing_cycle` | Total tiers created |
+| `tier_archived_total` | counter | `creator_id` | Total tiers archived |
+| `tier_deleted_total` | counter | `creator_id` | Total tiers deleted |
+| `tier_updated_total` | counter | `creator_id`, `field` | Total tier updates by field |
+| `tier_reorder_total` | counter | `creator_id` | Total reorder operations |
+| `tier_analytics_query_duration_seconds` | histogram | `creator_id` | Analytics query latency |
+| `tier_subscriber_count` | gauge | `creator_id`, `tier_id` | Current subscriber count per tier |
+
+### 7.2 Logging
+
+All tier management operations log structured events:
+- `tier.created` — tier_id, creator_id, name, price_cents, billing_cycle
+- `tier.updated` — tier_id, creator_id, changed_fields
+- `tier.archived` — tier_id, creator_id, subscriber_count
+- `tier.unarchived` — tier_id, creator_id
+- `tier.deleted` — tier_id, creator_id
+- `tier.reordered` — creator_id, new_order (list of tier_ids)
+- `tier.delete_blocked` — tier_id, creator_id, subscriber_count (409 case)
+
+### 7.3 Alerting
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| High deletion rate | > 10 tiers deleted in 1 hour (platform-wide) | Warning |
+| Analytics query slow | p95 latency > 2s | Warning |
+| Tier count anomaly | Creator with > 50 tiers | Info |
+
+---
+
+## 8. Rollout Plan
+
+### Phase 1: Backend Only (Feature Flag: `TIER_MANAGEMENT_ENABLED=false`)
+- Deploy backend service and router
+- Endpoints return 404 when feature flag is off
+- Internal testing via Swagger UI / curl
+
+### Phase 2: Limited Access (Feature Flag: `TIER_MANAGEMENT_ENABLED=true`, `TIER_MANAGEMENT_ALLOWLIST`)
+- Enable for specific creator IDs in the allowlist
+- Monitor for DynamoDB errors, latency, data integrity
+- Collect feedback from early adopters
+
+### Phase 3: General Availability
+- Remove allowlist restriction
+- Add sidebar navigation link
+- Announce to all creators
+
+### Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `TIER_MANAGEMENT_ENABLED` | `false` | Master switch for tier management endpoints |
+| `TIER_MANAGEMENT_ALLOWLIST` | `""` | Comma-separated creator IDs allowed early access |
+| `TIER_ANALYTICS_ENABLED` | `true` | Enable analytics queries (can disable if DDB load too high) |
+
+---
+
+## 9. Performance Considerations
+
+### 9.1 Latency Targets
+
+| Operation | Target p50 | Target p95 | Notes |
+|-----------|-----------|-----------|-------|
+| Create tier | < 100ms | < 250ms | Single PutItem |
+| List tiers | < 100ms | < 200ms | Query on PK, typically < 20 items |
+| Update tier | < 100ms | < 250ms | Single UpdateItem |
+| Reorder tiers | < 200ms | < 500ms | BatchWriteItem for N tiers |
+| Analytics | < 500ms | < 2s | Aggregation across subscriptions table |
+| Preview | < 100ms | < 200ms | Filtered query, cached in React Query |
+
+### 9.2 Caching Strategy
+
+- **React Query**: `staleTime: 30_000` (30s) for tier list; `staleTime: 60_000` (60s) for analytics
+- **Optimistic updates**: Reorder and archive/unarchive use optimistic React Query cache updates for instant UI feedback
+- **No server-side cache**: DynamoDB is fast enough; no Redis needed
+
+### 9.3 Pagination
+
+- Tier list is not paginated (creators typically have < 20 tiers)
+- Analytics `growth_series` limited to 52 data points (weekly for 1 year)
+- Preview limited to active tiers only
+
+---
+
+## 10. Files to Create
 
 | File | Purpose |
 |------|---------|
@@ -544,9 +1007,9 @@ export const previewTiers = () =>
 | `app/routers/tier_management.py` | Tier management API (10 endpoints) |
 | `frontend/src/api/endpoints/tierManagement.ts` | API wrappers |
 | `frontend/src/pages/subscriptions/TierManager.tsx` | Tier management page |
-| `frontend/e2e/tier-manager.spec.ts` | E2E tests (16 tests, sections 547-550) |
+| `frontend/e2e/tier-manager.spec.ts` | E2E tests (30 tests, sections 547-550b) |
 
-## 8. Files to Modify
+## 11. Files to Modify
 
 | File | Change |
 |------|--------|
@@ -556,7 +1019,7 @@ export const previewTiers = () =>
 | `frontend/src/App.tsx` | Add `/subscriptions/manage` route |
 | `frontend/src/components/layout/Sidebar.tsx` | Add "Manage Tiers" nav link |
 
-## 9. Acceptance Criteria
+## 12. Acceptance Criteria
 
 1. Creators can create tiers with name, price, billing cycle, description, benefits, and access level
 2. Creators can update any tier field; price changes apply to new subscribers only
@@ -566,4 +1029,5 @@ export const previewTiers = () =>
 6. Preview endpoint returns subscriber-facing tier data in display order
 7. Analytics endpoint returns subscriber count and revenue per tier
 8. All operations scoped to the authenticated creator's tiers
-9. All 16 E2E tests pass in `frontend/e2e/tier-manager.spec.ts`
+9. All 30 E2E tests pass in `frontend/e2e/tier-manager.spec.ts`
+10. Observability metrics and structured logging in place for all operations

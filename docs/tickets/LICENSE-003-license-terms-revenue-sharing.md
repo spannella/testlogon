@@ -687,3 +687,140 @@ Total license revenue splits for a single transaction are capped at 80% of the s
 8. Admin can audit platform-wide license revenue.
 9. Safety cap prevents total splits from exceeding 80% of source amount.
 10. All 15 E2E tests pass.
+
+---
+
+## 9. Architecture Diagram
+
+```
+Revenue Split Flow:
+
+  Tip/Unlock/Sale Event
+         |
+         v
+  Billing Hook (messaging.py / newsfeed.py / vod_purchase.py)
+    |  Writes primary billing ledger entry (existing flow)
+    |
+    +-> process_revenue_split()
+         |
+         | 1. list_licenses_for_content(content_id)
+         |    -> Query issued_licenses table for active licenses
+         |
+         | 2. For each active license:
+         |    a. Check fixed_cost_cents (one-time fee)
+         |       -> Check USAGE# record in license_revenue table
+         |       -> If not paid: charge fixed fee, create USAGE# record
+         |
+         |    b. calculate_split(source_amount, platform_fee, rev_share, prof_share)
+         |       -> revenue_split = source * revenue_share_pct / 100
+         |       -> net_profit = source - (source * platform_fee_pct / 100)
+         |       -> profit_split = net_profit * profit_share_pct / 100
+         |       -> total_split = revenue_split + profit_split
+         |
+         |    c. Safety cap check: total_splits <= 80% of source_amount
+         |
+         | 3. Write bilateral entries:
+         |    a. Licensor TXN record (LICENSOR#{id}/TXN#{ts}#{txn_id})
+         |    b. Licensee TXN record (LICENSEE#{id}/TXN#{ts}#{txn_id})
+         |    c. License TXN record (LICENSE#{lic_id}/TXN#{ts}#{txn_id})
+         |    d. Content TXN record (CONTENT#{cid}/TXN#{ts}#{txn_id})
+         |    e. Licensor wallet credit (apply_wallet_delta)
+         |    f. Licensor billing ledger credit (new_ledger_entry)
+         |    g. Licensee billing ledger debit (new_ledger_entry)
+         |
+         | 4. Update summary records:
+         |    a. LICENSOR#{id}/SUMMARY (atomic ADD total_earned_cents)
+         |    b. LICENSEE#{id}/SUMMARY (atomic ADD total_paid_cents)
+         |
+         | 5. Send notification to licensor (alerts service)
+         |
+         +-> Return list of split transactions
+
+
+Table Relationships:
+
+  +---------------------+     +----------------------+
+  |  issued_licenses    |     |  license_revenue     |
+  |  (LICENSE-002)      |     |  (LICENSE-003)       |
+  |                     |     |                      |
+  |  issued_license_id  |<--->|  issued_license_id   |
+  |  licensor_id        |     |  LICENSOR#{id}/TXN#  |
+  |  licensee_id        |     |  LICENSEE#{id}/TXN#  |
+  |  fixed_cost_cents   |     |  LICENSE#{id}/USAGE# |
+  |  revenue_share_pct  |     |  CONTENT#{id}/TXN#   |
+  |  profit_share_pct   |     |  GSI1: PLATFORM_REV  |
+  +---------------------+     +----------------------+
+         |                              |
+         v                              v
+  +---------------------+     +----------------------+
+  |  billing table      |     |  alerts table        |
+  |  (existing)         |     |  (existing)          |
+  |                     |     |                      |
+  |  USER#{id}/LEDGER#  |     |  Revenue split       |
+  |  USER#{id}/WALLET   |     |  notifications       |
+  +---------------------+     +----------------------+
+```
+
+---
+
+## 10. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|---|---|---|---|
+| No active licenses for content | 200 | -- | No split transactions (empty list) | N/A -- content has no licensing obligations |
+| License revoked before split | 200 | -- | Revoked license skipped | N/A -- no split for inactive licenses |
+| Licensor == Licensee (self-split) | 200 | -- | Self-split skipped | N/A -- no circular transactions |
+| Split amount rounds to 0 cents | 200 | -- | Zero split skipped | N/A -- sub-cent splits dropped |
+| Total splits exceed 80% cap | 200 | -- | Splits proportionally reduced | Logged as `license_revenue.cap_applied` |
+| Fixed fee USAGE record already exists | 200 | -- | Fixed fee skipped (already paid) | N/A -- idempotent |
+| Licensee insufficient balance | 200 | -- | Debit still written (balance goes negative) | Licensee must deposit funds |
+| Split preview: invalid parameters | 422 | `validation_error` | Pydantic validation error | Fix input values |
+| Revenue earned: not authenticated | 401 | `unauthorized` | "Authentication required" | Log in |
+| Admin audit: not admin | 403 | `admin_required` | "Admin access required" | Elevate role |
+| License not found for per-license query | 404 | `license_not_found` | "License not found" | Check license ID |
+
+---
+
+## 11. Observability & Monitoring
+
+### 11.1 Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `license_revenue_splits_total` | Counter | `source_type`, `split_type` | Total split transactions processed |
+| `license_revenue_split_amount_cents` | Histogram | `source_type` | Distribution of split amounts |
+| `license_revenue_fixed_fees_total` | Counter | -- | Fixed fee charges |
+| `license_revenue_cap_applied_total` | Counter | -- | Times the 80% safety cap was triggered |
+| `license_revenue_self_split_skipped_total` | Counter | -- | Self-splits skipped |
+| `license_revenue_processing_latency_ms` | Histogram | `source_type` | Time to process all splits for a transaction |
+
+### 11.2 Alerting Rules
+
+| Alert | Condition | Severity |
+|---|---|---|
+| High split processing latency | P95 > 500ms for 10 minutes | P3 |
+| Safety cap triggered frequently | `cap_applied_total` > 50 in 1 hour | P3 (misconfigured terms) |
+| Split processing errors | Error rate > 5% for 5 minutes | P2 |
+
+---
+
+## 12. Performance Considerations
+
+### 12.1 Query Cost Analysis
+
+| Operation | DDB Operations | Estimated Cost |
+|---|---|---|
+| Process revenue split (per license) | 1 GetItem + 4 PutItem + 2 UpdateItem + 2 PutItem (ledger) | ~8 WCU + 1 RCU |
+| Fixed fee check | 1 GetItem (USAGE#) + conditional PutItem | 1-2 WCU + 1 RCU |
+| Revenue earned summary | 1 GetItem (SUMMARY) | 1 RCU |
+| Transaction list (50 items) | 1 Query | ~13 RCU |
+| Admin platform audit (100 items) | 1 GSI1 Query | ~25 RCU |
+
+### 12.2 Caching Strategy
+
+| Data | Cache | TTL | Invalidation |
+|---|---|---|---|
+| Revenue summaries | React Query | 60 seconds | Invalidated after new split |
+| Transaction lists | React Query | 30 seconds | Invalidated after new split |
+| Split preview calculation | No cache (stateless) | -- | N/A |
+| License terms | In-memory per-request | Request scope | Fetched from issued_licenses |

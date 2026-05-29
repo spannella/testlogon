@@ -62,7 +62,61 @@ The platform currently supports one-to-one interactions (DMs, follows) and creat
 
 ## 3. Technical Design
 
-### 3.1 DynamoDB Table: `user_groups`
+### 3.1 Architecture & Data Flow
+
+```
+Group Creation Flow
+───────────────────
+  User Browser                   Backend                      DynamoDB
+  ────────────                   ───────                      ────────
+  POST /ui/groups           ──> create_group()           ──> put_item(GROUP#{id}, META)
+  { name, description,          validate inputs               put_item(GROUP#{id}, MEMBER#{user})
+    visibility, topic }         check max groups/user          put_item(USERGROUPS#{user}, GROUP#{id})
+                                create admin membership
+                            <── 201 GroupOut
+
+  Join Flow (Public Group)
+  ────────────────────────
+  POST /ui/groups/{id}/join ──> join_group()             ──> put_item(GROUP#{id}, MEMBER#{user})
+                                check visibility=public       put_item(USERGROUPS#{user}, GROUP#{id})
+                                set status=active             update_item(member_count += 1)
+                            <── 200 { status: "active" }
+
+  Join Flow (Private Group)
+  ─────────────────────────
+  POST /ui/groups/{id}/join ──> join_group()             ──> put_item(GROUP#{id}, MEMBER#{user})
+                                check visibility=private       status=pending_approval
+                            <── 200 { status: "pending_approval" }
+
+  POST .../requests/{user}/review ──> approve_join_request() ──> update_item(status=active)
+  { approved: true }                  check admin/mod role        put_item(USERGROUPS#{user}, GROUP#{id})
+                                                                  update_item(member_count += 1)
+
+  Admin Succession Flow
+  ─────────────────────
+  POST /ui/groups/{id}/leave ──> leave_group()           ──> delete_item(MEMBER#{admin})
+                                  if admin:                   delete_item(USERGROUPS#{admin})
+                                    _admin_succession()       update_item(member_count -= 1)
+                                      1. find oldest mod
+                                      2. if none: oldest member
+                                      3. if empty: dissolve
+                                      4. update META.admin_user_id
+```
+
+### 3.2 DynamoDB Access Patterns
+
+| # | Access Pattern | Table | PK | SK / GSI | Query |
+|---|----------------|-------|-----|----------|-------|
+| 1 | Get group metadata | `user_groups` | `GROUP#{group_id}` | `META` | `get_item` |
+| 2 | List group members | `user_groups` | `GROUP#{group_id}` | `SK begins_with MEMBER#` | `query` |
+| 3 | Get single membership | `user_groups` | `GROUP#{group_id}` | `MEMBER#{user_id}` | `get_item` |
+| 4 | List user's groups | `user_groups` | `USERGROUPS#{user_id}` | `SK begins_with GROUP#` | `query` |
+| 5 | Discover public groups | `user_groups` | GSI1 PK=`public` | SK=`created_at` DESC | `query` with limit |
+| 6 | Active groups by popularity | `user_groups` | GSI2 PK=`active` | SK=`member_count` DESC | `query` with limit |
+| 7 | Pending invites/requests | `user_groups` | `GROUP#{group_id}` | `MEMBER#` prefix + filter `status in (invited, pending_approval)` | `query` + filter |
+| 8 | Check max groups per user | `user_groups` | `USERGROUPS#{user_id}` | Count items | `query` with Select=COUNT |
+
+### 3.3 DynamoDB Table: `user_groups`
 
 Single-table design with group metadata and membership.
 
@@ -104,7 +158,141 @@ Single-table design with group metadata and membership.
 
 **`scripts/local-ddb-init.py`**: `attr_types={"created_at": "N", "joined_at": "N", "member_count": "N", "promoted_at": "N"}`
 
-### 3.2 Settings & Table Handle
+### 3.4 API Request/Response Examples
+
+#### 3.4.1 Create Group
+
+```
+POST /ui/groups
+x-csrf-token: <token>
+
+{
+  "name": "Photography Club",
+  "description": "Share your best shots and learn new techniques.",
+  "visibility": "public",
+  "topic": "photography"
+}
+
+201 Created
+{
+  "group_id": "grp_a1b2c3d4e5f6",
+  "name": "Photography Club",
+  "description": "Share your best shots and learn new techniques.",
+  "topic": "photography",
+  "visibility": "public",
+  "status": "active",
+  "admin_user_id": "alice-sub-123",
+  "cover_image_url": null,
+  "member_count": 1,
+  "created_at": 1748534400,
+  "updated_at": 1748534400,
+  "my_role": "admin"
+}
+```
+
+#### 3.4.2 Join Public Group
+
+```
+POST /ui/groups/grp_a1b2c3d4e5f6/join
+x-csrf-token: <token>
+
+200 OK
+{
+  "user_id": "bob-sub-456",
+  "role": "member",
+  "status": "active",
+  "display_name": "Bob",
+  "joined_at": 1748534500
+}
+```
+
+#### 3.4.3 Request to Join Private Group
+
+```
+POST /ui/groups/grp_private_id/join
+x-csrf-token: <token>
+
+200 OK
+{
+  "user_id": "bob-sub-456",
+  "role": "member",
+  "status": "pending_approval",
+  "display_name": "Bob",
+  "joined_at": null
+}
+```
+
+#### 3.4.4 Approve Join Request
+
+```
+POST /ui/groups/grp_private_id/requests/bob-sub-456/review
+x-csrf-token: <token>
+
+{ "approved": true }
+
+200 OK
+{ "ok": true, "status": "active" }
+```
+
+#### 3.4.5 Promote Member to Moderator
+
+```
+PATCH /ui/groups/grp_a1b2c3d4e5f6/members/bob-sub-456/role
+x-csrf-token: <token>
+
+{ "role": "moderator" }
+
+200 OK
+{
+  "user_id": "bob-sub-456",
+  "role": "moderator",
+  "status": "active",
+  "promoted_at": 1748534600
+}
+```
+
+#### 3.4.6 Discover Public Groups
+
+```
+GET /ui/groups/discover?query=photo&limit=10
+
+200 OK
+{
+  "groups": [
+    {
+      "group_id": "grp_a1b2c3d4e5f6",
+      "name": "Photography Club",
+      "description": "Share your best shots...",
+      "topic": "photography",
+      "visibility": "public",
+      "member_count": 42,
+      "created_at": 1748534400
+    }
+  ],
+  "cursor": null,
+  "has_more": false
+}
+```
+
+### 3.5 Error Handling Matrix
+
+| # | Scenario | HTTP Status | Error Message | Recovery |
+|---|----------|-------------|---------------|----------|
+| 1 | Group not found | 404 | "Group not found" | Redirect to groups list |
+| 2 | Not a member | 403 | "Not a member of this group" | Show join button |
+| 3 | Not admin | 403 | "Only the group admin can perform this action" | Hide admin UI |
+| 4 | Already a member | 409 | "Already a member of this group" | Show group page |
+| 5 | Group dissolved | 410 | "This group has been dissolved" | Show dissolved message |
+| 6 | Max groups exceeded | 400 | "Maximum number of groups reached (50)" | Show limit info |
+| 7 | Moderator removing admin | 403 | "Moderators cannot remove the admin" | Disable remove button |
+| 8 | Non-member trying to post | 403 | "Not a member of this group" | Show join CTA |
+| 9 | Name too short | 422 | Pydantic: min_length 3 | Highlight field |
+| 10 | Description too long | 422 | Pydantic: max_length 2000 | Show character count |
+| 11 | Invalid visibility value | 422 | Pydantic: Literal constraint | Use radio buttons in UI |
+| 12 | Join request already pending | 409 | "Join request already pending" | Show pending status |
+| 13 | Cannot dissolve with active members (optional) | 400 | "Remove all members before dissolving" | Show member list |
+
+### 3.6 Settings & Table Handle
 
 **File**: `app/core/settings.py`
 
@@ -116,7 +304,7 @@ user_group_max_per_user: int = int(os.environ.get("USER_GROUP_MAX_PER_USER", "50
 
 **File**: `app/core/tables.py` — Add `user_groups: Any` to the `Tables` dataclass and `user_groups=ddb.Table(S.ddb_user_groups_table)` to the `T` initialization block.
 
-### 3.3 Backend Service (`app/services/user_groups.py`)
+### 3.7 Backend Service (`app/services/user_groups.py`)
 
 Key functions:
 
@@ -136,7 +324,7 @@ Key functions:
 | `search_public_groups(query, topic, cursor, limit)` | GSI1 query + name/topic filter |
 | `dissolve_group(group_id, admin_id)` | Set dissolved; trigger GROUP-004 treasury return |
 
-### 3.4 Backend Router (`app/routers/user_groups.py`)
+### 3.8 Backend Router (`app/routers/user_groups.py`)
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -156,14 +344,23 @@ Key functions:
 | DELETE | `/ui/groups/{group_id}/members/{user_id}` | `require_ui_session` | Remove member |
 | GET | `/ui/groups/{group_id}/pending` | `require_ui_session` | Pending invites/requests (admin/mod) |
 
-**Request models**:
+### 3.9 Pydantic Model Definitions
 
 ```python
+# -- User Groups (GROUP-001) --
+
 class CreateGroupIn(BaseModel):
     name: str = Field(..., min_length=3, max_length=100)
     description: str = Field(default="", max_length=2000)
     visibility: Literal["public", "private"] = "public"
     topic: Optional[str] = Field(default=None, max_length=50)
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Group name cannot be blank")
+        return v.strip()
 
 class UpdateGroupIn(BaseModel):
     name: Optional[str] = Field(default=None, min_length=3, max_length=100)
@@ -182,11 +379,7 @@ class ReviewRequestIn(BaseModel):
 
 class UpdateRoleIn(BaseModel):
     role: Literal["moderator", "member"]
-```
 
-### 3.5 Pydantic Models (`app/models.py`)
-
-```python
 class GroupOut(BaseModel):
     group_id: str
     name: str
@@ -215,9 +408,97 @@ class PendingMemberOut(BaseModel):
     status: str  # "invited" or "pending_approval"
     created_at: int
     invited_by: Optional[str] = None
+
+class GroupListOut(BaseModel):
+    groups: List[GroupOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    has_more: bool = False
+
+class GroupMemberListOut(BaseModel):
+    members: List[GroupMemberOut] = Field(default_factory=list)
+    count: int = 0
 ```
 
-### 3.6 Frontend Types (`frontend/src/api/types.ts`)
+### 3.10 Frontend Component Tree & Props
+
+```
+GroupsListPage (route: /groups)
+├── Tabs
+│   ├── Tab: "My Groups"
+│   │   ├── GroupCard (per group)
+│   │   │   ├── Cover image / placeholder
+│   │   │   ├── Name
+│   │   │   ├── Description (truncated)
+│   │   │   ├── Member count
+│   │   │   ├── Role badge (admin/moderator/member)
+│   │   │   └── Link to /groups/:groupId
+│   │   ├── Empty state: "You haven't joined any groups yet."
+│   │   └── Button: "Create Group" → CreateGroupDialog
+│   └── Tab: "Discover"
+│       ├── SearchInput (name/topic filter)
+│       ├── GroupDiscoveryCard (per public group)
+│       │   ├── Name, topic badge, member count
+│       │   └── Button: "Join" (public) or "Request" (private)
+│       └── Pagination
+├── CreateGroupDialog
+│   ├── Name input (3-100 chars)
+│   ├── Description textarea (max 2000)
+│   ├── Visibility radio: Public / Private
+│   ├── Topic input (optional)
+│   └── Button: "Create Group"
+└── GroupSettingsPage (route: /groups/:groupId/settings)
+    ├── Settings form (admin only)
+    │   ├── Name, Description, Visibility, Topic inputs
+    │   └── Save button
+    ├── Members list
+    │   ├── MemberRow (per member)
+    │   │   ├── Display name, role badge
+    │   │   ├── Promote/Demote button (admin only)
+    │   │   └── Remove button (admin/mod)
+    │   └── Invite input + button
+    ├── Pending requests section (admin/mod)
+    │   ├── PendingRow (per pending)
+    │   │   ├── Display name, status badge
+    │   │   └── Approve / Reject buttons
+    └── Danger zone
+        └── Button: "Dissolve Group" (admin only, with confirmation)
+```
+
+**TypeScript Props Interfaces**:
+
+```typescript
+interface GroupCardProps {
+  group: UserGroup;
+  myRole?: "admin" | "moderator" | "member";
+}
+
+interface GroupDiscoveryCardProps {
+  group: UserGroup;
+  onJoin: (groupId: string) => void;
+  isJoining: boolean;
+}
+
+interface CreateGroupDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (group: UserGroup) => void;
+}
+
+interface MemberRowProps {
+  member: GroupMember;
+  viewerRole: "admin" | "moderator" | "member";
+  onPromote: (userId: string, role: string) => void;
+  onRemove: (userId: string) => void;
+}
+
+interface PendingRowProps {
+  pending: PendingMemberOut;
+  onApprove: (userId: string) => void;
+  onReject: (userId: string) => void;
+}
+```
+
+### 3.11 Frontend Types (`frontend/src/api/types.ts`)
 
 ```typescript
 export interface UserGroup {
@@ -233,25 +514,113 @@ export interface GroupMember {
 }
 ```
 
-### 3.7 Frontend API (`frontend/src/api/endpoints/groups.ts`)
+### 3.12 Frontend API (`frontend/src/api/endpoints/groups.ts`)
 
 Wrappers for all router endpoints: `createGroup`, `listMyGroups`, `discoverGroups`, `getGroup`, `updateGroup`, `deleteGroup`, `listGroupMembers`, `joinGroup`, `leaveGroup`, `inviteToGroup`, `respondToInvite`, `reviewJoinRequest`, `updateMemberRole`, `removeMember`, `listPendingMembers`.
 
-### 3.8 Frontend Pages
+### 3.13 Frontend Pages
 
 - **GroupsListPage** (`frontend/src/pages/groups/GroupsListPage.tsx`): Route `/groups`. Two tabs: "My Groups" (role badges) and "Discover" (search + join). `data-testid="groups-list-page"`.
 - **CreateGroupDialog** (`frontend/src/pages/groups/CreateGroupDialog.tsx`): Modal with name, description, visibility toggle, topic. React Hook Form + Zod.
 - **GroupSettingsPage** (`frontend/src/pages/groups/GroupSettingsPage.tsx`): Route `/groups/:groupId/settings`. Admin-only: edit settings, member management, pending requests, dissolve.
 
-### 3.9 Navigation
+### 3.14 Navigation
 
 Add "Groups" with `Users` icon to Social section in `Sidebar.tsx` and `MobileNav.tsx`.
 
 ---
 
-## 4. Implementation Plan
+## 4. Observability
 
-### 4.1 Files to Create
+### 4.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `group_created_total` | Counter | `visibility` | Groups created |
+| `group_joined_total` | Counter | `visibility`, `method` (instant/approved) | Members joining groups |
+| `group_left_total` | Counter | - | Members leaving groups |
+| `group_dissolved_total` | Counter | `reason` (admin/succession) | Groups dissolved |
+| `group_admin_succession_total` | Counter | `new_role` (mod/member) | Admin succession events |
+| `group_membership_query_latency_ms` | Histogram | `operation` | DDB query latency |
+
+### 4.2 Structured Logging
+
+```python
+logger.info("group.created", extra={
+    "group_id": group_id, "creator": creator_sub,
+    "visibility": visibility, "topic": topic,
+})
+
+logger.info("group.admin_succession", extra={
+    "group_id": group_id, "old_admin": old_admin,
+    "new_admin": new_admin, "new_role": new_role,
+})
+```
+
+### 4.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Group creation spike | `rate(group_created_total[5m]) > 20` | Warning | Check for spam accounts |
+| Succession failure | `group.admin_succession` with `new_admin=null` (dissolved) | Info | Expected behavior |
+| High membership churn | `rate(group_left_total[1h]) > 50` for single group | Warning | Investigate content issues |
+
+---
+
+## 5. Rollout Plan
+
+### 5.1 Feature Flag
+
+```python
+# app/core/settings.py
+user_groups_enabled: bool = field(default=True)
+user_groups_discovery_enabled: bool = field(default=True)
+```
+
+### 5.2 Phased Rollout
+
+| Phase | Scope | Duration | Criteria |
+|-------|-------|----------|----------|
+| 1 | Dev/staging | 3 days | All E2E tests pass; CRUD verified manually |
+| 2 | Internal beta (staff accounts) | 5 days | Create groups, test succession, test discovery |
+| 3 | 25% of users | 5 days | Monitor creation rate, join patterns, error rates |
+| 4 | 100% GA | - | All metrics healthy; GROUP-002/003/004 ready |
+
+### 5.3 Rollback
+
+Disable `user_groups_enabled`. Groups page returns 404 in frontend. Existing DDB data is preserved but inaccessible via API.
+
+---
+
+## 6. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Member list for large groups | < 300ms p99 | Paginate with `Limit=100`; cursor-based pagination |
+| Discovery search | < 500ms p99 | GSI1 on `visibility` + `created_at`; client-side name filter for small result sets |
+| Member count accuracy | Eventually consistent | Atomic increment/decrement via `UpdateExpression`; eventual consistency acceptable |
+| User-group index consistency | Immediate | Write in same transaction as membership record (`transact_write_items`) |
+| Group name search | < 500ms p99 | `contains` FilterExpression on GSI1 query; acceptable for moderate group counts |
+| Max groups check | < 100ms | `query` with `Select=COUNT` on USERGROUPS PK |
+
+### 6.1 Caching Strategy
+
+- Group metadata: React Query `staleTime: 30_000`.
+- Member list: `staleTime: 15_000` with `refetchOnWindowFocus: true`.
+- My groups list: `staleTime: 30_000`.
+- Discovery results: `staleTime: 60_000`.
+
+### 6.2 Pagination
+
+- Member list: cursor-based, 100 per page.
+- My groups: cursor-based, 50 per page.
+- Discovery: cursor-based, 20 per page with search debounce (300ms).
+
+---
+
+## 7. Implementation Plan
+
+### 7.1 Files to Create
 
 | File | Purpose |
 |------|---------|
@@ -262,7 +631,7 @@ Add "Groups" with `Users` icon to Social section in `Sidebar.tsx` and `MobileNav
 | `frontend/src/pages/groups/CreateGroupDialog.tsx` | Group creation |
 | `frontend/src/pages/groups/GroupSettingsPage.tsx` | Admin settings |
 
-### 4.2 Files to Modify
+### 7.2 Files to Modify
 
 | File | Changes |
 |------|---------|
@@ -278,13 +647,13 @@ Add "Groups" with `Users` icon to Social section in `Sidebar.tsx` and `MobileNav
 
 ---
 
-## 5. E2E Test Plan
+## 8. E2E Test Plan
 
-### 5.1 Test File
+### 8.1 Test File
 
-`frontend/e2e/user-groups.spec.ts` — 16 tests across 4 sections.
+`frontend/e2e/user-groups.spec.ts` — 24 tests across 6 sections.
 
-### 5.2 Test Setup
+### 8.2 Test Setup
 
 ```typescript
 const TS = Date.now();
@@ -293,7 +662,7 @@ let groupId: string;
 let privateGroupId: string;
 ```
 
-### 5.3 Section 447: Group CRUD API (4 tests)
+### 8.3 Section 447: Group CRUD API (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -302,7 +671,7 @@ let privateGroupId: string;
 | 447.3 | Update group settings | PATCH `/ui/groups/{id}` with new description; 200; updated |
 | 447.4 | Create private group | POST with `visibility=private`; 201; `visibility=private` |
 
-### 5.4 Section 448: Membership Lifecycle API (5 tests)
+### 8.4 Section 448: Membership Lifecycle API (5 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -312,7 +681,7 @@ let privateGroupId: string;
 | 448.4 | Alice approves join request | POST review with `approved=true`; 200 |
 | 448.5 | Bob leaves group | POST leave; 200; member count decremented |
 
-### 5.5 Section 449: Role Management & Succession API (4 tests)
+### 8.5 Section 449: Role Management & Succession API (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -321,7 +690,7 @@ let privateGroupId: string;
 | 449.3 | Moderator cannot remove admin | DELETE admin; 403 |
 | 449.4 | Admin succession on leave | Alice leaves; GET group; `admin_user_id` changed |
 
-### 5.6 Section 450: Groups UI (3 tests)
+### 8.6 Section 450: Groups UI (3 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -329,23 +698,29 @@ let privateGroupId: string;
 | 450.2 | Discover tab shows public groups | Click "Discover"; public group with "Join" button |
 | 450.3 | Settings page allows admin edits | Navigate settings; edit description; save; persisted |
 
+### 8.7 Section 451: Edge Cases & Negative Tests (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 451.1 | Duplicate join returns 409 | Bob joins same group twice; 409 "Already a member" |
+| 451.2 | Non-admin cannot update group | Bob PATCHes group; 403 |
+| 451.3 | Non-member cannot view members of private group | Charlie GETs members of private group; 403 |
+| 451.4 | Dissolved group returns 410 | Dissolve group; GET group; 410 "dissolved" |
+| 451.5 | Name too short returns 422 | POST group with name "Ab"; 422 |
+
+### 8.8 Section 452: Invitation Flow (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 452.1 | Admin invites user | POST invite; 200; status=invited |
+| 452.2 | Invited user accepts | POST respond with accept=true; 200; status=active |
+| 452.3 | Invited user declines | POST respond with accept=false; 200; membership removed |
+
+**Total E2E tests: 24**
+
 ---
 
-## 6. Error Handling
-
-| Scenario | Status | Detail |
-|----------|--------|--------|
-| Group not found | 404 | "Group not found" |
-| Not a member | 403 | "Not a member of this group" |
-| Not admin | 403 | "Only the group admin can perform this action" |
-| Already a member | 409 | "Already a member of this group" |
-| Group dissolved | 410 | "This group has been dissolved" |
-| Max groups exceeded | 400 | "Maximum number of groups reached" |
-| Cannot remove admin (moderator) | 403 | "Moderators cannot remove the admin" |
-
----
-
-## 7. Security Considerations
+## 9. Security Considerations
 
 - **Authorization**: Group-level roles checked per-request by querying membership record. Admin-only ops verify `role=admin`; moderator ops verify `role in (admin, moderator)`.
 - **Data isolation**: Membership scoped by `GROUP#{group_id}` PK. User-group index scoped by `USERGROUPS#{user_id}`.
@@ -355,7 +730,7 @@ let privateGroupId: string;
 
 ---
 
-## 8. Dependencies
+## 10. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
@@ -369,3 +744,18 @@ let privateGroupId: string;
 | GROUP-002 (Group Page & Newsfeed) | Group metadata + membership |
 | GROUP-003 (Advertising & Fundraising) | Admin role check |
 | GROUP-004 (Treasury Management) | Membership + dissolution |
+
+---
+
+## 11. Acceptance Criteria
+
+1. Users can create public and private groups.
+2. Public group join is instant; private requires approval.
+3. Admin can invite users, promote/demote roles, and remove members.
+4. Moderators can remove non-admin members and approve join requests.
+5. Admin succession transfers admin role when admin leaves.
+6. Discovery search returns public, active groups with name/topic filtering.
+7. Per-user group limit (50) is enforced.
+8. Group dissolution cleans up memberships and triggers treasury return.
+9. Non-members cannot access private group data.
+10. All 24 E2E tests pass.

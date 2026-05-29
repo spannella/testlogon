@@ -83,10 +83,10 @@ The `KycCaseStore.create_case` (line 97) and `update_draft` (line 200) methods w
 ### 2.3 GDPR Service (`app/services/gdpr_service.py`)
 
 The existing GDPR service supports:
-- `create_export_request(user_sub, categories)` — Data export (DSAR)
-- `create_deletion_request(user_sub, reason)` — Data deletion
-- `get_request(user_sub, request_id)` — Status check
-- `list_user_requests(user_sub)` — List requests
+- `create_export_request(user_sub, categories)` -- Data export (DSAR)
+- `create_deletion_request(user_sub, reason)` -- Data deletion
+- `get_request(user_sub, request_id)` -- Status check
+- `list_user_requests(user_sub)` -- List requests
 
 The deletion flow deletes DDB records but does not handle encrypted field key destruction. The encryption service must integrate with the GDPR service so that deletion requests also destroy per-user encryption keys.
 
@@ -98,7 +98,79 @@ The `AuthenticatedUser` returned by `get_authenticated_user` includes `user_sub`
 
 ## 3. Technical Design
 
-### 3.1 New Service: `app/services/kyc_encryption.py`
+### 3.1 Architecture Diagram
+
+```
++-------------------+      +--------------------+      +-------------------+
+|   React Frontend  |      |   FastAPI Backend   |      |  AWS KMS (Mock)   |
+|                   |      |                    |      |  Port 7999        |
+|  Admin: Case      |      |                    |      |                   |
+|  Detail View      |      |  KycEncryption     |      |                   |
+|                   |      |  Service           |      |                   |
+|  PiiFieldDisplay  | ---> |                    | ---> |  GenerateDataKey  |
+|  (masked by       |      |  encrypt_fields()  |      |  (returns DEK +   |
+|   default)        |      |  decrypt_fields()  |      |   wrapped DEK)    |
+|                   |      |  mask_fields()     |      |                   |
+|  "Reveal" button  | ---> |  destroy_user_keys |      |  Decrypt          |
+|  (assigned admin) |      |                    |      |  (unwrap DEK)     |
+|                   |      |  log_access()      |      |                   |
++-------------------+      +--------------------+      +-------------------+
+                                    |
+                                    v
+                           +--------------------+
+                           |   DynamoDB Tables   |
+                           |                    |
+                           |  kyc_cases table:   |
+                           |   Case items with   |
+                           |   encrypted_pii (M) |
+                           |                    |
+                           |   USER_DEK#{sub}    |
+                           |   (per-user keys)   |
+                           |                    |
+                           |   PII_AUDIT#{case}  |
+                           |   (access log)      |
+                           +--------------------+
+
+Encryption Flow (write):
+
+  KycCaseStore                KycEncryptionService           KMS Mock
+       |                            |                          |
+       | create_case(pii_data)      |                          |
+       |--------------------------->|                          |
+       |                            | get/create user DEK      |
+       |                            |------------------------->|
+       |                            | <-- plaintext DEK        |
+       |                            |    + wrapped DEK         |
+       |                            |                          |
+       |                            | AES-256-GCM encrypt      |
+       |                            | each PII field with DEK  |
+       |                            |                          |
+       |  <-- encrypted_pii map     |                          |
+       |                            |                          |
+       | DDB PutItem with           |                          |
+       | encrypted_pii attribute    |                          |
+
+Decryption Flow (read):
+
+  Admin clicks "Reveal"     KycEncryptionService           KMS Mock
+       |                            |                          |
+       | POST /pii/decrypt          |                          |
+       |--------------------------->|                          |
+       |                            | get wrapped DEK          |
+       |                            | for user                 |
+       |                            |------------------------->|
+       |                            | <-- plaintext DEK        |
+       |                            |                          |
+       |                            | AES-256-GCM decrypt      |
+       |                            | requested fields         |
+       |                            |                          |
+       |                            | log_access() to          |
+       |                            | PII_AUDIT table          |
+       |                            |                          |
+       |  <-- decrypted values      |                          |
+```
+
+### 3.2 New Service: `app/services/kyc_encryption.py`
 
 ```python
 @dataclass
@@ -126,7 +198,7 @@ class KycEncryptionService:
                      masking_rules: dict[str, str] | None = None) -> dict[str, str]:
         """Return masked representations without decrypting.
         Uses stored metadata (field_name) to determine masking rule.
-        Does NOT call KMS — no audit entry generated."""
+        Does NOT call KMS -- no audit entry generated."""
 
     def generate_user_dek(self, user_sub: str) -> str:
         """Generate a per-user Data Encryption Key, wrapped by KMS master key.
@@ -151,7 +223,7 @@ class KycEncryptionService:
         """Query PII access audit log, filtered by case or accessor."""
 ```
 
-### 3.2 Encryption Architecture
+### 3.3 Encryption Architecture
 
 ```
 Envelope Encryption Pattern:
@@ -170,21 +242,91 @@ Storage:
 
   kyc_cases table:
     PK=USER_DEK#{user_sub}  SK=ACTIVE
-      wrapped_dek (S)       — KMS-encrypted DEK
-      key_id (S)            — KMS key ID
+      wrapped_dek (S)       -- KMS-encrypted DEK
+      key_id (S)            -- KMS key ID
       created_at (N)
-      version (N)           — For key rotation
+      version (N)           -- For key rotation
 
     PK=USER_DEK#{user_sub}  SK=ROTATED#{version}
-      wrapped_dek (S)       — Old DEK (retained 30 days)
+      wrapped_dek (S)       -- Old DEK (retained 30 days)
       rotated_at (N)
-      ttl (N)               — DDB TTL, 30 days
+      ttl (N)               -- DDB TTL, 30 days
 
   kyc_cases table (on case items):
-    encrypted_pii (M)       — Map of field_name -> EncryptedField
+    encrypted_pii (M)       -- Map of field_name -> EncryptedField
 ```
 
-### 3.3 PII Access Audit Log
+### 3.4 DynamoDB Access Patterns
+
+| Access Pattern | PK | SK / Index | Operation | Notes |
+|---|---|---|---|---|
+| Get active DEK for user | `USER_DEK#{user_sub}` | `ACTIVE` | GetItem | Used on every encrypt/decrypt operation |
+| Store new DEK | `USER_DEK#{user_sub}` | `ACTIVE` | PutItem | Created on first PII write for a user |
+| Archive rotated DEK | `USER_DEK#{user_sub}` | `ROTATED#{version}` | PutItem | Old key, TTL=30 days |
+| List all DEKs for user | `USER_DEK#{user_sub}` | begins_with("") | Query | For key destruction (GDPR) |
+| Write encrypted PII to case | Case PK/SK | -- | UpdateItem | Sets `encrypted_pii` map attribute |
+| Read encrypted PII from case | Case PK/SK | -- | GetItem | Returns `encrypted_pii` for mask/decrypt |
+| Write audit log entry | `PII_AUDIT#{case_id}` | `{timestamp}#{event_id}` | PutItem | One entry per access event |
+| Query audit log by case | `PII_AUDIT#{case_id}` | -- | Query | Paginated, newest first |
+| Query audit log by accessor | GSI `pii-audit-accessor-index` | PK=accessor_sub, SK=created_at | Query | For compliance reporting |
+
+**Example DynamoDB Items:**
+
+User DEK (active):
+```json
+{
+  "pk": "USER_DEK#alice-uuid",
+  "sk": "ACTIVE",
+  "wrapped_dek": "AQECAHhWPJtG6u...base64-wrapped-key",
+  "key_id": "arn:aws:kms:us-east-1:000000000000:key/mock-kms-key-id",
+  "created_at": 1748520000,
+  "version": 1
+}
+```
+
+Encrypted PII on case:
+```json
+{
+  "pk": "CASE#kyc_case_001",
+  "sk": "META",
+  "encrypted_pii": {
+    "document_number": {
+      "ciphertext_b64": "Wk1E...base64",
+      "key_id": "arn:aws:kms:us-east-1:000000000000:key/mock-kms-key-id",
+      "algorithm": "AES-256-GCM",
+      "encrypted_at": 1748520100,
+      "field_name": "document_number"
+    },
+    "date_of_birth": {
+      "ciphertext_b64": "XmJq...base64",
+      "key_id": "arn:aws:kms:us-east-1:000000000000:key/mock-kms-key-id",
+      "algorithm": "AES-256-GCM",
+      "encrypted_at": 1748520100,
+      "field_name": "date_of_birth"
+    }
+  },
+  "pii_hints": {
+    "document_number": "4567",
+    "date_of_birth": "1990"
+  }
+}
+```
+
+PII audit log entry:
+```json
+{
+  "pk": "PII_AUDIT#kyc_case_001",
+  "sk": "1748520200#evt_abc123",
+  "accessor_sub": "charlie-admin-uuid",
+  "action": "decrypt",
+  "fields": ["document_number", "date_of_birth"],
+  "reason": "case_review",
+  "ip_address": "192.168.1.100",
+  "created_at": 1748520200
+}
+```
+
+### 3.5 PII Access Audit Log
 
 Stored in the `kyc_cases` table using single-table design:
 
@@ -193,11 +335,11 @@ PK: PII_AUDIT#{case_id}
 SK: {timestamp}#{event_id}
 
 Attributes:
-  accessor_sub (S)         — Who accessed the data
-  action (S)               — "decrypt" | "encrypt" | "mask" | "delete"
-  fields (L)               — List of field names accessed
-  reason (S)               — Why (e.g., "case_review", "export_request", "admin_override")
-  ip_address (S)           — Accessor's IP
+  accessor_sub (S)         -- Who accessed the data
+  action (S)               -- "decrypt" | "encrypt" | "mask" | "delete"
+  fields (L)               -- List of field names accessed
+  reason (S)               -- Why (e.g., "case_review", "export_request", "admin_override")
+  ip_address (S)           -- Accessor's IP
   created_at (N)
 ```
 
@@ -211,11 +353,11 @@ GSI pii-audit-accessor-index:
 
 This GSI is added to the existing `kyc_cases` table (not a new table).
 
-### 3.4 Integration with KYC Case Service
+### 3.6 Integration with KYC Case Service
 
 Modify `app/services/kyc_cases.py`:
 
-**On case creation / draft update** — encrypt PII fields before DDB write:
+**On case creation / draft update** -- encrypt PII fields before DDB write:
 
 ```python
 def create_case(self, ...):
@@ -228,7 +370,7 @@ def create_case(self, ...):
     # ... write to DDB ...
 ```
 
-**On case read (user/admin)** — decrypt or mask based on authorization:
+**On case read (user/admin)** -- decrypt or mask based on authorization:
 
 ```python
 def _prepare_case_for_response(case: dict, *, viewer_sub: str, viewer_role: Role) -> dict:
@@ -252,7 +394,7 @@ def _prepare_case_for_response(case: dict, *, viewer_sub: str, viewer_role: Role
     return case
 ```
 
-### 3.5 GDPR Integration
+### 3.7 GDPR Integration
 
 Extend `app/services/gdpr_service.py`:
 
@@ -269,47 +411,217 @@ def create_deletion_request(user_sub: str, reason: Optional[str] = None) -> Dict
 
 After `destroy_user_keys`, all `encrypted_pii` fields on the user's KYC cases become permanently unrecoverable. The DDB records can be retained for audit (showing that a case existed and was deleted) without exposing PII.
 
-### 3.6 Router Endpoints
+### 3.8 Pydantic Models
+
+```python
+# -- KYC Data Encryption (KYC-023) -- Add to app/models.py
+
+class EncryptedFieldOut(BaseModel):
+    field_name: str
+    encrypted: bool = True
+    key_id: str = ""
+    algorithm: str = "AES-256-GCM"
+    encrypted_at: int = 0
+
+
+class PiiDecryptRequest(BaseModel):
+    fields: list[str] = Field(
+        ..., min_length=1, max_length=10,
+        description="PII field names to decrypt"
+    )
+    reason: str = Field(
+        ..., min_length=3, max_length=500,
+        description="Reason for accessing PII (required for audit)"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "fields": ["document_number", "date_of_birth"],
+                "reason": "Reviewing case for Tier 2 approval"
+            }
+        }
+
+
+class PiiDecryptResponse(BaseModel):
+    pii: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of field_name -> plaintext value"
+    )
+
+
+class PiiMaskedResponse(BaseModel):
+    pii: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of field_name -> masked value"
+    )
+
+
+class PiiAuditEvent(BaseModel):
+    event_id: str
+    accessor_sub: str
+    accessor_display_name: str = ""
+    action: str  # "decrypt", "encrypt", "mask", "delete"
+    fields: list[str]
+    reason: str
+    ip_address: str = ""
+    created_at: int = 0
+
+
+class PiiAuditLogResponse(BaseModel):
+    events: list[PiiAuditEvent] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+class KeyRotationResponse(BaseModel):
+    ok: bool = True
+    new_version: int = 0
+    fields_re_encrypted: int = 0
+
+
+class KeyDestroyResponse(BaseModel):
+    ok: bool = True
+    keys_destroyed: int = 0
+    fields_affected: int = 0
+```
+
+### 3.9 Router Endpoints
 
 Add to `app/routers/kyc_cases.py`:
 
 ```python
 # PII access endpoints
 POST /v1/kyc/cases/{case_id}/pii/decrypt
-  — Decrypt specific PII fields for assigned admin
-  — Auth: require_admin_session
-  — Body: { "fields": ["document_number", "date_of_birth"], "reason": str }
-  — Response: { "pii": { "document_number": "AB1234567", "date_of_birth": "1990-01-15" } }
+  -- Decrypt specific PII fields for assigned admin
+  -- Auth: require_admin_session
+  -- Body: { "fields": ["document_number", "date_of_birth"], "reason": str }
+  -- Response: { "pii": { "document_number": "AB1234567", "date_of_birth": "1990-01-15" } }
 
 GET /v1/kyc/cases/{case_id}/pii/masked
-  — Get masked PII values (any admin)
-  — Auth: require_admin_session
-  — Response: { "pii": { "document_number": "****4567", "date_of_birth": "1990-**-**" } }
+  -- Get masked PII values (any admin)
+  -- Auth: require_admin_session
+  -- Response: { "pii": { "document_number": "****4567", "date_of_birth": "1990-**-**" } }
 
 # Audit endpoints
 GET /v1/kyc/cases/{case_id}/pii/audit-log
-  — Get PII access log for a case
-  — Auth: require_root_session
-  — Response: { "events": [...] }
+  -- Get PII access log for a case
+  -- Auth: require_root_session
+  -- Response: { "events": [...] }
 
 GET /v1/kyc/admin/pii/audit-log?accessor={sub}&from={ts}&to={ts}
-  — Query PII access log by accessor
-  — Auth: require_root_session
-  — Response: { "events": [...] }
+  -- Query PII access log by accessor
+  -- Auth: require_root_session
+  -- Response: { "events": [...] }
 
 # Key management (root only)
 POST /v1/kyc/admin/encryption/rotate-key/{user_sub}
-  — Rotate a user's DEK
-  — Auth: require_root_session
-  — Response: { "ok": true, "new_version": int }
+  -- Rotate a user's DEK
+  -- Auth: require_root_session
+  -- Response: { "ok": true, "new_version": int }
 
 POST /v1/kyc/admin/encryption/destroy-keys/{user_sub}
-  — Permanently destroy user's keys (GDPR erasure)
-  — Auth: require_root_session
-  — Response: { "ok": true, "fields_affected": int }
+  -- Permanently destroy user's keys (GDPR erasure)
+  -- Auth: require_root_session
+  -- Response: { "ok": true, "fields_affected": int }
 ```
 
-### 3.7 Data Masking Rules
+### 3.10 API Request/Response Examples
+
+**Decrypt PII fields (assigned admin):**
+```bash
+curl -X POST http://localhost:8000/v1/kyc/cases/kyc_case_001/pii/decrypt \
+  -H "Cookie: ui_session=sess_charlie; ui_csrf=csrf_charlie; ui_access_token=tok_charlie" \
+  -H "x-csrf-token: csrf_charlie" \
+  -H "Content-Type: application/json" \
+  -d '{"fields": ["document_number", "date_of_birth"], "reason": "Reviewing case for Tier 2 approval"}'
+
+# Response 200:
+{
+  "pii": {
+    "document_number": "AB1234567",
+    "date_of_birth": "1990-01-15"
+  }
+}
+
+# Error 403 - not assigned admin:
+{
+  "detail": "Only the assigned admin can decrypt PII for this case"
+}
+
+# Error 400 - missing reason:
+{
+  "detail": [{"loc": ["body", "reason"], "msg": "field required"}]
+}
+```
+
+**Get masked PII (any admin):**
+```bash
+curl http://localhost:8000/v1/kyc/cases/kyc_case_001/pii/masked \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_root; ui_access_token=tok_root"
+
+# Response 200:
+{
+  "pii": {
+    "document_number": "****4567",
+    "date_of_birth": "1990-**-**",
+    "tax_id": "***-**-1234",
+    "bank_routing_number": "*********"
+  }
+}
+```
+
+**Get PII audit log:**
+```bash
+curl "http://localhost:8000/v1/kyc/cases/kyc_case_001/pii/audit-log" \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_root; ui_access_token=tok_root"
+
+# Response 200:
+{
+  "events": [
+    {
+      "event_id": "evt_abc123",
+      "accessor_sub": "charlie-admin-uuid",
+      "accessor_display_name": "Charlie Admin",
+      "action": "decrypt",
+      "fields": ["document_number", "date_of_birth"],
+      "reason": "Reviewing case for Tier 2 approval",
+      "ip_address": "127.0.0.1",
+      "created_at": 1748520200
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+**Rotate DEK (root only):**
+```bash
+curl -X POST http://localhost:8000/v1/kyc/admin/encryption/rotate-key/alice-uuid \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_root; ui_access_token=tok_root" \
+  -H "x-csrf-token: csrf_root"
+
+# Response 200:
+{
+  "ok": true,
+  "new_version": 2,
+  "fields_re_encrypted": 5
+}
+```
+
+**Destroy keys (GDPR erasure, root only):**
+```bash
+curl -X POST http://localhost:8000/v1/kyc/admin/encryption/destroy-keys/alice-uuid \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_root; ui_access_token=tok_root" \
+  -H "x-csrf-token: csrf_root"
+
+# Response 200:
+{
+  "ok": true,
+  "keys_destroyed": 2,
+  "fields_affected": 8
+}
+```
+
+### 3.11 Data Masking Rules
 
 ```python
 MASKING_RULES = {
@@ -326,26 +638,200 @@ MASKING_RULES = {
 
 These rules are applied by `mask_fields` without calling KMS. The masking function uses the `field_name` metadata stored in `EncryptedField` to select the correct rule. The last N characters are stored as a separate unencrypted `hint` field for masking display (the full value is only in the encrypted ciphertext).
 
-### 3.8 Frontend Changes
+### 3.12 Frontend Changes
 
 **Admin case detail**: Modify the case detail view to show masked PII by default, with a "Reveal" button for assigned admins that triggers the decrypt endpoint.
 
-- `PiiFieldDisplay` — Shows masked value with optional "Reveal" button
-- `PiiAuditLog` — Table showing who accessed PII, when, for what reason (root-only view)
+- `PiiFieldDisplay` -- Shows masked value with optional "Reveal" button
+- `PiiAuditLog` -- Table showing who accessed PII, when, for what reason (root-only view)
+
+**Frontend Component Tree:**
+
+```
+AdminCaseDetailPage
+  +-- CaseHeader (status, tier, assignment)
+  +-- PiiSection
+  |     +-- PiiFieldDisplay (for each encrypted field)
+  |     |     +-- MaskedValue ("****4567")
+  |     |     +-- RevealButton (visible only for assigned admin)
+  |     |     |     -> onClick: POST /pii/decrypt
+  |     |     |     -> Shows plaintext for 30 seconds, then re-masks
+  |     |     +-- ReasonInput (dialog for decrypt reason)
+  |     |
+  |     +-- PiiDecryptAllButton (decrypt all fields at once)
+  |           -> Opens reason dialog, decrypts all
+  |
+  +-- PiiAuditLogSection (root-only)
+  |     +-- PiiAuditLog
+  |           +-- DataTable (event_id, accessor, action, fields, reason, timestamp)
+  |           +-- Pagination (cursor-based)
+  |
+  +-- KeyManagementSection (root-only)
+        +-- RotateKeyButton -> POST /rotate-key/{user_sub}
+        +-- DestroyKeysButton -> POST /destroy-keys/{user_sub}
+              +-- ConfirmDialog ("This action is irreversible...")
+```
+
+**TypeScript Props Interfaces:**
+
+```typescript
+interface PiiFieldDisplayProps {
+  fieldName: string;
+  maskedValue: string;
+  canReveal: boolean;  // true if viewer is assigned admin
+  caseId: string;
+  onRevealed?: (plaintext: string) => void;
+}
+
+interface PiiAuditLogProps {
+  caseId: string;
+}
+
+interface PiiDecryptDialogProps {
+  caseId: string;
+  fields: string[];
+  onDecrypted: (values: Record<string, string>) => void;
+  onCancel: () => void;
+}
+```
 
 **Admin UI flow**:
 1. Case detail loads with masked PII (`****4567` for document number)
 2. Assigned admin clicks "Reveal" on a field
-3. Frontend calls `POST /pii/decrypt` with field name and reason
-4. Decrypted value shown temporarily (auto-hides after 30 seconds)
-5. Access logged in audit table
+3. Dialog prompts for reason ("Why do you need to see this?")
+4. Frontend calls `POST /pii/decrypt` with field name and reason
+5. Decrypted value shown temporarily (auto-hides after 30 seconds)
+6. Access logged in audit table
 
 ---
 
-## 4. E2E Test Plan
+## 4. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|---|---|---|---|
+| Not assigned admin for decrypt | 403 | `pii_not_assigned` | "Only the assigned reviewer can decrypt PII for this case." | Assign yourself to the case first |
+| Missing decrypt reason | 400 | `pii_reason_required` | "A reason is required to access PII data." | Enter a reason |
+| DEK not found for user | 404 | `pii_no_dek` | "No encryption key found for this user." | User has no encrypted PII |
+| KMS decrypt failure | 500 | `pii_decrypt_error` | "Unable to decrypt data. Please try again or contact support." | Retry; check KMS availability |
+| Keys already destroyed | 410 | `pii_keys_destroyed` | "PII data has been permanently erased and cannot be recovered." | None -- data is gone |
+| Non-root accessing audit log | 403 | `pii_audit_forbidden` | "Only root users can access the PII audit log." | Escalate to root |
+| Non-root rotating keys | 403 | `pii_rotation_forbidden` | "Only root users can rotate encryption keys." | Escalate to root |
+| Case has no encrypted PII | 200 | -- | Returns empty pii map | N/A |
+| Field name not in encrypted_pii | 400 | `pii_field_not_found` | "Requested field is not encrypted on this case." | Check available fields |
+| KMS service unavailable | 503 | `kms_unavailable` | "Encryption service temporarily unavailable." | Retry after delay |
+| Rate limit on decrypt | 429 | `rate_limit` | "Too many decryption requests. Please wait." | Wait and retry |
+
+---
+
+## 5. Observability & Monitoring
+
+### 5.1 Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `kyc_pii_encryptions_total` | Counter | `field` | Total field encryption operations |
+| `kyc_pii_decryptions_total` | Counter | `field`, `accessor_role` | Total field decryption operations |
+| `kyc_pii_mask_requests_total` | Counter | -- | Total mask operations (no KMS call) |
+| `kyc_pii_decrypt_latency_seconds` | Histogram | -- | Decryption latency including KMS unwrap |
+| `kyc_pii_key_rotations_total` | Counter | -- | DEK rotation events |
+| `kyc_pii_key_destructions_total` | Counter | -- | Permanent key destruction events |
+| `kyc_pii_audit_events_total` | Counter | `action` | Total audit log entries written |
+| `kyc_pii_kms_errors_total` | Counter | `operation` | KMS API call failures |
+
+### 5.2 Log Events
+
+| Event | Level | Fields | Description |
+|---|---|---|---|
+| `pii.encrypted` | INFO | `case_id`, `fields`, `user_sub` | PII fields encrypted during case write |
+| `pii.decrypted` | INFO | `case_id`, `fields`, `accessor_sub`, `reason` | PII fields decrypted (always logged) |
+| `pii.masked` | DEBUG | `case_id`, `fields`, `viewer_sub` | Masked values returned (no KMS) |
+| `pii.key.rotated` | INFO | `user_sub`, `old_version`, `new_version` | DEK rotated |
+| `pii.key.destroyed` | WARN | `user_sub`, `keys_destroyed`, `fields_affected` | Permanent key destruction |
+| `pii.kms.error` | ERROR | `operation`, `error_message` | KMS API failure |
+| `pii.audit.written` | DEBUG | `event_id`, `case_id`, `accessor_sub` | Audit log entry recorded |
+
+### 5.3 Alerting Rules
+
+| Alert | Condition | Severity |
+|---|---|---|
+| PII decryption spike | `kyc_pii_decryptions_total` > 100 in 10 minutes | P2 (unusual access) |
+| KMS error rate | `kyc_pii_kms_errors_total` > 5 in 5 minutes | P1 (encryption broken) |
+| Key destruction event | Any `pii.key.destroyed` log event | P3 (audit notification) |
+| Decryption latency high | P95 > 5 seconds for 5 minutes | P3 |
+| Unauthorized decrypt attempts | 403 responses on /pii/decrypt > 10 in 1 hour | P2 |
+
+---
+
+## 6. Rollout Plan
+
+### 6.1 Feature Flags
+
+| Flag | Default (Dev) | Default (Prod) | Description |
+|---|---|---|---|
+| `KYC_ENCRYPTION_ENABLED` | `true` | `false` | Master enable for PII encryption |
+| `KYC_ENCRYPTION_AUDIT_ENABLED` | `true` | `true` | Enable PII access audit logging |
+| `KYC_DEK_ROTATION_DAYS` | `90` | `90` | Days between automatic DEK rotation |
+| `KYC_PII_REVEAL_TIMEOUT_SECONDS` | `30` | `30` | Auto-hide timeout for revealed PII |
+
+### 6.2 Phased Deployment
+
+| Phase | Scope | Duration | Success Criteria |
+|---|---|---|---|
+| Phase 1: Schema + models | Deploy encrypted_pii field support, backwards-compatible | 1 day | No runtime errors, existing cases unaffected |
+| Phase 2: Encrypt new cases | New cases encrypt PII on creation | 3 days | 100+ cases encrypted, decrypt works correctly |
+| Phase 3: Backfill existing | Script to encrypt PII on existing cases | 2 days | All existing PII encrypted, audit log populated |
+| Phase 4: Mask by default | Enable masking for non-assigned admins | 1 day | Non-assigned admins see masked values |
+| Phase 5: GDPR integration | Connect key destruction to GDPR deletion flow | 2 days | Deletion request destroys keys, fields unrecoverable |
+
+### 6.3 Rollback Procedure
+
+1. Set `KYC_ENCRYPTION_ENABLED=false` -- new cases store PII in plaintext (fallback)
+2. Existing encrypted fields remain encrypted and decryptable (no data loss)
+3. Masking continues to work (uses metadata, not KMS)
+4. To fully revert: run migration script to decrypt all fields back to plaintext and remove `encrypted_pii` attributes
+5. Audit log entries are permanent and not affected by rollback
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Query Cost Analysis
+
+| Operation | DDB Operations | KMS Calls | Estimated Cost |
+|---|---|---|---|
+| Encrypt PII (case create) | 1 GetItem (DEK) + 1 UpdateItem (case) | 1 GenerateDataKey (or 0 if DEK cached) | 2 WCU + 1 RCU + 1 KMS |
+| Decrypt PII (admin reveal) | 1 GetItem (DEK) + 1 GetItem (case) + 1 PutItem (audit) | 1 Decrypt (unwrap DEK) | 1 WCU + 2 RCU + 1 KMS |
+| Mask PII (non-assigned view) | 1 GetItem (case) | 0 KMS calls | 1 RCU |
+| Rotate DEK | N GetItem + N UpdateItem (re-encrypt) + 2 PutItem (keys) | 1 GenerateDataKey + 1 Decrypt | N*2 WCU + N RCU + 2 KMS |
+| Destroy keys | Query + BatchDelete | 0 | Query cost + N WCU |
+
+### 7.2 Caching Strategy
+
+| Data | Cache | TTL | Invalidation |
+|---|---|---|---|
+| Unwrapped DEK | In-memory per-request | Request scope only | Cleared after request |
+| Masking rules | In-memory constant | Never | Application restart |
+| Audit log queries | React Query client | 60 seconds | Invalidated on new decrypt |
+| Masked PII values | React Query client | 30 seconds | Invalidated on reveal |
+
+**Important**: The plaintext DEK must NEVER be cached across requests or stored in DDB. It is unwrapped via KMS for each decrypt operation and held only in memory during request processing.
+
+### 7.3 Rate Limiting
+
+| Endpoint | Limit | Window | Notes |
+|---|---|---|---|
+| POST /pii/decrypt | 20 per admin | 15 minutes | Prevents bulk PII extraction |
+| GET /pii/masked | 60 per admin | 1 minute | Standard read rate |
+| GET /pii/audit-log | 30 per root | 1 minute | Standard read rate |
+| POST /rotate-key | 5 per root | 1 hour | Key rotation is expensive |
+| POST /destroy-keys | 3 per root | 1 hour | Irreversible, rate-limit tightly |
+
+---
+
+## 8. E2E Test Plan
 
 **Test file**: `frontend/e2e/kyc-encryption.spec.ts`
-**Total**: ~15 tests across 3 sections (234-236)
+**Total**: ~22 tests across 4 sections (234-237)
 
 ### Section 234: Field Encryption & Decryption API (6 tests)
 
@@ -379,7 +865,7 @@ test("234.6 Decrypt without reason returns 400", async ({ page }) => {
 });
 ```
 
-### Section 235: Key Management & GDPR Erasure (5 tests)
+### Section 235: Key Management & GDPR Erasure (6 tests)
 
 ```typescript
 test("235.1 Root rotates user DEK", async ({ page }) => {
@@ -404,9 +890,13 @@ test("235.4 GDPR deletion request destroys encryption keys", async ({ page }) =>
 test("235.5 Non-root cannot rotate or destroy keys", async ({ page }) => {
   // Charlie (admin) POST rotate-key -> 403
 });
+
+test("235.6 Double key destruction is idempotent", async ({ page }) => {
+  // Destroy keys twice -> second call returns ok with 0 keys_destroyed
+});
 ```
 
-### Section 236: Audit Log & Masking Rules (4 tests)
+### Section 236: Audit Log & Masking Rules (5 tests)
 
 ```typescript
 test("236.1 PII audit log records all access events", async ({ page }) => {
@@ -431,11 +921,43 @@ test("236.4 Masked values returned without calling KMS", async ({ page }) => {
   // Verify mask endpoint does not log a decrypt event in audit
   // (masking uses hint field, not KMS decryption)
 });
+
+test("236.5 Audit log includes IP address of accessor", async ({ page }) => {
+  // Decrypt PII, check audit log entry has ip_address set
+});
+```
+
+### Section 237: Concurrent Access & Edge Cases (5 tests)
+
+```typescript
+test("237.1 Two admins decrypt same case concurrently", async ({ page }) => {
+  // Both assigned admin and root decrypt simultaneously
+  // Both get correct values, both audit entries recorded
+});
+
+test("237.2 Encrypt fields for case with no PII returns empty map", async ({ page }) => {
+  // Create case without PII fields
+  // GET masked -> pii map is empty
+});
+
+test("237.3 Re-encryption after draft update preserves old hint values", async ({ page }) => {
+  // Create case with document_number, update draft with new document_number
+  // Hints updated to reflect new value
+});
+
+test("237.4 Decrypt after case deletion returns 404", async ({ page }) => {
+  // Delete case, POST decrypt -> 404
+});
+
+test("237.5 Audit log pagination works correctly", async ({ page }) => {
+  // Generate many audit events, query with limit=5
+  // Verify next_cursor returned, second page returns remaining events
+});
 ```
 
 ---
 
-## 5. File Change Summary
+## 9. File Change Summary
 
 | File | Change Type | Description |
 |------|-------------|-------------|
@@ -450,4 +972,4 @@ test("236.4 Masked values returned without calling KMS", async ({ page }) => {
 | `frontend/src/api/types.ts` | Modify | Add `PiiField`, `PiiAuditEvent` types |
 | `frontend/src/components/shared/PiiFieldDisplay.tsx` | **New** | Masked field with reveal button |
 | `frontend/src/components/shared/PiiAuditLog.tsx` | **New** | Audit log table (root-only) |
-| `frontend/e2e/kyc-encryption.spec.ts` | **New** | 15 E2E tests across sections 234-236 |
+| `frontend/e2e/kyc-encryption.spec.ts` | **New** | 22 E2E tests across sections 234-237 |

@@ -543,3 +543,266 @@ test.beforeAll(async ({ browser }) => {
 ### 8.1 Downstream Dependents
 
 None — ADS-010 is a terminal content provider control surface.
+
+---
+
+## 9. Architecture & Data Flow
+
+```
+Creator Ad Control Evaluation Hierarchy
+────────────────────────────────────────
+
+  serve_ad(creator_id, content_id, ...)
+       │
+       ▼
+  ┌────────────────────────────────────┐
+  │  1. Get Global Creator Settings    │
+  │     billing: USER#{creator}/       │
+  │             AD_SETTINGS            │
+  │                                    │
+  │     allow_ads == false?            │
+  │     ├─ Yes → return empty (no ads) │
+  │     └─ No  → continue             │
+  └──────────┬─────────────────────────┘
+             │
+             ▼
+  ┌────────────────────────────────────┐
+  │  2. Per-Content Override Check     │
+  │     (post: allow_ads_near,         │
+  │      video: ad_enabled,            │
+  │      broadcast: pre_roll_enabled)  │
+  │                                    │
+  │     ad_enabled == false?           │
+  │     ├─ Yes → return empty          │
+  │     └─ No  → continue             │
+  └──────────┬─────────────────────────┘
+             │
+             ▼
+  ┌────────────────────────────────────┐
+  │  3. Advertiser Block List          │
+  │     billing: USER#{creator}/       │
+  │             AD_BLOCK#{account_id}  │
+  │                                    │
+  │     Blocked? → Skip this campaign  │
+  └──────────┬─────────────────────────┘
+             │
+             ▼
+  ┌────────────────────────────────────┐
+  │  4. Category Whitelist             │
+  │     allowed_ad_categories check    │
+  │                                    │
+  │     Not in list? → Skip            │
+  └──────────┬─────────────────────────┘
+             │
+             ▼
+  ┌────────────────────────────────────┐
+  │  5. Minimum CPM Check              │
+  │     bid_cpm < min_cpm_cents?       │
+  │     ├─ Yes → Skip (too cheap)      │
+  │     └─ No  → Serve ad             │
+  └──────────┬─────────────────────────┘
+             │
+             ▼
+  ┌────────────────────────────────────┐
+  │  6. Revenue Split                  │
+  │     revenue_share_pct (default 70) │
+  │     Creator gets X%, Platform Y%   │
+  └────────────────────────────────────┘
+```
+
+---
+
+## 10. API Request/Response Examples
+
+### 10.1 Get Full Creator Ad Settings
+
+```bash
+curl http://localhost:8000/ui/ads/creator/ad-settings \
+  -H "Cookie: ui_session=sess_bob; ui_access_token=jwt_tok"
+```
+
+**Response (200)**:
+```json
+{
+  "allow_ads": true,
+  "allowed_ad_categories": [],
+  "min_cpm_cents": 0,
+  "revenue_share_pct": 70,
+  "mid_roll_enabled": true,
+  "default_pre_roll_enabled": true,
+  "default_ads_free_for_subscribers": false,
+  "updated_at": 1748534400
+}
+```
+
+### 10.2 Get Ad Revenue Summary
+
+```bash
+curl "http://localhost:8000/ui/ads/creator/ad-revenue?days=30" \
+  -H "Cookie: ui_session=sess_bob; ui_access_token=jwt_tok"
+```
+
+**Response (200)**:
+```json
+{
+  "total_ad_revenue_cents": 15250,
+  "entry_count": 42,
+  "days": 30,
+  "top_content": [
+    {"content_id": "vid_001", "revenue_cents": 8500},
+    {"content_id": "vid_002", "revenue_cents": 4200},
+    {"content_id": "bcast_003", "revenue_cents": 2550}
+  ]
+}
+```
+
+### 10.3 Get Advertiser Transparency
+
+```bash
+curl "http://localhost:8000/ui/ads/creator/ad-transparency?month=2026-05" \
+  -H "Cookie: ui_session=sess_bob; ui_access_token=jwt_tok"
+```
+
+**Response (200)**:
+```json
+[
+  {
+    "account_id": "adv_alice",
+    "company_name": "Acme Corp",
+    "total_impressions": 5200,
+    "total_clicks": 120,
+    "total_revenue_cents": 8500
+  },
+  {
+    "account_id": "adv_charlie",
+    "company_name": "Widget Inc",
+    "total_impressions": 3100,
+    "total_clicks": 75,
+    "total_revenue_cents": 4200
+  }
+]
+```
+
+---
+
+## 11. Error Handling Matrix
+
+| # | Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|----------------|-------------|------------|---------------------|-----------------|
+| 1 | Invalid min_cpm (negative) | 400 | `INVALID_MIN_CPM` | "min_cpm_cents must be >= 0." | Use non-negative value |
+| 2 | Invalid ad category | 400 | `INVALID_CATEGORY` | "Invalid ad category: {cat}." | Use valid category |
+| 3 | Block non-existent account | 200 | -- | Idempotent (no error) | None needed |
+| 4 | Revenue query invalid days | 400 | `INVALID_DAYS` | "days must be between 1 and 365." | Use valid range |
+| 5 | Invalid month format | 400 | `INVALID_MONTH` | "Invalid month format, use YYYY-MM." | Use format YYYY-MM |
+| 6 | Revenue share not modifiable | 403 | `ADMIN_ONLY` | "Revenue share can only be set by admins." | Contact admin |
+| 7 | Not content owner | 403 | `NOT_CONTENT_OWNER` | "You do not own this content." | Use own content |
+
+---
+
+## 12. Observability
+
+### 12.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `creator_ad_settings_updated_total` | Counter | `field` | Settings updates by field |
+| `creator_ad_revenue_cents` | Counter | `creator_id` | Revenue credited to creators |
+| `creator_min_cpm_blocked_total` | Counter | `creator_id` | Ads blocked by min CPM |
+| `creator_advertiser_blocked_total` | Counter | -- | Advertisers blocked by creators |
+| `creator_transparency_queries_total` | Counter | -- | Transparency page views |
+
+### 12.2 Log Events
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| `creator_settings_updated` | INFO | creator_sub, changed_fields |
+| `creator_min_cpm_blocked` | INFO | creator_sub, campaign_id, bid_cpm, min_cpm |
+| `creator_advertiser_blocked` | INFO | creator_sub, account_id |
+| `creator_revenue_credited` | INFO | creator_sub, amount_cents, content_id |
+| `transparency_recorded` | DEBUG | creator_sub, account_id, month, impressions |
+
+### 12.3 Alerting Rules
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Revenue crediting failures | >5% failed revenue credits in 1 hour | P2 |
+| Transparency recording lag | Records not updated for >6 hours | P3 |
+| Settings update error rate | >5% errors on PATCH settings in 15 min | P3 |
+
+---
+
+## 13. Rollout Plan
+
+### 13.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `CREATOR_AD_CONTROLS_ENABLED` | `false` | Enable full creator ad control UI |
+| `CREATOR_MIN_CPM_ENFORCEMENT` | `false` | Enforce min CPM in ad serving |
+
+### 13.2 Phased Deployment
+
+| Phase | Scope | Duration | Details |
+|-------|-------|----------|---------|
+| Phase 1: Backend + Min CPM | Internal | Week 1 | Deploy creator_ad_controls service. Wire min_cpm check into ad serving. Transparency recording in billing pipeline. |
+| Phase 2: Settings UI | All creators | Week 2 | CreatorAdSettingsPage deployed. Creators can manage allow_ads, categories, min_cpm, block list. |
+| Phase 3: Revenue + Transparency | All creators | Week 3 | AdRevenueCard and AdTransparencyPage deployed. Full creator ad management suite. |
+
+---
+
+## 14. Performance Considerations
+
+### 14.1 Latency Targets
+
+| Endpoint | Target p50 | Target p99 |
+|----------|-----------|-----------|
+| GET /creator/ad-settings | 20ms | 100ms |
+| PATCH /creator/ad-settings | 50ms | 200ms |
+| GET /creator/ad-revenue | 100ms | 500ms |
+| GET /creator/ad-transparency | 80ms | 400ms |
+| Min CPM check (in serve_ad) | 2ms | 10ms |
+
+### 14.2 Caching Strategy
+
+| Data | Cache | staleTime | Invalidation |
+|------|-------|-----------|-------------|
+| Creator ad settings | React Query | 60_000ms | On PATCH mutation |
+| Creator ad settings (server) | In-memory LRU | 60s | On update |
+| Revenue summary | React Query | 120_000ms | On period change |
+| Transparency list | React Query | 120_000ms | On month filter change |
+| Block list | React Query | 60_000ms | On block/unblock mutation |
+
+### 14.3 Transparency Recording
+
+Transparency records are updated atomically using DDB `ADD` operations (increment counters). This avoids read-before-write and supports concurrent billing events. Records are keyed by `AD_TRANSPARENCY#{account_id}#{month}`, so each month gets a separate record. Historical months are immutable after month end.
+
+---
+
+## 15. Expanded E2E Tests
+
+### 15.1 Section 388: Input Validation (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 388.1 | Negative min_cpm rejected | PATCH min_cpm_cents=-1; 400 |
+| 388.2 | Invalid category rejected | PATCH allowed_ad_categories=["invalid"]; 400 |
+| 388.3 | Revenue days=0 rejected | GET ad-revenue?days=0; 400 |
+| 388.4 | Invalid month format rejected | GET ad-transparency?month=2026; 400 |
+
+### 15.2 Section 389: Authorization Boundary (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 389.1 | Cannot modify other creator's settings | Alice PATCH Bob's settings; settings scoped to own session |
+| 389.2 | Revenue share not modifiable via API | PATCH revenue_share_pct=90; field ignored or 403 |
+| 389.3 | Transparency scoped to own account | GET transparency returns only own data |
+| 389.4 | Block list scoped to own account | GET blocks returns only own blocks |
+
+### 15.3 Section 390: Revenue & Transparency Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 390.1 | Revenue with no data returns zeros | New creator; GET ad-revenue; total=0, top_content=[] |
+| 390.2 | Transparency with no advertisers | GET transparency; 200; empty array |
+| 390.3 | Transparency month filter works | Seed data for 2 months; filter by one; only that month's data returned |
+| 390.4 | Block then check serve_ad | Block advertiser; serve_ad for that advertiser; excluded |

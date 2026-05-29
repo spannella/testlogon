@@ -460,6 +460,57 @@ Currently, DynamoDB TTL hard-deletes carts. To support recovery after TTL:
 
 ---
 
+## 4b. API Request/Response Examples
+
+**Get user reminder preferences** (curl):
+
+```bash
+curl -X GET http://localhost:8000/ui/shoppingcart/reminders/preferences \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{"opted_out": false}
+```
+
+**Recover cart via token** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/ui/shoppingcart/recover/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+```
+
+**Response (200)**:
+```json
+{
+  "valid": true,
+  "cart_id": "cart_xyz789",
+  "item_count": 3,
+  "total_cents": 4500,
+  "redirect_url": "/cart?cartId=cart_xyz789"
+}
+```
+
+**Admin get analytics** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/ui/shoppingcart/admin/reminders/analytics?period_days=30" \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_r; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "total_abandoned": 142,
+  "total_recovered": 23,
+  "recovery_rate_pct": 16.2,
+  "avg_abandoned_value_cents": 3200,
+  "total_recovered_value_cents": 73600
+}
+```
+
+---
+
 ## 5. E2E Test Plan
 
 **File**: `frontend/e2e/cart-reminders.spec.ts`
@@ -499,7 +550,25 @@ Currently, DynamoDB TTL hard-deletes carts. To support recovery after TTL:
 | 550.3 | Manual scan trigger returns results | Root POST `/admin/cart-abandonment/scan`; response includes count of processed carts. |
 | 550.4 | Analytics period filter works | GET with `period_days=7`; results scoped to last 7 days. |
 
-**Total E2E tests: 15**
+### Section 551: Reminder Edge Cases & Concurrent Access (5 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 551.1 | No reminder for purchased cart | Alice purchases cart; trigger scan; no reminder created for that cart |
+| 551.2 | No reminder for user who opted out | Alice opts out; abandons cart; trigger scan; no reminder email |
+| 551.3 | Multiple carts abandoned by same user | Alice has 2 abandoned carts; each gets independent reminder chain |
+| 551.4 | Cart recovery after 2nd stage reminder | Alice ignores 1st reminder, recovers on 2nd; analytics shows stage=2 recovery |
+| 551.5 | Recovery link in email is valid URL | Extract recovery URL from reminder alert; parse URL; token is 32-char hex |
+
+### Section 552: Reminder UI Preferences (3 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 552.1 | Preferences page shows opt-out toggle | Navigate to settings; cart reminders toggle visible |
+| 552.2 | Toggling opt-out updates preference | Click toggle to opt out; reload; toggle reflects opted_out=true |
+| 552.3 | Admin config page shows stages | Root navigates to admin reminders; stage table with delay, subject, template visible |
+
+**Total E2E tests: 23**
 
 ---
 
@@ -529,9 +598,110 @@ Currently, DynamoDB TTL hard-deletes carts. To support recovery after TTL:
 - Per-user cooldown: no more than 5 reminder emails per 24 hours across all carts.
 - Test email: max 3 per admin per hour.
 
+### 6.4 Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Recovery token not found | 404 | `token_not_found` | "Recovery link not found" | Request new link from email |
+| Recovery token expired | 410 | `token_expired` | "This recovery link has expired" | Request new link |
+| Recovery token already used | 410 | `token_used` | "This recovery link has already been used" | Cart should be in account |
+| Cart already purchased | 409 | `cart_purchased` | "This cart has already been purchased" | No action needed |
+| Cart permanently deleted | 410 | `cart_deleted` | "This cart is no longer available" | Start new cart |
+| User opted out | N/A | — | No email sent | Opt back in via preferences |
+| Admin config invalid stage | 422 | `validation_error` | "delay_hours must be >= 1" | Fix config values |
+| Non-admin access to config | 403 | `forbidden` | "Admin access required" | Use admin account |
+| Email delivery failure | 500 | `email_failed` | (No user-facing; logged) | Retry on next scan |
+
 ---
 
-## 7. Dependencies
+## 7. Observability
+
+### 7.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `cart_abandoned_total` | Counter | — | Carts detected as abandoned |
+| `cart_reminder_sent_total` | Counter | `stage` (1/2/3) | Reminder emails sent |
+| `cart_recovered_total` | Counter | `stage` | Carts recovered via recovery link |
+| `cart_recovery_latency_hours` | Histogram | — | Time from abandonment to recovery |
+| `cart_reminder_email_failed_total` | Counter | — | Email delivery failures |
+| `cart_abandoned_value_cents` | Histogram | — | Value of abandoned carts |
+| `cart_scan_duration_ms` | Histogram | — | Duration of abandonment scan job |
+
+### 7.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Cart abandoned detected | INFO | `cart_id`, `user_sub`, `item_count`, `total_cents`, `hours_since_activity` |
+| Reminder email sent | INFO | `cart_id`, `user_sub`, `stage`, `email_address` |
+| Cart recovered | INFO | `cart_id`, `user_sub`, `recovery_token`, `hours_since_abandonment` |
+| Recovery token expired | DEBUG | `token`, `expired_at` |
+| User opted out of reminders | INFO | `user_sub` |
+| Scan job completed | INFO | `carts_scanned`, `reminders_sent`, `duration_ms` |
+
+### 7.3 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Reminder email failure rate | > 10% of sends fail | High | Check SES configuration |
+| Recovery rate drop | Recovery rate drops below 5% for 3 days | Medium | Review email content/timing |
+| Scan job timeout | Scan takes > 5 minutes | Medium | Check DDB throughput |
+| High abandonment rate | > 50% of carts abandoned in 24h | Low | Review checkout UX |
+
+### 7.4 Dashboard Queries
+
+**Recovery funnel**:
+```promql
+sum(rate(cart_recovered_total[1d])) / sum(rate(cart_abandoned_total[1d])) * 100
+```
+
+**Average cart value recovered**:
+```promql
+histogram_quantile(0.5, rate(cart_abandoned_value_cents_bucket[1d]))
+```
+
+---
+
+## 8. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Abandonment scan latency | < 30s for 10K carts | DDB scan with page size 100; filter on `last_activity_at < threshold` |
+| Email sending throughput | 10 emails/sec | SES batch sending; async within scan loop |
+| Recovery token lookup | < 5ms | Direct GetItem on token PK |
+| Cart recovery write | < 20ms | UpdateItem on cart + DeleteItem on token |
+| Reminder config read | < 5ms | GetItem; cached in-memory for scan duration |
+| Analytics query | < 200ms | Pre-computed aggregates in analytics DDB item; updated on each scan |
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flag
+
+```python
+cart_reminders_enabled: bool = os.environ.get("CART_REMINDERS_ENABLED", "true").lower() == "true"
+```
+
+### 9.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend | Deploy scan + email logic; flag OFF | 2 days | Unit tests pass |
+| Phase 2: Internal | Enable for internal accounts; manually trigger scan | 3 days | Emails arrive; recovery works |
+| Phase 3: Canary 10% | Enable auto-scan for 10% of users | 3 days | Recovery rate > 5%; no email complaints |
+| Phase 4: GA | Enable for all | Permanent | Positive revenue recovery signal |
+
+### 9.3 Rollback
+
+1. Set `CART_REMINDERS_ENABLED=false` — stops scan loop and email sending
+2. Existing recovery tokens remain valid until TTL
+3. Preferences and analytics data preserved
+4. No impact on cart functionality
+
+---
+
+## 10. Dependencies
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|

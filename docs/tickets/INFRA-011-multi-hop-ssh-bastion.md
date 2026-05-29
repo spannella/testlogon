@@ -497,3 +497,362 @@ Each hop in a multi-hop connection is audit-logged: `ssh.connect_hop` with hop n
 8. Host edit dialog includes bastion toggle and bastion selector.
 9. Connection status shows per-hop progress.
 10. All multi-hop connections produce per-hop audit events.
+
+---
+
+## 8. Architecture & Data Flow
+
+```
+  User clicks "Connect" on a host with bastion_host_id
+       │
+       ▼
+  Frontend: WebSocket connect { host_id: "target-host-id" }
+       │
+       ▼
+  WebSocket handler (browser_ssh_terminal.py)
+       │
+       ├── resolve_connection_chain(user_sub, host_id)
+       │     │
+       │     ├── get_host(user_sub, "target-host") → { bastion_host_id: "bastion-1" }
+       │     ├── get_host(user_sub, "bastion-1") → { bastion_host_id: "" } (direct)
+       │     │
+       │     ├── Cycle detection: visited = {"target-host", "bastion-1"} ✓
+       │     ├── Hop count: 2 <= max_hops(3) ✓
+       │     │
+       │     └── Returns chain: [
+       │           { hostname: "10.0.0.1", port: 22, key_id: "bastion-key" },  # hop 1
+       │           { hostname: "172.16.0.5", port: 22, key_id: "target-key" },  # hop 2
+       │         ]
+       │
+       ├── len(chain) > 1 → MultiHopSshBridge
+       │     │
+       │     ├── Hop 1: paramiko.Transport(("10.0.0.1", 22))
+       │     │     └── connect(username, pkey=bastion_key)
+       │     │
+       │     ├── open_channel("direct-tcpip", dest=("172.16.0.5", 22))
+       │     │     └── TCP forwarding through bastion transport
+       │     │
+       │     ├── Hop 2: paramiko.Transport(channel)
+       │     │     └── connect(username, pkey=target_key)
+       │     │
+       │     └── open_session() + get_pty() + invoke_shell()
+       │           └── Interactive terminal session on target host
+       │
+       └── audit_event per hop:
+             ├── "ssh.connect_hop" { hop: 1, host: "bastion-1" }
+             └── "ssh.connect_hop" { hop: 2, host: "target-host" }
+```
+
+---
+
+## 9. Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table / GSI | PK | SK | Operation | Notes |
+|---|---------------|-------------|----|----|-----------|-------|
+| 1 | Get host with bastion fields | `remote_hosts` | `user_sub` | `HOST#{host_id}` | GetItem | Returns is_bastion, bastion_host_id |
+| 2 | Update host bastion fields | `remote_hosts` | `user_sub` | `HOST#{host_id}` | UpdateItem SET is_bastion, bastion_host_id | User-initiated |
+| 3 | List bastion hosts only | `remote_hosts` | `user_sub` | begins_with `HOST#` | Query + FilterExpression `is_bastion = :true` | For dropdown selector |
+| 4 | Resolve chain (recursive) | `remote_hosts` | `user_sub` | `HOST#{host_id}` | GetItem (1 per hop) | Up to 3 GetItems for max_hops=3 |
+| 5 | Get connection profile per hop | `connection_profiles` | `user_sub` | `PROFILE#{host_id}` | GetItem | SSH key + auth method per hop |
+| 6 | Get SSH key per hop | `ssh_keys` | `user_sub` | `KEY#{key_id}` | GetItem | Decrypted private key for auth |
+| 7 | Audit log per hop | `audit_log` | `user_sub` | `{timestamp}#{event_id}` | PutItem | One per hop in chain |
+
+---
+
+## 10. API Request/Response Examples
+
+**PATCH /ui/remote/hosts/{id}** (Mark as bastion)
+
+```bash
+curl -X PATCH http://localhost:8000/ui/remote/hosts/h-bastion-1 \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_xxx; ui_csrf=csrf_xxx; ui_access_token=jwt_xxx" \
+  -H "x-csrf-token: csrf_xxx" \
+  -d '{ "is_bastion": true }'
+```
+
+Response (200):
+```json
+{
+  "host_id": "h-bastion-1",
+  "label": "Production Bastion",
+  "hostname": "10.0.0.1",
+  "port": 22,
+  "is_bastion": true,
+  "bastion_host_id": ""
+}
+```
+
+**PATCH /ui/remote/hosts/{id}** (Set bastion for target)
+
+```json
+// Request
+{ "bastion_host_id": "h-bastion-1" }
+
+// Response (200)
+{
+  "host_id": "h-target-1",
+  "label": "App Server",
+  "hostname": "172.16.0.5",
+  "port": 22,
+  "is_bastion": false,
+  "bastion_host_id": "h-bastion-1"
+}
+```
+
+**GET /ui/remote/hosts/{id}/connection-chain**
+
+```bash
+curl http://localhost:8000/ui/remote/hosts/h-target-1/connection-chain \
+  -H "Cookie: ui_session=sess_xxx; ui_access_token=jwt_xxx"
+```
+
+Response (200):
+```json
+{
+  "chain": [
+    {
+      "host_id": "h-bastion-1",
+      "hostname": "10.0.0.1",
+      "port": 22,
+      "username": "ubuntu",
+      "ssh_key_id": "key-bastion",
+      "auth_method": "key_ref",
+      "is_bastion": true,
+      "hop_number": 1
+    },
+    {
+      "host_id": "h-target-1",
+      "hostname": "172.16.0.5",
+      "port": 22,
+      "username": "ubuntu",
+      "ssh_key_id": "key-target",
+      "auth_method": "key_ref",
+      "is_bastion": false,
+      "hop_number": 2
+    }
+  ],
+  "total_hops": 2
+}
+```
+
+**Circular chain error:**
+
+Response (400):
+```json
+{ "detail": "Circular bastion chain detected" }
+```
+
+**Chain exceeding max hops:**
+
+Response (400):
+```json
+{ "detail": "Connection chain exceeds maximum 3 hops" }
+```
+
+---
+
+## 11. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Host not found | 404 | `host_not_found` | "Host not found" | Verify host ID |
+| Bastion host not found | 404 | `bastion_not_found` | "Bastion host not found" | Check bastion_host_id |
+| Circular bastion chain | 400 | `circular_chain` | "Circular bastion chain detected" | Remove the circular reference |
+| Chain exceeds max hops | 400 | `max_hops_exceeded` | "Connection chain exceeds 3 hops" | Reduce chain depth |
+| Missing SSH key for hop | 400 | `missing_credentials` | "No SSH key configured for hop" | Add SSH key via INFRA-002 |
+| Bastion unreachable | 502 | `connection_failed` | "Could not connect to bastion host" | Check bastion connectivity |
+| Target unreachable via bastion | 502 | `channel_failed` | "Could not reach target through bastion" | Verify target is reachable from bastion |
+| Self-referencing bastion | 400 | `circular_chain` | "Host cannot be its own bastion" | Set a different bastion |
+| Other user's host | 403 | `forbidden` | "Access denied" | Use your own hosts |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Log in |
+
+---
+
+## 12. Frontend Component Tree
+
+```
+HostInventoryPage (modified)
+├── HostTable
+│   └── HostRow[]
+│       ├── HostLabel
+│       ├── Hostname
+│       ├── BastionBadge (shown if is_bastion=true, blue "Bastion" badge)
+│       ├── ViaLabel ("via Production Bastion" if bastion_host_id set)
+│       ├── ConnectButton
+│       │   └── onClick → resolve chain, validate all hops have keys, connect
+│       └── EditButton → opens AddHostDialog
+│
+AddHostDialog (modified)
+├── ExistingFields (label, hostname, port, protocol, etc.)
+├── BastionSection
+│   ├── IsBastionCheckbox ("This is a bastion/jump host")
+│   └── BastionSelectorDropdown ("Connect via bastion")
+│       ├── OptionList (hosts where is_bastion=true)
+│       └── ClearOption ("Direct connection — no bastion")
+├── ConnectionChainPreview (shown when bastion selected)
+│   └── ChainVisualization
+│       ├── PlatformNode ("Platform")
+│       ├── Arrow ("→")
+│       ├── BastionNode ("Bastion (10.0.0.1)")
+│       ├── Arrow ("→")
+│       └── TargetNode ("Target (172.16.0.5)")
+└── SaveButton
+
+SSH Terminal (modified connection status)
+├── ConnectionProgress
+│   ├── HopStatus("Connecting to bastion...", spinner)
+│   ├── HopStatus("Connected to bastion ✓")
+│   ├── HopStatus("Connecting to target...", spinner)
+│   └── HopStatus("Connected to target ✓")
+└── TerminalView (existing)
+```
+
+**Props interfaces:**
+
+```typescript
+interface BastionBadgeProps {
+  isBastion: boolean;
+}
+
+interface ViaLabelProps {
+  bastionLabel: string;
+}
+
+interface BastionSelectorProps {
+  value: string;           // bastion_host_id or ""
+  onChange: (hostId: string) => void;
+  bastionHosts: HostOut[];
+  excludeHostId: string;   // can't select self
+}
+
+interface ConnectionChainPreviewProps {
+  chain: ConnectionChainHop[];
+}
+
+interface HopStatusProps {
+  hopNumber: number;
+  hostLabel: string;
+  status: "connecting" | "connected" | "failed";
+}
+```
+
+---
+
+## 13. Observability
+
+### 13.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `ssh_multihop_connections_total` | Counter | `hops` (1/2/3), `result` (success/failed) | Multi-hop connection attempts |
+| `ssh_hop_latency_seconds` | Histogram | `hop_number` | Time to establish each hop |
+| `ssh_chain_resolution_total` | Counter | `result` (ok/circular/max_hops/missing) | Chain resolution attempts |
+| `ssh_bastion_hosts_total` | Gauge | | Total bastion hosts configured |
+| `ssh_channel_forwarding_total` | Counter | | Paramiko direct-tcpip channels opened |
+
+### 13.2 Structured Logging
+
+| Log Event | Level | Fields | Trigger |
+|-----------|-------|--------|---------|
+| `ssh.chain_resolved` | INFO | `user_sub`, `target_host_id`, `hops`, `chain` | Chain successfully resolved |
+| `ssh.chain_circular` | WARN | `user_sub`, `visited_hosts` | Circular chain detected |
+| `ssh.hop_connected` | INFO | `user_sub`, `hop_number`, `hostname`, `duration_ms` | Individual hop connected |
+| `ssh.hop_failed` | ERROR | `user_sub`, `hop_number`, `hostname`, `error` | Individual hop failed |
+| `ssh.multihop_session_started` | INFO | `user_sub`, `total_hops`, `target_host_id` | Full session established |
+
+### 13.3 Alerting
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High multi-hop failure rate | > 20% of multi-hop connections fail in 1 hour | Warning | Check bastion health |
+| Circular chain detected | Any circular chain resolution | Info | Notify user to fix config |
+
+---
+
+## 14. Performance Considerations
+
+### 14.1 Latency Targets
+
+| Operation | Target P95 | Notes |
+|-----------|-----------|-------|
+| Chain resolution | < 100ms | 1-3 DDB GetItems (parallel where possible) |
+| Bastion list query | < 100ms | DDB Query + FilterExpression |
+| Single hop connection (dev mock) | < 50ms | No real TCP connection |
+| Single hop connection (production) | < 5s | TCP + SSH handshake |
+| Full 3-hop connection (production) | < 15s | Sequential hops |
+
+### 14.2 Connection Lifecycle
+
+- Each hop maintains an open Paramiko Transport for the duration of the session.
+- Channel forwarding adds ~5ms latency per hop for data throughput (negligible for interactive SSH).
+- `MultiHopSshBridge.close()` tears down in reverse order to prevent orphaned channels.
+
+### 14.3 Resource Cleanup
+
+- On WebSocket disconnect, all transports and channels are closed in reverse order.
+- A 30-second grace period prevents premature cleanup on brief network blips.
+- If cleanup fails, transports have built-in TCP keepalive that will close after timeout.
+
+---
+
+## 15. Rollout Plan
+
+### 15.1 Feature Flags
+
+| Flag | Environment Variable | Default | Description |
+|------|---------------------|---------|-------------|
+| `multihop_ssh_enabled` | `MULTIHOP_SSH_ENABLED` | `true` | Master switch for multi-hop |
+| `max_ssh_hops` | `MAX_SSH_HOPS` | `3` | Maximum hops in a chain |
+
+### 15.2 Phased Rollout
+
+**Phase 1 (Day 1)**: Host inventory extension (is_bastion, bastion_host_id fields).
+
+**Phase 2 (Day 2)**: Chain resolution service with cycle detection and hop limits.
+
+**Phase 3 (Day 3-4)**: MultiHopSshBridge class + WebSocket handler integration.
+
+**Phase 4 (Day 5)**: Frontend bastion toggle, selector, chain preview.
+
+**Phase 5 (Day 6-7)**: E2E tests, production rollout.
+
+### 15.3 Rollback
+
+1. Set `MULTIHOP_SSH_ENABLED=false` — WebSocket handler ignores `host_id` and falls back to direct connect.
+2. Bastion fields remain on host records but are unused.
+3. Frontend hides bastion selector when flag is off.
+
+---
+
+## 16. Expanded E2E Tests
+
+### Section 277: Bastion Host Configuration API (5 tests) -- existing
+
+1-5. (As defined above in Section 5)
+
+### Section 278: Multi-Hop Chain Validation API (4 tests) -- existing
+
+6-9. (As defined above in Section 5)
+
+### Section 279: Bastion Host UI (3 tests) -- existing
+
+10-12. (As defined above in Section 5)
+
+### Section 280: Chain Resolution Edge Cases (7 tests)
+
+13. `3-hop chain resolves correctly` -- Create A → B → C chain (3 hops). GET chain for C. Verify 3 hops in correct order.
+14. `Self-referencing bastion returns 400` -- Set host's bastion_host_id to itself. GET chain → 400.
+15. `Chain with non-existent intermediate bastion returns 404` -- Host A bastion → "non-existent-id". GET chain → 404.
+16. `Clear bastion_host_id makes host direct-connect` -- PATCH bastion_host_id="". GET chain. Verify 1 hop.
+17. `Bastion list endpoint returns only bastions` -- Create 3 hosts (1 bastion, 2 regular). GET hosts with `?is_bastion=true`. Verify 1 result.
+18. `Chain resolution includes connection profile data` -- Set connection profile on each hop. GET chain. Verify `ssh_key_id` and `username` populated on each hop.
+19. `Multiple hosts can reference same bastion` -- Host B and Host C both use bastion A. GET chain for B → 2 hops. GET chain for C → 2 hops. Both have same first hop.
+
+### Section 281: Multi-User Isolation & Security (5 tests)
+
+20. `Alice cannot resolve chain for Bob's host` -- Bob creates host. Alice GET chain for Bob's host → 403 or 404.
+21. `Alice cannot modify Bob's host bastion field` -- PATCH Bob's host → 403.
+22. `Bastion selector only shows user's own bastion hosts` -- Alice marks host as bastion. Bob's bastion list does not include Alice's host.
+23. `Connection audit records include all hops` -- Connect via 2-hop chain. Query audit log. Verify 2 `ssh.connect_hop` events.
+24. `Each hop in chain uses different SSH key` -- Configure different keys for bastion and target. Verify chain resolution returns correct key_id per hop.

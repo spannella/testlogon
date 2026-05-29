@@ -596,3 +596,593 @@ test.beforeAll(async ({ browser }) => {
 - Remove KYC event types from `WEBHOOK_EVENT_TYPES_V2` in `app/services/webhook_service.py`.
 - Delete `app/services/kyc_notifications.py` and `app/routers/kyc_notifications.py`.
 - Notification preference records (`SK=KYC_NOTIFICATION_PREFS`) in the users table are inert and can remain.
+
+---
+
+## 8. Architecture & Data Flow
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                           Frontend                                         │
+│                                                                            │
+│  KycNotificationPrefs.tsx                  AlertsBell (header)             │
+│  ┌──────────────────────────────┐         ┌──────────────────────────┐    │
+│  │ ChannelToggles                │         │ KYC alert items in       │    │
+│  │  ├─ Switch (Email)            │         │ notification dropdown    │    │
+│  │  ├─ Switch (SMS)              │         │  ├─ "Verification         │    │
+│  │  └─ Switch (Push)             │         │  │   submitted"          │    │
+│  │ EventCheckboxes               │         │  ├─ "Approved!"          │    │
+│  │  ├─ ☑ case.submitted          │         │  └─ "Info needed"        │    │
+│  │  ├─ ☑ case.approved           │         └──────────────────────────┘    │
+│  │  ├─ ☑ case.rejected           │                                         │
+│  │  ├─ ☑ case.needs_info         │                                         │
+│  │  ├─ ☐ screening.match_found   │                                         │
+│  │  ├─ ☑ tier.upgraded           │                                         │
+│  │  └─ ☑ tier.downgraded         │                                         │
+│  │ Button "Save Preferences"     │                                         │
+│  └──────────────────────────────┘                                          │
+└──────────────────┬─────────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                      Backend (FastAPI)                                      │
+│                                                                            │
+│  KYC State Transition (kyc_cases.py)                                      │
+│  ┌──────────────────────────────────────────────────────────────────┐     │
+│  │ create_kyc_case()     → kyc_notify("kyc.case.created")          │     │
+│  │ submit_kyc_case()     → kyc_notify("kyc.case.submitted")        │     │
+│  │ _admin_decide_case()  → kyc_notify("kyc.case.approved")         │     │
+│  │                       → kyc_notify("kyc.case.rejected")          │     │
+│  │ admin_request_info()  → kyc_notify("kyc.case.needs_info")       │     │
+│  └──────────────────────────────────────────────────────────────────┘     │
+│                         │                                                  │
+│                         ▼                                                  │
+│  kyc_notify() dispatcher (kyc_notifications.py)                           │
+│  ┌──────────────────────────────────────────────────────────────────┐     │
+│  │ 1. write_alert()         → alerts table (always)                  │     │
+│  │ 2. send_alert_email()    → SES mock (if email_enabled + event)   │     │
+│  │ 3. send_alert_sms()      → SNS mock (if sms_enabled + urgent)   │     │
+│  │ 4. dispatch_webhook()    → webhook_dispatcher (if endpoint set)  │     │
+│  │ 5. _notify_admin_queue() → audit_event (for admin events)        │     │
+│  └──────────────────────────────────────────────────────────────────┘     │
+│                                                                            │
+│  Notification Preferences (users table)                                   │
+│  ┌──────────────────────────────────────────────────────────────────┐     │
+│  │ PK=USER#{sub}, SK=KYC_NOTIFICATION_PREFS                         │     │
+│  │ { email_enabled, sms_enabled, push_enabled, events[] }           │     │
+│  └──────────────────────────────────────────────────────────────────┘     │
+└──────────────────┬─────────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│  External channels (all mocked in dev)                                    │
+│  ┌─────────────┐ ┌─────────────┐ ┌──────────────────┐ ┌──────────────┐  │
+│  │ alerts table │ │ SES (email) │ │ SNS (SMS)        │ │ webhooks     │  │
+│  │ (in-app)    │ │ mocked by   │ │ mocked by moto   │ │ dispatcher + │  │
+│  │             │ │ moto        │ │                   │ │ retry + DLQ  │  │
+│  └─────────────┘ └─────────────┘ └──────────────────┘ └──────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | Notes |
+|---|---------------|-------|---------------|-------|
+| 1 | Get notification prefs | `users` | PK=`USER#{sub}`, SK=`KYC_NOTIFICATION_PREFS` | Returns defaults if not found |
+| 2 | Update notification prefs | `users` | PK=`USER#{sub}`, SK=`KYC_NOTIFICATION_PREFS` | PutItem (full replace) |
+| 3 | Write in-app alert | `alerts` | PK=`{user_sub}`, SK=`{alert_id}` | Via existing `write_alert()` |
+| 4 | Query KYC notification history | `alerts` | PK=`{user_sub}`, filter `event begins_with "kyc."` | ScanIndexForward=False, Limit=50 |
+| 5 | Query admin subscriptions | `users` | GSI `ByRole`, filter SK begins_with `KYC_ADMIN_NOTIFY` | For admin notification dispatch |
+| 6 | Get user profile (for email/phone) | `users` | PK=`USER#{sub}`, SK=`PROFILE` | For email and SMS delivery |
+
+---
+
+## 10. API Request/Response Examples
+
+### 10.1 Get Notification Preferences
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/notifications/preferences" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a"
+```
+
+**Response (200):**
+```json
+{
+  "email_enabled": true,
+  "sms_enabled": false,
+  "push_enabled": true,
+  "events": [
+    "kyc.case.created",
+    "kyc.case.submitted",
+    "kyc.case.approved",
+    "kyc.case.rejected",
+    "kyc.case.needs_info",
+    "kyc.screening.match_found",
+    "kyc.tier.upgraded",
+    "kyc.tier.downgraded"
+  ]
+}
+```
+
+### 10.2 Update Notification Preferences
+
+```bash
+curl -X PATCH "http://localhost:8000/v1/kyc/notifications/preferences" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a" \
+  -H "x-csrf-token: csrf_a" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email_enabled": false,
+    "sms_enabled": true,
+    "events": ["kyc.case.approved", "kyc.case.rejected", "kyc.case.needs_info"]
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "email_enabled": false,
+  "sms_enabled": true,
+  "push_enabled": true,
+  "events": ["kyc.case.approved", "kyc.case.rejected", "kyc.case.needs_info"]
+}
+```
+
+### 10.3 Get Notification History
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/notifications/history" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a"
+```
+
+**Response (200):**
+```json
+{
+  "items": [
+    {
+      "alert_id": "alert_abc123",
+      "event": "kyc.case.approved",
+      "title": "Identity verification approved!",
+      "details": {
+        "case_id": "kyc_a1b2c3d4",
+        "user_sub": "e2e_alice@test.local",
+        "timestamp": 1716768000
+      },
+      "action_url": "/kyc/status?case_id=kyc_a1b2c3d4",
+      "created_at": 1716768000,
+      "read": false
+    },
+    {
+      "alert_id": "alert_def456",
+      "event": "kyc.case.submitted",
+      "title": "Verification submitted for review",
+      "details": {
+        "case_id": "kyc_a1b2c3d4",
+        "timestamp": 1716681600
+      },
+      "action_url": "/kyc/status?case_id=kyc_a1b2c3d4",
+      "created_at": 1716681600,
+      "read": true
+    }
+  ]
+}
+```
+
+---
+
+## 11. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|----------------|
+| Get prefs for non-authenticated user | 401 | `unauthorized` | "Authentication required." | Log in |
+| Update prefs with invalid event type | 200 | — | Invalid events silently filtered out | Normal behavior |
+| Update prefs with empty events list | 200 | — | Sets empty events list (no notifications) | Re-enable events |
+| Notification history with no KYC alerts | 200 | — | Returns empty items array | Normal behavior |
+| Email delivery failure (SES error) | N/A | — | Alert still written; email channel marked failed in result | Retry or check email |
+| SMS delivery failure (SNS error) | N/A | — | Alert still written; SMS channel marked failed in result | Check phone number |
+| Webhook endpoint down | N/A | — | Enters retry/DLQ pipeline | Webhook retry handles |
+| Admin subscribe without ROOT session | 403 | `root_session_required` | "Root access required." | Use root credentials |
+
+---
+
+## 12. Pydantic Models
+
+### 12.1 Request Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+
+class NotificationPreferencesUpdateRequest(BaseModel):
+    """Request to update a user's KYC notification preferences."""
+    enabled_events: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="List of KYC event names to receive notifications for.",
+        examples=[["case.approved", "case.rejected", "case.needs_more_info"]],
+    )
+    channels: list[Literal["in_app", "email", "sms"]] = Field(
+        default_factory=lambda: ["in_app"],
+        max_length=3,
+        description="Notification delivery channels. in_app is always active.",
+        examples=[["in_app", "email"]],
+    )
+    email_override: str | None = Field(
+        default=None,
+        max_length=254,
+        description="Override email for KYC notifications (defaults to account email).",
+        examples=["kyc-alerts@mycompany.com"],
+    )
+    phone_override: str | None = Field(
+        default=None,
+        max_length=20,
+        description="Override phone for SMS notifications.",
+        examples=["+15551234567"],
+    )
+
+
+class AdminWebhookSubscribeRequest(BaseModel):
+    """Request to subscribe an admin webhook for KYC events."""
+    url: str = Field(
+        min_length=10,
+        max_length=2000,
+        pattern=r"^https://",
+        description="Webhook URL (must be HTTPS).",
+        examples=["https://compliance.example.com/kyc-events"],
+    )
+    events: list[str] = Field(
+        min_length=1,
+        max_length=20,
+        description="KYC event names to subscribe to.",
+        examples=[["case.approved", "case.rejected", "screening.hit"]],
+    )
+    secret: str | None = Field(
+        default=None,
+        min_length=16,
+        max_length=256,
+        description="Shared secret for webhook HMAC signature verification.",
+    )
+
+
+class AdminWebhookUnsubscribeRequest(BaseModel):
+    """Request to remove an admin webhook subscription."""
+    subscription_id: str = Field(
+        min_length=1,
+        max_length=64,
+        description="ID of the webhook subscription to remove.",
+    )
+```
+
+### 12.2 Response Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Any, Literal
+
+
+class NotificationPreferencesOut(BaseModel):
+    """User's current KYC notification preferences."""
+    user_sub: str
+    enabled_events: list[str] = Field(default_factory=list)
+    channels: list[str] = Field(default_factory=lambda: ["in_app"])
+    email_override: str | None = None
+    phone_override: str | None = None
+    updated_at: int
+
+
+class NotificationChannelResultOut(BaseModel):
+    """Result of a single channel delivery attempt."""
+    channel: Literal["in_app", "email", "sms", "webhook"]
+    success: bool
+    error: str | None = None
+    delivered_at: int | None = None
+
+
+class NotificationDispatchResultOut(BaseModel):
+    """Result of a notification dispatch across all channels."""
+    event: str
+    user_sub: str
+    channels: list[NotificationChannelResultOut]
+    alert_id: str | None = Field(description="In-app alert ID, if created")
+    dispatched_at: int
+
+
+class NotificationHistoryItemOut(BaseModel):
+    """A single notification history entry."""
+    alert_id: str
+    event: str
+    title: str
+    body: str
+    channels: list[str]
+    read: bool
+    created_at: int
+
+
+class NotificationHistoryOut(BaseModel):
+    """List of past KYC notifications for a user."""
+    items: list[NotificationHistoryItemOut]
+    total: int
+    cursor: str | None = None
+
+
+class WebhookSubscriptionOut(BaseModel):
+    """An admin webhook subscription."""
+    subscription_id: str
+    url: str
+    events: list[str]
+    created_at: int
+    created_by: str
+    last_delivery_at: int | None = None
+    failure_count: int = Field(ge=0, default=0)
+
+
+class AdminWebhookListOut(BaseModel):
+    """List of all admin webhook subscriptions."""
+    subscriptions: list[WebhookSubscriptionOut]
+    total: int
+
+
+class KycEventPayload(BaseModel):
+    """Payload structure for KYC event notifications (webhook body)."""
+    event: str = Field(description="Event name (e.g., case.approved)")
+    case_id: str
+    user_sub: str
+    status: str
+    timestamp: int
+    details: dict[str, Any] = Field(default_factory=dict)
+    signature: str | None = Field(
+        default=None,
+        description="HMAC-SHA256 signature of the payload (if webhook secret configured)",
+    )
+```
+
+---
+
+## 13. Frontend Component Tree
+
+```
+NotificationPreferencesPage.tsx  (/settings/notifications or embedded in KycStatusPage)
+├── Props: none (uses auth context for user_sub)
+├── State:
+│   ├── form: useForm<NotificationPreferencesUpdateRequest>()
+│   └── saving: boolean (from useMutation)
+├── Queries:
+│   └── useQuery(["kyc","notification-prefs"]) → NotificationPreferencesOut
+├── Mutations:
+│   └── useMutation(updateNotificationPrefs)
+│       → onSuccess: invalidate ["kyc","notification-prefs"], toast "Preferences saved"
+│
+├── <Card>
+│   ├── <CardHeader>
+│   │   └── <CardTitle>"KYC Notification Preferences"</CardTitle>
+│   │
+│   ├── <CardContent>
+│   │   ├── <h4>"Events"</h4>
+│   │   ├── <CheckboxGroup>
+│   │   │   ├── <Checkbox label="Case Approved" value="case.approved" />
+│   │   │   ├── <Checkbox label="Case Rejected" value="case.rejected" />
+│   │   │   ├── <Checkbox label="More Info Requested" value="case.needs_more_info" />
+│   │   │   ├── <Checkbox label="Case Under Review" value="case.under_review" />
+│   │   │   ├── <Checkbox label="Screening Hit" value="screening.hit" />
+│   │   │   └── <Checkbox label="Risk Tier Changed" value="risk.tier_changed" />
+│   │   │
+│   │   ├── <Separator />
+│   │   │
+│   │   ├── <h4>"Delivery Channels"</h4>
+│   │   ├── <CheckboxGroup>
+│   │   │   ├── <Checkbox label="In-App Alerts" value="in_app" checked disabled />
+│   │   │   │   └── <span className="text-muted-foreground">"Always active"</span>
+│   │   │   ├── <Checkbox label="Email" value="email" />
+│   │   │   └── <Checkbox label="SMS" value="sms" />
+│   │   │
+│   │   ├── {channels.includes("email") &&
+│   │   │   <Input label="Email Override (optional)" placeholder="Default: account email"
+│   │   │          {...register("email_override")} />}
+│   │   │
+│   │   ├── {channels.includes("sms") &&
+│   │   │   <Input label="Phone Override (optional)" placeholder="Default: account phone"
+│   │   │          {...register("phone_override")} />}
+│   │   │
+│   │   └── <Button type="submit" disabled={saving}>"Save Preferences"</Button>
+│   │
+│   └── </CardContent>
+└── </Card>
+
+NotificationHistorySection.tsx  (embedded in KycStatusPage)
+├── Props: none
+├── Queries:
+│   └── useQuery(["kyc","notification-history"]) → NotificationHistoryOut
+│
+├── <Card>
+│   ├── <CardHeader>
+│   │   └── <CardTitle>"Notification History"</CardTitle>
+│   │
+│   ├── <CardContent>
+│   │   ├── {items.length === 0 && <p>"No notifications yet."</p>}
+│   │   └── items.map(item =>
+│   │       <div className={`p-3 border-b ${!item.read ? "bg-blue-50" : ""}`}>
+│   │         ├── <div className="flex justify-between">
+│   │         │   ├── <span className="font-medium">{item.title}</span>
+│   │         │   └── <span className="text-xs text-muted-foreground">
+│   │         │       {formatRelative(item.created_at)}
+│   │         │   </span>
+│   │         ├── <p className="text-sm">{item.body}</p>
+│   │         └── <div className="flex gap-1">
+│   │             {item.channels.map(ch => <Badge variant="outline">{ch}</Badge>)}
+│   │         </div>
+│   │       </div>)
+│   │
+│   └── {history.cursor && <Button variant="ghost">"Load More"</Button>}
+└── </Card>
+
+AdminWebhookManager.tsx  (admin-only, /admin/kyc/webhooks)
+├── Props: none
+├── State:
+│   ├── showAddDialog: boolean
+│   └── addForm: useForm<AdminWebhookSubscribeRequest>()
+├── Queries:
+│   └── useQuery(["kyc","admin-webhooks"]) → AdminWebhookListOut
+├── Mutations:
+│   ├── useMutation(adminSubscribeWebhook) → invalidate ["kyc","admin-webhooks"]
+│   └── useMutation(adminUnsubscribeWebhook) → invalidate ["kyc","admin-webhooks"]
+│
+├── <Card>
+│   ├── <CardHeader className="flex justify-between">
+│   │   ├── <CardTitle>"KYC Webhook Subscriptions"</CardTitle>
+│   │   └── <Button onClick={() => setShowAddDialog(true)}>"Add Webhook"</Button>
+│   │
+│   ├── <CardContent>
+│   │   └── <DataTable columns={["URL","Events","Last Delivery","Failures","Actions"]}>
+│   │       └── subscriptions.map(sub =>
+│   │           <TableRow>
+│   │             ├── <td>{sub.url}</td>
+│   │             ├── <td>{sub.events.join(", ")}</td>
+│   │             ├── <td>{sub.last_delivery_at ? formatDate(...) : "Never"}</td>
+│   │             ├── <td>{sub.failure_count > 0 ?
+│   │             │     <Badge variant="destructive">{sub.failure_count}</Badge>
+│   │             │     : "0"}</td>
+│   │             └── <td><Button variant="ghost" size="sm"
+│   │                   onClick={() => unsubscribe(sub.subscription_id)}>"Remove"</Button></td>
+│   │           </TableRow>)
+│   │
+│   └── <Dialog open={showAddDialog}>
+│       └── <DialogContent>
+│           ├── <DialogTitle>"Add Webhook Subscription"</DialogTitle>
+│           ├── <Form>
+│           │   ├── <Input label="URL (HTTPS)" {...register("url")} />
+│           │   ├── <CheckboxGroup label="Events" options={KYC_EVENTS} />
+│           │   ├── <Input label="Shared Secret (optional)" type="password" />
+│           │   └── <Button type="submit">"Subscribe"</Button>
+│           └── </Form>
+└── </Card>
+```
+
+### React Query Keys
+
+| Key | Endpoint | Stale Time | Invalidation |
+|-----|----------|------------|--------------|
+| `["kyc","notification-prefs"]` | `GET /v1/kyc/notifications/preferences` | 60s | After prefs update |
+| `["kyc","notification-history"]` | `GET /v1/kyc/notifications/history` | 30s | After new notification |
+| `["kyc","admin-webhooks"]` | `GET /v1/kyc/notifications/admin/webhooks` | 30s | After subscribe/unsubscribe |
+
+---
+
+## 14. Observability & Monitoring
+
+### Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `kyc_notification_dispatched` | Counter | `event`, `channel` | Notifications sent per event and channel |
+| `kyc_notification_channel_failure` | Counter | `event`, `channel` | Channel delivery failures |
+| `kyc_notification_prefs_updated` | Counter | — | Preference update requests |
+| `kyc_notification_admin_queue` | Counter | `event` | Admin queue notifications generated |
+| `kyc_notification_latency_ms` | Histogram | `event` | Time to dispatch across all channels |
+
+### Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Email delivery failure rate | > 10% failures in 1h | P2 |
+| SMS delivery failure rate | > 20% failures in 1h | P2 |
+| Webhook DLQ growing | > 50 KYC webhook events in DLQ | P3 |
+| No notifications dispatched | 0 notifications for > 24h (in production with active KYC flow) | P3 |
+
+---
+
+## 15. Performance Considerations
+
+| Operation | Latency Target | DDB Cost | Notes |
+|-----------|---------------|----------|-------|
+| Get notification prefs | < 50ms | 1 RCU | Single GetItem |
+| Update notification prefs | < 100ms | 1 WCU | Single PutItem |
+| kyc_notify() dispatch | < 300ms | 2-3 WCU | Alert write + audit; email/SMS/webhook are fire-and-forget |
+| Notification history query | < 200ms | 5-10 RCU | Query with filter; may scan past non-KYC alerts |
+| Admin queue notification | < 100ms | 1 WCU | Single audit event write |
+
+### Design Note
+
+The `kyc_notify()` function is called synchronously in the request path of state transitions. To avoid adding latency to case submission/approval, email and SMS delivery are fire-and-forget (exceptions caught and logged). Only the in-app alert write blocks the response. If delivery latency becomes a concern, email/SMS/webhook dispatch can be moved to a background task.
+
+---
+
+## 16. Expanded E2E Tests
+
+### Section 191 Additions: Preference Edge Cases (3 additional tests)
+
+```typescript
+test("191.6 Setting events to empty array disables all event notifications", async () => {
+  // PATCH with events: []
+  // GET prefs
+  // Verify events is empty array
+});
+
+test("191.7 Push_enabled toggle persists independently", async () => {
+  // PATCH with push_enabled: false (leave others unchanged)
+  // GET prefs
+  // Verify push_enabled: false, email/sms unchanged from previous state
+});
+
+test("191.8 Concurrent preference updates from same user are safe", async () => {
+  // PATCH twice quickly with different values
+  // GET prefs
+  // Verify latest write wins (last-write-wins DDB PutItem)
+});
+```
+
+### Section 192 Additions: Dispatch Edge Cases (4 additional tests)
+
+```typescript
+test("192.7 Email not sent when user has email_enabled=false", async () => {
+  // Set email_enabled: false
+  // Submit case
+  // Verify in-app alert exists but no email delivery record
+});
+
+test("192.8 SMS sent only for urgent events (needs_info, rejected)", async () => {
+  // Set sms_enabled: true
+  // Submit case (kyc.case.submitted)
+  // Verify no SMS sent (submitted is not an urgent event)
+  // Then have admin request info
+  // Verify SMS sent for kyc.case.needs_info
+});
+
+test("192.9 In-app alert always created regardless of preferences", async () => {
+  // Disable all channels (email, sms, push)
+  // Set events to empty array
+  // Submit case
+  // Verify in-app alert still created (always-on channel)
+});
+
+test("192.10 Notification includes action_url pointing to KYC status page", async () => {
+  // Submit case
+  // Get notification history
+  // Verify action_url contains "/kyc/status?case_id="
+});
+```
+
+### Section 193 Additions: Admin Notification Edge Cases (3 additional tests)
+
+```typescript
+test("193.5 Admin audit event includes full payload for submitted event", async () => {
+  // Submit case
+  // Query audit log for kyc.admin_notification.kyc.case.submitted
+  // Verify payload includes case_id and user_sub
+});
+
+test("193.6 Multiple admin subscriptions receive independent notifications", async () => {
+  // Subscribe two admins
+  // Submit case
+  // Verify audit events for both admins
+});
+
+test("193.7 Tier upgrade event dispatched when KYC case approved with tier change", async () => {
+  // Approve case that results in tier upgrade
+  // Verify kyc.tier.upgraded event in notification history
+  // Verify payload includes from_tier and to_tier
+});
+```

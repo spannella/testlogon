@@ -577,7 +577,126 @@ All instance records use `user_sub` as the DDB partition key. No cross-user acce
 
 ---
 
-## 7. Acceptance Criteria
+## 7. Observability & Monitoring
+
+### 7.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `ec2_instance_launched_total` | Counter | `instance_type`, `ami_id` | Instances launched |
+| `ec2_instance_terminated_total` | Counter | `reason` (user/auto_idle/admin) | Terminations by reason |
+| `ec2_instance_stopped_total` | Counter | — | Stop events |
+| `ec2_instance_started_total` | Counter | — | Start events |
+| `ec2_instance_launch_latency_seconds` | Histogram | `instance_type` | Time from launch request to running |
+| `ec2_auto_terminate_total` | Counter | — | Idle auto-terminations |
+| `ec2_active_instances` | Gauge | `user_sub` | Currently running instances per user |
+| `ec2_instance_limit_reached_total` | Counter | — | Instance limit rejection events |
+| `ec2_mock_mode` | Gauge | — | 1 if mock EC2, 0 if real |
+
+### 7.2 Structured Log Events
+
+```json
+{"logger": "ec2_launcher", "level": "info", "event": "instance_launched", "user_sub": "alice-uuid", "instance_id": "i-mock-abc123", "instance_type": "t3.micro", "ami_id": "ami-ubuntu-22", "ssh_key_id": "k_def456"}
+
+{"logger": "ec2_launcher", "level": "info", "event": "instance_terminated", "user_sub": "alice-uuid", "instance_id": "i-mock-abc123", "reason": "auto_idle", "runtime_minutes": 125}
+
+{"logger": "ec2_launcher", "level": "warn", "event": "instance_limit_reached", "user_sub": "alice-uuid", "current_count": 3, "max_allowed": 3}
+
+{"logger": "ec2_launcher", "level": "info", "event": "auto_terminate_scan", "scanned": 45, "terminated": 3, "duration_ms": 250}
+```
+
+### 7.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High launch rate | `rate(ec2_instance_launched_total[1h]) > 50` platform-wide | Warning | Possible abuse |
+| Auto-terminate failures | Background task errors > 3 consecutively | Critical | Manual instance cleanup needed |
+| Instance stuck in pending | Instance in `pending` state > 5 minutes | Warning | Check EC2 API / mock |
+| Long-running instance | Instance running > 24 hours | Info | Notify user about costs |
+
+---
+
+## 8. Rollout Plan
+
+### Phase 1: Mock Mode (Days 1-3)
+
+- **Feature flag**: `EC2_LAUNCHER_ENABLED=false`
+- Deploy with mock EC2 service only (no real AWS calls)
+- All endpoints return 404 when flag is off
+- Integration tests validate full lifecycle in mock mode
+
+### Phase 2: Internal Beta (Days 4-6)
+
+- **Feature flag**: `EC2_LAUNCHER_ENABLED=true` for internal users
+- Deploy frontend pages
+- Test launch + connect + auto-terminate flow
+- Validate host inventory auto-registration
+- Validate SSH key injection
+
+### Phase 3: Real EC2 (Days 7-8)
+
+- Configure real AWS credentials and VPC settings
+- Enable `ec2_real_mode=true` for staging
+- Validate real EC2 lifecycle matches mock behavior
+- **Rollback**: Set `EC2_LAUNCHER_ENABLED=false`; terminate any running instances manually
+
+### Phase 4: GA (Day 9+)
+
+- Enable for all users with conservative limits (max 2 instances)
+- Monitor spending, instance count, auto-terminate patterns
+- Gradually increase limits based on usage data
+
+---
+
+## 9. Performance Considerations
+
+### 9.1 Latency Targets
+
+| Operation | Target p50 | Target p99 | Notes |
+|-----------|-----------|-----------|-------|
+| Launch instance (mock) | < 100ms | < 300ms | In-memory mock |
+| Launch instance (real) | < 3s | < 10s | EC2 RunInstances API |
+| Stop/start instance | < 50ms | < 200ms | EC2 API call |
+| Terminate instance | < 50ms | < 200ms | EC2 API + DDB update |
+| List instances | < 30ms | < 100ms | DDB query |
+| Auto-terminate scan | < 2s | < 5s | Scan all running instances |
+
+### 9.2 DynamoDB Costs
+
+| Operation | RCU | WCU | Notes |
+|-----------|-----|-----|-------|
+| Launch (create record) | — | 2.5 | Instance + host inventory |
+| List instances | 2.0 | — | Query per user |
+| Terminate | — | 2.5 | Update instance + host |
+| Auto-terminate scan | 10.0 | varies | Scan + batch updates |
+
+### 9.3 Scalability
+
+- **Per-user instance limit**: Default 3, configurable. Keeps DDB item count bounded.
+- **Auto-terminate background task**: Runs every 60 seconds. Scans GSI for `status=running, last_activity_at < now - auto_terminate_after`. Efficient with GSI range query.
+- **Mock EC2 state**: In-memory `_MockEc2Store` is per-process. With `--workers 1` this is fine for dev. Production uses real EC2 API (stateless).
+- **EC2 API rate limits**: AWS allows ~100 RunInstances/sec per account. Platform-wide launches are well under this.
+
+### 9.4 Rate Limiting
+
+| Action | Limit | Window | Key |
+|--------|-------|--------|-----|
+| Launch instance | 5 | 1 hour | user_sub |
+| Stop/start | 10 | 1 hour | user_sub |
+| Terminate | 10 | 1 hour | user_sub |
+| List instances | 60 | 1 minute | user_sub |
+
+### 9.5 Caching
+
+| Data | Cache | TTL | Invalidation |
+|------|-------|-----|--------------|
+| Instance list | React Query | 10s staleTime | On launch/stop/start/terminate |
+| Instance types (allowlist) | In-memory dict | 300s | On settings change |
+| AMI list | In-memory dict | 300s | On settings change |
+
+---
+
+## 10. Acceptance Criteria
 
 1. Users can launch EC2 instances from a curated list of instance types and AMIs.
 2. Mock EC2 service works in dev mode with simulated IPs and lifecycle.

@@ -470,21 +470,105 @@ test.beforeAll(async ({ browser }) => {
 | 316.2 | Share links management page shows links | Navigate to `/files/share-links`; `[data-testid="share-links-page"]` visible; link listed |
 | 316.3 | Public download page shows file info | Navigate to `/share/{linkId}` (unauthenticated); file name and download button visible |
 
+### 5.8 Section 317: Concurrent Access & Edge Cases (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 317.1 | Two simultaneous downloads on max_downloads=2 link | Both succeed; download_count=2; third attempt gets 410 |
+| 317.2 | Create link for soft-deleted file fails | Soft-delete file; POST create link; 404 "File not found" |
+| 317.3 | Download with expired password link | Create link with password + 1h expiry; mock time past expiry; download returns 410 "expired" (not password prompt) |
+| 317.4 | Large file share (near size limit) | Create link for file near max_file_size; encryption completes; download succeeds |
+| 317.5 | Revoke link cleans up S3 encrypted object | Revoke link; verify S3 encrypted object deleted via mock S3 list |
+
+### 5.9 Section 318: Share Link Info Endpoint (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 318.1 | Info endpoint returns file metadata without auth | GET `/public/files/share/{id}/info` with no cookies; 200; file_name, file_size_bytes present |
+| 318.2 | Info endpoint does not reveal owner or S3 key | Response does NOT contain `owner_sub`, `s3_key`, or `encryption_key_encrypted` |
+| 318.3 | Info for used link shows remaining_downloads=0 | Download link to exhaustion; GET info; `remaining_downloads=0`, `is_expired=false`, `is_used=true` |
+
+### 5.10 API Request/Response Examples
+
+**Create a share link** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/files/share-links \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_a" \
+  -d '{
+    "file_node_id": "node_abc123",
+    "expiry_hours": 24,
+    "max_downloads": 3,
+    "password": "s3cretP@ss"
+  }'
+```
+
+**Response (201)**:
+```json
+{
+  "link_id": "fsl_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+  "share_url": "http://localhost:3000/share/fsl_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+  "file_name": "project-plan.pdf",
+  "expires_at": 1748606500,
+  "max_downloads": 3,
+  "has_password": true,
+  "created_at": 1748520100
+}
+```
+
+**Download via share link** (curl):
+
+```bash
+curl -X POST http://localhost:8000/public/files/share/fsl_a1b2c3d4/download \
+  -H "Content-Type: application/json" \
+  -d '{"password": "s3cretP@ss"}' \
+  -o downloaded-file.pdf
+```
+
+**Response (200)**: Binary file stream with `Content-Disposition: attachment; filename="project-plan.pdf"` header.
+
+**Get link info** (curl, no auth):
+
+```bash
+curl -X GET http://localhost:8000/public/files/share/fsl_a1b2c3d4/info
+```
+
+**Response (200)**:
+```json
+{
+  "file_name": "project-plan.pdf",
+  "file_size_bytes": 245760,
+  "content_type": "application/pdf",
+  "requires_password": true,
+  "is_expired": false,
+  "is_used": false,
+  "remaining_downloads": 3
+}
+```
+
 ---
 
-## 6. Error Handling
+## 6. Error Handling Matrix
 
-| Scenario | Status | Detail |
-|----------|--------|--------|
-| File not found | 404 | "File not found" |
-| File not owned by user | 403 | "Forbidden" |
-| File too large for sharing | 400 | "File exceeds maximum share size" |
-| Link expired | 410 | "This link has expired" |
-| Link already used (downloads exhausted) | 410 | "This link has already been used" |
-| Link revoked | 410 | "This link has been revoked" |
-| Wrong password | 403 | "Invalid password" |
-| Link not found | 404 | "Share link not found" |
-| KMS decryption failure | 500 | "Unable to process download" (logged server-side) |
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| File not found | 404 | `file_not_found` | "File not found" | Verify file exists in file manager |
+| File not owned by user | 403 | `forbidden` | "You don't have permission to share this file" | Only owner can create share links |
+| File too large for sharing | 400 | `file_too_large` | "File exceeds 5GB maximum for sharing" | Use direct sharing instead |
+| Link expired | 410 | `link_expired` | "This link has expired" | Request a new link from the owner |
+| Link already used (downloads exhausted) | 410 | `link_used` | "This link has already been used" | Request a new link from the owner |
+| Link revoked | 410 | `link_revoked` | "This link has been revoked by the owner" | Contact the owner |
+| Wrong password | 403 | `invalid_password` | "Invalid password" | Re-enter correct password |
+| Password attempts exceeded | 429 | `too_many_attempts` | "Too many password attempts. Try again in 1 minute." | Wait 60 seconds |
+| Link not found | 404 | `link_not_found` | "Share link not found" | Check URL is correct |
+| KMS decryption failure | 500 | `internal_error` | "Unable to process download" | Retry; contact support if persistent |
+| S3 object missing | 500 | `internal_error` | "File content unavailable" | Owner must re-create share link |
+| Unauthenticated (management endpoints) | 401 | `unauthorized` | "Authentication required" | Log in |
+| CSRF mismatch | 403 | `csrf_invalid` | "Invalid CSRF token" | Refresh page |
+| Rate limited (public download) | 429 | `rate_limited` | "Too many download attempts" | Wait and retry |
+| Max active links per file exceeded | 400 | `max_links` | "Maximum of 10 active share links per file" | Revoke old links first |
 
 ---
 
@@ -524,7 +608,103 @@ test.beforeAll(async ({ browser }) => {
 
 ---
 
-## 8. Dependencies
+## 8. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| File encryption time | < 2s for 100MB file | AES-256-GCM with streaming encryption; process in 64KB chunks |
+| Download latency | < 500ms TTFB | S3 streaming response with chunked transfer encoding |
+| KMS key decryption | < 100ms | Single KMS decrypt call per download; key cached in-memory for duration of request |
+| Password hashing latency | < 300ms | bcrypt work factor 12; acceptable for security-sensitive operation |
+| Public endpoint abuse | < 10 req/min per IP | IP-based rate limiting via middleware |
+| S3 encrypted object storage | Same as original | Encrypted copy stored in separate S3 prefix; TTL cleanup removes expired |
+| DDB query for link status | < 5ms | Direct GetItem by link_id PK |
+| Concurrent downloads | Support 100 concurrent | Each download is independent streaming response; no shared state |
+
+### 8.1 Rate Limiting
+
+| Endpoint | Limit | Scope | Window |
+|----------|-------|-------|--------|
+| POST `/public/files/share/{id}/download` | 10 requests | Per IP | 1 minute |
+| POST `/public/files/share/{id}/download` (password) | 5 attempts | Per link ID + IP | 1 minute |
+| POST `/ui/files/share-links` (create) | 20 links | Per user | 1 hour |
+| GET `/public/files/share/{id}/info` | 30 requests | Per IP | 1 minute |
+
+---
+
+## 9. Observability
+
+### 9.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `share_link_created_total` | Counter | `has_password`, `expiry_hours` | Share links created |
+| `share_link_downloaded_total` | Counter | `has_password` | Successful downloads |
+| `share_link_download_failed_total` | Counter | `reason` (expired/used/revoked/bad_password) | Failed download attempts |
+| `share_link_revoked_total` | Counter | — | Links revoked by owner |
+| `share_link_download_latency_ms` | Histogram | — | Download request latency (TTFB) |
+| `share_link_encryption_latency_ms` | Histogram | — | File encryption time on link creation |
+| `share_link_password_attempts_total` | Counter | `result` (success/failure) | Password verification attempts |
+
+### 9.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Share link created | INFO | `user_sub`, `link_id`, `file_name`, `expiry_hours`, `max_downloads`, `has_password` |
+| Share link downloaded | INFO | `link_id`, `download_ip`, `download_count`, `file_size_bytes` |
+| Share link download rejected | WARN | `link_id`, `reason`, `download_ip` |
+| Wrong password attempt | WARN | `link_id`, `attempt_ip`, `attempt_count` |
+| Share link revoked | INFO | `user_sub`, `link_id` |
+| KMS decryption error | ERROR | `link_id`, `error_message` |
+| S3 object missing | ERROR | `link_id`, `s3_key` |
+
+### 9.3 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High password failure rate | > 10 failures/min on single link | High | Possible brute force; increase rate limit |
+| KMS decryption errors | Any KMS error | Critical | Check KMS key status and permissions |
+| Download error rate | > 5% of downloads fail | High | Check S3 availability |
+| Encryption time spike | p95 > 5s | Medium | Check file sizes and CPU |
+
+---
+
+## 10. Rollout Plan
+
+### 10.1 Feature Flag
+
+```python
+# app/core/settings.py
+share_links_enabled: bool = os.environ.get("SHARE_LINKS_ENABLED", "true").lower() == "true"
+```
+
+### 10.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend + table | Deploy DDB table + endpoints; flag OFF | 2 days | Unit tests pass; encryption validated |
+| Phase 2: Internal | Enable for internal accounts | 3 days | E2E pass; security review |
+| Phase 3: Canary 5% | Enable for 5% of users | 3 days | No KMS errors; download success rate > 99% |
+| Phase 4: GA | Enable for all users | Permanent | No security incidents |
+
+### 10.3 Migration
+
+1. Create `file_share_links` table via `scripts/local-ddb-init.py` with TTL on `ttl_delete_at`
+2. Add `bcrypt` and `cryptography` to `requirements.txt`
+3. Create S3 prefix `encrypted-shares/` for encrypted file copies
+4. Deploy KMS key alias for share link encryption (or reuse existing platform key)
+
+### 10.4 Rollback
+
+1. Set `SHARE_LINKS_ENABLED=false` — disables creation and download endpoints
+2. Existing links become non-downloadable (404 from gated endpoint)
+3. S3 encrypted objects remain (cleaned up by TTL or manual cleanup)
+4. DDB records auto-expire via TTL
+5. No impact on original files in S3
+
+---
+
+## 11. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|

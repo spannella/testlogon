@@ -554,7 +554,16 @@ function convert(usdCents: number): ConvertedAmount {
 | 558.3 | USD selection shows normal prices | Set preferred currency to USD. Navigate to billing page. Prices show `$` format without conversion. |
 | 558.4 | Stale rates show warning indicator | (Use mock to set `expires_at` in the past.) Navigate to billing page. Price display includes stale indicator (asterisk or tooltip). |
 
-**Total E2E tests: 15**
+### Section 559: Currency Edge Cases (4 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 559.1 | JPY displays without decimals | Set pref to JPY; view price of $10.50; shows ~1,575 (no decimal) |
+| 559.2 | Fallback to USD when rate unavailable | Set pref to obscure currency with no rate; prices show in USD with note |
+| 559.3 | Rate staleness indicator shows on old rates | Mock stale rate; price shows asterisk or tooltip indicating approximate |
+| 559.4 | Zero-amount shows correctly in all currencies | View $0.00 item in EUR; shows ~0,00 EUR (not NaN or blank) |
+
+**Total E2E tests: 19**
 
 ---
 
@@ -592,7 +601,75 @@ function convert(usdCents: number): ConvertedAmount {
 
 ---
 
-## 7. Dependencies
+## 7. Observability
+
+### 7.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `exchange_rate_fetch_total` | Counter | `source` (external/cache/fallback) | Rate fetch attempts |
+| `exchange_rate_fetch_failed_total` | Counter | `reason` | Failed rate fetches |
+| `currency_conversion_total` | Counter | `from`, `to` | Conversion requests |
+| `currency_preference_set_total` | Counter | `currency` | Preference updates |
+| `exchange_rate_staleness_seconds` | Gauge | — | Time since last successful fetch |
+
+### 7.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Exchange rates fetched | INFO | `source`, `currencies_count`, `fetch_duration_ms` |
+| Exchange rate fetch failed | WARN | `error`, `using_fallback` |
+| Currency preference updated | INFO | `user_sub`, `old_currency`, `new_currency` |
+| Stale rates served | WARN | `staleness_hours`, `currencies_affected` |
+
+### 7.3 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Rate fetch failures | > 3 consecutive failures | High | Check external API status |
+| Stale rates | > 24h since last refresh | Medium | Force refresh; check API key |
+| Unusual conversion volume | > 10K conversions/hour | Low | Review for abuse |
+
+---
+
+## 8. Rollout Plan
+
+### 8.1 Feature Flag
+
+```python
+multi_currency_enabled: bool = os.environ.get("MULTI_CURRENCY_ENABLED", "true").lower() == "true"
+```
+
+### 8.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend | Deploy exchange rate service + endpoints; flag OFF | 2 days | Unit tests pass |
+| Phase 2: Internal | Enable with CurrencyAmount component | 3 days | All 15 E2E pass |
+| Phase 3: Canary 10% | Enable for 10% of users | 3 days | No display errors; rate freshness OK |
+| Phase 4: GA | Enable for all | Permanent | Positive user feedback |
+
+### 8.3 Rollback
+
+1. Set `MULTI_CURRENCY_ENABLED=false` — all prices display in USD only
+2. CurrencyAmount component falls back to USD formatting
+3. Preferences preserved but ignored until re-enabled
+
+---
+
+## 9. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Exchange rate cache hit | > 99% | In-memory cache refreshed every 1-4h; TTL on DDB fallback |
+| Conversion computation | < 1ms | Simple multiplication; no API call |
+| CurrencyAmount render | < 1ms per component | Pure function; memoized with useMemo |
+| Rate fetch external call | < 2s | Timeout set to 5s; fallback to cache on timeout |
+| Multiple currency displays per page | No jank | Batch conversion: convert all amounts at once using cached rate |
+
+---
+
+## 10. Dependencies
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|

@@ -31,13 +31,95 @@ Countdowns create anticipation and engagement around upcoming events. With the b
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture & Data Flow
 
-### 2.1 Message Kinds
+### 2.1 Countdown Message Creation Flow
+
+```
+  User (ComposeBar)              Backend (messaging.py)            DynamoDB
+  ─────────────────              ──────────────────────            ────────
+       │                                │                            │
+       │  Click Timer icon              │                            │
+       │  Fill CountdownComposerDialog  │                            │
+       │   - title                      │                            │
+       │   - date/time picker           │                            │
+       │   - event type selector        │                            │
+       │                                │                            │
+       │  POST /conversations/{id}/     │                            │
+       │    messages/countdown          │                            │
+       │  { title, target_datetime,     │                            │
+       │    associated_event_type,      │                            │
+       │    associated_event_id }       │                            │
+       │ ────────────────────────────>  │                            │
+       │                                │  1. Validate target > now  │
+       │                                │  2. Verify conv access     │
+       │                                │  3. Generate msg_id        │
+       │                                │                            │
+       │                                │  PutItem to Messages       │
+       │                                │  table with kind=countdown │
+       │                                │ ────────────────────────>  │
+       │                                │                            │
+       │                                │  4. Update conversation    │
+       │                                │     last_message           │
+       │                                │ ────────────────────────>  │
+       │                                │                            │
+       │                                │  5. Emit SSE event         │
+       │                                │                            │
+       │  <── 201 Created               │                            │
+       │  { message with countdown }    │                            │
+```
+
+### 2.2 Live Countdown Rendering Flow
+
+```
+  MessageBubble                   CountdownCard                 Browser Timer
+  ─────────────                   ─────────────                 ─────────────
+       │                               │                             │
+       │  kind === "countdown"?        │                             │
+       │ ──────────────────────────>   │                             │
+       │                               │  useEffect(() => {          │
+       │                               │    setInterval(1000)        │
+       │                               │ ──────────────────────────> │
+       │                               │                             │
+       │                               │  Every 1 second:            │
+       │                               │  <── remaining = calc()     │
+       │                               │                             │
+       │                               │  if remaining.total <= 0:   │
+       │                               │    Show "Time's up!" or     │
+       │                               │    "Event started!" + CTA   │
+       │                               │    clearInterval            │
+       │                               │                             │
+       │  <── Rendered card             │                             │
+       │      with live timer           │                             │
+```
+
+### 2.3 Associated Event Action Mapping
+
+```
+  Countdown reaches zero
+       │
+       ├── associated_event_type === "broadcast"
+       │   └── Show "Watch Live" → /broadcasts/{associated_event_id}
+       │
+       ├── associated_event_type === "call"
+       │   └── Show "Join Call" → /calls/{associated_event_id}
+       │
+       ├── associated_event_type === "calendar"
+       │   └── Show "View Event" → /calendar/events/{associated_event_id}
+       │
+       └── associated_event_type === "custom"
+           └── Show "Time's up!" (no CTA button)
+```
+
+---
+
+## 3. Current State Analysis
+
+### 3.1 Message Kinds
 
 Current kinds: `text`, `image`, `file_share`, `calendar_share`, `calendar_event`, `meeting_poll`, `find_datetime`. Adding `countdown` follows the established pattern.
 
-### 2.2 Message Send Infrastructure
+### 3.2 Message Send Infrastructure
 
 `send_text_message()` in `app/services/messaging.py` is the core send function. New message kinds are added by:
 1. Defining a new endpoint in `app/routers/messaging.py`
@@ -45,22 +127,22 @@ Current kinds: `text`, `image`, `file_share`, `calendar_share`, `calendar_event`
 3. Including the fields in `MessageOut` and `_message_out_from_item()`
 4. Adding rendering in `MessageBubble.tsx`
 
-### 2.3 Frontend Timer Patterns
+### 3.3 Frontend Timer Patterns
 
 React's `useEffect` with `setInterval` is the standard pattern for live timers. The frontend already uses similar patterns in scheduled message indicators. The countdown component will follow the same approach with a 1-second interval.
 
-### 2.4 Gaps
+### 3.4 Gaps
 
-1. **No `countdown` message kind** — no backend support.
-2. **No countdown fields on messages** — no `target_datetime`, `associated_event_type`.
-3. **No CountdownCard component** — no live timer rendering.
-4. **No "Join" button integration** — no link to broadcast/call when timer expires.
+1. **No `countdown` message kind** -- no backend support.
+2. **No countdown fields on messages** -- no `target_datetime`, `associated_event_type`.
+3. **No CountdownCard component** -- no live timer rendering.
+4. **No "Join" button integration** -- no link to broadcast/call when timer expires.
 
 ---
 
-## 3. Technical Design
+## 4. Technical Design
 
-### 3.1 Message Schema
+### 4.1 Message Schema
 
 Add to message item when `kind = "countdown"`:
 
@@ -71,20 +153,45 @@ Add to message item when `kind = "countdown"`:
 | `associated_event_type` | String | `"broadcast"`, `"call"`, `"calendar"`, `"custom"` |
 | `associated_event_id` | String (optional) | ID of linked event (broadcast_id, call_id, calendar_event_id) |
 
-### 3.2 Backend Endpoint
+### 4.2 Detailed DynamoDB Access Patterns
 
-**File**: `app/routers/messaging.py`
+| # | Access Pattern | Table | PK | SK | Operation | Notes |
+|---|---------------|-------|----|----|-----------|-------|
+| 1 | Create countdown message | Messages | `conversation_id` | `message_id` (m_{uuid}) | PutItem | Standard message write pattern |
+| 2 | Get countdown message | Messages | `conversation_id` | `message_id` | GetItem | Standard message read |
+| 3 | List messages in conversation | Messages | `conversation_id` | begins_with("m_") | Query | Includes countdown messages in regular list |
+| 4 | Update conversation last_message | Conversations | `conversation_id` | `META` | UpdateItem | Sets last_message_id, last_message_at |
+| 5 | Get associated event details | Varies | Event-specific PK | Event-specific SK | GetItem | Optional: validate event exists at creation |
+
+### 4.3 Pydantic Model Definitions
 
 ```python
+# app/models.py additions
+
+from pydantic import BaseModel, Field, model_validator
+from typing import Optional
+from app.core.time import now_ts
+
+
 class SendCountdownMessageIn(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
-    target_datetime: int = Field(..., description="UTC Unix timestamp")
+    """Request model for sending a countdown message."""
+    title: str = Field(..., min_length=1, max_length=200,
+                       description="Display title for the countdown")
+    target_datetime: int = Field(...,
+                                 description="UTC Unix timestamp of target event")
     associated_event_type: str = Field(
         default="custom",
         pattern=r"^(broadcast|call|calendar|custom)$",
+        description="Type of associated event"
     )
-    associated_event_id: Optional[str] = Field(default=None, max_length=128)
-    reply_to_message_id: Optional[str] = None
+    associated_event_id: Optional[str] = Field(
+        default=None, max_length=128,
+        description="ID of linked event (required for non-custom types)"
+    )
+    reply_to_message_id: Optional[str] = Field(
+        default=None,
+        description="ID of message being replied to"
+    )
 
     @model_validator(mode="after")
     def validate_target(self):
@@ -94,6 +201,20 @@ class SendCountdownMessageIn(BaseModel):
             raise ValueError("associated_event_id required for non-custom events")
         return self
 
+
+class CountdownMessageOut(BaseModel):
+    """Countdown-specific fields in MessageOut."""
+    countdown_title: Optional[str] = None
+    target_datetime: Optional[int] = None
+    associated_event_type: Optional[str] = None
+    associated_event_id: Optional[str] = None
+```
+
+### 4.4 Backend Endpoint
+
+**File**: `app/routers/messaging.py`
+
+```python
 @router.post("/conversations/{conv_id}/messages/countdown", status_code=201)
 def send_countdown_message(conv_id: str, body: SendCountdownMessageIn, ctx=Depends(require_ui_session)):
     """Send a countdown message to a conversation."""
@@ -126,7 +247,106 @@ def send_countdown_message(conv_id: str, body: SendCountdownMessageIn, ctx=Depen
     return _message_out_from_item(message_item)
 ```
 
-### 3.3 MessageOut Extension
+### 4.5 API Request/Response Examples
+
+**POST /ui/messaging/conversations/{conv_id}/messages/countdown**
+
+Request:
+```json
+{
+  "title": "Team standup starts in...",
+  "target_datetime": 1748527200,
+  "associated_event_type": "call",
+  "associated_event_id": "call_abc123def456"
+}
+```
+
+Response (201):
+```json
+{
+  "message_id": "m_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+  "conversation_id": "conv_x1y2z3",
+  "sender_id": "e2e_alice@test.local",
+  "kind": "countdown",
+  "text": "Team standup starts in...",
+  "countdown_title": "Team standup starts in...",
+  "target_datetime": 1748527200,
+  "associated_event_type": "call",
+  "associated_event_id": "call_abc123def456",
+  "reply_to_message_id": null,
+  "created_at": 1748523600,
+  "reactions": {},
+  "tip_amount_cents": 0
+}
+```
+
+**POST (custom countdown, no event link)**
+
+Request:
+```json
+{
+  "title": "Birthday countdown!",
+  "target_datetime": 1751241600,
+  "associated_event_type": "custom"
+}
+```
+
+Response (201):
+```json
+{
+  "message_id": "m_f1e2d3c4b5a6f7e8d9c0b1a2f3e4d5c6",
+  "conversation_id": "conv_x1y2z3",
+  "sender_id": "e2e_alice@test.local",
+  "kind": "countdown",
+  "text": "Birthday countdown!",
+  "countdown_title": "Birthday countdown!",
+  "target_datetime": 1751241600,
+  "associated_event_type": "custom",
+  "associated_event_id": null,
+  "created_at": 1748523601
+}
+```
+
+**POST (broadcast link)**
+
+Request:
+```json
+{
+  "title": "Live stream starting soon!",
+  "target_datetime": 1748530800,
+  "associated_event_type": "broadcast",
+  "associated_event_id": "bcast_789xyz"
+}
+```
+
+Response (201):
+```json
+{
+  "message_id": "m_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
+  "kind": "countdown",
+  "countdown_title": "Live stream starting soon!",
+  "target_datetime": 1748530800,
+  "associated_event_type": "broadcast",
+  "associated_event_id": "bcast_789xyz",
+  "created_at": 1748523602
+}
+```
+
+### 4.6 Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|----------|-------------|------------|---------------|-----------------|
+| target_datetime in the past | 422 | `validation_error` | "target_datetime must be in the future" | Set target_datetime to a future timestamp |
+| Non-custom event without associated_event_id | 422 | `validation_error` | "associated_event_id required for non-custom events" | Provide an event ID or use "custom" type |
+| Invalid associated_event_type | 422 | `validation_error` | "String should match pattern '^(broadcast\|call\|calendar\|custom)$'" | Use one of: broadcast, call, calendar, custom |
+| Title too long (>200 chars) | 422 | `validation_error` | "ensure this value has at most 200 characters" | Shorten the title |
+| Title empty | 422 | `validation_error` | "ensure this value has at least 1 character" | Provide a non-empty title |
+| Conversation not found | 404 | `not_found` | "Conversation not found" | Verify the conversation ID |
+| User not a participant | 403 | `forbidden` | "Not a participant in this conversation" | User must be in the conversation |
+| associated_event_id too long (>128 chars) | 422 | `validation_error` | "ensure this value has at most 128 characters" | Use a valid event ID |
+| Non-integer target_datetime | 422 | `validation_error` | "value is not a valid integer" | Provide Unix timestamp as integer |
+
+### 4.7 MessageOut Extension
 
 Add to `MessageOut` model and `_message_out_from_item()`:
 
@@ -137,7 +357,7 @@ associated_event_type: Optional[str] = None
 associated_event_id: Optional[str] = None
 ```
 
-### 3.4 Frontend Types
+### 4.8 Frontend Types
 
 **File**: `frontend/src/api/types.ts`
 
@@ -151,7 +371,7 @@ export interface MessageOut {
 }
 ```
 
-### 3.5 Frontend API
+### 4.9 Frontend API
 
 **File**: `frontend/src/api/endpoints/messaging.ts`
 
@@ -167,7 +387,7 @@ export const sendCountdownMessage = (
 ) => api.post(`/ui/messaging/conversations/${conversationId}/messages/countdown`, data);
 ```
 
-### 3.6 CountdownCard Component
+### 4.10 CountdownCard Component
 
 **File**: `frontend/src/pages/messages/CountdownCard.tsx`
 
@@ -242,7 +462,83 @@ function calculateRemaining(targetTs: number) {
 function pad(n: number) { return n.toString().padStart(2, "0"); }
 ```
 
-### 3.7 ComposeBar Integration
+### 4.11 Frontend Component Tree
+
+```
+ComposeBar
+├── ... existing buttons ...
+├── CountdownButton (Timer icon)
+│   └── onClick → setCountdownDialogOpen(true)
+└── CountdownComposerDialog
+    ├── DialogHeader: "Create Countdown"
+    ├── TitleInput (text field, max 200 chars)
+    ├── DateTimePicker (target date + time)
+    ├── EventTypeSelector
+    │   ├── RadioGroup
+    │   │   ├── "Custom" (default)
+    │   │   ├── "Broadcast"
+    │   │   ├── "Call"
+    │   │   └── "Calendar Event"
+    │   └── EventIdInput (conditional, shown for non-custom types)
+    │       └── Or: EventPicker (browse existing events)
+    ├── PreviewSection
+    │   └── CountdownCard (preview with live timer)
+    └── DialogFooter
+        ├── CancelButton
+        └── CreateButton (disabled if title empty or target in past)
+
+MessageBubble
+├── ... existing kind checks ...
+└── kind === "countdown"
+    └── CountdownCard
+        ├── CardHeader
+        │   ├── Timer icon
+        │   └── countdown_title
+        └── CardContent
+            ├── (active) TimerDisplay: DD:HH:MM:SS
+            └── (expired) CompletionMessage
+                ├── "Time's up!" or "Event started!"
+                └── CTAButton (Watch Live / Join Call / View Event)
+```
+
+**Props interfaces**:
+
+```typescript
+interface CountdownComposerDialogProps {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (data: {
+    title: string;
+    target_datetime: number;
+    associated_event_type: string;
+    associated_event_id?: string;
+  }) => void;
+}
+
+interface CountdownCardProps {
+  title: string;
+  targetDatetime: number;
+  associatedEventType: string;
+  associatedEventId?: string | null;
+}
+
+interface TimerDisplayProps {
+  remaining: {
+    total: number;
+    days: number;
+    hours: number;
+    minutes: number;
+    seconds: number;
+  };
+}
+
+interface CompletionMessageProps {
+  eventType: string;
+  eventId?: string | null;
+}
+```
+
+### 4.12 ComposeBar Integration
 
 Add a countdown button to ComposeBar toolbar:
 
@@ -262,9 +558,9 @@ Add a countdown button to ComposeBar toolbar:
 - Title input
 - Date + time picker for target datetime
 - Event type selector (Custom / Broadcast / Call / Calendar)
-- Event ID input (if not Custom) — or picker from existing events
+- Event ID input (if not Custom) -- or picker from existing events
 
-### 3.8 MessageBubble Integration
+### 4.13 MessageBubble Integration
 
 ```tsx
 {message.kind === "countdown" && message.countdown_title && message.target_datetime && (
@@ -279,50 +575,97 @@ Add a countdown button to ComposeBar toolbar:
 
 ---
 
-## 4. Implementation Plan
+## 5. Observability
 
-### 4.1 Files to Create
+### 5.1 Metrics
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/pages/messages/CountdownCard.tsx` | Live countdown timer card component |
-| `frontend/src/pages/messages/CountdownComposerDialog.tsx` | Dialog for creating countdown messages |
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `msg_countdown_created_total` | Counter | `event_type=(broadcast\|call\|calendar\|custom)` | Countdown messages created by event type |
+| `msg_countdown_expired_views_total` | Counter | `event_type`, `had_cta=(true\|false)` | Views of expired countdown cards (measures CTA visibility) |
+| `msg_countdown_cta_clicks_total` | Counter | `event_type` | Clicks on "Watch Live" / "Join Call" buttons |
 
-### 4.2 Files to Modify
+### 5.2 Logging
 
-| File | Changes |
-|------|---------|
-| `app/routers/messaging.py` | Add countdown endpoint and model |
-| `app/models.py` | Add countdown fields to MessageOut |
-| `frontend/src/api/types.ts` | Add countdown fields to MessageOut |
-| `frontend/src/api/endpoints/messaging.ts` | Add `sendCountdownMessage` |
-| `frontend/src/pages/messages/ComposeBar.tsx` | Add countdown button + dialog |
-| `frontend/src/pages/messages/MessageBubble.tsx` | Render CountdownCard |
+| Log Event | Level | Fields | Trigger |
+|-----------|-------|--------|---------|
+| `countdown.created` | INFO | `conversation_id`, `message_id`, `event_type`, `target_datetime` | Countdown message sent |
+| `countdown.validation_failed` | WARNING | `reason`, `target_datetime`, `event_type` | Validation error on creation |
+| `countdown.event_not_found` | WARNING | `event_type`, `event_id` | Associated event does not exist (optional validation) |
 
-### 4.3 Step-by-Step Order
+### 5.3 Alerting
 
-1. Add countdown endpoint and model to backend
-2. Extend MessageOut with countdown fields
-3. Add frontend types and API
-4. Build CountdownCard component
-5. Build CountdownComposerDialog
-6. Integrate into ComposeBar and MessageBubble
-7. Write E2E tests
+No specific alerting needed for countdown messages. Standard messaging error rate alerts apply.
 
 ---
 
-## 5. E2E Test Plan
+## 6. Rollout Plan
 
-### 5.1 Test File
+### 6.1 Feature Flags
 
-`frontend/e2e/countdown-messages.spec.ts` — 12 tests across 3 sections.
+| Flag | Environment Variable | Default | Description |
+|------|---------------------|---------|-------------|
+| `COUNTDOWN_MESSAGES_ENABLED` | `COUNTDOWN_MESSAGES_ENABLED` | `true` | Enable countdown message kind |
 
-### 5.2 Test Setup
+### 6.2 Phased Rollout
+
+**Phase 1: Backend (Day 1)**
+- Add countdown endpoint and validation
+- Extend MessageOut with countdown fields
+- Wire _message_out_from_item() for countdown fields
+
+**Phase 2: Frontend components (Days 2-3)**
+- Build CountdownCard component with live timer
+- Build CountdownComposerDialog
+- Integrate into ComposeBar and MessageBubble
+
+**Phase 3: Polish and testing (Days 4-5)**
+- Add event type validation (optional: verify linked event exists)
+- Write E2E tests
+- Handle edge cases (timezone display, very long countdowns)
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Latency Targets
+
+| Operation | Target | Strategy |
+|-----------|--------|----------|
+| Create countdown message | < 50ms | Single DDB PutItem + UpdateItem |
+| Render countdown card | < 1ms | Pure frontend calculation, no API call |
+| Timer tick (1s interval) | < 0.1ms | Simple arithmetic on cached target timestamp |
+
+### 7.2 Timer Performance
+
+| Concern | Mitigation |
+|---------|-----------|
+| Many countdown cards ticking simultaneously | Each card runs its own `setInterval(1000)`; typically only 1-2 visible at once. For conversations with many countdowns, the interval only runs for visible messages (IntersectionObserver, future optimization). |
+| Client clock drift | Timer is cosmetic -- display only. No server roundtrip for each tick. Server stores the authoritative `target_datetime`. |
+| Memory leak from intervals | `useEffect` cleanup function calls `clearInterval` on unmount. Expired countdowns also clear their interval. |
+| Countdown cards in message list (scrolled offscreen) | React only renders visible messages in virtualized lists. Offscreen cards are unmounted, stopping their intervals. |
+
+### 7.3 Caching Strategy
+
+- No caching needed for countdown data -- it is part of the standard message object.
+- The `target_datetime` is immutable after creation -- no stale data concern.
+- CountdownCard performs all calculations client-side with `Date.now()`.
+
+---
+
+## 8. E2E Test Plan
+
+### 8.1 Test File
+
+`frontend/e2e/countdown-messages.spec.ts` -- 24 tests across 6 sections.
+
+### 8.2 Test Setup
 
 ```typescript
 const TS = Date.now();
 const FUTURE_TS = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
 const PAST_TS = Math.floor(Date.now() / 1000) - 60; // 1 minute ago
+const NEAR_FUTURE_TS = Math.floor(Date.now() / 1000) + 10; // 10 seconds from now
 let dmConvoId: string;
 
 test.beforeAll(async ({ browser }) => {
@@ -331,7 +674,7 @@ test.beforeAll(async ({ browser }) => {
 });
 ```
 
-### 5.3 Section 306: Countdown Message API (5 tests)
+### 8.3 Section 306: Countdown Message API (5 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -341,7 +684,7 @@ test.beforeAll(async ({ browser }) => {
 | 306.4 | Reject countdown with past target_datetime | POST with `target_datetime` in past; 422; "target_datetime must be in the future" |
 | 306.5 | Reject broadcast countdown without event ID | POST `associated_event_type=broadcast` without `associated_event_id`; 422 |
 
-### 5.4 Section 307: Countdown Message in Conversation (4 tests)
+### 8.4 Section 307: Countdown Message in Conversation (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -350,7 +693,7 @@ test.beforeAll(async ({ browser }) => {
 | 307.3 | Countdown message supports replies | POST text message with `reply_to_message_id` of countdown; 201 |
 | 307.4 | Countdown appears in last_message preview | GET conversations; conversation has `last_message` with `kind=countdown` |
 
-### 5.5 Section 308: Countdown Rendering (3 tests)
+### 8.5 Section 308: Countdown Rendering (3 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -358,44 +701,69 @@ test.beforeAll(async ({ browser }) => {
 | 308.2 | Countdown card shows title | Card contains the countdown title text |
 | 308.3 | Expired countdown shows completion state | Create countdown with near-future target; wait; card shows "Time's up!" or "Event started!" |
 
+### 8.6 Section 309: Countdown Validation Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 309.1 | Reject countdown with title > 200 characters | POST with 201-char title; 422 |
+| 309.2 | Reject countdown with invalid event type | POST with `associated_event_type=invalid`; 422 |
+| 309.3 | Countdown with calendar event type and event ID | POST `associated_event_type=calendar`, `associated_event_id=evt_123`; 201 |
+| 309.4 | Countdown with call event type and event ID | POST `associated_event_type=call`, `associated_event_id=call_456`; 201 |
+
+### 8.7 Section 310: Countdown in Group Chats (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 310.1 | Create countdown in group conversation | Create group; POST countdown; 201; all participants receive message |
+| 310.2 | Multiple countdowns in same conversation | Create 3 countdown messages; GET messages; all 3 present with distinct IDs |
+| 310.3 | Countdown with reply_to in group | Create text message; create countdown as reply; reply_to_message_id set correctly |
+| 310.4 | Non-participant cannot send countdown | Non-member POST countdown to group; 403 |
+
+### 8.8 Section 311: Countdown CTA Buttons (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 311.1 | Broadcast countdown shows "Watch Live" when expired | Create broadcast countdown with near-future target; wait; verify "Watch Live" button appears |
+| 311.2 | Call countdown shows "Join Call" when expired | Create call countdown with near-future target; wait; verify "Join Call" button appears |
+| 311.3 | Custom countdown shows "Time's up!" without CTA | Create custom countdown with near-future target; wait; verify "Time's up!" text, no button |
+| 311.4 | CTA button has correct href | Verify "Watch Live" button links to `/broadcasts/{event_id}` |
+
 ---
 
-## 6. Error Handling
-
-| Scenario | Status | Detail |
-|----------|--------|--------|
-| target_datetime in the past | 422 | "target_datetime must be in the future" |
-| Non-custom event without ID | 422 | "associated_event_id required for non-custom events" |
-| Invalid event type | 422 | Pydantic pattern validation |
-| Title too long (> 200 chars) | 422 | Pydantic max_length validation |
-
----
-
-## 7. Performance Considerations
-
-| Concern | Mitigation |
-|---------|-----------|
-| Many countdown cards ticking simultaneously | Each card runs its own `setInterval(1000)`; typically only 1-2 visible at once. For conversations with many countdowns, the interval only runs for visible messages (IntersectionObserver, future optimization). |
-| Client clock drift | Timer is cosmetic — display only. No server roundtrip for each tick. Server stores the authoritative `target_datetime`. |
-
----
-
-## 8. Security Considerations
+## 9. Security Considerations
 
 - `target_datetime` validated server-side (must be future)
-- `associated_event_id` is display-only in countdown card — the linked event's own access control governs whether the "Join" button works
+- `associated_event_id` is display-only in countdown card -- the linked event's own access control governs whether the "Join" button works
 - No sensitive data in countdown fields
+- Only conversation participants can create countdown messages
+- CTA buttons use standard navigation -- clicking "Watch Live" still requires broadcast access
 
 ---
 
-## 9. Dependencies
+## 10. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
-| None | — | Standalone feature |
+| None | -- | Standalone feature |
 
-### 9.1 Downstream Dependents
+### 10.1 Downstream Dependents
 
 | Ticket | Depends On |
 |--------|-----------|
 | FEED-005 (Countdown Newsfeed Posts) | CountdownCard component |
+
+---
+
+## 11. File Change Summary
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `frontend/src/pages/messages/CountdownCard.tsx` | **New** | Live countdown timer card component |
+| `frontend/src/pages/messages/CountdownComposerDialog.tsx` | **New** | Dialog for creating countdown messages |
+| `app/routers/messaging.py` | Modify | Add countdown endpoint and model |
+| `app/models.py` | Modify | Add SendCountdownMessageIn, countdown fields to MessageOut |
+| `frontend/src/api/types.ts` | Modify | Add countdown fields to MessageOut |
+| `frontend/src/api/endpoints/messaging.ts` | Modify | Add `sendCountdownMessage` |
+| `frontend/src/pages/messages/ComposeBar.tsx` | Modify | Add countdown button + dialog |
+| `frontend/src/pages/messages/MessageBubble.tsx` | Modify | Render CountdownCard |
+| `frontend/e2e/countdown-messages.spec.ts` | **New** | 24 E2E tests across sections 306-311 |

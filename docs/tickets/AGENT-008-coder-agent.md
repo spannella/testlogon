@@ -532,3 +532,727 @@ let runId: string;
 | AGENT-009 (QA Agent) | Uses `code_complete` status as trigger; reviews PRs created by Coder Agent |
 | AGENT-011 (Solution Architect) | Creates tickets with labels and complexity that Coder Agent picks up |
 | AGENT-012 (Project Manager) | Tracks Coder Agent throughput for project velocity |
+
+---
+
+## 10. Architecture & Data Flow
+
+### 10.1 Coder Agent Workflow Pipeline
+
+```
+Ticket System                Worker Agent Framework (AGENT-003)
+┌─────────────┐      ┌─────────────────────────────────────────────────────┐
+│ Ticket Queue │      │  Coder Agent Workflow Orchestrator                  │
+│ status=open  │      │                                                     │
+│ labels:      │◄─────│  1. find_eligible_tickets(skill_level, labels)      │
+│  type:dev    │ poll │  2. claim_ticket(ticket_id) ── conditional update   │
+│  complexity: │      │     ↓                                               │
+│  medium      │      │  3. build_git_commands(repo, branch)                │
+└─────────────┘      │     └── Terminal: git clone → git checkout -b        │
+                      │  4. run_pre_commands(["nvm use 20", ...])           │
+                      │     └── Terminal: environment setup                  │
+                      │  5. inject_coding_prompt(ticket, tool, model)       │
+                      │     └── Terminal: claude --dangerously-skip-perms    │
+                      │  6. wait_for_coding(timeout=max_time/2)             │
+                      │     └── Monitor: exit code 0 = done                 │
+                      │  7. run_tests(test_commands)                        │
+                      │     └── Terminal: just test / just e2e              │
+                      │  8. evaluate_tests → pass? → create_pr             │
+                      │                    → fail? → fix_loop (retry N)     │
+                      │  9. build_pr_command(template, ticket_id)           │
+                      │     └── Terminal: gh pr create                      │
+                      │  10. capture_output(git diff --stat)               │
+                      │  11. update_ticket(status=code_complete, pr_url)   │
+                      └─────────────────────────────────────────────────────┘
+                                          │
+                                          ▼
+                      ┌─────────────────────────────────────────────────────┐
+                      │  Escalation Path (on failure)                       │
+                      │                                                     │
+                      │  test retries exhausted ──► mark_ticket_blocked     │
+                      │  timeout exceeded ─────────► save state + escalate  │
+                      │  git conflict ─────────────► escalate with details  │
+                      │  coding tool crash ────────► capture error + esc.   │
+                      │                                                     │
+                      │  All escalations → Feedback Loop (AGENT-006)        │
+                      │                  → Ticket status = "blocked"        │
+                      │                  → SSE: worker:error event          │
+                      └─────────────────────────────────────────────────────┘
+```
+
+### 10.2 Test-Fix Loop Detail
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Test-Fix Loop (max test_retry_limit iterations)     │
+│                                                      │
+│  retry_count = 0                                     │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  run_tests(test_commands)                      │  │
+│  │    ↓                                           │  │
+│  │  all pass? ──YES──► exit loop → create_pr      │  │
+│  │    │                                           │  │
+│  │   NO                                           │  │
+│  │    ↓                                           │  │
+│  │  retry_count += 1                              │  │
+│  │  retry_count > limit? ──YES──► ESCALATE        │  │
+│  │    │                                           │  │
+│  │   NO                                           │  │
+│  │    ↓                                           │  │
+│  │  build_fix_prompt(test_output, retry_count)    │  │
+│  │    ↓                                           │  │
+│  │  inject into coding tool                       │  │
+│  │    ↓                                           │  │
+│  │  wait_for_coding(timeout)                      │  │
+│  │    ↓                                           │  │
+│  │  loop back to run_tests                        │  │
+│  └────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
+```
+
+---
+
+## 11. Detailed DynamoDB Access Patterns
+
+| # | Operation | Table | PK | SK / Key Condition | GSI | Notes |
+|---|-----------|-------|----|--------------------|-----|-------|
+| 1 | Get coder config | `agent_types` | `TYPE#{type_id}` | `CONFIG` | -- | GetItem; check `agent_type=coder` |
+| 2 | Update coder config | `agent_types` | `TYPE#{type_id}` | `CONFIG` | -- | UpdateItem on `coder_config` map |
+| 3 | Find tickets by label | `tickets` | -- | -- | `gsi_label` PK=`LABEL#type:development` | Query oldest-first |
+| 4 | Claim ticket (conditional) | `tickets` | `SPACE#{space_id}` | `TICKET#{ticket_id}` | -- | ConditionExpression: `assigned_to_sub = :none OR attribute_not_exists(assigned_to_sub)` |
+| 5 | Update ticket to code_complete | `tickets` | `SPACE#{space_id}` | `TICKET#{ticket_id}` | -- | UpdateItem: status, pr_url in metadata |
+| 6 | Update ticket to blocked | `tickets` | `SPACE#{space_id}` | `TICKET#{ticket_id}` | -- | UpdateItem: status, escalation reason |
+| 7 | Store coder output | `agent_runs` | `RUN#{run_id}` | `OUTPUT` | -- | PutItem with coder_output map |
+| 8 | Get coder output | `agent_runs` | `RUN#{run_id}` | `OUTPUT` | -- | GetItem |
+| 9 | Query metrics (daily snapshots) | `agent_runs` | -- | -- | `gsi_type_date` PK=`CODER#{type_id}`, SK=`DATE#{yyyy-mm-dd}` | Rollup records |
+| 10 | Fan-out label index on ticket create | `tickets` | -- | -- | `gsi_label` | One PutItem per label in the set |
+
+---
+
+## 12. API Request/Response Examples
+
+### 12.1 Set Coder Config
+
+```bash
+curl -s -X PUT "http://localhost:8000/ui/agents/types/type_abc123/coder-config" \
+  -H "Cookie: ui_session=SESS_root; ui_access_token=JWT_root; ui_csrf=CSRF_root" \
+  -H "x-csrf-token: CSRF_root" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_url": "https://github.com/acme/backend.git",
+    "repo_branch_base": "main",
+    "branch_pattern": "feat/{ticket_id}-{slug}",
+    "test_commands": ["just test", "just e2e"],
+    "test_timeout_seconds": 600,
+    "test_retry_limit": 3,
+    "pr_template": "Closes #{ticket_id}\n\n## Summary\n{summary}\n\n## Test Results\nAll tests passing.",
+    "pr_base_branch": "main",
+    "skill_level": "mid",
+    "max_ticket_time_seconds": 3600,
+    "complexity_labels": {
+      "junior": ["complexity:low"],
+      "mid": ["complexity:low", "complexity:medium"],
+      "senior": ["complexity:low", "complexity:medium", "complexity:high"]
+    },
+    "coding_tool": "claude_code",
+    "coding_tool_model": "claude-sonnet-4-6",
+    "pre_commands": ["source .venv/bin/activate", "nvm use 20"],
+    "post_commands": ["just lint-fix"],
+    "file_exclude_patterns": ["*.lock", "package-lock.json"]
+  }'
+```
+
+```json
+{
+  "repo_url": "https://github.com/acme/backend.git",
+  "repo_branch_base": "main",
+  "branch_pattern": "feat/{ticket_id}-{slug}",
+  "test_commands": ["just test", "just e2e"],
+  "test_timeout_seconds": 600,
+  "test_retry_limit": 3,
+  "pr_template": "Closes #{ticket_id}\n\n## Summary\n{summary}\n\n## Test Results\nAll tests passing.",
+  "pr_base_branch": "main",
+  "skill_level": "mid",
+  "max_ticket_time_seconds": 3600,
+  "complexity_labels": {
+    "junior": ["complexity:low"],
+    "mid": ["complexity:low", "complexity:medium"],
+    "senior": ["complexity:low", "complexity:medium", "complexity:high"]
+  },
+  "coding_tool": "claude_code",
+  "coding_tool_model": "claude-sonnet-4-6",
+  "pre_commands": ["source .venv/bin/activate", "nvm use 20"],
+  "post_commands": ["just lint-fix"],
+  "file_exclude_patterns": ["*.lock", "package-lock.json"],
+  "updated_at": 1748520000
+}
+```
+
+### 12.2 Get Coder Config
+
+```bash
+curl -s -X GET "http://localhost:8000/ui/agents/types/type_abc123/coder-config" \
+  -H "Cookie: ui_session=SESS_root; ui_access_token=JWT_root; ui_csrf=CSRF_root"
+```
+
+```json
+{
+  "repo_url": "https://github.com/acme/backend.git",
+  "repo_branch_base": "main",
+  "branch_pattern": "feat/{ticket_id}-{slug}",
+  "test_commands": ["just test", "just e2e"],
+  "test_timeout_seconds": 600,
+  "test_retry_limit": 3,
+  "pr_template": "Closes #{ticket_id}\n\n## Summary\n{summary}",
+  "pr_base_branch": "main",
+  "skill_level": "mid",
+  "max_ticket_time_seconds": 3600,
+  "coding_tool": "claude_code",
+  "coding_tool_model": "claude-sonnet-4-6",
+  "pre_commands": ["source .venv/bin/activate", "nvm use 20"],
+  "file_exclude_patterns": ["*.lock", "package-lock.json"]
+}
+```
+
+### 12.3 Validate Config (with errors)
+
+```bash
+curl -s -X POST "http://localhost:8000/ui/agents/types/type_abc123/coder-config/validate" \
+  -H "Cookie: ui_session=SESS_root; ui_access_token=JWT_root; ui_csrf=CSRF_root" \
+  -H "x-csrf-token: CSRF_root" \
+  -H "Content-Type: application/json" \
+  -d '{"repo_url": "not-a-url", "branch_pattern": "my-branch", "test_commands": []}'
+```
+
+```json
+{
+  "valid": false,
+  "errors": [
+    "Repository URL must be a valid git URL (https:// or git@)",
+    "Branch pattern must include {ticket_id} placeholder",
+    "At least one test command is required"
+  ]
+}
+```
+
+### 12.4 Get Eligible Tickets
+
+```bash
+curl -s -X GET "http://localhost:8000/ui/agents/types/type_abc123/eligible-tickets?limit=5" \
+  -H "Cookie: ui_session=SESS_root; ui_access_token=JWT_root; ui_csrf=CSRF_root"
+```
+
+```json
+{
+  "tickets": [
+    {
+      "ticket_id": "tkt_def456",
+      "subject": "Add pagination to user list endpoint",
+      "labels": ["type:development", "complexity:medium", "area:backend"],
+      "complexity": "medium",
+      "estimated_effort_hours": 2,
+      "created_at": 1748430000
+    },
+    {
+      "ticket_id": "tkt_ghi789",
+      "subject": "Fix 500 error on empty search query",
+      "labels": ["type:bugfix", "complexity:low", "area:backend"],
+      "complexity": "low",
+      "estimated_effort_hours": 1,
+      "created_at": 1748440000
+    }
+  ],
+  "count": 2
+}
+```
+
+### 12.5 Claim Ticket
+
+```bash
+curl -s -X POST "http://localhost:8000/ui/agents/runs/run_xyz/claim-ticket" \
+  -H "Cookie: ui_session=SESS_root; ui_access_token=JWT_root; ui_csrf=CSRF_root" \
+  -H "x-csrf-token: CSRF_root" \
+  -H "Content-Type: application/json" \
+  -d '{"ticket_id": "tkt_def456"}'
+```
+
+```json
+{
+  "ok": true,
+  "ticket_id": "tkt_def456",
+  "status": "in_progress",
+  "assigned_to_sub": "agent_run_xyz_sub",
+  "claimed_at": 1748520100
+}
+```
+
+### 12.6 Test Workflow (dry-run)
+
+```bash
+curl -s -X POST "http://localhost:8000/ui/agents/types/type_abc123/test-workflow" \
+  -H "Cookie: ui_session=SESS_root; ui_access_token=JWT_root; ui_csrf=CSRF_root" \
+  -H "x-csrf-token: CSRF_root" \
+  -H "Content-Type: application/json" \
+  -d '{"ticket_id": "tkt_def456"}'
+```
+
+```json
+{
+  "steps": [
+    {"step_id": 1, "type": "clone_repo", "command": "git clone https://github.com/acme/backend.git /workspace && cd /workspace && git fetch origin", "timeout_seconds": 120, "on_failure": "escalate"},
+    {"step_id": 2, "type": "create_branch", "command": "git checkout -b feat/tkt_def456-add-pagination-to-user-list origin/main", "timeout_seconds": 30, "on_failure": "escalate"},
+    {"step_id": 3, "type": "run_pre_commands", "command": "source .venv/bin/activate && nvm use 20", "timeout_seconds": 60, "on_failure": "escalate"},
+    {"step_id": 4, "type": "inject_coding_prompt", "command": "claude --dangerously-skip-permissions -p \"...\"", "timeout_seconds": 1800, "on_failure": "escalate"},
+    {"step_id": 5, "type": "wait_for_coding", "command": null, "timeout_seconds": 1800, "on_failure": "escalate"},
+    {"step_id": 6, "type": "run_tests", "command": "just test", "timeout_seconds": 600, "on_failure": "retry"},
+    {"step_id": 7, "type": "run_tests", "command": "just e2e", "timeout_seconds": 600, "on_failure": "retry"},
+    {"step_id": 8, "type": "evaluate_tests", "command": null, "timeout_seconds": 10, "on_failure": "escalate"},
+    {"step_id": 9, "type": "create_pr", "command": "gh pr create --title \"Add pagination to user list endpoint\" --body \"Closes #tkt_def456\\n\\n## Summary\\n{summary}\"", "timeout_seconds": 60, "on_failure": "escalate"},
+    {"step_id": 10, "type": "capture_output", "command": "git diff --stat origin/main...HEAD", "timeout_seconds": 30, "on_failure": "next"},
+    {"step_id": 11, "type": "update_ticket", "command": null, "timeout_seconds": 30, "on_failure": "next"}
+  ],
+  "branch_name": "feat/tkt_def456-add-pagination-to-user-list",
+  "total_timeout_seconds": 3600
+}
+```
+
+### 12.7 Get Coder Output
+
+```bash
+curl -s -X GET "http://localhost:8000/ui/agents/runs/run_xyz/coder-output" \
+  -H "Cookie: ui_session=SESS_root; ui_access_token=JWT_root; ui_csrf=CSRF_root"
+```
+
+```json
+{
+  "branch_name": "feat/tkt_def456-add-pagination-to-user-list",
+  "pr_url": "https://github.com/acme/backend/pull/142",
+  "pr_number": 142,
+  "files_changed": ["app/routers/users.py", "app/services/users.py", "tests/test_users.py"],
+  "files_added": [],
+  "files_deleted": [],
+  "insertions": 87,
+  "deletions": 12,
+  "test_results": [
+    {"command": "just test", "exit_code": 0, "duration_seconds": 45, "stdout_tail": "42 passed", "stderr_tail": ""},
+    {"command": "just e2e", "exit_code": 0, "duration_seconds": 312, "stdout_tail": "1070 passed", "stderr_tail": ""}
+  ],
+  "test_retry_count": 1,
+  "total_duration_seconds": 1847,
+  "escalated": false,
+  "escalation_reason": null
+}
+```
+
+### 12.8 Get Coder Metrics
+
+```bash
+curl -s -X GET "http://localhost:8000/ui/agents/coder/metrics?period_days=30" \
+  -H "Cookie: ui_session=SESS_root; ui_access_token=JWT_root; ui_csrf=CSRF_root"
+```
+
+```json
+{
+  "completed_count": 47,
+  "avg_duration_seconds": 2100,
+  "failure_rate": 0.085,
+  "escalation_rate": 0.064,
+  "tickets_by_skill_level": {"junior": 12, "mid": 28, "senior": 7},
+  "period_start": 1745928000,
+  "period_end": 1748520000
+}
+```
+
+---
+
+## 13. Expanded Pydantic Models with Validators
+
+```python
+from pydantic import BaseModel, Field, field_validator
+from typing import Dict, List, Literal, Optional
+
+class CoderConfigIn(BaseModel):
+    repo_url: str = Field(..., min_length=5, max_length=500)
+    repo_branch_base: str = Field(default="main", max_length=100)
+    branch_pattern: str = Field(default="feat/{ticket_id}-{slug}", max_length=200)
+    test_commands: List[str] = Field(..., min_length=1, max_length=20)
+    test_timeout_seconds: int = Field(default=600, ge=60, le=7200)
+    test_retry_limit: int = Field(default=3, ge=0, le=10)
+    pr_template: str = Field(
+        default="Closes #{ticket_id}\n\n{summary}", max_length=5000
+    )
+    pr_base_branch: str = Field(default="main", max_length=100)
+    skill_level: Literal["junior", "mid", "senior"] = "mid"
+    max_ticket_time_seconds: int = Field(default=3600, ge=300, le=28800)
+    complexity_labels: Optional[Dict[str, List[str]]] = None
+    coding_tool: Literal["claude_code", "codex"] = "claude_code"
+    coding_tool_model: Optional[str] = Field(default=None, max_length=100)
+    pre_commands: Optional[List[str]] = Field(default=None, max_length=20)
+    post_commands: Optional[List[str]] = Field(default=None, max_length=20)
+    file_exclude_patterns: Optional[List[str]] = Field(default=None, max_length=50)
+
+    @field_validator("repo_url")
+    @classmethod
+    def validate_repo_url(cls, v: str) -> str:
+        if not (v.startswith("https://") or v.startswith("git@")):
+            raise ValueError("Repository URL must start with https:// or git@")
+        if " " in v:
+            raise ValueError("Repository URL must not contain spaces")
+        return v
+
+    @field_validator("branch_pattern")
+    @classmethod
+    def validate_branch_pattern(cls, v: str) -> str:
+        if "{ticket_id}" not in v:
+            raise ValueError("Branch pattern must include {ticket_id} placeholder")
+        import re
+        if not re.match(r'^[a-zA-Z0-9_/{}\-]+$', v):
+            raise ValueError("Branch pattern contains invalid characters")
+        return v
+
+    @field_validator("test_commands")
+    @classmethod
+    def validate_test_commands(cls, v: list) -> list:
+        if not v:
+            raise ValueError("At least one test command is required")
+        for cmd in v:
+            if not cmd.strip():
+                raise ValueError("Test commands must not be empty strings")
+            if len(cmd) > 500:
+                raise ValueError("Individual test command must be <= 500 characters")
+        return v
+
+    @field_validator("pr_template")
+    @classmethod
+    def validate_pr_template(cls, v: str) -> str:
+        if "{ticket_id}" not in v and "ticket_id" not in v:
+            raise ValueError("PR template should reference the ticket ID")
+        return v
+
+    @field_validator("complexity_labels")
+    @classmethod
+    def validate_complexity_labels(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        allowed_levels = {"junior", "mid", "senior"}
+        for level in v:
+            if level not in allowed_levels:
+                raise ValueError(f"Complexity label key must be one of {sorted(allowed_levels)}")
+            if not isinstance(v[level], list):
+                raise ValueError(f"Complexity labels for {level} must be a list")
+        return v
+
+    @field_validator("coding_tool_model")
+    @classmethod
+    def validate_coding_tool_model(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            return None
+        return v
+
+    @field_validator("file_exclude_patterns")
+    @classmethod
+    def validate_file_exclude_patterns(cls, v: list | None) -> list | None:
+        if v is None:
+            return v
+        for pattern in v:
+            if not pattern.strip():
+                raise ValueError("File exclude patterns must not be empty strings")
+            if "/" in pattern and not pattern.startswith("**/"):
+                pass  # Allow path-relative patterns
+        return v
+
+
+class CoderOutputOut(BaseModel):
+    branch_name: str = ""
+    pr_url: str = ""
+    pr_number: int = 0
+    files_changed: List[str] = Field(default_factory=list)
+    files_added: List[str] = Field(default_factory=list)
+    files_deleted: List[str] = Field(default_factory=list)
+    insertions: int = Field(default=0, ge=0)
+    deletions: int = Field(default=0, ge=0)
+    test_results: List[Dict] = Field(default_factory=list)
+    test_retry_count: int = Field(default=0, ge=0)
+    total_duration_seconds: int = Field(default=0, ge=0)
+    escalated: bool = False
+    escalation_reason: Optional[str] = None
+
+    @field_validator("test_results")
+    @classmethod
+    def validate_test_results(cls, v: list) -> list:
+        for result in v:
+            required = {"command", "exit_code", "duration_seconds"}
+            missing = required - set(result.keys())
+            if missing:
+                raise ValueError(f"Test result missing fields: {missing}")
+        return v
+
+
+class CoderMetricsOut(BaseModel):
+    completed_count: int = Field(ge=0)
+    avg_duration_seconds: float = Field(ge=0)
+    failure_rate: float = Field(ge=0, le=1)
+    escalation_rate: float = Field(ge=0, le=1)
+    tickets_by_skill_level: Dict[str, int] = Field(default_factory=dict)
+    period_start: int
+    period_end: int
+
+    @field_validator("period_end")
+    @classmethod
+    def validate_period_end(cls, v: int, info) -> int:
+        if "period_start" in info.data and v < info.data["period_start"]:
+            raise ValueError("period_end must be >= period_start")
+        return v
+```
+
+---
+
+## 14. Frontend Component Tree
+
+```
+CoderAgentConfigPage
+├── PageHeader
+│   ├── Breadcrumb (Agents > Coder Config)
+│   └── Heading ("Coder Agent Configuration")
+├── Tabs
+│   ├── Tab("Config") → CoderConfigTab
+│   │   ├── Card("Repository")
+│   │   │   ├── Input (repo_url)
+│   │   │   ├── Input (repo_branch_base)
+│   │   │   └── Input (branch_pattern) + PatternPreview
+│   │   ├── Card("Test Suite")
+│   │   │   ├── SortableList (test_commands)
+│   │   │   ├── Slider (test_timeout_seconds, 60-7200)
+│   │   │   └── Slider (test_retry_limit, 0-10)
+│   │   ├── Card("PR Template")
+│   │   │   └── MarkdownEditor (pr_template, with placeholder highlighting)
+│   │   ├── Card("Agent Settings")
+│   │   │   ├── RadioGroup (skill_level: junior/mid/senior)
+│   │   │   ├── Slider (max_ticket_time_seconds, 300-28800)
+│   │   │   ├── RadioGroup (coding_tool: claude_code/codex)
+│   │   │   └── Input (coding_tool_model, optional)
+│   │   ├── Card("Setup Commands")
+│   │   │   ├── EditableList (pre_commands)
+│   │   │   └── EditableList (post_commands)
+│   │   ├── Card("File Exclusions")
+│   │   │   └── EditableList (file_exclude_patterns)
+│   │   └── ActionBar
+│   │       ├── Button("Validate") → useMutation(validateConfig)
+│   │       └── Button("Save")     → useMutation(updateConfig)
+│   ├── Tab("Eligible Tickets") → EligibleTicketsTab
+│   │   ├── Button("Refresh")
+│   │   └── DataTable
+│   │       ├── Column (Ticket ID)
+│   │       ├── Column (Subject)
+│   │       ├── Column (Labels) → BadgeGroup
+│   │       ├── Column (Complexity) → Badge
+│   │       ├── Column (Est. Effort)
+│   │       └── Column (Age)
+│   └── Tab("Metrics") → CoderMetricsTab
+│       ├── StatCard (Completed)
+│       ├── StatCard (Avg Duration)
+│       ├── StatCard (Failure Rate %)
+│       ├── StatCard (Escalation Rate %)
+│       ├── BarChart (tickets_by_skill_level)
+│       └── TimeSeriesChart (throughput, last 30d)
+│
+CoderRunOutputPanel (embedded in Agent Run detail)
+├── Card("Branch & PR")
+│   ├── CodeLink (branch_name)
+│   └── ExternalLink (pr_url)
+├── Card("Files Changed")
+│   └── FileTree (files_changed + files_added + files_deleted, with +/- badges)
+├── Card("Diff Stats")
+│   ├── Stat (insertions, green)
+│   └── Stat (deletions, red)
+├── Card("Test Results")
+│   └── Accordion
+│       └── AccordionItem[] (one per test result)
+│           ├── Header: command + exit_code badge + duration
+│           └── Content: stdout_tail + stderr_tail (monospace)
+├── Card("Retry Info")
+│   └── Text (test_retry_count + escalated status)
+└── Card("Duration")
+    └── Text (total_duration_seconds, formatted)
+```
+
+### Component Props Interfaces
+
+```typescript
+interface CoderConfigTabProps {
+  typeId: string;
+  config: CoderConfig | undefined;
+  isLoading: boolean;
+  onSave: (config: CoderConfigIn) => void;
+  onValidate: (config: CoderConfigIn) => void;
+}
+
+interface EligibleTicketsTabProps {
+  typeId: string;
+}
+
+interface CoderMetricsTabProps {
+  typeId: string;
+  periodDays: number;
+}
+
+interface CoderRunOutputPanelProps {
+  runId: string;
+  output: CoderOutput | undefined;
+  isLoading: boolean;
+}
+
+interface PatternPreviewProps {
+  pattern: string;
+  sampleTicketId: string;
+  sampleSubject: string;
+}
+```
+
+---
+
+## 15. Observability
+
+### 15.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `coder_config_updates_total` | Counter | `type_id` | Config save operations |
+| `coder_eligible_tickets_count` | Gauge | `type_id`, `skill_level` | Current eligible ticket count |
+| `coder_ticket_claims_total` | Counter | `type_id`, `outcome=success\|conflict` | Ticket claim attempts |
+| `coder_workflow_duration_seconds` | Histogram | `type_id`, `outcome=success\|escalated` | Total workflow wall-clock time |
+| `coder_test_retry_count` | Histogram | `type_id` | Number of test-fix cycles per run |
+| `coder_escalations_total` | Counter | `type_id`, `reason` | Escalation events by cause |
+| `coder_pr_created_total` | Counter | `type_id` | Successful PR creations |
+| `coder_lines_changed_total` | Counter | `type_id`, `direction=inserted\|deleted` | Code change volume |
+
+### 15.2 Logging Events
+
+| Event | Level | Fields | When |
+|-------|-------|--------|------|
+| `coder.config.updated` | INFO | `type_id`, `skill_level`, `coding_tool` | Config saved |
+| `coder.config.validated` | INFO | `type_id`, `valid`, `error_count` | Config validation completed |
+| `coder.ticket.claimed` | INFO | `type_id`, `run_id`, `ticket_id`, `complexity` | Ticket claimed by agent |
+| `coder.ticket.claim_conflict` | WARN | `type_id`, `run_id`, `ticket_id` | Concurrent claim lost |
+| `coder.workflow.started` | INFO | `run_id`, `ticket_id`, `branch_name` | Workflow execution begins |
+| `coder.tests.passed` | INFO | `run_id`, `retry_count`, `duration_seconds` | All tests passed |
+| `coder.tests.failed` | WARN | `run_id`, `retry_count`, `command`, `exit_code` | Test failure detected |
+| `coder.fix.attempted` | INFO | `run_id`, `retry_number`, `max_retries` | Fix prompt injected |
+| `coder.pr.created` | INFO | `run_id`, `pr_url`, `pr_number`, `insertions`, `deletions` | PR created successfully |
+| `coder.escalated` | WARN | `run_id`, `ticket_id`, `reason` | Agent escalated to human |
+| `coder.timeout` | ERROR | `run_id`, `ticket_id`, `elapsed_seconds`, `budget_seconds` | Time budget exceeded |
+
+### 15.3 Alerting Rules
+
+| Alert | Condition | Severity | Channel |
+|-------|-----------|----------|---------|
+| `CoderHighEscalationRate` | `rate(coder_escalations_total) / rate(coder_ticket_claims_total) > 0.25 over 1h` | Warning | Slack #agents |
+| `CoderTestRetryExhaustion` | `coder_test_retry_count{quantile="0.95"} >= test_retry_limit` | Warning | Slack #agents |
+| `CoderWorkflowTimeout` | `coder_workflow_duration_seconds{quantile="0.99"} > max_ticket_time_seconds * 0.9` | Critical | PagerDuty |
+
+---
+
+## 16. Rollout Plan
+
+### 16.1 Feature Flags
+
+| Flag | Scope | Default | Description |
+|------|-------|---------|-------------|
+| `AGENT_CODER_ENABLED` | Global | `false` | Gates all coder agent endpoints and workflow execution |
+| `AGENT_CODER_AUTO_CLAIM` | Per-type | `false` | When true, coder agents auto-poll for eligible tickets; when false, manual claim only |
+
+### 16.2 Phases
+
+**Phase 1 -- Backend + manual claim (Week 1-2)**
+- Deploy `agent_coder.py` service and router.
+- `AGENT_CODER_ENABLED=true`, `AGENT_CODER_AUTO_CLAIM=false`.
+- Admins manually claim tickets and trigger workflows via API.
+- Monitor: workflow duration, test pass/fail rates, escalation causes.
+- Validate: branch naming, PR template rendering, ticket status transitions.
+
+**Phase 2 -- Auto-claim with guardrails (Week 3)**
+- Enable `AGENT_CODER_AUTO_CLAIM=true` for 1-2 agent instances on internal repos.
+- Agent polls every 60s for eligible tickets.
+- Limit: 1 concurrent ticket per agent (no parallel workflows).
+- Monitor: claim conflicts, timeout frequency, PR quality (manual review).
+
+**Phase 3 -- General availability (Week 4+)**
+- Enable auto-claim for all configured coder agent types.
+- Allow parallel workflows (up to 3 per agent) for senior skill level.
+- Frontend config page available to all admins.
+- Publish runbook for troubleshooting stuck workflows.
+- Monitor: throughput per agent, cost per ticket, human intervention rate.
+
+---
+
+## 17. Performance Considerations
+
+### 17.1 Latency Targets
+
+| Endpoint | Target P50 | Target P99 | Notes |
+|----------|-----------|-----------|-------|
+| `PUT coder-config` | 40ms | 150ms | Single DDB UpdateItem |
+| `GET coder-config` | 20ms | 80ms | Single DDB GetItem |
+| `POST validate` | 100ms | 500ms | May check repo URL accessibility (HTTP HEAD) |
+| `GET eligible-tickets` | 80ms | 300ms | 2 GSI queries (dev + bugfix labels) + merge |
+| `POST claim-ticket` | 30ms | 100ms | Single conditional UpdateItem |
+| `GET coder-output` | 20ms | 80ms | Single DDB GetItem |
+| `GET coder/metrics` | 100ms | 400ms | Query 30 daily rollup records |
+| `POST test-workflow` | 50ms | 200ms | In-memory workflow generation, no I/O |
+
+### 17.2 Caching Strategy
+
+- **Coder config**: React Query `staleTime: 60_000`. Config rarely changes; invalidated on PUT.
+- **Eligible tickets**: React Query `staleTime: 10_000`. Tickets claimed frequently; short stale window.
+- **Metrics**: React Query `staleTime: 300_000`. Daily rollups; 5-minute cache acceptable.
+- **Coder output**: React Query `staleTime: Infinity` once `escalated` or `pr_url` is set (output is final).
+
+### 17.3 Workflow Execution Concerns
+
+- **Terminal session isolation**: Each coder workflow runs in a dedicated terminal session (AGENT-002). No shared state between concurrent agent runs.
+- **Git clone caching**: For repeated runs against the same repo, the agent can use `git fetch + reset` instead of fresh clone. Saves 10-30s per run.
+- **Test output truncation**: Only last 200 lines of stdout and 100 lines of stderr are stored. Full output is available in the terminal session logs (AGENT-006) for 7 days.
+- **Concurrent ticket claiming**: DDB conditional update ensures exactly one agent claims each ticket. Failed claims add ~30ms overhead; agents back off with jitter (1-5s).
+- **Metrics rollup**: Daily snapshot computed by cron job (not real-time aggregation). Dashboard reads pre-computed records.
+
+---
+
+## 18. Expanded E2E Tests
+
+### Section 655: Input Validation (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 655.1 | Empty repo URL rejected | PUT coder-config with `repo_url: ""` → 422 |
+| 655.2 | Invalid repo URL rejected | PUT coder-config with `repo_url: "ftp://bad"` → 422 with "must start with https:// or git@" |
+| 655.3 | Branch pattern without ticket_id rejected | PUT with `branch_pattern: "my-branch"` → 422 with "must include {ticket_id}" |
+| 655.4 | Empty test_commands rejected | PUT with `test_commands: []` → 422 with "at least one test command" |
+| 655.5 | test_timeout_seconds below 60 rejected | PUT with `test_timeout_seconds: 10` → 422 |
+
+### Section 656: Authorization Boundary (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 656.1 | Non-admin cannot read coder config | Alice GET coder-config → 403 "Admin access required" |
+| 656.2 | Non-admin cannot update coder config | Alice PUT coder-config → 403 |
+| 656.3 | Non-admin cannot view eligible tickets | Alice GET eligible-tickets → 403 |
+| 656.4 | CSRF required for config update | PUT coder-config without x-csrf-token → 403 |
+
+### Section 657: Ticket Label Filtering (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 657.1 | Ticket without type:development label not eligible | Create ticket with labels `["area:backend"]` only; GET eligible-tickets; ticket not in list |
+| 657.2 | Ticket with complexity above skill level not eligible | Junior agent; create ticket with `complexity:high`; GET eligible; not in list |
+| 657.3 | Claimed ticket disappears from eligible list | Claim ticket; GET eligible; ticket no longer listed |
+| 657.4 | Ticket in different space not eligible | Create ticket in space_B; agent configured for space_A; GET eligible; not in list |
+| 657.5 | Bugfix label tickets also eligible | Create ticket with `type:bugfix`; GET eligible; ticket appears |
+
+### Section 658: Workflow Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 658.1 | Test workflow for nonexistent ticket returns 404 | POST test-workflow with `ticket_id: "nonexistent"` → 404 |
+| 658.2 | Claim already-claimed ticket returns 409 | Claim same ticket twice → second attempt returns 409 "already assigned" |
+| 658.3 | Coder output for run without output returns 404 | GET coder-output for a run that has not completed → 404 "No coder output available" |
+| 658.4 | Metrics endpoint returns zeros for new agent type | GET metrics for a type with no completed runs → `completed_count: 0`, `failure_rate: 0` |

@@ -61,9 +61,102 @@ The platform already has a foundational i18n infrastructure (`app/core/settings.
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture & Data Flow
 
-### 2.1 i18n Settings (`app/core/settings.py`, lines 1405-1409)
+### 2.1 Request Flow Diagram
+
+```
+ User Browser                   Backend                          DynamoDB
+ ────────────                   ───────                          ────────
+      │                            │                                │
+      │  GET /questionnaire/       │                                │
+      │      {slug}/localized      │                                │
+      │      ?lang=es              │                                │
+      │ ─────────────────────────> │                                │
+      │                            │  1. Lookup user profile        │
+      │                            │     resolve_locale()           │
+      │                            │ ─────────────────────────────> │
+      │                            │  <── locale="es"               │
+      │                            │                                │
+      │                            │  2. Load questionnaire         │
+      │                            │     (English template)         │
+      │                            │ ─────────────────────────────> │
+      │                            │  <── questionnaire object      │
+      │                            │                                │
+      │                            │  3. BatchGetItem translations  │
+      │                            │     kyc_translations table     │
+      │                            │     PK="es", SK=key_prefix     │
+      │                            │ ─────────────────────────────> │
+      │                            │  <── translated strings        │
+      │                            │                                │
+      │                            │  4. Merge translations into    │
+      │                            │     questionnaire object       │
+      │                            │                                │
+      │  <── localized JSON        │                                │
+      │      (Spanish strings)     │                                │
+```
+
+### 2.2 Translation Resolution Pipeline
+
+```
+  resolve_locale(user_profile, accept_language_header)
+      │
+      ▼
+  ┌─────────────────────────────────┐
+  │ 1. user_profile.locale set?     │── Yes ──> locale = profile.locale
+  │                                 │
+  │ 2. Accept-Language header?      │── Yes ──> parse & match to supported
+  │                                 │
+  │ 3. Fall back to default         │── Always ──> "en"
+  └─────────────────────────────────┘
+      │
+      ▼
+  translate(key, language)
+      │
+      ▼
+  ┌─────────────────────────────────┐
+  │ 1. Query kyc_translations       │
+  │    PK=language, SK=key          │
+  │    Found? ──> return value      │
+  │                                 │
+  │ 2. language != "en"?            │
+  │    Query PK="en", SK=key        │
+  │    Found? ──> return EN value   │
+  │                                 │
+  │ 3. Return fallback or key       │
+  └─────────────────────────────────┘
+```
+
+### 2.3 Email Localization Flow
+
+```
+  KYC Status Change (e.g., case approved)
+      │
+      ▼
+  Resolve user locale from profile
+      │
+      ▼
+  localize_email(event="case_approved", language="es", variables={user_name, case_id})
+      │
+      ▼
+  ┌──────────────────────────────────────┐
+  │ Lookup "kyc.email.subject.case_approved" │
+  │ Lookup "kyc.email.body.case_approved"    │
+  │ for language="es"                        │
+  │                                          │
+  │ Substitute {{user_name}}, {{case_id}}    │
+  │ in translated template                   │
+  └──────────────────────────────────────┘
+      │
+      ▼
+  send_alert_email(subject, body, recipient_email)
+```
+
+---
+
+## 3. Current State Analysis
+
+### 3.1 i18n Settings (`app/core/settings.py`, lines 1405-1409)
 
 ```python
 i18n_default_locale: str = os.environ.get("I18N_DEFAULT_LOCALE", "en")
@@ -75,27 +168,27 @@ i18n_admin_management_enabled: bool = os.environ.get("I18N_ADMIN_MANAGEMENT_ENAB
 
 These settings exist but are not consumed by any KYC code path.
 
-### 2.2 Questionnaire System (`app/services/questionnaires_repository.py`)
+### 3.2 Questionnaire System (`app/services/questionnaires_repository.py`)
 
 The questionnaire repository stores questionnaire definitions with `title`, `description`, and question `label`/`hint` fields -- all stored as plain strings with no language dimension. The KYC integration (`app/routers/kyc_cases.py`, line 625, `start_kyc_questionnaire`) binds a questionnaire to a case by slug, but the slug lookup returns the English-only version.
 
-### 2.3 Alert/Email System (`app/services/alerts.py`)
+### 3.3 Alert/Email System (`app/services/alerts.py`)
 
 The `write_alert` function (line 355) accepts `title` and `details` as plain strings. The `send_alert_email` function (line 458) sends emails with hard-coded English subject/body patterns. Alert email templates (`app/services/alert_email_templates.py`) have English-only templates.
 
-### 2.4 Signature Packet Legal Notices
+### 3.4 Signature Packet Legal Notices
 
 The `KycSignatureStatusOut` (`app/contracts/kyc_cases_contract.py`, line 160) has a `legal_notice_version` field and `legal_notice_accepted` flag. The legal notice text is currently hard-coded in the frontend signing page, not served from the backend or localized.
 
-### 2.5 User Profile Locale
+### 3.5 User Profile Locale
 
 User profiles can store a `locale` field (e.g., `"es"`, `"fr"`), but this field is not currently used by any KYC code path. The profile is accessible via `app/services/user_profile.py`.
 
 ---
 
-## 3. Technical Design
+## 4. Technical Design
 
-### 3.1 New DynamoDB Table: `kyc_translations`
+### 4.1 New DynamoDB Table: `kyc_translations`
 
 ```
 Table: kyc_translations
@@ -128,7 +221,20 @@ TableDef(
 ),
 ```
 
-### 3.2 Translation Key Naming Convention
+### 4.2 Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table / GSI | PK | SK | Operation | Notes |
+|---|---------------|-------------|----|----|-----------|-------|
+| 1 | Get single translation | Main table | `language_code = "es"` | `key = "kyc.status.approved"` | GetItem | O(1) lookup |
+| 2 | Batch get translations for a questionnaire | Main table | `language_code = "es"` | Multiple keys | BatchGetItem (up to 100) | Used by `translate_batch()` |
+| 3 | List all translations for a language | Main table | `language_code = "es"` | `begins_with("kyc.")` | Query | For admin translation management |
+| 4 | List translations by key prefix | Main table | `language_code = "es"` | `begins_with("kyc.questionnaire.")` | Query | Scoped listing |
+| 5 | List translations by status | GSI status-language-index | `status = "needs_review"` | `language_code = "es"` | Query | Admin review workflow |
+| 6 | Coverage comparison (EN vs target) | Main table | Two queries: `"en"` and target language | `begins_with("kyc.")` | Two Queries + set diff | Coverage report generation |
+| 7 | Upsert translation | Main table | `language_code = "es"` | `key = "kyc.status.approved"` | PutItem | Admin creates/updates |
+| 8 | Delete translation | Main table | `language_code = "es"` | `key = "kyc.status.approved"` | DeleteItem | Admin removes |
+
+### 4.3 Translation Key Naming Convention
 
 ```
 kyc.questionnaire.title.{slug}         — Questionnaire title
@@ -144,7 +250,7 @@ kyc.error.{error_code}               — Error message
 kyc.ui.label.{component}.{field}      — UI label
 ```
 
-### 3.3 New Service: `app/services/kyc_i18n.py`
+### 4.4 New Service: `app/services/kyc_i18n.py`
 
 ```python
 class KycI18nService:
@@ -197,7 +303,92 @@ class KycI18nService:
         """Parse S.i18n_supported_locales into list."""
 ```
 
-### 3.4 Router Endpoints
+### 4.5 Pydantic Model Definitions
+
+```python
+# app/models.py additions
+
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, List, Any
+
+
+class TranslationIn(BaseModel):
+    """Request model for creating/updating a translation."""
+    value: str = Field(..., min_length=1, max_length=10000,
+                       description="Translated string value")
+    context: str = Field(default="", max_length=500,
+                         description="Usage context hint for translators")
+    status: str = Field(default="published",
+                        pattern=r"^(published|draft|needs_review)$")
+
+
+class TranslationOut(BaseModel):
+    """Response model for a single translation entry."""
+    language_code: str
+    key: str
+    value: str
+    context: str = ""
+    status: str = "published"
+    updated_by: Optional[str] = None
+    updated_at: Optional[int] = None
+
+
+class TranslationListOut(BaseModel):
+    """Response model for listing translations."""
+    items: List[TranslationOut] = Field(default_factory=list)
+    coverage: Optional[Dict[str, Any]] = None
+    total: int = 0
+
+
+class TranslationCoverageOut(BaseModel):
+    """Response model for translation coverage."""
+    language_code: str
+    total_keys: int = 0
+    translated_keys: int = 0
+    missing_keys: int = 0
+    coverage_pct: float = 0.0
+
+
+class CoverageReportOut(BaseModel):
+    """Response model for multi-language coverage report."""
+    languages: Dict[str, TranslationCoverageOut] = Field(default_factory=dict)
+
+
+class LocalizedQuestionnaireOut(BaseModel):
+    """Response model for a localized questionnaire."""
+    questionnaire: Dict[str, Any]
+    language: str
+    fallback_keys: List[str] = Field(default_factory=list,
+                                      description="Keys that fell back to English")
+
+
+class LocalizedLegalNoticeOut(BaseModel):
+    """Response model for a localized legal notice."""
+    text: str
+    language: str
+    version: str
+    is_fallback: bool = False
+
+
+class TranslationBulkImportIn(BaseModel):
+    """Request model for bulk translation import."""
+    translations: Dict[str, str] = Field(
+        ..., description="Map of key -> value",
+        max_length=500
+    )
+    language: str = Field(..., min_length=2, max_length=5)
+    status: str = Field(default="draft",
+                        pattern=r"^(published|draft|needs_review)$")
+
+
+class TranslationBulkImportOut(BaseModel):
+    """Response model for bulk import results."""
+    imported: int = 0
+    skipped: int = 0
+    errors: List[str] = Field(default_factory=list)
+```
+
+### 4.6 Router Endpoints
 
 Add to a new router `app/routers/kyc_i18n.py`:
 
@@ -232,9 +423,171 @@ DELETE /admin/translations/{language}/{key}
 GET /admin/coverage
   — Translation coverage report across all languages
   — Response: { "languages": { "es": { total: N, translated: N, pct: 0.85 }, ... } }
+
+POST /admin/translations/{language}/bulk-import
+  — Import multiple translations at once
+  — Body: { "translations": { key: value, ... }, "status": "draft" }
+  — Response: { "imported": N, "skipped": N, "errors": [...] }
+
+GET /admin/translations/{language}/export
+  — Export all translations for a language as JSON
+  — Response: { "language": str, "translations": { key: value, ... } }
 ```
 
-### 3.5 Integration Points
+### 4.7 API Request/Response Examples
+
+**PUT /admin/translations/es/kyc.status.approved**
+
+Request:
+```json
+{
+  "value": "Aprobado",
+  "context": "KYC case status label shown to users when their verification is approved"
+}
+```
+
+Response (200):
+```json
+{
+  "language_code": "es",
+  "key": "kyc.status.approved",
+  "value": "Aprobado",
+  "context": "KYC case status label shown to users when their verification is approved",
+  "status": "published",
+  "updated_by": "root.admin@testdev.local",
+  "updated_at": 1748520000
+}
+```
+
+**GET /translations/es?prefix=kyc.status**
+
+Response (200):
+```json
+{
+  "translations": {
+    "kyc.status.approved": "Aprobado",
+    "kyc.status.rejected": "Rechazado",
+    "kyc.status.under_review": "En Revision",
+    "kyc.status.submitted": "Enviado",
+    "kyc.status.draft": "Borrador"
+  }
+}
+```
+
+**GET /questionnaire/identity_verification/localized?lang=es**
+
+Response (200):
+```json
+{
+  "questionnaire": {
+    "slug": "identity_verification",
+    "title": "Verificacion de Identidad",
+    "description": "Complete este formulario para verificar su identidad.",
+    "questions": [
+      {
+        "question_id": "q_001",
+        "label": "Nombre completo como aparece en su documento",
+        "hint": "Ingrese su nombre legal completo",
+        "type": "text",
+        "required": true
+      },
+      {
+        "question_id": "q_002",
+        "label": "Fecha de nacimiento",
+        "hint": "",
+        "type": "date",
+        "required": true
+      }
+    ]
+  },
+  "language": "es",
+  "fallback_keys": []
+}
+```
+
+**GET /legal-notice/v1?lang=fr**
+
+Response (200):
+```json
+{
+  "text": "En signant ce document, vous attestez que les informations fournies sont exactes et completes. Vous autorisez la plateforme a verifier votre identite conformement a notre politique de confidentialite.",
+  "language": "fr",
+  "version": "v1",
+  "is_fallback": false
+}
+```
+
+**GET /admin/coverage**
+
+Response (200):
+```json
+{
+  "languages": {
+    "es": {
+      "language_code": "es",
+      "total_keys": 85,
+      "translated_keys": 72,
+      "missing_keys": 13,
+      "coverage_pct": 0.847
+    },
+    "fr": {
+      "language_code": "fr",
+      "total_keys": 85,
+      "translated_keys": 68,
+      "missing_keys": 17,
+      "coverage_pct": 0.8
+    },
+    "de": {
+      "language_code": "de",
+      "total_keys": 85,
+      "translated_keys": 0,
+      "missing_keys": 85,
+      "coverage_pct": 0.0
+    }
+  }
+}
+```
+
+**POST /admin/translations/es/bulk-import**
+
+Request:
+```json
+{
+  "translations": {
+    "kyc.status.approved": "Aprobado",
+    "kyc.status.rejected": "Rechazado",
+    "kyc.status.under_review": "En Revision"
+  },
+  "language": "es",
+  "status": "draft"
+}
+```
+
+Response (200):
+```json
+{
+  "imported": 3,
+  "skipped": 0,
+  "errors": []
+}
+```
+
+### 4.8 Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|----------|-------------|------------|---------------|-----------------|
+| Translation key not found | 200 (fallback) | N/A | Falls back to English silently | No action needed; fallback is expected behavior |
+| Language code not in supported list | 400 | `unsupported_locale` | "Language 'xx' is not supported. Supported: en, es, fr, de, pt, zh, ja, ko, ar, hi" | Use a supported language code |
+| Admin PUT with empty value | 422 | `validation_error` | "value: ensure this value has at least 1 character" | Provide non-empty translation value |
+| Non-admin attempts PUT/DELETE | 403 | `forbidden` | "Admin session required" | Use admin credentials |
+| Translation key too long (>500 chars) | 422 | `validation_error` | "key: ensure this value has at most 500 characters" | Shorten the translation key |
+| Bulk import exceeds 500 entries | 422 | `validation_error` | "translations: ensure this value has at most 500 items" | Split into multiple requests |
+| Questionnaire slug not found | 404 | `not_found` | "Questionnaire not found" | Verify the questionnaire slug |
+| Legal notice version not found | 404 | `not_found` | "Legal notice version not found" | Verify the version string |
+| Database timeout during batch get | 500 | `internal_error` | "Translation service temporarily unavailable" | Retry after a few seconds |
+| i18n feature disabled | 400 | `feature_disabled` | "Internationalization is currently disabled" | Enable I18N_ENABLED in settings |
+
+### 4.9 Integration Points
 
 **Questionnaire localization**: Modify `start_kyc_questionnaire` in `app/routers/kyc_cases.py` (line 625) to accept an optional `?lang=` parameter. Before returning the questionnaire to the user, pass it through `kyc_i18n_svc.localize_questionnaire()`.
 
@@ -244,7 +597,7 @@ GET /admin/coverage
 
 **Document signing legal notice**: The frontend signing page fetches the localized legal notice via `GET /v1/kyc/i18n/legal-notice/{version}?lang={lang}` instead of using a hard-coded English string.
 
-### 3.6 Frontend Changes
+### 4.10 Frontend Changes
 
 **Translation fetching**: Add a `useKycTranslations(lang)` React Query hook that fetches and caches translations for the user's locale. Components use `t("kyc.status.under_review")` helper to look up translated strings.
 
@@ -254,6 +607,66 @@ GET /admin/coverage
 - Inline editing of translation values
 - Coverage progress bars per language
 - Bulk import/export (JSON format)
+
+### 4.11 Frontend Component Tree
+
+```
+KycTranslationsPage (admin)
+├── PageHeader
+│   ├── Title: "KYC Translations"
+│   └── Actions: [Export JSON] [Import JSON]
+├── LanguageSelector (dropdown)
+│   └── Options: en, es, fr, de, pt, zh, ja, ko, ar, hi
+├── CoverageBar
+│   └── Progress bar showing translated_keys / total_keys
+├── TranslationFilters
+│   ├── SearchInput (filter by key prefix)
+│   ├── StatusFilter (published | draft | needs_review | all)
+│   └── CategoryFilter (status | questionnaire | email | legal | ui)
+└── TranslationTable
+    ├── TableHeader: [Key, English Value, Translation, Status, Actions]
+    └── TableRow (for each translation)
+        ├── Key (monospace, truncated with tooltip)
+        ├── English reference value (readonly)
+        ├── TranslationInput (inline editable textarea)
+        ├── StatusBadge (published=green, draft=yellow, needs_review=orange)
+        └── Actions: [Save] [Delete]
+```
+
+**Props interfaces**:
+
+```typescript
+interface KycTranslationsPageProps {}
+
+interface LanguageSelectorProps {
+  value: string;
+  onChange: (lang: string) => void;
+  languages: { code: string; name: string }[];
+}
+
+interface CoverageBarProps {
+  total: number;
+  translated: number;
+  language: string;
+}
+
+interface TranslationRowProps {
+  translationKey: string;
+  englishValue: string;
+  translatedValue: string;
+  status: "published" | "draft" | "needs_review";
+  onSave: (value: string, status: string) => void;
+  onDelete: () => void;
+}
+
+interface TranslationTableProps {
+  items: TranslationOut[];
+  englishMap: Record<string, string>;
+  onSave: (key: string, value: string, status: string) => void;
+  onDelete: (key: string) => void;
+  isLoading: boolean;
+}
+```
 
 **Components:**
 
@@ -268,16 +681,115 @@ const KycTranslationsPage = lazy(() => import("@/pages/admin/KycTranslationsPage
 <Route path="admin/kyc/translations" element={<KycTranslationsPage />} />
 ```
 
-### 3.7 Seed Data
+### 4.12 Seed Data
 
 The `scripts/local-ddb-seed.py` script will be extended to seed baseline translations for `es` and `fr` covering the most critical keys (status names, common questionnaire labels, legal notice). This ensures dev/test environments have enough translations to exercise the localization code paths.
 
 ---
 
-## 4. E2E Test Plan
+## 5. Observability
+
+### 5.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `kyc_translation_lookup_total` | Counter | `language`, `outcome=(hit|miss|fallback)` | Translation lookup results |
+| `kyc_translation_batch_size` | Histogram | `language` | Number of keys per batch translate call |
+| `kyc_translation_coverage_pct` | Gauge | `language` | Current coverage percentage per language |
+| `kyc_localized_email_sent_total` | Counter | `language`, `event_type` | Localized emails dispatched |
+| `kyc_translation_admin_edits_total` | Counter | `language`, `action=(create|update|delete)` | Admin translation modifications |
+
+### 5.2 Logging
+
+| Log Event | Level | Fields | Trigger |
+|-----------|-------|--------|---------|
+| `translation.fallback` | WARNING | `key`, `requested_language`, `fallback_language` | Requested translation missing, fell back to English |
+| `translation.missing_all` | WARNING | `key`, `requested_language` | Translation missing in all languages (using key as display) |
+| `translation.batch_partial` | INFO | `language`, `requested_count`, `found_count` | Batch translate had partial coverage |
+| `translation.admin_edit` | INFO | `admin_sub`, `language`, `key`, `action` | Admin creates/updates/deletes a translation |
+| `translation.bulk_import` | INFO | `admin_sub`, `language`, `imported_count`, `error_count` | Bulk import completed |
+
+### 5.3 Alerting
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Low translation coverage | Coverage below 60% for any P0 language (es, fr) | Warning | Notify admin to add missing translations |
+| High fallback rate | > 30% of translation lookups fall back to English in 1 hour | Warning | Check for missing translations in affected language |
+| Translation service errors | > 5 DynamoDB errors in translation lookups in 5 minutes | Critical | Check DDB table health and provisioned capacity |
+
+---
+
+## 6. Rollout Plan
+
+### 6.1 Feature Flags
+
+| Flag | Environment Variable | Default | Description |
+|------|---------------------|---------|-------------|
+| `I18N_ENABLED` | `I18N_ENABLED` | `true` | Master switch for all i18n features |
+| `I18N_KYC_LOCALIZATION_ENABLED` | `I18N_KYC_LOCALIZATION_ENABLED` | `false` | Enable KYC-specific localization (off by default until translations seeded) |
+| `I18N_RTL_ENABLED` | `I18N_RTL_ENABLED` | `true` | Enable RTL language support (Arabic) |
+| `I18N_ADMIN_MANAGEMENT_ENABLED` | `I18N_ADMIN_MANAGEMENT_ENABLED` | `true` | Enable admin translation management UI |
+
+### 6.2 Phased Rollout
+
+**Phase 1: Infrastructure (Days 1-2)**
+- Create `kyc_translations` DDB table
+- Implement `KycI18nService` with translate/batch/resolve
+- Add admin CRUD endpoints
+- Seed es/fr baseline translations
+- Feature flag: `I18N_KYC_LOCALIZATION_ENABLED=false`
+
+**Phase 2: Admin UI (Days 3-4)**
+- Build KycTranslationsPage
+- Implement bulk import/export
+- Coverage reporting
+- Internal testing by admins to populate translations
+
+**Phase 3: User-facing localization (Days 5-6)**
+- Wire questionnaire localization
+- Wire email notification localization
+- Wire legal notice localization
+- Feature flag: `I18N_KYC_LOCALIZATION_ENABLED=true` for 10% of users
+
+**Phase 4: Full rollout (Days 7-8)**
+- Ramp to 100% of users
+- Monitor fallback rates and coverage metrics
+- Address any edge cases (RTL layout issues, text overflow)
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Latency Targets
+
+| Operation | Target | Strategy |
+|-----------|--------|----------|
+| Single translation lookup | < 5ms | DDB GetItem with consistent reads |
+| Batch translate (50 keys) | < 20ms | DDB BatchGetItem (single round trip) |
+| Questionnaire localization | < 30ms | Batch translate all keys + merge |
+| Coverage report (all languages) | < 200ms | Query per language (parallelized) |
+
+### 7.2 Caching Strategy
+
+| Cache Layer | TTL | Scope | Invalidation |
+|-------------|-----|-------|-------------|
+| In-memory service cache | 5 minutes | Per-language translation map | On admin PUT/DELETE, invalidate affected language |
+| React Query (frontend) | 10 minutes | Per `useKycTranslations(lang)` hook | Manual invalidation via query key |
+| HTTP cache headers | 60 seconds | GET /translations/{language} | `Cache-Control: public, max-age=60` |
+
+### 7.3 Pagination
+
+- `list_translations` uses DDB Query with `Limit` parameter and cursor-based pagination via `LastEvaluatedKey`.
+- Default limit: 100 items per page.
+- Maximum limit: 500 items per page.
+- Coverage report computes on the full key set (no pagination needed -- typically < 500 keys).
+
+---
+
+## 8. E2E Test Plan
 
 **Test file**: `frontend/e2e/kyc-i18n.spec.ts`
-**Total**: ~12 tests across 3 sections (225-227)
+**Total**: ~24 tests across 6 sections (225-230)
 
 ### Section 225: Translation CRUD API (5 tests)
 
@@ -354,9 +866,105 @@ test("227.3 Coverage progress bar reflects translation completeness", async ({ p
 });
 ```
 
+### Section 228: Bulk Import/Export API (4 tests)
+
+```typescript
+test("228.1 Admin bulk imports translations for a language", async ({ page }) => {
+  // POST /admin/translations/es/bulk-import with 5 key-value pairs
+  // Expect imported=5, skipped=0
+});
+
+test("228.2 Bulk import with duplicate keys updates existing", async ({ page }) => {
+  // Import same keys with different values
+  // GET translations -> values are updated
+});
+
+test("228.3 Export translations returns complete JSON", async ({ page }) => {
+  // GET /admin/translations/es/export
+  // Expect JSON map with all keys for the language
+});
+
+test("228.4 Bulk import with empty value skips entry", async ({ page }) => {
+  // POST bulk-import with one empty value
+  // Expect skipped=1
+});
+```
+
+### Section 229: Edge Cases & Fallback Behavior (4 tests)
+
+```typescript
+test("229.1 Translation with HTML entities is stored safely", async ({ page }) => {
+  // PUT translation with value containing <script> tags
+  // GET -> value is stored as-is (frontend will escape)
+  // Verify no XSS in admin list rendering
+});
+
+test("229.2 Very long translation value accepted up to 10000 chars", async ({ page }) => {
+  // PUT translation with 10000-char legal notice text
+  // Expect 200
+});
+
+test("229.3 Translation value exceeding 10000 chars rejected", async ({ page }) => {
+  // PUT with 10001-char value -> 422
+});
+
+test("229.4 Concurrent admin edits last-write-wins", async ({ page }) => {
+  // Two rapid PUTs to same key with different values
+  // GET -> returns the last written value
+});
+```
+
+### Section 230: Locale Resolution & RTL (4 tests)
+
+```typescript
+test("230.1 Accept-Language header used when profile locale not set", async ({ page }) => {
+  // Set Alice profile locale to null
+  // Send request with Accept-Language: fr
+  // Expect French translations returned
+});
+
+test("230.2 Profile locale takes precedence over Accept-Language", async ({ page }) => {
+  // Set Alice profile locale to 'es'
+  // Send request with Accept-Language: fr
+  // Expect Spanish translations returned
+});
+
+test("230.3 Unsupported Accept-Language falls back to default", async ({ page }) => {
+  // Send request with Accept-Language: zz
+  // Expect English translations returned
+});
+
+test("230.4 RTL language (Arabic) includes direction metadata", async ({ page }) => {
+  // Seed Arabic translation
+  // GET questionnaire localized with lang=ar
+  // Expect response or questionnaire to indicate RTL direction
+});
+```
+
 ---
 
-## 5. File Change Summary
+## 9. Security Considerations
+
+### 9.1 XSS Prevention
+
+Translation values are stored as plain text and rendered by React JSX, which auto-escapes HTML. The admin UI uses standard React rendering, so malicious HTML in translation values is rendered as literal text, not executed. No `dangerouslySetInnerHTML` is used for translation display.
+
+### 9.2 Access Control
+
+- Read endpoints (translations, questionnaire, legal notice) require `require_ui_session` -- any authenticated user can read translations.
+- Write endpoints (PUT, DELETE, bulk-import) require `require_admin_session` -- only admins can modify translations.
+- Coverage report is admin-only.
+
+### 9.3 Input Validation
+
+- Translation values: max 10,000 characters (accommodates legal notice text).
+- Translation keys: max 500 characters, validated to start with `kyc.`.
+- Language codes: validated against `i18n_supported_locales` setting.
+- Bulk import: max 500 entries per request.
+
+---
+
+## 10. File Change Summary
 
 | File | Change Type | Description |
 |------|-------------|-------------|
@@ -365,6 +973,7 @@ test("227.3 Coverage progress bar reflects translation completeness", async ({ p
 | `app/core/settings.py` | Modify | Add `kyc_translations_table_name` setting |
 | `app/core/tables.py` | Modify | Add `kyc_translations` table handle |
 | `app/main.py` | Modify | Register `kyc_i18n_router` |
+| `app/models.py` | Modify | Add translation request/response Pydantic models |
 | `scripts/local-ddb-init.py` | Modify | Add `kyc_translations` table definition |
 | `scripts/local-ddb-seed.py` | Modify | Seed baseline es/fr translations |
 | `app/routers/kyc_cases.py` | Modify | Add `?lang=` param to questionnaire endpoint; localize emails |
@@ -374,4 +983,4 @@ test("227.3 Coverage progress bar reflects translation completeness", async ({ p
 | `frontend/src/hooks/useKycTranslations.ts` | **New** | Translation hook for components |
 | `frontend/src/pages/admin/KycTranslationsPage.tsx` | **New** | Translation management UI |
 | `frontend/src/App.tsx` | Modify | Add `/admin/kyc/translations` route |
-| `frontend/e2e/kyc-i18n.spec.ts` | **New** | 12 E2E tests across sections 225-227 |
+| `frontend/e2e/kyc-i18n.spec.ts` | **New** | 24 E2E tests across sections 225-230 |

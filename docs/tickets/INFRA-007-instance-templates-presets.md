@@ -525,3 +525,382 @@ Startup scripts are stored as plaintext strings with a 16KB limit. They are pass
 8. Clone creates a user-owned copy of any template.
 9. All template mutations produce audit events.
 10. User templates are isolated per user; system templates are visible to all.
+
+---
+
+## 8. Architecture & Data Flow
+
+```
+  User clicks "Launch from Template"
+       │
+       ▼
+  Frontend: POST /ui/remote/ec2/launch { template_id, overrides? }
+       │
+       ▼
+  Router: launch_instance()
+       │
+       ├── resolve_template(template_id, user_sub)
+       │     │
+       │     ├── Check user templates (PK=user_sub, SK=TEMPLATE#{id})
+       │     │     └── Found? → return template
+       │     └── Check system templates (PK=SYSTEM, SK=TEMPLATE#{id})
+       │           └── Found? → return template
+       │
+       ├── Merge: template defaults ← explicit overrides
+       │     instance_type = override or template.instance_type
+       │     ami_id        = override or template.ami_id
+       │     startup_script = override or template.startup_script
+       │
+       ├── increment_use_count(owner_sub, template_id)
+       │     └── DDB UpdateItem: SET use_count = use_count + 1
+       │
+       ├── ec2_launcher.launch_instance(merged_params)
+       │     └── Creates instance in EC2 / mock store
+       │
+       └── audit_event("compute.launch_from_template", ...)
+             └── Records template_id, user_sub, merged params
+```
+
+---
+
+## 9. Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table / GSI | PK | SK | Operation | Notes |
+|---|---------------|-------------|----|----|-----------|-------|
+| 1 | Get template by owner + ID | Main table | `owner_sub` | `TEMPLATE#{template_id}` | GetItem | Pass `"SYSTEM"` for system templates |
+| 2 | List user templates (by creation date) | GSI `ByCreatedAt` | `owner_sub` | `created_at` (N) | Query | ScanIndexForward=False for newest first |
+| 3 | List system templates | GSI `ByCreatedAt` | `"SYSTEM"` | `created_at` (N) | Query | Returns all platform templates |
+| 4 | Browse by category | GSI `ByCategory` | `category` | `name_lower` | Query | Alphabetical listing within category |
+| 5 | Filter by target (ec2/k8s) | Main table | `owner_sub` | begins_with `TEMPLATE#` | Query + FilterExpression `target = :t` | FilterExpression on non-key attr |
+| 6 | Increment use count | Main table | `owner_sub` | `TEMPLATE#{template_id}` | UpdateItem `ADD use_count :one` | Atomic counter increment |
+| 7 | Delete user template | Main table | `owner_sub` | `TEMPLATE#{template_id}` | DeleteItem with ConditionExpression `is_system = :false` | Prevents deletion of system templates |
+
+---
+
+## 10. API Request/Response Examples
+
+**POST /ui/remote/templates** (Create user template)
+
+```bash
+curl -X POST http://localhost:8000/ui/remote/templates \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_xxx; ui_csrf=csrf_xxx; ui_access_token=jwt_xxx" \
+  -H "x-csrf-token: csrf_xxx" \
+  -d '{
+    "name": "My ML Environment",
+    "description": "Custom ML workspace with GPU support",
+    "category": "ml",
+    "target": "ec2",
+    "instance_type": "t3.xlarge",
+    "ami_id": "ami-ubuntu-2204",
+    "startup_script": "#!/bin/bash\npip3 install torch",
+    "ports": [22, 8888],
+    "env_vars": {"JUPYTER_TOKEN": "mytoken"},
+    "auto_terminate_after": 14400
+  }'
+```
+
+Response (201):
+```json
+{
+  "template_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "name": "My ML Environment",
+  "description": "Custom ML workspace with GPU support",
+  "category": "ml",
+  "target": "ec2",
+  "instance_type": "t3.xlarge",
+  "ami_id": "ami-ubuntu-2204",
+  "startup_script": "#!/bin/bash\npip3 install torch",
+  "ports": [22, 8888],
+  "env_vars": {"JUPYTER_TOKEN": "mytoken"},
+  "tags": [],
+  "auto_terminate_after": 14400,
+  "icon": "",
+  "is_system": false,
+  "owner_sub": "alice_sub_123",
+  "created_at": 1748520000,
+  "updated_at": 1748520000,
+  "use_count": 0
+}
+```
+
+**GET /ui/remote/templates?category=compute&target=ec2** (List templates)
+
+Response (200):
+```json
+{
+  "templates": [
+    {
+      "template_id": "sys-dev-workspace",
+      "name": "Dev Workspace",
+      "description": "Ubuntu 22.04 with VS Code Server...",
+      "category": "compute",
+      "target": "ec2",
+      "instance_type": "t3.small",
+      "is_system": true,
+      "use_count": 42,
+      "created_at": 1748000000
+    }
+  ],
+  "count": 1
+}
+```
+
+**POST /ui/remote/templates/{id}/clone** (Clone template)
+
+```json
+// Request
+{ "new_name": "My Dev Workspace (Customized)" }
+
+// Response (201)
+{
+  "template_id": "new-uuid-here",
+  "name": "My Dev Workspace (Customized)",
+  "is_system": false,
+  "owner_sub": "alice_sub_123",
+  "instance_type": "t3.small",
+  "ami_id": "ami-ubuntu-2204"
+}
+```
+
+**PATCH /ui/remote/templates/{id}** (Update template)
+
+```json
+// Request
+{ "description": "Updated description", "instance_type": "t3.medium" }
+
+// Response (200)
+{
+  "template_id": "a1b2c3d4...",
+  "description": "Updated description",
+  "instance_type": "t3.medium",
+  "updated_at": 1748521000
+}
+```
+
+**DELETE /ui/remote/templates/{id}**
+
+Response (200): `{ "ok": true }`
+
+Attempting to delete a system template:
+Response (403): `{ "detail": "Cannot modify system template" }`
+
+---
+
+## 11. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Template not found | 404 | `template_not_found` | "Template not found" | Verify template ID |
+| Modify system template | 403 | `system_template_immutable` | "Cannot modify system template" | Clone instead of editing |
+| Delete system template | 403 | `system_template_immutable` | "Cannot delete system template" | N/A |
+| Delete other user's template | 403 | `forbidden` | "You do not own this template" | Use your own templates |
+| Name exceeds 100 chars | 422 | `validation_error` | "Name must be 100 characters or fewer" | Shorten name |
+| Startup script exceeds 16KB | 422 | `validation_error` | "Startup script exceeds 16KB limit" | Reduce script size |
+| auto_terminate < 600s | 422 | `validation_error` | "Auto-terminate must be at least 10 minutes" | Increase value |
+| auto_terminate > 86400s | 422 | `validation_error` | "Auto-terminate must be at most 24 hours" | Decrease value |
+| Clone non-existent template | 404 | `template_not_found` | "Source template not found" | Verify source template ID |
+| Launch with invalid template_id | 404 | `template_not_found` | "Template not found" | Use a valid template |
+| Unauthenticated request | 401 | `unauthorized` | "Authentication required" | Log in first |
+
+---
+
+## 12. Frontend Component Tree
+
+```
+TemplateBrowserPage
+├── PageHeader
+│   ├── Title ("Templates")
+│   └── CreateTemplateButton
+│       └── onClick → opens TemplateEditorDialog
+├── CategoryTabs
+│   ├── Tab("All")
+│   ├── Tab("Compute")
+│   ├── Tab("Database")
+│   ├── Tab("Web")
+│   ├── Tab("ML")
+│   └── Tab("Custom")
+├── TemplateGallery (grid layout)
+│   └── TemplateCard[] (filtered by active tab + target)
+│       ├── IconBadge (lucide icon based on template.icon)
+│       ├── CardTitle (template.name)
+│       ├── CardDescription (template.description)
+│       ├── TargetBadge ("EC2" | "K8s")
+│       ├── SystemBadge (blue "System" if is_system)
+│       ├── InstanceTypeLabel (e.g. "t3.small")
+│       ├── UseCountLabel ("Used 42 times")
+│       ├── LaunchButton → opens launch dialog with pre-filled params
+│       ├── CloneButton → POST /clone, add new card
+│       └── DropdownMenu (user templates only)
+│           ├── EditItem → opens TemplateEditorDialog(edit mode)
+│           └── DeleteItem → confirm dialog → DELETE
+└── TemplateEditorDialog (create/edit mode)
+    ├── NameInput
+    ├── DescriptionTextarea
+    ├── CategorySelect
+    ├── TargetToggle (EC2 / K8s)
+    ├── EC2Fields (shown when target=ec2)
+    │   ├── InstanceTypeSelect
+    │   └── AmiIdInput
+    ├── K8sFields (shown when target=k8s)
+    │   ├── ImageInput
+    │   └── PresetSelect
+    ├── StartupScriptEditor (syntax-highlighted textarea)
+    ├── EnvVarsEditor (key-value pair rows)
+    ├── PortsInput (comma-separated)
+    ├── AutoTerminateSlider (10min - 24h)
+    └── SubmitButton
+```
+
+**Props interfaces:**
+
+```typescript
+interface TemplateCardProps {
+  template: TemplateOut;
+  onLaunch: (templateId: string) => void;
+  onClone: (templateId: string) => void;
+  onEdit?: (templateId: string) => void;
+  onDelete?: (templateId: string) => void;
+}
+
+interface TemplateEditorDialogProps {
+  open: boolean;
+  onClose: () => void;
+  template?: TemplateOut;  // undefined = create mode, present = edit mode
+  onSaved: (template: TemplateOut) => void;
+}
+
+interface CategoryTabsProps {
+  activeCategory: string;
+  onChange: (category: string) => void;
+  counts: Record<string, number>;
+}
+
+interface TemplateGalleryProps {
+  templates: TemplateOut[];
+  onLaunch: (templateId: string) => void;
+  onClone: (templateId: string) => void;
+}
+```
+
+---
+
+## 13. Observability
+
+### 13.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `template_created_total` | Counter | `target` (ec2/k8s), `category` | Templates created by users |
+| `template_cloned_total` | Counter | `source` (system/user) | Templates cloned |
+| `template_launch_total` | Counter | `template_id`, `target` | Launches via template |
+| `template_seeded_total` | Counter | | System templates seeded on startup |
+| `template_deleted_total` | Counter | | User templates deleted |
+
+### 13.2 Structured Logging
+
+| Log Event | Level | Fields | Trigger |
+|-----------|-------|--------|---------|
+| `template.created` | INFO | `template_id`, `user_sub`, `target`, `category` | User creates template |
+| `template.updated` | INFO | `template_id`, `user_sub`, `updated_fields` | User updates template |
+| `template.deleted` | INFO | `template_id`, `user_sub` | User deletes template |
+| `template.cloned` | INFO | `source_id`, `new_id`, `user_sub` | User clones template |
+| `template.launched` | INFO | `template_id`, `user_sub`, `resource_id`, `overrides` | Instance launched from template |
+| `template.system_seed` | INFO | `count`, `already_existed` | System templates seeded on startup |
+
+### 13.3 Alerting
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| System template seeding failed | `ensure_system_templates()` raises exception | Critical | Check DDB connectivity and table existence |
+| High template launch failure rate | > 10% of template launches fail in 1 hour | Warning | Check EC2/K8s launcher health |
+
+---
+
+## 14. Performance Considerations
+
+### 14.1 Latency Targets
+
+| Operation | Target P95 | Notes |
+|-----------|-----------|-------|
+| List templates | < 200ms | Two parallel DDB queries (user + system), merge in memory |
+| Get template | < 50ms | Single DDB GetItem |
+| Create template | < 100ms | Single DDB PutItem |
+| Clone template | < 150ms | GetItem + PutItem |
+| Resolve template for launch | < 100ms | GetItem (user), fallback GetItem (system) |
+
+### 14.2 Caching Strategy
+
+- System templates change only on deployment. Cache in-memory after first load with TTL of 1 hour.
+- User templates are mutable. No client-side caching beyond React Query's stale-while-revalidate (30s staleTime).
+- Template gallery page uses `useQuery` with `staleTime: 30_000` and `refetchOnWindowFocus: true`.
+
+### 14.3 Pagination
+
+- `list_templates` returns all user + system templates in a single response. Expected volume: < 100 templates per user (6 system + ~10-50 user).
+- No cursor-based pagination needed at current scale. If template count exceeds 200, add `Limit` parameter with cursor support.
+
+---
+
+## 15. Rollout Plan
+
+### 15.1 Feature Flags
+
+| Flag | Environment Variable | Default | Description |
+|------|---------------------|---------|-------------|
+| `instance_templates_enabled` | `INSTANCE_TEMPLATES_ENABLED` | `true` | Master switch for template system |
+| `template_launch_enabled` | `TEMPLATE_LAUNCH_ENABLED` | `true` | Allow launching from templates |
+| `system_templates_seeded` | `SYSTEM_TEMPLATES_SEEDED` | `false` | Set to `true` after initial seed |
+
+### 15.2 Phased Rollout
+
+**Phase 1 (Day 1-2)**: Backend service + DDB table + system template seeding. Feature flag off in production.
+
+**Phase 2 (Day 3)**: API router with all 6 endpoints. Internal testing with dev accounts.
+
+**Phase 3 (Day 4-5)**: Frontend gallery page, editor dialog, route and sidebar. Enable for 10% of users.
+
+**Phase 4 (Day 6-7)**: E2E tests, launch integration, ramp to 100%.
+
+### 15.3 Rollback
+
+1. Set `INSTANCE_TEMPLATES_ENABLED=false` -- API returns 400, frontend hides template nav.
+2. System templates remain in DDB but are inert.
+3. Launch flow falls back to manual param entry (existing behavior).
+
+---
+
+## 16. Expanded E2E Tests
+
+### Section 264: Template CRUD API (5 tests) -- existing
+
+1-5. (As defined above in Section 5)
+
+### Section 265: Template Clone & Launch API (5 tests) -- existing
+
+6-10. (As defined above in Section 5)
+
+### Section 266: Templates UI (5 tests) -- existing
+
+11-15. (As defined above in Section 5)
+
+### Section 267: Template Validation & Edge Cases (8 tests)
+
+16. `Name at max length (100 chars) succeeds` -- POST with 100-char name. Verify 201.
+17. `Name exceeding 100 chars rejected` -- POST with 101-char name. Verify 422.
+18. `Startup script at 16KB limit succeeds` -- POST with 16384-byte script. Verify 201.
+19. `Startup script exceeding 16KB rejected` -- POST with 16385-byte script. Verify 422.
+20. `auto_terminate_after below 600 rejected` -- POST with 500. Verify 422.
+21. `auto_terminate_after above 86400 rejected` -- POST with 90000. Verify 422.
+22. `Empty env_vars accepted` -- POST with `env_vars: {}`. Verify 201.
+23. `Clone preserves all template fields` -- Clone system template. Verify clone has same `instance_type`, `ami_id`, `ports`, `env_vars`, `startup_script`.
+
+### Section 268: System Template Protection & Multi-User Isolation (7 tests)
+
+24. `System templates seeded count >= 6` -- GET templates. Verify at least 6 system templates.
+25. `User cannot see other user's templates` -- Alice creates template. Bob lists templates. Verify Bob sees only system templates (not Alice's).
+26. `System template cannot be updated (PATCH returns 403)` -- PATCH system template name. Verify 403.
+27. `System template cannot be deleted (DELETE returns 403)` -- DELETE system template. Verify 403.
+28. `User template is returned with owner_sub set` -- Create and GET. Verify `owner_sub` equals Alice's sub.
+29. `Clone of user template by same user succeeds` -- Alice creates + clones own template. Verify clone `is_system: false`.
+30. `Launch from system template increments use_count` -- Launch from sys-dev-workspace. GET template. Verify `use_count >= 1`.

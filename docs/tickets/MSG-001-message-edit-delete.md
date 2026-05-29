@@ -621,4 +621,85 @@ When `mode="edit"`:
 | No MESSAGE_EDIT_DELETE_ENABLED setting | Confirmed | `app/core/settings.py` | Does not exist. Edit/delete are always enabled. |
 | `messaging_mutations.py` does NOT exist | Confirmed | `app/services/` | All edit/delete logic is inline in the router. |
 
+---
+
+## 14. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|---|---|---|---|
+| Edit window expired | 400 | `edit_window_expired` | "Message can no longer be edited (15-minute window)." | Send a follow-up message instead |
+| Encrypted message edit | 400 | `edit_encrypted_blocked` | "Encrypted messages cannot be edited." | Delete and re-send if needed |
+| Locked message edit | 400 | `edit_locked_blocked` | "Locked messages cannot be edited." | Cannot modify paid content |
+| View-once message edit | 400 | `edit_view_once_blocked` | "View-once messages cannot be edited." | Cannot modify ephemeral content |
+| Message already deleted | 400 | `already_deleted` | "This message has already been deleted." | No action needed |
+| Not sender (edit) | 403 | `not_sender` | "Only the sender can edit this message." | Contact the sender |
+| Not sender and not admin (delete) | 403 | `not_authorized_delete` | "Only the sender or an admin can delete this message." | Contact admin for moderation |
+| Message not found | 404 | `message_not_found` | "Message not found." | Refresh the conversation |
+| Not a conversation participant | 403 | `not_participant` | "You are not a participant in this conversation." | Join the conversation |
+| Empty edit text | 422 | `validation_error` | "Message text cannot be empty." | Enter message text |
+| Edit text exceeds max length | 422 | `validation_error` | "Message text exceeds maximum length (4000 characters)." | Shorten the message |
+
+---
+
+## 15. DynamoDB Access Patterns
+
+| Access Pattern | PK | SK / Index | Operation | Notes |
+|---|---|---|---|---|
+| Get message by ID | `conversation_id` | `message_id` | GetItem | 1 RCU, used for edit/delete validation |
+| Update message text (edit) | `conversation_id` | `message_id` | UpdateItem | Sets text, edited, edited_at, edit_count |
+| Soft-delete message | `conversation_id` | `message_id` | UpdateItem | Clears text/image/file, sets deleted=true |
+| Write edit history | `{conv_id}#{msg_id}` (MessageEdits) | `edited_at` | PutItem | Audit trail, TTL=90 days |
+| Get edit history | `{conv_id}#{msg_id}` (MessageEdits) | Query all | Query | Compliance only, not exposed via API |
+| Check participant status | `user_id` (Participants) | `conversation_id` | GetItem | Authorization check |
+
+**Example DynamoDB Update (edit):**
+```json
+{
+  "TableName": "Messages",
+  "Key": {"conversation_id": "conv_abc", "message_id": "m_1a2b3c"},
+  "UpdateExpression": "SET #text = :text, edited = :t, edited_at = :ts, original_text = if_not_exists(original_text, #text), edit_count = if_not_exists(edit_count, :zero) + :one",
+  "ConditionExpression": "attribute_exists(message_id) AND (attribute_not_exists(deleted) OR deleted = :f)",
+  "ExpressionAttributeNames": {"#text": "text"},
+  "ExpressionAttributeValues": {
+    ":text": "The meeting is at 3pm",
+    ":t": true,
+    ":ts": 1748350120,
+    ":f": false,
+    ":zero": 0,
+    ":one": 1
+  }
+}
+```
+
+---
+
+## 16. Observability & Monitoring (Extended)
+
+### 16.1 Dashboard Queries
+
+| Dashboard Panel | Query | Description |
+|---|---|---|
+| Edit volume over time | `sum(rate(messaging_edits_total[5m]))` | Edits per second |
+| Delete volume by actor | `sum by (actor)(rate(messaging_deletes_total[5m]))` | Sender vs admin deletes |
+| Edit window rejections | `rate(messaging_edit_window_rejections_total[5m])` | Users hitting the time limit |
+| Edit latency distribution | `histogram_quantile(0.95, messaging_edit_latency_seconds_bucket)` | P95 edit latency |
+| Admin moderation activity | `sum by (admin_user_sub)(messaging_admin_deletes_total)` | Per-admin delete counts |
+
+### 16.2 Rollout Plan (Extended)
+
+| Phase | Duration | Criteria to Advance |
+|---|---|---|
+| Phase 1: Backend schema | Day 1 | Zero runtime errors for 24h |
+| Phase 2: Backend endpoints (flag off) | Day 2-3 | Unit tests pass, E2E dry run |
+| Phase 3: Frontend changes | Day 4-5 | UI renders correctly, optimistic updates work |
+| Phase 4: Enable for internal team | Day 6 | 50+ edits/deletes by team, no data corruption |
+| Phase 5: Enable for all users | Day 7 | Monitor edit/delete volume, alert thresholds stable |
+
+### 16.3 Performance Notes
+
+- Edit and delete operations are single-item DDB updates (constant cost regardless of conversation size)
+- SSE fan-out for edits/deletes uses the same infrastructure as message sends (no additional scaling concern)
+- Edit history (MessageEdits table) rows have 90-day TTL to prevent unbounded growth
+- The `original_text` field is set only on the first edit (`if_not_exists`), preventing repeated overwrites
+
 **Key finding**: The ticket's premise that edit/delete "does not exist" is **incorrect**. Both operations are already implemented. This ticket should be scoped as an **enhancement** of the existing edit/delete functionality, adding: time-window enforcement, admin moderation delete, proper "deleted" placeholder behavior in the UI, and frontend context menu integration.

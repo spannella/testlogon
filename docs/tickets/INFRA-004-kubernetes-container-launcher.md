@@ -483,7 +483,286 @@ In production, K8s NetworkPolicy restricts container egress to the platform's SS
 
 ---
 
-## 7. Acceptance Criteria
+## 7. DynamoDB Access Patterns
+
+### 7.1 Access Pattern Matrix
+
+| Access Pattern | Table/GSI | PK | SK / Condition | Projection | Frequency |
+|---------------|-----------|-----|----------------|------------|-----------|
+| Get pod by ID | Main table | `user_sub` | `SK = POD#{pod_id}` | All | High — every detail/action |
+| List user pods | Main table | `user_sub` | `SK begins_with POD#` | All | High — pod table view |
+| List pods by status | ByStatus GSI | `user_sub` | `status = running` | All | Medium — filter views |
+| List pods by namespace | ByNamespace GSI | `namespace` | `created_at BETWEEN` | All | Low — admin namespace view |
+| List pods by creation date | ByCreatedAt GSI | `user_sub` | `created_at BETWEEN` | All | Medium — sorted listing |
+| TTL scan for expired pods | ByCreatedAt GSI | Scan | `expires_at < :now` | pod_id, user_sub, status | Every 30 sec (background) |
+| Count active pods per user | ByStatus GSI | `user_sub` | `status = running` | COUNT | On each launch (quota check) |
+
+### 7.2 Example DynamoDB Items
+
+**Running pod record:**
+
+```json
+{
+  "user_sub":         {"S": "abc-123-def"},
+  "sk":               {"S": "POD#p_9f4a2b1c"},
+  "pod_id":           {"S": "p_9f4a2b1c"},
+  "k8s_pod_name":     {"S": "ws-abc123def-9f4a2b1c"},
+  "namespace":        {"S": "user-abc123def"},
+  "label":            {"S": "My Dev Environment"},
+  "image":            {"S": "dev-workspace"},
+  "image_display_name": {"S": "Dev Workspace"},
+  "preset":           {"S": "medium"},
+  "cpu_millicores":   {"N": "500"},
+  "memory_mb":        {"N": "512"},
+  "status":           {"S": "running"},
+  "pod_ip":           {"S": "10.pod.42.17"},
+  "service_hostname": {"S": "ws-abc123def-9f4a2b1c.user-abc123def.svc.cluster.local"},
+  "ssh_port":         {"N": "22"},
+  "ssh_key_id":       {"S": "key_7d3f1a"},
+  "host_id":          {"S": "host_a2c8e4"},
+  "created_at":       {"N": "1748520000"},
+  "started_at":       {"N": "1748520003"},
+  "terminated_at":    {"N": "0"},
+  "ttl_seconds":      {"N": "14400"},
+  "expires_at":       {"N": "1748534400"},
+  "last_activity_at": {"N": "1748521500"},
+  "env_vars":         {"M": {"NODE_ENV": {"S": "development"}, "DEBUG": {"S": "true"}}},
+  "ports":            {"L": [{"N": "22"}, {"N": "8080"}]}
+}
+```
+
+**Terminated pod record:**
+
+```json
+{
+  "user_sub":         {"S": "abc-123-def"},
+  "sk":               {"S": "POD#p_e7b3c5d2"},
+  "pod_id":           {"S": "p_e7b3c5d2"},
+  "status":           {"S": "terminated"},
+  "terminated_at":    {"N": "1748525600"},
+  "last_activity_at": {"N": "1748525590"}
+}
+```
+
+---
+
+## 8. API Request/Response Examples
+
+### 8.1 Launch a Pod
+
+```bash
+curl -s -X POST http://localhost:8000/ui/remote/k8s/launch \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_abc; ui_csrf=tok123; ui_access_token=eyJ..." \
+  -H "x-csrf-token: tok123" \
+  -d '{
+    "label": "My Dev Env",
+    "image": "dev-workspace",
+    "preset": "medium",
+    "ssh_key_id": "key_7d3f1a",
+    "ttl_seconds": 7200,
+    "env_vars": {"NODE_ENV": "development"}
+  }'
+```
+
+**Response (201):**
+
+```json
+{
+  "pod_id": "p_9f4a2b1c",
+  "k8s_pod_name": "ws-abc123def-9f4a2b1c",
+  "namespace": "user-abc123def",
+  "label": "My Dev Env",
+  "image": "dev-workspace",
+  "image_display_name": "Dev Workspace",
+  "preset": "medium",
+  "cpu_millicores": 500,
+  "memory_mb": 512,
+  "status": "running",
+  "pod_ip": "10.pod.42.17",
+  "service_hostname": "ws-abc123def-9f4a2b1c.user-abc123def.svc.cluster.local",
+  "ssh_port": 22,
+  "ssh_key_id": "key_7d3f1a",
+  "host_id": "host_a2c8e4",
+  "created_at": 1748520000,
+  "started_at": 1748520003,
+  "terminated_at": 0,
+  "ttl_seconds": 7200,
+  "expires_at": 1748527200,
+  "last_activity_at": 0
+}
+```
+
+### 8.2 Get Pod Logs
+
+```bash
+curl -s http://localhost:8000/ui/remote/k8s/pods/p_9f4a2b1c/logs?tail=50 \
+  -H "Cookie: ui_session=sess_abc; ui_csrf=tok123; ui_access_token=eyJ..."
+```
+
+**Response (200):**
+
+```json
+{
+  "pod_id": "p_9f4a2b1c",
+  "lines": [
+    "Starting SSH server on port 22...",
+    "SSH server ready. Accepting connections.",
+    "Container dev-workspace started successfully."
+  ]
+}
+```
+
+---
+
+## 9. Error Handling Matrix
+
+| HTTP | Error Code | Condition | Response Body | Client Recovery |
+|------|-----------|-----------|---------------|-----------------|
+| 400 | `INVALID_IMAGE` | Image not in allowlist | `{"detail": "Image 'x' not in allowed image list"}` | Show image picker |
+| 400 | `INVALID_PRESET` | Preset not recognized | `{"detail": "Unknown preset 'y'"}` | Show preset picker |
+| 404 | `POD_NOT_FOUND` | Pod ID doesn't exist or belongs to another user | `{"detail": "Pod not found"}` | Refresh pod list |
+| 409 | `POD_LIMIT_REACHED` | User has max pods running | `{"detail": "Maximum 5 running pods. Terminate one first."}` | Show terminate option |
+| 409 | `POD_ALREADY_TERMINATED` | Terminate called on terminated pod | `{"detail": "Pod already terminated"}` | Refresh status |
+| 422 | `TTL_TOO_SHORT` | ttl_seconds < 600 | `{"detail": "TTL must be >= 600 seconds"}` | Show min value |
+| 422 | `TTL_TOO_LONG` | ttl_seconds > 86400 | `{"detail": "TTL must be <= 86400 seconds (24h)"}` | Show max value |
+| 422 | `INVALID_LABEL` | Label empty or > 100 chars | `{"detail": "Label must be 1-100 characters"}` | Fix label input |
+| 422 | `INVALID_ENV_VAR` | Reserved env var key (e.g., `PATH`) | `{"detail": "Cannot override system environment variables"}` | Remove reserved key |
+| 500 | `K8S_API_ERROR` | Real K8s API unreachable | `{"detail": "Container service temporarily unavailable"}` | Retry with backoff |
+| 502 | `K8S_TIMEOUT` | K8s API response > 10s | `{"detail": "Container service timed out"}` | Retry |
+| 503 | `MAINTENANCE` | Feature flag disabled | `{"detail": "Container launcher is currently disabled"}` | Wait for re-enable |
+
+---
+
+## 10. Observability & Monitoring
+
+### 7.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `k8s_pod_launched_total` | Counter | `image`, `preset` | Pods launched |
+| `k8s_pod_terminated_total` | Counter | `reason` (user/ttl_expired/admin/failed) | Terminations by reason |
+| `k8s_pod_launch_latency_seconds` | Histogram | `image` | Time from launch to running |
+| `k8s_ttl_terminated_total` | Counter | — | TTL-based auto-terminations |
+| `k8s_active_pods` | Gauge | `user_sub` | Currently running pods per user |
+| `k8s_pod_limit_reached_total` | Counter | — | Pod limit rejection events |
+| `k8s_log_fetch_total` | Counter | — | Log fetch requests |
+| `k8s_log_fetch_latency_seconds` | Histogram | — | Log retrieval latency |
+| `k8s_mock_mode` | Gauge | — | 1 if mock K8s, 0 if real |
+| `k8s_resource_utilization_cpu` | Gauge | `user_sub` | Total CPU allocated per user (millicores) |
+| `k8s_resource_utilization_memory` | Gauge | `user_sub` | Total memory allocated per user (MiB) |
+
+### 7.2 Structured Log Events
+
+```json
+{"logger": "k8s_launcher", "level": "info", "event": "pod_launched", "user_sub": "alice-uuid", "pod_id": "pod-abc123", "image": "ubuntu:22.04", "preset": "small", "ttl_seconds": 14400}
+
+{"logger": "k8s_launcher", "level": "info", "event": "pod_terminated", "user_sub": "alice-uuid", "pod_id": "pod-abc123", "reason": "ttl_expired", "runtime_seconds": 14400}
+
+{"logger": "k8s_launcher", "level": "warn", "event": "pod_limit_reached", "user_sub": "alice-uuid", "current_count": 5, "max_allowed": 5}
+
+{"logger": "k8s_launcher", "level": "info", "event": "ttl_scan_complete", "scanned": 30, "terminated": 5, "duration_ms": 180}
+
+{"logger": "k8s_launcher", "level": "error", "event": "pod_launch_failed", "user_sub": "alice-uuid", "image": "ubuntu:22.04", "error": "ImagePullBackOff"}
+```
+
+### 7.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High pod failure rate | `rate(k8s_pod_terminated_total{reason=failed}[1h]) > 10` | Warning | Check image availability |
+| TTL scan failures | Background task errors > 3 consecutively | Critical | Manual pod cleanup needed |
+| Pod stuck in pending | Pod in `pending` > 2 minutes | Warning | Check K8s scheduler / node capacity |
+| Resource quota exhaustion | Total CPU/memory across all users > 80% of cluster capacity | Warning | Scale cluster or restrict launches |
+| Log fetch slow | `p99(k8s_log_fetch_latency_seconds) > 5s` | Warning | Check K8s API performance |
+
+---
+
+## 11. Rollout Plan
+
+### Phase 1: Mock Mode (Days 1-3)
+
+- **Feature flag**: `K8S_LAUNCHER_ENABLED=false`
+- Deploy with mock K8s service only
+- All endpoints return 404 when flag is off
+- Integration tests validate full pod lifecycle in mock mode
+- Validate TTL expiration logic with short TTLs
+
+### Phase 2: Internal Beta (Days 4-6)
+
+- **Feature flag**: `K8S_LAUNCHER_ENABLED=true` for internal users
+- Deploy frontend pages
+- Test launch + logs + terminate flow
+- Validate host inventory auto-registration
+- Test namespace isolation between users
+
+### Phase 3: Real K8s (Days 7-8)
+
+- Configure kubeconfig for staging K8s cluster
+- Enable `k8s_real_mode=true` for staging
+- Validate real pod lifecycle matches mock behavior
+- Test resource limits enforcement
+- **Rollback**: Set `K8S_LAUNCHER_ENABLED=false`; terminate running pods via kubectl
+
+### Phase 4: GA (Day 9+)
+
+- Enable for all users with conservative limits (max 3 pods)
+- Monitor resource utilization and TTL patterns
+- Gradually increase limits
+
+---
+
+## 12. Performance Considerations
+
+### 9.1 Latency Targets
+
+| Operation | Target p50 | Target p99 | Notes |
+|-----------|-----------|-----------|-------|
+| Launch pod (mock) | < 50ms | < 150ms | In-memory mock |
+| Launch pod (real) | < 2s | < 8s | K8s API + image pull |
+| Terminate pod | < 30ms | < 100ms | K8s API + DDB update |
+| Get pod logs | < 100ms | < 500ms | K8s API log stream |
+| List pods | < 30ms | < 100ms | DDB query |
+| TTL scan | < 1s | < 3s | Scan + batch terminates |
+
+### 9.2 DynamoDB Costs
+
+| Operation | RCU | WCU | Notes |
+|-----------|-----|-----|-------|
+| Launch (create record) | — | 2.5 | Pod + host inventory |
+| List pods | 2.0 | — | Query per user |
+| Terminate | — | 2.5 | Update pod + host |
+| TTL scan | 5.0 | varies | Scan + batch updates |
+
+### 9.3 Caching Strategy
+
+| Data | Cache | TTL | Invalidation |
+|------|-------|-----|--------------|
+| Pod list | React Query | 5s staleTime | On launch/terminate |
+| Pod logs | React Query | 3s staleTime | Manual refresh |
+| Image allowlist | In-memory dict | 300s | On settings change |
+| Resource presets | In-memory dict | 300s | On settings change |
+
+### 9.4 Rate Limiting
+
+| Action | Limit | Window | Key |
+|--------|-------|--------|-----|
+| Launch pod | 10 | 1 hour | user_sub |
+| Terminate | 20 | 1 hour | user_sub |
+| Get logs | 60 | 1 minute | user_sub |
+| List pods | 60 | 1 minute | user_sub |
+
+### 9.5 Scalability
+
+- **Per-user pod limit**: Default 5 (configurable). Keeps DDB and K8s resource usage bounded.
+- **TTL background task**: Runs every 30 seconds. Queries `expires_at < now` with GSI. Efficient range query.
+- **Mock K8s state**: In-memory store, same pattern as mock EC2. Per-process.
+- **K8s API rate**: K8s API server handles ~50 requests/sec per client. Rate-limit launch requests to stay well under this.
+- **Log streaming**: Logs fetched on-demand from K8s API. No persistent storage of container logs (K8s handles retention).
+
+---
+
+## 13. Acceptance Criteria
 
 1. Users can launch containers from a curated image list with selectable resource presets.
 2. Mock K8s service works in dev mode without a real cluster.

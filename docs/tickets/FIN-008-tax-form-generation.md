@@ -82,9 +82,103 @@ The mock KMS server on port 7999 provides encryption/decryption for local dev. T
 
 ## 3. Technical Design
 
-### 3.1 Data Model
+### 3.1 Architecture & Data Flow
 
-#### 3.1.1 Tax Info Record (Billing Table)
+```
+W-9 Submission Flow
+===================
+
+  Browser (TaxInfoPage)
+       |
+       | POST /ui/tax/w9  { legal_name, tin, ... }
+       v
+  +--------------------+
+  | tax_forms router   |  (app/routers/tax_forms.py)
+  | require_ui_session |
+  +--------------------+
+       |
+       v
+  +---------------------+      +-------------------+
+  | tax_forms service    |----->| KMS (port 7999)   |
+  | submit_tax_info()    |      | kms_encrypt(tin)  |
+  +---------------------+      +-------------------+
+       |                              |
+       | writes encrypted             | returns base64
+       v                              | ciphertext
+  +--------------------+
+  | billing DDB table  |  PK=USER#{id}, SK=TAX_INFO
+  | tin_encrypted      |  (base64 KMS ciphertext)
+  | tin_last4          |  ("6789" -- plaintext last 4)
+  +--------------------+
+
+
+1099-NEC Generation Flow
+========================
+
+  Admin triggers batch generation
+       |
+       | POST /ui/admin/tax/generate-1099s { tax_year: 2026 }
+       v
+  +----------------------+
+  | batch_generate_1099s |
+  | for each creator:    |
+  |   1. query ledger    |
+  |      sum credits     |
+  |   2. check >= $600   |
+  |   3. decrypt TIN     |
+  |      (KMS)           |
+  |   4. render PDF      |
+  |      (reportlab)     |
+  |   5. upload S3       |
+  |   6. write 1099 rec  |
+  +----------------------+
+       |
+       v
+  +-------------------+      +-------------------+
+  | billing DDB       |      | S3 (moto mock)    |
+  | PK=USER#{id}      |      | tax-forms/2026/   |
+  | SK=TAX_1099#2026  |      |   user_abc.pdf    |
+  +-------------------+      +-------------------+
+
+
+TIN Decryption Audit Flow
+=========================
+
+  Admin views full TIN
+       |
+       | GET /ui/admin/tax/info/{user_id}
+       v
+  +---------------------+      +------------------+
+  | get_tax_info_admin   |----->| KMS decrypt      |
+  | audit_logged: YES    |      | kms_decrypt(blob)|
+  +---------------------+      +------------------+
+       |
+       | writes audit record
+       v
+  +-------------------+
+  | billing DDB       |
+  | PK=TAX_AUDIT      |
+  | SK={ts}#{id}      |
+  | action=tin_viewed  |
+  +-------------------+
+```
+
+### 3.2 Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | GSI | Notes |
+|---|---------------|-------|--------------|-----|-------|
+| 1 | Get tax info for user | billing | `PK=USER#{user_id}, SK=TAX_INFO` | -- | Single GetItem |
+| 2 | Get 1099 for user+year | billing | `PK=USER#{user_id}, SK=TAX_1099#{tax_year}` | -- | Single GetItem |
+| 3 | List all 1099s for user | billing | `PK=USER#{user_id}, SK begins_with TAX_1099#` | -- | Query on SK prefix |
+| 4 | List creators by tax status | billing | `PK=TAX_STATUS#{status}, SK={submitted_at}#{user_id}` | ByTaxStatus | Paginated GSI query |
+| 5 | Write tax audit entry | billing | `PK=TAX_AUDIT, SK={ts}#{audit_id}` | -- | PutItem |
+| 6 | List tax audit entries | billing | `PK=TAX_AUDIT, SK begins_with {prefix}` | -- | Query sorted by SK |
+| 7 | Sum annual earnings | billing | `PK=USER#{user_id}, SK begins_with LEDGER#` | -- | Query + filter entry_type=*_credit, filter by year |
+| 8 | Batch scan all creators with TAX_INFO | billing | Full scan with SK=TAX_INFO filter | -- | Used by batch_generate_1099s; paginated scan |
+
+### 3.3 Data Model
+
+#### 3.3.1 Tax Info Record (Billing Table)
 
 **PK**: `USER#{user_id}`, **SK**: `TAX_INFO`
 
@@ -107,7 +201,7 @@ The mock KMS server on port 7999 provides encryption/decryption for local dev. T
 | `updated_at` | N | Last update timestamp |
 | `status` | S | `"active"`, `"expired"`, `"invalid"` |
 
-#### 3.1.2 Generated 1099-NEC Record (Billing Table)
+#### 3.3.2 Generated 1099-NEC Record (Billing Table)
 
 **PK**: `USER#{user_id}`, **SK**: `TAX_1099#{tax_year}`
 
@@ -122,14 +216,14 @@ The mock KMS server on port 7999 provides encryption/decryption for local dev. T
 | `correction_id` | S | If corrected, reference to the corrected version |
 | `payer_tin_last4` | S | Platform's TIN last 4 (for display on form) |
 
-#### 3.1.3 Tax Info Admin Index (Billing Table)
+#### 3.3.3 Tax Info Admin Index (Billing Table)
 
 **GSI**: `ByTaxStatus` (new GSI on billing table)
 **PK**: `TAX_STATUS#{status}`, **SK**: `{submitted_at}#{user_id}`
 
 Allows admin to query all creators by tax info status (active, expired, missing).
 
-#### 3.1.4 TIN Access Audit Log (Billing Table)
+#### 3.3.4 TIN Access Audit Log (Billing Table)
 
 **PK**: `TAX_AUDIT`, **SK**: `{timestamp}#{audit_id}`
 
@@ -142,7 +236,7 @@ Allows admin to query all creators by tax info status (active, expired, missing)
 | `ip_address` | S | Actor's IP address |
 | `created_at` | N | Timestamp |
 
-### 3.2 Backend Service
+### 3.4 Backend Service
 
 **New file**: `app/services/tax_forms.py` (~450 lines)
 
@@ -272,11 +366,11 @@ def _render_1099_pdf(
     ...
 ```
 
-### 3.3 Backend Router
+### 3.5 Backend Router
 
 **New file**: `app/routers/tax_forms.py` (~180 lines)
 
-### 3.4 Router Endpoints
+### 3.6 Router Endpoints
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -290,7 +384,169 @@ def _render_1099_pdf(
 | `POST` | `/ui/admin/tax/generate-1099s` | `require_admin_session` | Batch generate 1099s for a year |
 | `GET` | `/ui/admin/tax/audit` | `require_admin_session` | View tax audit log |
 
-### 3.5 Request/Response Models
+### 3.7 API Request/Response Examples
+
+**POST /ui/tax/w9 -- Submit W-9**
+
+Request:
+```json
+{
+  "legal_name": "Jane Smith",
+  "business_name": "",
+  "tax_classification": "individual",
+  "address_line1": "123 Main Street",
+  "address_line2": "Apt 4B",
+  "city": "San Francisco",
+  "state": "CA",
+  "zip_code": "94102",
+  "tin": "123-45-6789",
+  "tin_type": "ssn",
+  "certified_signature": "Jane Smith"
+}
+```
+
+Response (200):
+```json
+{
+  "legal_name": "Jane Smith",
+  "business_name": "",
+  "tax_classification": "individual",
+  "address_line1": "123 Main Street",
+  "address_line2": "Apt 4B",
+  "city": "San Francisco",
+  "state": "CA",
+  "zip_code": "94102",
+  "tin_masked": "***-**-6789",
+  "tin_type": "ssn",
+  "certified_at": 1748534400,
+  "status": "active",
+  "submitted_at": 1748534400,
+  "updated_at": 1748534400
+}
+```
+
+**GET /ui/tax/info -- Get Own Tax Info (masked)**
+
+Response (200):
+```json
+{
+  "legal_name": "Jane Smith",
+  "business_name": "",
+  "tax_classification": "individual",
+  "address_line1": "123 Main Street",
+  "address_line2": "Apt 4B",
+  "city": "San Francisco",
+  "state": "CA",
+  "zip_code": "94102",
+  "tin_masked": "***-**-6789",
+  "tin_type": "ssn",
+  "certified_at": 1748534400,
+  "status": "active",
+  "submitted_at": 1748534400,
+  "updated_at": 1748534400
+}
+```
+
+**GET /ui/admin/tax/info/{user_id} -- Admin Full TIN (audit-logged)**
+
+Response (200):
+```json
+{
+  "legal_name": "Jane Smith",
+  "business_name": "",
+  "tax_classification": "individual",
+  "address_line1": "123 Main Street",
+  "address_line2": "Apt 4B",
+  "city": "San Francisco",
+  "state": "CA",
+  "zip_code": "94102",
+  "tin_masked": "***-**-6789",
+  "tin_full": "123456789",
+  "tin_type": "ssn",
+  "certified_at": 1748534400,
+  "status": "active",
+  "submitted_at": 1748534400,
+  "updated_at": 1748534400,
+  "user_id": "user_abc123"
+}
+```
+
+**POST /ui/admin/tax/generate-1099s -- Batch Generate**
+
+Request:
+```json
+{
+  "tax_year": 2026
+}
+```
+
+Response (200):
+```json
+{
+  "tax_year": 2026,
+  "total_creators": 150,
+  "qualifying": 42,
+  "generated": 42,
+  "errors": 0
+}
+```
+
+**GET /ui/tax/1099s/{tax_year}/download -- Download 1099 PDF**
+
+Response (200):
+```json
+{
+  "download_url": "/mock/s3/tax-forms/2026/user_abc123_1099nec.pdf?X-Amz-Expires=3600"
+}
+```
+
+**GET /ui/admin/tax/audit -- Tax Audit Log**
+
+Response (200):
+```json
+{
+  "items": [
+    {
+      "audit_id": "aud_abc123",
+      "action": "tin_viewed",
+      "actor_user_id": "root.admin@testdev.local",
+      "target_user_id": "user_abc123",
+      "ip_address": "127.0.0.1",
+      "created_at": 1748534500
+    },
+    {
+      "audit_id": "aud_def456",
+      "action": "1099_generated",
+      "actor_user_id": "root.admin@testdev.local",
+      "target_user_id": "user_abc123",
+      "ip_address": "127.0.0.1",
+      "created_at": 1748534400
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+### 3.8 Error Handling Matrix
+
+| # | Scenario | HTTP Status | Error Message | Recovery Action |
+|---|----------|-------------|---------------|-----------------|
+| 1 | Invalid TIN format (not 9 digits) | 422 | `"tin: String should match pattern '^\\d{9}$' or 'min_length=9'"` | Fix input; TIN must be 9-11 chars (with or without dashes) |
+| 2 | Invalid state code | 422 | `"state: String should have at most 2 characters"` | Use 2-letter state code |
+| 3 | Invalid tax classification | 422 | `"tax_classification: String should match pattern..."` | Use one of: individual, sole_proprietor, llc, corporation, partnership, trust |
+| 4 | No tax info submitted yet (GET) | 404 | `"No tax information found"` | Submit W-9 first |
+| 5 | Admin access on non-existent user | 404 | `"User tax information not found"` | Verify user_id |
+| 6 | Non-admin access to admin endpoint | 403 | `"Admin role required"` | Use admin credentials |
+| 7 | 1099 for non-qualifying year | 200 | `qualifies: false` (not an error) | No action; creator below threshold |
+| 8 | 1099 already generated for year | 409 | `"1099 already generated for this tax year"` | Use correction endpoint |
+| 9 | Batch generate while another in progress | 429 | `"Batch generation already in progress"` | Wait for current batch |
+| 10 | KMS decrypt failure | 500 | `"Internal error: unable to process tax data"` | Check KMS key and permissions |
+| 11 | S3 upload failure for PDF | 500 | `"Failed to store generated form"` | Retry; check S3 availability |
+| 12 | Expired tax info (>3 years old) | 200 | `status: "expired"` | Creator must re-submit W-9 |
+| 13 | Missing certified signature | 422 | `"certified_signature: min_length=2"` | Provide electronic signature |
+| 14 | Download 1099 that does not exist | 404 | `"No 1099 found for this tax year"` | Verify tax year; may not be generated yet |
+
+### 3.9 Request/Response Models
 
 **Add to `app/models.py`**:
 
@@ -309,6 +565,31 @@ class W9SubmissionIn(BaseModel):
     tin: str = Field(min_length=9, max_length=11)
     tin_type: str = Field(pattern="^(ssn|ein)$")
     certified_signature: str = Field(min_length=2, max_length=200)
+
+    @field_validator("tin")
+    @classmethod
+    def validate_tin_format(cls, v: str) -> str:
+        """Strip dashes and validate that TIN is exactly 9 digits."""
+        digits = v.replace("-", "")
+        if len(digits) != 9 or not digits.isdigit():
+            raise ValueError("TIN must be exactly 9 digits")
+        return digits
+
+    @field_validator("state")
+    @classmethod
+    def validate_state_code(cls, v: str) -> str:
+        """Validate 2-letter US state code."""
+        valid_states = {
+            "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+            "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+            "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+            "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+            "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+            "DC", "PR", "VI", "GU", "AS", "MP",
+        }
+        if v.upper() not in valid_states:
+            raise ValueError(f"Invalid state code: {v}")
+        return v.upper()
 
 class TaxInfoOut(BaseModel):
     legal_name: str = ""
@@ -368,24 +649,29 @@ class TaxAuditEntryOut(BaseModel):
     actor_user_id: str
     target_user_id: str
     created_at: int
+    ip_address: str = ""
+
+class TaxAuditListOut(BaseModel):
+    items: List[TaxAuditEntryOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
 ```
 
-### 3.6 TIN Encryption Flow
+### 3.10 TIN Encryption Flow
 
 ```
 User submits TIN "123-45-6789"
-  → Strip non-digits: "123456789"
-  → Store last4: "6789"
-  → KMS encrypt: kms_encrypt("123456789") → base64 ciphertext
-  → Store in DDB: tin_encrypted = ciphertext, tin_last4 = "6789"
-  → Return to user: tin_masked = "***-**-6789"
+  -> Strip non-digits: "123456789"
+  -> Store last4: "6789"
+  -> KMS encrypt: kms_encrypt("123456789") -> base64 ciphertext
+  -> Store in DDB: tin_encrypted = ciphertext, tin_last4 = "6789"
+  -> Return to user: tin_masked = "***-**-6789"
 ```
 
 Decryption occurs only during:
 1. 1099 generation (system, audit-logged)
 2. Admin full TIN reveal (audit-logged with IP)
 
-### 3.7 1099-NEC PDF Generation
+### 3.11 1099-NEC PDF Generation
 
 The 1099-NEC PDF is rendered using a template approach:
 
@@ -398,15 +684,7 @@ The 1099-NEC PDF is rendered using a template approach:
 
 For v1, use `reportlab` to generate a simplified 1099-NEC layout. Full IRS-compliant formatting is a future enhancement.
 
-### 3.8 Frontend Components
-
-| File | Purpose | Estimated Lines |
-|------|---------|-----------------|
-| `frontend/src/pages/tax/TaxInfoPage.tsx` | W-9 form + 1099 downloads | ~400 |
-| `frontend/src/pages/admin/TaxAdminPage.tsx` | Admin tax management | ~250 |
-| `frontend/src/api/endpoints/tax.ts` | API wrappers | ~50 |
-
-**Component tree for TaxInfoPage**:
+### 3.12 Frontend Component Tree
 
 ```
 TaxInfoPage
@@ -436,7 +714,40 @@ TaxInfoPage
     └── Info text: "1099-NEC forms are generated annually for earnings over $600."
 ```
 
-### 3.9 Files to Create
+**TypeScript Props Interfaces**:
+
+```typescript
+interface TaxInfoFormProps {
+  initialData?: TaxInfoOut;
+  onSubmit: (data: W9SubmissionIn) => Promise<void>;
+  isLoading: boolean;
+}
+
+interface TaxInfoDisplayProps {
+  data: TaxInfoOut;
+  onEdit: () => void;
+}
+
+interface Form1099TableProps {
+  items: Form1099Out[];
+  onDownload: (taxYear: number) => void;
+  isDownloading: boolean;
+}
+
+interface TaxAdminListProps {
+  submissions: TaxSubmissionListItem[];
+  onViewFull: (userId: string) => void;
+  onLoadMore: () => void;
+  hasMore: boolean;
+}
+
+interface TaxAuditTableProps {
+  entries: TaxAuditEntryOut[];
+  isLoading: boolean;
+}
+```
+
+### 3.13 Files to Create
 
 | File | Purpose | Estimated Lines |
 |------|---------|-----------------|
@@ -447,7 +758,7 @@ TaxInfoPage
 | `frontend/src/api/endpoints/tax.ts` | API wrappers | ~50 |
 | `frontend/e2e/fin-tax-forms.spec.ts` | E2E tests | ~420 |
 
-### 3.10 Files to Modify
+### 3.14 Files to Modify
 
 | File | Change |
 |------|--------|
@@ -490,7 +801,127 @@ Every access to unmasked TIN data is logged to `TAX_AUDIT`:
 
 ---
 
-## 5. E2E Test Plan
+## 5. Observability
+
+### 5.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `tax_w9_submissions_total` | counter | `status` | W-9 submissions (new, update) |
+| `tax_1099_generated_total` | counter | `tax_year`, `qualifies` | 1099s generated |
+| `tax_tin_decryptions_total` | counter | `purpose` | TIN decryption events (admin_view, 1099_gen) |
+| `tax_batch_generate_duration_seconds` | histogram | `tax_year` | Batch generation latency |
+| `tax_audit_entries_total` | counter | `action` | Audit log entries written |
+| `tax_kms_errors_total` | counter | `operation` | KMS encrypt/decrypt failures |
+
+### 5.2 Structured Logging
+
+```python
+logger.info(
+    "tax_w9_submitted",
+    extra={
+        "user_id": user_id,
+        "tax_classification": tax_classification,
+        "tin_type": tin_type,
+        "is_update": is_update,
+    },
+)
+
+logger.info(
+    "tax_1099_generated",
+    extra={
+        "user_id": user_id,
+        "tax_year": tax_year,
+        "total_earnings_cents": total_earnings_cents,
+        "qualifies": qualifies,
+    },
+)
+
+logger.warning(
+    "tax_tin_decrypted",
+    extra={
+        "actor_user_id": admin_user_id,
+        "target_user_id": user_id,
+        "purpose": "admin_view",
+        "ip_address": ip_address,
+    },
+)
+```
+
+### 5.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High TIN decryption rate | `rate(tax_tin_decryptions_total[5m]) > 10` | Warning | Investigate admin activity; possible data exfiltration |
+| KMS failure spike | `rate(tax_kms_errors_total[5m]) > 1` | Critical | Check KMS key status; may block tax operations |
+| Batch generation failure | `tax_batch_generate_errors > 0` | High | Review failed creator list; retry individually |
+| Unusual W-9 update volume | `rate(tax_w9_submissions_total{status="update"}[1h]) > 50` | Warning | Potential automated abuse; investigate |
+
+---
+
+## 6. Rollout Plan
+
+### 6.1 Feature Flag
+
+```python
+# app/core/settings.py
+tax_forms_enabled: bool = os.environ.get("TAX_FORMS_ENABLED", "false").lower() == "true"
+```
+
+### 6.2 Phased Rollout
+
+| Phase | Scope | Duration | Gate |
+|-------|-------|----------|------|
+| 1 | Internal QA | 3 days | TAX_FORMS_ENABLED=true in staging |
+| 2 | Admin-only (batch generation) | 5 days | Admin UI available; creator UI hidden |
+| 3 | Creator W-9 submission | 7 days | Creator tax page accessible; 1099 download available |
+| 4 | Full rollout | Ongoing | Remove feature flag; make tax page permanent |
+
+### 6.3 Rollback Plan
+
+- Disable feature flag (`TAX_FORMS_ENABLED=false`) to hide tax pages and endpoints.
+- Encrypted TIN data remains in DDB but is inaccessible via disabled endpoints.
+- Generated 1099 PDFs remain in S3; download links stop working when flag is off.
+- Audit log data is preserved regardless of feature state.
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Latency Targets
+
+| Operation | Target | Notes |
+|-----------|--------|-------|
+| Submit W-9 | < 500ms | KMS encrypt + DDB write + GSI write |
+| Get tax info (masked) | < 100ms | Single DDB GetItem (no KMS) |
+| Admin view full TIN | < 300ms | DDB GetItem + KMS decrypt + audit write |
+| Generate single 1099 | < 3s | Ledger query + KMS decrypt + PDF render + S3 upload |
+| Batch generate (100 creators) | < 60s | Sequential processing; parallelize in future |
+| Download 1099 PDF | < 200ms | Generate presigned S3 URL |
+
+### 7.2 Caching Strategy
+
+- **No caching of TIN data**: Encrypted TIN and decrypted TIN must never be cached (PII).
+- **Tax info metadata cache**: Non-sensitive fields (name, address, status) can be cached at React Query level with 5-minute stale time.
+- **1099 list cache**: Form1099ListOut can be cached with 60-second stale time since it changes infrequently.
+- **Admin submission list**: No cache; paginated queries run on each page load.
+
+### 7.3 Batch Generation Optimization
+
+- **Sequential v1**: Process creators one at a time (simple, auditable).
+- **Batched v2**: Process 10 creators concurrently using `asyncio.gather` with semaphore.
+- **Progress tracking**: For >100 creators, write progress to a DDB status record so admin UI can poll.
+- **Idempotency**: If a 1099 already exists for user+year, skip (do not regenerate unless `force=true`).
+
+### 7.4 PDF Generation Memory
+
+- `reportlab` generates PDFs in memory. Each 1099 PDF is ~50KB.
+- For batch generation of 1000 creators, peak memory is ~50MB (assuming sequential processing).
+- If memory is a concern, flush each PDF to S3 immediately and release the bytes buffer.
+
+---
+
+## 8. E2E Test Plan
 
 **File**: `frontend/e2e/fin-tax-forms.spec.ts`
 
@@ -532,11 +963,30 @@ Every access to unmasked TIN data is logged to `TAX_AUDIT`:
 | 570.4 | 1099 section shows available forms | After 1099 generation; table row with tax year visible |
 | 570.5 | Update Tax Info button reveals form | Click "Update Tax Info"; form fields become editable |
 
-**Total E2E tests: 18**
+### Section 571: Edge Cases & Negative Tests (5 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 571.1 | EIN format accepted for business entities | POST with tin_type="ein", tin="12-3456789"; 200; status="active" |
+| 571.2 | Duplicate W-9 submission overwrites previous | Submit twice with different addresses; GET returns latest address |
+| 571.3 | Batch generate with no qualifying creators | Seed 0 credits; batch generate; qualifying=0, generated=0, errors=0 |
+| 571.4 | Admin audit log is chronologically ordered | Generate multiple audit events; GET audit; created_at descending |
+| 571.5 | Tax info survives backend restart | Submit W-9; restart backend; GET returns same data |
+
+### Section 572: Audit Trail Verification (4 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 572.1 | W-9 submission creates audit entry | Submit W-9; GET audit; entry with action="tax_info_updated" |
+| 572.2 | 1099 generation creates audit entry | Generate 1099; GET audit; entry with action="1099_generated" and target_user_id |
+| 572.3 | Multiple TIN views create separate audit entries | View TIN twice; audit log has 2 entries with action="tin_viewed" |
+| 572.4 | Audit entries include IP address | View TIN; audit entry has non-empty ip_address field |
+
+**Total E2E tests: 27**
 
 ---
 
-## 6. Dependencies
+## 9. Dependencies
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|
@@ -549,7 +999,7 @@ Every access to unmasked TIN data is logged to `TAX_AUDIT`:
 
 ---
 
-## 7. Acceptance Criteria
+## 10. Acceptance Criteria
 
 1. Creator can submit W-9 equivalent form with TIN.
 2. TIN is KMS-encrypted before storage; only last 4 stored in plaintext.
@@ -559,4 +1009,4 @@ Every access to unmasked TIN data is logged to `TAX_AUDIT`:
 6. Admin can list tax submissions and view full TIN (audit-logged).
 7. Admin can batch-generate 1099s for a tax year.
 8. All TIN access is audit-logged.
-9. All 18 E2E tests pass.
+9. All 27 E2E tests pass.

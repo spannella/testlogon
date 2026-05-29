@@ -69,7 +69,87 @@ The current `AffiliateDashboard.tsx` (204 lines) includes:
 - Delete link button
 - Copy link button
 
-### 2.4 Gaps
+### 2.4 DynamoDB Access Patterns
+
+| Access Pattern | Table | Key Condition | Filter | Use Case |
+|---------------|-------|---------------|--------|----------|
+| List links by creator | `AffiliateLinks` GSI1 | GSI1PK=`AFL#{creator_id}` | — | Creator's link list |
+| Get link by ID | `AffiliateLinks` | PK=`LINK#{link_id}`, SK=`META` | — | Link detail |
+| Get link by tracking code | `AffiliateLinks` GSI2 | GSI2PK=`CODE#{code}` | — | Redirect endpoint |
+| Record click | `AffiliateClicks` | PK=`LINK#{link_id}`, SK=`CLK#{ts}#{uuid}` | — | Click event storage |
+| Click time series | `AffiliateClicks` GSI1 | GSI1PK=`LINK#{link_id}#DAY#{date}` | — | Daily aggregated clicks |
+| Get summary | `AffiliateLinks` GSI1 | GSI1PK=`AFL#{creator_id}` | — | Aggregate all link stats |
+| Top products | `AffiliateLinks` GSI1 | GSI1PK=`AFL#{creator_id}` | — | Sort in-memory by conversions |
+
+**Example DynamoDB Item** (affiliate link):
+
+```json
+{
+  "pk": {"S": "LINK#afl_abc123"},
+  "sk": {"S": "META"},
+  "GSI1PK": {"S": "AFL#alice@test.local"},
+  "link_id": {"S": "afl_abc123"},
+  "tracking_code": {"S": "alice-summer"},
+  "product_id": {"S": "prod_123"},
+  "commission_pct": {"N": "10"},
+  "total_clicks": {"N": "342"},
+  "unique_clicks": {"N": "218"},
+  "total_conversions": {"N": "28"},
+  "total_commission_cents": {"N": "14200"},
+  "created_at": {"N": "1748520100"}
+}
+```
+
+**Example DynamoDB Item** (click event):
+
+```json
+{
+  "pk": {"S": "LINK#afl_abc123"},
+  "sk": {"S": "CLK#1748520500#uuid123"},
+  "visitor_ip_hash": {"S": "sha256_of_ip"},
+  "user_agent": {"S": "Mozilla/5.0..."},
+  "is_unique": {"BOOL": true},
+  "created_at": {"N": "1748520500"}
+}
+```
+
+### 2.5 Pydantic Models
+
+```python
+class AffiliateLinkOut(BaseModel):
+    link_id: str
+    tracking_code: str
+    product_id: str
+    tracking_url: str
+    commission_pct: int
+    total_clicks: int = 0
+    unique_clicks: int = 0
+    total_conversions: int = 0
+    conversion_rate_pct: float = 0.0
+    total_commission_cents: int = 0
+    created_at: int
+
+class AffiliateSummaryOut(BaseModel):
+    total_links: int
+    total_clicks: int
+    total_unique_clicks: int
+    total_conversions: int
+    conversion_rate_pct: float
+    total_commission_cents: int
+    pending_commission_cents: int
+    approved_commission_cents: int
+    paid_commission_cents: int
+
+class AffiliateClickSeriesOut(BaseModel):
+    items: List[Dict[str, Any]]  # [{date, clicks, unique_clicks}]
+
+class CreateAffiliateLinkIn(BaseModel):
+    product_id: str
+    tracking_code: str = Field(..., min_length=3, max_length=50, pattern=r"^[a-z0-9-]+$")
+    commission_pct: int = Field(..., ge=1, le=50)
+```
+
+### 2.6 Gaps
 
 1. **No earnings breakdown** by status (pending, approved, paid).
 2. **No time-series click analytics** -- no chart showing clicks over time.
@@ -387,11 +467,204 @@ If `click_count == 0`, `conversion_rate = 0.0`. Displayed as percentage with 1 d
 | 578.4 | Copy tracking code to clipboard | Click copy button on link; toast "Copied" appears |
 | 578.5 | Earnings tab shows breakdown cards | Click "Earnings" tab; "Pending", "Approved", "Paid" cards visible |
 
-**Total E2E tests: 16**
+### Section 579: Affiliate Edge Cases & Negative Tests (5 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 579.1 | Duplicate tracking code rejected | Create link with same code twice; second returns 409 |
+| 579.2 | Click on expired link not counted | Expire link; record click; summary doesn't increment |
+| 579.3 | Conversion with zero amount | POST conversion with amount=0; 400 or conversion not recorded |
+| 579.4 | Delete affiliate link | DELETE link; GET links; deleted link absent |
+| 579.5 | Large time range analytics | GET clicks with 365-day range; response paginated correctly |
+
+**Total E2E tests: 21**
 
 ---
 
-## 6. Security Considerations
+## 6. API Request/Response Examples
+
+**Get affiliate summary** (curl):
+
+```bash
+curl -X GET http://localhost:8000/ui/affiliates/summary \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "total_links": 5,
+  "total_clicks": 342,
+  "total_unique_clicks": 218,
+  "total_conversions": 28,
+  "conversion_rate_pct": 12.8,
+  "total_commission_cents": 14200,
+  "pending_commission_cents": 5000,
+  "approved_commission_cents": 7200,
+  "paid_commission_cents": 2000
+}
+```
+
+**Create affiliate link** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/affiliates/links \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_a" \
+  -d '{"product_id": "prod_123", "tracking_code": "alice-summer", "commission_pct": 10}'
+```
+
+**Response (201)**:
+```json
+{
+  "link_id": "afl_abc123",
+  "tracking_code": "alice-summer",
+  "product_id": "prod_123",
+  "tracking_url": "https://platform.com/r/alice-summer",
+  "commission_pct": 10,
+  "created_at": 1748520100
+}
+```
+
+**Get click analytics** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/ui/affiliates/links/afl_abc123/clicks?period=7d" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "items": [
+    {"date": "2026-05-28", "clicks": 12, "unique_clicks": 8},
+    {"date": "2026-05-29", "clicks": 15, "unique_clicks": 11}
+  ]
+}
+```
+
+**Get earnings breakdown** (curl):
+
+```bash
+curl -X GET http://localhost:8000/ui/affiliates/earnings \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "pending_cents": 5000,
+  "approved_cents": 7200,
+  "paid_cents": 2000,
+  "total_cents": 14200
+}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Duplicate tracking code | 409 | `duplicate_code` | "Tracking code already exists" | Choose a different code |
+| Product not found | 404 | `product_not_found` | "Product not found" | Verify product ID |
+| Link not found | 404 | `not_found` | "Affiliate link not found" | Check link ID |
+| Not link owner | 403 | `forbidden` | "Not authorized" | Use own links |
+| Invalid commission pct | 422 | `validation_error` | "Commission must be 1-50%" | Adjust value |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Log in |
+| Click fraud detected | 429 | `rate_limited` | N/A (server-side) | IP rate limited |
+
+---
+
+## 8. Observability
+
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `affiliate_link_created_total` | Counter | — | Links created |
+| `affiliate_click_total` | Counter | `is_unique` | Clicks recorded |
+| `affiliate_conversion_total` | Counter | — | Conversions recorded |
+| `affiliate_commission_cents` | Counter | `status` (pending/approved/paid) | Commission amounts |
+| `affiliate_click_fraud_blocked_total` | Counter | — | Rate-limited click attempts |
+
+### 8.2 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Click fraud spike | > 1000 clicks/min from single IP | High | Auto-block IP |
+| Conversion anomaly | > 50% conversion rate on single link | Medium | Review for fraud |
+| Commission payout backlog | > 100 pending commissions for > 7d | Medium | Process payouts |
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flag
+
+```python
+affiliate_dashboard_enabled: bool = os.environ.get("AFFILIATE_DASHBOARD_ENABLED", "true").lower() == "true"
+```
+
+### 9.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend | Deploy new endpoints; flag OFF | 2 days | Unit tests pass |
+| Phase 2: Internal | Enable dashboard for internal | 3 days | All 21 E2E pass |
+| Phase 3: Canary 10% | Enable for 10% of creators | 3 days | No fraud anomalies |
+| Phase 4: GA | Enable for all | Permanent | Healthy conversion metrics |
+
+### 9.3 Rollback
+
+1. Set flag OFF — dashboard shows read-only summary
+2. Click tracking continues (independent of dashboard)
+3. Commission data preserved
+
+---
+
+## 10. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Summary aggregation | < 200ms | Pre-computed counters in DDB; updated on each event |
+| Click time series query | < 100ms | DDB query on GSI by link + date range |
+| Top products sort | < 200ms | In-memory sort of cached product data |
+| Dashboard initial load | < 500ms | Parallel queries: summary + links + earnings |
+| Click recording latency | < 10ms | Async fire-and-forget write |
+
+---
+
+## 11. Frontend Component Tree
+
+```
+AffiliateDashboard
+├── SummaryCards (row)
+│   ├── TotalClicksCard
+│   ├── ConversionsCard
+│   ├── ConversionRateCard
+│   └── TotalEarningsCard
+├── Tabs
+│   ├── MyLinksTab
+│   │   ├── LinksTable
+│   │   │   └── LinkRow (code, product, clicks, conversions, earnings, copy button)
+│   │   └── CreateLinkButton → CreateLinkDialog
+│   ├── AnalyticsTab
+│   │   ├── LinkSelector (dropdown to pick link)
+│   │   ├── ClickChart (line/bar chart, 7d/30d/90d toggle)
+│   │   └── StatsCards (unique vs total clicks, geo breakdown)
+│   ├── EarningsTab
+│   │   ├── EarningsBreakdownCards (pending, approved, paid)
+│   │   └── EarningsHistoryTable
+│   └── TopProductsTab
+│       └── ProductTable (product name, clicks, conversions, rate, earnings)
+└── ExportButton (CSV download)
+```
+
+---
+
+## 12. Security Considerations
 
 ### 6.1 Auth Requirements
 

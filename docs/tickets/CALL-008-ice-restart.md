@@ -642,3 +642,88 @@ The existing metrics infrastructure in `app/metrics.py` records signaling events
 2. **Retry count reset**: After a successful restart (`CONNECT`), `retryCount` resets to 0. Verify that a subsequent failure gets the full retry budget again.
 3. **Teardown during restart**: If user clicks "Cancel" while in `outgoing_connecting` (during restart), verify `teardownCallResources` is called and `call.end` is sent.
 4. **Concurrent restart attempts**: If both peers detect failure simultaneously and both send restart offers, the "glare" scenario must be handled (per WebRTC spec: the peer with the lower session ID should roll back their offer and accept the other's).
+
+---
+
+## 6. Error Handling Matrix
+
+| Error Scenario | Behavior | User-Facing Message | Recovery Action |
+|----------------|----------|---------------------|-----------------|
+| ICE disconnected (brief) | Grace period (3s) before showing reconnecting | No message if reconnects within grace period | Auto-resolve |
+| ICE failed after retries | All restart attempts exhausted | "Call failed to reconnect." | End call; allow re-call |
+| TURN credential refresh failure | Cannot get new TURN creds | "Connection lost. Please try again." | End call; re-initiate |
+| Signaling server unavailable | Cannot send restart offer | "Reconnection failed: server unavailable." | Retry on reconnect |
+| Glare (both send offers) | Lower session ID rolls back | No user message; transparent | Auto-resolve per WebRTC spec |
+| Network returns but peer gone | Restart offer sent; no answer | "Other party left the call." | End call |
+| Browser tab suspended | ICE keep-alive paused | "Reconnecting..." on foreground | Auto-restart on foreground |
+
+---
+
+## 7. Observability & Monitoring
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `webrtc_ice_restart_total` | Counter | `outcome={success,failure}` | ICE restart attempts |
+| `webrtc_ice_restart_duration_ms` | Histogram | -- | Time from disconnect to reconnect |
+| `webrtc_ice_state_change_total` | Counter | `from_state`, `to_state` | ICE state transitions |
+| `webrtc_grace_period_absorbed_total` | Counter | -- | Disconnects resolved within grace period |
+| `webrtc_glare_resolution_total` | Counter | -- | Concurrent offer conflicts resolved |
+| `webrtc_turn_refresh_total` | Counter | `result={success,failure}` | TURN credential refreshes |
+
+### Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| ICE restart failure rate > 30% | Rolling 1h | P2 |
+| TURN refresh failures > 5 in 10min | Spike detection | P1 |
+| Average reconnect time > 15s | Rolling 1h | P3 |
+
+---
+
+## 8. Performance Considerations
+
+| Concern | Mitigation |
+|---------|-----------|
+| Grace period too short (false UI flicker) | 3s default; configurable; debounce state changes |
+| TURN credential refresh latency | Pre-fetch new creds 60s before expiry; cache |
+| Retry backoff blocking user | Show progress ("Attempt 2 of 3..."); allow manual cancel |
+| ICE candidate gathering on restart | Use `iceRestart: true` on createOffer; reuse existing transport |
+| Memory from accumulated candidates | Clear candidate list on each restart attempt |
+
+---
+
+## 9. Rollout Plan
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `ICE_RESTART_ENABLED` | `true` | Enable automatic ICE restart |
+| `ICE_RESTART_MAX_RETRIES` | `3` | Maximum restart attempts |
+| `ICE_GRACE_PERIOD_MS` | `3000` | Grace period before showing reconnecting UI |
+| `ICE_RESTART_BACKOFF_MS` | `2000` | Initial backoff between retries |
+
+### Canary
+
+1. **Week 1**: Deploy with `ICE_RESTART_MAX_RETRIES=1`. Monitor restart success rate.
+2. **Week 2**: Increase to 3 retries. Verify no infinite loops.
+3. **Week 3**: Full rollout. Monitor reconnect duration and user satisfaction.
+
+---
+
+## 10. Expanded E2E Test Details
+
+### Additional Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| E1 | Grace period prevents UI flicker | 2s disconnect resolves; no "Reconnecting..." shown |
+| E2 | Retry counter resets after success | After 1 restart success, next failure gets full retry budget |
+| E3 | Cancel during reconnection | User clicks end; teardown called; no orphan connections |
+| E4 | Background tab returns after 2 minutes | ICE restart triggers; call reconnects |
+
+### Negative Tests (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| N1 | ICE restart disabled by flag | Set flag=false; disconnect goes straight to "Call failed" |
+| N2 | All TURN servers unreachable | Restart fails; clean termination |
+| N3 | Peer offline permanently | All retries exhaust; "Call ended" after max retries * backoff |

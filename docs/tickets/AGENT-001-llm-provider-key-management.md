@@ -29,7 +29,81 @@ AGENT-001 provides a secure key vault for storing and managing API keys from mul
 | User | As a user, I want to assign specific keys to specific worker agents so that different agents can use different providers/models. | Worker config references key_id; agent startup injects the correct API key. |
 | Admin | As an admin, I want to see all LLM keys across users for audit purposes so that I can monitor platform-wide LLM usage. | Admin endpoint returns all keys with usage stats (keys themselves are never exposed). |
 
-### 1.3 Why This Is Needed
+### 1.3 Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    LLM Provider Key Management                          │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────┐           │
+│  │                   Frontend (Browser)                      │           │
+│  │                                                           │           │
+│  │  LlmKeysPage (/agents/llm-keys)                         │           │
+│  │  ├── Key Table (label, provider, model, status, usage)   │           │
+│  │  ├── "Add Key" → AddLlmKeyDialog                        │           │
+│  │  │   ├── Step 1: Provider selector (card grid)           │           │
+│  │  │   └── Step 2: Key config (label, API key, model)      │           │
+│  │  ├── "Test" → POST /llm-keys/{id}/test                  │           │
+│  │  ├── "Rotate" → POST /llm-keys/{id}/rotate              │           │
+│  │  └── "Delete" → DELETE /llm-keys/{id}                    │           │
+│  └──────────────────────────────────────────────────────────┘           │
+│                              │                                          │
+│               Vite Proxy /ui/* → :8000                                  │
+│                              │                                          │
+│  ┌──────────────────────────────────────────────────────────┐           │
+│  │                  Backend (FastAPI :8000)                   │           │
+│  │                                                           │           │
+│  │  app/routers/llm_provider_keys.py                         │           │
+│  │  ├── POST   /ui/agent/llm-keys           (add key)       │           │
+│  │  ├── GET    /ui/agent/llm-keys           (list keys)     │           │
+│  │  ├── GET    /ui/agent/llm-keys/{id}      (get key)       │           │
+│  │  ├── POST   /ui/agent/llm-keys/{id}/test (test key)      │           │
+│  │  ├── POST   /ui/agent/llm-keys/{id}/rotate (rotate)      │           │
+│  │  ├── DELETE  /ui/agent/llm-keys/{id}     (delete key)    │           │
+│  │  ├── GET    /ui/agent/llm-keys/{id}/usage (usage)        │           │
+│  │  ├── GET    /ui/agent/llm-providers       (providers)     │           │
+│  │  ├── POST   /ui/agent/llm-keys/{id}/assign (assign)      │           │
+│  │  ├── DELETE  /ui/agent/llm-keys/{id}/assign/{wid}        │           │
+│  │  └── GET    /ui/admin/agent/llm-keys     (admin audit)   │           │
+│  │                                                           │           │
+│  │  app/services/llm_provider_keys.py                        │           │
+│  │  ├── add_key()          → encrypt + store                │           │
+│  │  ├── list_keys()        → query, strip encrypted key     │           │
+│  │  ├── test_key()         → decrypt, probe provider API    │           │
+│  │  ├── rotate_key()       → re-encrypt, same key_id        │           │
+│  │  ├── record_usage()     → atomic increment + budget check│           │
+│  │  └── get_decrypted_api_key() → for agent provisioning    │           │
+│  └──────────────────────────────────────────────────────────┘           │
+│                              │                                          │
+│  ┌──────────────────────────────────────────────────────────┐           │
+│  │                    Infrastructure                         │           │
+│  │                                                           │           │
+│  │  DynamoDB: llm_provider_keys table                        │           │
+│  │  ├── PK: USER#{user_id}                                  │           │
+│  │  ├── SK: KEY#{key_id}                                    │           │
+│  │  ├── encrypted_api_key (KMS ciphertext)                  │           │
+│  │  └── GSIs: ByProvider, ByCreatedAt                       │           │
+│  │                                                           │           │
+│  │  KMS (mock_kms_server.py :7999)                          │           │
+│  │  ├── Encrypt: plaintext API key → base64 ciphertext      │           │
+│  │  └── Decrypt: ciphertext → plaintext (agent provisioning)│           │
+│  └──────────────────────────────────────────────────────────┘           │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────┐           │
+│  │          Downstream Consumers                             │           │
+│  │                                                           │           │
+│  │  AGENT-002 (Worker Provisioning)                          │           │
+│  │  └── get_decrypted_api_key(user_id, key_id)              │           │
+│  │      → injects API key as env var on compute instance     │           │
+│  │                                                           │           │
+│  │  AGENT-003 (Agent Framework)                              │           │
+│  │  └── record_usage(user_id, key_id, tokens, cost_cents)   │           │
+│  │      → tracks usage per LLM call, enforces budget         │           │
+│  └──────────────────────────────────────────────────────────┘           │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.4 Why This Is Needed
 
 The Agent Orchestration Platform (AGENT-002 through AGENT-007) requires LLM API keys to power autonomous coding agents. Users bring their own keys (BYOK model) and need a secure way to store, test, rotate, and assign them to agents. Without centralized key management, users would need to manually paste keys into terminal sessions every time an agent spins up, which is error-prone, insecure (keys visible in terminal history), and blocks automated agent provisioning.
 
@@ -105,7 +179,80 @@ TableDef(
 | `updated_at` | N | Unix timestamp |
 | `assigned_worker_ids` | L | List of worker IDs this key is assigned to |
 
-### 3.2 Provider Registry
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Key | GSI | Operation | Description |
+|---|---|---|---|---|
+| Add new key | PK=`USER#{user_id}`, SK=`KEY#{key_id}` | — | PutItem | Store encrypted key with metadata |
+| List user's keys | PK=`USER#{user_id}`, SK begins_with `KEY#` | — | Query | All keys for a user |
+| Get single key | PK=`USER#{user_id}`, SK=`KEY#{key_id}` | — | GetItem | Single key details |
+| Filter by provider | PK=`USER#{user_id}` | ByProvider | Query GSI | Keys for a specific provider |
+| List by creation date | PK=`USER#{user_id}` | ByCreatedAt | Query GSI | Keys sorted by creation time |
+| Update key metadata | PK=`USER#{user_id}`, SK=`KEY#{key_id}` | — | UpdateItem | Test results, usage, status |
+| Rotate key (re-encrypt) | PK=`USER#{user_id}`, SK=`KEY#{key_id}` | — | UpdateItem | New encrypted_api_key + key_suffix |
+| Record usage (atomic) | PK=`USER#{user_id}`, SK=`KEY#{key_id}` | — | UpdateItem (ADD) | Increment tokens, requests, cost |
+| Delete key | PK=`USER#{user_id}`, SK=`KEY#{key_id}` | — | DeleteItem | Permanent removal |
+| Admin scan all keys | — | — | Scan (paginated) | Admin audit across all users |
+
+#### Example DynamoDB Items (JSON)
+
+**Active Anthropic Key**:
+```json
+{
+  "pk": {"S": "USER#e2e_alice@test.local"},
+  "sk": {"S": "KEY#a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"},
+  "key_id": {"S": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"},
+  "user_id": {"S": "e2e_alice@test.local"},
+  "provider": {"S": "anthropic"},
+  "label": {"S": "My Claude Production Key"},
+  "encrypted_api_key": {"S": "AQICAHh...base64ciphertext...=="},
+  "key_suffix": {"S": "cdef"},
+  "base_url": {"S": "https://api.anthropic.com/v1"},
+  "model_preference": {"S": "claude-sonnet-4-20250514"},
+  "available_models": {"L": [
+    {"S": "claude-sonnet-4-20250514"},
+    {"S": "claude-opus-4-20250514"},
+    {"S": "claude-haiku-3-5-20241022"}
+  ]},
+  "rate_limit_rpm": {"N": "60"},
+  "monthly_budget_cents": {"N": "50000"},
+  "current_month_usage_cents": {"N": "12340"},
+  "usage_reset_at": {"N": "1751328000"},
+  "total_requests": {"N": "4521"},
+  "total_tokens_used": {"N": "1234567"},
+  "status": {"S": "active"},
+  "last_tested_at": {"N": "1748534000"},
+  "last_used_at": {"N": "1748534400"},
+  "created_at": {"N": "1748000000"},
+  "updated_at": {"N": "1748534400"},
+  "assigned_worker_ids": {"L": [{"S": "worker_coder_001"}, {"S": "worker_qa_002"}]}
+}
+```
+
+**Custom OpenAI-Compatible Key**:
+```json
+{
+  "pk": {"S": "USER#e2e_alice@test.local"},
+  "sk": {"S": "KEY#f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2"},
+  "key_id": {"S": "f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2"},
+  "user_id": {"S": "e2e_alice@test.local"},
+  "provider": {"S": "custom"},
+  "label": {"S": "Local vLLM Server"},
+  "encrypted_api_key": {"S": "AQICAHh...=="},
+  "key_suffix": {"S": "c123"},
+  "base_url": {"S": "https://my-vllm.example.com/v1"},
+  "model_preference": {"S": "meta-llama/Llama-3.3-70B-Instruct"},
+  "available_models": {"L": []},
+  "rate_limit_rpm": {"N": "120"},
+  "monthly_budget_cents": {"N": "0"},
+  "current_month_usage_cents": {"N": "0"},
+  "status": {"S": "active"},
+  "created_at": {"N": "1748100000"},
+  "assigned_worker_ids": {"L": []}
+}
+```
+
+### 3.3 Provider Registry
 
 ```python
 # In app/services/llm_provider_keys.py
@@ -161,7 +308,7 @@ PROVIDER_REGISTRY = {
 }
 ```
 
-### 3.3 Backend Service
+### 3.4 Backend Service
 
 **New file**: `app/services/llm_provider_keys.py` (~450 lines)
 
@@ -324,9 +471,6 @@ def check_usage(user_id: str, key_id: str) -> Dict[str, Any]:
     OpenAI: GET /dashboard/billing/usage
     Others: return local tracking only.
     """
-    # 1. Decrypt key
-    # 2. If provider supports usage endpoint, query it
-    # 3. Return merged local + provider usage data
     # In dev mode: return mock usage data
 
 
@@ -369,7 +513,7 @@ def _safe_out(item: Dict[str, Any]) -> Dict[str, Any]:
     return out
 ```
 
-### 3.4 Backend Router
+### 3.5 Backend Router
 
 **New file**: `app/routers/llm_provider_keys.py` (~200 lines)
 
@@ -389,7 +533,7 @@ Prefix: `/ui/agent/llm-keys`
 | `DELETE` | `/ui/agent/llm-keys/{key_id}/assign/{worker_id}` | `require_ui_session` | Unassign key from worker |
 | `GET` | `/ui/admin/agent/llm-keys` | `require_admin_session` | Admin: list all keys across users |
 
-### 3.5 Pydantic Models
+### 3.6 Pydantic Models
 
 **Add to `app/models.py`**:
 
@@ -461,7 +605,7 @@ class LlmProviderListOut(BaseModel):
     providers: List[LlmProviderInfo]
 ```
 
-### 3.6 Frontend Components
+### 3.7 Frontend Components
 
 #### LlmKeysPage (`frontend/src/pages/agents/LlmKeysPage.tsx`)
 
@@ -481,17 +625,171 @@ Dialog (~250 lines):
 - **Step 2**: Key configuration -- label, API key (password field with show/hide), model preference dropdown, base_url (for custom), rate limit, monthly budget
 - **Add button**: Calls POST, shows test result inline
 
-#### Route & Navigation
+#### Frontend Component Tree
 
-```tsx
-<Route path="/agents/llm-keys" element={<LlmKeysPage />} />
 ```
+LlmKeysPage (/agents/llm-keys)
+├── Props: none (page)
+├── State: useQuery(["llm-keys"], listKeys)
+│
+├── PageHeader
+│   ├── <h1>LLM API Keys</h1>
+│   └── <Button>Add Key</Button> → opens AddLlmKeyDialog
+│
+├── KeyTable (DataTable)
+│   ├── Columns: Label, Provider, Model, Status, Usage, Last Tested, Actions
+│   ├── StatusBadge
+│   │   ├── active → green Badge
+│   │   ├── inactive → gray Badge
+│   │   ├── budget_exceeded → red Badge
+│   │   └── invalid → orange Badge
+│   ├── UsageBar (when monthly_budget_cents > 0)
+│   │   └── Progress bar: current_month_usage_cents / monthly_budget_cents
+│   └── ActionsDropdown
+│       ├── Test → useMutation(testKey)
+│       ├── Rotate → opens RotateDialog
+│       ├── Usage → opens UsageDialog
+│       └── Delete → opens ConfirmDialog
+│
+├── AddLlmKeyDialog
+│   ├── Step 1: ProviderSelector (card grid)
+│   │   └── Cards: OpenAI, Anthropic, DeepSeek, Gemini, Custom
+│   └── Step 2: KeyConfigForm
+│       ├── Label input
+│       ├── API Key (password input with show/hide toggle)
+│       ├── Model preference (Select from provider.models)
+│       ├── Base URL (visible only for custom provider)
+│       ├── Rate limit (number input, default 60)
+│       ├── Monthly budget (currency input, $0 = unlimited)
+│       └── Submit → useMutation(addKey)
+│
+├── RotateKeyDialog
+│   ├── Props: { keyId, currentSuffix }
+│   ├── New API key input (password field)
+│   └── Submit → useMutation(rotateKey)
+│
+└── EmptyState
+    └── "No LLM keys configured. Add your first API key."
 
-Sidebar: "LLM Keys" with `KeyRound` icon under "AI Agents" group.
+Route: /agents/llm-keys
+Sidebar: "LLM Keys" with KeyRound icon under "AI Agents" group
+```
 
 ---
 
-## 4. Implementation Plan
+## 4. API Request/Response Examples
+
+### 4.1 Add Key
+
+```bash
+curl -X POST http://localhost:8000/ui/agent/llm-keys \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=tok_csrf_001" \
+  -H "x-csrf-token: tok_csrf_001" \
+  -d '{
+    "provider": "anthropic",
+    "label": "My Claude Production Key",
+    "api_key": "sk-ant-test-1234567890abcdef",
+    "model_preference": "claude-sonnet-4-20250514",
+    "monthly_budget_cents": 50000
+  }'
+
+# Response (201 Created)
+{
+  "key_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+  "provider": "anthropic",
+  "label": "My Claude Production Key",
+  "key_suffix": "cdef",
+  "base_url": "https://api.anthropic.com/v1",
+  "model_preference": "claude-sonnet-4-20250514",
+  "available_models": [],
+  "rate_limit_rpm": 60,
+  "monthly_budget_cents": 50000,
+  "current_month_usage_cents": 0,
+  "total_requests": 0,
+  "total_tokens_used": 0,
+  "status": "active",
+  "last_tested_at": 0,
+  "last_used_at": 0,
+  "created_at": 1748534400,
+  "assigned_worker_ids": []
+}
+```
+
+### 4.2 Test Key
+
+```bash
+curl -X POST http://localhost:8000/ui/agent/llm-keys/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4/test \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=tok_csrf_001" \
+  -H "x-csrf-token: tok_csrf_001"
+
+# Response (200 OK)
+{
+  "ok": true,
+  "models": ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-haiku-3-5-20241022"],
+  "error": "",
+  "latency_ms": 142
+}
+```
+
+### 4.3 Rotate Key
+
+```bash
+curl -X POST http://localhost:8000/ui/agent/llm-keys/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4/rotate \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=tok_csrf_001" \
+  -H "x-csrf-token: tok_csrf_001" \
+  -d '{"new_api_key": "sk-ant-new-key-9876543210"}'
+
+# Response (200 OK)
+{
+  "key_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+  "provider": "anthropic",
+  "label": "My Claude Production Key",
+  "key_suffix": "3210",
+  "status": "active"
+}
+```
+
+### 4.4 List Providers
+
+```bash
+curl http://localhost:8000/ui/agent/llm-providers \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ..."
+
+# Response (200 OK)
+{
+  "providers": [
+    {"provider": "openai", "display_name": "OpenAI", "base_url": "https://api.openai.com/v1", "models": ["gpt-4o", "gpt-4o-mini", "o3", "o4-mini", "codex-mini-latest"], "supports_usage_api": true},
+    {"provider": "anthropic", "display_name": "Anthropic (Claude)", "base_url": "https://api.anthropic.com/v1", "models": ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-haiku-3-5-20241022"], "supports_usage_api": false},
+    {"provider": "deepseek", "display_name": "DeepSeek", "base_url": "https://api.deepseek.com/v1", "models": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"], "supports_usage_api": false},
+    {"provider": "gemini", "display_name": "Google Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta", "models": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"], "supports_usage_api": false},
+    {"provider": "custom", "display_name": "Custom (OpenAI-compatible)", "base_url": "", "models": [], "supports_usage_api": false}
+  ]
+}
+```
+
+---
+
+## 5. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Unknown provider | 400 | `invalid_provider` | "Unknown provider: {value}" | Use one of: openai, anthropic, deepseek, gemini, custom |
+| Custom provider without base_url | 400 | `base_url_required` | "base_url is required for custom provider" | Provide base_url |
+| API key too short (<8 chars) | 422 | `validation_error` | "api_key must be at least 8 characters" | Use full API key |
+| Key not found | 404 | `key_not_found` | "LLM key not found" | Check key_id |
+| Key test failed (invalid key) | 200 | — | `ok: false, error: "Authentication failed"` | Check API key validity |
+| Key test failed (network error) | 200 | — | `ok: false, error: "Connection timeout"` | Check provider availability |
+| Budget exceeded | 200 | — | Status changes to `budget_exceeded` | Increase budget or reset usage |
+| Key already assigned to worker | 200 | — | Worker added to list (idempotent) | No action needed |
+| Delete key with active workers | 200 | — | Key deleted; workers lose reference | Reassign workers to new key |
+| Session expired | 401 | `unauthorized` | "Session expired" | Re-authenticate |
+| Non-admin accessing admin endpoint | 403 | `forbidden` | "Admin access required" | Use admin account |
+
+---
+
+## 6. Implementation Plan
 
 ### Phase 1: Backend Service + DDB (2-3 days)
 
@@ -525,11 +823,11 @@ Sidebar: "LLM Keys" with `KeyRound` icon under "AI Agents" group.
 
 | File | Change |
 |------|--------|
-| `frontend/e2e/agent-llm-keys.spec.ts` | New file: ~16 tests in 4 sections |
+| `frontend/e2e/agent-llm-keys.spec.ts` | New file: ~18 tests in 4 sections |
 
 ---
 
-## 5. E2E Test Plan (`frontend/e2e/agent-llm-keys.spec.ts`)
+## 7. E2E Test Plan (`frontend/e2e/agent-llm-keys.spec.ts`)
 
 **Test setup**: Uses `e2e_admin_session_setup.py` sessions. Alice is the primary test user.
 
@@ -565,31 +863,109 @@ Sidebar: "LLM Keys" with `KeyRound` icon under "AI Agents" group.
 
 ---
 
-## 6. Security Considerations
+## 8. Observability & Monitoring
 
-### 6.1 Encryption at Rest
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `llm_key_operations_total` | Counter | `operation` (add/delete/test/rotate/assign) | Total key management operations |
+| `llm_key_test_results_total` | Counter | `provider`, `result` (success/failure) | Key test outcomes |
+| `llm_key_usage_tokens_total` | Counter | `provider`, `user_id` | Total tokens consumed across all keys |
+| `llm_key_budget_exceeded_total` | Counter | `provider` | Times a key hit its budget cap |
+
+### 8.2 Log Events
+
+| Event | Level | Fields | Description |
+|-------|-------|--------|-------------|
+| `llm_key_added` | INFO | `user_id`, `key_id`, `provider`, `label` | New key stored |
+| `llm_key_tested` | INFO | `user_id`, `key_id`, `provider`, `ok`, `latency_ms` | Key test completed |
+| `llm_key_rotated` | INFO | `user_id`, `key_id`, `provider` | Key rotated |
+| `llm_key_deleted` | INFO | `user_id`, `key_id`, `provider` | Key deleted |
+| `llm_key_budget_exceeded` | WARN | `user_id`, `key_id`, `budget_cents`, `usage_cents` | Budget cap hit |
+| `llm_key_decrypted` | DEBUG | `user_id`, `key_id` | Key decrypted (agent provisioning) |
+
+### 8.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Key test failure spike | `rate(llm_key_test_results_total{result="failure"}) > 10/min` | Warning | Check provider API status |
+| Budget exceeded wave | `rate(llm_key_budget_exceeded_total) > 5/min` | Warning | Users hitting budget caps; may indicate agent cost spike |
+| KMS decrypt failures | Any `kms_decrypt` error | Critical | Check KMS mock server (port 7999) is running |
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `AGENT_LLM_KEYS_ENABLED` | `false` | Master switch for LLM key management feature |
+| `AGENT_LLM_KEY_TESTING_ENABLED` | `true` | When false, test endpoint returns mock success without calling provider |
+
+### 9.2 Migration Steps
+
+1. **Phase 1**: Create DynamoDB table. Deploy backend service with `AGENT_LLM_KEYS_ENABLED=false`.
+2. **Phase 2**: Enable for internal users. Test add/list/delete/rotate flows.
+3. **Phase 3**: Enable `AGENT_LLM_KEYS_ENABLED=true` for all users. Frontend page visible.
+4. **Phase 4**: Enable key testing against live provider APIs (after confirming no rate limit issues).
+
+### 9.3 Rollback Procedure
+
+1. Set `AGENT_LLM_KEYS_ENABLED=false`. Frontend hides LLM Keys page.
+2. Existing keys remain encrypted in DDB (harmless).
+3. Workers referencing key_ids will fail at provisioning time (AGENT-002 handles gracefully).
+
+---
+
+## 10. Performance Considerations
+
+### 10.1 KMS Latency
+
+- `kms_encrypt`: ~10ms (mock KMS). In production with AWS KMS: ~50-100ms.
+- `kms_decrypt`: ~10ms (mock). In production: ~50-100ms.
+- Key encryption/decryption happens only on add, rotate, test, and agent provisioning — not on every API call.
+
+### 10.2 Key Listing
+
+- `list_keys` is a DynamoDB Query (not Scan). Partition key = `USER#{user_id}`, SK prefix = `KEY#`. Even with 100 keys per user (unlikely), the query returns in < 10ms.
+
+### 10.3 Usage Recording
+
+- `record_usage` uses DynamoDB `ADD` (atomic increment). This is called after every LLM API call by the agent framework. At 100 API calls/minute per agent, this generates 100 WCUs/minute per active key — well within DDB limits.
+
+### 10.4 Budget Check
+
+- Budget check after `record_usage` is a conditional update: if `current_month_usage_cents >= monthly_budget_cents` then set `status = budget_exceeded`. This is an atomic operation piggy-backed on the usage recording write.
+
+---
+
+## 11. Security Considerations
+
+### 11.1 Encryption at Rest
 
 All API keys are encrypted using KMS (`kms_encrypt`) before storage. The `encrypted_api_key` field contains base64-encoded ciphertext. Decryption only occurs in two paths: (a) key testing and (b) agent provisioning (AGENT-002). Raw keys are never logged.
 
-### 6.2 Key Never Exposed
+### 11.2 Key Never Exposed
 
 The `_safe_out` function strips `encrypted_api_key` from all API responses. Only the `key_suffix` (last 4 chars) is returned for display. The full key is shown only once at creation time (if the frontend chooses to display it).
 
-### 6.3 User Isolation
+### 11.3 User Isolation
 
 All DDB items use `USER#{user_id}` as the partition key. API endpoints validate `user_id` from the session. Cross-user access is impossible via the API.
 
-### 6.4 Budget Enforcement
+### 11.4 Budget Enforcement
 
 `record_usage` checks `current_month_usage_cents` against `monthly_budget_cents`. When budget is exceeded, key status is set to `budget_exceeded` and `get_decrypted_api_key` raises an error, preventing further agent usage.
 
-### 6.5 Admin Audit
+### 11.5 Admin Audit
 
 Admin endpoint lists all keys across users with usage stats but never exposes the encrypted key or key_suffix. Audit trail via `audit_event` on add, rotate, delete actions.
 
 ---
 
-## 7. Dependencies
+## 12. Dependencies
 
 | Dependency | Type | Description |
 |------------|------|-------------|
@@ -600,7 +976,7 @@ Admin endpoint lists all keys across users with usage stats but never exposes th
 
 ---
 
-## 8. Acceptance Criteria
+## 13. Acceptance Criteria
 
 1. Users can add API keys for OpenAI, Anthropic, DeepSeek, Gemini, and custom OpenAI-compatible endpoints.
 2. Keys are encrypted at rest using KMS and never exposed in API responses.

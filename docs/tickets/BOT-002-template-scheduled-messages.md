@@ -151,73 +151,15 @@ Supported variables and their data sources:
 | `{subscriber_status}` | Subscriptions table | `active`, `expired`, `none` |
 | `{conversation_name}` | Conversations table | Conversation or group name |
 
-```python
-VARIABLE_PATTERN = re.compile(r"\{(\w+)\}")
-
-def resolve_variables(template_text: str, *, context: dict[str, str]) -> str:
-    """Replace {variable_name} placeholders with values from context.
-    Unknown variables are left as-is (not replaced)."""
-    def replacer(match: re.Match) -> str:
-        key = match.group(1)
-        return context.get(key, match.group(0))
-    return VARIABLE_PATTERN.sub(replacer, template_text)
-
-def build_variable_context(*, sender_id: str, creator_id: str,
-                            bot: dict, conversation_id: str,
-                            timezone: str = "UTC") -> dict[str, str]:
-    """Build context dict by fetching data from various tables."""
-    # Lazy-load: only fetch data for variables actually used in the template
-```
+`resolve_variables(template_text, context)` uses `re.compile(r"\{(\w+)\}")` to replace placeholders. Unknown variables are left as-is. `build_variable_context()` lazily fetches data only for variables present in the template.
 
 ### 3.3 Quick Replies
 
-Quick-reply buttons are delivered as a special field on bot messages. When a user taps a quick-reply, the frontend sends the button's `value` as a regular text message.
-
-**Message extension**:
-
-```python
-# In MessageOut (app/routers/messaging.py)
-quick_replies: Optional[List[Dict[str, str]]] = None
-# Each dict: {"label": "Yes, I'm interested", "value": "interested"}
-```
-
-**Frontend rendering** (`MessageBubble.tsx`):
-
-```tsx
-{message.quick_replies && (
-  <div className="flex flex-wrap gap-2 mt-2">
-    {message.quick_replies.map((qr, i) => (
-      <Button key={i} variant="outline" size="sm"
-              onClick={() => sendMessage(qr.value)}
-              data-testid={`quick-reply-${i}`}>
-        {qr.label}
-      </Button>
-    ))}
-  </div>
-)}
-```
-
-Quick-reply buttons are only interactive for the message recipient (not the sender/bot). After tapping, the buttons are disabled to prevent duplicate sends.
+Quick-reply buttons are delivered as `quick_replies: Optional[List[Dict[str, str]]]` on `MessageOut`. Each dict has `{"label": "...", "value": "..."}`. When a user taps a button, the frontend sends `value` as a regular text message. Buttons are disabled after first tap to prevent duplicates. Rendered in `MessageBubble.tsx` as `<Button variant="outline" size="sm">` with `data-testid="quick-reply-{i}"`.
 
 ### 3.4 A/B Testing
 
-When multiple templates share the same `ab_group` value and are linked to the same trigger, the bot selects one randomly using weighted probability:
-
-```python
-def select_ab_template(templates: list[dict]) -> dict:
-    """Weighted random selection from A/B group."""
-    weights = [int(t.get("ab_weight", 1)) for t in templates]
-    total = sum(weights)
-    r = random.randint(1, total)
-    cumulative = 0
-    for t, w in zip(templates, weights):
-        cumulative += w
-        if r <= cumulative:
-            return t
-    return templates[-1]  # fallback
-```
-
-Impression and response counts are tracked per template to calculate conversion rates in the creator's bot analytics.
+When multiple templates share the same `ab_group` and are linked to the same trigger, `select_ab_template()` performs weighted random selection based on `ab_weight`. Impression and response counts are tracked per template to calculate conversion rates.
 
 ### 3.5 Backend Service (`app/services/bot_template.py`)
 
@@ -580,3 +522,625 @@ let conversationId: string;
 |--------|-----------|
 | BOT-003 (Content Promotion) | Templates for content card rendering and scheduled promotion sends |
 | BOT-004 (AI Chat) | Template system for fallback messages and escalation templates |
+
+---
+
+## 10. Architecture & Data Flow
+
+```
+                    Template Message Creation Flow
+  ┌───────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │ Bot Config UI  │────>│ POST /ui/bots/     │────>│  DynamoDB     │
+  │  (frontend)    │     │  {id}/templates    │     │  bot_templates│
+  │                │     │  (bot_router.py)    │     │  table        │
+  │  template_name │     │                    │     │               │
+  │  body w/ vars  │     │  1. validate vars  │     │  PK=BOT#id   │
+  │  quick_replies │     │  2. store template │     │  SK=TPL#tpl_id│
+  └───────────────┘     └────────────────────┘     └──────────────┘
+
+                    Scheduled Message Execution Flow
+  ┌───────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │ Background     │────>│ scan_due_scheduled │────>│  DynamoDB     │
+  │ Loop (30s)     │     │ _messages()        │     │  bot_scheduled│
+  │                │     │                    │     │  _messages    │
+  │ check          │     │ for each due msg:  │     │               │
+  │ deliver_at     │     │  1. resolve vars   │     │  GSI: by      │
+  │ <= now_ts()    │     │  2. render template│     │  deliver_at   │
+  │                │     │  3. send_text_msg  │     │               │
+  │                │     │  4. mark delivered │     │               │
+  └───────────────┘     └────────────────────┘     └──────────────┘
+```
+
+---
+
+## 11. Observability
+
+### 11.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `bot_template_created_total` | Counter | `bot_id` | Number of templates created |
+| `bot_scheduled_message_created_total` | Counter | `bot_id` | Number of scheduled messages created |
+| `bot_scheduled_message_delivered_total` | Counter | `bot_id`, `status` | Delivered vs failed scheduled messages |
+| `bot_template_render_duration_ms` | Histogram | `bot_id` | Time to resolve variables and render template |
+| `bot_variable_resolution_errors_total` | Counter | `variable_name` | Failed variable resolutions |
+| `bot_scheduled_message_latency_ms` | Histogram | -- | Delay between deliver_at and actual delivery |
+
+### 11.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Template created | INFO | `bot_id`, `template_id`, `variable_count` |
+| Scheduled message created | INFO | `bot_id`, `message_id`, `deliver_at`, `recipient_count` |
+| Scheduled message delivered | INFO | `bot_id`, `message_id`, `conversation_id`, `latency_ms` |
+| Variable resolution failed | WARN | `bot_id`, `template_id`, `variable_name`, `reason` |
+| Scheduled message delivery failed | ERROR | `bot_id`, `message_id`, `error` |
+
+### 11.3 Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Scheduled message delivery backlog | > 100 undelivered messages past deliver_at | High |
+| Template variable resolution failures | > 20/hour | Medium |
+| Background loop stalled | No scan in > 5 minutes | High |
+
+---
+
+## 12. Rollout Plan
+
+### 12.1 Feature Flag
+
+```python
+# app/core/settings.py
+bot_templates_enabled: bool = os.environ.get("BOT_TEMPLATES_ENABLED", "true").lower() == "true"
+bot_scheduled_messages_enabled: bool = os.environ.get("BOT_SCHEDULED_MESSAGES_ENABLED", "true").lower() == "true"
+```
+
+### 12.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Templates only | Deploy template CRUD; no scheduled execution | 2 days | Unit tests pass; template creation/preview works |
+| Phase 2: Scheduled messages | Enable background loop for scheduled delivery | 2 days | E2E tests pass; delivery latency < 60s |
+| Phase 3: Quick replies | Enable quick reply buttons on template messages | 1 day | Quick reply callbacks trigger correct bot actions |
+| Phase 4: GA | Remove feature flags; full template + scheduling system | Permanent | All tests pass; monitoring clean for 48h |
+
+---
+
+## 13. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Background scan latency | < 2s per scan cycle | GSI query on deliver_at; process in batches of 25 |
+| Variable resolution per message | < 50ms | Cache profile data per batch; parallel DDB lookups |
+| Template render time | < 10ms | Simple string substitution; no complex templating engine |
+| Scheduled message delivery accuracy | Within 60s of deliver_at | 30s scan interval; worst case = 30s delay |
+| Many concurrent scheduled messages | 100+/minute | Batch processing with rate limiting to prevent messaging API overload |
+| Quick reply callback latency | < 200ms | Direct bot trigger invocation; no queue |
+
+---
+
+## 14. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|----------|-------------|------------|---------------|-----------------|
+| Template not found | 404 | `template_not_found` | "Template not found" | Show error; refresh template list |
+| Invalid variable syntax | 422 | `invalid_variable` | "Invalid variable: {bad_var}" | Show inline error on template editor |
+| Bot not found | 404 | `bot_not_found` | "Bot not found" | Redirect to bot list |
+| Scheduled time in past | 400 | `time_in_past` | "deliver_at must be in the future" | Show date picker error |
+| Template body empty | 422 | `validation_error` | "Template body is required" | Show form validation |
+| Variable resolution failed | 200 (degraded) | -- | Variable left as `{unknown_var}` literal | Log warning; deliver with unresolved vars |
+| Recipient not in conversation | 400 | `invalid_recipient` | "Recipient is not in this conversation" | Show error; suggest valid recipients |
+| Max templates per bot exceeded | 400 | `template_limit` | "Maximum 100 templates per bot" | Show limit reached message |
+
+---
+
+## 15. API Request/Response Examples
+
+**Create template**:
+
+```
+POST /ui/bots/bot_abc123/templates
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "name": "Welcome New Subscriber",
+  "body": "Hey {user_name}! Welcome to the community. Your subscription to {plan_name} is now active. Check out the latest content at {creator_page_url}.",
+  "quick_replies": [
+    {"label": "View Content", "action": "navigate", "payload": "/feed"},
+    {"label": "Settings", "action": "navigate", "payload": "/settings"}
+  ]
+}
+```
+
+**Response (201)**:
+```json
+{
+  "template_id": "tpl_7a8b9c0d",
+  "bot_id": "bot_abc123",
+  "name": "Welcome New Subscriber",
+  "body": "Hey {user_name}! Welcome to the community...",
+  "variables": ["user_name", "plan_name", "creator_page_url"],
+  "quick_replies": [
+    {"label": "View Content", "action": "navigate", "payload": "/feed"},
+    {"label": "Settings", "action": "navigate", "payload": "/settings"}
+  ],
+  "created_at": 1748520100
+}
+```
+
+**Schedule a message**:
+
+```
+POST /ui/bots/bot_abc123/scheduled-messages
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "template_id": "tpl_7a8b9c0d",
+  "conversation_id": "conv_xyz789",
+  "deliver_at": 1748606500,
+  "variable_overrides": {
+    "plan_name": "Premium Monthly"
+  }
+}
+```
+
+**Response (201)**:
+```json
+{
+  "scheduled_message_id": "sm_d4e5f6a7",
+  "bot_id": "bot_abc123",
+  "template_id": "tpl_7a8b9c0d",
+  "conversation_id": "conv_xyz789",
+  "deliver_at": 1748606500,
+  "status": "pending",
+  "created_at": 1748520200
+}
+```
+
+**Preview rendered template**:
+
+```
+POST /ui/bots/bot_abc123/templates/tpl_7a8b9c0d/preview
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "user_sub": "bob@test.local"
+}
+```
+
+**Response (200)**:
+```json
+{
+  "rendered_body": "Hey Bob! Welcome to the community. Your subscription to Premium Monthly is now active. Check out the latest content at /creators/alice.",
+  "resolved_variables": {
+    "user_name": "Bob",
+    "plan_name": "Premium Monthly",
+    "creator_page_url": "/creators/alice"
+  },
+  "unresolved_variables": []
+}
+```
+
+---
+
+## 16. Architecture Diagram
+
+```
+                  Bot Templates & Scheduled Messages — System Architecture
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                            Platform Frontend                                │
+  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐  │
+  │  │ TemplateEditor    │  │ TemplateForm     │  │ ScheduleManager          │  │
+  │  │ Page              │  │ Dialog           │  │ Panel                    │  │
+  │  │                   │  │                  │  │                          │  │
+  │  │ - template list   │  │ - text editor    │  │ - schedule list          │  │
+  │  │ - category filter │  │ - variable {..}  │  │ - cron description       │  │
+  │  │ - A/B stats       │  │ - quick replies  │  │ - next run time          │  │
+  │  │ - inline preview  │  │ - A/B groups     │  │ - enable/disable         │  │
+  │  └────────┬─────────┘  └────────┬─────────┘  └─────────────┬────────────┘  │
+  │           │                     │                           │               │
+  │  ┌────────┴─────────────────────┴───────────────────────────┴────────────┐  │
+  │  │                     React Query + Axios Client                        │  │
+  │  │  createTemplate() | previewTemplate() | createScheduledSend()         │  │
+  │  └───────────────────────────────────┬──────────────────────────────────┘  │
+  └──────────────────────────────────────┼──────────────────────────────────────┘
+                                         │ HTTP (CSRF + cookies)
+  ┌──────────────────────────────────────┼──────────────────────────────────────┐
+  │                           FastAPI Backend                                   │
+  │  ┌───────────────────────────────────┴──────────────────────────────────┐  │
+  │  │              app/routers/bot_template.py                              │  │
+  │  │   POST /bots/{id}/templates    GET /bots/{id}/templates              │  │
+  │  │   PUT /bots/{id}/templates/{tId}    DELETE .../templates/{tId}       │  │
+  │  │   POST .../templates/{tId}/preview  POST .../templates/{tId}/send-test│  │
+  │  │   POST /bots/{id}/schedules    GET .../schedules                     │  │
+  │  │   PUT .../schedules/{sId}      DELETE .../schedules/{sId}            │  │
+  │  └───────────────────────────────────┬──────────────────────────────────┘  │
+  │                                      │                                     │
+  │  ┌───────────────────────────────────┴──────────────────────────────────┐  │
+  │  │              app/services/bot_template.py                             │  │
+  │  │                                                                       │  │
+  │  │   create_template()  list_templates()  update_template()              │  │
+  │  │   delete_template()  render_template()  record_impression()           │  │
+  │  │   record_response()  get_templates_for_trigger()                      │  │
+  │  │   select_ab_template()  build_variable_context()                      │  │
+  │  │   resolve_variables()                                                 │  │
+  │  │                                                                       │  │
+  │  │   Variable Resolution Pipeline:                                       │  │
+  │  │   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐      │  │
+  │  │   │ {user_name}  │  │ {creator_    │  │ {subscriber_status}  │      │  │
+  │  │   │ → Profiles   │  │  name}       │  │ → Subscriptions      │      │  │
+  │  │   │   table      │  │ → Profiles   │  │   table              │      │  │
+  │  │   │   by sender  │  │   table by   │  │   by sender          │      │  │
+  │  │   │              │  │   creator    │  │                      │      │  │
+  │  │   └──────────────┘  └──────────────┘  └──────────────────────┘      │  │
+  │  │   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐      │  │
+  │  │   │ {bot_name}   │  │ {current_    │  │ {conversation_name}  │      │  │
+  │  │   │ → ChatBots   │  │  time/date}  │  │ → Conversations      │      │  │
+  │  │   │   table      │  │ → datetime   │  │   table              │      │  │
+  │  │   └──────────────┘  └──────────────┘  └──────────────────────┘      │  │
+  │  └──────────────────────────────────────────────────────────────────────┘  │
+  │                                                                            │
+  │  ┌──────────────────────────────────────────────────────────────────────┐  │
+  │  │              app/services/bot_scheduler.py                            │  │
+  │  │                                                                       │  │
+  │  │   create_scheduled_send()    list_scheduled_sends()                   │  │
+  │  │   update_scheduled_send()    delete_scheduled_send()                  │  │
+  │  │   dispatch_due_scheduled_sends()    run_bot_scheduler_loop()          │  │
+  │  │                                                                       │  │
+  │  │   ┌──────────────────────────────────────────────────────────────┐   │  │
+  │  │   │  Background Scheduler Loop (every 60s)                       │   │  │
+  │  │   │  1. Query GSI1: BOTSCHED#PENDING, next_run_at <= now        │   │  │
+  │  │   │  2. For each due send:                                       │   │  │
+  │  │   │     a. Fetch bot + template                                  │   │  │
+  │  │   │     b. Expand wildcards → list of conversations              │   │  │
+  │  │   │     c. Render template (resolve variables per conversation)  │   │  │
+  │  │   │     d. send_bot_message() to each conversation               │   │  │
+  │  │   │     e. Record impression per template                        │   │  │
+  │  │   │     f. Calculate next_run_at from cron                       │   │  │
+  │  │   │     g. Update last_run_at + next_run_at                      │   │  │
+  │  │   └──────────────────────────────────────────────────────────────┘   │  │
+  │  └──────────────────────────────────────────────────────────────────────┘  │
+  │                                                                            │
+  │  ┌──────────────────────────────────────────────────────────────────────┐  │
+  │  │                          DynamoDB Tables                              │  │
+  │  │   ┌─────────────────────┐    ┌──────────────────────────────┐       │  │
+  │  │   │ bot_templates       │    │ bot_scheduled_sends           │       │  │
+  │  │   │                     │    │                              │       │  │
+  │  │   │ PK=BOT#{bot_id}    │    │ PK=BOT#{bot_id}             │       │  │
+  │  │   │ SK=TEMPLATE#{tpl_id}│    │ SK=SCHED#{schedule_id}      │       │  │
+  │  │   │                     │    │                              │       │  │
+  │  │   │ GSI1: by category   │    │ GSI1: pending sends         │       │  │
+  │  │   │   + created_at     │    │  PK=BOTSCHED#PENDING        │       │  │
+  │  │   │                     │    │  SK=next_run_at              │       │  │
+  │  │   └─────────────────────┘    └──────────────────────────────┘       │  │
+  │  └──────────────────────────────────────────────────────────────────────┘  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 17. DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | GSI | Example |
+|---|---------------|-------|---------------|-----|---------|
+| 1 | Create template | `bot_templates` | `PK=BOT#{bot_id}, SK=TEMPLATE#{template_id}` | -- | `put_item` with name, text, category, quick_replies |
+| 2 | Get template by ID | `bot_templates` | `PK=BOT#{bot_id}, SK=TEMPLATE#{template_id}` | -- | `get_item` |
+| 3 | List all templates for bot | `bot_templates` | `PK=BOT#{bot_id}, SK begins_with("TEMPLATE#")` | -- | All templates for a bot |
+| 4 | List templates by category | `bot_templates` | `GSI1PK=BOT#{bot_id}#CAT#{category}, GSI1SK desc` | GSI1 | Templates of category "greeting" sorted by created_at |
+| 5 | Update template | `bot_templates` | `PK=BOT#{bot_id}, SK=TEMPLATE#{template_id}` | -- | `update_item` set text, quick_replies, etc. |
+| 6 | Delete template | `bot_templates` | `PK=BOT#{bot_id}, SK=TEMPLATE#{template_id}` | -- | `delete_item` |
+| 7 | Increment impression count | `bot_templates` | `PK=BOT#{bot_id}, SK=TEMPLATE#{template_id}` | -- | `update_item` ADD impression_count 1 |
+| 8 | Increment response count | `bot_templates` | `PK=BOT#{bot_id}, SK=TEMPLATE#{template_id}` | -- | `update_item` ADD response_count 1 |
+| 9 | Get templates in A/B group | `bot_templates` | `PK=BOT#{bot_id}, SK begins_with("TEMPLATE#")` + FilterExpression `ab_group = :group` | -- | Templates sharing same A/B group |
+| 10 | Create scheduled send | `bot_scheduled_sends` | `PK=BOT#{bot_id}, SK=SCHED#{schedule_id}` | -- | `put_item` with cron, timezone, next_run_at |
+| 11 | List schedules for bot | `bot_scheduled_sends` | `PK=BOT#{bot_id}, SK begins_with("SCHED#")` | -- | All scheduled sends |
+| 12 | Query due scheduled sends | `bot_scheduled_sends` | `GSI1PK=BOTSCHED#PENDING, GSI1SK <= now_ts` | GSI1 | Background worker picks up due sends |
+| 13 | Update schedule after execution | `bot_scheduled_sends` | `PK=BOT#{bot_id}, SK=SCHED#{schedule_id}` | -- | Set last_run_at, recalculate next_run_at |
+
+**Example DynamoDB item (BotTemplates)**:
+
+```json
+{
+  "pk": {"S": "BOT#b1c2d3e4f5a6"},
+  "sk": {"S": "TEMPLATE#tpl_7a8b9c0d1e2f"},
+  "template_id": {"S": "tpl_7a8b9c0d1e2f"},
+  "bot_id": {"S": "b1c2d3e4f5a6"},
+  "name": {"S": "Welcome Greeting"},
+  "category": {"S": "greeting"},
+  "text": {"S": "Hey {user_name}! Welcome to {creator_name}'s community. Feel free to ask me anything!"},
+  "body_format": {"S": "plain"},
+  "quick_replies": {"L": [
+    {"M": {"label": {"S": "What's new?"}, "value": {"S": "whats_new"}}},
+    {"M": {"label": {"S": "Pricing info"}, "value": {"S": "pricing"}}},
+    {"M": {"label": {"S": "Contact support"}, "value": {"S": "support"}}}
+  ]},
+  "variables_used": {"SS": ["user_name", "creator_name"]},
+  "ab_group": {"S": "greeting_test_1"},
+  "ab_weight": {"N": "2"},
+  "impression_count": {"N": "534"},
+  "response_count": {"N": "198"},
+  "created_at": {"N": "1748520100"},
+  "updated_at": {"N": "1748520300"},
+  "GSI1PK": {"S": "BOT#b1c2d3e4f5a6#CAT#greeting"},
+  "GSI1SK": {"N": "1748520100"}
+}
+```
+
+**Example DynamoDB item (BotScheduledSends)**:
+
+```json
+{
+  "pk": {"S": "BOT#b1c2d3e4f5a6"},
+  "sk": {"S": "SCHED#sch_9a0b1c2d3e4f"},
+  "schedule_id": {"S": "sch_9a0b1c2d3e4f"},
+  "bot_id": {"S": "b1c2d3e4f5a6"},
+  "creator_id": {"S": "alice_sub_123"},
+  "template_id": {"S": "tpl_promo_daily"},
+  "target_type": {"S": "all_dms"},
+  "target_id": {"NULL": true},
+  "cron_expression": {"S": "0 14 * * *"},
+  "timezone": {"S": "America/New_York"},
+  "next_run_at": {"N": "1748620800"},
+  "last_run_at": {"N": "1748534400"},
+  "enabled": {"BOOL": true},
+  "created_at": {"N": "1748100000"},
+  "GSI1PK": {"S": "BOTSCHED#PENDING"},
+  "GSI1SK": {"N": "1748620800"}
+}
+```
+
+---
+
+## 18. Pydantic Models
+
+```python
+# In app/models.py
+
+from pydantic import BaseModel, Field, model_validator
+from typing import Optional, List, Literal
+
+
+class QuickReplyIn(BaseModel):
+    """A single quick-reply button definition."""
+    label: str = Field(..., min_length=1, max_length=40)
+    value: str = Field(..., min_length=1, max_length=200)
+
+
+class CreateTemplateIn(BaseModel):
+    """Request model for creating a bot message template."""
+    name: str = Field(..., min_length=1, max_length=100)
+    text: str = Field(..., min_length=1, max_length=4000)
+    category: Literal[
+        "greeting", "support", "promotion", "farewell", "away", "custom"
+    ] = "custom"
+    body_format: Literal["plain", "markdown"] = "plain"
+    quick_replies: Optional[List[QuickReplyIn]] = Field(
+        default=None, max_length=5,
+        description="Up to 5 quick-reply buttons"
+    )
+    ab_group: Optional[str] = Field(
+        default=None, max_length=50,
+        description="A/B test group name; templates in same group are alternates"
+    )
+    ab_weight: int = Field(
+        default=1, ge=1, le=100,
+        description="Weight for random selection within A/B group"
+    )
+
+
+class UpdateTemplateIn(BaseModel):
+    """Request model for updating a bot message template."""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    text: Optional[str] = Field(default=None, min_length=1, max_length=4000)
+    category: Optional[Literal[
+        "greeting", "support", "promotion", "farewell", "away", "custom"
+    ]] = None
+    body_format: Optional[Literal["plain", "markdown"]] = None
+    quick_replies: Optional[List[QuickReplyIn]] = Field(default=None, max_length=5)
+    ab_group: Optional[str] = Field(default=None, max_length=50)
+    ab_weight: Optional[int] = Field(default=None, ge=1, le=100)
+
+
+class PreviewTemplateIn(BaseModel):
+    """Request model for previewing a rendered template."""
+    sample_user_name: Optional[str] = Field(
+        default=None, max_length=100,
+        description="Override {user_name} for preview"
+    )
+    sample_subscriber_status: Optional[str] = Field(
+        default=None, max_length=50,
+        description="Override {subscriber_status} for preview"
+    )
+    conversation_id: Optional[str] = Field(
+        default=None, max_length=100,
+        description="Conversation context for {conversation_name}"
+    )
+
+
+class SendTestTemplateIn(BaseModel):
+    """Request model for sending a test message using a template."""
+    conversation_id: str = Field(..., min_length=1, max_length=100)
+
+
+class CreateScheduledSendIn(BaseModel):
+    """Request model for creating a bot scheduled send."""
+    template_id: str = Field(..., min_length=1, max_length=100)
+    target_type: Literal[
+        "conversation", "all_dms", "all_groups", "all_broadcasts"
+    ]
+    target_id: Optional[str] = Field(
+        default=None, max_length=100,
+        description="Specific conversation ID (required for target_type=conversation)"
+    )
+    cron_expression: str = Field(
+        ..., min_length=5, max_length=100,
+        description="Cron expression (minimum frequency: once per hour)"
+    )
+    timezone: str = Field(
+        default="UTC", max_length=50,
+        description="IANA timezone identifier"
+    )
+
+    @model_validator(mode="after")
+    def validate_target_id(self):
+        if self.target_type == "conversation" and not self.target_id:
+            raise ValueError("target_id is required when target_type is 'conversation'")
+        return self
+
+
+class UpdateScheduledSendIn(BaseModel):
+    """Request model for updating a bot scheduled send."""
+    template_id: Optional[str] = Field(default=None, max_length=100)
+    cron_expression: Optional[str] = Field(default=None, min_length=5, max_length=100)
+    timezone: Optional[str] = Field(default=None, max_length=50)
+    enabled: Optional[bool] = None
+
+
+class TemplateOut(BaseModel):
+    """Response model for a bot message template."""
+    template_id: str
+    bot_id: str
+    name: str
+    text: str
+    category: str = "custom"
+    body_format: str = "plain"
+    quick_replies: Optional[List[dict]] = None
+    variables_used: Optional[List[str]] = None
+    ab_group: Optional[str] = None
+    ab_weight: int = 1
+    impression_count: int = 0
+    response_count: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class ScheduledSendOut(BaseModel):
+    """Response model for a bot scheduled send."""
+    schedule_id: str
+    bot_id: str
+    template_id: str
+    target_type: str
+    target_id: Optional[str] = None
+    cron_expression: str
+    timezone: str = "UTC"
+    next_run_at: int = 0
+    last_run_at: Optional[int] = None
+    enabled: bool = True
+    created_at: int = 0
+
+
+class TemplatePreviewOut(BaseModel):
+    """Response model for a rendered template preview."""
+    rendered_text: str
+    resolved_variables: dict = Field(default_factory=dict)
+    unresolved_variables: List[str] = Field(default_factory=list)
+    quick_replies: Optional[List[dict]] = None
+```
+
+---
+
+## 19. Frontend Component Tree
+
+```
+/bots/:botId/templates — TemplateEditorPage
+├── PageHeader
+│   ├── BackButton → BotManagerPage (/bots)
+│   ├── BotName display
+│   └── CreateTemplateButton → opens TemplateFormDialog (mode="create")
+├── CategoryTabs
+│   ├── Tab: "All"
+│   ├── Tab: "Greeting"
+│   ├── Tab: "Support"
+│   ├── Tab: "Promotion"
+│   ├── Tab: "Farewell"
+│   ├── Tab: "Away"
+│   └── Tab: "Custom"
+├── TemplateListPanel (left side)
+│   └── TemplateRow (one per template)
+│       ├── NameText
+│       ├── CategoryBadge (colored pill)
+│       ├── ABGroupBadge (if ab_group set, shows group name + weight)
+│       ├── StatsRow
+│       │   ├── ImpressionCount ("534 sent")
+│       │   └── ResponseRate ("37% response")
+│       ├── QuickReplyIndicator (pill count if quick_replies present)
+│       ├── VariablesChips (shows detected variables as small chips)
+│       └── ActionsDropdown (Edit, Duplicate, Delete)
+├── PreviewPanel (right side, shows selected template)
+│   ├── PreviewHeader
+│   │   ├── TemplateName
+│   │   └── PreviewButton ("Preview with sample data")
+│   ├── RenderedPreview
+│   │   ├── MockBotAvatar + BotName + "Bot" badge
+│   │   ├── RenderedText (variables replaced with sample values)
+│   │   └── QuickReplyButtons (rendered as outline buttons)
+│   └── RawTextView (toggle to see raw template with {variables})
+└── ScheduleManagerPanel (bottom section)
+    ├── SectionHeader ("Scheduled Sends")
+    ├── ScheduleList
+    │   └── ScheduleCard (one per scheduled send)
+    │       ├── TemplateName (linked template)
+    │       ├── CronDescription (human-readable: "Every day at 2:00 PM EST")
+    │       ├── TargetLabel ("All DMs" / specific conversation name)
+    │       ├── NextRunDisplay ("Next: Jun 1, 2026 at 2:00 PM")
+    │       ├── LastRunDisplay ("Last: May 29, 2026 at 2:00 PM")
+    │       ├── EnabledToggle (switch)
+    │       └── ActionsDropdown (Edit, Delete)
+    └── AddScheduleButton → ScheduleFormDialog
+
+TemplateFormDialog (shared dialog for create + edit)
+├── DialogHeader ("New Template" or "Edit Template")
+├── NameInput (<Input> max 100 chars)
+├── CategorySelect (dropdown: greeting, support, promotion, farewell, away, custom)
+├── BodyFormatSelect (radio: Plain Text / Markdown)
+├── TextEditorArea
+│   ├── VariableToolbar (button row)
+│   │   ├── "{user_name}" button (inserts at cursor)
+│   │   ├── "{creator_name}" button
+│   │   ├── "{bot_name}" button
+│   │   ├── "{current_time}" button
+│   │   ├── "{subscriber_status}" button
+│   │   └── "{conversation_name}" button
+│   └── Textarea (with auto-detection of variables; highlights {vars})
+├── QuickReplyBuilder
+│   ├── QuickReplyRow (one per button, max 5)
+│   │   ├── LabelInput (max 40 chars)
+│   │   ├── ValueInput (max 200 chars)
+│   │   ├── ReorderHandle (drag)
+│   │   └── RemoveButton
+│   └── AddQuickReplyButton (if < 5)
+├── ABTestSection (collapsible)
+│   ├── ABGroupInput (text, shared name across variants)
+│   └── ABWeightSlider (1-100)
+├── PreviewButton ("Preview" → sends to preview endpoint)
+├── SaveButton
+└── CancelButton
+
+ScheduleFormDialog
+├── DialogHeader ("New Scheduled Send" or "Edit Schedule")
+├── TemplateSelect (dropdown of bot templates)
+├── TargetTypeSelect (conversation / all_dms / all_groups / all_broadcasts)
+├── ConversationPicker (visible when target_type=conversation)
+├── CronBuilder
+│   ├── FrequencySelect (Daily / Weekly / Custom)
+│   ├── TimeInput (hour:minute)
+│   ├── DayOfWeekCheckboxes (visible for weekly)
+│   ├── CronExpressionInput (visible for custom, raw cron)
+│   └── CronPreview (human-readable description of the cron)
+├── TimezoneSelect (IANA timezone dropdown)
+├── SaveButton
+└── CancelButton
+
+MessageBubble enhancement (for quick replies)
+├── ...existing message content...
+└── QuickRepliesContainer (if message.quick_replies && sender_type="bot")
+    ├── QuickReplyButton (Button variant="outline" size="sm")
+    │   ├── Label text
+    │   └── onClick → sendMessage({ text: qr.value })
+    ├── QuickReplyButton (disabled after first tap)
+    └── ...up to 5 buttons
+```

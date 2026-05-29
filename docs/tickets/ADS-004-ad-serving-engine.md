@@ -28,7 +28,76 @@ This replaces the hardcoded `DEV_AD_CREATIVES` selection in `app/services/ad_pla
 | Platform | As the platform, I want to track fill rate. | Logging records filled vs unfilled ad slots. |
 | System | As the platform, I want to fall back to house ads when no paid ad matches. | Unfilled slots serve platform self-promotion or blank. |
 
-### 1.3 Ad Serving Flow
+### 1.3 Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Frontend (Browser)                               │
+│                                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │
+│  │  NewsfeedPage │  │ BroadcastView│  │  VODPlayer   │                  │
+│  │  (ADS-005)    │  │  (ADS-006)   │  │  (existing)  │                  │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                  │
+│         │                  │                  │                          │
+│         └──────────────────┼──────────────────┘                          │
+│                            │                                             │
+│              POST /ui/ads/serve                                          │
+│              { surface, content_type, creator_id,                        │
+│                content_id, slot_type, user_context }                     │
+│                            │                                             │
+│  ┌─────────────────────────┼─────────────────────────┐                  │
+│  │  Ad Creative Render     │   POST /ui/ads/track     │                  │
+│  │  (impression_url,       │   event=impression|click  │                  │
+│  │   click_url, skip_url)  │   |skip|complete          │                  │
+│  └─────────────────────────┼─────────────────────────┘                  │
+└─────────────────────────────┼───────────────────────────────────────────┘
+                              │
+                     ┌────────▼────────┐
+                     │  Vite Proxy      │
+                     │  /ui/* → :8000   │
+                     └────────┬────────┘
+                              │
+┌─────────────────────────────▼───────────────────────────────────────────┐
+│                     Backend (FastAPI :8000)                              │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────┐           │
+│  │  app/routers/ads.py                                       │           │
+│  │                                                           │           │
+│  │  POST /ui/ads/serve  ─── validates body ──► serve_ad()    │           │
+│  │  POST /ui/ads/track  ─── query params ──► track_ad_event()│           │
+│  └──────────┬───────────────────────────────────┬───────────┘           │
+│             │                                   │                       │
+│  ┌──────────▼──────────────┐   ┌────────────────▼──────────────┐       │
+│  │ app/services/            │   │ app/services/                  │       │
+│  │   ad_serving.py          │   │   ad_placement.py              │       │
+│  │                          │   │   (record_ad_impression,       │       │
+│  │ 1. Load active campaigns │   │    credit creator revenue)     │       │
+│  │    (ad_campaigns.py)     │   │                                │       │
+│  │ 2. Check creator prefs   │   └────────────────────────────────┘       │
+│  │    (creator_ad_prefs.py) │                                           │
+│  │ 3. Evaluate targeting    │                                           │
+│  │    (ad_targeting.py)     │                                           │
+│  │ 4. Check frequency caps  │                                           │
+│  │ 5. Check budget          │                                           │
+│  │ 6. Score & rank          │                                           │
+│  │ 7. Select creative       │                                           │
+│  │ 8. Build tracking URLs   │                                           │
+│  └──────────┬───────────────┘                                           │
+│             │                                                           │
+│  ┌──────────▼───────────────────────────────────────────┐               │
+│  │                    DynamoDB                            │               │
+│  │                                                       │               │
+│  │  ad_campaigns ─── active campaign records             │               │
+│  │  ad_creatives ─── approved creative assets            │               │
+│  │  ad_targeting ─── targeting rule sets                  │               │
+│  │  ad_frequency_caps ─── user/campaign/window counters  │               │
+│  │  ad_impressions ─── impression/click/skip events      │               │
+│  │  creator_ad_prefs ─── creator allow/block settings    │               │
+│  └───────────────────────────────────────────────────────┘               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.4 Ad Serving Flow
 
 ```
 Ad Request Flow
@@ -68,7 +137,7 @@ Ad Serving Engine
             }
 ```
 
-### 1.4 Tracking Flow
+### 1.5 Tracking Flow
 
 ```
 Impression Tracking
@@ -149,7 +218,51 @@ TableDef(
 ),
 ```
 
-### 3.2 Backend Service
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK / GSI | Example |
+|---|---|---|---|---|
+| Get frequency cap for user+campaign+window | `ad_frequency_caps` | `USER#{user_sub}` | `CAMPAIGN#{campaign_id}#{window}` | GetItem |
+| Increment frequency cap | `ad_frequency_caps` | `USER#{user_sub}` | `CAMPAIGN#{campaign_id}#{window}` | UpdateItem (atomic ADD) |
+| List all caps for a user | `ad_frequency_caps` | `USER#{user_sub}` | begins_with(`CAMPAIGN#`) | Query |
+| Load active campaigns | `ad_campaigns` | `ACCT#{account_id}` | `CAMPAIGN#{campaign_id}` | Scan with FilterExpression `status=active` |
+| Get approved creatives | `ad_creatives` | `ACCT#{account_id}` | `CREATIVE#{creative_id}` | Query with filter `status=approved` |
+| Write impression event | `ad_impressions` | `AD_IMP#{date}` | `VIDEO#{video_id}#{user_id}#{ts}` | PutItem |
+| Get creator ad settings | `creator_ad_prefs` | `CREATOR#{creator_id}` | `SETTINGS` | GetItem |
+| Check blocked advertiser | `creator_ad_prefs` | `CREATOR#{creator_id}` | `BLOCK#{account_id}` | GetItem |
+
+#### Example DynamoDB Items (JSON)
+
+**Frequency Cap Record**:
+```json
+{
+  "pk": {"S": "USER#e2e_alice@test.local"},
+  "sk": {"S": "CAMPAIGN#camp_abc123#1h"},
+  "count": {"N": "2"},
+  "campaign_id": {"S": "camp_abc123"},
+  "window": {"S": "1h"},
+  "expires_at": {"N": "1748541600"}
+}
+```
+
+**Ad Impression Record**:
+```json
+{
+  "pk": {"S": "AD_IMP#2026-05-29"},
+  "sk": {"S": "VIDEO#vid_001#e2e_bob@test.local#1748534400"},
+  "creative_id": {"S": "creat_xyz789"},
+  "campaign_id": {"S": "camp_abc123"},
+  "account_id": {"S": "acct_adv001"},
+  "slot_type": {"S": "pre_roll"},
+  "event_type": {"S": "impression"},
+  "user_id": {"S": "e2e_bob@test.local"},
+  "creator_id": {"S": "e2e_alice@test.local"},
+  "surface": {"S": "vod"},
+  "created_at": {"N": "1748534400"}
+}
+```
+
+### 3.3 Backend Service
 
 **File**: `app/services/ad_serving.py`
 
@@ -383,7 +496,83 @@ def _empty_response(reason: str) -> dict:
     return {"filled": False, "is_house_ad": False, "fill_reason": reason}
 ```
 
-### 3.3 Backend Router
+### 3.4 Pydantic Models
+
+**File**: `app/models.py`
+
+```python
+# -- Ad Serving (ADS-004) --
+
+class AdServeRequestIn(BaseModel):
+    """Request body for POST /ui/ads/serve."""
+    surface: str = Field(..., pattern="^(newsfeed|broadcast|vod)$",
+                         description="Ad surface: newsfeed, broadcast, or vod")
+    content_type: str = Field(default="",
+                              description="Content type: post, broadcast_session, video")
+    creator_id: str = Field(..., min_length=1,
+                            description="Creator who owns the content being viewed")
+    content_id: str = Field(..., min_length=1,
+                            description="ID of the content item (post_id, video_id, etc.)")
+    slot_type: str = Field(default="sponsored_post",
+                           pattern="^(pre_roll|mid_roll|overlay|sponsored_post|broadcast_preroll|broadcast_midroll)$",
+                           description="Type of ad slot within the surface")
+    user_context: Optional[Dict[str, Any]] = Field(default=None,
+                                                    description="Additional viewer context for targeting")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "surface": "newsfeed",
+            "creator_id": "user_creator_abc",
+            "content_id": "post_12345",
+            "slot_type": "sponsored_post",
+            "user_context": {"geo": "US", "device": "mobile"}
+        }
+    })
+
+
+class AdServeResponseOut(BaseModel):
+    """Response from POST /ui/ads/serve."""
+    filled: bool
+    creative_id: Optional[str] = None
+    format: Optional[str] = None
+    title: str = ""
+    headline: Optional[str] = None
+    body_text: Optional[str] = None
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    image_url: Optional[str] = None
+    video_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    skip_after_seconds: int = 5
+    impression_url: Optional[str] = None
+    click_url: Optional[str] = None
+    skip_url: Optional[str] = None
+    is_house_ad: bool = False
+    campaign_id: Optional[str] = None
+    promo_code_id: Optional[str] = None
+    affiliate_link_id: Optional[str] = None
+    fill_reason: Optional[str] = None
+
+
+class AdTrackEventIn(BaseModel):
+    """Query parameters for POST /ui/ads/track."""
+    event: str = Field(..., pattern="^(impression|click|skip|complete)$")
+    creative_id: str = Field(..., min_length=1)
+    campaign_id: str = Field(..., min_length=1)
+    account_id: str = Field(..., min_length=1)
+    surface: str = Field(..., min_length=1)
+    slot_type: str = Field(..., min_length=1)
+    content_id: str = Field(..., min_length=1)
+    creator_id: str = Field(..., min_length=1)
+
+
+class AdTrackEventOut(BaseModel):
+    """Response from POST /ui/ads/track."""
+    ok: bool
+    event_id: str = ""
+```
+
+### 3.5 Backend Router
 
 **File**: `app/routers/ads.py` (extend)
 
@@ -416,7 +605,7 @@ def track_ad_event_endpoint(
     )
 ```
 
-### 3.4 Frontend Types
+### 3.6 Frontend Types
 
 **File**: `frontend/src/api/types.ts`
 
@@ -454,7 +643,7 @@ export interface AdServeResponse {
 }
 ```
 
-### 3.5 Frontend API
+### 3.7 Frontend API
 
 **File**: `frontend/src/api/endpoints/ads.ts` (extend)
 
@@ -466,17 +655,179 @@ export const trackAdEvent = (params: Record<string, string>) =>
   api.post("/ui/ads/track", null, { params });
 ```
 
+### 3.8 Frontend Component Tree
+
+```
+AdSlot (shared wrapper)
+├── Props: { surface, contentType, creatorId, contentId, slotType }
+├── State: useQuery(["ad-serve", contentId], () => serveAd({...}))
+├── Effect: on mount, fire impression tracking via trackAdEvent
+│
+├── AdCreativeRender
+│   ├── Props: { creative: AdServeResponse, onImpression, onClick, onSkip }
+│   │
+│   ├── ImageAdCreative
+│   │   ├── <img src={image_url} />
+│   │   └── PromoBadge (if promo_code_id)
+│   │
+│   ├── VideoAdCreative
+│   │   ├── <video src={video_url} autoPlay />
+│   │   ├── SkipButton (appears after skip_after_seconds)
+│   │   └── ProgressBar (video duration countdown)
+│   │
+│   └── NativePostAdCreative
+│       ├── <h3>{title}</h3>
+│       ├── <p>{body_text}</p>
+│       ├── <Button>{cta_text}</Button>
+│       └── "Promoted" badge (text-xs text-muted-foreground)
+│
+├── HouseAdFallback
+│   ├── Renders HOUSE_AD content when is_house_ad=true
+│   └── "Promoted" badge
+│
+└── EmptyAdSlot
+    └── Renders nothing (filled=false, no house ad)
+
+PostCard (newsfeed integration, ADS-005)
+├── Existing post content
+└── AdSlot (inserted between posts at position intervals)
+
+BroadcastPlayer (broadcast integration, ADS-006)
+├── Existing broadcast stream
+├── PreRollAdSlot (before stream starts)
+└── MidRollAdSlot (during ad breaks)
+
+VODPlayer (video integration)
+├── Existing video player
+├── PreRollAdSlot (before video plays)
+├── MidRollAdSlot (at configured breakpoints)
+└── OverlayAdSlot (non-blocking overlay during playback)
+```
+
 ---
 
-## 4. Implementation Plan
+## 4. API Request/Response Examples
 
-### 4.1 Files to Create
+### 4.1 Serve Ad
+
+```bash
+# Serve an ad for a newsfeed post
+curl -X POST http://localhost:8000/ui/ads/serve \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_abc123; ui_access_token=eyJ...; ui_csrf=tok_csrf_001" \
+  -H "x-csrf-token: tok_csrf_001" \
+  -d '{
+    "surface": "newsfeed",
+    "creator_id": "e2e_alice@test.local",
+    "content_id": "post_12345",
+    "slot_type": "sponsored_post",
+    "user_context": {"geo": "US", "device": "mobile"}
+  }'
+
+# Response (200 OK — paid ad served)
+{
+  "filled": true,
+  "creative_id": "creat_xyz789",
+  "format": "native_post",
+  "title": "Try Premium Today",
+  "headline": "Unlock all features",
+  "body_text": "Get 30 days free with code WELCOME30",
+  "cta_text": "Start Free Trial",
+  "cta_url": "https://example.com/trial?ref=ABC123",
+  "image_url": "https://cdn.example.com/ads/premium-banner.png",
+  "video_url": null,
+  "thumbnail_url": null,
+  "skip_after_seconds": 5,
+  "impression_url": "/api/ads/track?event=impression&creative_id=creat_xyz789&campaign_id=camp_abc123&account_id=acct_adv001&surface=newsfeed&slot_type=sponsored_post&content_id=post_12345&creator_id=e2e_alice@test.local",
+  "click_url": "/api/ads/track?event=click&creative_id=creat_xyz789&campaign_id=camp_abc123&account_id=acct_adv001&surface=newsfeed&slot_type=sponsored_post&content_id=post_12345&creator_id=e2e_alice@test.local",
+  "skip_url": "/api/ads/track?event=skip&creative_id=creat_xyz789&campaign_id=camp_abc123&account_id=acct_adv001&surface=newsfeed&slot_type=sponsored_post&content_id=post_12345&creator_id=e2e_alice@test.local",
+  "is_house_ad": false,
+  "campaign_id": "camp_abc123",
+  "promo_code_id": "promo_welcome30",
+  "affiliate_link_id": "aff_ABC123"
+}
+
+# Response (200 OK — house ad served, no paid campaign matched)
+{
+  "filled": true,
+  "creative_id": "house_ad_001",
+  "format": "native_post",
+  "title": "Discover more on this platform",
+  "headline": "Explore creators you'll love",
+  "body_text": "Find new content, connect with creators, and join the community.",
+  "cta_text": "Explore",
+  "cta_url": "/feed",
+  "is_house_ad": true,
+  "fill_reason": "no_eligible_campaigns"
+}
+
+# Response (200 OK — empty, creator disabled ads)
+{
+  "filled": false,
+  "is_house_ad": false,
+  "fill_reason": "creator_ads_disabled"
+}
+```
+
+### 4.2 Track Ad Event
+
+```bash
+# Track an impression
+curl -X POST "http://localhost:8000/ui/ads/track?event=impression&creative_id=creat_xyz789&campaign_id=camp_abc123&account_id=acct_adv001&surface=newsfeed&slot_type=sponsored_post&content_id=post_12345&creator_id=e2e_alice@test.local" \
+  -H "Cookie: ui_session=sess_abc123; ui_access_token=eyJ...; ui_csrf=tok_csrf_001" \
+  -H "x-csrf-token: tok_csrf_001"
+
+# Response (200 OK)
+{
+  "ok": true,
+  "event_id": "evt_1748534400_creat_xyz789"
+}
+
+# Track a click
+curl -X POST "http://localhost:8000/ui/ads/track?event=click&creative_id=creat_xyz789&campaign_id=camp_abc123&account_id=acct_adv001&surface=newsfeed&slot_type=sponsored_post&content_id=post_12345&creator_id=e2e_alice@test.local" \
+  -H "Cookie: ui_session=sess_abc123; ui_access_token=eyJ...; ui_csrf=tok_csrf_001" \
+  -H "x-csrf-token: tok_csrf_001"
+
+# Response (200 OK)
+{
+  "ok": true,
+  "event_id": "evt_1748534405_creat_xyz789"
+}
+```
+
+---
+
+## 5. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Missing required `surface` in serve request | 422 | `validation_error` | "surface is required" | Fix request body |
+| Missing required `creator_id` in serve request | 422 | `validation_error` | "creator_id is required" | Fix request body |
+| Missing required `content_id` in serve request | 422 | `validation_error` | "content_id is required" | Fix request body |
+| Invalid surface value (not newsfeed/broadcast/vod) | 422 | `validation_error` | "surface must be newsfeed, broadcast, or vod" | Fix surface value |
+| Invalid event type in track request | 400 | `invalid_event` | "Invalid event type; must be impression, click, skip, or complete" | Fix event parameter |
+| Creative not found during tracking | 200 | — | (best-effort; still records event) | Log warning; no user action needed |
+| DDB write failure for frequency cap | 200 | — | (best-effort; serve continues) | Log warning; cap may be inaccurate |
+| DDB write failure for impression record | 500 | `internal_error` | "Failed to record ad event" | Retry the request |
+| All campaigns exhausted (budget or frequency) | 200 | — | House ad served with `fill_reason` | No action; platform serves house ad |
+| Creator has ads disabled | 200 | — | Empty response with `fill_reason: "creator_ads_disabled"` | No action; ad slot remains empty |
+| No active campaigns in system | 200 | — | House ad served with `fill_reason: "no_active_campaigns"` | Advertiser needs to activate campaigns |
+| Session expired / authentication failure | 401 | `unauthorized` | "Session expired" | Re-authenticate |
+| CSRF token mismatch | 403 | `csrf_invalid` | "Invalid CSRF token" | Refresh page to get new CSRF token |
+| Rate limit exceeded on serve endpoint | 429 | `rate_limited` | "Too many requests" | Wait and retry |
+| Advertiser blocked by creator | 200 | — | Campaign excluded from candidates (transparent to viewer) | Advertiser contacts creator or targets different content |
+
+---
+
+## 6. Implementation Plan
+
+### 6.1 Files to Create
 
 | File | Purpose |
 |------|---------|
 | `app/services/ad_serving.py` | Core ad selection + serving engine |
 
-### 4.2 Files to Modify
+### 6.2 Files to Modify
 
 | File | Changes |
 |------|---------|
@@ -487,41 +838,47 @@ export const trackAdEvent = (params: Record<string, string>) =>
 | `scripts/local-ddb-init.py` | Add `AdFrequencyCaps` table definition with TTL |
 | `frontend/src/api/types.ts` | Add `AdServeRequest`, `AdServeResponse` types |
 | `frontend/src/api/endpoints/ads.ts` | Add `serveAd`, `trackAdEvent` functions |
+| `app/models.py` | Add `AdServeRequestIn`, `AdServeResponseOut`, `AdTrackEventIn`, `AdTrackEventOut` |
 
-### 4.3 Step-by-Step Order
+### 6.3 Step-by-Step Order
 
 1. Add DDB table definition with TTL
 2. Add settings + table handle
-3. Implement `ad_serving.py` service
-4. Add serve/track endpoints to router
-5. Update `ad_placement.py` to delegate to serving engine
-6. Add frontend types + API endpoints
-7. Write E2E tests
+3. Add Pydantic models to `app/models.py`
+4. Implement `ad_serving.py` service
+5. Add serve/track endpoints to router
+6. Update `ad_placement.py` to delegate to serving engine
+7. Add frontend types + API endpoints
+8. Write E2E tests
 
 ---
 
-## 5. E2E Test Plan
+## 7. E2E Test Plan
 
-### 5.1 Test File
+### 7.1 Test File
 
-`frontend/e2e/ads-serving.spec.ts` — 20 tests across 5 sections.
+`frontend/e2e/ads-serving.spec.ts` — 30 tests across 7 sections.
 
-### 5.2 Test Setup
+### 7.2 Test Setup
 
 ```typescript
 const TS = Date.now();
 let accountId: string;
 let campaignId: string;
+let campaignId2: string;
 let creativeId: string;
+let creativeId2: string;
 
 test.beforeAll(async ({ browser }) => {
   // Set up Alice (advertiser), Bob (viewer/creator), Root (admin)
   // Create ad account + campaign + creative + targeting
   // Approve account, campaign, creative (all must be active/approved)
+  // Create a second campaign with lower bid for ranking tests
+  // Create a second creative with different rotation_weight
 });
 ```
 
-### 5.3 Section 354: Ad Serve Endpoint (5 tests)
+### 7.3 Section 354: Ad Serve Endpoint (5 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -531,7 +888,7 @@ test.beforeAll(async ({ browser }) => {
 | 354.4 | Creator with ads disabled returns empty | Set Bob allow_ads=false; POST serve for Bob's content; `filled=false` |
 | 354.5 | Blocked advertiser excluded | Bob blocks Alice's account; POST serve; house ad or empty (not Alice's creative) |
 
-### 5.4 Section 355: Frequency Capping (4 tests)
+### 7.4 Section 355: Frequency Capping (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -540,7 +897,7 @@ test.beforeAll(async ({ browser }) => {
 | 355.3 | Frequency cap triggers after limit | Track impressions until 1h cap (3); next serve returns different campaign or house ad |
 | 355.4 | Frequency cap record has TTL | DDB record has `expires_at` field set to future timestamp |
 
-### 5.5 Section 356: Budget Pacing (3 tests)
+### 7.5 Section 356: Budget Pacing (3 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -548,7 +905,7 @@ test.beforeAll(async ({ browser }) => {
 | 356.2 | Exhausted lifetime budget stops serving | Set lifetime_spent_cents >= budget_cents; serve excludes this campaign |
 | 356.3 | Exhausted daily budget stops serving | Set spent_today_cents >= daily_budget_cents; serve excludes this campaign |
 
-### 5.6 Section 357: Ad Tracking Events (4 tests)
+### 7.6 Section 357: Ad Tracking Events (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -557,7 +914,7 @@ test.beforeAll(async ({ browser }) => {
 | 357.3 | Track skip event | POST with event=skip; 200; ok=true |
 | 357.4 | Impression writes to ad_impressions table | After tracking, query ad_impressions; record exists with correct fields |
 
-### 5.7 Section 358: Creative Selection (4 tests)
+### 7.7 Section 358: Creative Selection (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -566,30 +923,138 @@ test.beforeAll(async ({ browser }) => {
 | 358.3 | Only approved creatives served | Add draft creative; serve never returns draft creative_id |
 | 358.4 | Creative with promo_code_id returned | Serve returns `promo_code_id` from creative |
 
+### 7.8 Section 359: Input Validation & Edge Cases (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 359.1 | Missing surface returns 422 | POST with empty surface; 422 validation error |
+| 359.2 | Invalid surface value returns 422 | POST with `surface: "unknown"`; 422 |
+| 359.3 | Missing creator_id returns 422 | POST without creator_id; 422 |
+| 359.4 | Invalid track event type returns 400 | POST `/ui/ads/track?event=invalid_event&...`; 400 |
+| 359.5 | Unauthenticated request returns 401 | POST `/ui/ads/serve` without session cookies; 401 |
+
+### 7.9 Section 360: Concurrent Access & Campaign Ranking (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 360.1 | Higher bid campaign wins over lower bid | Campaign A (bid_cpm=1000) vs Campaign B (bid_cpm=500); serve returns Campaign A creative |
+| 360.2 | Equal bid campaigns both serve across requests | Two campaigns with same bid_cpm; 10 serves; both campaign_ids appear (non-deterministic ranking tiebreak) |
+| 360.3 | Concurrent serve requests return consistent results | Fire 5 parallel serve requests; all return filled=true; frequency caps update atomically |
+| 360.4 | House ad fields are complete | When house ad is served, response includes title, headline, body_text, cta_text, cta_url |
+| 360.5 | Serve endpoint latency under 200ms | Time 10 sequential serve calls; average latency < 200ms |
+
 ---
 
-## 6. Error Handling
+## 8. Observability & Monitoring
 
-| Scenario | Status | Detail |
-|----------|--------|--------|
-| Missing required serve params | 422 | Pydantic validation |
-| Invalid event type | 400 | "Invalid event type" |
-| Creative not found during tracking | 200 | Best-effort; log warning, still record event |
-| DDB write failure for frequency cap | 200 | Best-effort; log warning, don't fail the serve |
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `ad_serve_requests_total` | Counter | `surface`, `slot_type`, `result` (filled/house/empty) | Total ad serve requests by outcome |
+| `ad_serve_latency_seconds` | Histogram | `surface` | Latency of serve_ad() calls |
+| `ad_track_events_total` | Counter | `event` (impression/click/skip/complete), `surface` | Total tracking events by type |
+| `ad_frequency_cap_hits_total` | Counter | — | Number of times a campaign was excluded due to frequency cap |
+| `ad_budget_exhausted_total` | Counter | — | Number of times a campaign was excluded due to budget exhaustion |
+| `ad_fill_rate` | Gauge | `surface` | Percentage of serve requests that returned a paid ad (not house ad) |
+| `ad_candidates_per_request` | Histogram | `surface` | Number of eligible campaigns after filtering per serve call |
+
+### 8.2 Log Events
+
+| Event | Level | Fields | Description |
+|-------|-------|--------|-------------|
+| `ad_serve_complete` | INFO | `surface`, `slot_type`, `filled`, `is_house_ad`, `campaign_id`, `creative_id`, `latency_ms` | Logged on every serve request completion |
+| `ad_serve_empty` | INFO | `surface`, `slot_type`, `fill_reason` | Logged when no ad is served (empty response) |
+| `ad_serve_house_ad` | INFO | `surface`, `slot_type`, `fill_reason` | Logged when house ad is served as fallback |
+| `ad_track_event` | INFO | `event`, `creative_id`, `campaign_id`, `user_id` | Logged on every tracking event |
+| `ad_frequency_cap_hit` | DEBUG | `user_id`, `campaign_id`, `window`, `count`, `max_count` | Logged when a user hits frequency cap for a campaign |
+| `ad_budget_exhausted` | WARN | `campaign_id`, `budget_type`, `budget_cents`, `spent_cents` | Logged when a campaign's budget is fully consumed |
+| `ad_freq_cap_write_failed` | WARN | `user_id`, `campaign_id`, `error` | Logged when frequency cap DDB write fails |
+
+### 8.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Low fill rate | `ad_fill_rate < 0.3` for 15 minutes on any surface | Warning | Investigate campaign pipeline; check if campaigns are paused/exhausted |
+| High serve latency | `p99(ad_serve_latency_seconds) > 0.5` for 5 minutes | Warning | Check DDB read latency; consider caching active campaigns |
+| Zero serves | `rate(ad_serve_requests_total[5m]) == 0` during business hours | Critical | Verify frontend is making serve calls; check routing/proxy |
+| Frequency cap write failures | `rate(ad_freq_cap_write_failed[5m]) > 10` | Warning | Check DDB table capacity; verify table exists |
 
 ---
 
-## 7. Security Considerations
+## 9. Rollout Plan
+
+### 9.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `AD_SERVING_ENABLED` | `false` | Master switch: when false, `/ui/ads/serve` returns empty response |
+| `AD_SERVING_HOUSE_ADS_ENABLED` | `true` | When true, unfilled slots return house ads; when false, return empty |
+| `AD_FREQUENCY_CAPPING_ENABLED` | `true` | When false, skip frequency cap checks (useful for testing) |
+
+### 9.2 Migration Steps
+
+1. **Phase 1 — Table creation**: Deploy `scripts/local-ddb-init.py` change to create `AdFrequencyCaps` table. No application changes.
+2. **Phase 2 — Backend service**: Deploy `ad_serving.py` with `AD_SERVING_ENABLED=false`. Service code is deployed but dormant.
+3. **Phase 3 — Shadow mode**: Enable serving for 1% of requests (randomly selected). Log results but don't return to frontend. Compare with existing hardcoded logic.
+4. **Phase 4 — Gradual rollout**: Enable `AD_SERVING_ENABLED=true` for 10% -> 50% -> 100% of users over 1 week.
+5. **Phase 5 — Legacy removal**: Remove hardcoded `DEV_AD_CREATIVES` selection logic from `ad_placement.py`.
+
+### 9.3 Rollback Procedure
+
+1. Set `AD_SERVING_ENABLED=false` — immediately falls back to existing `ad_placement.py` logic.
+2. If frequency cap table has issues, set `AD_FREQUENCY_CAPPING_ENABLED=false` to skip cap checks without disabling serving.
+3. No DDB data migration needed for rollback — frequency cap records auto-expire via TTL.
+
+---
+
+## 10. Performance Considerations
+
+### 10.1 Latency Budget
+
+| Operation | Target Latency | Approach |
+|-----------|---------------|----------|
+| Load active campaigns | < 50ms | Cache campaign list for 30 seconds (in-memory TTL cache) |
+| Evaluate targeting per campaign | < 5ms each | Pre-filter by surface/slot_type before full targeting eval |
+| Frequency cap check (3 GetItems) | < 30ms | Batch GetItem using `batch_get_item` for all 3 windows |
+| Budget check | < 1ms | Denormalized budget fields already on campaign record |
+| Creative selection | < 1ms | In-memory weighted random |
+| **Total serve_ad() target** | **< 100ms** | |
+
+### 10.2 Caching Strategy
+
+- **Active campaigns**: Cache in-memory for 30 seconds. Campaign status changes (pause, budget exhaustion) take up to 30 seconds to take effect. Acceptable trade-off for latency.
+- **Creator ad settings**: Cache per creator_id for 60 seconds. Settings change infrequently.
+- **Targeting rule sets**: Cache per campaign_id for 60 seconds. Targeting rules are updated infrequently during a campaign's lifetime.
+- **Frequency caps**: NOT cached. Must always read from DDB for accuracy. Batch GetItem reduces round trips.
+
+### 10.3 Pagination & Rate Limits
+
+- **Serve endpoint**: Rate limited to 60 req/min per user (matches page scroll rate).
+- **Track endpoint**: Rate limited to 120 req/min per user (impression + click can fire simultaneously).
+- **Campaign scan**: `list_campaigns_by_status("active")` scans the campaigns table. At scale (>10,000 campaigns), add a GSI on `status` with `created_at` sort key to avoid full table scan. For MVP with < 500 campaigns, scan is acceptable.
+
+### 10.4 DynamoDB Capacity
+
+- **Frequency caps table**: Write-heavy (one UpdateItem per impression per 3 windows = 3 WCUs per impression). At 1000 impressions/second = 3000 WCUs. TTL auto-deletes expired records.
+- **Ad impressions table**: One PutItem per event = 1 WCU per event. Partitioned by date in PK to distribute hot keys.
+- **Estimated monthly DDB cost at 1M impressions/day**: ~$15/month (on-demand pricing).
+
+---
+
+## 11. Security Considerations
 
 - Ad serve endpoint requires authentication (no anonymous ad requests)
 - Tracking URLs include all context params in query string (not user-modifiable in meaningful ways)
 - Frequency cap records are per-user, per-campaign — no cross-user leakage
 - Budget deductions are atomic (DDB update expression with increment)
 - House ads are always safe fallback (no external content)
+- Tracking event injection is mitigated by session auth — cannot fire fake impressions without a valid session
+- Creative content (image_url, video_url) is served from the platform's CDN or S3 — no arbitrary external URLs
 
 ---
 
-## 8. Dependencies
+## 12. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
@@ -597,7 +1062,7 @@ test.beforeAll(async ({ browser }) => {
 | ADS-002 | Approved creatives | Required |
 | ADS-003 | Targeting evaluation + creator prefs | Required |
 
-### 8.1 Downstream Dependents
+### 12.1 Downstream Dependents
 
 | Ticket | Depends On |
 |--------|-----------|
@@ -605,3 +1070,20 @@ test.beforeAll(async ({ browser }) => {
 | ADS-006 (Broadcast Ads) | `serve_ad(surface="broadcast")` |
 | ADS-007 (Billing) | `track_ad_event()` triggers billing |
 | ADS-008 (Analytics) | Impression/click data from tracking |
+| ADS-009 (User Ad Preferences) | User ad pref tier checked during serve |
+| ADS-015 (Affiliate/Promo) | `promo_code_id` and `affiliate_link_id` fields on serve response |
+
+---
+
+## 13. Acceptance Criteria
+
+1. `POST /ui/ads/serve` selects the highest-scoring eligible campaign and returns the creative with tracking URLs.
+2. Frequency capping limits impressions per user per campaign per window (1h: 3, 24h: 10, 7d: 30).
+3. Budget-exhausted campaigns are excluded from serving.
+4. Unfilled slots return house ads or empty responses (never errors).
+5. `POST /ui/ads/track` records impression, click, skip, and complete events.
+6. Frequency cap records auto-expire via DDB TTL.
+7. Creative rotation distributes impressions across creatives by `rotation_weight`.
+8. Creator ad preferences (allow_ads, block list) are respected.
+9. All 30 E2E tests pass in `frontend/e2e/ads-serving.spec.ts`.
+10. Serve endpoint p99 latency < 200ms under normal load.

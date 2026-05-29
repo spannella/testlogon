@@ -596,3 +596,121 @@ After implementation, verify via the `/metrics` endpoint:
 6. Verify caller can immediately re-call after a missed call (no busy lock)
 7. Verify `callTimeoutRef` is cleared on component unmount (no memory leak)
 8. Test with configurable timeout (set env var to 10s, verify faster timeout)
+
+---
+
+## 6. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│               Ringing Timeout & Missed Call Flow                    │
+└─────────────────────────────────────────────────────────────────────┘
+
+  Caller                        Server (SSE)                   Callee
+    │                              │                              │
+    │  POST /calls/initiate        │                              │
+    │─────────────────────────────▶│                              │
+    │                              │  SSE: call:incoming          │
+    │  Start client timer (30s)    │──────────────────────────────▶│
+    │                              │                              │
+    │                              │  Start server timer (45s)    │
+    │                              │                              │
+    │  ... 30s elapses ...         │                              │
+    │                              │                              │
+    │  Client timer fires          │                              │
+    │  POST /calls/{id}/cancel     │                              │
+    │  reason="timeout_no_answer"  │                              │
+    │─────────────────────────────▶│                              │
+    │                              │  SSE: call:cancelled         │
+    │                              │──────────────────────────────▶│
+    │                              │  Cancel server timer         │
+    │                              │  Write missed_call record    │
+    │                              │  SSE: call:missed            │
+    │                              │──────────────────────────────▶│
+    │                              │                              │
+    │  Show "No answer" UI         │              Show "Missed call"
+    │                              │                              │
+
+  Server Backstop (if client fails to cancel):
+    │                              │
+    │  ... 45s elapses ...         │
+    │                              │  Server timer fires
+    │                              │  Force-cancel call
+    │  SSE: call:cancelled         │  Write missed_call
+    │◀──────────────────────────── │──────────────────────────────▶│
+```
+
+---
+
+## 7. DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | Notes |
+|----------------|-------|----|----|-------|
+| Create active call | `calls` | `CALL#{call_id}` | `META` | status=ringing, created_at=now |
+| Timeout call | `calls` | `CALL#{call_id}` | `META` | Conditional: status=ringing; SET status=missed |
+| Write missed call record | `call_events` | `USER#{callee_id}` | `MISSED#{ts}` | caller_id, call_id, duration=0 |
+| List missed calls | `call_events` | `USER#{user_id}` | begins_with `MISSED#` | Newest first |
+| Cancel server timer | `call_timers` | `CALL#{call_id}` | `TIMEOUT` | Delete on answer/cancel |
+
+---
+
+## 8. Error Handling Matrix
+
+| Error Scenario | Behavior | User-Facing Message | Recovery Action |
+|----------------|----------|---------------------|-----------------|
+| Client timer fires but server already answered | Client cancel returns 409; ignore | No message (call connected) | Auto-resolve; call continues |
+| Server timer fires but client already cancelled | Server cancel is idempotent | No extra message | No action needed |
+| Both timers fire simultaneously | Conditional update on call status; first write wins | "No answer" shown once | Idempotent; no conflict |
+| Network failure during timeout | Client-side timer still fires; offline cancel queued | "Call timed out" (optimistic) | Sync on reconnect |
+| Callee answers at exactly 30s | Answer POST races with cancel POST; answer wins if first | Call connects | Server resolves race |
+| Call cancelled before timeout | Clear client timer; clear server timer | "Call cancelled" | Normal flow |
+
+---
+
+## 9. Performance Considerations
+
+| Concern | Mitigation |
+|---------|-----------|
+| Timer accuracy (30s client) | `setTimeout` with drift check; re-fire if < 29s elapsed |
+| Server timer resource leak | DDB TTL on call_timers (60s); cron cleanup for orphans |
+| Missed call notification fan-out | Single SSE event per callee; no fan-out needed |
+| Concurrent calls to same callee | Each call has independent timers; no interference |
+| Memory leak from unmounted timers | Clear `callTimeoutRef` in `useEffect` cleanup |
+
+---
+
+## 10. Rollout Plan
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `CALL_RINGING_TIMEOUT_ENABLED` | `true` | Enable client-side timeout |
+| `CALL_SERVER_BACKSTOP_ENABLED` | `true` | Enable server-side timeout backup |
+| `CALL_TIMEOUT_SECONDS` | `30` | Configurable timeout duration |
+| `CALL_SERVER_BACKSTOP_SECONDS` | `45` | Server backup timeout |
+
+### Canary
+
+1. **Week 1**: Deploy with defaults (30s/45s). Monitor timeout vs answer rates.
+2. **Week 2**: Adjust timeout if miss rate is too high (increase to 45s/60s).
+3. **Week 3**: Verify missed call notifications and UI in all clients.
+
+---
+
+## 11. Expanded E2E Test Details
+
+### Additional Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| E1 | Answer at 29.9 seconds | Call connects; no timeout; no missed call |
+| E2 | Caller disconnects during ringing | Server backstop fires; callee sees missed call |
+| E3 | Multiple rapid call/timeout cycles | Each creates independent missed call records |
+| E4 | Timeout with push notification enabled | Push notification sent with "Missed call from {name}" |
+
+### Negative Tests (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| N1 | Cancel non-existent call | POST cancel with bad call_id; 404 |
+| N2 | Timeout already-answered call | Server timeout on answered call; no-op; call continues |
+| N3 | Invalid timeout configuration | Set CALL_TIMEOUT_SECONDS=0; 422 on config update |

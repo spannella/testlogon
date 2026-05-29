@@ -39,7 +39,65 @@ Feature requests are the most unstructured input in the development pipeline. Th
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  Solution Architect Agent System Architecture                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────┐
+  │ Ticket System    │
+  │ (DynamoDB)       │
+  │                  │
+  │ type:feature_    │
+  │ request tickets  │
+  └────────┬─────────┘
+           │ poll / SSE event
+           ▼
+  ┌─────────────────┐   ┌──────────────────────────────┐   ┌──────────────────┐
+  │ Worker Agent    │──▶│  Architect Agent Core          │──▶│ Terminal Worker  │
+  │ Framework       │   │  (agent_architect.py)          │   │ (SSH session)    │
+  │ (AGENT-003)     │   │                                │   │                  │
+  │                 │   │ ┌────────────────────────────┐ │   │ git clone        │
+  │ lifecycle mgmt  │   │ │ Phase 1: Codebase Analysis │ │   │ find/grep/cat    │
+  │ polling loop    │   │ │ - Read reference docs      │ │   │ read CLAUDE.md   │
+  │                 │   │ │ - Scan existing patterns   │ │   │ scan services/   │
+  └─────────────────┘   │ │ - Identify related code    │ │   └────────┬─────────┘
+                        │ └────────────────────────────┘ │            │
+                        │ ┌────────────────────────────┐ │            │ output
+                        │ │ Phase 2: Solution Design   │ │            ▼
+                        │ │ - Data model (DDB tables)  │ │   ┌──────────────────┐
+                        │ │ - API design (endpoints)   │ │   │ LLM Client       │
+                        │ │ - Frontend plan (pages)    │ │   │ (Claude Code /   │
+                        │ │ - Test plan (E2E sections) │ │   │  Codex)          │
+                        │ └────────────────────────────┘ │   │                  │
+                        │ ┌────────────────────────────┐ │   │ codebase analysis│
+                        │ │ Phase 3: Ticket Generation │ │   │ solution design  │
+                        │ │ - Break into dev tickets   │ │   │ ticket content   │
+                        │ │ - Estimate complexity      │ │   └──────────────────┘
+                        │ │ - Build dependency graph   │ │
+                        │ │ - Render ticket content    │ │
+                        │ └────────────────────────────┘ │
+                        └──────────┬─────────────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              │                    │                     │
+              ▼                    ▼                     ▼
+    ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+    │ Feature          │ │ Ticket System    │ │ Feedback Loop    │
+    │ Decompositions   │ │ (DynamoDB)       │ │ (AGENT-006)      │
+    │ Table (DynamoDB) │ │                  │ │                  │
+    │                  │ │ create_ticket()  │ │ design review    │
+    │ pk=FEATURE#id    │ │ with labels,     │ │ request/response │
+    │ sk=DEV#id / META │ │ metadata,        │ │                  │
+    └──────────────────┘ │ depends_on       │ └──────────────────┘
+                         └──────────────────┘
+```
+
+---
+
+## 3. Current State Analysis
 
 ### 2.1 Existing Infrastructure
 
@@ -148,7 +206,39 @@ TableDef(
 | `architect_output.feedback_response` | S (optional) | Human feedback received |
 | `architect_output.total_duration_seconds` | N | Wall-clock time |
 
-### 3.2 Backend Service (`app/services/agent_architect.py`)
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | GSI | Notes |
+|----------------|-------|----|----|-----|-------|
+| Get Architect config | `agent_types` | `ATYPE#{type_id}` | `CONFIG` | -- | architect_config map on config item |
+| List feature_request tickets | `tickets` | -- | -- | `GSI3PK=LABEL#type:feature_request` | Filter status=open |
+| Claim feature ticket | `tickets` | `TICKET#{id}` | `META` | -- | ConditionExpression: status=open AND no decomposition |
+| Get decomposition meta | `feature_decompositions` | `FEATURE#{feature_id}` | `META` | -- | Single item read |
+| List dev tickets for feature | `feature_decompositions` | `FEATURE#{feature_id}` | begins_with `DEV#` | -- | All generated tickets |
+| Find decomposition by run | `feature_decompositions` | -- | -- | `GSI1PK=AGENT_RUN#{run_id}` | All features decomposed in a run |
+| Check if feature already decomposed | `feature_decompositions` | `FEATURE#{feature_id}` | `META` | -- | Conditional: attribute_not_exists(pk) |
+| Store architect output | `agent_runs` | `RUN#{run_id}` | `META` | -- | SET architect_output |
+| Metrics aggregation | `agent_runs` | -- | -- | `GSI1PK=AGENT_TYPE#{id}` | Scan completed runs |
+
+**Example DynamoDB item -- decomposition META:**
+
+```json
+{
+  "pk": {"S": "FEATURE#TICKET-500"},
+  "sk": {"S": "META"},
+  "feature_ticket_id": {"S": "TICKET-500"},
+  "agent_run_id": {"S": "run-arch-001"},
+  "decomposition_summary": {"S": "## Video Sharing in Messages\n\nThis feature adds..."},
+  "total_tickets_created": {"N": "5"},
+  "total_estimated_hours": {"N": "42"},
+  "dependency_graph": {"S": "{\"TICKET-501\":[],\"TICKET-502\":[\"TICKET-501\"],\"TICKET-503\":[\"TICKET-501\"],\"TICKET-504\":[\"TICKET-502\",\"TICKET-503\"],\"TICKET-505\":[\"TICKET-504\"]}"},
+  "created_at": {"N": "1748534400"},
+  "GSI1PK": {"S": "AGENT_RUN#run-arch-001"},
+  "GSI1SK": {"N": "1748534400"}
+}
+```
+
+### 3.3 Backend Service (`app/services/agent_architect.py`)
 
 ```python
 # --- Configuration ---
@@ -309,6 +399,58 @@ class ArchitectConfigIn(BaseModel):
     max_analysis_time_seconds: int = Field(default=900, ge=120, le=3600)
     require_design_review: bool = False
     ticket_spec_style: Literal["full", "compact"] = "compact"
+```
+
+### 3.6 API Request/Response Examples
+
+```bash
+# --- GET /ui/agents/features/{feature_ticket_id}/decomposition ---
+curl http://localhost:8000/ui/agents/features/TICKET-500/decomposition \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "feature_ticket_id": "TICKET-500",
+  "decomposition_summary": "## Video Sharing in Messages\n\nAdds ability for users to share VOD content directly in DM and group chats...",
+  "total_tickets_created": 5,
+  "total_estimated_hours": 42,
+  "dependency_graph": {
+    "TICKET-501": [],
+    "TICKET-502": ["TICKET-501"],
+    "TICKET-503": ["TICKET-501"],
+    "TICKET-504": ["TICKET-502", "TICKET-503"],
+    "TICKET-505": ["TICKET-504"]
+  },
+  "tickets": [
+    {"ticket_id": "TICKET-501", "subject": "Add video_shares DDB table", "complexity": "low", "estimated_hours": 4, "order": 1},
+    {"ticket_id": "TICKET-502", "subject": "Implement video sharing service", "complexity": "medium", "estimated_hours": 12, "order": 2},
+    {"ticket_id": "TICKET-503", "subject": "Add video share API endpoints", "complexity": "medium", "estimated_hours": 8, "order": 2},
+    {"ticket_id": "TICKET-504", "subject": "Build video share frontend components", "complexity": "medium", "estimated_hours": 10, "order": 3},
+    {"ticket_id": "TICKET-505", "subject": "Write E2E tests for video sharing", "complexity": "low", "estimated_hours": 8, "order": 4}
+  ]
+}
+
+# --- GET /ui/agents/features/{feature_ticket_id}/dependency-graph ---
+curl http://localhost:8000/ui/agents/features/TICKET-500/dependency-graph \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "nodes": [
+    {"id": "TICKET-501", "subject": "Add video_shares DDB table", "complexity": "low", "order": 1, "status": "open"},
+    {"id": "TICKET-502", "subject": "Implement video sharing service", "complexity": "medium", "order": 2, "status": "open"},
+    {"id": "TICKET-503", "subject": "Add video share API endpoints", "complexity": "medium", "order": 2, "status": "open"},
+    {"id": "TICKET-504", "subject": "Build video share frontend components", "complexity": "medium", "order": 3, "status": "open"},
+    {"id": "TICKET-505", "subject": "Write E2E tests for video sharing", "complexity": "low", "order": 4, "status": "open"}
+  ],
+  "edges": [
+    {"from": "TICKET-501", "to": "TICKET-502"},
+    {"from": "TICKET-501", "to": "TICKET-503"},
+    {"from": "TICKET-502", "to": "TICKET-504"},
+    {"from": "TICKET-503", "to": "TICKET-504"},
+    {"from": "TICKET-504", "to": "TICKET-505"}
+  ]
+}
 ```
 
 Response models: `ArchitectConfigOut`, `ArchitectOutputOut` (full architect_output map), `DecompositionOut` (summary, tickets, graph, analysis), `DependencyGraphOut` (nodes and edges for visualization), `DevTicketListOut` (list of generated tickets with order/complexity/effort), `ArchitectMetricsOut` (features_decomposed, avg_tickets_per_feature, avg_hours_per_feature).
@@ -564,9 +706,87 @@ let devTicketIds: string[];
 | Run not found | 404 | "Agent run not found" |
 | Not admin | 403 | "Admin access required" |
 
+### 6.2 Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| Agent type not in DDB | 404 | `AGENT_TYPE_NOT_FOUND` | "Agent type not found." | Verify type_id |
+| Wrong agent type | 409 | `AGENT_TYPE_MISMATCH` | "Not configured as architect." | Use correct type |
+| Empty reference docs | 422 | `NO_REFERENCE_DOCS` | "At least one reference doc required." | Add CLAUDE.md |
+| Empty scan paths | 422 | `NO_SCAN_PATHS` | "At least one scan path required." | Add app/services/ |
+| Feature not found | 404 | `FEATURE_NOT_FOUND` | "Feature request ticket not found." | Verify ticket_id |
+| Already decomposed | 409 | `ALREADY_DECOMPOSED` | "Feature already decomposed." | View existing decomposition |
+| Circular dependency | 422 | `CIRCULAR_DEPENDENCY` | "Cycle detected in ticket graph." | Review agent output |
+| Max tickets exceeded | 422 | `MAX_TICKETS_EXCEEDED` | "Exceeds max ticket limit." | Increase limit or simplify feature |
+| Analysis timeout | 504 | `ANALYSIS_TIMEOUT` | "Codebase analysis timed out." | Increase time budget |
+| Template placeholder missing | 422 | `TEMPLATE_INVALID` | "Template missing required placeholder." | Fix template |
+| Repo clone failed | 500 | `REPO_CLONE_FAILED` | "Failed to clone repository." | Check repo URL and credentials |
+| LLM provider error | 502 | `LLM_ERROR` | "Design generation failed." | Retry or check API keys |
+| Run not found | 404 | `RUN_NOT_FOUND` | "Agent run not found." | Verify run_id |
+| Not admin | 403 | `ADMIN_REQUIRED` | "Admin access required." | Use admin account |
+
 ---
 
-## 7. Security Considerations
+## 7. Observability & Monitoring
+
+### 7.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `architect_decompositions_total` | Counter | -- | Features decomposed |
+| `architect_tickets_generated_total` | Counter | `complexity` | Dev tickets by complexity |
+| `architect_estimated_hours_total` | Counter | -- | Total hours estimated |
+| `architect_analysis_duration_seconds` | Histogram | -- | Codebase analysis time |
+| `architect_design_duration_seconds` | Histogram | -- | Solution design time |
+| `architect_files_scanned_total` | Counter | -- | Files read during analysis |
+| `architect_feedback_requests_total` | Counter | -- | Design reviews requested |
+| `architect_eligible_features_gauge` | Gauge | -- | Pending feature requests |
+
+### 7.2 Log Events
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| `architect_run_started` | INFO | run_id, feature_ticket_id |
+| `architect_analysis_complete` | INFO | run_id, files_scanned, patterns_found |
+| `architect_design_complete` | INFO | run_id, tickets_count, total_hours |
+| `architect_tickets_created` | INFO | run_id, ticket_ids, dependency_graph |
+| `architect_feedback_requested` | INFO | run_id, decisions_count |
+| `architect_run_error` | ERROR | run_id, step, error |
+
+### 7.3 Alert Thresholds
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Decomposition backlog | eligible_features > 10 | P3 |
+| Analysis timeout rate | > 20% timeouts in 24h | P2 |
+| LLM error spike | > 3 LLM errors in 1h | P2 |
+
+---
+
+## 8. Rollout Plan
+
+### 8.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `ARCHITECT_AGENT_ENABLED` | `false` | Master kill switch |
+| `ARCHITECT_DESIGN_REVIEW_REQUIRED` | `true` | Force human review before ticket creation |
+| `ARCHITECT_FULL_SPEC_ENABLED` | `false` | Allow 350-550 line specs (start with compact) |
+
+### 8.2 Canary Deployment
+
+1. **Week 1**: Enable with `ARCHITECT_DESIGN_REVIEW_REQUIRED=true`. All decompositions require human approval.
+2. **Week 2**: Review accuracy. If >80% designs accepted without changes, allow compact auto-creation.
+3. **Week 3**: Enable `ARCHITECT_FULL_SPEC_ENABLED=true` for teams that want detailed specs.
+
+### 8.3 Rollback
+
+1. Set `ARCHITECT_AGENT_ENABLED=false`. No new decompositions.
+2. Existing tickets and decompositions are permanent and unaffected.
+
+---
+
+## 9. Security Considerations
 
 - **Admin-only access**: All Architect Agent endpoints require `require_admin_session`.
 - **Repository read-only**: The Architect Agent only reads the codebase. It does not create branches, modify files, or push changes. The terminal is provisioned with read-only repository access.

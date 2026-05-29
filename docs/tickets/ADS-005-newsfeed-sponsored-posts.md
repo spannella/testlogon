@@ -421,3 +421,372 @@ test.beforeAll(async ({ browser }) => {
 |--------|-----------|
 | ADS-008 (Analytics) | Sponsored post impression/click data |
 | ADS-009 (User Ad Prefs) | User hide signals from ADS-005 |
+
+---
+
+## 9. Architecture & Data Flow
+
+```
+Sponsored Post Injection Pipeline
+──────────────────────────────────
+
+  GET /feed (viewer_id, cursor)
+       │
+       ▼
+  ┌─────────────────────────────────────┐
+  │  Fetch Organic Posts                │
+  │  GSI1PK = FEED#{viewer_id}          │
+  │  → [post_1, post_2, ..., post_N]   │
+  └──────────┬──────────────────────────┘
+             │
+             ▼
+  ┌─────────────────────────────────────┐
+  │  _inject_sponsored_posts()          │
+  │                                     │
+  │  For every interval-th post:        │
+  │    ├─ Check allow_ads_near on post  │
+  │    ├─ Call serve_ad(surface=newsfeed)│
+  │    │     └─ Check user ad prefs     │
+  │    │     └─ Check targeting match   │
+  │    │     └─ Check frequency cap     │
+  │    │     └─ Check hidden ads        │
+  │    ├─ If filled: insert sponsored   │
+  │    └─ If not: skip slot             │
+  │                                     │
+  │  Max 3 sponsored per page           │
+  └──────────┬──────────────────────────┘
+             │
+             ▼
+  ┌─────────────────────────────────────┐
+  │  Return interleaved feed            │
+  │  [organic, organic, ..., SPONSORED, │
+  │   organic, organic, ..., SPONSORED] │
+  └─────────────────────────────────────┘
+
+  Ad Feedback Flow
+  ─────────────────
+  User clicks "Hide this ad"
+       │
+       ▼
+  POST /ui/ads/feedback
+  { creative_id, feedback_type: "hide" }
+       │
+       ▼
+  billing table: USER#{user_id} / AD_FEEDBACK#{creative_id}#{ts}
+       │
+       ▼
+  get_hidden_ad_ids() → excluded from future injection
+```
+
+---
+
+## 10. Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | GSI | Notes |
+|---|---------------|-------|---------------|-----|-------|
+| 1 | Fetch viewer feed posts | `newsfeed` | `GSI1PK=FEED#{viewer_id}` | GSI1 | Existing feed query |
+| 2 | Record ad feedback | `billing` | `pk=USER#{user_id}, sk=AD_FEEDBACK#{creative_id}#{ts}` | -- | PutItem |
+| 3 | Get hidden ad IDs | `billing` | `pk=USER#{user_id}, sk begins_with AD_FEEDBACK#` | -- | Query, filter feedback_type=hide |
+| 4 | Get post allow_ads_near | `newsfeed` | `pk=POST#{post_id}` | -- | GetItem, check field |
+| 5 | Create post with allow_ads_near | `newsfeed` | `pk=POST#{post_id}` | -- | PutItem with field |
+
+---
+
+## 11. API Request/Response Examples
+
+### 11.1 Ad Feedback (Hide)
+
+```bash
+curl -X POST http://localhost:8000/ui/ads/feedback \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_bob; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok" \
+  -d '{
+    "creative_id": "cre_abc123",
+    "campaign_id": "camp_xyz",
+    "feedback_type": "hide",
+    "reason": "not_relevant"
+  }'
+```
+
+**Response (200)**:
+```json
+{"ok": true}
+```
+
+### 11.2 Why This Ad
+
+```bash
+curl http://localhost:8000/ui/ads/why/cre_abc123 \
+  -H "Cookie: ui_session=sess_bob; ui_access_token=jwt_tok"
+```
+
+**Response (200)**:
+```json
+{
+  "reason": "Based on your activity on the platform",
+  "categories": ["general"],
+  "note": "Ads are selected based on the content you view and your platform activity."
+}
+```
+
+### 11.3 Feed with Sponsored Posts
+
+```bash
+curl http://localhost:8000/feed?limit=10 \
+  -H "Cookie: ui_session=sess_bob; ui_access_token=jwt_tok"
+```
+
+**Response (200)** (excerpt):
+```json
+[
+  {"post_id": "post_001", "body": "Organic post...", "is_sponsored": false},
+  {"post_id": "post_002", "body": "Another post...", "is_sponsored": false},
+  {
+    "post_id": "sponsored_cre_abc123_4",
+    "is_sponsored": true,
+    "sponsor_label": "Acme Corp",
+    "headline": "Try our new product",
+    "body": "Best thing since sliced bread...",
+    "cta_text": "Shop Now",
+    "cta_url": "https://acme.com/shop",
+    "impression_url": "/ui/ads/impressions/cre_abc123/track",
+    "click_url": "/ui/ads/clicks/cre_abc123/track",
+    "creative_id": "cre_abc123",
+    "campaign_id": "camp_xyz",
+    "reactions_counts": {},
+    "comment_count": 0,
+    "comments_enabled": false
+  }
+]
+```
+
+---
+
+## 12. Error Handling Matrix
+
+| # | Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|----------------|-------------|------------|---------------------|-----------------|
+| 1 | Ad serving engine fails | -- | -- | Feed returns organic posts only (graceful degradation) | Automatic |
+| 2 | Invalid feedback_type | 400 | `INVALID_FEEDBACK_TYPE` | "Invalid feedback type." | Use: hide, not_relevant, repetitive, offensive |
+| 3 | Missing creative_id in feedback | 422 | `MISSING_FIELD` | "creative_id is required." | Include creative_id |
+| 4 | Creative not found for why-this-ad | 200 | -- | Returns generic reason (no error) | None needed |
+| 5 | Impression tracking fails | 200 | -- | Best-effort; logged but no user impact | Automatic |
+| 6 | allow_ads_near field missing on post | -- | -- | Defaults to true (ads allowed) | None needed |
+| 7 | No active campaigns for feed | -- | -- | Feed returns organic posts only | None needed |
+| 8 | Hidden creative ID stale | -- | -- | Old feedback entries auto-expire after 90 days | Automatic |
+
+---
+
+## 13. Expanded Pydantic Models
+
+```python
+from pydantic import BaseModel, Field, field_validator
+
+VALID_FEEDBACK_TYPES = {"hide", "not_relevant", "repetitive", "offensive"}
+
+class AdFeedbackIn(BaseModel):
+    creative_id: str = Field(..., min_length=1, max_length=100)
+    campaign_id: str = Field(default="", max_length=100)
+    feedback_type: str = Field(..., min_length=1)
+    reason: str = Field(default="", max_length=500)
+
+    @field_validator("feedback_type")
+    @classmethod
+    def validate_feedback_type(cls, v):
+        if v not in VALID_FEEDBACK_TYPES:
+            raise ValueError(f"Invalid feedback type: {v}. Must be one of {VALID_FEEDBACK_TYPES}")
+        return v
+
+class SponsoredPostOut(BaseModel):
+    post_id: str
+    is_sponsored: bool = True
+    sponsor_account_id: str
+    sponsor_label: str
+    headline: str | None = None
+    body: str = ""
+    cta_text: str | None = None
+    cta_url: str | None = None
+    image_urls: list[str] = Field(default_factory=list)
+    impression_url: str | None = None
+    click_url: str | None = None
+    creative_id: str
+    campaign_id: str | None = None
+    reactions_counts: dict = Field(default_factory=dict)
+    comment_count: int = 0
+    comments_enabled: bool = False
+    created_at: int
+
+class WhyThisAdOut(BaseModel):
+    reason: str
+    categories: list[str]
+    note: str
+```
+
+---
+
+## 14. Frontend Component Tree
+
+```
+FeedPage
+├── FeedPostList
+│   ├── PostCard (organic posts)
+│   └── SponsoredPostCard (sponsored posts, data-testid="sponsored-post")
+│       ├── SponsoredBadge ("Sponsored" + Tag icon + sponsor_label)
+│       ├── SponsoredContent
+│       │   ├── HeadlineText (bold)
+│       │   ├── BodyText
+│       │   └── ImagePreview (if image_urls present)
+│       ├── CTAButton (primary, full-width or inline)
+│       ├── ReactionBar (same as PostCard)
+│       ├── OverflowMenu
+│       │   ├── "Hide this ad" → AdFeedbackDialog
+│       │   ├── "Why this ad?" → WhyThisAdDialog
+│       │   └── "Report ad" → ReportDialog
+│       └── ImpressionTracker (IntersectionObserver, fires on mount)
+└── WhyThisAdDialog (data-testid="why-this-ad-dialog")
+    ├── ReasonText (from /ui/ads/why/{id})
+    └── AdPreferencesLink (→ settings page)
+```
+
+### Props Interfaces
+
+```typescript
+interface SponsoredPostCardProps {
+  post: FeedPost & { is_sponsored: true };
+  onHide: (creativeId: string) => void;
+  onReaction: (postId: string, emoji: string) => void;
+}
+
+interface WhyThisAdDialogProps {
+  creativeId: string;
+  open: boolean;
+  onClose: () => void;
+}
+
+interface AdFeedbackDialogProps {
+  creativeId: string;
+  campaignId: string;
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (feedbackType: string, reason: string) => void;
+}
+```
+
+---
+
+## 15. Observability
+
+### 15.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `sponsored_post_injected_total` | Counter | `campaign_id` | Sponsored posts injected into feeds |
+| `sponsored_post_impression_total` | Counter | `creative_id` | Impression beacons fired |
+| `sponsored_post_click_total` | Counter | `creative_id` | CTA button clicks tracked |
+| `sponsored_post_hidden_total` | Counter | `reason` | Ads hidden by users |
+| `sponsored_post_injection_rate` | Gauge | -- | Ratio of feeds with at least one sponsored post |
+| `feed_request_duration_ms` | Histogram | `has_sponsored` | Feed endpoint latency |
+
+### 15.2 Log Events
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| `sponsored_injected` | INFO | viewer_id, creative_id, position, campaign_id |
+| `sponsored_hidden` | INFO | viewer_id, creative_id, feedback_type |
+| `sponsored_impression` | DEBUG | viewer_id, creative_id |
+| `sponsored_click` | INFO | viewer_id, creative_id, cta_url |
+| `sponsored_injection_skipped` | DEBUG | viewer_id, reason (no_campaign, allow_ads_near_false, hidden) |
+| `why_this_ad_viewed` | DEBUG | viewer_id, creative_id |
+
+### 15.3 Alerting Rules
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Sponsored injection rate drops to 0% | No sponsored posts injected for 1 hour (with active campaigns) | P3 |
+| Ad feedback spike | >100 hides in 15 minutes for a single creative | P2 |
+| Feed latency regression | p99 feed response > 2s with sponsored injection enabled | P2 |
+
+---
+
+## 16. Rollout Plan
+
+### 16.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `SPONSORED_POSTS_ENABLED` | `false` | Enable sponsored post injection in feed |
+| `AD_FEEDBACK_ENABLED` | `true` | Enable hide/feedback on sponsored posts |
+
+### 16.2 Phased Deployment
+
+| Phase | Scope | Duration | Details |
+|-------|-------|----------|---------|
+| Phase 1: Backend only | Internal | Week 1 | Deploy ad_feedback service, "why this ad" endpoint. Sponsored injection runs in shadow mode (logged but not returned to client). |
+| Phase 2: Limited rollout | 10% of users | Week 2 | `SPONSORED_POSTS_ENABLED=true` for cohort. Monitor hide rates, impression counts, feed latency. |
+| Phase 3: Full GA | All users | Week 3 | Full rollout. SponsoredPostCard + WhyThisAdDialog deployed. Export documentation. |
+
+---
+
+## 17. Performance Considerations
+
+### 17.1 Latency Targets
+
+| Endpoint | Target p50 | Target p99 |
+|----------|-----------|-----------|
+| GET /feed (with injection) | 80ms | 300ms |
+| POST /ui/ads/feedback | 30ms | 100ms |
+| GET /ui/ads/why/{id} | 10ms | 50ms |
+| serve_ad() per injection slot | 20ms | 80ms |
+
+### 17.2 Caching Strategy
+
+| Data | Cache | staleTime | Invalidation |
+|------|-------|-----------|-------------|
+| Feed posts + sponsored | React Query | 30_000ms | On new post creation, pull-to-refresh |
+| Hidden ad IDs | Server-side set per request | Per-request | On new feedback submission |
+| Why-this-ad response | React Query | 300_000ms | Static data, rarely changes |
+
+### 17.3 Feed Injection Performance
+
+The sponsored post injection adds at most 3 `serve_ad()` calls per feed page. Each call is independent and can be parallelized. If the ad serving engine is slow or unavailable, the feed falls back to organic-only with no user-visible error. The `get_hidden_ad_ids()` query is batched once per feed request (not per slot).
+
+---
+
+## 18. Expanded E2E Tests
+
+### 18.1 Section 364: Input Validation (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 364.1 | Invalid feedback_type rejected | POST feedback with feedback_type="invalid"; 400; "Invalid feedback type" |
+| 364.2 | Missing creative_id rejected | POST feedback without creative_id; 422 |
+| 364.3 | Empty reason accepted | POST feedback with reason=""; 200 (reason is optional) |
+| 364.4 | Very long reason truncated or rejected | POST feedback with 600-char reason; 422 or truncated |
+
+### 18.2 Section 365: Concurrent Feed Operations (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 365.1 | Simultaneous feed requests both get sponsored posts | Two parallel GET /feed; both include sponsored items |
+| 365.2 | Hide ad then fetch feed | Hide creative; GET /feed; hidden creative not in response |
+| 365.3 | Multiple hides in rapid succession | Hide 3 different creatives; all recorded; none appear in next feed |
+| 365.4 | Create post with allow_ads_near=false then verify feed | Create post; GET /feed; no sponsored adjacent to that post |
+
+### 18.3 Section 366: Authorization Boundary (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 366.1 | Unauthenticated feed request | GET /feed without session; 401 |
+| 366.2 | Feedback requires auth | POST feedback without session; 401 |
+| 366.3 | Why-this-ad requires auth | GET /ui/ads/why/{id} without session; 401 |
+
+### 18.4 Section 367: Sponsored Post UI Interactions (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 367.1 | Hide ad removes it from feed | Click "Hide this ad" on sponsored post; post disappears from DOM |
+| 367.2 | Why this ad dialog shows reason | Click "Why this ad?"; dialog visible with reason text |
+| 367.3 | CTA button navigates to URL | Click CTA; intercept navigation; URL matches cta_url |
+| 367.4 | Sponsored badge text correct | Sponsored post shows "Sponsored" text and sponsor_label |
+| 367.5 | Overflow menu has all options | Click three-dot menu; "Hide this ad", "Why this ad?", "Report ad" all visible |

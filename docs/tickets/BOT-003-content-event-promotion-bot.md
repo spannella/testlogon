@@ -273,29 +273,7 @@ def handle_slot_booking(*, bot_id: str, conversation_id: str,
 
 ### 3.4 Broadcast Announcement Integration (`app/services/bot_broadcast_announcer.py`)
 
-```python
-async def run_broadcast_announcement_loop() -> None:
-    """Background loop checking for broadcasts that need bot announcements.
-    Runs every 60 seconds."""
-    while True:
-        try:
-            _check_and_announce_broadcasts()
-        except Exception:
-            logger.exception("bot_broadcast_announcer: error")
-        await asyncio.sleep(60)
-
-def _check_and_announce_broadcasts() -> None:
-    """Find upcoming broadcasts and send announcements if due."""
-    # 1. Query scheduled broadcasts starting in next 120 minutes
-    # 2. For each broadcast:
-    #    a. Find bots with broadcast_announce config
-    #    b. Check if announcement at this tier already sent (dedup)
-    #    c. If due and not already sent, call announce_broadcast()
-
-def start_broadcast_announcement_task() -> None:
-    """Called from main.py startup."""
-    asyncio.create_task(run_broadcast_announcement_loop())
-```
+Background async loop runs every 60 seconds. `_check_and_announce_broadcasts()` queries scheduled broadcasts starting within 120 minutes, finds bots with `broadcast_announce` config, deduplicates announcements already sent at this tier, and calls `announce_broadcast()` for due announcements. `start_broadcast_announcement_task()` is called from `main.py` startup.
 
 ### 3.5 Backend Router (`app/routers/bot_promotion.py`)
 
@@ -560,3 +538,233 @@ let conversationId: string;
 | Ticket | Depends On |
 |--------|-----------|
 | ANALYTICS-001 (Creator Analytics) | Promotion stats feed into creator analytics dashboard |
+
+---
+
+## 10. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│            Content & Event Promotion Bot Architecture               │
+└─────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+  │ New Content  │   │ Scheduled    │   │ Manual       │
+  │ Published    │   │ Promotion    │   │ Broadcast    │
+  │ (VOD/post)   │   │ (cron)       │   │ (admin)      │
+  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
+         └──────────────────┼──────────────────┘
+                            ▼
+  ┌──────────────────────────────────────┐
+  │   Promotion Bot Engine               │
+  │                                      │
+  │  1. Select content from set          │
+  │  2. Check promotion caps             │
+  │  3. Render content_card message      │
+  │  4. Deliver via send_bot_message     │
+  │  5. Track click/conversion           │
+  └──────┬──────────┬──────────┬────────┘
+         │          │          │
+         ▼          ▼          ▼
+  ┌──────────┐ ┌──────────┐ ┌──────────┐
+  │ Content  │ │ Promotion│ │ Promotion│
+  │ Sets     │ │ History  │ │ Caps     │
+  │ (DDB)    │ │ (DDB)    │ │ (DDB)    │
+  └──────────┘ └──────────┘ └──────────┘
+```
+
+---
+
+## 11. DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | GSI | Notes |
+|----------------|-------|----|----|-----|-------|
+| Get content set | `bot_content_sets` | `BOT#{bot_id}` | `SET#{set_id}` | -- | Single item |
+| List sets for bot | `bot_content_sets` | `BOT#{bot_id}` | begins_with `SET#` | -- | All sets |
+| List items in set | `bot_content_sets` | `BOT#{bot_id}` | begins_with `SET#{set_id}#ITEM#` | -- | Content items |
+| Get promotion history | `bot_promotion_history` | `USER#{user_id}` | `PROMO#{ts}` | -- | Recent promotions |
+| Check daily cap | `bot_promotion_caps` | `BOT#{bot_id}#USER#{user_id}` | `DATE#{YYYY-MM-DD}` | -- | Today's count |
+| Increment click count | `bot_content_sets` | `BOT#{bot_id}` | `SET#{set_id}#ITEM#{item_id}` | -- | ADD click_count |
+
+---
+
+## 12. API Request/Response Examples
+
+```bash
+# --- POST /ui/bots/{bot_id}/content-sets ---
+curl -X POST http://localhost:8000/ui/bots/bot-001/content-sets \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Summer VOD Promo",
+    "content_type": "vod",
+    "items": [
+      {"content_id": "vod-001", "title": "Beach Workout", "thumbnail_url": "..."},
+      {"content_id": "vod-002", "title": "Sunset Yoga", "thumbnail_url": "..."}
+    ],
+    "strategy": "round_robin",
+    "daily_cap": 3
+  }'
+
+# Response 201:
+{
+  "set_id": "set-abc-123",
+  "bot_id": "bot-001",
+  "name": "Summer VOD Promo",
+  "items_count": 2,
+  "strategy": "round_robin",
+  "daily_cap": 3,
+  "created_at": 1748534400
+}
+
+# --- POST /ui/bots/{bot_id}/broadcast ---
+curl -X POST http://localhost:8000/ui/bots/bot-001/broadcast \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "Content-Type: application/json" \
+  -d '{"content_set_id": "set-abc-123", "message_text": "Check out our new summer content!"}'
+
+# Response 200:
+{
+  "broadcast_id": "bcast-001",
+  "conversations_targeted": 142,
+  "messages_sent": 142,
+  "status": "completed"
+}
+```
+
+---
+
+## 13. Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| Bot not found | 404 | `BOT_NOT_FOUND` | "Bot not found." | Verify bot_id |
+| Content set not found | 404 | `SET_NOT_FOUND` | "Content set not found." | Verify set_id |
+| Daily cap reached | 429 | `DAILY_CAP_REACHED` | "Daily promotion limit reached." | Wait until tomorrow |
+| Empty content set | 422 | `EMPTY_CONTENT_SET` | "Content set has no items." | Add items first |
+| Invalid strategy | 422 | `INVALID_STRATEGY` | "Strategy must be round_robin, random, or weighted." | Fix strategy value |
+| Content not found | 404 | `CONTENT_NOT_FOUND` | "Referenced content does not exist." | Check content_id |
+| Broadcast too large | 422 | `BROADCAST_TOO_LARGE` | "Max 500 conversations per broadcast." | Reduce scope |
+
+---
+
+## 14. Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal, Optional, List
+
+class ContentItemIn(BaseModel):
+    content_id: str
+    title: str = Field(max_length=200)
+    thumbnail_url: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=500)
+
+class CreateContentSetIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    content_type: Literal["vod", "post", "event", "product"]
+    items: List[ContentItemIn] = Field(..., min_length=1, max_length=100)
+    strategy: Literal["round_robin", "random", "weighted"] = "round_robin"
+    daily_cap: int = Field(default=5, ge=1, le=50)
+
+class ContentSetOut(BaseModel):
+    set_id: str
+    bot_id: str
+    name: str
+    content_type: str
+    items_count: int
+    strategy: str
+    daily_cap: int
+    created_at: int
+
+class BroadcastIn(BaseModel):
+    content_set_id: str
+    message_text: Optional[str] = Field(default=None, max_length=1000)
+
+class BroadcastOut(BaseModel):
+    broadcast_id: str
+    conversations_targeted: int
+    messages_sent: int
+    status: Literal["completed", "partial", "failed"]
+
+class PromotionStatsOut(BaseModel):
+    set_id: str
+    total_sent: int
+    total_clicks: int
+    click_rate: float
+    top_item: Optional[str] = None
+```
+
+---
+
+## 15. Frontend Component Tree
+
+```
+PromotionBotPage                      data-testid="promotion-bot-page"
+├── Tabs
+│   ├── TabsTrigger "Content Sets"
+│   ├── TabsTrigger "Broadcast"
+│   └── TabsTrigger "Analytics"
+├── TabsContent "sets"
+│   ├── Button "New Content Set"
+│   └── DataTable (content sets)
+│       ├── columns: [name, type, items_count, strategy, daily_cap]
+│       └── row click → ContentSetDetail
+├── TabsContent "broadcast"
+│   ├── Select (content_set_id)
+│   ├── Textarea (message_text)
+│   └── Button "Send Broadcast"
+└── TabsContent "analytics"
+    ├── StatCard "Total Sent" / "Total Clicks" / "Click Rate"
+    └── DataTable (per-item stats)
+```
+
+---
+
+## 16. Observability & Monitoring
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `promotion_messages_sent_total` | Counter | `bot_id`, `content_type` | Promotions sent |
+| `promotion_clicks_total` | Counter | `bot_id`, `content_type` | Click-throughs |
+| `promotion_daily_cap_hits_total` | Counter | `bot_id` | Cap limit reached |
+| `broadcast_messages_total` | Counter | `bot_id`, `status` | Broadcast volume |
+
+---
+
+## 17. Rollout Plan
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `PROMOTION_BOT_ENABLED` | `false` | Master kill switch |
+| `PROMOTION_BROADCAST_ENABLED` | `false` | Allow mass broadcasts |
+| `PROMOTION_TRACKING_ENABLED` | `true` | Click/conversion tracking |
+
+### Canary
+
+1. **Week 1**: Single bot, 10 users, round_robin only.
+2. **Week 2**: Enable broadcast to all conversations.
+3. **Week 3**: Enable analytics tracking.
+
+---
+
+## 18. Expanded E2E Test Details
+
+### Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| E1 | Promotion after cap reset (next day) | Simulate date change; promotion succeeds |
+| E2 | Content set with deleted content | Item with invalid content_id; skip gracefully |
+| E3 | Broadcast to zero conversations | Bot with no assignments; messages_sent=0 |
+| E4 | Concurrent broadcast triggers | Second broadcast gets 409 if first still running |
+
+### Negative Tests (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| N1 | Create set with >100 items | 422 validation error |
+| N2 | Non-owner cannot manage content sets | Bob (not bot owner) POSTs set; 403 |
+| N3 | Broadcast with non-existent set_id | 404 |

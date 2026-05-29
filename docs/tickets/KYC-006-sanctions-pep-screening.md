@@ -49,16 +49,112 @@ external watchlists. This creates significant regulatory risk.
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
 
-### 2.1 KYC Case Submission Flow
+```
++-------------------------------------------------------------------------+
+|                            Frontend (React)                             |
+|                                                                         |
+|  KycCaseDetailPage.tsx (admin)        KycScreeningQueuePage.tsx (admin) |
+|  +-------------------------------+   +-------------------------------+  |
+|  | ScreeningResultsTab            |   | PendingReviewsTable            |  |
+|  |  +--ScreenTypeTable           |   |  +--FilterByType               |  |
+|  |  |  Row[OFAC] StatusBadge     |   |  +--ReviewRow[]                |  |
+|  |  |  Row[EU]   StatusBadge     |   |  |  CaseLink | Score | Time   |  |
+|  |  |  Row[UN]   StatusBadge     |   |  |  ReviewButton               |  |
+|  |  |  Row[PEP]  StatusBadge     |   |  +--BulkReviewBar              |  |
+|  |  |  Row[Media] StatusBadge    |   |     "Mark All False Positive"  |  |
+|  |  +--MatchDetailsExpander      |   +-------------------------------+  |
+|  |  +--ReviewDialog              |                                      |
+|  |  +--ReScreenButton            |                                      |
+|  +-------------------------------+                                      |
++------------------|------------------------------|------------------------+
+                   |                              |
+          POST/GET |                     POST/GET |
+                   v                              v
++-------------------------------------------------------------------------+
+|                       FastAPI Backend (8000)                             |
+|                                                                         |
+|  Submission Integration                                                 |
+|  +-------------------------------------------------------------------+ |
+|  | submit_kyc_case()                                                  | |
+|  |   -> after status transition to "submitted"                       | |
+|  |   -> KycScreeningService.screen_case(case_id, user_sub)           | |
+|  |      -> runs 5 screen types in sequence (mock) or parallel (prod) | |
+|  |      -> stores results in kyc_screening_results table             | |
+|  |      -> if any match: audit_event("kyc_screening_matches_found")  | |
+|  +-------------------------------------------------------------------+ |
+|                                                                         |
+|  Profile Change Hook                                                    |
+|  +-------------------------------------------------------------------+ |
+|  | update_profile() (settings.py)                                     | |
+|  |   -> if name/dob/nationality changed AND user has approved case   | |
+|  |   -> KycScreeningService.rescreen_user(trigger="profile_change")  | |
+|  +-------------------------------------------------------------------+ |
+|                                                                         |
+|  KycScreeningService (app/services/kyc_screening.py)                    |
+|  +-------------------------------------------------------------------+ |
+|  | screen_case()        -> run all 5 screen types for a case          | |
+|  | screen_single()      -> run one screen type                        | |
+|  | get_results_for_case -> query PK=case_id                           | |
+|  | get_results_for_user -> GSI ByUserSub query                        | |
+|  | get_pending_reviews  -> GSI ByResult PK=potential_match            | |
+|  | review_match()       -> update reviewed_by, decision, note         | |
+|  | rescreen_user()      -> find latest case, re-run all types         | |
+|  | _run_mock_screening  -> deterministic name-pattern matching        | |
+|  +-------------------------------------------------------------------+ |
+|                                                                         |
+|  Admin Endpoints (kyc_cases.py)                                         |
+|  +-------------------------------------------------------------------+ |
+|  | GET  /{case_id}/screening-results                                  | |
+|  | GET  /admin/screening/pending-reviews                              | |
+|  | POST /admin/screening/{case_id}/{screen_key}/review                | |
+|  | POST /admin/screening/{case_id}/rescreen                           | |
+|  | GET  /admin/screening/user/{user_sub}/history                      | |
+|  +-------------------------------------------------------------------+ |
++-------------------------------|------------------------------------------+
+                                |
+                                v
++-------------------------------------------------------------------------+
+|                          DynamoDB                                        |
+|                                                                         |
+|  kyc_screening_results table                                            |
+|  +-------------------------------------------------------------------+ |
+|  | PK: case_id (or "USER#{sub}" for continuous monitoring)            | |
+|  | SK: {screen_type}#{iso_timestamp}                                  | |
+|  |                                                                    | |
+|  | Fields: screening_id, screen_type, result, match_details[],       | |
+|  |   reviewed_by, review_decision, review_note, reviewed_at,         | |
+|  |   user_sub, screened_name, screened_dob, screened_nationality,     | |
+|  |   provider, trigger, created_at                                    | |
+|  |                                                                    | |
+|  | GSI ByUserSub: PK=user_sub, SK=created_at (N)                     | |
+|  | GSI ByResult:  PK=result,   SK=created_at (N)                     | |
+|  +-------------------------------------------------------------------+ |
+|                                                                         |
+|  Mock Screening Provider (deterministic lookup)                         |
+|  +-------------------------------------------------------------------+ |
+|  | "OFAC Test*"        -> sanctions_ofac:  potential_match (0.92)     | |
+|  | "Sanctioned Person" -> ALL sanctions:   confirmed_match (1.0)     | |
+|  | "PEP Official*"     -> pep_check:       potential_match (0.88)    | |
+|  | "Media Flagged*"    -> adverse_media:   potential_match (0.75)    | |
+|  | anything else       -> ALL:             clear                     | |
+|  +-------------------------------------------------------------------+ |
++-------------------------------------------------------------------------+
+```
+
+---
+
+## 3. Current State Analysis
+
+### 3.1 KYC Case Submission Flow
 
 `submit_kyc_case()` (line 830 of `app/routers/kyc_cases.py`) transitions the case from
 `draft` to `submitted`, builds an evidence snapshot with evidence hash, creates a review
 ticket, and emits audit events. This is the integration point for triggering automatic
 screening.
 
-### 2.2 Case Status Transitions
+### 3.2 Case Status Transitions
 
 From `app/services/kyc_cases.py` (line 17):
 ```python
@@ -71,21 +167,21 @@ _ALLOWED_STATUSES = {
 Screening results will influence the transition from `submitted` to `under_review` or
 `needs_more_info` depending on match outcomes.
 
-### 2.3 User Profile Access
+### 3.3 User Profile Access
 
 User profile data (full name, DOB, nationality) is accessible via `app/services/profiles.py`.
 Profile change events are tracked via `audit_event()` in profile update endpoints.
 
-### 2.4 Audit Event Infrastructure
+### 3.4 Audit Event Infrastructure
 
 `audit_event()` in `app/services/alerts.py` (line 695) supports arbitrary key-value fields.
 Screening events will use namespace `kyc_screening` for filtering and audit trail.
 
 ---
 
-## 3. Technical Design
+## 4. Technical Design
 
-### 3.1 New DDB Table: `kyc_screening_results`
+### 4.1 New DDB Table: `kyc_screening_results`
 
 **Table name**: `kyc_screening_results` (env: `KYC_SCREENING_RESULTS_TABLE_NAME`)
 **Partition key**: `case_id` (String)
@@ -146,7 +242,7 @@ TableDef(
 )
 ```
 
-### 3.2 New Service: `app/services/kyc_screening.py`
+### 4.2 New Service: `app/services/kyc_screening.py`
 
 ```python
 SCREEN_TYPES = ["sanctions_ofac", "sanctions_eu", "sanctions_un", "pep_check", "adverse_media"]
@@ -182,7 +278,7 @@ class KycScreeningService:
         """Mock screening provider. Deterministic results based on name patterns."""
 ```
 
-### 3.3 Mock Screening Provider
+### 4.3 Mock Screening Provider
 
 Deterministic results for testability:
 
@@ -213,7 +309,7 @@ Mock response structure for a match:
 }
 ```
 
-### 3.4 Submission Integration
+### 4.4 Submission Integration
 
 In `submit_kyc_case()` (line 830 of `app/routers/kyc_cases.py`), after successful
 submission and review ticket creation, trigger screening:
@@ -236,7 +332,7 @@ if has_matches:
                 case_id=case_id)
 ```
 
-### 3.5 Profile Change Re-screening
+### 4.5 Profile Change Re-screening
 
 Add a hook in `app/routers/settings.py` profile update endpoint. When a user updates their
 `display_name`, `date_of_birth`, or `nationality`, and they have an approved KYC case,
@@ -249,7 +345,7 @@ if any(field in changed_fields for field in ("display_name", "date_of_birth", "n
     screening_service.rescreen_user(user_sub=user_sub, trigger="profile_change")
 ```
 
-### 3.6 New Router Endpoints
+### 4.6 New Router Endpoints
 
 **File: `app/routers/kyc_cases.py`** -- add endpoints:
 
@@ -275,27 +371,7 @@ def get_user_screening_history(user_sub: str, ...):
     """Get full screening history for a user across all cases."""
 ```
 
-### 3.7 Request Models
-
-**File: `app/contracts/kyc_cases_contract.py`** -- add:
-
-```python
-class KycScreeningReviewRequest(BaseModel):
-    decision: Literal["false_positive", "true_match"]
-    note: str = Field(..., min_length=1, max_length=2000)
-
-class KycScreeningResultOut(BaseModel):
-    screening_id: str
-    screen_type: str
-    result: Literal["clear", "potential_match", "confirmed_match"]
-    match_details: list[dict] = Field(default_factory=list)
-    reviewed_by: str | None = None
-    review_decision: str | None = None
-    trigger: str
-    created_at: int
-```
-
-### 3.8 Frontend Changes
+### 4.7 Frontend Changes
 
 **File: `frontend/src/pages/admin/KycCaseDetailPage.tsx`** -- extend:
 
@@ -315,7 +391,686 @@ Dedicated page listing all pending screening reviews across all cases:
 
 ---
 
-## 4. E2E Test Plan
+## 5. DynamoDB Access Patterns
+
+| # | Access Pattern | Table / Index | Key Condition | Notes |
+|---|---------------|---------------|---------------|-------|
+| 1 | Get screening results for case | `kyc_screening_results` | PK=`{case_id}` | Returns all screen types with timestamps |
+| 2 | Get single screening result | `kyc_screening_results` | PK=`{case_id}`, SK=`{screen_type}#{ts}` | Exact get for review operations |
+| 3 | Get user screening history | GSI `ByUserSub` | PK=`{user_sub}`, SK desc | All screenings across cases |
+| 4 | Get pending reviews | GSI `ByResult` | PK=`potential_match`, SK desc | Unreviewed matches for admin queue |
+| 5 | Update review decision | `kyc_screening_results` | PK=`{case_id}`, SK=`{screen_key}` | Set `reviewed_by`, `review_decision`, `review_note`, `reviewed_at` |
+| 6 | Store new screening result | `kyc_screening_results` | PK=`{case_id}`, SK=`{screen_type}#{iso_ts}` | PutItem for each screen type run |
+| 7 | Count pending by type | GSI `ByResult` | PK=`potential_match`, filter `screen_type` | For admin queue filtering |
+
+### 5.1 Example DynamoDB Item
+
+```json
+{
+  "case_id": { "S": "kyc_a1b2c3d4" },
+  "screen_key": { "S": "sanctions_ofac#2026-05-29T10:00:00Z" },
+  "screening_id": { "S": "scr_a1b2c3d4e5f6" },
+  "screen_type": { "S": "sanctions_ofac" },
+  "user_sub": { "S": "e2e_alice@test.local" },
+  "screened_name": { "S": "OFAC Test Person" },
+  "screened_dob": { "S": "1990-01-15" },
+  "screened_nationality": { "S": "US" },
+  "result": { "S": "potential_match" },
+  "match_details": {
+    "L": [
+      {
+        "M": {
+          "list_name": { "S": "Mock SANCTIONS_OFAC List" },
+          "matched_name": { "S": "OFAC Test Person" },
+          "matched_dob": { "S": "1990-01-15" },
+          "match_score": { "N": "0.92" },
+          "entity_id": { "S": "MOCK-a1b2c3d4" },
+          "entity_type": { "S": "individual" },
+          "listed_since": { "S": "2023-01-01" },
+          "source_url": { "S": "https://mock-screening.example.com/" }
+        }
+      }
+    ]
+  },
+  "reviewed_by": { "NULL": true },
+  "review_decision": { "NULL": true },
+  "review_note": { "NULL": true },
+  "reviewed_at": { "NULL": true },
+  "provider": { "S": "mock_screening" },
+  "trigger": { "S": "submission" },
+  "created_at": { "N": "1716681600" }
+}
+```
+
+### 5.2 Write Patterns
+
+| Operation | Update Expression | Condition | Notes |
+|-----------|------------------|-----------|-------|
+| Store screening result | PutItem | `attribute_not_exists(case_id) AND attribute_not_exists(screen_key)` | Prevents overwrite of existing result |
+| Review match | `SET reviewed_by=:admin, review_decision=:dec, review_note=:note, reviewed_at=:ts` | `attribute_exists(case_id) AND attribute_not_exists(reviewed_by)` | Prevents double-review |
+| Re-screen (new result) | PutItem with new timestamp in SK | None (always succeeds) | Append-only pattern |
+
+---
+
+## 6. API Request/Response Examples
+
+### 6.1 Get Screening Results for Case
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/cases/kyc_a1b2c3d4/screening-results" \
+  -H "Cookie: ui_session=sess_root; ui_access_token=eyJ...; ui_csrf=csrf_r"
+```
+
+**Response (200):**
+```json
+{
+  "results": [
+    {
+      "screening_id": "scr_a1b2c3d4e5f6",
+      "screen_type": "sanctions_ofac",
+      "result": "potential_match",
+      "match_details": [
+        {
+          "list_name": "Mock SANCTIONS_OFAC List",
+          "matched_name": "OFAC Test Person",
+          "matched_dob": "1990-01-15",
+          "match_score": 0.92,
+          "entity_id": "MOCK-a1b2c3d4",
+          "entity_type": "individual",
+          "listed_since": "2023-01-01",
+          "source_url": "https://mock-screening.example.com/"
+        }
+      ],
+      "reviewed_by": null,
+      "review_decision": null,
+      "trigger": "submission",
+      "provider": "mock_screening",
+      "created_at": 1716681600
+    },
+    {
+      "screening_id": "scr_f6e5d4c3b2a1",
+      "screen_type": "sanctions_eu",
+      "result": "clear",
+      "match_details": [],
+      "reviewed_by": null,
+      "review_decision": null,
+      "trigger": "submission",
+      "provider": "mock_screening",
+      "created_at": 1716681601
+    },
+    {
+      "screening_id": "scr_111222333444",
+      "screen_type": "sanctions_un",
+      "result": "clear",
+      "match_details": [],
+      "trigger": "submission",
+      "provider": "mock_screening",
+      "created_at": 1716681602
+    },
+    {
+      "screening_id": "scr_555666777888",
+      "screen_type": "pep_check",
+      "result": "clear",
+      "match_details": [],
+      "trigger": "submission",
+      "provider": "mock_screening",
+      "created_at": 1716681603
+    },
+    {
+      "screening_id": "scr_999000111222",
+      "screen_type": "adverse_media",
+      "result": "clear",
+      "match_details": [],
+      "trigger": "submission",
+      "provider": "mock_screening",
+      "created_at": 1716681604
+    }
+  ]
+}
+```
+
+### 6.2 Review a Screening Match
+
+```bash
+curl -X POST "http://localhost:8000/v1/kyc/cases/admin/screening/kyc_a1b2c3d4/sanctions_ofac%232026-05-29T10:00:00Z/review" \
+  -H "Cookie: ui_session=sess_root; ui_access_token=eyJ...; ui_csrf=csrf_r" \
+  -H "x-csrf-token: csrf_r" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "decision": "false_positive",
+    "note": "Name similarity only. Different DOB and nationality. Verified against secondary source."
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "screening_id": "scr_a1b2c3d4e5f6",
+  "review_decision": "false_positive",
+  "reviewed_by": "root.admin@testdev.local",
+  "reviewed_at": 1716768000
+}
+```
+
+### 6.3 List Pending Screening Reviews
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/cases/admin/screening/pending-reviews?limit=20" \
+  -H "Cookie: ui_session=sess_root; ui_access_token=eyJ...; ui_csrf=csrf_r"
+```
+
+**Response (200):**
+```json
+{
+  "items": [
+    {
+      "case_id": "kyc_a1b2c3d4",
+      "screen_key": "sanctions_ofac#2026-05-29T10:00:00Z",
+      "screening_id": "scr_a1b2c3d4e5f6",
+      "screen_type": "sanctions_ofac",
+      "result": "potential_match",
+      "match_details": [{ "matched_name": "OFAC Test Person", "match_score": 0.92 }],
+      "user_sub": "e2e_alice@test.local",
+      "trigger": "submission",
+      "created_at": 1716681600
+    }
+  ],
+  "cursor": null
+}
+```
+
+### 6.4 Trigger Manual Re-screen
+
+```bash
+curl -X POST "http://localhost:8000/v1/kyc/cases/admin/screening/kyc_a1b2c3d4/rescreen" \
+  -H "Cookie: ui_session=sess_root; ui_access_token=eyJ...; ui_csrf=csrf_r" \
+  -H "x-csrf-token: csrf_r"
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "case_id": "kyc_a1b2c3d4",
+  "results_count": 5,
+  "trigger": "manual",
+  "matches_found": 1
+}
+```
+
+### 6.5 Get User Screening History
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/cases/admin/screening/user/e2e_alice@test.local/history?limit=50" \
+  -H "Cookie: ui_session=sess_root; ui_access_token=eyJ...; ui_csrf=csrf_r"
+```
+
+**Response (200):**
+```json
+{
+  "user_sub": "e2e_alice@test.local",
+  "results": [
+    {
+      "case_id": "kyc_a1b2c3d4",
+      "screening_id": "scr_new_manual_01",
+      "screen_type": "sanctions_ofac",
+      "result": "clear",
+      "trigger": "manual",
+      "created_at": 1716768000
+    },
+    {
+      "case_id": "kyc_a1b2c3d4",
+      "screening_id": "scr_a1b2c3d4e5f6",
+      "screen_type": "sanctions_ofac",
+      "result": "potential_match",
+      "match_details": [{ "matched_name": "OFAC Test Person", "match_score": 0.92 }],
+      "review_decision": "false_positive",
+      "trigger": "submission",
+      "created_at": 1716681600
+    }
+  ],
+  "total": 2
+}
+```
+
+### 6.6 Non-admin Attempts Admin Endpoint (403)
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/cases/admin/screening/pending-reviews" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a"
+```
+
+**Response (403):**
+```json
+{
+  "detail": "Admin access required.",
+  "error_code": "kyc_admin_role_required"
+}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| # | Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|----------|-------------|------------|---------------------|----------------|
+| 1 | Get screening for non-existent case | 404 | `kyc_case_not_found` | "Case not found." | Verify case ID |
+| 2 | Non-owner views screening results | 403 | `kyc_access_forbidden` | "Access denied." | Use correct session |
+| 3 | Non-admin accesses admin endpoints | 403 | `kyc_admin_role_required` | "Admin access required." | Use admin credentials |
+| 4 | Review already-reviewed match | 409 | `kyc_screening_already_reviewed` | "This match has already been reviewed." | Refresh results |
+| 5 | Review with invalid decision value | 422 | `validation_error` | "Decision must be 'false_positive' or 'true_match'." | Use valid decision |
+| 6 | Re-screen case without submitted status | 400 | `kyc_invalid_status` | "Case must be submitted or under review for screening." | Check case status |
+| 7 | Invalid screen_key format in URL | 400 | `kyc_invalid_screen_key` | "Invalid screening result key." | Use correct key from GET results |
+| 8 | Screening provider timeout (production) | 502 | `kyc_screening_provider_error` | "Screening service unavailable. Please try later." | Retry or use manual review |
+| 9 | User screening history for unknown user | 200 | -- | Returns empty array | Normal behavior |
+| 10 | Review note empty | 422 | `validation_error` | "Note must be between 1 and 2000 characters." | Provide non-empty note |
+| 11 | Review note exceeds 2000 chars | 422 | `validation_error` | "Note must be between 1 and 2000 characters." | Shorten note |
+| 12 | Re-screen non-existent case | 404 | `kyc_case_not_found` | "Case not found." | Verify case ID |
+| 13 | Screening result not found (review) | 404 | `kyc_screening_not_found` | "Screening result not found." | Verify case_id + screen_key |
+| 14 | Case owner views full match details (non-admin) | 200 | -- | Returns summary only (match_details redacted) | Contact support for full details |
+
+---
+
+## 8. Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+
+class KycScreeningReviewRequest(BaseModel):
+    """Admin review of a screening match."""
+
+    decision: Literal["false_positive", "true_match"] = Field(
+        ...,
+        description="Review decision.",
+        examples=["false_positive"],
+    )
+    note: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="Justification for the review decision.",
+        examples=["Name similarity only. Different DOB and nationality."],
+    )
+
+
+class KycScreeningMatchDetail(BaseModel):
+    """A single match from a screening provider."""
+
+    list_name: str = Field(..., description="Watchlist or database name.")
+    matched_name: str = Field(..., description="Name matched on the list.")
+    matched_dob: str | None = Field(None, description="DOB of matched entity (if available).")
+    match_score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score (0.0-1.0) of the match.",
+    )
+    entity_id: str = Field(..., description="Unique ID of the matched entity on the list.")
+    entity_type: Literal["individual", "entity", "vessel", "aircraft"] = Field(
+        ...,
+        description="Type of matched entity.",
+    )
+    listed_since: str | None = Field(None, description="Date entity was added to the list.")
+    source_url: str | None = Field(None, description="URL to the source list or entry.")
+
+
+class KycScreeningResultOut(BaseModel):
+    """A single screening result for one screen type."""
+
+    screening_id: str = Field(..., description="Unique screening ID.")
+    screen_type: Literal[
+        "sanctions_ofac", "sanctions_eu", "sanctions_un",
+        "pep_check", "adverse_media"
+    ] = Field(..., description="Type of screening performed.")
+    result: Literal["clear", "potential_match", "confirmed_match"] = Field(
+        ...,
+        description="Screening outcome.",
+    )
+    match_details: list[KycScreeningMatchDetail] = Field(
+        default_factory=list,
+        description="Match records (empty if clear).",
+    )
+    reviewed_by: str | None = Field(None, description="Admin who reviewed this match.")
+    review_decision: Literal["false_positive", "true_match"] | None = Field(
+        None,
+        description="Admin review decision.",
+    )
+    review_note: str | None = Field(None, description="Admin review notes.")
+    reviewed_at: int | None = Field(None, description="Unix timestamp of review.")
+    trigger: Literal["submission", "profile_change", "continuous_monitoring", "manual"] = Field(
+        ...,
+        description="What triggered this screening.",
+    )
+    provider: str = Field("mock_screening", description="Screening provider name.")
+    created_at: int = Field(..., description="Unix timestamp of screening.")
+
+
+class KycScreeningResultsListOut(BaseModel):
+    """List of screening results for a case."""
+
+    results: list[KycScreeningResultOut] = Field(default_factory=list)
+
+
+class KycPendingReviewsOut(BaseModel):
+    """Paginated list of screening results needing admin review."""
+
+    items: list[dict] = Field(default_factory=list, description="Pending review items.")
+    cursor: str | None = Field(None, description="Pagination cursor for next page.")
+
+
+class KycRescreenResponse(BaseModel):
+    """Response from triggering a re-screen."""
+
+    ok: bool = True
+    case_id: str
+    results_count: int = Field(..., description="Number of screen types executed.")
+    trigger: str = Field(..., description="Trigger type for the re-screen.")
+    matches_found: int = Field(..., description="Number of non-clear results.")
+
+
+class KycReviewResponse(BaseModel):
+    """Response from reviewing a screening match."""
+
+    ok: bool = True
+    screening_id: str
+    review_decision: str
+    reviewed_by: str
+    reviewed_at: int
+
+
+class KycUserScreeningHistoryOut(BaseModel):
+    """Screening history for a user across all cases."""
+
+    user_sub: str
+    results: list[KycScreeningResultOut] = Field(default_factory=list)
+    total: int = Field(0, description="Total number of results.")
+```
+
+---
+
+## 9. Frontend Component Tree
+
+```
+KycCaseDetailPage (admin, extended)
+└── Tabs
+    └── TabsContent (value="screening-results")
+        └── ScreeningResultsTab
+            ├── SectionHeader ("Screening Results")
+            │   ├── Text ("Screened at: {timestamp}")
+            │   └── TriggerBadge ("submission" | "manual" | "profile_change")
+            ├── ScreenTypeTable
+            │   └── ScreeningRow[] (one per screen type)
+            │       ├── ScreenTypeLabel
+            │       │   ├── "OFAC SDN" (for sanctions_ofac)
+            │       │   ├── "EU Sanctions" (for sanctions_eu)
+            │       │   ├── "UN Sanctions" (for sanctions_un)
+            │       │   ├── "PEP Check" (for pep_check)
+            │       │   └── "Adverse Media" (for adverse_media)
+            │       ├── ResultBadge
+            │       │   ├── variant="success" -> green "Clear"
+            │       │   ├── variant="warning" -> yellow "Potential Match (0.92)"
+            │       │   └── variant="destructive" -> red "Confirmed Match"
+            │       ├── ReviewStatusBadge (if reviewed)
+            │       │   ├── green outline: "Reviewed - False Positive"
+            │       │   └── red outline: "Reviewed - True Match"
+            │       ├── ExpandButton (for rows with match_details.length > 0)
+            │       │   └── MatchDetailsPanel (collapsible)
+            │       │       └── MatchCard[] (per match)
+            │       │           ├── Text ("List: {list_name}")
+            │       │           ├── Text ("Matched: {matched_name}")
+            │       │           ├── Text ("DOB: {matched_dob}")
+            │       │           ├── ProgressBar (match_score, 0-100%)
+            │       │           ├── Text ("Entity: {entity_id} ({entity_type})")
+            │       │           ├── Text ("Listed since: {listed_since}")
+            │       │           └── Link ("View Source" -> source_url)
+            │       └── ReviewButton (for unreviewed potential_match rows)
+            │           └── onClick -> open ReviewDialog
+            ├── ReviewDialog
+            │   ├── DialogTitle ("Review Screening Match")
+            │   ├── DialogDescription (screen_type + matched_name)
+            │   ├── RadioGroup
+            │   │   ├── Radio ("False Positive - name similarity, not the same person")
+            │   │   └── Radio ("True Match - confirmed match against watchlist")
+            │   ├── Textarea (note, required, maxLength=2000, placeholder="Provide justification...")
+            │   └── DialogFooter
+            │       ├── Button ("Cancel")
+            │       └── Button ("Submit Review")
+            │           └── onClick -> useMutation(POST /review)
+            └── ReScreenButton
+                └── "Re-screen" -> useMutation(POST /rescreen) -> refetch results
+
+KycScreeningQueuePage (/admin/kyc/screening)
+├── PageHeader ("Screening Review Queue")
+├── StatsSummary
+│   ├── StatCard (total_pending)
+│   ├── StatCard (oldest_pending_age)
+│   └── StatCard (reviewed_today)
+├── FilterBar
+│   ├── Select (screen_type: All | OFAC | EU | UN | PEP | Adverse Media)
+│   ├── Select (sort_by: "oldest_first" | "highest_score")
+│   └── Button ("Refresh")
+├── PendingReviewsTable
+│   ├── TableHeader (Case | User | Type | Score | Waiting | Actions)
+│   └── TableBody
+│       └── ReviewRow[] (sortable by waiting_time, match_score)
+│           ├── Cell: CaseId (link to case detail /admin/kyc/cases/{id})
+│           ├── Cell: UserDisplayName
+│           ├── Cell: ScreenTypeBadge (color-coded)
+│           ├── Cell: MatchScoreBar (visual bar 0-1.0, color gradient)
+│           ├── Cell: WaitingTimeBadge (relative: "2h ago", "3d ago")
+│           └── Cell: ReviewButton -> opens ReviewDialog
+├── BulkReviewBar (visible when rows selected via checkboxes)
+│   ├── Text ("{N} selected")
+│   ├── Button ("Mark All as False Positive")
+│   │   └── onClick -> sequential review API calls
+│   └── Button ("Clear Selection")
+└── PaginationFooter (cursor-based)
+    ├── Text ("Showing {count} of {total}")
+    └── Button ("Load More")
+```
+
+### State Management (React Query)
+
+```typescript
+const screeningKeys = {
+  caseResults: (caseId: string) => ["kyc", "screening", caseId] as const,
+  pendingReviews: (filters: object) => ["kyc", "screening", "pending", filters] as const,
+  userHistory: (userSub: string) => ["kyc", "screening", "history", userSub] as const,
+};
+
+function useScreeningResults(caseId: string) {
+  return useQuery({
+    queryKey: screeningKeys.caseResults(caseId),
+    queryFn: () => getScreeningResults(caseId),
+    staleTime: 60_000,
+  });
+}
+
+function useReviewMatch(caseId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { screenKey: string; decision: string; note: string }) =>
+      reviewMatch(caseId, body.screenKey, { decision: body.decision, note: body.note }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: screeningKeys.caseResults(caseId) });
+      qc.invalidateQueries({ queryKey: ["kyc", "screening", "pending"] });
+    },
+  });
+}
+
+function useRescreen(caseId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => rescreenCase(caseId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: screeningKeys.caseResults(caseId) }),
+  });
+}
+```
+
+---
+
+## 10. Observability & Monitoring
+
+### 10.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `kyc_screening_run_total` | Counter | `screen_type`, `trigger` | Total screening runs per type and trigger |
+| `kyc_screening_result_total` | Counter | `screen_type`, `result` | Result distribution per type |
+| `kyc_screening_match_score_histogram` | Histogram | `screen_type` | Match score distribution for non-clear results |
+| `kyc_screening_review_total` | Counter | `decision` | Reviews completed (false_positive / true_match) |
+| `kyc_screening_pending_gauge` | Gauge | `screen_type` | Current pending review count per type |
+| `kyc_screening_latency_seconds` | Histogram | `screen_type`, `provider` | Screening provider response time |
+| `kyc_screening_rescreen_total` | Counter | `trigger` | Re-screens triggered |
+| `kyc_screening_review_latency_hours` | Histogram | -- | Time from match creation to review |
+
+### 10.2 Structured Log Events
+
+| Event | Level | Fields | Trigger |
+|-------|-------|--------|---------|
+| `kyc.screening.run_started` | INFO | `case_id`, `user_sub`, `trigger`, `screen_types` | screen_case() called |
+| `kyc.screening.match_found` | WARN | `case_id`, `screen_type`, `match_score`, `matched_name`, `entity_id` | potential_match or confirmed_match |
+| `kyc.screening.confirmed_match` | ERROR | `case_id`, `screen_type`, `matched_name`, `entity_id` | confirmed_match (requires immediate attention) |
+| `kyc.screening.all_clear` | INFO | `case_id`, `trigger` | All 5 screen types clear |
+| `kyc.screening.reviewed` | INFO | `case_id`, `screen_key`, `decision`, `reviewer` | Admin reviews match |
+| `kyc.screening.rescreen_triggered` | INFO | `case_id`, `trigger`, `user_sub` | Re-screen requested |
+| `kyc.screening.provider_error` | ERROR | `screen_type`, `provider`, `error_message` | Provider timeout/failure |
+| `kyc.screening.bulk_review` | INFO | `reviewer`, `count`, `decision` | Bulk false-positive review |
+
+### 10.3 Alert Thresholds
+
+| Alert | Condition | Severity | Action |
+|-------|----------|----------|--------|
+| Confirmed match detected | Any `confirmed_match` result | P1 (Critical) | Immediate admin notification; block case approval |
+| Pending review backlog | > 20 unreviewed `potential_match` older than 24h | P2 (Warning) | Escalate to compliance lead |
+| Screening provider errors | > 5% failure rate in 1h (production only) | P2 (Warning) | Check provider status; fallback to manual review |
+| False positive rate anomaly | FP rate > 95% over 7 days | P3 (Info) | Review screening quality; tune match thresholds |
+| No screenings in 4h | Zero `kyc.screening.run_started` events | P3 (Info) | Check if submission flow is broken |
+
+### 10.4 Dashboard Queries
+
+```sql
+-- Screening outcome distribution (last 30 days)
+SELECT screen_type, result, count(*) as count
+FROM structured_logs
+WHERE event = 'kyc.screening.run_started'
+  AND timestamp > now() - interval '30 days'
+GROUP BY screen_type, result
+
+-- Review backlog aging
+SELECT
+  screen_type,
+  count(*) as pending,
+  min(created_at) as oldest,
+  avg(EXTRACT(EPOCH FROM (now() - to_timestamp(created_at)))) / 3600 as avg_hours
+FROM kyc_screening_results
+WHERE result = 'potential_match' AND reviewed_by IS NULL
+GROUP BY screen_type
+
+-- False positive rate by screen type
+SELECT screen_type,
+  count(CASE WHEN review_decision = 'false_positive' THEN 1 END) as fp,
+  count(CASE WHEN review_decision = 'true_match' THEN 1 END) as tm,
+  round(100.0 * count(CASE WHEN review_decision = 'false_positive' THEN 1 END) / count(*), 1) as fp_pct
+FROM kyc_screening_results
+WHERE review_decision IS NOT NULL
+  AND created_at > EXTRACT(EPOCH FROM now() - interval '30 days')
+GROUP BY screen_type
+```
+
+---
+
+## 11. Rollout Plan
+
+### 11.1 Feature Flags
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `KYC_SCREENING_ENABLED` | `false` | Gates screening integration at submission |
+| `KYC_SCREENING_CONTINUOUS_ENABLED` | `false` | Gates profile-change re-screening |
+| `KYC_SCREENING_PROVIDER` | `mock` | Provider selection (`mock` / `production`) |
+
+### 11.2 Migration Steps
+
+| Step | Action | Duration | Rollback |
+|------|--------|----------|----------|
+| 1 | Deploy backend + create `kyc_screening_results` DDB table | 1 day | Delete table |
+| 2 | Deploy screening service behind `KYC_SCREENING_ENABLED=false` | 1 day | Revert deploy |
+| 3 | Enable on staging with mock provider; run E2E suite | 2 days | Set false |
+| 4 | Enable in production with mock provider (shadow mode -- results stored but not blocking) | 1 week | Set false |
+| 5 | Verify mock results quality; train admin team on review queue UI | 1 week | N/A |
+| 6 | Switch to production provider (`KYC_SCREENING_PROVIDER=production`) | 1 day | Set `mock` |
+| 7 | Shadow-compare: run both mock + production, compare results for 2 weeks | 2 weeks | Revert to mock-only |
+| 8 | Enable blocking mode (matches prevent auto-approval) | 1 day | Disable blocking |
+| 9 | Enable `KYC_SCREENING_CONTINUOUS_ENABLED` for profile-change re-screening | after 1 month | Set false |
+
+### 11.3 Canary Criteria
+
+- Mock provider produces deterministic results for all test patterns
+- Production provider response time < 2s for 99th percentile
+- False positive rate for production provider < 20% (validated by manual spot-check)
+- No increase in case processing latency > 500ms at submission
+- Admin review queue functional and accessible
+- Zero data leakage (match details not exposed to non-admin users)
+
+### 11.4 Rollback Procedure
+
+1. Set `KYC_SCREENING_ENABLED=false` -- submission proceeds without screening
+2. Existing screening results remain in DDB for audit trail (never deleted)
+3. Pending review queue becomes empty (no new matches created)
+4. Admin screening endpoints return empty results (safe degradation)
+5. If production provider caused issues, revert `KYC_SCREENING_PROVIDER=mock`
+6. Post-mortem before re-enabling
+
+---
+
+## 12. Performance Considerations
+
+### 12.1 Screening Latency Budget
+
+| Operation | Latency Target | DDB Cost | Notes |
+|-----------|---------------|----------|-------|
+| Screen case (5 types, mock) | < 200ms total | 5 WCU | Mock: in-process, no HTTP |
+| Screen case (5 types, production) | < 3s total | 5 WCU | HTTP calls parallelized with `asyncio.gather()` |
+| Single screen type (mock) | < 30ms | 1 WCU | In-memory name pattern matching |
+| Single screen type (production) | < 2s | 1 WCU | External HTTP call + DDB write |
+| Get screening results | < 100ms | 5 RCU | Query PK=case_id |
+| Review match | < 150ms | 2 WCU | Conditional update + audit event |
+| Pending reviews list | < 200ms | 10 RCU | GSI query, limit 50 |
+| User history | < 200ms | 10 RCU | GSI query, limit 50 |
+
+### 12.2 Submission Latency Impact
+
+Screening adds latency to the submission flow. To minimize impact:
+- Mock provider runs synchronously in-process (< 200ms total)
+- Production provider runs all 5 types in parallel via `asyncio.gather()`
+- If any provider call times out (> 5s), the result is stored as `provider_error` and flagged for manual review
+- Submission succeeds even if screening fails (screening is fire-and-forget with error tracking)
+
+### 12.3 Storage Growth
+
+- 5 screening results per case submission = ~5KB per case
+- Re-screening adds another 5 results per trigger = ~5KB per re-screen
+- With 1000 submissions/month: ~5MB/month of screening data
+- GSI `ByResult` for pending reviews: hot partition on `potential_match` -- expected to be small (< 100 pending at any time)
+- Old results are never deleted (audit trail requirement)
+
+### 12.4 Rate Limiting
+
+| Endpoint | Rate Limit | Window | Notes |
+|----------|-----------|--------|-------|
+| GET screening results | 60 req/user/min | 1m | Standard read rate |
+| POST review | 30 req/admin/min | 1m | Allows bulk review pace |
+| POST rescreen | 5 req/admin/hour | 1h | Expensive operation |
+| GET pending reviews | 30 req/admin/min | 1m | Polling frequency |
+| GET user history | 30 req/admin/min | 1m | Standard admin read rate |
+
+---
+
+## 13. E2E Test Plan
 
 **File**: `frontend/e2e/kyc-screening.spec.ts`
 **Total**: ~20 tests across 4 sections (170-173)
@@ -452,7 +1207,129 @@ test("173.5 Screening queue page lists pending reviews", async ({ page }) => {
 
 ---
 
-## 5. File Change Summary
+## 14. Expanded E2E Test Details
+
+### Section 170a: Screening Edge Cases (5 additional tests)
+
+```typescript
+test("170.6 Adverse media match triggered by name pattern", async () => {
+  // Set display_name to "Media Flagged Reporter"
+  // Submit case
+  // Verify adverse_media result = "potential_match"
+  // Verify match_score = 0.75
+  // Verify other 4 screen types = "clear"
+});
+
+test("170.7 Screening results include provider field", async () => {
+  // GET screening results for any submitted case
+  // Verify all 5 results have provider = "mock_screening"
+});
+
+test("170.8 Each screening result has unique screening_id", async () => {
+  // GET results
+  // Verify all 5 screening_ids are distinct
+  // Verify format matches "scr_" + 12 hex chars
+});
+
+test("170.9 Case owner sees summary but match_details redacted", async () => {
+  // Create case with OFAC-triggering name, submit
+  // GET screening results as Alice (owner, non-admin)
+  // Verify result status is visible ("potential_match")
+  // Verify match_details is empty or redacted for non-admin
+});
+
+test("170.10 Multiple trigger patterns combine correctly", async () => {
+  // Set display_name to "OFAC Test PEP Official Combined"
+  // Submit case
+  // Verify sanctions_ofac = "potential_match" (matches "OFAC Test")
+  // Verify pep_check = "potential_match" (matches "PEP Official")
+  // Verify sanctions_eu, sanctions_un, adverse_media = "clear"
+});
+```
+
+### Section 171a: Review Edge Cases (4 additional tests)
+
+```typescript
+test("171.6 Review with empty note rejected (422)", async () => {
+  // POST review with note=""
+  // Expect 422 validation_error
+});
+
+test("171.7 Review note exceeding 2000 chars rejected (422)", async () => {
+  // POST review with note of 2001 characters
+  // Expect 422 validation_error
+});
+
+test("171.8 Double-review returns 409", async () => {
+  // Review a match as false_positive (succeeds)
+  // Attempt to review same match again as true_match
+  // Expect 409 "kyc_screening_already_reviewed"
+});
+
+test("171.9 Reviewing confirmed_match as false_positive is allowed", async () => {
+  // Admin can override even confirmed matches (compliance decision)
+  // POST review on confirmed_match with decision="false_positive"
+  // Verify 200 success
+  // Verify review_decision = "false_positive"
+});
+```
+
+### Section 172a: Re-screening Edge Cases (4 additional tests)
+
+```typescript
+test("172.6 Re-screen preserves original screening results", async () => {
+  // GET results after re-screen
+  // Verify both original (trigger="submission") and new (trigger="manual") results
+  // Count total results: should be 10 (5 original + 5 re-screen)
+  // Verify distinct screen_key timestamps
+});
+
+test("172.7 Multiple re-screens accumulate in history", async () => {
+  // Re-screen twice more
+  // GET user history
+  // Verify 3 sets of results (submission + manual + manual)
+  // Total results = 15
+});
+
+test("172.8 Re-screen on non-existent case returns 404", async () => {
+  // POST rescreen for "kyc_nonexistent_case"
+  // Expect 404
+});
+
+test("172.9 Re-screen on draft case returns 400", async () => {
+  // Create case but don't submit it
+  // POST rescreen
+  // Expect 400 "kyc_invalid_status"
+});
+```
+
+### Section 173a: UI Edge Cases (3 additional tests)
+
+```typescript
+test("173.6 Bulk false-positive review updates all selected rows", async ({ page }) => {
+  // Select 3 pending review rows via checkboxes
+  // Click "Mark All as False Positive"
+  // Verify all 3 rows show "Reviewed - False Positive"
+  // Verify pending count decreases by 3
+});
+
+test("173.7 Screening queue pagination loads more items", async ({ page }) => {
+  // If > 20 pending reviews, verify "Load More" button appears
+  // Click "Load More"
+  // Verify additional rows are appended to the table
+});
+
+test("173.8 Filter by screen type updates table rows", async ({ page }) => {
+  // Select "OFAC" in filter dropdown
+  // Verify only sanctions_ofac rows visible
+  // Select "All"
+  // Verify all types visible again
+});
+```
+
+---
+
+## 15. File Change Summary
 
 | File | Change Type | Description |
 |------|-------------|-------------|
@@ -466,4 +1343,4 @@ test("173.5 Screening queue page lists pending reviews", async ({ page }) => {
 | `frontend/src/pages/admin/KycScreeningQueuePage.tsx` | **New** | Pending screening review queue |
 | `frontend/src/api/endpoints/kyc-admin.ts` | Modify | Add screening API functions |
 | `frontend/src/App.tsx` | Modify | Add /admin/kyc/screening route |
-| `frontend/e2e/kyc-screening.spec.ts` | **New** | 20 E2E tests across sections 170-173 |
+| `frontend/e2e/kyc-screening.spec.ts` | **New** | 20+ E2E tests across sections 170-173 |

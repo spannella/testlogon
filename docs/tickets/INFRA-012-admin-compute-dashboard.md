@@ -609,7 +609,266 @@ Quota modification is root-only. This prevents:
 
 ---
 
-## 8. Acceptance Criteria
+## 8. DynamoDB Access Patterns
+
+### 8.1 Access Pattern Matrix
+
+| Access Pattern | Table/GSI | PK | SK / Condition | Projection | Frequency |
+|---------------|-----------|-----|----------------|------------|-----------|
+| Get user quota | compute_quotas | `user_sub` | — | All | On every launch |
+| Set user quota | compute_quotas | `user_sub` | — (put_item) | — | Low — root admin action |
+| Delete user quota | compute_quotas | `user_sub` | — (delete_item) | — | Rare |
+| All running instances | ec2_instances / ByGlobalStatus GSI | `status = running` | `created_at DESC` | All | Medium — admin dashboard |
+| All running pods | k8s_pods / ByGlobalStatus GSI | `status = running` | `created_at DESC` | All | Medium — admin dashboard |
+| Instances by user | ec2_instances | `user_sub` | `SK begins_with INST#` | All | Medium — user filter |
+| Platform spending | compute_billing (Scan) | All | Filter by month prefix | Aggregation | Low — dashboard load |
+| Per-user spending | compute_billing (Scan) | All | Filter by month prefix | Group by user_sub | Low — dashboard load |
+
+### 8.2 Example DynamoDB Items
+
+**Custom quota record:**
+
+```json
+{
+  "user_sub":                 {"S": "abc-123-def"},
+  "max_ec2_instances":        {"N": "10"},
+  "max_k8s_pods":             {"N": "15"},
+  "max_monthly_spend_cents":  {"N": "25000"},
+  "allowed_instance_types":   {"L": [{"S": "t3.micro"}, {"S": "t3.small"}, {"S": "t3.medium"}]},
+  "allowed_k8s_presets":      {"L": [{"S": "small"}, {"S": "medium"}, {"S": "large"}]},
+  "updated_at":               {"N": "1748520000"},
+  "updated_by":               {"S": "root.admin@testdev.local"},
+  "notes":                    {"S": "Upgraded to premium tier quota"}
+}
+```
+
+---
+
+## 9. API Request/Response Examples
+
+### 9.1 List All Instances (Admin)
+
+```bash
+curl -s "http://localhost:8000/v1/admin/compute/instances?status=running&limit=10" \
+  -H "Cookie: ui_session=sess_root; ui_csrf=tok_root; ui_access_token=eyJ..."
+```
+
+**Response (200):**
+
+```json
+{
+  "instances": [
+    {
+      "instance_id": "i_abc12345",
+      "user_sub": "alice-uuid",
+      "label": "Dev Server",
+      "instance_type": "t3.small",
+      "ami_name": "Ubuntu 22.04",
+      "status": "running",
+      "public_ip": "10.0.42.17",
+      "created_at": 1748520000,
+      "last_activity_at": 1748525000,
+      "auto_terminate_after": 28800
+    }
+  ],
+  "count": 1,
+  "cursor": null
+}
+```
+
+### 9.2 Force-Terminate Instance
+
+```bash
+curl -s -X POST "http://localhost:8000/v1/admin/compute/instances/alice-uuid/i_abc12345/terminate" \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_root; ui_csrf=tok_root; ui_access_token=eyJ..." \
+  -H "x-csrf-token: tok_root" \
+  -d '{"reason": "Suspected crypto mining — excessive CPU usage"}'
+```
+
+**Response (200):**
+
+```json
+{
+  "instance_id": "i_abc12345",
+  "status": "terminated",
+  "terminated_at": 1748525100
+}
+```
+
+### 9.3 Set User Quota (Root Only)
+
+```bash
+curl -s -X PUT "http://localhost:8000/v1/admin/compute/quotas/alice-uuid" \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_root; ui_csrf=tok_root; ui_access_token=eyJ..." \
+  -H "x-csrf-token: tok_root" \
+  -d '{
+    "max_ec2_instances": 10,
+    "max_k8s_pods": 15,
+    "max_monthly_spend_cents": 25000,
+    "allowed_instance_types": ["t3.micro", "t3.small", "t3.medium"],
+    "notes": "Upgraded to premium tier"
+  }'
+```
+
+**Response (200):**
+
+```json
+{
+  "user_sub": "alice-uuid",
+  "max_ec2_instances": 10,
+  "max_k8s_pods": 15,
+  "max_monthly_spend_cents": 25000,
+  "allowed_instance_types": ["t3.micro", "t3.small", "t3.medium"],
+  "allowed_k8s_presets": [],
+  "is_custom": true,
+  "updated_at": 1748525200,
+  "updated_by": "root.admin@testdev.local",
+  "notes": "Upgraded to premium tier"
+}
+```
+
+---
+
+## 10. Error Handling Matrix
+
+| HTTP | Error Code | Condition | Response Body | Client Recovery |
+|------|-----------|-----------|---------------|-----------------|
+| 403 | `FORBIDDEN` | Non-admin calls admin endpoint | `{"detail": "Admin access required"}` | N/A |
+| 403 | `ROOT_REQUIRED` | Non-root calls quota set/delete | `{"detail": "Root access required"}` | N/A |
+| 404 | `INSTANCE_NOT_FOUND` | Force-terminate with invalid ID | `{"detail": "Instance not found"}` | Refresh list |
+| 404 | `POD_NOT_FOUND` | Force-terminate pod with invalid ID | `{"detail": "Pod not found"}` | Refresh list |
+| 404 | `USER_NOT_FOUND` | Quota for non-existent user | `{"detail": "User not found"}` | Check user_sub |
+| 409 | `ALREADY_TERMINATED` | Force-terminate already terminated instance | `{"detail": "Instance already terminated"}` | Refresh status |
+| 409 | `QUOTA_EXCEEDED` | Launch blocked by quota | `{"detail": "Maximum 3 instances allowed"}` | Show quota info |
+| 409 | `SPENDING_LIMIT_REACHED` | Launch blocked by spending cap | `{"detail": "Monthly spending limit reached"}` | Show spending |
+| 422 | `INVALID_QUOTA` | Quota values out of range | `{"detail": "max_ec2_instances must be 0-100"}` | Fix input |
+| 422 | `INVALID_INSTANCE_TYPE` | Allowed type not in platform list | `{"detail": "Unknown instance type: m5.24xlarge"}` | Show valid types |
+
+---
+
+## 11. Observability & Monitoring
+
+### 11.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `admin_compute_force_terminate_total` | Counter | `resource_type` (ec2/k8s), `admin_sub` | Force-termination events |
+| `admin_compute_quota_set_total` | Counter | `admin_sub` | Quota modifications |
+| `admin_compute_quota_check_total` | Counter | `result` (allowed/denied) | Quota enforcement results |
+| `admin_compute_spending_query_latency_seconds` | Histogram | `scope` (platform/per_user) | Spending aggregation latency |
+| `admin_compute_instance_list_latency_seconds` | Histogram | `resource_type` | Cross-user listing latency |
+| `admin_compute_dashboard_loads_total` | Counter | — | Dashboard page loads |
+
+### 11.2 Structured Log Events
+
+```json
+{"logger": "admin_compute", "level": "warn", "event": "force_terminate", "admin_sub": "root-uuid", "target_user": "alice-uuid", "resource_type": "ec2", "instance_id": "i_abc12345", "reason": "resource abuse"}
+
+{"logger": "admin_compute", "level": "info", "event": "quota_set", "admin_sub": "root-uuid", "target_user": "alice-uuid", "max_ec2": 10, "max_k8s": 15, "max_spend_cents": 25000}
+
+{"logger": "admin_compute", "level": "info", "event": "quota_enforced", "user_sub": "alice-uuid", "resource_type": "ec2", "current": 3, "max": 3, "outcome": "denied"}
+
+{"logger": "admin_compute", "level": "info", "event": "spending_query", "scope": "platform", "month": "2026-05", "total_cents": 142500, "duration_ms": 320}
+```
+
+### 11.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High force-terminate rate | `rate(admin_compute_force_terminate_total[1h]) > 10` | Warning | Review admin activity |
+| Spending query slow | `p99(admin_compute_spending_query_latency_seconds) > 5s` | Warning | Optimize aggregation / add caching |
+| Quota denial spike | `rate(admin_compute_quota_check_total{result=denied}[1h]) > 50` | Info | Review if quotas are too restrictive |
+| Platform spend threshold | Monthly total > 80% of configured budget | Warning | Notify finance team |
+
+---
+
+## 12. Rollout Plan
+
+### Phase 1: Backend Only (Days 1-2)
+
+- **Feature flag**: `ADMIN_COMPUTE_DASHBOARD_ENABLED=false`
+- Deploy admin service + quota table
+- Quota enforcement disabled (no launch-time checks)
+- Admin endpoints return 404 when flag is off
+
+### Phase 2: Admin API (Days 3-4)
+
+- **Feature flag**: `ADMIN_COMPUTE_DASHBOARD_ENABLED=true` for root users only
+- Enable listing, force-terminate, and spending endpoints
+- Test with root session in staging
+- Validate audit logging for all operations
+
+### Phase 3: Quota Enforcement (Day 5)
+
+- Enable quota checks in launch paths
+- Default quotas match current hardcoded limits (no user impact)
+- Monitor quota denial rate
+- **Rollback**: Remove quota check imports; launchers revert to hardcoded limits
+
+### Phase 4: Frontend + GA (Days 6-8)
+
+- Deploy AdminComputeDashboard page
+- Enable for all admins
+- Monitor dashboard load performance (spending aggregation can be slow)
+- Add caching for spending queries if p99 > 3s
+
+---
+
+## 13. Performance Considerations
+
+### 13.1 Latency Targets
+
+| Operation | Target p50 | Target p99 | Notes |
+|-----------|-----------|-----------|-------|
+| List all instances | < 100ms | < 500ms | GSI query, paginated |
+| Force-terminate | < 50ms | < 200ms | DDB update + audit write |
+| Platform spending | < 300ms | < 2s | Full table scan + aggregation |
+| Per-user spending | < 500ms | < 3s | Full scan + group by |
+| Get quota | < 10ms | < 40ms | Single GetItem |
+| Set quota | < 20ms | < 80ms | Single PutItem |
+| Instance type stats | < 200ms | < 1s | GSI query + count |
+
+### 13.2 Spending Aggregation Optimization
+
+Platform spending requires scanning the `compute_billing` table. For large-scale deployments:
+
+1. **Materialized summary**: Background task runs hourly, writes `platform_spending_summary` DDB item per month
+2. **Dashboard reads summary**: Instead of scanning, reads pre-computed summary
+3. **Per-user breakdown cached**: Store top-50 spenders in summary for instant display
+
+### 13.3 DynamoDB Costs
+
+| Operation | RCU | WCU | Notes |
+|-----------|-----|-----|-------|
+| List instances (GSI) | 5.0 | — | Eventually consistent, paginated |
+| Force-terminate | — | 2.0 | Instance update + audit event |
+| Spending scan | 50-200 | — | Depends on billing table size |
+| Get quota | 0.5 | — | Single item |
+| Set quota | — | 1.0 | Single item |
+
+### 13.4 Caching Strategy
+
+| Data | Cache | TTL | Invalidation |
+|------|-------|-----|--------------|
+| Platform spending | Server-side (in-memory) | 60s | On force-terminate |
+| Instance list | React Query | 10s staleTime | On force-terminate |
+| Quota | React Query | 30s staleTime | On set/delete |
+| Instance type stats | Server-side | 300s | On instance launch/terminate |
+
+### 13.5 Rate Limiting
+
+| Action | Limit | Window | Key |
+|--------|-------|--------|-----|
+| List instances/pods | 30 | 1 minute | admin_sub |
+| Force-terminate | 10 | 1 minute | admin_sub |
+| Set quota | 20 | 1 minute | admin_sub |
+| Spending queries | 10 | 1 minute | admin_sub |
+
+---
+
+## 14. Acceptance Criteria
 
 1. Admins can view all instances and pods across all users.
 2. Admins can force-terminate any user's instance or pod with a reason.

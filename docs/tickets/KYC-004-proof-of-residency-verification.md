@@ -49,9 +49,61 @@ residency document, which is error-prone and slow.
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
 
-### 2.1 Current Proof of Address Handling
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                         Frontend                                       │
+│                                                                        │
+│  KycCaseForm.tsx (user)                 KycCaseDetailPage.tsx (admin)  │
+│  ┌─────────────────────────┐          ┌──────────────────────────┐    │
+│  │ ResidencySection         │          │ ResidencyVerificationTab │    │
+│  │  ├─ DocTypeDropdown      │          │  ├─ DocAddress (left)    │    │
+│  │  ├─ IssuingEntityInput   │          │  ├─ ProfileAddress(right)│    │
+│  │  ├─ DocumentDatePicker   │          │  ├─ FieldMatchIndicators │    │
+│  │  ├─ FileUpload           │          │  ├─ RecencyBadge         │    │
+│  │  ├─ RecencyBadge         │          │  └─ MultipleDocs SubTabs │    │
+│  │  └─ AttachedDocsList     │          └──────────────────────────┘    │
+│  └─────────────────────────┘                                          │
+└──────────────────┬─────────────────────────────┬──────────────────────┘
+                   │                             │
+                   ▼                             ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                     Backend (FastAPI)                                   │
+│                                                                        │
+│  POST /{case_id}/residency-documents        (attach with metadata)    │
+│  GET  /{case_id}/residency-documents        (list residency docs)     │
+│  DELETE /{case_id}/residency-documents/{idx} (remove by index)        │
+│                                                                        │
+│  kyc_address_matching.py (NEW)                                        │
+│  ┌────────────────────────────────────────────────────────┐           │
+│  │ match_addresses(extracted, profile)                     │           │
+│  │   ├─ line1: normalize abbreviations, case-insensitive   │           │
+│  │   ├─ city: case-insensitive exact                       │           │
+│  │   ├─ state: abbrev ↔ full name ("CA" = "California")   │           │
+│  │   ├─ postal_code: first 5 digits (ignore +4)           │           │
+│  │   └─ country: ISO 2-letter ↔ full name                 │           │
+│  └────────────────────────────────────────────────────────┘           │
+│                                                                        │
+│  Readiness gate update (_readiness_for_case):                         │
+│  ┌────────────────────────────────────────────────────────┐           │
+│  │ if intake_profile in ("enhanced", "high_risk"):         │           │
+│  │   residency_doc required + recency_valid = true         │           │
+│  └────────────────────────────────────────────────────────┘           │
+└──────────────────┬─────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│  DynamoDB: kyc_cases table                                             │
+│  case.files[] entry with residency_meta nested object                 │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Current State Analysis
+
+### 3.1 Current Proof of Address Handling
 
 `_KYC_ALLOWED_FILE_TYPES` (line 51 of `app/routers/kyc_cases.py`):
 ```python
@@ -63,7 +115,7 @@ The `proof_of_address` type is optional -- it is in `_KYC_ALLOWED_FILE_TYPES` bu
 with `file_type="proof_of_address"` are stored as opaque entries in the case's `files[]`
 array with no additional metadata.
 
-### 2.2 User Mailing Address
+### 3.2 User Mailing Address
 
 `MailingAddress` model (`app/models.py`, line 1273):
 ```python
@@ -76,10 +128,7 @@ class MailingAddress(BaseModel):
     country: Optional[str] = None
 ```
 
-Stored on the user profile via `app/services/profiles.py`. Accessible via profile
-retrieval for the case's `user_sub`.
-
-### 2.3 File Validation
+### 3.3 File Validation
 
 `_validate_file_requirements()` (line 155 of `app/routers/kyc_cases.py`) checks for
 required file types but does not validate metadata, recency, or content of proof_of_address
@@ -87,140 +136,211 @@ files beyond their presence.
 
 ---
 
-## 3. Technical Design
+## 4. DynamoDB Access Patterns
 
-### 3.1 Accepted Residency Document Types
+| Access Pattern | PK | SK | Notes |
+|---------------|-----|-----|-------|
+| Get residency docs for a case | `KYC#{case_id}` | `META` → filter `files[]` where `type=proof_of_address` | Part of case record |
+| Update case files array | `KYC#{case_id}` | `META` | Conditional update on `version` |
+| Get user profile address | `USER#{user_sub}` | `PROFILE` | For matching |
 
-```python
-RESIDENCY_DOC_TYPES = {
-    "utility_bill",        # Gas, electric, water, internet
-    "bank_statement",      # Bank or credit union statement
-    "government_letter",   # Tax notice, voter registration, government correspondence
-    "tax_document",        # Tax return, tax assessment
-    "lease_agreement",     # Signed rental/lease agreement
+### Example: Residency Document in files[] Array
+
+```json
+{
+  "type": "proof_of_address",
+  "path": "/uploads/kyc/alice_utility_bill.pdf",
+  "verification_state": "pending",
+  "attached_at": 1716681600,
+  "residency_meta": {
+    "document_type": "utility_bill",
+    "issuing_entity": "Pacific Gas & Electric",
+    "document_date": "2026-04-15",
+    "extracted_address": {
+      "line1": "123 Main St",
+      "line2": "Apt 4B",
+      "city": "San Francisco",
+      "state": "CA",
+      "postal_code": "94105",
+      "country": "US"
+    },
+    "recency_valid": true,
+    "recency_days": 44,
+    "address_match": {
+      "status": "match",
+      "profile_address": {
+        "line1": "123 Main Street",
+        "city": "San Francisco",
+        "state": "California",
+        "postal_code": "94105",
+        "country": "US"
+      },
+      "field_matches": {
+        "line1": "match",
+        "city": "match",
+        "state": "match",
+        "postal_code": "match",
+        "country": "match"
+      }
+    }
+  }
 }
 ```
 
-### 3.2 Enhanced File Entry Structure
+---
 
-Each proof-of-address file entry in `case.files[]` will be extended with a `residency_meta`
-sub-object:
+## 5. API Request/Response Examples
 
-```python
-{
-    "type": "proof_of_address",
+### 5.1 Attach Residency Document
+
+```bash
+curl -X POST "http://localhost:8000/v1/kyc/cases/kyc_a1b2c3d4/residency-documents" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a" \
+  -H "x-csrf-token: csrf_a" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "expected_version": 3,
     "path": "/uploads/kyc/alice_utility_bill.pdf",
-    "verification_state": "pending",
-    "attached_at": 1716681600,
-    "residency_meta": {
+    "document_type": "utility_bill",
+    "issuing_entity": "Pacific Gas & Electric",
+    "document_date": "2026-04-15"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "file_index": 3,
+  "residency_meta": {
+    "document_type": "utility_bill",
+    "issuing_entity": "Pacific Gas & Electric",
+    "document_date": "2026-04-15",
+    "recency_valid": true,
+    "recency_days": 44,
+    "address_match": {
+      "status": "match",
+      "field_matches": {
+        "line1": "match",
+        "city": "match",
+        "state": "match",
+        "postal_code": "match",
+        "country": "match"
+      }
+    }
+  }
+}
+```
+
+### 5.2 List Residency Documents
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/cases/kyc_a1b2c3d4/residency-documents" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a"
+```
+
+**Response (200):**
+```json
+{
+  "documents": [
+    {
+      "file_index": 3,
+      "path": "/uploads/kyc/alice_utility_bill.pdf",
+      "residency_meta": {
         "document_type": "utility_bill",
         "issuing_entity": "Pacific Gas & Electric",
         "document_date": "2026-04-15",
-        "extracted_address": {
-            "line1": "123 Main St",
-            "line2": "Apt 4B",
-            "city": "San Francisco",
-            "state": "CA",
-            "postal_code": "94105",
-            "country": "US"
-        },
         "recency_valid": true,
         "recency_days": 44,
-        "address_match": {
-            "status": "match",          # match | partial | mismatch
-            "profile_address": { ... },
-            "field_matches": {
-                "line1": "match",
-                "city": "match",
-                "state": "match",
-                "postal_code": "match",
-                "country": "match"
-            }
-        }
+        "address_match": { "status": "match" }
+      }
     }
+  ]
 }
 ```
 
-### 3.3 Request Models
+### 5.3 Remove Residency Document
 
-**File: `app/contracts/kyc_cases_contract.py`** -- add:
+```bash
+curl -X DELETE "http://localhost:8000/v1/kyc/cases/kyc_a1b2c3d4/residency-documents/0" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a" \
+  -H "x-csrf-token: csrf_a"
+```
+
+**Response (200):**
+```json
+{ "ok": true, "removed_index": 0 }
+```
+
+---
+
+## 6. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|----------------|
+| Invalid document_type | 422 | `validation_error` | "Document type must be one of: utility_bill, bank_statement, government_letter, tax_document, lease_agreement." | Select valid type |
+| Invalid document_date format | 422 | `validation_error` | "Document date must be in YYYY-MM-DD format." | Fix date format |
+| Document older than 90 days | 200 (attached) | — | Warning: "Document is older than 90 days." | Attach but flagged |
+| Case not found | 404 | `kyc_case_not_found` | "Case not found." | Verify case ID |
+| Case not in draft/needs_more_info | 400 | `kyc_invalid_status` | "Documents can only be attached to draft or needs_more_info cases." | Check case status |
+| Non-owner attaches document | 403 | `kyc_access_forbidden` | "You do not own this case." | Use correct session |
+| Remove doc from submitted case | 400 | `kyc_invalid_status` | "Cannot modify files on a submitted case." | Case must be in draft |
+| File index out of bounds | 400 | `kyc_invalid_file_index` | "File index not found." | Refresh file list |
+
+---
+
+## 7. Pydantic Models
 
 ```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+RESIDENCY_DOC_TYPES = Literal[
+    "utility_bill", "bank_statement", "government_letter",
+    "tax_document", "lease_agreement"
+]
+
 class KycResidencyDocAttachRequest(BaseModel):
     expected_version: int = Field(..., ge=1)
     path: str = Field(..., min_length=1, max_length=1024)
-    document_type: Literal[
-        "utility_bill", "bank_statement", "government_letter",
-        "tax_document", "lease_agreement"
-    ]
+    document_type: RESIDENCY_DOC_TYPES
     issuing_entity: str = Field(..., min_length=1, max_length=200)
     document_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$",
                                description="ISO date, e.g. 2026-04-15")
+
+class AddressFieldMatch(BaseModel):
+    line1: Literal["match", "partial", "mismatch"] | None = None
+    city: Literal["match", "partial", "mismatch"] | None = None
+    state: Literal["match", "partial", "mismatch"] | None = None
+    postal_code: Literal["match", "partial", "mismatch"] | None = None
+    country: Literal["match", "partial", "mismatch"] | None = None
+
+class AddressMatchResult(BaseModel):
+    status: Literal["match", "partial", "mismatch"]
+    profile_address: dict = Field(default_factory=dict)
+    field_matches: AddressFieldMatch = Field(default_factory=AddressFieldMatch)
+
+class ResidencyMetaOut(BaseModel):
+    document_type: str
+    issuing_entity: str
+    document_date: str
+    extracted_address: dict | None = None
+    recency_valid: bool
+    recency_days: int
+    address_match: AddressMatchResult | None = None
 ```
 
-### 3.4 New Router Endpoint
+---
 
-**File: `app/routers/kyc_cases.py`** -- add endpoint:
+## 8. Technical Design
 
-```python
-@router.post("/{case_id}/residency-documents")
-def attach_residency_document(
-    case_id: str,
-    body: KycResidencyDocAttachRequest,
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """Attach a proof-of-residency document with metadata to a KYC case.
-    Validates document recency (within 90 days) and extracts address for matching.
-    Multiple residency documents can be attached."""
-```
-
-**Validation logic:**
-1. Verify case exists and belongs to user
-2. Verify case status is `draft` or `needs_more_info`
-3. Parse `document_date` and check recency: `(today - document_date).days <= 90`
-4. If recency fails: still attach but set `recency_valid=false`
-5. Run mock address extraction from file (reuse KYC-002 mock provider pattern)
-6. Compare extracted address against user's `mailing_address` using field-by-field fuzzy match
-7. Append to `files[]` array with full `residency_meta`
-
-```python
-@router.get("/{case_id}/residency-documents")
-def list_residency_documents(
-    case_id: str,
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """List all residency documents attached to a case with metadata."""
-
-@router.delete("/{case_id}/residency-documents/{file_index}")
-def remove_residency_document(
-    case_id: str,
-    file_index: int,
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """Remove a residency document from the case (draft/needs_more_info only)."""
-```
-
-### 3.5 Address Matching Service
+### 8.1 Address Matching Service
 
 **File: `app/services/kyc_address_matching.py`** (new, ~100 lines)
 
 ```python
 def match_addresses(extracted: dict, profile: dict) -> dict:
-    """Compare two address dicts field by field.
-
-    Returns:
-        {
-            "status": "match" | "partial" | "mismatch",
-            "profile_address": profile,
-            "field_matches": { field_name: "match"|"partial"|"mismatch" for each field }
-        }
-    """
+    """Compare two address dicts field by field."""
 ```
 
 Field matching rules:
@@ -235,12 +355,20 @@ Overall status:
 - postal_code + city match but line1 differs -> `partial`
 - city or postal_code mismatch -> `mismatch`
 
-### 3.6 Readiness Gate Update
+### 8.2 Street Abbreviation Map
 
-`_readiness_for_case()` (line 223 of `app/routers/kyc_cases.py`) currently does not require
-proof_of_address. For `intake_profile="enhanced"` or `"high_risk"` cases, add a new
-requirement check:
+```python
+_STREET_ABBREVIATIONS = {
+    "st": "street", "ave": "avenue", "blvd": "boulevard", "dr": "drive",
+    "ln": "lane", "rd": "road", "ct": "court", "pl": "place",
+    "cir": "circle", "pkwy": "parkway", "hwy": "highway",
+    "apt": "apartment", "ste": "suite", "fl": "floor",
+}
+```
 
+### 8.3 Readiness Gate Update
+
+For `intake_profile in ("enhanced", "high_risk")`:
 ```python
 if case.get("intake_profile") in ("enhanced", "high_risk"):
     residency_docs = [f for f in files_list if f.get("type") == "proof_of_address"]
@@ -250,29 +378,103 @@ if case.get("intake_profile") in ("enhanced", "high_risk"):
     checks["residency_document"] = bool(residency_docs) and valid_residency
 ```
 
-### 3.7 Frontend Changes
+---
 
-**File: `frontend/src/pages/kyc/KycCaseForm.tsx`** -- extend:
+## 9. Frontend Component Tree
 
-Add "Proof of Residency" section with:
-- Document type dropdown (Utility Bill, Bank Statement, etc.)
-- Issuing entity text input
-- Document date picker (must be within last 90 days)
-- File upload button (reuse existing file upload component)
-- List of attached residency documents with remove button
-- Recency badge (green "Within 90 days" / red "Expired")
+```
+KycCaseForm (user wizard, extended)
+└── ResidencyDocumentSection
+    ├── SectionHeader ("Proof of Residency")
+    ├── Select (document_type: Utility Bill | Bank Statement | ...)
+    ├── Input (issuing_entity)
+    ├── DatePicker (document_date, max=today, min=today-180)
+    ├── FileUpload (accepts PDF, JPG, PNG)
+    ├── RecencyBadge
+    │   ├── variant="valid" → green "Within 90 days"
+    │   └── variant="expired" → red "Expired (X days old)"
+    ├── AttachedDocsList
+    │   └── DocRow[] (for each attached residency doc)
+    │       ├── TypeBadge (utility_bill / bank_statement / ...)
+    │       ├── IssuingEntity text
+    │       ├── DocumentDate text
+    │       ├── RecencyBadge
+    │       └── Button "Remove"
+    └── Button "Add Another Document"
 
-**File: `frontend/src/pages/admin/KycCaseDetailPage.tsx`** -- extend:
-
-Add "Residency Verification" tab in document viewer:
-- Side-by-side comparison: document address (left) vs. profile address (right)
-- Field-by-field match indicators (green/yellow/red)
-- Document metadata display (type, issuing entity, date, recency)
-- Multiple documents shown as sub-tabs
+KycCaseDetailPage (admin, extended)
+└── ResidencyVerificationTab
+    ├── SubTabBar (one per residency document)
+    └── ResidencyDocPanel (per document)
+        ├── Grid (2 columns)
+        │   ├── DocumentAddressCard (left)
+        │   │   ├── line1, line2, city, state, postal_code, country
+        │   │   └── Source: "Extracted from document"
+        │   └── ProfileAddressCard (right)
+        │       ├── line1, line2, city, state, postal_code, country
+        │       └── Source: "User profile"
+        ├── FieldMatchTable
+        │   ├── Row: line1 → match/partial/mismatch badge
+        │   ├── Row: city → badge
+        │   ├── Row: state → badge
+        │   ├── Row: postal_code → badge
+        │   └── Row: country → badge
+        ├── MetadataPanel
+        │   ├── Document Type badge
+        │   ├── Issuing Entity
+        │   ├── Document Date
+        │   └── RecencyBadge
+        └── OverallMatchBadge (match/partial/mismatch)
+```
 
 ---
 
-## 4. E2E Test Plan
+## 10. Observability & Monitoring
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `kyc_residency_doc_attached` | Counter | `document_type` | Documents attached |
+| `kyc_residency_recency_result` | Counter | `valid` (bool) | Recency validation outcomes |
+| `kyc_residency_address_match` | Counter | `status` (match/partial/mismatch) | Address matching outcomes |
+| `kyc_residency_field_match` | Counter | `field`, `status` | Per-field match results |
+
+### Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| High mismatch rate | `mismatch / total > 30%` in 24h | P3 |
+| All documents expired | Case with only `recency_valid=false` docs for 48h | P3 (send reminder) |
+
+---
+
+## 11. Rollout Plan
+
+1. Deploy address matching service (no external dependencies)
+2. Deploy residency document endpoints (backward compatible -- existing proof_of_address still works)
+3. Update readiness gate for enhanced/high_risk profiles
+4. Deploy frontend residency section in wizard
+5. Deploy admin residency verification tab
+
+### Rollback
+
+- Revert readiness gate change (residency becomes optional again)
+- Residency metadata in `files[]` is ignored by existing code
+- No DDB schema changes needed (uses existing case files array)
+
+---
+
+## 12. Performance Considerations
+
+| Operation | Cost | Notes |
+|-----------|------|-------|
+| Attach residency doc | 2-5 WCU | Case update (larger item with metadata) |
+| Address matching | 0 DDB | In-memory computation |
+| Recency check | 0 DDB | Date arithmetic |
+| List residency docs | 1 RCU | Filter on case GetItem |
+
+---
+
+## 13. E2E Test Plan
 
 **File**: `frontend/e2e/kyc-residency-verification.spec.ts`
 **Total**: ~15 tests across 3 sections (164-166)
@@ -370,9 +572,28 @@ test("166.4 Enhanced profile with valid residency doc passes gate", async () => 
 });
 ```
 
+### Expanded E2E: Edge Cases
+
+```typescript
+test("164.7 Attach document to submitted case returns 400", async () => {
+  // Submit case first, then try to attach residency doc
+  // Expect 400 kyc_invalid_status
+});
+
+test("165.6 Address with normalized abbreviations matches", async () => {
+  // Profile: "123 Main Street", Extracted: "123 Main St"
+  // Verify field_matches.line1 = "match"
+});
+
+test("165.7 Empty profile address results in no match data", async () => {
+  // User has no mailing_address set
+  // Verify address_match is null or status = "not_available"
+});
+```
+
 ---
 
-## 5. File Change Summary
+## 14. File Change Summary
 
 | File | Change Type | Description |
 |------|-------------|-------------|
@@ -383,4 +604,144 @@ test("166.4 Enhanced profile with valid residency doc passes gate", async () => 
 | `frontend/src/pages/kyc/KycCaseForm.tsx` | Modify | Add residency document upload section |
 | `frontend/src/pages/admin/KycCaseDetailPage.tsx` | Modify | Add residency verification tab |
 | `frontend/src/api/endpoints/kyc-admin.ts` | Modify | Add residency document API functions |
-| `frontend/e2e/kyc-residency-verification.spec.ts` | **New** | 15 E2E tests across sections 164-166 |
+| `frontend/e2e/kyc-residency-verification.spec.ts` | **New** | 15+ E2E tests across sections 164-166 |
+
+---
+
+## 15. Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+RESIDENCY_DOC_TYPES = Literal[
+    "utility_bill", "bank_statement", "government_letter",
+    "tax_document", "lease_agreement"
+]
+
+
+class KycResidencyDocAttachRequest(BaseModel):
+    expected_version: int = Field(..., ge=1)
+    path: str = Field(..., min_length=1, max_length=1024)
+    document_type: RESIDENCY_DOC_TYPES
+    issuing_entity: str = Field(..., min_length=1, max_length=200)
+    document_date: str = Field(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="ISO date, e.g. 2026-04-15",
+    )
+
+
+class AddressFieldMatch(BaseModel):
+    line1: Literal["match", "partial", "mismatch"] | None = None
+    city: Literal["match", "partial", "mismatch"] | None = None
+    state: Literal["match", "partial", "mismatch"] | None = None
+    postal_code: Literal["match", "partial", "mismatch"] | None = None
+    country: Literal["match", "partial", "mismatch"] | None = None
+
+
+class AddressMatchResult(BaseModel):
+    status: Literal["match", "partial", "mismatch", "not_available"]
+    profile_address: dict = Field(default_factory=dict)
+    field_matches: AddressFieldMatch = Field(default_factory=AddressFieldMatch)
+
+
+class ResidencyMetaOut(BaseModel):
+    document_type: str
+    issuing_entity: str
+    document_date: str
+    extracted_address: dict | None = None
+    recency_valid: bool
+    recency_days: int
+    address_match: AddressMatchResult | None = None
+
+
+class KycResidencyDocOut(BaseModel):
+    file_index: int
+    path: str
+    residency_meta: ResidencyMetaOut
+
+
+class KycResidencyDocAttachResponse(BaseModel):
+    ok: bool = True
+    file_index: int
+    residency_meta: ResidencyMetaOut
+
+
+class KycResidencyDocsListResponse(BaseModel):
+    documents: list[KycResidencyDocOut] = Field(default_factory=list)
+```
+
+---
+
+## 16. Expanded E2E Tests
+
+### Section 164 Additions: Attachment Edge Cases (4 additional tests)
+
+```typescript
+test("164.8 Lease agreement document type accepted", async () => {
+  // POST with document_type: "lease_agreement"
+  // issuing_entity: "Riverside Property Management"
+  // Verify 200, type badge shows lease_agreement
+});
+
+test("164.9 Document exactly 90 days old is still valid", async () => {
+  // POST with document_date = today - 90 days (exactly)
+  // Verify recency_valid=true, recency_days=90
+});
+
+test("164.10 Document 91 days old is flagged as expired", async () => {
+  // POST with document_date = today - 91 days
+  // Verify recency_valid=false, recency_days=91
+});
+
+test("164.11 Multiple residency docs of different types can coexist", async () => {
+  // Attach utility_bill, then bank_statement
+  // GET residency-documents
+  // Verify 2 documents with distinct types
+});
+```
+
+### Section 165 Additions: Address Matching Edge Cases (4 additional tests)
+
+```typescript
+test("165.8 Boulevard abbreviated to Blvd matches", async () => {
+  // Profile: "100 Sunset Boulevard", Extracted: "100 Sunset Blvd"
+  // Verify field_matches.line1 = "match"
+});
+
+test("165.9 Country ISO code US matches full name United States", async () => {
+  // Profile: country="United States", Extracted: country="US"
+  // Verify field_matches.country = "match"
+});
+
+test("165.10 Suite vs Ste abbreviation matches", async () => {
+  // Profile: "Suite 200", Extracted: "Ste 200"
+  // Verify this portion matches in line1 normalization
+});
+
+test("165.11 Full address match returns status=match with all fields match", async () => {
+  // All 5 fields match after normalization
+  // Verify address_match.status = "match"
+  // Verify all field_matches entries = "match"
+});
+```
+
+### Section 166 Additions: Readiness Gate Edge Cases (3 additional tests)
+
+```typescript
+test("166.5 High-risk profile also requires valid residency doc", async () => {
+  // intake_profile="high_risk", no docs
+  // GET readiness → missing residency_document
+});
+
+test("166.6 Having multiple docs with one valid satisfies gate", async () => {
+  // Attach expired doc + valid doc
+  // GET readiness → passes (at least one valid)
+});
+
+test("166.7 Removing last valid doc re-fails the gate", async () => {
+  // After 166.6, remove the valid doc
+  // GET readiness → missing residency_document
+});
+```

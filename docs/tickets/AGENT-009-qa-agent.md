@@ -39,9 +39,100 @@ Manual QA is the most common bottleneck in the development pipeline. PRs sit for
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
 
-### 2.1 Existing Infrastructure
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          QA Agent System Architecture                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                          ┌──────────────────┐
+                          │  Ticket System   │
+                          │  (DynamoDB)      │
+                          │                  │
+                          │ status=code_     │
+                          │ complete tickets │
+                          └────────┬─────────┘
+                                   │ poll / SSE event
+                                   ▼
+┌─────────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
+│ Worker Agent    │────▶│    QA Agent Core      │────▶│  Terminal Worker    │
+│ Framework       │     │  (agent_qa.py)        │     │  (SSH session)     │
+│ (AGENT-003)     │     │                       │     │                     │
+│                 │     │ ┌───────────────────┐ │     │ ┌─────────────────┐ │
+│ lifecycle mgmt  │     │ │ 1. claim_ticket   │ │     │ │ git checkout    │ │
+│ polling loop    │     │ │ 2. checkout_pr    │ │     │ │ npm install     │ │
+│ heartbeat       │     │ │ 3. gen_tests      │ │     │ │ run tests       │ │
+│ status tracking │     │ │ 4. run_tests      │ │     │ │ capture screens │ │
+│                 │     │ │ 5. evaluate       │ │     │ └─────────────────┘ │
+└─────────────────┘     │ │ 6. file_bugs      │ │     └──────────┬─────────┘
+                        │ │ 7. review_pr      │ │                │
+                        │ │ 8. update_ticket  │ │                │ terminal output
+                        │ └───────────────────┘ │                ▼
+                        └──────────┬────────────┘     ┌──────────────────────┐
+                                   │                  │ Terminal Monitoring   │
+                    ┌──────────────┼──────────────┐   │ (AGENT-006)          │
+                    │              │              │    │                      │
+                    ▼              ▼              ▼    │ stdout/stderr capture│
+          ┌─────────────┐ ┌──────────────┐ ┌────────┐│ escalation triggers  │
+          │ S3           │ │ GitHub API   │ │ LLM    ││ flaky detection      │
+          │              │ │              │ │ Client │└──────────────────────┘
+          │ screenshots/ │ │ gh pr review │ │        │
+          │ artifacts/   │ │ gh pr list   │ │ Claude │
+          │ test-results/│ │ check status │ │ Code / │
+          └─────────────┘ └──────────────┘ │ Codex  │
+                                           │        │
+                                           │ test   │
+                                           │ gen    │
+                                           └────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │                         Data Flow Summary                            │
+  │                                                                      │
+  │  1. Worker Framework polls for code_complete tickets                  │
+  │  2. QA Agent claims ticket (conditional update → qa_in_progress)     │
+  │  3. Terminal Worker checks out PR branch, installs dependencies       │
+  │  4. LLM Client generates E2E tests from acceptance criteria + diff   │
+  │  5. Terminal runs new tests → captures screenshots on pass/fail       │
+  │  6. Terminal runs regression suite (full or affected scope)           │
+  │  7. Results parsed; verdict determined (pass/fail/flaky/error)        │
+  │  8. Bug tickets filed for real failures (not flaky)                   │
+  │  9. gh pr review --approve or --request-changes posted                │
+  │ 10. Ticket status → qa_approved (pass) or in_progress (fail)         │
+  │ 11. Screenshots + artifacts uploaded to S3                            │
+  │ 12. QA report rendered and attached to ticket as comment              │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │                      Agent Run State Machine                         │
+  │                                                                      │
+  │  ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐       │
+  │  │ pending │───▶│ claiming │───▶│ checkout │───▶│ gen_test │       │
+  │  └─────────┘    └──────────┘    └──────────┘    └──────────┘       │
+  │                                                       │             │
+  │       ┌───────────────────────────────────────────────┘             │
+  │       ▼                                                             │
+  │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐     │
+  │  │ run_new  │───▶│ run_regr │───▶│ evaluate │───▶│ file_bug │     │
+  │  └──────────┘    └──────────┘    └──────────┘    └──────────┘     │
+  │                                                       │             │
+  │       ┌───────────────────────────────────────────────┘             │
+  │       ▼                                                             │
+  │  ┌──────────┐    ┌──────────┐                                      │
+  │  │ review   │───▶│ complete │                                      │
+  │  └──────────┘    └──────────┘                                      │
+  │                                                                      │
+  │  Any step can transition to: ┌─────────┐ on unrecoverable error     │
+  │                               │  error  │                           │
+  │                               └─────────┘                           │
+  └──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Current State Analysis
+
+### 3.1 Existing Infrastructure
 
 - **LLM Provider Key Management** (AGENT-001): API key storage for coding tools used to generate tests. QA Agent registers as `agent_type=qa`.
 - **Terminal Worker Provisioning** (AGENT-002): SSH terminal for running tests. Must have Node.js, browsers, and test frameworks installed.
@@ -55,7 +146,7 @@ Manual QA is the most common bottleneck in the development pipeline. PRs sit for
 - **pytest** (`tests/`): Backend unit test framework with in-memory DynamoDB mock.
 - **S3 / File Storage**: Existing S3 infrastructure for storing screenshots and test artifacts.
 
-### 2.2 Gaps
+### 3.2 Gaps
 
 1. No agent type configuration schema for QA Agent behavior (test framework, browser, conventions).
 2. No automated PR checkout and test execution workflow for QA purposes.
@@ -69,11 +160,11 @@ Manual QA is the most common bottleneck in the development pipeline. PRs sit for
 
 ---
 
-## 3. Technical Design
+## 4. Technical Design
 
-### 3.1 Data Model
+### 4.1 Data Model
 
-#### 3.1.1 AgentTypes Table Extension (QA Config)
+#### 4.1.1 AgentTypes Table Extension (QA Config)
 
 Additional fields on the `agent_types` table when `agent_type = "qa"`:
 
@@ -99,7 +190,7 @@ Additional fields on the `agent_types` table when `agent_type = "qa"`:
 | `qa_config.coding_tool` | S | Tool for writing tests: `claude_code` or `codex` (default `claude_code`) |
 | `qa_config.coding_tool_model` | S (optional) | Model override for test generation |
 
-#### 3.1.2 AgentRuns Table Extension (QA Output)
+#### 4.1.2 AgentRuns Table Extension (QA Output)
 
 Additional fields on the `agent_runs` table for QA Agent runs:
 
@@ -125,7 +216,7 @@ Additional fields on the `agent_runs` table for QA Agent runs:
 | `qa_output.total_duration_seconds` | N | Wall-clock time for QA pass |
 | `qa_output.flaky_tests` | L (list of S) | Tests that failed then passed on retry |
 
-#### 3.1.3 Bug Ticket Template
+#### 4.1.3 Bug Ticket Template
 
 Auto-filed bug tickets use the existing ticket system with structured `metadata`:
 
@@ -142,7 +233,88 @@ Auto-filed bug tickets use the existing ticket system with structured `metadata`
 | `screenshot_urls` | L (list of S) | S3 URLs for failure screenshots |
 | `severity` | S | `critical`, `major`, `minor` (auto-classified) |
 
-### 3.2 Backend Service (`app/services/agent_qa.py`)
+### 4.2 DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | GSI | Notes |
+|----------------|-------|----|----|-----|-------|
+| Get QA config for agent type | `agent_types` | `ATYPE#{type_id}` | `CONFIG` | -- | qa_config map stored on the config item |
+| List QA-eligible tickets (code_complete) | `tickets` | -- | -- | `GSI2PK=SPACE#{space_id}, GSI2SK=STATUS#code_complete` | Sorted by created_at ascending (oldest first) |
+| List QA-eligible tickets (type:qa label) | `tickets` | -- | -- | `GSI3PK=LABEL#type:qa` | Scan label GSI for qa-labeled tickets |
+| Claim ticket (conditional update) | `tickets` | `TICKET#{ticket_id}` | `META` | -- | ConditionExpression: `status = :code_complete AND attribute_not_exists(qa_agent_run_id)` |
+| Store QA output on run | `agent_runs` | `RUN#{run_id}` | `META` | -- | UpdateExpression: SET qa_output = :output |
+| List QA runs by verdict | `agent_runs` | -- | -- | `GSI1PK=AGENT_TYPE#{type_id}, GSI1SK=COMPLETED#{ts}` | Filter on qa_output.verdict |
+| Get bug tickets for a QA run | `tickets` | -- | -- | `GSI4PK=SOURCE_RUN#{run_id}` | All bugs filed by a specific QA run |
+| QA metrics aggregation | `agent_runs` | -- | -- | `GSI1PK=AGENT_TYPE#{type_id}` | Scan all completed runs, aggregate in-service |
+
+**Example DynamoDB item -- QA config on agent_types table:**
+
+```json
+{
+  "pk": {"S": "ATYPE#qa-agent-001"},
+  "sk": {"S": "CONFIG"},
+  "agent_type": {"S": "qa"},
+  "display_name": {"S": "QA Agent (Playwright)"},
+  "qa_config": {"M": {
+    "test_framework": {"S": "playwright"},
+    "browser": {"S": "chromium"},
+    "test_dir": {"S": "frontend/e2e/"},
+    "test_file_pattern": {"S": "{feature}.spec.ts"},
+    "test_run_command": {"S": "cd frontend && npx playwright test"},
+    "test_run_specific_command": {"S": "cd frontend && npx playwright test e2e/{file}"},
+    "regression_scope": {"S": "affected"},
+    "regression_command": {"S": "just e2e"},
+    "screenshot_enabled": {"BOOL": true},
+    "screenshot_on_failure": {"BOOL": false},
+    "screenshot_s3_prefix": {"S": "qa-screenshots/"},
+    "visual_diff_threshold": {"N": "0.01"},
+    "max_test_time_seconds": {"N": "1800"},
+    "flaky_retry_count": {"N": "2"},
+    "pr_review_enabled": {"BOOL": true},
+    "coding_tool": {"S": "claude_code"},
+    "coding_tool_model": {"S": "claude-opus-4-6"}
+  }},
+  "created_at": {"N": "1748534400"},
+  "updated_at": {"N": "1748534400"}
+}
+```
+
+**Example DynamoDB item -- QA output on agent_runs table:**
+
+```json
+{
+  "pk": {"S": "RUN#run-abc-123"},
+  "sk": {"S": "META"},
+  "agent_type_id": {"S": "qa-agent-001"},
+  "status": {"S": "completed"},
+  "qa_output": {"M": {
+    "verdict": {"S": "fail"},
+    "pr_url": {"S": "https://github.com/org/repo/pull/42"},
+    "pr_branch": {"S": "feat/messaging-reactions"},
+    "ticket_id": {"S": "TICKET-789"},
+    "acceptance_criteria_count": {"N": "5"},
+    "new_tests_written": {"N": "8"},
+    "new_test_file": {"S": "frontend/e2e/messaging-reactions.spec.ts"},
+    "new_tests_pass_count": {"N": "6"},
+    "new_tests_fail_count": {"N": "2"},
+    "regression_tests_run": {"N": "1070"},
+    "regression_tests_pass": {"N": "1069"},
+    "regression_tests_fail": {"N": "1"},
+    "regression_failures": {"L": [{"S": "messaging-features > section 11 > tip flow"}]},
+    "screenshots": {"L": [
+      {"M": {"name": {"S": "reaction-bar-visible.png"}, "s3_key": {"S": "qa-screenshots/run-abc-123/reaction-bar-visible.png"}, "step": {"S": "run_new_tests"}, "status": {"S": "pass"}}},
+      {"M": {"name": {"S": "tip-flow-failure.png"}, "s3_key": {"S": "qa-screenshots/run-abc-123/tip-flow-failure.png"}, "step": {"S": "run_regression"}, "status": {"S": "fail"}}}
+    ]},
+    "bug_ticket_ids": {"L": [{"S": "TICKET-790"}, {"S": "TICKET-791"}]},
+    "pr_review_action": {"S": "changes_requested"},
+    "total_duration_seconds": {"N": "847"},
+    "flaky_tests": {"L": []}
+  }},
+  "started_at": {"N": "1748534400"},
+  "completed_at": {"N": "1748535247"}
+}
+```
+
+### 4.3 Backend Service (`app/services/agent_qa.py`)
 
 ```python
 # --- Configuration ---
@@ -262,7 +434,7 @@ def build_qa_workflow(*, agent_run_id: str, agent_type_id: str,
     Each step: {step_id, type, command_or_prompt, timeout_seconds, on_failure}."""
 ```
 
-### 3.3 Backend Router (`app/routers/agent_qa.py`)
+### 4.4 Backend Router (`app/routers/agent_qa.py`)
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -275,6 +447,353 @@ def build_qa_workflow(*, agent_run_id: str, agent_type_id: str,
 | GET | `/ui/agents/runs/{run_id}/qa-screenshots` | `require_admin_session` | List screenshots with presigned S3 URLs |
 | POST | `/ui/agents/types/{type_id}/test-qa-workflow` | `require_admin_session` | Dry-run: preview workflow steps for a ticket |
 | GET | `/ui/agents/qa/metrics` | `require_admin_session` | QA metrics: tested count, pass rate, bugs found, avg time |
+
+### 4.5 API Request/Response Examples
+
+```bash
+# --- PUT /ui/agents/types/{type_id}/qa-config ---
+curl -X PUT http://localhost:8000/ui/agents/types/qa-agent-001/qa-config \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "test_framework": "playwright",
+    "browser": "chromium",
+    "test_dir": "frontend/e2e/",
+    "test_file_pattern": "{feature}.spec.ts",
+    "test_run_command": "cd frontend && npx playwright test",
+    "test_run_specific_command": "cd frontend && npx playwright test e2e/{file}",
+    "regression_scope": "affected",
+    "regression_command": "just e2e",
+    "screenshot_enabled": true,
+    "screenshot_on_failure": false,
+    "screenshot_s3_prefix": "qa-screenshots/",
+    "visual_diff_threshold": 0.01,
+    "max_test_time_seconds": 1800,
+    "flaky_retry_count": 2,
+    "bug_ticket_space_id": "space-bugs-001",
+    "pr_review_enabled": true,
+    "coding_tool": "claude_code",
+    "coding_tool_model": "claude-opus-4-6"
+  }'
+
+# Response 200:
+{
+  "type_id": "qa-agent-001",
+  "qa_config": {
+    "test_framework": "playwright",
+    "browser": "chromium",
+    "test_dir": "frontend/e2e/",
+    "test_file_pattern": "{feature}.spec.ts",
+    "test_run_command": "cd frontend && npx playwright test",
+    "test_run_specific_command": "cd frontend && npx playwright test e2e/{file}",
+    "regression_scope": "affected",
+    "regression_command": "just e2e",
+    "screenshot_enabled": true,
+    "screenshot_on_failure": false,
+    "screenshot_s3_prefix": "qa-screenshots/",
+    "visual_diff_threshold": 0.01,
+    "max_test_time_seconds": 1800,
+    "flaky_retry_count": 2,
+    "bug_ticket_space_id": "space-bugs-001",
+    "pr_review_enabled": true,
+    "coding_tool": "claude_code",
+    "coding_tool_model": "claude-opus-4-6"
+  },
+  "updated_at": 1748534400
+}
+
+# --- GET /ui/agents/types/{type_id}/qa-eligible-tickets ---
+curl http://localhost:8000/ui/agents/types/qa-agent-001/qa-eligible-tickets \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "tickets": [
+    {
+      "ticket_id": "TICKET-789",
+      "subject": "Add emoji reactions to messages",
+      "status": "code_complete",
+      "pr_url": "https://github.com/org/repo/pull/42",
+      "pr_branch": "feat/messaging-reactions",
+      "created_at": 1748520000,
+      "labels": ["type:feature", "domain:messaging"]
+    },
+    {
+      "ticket_id": "TICKET-801",
+      "subject": "Fix sidebar preview for locked messages",
+      "status": "code_complete",
+      "pr_url": "https://github.com/org/repo/pull/45",
+      "pr_branch": "fix/sidebar-locked-preview",
+      "created_at": 1748524000,
+      "labels": ["type:bugfix"]
+    }
+  ],
+  "count": 2
+}
+
+# --- GET /ui/agents/runs/{run_id}/qa-output ---
+curl http://localhost:8000/ui/agents/runs/run-abc-123/qa-output \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "verdict": "fail",
+  "pr_url": "https://github.com/org/repo/pull/42",
+  "pr_branch": "feat/messaging-reactions",
+  "ticket_id": "TICKET-789",
+  "acceptance_criteria_count": 5,
+  "new_tests_written": 8,
+  "new_test_file": "frontend/e2e/messaging-reactions.spec.ts",
+  "new_tests_pass_count": 6,
+  "new_tests_fail_count": 2,
+  "regression_tests_run": 1070,
+  "regression_tests_pass": 1069,
+  "regression_tests_fail": 1,
+  "regression_failures": ["messaging-features > section 11 > tip flow"],
+  "screenshots": [
+    {"name": "reaction-bar-visible.png", "s3_key": "qa-screenshots/run-abc-123/reaction-bar-visible.png", "step": "run_new_tests", "status": "pass"},
+    {"name": "tip-flow-failure.png", "s3_key": "qa-screenshots/run-abc-123/tip-flow-failure.png", "step": "run_regression", "status": "fail"}
+  ],
+  "bug_ticket_ids": ["TICKET-790", "TICKET-791"],
+  "pr_review_action": "changes_requested",
+  "total_duration_seconds": 847,
+  "flaky_tests": []
+}
+
+# --- GET /ui/agents/runs/{run_id}/qa-screenshots ---
+curl http://localhost:8000/ui/agents/runs/run-abc-123/qa-screenshots \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "screenshots": [
+    {
+      "name": "reaction-bar-visible.png",
+      "presigned_url": "https://s3.amazonaws.com/bucket/qa-screenshots/run-abc-123/reaction-bar-visible.png?X-Amz-Signature=...",
+      "step": "run_new_tests",
+      "status": "pass"
+    },
+    {
+      "name": "tip-flow-failure.png",
+      "presigned_url": "https://s3.amazonaws.com/bucket/qa-screenshots/run-abc-123/tip-flow-failure.png?X-Amz-Signature=...",
+      "step": "run_regression",
+      "status": "fail"
+    }
+  ]
+}
+
+# --- POST /ui/agents/types/{type_id}/qa-config/validate ---
+curl -X POST http://localhost:8000/ui/agents/types/qa-agent-001/qa-config/validate \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "Content-Type: application/json" \
+  -d '{"test_framework": "invalid_framework", "visual_diff_threshold": 2.0}'
+
+# Response 200 (validation result, not HTTP error):
+{
+  "valid": false,
+  "errors": [
+    "test_framework must be one of: playwright, cypress, pytest",
+    "visual_diff_threshold must be between 0.0 and 1.0"
+  ]
+}
+
+# --- GET /ui/agents/qa/metrics ---
+curl http://localhost:8000/ui/agents/qa/metrics?period_days=30 \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "tested_count": 47,
+  "pass_rate": 0.787,
+  "bugs_found_count": 23,
+  "avg_duration_seconds": 612,
+  "flaky_test_rate": 0.042,
+  "period_start": 1745942400,
+  "period_end": 1748534400
+}
+```
+
+### 4.6 Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal, Optional
+from enum import Enum
+
+
+class TestFramework(str, Enum):
+    PLAYWRIGHT = "playwright"
+    CYPRESS = "cypress"
+    PYTEST = "pytest"
+
+
+class BrowserTarget(str, Enum):
+    CHROMIUM = "chromium"
+    FIREFOX = "firefox"
+    WEBKIT = "webkit"
+
+
+class RegressionScope(str, Enum):
+    FULL = "full"
+    AFFECTED = "affected"
+    NONE = "none"
+
+
+class CodingTool(str, Enum):
+    CLAUDE_CODE = "claude_code"
+    CODEX = "codex"
+
+
+class QaVerdict(str, Enum):
+    PASS = "pass"
+    FAIL = "fail"
+    FLAKY = "flaky"
+    ERROR = "error"
+
+
+class PrReviewAction(str, Enum):
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+    NONE = "none"
+
+
+class BugSeverity(str, Enum):
+    CRITICAL = "critical"
+    MAJOR = "major"
+    MINOR = "minor"
+
+
+class QaConfigIn(BaseModel):
+    test_framework: TestFramework = TestFramework.PLAYWRIGHT
+    browser: BrowserTarget = BrowserTarget.CHROMIUM
+    test_dir: str = Field(default="frontend/e2e/", max_length=200)
+    test_file_pattern: str = Field(default="{feature}.spec.ts", max_length=200)
+    test_run_command: str = Field(default="cd frontend && npx playwright test", max_length=500)
+    test_run_specific_command: str = Field(
+        default="cd frontend && npx playwright test e2e/{file}", max_length=500
+    )
+    regression_scope: RegressionScope = RegressionScope.AFFECTED
+    regression_command: str = Field(default="just e2e", max_length=500)
+    screenshot_enabled: bool = True
+    screenshot_on_failure: bool = False
+    screenshot_s3_prefix: str = Field(default="qa-screenshots/", max_length=200)
+    visual_diff_threshold: float = Field(default=0.01, ge=0.0, le=1.0)
+    max_test_time_seconds: int = Field(default=1800, ge=300, le=14400)
+    flaky_retry_count: int = Field(default=2, ge=0, le=5)
+    bug_ticket_space_id: Optional[str] = None
+    pr_review_enabled: bool = True
+    coding_tool: CodingTool = CodingTool.CLAUDE_CODE
+    coding_tool_model: Optional[str] = Field(default=None, max_length=100)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "test_framework": "playwright",
+                "browser": "chromium",
+                "test_dir": "frontend/e2e/",
+                "regression_scope": "affected",
+                "screenshot_enabled": True,
+                "visual_diff_threshold": 0.01,
+                "max_test_time_seconds": 1800,
+                "flaky_retry_count": 2,
+                "pr_review_enabled": True,
+                "coding_tool": "claude_code"
+            }
+        }
+
+
+class QaConfigOut(BaseModel):
+    type_id: str
+    qa_config: QaConfigIn
+    updated_at: int
+
+
+class ScreenshotItem(BaseModel):
+    name: str
+    s3_key: str
+    step: str
+    status: Literal["pass", "fail"]
+
+
+class QaOutputOut(BaseModel):
+    verdict: QaVerdict
+    pr_url: str
+    pr_branch: str
+    ticket_id: str
+    acceptance_criteria_count: int = Field(ge=0)
+    new_tests_written: int = Field(ge=0)
+    new_test_file: str
+    new_tests_pass_count: int = Field(ge=0)
+    new_tests_fail_count: int = Field(ge=0)
+    regression_tests_run: int = Field(ge=0)
+    regression_tests_pass: int = Field(ge=0)
+    regression_tests_fail: int = Field(ge=0)
+    regression_failures: list[str] = Field(default_factory=list)
+    screenshots: list[ScreenshotItem] = Field(default_factory=list)
+    bug_ticket_ids: list[str] = Field(default_factory=list)
+    pr_review_action: PrReviewAction
+    total_duration_seconds: int = Field(ge=0)
+    flaky_tests: list[str] = Field(default_factory=list)
+
+
+class QaReportOut(BaseModel):
+    run_id: str
+    verdict: QaVerdict
+    report_markdown: str
+    generated_at: int
+
+
+class QaScreenshotOut(BaseModel):
+    name: str
+    presigned_url: str
+    step: str
+    status: Literal["pass", "fail"]
+
+
+class QaMetricsOut(BaseModel):
+    tested_count: int = Field(ge=0)
+    pass_rate: float = Field(ge=0.0, le=1.0)
+    bugs_found_count: int = Field(ge=0)
+    avg_duration_seconds: float = Field(ge=0.0)
+    flaky_test_rate: float = Field(ge=0.0, le=1.0)
+    period_start: int
+    period_end: int
+
+
+class QaEligibleTicketOut(BaseModel):
+    ticket_id: str
+    subject: str
+    status: str
+    pr_url: Optional[str] = None
+    pr_branch: Optional[str] = None
+    created_at: int
+    labels: list[str] = Field(default_factory=list)
+
+
+class QaEligibleTicketsResponse(BaseModel):
+    tickets: list[QaEligibleTicketOut]
+    count: int
+
+
+class QaValidationResult(BaseModel):
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+
+
+class BugTicketMetadata(BaseModel):
+    bug_source: Literal["qa_agent"] = "qa_agent"
+    source_ticket_id: str
+    source_pr_url: str
+    agent_run_id: str
+    reproduction_steps: str
+    expected_behavior: str
+    actual_behavior: str
+    test_output: str = Field(max_length=5000)
+    screenshot_urls: list[str] = Field(default_factory=list)
+    severity: BugSeverity
+```
 
 **Key request models**:
 
@@ -309,7 +828,7 @@ from app.routers.agent_qa import router as agent_qa_router
 app.include_router(agent_qa_router, prefix="/ui")
 ```
 
-### 3.4 Test Generation Strategy
+### 4.7 Test Generation Strategy
 
 The QA Agent generates tests by:
 
@@ -320,17 +839,17 @@ The QA Agent generates tests by:
 5. **Writing the test file** via Claude Code or Codex in the terminal.
 6. **Running the new tests** and iterating if they fail due to test code issues (not application bugs).
 
-### 3.5 Regression Scope Selection
+### 4.8 Regression Scope Selection
 
 - **`full`**: Run the entire test suite (`just e2e` + `just test`). Most thorough but slowest.
 - **`affected`**: Derive affected test files from changed source files using import graph analysis. If `app/services/tickets.py` changed, run `frontend/e2e/tickets.spec.ts` and `tests/test_tickets.py`. Uses a heuristic mapping: `app/services/{x}.py` -> `tests/test_{x}.py` + `frontend/e2e/{x}.spec.ts`.
 - **`none`**: Skip regression testing. Only useful for QA of isolated documentation or configuration changes.
 
-### 3.6 Flaky Test Handling
+### 4.9 Flaky Test Handling
 
 Tests that fail on the first run are retried `flaky_retry_count` times. If a test fails on the first run but passes on retry, it is classified as "flaky" and excluded from the verdict. Flaky tests are listed in the QA report for human attention. If ALL failures are flaky, the verdict is `flaky` (treated as a soft pass -- PR is approved but flaky tests are flagged).
 
-### 3.7 Frontend Types (`frontend/src/api/types.ts`)
+### 4.10 Frontend Types (`frontend/src/api/types.ts`)
 
 ```typescript
 export interface QaConfig {
@@ -393,11 +912,160 @@ export interface QaScreenshot {
 }
 ```
 
-### 3.8 Frontend API (`frontend/src/api/endpoints/agents.ts`)
+### 4.11 Frontend API (`frontend/src/api/endpoints/agents.ts`)
 
 Add QA Agent API functions: `getQaConfig`, `updateQaConfig`, `validateQaConfig`, `getQaEligibleTickets`, `getQaOutput`, `getQaReport`, `getQaScreenshots`, `testQaWorkflow`, `getQaMetrics`.
 
-### 3.9 Frontend Pages
+### 4.12 Frontend Component Tree
+
+```
+QaAgentConfigPage                    data-testid="qa-config-page"
+├── Tabs                             shadcn Tabs component
+│   ├── TabsList
+│   │   ├── TabsTrigger "Config"
+│   │   ├── TabsTrigger "Eligible Tickets"
+│   │   └── TabsTrigger "Metrics"
+│   │
+│   ├── TabsContent "config"         data-testid="qa-config-tab"
+│   │   ├── Card
+│   │   │   ├── CardHeader "Test Framework Settings"
+│   │   │   └── CardContent
+│   │   │       ├── Select (test_framework)       "playwright" | "cypress" | "pytest"
+│   │   │       ├── Select (browser)              "chromium" | "firefox" | "webkit"
+│   │   │       ├── Input (test_dir)              string, default "frontend/e2e/"
+│   │   │       ├── Input (test_file_pattern)     string, default "{feature}.spec.ts"
+│   │   │       ├── Input (test_run_command)       monospace font
+│   │   │       └── Input (test_run_specific_command) monospace font
+│   │   │
+│   │   ├── Card
+│   │   │   ├── CardHeader "Regression Settings"
+│   │   │   └── CardContent
+│   │   │       ├── Select (regression_scope)     "full" | "affected" | "none"
+│   │   │       └── Input (regression_command)    monospace font
+│   │   │
+│   │   ├── Card
+│   │   │   ├── CardHeader "Screenshot Settings"
+│   │   │   └── CardContent
+│   │   │       ├── Switch (screenshot_enabled)
+│   │   │       ├── Switch (screenshot_on_failure)
+│   │   │       ├── Input (screenshot_s3_prefix)
+│   │   │       └── Slider (visual_diff_threshold) 0.00 - 1.00, step 0.01
+│   │   │
+│   │   ├── Card
+│   │   │   ├── CardHeader "Execution Settings"
+│   │   │   └── CardContent
+│   │   │       ├── Input (max_test_time_seconds)  type="number", min=300, max=14400
+│   │   │       ├── Input (flaky_retry_count)      type="number", min=0, max=5
+│   │   │       ├── Select (coding_tool)           "claude_code" | "codex"
+│   │   │       └── Input (coding_tool_model)      optional override
+│   │   │
+│   │   ├── Card
+│   │   │   ├── CardHeader "Integration Settings"
+│   │   │   └── CardContent
+│   │   │       ├── Switch (pr_review_enabled)
+│   │   │       └── Select (bug_ticket_space_id)   ticket space dropdown
+│   │   │
+│   │   └── div.flex.gap-2
+│   │       ├── Button "Validate"     onClick → POST validate; shows toast
+│   │       └── Button "Save"         onClick → PUT qa-config; shows toast
+│   │
+│   ├── TabsContent "eligible"       data-testid="qa-eligible-tab"
+│   │   ├── Alert "These tickets are ready for QA"
+│   │   └── DataTable
+│   │       ├── columns: [ticket_id, subject, status, pr_url, created_at, labels]
+│   │       ├── sortable by created_at
+│   │       └── pr_url renders as clickable link
+│   │
+│   └── TabsContent "metrics"        data-testid="qa-metrics-tab"
+│       ├── div.grid.grid-cols-2.lg:grid-cols-4
+│       │   ├── StatCard "Tickets Tested" → tested_count
+│       │   ├── StatCard "Pass Rate" → pass_rate as %
+│       │   ├── StatCard "Bugs Found" → bugs_found_count
+│       │   └── StatCard "Avg Duration" → avg_duration_seconds formatted
+│       │
+│       ├── Card "Flaky Test Rate"
+│       │   └── Progress bar (flaky_test_rate as %)
+│       │
+│       └── Select "Period" → 7d / 30d / 90d (re-fetches metrics)
+
+QaRunOutputPanel                     data-testid="qa-output-panel"
+├── div.flex.items-center.gap-2
+│   ├── Badge (verdict)              green=pass, red=fail, yellow=flaky, gray=error
+│   ├── span "PR: {pr_url}"         clickable link
+│   └── span "Ticket: {ticket_id}"  clickable link
+│
+├── Card "Test Results"
+│   ├── div.grid.grid-cols-2
+│   │   ├── div "New Tests"
+│   │   │   ├── span "{new_tests_pass_count} passed"
+│   │   │   └── span "{new_tests_fail_count} failed"
+│   │   └── div "Regression Tests"
+│   │       ├── span "{regression_tests_pass} passed"
+│   │       └── span "{regression_tests_fail} failed"
+│   │
+│   └── Collapsible "Regression Failures" (if any)
+│       └── ul → regression_failures.map(f => <li>{f}</li>)
+│
+├── Card "Screenshots"               expandable gallery
+│   └── div.grid.grid-cols-3
+│       └── screenshots.map(s =>
+│           ├── img (thumbnail, onClick → lightbox)
+│           ├── Badge (s.status)
+│           └── span (s.step)
+│       )
+│
+├── Card "Bug Tickets Filed"          (if bug_ticket_ids.length > 0)
+│   └── ul → bug_ticket_ids.map(id =>
+│       <li><Link to={`/tickets/${id}`}>{id}</Link></li>
+│   )
+│
+├── Card "Flaky Tests"                (if flaky_tests.length > 0)
+│   └── ul → flaky_tests.map(t => <li>{t}</li>)
+│
+└── div.text-sm.text-muted
+    ├── span "Duration: {total_duration_seconds}s"
+    └── span "PR Review: {pr_review_action}"
+```
+
+**State management:**
+
+```typescript
+// React Query hooks used by QaAgentConfigPage
+const { data: config } = useQuery({
+  queryKey: ["qa-config", typeId],
+  queryFn: () => getQaConfig(typeId),
+});
+
+const { data: eligible } = useQuery({
+  queryKey: ["qa-eligible", typeId],
+  queryFn: () => getQaEligibleTickets(typeId),
+  enabled: activeTab === "eligible",
+});
+
+const { data: metrics } = useQuery({
+  queryKey: ["qa-metrics", periodDays],
+  queryFn: () => getQaMetrics(periodDays),
+  enabled: activeTab === "metrics",
+});
+
+const updateMut = useMutation({
+  mutationFn: (data: QaConfigIn) => updateQaConfig(typeId, data),
+  onSuccess: () => {
+    queryClient.invalidateQueries({ queryKey: ["qa-config", typeId] });
+    toast({ title: "QA config saved" });
+  },
+});
+
+const validateMut = useMutation({
+  mutationFn: (data: QaConfigIn) => validateQaConfig(typeId, data),
+  onSuccess: (result) => {
+    if (result.valid) toast({ title: "Config is valid" });
+    else toast({ title: "Validation errors", description: result.errors.join(", "), variant: "destructive" });
+  },
+});
+```
+
+### 4.13 Frontend Pages
 
 - **QaAgentConfigPage** (`frontend/src/pages/agents/QaAgentConfigPage.tsx`): Route `/agents/types/:typeId/qa`. Tabbed layout: Config | Eligible Tickets | Metrics. `data-testid="qa-config-page"`.
   - **Config tab**: Test framework selector, browser selector, test directory input, file pattern input, run commands, regression scope selector, screenshot toggles, visual diff threshold slider, time budget, flaky retry count, bug ticket space selector, PR review toggle, coding tool selector. "Validate" and "Save" buttons. `data-testid="qa-config-tab"`.
@@ -408,9 +1076,9 @@ Add QA Agent API functions: `getQaConfig`, `updateQaConfig`, `validateQaConfig`,
 
 ---
 
-## 4. Implementation Plan
+## 5. Implementation Plan
 
-### 4.1 Files to Create
+### 5.1 Files to Create
 
 | File | Purpose |
 |------|---------|
@@ -419,7 +1087,7 @@ Add QA Agent API functions: `getQaConfig`, `updateQaConfig`, `validateQaConfig`,
 | `frontend/src/pages/agents/QaAgentConfigPage.tsx` | QA Agent configuration + metrics UI |
 | `frontend/src/pages/agents/QaRunOutputPanel.tsx` | QA run output detail panel with screenshot gallery |
 
-### 4.2 Files to Modify
+### 5.2 Files to Modify
 
 | File | Changes |
 |------|---------|
@@ -432,13 +1100,13 @@ Add QA Agent API functions: `getQaConfig`, `updateQaConfig`, `validateQaConfig`,
 
 ---
 
-## 5. E2E Test Plan
+## 6. E2E Test Plan
 
-### 5.1 Test File
+### 6.1 Test File
 
 `frontend/e2e/agent-qa.spec.ts` -- 16 tests across 4 sections.
 
-### 5.2 Test Setup
+### 6.2 Test Setup
 
 ```typescript
 const TS = Date.now();
@@ -449,7 +1117,7 @@ let bugTicketId: string;
 // Root = admin who configures agents
 ```
 
-### 5.3 Section 655: QA Config API (4 tests)
+### 6.3 Section 655: QA Config API (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -458,7 +1126,7 @@ let bugTicketId: string;
 | 655.3 | Validate config with invalid framework | POST validate with `test_framework="invalid"`; 422 or validation errors returned |
 | 655.4 | Update regression scope and screenshot settings | PUT with `regression_scope=full`, `screenshot_on_failure=true`; 200; values updated |
 
-### 5.4 Section 656: Ticket Filtering & Acceptance Criteria (4 tests)
+### 6.4 Section 656: Ticket Filtering & Acceptance Criteria (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -467,7 +1135,7 @@ let bugTicketId: string;
 | 656.3 | Ticket with type:qa label is eligible | Create ticket with `labels=["type:qa"]`; GET eligible; ticket included |
 | 656.4 | Claim QA ticket updates status | POST claim; ticket status = `qa_in_progress` |
 
-### 5.5 Section 657: QA Output & Bug Filing API (5 tests)
+### 6.5 Section 657: QA Output & Bug Filing API (5 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -477,7 +1145,7 @@ let bugTicketId: string;
 | 657.4 | Bug tickets were auto-filed | QA output `bug_ticket_ids` non-empty; GET each ticket; subject contains "Bug:" |
 | 657.5 | Bug ticket has reproduction metadata | Bug ticket metadata contains `reproduction_steps`, `expected_behavior`, `actual_behavior` |
 
-### 5.6 Section 658: QA Config UI (3 tests)
+### 6.6 Section 658: QA Config UI (3 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -485,9 +1153,46 @@ let bugTicketId: string;
 | 658.2 | Config tab shows saved framework | Config tab active; test framework selector shows "playwright" |
 | 658.3 | Metrics tab renders pass rate | Click "Metrics" tab; `[data-testid="qa-metrics-tab"]` visible; pass rate gauge present |
 
+### 6.7 Expanded E2E Test Details
+
+#### Additional Edge Case Tests (Section 659: 8 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 659.1 | Concurrent QA claim race condition | Two agents try to claim same ticket simultaneously; only one succeeds (conditional update); the other gets 409 |
+| 659.2 | QA config with empty test_run_command | PUT with `test_run_command=""`; 422 validation error |
+| 659.3 | QA run with all tests flaky | Simulate run where all failures are flaky; verdict = `flaky`; PR approved |
+| 659.4 | QA run with infrastructure error | Simulate run where terminal crashes; verdict = `error`; ticket stays in qa_in_progress |
+| 659.5 | Bug deduplication | File bug for ticket A; run QA again on same ticket; no duplicate bug filed |
+| 659.6 | Screenshot upload with >50 screenshots | Only first 50 screenshots stored; rest discarded with warning in report |
+| 659.7 | QA config with max_test_time_seconds below minimum | PUT with `max_test_time_seconds=100`; 422 "must be >= 300" |
+| 659.8 | QA eligible tickets excludes already-claimed tickets | Claim ticket X; GET eligible; ticket X not in list |
+
+#### Negative Test Cases (Section 660: 6 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 660.1 | Non-admin cannot access QA config | Alice (USER role) GETs qa-config; 403 |
+| 660.2 | QA output for non-existent run | GET qa-output with fake run_id; 404 |
+| 660.3 | QA config on non-QA agent type | PUT qa-config on agent_type=coder; 409 "Agent type is not configured as qa" |
+| 660.4 | Claim ticket not in code_complete status | Try to claim ticket in `open` status; 409 |
+| 660.5 | Visual diff threshold out of range | PUT with `visual_diff_threshold=5.0`; 422 |
+| 660.6 | QA screenshots for run with no screenshots | GET qa-screenshots; 200; empty array |
+
+#### Concurrent Access Tests (Section 661: 4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 661.1 | Parallel QA config updates | Two admins update config simultaneously; last write wins; no data corruption |
+| 661.2 | QA run completes while admin views output | Output panel refreshes; shows final verdict after completion |
+| 661.3 | Ticket status changes during QA run | External status change to `closed` while QA in progress; QA agent detects and aborts gracefully |
+| 661.4 | Multiple QA agents polling same ticket pool | Five agents poll; each claims different ticket; no ticket claimed twice |
+
 ---
 
-## 6. Error Handling
+## 7. Error Handling
+
+### 7.1 Error Table
 
 | Scenario | Status | Detail |
 |----------|--------|--------|
@@ -503,9 +1208,148 @@ let bugTicketId: string;
 | Run not found | 404 | "Agent run not found" |
 | Not admin | 403 | "Admin access required" |
 
+### 7.2 Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| Agent type not in DDB | 404 | `AGENT_TYPE_NOT_FOUND` | "The specified agent type does not exist." | Verify type_id is correct; check agent registry |
+| qa_config missing on agent type | 404 | `QA_CONFIG_NOT_FOUND` | "No QA configuration found for this agent type." | PUT qa-config to create initial configuration |
+| Agent type is not qa | 409 | `AGENT_TYPE_MISMATCH` | "This agent type is not configured as a QA agent." | Use PUT on a type with agent_type=qa |
+| Invalid test_framework value | 422 | `INVALID_TEST_FRAMEWORK` | "Test framework must be playwright, cypress, or pytest." | Correct the value and retry |
+| Invalid browser value | 422 | `INVALID_BROWSER` | "Browser must be chromium, firefox, or webkit." | Correct the value and retry |
+| test_run_command empty | 422 | `EMPTY_RUN_COMMAND` | "Test run command cannot be empty." | Provide a valid shell command |
+| visual_diff_threshold out of range | 422 | `THRESHOLD_OUT_OF_RANGE` | "Visual diff threshold must be between 0.0 and 1.0." | Use a value like 0.01 (1%) |
+| max_test_time below 300s | 422 | `TIME_BUDGET_TOO_LOW` | "Test time budget must be at least 300 seconds." | Increase to >= 300 |
+| flaky_retry_count > 5 | 422 | `RETRY_COUNT_TOO_HIGH` | "Flaky retry count cannot exceed 5." | Use a value between 0 and 5 |
+| No PR URL on ticket | 404 | `PR_NOT_FOUND` | "No PR URL found in ticket metadata." | Ensure Coder Agent set pr_url on the ticket |
+| Ticket not code_complete | 409 | `INVALID_TICKET_STATUS` | "Ticket must be in code_complete status." | Wait for Coder Agent to complete |
+| Ticket already claimed | 409 | `TICKET_ALREADY_CLAIMED` | "This ticket is already being tested by another QA agent." | Pick a different ticket |
+| Terminal not available | 503 | `TERMINAL_UNAVAILABLE` | "No terminal worker available for QA execution." | Wait for worker provisioning; check fleet status |
+| Git checkout failed | 500 | `CHECKOUT_FAILED` | "Failed to check out PR branch." | Verify branch exists; check git credentials |
+| npm install failed | 500 | `DEPS_INSTALL_FAILED` | "Dependency installation failed." | Check package.json; review install logs |
+| Test generation LLM error | 502 | `LLM_GENERATION_ERROR` | "Test generation failed due to LLM provider error." | Check API key; retry after cooldown |
+| Test generation timeout | 504 | `TEST_GEN_TIMEOUT` | "Test generation exceeded time budget." | Increase max_test_time_seconds or simplify acceptance criteria |
+| Test execution timeout | 504 | `TEST_EXEC_TIMEOUT` | "Test execution exceeded time budget." | Increase max_test_time_seconds or reduce regression scope |
+| S3 upload failed | 500 | `S3_UPLOAD_FAILED` | "Failed to upload screenshots to S3." | Check S3 credentials and bucket permissions |
+| gh pr review failed | 502 | `PR_REVIEW_FAILED` | "Failed to post PR review on GitHub." | Check GitHub token permissions |
+| Bug ticket creation failed | 500 | `BUG_FILING_FAILED` | "Failed to create bug ticket." | Check ticket system availability; verify space_id |
+| Run not found | 404 | `RUN_NOT_FOUND` | "The specified agent run does not exist." | Verify run_id is correct |
+| Not admin | 403 | `ADMIN_REQUIRED` | "Admin access is required for this operation." | Log in as admin or root |
+| Infrastructure error (all tests crash) | 200 | (verdict=error) | "All tests failed due to infrastructure error." | Check terminal health; restart worker |
+
 ---
 
-## 7. Security Considerations
+## 8. Observability & Monitoring
+
+### 8.1 Metrics to Track
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `qa_agent_runs_total` | Counter | `verdict={pass,fail,flaky,error}` | Total QA runs by verdict |
+| `qa_agent_run_duration_seconds` | Histogram | `agent_type_id` | Wall-clock time per QA run |
+| `qa_agent_tests_generated_total` | Counter | `agent_type_id` | New E2E tests written |
+| `qa_agent_tests_executed_total` | Counter | `type={new,regression}`, `result={pass,fail}` | Tests run by type and result |
+| `qa_agent_bugs_filed_total` | Counter | `severity={critical,major,minor}` | Bug tickets auto-filed |
+| `qa_agent_pr_reviews_total` | Counter | `action={approved,changes_requested,none}` | PR review actions posted |
+| `qa_agent_flaky_tests_detected_total` | Counter | `agent_type_id` | Flaky tests caught |
+| `qa_agent_screenshots_uploaded_total` | Counter | `status={pass,fail}` | Screenshots stored |
+| `qa_agent_ticket_claim_conflicts_total` | Counter | -- | Concurrent claim failures |
+| `qa_agent_llm_tokens_used_total` | Counter | `model` | LLM tokens consumed for test generation |
+| `qa_agent_s3_upload_bytes_total` | Counter | -- | Total bytes uploaded to S3 |
+| `qa_agent_eligible_tickets_gauge` | Gauge | -- | Current count of eligible tickets |
+
+### 8.2 Log Events
+
+| Event | Level | Fields | When |
+|-------|-------|--------|------|
+| `qa_run_started` | INFO | run_id, ticket_id, pr_url, agent_type_id | QA run begins |
+| `qa_ticket_claimed` | INFO | run_id, ticket_id | Ticket claimed successfully |
+| `qa_ticket_claim_conflict` | WARN | run_id, ticket_id | Concurrent claim failed |
+| `qa_pr_checkout` | INFO | run_id, pr_branch, commit_sha | PR branch checked out |
+| `qa_tests_generated` | INFO | run_id, test_count, test_file | New tests written |
+| `qa_test_gen_failed` | ERROR | run_id, error | Test generation LLM error |
+| `qa_new_tests_result` | INFO | run_id, pass_count, fail_count | New test results |
+| `qa_regression_result` | INFO | run_id, pass_count, fail_count, failures | Regression results |
+| `qa_flaky_detected` | WARN | run_id, test_names | Flaky tests found |
+| `qa_screenshots_uploaded` | INFO | run_id, count, total_bytes | Screenshots pushed to S3 |
+| `qa_bug_filed` | INFO | run_id, bug_ticket_id, severity | Bug ticket created |
+| `qa_pr_reviewed` | INFO | run_id, pr_number, action | PR review posted |
+| `qa_verdict` | INFO | run_id, verdict, duration_seconds | Final verdict |
+| `qa_run_error` | ERROR | run_id, step, error | Infrastructure error during run |
+
+### 8.3 Alert Thresholds
+
+| Alert | Condition | Severity | Channel |
+|-------|-----------|----------|---------|
+| QA pass rate drop | pass_rate < 50% over 24h (rolling) | P2 | Slack #agents |
+| QA run backlog | eligible_tickets_gauge > 20 | P3 | Slack #agents |
+| QA run failure spike | > 5 verdict=error runs in 1h | P1 | PagerDuty |
+| Flaky test rate high | flaky_test_rate > 15% over 7d | P3 | Slack #qa |
+| QA run duration anomaly | p95 duration > 2x avg over 7d | P3 | Slack #agents |
+| S3 upload failures | s3_upload_failed > 3 in 1h | P2 | Slack #infra |
+| LLM token budget exceeded | daily tokens > budget threshold | P3 | Slack #agents |
+
+### 8.4 Dashboard Queries (Prometheus/Grafana)
+
+```promql
+# QA pass rate (last 24h)
+sum(rate(qa_agent_runs_total{verdict="pass"}[24h]))
+/ sum(rate(qa_agent_runs_total[24h]))
+
+# Average QA run duration
+histogram_quantile(0.50, rate(qa_agent_run_duration_seconds_bucket[24h]))
+
+# Bug filing rate
+sum(rate(qa_agent_bugs_filed_total[24h])) by (severity)
+
+# Flaky test rate
+sum(rate(qa_agent_flaky_tests_detected_total[7d]))
+/ sum(rate(qa_agent_tests_executed_total{type="regression"}[7d]))
+
+# QA throughput (runs per hour)
+sum(rate(qa_agent_runs_total[1h])) * 3600
+```
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `QA_AGENT_ENABLED` | `false` | Master kill switch for QA Agent type registration |
+| `QA_AGENT_TEST_GEN_ENABLED` | `true` | Enable LLM-based test generation (disable for dry-run mode) |
+| `QA_AGENT_PR_REVIEW_ENABLED` | `false` | Enable automated PR reviews (start disabled, enable after confidence) |
+| `QA_AGENT_BUG_FILING_ENABLED` | `false` | Enable automatic bug ticket creation (start disabled) |
+| `QA_AGENT_REGRESSION_ENABLED` | `true` | Enable regression suite execution |
+| `QA_AGENT_VISUAL_DIFF_ENABLED` | `false` | Enable pixel-level visual comparison (experimental) |
+
+### 9.2 Migration Steps
+
+1. **Schema migration**: No new DynamoDB tables required. The `qa_config` and `qa_output` maps are added to existing `agent_types` and `agent_runs` tables respectively. Add `qa_in_progress` and `qa_approved` to the ticket status enum.
+2. **Ticket status backfill**: No backfill needed. New statuses only apply to future tickets.
+3. **S3 bucket configuration**: Create `qa-screenshots/` prefix with lifecycle policy (90-day expiry). Configure CORS for presigned URL access from frontend.
+4. **Agent type seed**: After deployment, admin creates the first QA Agent type via the UI or API.
+
+### 9.3 Canary Deployment
+
+1. **Week 1 (shadow mode)**: Deploy with `QA_AGENT_ENABLED=true`, `QA_AGENT_PR_REVIEW_ENABLED=false`, `QA_AGENT_BUG_FILING_ENABLED=false`. QA Agent runs tests and generates reports but does NOT post PR reviews or file bugs. Reports are visible only in the admin UI.
+2. **Week 2 (limited PR review)**: Enable `QA_AGENT_PR_REVIEW_ENABLED=true` for a single agent type. Monitor false positive rate. Target: < 5% false approvals, < 10% false rejections.
+3. **Week 3 (bug filing)**: Enable `QA_AGENT_BUG_FILING_ENABLED=true`. Monitor duplicate bug rate and severity accuracy.
+4. **Week 4 (full rollout)**: Enable all flags. Monitor QA throughput and human override rate.
+
+### 9.4 Rollback Procedure
+
+1. **Immediate**: Set `QA_AGENT_ENABLED=false`. All QA agent instances stop picking up new tickets. In-progress runs complete but no new runs start.
+2. **PR review rollback**: Set `QA_AGENT_PR_REVIEW_ENABLED=false`. Existing PR reviews remain but no new ones are posted.
+3. **Bug filing rollback**: Set `QA_AGENT_BUG_FILING_ENABLED=false`. Already-filed bugs remain open for human triage.
+4. **Data cleanup**: No data deletion needed. QA output on agent_runs and bug tickets can be archived.
+5. **Ticket status reset**: Any tickets stuck in `qa_in_progress` can be manually reset to `code_complete` via admin API.
+
+---
+
+## 10. Security Considerations
 
 - **Admin-only access**: All QA Agent configuration endpoints require `require_admin_session`.
 - **Screenshot access control**: Presigned S3 URLs expire after 15 minutes. Screenshots are stored in a separate S3 prefix not accessible via the public file manager.
@@ -517,7 +1361,49 @@ let bugTicketId: string;
 
 ---
 
-## 8. Performance Considerations
+## 11. Performance Considerations
+
+### 11.1 Query Cost Analysis
+
+| Operation | Read/Write | Cost Estimate | Notes |
+|-----------|-----------|---------------|-------|
+| Get QA config | 1 RCU | Minimal | Single item read, eventually consistent |
+| List eligible tickets (GSI scan) | 5-20 RCU | Moderate | Depends on ticket volume; filtered scan |
+| Claim ticket (conditional write) | 5 WCU | Low | Single conditional update |
+| Store QA output | 10-50 WCU | Moderate | Large map attribute; depends on screenshot count |
+| Aggregate metrics | 50-200 RCU | High | Scans all completed runs for type; cache result |
+| File bug ticket | 5 WCU per bug | Low | Typically 0-3 bugs per run |
+
+### 11.2 Caching Strategy
+
+| Data | TTL | Invalidation | Storage |
+|------|-----|-------------|---------|
+| QA config | 5 min | On PUT update | In-memory (service layer) |
+| Eligible tickets list | 30 sec | On ticket status change | React Query |
+| QA metrics | 5 min | On run completion | In-memory + React Query |
+| Screenshot presigned URLs | 15 min | Regenerate on access | None (always fresh) |
+| Regression test mapping (source -> test file) | 1 hour | On repo change | In-memory |
+
+### 11.3 Pagination Limits
+
+| Endpoint | Default Limit | Max Limit | Cursor |
+|----------|--------------|-----------|--------|
+| Eligible tickets | 10 | 50 | `last_evaluated_key` |
+| QA screenshots | 50 (max stored) | 50 | None |
+| QA metrics | N/A (aggregate) | N/A | N/A |
+| Bug tickets for run | 20 | 100 | `last_evaluated_key` |
+
+### 11.4 Rate Limiting
+
+| Operation | Limit | Window | Scope |
+|-----------|-------|--------|-------|
+| QA config updates | 10 | 1 min | Per admin user |
+| QA config validates | 30 | 1 min | Per admin user |
+| QA eligible ticket queries | 60 | 1 min | Per admin user |
+| QA workflow dry-run | 5 | 1 min | Per agent type |
+| QA metric aggregation | 10 | 1 min | Global |
+
+### 11.5 Performance Constraints
 
 | Concern | Mitigation |
 |---------|-----------|
@@ -527,10 +1413,11 @@ let bugTicketId: string;
 | Concurrent QA runs competing for tickets | Conditional update on ticket claim; staggered polling |
 | S3 storage growth from screenshots | Lifecycle policy: delete screenshots older than 90 days |
 | Bug ticket deduplication | Before filing, check existing open bugs with same `source_ticket_id` |
+| Metrics aggregation on large run tables | Pre-compute daily aggregates; cache 5-min TTL |
 
 ---
 
-## 9. Dependencies
+## 12. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|

@@ -507,3 +507,224 @@ let issueId: string;
 |--------|-----------|
 | AGENT-013 (PM Agent) | May reference design scores when suggesting UX improvements |
 | AGENT-015 (Security Agent) | Accessibility findings may overlap with WCAG compliance checks |
+
+---
+
+## 10. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                Stylist / UI Agent Architecture                       │
+└─────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────┐   ┌──────────────┐
+  │ PR Merge     │   │ Schedule /   │
+  │ Trigger      │   │ Manual       │
+  └──────┬───────┘   └──────┬───────┘
+         └──────────────────┘
+                  ▼
+  ┌──────────────────────────────────────┐
+  │   Stylist Agent Core                 │
+  │                                      │
+  │  1. Load design rules               │
+  │  2. Browse app via Playwright        │
+  │  3. Screenshot 3 viewports           │
+  │  4. Evaluate accessibility (axe)     │
+  │  5. Compare against design system    │
+  │  6. Score each page                  │
+  │  7. Generate review report           │
+  └──────┬────────────┬────────┬────────┘
+         │            │        │
+         ▼            ▼        ▼
+  ┌──────────┐ ┌──────────┐ ┌──────────┐
+  │ UIReviews│ │ Design   │ │ S3       │
+  │ Table    │ │ Rules    │ │ screens  │
+  │ (DDB)    │ │ Table    │ │          │
+  └──────────┘ └──────────┘ └──────────┘
+```
+
+---
+
+## 11. DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | GSI | Notes |
+|----------------|-------|----|----|-----|-------|
+| Get review | `ui_reviews` | `USER#{user_id}` | `REVIEW#{review_id}` | -- | Single item |
+| List reviews | `ui_reviews` | `USER#{user_id}` | begins_with `REVIEW#` | -- | All reviews |
+| List reviews by page | `ui_reviews` | -- | -- | `GSI1PK=USER#{id}#PAGE#{path}` | Reviews for one page |
+| Get design rule | `design_rules` | `USER#{user_id}` | `RULE#{rule_id}` | -- | Single item |
+| List all rules | `design_rules` | `USER#{user_id}` | begins_with `RULE#` | -- | All configured rules |
+
+---
+
+## 12. API Request/Response Examples
+
+```bash
+# --- GET /ui/agents/stylist/reviews ---
+curl http://localhost:8000/ui/agents/stylist/reviews \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "reviews": [
+    {
+      "review_id": "rev-001",
+      "page_path": "/messages",
+      "overall_score": 87,
+      "accessibility_score": 92,
+      "design_score": 82,
+      "issues_count": 3,
+      "screenshots": ["mobile.png", "tablet.png", "desktop.png"],
+      "created_at": 1748534400
+    }
+  ]
+}
+
+# --- GET /ui/agents/stylist/reviews/{review_id}/issues ---
+curl http://localhost:8000/ui/agents/stylist/reviews/rev-001/issues \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "issues": [
+    {
+      "severity": "medium",
+      "category": "accessibility",
+      "title": "Missing alt text on avatar images",
+      "selector": "img.avatar",
+      "description": "WCAG 2.1 Level A: Images must have alt text",
+      "recommendation": "Add alt={user.displayName} to Avatar component",
+      "screenshot_url": "https://s3.../rev-001/issue-1.png"
+    }
+  ]
+}
+```
+
+---
+
+## 13. Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| Review not found | 404 | `REVIEW_NOT_FOUND` | "UI review not found." | Verify review_id |
+| Rule not found | 404 | `RULE_NOT_FOUND` | "Design rule not found." | Verify rule_id |
+| Review in progress | 409 | `REVIEW_IN_PROGRESS` | "A review is already running." | Wait for completion |
+| Invalid page path | 422 | `INVALID_PAGE_PATH` | "Page path must start with /." | Fix path |
+| Duplicate rule name | 409 | `RULE_EXISTS` | "A rule with this name already exists." | Use unique name |
+| Agent not configured | 404 | `AGENT_NOT_CONFIGURED` | "No Stylist Agent configured." | Create agent |
+
+---
+
+## 14. Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal, Optional, List
+
+class UIIssueOut(BaseModel):
+    severity: Literal["critical", "high", "medium", "low"]
+    category: Literal["accessibility", "design", "responsive", "performance"]
+    title: str
+    selector: Optional[str] = None
+    description: str
+    recommendation: str
+    screenshot_url: Optional[str] = None
+
+class UIReviewOut(BaseModel):
+    review_id: str
+    page_path: str
+    overall_score: int = Field(ge=0, le=100)
+    accessibility_score: int = Field(ge=0, le=100)
+    design_score: int = Field(ge=0, le=100)
+    issues: List[UIIssueOut] = Field(default_factory=list)
+    screenshots: List[str] = Field(default_factory=list)
+    created_at: int
+
+class DesignRuleIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    category: Literal["spacing", "color", "typography", "layout", "accessibility"]
+    description: str = Field(max_length=2000)
+    selector_pattern: Optional[str] = Field(default=None, max_length=500)
+    expected_value: Optional[str] = Field(default=None, max_length=200)
+    severity: Literal["critical", "high", "medium", "low"] = "medium"
+```
+
+---
+
+## 15. Frontend Component Tree
+
+```
+UIReviewDashboard                     data-testid="stylist-dashboard"
+├── div.grid.grid-cols-3
+│   ├── StatCard "Overall Score" → avg overall_score
+│   ├── StatCard "Accessibility" → avg accessibility_score
+│   └── StatCard "Design" → avg design_score
+├── DataTable (reviews)
+│   ├── columns: [page_path, overall_score, issues_count, created_at]
+│   └── row click → ReviewDetail
+├── ReviewDetail
+│   ├── Screenshot gallery (3 viewports)
+│   ├── Issues list with severity badges
+│   └── Recommendations panel
+└── Card "Design Rules"
+    ├── Button "Add Rule"
+    └── DataTable (rules)
+```
+
+---
+
+## 16. Observability & Monitoring
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `stylist_reviews_total` | Counter | -- | Total reviews completed |
+| `stylist_issues_found_total` | Counter | `severity`, `category` | Issues detected |
+| `stylist_score_avg` | Gauge | `score_type={overall,accessibility,design}` | Average scores |
+| `stylist_review_duration_seconds` | Histogram | -- | Review duration |
+
+### Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Accessibility score drop | avg score < 70 | P2 |
+| Critical UI issue | critical issues > 0 in review | P2 |
+
+---
+
+## 17. Rollout Plan
+
+### Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `STYLIST_AGENT_ENABLED` | `false` | Master kill switch |
+| `STYLIST_PR_TRIGGER_ENABLED` | `false` | Auto-review on PR merge |
+| `STYLIST_TICKET_CREATION_ENABLED` | `false` | Auto-file UI improvement tickets |
+
+### Canary
+
+1. **Week 1**: Manual trigger only. Review and validate scoring accuracy.
+2. **Week 2**: Enable `STYLIST_PR_TRIGGER_ENABLED`.
+3. **Week 3**: Enable `STYLIST_TICKET_CREATION_ENABLED`.
+
+---
+
+## 18. Expanded E2E Test Details
+
+### Additional Edge Case Tests (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| E1 | Review page that returns 404 | Agent logs warning; page skipped; review completes without crash |
+| E2 | No design rules configured | Review runs with defaults; design_score based on built-in checks |
+| E3 | Duplicate review trigger | POST review while one is running; 409 |
+| E4 | 100-score page (perfect) | Page with no issues; issues array empty; all scores = 100 |
+
+### Additional Negative Tests (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| N1 | Non-admin cannot trigger review | Alice (USER) POSTs review; 403 |
+| N2 | Invalid rule category | POST rule with category="invalid"; 422 |
+| N3 | Delete non-existent rule | DELETE rule with fake ID; 404 |
+| N4 | Review for non-existent page | Review completes but page marked as "not found" in results |

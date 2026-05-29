@@ -44,9 +44,82 @@ dates, and document numbers against the profile -- a slow, error-prone process.
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
 
-### 2.1 KYC File Attachment Flow
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                           Frontend                                       │
+│  ┌──────────────────────────────────────────────────────────┐            │
+│  │ KycCaseDetailPage (from KYC-001)                         │            │
+│  │  ├── DocumentViewer (existing)                            │            │
+│  │  └── ExtractionResultsPanel (NEW)                         │            │
+│  │       ├── FieldRow (full_name: Match ✓ / Mismatch ✗)     │            │
+│  │       ├── FieldRow (date_of_birth: Match ✓ / Mismatch ✗) │            │
+│  │       ├── FieldRow (document_number: extracted value)     │            │
+│  │       ├── FieldRow (expiry_date: extracted value)         │            │
+│  │       ├── OverallConfidenceBadge (high/medium/low)        │            │
+│  │       └── Button "Re-extract"                             │            │
+│  └──────────────────────────────────────────────────────────┘            │
+└───────────────────────────────┬──────────────────────────────────────────┘
+                                │ Axios
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      Backend (FastAPI)                                    │
+│                                                                          │
+│  app/routers/kyc_cases.py                                               │
+│  ┌────────────────────────────────────────────────────────────────┐      │
+│  │ POST /{case_id}/extract-documents  → trigger extraction       │      │
+│  │ GET  /{case_id}/extractions        → get results (owner)      │      │
+│  │ GET  /admin/cases/{id}/extractions → get results (admin)      │      │
+│  └────────────────────────────────────────────────────────────────┘      │
+│                                                                          │
+│  app/services/kyc_document_verification.py (NEW)                        │
+│  ┌────────────────────────────────────────────────────────────────┐      │
+│  │ DocumentVerificationService                                    │      │
+│  │  ├── trigger_extraction()                                      │      │
+│  │  │    ├── _run_mock_extraction()  (dev mode)                   │      │
+│  │  │    └── _run_provider_extraction()  (prod)                   │      │
+│  │  ├── _match_against_profile()                                  │      │
+│  │  │    ├── Name: case-insensitive + Levenshtein (>= 0.85)      │      │
+│  │  │    └── DOB: exact ISO date comparison                       │      │
+│  │  ├── _compute_confidence()                                     │      │
+│  │  │    ├── all match → "high"                                   │      │
+│  │  │    ├── some partial → "medium"                              │      │
+│  │  │    └── any mismatch → "low"                                 │      │
+│  │  ├── get_extraction()                                          │      │
+│  │  └── get_all_extractions()                                     │      │
+│  └───────────────────────┬────────────────────────────────────────┘      │
+│                          │                                               │
+│  Auto-trigger on submission (submit_kyc_case, line 830):                │
+│  ┌────────────────────────────────────────────────────────┐              │
+│  │ for file in case.files:                                 │              │
+│  │   if file.type in ("id_front", "id_back"):             │              │
+│  │     verification_service.trigger_extraction(...)        │              │
+│  └────────────────────────────────────────────────────────┘              │
+└───────────────────────────────┬──────────────────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                    DynamoDB Local (:8001)                                 │
+│                                                                          │
+│  ┌──────────────────────────────────────────────┐                       │
+│  │ kyc_document_extractions (NEW TABLE)          │                       │
+│  │ PK: case_id    SK: file_type                  │                       │
+│  │ GSI: ByStatus  PK: status  SK: created_at (N) │                       │
+│  └──────────────────────────────────────────────┘                       │
+│                                                                          │
+│  ┌──────────────────────────┐  ┌─────────────────┐                      │
+│  │ kyc_cases                │  │ users (profiles) │                      │
+│  │ PK: KYC#{case_id}       │  │ PK: USER#{sub}   │                      │
+│  └──────────────────────────┘  └─────────────────┘                      │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Current State Analysis
+
+### 3.1 KYC File Attachment Flow
 
 Files are attached to a KYC case via `POST /v1/kyc/cases/{id}/files` (line 734 of
 `app/routers/kyc_cases.py`). The `KycFileAttachmentRequest` model (contract line 133)
@@ -64,7 +137,7 @@ Each file entry stored on the case:
 }
 ```
 
-### 2.2 User Profile Data
+### 3.2 User Profile Data
 
 User profile data is accessible via `app/services/profiles.py`. Relevant fields for matching:
 - `display_name` or `full_name` (from profile record)
@@ -72,7 +145,7 @@ User profile data is accessible via `app/services/profiles.py`. Relevant fields 
 - `mailing_address` (`MailingAddress` model in `app/models.py`, line 1273: line1, line2, city,
   state, postal_code, country)
 
-### 2.3 File Content Access
+### 3.3 File Content Access
 
 File content is accessible via the file manager's S3 integration. The file manager node's
 `s3_key` field points to the stored object. In dev mode, S3 is mocked via moto (in-process).
@@ -80,9 +153,260 @@ The extraction service will read file bytes via `boto3.client("s3").get_object()
 
 ---
 
-## 3. Technical Design
+## 4. DynamoDB Access Patterns
 
-### 3.1 New DDB Table: `kyc_document_extractions`
+### 4.1 Table: `kyc_document_extractions`
+
+| Access Pattern | PK | SK / GSI | Condition | Used By |
+|---------------|-----|----------|-----------|---------|
+| Get extraction for specific file | `case_id` | `file_type` (e.g., `id_front`) | GetItem | Case detail, admin view |
+| Get all extractions for a case | `case_id` | `begins_with(file_type, "")` | Query all SKeys | Admin case detail |
+| List pending extractions | GSI `ByStatus` PK=`pending` | SK=`created_at` (N) range | Background processor | |
+| List failed extractions | GSI `ByStatus` PK=`failed` | SK=`created_at` (N) range | Admin monitoring | |
+
+### 4.2 Example DDB Items
+
+**Extraction result (completed, matching):**
+```json
+{
+  "case_id": "kyc_a1b2c3d4",
+  "file_type": "id_front",
+  "extraction_id": "ext_f8a3b2c1d0e9",
+  "status": "completed",
+  "provider": "mock_ocr",
+  "extracted_fields": {
+    "full_name": "ALICE SMITH",
+    "date_of_birth": "1990-05-15",
+    "document_number": "X12345678",
+    "expiry_date": "2030-12-31",
+    "issuing_country": "US"
+  },
+  "match_results": {
+    "full_name": {
+      "status": "match",
+      "profile_value": "Alice Smith",
+      "extracted_value": "ALICE SMITH",
+      "similarity": 1.0
+    },
+    "date_of_birth": {
+      "status": "match",
+      "profile_value": "1990-05-15",
+      "extracted_value": "1990-05-15",
+      "similarity": 1.0
+    }
+  },
+  "overall_confidence": "high",
+  "raw_response": "{\"provider\":\"mock_ocr\",\"raw\":{}}",
+  "file_path": "/uploads/kyc/alice_id_front.jpg",
+  "created_at": 1716681800,
+  "updated_at": 1716681800
+}
+```
+
+**Extraction result (completed, mismatch):**
+```json
+{
+  "case_id": "kyc_e5f6g7h8",
+  "file_type": "id_front",
+  "extraction_id": "ext_a1b2c3d4e5f6",
+  "status": "completed",
+  "provider": "mock_ocr",
+  "extracted_fields": {
+    "full_name": "WRONG ALICE SMITH",
+    "date_of_birth": "1991-05-15",
+    "document_number": "Y87654321",
+    "expiry_date": "2028-06-30",
+    "issuing_country": "US"
+  },
+  "match_results": {
+    "full_name": {
+      "status": "mismatch",
+      "profile_value": "Alice Smith",
+      "extracted_value": "WRONG ALICE SMITH",
+      "similarity": 0.62
+    },
+    "date_of_birth": {
+      "status": "mismatch",
+      "profile_value": "1990-05-15",
+      "extracted_value": "1991-05-15",
+      "similarity": 0.0
+    }
+  },
+  "overall_confidence": "low",
+  "raw_response": "{}",
+  "file_path": "/uploads/kyc/alice_mismatch_id.jpg",
+  "created_at": 1716681900,
+  "updated_at": 1716681900
+}
+```
+
+**DDB init** (`scripts/local-ddb-init.py`):
+```python
+TableDef(
+    _resolve_table_name(S.kyc_doc_extractions_table_name, "kyc_document_extractions"),
+    partition_key="case_id",
+    sort_key="file_type",
+    gsis=[
+        {"index_name": "status-created-index", "partition_key": "status", "sort_key": "created_at"},
+    ],
+    attr_types={"created_at": "N"},
+)
+```
+
+---
+
+## 5. API Request/Response Examples
+
+### 5.1 Trigger Document Extraction
+
+```bash
+curl -X POST "http://localhost:8000/v1/kyc/cases/kyc_a1b2c3d4/extract-documents" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a" \
+  -H "x-csrf-token: csrf_a" \
+  -H "Content-Type: application/json"
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "extractions_triggered": 2,
+  "extraction_ids": ["ext_f8a3b2c1d0e9", "ext_c4d5e6f7a8b9"]
+}
+```
+
+### 5.2 Get Extractions for a Case (Owner)
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/cases/kyc_a1b2c3d4/extractions" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a"
+```
+
+**Response (200):**
+```json
+{
+  "extractions": [
+    {
+      "extraction_id": "ext_f8a3b2c1d0e9",
+      "file_type": "id_front",
+      "status": "completed",
+      "overall_confidence": "high",
+      "extracted_fields": {
+        "full_name": "ALICE SMITH",
+        "date_of_birth": "1990-05-15",
+        "document_number": "X12345678",
+        "expiry_date": "2030-12-31",
+        "issuing_country": "US"
+      },
+      "created_at": 1716681800
+    },
+    {
+      "extraction_id": "ext_c4d5e6f7a8b9",
+      "file_type": "id_back",
+      "status": "completed",
+      "overall_confidence": "high",
+      "extracted_fields": {
+        "full_name": "ALICE SMITH",
+        "date_of_birth": "1990-05-15"
+      },
+      "created_at": 1716681801
+    }
+  ]
+}
+```
+
+### 5.3 Get Admin Extractions (with match details)
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/cases/admin/cases/kyc_a1b2c3d4/extractions" \
+  -H "Cookie: ui_session=sess_root; ui_access_token=eyJ...; ui_csrf=csrf_r"
+```
+
+**Response (200):**
+```json
+{
+  "extractions": [
+    {
+      "extraction_id": "ext_f8a3b2c1d0e9",
+      "file_type": "id_front",
+      "status": "completed",
+      "overall_confidence": "high",
+      "extracted_fields": {
+        "full_name": "ALICE SMITH",
+        "date_of_birth": "1990-05-15",
+        "document_number": "X12345678",
+        "expiry_date": "2030-12-31",
+        "issuing_country": "US"
+      },
+      "match_results": {
+        "full_name": { "status": "match", "profile_value": "Alice Smith", "extracted_value": "ALICE SMITH", "similarity": 1.0 },
+        "date_of_birth": { "status": "match", "profile_value": "1990-05-15", "extracted_value": "1990-05-15", "similarity": 1.0 }
+      },
+      "provider": "mock_ocr",
+      "created_at": 1716681800,
+      "updated_at": 1716681800
+    }
+  ]
+}
+```
+
+---
+
+## 6. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|----------------|
+| Trigger extraction on non-existent case | 404 | `kyc_case_not_found` | "KYC case not found." | Verify case ID |
+| Trigger extraction by non-owner | 403 | `kyc_access_forbidden` | "You do not own this case." | Use correct session |
+| Trigger extraction with no ID files | 400 | `kyc_no_extractable_files` | "No identity documents to extract from." | Upload id_front/id_back first |
+| Extraction provider timeout | 500 | `extraction_provider_error` | "Document extraction failed. Try again later." | Re-trigger manually |
+| Get extractions for non-existent case | 404 | `kyc_case_not_found` | "KYC case not found." | Verify case ID |
+| Admin views extractions on non-existent case | 404 | `kyc_case_not_found` | "KYC case not found." | Verify case ID |
+| Non-admin accesses admin extraction endpoint | 403 | `kyc_admin_role_required` | "Admin access required." | Use admin credentials |
+| Re-trigger extraction on same file | 200 | — (idempotent update) | Success, updated result | No action needed |
+| File manager node not found (dangling ref) | 500 | `file_not_found` | "Source document file not found." | Re-upload document |
+| S3 get_object failure | 500 | `extraction_provider_error` | "Could not read document file." | Retry |
+
+---
+
+## 7. Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+class ExtractionFieldMatch(BaseModel):
+    status: Literal["match", "mismatch", "partial", "not_available"]
+    profile_value: str | None = None
+    extracted_value: str | None = None
+    similarity: float | None = None
+
+class DocumentExtractionOut(BaseModel):
+    extraction_id: str
+    file_type: Literal["id_front", "id_back"]
+    status: Literal["pending", "completed", "failed", "not_supported"]
+    provider: str | None = None
+    extracted_fields: dict[str, str] = Field(default_factory=dict)
+    match_results: dict[str, ExtractionFieldMatch] | None = None
+    overall_confidence: Literal["high", "medium", "low", "failed"] | None = None
+    file_path: str | None = None
+    created_at: int
+    updated_at: int
+
+class TriggerExtractionResponse(BaseModel):
+    ok: bool = True
+    extractions_triggered: int
+    extraction_ids: list[str] = Field(default_factory=list)
+
+class ExtractionListResponse(BaseModel):
+    extractions: list[DocumentExtractionOut]
+```
+
+---
+
+## 8. Technical Design
+
+### 8.1 New DDB Table: `kyc_document_extractions`
 
 **Table name**: `kyc_document_extractions` (env: `KYC_DOC_EXTRACTIONS_TABLE_NAME`)
 **Partition key**: `case_id` (String)
@@ -103,55 +427,7 @@ The extraction service will read file bytes via `boto3.client("s3").get_object()
 | `created_at` | N | Unix timestamp |
 | `updated_at` | N | Unix timestamp |
 
-`extracted_fields` map structure:
-```json
-{
-  "full_name": "ALICE SMITH",
-  "date_of_birth": "1990-05-15",
-  "document_number": "X12345678",
-  "expiry_date": "2030-12-31",
-  "issuing_country": "US"
-}
-```
-
-`match_results` map structure:
-```json
-{
-  "full_name": {
-    "status": "match",
-    "profile_value": "Alice Smith",
-    "extracted_value": "ALICE SMITH",
-    "similarity": 1.0
-  },
-  "date_of_birth": {
-    "status": "mismatch",
-    "profile_value": "1990-05-15",
-    "extracted_value": "1991-05-15",
-    "similarity": 0.0
-  }
-}
-```
-
-**GSIs**:
-
-| GSI Name | Partition Key | Sort Key | Purpose |
-|----------|--------------|----------|---------|
-| `ByStatus` | `status` | `created_at` (N) | Query pending extractions for processing |
-
-**DDB init** (`scripts/local-ddb-init.py`):
-```python
-TableDef(
-    _resolve_table_name(S.kyc_doc_extractions_table_name, "kyc_document_extractions"),
-    partition_key="case_id",
-    sort_key="file_type",
-    gsis=[
-        {"index_name": "status-created-index", "partition_key": "status", "sort_key": "created_at"},
-    ],
-    attr_types={"created_at": "N"},
-)
-```
-
-### 3.2 New Service: `app/services/kyc_document_verification.py`
+### 8.2 New Service: `app/services/kyc_document_verification.py`
 
 ```python
 class DocumentVerificationService:
@@ -177,7 +453,7 @@ class DocumentVerificationService:
         """Compute overall confidence: high (all match), medium (partial), low (mismatch)."""
 ```
 
-### 3.3 Mock Provider Logic
+### 8.3 Mock Provider Logic
 
 The mock extraction provider returns deterministic results for testability:
 
@@ -189,18 +465,7 @@ The mock extraction provider returns deterministic results for testability:
 | `*_expired_*` | Returns expiry_date in the past |
 | `*_fail_*` | Returns status=failed, no extracted fields |
 
-Example mock response for a matching document:
-```python
-{
-    "full_name": profile.display_name.upper(),
-    "date_of_birth": profile.date_of_birth,
-    "document_number": f"X{uuid4().hex[:8].upper()}",
-    "expiry_date": "2030-12-31",
-    "issuing_country": "US",
-}
-```
-
-### 3.4 String Matching Algorithm
+### 8.4 String Matching Algorithm
 
 Name matching uses case-insensitive comparison with normalization:
 1. Strip leading/trailing whitespace
@@ -210,41 +475,7 @@ Name matching uses case-insensitive comparison with normalization:
 
 DOB matching: exact string comparison after normalizing to ISO format.
 
-### 3.5 New Router Endpoints
-
-**File: `app/routers/kyc_cases.py`** -- add endpoints:
-
-```python
-@router.post("/{case_id}/extract-documents")
-def trigger_document_extraction(
-    case_id: str,
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """Trigger extraction for all ID documents attached to the case.
-    Called automatically on case submission, or manually by admin."""
-
-@router.get("/{case_id}/extractions")
-def get_document_extractions(
-    case_id: str,
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """Get all extraction results for a case. Available to case owner and admins."""
-
-@router.get("/admin/cases/{case_id}/extractions")
-def get_admin_document_extractions(
-    case_id: str,
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """Admin view of extraction results with match details and confidence."""
-```
-
-### 3.6 Integration with Case Submission
+### 8.5 Integration with Case Submission
 
 In `submit_kyc_case()` (line 830 of `app/routers/kyc_cases.py`), after successful
 submission, automatically trigger extraction for all id_front and id_back files:
@@ -261,17 +492,7 @@ for file_entry in case.get("files", []):
         )
 ```
 
-### 3.7 Frontend Integration
-
-**File: `frontend/src/pages/admin/KycCaseDetailPage.tsx`** -- extend:
-
-Add an "Extraction Results" panel below the document viewer showing:
-- Per-field extracted value vs profile value with color-coded match status
-  (green=match, yellow=partial, red=mismatch, gray=not_available)
-- Overall confidence badge
-- "Re-extract" button for admin to re-trigger extraction
-
-### 3.8 Settings
+### 8.6 Settings
 
 **File: `app/core/settings.py`** -- add:
 
@@ -283,7 +504,119 @@ kyc_name_match_threshold: float = float(os.environ.get("KYC_NAME_MATCH_THRESHOLD
 
 ---
 
-## 4. E2E Test Plan
+## 9. Frontend Component Tree
+
+```
+KycCaseDetailPage (extended from KYC-001)
+├── DocumentViewer (existing)
+│   ├── TabBar (Selfie | ID Front | ID Back | Proof of Address)
+│   └── ImagePane
+└── ExtractionResultsPanel (NEW)
+    ├── SectionHeader ("Extraction Results")
+    ├── OverallConfidenceBadge
+    │   ├── variant="high" → green "High Confidence"
+    │   ├── variant="medium" → yellow "Medium Confidence"
+    │   └── variant="low" → red "Low Confidence"
+    ├── ExtractionFieldTable
+    │   ├── FieldRow (full_name)
+    │   │   ├── Label "Full Name"
+    │   │   ├── ExtractedValue "ALICE SMITH"
+    │   │   ├── ProfileValue "Alice Smith"
+    │   │   └── MatchBadge (green "Match" | yellow "Partial" | red "Mismatch")
+    │   ├── FieldRow (date_of_birth)
+    │   ├── FieldRow (document_number)
+    │   ├── FieldRow (expiry_date)
+    │   └── FieldRow (issuing_country)
+    ├── FailedExtractionBanner (shown when status=failed)
+    │   └── Text "Extraction failed for this document."
+    ├── PendingExtractionSpinner (shown when status=pending)
+    │   └── Loader2 + Text "Extracting document data..."
+    └── Button "Re-extract" (triggers POST extract-documents)
+```
+
+---
+
+## 10. Observability & Monitoring
+
+### 10.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `kyc_extraction_total` | Counter | `file_type`, `provider`, `status` | Total extractions triggered |
+| `kyc_extraction_duration_ms` | Histogram | `provider` | Time to complete extraction |
+| `kyc_extraction_confidence` | Histogram | `file_type` | Distribution of confidence levels |
+| `kyc_extraction_match_status` | Counter | `field`, `status` | Per-field match outcomes |
+| `kyc_extraction_auto_triggered` | Counter | — | Extractions auto-triggered on submission |
+
+### 10.2 Log Events
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| `kyc.extraction.triggered` | INFO | `case_id`, `file_type`, `provider` |
+| `kyc.extraction.completed` | INFO | `case_id`, `file_type`, `confidence`, `match_summary` |
+| `kyc.extraction.failed` | ERROR | `case_id`, `file_type`, `error` |
+| `kyc.extraction.name_mismatch` | WARN | `case_id`, `profile_name`, `extracted_name`, `similarity` |
+| `kyc.extraction.dob_mismatch` | WARN | `case_id`, `profile_dob`, `extracted_dob` |
+
+### 10.3 Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Extraction failure rate high | `failed / total > 10%` in 1h | P2 |
+| Extraction latency high | `p95 > 30s` | P3 |
+| Name mismatch rate high | `mismatch / total > 25%` in 1h | P3 (may indicate mock issue or real issue) |
+
+---
+
+## 11. Rollout Plan
+
+### 11.1 Feature Flag
+
+**Flag:** `KYC_DOCUMENT_EXTRACTION_ENABLED` (default `true` in dev, `false` in prod)
+
+### 11.2 Migration Steps
+
+1. Deploy DDB table creation (local-ddb-init.py change)
+2. Deploy service + router changes with flag off
+3. Enable in staging, verify with E2E tests
+4. Enable in production (extractions begin on new submissions)
+5. Backfill: manually trigger extraction for existing submitted cases
+
+### 11.3 Rollback
+
+1. Set flag to `false` -- auto-trigger on submission stops
+2. Existing extraction records remain (read-only)
+3. Admin dashboard falls back to no extraction panel
+4. No data loss or schema change needed
+
+---
+
+## 12. Performance Considerations
+
+### 12.1 Query Costs
+
+| Operation | RCU/WCU | Notes |
+|-----------|---------|-------|
+| Trigger extraction (PutItem) | 1 WCU | Single write ~1 KB |
+| Get extraction (GetItem) | 1 RCU | Single read |
+| Get all extractions (Query) | 1-2 RCU | Max 4 items per case |
+| Mock extraction compute | 0 DDB | In-memory computation |
+
+### 12.2 Latency
+
+- Mock extraction: < 50ms (in-memory)
+- Production extraction: 2-10s (external API call)
+- Auto-trigger adds ~100ms to submission flow (mock) or should be async (production)
+
+### 12.3 Caching
+
+- Extraction results are immutable once completed; cache indefinitely in React Query
+- `staleTime: Infinity` for completed extractions
+- `staleTime: 5000` for pending extractions (poll for completion)
+
+---
+
+## 13. E2E Test Plan
 
 **File**: `frontend/e2e/kyc-document-verification.spec.ts`
 **Total**: ~20 tests across 4 sections (156-159)
@@ -415,9 +748,29 @@ test("159.5 Failed extraction shows error state", async ({ page }) => {
 });
 ```
 
+### Expanded E2E: Edge Cases
+
+```typescript
+test("156.7 Trigger extraction with no files attached returns 400", async () => {
+  // Create case without any files
+  // POST extract-documents
+  // Expect 400 kyc_no_extractable_files
+});
+
+test("158.6 Extraction with name containing special characters still matches", async () => {
+  // Profile name "O'Brien-Smith", extracted "OBRIEN SMITH"
+  // Verify match or partial based on Levenshtein ratio
+});
+
+test("158.7 Concurrent extractions for same file are idempotent", async () => {
+  // Trigger extraction twice simultaneously
+  // Verify only one final result exists (PutItem is idempotent on PK/SK)
+});
+```
+
 ---
 
-## 5. File Change Summary
+## 14. File Change Summary
 
 | File | Change Type | Description |
 |------|-------------|-------------|
@@ -429,4 +782,4 @@ test("159.5 Failed extraction shows error state", async ({ page }) => {
 | `scripts/local-ddb-init.py` | Modify | Add `kyc_document_extractions` table with GSI |
 | `frontend/src/api/endpoints/kyc-admin.ts` | Modify | Add extraction API functions |
 | `frontend/src/pages/admin/KycCaseDetailPage.tsx` | Modify | Add extraction results panel |
-| `frontend/e2e/kyc-document-verification.spec.ts` | **New** | 20 E2E tests across sections 156-159 |
+| `frontend/e2e/kyc-document-verification.spec.ts` | **New** | 20+ E2E tests across sections 156-159 |

@@ -685,3 +685,51 @@ it("handles devicechange event (hot-plug)", async () => {
 | `frontend/e2e/webrtc-media.spec.ts` | Full browser integration, permission flows | Playwright |
 
 All unit tests mock `navigator.mediaDevices` at the module level. E2E tests use Playwright's `browserContext.grantPermissions()` for happy paths and `page.addInitScript()` overrides for failure simulation.
+
+---
+
+## 6. Error Handling Matrix
+
+| Error Scenario | Browser Error | User-Facing Message | Recovery Action |
+|----------------|--------------|---------------------|-----------------|
+| Permission denied | `NotAllowedError` | "Camera/mic permission denied. Please allow access in browser settings." | Show permission instructions dialog |
+| Device not found | `NotFoundError` | "No camera/microphone found." | Show device troubleshooting tips |
+| Device in use | `NotReadableError` | "Camera/mic is in use by another app." | Suggest closing other apps |
+| Overconstrained | `OverconstrainedError` | "Requested quality not supported by device." | Fall back to lower resolution |
+| Secure context required | `NotAllowedError` (HTTP) | "Secure connection (HTTPS) required for media access." | Redirect to HTTPS |
+| getUserMedia not supported | `TypeError` | "Your browser does not support media capture." | Suggest Chrome/Firefox |
+| Track ended unexpectedly | `ended` event | "Media device disconnected." | Attempt re-acquisition |
+
+---
+
+## 7. Observability & Monitoring
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `webrtc_get_user_media_total` | Counter | `result={success,denied,error}` | getUserMedia attempts |
+| `webrtc_get_user_media_duration_ms` | Histogram | -- | Time to acquire media |
+| `webrtc_device_change_total` | Counter | -- | Device hotplug events |
+| `webrtc_track_ended_total` | Counter | `kind={audio,video}` | Unexpected track ends |
+| `webrtc_permission_prompt_total` | Counter | `result={granted,denied}` | Permission prompt outcomes |
+
+---
+
+## 8. Performance Considerations
+
+| Concern | Mitigation |
+|---------|-----------|
+| getUserMedia blocks UI thread | Async call; show spinner during acquisition |
+| Multiple rapid device changes | Debounce devicechange listener (500ms) |
+| High-resolution video on weak devices | Start with 720p; downgrade on OverconstrainedError |
+| Memory leak from unreleased tracks | stopAllTracks() in cleanup; ref-count tracks per component |
+| Enumeration on every mount | Cache device list for 5 seconds; refresh on devicechange |
+
+---
+
+## 9. Rollout Plan
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `WEBRTC_VIDEO_ENABLED` | `true` | Enable video capture (audio always on) |
+| `WEBRTC_SCREEN_SHARE_ENABLED` | `false` | Enable screen sharing |
+| `WEBRTC_HD_VIDEO_ENABLED` | `false` | Allow 1080p requests (vs 720p max) |

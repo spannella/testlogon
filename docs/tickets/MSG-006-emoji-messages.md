@@ -431,3 +431,282 @@ No server-side limit change is needed — the existing message text length limit
 | MSG-011 (Emoji Reactions Enhancement) | EmojiPicker component |
 | FEED-004 (Emoji/GIF/Sticker Comments) | EmojiPicker component |
 | FEED-008 (Enhanced Post Composer) | EmojiPicker integration |
+
+---
+
+## 9. Architecture Diagram
+
+```
+Frontend-Only Architecture (No Backend Changes):
+
++-------------------------------------------+
+|             React Frontend                 |
+|                                           |
+|  ComposeBar.tsx                           |
+|  +--- EmojiButton (Smile icon)           |
+|  |      |                                 |
+|  |      +-> Popover                       |
+|  |           +-> EmojiPicker.tsx           |
+|  |                +-> SearchInput          |
+|  |                +-> CategoryTabs         |
+|  |                +-> RecentSection        |
+|  |                +-> EmojiGrid (virtual)  |
+|  |                +-> SkinToneSelector     |
+|  |                                        |
+|  +--- Textarea                            |
+|  |      <- emoji inserted via onSelect    |
+|  |      <- shortcodes replaced on send    |
+|  |                                        |
+|  +--- SendButton                          |
+|         |                                 |
+|         +-> replaceShortcodes(text)       |
+|         +-> POST /messages (unchanged)    |
+|                                           |
+|  MessageBubble.tsx                        |
+|  +--- isEmojiOnly(text) check            |
+|  |      +-> text-5xl class if true        |
+|  +--- Normal text rendering otherwise     |
+|                                           |
+|  CreatePost.tsx (Newsfeed)                |
+|  +--- Same EmojiPicker integration        |
++-------------------------------------------+
+
+Data Flow:
+
+  emoji-data.ts (static ~1800 entries, ~120KB gzipped)
+       |
+       +-> SHORTCODE_MAP (Map<string, string>)
+       |     Used by replaceShortcodes()
+       |
+       +-> EMOJI_DATA (EmojiEntry[])
+       |     Used by EmojiPicker search + categories
+       |
+       +-> EMOJI_CATEGORIES (category metadata)
+             Used by EmojiPicker tab rendering
+
+  emojiStore.ts (Zustand + localStorage)
+       |
+       +-> recentEmojis: string[] (max 32)
+       +-> skinTone: string (modifier codepoint)
+```
+
+---
+
+## 10. DynamoDB Access Patterns
+
+No new DynamoDB tables or access patterns are required. Emoji processing is entirely frontend-side:
+
+| Operation | Backend Impact | Notes |
+|---|---|---|
+| Send message with emojis | None -- text stored as-is | Backend receives Unicode characters |
+| Send message with shortcodes | None -- replaced on frontend before send | Backend never sees `:smile:` syntax |
+| Emoji-only large rendering | None -- detection is client-side | No `format` field needed |
+| Recent emoji tracking | None -- localStorage only | No server persistence |
+| Skin tone preference | None -- localStorage only | No server persistence |
+
+---
+
+## 11. API Request/Response Examples
+
+No new API endpoints are introduced. The existing message send endpoint accepts emoji text as-is:
+
+**Send emoji-only message:**
+```bash
+curl -X POST http://localhost:8000/ui/messaging/conversations/conv_abc/messages \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=tok_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "😀"}'
+
+# Response 201:
+{
+  "message_id": "m_abc123",
+  "conversation_id": "conv_abc",
+  "sender_id": "alice-uuid",
+  "text": "😀",
+  "kind": "text",
+  "created_at": 1748520000
+}
+```
+
+**Send message with shortcode (after frontend replacement):**
+```bash
+# Frontend replaces `:fire:` with `🔥` before sending
+curl -X POST http://localhost:8000/ui/messaging/conversations/conv_abc/messages \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=tok_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "hello 🔥 world 👋"}'
+
+# Response 201:
+{
+  "message_id": "m_def456",
+  "text": "hello 🔥 world 👋",
+  "kind": "text"
+}
+```
+
+---
+
+## 12. Pydantic Models
+
+No new Pydantic models are needed. The existing `SendTextMessageIn` model accepts Unicode emoji characters in the `text` field without any changes. The `MessageOut` model returns the text as-is.
+
+The frontend-only models are TypeScript interfaces:
+
+```typescript
+// frontend/src/data/emoji-data.ts
+export interface EmojiEntry {
+  emoji: string;           // Unicode character(s)
+  shortcode: string;       // e.g., "smile"
+  name: string;            // e.g., "Smiling Face with Open Mouth"
+  keywords: string[];      // e.g., ["happy", "joy"]
+  category: EmojiCategory;
+  skinToneSupport: boolean;
+  version: string;         // Unicode version
+}
+
+// frontend/src/stores/emojiStore.ts
+interface EmojiStoreState {
+  recentEmojis: string[];
+  skinTone: string;
+  addRecent: (emoji: string) => void;
+  setSkinTone: (tone: string) => void;
+}
+```
+
+---
+
+## 13. Frontend Component Tree (Detailed)
+
+```
+EmojiPicker (shared component)
+  +-- SearchInput
+  |     +-- Input (type="text", placeholder="Search emojis...")
+  |     +-- X button (clear search)
+  |     +-- debounced onChange (150ms)
+  |
+  +-- SkinToneSelector
+  |     +-- Popover trigger (hand emoji with current tone)
+  |     +-- PopoverContent: 6 tone circles (default + 5 modifiers)
+  |     +-- onClick: emojiStore.setSkinTone(modifier)
+  |
+  +-- CategoryTabs (vertical sidebar on desktop, horizontal on mobile)
+  |     +-- For each EMOJI_CATEGORIES: Button with emoji icon
+  |     +-- Active state: highlighted background
+  |     +-- onClick: scroll grid to category section
+  |
+  +-- RecentSection (visible when recentEmojis.length > 0)
+  |     +-- Label: "Recent"
+  |     +-- Grid: up to 32 emoji buttons
+  |
+  +-- EmojiGrid (main content area)
+  |     +-- VirtualList (react-virtualized or CSS content-visibility)
+  |     +-- For each category:
+  |     |     +-- CategoryHeader (sticky label)
+  |     |     +-- Grid (8 columns)
+  |     |           +-- For each emoji in category:
+  |     |                 +-- Button (emoji with applied skin tone)
+  |     |                 +-- title={emoji.name}
+  |     |                 +-- onClick: onSelect(appliedEmoji)
+  |     |                             emojiStore.addRecent(appliedEmoji)
+  |     +-- EmptyState (when search has no results)
+  |
+  +-- KeyboardNavigation
+        +-- Arrow keys: move focus between emoji buttons
+        +-- Enter: select focused emoji
+        +-- Escape: close picker (onClose callback)
+```
+
+---
+
+## 14. Observability & Monitoring
+
+Since this is a frontend-only feature, observability is limited to client-side metrics:
+
+| Metric | Type | Collection | Description |
+|---|---|---|---|
+| `emoji_picker_opens` | Counter | Analytics event | Times the emoji picker was opened |
+| `emoji_selected_category` | Counter | Analytics event | Emoji selection by category |
+| `emoji_search_used` | Counter | Analytics event | Search input used in picker |
+| `emoji_shortcode_replaced` | Counter | In-memory | Shortcodes replaced on send |
+| `emoji_only_messages_sent` | Counter | Analytics event | Messages detected as emoji-only |
+
+No server-side alerting is needed. Client-side errors (emoji data load failure) are logged to the browser console and to the existing error tracking system.
+
+---
+
+## 15. Rollout Plan
+
+### 15.1 Feature Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `EMOJI_SHORTCODES_ENABLED` | `true` | Enable shortcode replacement on send |
+| `EMOJI_PICKER_ENABLED` | `true` | Show emoji picker button in ComposeBar |
+| `EMOJI_LARGE_RENDERING_ENABLED` | `true` | Enable 3x rendering for emoji-only messages |
+
+### 15.2 Phased Deployment
+
+| Phase | Scope | Duration | Success Criteria |
+|---|---|---|---|
+| Phase 1: Emoji data + utilities | Ship emoji-data.ts and emoji.ts | 1 day | Tests pass, bundle size acceptable |
+| Phase 2: EmojiPicker component | Ship shared picker component | 1 day | Picker renders, search works, keyboard nav works |
+| Phase 3: ComposeBar integration | Add emoji button and picker to messaging | 1 day | Emoji insertion works, shortcodes replaced |
+| Phase 4: Large emoji rendering | Enable emoji-only detection in MessageBubble | 1 day | 1-3 emoji messages render at 3x size |
+| Phase 5: Newsfeed integration | Add picker to CreatePost | 1 day | Same behavior in newsfeed composer |
+
+### 15.3 Bundle Size Impact
+
+| Asset | Size (gzipped) | Loading |
+|---|---|---|
+| emoji-data.ts | ~120 KB | Lazy-loaded on first picker open |
+| EmojiPicker.tsx | ~8 KB | Lazy-loaded with data |
+| emoji.ts utilities | ~2 KB | Included in main bundle |
+
+Total impact on initial page load: ~2 KB (utilities only). The ~128 KB emoji data is loaded on demand.
+
+---
+
+## 16. Performance Considerations
+
+| Concern | Mitigation | Measured Impact |
+|---|---|---|
+| Emoji dataset size (~120KB gzip) | Dynamic import on first picker open | Zero impact on initial load |
+| Rendering 1800+ emoji grid items | CSS `content-visibility: auto` or virtualized list | < 16ms render time |
+| Search filter across 1800 entries | In-memory filter with debounced input (150ms) | < 5ms per filter |
+| isEmojiOnly regex per message | Regex compiled once, memoized per message text | < 1ms per message |
+| Shortcode replacement on send | Single regex pass, Map.get for each match | < 1ms per send |
+| Skin tone application | Memoized per (emoji, tone) pair | Negligible |
+| localStorage for recents/skin tone | try-catch wrapper, max 32 entries | < 1ms per operation |
+| Multiple EmojiPicker instances | Shared Zustand store, single data import | No duplication |
+
+---
+
+## 17. Accessibility
+
+| Feature | Implementation | WCAG |
+|---|---|---|
+| Emoji search by name | Search input in picker header | 2.1 Keyboard accessible |
+| Keyboard navigation | Arrow keys + Enter/Escape | 2.1.1 Keyboard operable |
+| Emoji alt text | `title` attribute on each button | 1.1 Text alternatives |
+| Screen reader labels | `aria-label` on picker, category tabs | 4.1.2 Name, Role, Value |
+| High contrast | Emoji renders natively (OS-level) | 1.4.3 Contrast minimum |
+| Reduced motion | No animations in picker | 2.3.3 Animation from interactions |
+
+---
+
+## 18. File Change Summary (Extended)
+
+| File | Change Type | Lines | Description |
+|------|-------------|-------|-------------|
+| `frontend/src/data/emoji-data.ts` | **New** | ~3000 | Static emoji dataset (1800 entries) |
+| `frontend/src/components/shared/EmojiPicker.tsx` | **New** | ~250 | Shared picker with categories, search, recents, skin tones |
+| `frontend/src/stores/emojiStore.ts` | **New** | ~30 | Zustand store for recents + skin tone |
+| `frontend/src/utils/emoji.ts` | **New** | ~50 | Shortcode replacement + emoji-only detection |
+| `frontend/src/pages/messages/ComposeBar.tsx` | Modify | +20 | Emoji button + popover + shortcode call |
+| `frontend/src/pages/messages/MessageBubble.tsx` | Modify | +10 | Emoji-only detection + large rendering |
+| `frontend/src/pages/feed/CreatePost.tsx` | Modify | +15 | Emoji button + popover |
+| `frontend/src/pages/feed/PostCard.tsx` | Modify | +5 | Emoji-only detection |
+| `app/core/settings.py` | Modify | +1 | `emoji_shortcodes_enabled` flag |
+| `frontend/e2e/emoji-messages.spec.ts` | **New** | ~200 | 15 E2E tests (sections 284-286) |

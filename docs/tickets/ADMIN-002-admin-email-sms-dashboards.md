@@ -102,6 +102,47 @@ Admin Communications Dashboard (/admin/communications)
     └── Recent dev-mode SMS
 ```
 
+### Architecture & Data Flow
+
+```
+┌─────────────┐    ┌─────────────────┐    ┌────────────────────┐
+│   Admin UI   │───▶│  FastAPI Router  │───▶│  DynamoDB Tables   │
+│  (React +    │    │  admin_email.py  │    │  email_delivery    │
+│   shadcn/ui) │    │  admin_sms.py    │    │  sms_delivery      │
+│              │    │  admin_notif.py  │    │  notification_tmpl  │
+└──────┬───────┘    └────────┬────────┘    └────────────────────┘
+       │                     │
+       │   GET /stats        │   get_delivery_stats()
+       │   GET /deliveries   │   list_deliveries()
+       │   GET /bounces      │   list_bounces()
+       │   POST /suppressed  │   suppress_email()
+       │                     │
+       ▼                     ▼
+┌─────────────┐    ┌─────────────────┐
+│  React Query │    │  Service Layer   │
+│  useQuery()  │    │  email_delivery  │
+│  useMutation │    │  sms_delivery    │
+│              │    │  notif_templates │
+└─────────────┘    └─────────────────┘
+
+Request Flow — Email Stats:
+  Browser → GET /v1/admin/email/stats?days=7
+         → require_admin_session (cookie auth + CSRF check)
+         → get_delivery_stats(days=7)
+         → DynamoDB Query: PK=EMAIL_STATS, SK between date range
+         → aggregate sent/delivered/bounced/complained
+         → return EmailStatsOut JSON
+
+Request Flow — Template Test Send:
+  Browser → POST /v1/admin/notifications/templates/{id}/test-send
+         → require_admin_session (CSRF enforced)
+         → notification_templates.test_send(id, recipient, sample_vars)
+         → render template with sample_vars
+         → email_delivery.send_email() or sms_delivery.send_sms()
+         → record as test_send in delivery log
+         → return {ok: true, channel: "email", recipient: "admin@test.local"}
+```
+
 ---
 
 ## 2. Current State Analysis
@@ -174,7 +215,27 @@ Mirror the existing email admin router pattern for SMS:
 | DELETE | `/v1/admin/sms/suppressed/{phone}` | `require_admin_session` | Remove suppression |
 | GET | `/v1/admin/sms/dev-log` | `require_admin_session` | Dev SMS log |
 
-### 3.2 Template Management
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK / GSI | Query Type | Example |
+|---------------|-------|-----|----------|------------|---------|
+| Get email stats by period | `email_delivery` | `EMAIL_STATS` | SK between `DATE#2026-05-22` and `DATE#2026-05-29` | Query (range) | 7-day delivery stats aggregation |
+| List email deliveries (paginated) | `email_delivery` | `EMAIL_DELIVERY` | SK descending, Limit=50 | Query (paginated) | Recent 50 deliveries with cursor |
+| List bounces by date | `email_delivery` | `EMAIL_BOUNCE` | SK descending | Query | Recent bounces for bounce drilldown |
+| List complaints | `email_delivery` | `EMAIL_COMPLAINT` | SK descending | Query | Recent complaints for complaint drilldown |
+| Get suppression list | `email_delivery` | `EMAIL_SUPPRESSED` | SK begins_with `ADDR#` | Query (scan) | All suppressed email addresses |
+| Check single suppression | `email_delivery` | `EMAIL_SUPPRESSED` | SK = `ADDR#{email}` | GetItem | Is this email suppressed? |
+| Add suppression | `email_delivery` | `EMAIL_SUPPRESSED` | SK = `ADDR#{email}` | PutItem | Suppress spam@test.local |
+| Remove suppression | `email_delivery` | `EMAIL_SUPPRESSED` | SK = `ADDR#{email}` | DeleteItem | Unsuppress false positive |
+| Get SMS stats by period | `sms_delivery` | `SMS_STATS` | SK between date range | Query (range) | 7-day SMS delivery stats |
+| List SMS deliveries | `sms_delivery` | `SMS_DELIVERY` | SK descending, Limit=50 | Query (paginated) | Recent SMS deliveries |
+| List SMS failures | `sms_delivery` | `SMS_FAILURE` | SK descending | Query | Recent SMS failures |
+| SMS suppression CRUD | `sms_delivery` | `SMS_SUPPRESSED` | SK = `PHONE#{phone}` | GetItem/PutItem/DeleteItem | Manage phone suppressions |
+| List templates | `notification_templates` | `TEMPLATE#{id}` | SK = `META` | Scan (all templates) | All notification templates |
+| Get single template | `notification_templates` | `TEMPLATE#{id}` | SK = `META` | GetItem | Template by ID |
+| Update template | `notification_templates` | `TEMPLATE#{id}` | SK = `META` | UpdateItem | Update body/subject |
+
+### 3.3 Template Management
 
 **Template storage table**: `notification_templates`
 
@@ -200,7 +261,7 @@ TableDef(
 | `updated_at` | N | Last update timestamp |
 | `updated_by` | S | Admin who last updated |
 
-### 3.3 Template Management Service: `app/services/notification_templates.py`
+### 3.4 Template Management Service: `app/services/notification_templates.py`
 
 ```python
 """Notification template management (ADMIN-002).
@@ -255,7 +316,7 @@ def seed_default_templates() -> None:
     ...
 ```
 
-### 3.4 Template & Test Send Router
+### 3.5 Template & Test Send Router
 
 Extend admin email router or create new combined router:
 
@@ -267,7 +328,235 @@ Extend admin email router or create new combined router:
 | POST | `/v1/admin/notifications/templates/{id}/preview` | `require_admin_session` | Preview template |
 | POST | `/v1/admin/notifications/templates/{id}/test-send` | `require_admin_session` | Test send |
 
-### 3.5 Pydantic Models (`app/models.py`)
+### 3.6 API Request/Response Examples
+
+**GET /v1/admin/email/stats?days=7**
+
+```json
+// Request
+GET /v1/admin/email/stats?days=7
+Cookie: ui_session=...; ui_access_token=...; ui_csrf=...
+x-csrf-token: <csrf_token>
+
+// Response 200
+{
+  "sent": 4521,
+  "delivered": 4389,
+  "bounced": 87,
+  "complained": 12,
+  "failed": 33,
+  "delivery_rate": 97.08,
+  "bounce_rate": 1.92,
+  "complaint_rate": 0.27,
+  "period_days": 7
+}
+```
+
+**GET /v1/admin/email/deliveries?limit=5**
+
+```json
+// Response 200
+{
+  "items": [
+    {
+      "delivery_id": "del_a1b2c3d4e5f6",
+      "recipient": "user@example.com",
+      "subject": "Your verification code",
+      "template_id": "email_verification",
+      "status": "delivered",
+      "sent_at": 1748500000,
+      "delivered_at": 1748500003,
+      "provider_response": "250 OK"
+    }
+  ],
+  "next_cursor": "eyJsYXN0X2tleS..."
+}
+```
+
+**GET /v1/admin/email/bounces?limit=5**
+
+```json
+// Response 200
+{
+  "items": [
+    {
+      "bounce_id": "bnc_f7g8h9i0j1k2",
+      "recipient": "bad_address@typo.com",
+      "bounce_type": "hard",
+      "bounce_subtype": "permanent",
+      "diagnostic": "550 5.1.1 User unknown",
+      "bounced_at": 1748499800,
+      "original_subject": "Welcome to the platform"
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+**POST /v1/admin/email/suppressed**
+
+```json
+// Request
+{
+  "address": "spam@test.local",
+  "reason": "repeated spam complaints"
+}
+
+// Response 200
+{
+  "ok": true,
+  "address": "spam@test.local",
+  "reason": "repeated spam complaints",
+  "suppressed_at": 1748500100,
+  "suppressed_by": "root.admin@testdev.local"
+}
+```
+
+**DELETE /v1/admin/email/suppressed/spam@test.local**
+
+```json
+// Response 200
+{
+  "ok": true,
+  "address": "spam@test.local",
+  "removed_at": 1748500200
+}
+```
+
+**GET /v1/admin/sms/stats?days=7**
+
+```json
+// Response 200
+{
+  "sent": 1283,
+  "delivered": 1204,
+  "failed": 79,
+  "total_segments": 1547,
+  "delivery_rate": 93.84,
+  "failure_rate": 6.16,
+  "period_days": 7
+}
+```
+
+**GET /v1/admin/sms/failures?limit=5**
+
+```json
+// Response 200
+{
+  "items": [
+    {
+      "failure_id": "smf_k3l4m5n6o7p8",
+      "phone": "+15559876543",
+      "error_type": "invalid_number",
+      "error_message": "The number is not a valid mobile number",
+      "attempted_at": 1748499600,
+      "template_id": "sms_verification",
+      "segments": 1
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+**GET /v1/admin/notifications/templates**
+
+```json
+// Response 200
+[
+  {
+    "template_id": "email_welcome",
+    "channel": "email",
+    "name": "Welcome Email",
+    "subject": "Welcome to {{platform_name}}!",
+    "body": "<h1>Welcome, {{user_name}}!</h1><p>Thanks for joining...</p>",
+    "variables": ["user_name", "platform_name", "login_url"],
+    "active": true,
+    "updated_at": 1748400000,
+    "updated_by": "root.admin@testdev.local"
+  },
+  {
+    "template_id": "sms_verification",
+    "channel": "sms",
+    "name": "SMS Verification Code",
+    "subject": null,
+    "body": "Your verification code is {{code}}. Expires in {{expires_minutes}} minutes.",
+    "variables": ["code", "expires_minutes"],
+    "active": true,
+    "updated_at": 1748400000,
+    "updated_by": null
+  }
+]
+```
+
+**PATCH /v1/admin/notifications/templates/email_welcome**
+
+```json
+// Request
+{
+  "subject": "Welcome aboard, {{user_name}}!",
+  "body": "<h1>Hey {{user_name}},</h1><p>We're excited to have you...</p>"
+}
+
+// Response 200
+{
+  "template_id": "email_welcome",
+  "channel": "email",
+  "name": "Welcome Email",
+  "subject": "Welcome aboard, {{user_name}}!",
+  "body": "<h1>Hey {{user_name}},</h1><p>We're excited to have you...</p>",
+  "variables": ["user_name", "platform_name", "login_url"],
+  "active": true,
+  "updated_at": 1748500300,
+  "updated_by": "root.admin@testdev.local"
+}
+```
+
+**POST /v1/admin/notifications/templates/email_welcome/preview**
+
+```json
+// Request
+{
+  "sample_vars": {
+    "user_name": "Alice",
+    "platform_name": "TestPlatform",
+    "login_url": "https://app.example.com/login"
+  }
+}
+
+// Response 200
+{
+  "template_id": "email_welcome",
+  "channel": "email",
+  "rendered_subject": "Welcome aboard, Alice!",
+  "rendered_body": "<h1>Hey Alice,</h1><p>We're excited to have you...</p>",
+  "missing_vars": []
+}
+```
+
+**POST /v1/admin/notifications/templates/email_welcome/test-send**
+
+```json
+// Request
+{
+  "recipient": "admin@test.local",
+  "sample_vars": {
+    "user_name": "TestAdmin",
+    "platform_name": "TestPlatform",
+    "login_url": "https://app.example.com/login"
+  }
+}
+
+// Response 200
+{
+  "ok": true,
+  "template_id": "email_welcome",
+  "channel": "email",
+  "recipient": "admin@test.local",
+  "sent_at": 1748500400
+}
+```
+
+### 3.7 Pydantic Models (`app/models.py`)
 
 ```python
 class EmailStatsOut(BaseModel):
@@ -276,23 +565,44 @@ class EmailStatsOut(BaseModel):
     bounced: int
     complained: int
     failed: int
-    delivery_rate: float
-    bounce_rate: float
-    complaint_rate: float
-    period_days: int
+    delivery_rate: float = Field(ge=0.0, le=100.0)
+    bounce_rate: float = Field(ge=0.0, le=100.0)
+    complaint_rate: float = Field(ge=0.0, le=100.0)
+    period_days: int = Field(ge=1, le=365)
+
+    @field_validator("delivery_rate", "bounce_rate", "complaint_rate", mode="before")
+    @classmethod
+    def round_rates(cls, v):
+        if isinstance(v, (int, float)):
+            return round(float(v), 2)
+        return v
 
 class SmsStatsOut(BaseModel):
     sent: int
     delivered: int
     failed: int
     total_segments: int
-    delivery_rate: float
-    failure_rate: float
-    period_days: int
+    delivery_rate: float = Field(ge=0.0, le=100.0)
+    failure_rate: float = Field(ge=0.0, le=100.0)
+    period_days: int = Field(ge=1, le=365)
+
+    @field_validator("delivery_rate", "failure_rate", mode="before")
+    @classmethod
+    def round_rates(cls, v):
+        if isinstance(v, (int, float)):
+            return round(float(v), 2)
+        return v
 
 class SuppressionAdd(BaseModel):
     address: str = Field(min_length=1, max_length=320)
     reason: str = Field(default="manual", max_length=200)
+
+    @field_validator("address", mode="before")
+    @classmethod
+    def normalize_address(cls, v):
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
 
 class TemplateOut(BaseModel):
     template_id: str
@@ -310,18 +620,168 @@ class TemplateUpdate(BaseModel):
     body: Optional[str] = Field(default=None, max_length=10000)
     active: Optional[bool] = None
 
+    @field_validator("body", mode="before")
+    @classmethod
+    def strip_script_tags(cls, v):
+        """Prevent executable scripts in template body."""
+        if isinstance(v, str):
+            import re
+            return re.sub(r"<script[^>]*>.*?</script>", "", v, flags=re.DOTALL | re.IGNORECASE)
+        return v
+
 class TemplatePreviewRequest(BaseModel):
     sample_vars: Dict[str, str] = Field(default_factory=dict)
 
 class TemplateTestSend(BaseModel):
     recipient: str = Field(min_length=1, max_length=320)
     sample_vars: Dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("recipient", mode="before")
+    @classmethod
+    def normalize_recipient(cls, v):
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
 ```
 
-### 3.6 Frontend: Communications Dashboard
+### 3.8 Error Handling Matrix
+
+| Scenario | HTTP Status | Error Message | Recovery Action |
+|----------|-------------|---------------|-----------------|
+| Non-admin user accesses any endpoint | 403 | "Forbidden: admin role required" | Redirect to login or escalate role |
+| Invalid `days` parameter (< 1 or > 365) | 422 | "days must be between 1 and 365" | Correct the query parameter |
+| Suppression address is empty | 422 | "address must have at least 1 character" | Provide a valid email/phone |
+| Suppression address too long (> 320 chars) | 422 | "address must have at most 320 characters" | Shorten the address |
+| Duplicate suppression add | 200 | Idempotent — returns existing record | No action needed |
+| Remove non-existent suppression | 404 | "Address not found in suppression list" | Verify the address spelling |
+| Template not found | 404 | "Template not found: {template_id}" | Check template ID exists |
+| Template body too long (> 10000 chars) | 422 | "body must have at most 10000 characters" | Shorten the template body |
+| Template body contains `<script>` tags | 200 | Tags silently stripped by validator | Re-check body after save |
+| Test send to invalid email format | 422 | "Invalid email format" | Provide a valid email address |
+| Test send rate limit exceeded (> 10/hr) | 429 | "Too many test sends. Limit: 10 per hour." | Wait and retry |
+| SMS suppression phone format invalid | 422 | "Phone must be in E.164 format (+1234567890)" | Provide E.164 formatted number |
+| Template preview with missing variables | 200 | Response includes `missing_vars` array | Provide all required sample_vars |
+| DynamoDB read timeout on stats query | 500 | "Internal server error" | Retry request; check DDB health |
+| Dev log endpoint in non-dev mode | 404 | "Dev log not available in production" | Only accessible in dev mode |
+
+### 3.9 Frontend: Communications Dashboard
 
 **Route**: `/admin/communications` in `frontend/src/App.tsx`  
 **Page**: `frontend/src/pages/admin/communications/CommunicationsDashboard.tsx`
+
+#### Frontend Component Tree
+
+```
+CommunicationsDashboard
+├── Tabs (shadcn/ui)
+│   ├── TabsTrigger "Email"
+│   ├── TabsTrigger "SMS"
+│   ├── TabsTrigger "Templates"
+│   └── TabsTrigger "Dev Log" (conditional: devMode)
+│
+├── TabsContent "email"
+│   ├── KpiCardRow
+│   │   ├── KpiCard (title="Sent (7d)", value={emailStats.sent})
+│   │   ├── KpiCard (title="Delivery Rate", value, variant="default")
+│   │   ├── KpiCard (title="Bounce Rate", value, variant="warning")
+│   │   └── KpiCard (title="Complaint Rate", value, variant="danger")
+│   ├── DeliveryChart (data={emailDeliveries})
+│   ├── div.grid
+│   │   ├── BounceTable (data={bounces}, onLoadMore)
+│   │   └── ComplaintTable (data={complaints}, onLoadMore)
+│   └── SuppressionSection
+│       ├── SuppressionSearchBar (onSearch)
+│       ├── AddSuppressionDialog (onAdd)
+│       └── SuppressionTable (data={suppressions}, onRemove)
+│
+├── TabsContent "sms"
+│   ├── SmsKpiCardRow
+│   │   ├── KpiCard (title="Sent (7d)")
+│   │   ├── KpiCard (title="Delivery Rate")
+│   │   ├── KpiCard (title="Failure Rate", variant="danger")
+│   │   └── KpiCard (title="Total Segments")
+│   ├── SmsDeliveryChart (data={smsDeliveries})
+│   ├── SmsFailureTable (data={smsFailures}, onLoadMore)
+│   └── SmsSuppressionSection
+│       ├── AddSmsSuppressionDialog (onAdd)
+│       └── SmsSuppressionTable (data, onRemove)
+│
+├── TabsContent "templates"
+│   ├── TemplateList (templates, onEdit, onPreview, onTestSend)
+│   ├── TemplateEditDialog (template, onSave, open, onOpenChange)
+│   ├── TemplatePreviewDialog (template, renderedHtml, open)
+│   └── TestSendDialog (template, onSend, open, onOpenChange)
+│
+└── TabsContent "dev-log" (conditional)
+    ├── DevEmailLog (entries={devEmails})
+    └── DevSmsLog (entries={devSms})
+```
+
+#### TypeScript Props Interfaces
+
+```typescript
+interface KpiCardProps {
+  title: string;
+  value: string | number;
+  variant?: "default" | "warning" | "danger";
+  changePercent?: number;
+  icon?: React.ComponentType;
+}
+
+interface DeliveryChartProps {
+  data: Array<{
+    date: string;
+    sent: number;
+    delivered: number;
+    bounced: number;
+    complained: number;
+  }>;
+  loading?: boolean;
+}
+
+interface BounceTableProps {
+  data: Array<{
+    bounce_id: string;
+    recipient: string;
+    bounce_type: "hard" | "soft";
+    diagnostic: string;
+    bounced_at: number;
+  }>;
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+}
+
+interface SuppressionTableProps {
+  data: Array<{
+    address: string;
+    reason: string;
+    suppressed_at: number;
+    suppressed_by?: string;
+  }>;
+  onRemove: (address: string) => void;
+}
+
+interface TemplateListProps {
+  templates: TemplateOut[];
+  onEdit: (template: TemplateOut) => void;
+  onPreview: (template: TemplateOut) => void;
+  onTestSend: (template: TemplateOut) => void;
+}
+
+interface TemplateEditDialogProps {
+  template: TemplateOut | null;
+  onSave: (id: string, updates: TemplateUpdate) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+interface TestSendDialogProps {
+  template: TemplateOut | null;
+  onSend: (id: string, data: TemplateTestSend) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+```
 
 ```tsx
 <Tabs defaultValue="email">
@@ -388,7 +848,7 @@ class TemplateTestSend(BaseModel):
 </Tabs>
 ```
 
-### 3.7 Frontend API (`frontend/src/api/endpoints/adminCommunications.ts`)
+### 3.10 Frontend API (`frontend/src/api/endpoints/adminCommunications.ts`)
 
 ```typescript
 // Email
@@ -466,11 +926,145 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 
 ### Phase 5: E2E Tests (Days 9-10)
 
-15. **`frontend/e2e/admin-communications.spec.ts`**: 16 tests across 4 sections.
+15. **`frontend/e2e/admin-communications.spec.ts`**: 30 tests across 8 sections.
 
 ---
 
-## 5. E2E Test Plan
+## 5. Observability
+
+### 5.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|------------|------|--------|-------------|
+| `admin_email_stats_requests_total` | counter | `admin_sub` | Times email stats endpoint was called |
+| `admin_sms_stats_requests_total` | counter | `admin_sub` | Times SMS stats endpoint was called |
+| `admin_suppression_add_total` | counter | `channel` (email/sms), `admin_sub` | Suppressions added by admins |
+| `admin_suppression_remove_total` | counter | `channel`, `admin_sub` | Suppressions removed by admins |
+| `admin_template_update_total` | counter | `template_id`, `admin_sub` | Template edits by admins |
+| `admin_template_test_send_total` | counter | `channel`, `admin_sub` | Test sends triggered |
+| `admin_template_preview_total` | counter | `template_id` | Template previews rendered |
+
+### 5.2 Logging Events
+
+| Event | Level | Fields | Trigger |
+|-------|-------|--------|---------|
+| `admin_suppression_added` | INFO | `channel`, `address`, `reason`, `admin_sub` | Admin adds a suppression |
+| `admin_suppression_removed` | INFO | `channel`, `address`, `admin_sub` | Admin removes a suppression |
+| `admin_template_updated` | INFO | `template_id`, `channel`, `fields_changed`, `admin_sub` | Template content edited |
+| `admin_template_test_sent` | INFO | `template_id`, `channel`, `recipient`, `admin_sub` | Test notification sent |
+| `admin_template_test_rate_limited` | WARN | `admin_sub`, `count_in_window` | Admin hit test send rate limit |
+| `admin_email_stats_queried` | DEBUG | `days`, `admin_sub` | Stats endpoint called |
+| `admin_sms_stats_queried` | DEBUG | `days`, `admin_sub` | SMS stats endpoint called |
+
+### 5.3 Alerting Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Email delivery rate drop | `delivery_rate < 90%` for 2 consecutive checks | HIGH | Notify platform admins via Slack/email |
+| Bounce rate spike | `bounce_rate > 5%` for any 24h period | MEDIUM | Flag in dashboard, send admin alert |
+| Complaint rate critical | `complaint_rate > 0.5%` for any 7d period | HIGH | Block further sends, notify admins |
+| SMS failure rate spike | `failure_rate > 15%` for any 24h period | MEDIUM | Dashboard warning, check SMS provider |
+
+---
+
+## 6. Rollout Plan
+
+### Phase 1: Backend Only (Feature Flag: `ADMIN_COMMS_DASHBOARD_ENABLED=false`)
+
+| Step | Action | Validation |
+|------|--------|------------|
+| 1 | Deploy SMS admin router + notification template service | API tests pass; Swagger shows new endpoints |
+| 2 | Seed default templates from `alert_email_templates.py` | `GET /v1/admin/notifications/templates` returns seeded templates |
+| 3 | Run backend unit tests for new services | All template CRUD tests pass |
+
+### Phase 2: Frontend (Feature Flag: `ADMIN_COMMS_DASHBOARD_ENABLED=true`)
+
+| Step | Action | Validation |
+|------|--------|------------|
+| 4 | Deploy CommunicationsDashboard page | Route loads; tabs render |
+| 5 | Wire email tab to existing admin_email endpoints | KPI cards show real stats |
+| 6 | Wire SMS tab to new admin_sms endpoints | SMS stats display correctly |
+| 7 | Wire templates tab to new admin_notifications endpoints | Template list, edit, preview all work |
+
+### Phase 3: GA (Remove Feature Flag)
+
+| Step | Action | Validation |
+|------|--------|------------|
+| 8 | Enable for all admin users | All 30 E2E tests pass |
+| 9 | Monitor delivery rate alerts for false positives | Alert thresholds tuned |
+| 10 | Remove feature flag, clean up conditional code | No regressions |
+
+### Feature Flags Table
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `ADMIN_COMMS_DASHBOARD_ENABLED` | `false` | Gates visibility of `/admin/communications` route and sidebar link |
+| `ADMIN_TEMPLATE_EDIT_ENABLED` | `true` | Allows template body/subject editing (can disable for read-only mode) |
+| `ADMIN_TEST_SEND_ENABLED` | `true` | Allows test send functionality (can disable in production) |
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Latency Targets
+
+| Endpoint | Target P50 | Target P99 | Notes |
+|----------|-----------|-----------|-------|
+| GET /email/stats | < 100ms | < 300ms | DDB query with date range filter |
+| GET /email/deliveries | < 150ms | < 400ms | Paginated, Limit=50 |
+| GET /email/bounces | < 150ms | < 400ms | Paginated |
+| GET /email/suppressed | < 200ms | < 500ms | Scan with Limit |
+| POST /email/suppressed | < 100ms | < 250ms | Single PutItem |
+| DELETE /email/suppressed | < 100ms | < 250ms | Single DeleteItem |
+| GET /sms/stats | < 100ms | < 300ms | DDB query with date range filter |
+| GET /templates | < 100ms | < 250ms | Scan (small table, < 50 templates) |
+| PATCH /templates/{id} | < 100ms | < 250ms | Single UpdateItem |
+| POST /templates/{id}/preview | < 50ms | < 150ms | In-memory template rendering |
+| POST /templates/{id}/test-send | < 500ms | < 2000ms | Includes external email/SMS send |
+
+### 7.2 Caching Strategy
+
+- **Email/SMS stats**: React Query `staleTime: 30_000` (30 seconds). Stats don't change frequently enough to justify real-time polling.
+- **Delivery/bounce lists**: React Query `staleTime: 10_000` (10 seconds). Shorter stale time for lists that may update as new events arrive.
+- **Suppression list**: React Query `staleTime: 60_000` (60 seconds). Suppressions change infrequently.
+- **Template list**: React Query `staleTime: 120_000` (2 minutes). Templates change rarely.
+- **No backend caching**: All reads go directly to DDB. Template rendering is in-memory (no cache needed).
+- **Browser cache**: All responses include `Cache-Control: no-store` (PII in delivery logs).
+
+### 7.3 Pagination
+
+- **Delivery lists**: Cursor-based pagination using `LastEvaluatedKey` encoding from `app/core/cursor.py`. Default `limit=50`, max `limit=200`.
+- **Bounce/complaint lists**: Same cursor pattern. Default `limit=50`.
+- **Suppression list**: Non-paginated scan with `Limit=1000` (suppression lists are typically small). If list exceeds 1000, add cursor pagination.
+- **Template list**: Non-paginated scan (template count < 50 expected).
+
+---
+
+## 8. Security Considerations
+
+### 8.1 Role-Based Access
+- All communication dashboard endpoints require ADMIN role
+- Template editing requires ADMIN role (not ROOT — templates are operational, not financial)
+- Test send limited to admin-owned email addresses to prevent abuse
+
+### 8.2 Suppression Safety
+- Removing a suppression re-enables delivery to that address/phone
+- Suppression additions logged with admin identity and reason
+- Auto-suppression from bounces/complaints cannot be removed without admin action
+
+### 8.3 Template Security
+- Template body must not include executable scripts (strip `<script>` tags)
+- Template variables are auto-escaped to prevent XSS in rendered emails
+- Test sends are rate-limited to 10 per hour per admin
+
+### 8.4 PII in Delivery Logs
+- Delivery logs contain email addresses and phone numbers (PII)
+- Access restricted to ADMIN role
+- Logs should not be cached in browser (Cache-Control: no-store)
+
+---
+
+## 9. E2E Test Plan
 
 **Test file**: `frontend/e2e/admin-communications.spec.ts`
 
@@ -516,33 +1110,43 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 | 15 | `Admin previews template` | POST `/v1/admin/notifications/templates/{id}/preview` with `{sample_vars: {user_name: "Alice"}}` -> 200; response contains rendered HTML/text with "Alice" |
 | 16 | `Admin sends test notification` | POST `/v1/admin/notifications/templates/{id}/test-send` with `{recipient: "admin@test.local"}` -> 200; response confirms send |
 
+**Section 555: Input Validation & Edge Cases (4 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 17 | `Empty suppression address rejected` | POST with `{address: "", reason: "test"}` -> 422; validation error for min_length |
+| 18 | `Template body with script tags stripped` | PATCH template with body containing `<script>alert(1)</script>` -> 200; re-GET body has no `<script>` tags |
+| 19 | `Invalid days parameter rejected` | GET `/v1/admin/email/stats?days=0` -> 422; validation error |
+| 20 | `Template update with empty subject allowed` | PATCH with `{subject: ""}` -> 200; subject cleared |
+
+**Section 556: Concurrent Operations (3 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 21 | `Concurrent suppression add is idempotent` | POST same suppression twice concurrently; both return 200; list has exactly one entry |
+| 22 | `Concurrent template updates last-write-wins` | Two PATCH requests with different bodies; final GET shows one of the bodies |
+| 23 | `Stats query during active delivery` | Seed new delivery records, then immediately query stats; new records reflected |
+
+**Section 557: Authorization Boundary Tests (3 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 24 | `Regular user cannot access SMS stats` | Alice GET `/v1/admin/sms/stats` -> 403 |
+| 25 | `Regular user cannot add suppression` | Alice POST `/v1/admin/email/suppressed` -> 403 |
+| 26 | `Regular user cannot update template` | Alice PATCH template -> 403 |
+
+**Section 558: Communications Dashboard UI (4 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 27 | `Dashboard loads with Email tab active` | Root navigates to `/admin/communications`; "Email" tab is active; KPI cards visible |
+| 28 | `SMS tab shows SMS-specific stats` | Click "SMS" tab; SMS KPI cards visible (Sent, Delivery Rate, Failure Rate, Segments) |
+| 29 | `Templates tab lists templates` | Click "Templates" tab; at least 2 templates listed |
+| 30 | `Suppression add dialog works` | Click "Add" button on suppression card; dialog opens; enter address and reason; submit; address appears in list |
+
 ---
 
-## 6. Security Considerations
-
-### 6.1 Role-Based Access
-- All communication dashboard endpoints require ADMIN role
-- Template editing requires ADMIN role (not ROOT — templates are operational, not financial)
-- Test send limited to admin-owned email addresses to prevent abuse
-
-### 6.2 Suppression Safety
-- Removing a suppression re-enables delivery to that address/phone
-- Suppression additions logged with admin identity and reason
-- Auto-suppression from bounces/complaints cannot be removed without admin action
-
-### 6.3 Template Security
-- Template body must not include executable scripts (strip `<script>` tags)
-- Template variables are auto-escaped to prevent XSS in rendered emails
-- Test sends are rate-limited to 10 per hour per admin
-
-### 6.4 PII in Delivery Logs
-- Delivery logs contain email addresses and phone numbers (PII)
-- Access restricted to ADMIN role
-- Logs should not be cached in browser (Cache-Control: no-store)
-
----
-
-## 7. Files to Create
+## 10. Files to Create
 
 | File | Purpose |
 |------|---------|
@@ -551,9 +1155,9 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 | `app/routers/admin_notifications.py` | Template management router (5 endpoints) |
 | `frontend/src/api/endpoints/adminCommunications.ts` | API wrappers |
 | `frontend/src/pages/admin/communications/CommunicationsDashboard.tsx` | Dashboard page |
-| `frontend/e2e/admin-communications.spec.ts` | E2E tests (16 tests, sections 551-554) |
+| `frontend/e2e/admin-communications.spec.ts` | E2E tests (30 tests, sections 551-558) |
 
-## 8. Files to Modify
+## 11. Files to Modify
 
 | File | Change |
 |------|--------|
@@ -566,7 +1170,7 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 | `frontend/src/App.tsx` | Add `/admin/communications` route |
 | `frontend/src/components/layout/Sidebar.tsx` | Add "Communications" admin nav link |
 
-## 9. Acceptance Criteria
+## 12. Acceptance Criteria
 
 1. Email stats dashboard shows sent, delivered, bounced, complained counts and rates
 2. Email deliveries, bounces, and complaints listed with pagination
@@ -577,4 +1181,4 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 7. Notification templates listed, editable, and previewable
 8. Test send delivers a notification to a specified address
 9. Non-admin users receive 403 on all endpoints
-10. All 16 E2E tests pass in `frontend/e2e/admin-communications.spec.ts`
+10. All 30 E2E tests pass in `frontend/e2e/admin-communications.spec.ts`

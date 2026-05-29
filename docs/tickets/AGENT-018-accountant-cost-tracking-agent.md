@@ -527,3 +527,631 @@ let alertId: string;
 |--------|-----------|
 | All other AGENT types | Cost data attributed to each agent type's operations |
 | AGENT-013 (PM Agent) | PM Agent reviews may reference cost data when prioritizing features |
+
+---
+
+## 10. Architecture & Data Flow
+
+```
+                    Cost Ingestion Pipeline
+  ┌───────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │ LLM Providers  │────>│ Cost Ingestion     │────>│  DynamoDB     │
+  │ (Anthropic,    │     │ Worker             │     │  agent_costs  │
+  │  OpenAI)       │     │ (accountant_agent  │     │  table        │
+  │                │     │  _service.py)       │     │               │
+  │ Usage APIs     │     │                    │     │ PK=AGENT#id   │
+  │ token counts   │     │ 1. poll provider   │     │ SK=COST#ts    │
+  │ billing data   │     │ 2. normalize costs │     │               │
+  └───────────────┘     │ 3. attribute to    │     │ Per-call cost │
+                         │    agent/task      │     │ entries       │
+  ┌───────────────┐     │ 4. store entry     │     └──────────────┘
+  │ AWS Cost       │────>│ 5. check budgets   │
+  │ Explorer       │     │ 6. fire alerts     │            │
+  │                │     │                    │            v
+  │ EC2 / Lambda   │     └────────────────────┘     ┌──────────────┐
+  │ compute costs  │                                │  Budget       │
+  └───────────────┘                                 │  Alerts       │
+                                                    │               │
+                                                    │  PK=BUDGET#id │
+                                                    │  threshold_pct│
+                                                    │  notify_email │
+                                                    └──────────────┘
+```
+
+---
+
+## 11. Observability
+
+### 11.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `accountant_cost_ingested_total` | Counter | `provider`, `cost_type` | Total cost entries ingested |
+| `accountant_total_cost_cents` | Counter | `agent_type`, `provider` | Running total cost in cents |
+| `accountant_budget_utilization_pct` | Gauge | `budget_id` | Current budget utilization percentage |
+| `accountant_budget_alert_fired_total` | Counter | `budget_id`, `threshold` | Budget alert notifications |
+| `accountant_ingestion_latency_ms` | Histogram | `provider` | Time to fetch and process cost data |
+| `accountant_idle_compute_cost_cents` | Counter | `agent_type` | Cost attributed to idle compute resources |
+
+### 11.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Cost entry created | INFO | `agent_id`, `provider`, `cost_cents`, `tokens`, `task_id` |
+| Budget threshold reached | WARN | `budget_id`, `current_pct`, `threshold_pct`, `period` |
+| Budget exceeded | ERROR | `budget_id`, `budget_cents`, `actual_cents`, `overage_pct` |
+| Provider API error | ERROR | `provider`, `error`, `retry_count` |
+| Cost reconciliation mismatch | WARN | `provider`, `expected_cents`, `actual_cents`, `delta_pct` |
+
+### 11.3 Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Budget 80% threshold | Any budget > 80% utilization | Medium |
+| Budget exceeded | Any budget > 100% utilization | High |
+| Cost ingestion stalled | No new entries in 1 hour during business hours | High |
+| Cost anomaly detected | Hourly cost > 3x rolling average | High |
+| Provider API unreachable | 3+ consecutive failures | Medium |
+
+---
+
+## 12. Rollout Plan
+
+### 12.1 Feature Flag
+
+```python
+# app/core/settings.py
+accountant_agent_enabled: bool = os.environ.get("ACCOUNTANT_AGENT_ENABLED", "false").lower() == "true"
+accountant_agent_auto_alert: bool = os.environ.get("ACCOUNTANT_AGENT_AUTO_ALERT", "false").lower() == "true"
+```
+
+### 12.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Ingestion only | Collect cost data without alerts | 1 week | Data accuracy verified against provider dashboards |
+| Phase 2: Dashboard | Enable cost dashboard widgets | 3 days | Dashboard shows correct totals and breakdowns |
+| Phase 3: Budget alerts | Enable budget threshold alerts | 3 days | Alerts fire correctly; no false positives |
+| Phase 4: Recommendations | Enable idle detection and optimization suggestions | Permanent | Recommendations are actionable and accurate |
+
+---
+
+## 13. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Provider API polling latency | < 5s per provider | Async concurrent polling; 5-minute intervals |
+| Cost aggregation query | < 200ms p95 | DDB query with date range on GSI; pre-aggregated daily totals |
+| Budget check latency | < 50ms | Cache current budget state in memory; refresh on cost write |
+| Dashboard widget load | < 500ms | Pre-computed daily/weekly/monthly rollups |
+| Historical cost query (90 days) | < 1s | GSI query with pagination; client-side aggregation for charts |
+| Cost entry write throughput | 100+ entries/sec | DDB on-demand capacity; batch writes for bulk ingestion |
+
+---
+
+## 14. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|----------|-------------|------------|---------------|-----------------|
+| Provider API unreachable | 503 | `provider_unavailable` | "Cost provider temporarily unavailable" | Retry in 5 minutes; use cached data |
+| Invalid cost data format | 422 | `invalid_cost_data` | "Unrecognized cost data format from provider" | Log and skip; alert team |
+| Budget not found | 404 | `budget_not_found` | "Budget configuration not found" | Create default budget |
+| Agent not found for attribution | 404 | `agent_not_found` | "Agent not found for cost attribution" | Attribute to "unattributed" bucket |
+| Cost reconciliation failure | 500 | `reconciliation_error` | "Cost reconciliation failed" | Manual investigation required |
+| Budget update conflict | 409 | `budget_conflict` | "Budget was updated by another request" | Retry with fresh version |
+
+---
+
+## 15. API Request/Response Examples
+
+**Get cost summary for an agent**:
+
+```
+GET /ui/agents/accountant/costs?agent_id=agent_mktg_001&period=7d
+```
+
+**Response (200)**:
+```json
+{
+  "agent_id": "agent_mktg_001",
+  "period": "7d",
+  "total_cost_cents": 4250,
+  "breakdown": {
+    "llm_tokens": {"cost_cents": 3800, "input_tokens": 125000, "output_tokens": 45000},
+    "compute": {"cost_cents": 450, "instance_hours": 12.5}
+  },
+  "daily_costs": [
+    {"date": "2026-05-23", "cost_cents": 620},
+    {"date": "2026-05-24", "cost_cents": 580},
+    {"date": "2026-05-25", "cost_cents": 710}
+  ]
+}
+```
+
+**Get budget status**:
+
+```
+GET /ui/agents/accountant/budgets/budget_monthly_001
+```
+
+**Response (200)**:
+```json
+{
+  "budget_id": "budget_monthly_001",
+  "name": "Monthly Agent Budget",
+  "period": "monthly",
+  "budget_cents": 50000,
+  "spent_cents": 32500,
+  "utilization_pct": 65.0,
+  "alerts": [
+    {"threshold_pct": 80, "status": "not_triggered"},
+    {"threshold_pct": 100, "status": "not_triggered"}
+  ],
+  "period_start": "2026-05-01",
+  "period_end": "2026-05-31"
+}
+```
+
+**Create budget with alert thresholds**:
+
+```
+POST /ui/agents/accountant/budgets
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "name": "Weekly LLM Budget",
+  "period": "weekly",
+  "budget_cents": 10000,
+  "alert_thresholds": [50, 80, 100],
+  "notify_emails": ["admin@test.local"]
+}
+```
+
+**Response (201)**:
+```json
+{
+  "budget_id": "budget_weekly_002",
+  "name": "Weekly LLM Budget",
+  "period": "weekly",
+  "budget_cents": 10000,
+  "spent_cents": 0,
+  "utilization_pct": 0.0
+}
+```
+
+---
+
+## 16. Architecture Diagram
+
+```
+                    Accountant Agent — System Architecture
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                          External Data Sources                              │
+  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐  │
+  │  │ Anthropic API     │  │ OpenAI API       │  │ AWS Cost Explorer        │  │
+  │  │ Usage & Billing   │  │ Usage & Billing  │  │ EC2 / Lambda / K8s      │  │
+  │  │ Endpoints         │  │ Endpoints        │  │ Compute Cost Data        │  │
+  │  └────────┬─────────┘  └────────┬─────────┘  └─────────────┬────────────┘  │
+  └───────────┼──────────────────────┼──────────────────────────┼───────────────┘
+              │                      │                          │
+              └──────────────────────┼──────────────────────────┘
+                                     │ HTTP / AWS SDK
+  ┌──────────────────────────────────┼──────────────────────────────────────────┐
+  │                       FastAPI Backend                                        │
+  │  ┌───────────────────────────────┴──────────────────────────────────────┐   │
+  │  │                  Cost Ingestion Worker (background task)              │   │
+  │  │   ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐     │   │
+  │  │   │ LLM Provider  │  │ Compute Cost │  │ Budget Checker        │     │   │
+  │  │   │ Poller        │  │ Poller       │  │                       │     │   │
+  │  │   │               │  │              │  │ check_budgets()       │     │   │
+  │  │   │ poll per key  │  │ query Cost   │  │ fire alerts if >     │     │   │
+  │  │   │ normalize to  │  │ Explorer     │  │   threshold_pct      │     │   │
+  │  │   │ cost_cents    │  │ per worker   │  │ auto-pause workers   │     │   │
+  │  │   └──────┬───────┘  └──────┬───────┘  │   if auto_pause=true │     │   │
+  │  │          │                  │           └──────────┬────────────┘     │   │
+  │  │          └──────────────────┼──────────────────────┘                  │   │
+  │  │                             │                                         │   │
+  │  │   record_cost_entry() + attribute_cost_to_ticket()                    │   │
+  │  └─────────────────────────────┼────────────────────────────────────────┘   │
+  │                                │                                            │
+  │  ┌─────────────────────────────┴────────────────────────────────────────┐   │
+  │  │              app/routers/agent_accountant.py (API Layer)              │   │
+  │  │   GET /costs/summary/daily   GET /costs/by-agent-type                │   │
+  │  │   GET /costs/by-ticket       GET /costs/trends                       │   │
+  │  │   POST /costs/budgets        GET /costs/alerts                       │   │
+  │  │   PUT /costs/config          GET /costs/optimizations                │   │
+  │  └─────────────────────────────┬────────────────────────────────────────┘   │
+  │                                │                                            │
+  │  ┌─────────────────────────────┴────────────────────────────────────────┐   │
+  │  │              app/services/agent_accountant.py (Business Logic)        │   │
+  │  │                                                                       │   │
+  │  │   get_daily_summary()     get_period_summary()                        │   │
+  │  │   get_agent_type_costs()  get_ticket_cost()  list_ticket_costs()      │   │
+  │  │   create_budget()         check_budgets()    list_alerts()            │   │
+  │  │   get_cost_trends()       get_optimization_recommendations()          │   │
+  │  └─────────────────────────────┬────────────────────────────────────────┘   │
+  │                                │                                            │
+  │  ┌─────────────────────────────┴────────────────────────────────────────┐   │
+  │  │                          DynamoDB Tables                              │   │
+  │  │   ┌────────────────┐ ┌────────────────┐ ┌─────────────┐ ┌────────┐  │   │
+  │  │   │ agent_costs    │ │ agent_ticket_  │ │ agent_cost_ │ │ agent_ │  │   │
+  │  │   │                │ │ costs          │ │ budgets     │ │ cost_  │  │   │
+  │  │   │ PK=USER#id    │ │ PK=USER#id    │ │ PK=USER#id  │ │ alerts │  │   │
+  │  │   │ SK=COST#date  │ │ SK=TCOST#tid  │ │ SK=BUDGET#  │ │        │  │   │
+  │  │   │   #worker     │ │               │ │   bid       │ │ PK=    │  │   │
+  │  │   │               │ │ GSI1: by cost │ │             │ │ USER#  │  │   │
+  │  │   │ GSI1: by date │ │   (sorted)    │ │             │ │ SK=    │  │   │
+  │  │   │ GSI2: by type │ │               │ │             │ │ ALERT# │  │   │
+  │  │   └────────────────┘ └────────────────┘ └─────────────┘ └────────┘  │   │
+  │  └──────────────────────────────────────────────────────────────────────┘   │
+  └─────────────────────────────────────────────────────────────────────────────┘
+                                     │
+  ┌──────────────────────────────────┼──────────────────────────────────────────┐
+  │                          Platform Frontend                                  │
+  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐  │
+  │  │ CostOverviewPage │  │ CostBreakdown    │  │ BudgetManagerPage        │  │
+  │  │                   │  │ Page             │  │                          │  │
+  │  │ summary cards,    │  │ by agent type,   │  │ budget list, progress    │  │
+  │  │ stacked area      │  │ by worker,       │  │ bars, create/edit,       │  │
+  │  │ chart, pie chart, │  │ by ticket,       │  │ toggle auto-pause        │  │
+  │  │ alert banner      │  │ date range       │  │                          │  │
+  │  └──────────────────┘  └──────────────────┘  └──────────────────────────┘  │
+  │                                                                             │
+  │  ┌──────────────────┐  ┌──────────────────────────────────────────────┐    │
+  │  │ CostAlertsPage   │  │ OptimizationsPanel                          │    │
+  │  │                   │  │                                              │    │
+  │  │ alert cards,      │  │ idle workers, model downgrade suggestions,  │    │
+  │  │ severity badges,  │  │ high cost-per-ticket agents, savings est.   │    │
+  │  │ acknowledge btn   │  │                                              │    │
+  │  └──────────────────┘  └──────────────────────────────────────────────┘    │
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 17. DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | GSI | Example |
+|---|---------------|-------|---------------|-----|---------|
+| 1 | Record/upsert daily cost entry | `agent_costs` | `PK=USER#{user_id}, SK=COST#{date}#{worker_id}` | -- | `update_item` ADD to atomic counters |
+| 2 | Get daily summary by date | `agent_costs` | `GSI1PK=USER#{user_id}#DATE#{date}` | GSI1 | All worker entries for a specific day |
+| 3 | Get costs by agent type | `agent_costs` | `GSI2PK=USER#{user_id}#TYPE#{agent_type}, GSI2SK between(start, end)` | GSI2 | Last 30 days for the "coder" agent type |
+| 4 | Attribute cost to ticket | `agent_ticket_costs` | `PK=USER#{user_id}, SK=TCOST#{ticket_id}` | -- | `update_item` ADD to atomic counters |
+| 5 | Get ticket cost | `agent_ticket_costs` | `PK=USER#{user_id}, SK=TCOST#{ticket_id}` | -- | `get_item` |
+| 6 | List tickets by cost | `agent_ticket_costs` | `GSI1PK=USER#{user_id}#TICKET_COSTS` | GSI1 | Sorted by `total_cost_cents` desc |
+| 7 | Create budget | `agent_cost_budgets` | `PK=USER#{user_id}, SK=BUDGET#{budget_id}` | -- | `put_item` |
+| 8 | List budgets | `agent_cost_budgets` | `PK=USER#{user_id}, SK begins_with("BUDGET#")` | -- | All budgets for user |
+| 9 | Create alert | `agent_cost_alerts` | `PK=USER#{user_id}, SK=ALERT#{alert_id}` | -- | `put_item` |
+| 10 | List alerts by date | `agent_cost_alerts` | `GSI1PK=USER#{user_id}#ALERTS` | GSI1 | Sorted by `created_at` desc |
+| 11 | Acknowledge alert | `agent_cost_alerts` | `PK=USER#{user_id}, SK=ALERT#{alert_id}` | -- | `update_item` set `acknowledged=true` |
+
+**Example DynamoDB item (AgentCosts)**:
+
+```json
+{
+  "pk": {"S": "USER#alice_sub_123"},
+  "sk": {"S": "COST#2026-05-29#worker_coder_001"},
+  "user_id": {"S": "alice_sub_123"},
+  "worker_id": {"S": "worker_coder_001"},
+  "agent_type": {"S": "coder"},
+  "agent_id": {"S": "agent_coder_primary"},
+  "date": {"S": "2026-05-29"},
+  "llm_input_tokens": {"N": "85000"},
+  "llm_output_tokens": {"N": "32000"},
+  "llm_cached_tokens": {"N": "15000"},
+  "llm_cost_cents": {"N": "520"},
+  "llm_provider": {"S": "anthropic"},
+  "llm_model": {"S": "claude-sonnet-4-20250514"},
+  "compute_hours": {"N": "4.5"},
+  "compute_cost_cents": {"N": "45"},
+  "total_cost_cents": {"N": "565"},
+  "tickets_worked": {"N": "3"},
+  "tickets_completed": {"N": "1"},
+  "updated_at": {"N": "1748520200"},
+  "GSI1PK": {"S": "USER#alice_sub_123#DATE#2026-05-29"},
+  "GSI1SK": {"S": "TYPE#coder#WORKER#worker_coder_001"},
+  "GSI2PK": {"S": "USER#alice_sub_123#TYPE#coder"},
+  "GSI2SK": {"S": "DATE#2026-05-29"}
+}
+```
+
+**Example DynamoDB item (TicketCosts)**:
+
+```json
+{
+  "pk": {"S": "USER#alice_sub_123"},
+  "sk": {"S": "TCOST#AGENT-017"},
+  "ticket_id": {"S": "AGENT-017"},
+  "user_id": {"S": "alice_sub_123"},
+  "agent_type": {"S": "coder"},
+  "total_llm_tokens": {"N": "210000"},
+  "total_llm_cost_cents": {"N": "1480"},
+  "total_compute_hours": {"N": "12.0"},
+  "total_compute_cost_cents": {"N": "120"},
+  "total_cost_cents": {"N": "1600"},
+  "worker_sessions": {"N": "8"},
+  "status": {"S": "completed"},
+  "started_at": {"N": "1748100000"},
+  "completed_at": {"N": "1748520000"},
+  "GSI1PK": {"S": "USER#alice_sub_123#TICKET_COSTS"},
+  "GSI1SK": {"N": "1600"}
+}
+```
+
+---
+
+## 18. Pydantic Models
+
+```python
+# In app/models.py
+
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, Literal
+
+
+class RecordCostEntryIn(BaseModel):
+    """Request model for recording a cost entry (internal use by ingestion worker)."""
+    worker_id: str = Field(..., min_length=1, max_length=100)
+    agent_type: str = Field(..., min_length=1, max_length=50)
+    agent_id: str = Field(..., min_length=1, max_length=100)
+    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    llm_input_tokens: int = Field(default=0, ge=0)
+    llm_output_tokens: int = Field(default=0, ge=0)
+    llm_cached_tokens: int = Field(default=0, ge=0)
+    llm_cost_cents: int = Field(default=0, ge=0)
+    llm_provider: str = Field(default="anthropic", max_length=50)
+    llm_model: str = Field(default="unknown", max_length=100)
+    compute_hours: float = Field(default=0.0, ge=0.0)
+    compute_cost_cents: int = Field(default=0, ge=0)
+
+
+class AttributeTicketCostIn(BaseModel):
+    """Request model for attributing cost to a ticket."""
+    ticket_id: str = Field(..., min_length=1, max_length=100)
+    agent_type: str = Field(..., min_length=1, max_length=50)
+    llm_tokens: int = Field(default=0, ge=0)
+    llm_cost_cents: int = Field(default=0, ge=0)
+    compute_hours: float = Field(default=0.0, ge=0.0)
+    compute_cost_cents: int = Field(default=0, ge=0)
+
+
+class CreateBudgetIn(BaseModel):
+    """Request model for creating a cost budget."""
+    name: str = Field(..., min_length=1, max_length=200)
+    scope: Literal["overall", "agent_type", "agent_instance"]
+    scope_ref: Optional[str] = Field(
+        default=None, max_length=100,
+        description="Agent type or agent ID for scoped budgets"
+    )
+    period: Literal["daily", "weekly", "monthly"]
+    limit_cents: int = Field(..., ge=100, description="Minimum $1.00")
+    alert_threshold_pct: int = Field(default=80, ge=10, le=100)
+    auto_pause_on_exceed: bool = False
+
+    @model_validator(mode="after")
+    def validate_scope_ref(self):
+        if self.scope in ("agent_type", "agent_instance") and not self.scope_ref:
+            raise ValueError("scope_ref is required when scope is agent_type or agent_instance")
+        return self
+
+
+class UpdateBudgetIn(BaseModel):
+    """Request model for updating a cost budget."""
+    name: Optional[str] = Field(default=None, max_length=200)
+    limit_cents: Optional[int] = Field(default=None, ge=100)
+    alert_threshold_pct: Optional[int] = Field(default=None, ge=10, le=100)
+    auto_pause_on_exceed: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+class CostEntryOut(BaseModel):
+    """Response model for a cost entry."""
+    worker_id: str
+    agent_type: str
+    agent_id: str
+    date: str
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    llm_cached_tokens: int = 0
+    llm_cost_cents: int = 0
+    llm_provider: str = ""
+    llm_model: str = ""
+    compute_hours: float = 0.0
+    compute_cost_cents: int = 0
+    total_cost_cents: int = 0
+    tickets_worked: int = 0
+    tickets_completed: int = 0
+
+
+class CostDailySummaryOut(BaseModel):
+    """Response model for daily cost summary."""
+    date: str
+    total_cents: int = 0
+    llm_cents: int = 0
+    compute_cents: int = 0
+    by_agent_type: Dict[str, int] = Field(default_factory=dict)
+    by_worker: List[CostEntryOut] = Field(default_factory=list)
+
+
+class CostPeriodSummaryOut(BaseModel):
+    """Response model for period cost summary."""
+    period: str
+    start_date: str
+    end_date: str
+    total_cents: int = 0
+    llm_cents: int = 0
+    compute_cents: int = 0
+    by_agent_type: Dict[str, int] = Field(default_factory=dict)
+    budget_utilization: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class TicketCostOut(BaseModel):
+    """Response model for ticket cost data."""
+    ticket_id: str
+    agent_type: str = ""
+    total_llm_tokens: int = 0
+    total_llm_cost_cents: int = 0
+    total_compute_hours: float = 0.0
+    total_compute_cost_cents: int = 0
+    total_cost_cents: int = 0
+    worker_sessions: int = 0
+    status: str = "in_progress"
+    started_at: Optional[int] = None
+    completed_at: Optional[int] = None
+
+
+class BudgetOut(BaseModel):
+    """Response model for a cost budget."""
+    budget_id: str
+    name: str
+    scope: str
+    scope_ref: Optional[str] = None
+    period: str
+    limit_cents: int
+    alert_threshold_pct: int = 80
+    auto_pause_on_exceed: bool = False
+    enabled: bool = True
+    created_at: int = 0
+
+
+class CostAlertOut(BaseModel):
+    """Response model for a cost alert."""
+    alert_id: str
+    budget_id: Optional[str] = None
+    alert_type: str
+    severity: str
+    title: str
+    message: str
+    current_spend_cents: int = 0
+    budget_limit_cents: Optional[int] = None
+    acknowledged: bool = False
+    auto_action_taken: Optional[str] = None
+    created_at: int = 0
+
+
+class CostTrendsOut(BaseModel):
+    """Response model for cost trends data."""
+    weeks: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class OptimizationRecommendationOut(BaseModel):
+    """Response model for a cost optimization recommendation."""
+    type: Literal["idle_worker", "model_downgrade", "high_cost_ticket", "underutilized_agent"]
+    title: str
+    description: str
+    potential_savings_cents: int = 0
+    action: str
+
+
+class UpdateAccountantConfigIn(BaseModel):
+    """Request model for updating accountant agent configuration."""
+    collection_frequency: Optional[Literal["hourly", "every_6h", "daily"]] = None
+    report_frequency: Optional[Literal["daily", "weekly", "monthly"]] = None
+    report_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
+    compute_pricing: Optional[Dict[str, int]] = None
+    anomaly_detection_enabled: Optional[bool] = None
+    anomaly_threshold_pct: Optional[int] = Field(default=None, ge=100, le=1000)
+    idle_worker_threshold_minutes: Optional[int] = Field(default=None, ge=10, le=1440)
+    optimization_suggestions_enabled: Optional[bool] = None
+```
+
+---
+
+## 19. Frontend Component Tree
+
+```
+/agents/costs — CostOverviewPage
+├── AlertBanner (if unacknowledged alerts exist)
+│   ├── Alert icon + severity color
+│   ├── Alert title + message summary
+│   └── "View Alerts" link → CostAlertsPage
+├── SummaryCardsRow
+│   ├── TodaySpendCard
+│   │   ├── Amount (formatted as $XX.XX)
+│   │   ├── TrendArrow (vs yesterday)
+│   │   └── BudgetProgressBar (if daily budget set)
+│   ├── WeekSpendCard (same structure)
+│   ├── MonthSpendCard (same structure)
+│   └── ProjectedMonthCard (extrapolated from daily average)
+├── CostStackedAreaChart
+│   ├── x-axis: dates (last 30 days)
+│   ├── StackedArea: LLM cost (blue)
+│   ├── StackedArea: Compute cost (green)
+│   └── BudgetLine (horizontal dashed line at daily budget limit)
+├── PerAgentTypePieChart
+│   ├── Slices: coder, security, pm, docs, marketing, etc.
+│   ├── Legend with percentages
+│   └── CenterLabel: total spend
+├── OptimizationsPanel (inline or as collapsible section)
+│   └── RecommendationCard (one per recommendation)
+│       ├── TypeIcon (idle, downgrade, high-cost, underutilized)
+│       ├── Title
+│       ├── Description
+│       ├── SavingsBadge ("Save $X.XX/month")
+│       └── ActionButton ("Pause Worker" / "Switch Model" / etc.)
+└── QuickLinksRow
+    ├── "View Breakdown" → CostBreakdownPage
+    ├── "Manage Budgets" → BudgetManagerPage
+    └── "View Alerts" → CostAlertsPage
+
+/agents/costs/breakdown — CostBreakdownPage
+├── DateRangePicker (start date, end date)
+├── ViewTabs
+│   ├── Tab: "By Agent Type"
+│   ├── Tab: "By Worker"
+│   └── Tab: "By Ticket"
+├── BreakdownTable (content changes per active tab)
+│   ├── ByAgentType view
+│   │   ├── Columns: Agent Type | LLM Tokens | LLM Cost | Compute Hours | Compute Cost | Total | % of Total
+│   │   ├── Rows sorted by total desc
+│   │   └── ExpandableRow → daily entries for that agent type
+│   ├── ByWorker view
+│   │   ├── Columns: Worker ID | Agent Type | Date | LLM Cost | Compute Cost | Total | Tickets
+│   │   └── Rows sorted by date desc
+│   └── ByTicket view
+│       ├── Columns: Ticket ID | Agent Type | LLM Tokens | LLM Cost | Compute Cost | Total | Sessions | Status
+│       ├── Rows sorted by total_cost desc (via GSI1)
+│       └── StatusBadge (in_progress / completed)
+└── ExportButton ("Download CSV")
+
+/agents/costs/budgets — BudgetManagerPage
+├── PageHeader
+│   ├── <h1> "Budget Manager"
+│   └── CreateBudgetButton → BudgetFormDialog
+├── BudgetList
+│   └── BudgetCard (one per budget)
+│       ├── NameAndScope (e.g., "Overall Daily" or "Coder Agent Monthly")
+│       ├── ProgressBar (spent / limit, color: green < 80%, yellow 80-100%, red > 100%)
+│       ├── SpendLabel ("$32.50 / $50.00")
+│       ├── ThresholdMarker (vertical line at alert_threshold_pct)
+│       ├── AutoPauseToggle (switch for auto_pause_on_exceed)
+│       ├── EnabledToggle (switch for enabled)
+│       └── ActionsDropdown (Edit, Delete)
+├── BudgetFormDialog
+│   ├── NameInput
+│   ├── ScopeSelect (Overall / Agent Type / Agent Instance)
+│   ├── ScopeRefSelect (conditional, agent type or instance picker)
+│   ├── PeriodSelect (Daily / Weekly / Monthly)
+│   ├── LimitInput (dollar amount, converts to cents)
+│   ├── ThresholdSlider (10-100%)
+│   ├── AutoPauseCheckbox
+│   └── SaveButton
+└── BudgetSummary (totals: active budgets, total limits, total utilization)
+
+/agents/costs/alerts — CostAlertsPage
+├── FilterBar
+│   ├── StatusFilter: "Unacknowledged" | "All"
+│   └── SeverityFilter: "All" | "Critical" | "Warning" | "Info"
+├── AlertList
+│   └── AlertCard (one per alert)
+│       ├── SeverityBadge (critical=red, warning=yellow, info=blue)
+│       ├── AlertTypeIcon (budget_threshold, budget_exceeded, spending_anomaly, etc.)
+│       ├── Title
+│       ├── Message (detailed description)
+│       ├── SpendContext ("Spent $42.50 of $50.00 daily budget")
+│       ├── AutoActionTag (if auto_action_taken, e.g., "Workers paused")
+│       ├── Timestamp (created_at formatted)
+│       └── AcknowledgeButton (if not acknowledged)
+└── EmptyState ("No alerts — your budgets are on track")
+```

@@ -20,7 +20,7 @@ MSG-011 enhances the existing message reaction system with custom emoji support 
 
 | Actor | Story | Acceptance Criteria |
 |-------|-------|---------------------|
-| User | As a user, I want to double-tap a message to add a ❤️ reaction quickly. | Double-tap → ❤️ added; animation plays; reaction count updates. |
+| User | As a user, I want to double-tap a message to add a heart reaction quickly. | Double-tap → heart added; animation plays; reaction count updates. |
 | User | As a user, I want to see who reacted with what emoji by tapping the reaction count. | Popover shows avatar + name list per emoji. |
 | User | As a user, I want to react with custom emojis from MSG-007. | Custom emojis appear in reaction picker; stored as `custom:shortcode`. |
 | User | As a user, I want to see a brief pop animation when a reaction is added. | CSS scale+opacity animation plays on the reaction badge. |
@@ -40,7 +40,7 @@ Reactions are already functional but lack polish. The current implementation sho
 **Backend** (`app/routers/messaging.py`):
 - `POST /messaging/conversations/{conv_id}/messages/{msg_id}/reactions` — add reaction
 - `POST /messaging/conversations/{conv_id}/messages/{msg_id}/unreact` — remove reaction
-- Reactions stored on message item as: `reactions: { "😀": { "user_sub_1": True, "user_sub_2": True } }`
+- Reactions stored on message item as: `reactions: { "smiley": { "user_sub_1": True, "user_sub_2": True } }`
 - `MessageOut.reactions` returns this map in the API response
 
 **Frontend** (`MessageBubble.tsx`):
@@ -54,7 +54,7 @@ Reactions are already functional but lack polish. The current implementation sho
 ```typescript
 // Current reactions on MessageOut
 reactions?: Record<string, Record<string, boolean>>;
-// Example: { "😀": { "user_sub_1": true }, "❤️": { "user_sub_1": true, "user_sub_2": true } }
+// Example: { "smiley": { "user_sub_1": true }, "heart": { "user_sub_1": true, "user_sub_2": true } }
 ```
 
 This structure supports both displaying counts (Object.keys(users).length) and checking the current user's reaction (users[currentUserSub]).
@@ -74,9 +74,123 @@ Custom emojis are stored in the `custom_emojis` table. In reactions, they're rep
 
 ---
 
-## 3. Technical Design
+## 3. Architecture Diagram
 
-### 3.1 Backend: Reaction Limit
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                       FRONTEND (React)                                │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │  MessageBubble                                                 │  │
+│  │                                                                │  │
+│  │  ┌──────────────────────────────────────────────────────────┐  │  │
+│  │  │  Message Content                                         │  │  │
+│  │  │  (text, image, GIF, etc.)                                │  │  │
+│  │  │                                                          │  │  │
+│  │  │  onDoubleClick → quickReact (add/remove default emoji)   │  │  │
+│  │  └──────────────────────────────────────────────────────────┘  │  │
+│  │                                                                │  │
+│  │  ┌──────────────────────────────────────────────────────────┐  │  │
+│  │  │  ReactionBar                                             │  │  │
+│  │  │                                                          │  │  │
+│  │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────┐   │  │  │
+│  │  │  │ smiley 3│ │ heart 5 │ │ fire 2  │ │ custom:cat 1│   │  │  │
+│  │  │  │  (pop)  │ │  (pop)  │ │  (pop)  │ │   (pop)     │   │  │  │
+│  │  │  └────┬────┘ └────┬────┘ └────┬────┘ └──────┬──────┘   │  │  │
+│  │  │       │            │           │              │          │  │  │
+│  │  │       └────────────┴───────────┴──────────────┘          │  │  │
+│  │  │                        │ click                            │  │  │
+│  │  │                        ▼                                  │  │  │
+│  │  │  ┌──────────────────────────────────────────────────┐    │  │  │
+│  │  │  │  ReactionDetailPopover                           │    │  │  │
+│  │  │  │  ┌────────┬────────┬────────┐                    │    │  │  │
+│  │  │  │  │smiley 3│heart 5 │fire 2  │  ← emoji tabs     │    │  │  │
+│  │  │  │  ├────────┴────────┴────────┤                    │    │  │  │
+│  │  │  │  │ avatar  Alice            │                    │    │  │  │
+│  │  │  │  │ avatar  Bob              │  ← user list       │    │  │  │
+│  │  │  │  │ avatar  Charlie          │                    │    │  │  │
+│  │  │  │  └──────────────────────────┘                    │    │  │  │
+│  │  │  └──────────────────────────────────────────────────┘    │  │  │
+│  │  │                                                          │  │  │
+│  │  │  ┌──────────────────────────────────────────────────┐    │  │  │
+│  │  │  │  Enhanced Reaction Picker (SmilePlus button)     │    │  │  │
+│  │  │  │  ┌──────────────────────────────────────────┐    │    │  │  │
+│  │  │  │  │ Quick row: thumbsup heart laugh wow cry fire│   │    │  │  │
+│  │  │  │  ├──────────────────────────────────────────┤    │    │  │  │
+│  │  │  │  │ Custom: [img] [img] [img] [img]          │    │    │  │  │
+│  │  │  │  ├──────────────────────────────────────────┤    │    │  │  │
+│  │  │  │  │ [+ More] → Full EmojiPicker (MSG-006)    │    │    │  │  │
+│  │  │  │  └──────────────────────────────────────────┘    │    │  │  │
+│  │  │  └──────────────────────────────────────────────────┘    │  │  │
+│  │  └──────────────────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │  emojiStore (Zustand + localStorage)                           │  │
+│  │  quickReactEmoji: "heart" (configurable)                       │  │
+│  │  recentEmojis: ["thumbsup", "heart", "laugh", ...]             │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────┬─────────────────────────────────────┘
+                                 │ HTTP
+┌────────────────────────────────▼─────────────────────────────────────┐
+│                       BACKEND (FastAPI)                               │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │  messaging router                                              │  │
+│  │                                                                │  │
+│  │  POST /messages/{id}/reactions                                 │  │
+│  │       → validate limit (20 unique emojis max)                  │  │
+│  │       → UpdateItem SET reactions.#emoji.#user_sub = true       │  │
+│  │                                                                │  │
+│  │  POST /messages/{id}/unreact                                   │  │
+│  │       → UpdateItem REMOVE reactions.#emoji.#user_sub           │  │
+│  │                                                                │  │
+│  │  GET  /messages/{id}/reactions/details   ← NEW                 │  │
+│  │       → batch_get_user_profiles for display names              │  │
+│  │       → return { reactions: { emoji: [{user_sub, name}] } }    │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │  Messages DDB Table                                            │  │
+│  │  reactions MAP: { "heart": { "alice-sub": true, "bob-sub": t } │  │
+│  │                   "custom:cat": { "alice-sub": true } }        │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │  custom_emojis DDB Table (MSG-007)                             │  │
+│  │  Resolves "custom:shortcode" → image_url for rendering         │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Data Flow — Quick React (Double-Tap)**:
+1. User double-clicks a message
+2. `handleDoubleClick` reads `emojiStore.quickReactEmoji` (default: heart)
+3. Check if user already reacted with that emoji
+4. If not: POST `/messages/{id}/reactions` with `emoji=heart`
+5. If yes: POST `/messages/{id}/unreact` with `emoji=heart`
+6. Optimistic update: immediately add/remove badge with pop animation
+7. SSE broadcasts reaction update to other participants
+
+**Data Flow — Reaction Detail Popover**:
+1. User clicks on reaction badge area
+2. ReactionDetailPopover fetches GET `/messages/{id}/reactions/details`
+3. Backend batch-fetches user profiles for all reacting user_subs
+4. Returns `{ reactions: { "heart": [{ user_sub, display_name }], ... } }`
+5. Popover renders tabs per emoji, each showing list of user names
+
+**Data Flow — Custom Emoji Reaction**:
+1. User opens enhanced reaction picker (SmilePlus button)
+2. Custom emojis section shows user's custom emojis (from MSG-007)
+3. User clicks custom emoji → POST `/messages/{id}/reactions` with `emoji=custom:shortcode`
+4. Backend stores `reactions.custom:shortcode.{user_sub} = true`
+5. Rendering: ReactionBadge detects `custom:` prefix, resolves shortcode to image URL via `resolveCustomShortcodes`
+
+---
+
+## 4. Technical Design
+
+### 4.1 Backend: Reaction Limit
 
 Add validation in the reaction endpoint to enforce max 20 unique emojis:
 
@@ -100,7 +214,7 @@ def add_reaction(conv_id: str, msg_id: str, body: ReactionIn, ctx=Depends(requir
     ...
 ```
 
-### 3.2 Backend: Reaction User Info Endpoint
+### 4.2 Backend: Reaction User Info Endpoint
 
 Add an endpoint to get reaction details (who reacted with what):
 
@@ -131,7 +245,238 @@ def get_reaction_details(conv_id: str, msg_id: str, ctx=Depends(require_ui_sessi
     return {"reactions": details}
 ```
 
-### 3.3 Frontend: ReactionDetailPopover
+### 4.3 DynamoDB Access Patterns
+
+| # | Access Pattern | Table/Index | PK | SK | Operation | Notes |
+|---|---------------|-------------|----|----|-----------|-------|
+| 1 | Add reaction | `messages` | `conversation_id` | `message_id` | `UpdateItem` | `SET reactions.#emoji.#user_sub = :true` — nested map update |
+| 2 | Remove reaction | `messages` | `conversation_id` | `message_id` | `UpdateItem` | `REMOVE reactions.#emoji.#user_sub` — remove user from emoji map |
+| 3 | Check reaction limit | `messages` | `conversation_id` | `message_id` | `GetItem` | Read reactions map, count unique keys; done in same request as add |
+| 4 | Get reaction details | `messages` | `conversation_id` | `message_id` | `GetItem` | Read reactions map for user_subs |
+| 5 | Batch get user profiles | `users` | `user_sub` | `PROFILE` | `BatchGetItem` | Fetch display_name for each reacting user |
+| 6 | Get custom emoji image | `custom_emojis` | `shortcode` | `META` | `GetItem` or batch | Resolve `custom:shortcode` to image_url |
+
+**Example DynamoDB Item (message with reactions)**:
+
+```json
+{
+  "conversation_id": {"S": "conv_abc123"},
+  "message_id": {"S": "m_def456"},
+  "kind": {"S": "text"},
+  "text": {"S": "Great work everyone!"},
+  "sender_id": {"S": "alice-sub-001"},
+  "created_at": {"N": "1748500000"},
+  "reactions": {"M": {
+    "thumbsup": {"M": {
+      "alice-sub-001": {"BOOL": true},
+      "bob-sub-002": {"BOOL": true},
+      "charlie-sub-003": {"BOOL": true}
+    }},
+    "heart": {"M": {
+      "bob-sub-002": {"BOOL": true}
+    }},
+    "fire": {"M": {
+      "alice-sub-001": {"BOOL": true},
+      "charlie-sub-003": {"BOOL": true}
+    }},
+    "custom:party_parrot": {"M": {
+      "alice-sub-001": {"BOOL": true}
+    }}
+  }}
+}
+```
+
+**Reaction Details API Response Example**:
+
+```json
+{
+  "reactions": {
+    "thumbsup": [
+      {"user_sub": "alice-sub-001", "display_name": "Alice"},
+      {"user_sub": "bob-sub-002", "display_name": "Bob"},
+      {"user_sub": "charlie-sub-003", "display_name": "Charlie"}
+    ],
+    "heart": [
+      {"user_sub": "bob-sub-002", "display_name": "Bob"}
+    ],
+    "fire": [
+      {"user_sub": "alice-sub-001", "display_name": "Alice"},
+      {"user_sub": "charlie-sub-003", "display_name": "Charlie"}
+    ],
+    "custom:party_parrot": [
+      {"user_sub": "alice-sub-001", "display_name": "Alice"}
+    ]
+  }
+}
+```
+
+### 4.4 API Request/Response Examples
+
+#### 4.4.1 Add Reaction
+
+```bash
+curl -s -X POST \
+  "http://localhost:8000/ui/messaging/conversations/conv_abc123/messages/m_def456/reactions" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=jwt_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -H "Content-Type: application/json" \
+  -d '{"emoji": "heart"}' \
+  | jq .
+```
+
+**Response** (200):
+```json
+{
+  "ok": true,
+  "conversation_id": "conv_abc123",
+  "message_id": "m_def456",
+  "emoji": "heart",
+  "action": "added"
+}
+```
+
+#### 4.4.2 Add Custom Emoji Reaction
+
+```bash
+curl -s -X POST \
+  "http://localhost:8000/ui/messaging/conversations/conv_abc123/messages/m_def456/reactions" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=jwt_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -H "Content-Type: application/json" \
+  -d '{"emoji": "custom:party_parrot"}' \
+  | jq .
+```
+
+**Response** (200):
+```json
+{
+  "ok": true,
+  "conversation_id": "conv_abc123",
+  "message_id": "m_def456",
+  "emoji": "custom:party_parrot",
+  "action": "added"
+}
+```
+
+#### 4.4.3 Remove Reaction
+
+```bash
+curl -s -X POST \
+  "http://localhost:8000/ui/messaging/conversations/conv_abc123/messages/m_def456/unreact" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=jwt_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -H "Content-Type: application/json" \
+  -d '{"emoji": "heart"}' \
+  | jq .
+```
+
+**Response** (200):
+```json
+{
+  "ok": true,
+  "conversation_id": "conv_abc123",
+  "message_id": "m_def456",
+  "emoji": "heart",
+  "action": "removed"
+}
+```
+
+#### 4.4.4 Get Reaction Details
+
+```bash
+curl -s -X GET \
+  "http://localhost:8000/ui/messaging/conversations/conv_abc123/messages/m_def456/reactions/details" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=jwt_alice" \
+  | jq .
+```
+
+**Response** (200):
+```json
+{
+  "reactions": {
+    "thumbsup": [
+      {"user_sub": "alice-sub-001", "display_name": "Alice"},
+      {"user_sub": "bob-sub-002", "display_name": "Bob"}
+    ],
+    "heart": [
+      {"user_sub": "bob-sub-002", "display_name": "Bob"}
+    ],
+    "custom:party_parrot": [
+      {"user_sub": "alice-sub-001", "display_name": "Alice"}
+    ]
+  }
+}
+```
+
+#### 4.4.5 Reaction Limit Exceeded
+
+```bash
+# After 20 unique emojis already added:
+curl -s -X POST \
+  "http://localhost:8000/ui/messaging/conversations/conv_abc123/messages/m_def456/reactions" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=jwt_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -H "Content-Type: application/json" \
+  -d '{"emoji": "emoji_21"}' \
+  | jq .
+```
+
+**Response** (400):
+```json
+{
+  "detail": "Maximum 20 unique reactions per message"
+}
+```
+
+### 4.5 Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class ReactionIn(BaseModel):
+    """Request body for adding/removing a reaction."""
+    emoji: str = Field(..., min_length=1, max_length=64,
+        description="Emoji string or 'custom:shortcode' for custom emojis")
+
+    model_config = {"json_schema_extra": {"examples": [
+        {"emoji": "heart"},
+        {"emoji": "custom:party_parrot"}
+    ]}}
+
+class ReactionOut(BaseModel):
+    """Response from add/remove reaction."""
+    ok: bool = True
+    conversation_id: str
+    message_id: str
+    emoji: str
+    action: str  # "added" | "removed"
+
+class ReactionUserOut(BaseModel):
+    """A user who reacted with a specific emoji."""
+    user_sub: str
+    display_name: str
+
+class ReactionDetailsOut(BaseModel):
+    """Detailed reaction breakdown for a message."""
+    reactions: dict[str, list[ReactionUserOut]] = Field(
+        default_factory=dict,
+        description="Map of emoji → list of users who reacted")
+
+    model_config = {"json_schema_extra": {"examples": [
+        {"reactions": {
+            "heart": [
+                {"user_sub": "alice-sub-001", "display_name": "Alice"},
+                {"user_sub": "bob-sub-002", "display_name": "Bob"}
+            ],
+            "custom:cat": [
+                {"user_sub": "alice-sub-001", "display_name": "Alice"}
+            ]
+        }}
+    ]}}
+```
+
+### 4.6 Frontend: ReactionDetailPopover
 
 **File**: `frontend/src/pages/messages/ReactionDetailPopover.tsx`
 
@@ -148,24 +493,24 @@ interface ReactionDetailPopoverProps {
 - Fetches `/reactions/details` via React Query
 - Displays a popover with tabs per emoji:
   ```
-  ┌────────────────────────────────┐
-  │  😀 (3)  │  ❤️ (5)  │  🔥 (2)  │
-  ├────────────────────────────────┤
-  │  👤 Alice                      │
-  │  👤 Bob                        │
-  │  👤 Charlie                    │
-  └────────────────────────────────┘
+  +---------------------------------+
+  |  smiley (3)  |  heart (5)  |  fire (2)  |
+  +---------------------------------+
+  |  avatar  Alice                  |
+  |  avatar  Bob                    |
+  |  avatar  Charlie                |
+  +---------------------------------+
   ```
 - Custom emojis render as `<img>` in tabs
 - `data-testid="reaction-detail-popover"`
 
-### 3.4 Frontend: Quick React (Double-Tap)
+### 4.7 Frontend: Quick React (Double-Tap)
 
 **File**: `frontend/src/pages/messages/MessageBubble.tsx`
 
 ```typescript
 const handleDoubleClick = useCallback(() => {
-  const defaultEmoji = emojiStore.quickReactEmoji || "❤️";
+  const defaultEmoji = emojiStore.quickReactEmoji || "heart";
   const existingReaction = message.reactions?.[defaultEmoji]?.[currentUserSub];
 
   if (existingReaction) {
@@ -183,7 +528,7 @@ const handleDoubleClick = useCallback(() => {
 </div>
 ```
 
-### 3.5 Frontend: Reaction Animation
+### 4.8 Frontend: Reaction Animation
 
 CSS animation for reaction badges:
 
@@ -220,7 +565,7 @@ const handleReact = async (emoji: string) => {
 </span>
 ```
 
-### 3.6 Frontend: Enhanced Reaction Picker
+### 4.9 Frontend: Enhanced Reaction Picker
 
 Extend the reaction picker in MessageBubble to include:
 1. A row of frequently used emojis (from emojiStore.recentEmojis)
@@ -237,7 +582,7 @@ Extend the reaction picker in MessageBubble to include:
   <PopoverContent className="w-auto p-2">
     {/* Quick row: 6 common emojis */}
     <div className="flex gap-1 mb-2">
-      {["👍", "❤️", "😂", "😮", "😢", "🔥"].map(emoji => (
+      {["thumbsup", "heart", "laugh", "wow", "cry", "fire"].map(emoji => (
         <button key={emoji} onClick={() => handleReact(emoji)} className="text-xl hover:scale-125 transition">
           {emoji}
         </button>
@@ -261,21 +606,84 @@ Extend the reaction picker in MessageBubble to include:
 </Popover>
 ```
 
-### 3.7 Frontend: Quick-React Default Setting
+### 4.10 Frontend Component Tree
+
+```
+MessageBubble (enhanced)
+├── ContentWrapper (onDoubleClick → quickReact)
+│   └── ... (existing message content)
+│
+├── ReactionBar (enhanced)
+│   ├── ReactionBadge[] (per unique emoji)
+│   │   ├── EmojiDisplay
+│   │   │   ├── Unicode: <span>heart</span>
+│   │   │   └── Custom: <img src={resolvedUrl} alt={shortcode} />
+│   │   ├── Count <span>{count}</span>
+│   │   ├── OwnReactionHighlight (bg-primary/20 if current user reacted)
+│   │   └── PopAnimation (reaction-badge-enter CSS class)
+│   │
+│   ├── ReactionDetailPopover (on badge click)
+│   │   ├── EmojiTabs
+│   │   │   └── Tab[] (emoji icon + count)
+│   │   └── UserList (per selected tab)
+│   │       └── UserRow[] (avatar + display_name)
+│   │
+│   └── AddReactionButton (SmilePlus icon)
+│       └── EnhancedReactionPicker (Popover)
+│           ├── QuickRow (6 common emojis)
+│           ├── CustomRow (up to 6 custom emojis, if any)
+│           └── MoreButton → Full EmojiPicker (MSG-006)
+│
+└── MessageMeta (existing: timestamp, read status)
+
+emojiStore (Zustand)
+├── quickReactEmoji: string (default "heart", persisted in localStorage)
+├── recentEmojis: string[] (last 20 used, persisted)
+└── setQuickReactEmoji: (emoji: string) => void
+```
+
+**State Management (MessageBubble)**:
+```typescript
+// Reaction mutations
+const reactMut = useMutation({
+  mutationFn: (data: { emoji: string }) =>
+    addReaction(conversationId, messageId, data),
+  onMutate: async ({ emoji }) => {
+    // Optimistic update: add reaction badge immediately
+    await queryClient.cancelQueries(["messages", conversationId]);
+    const prev = queryClient.getQueryData(["messages", conversationId]);
+    // ... optimistic update logic ...
+    return { prev };
+  },
+  onError: (_, __, ctx) => queryClient.setQueryData(["messages", conversationId], ctx?.prev),
+  onSettled: () => queryClient.invalidateQueries(["messages", conversationId]),
+});
+
+const unreactMut = useMutation({
+  mutationFn: (data: { emoji: string }) =>
+    removeReaction(conversationId, messageId, data),
+  // ... same optimistic pattern ...
+});
+
+// Animation state
+const [animatingEmoji, setAnimatingEmoji] = useState<string | null>(null);
+```
+
+### 4.11 Frontend: Quick-React Default Setting
 
 **File**: `frontend/src/stores/emojiStore.ts`
 
 ```typescript
 interface EmojiStore {
   // ... existing fields from MSG-006 ...
-  quickReactEmoji: string;  // Default: "❤️"
+  quickReactEmoji: string;  // Default: "heart"
   setQuickReactEmoji: (emoji: string) => void;
 }
 ```
 
 Persisted in localStorage. Configurable from the emoji picker settings or a messaging preferences page.
 
-### 3.8 Custom Emoji Reaction Rendering
+### 4.12 Custom Emoji Reaction Rendering
 
 In the reaction badge display:
 
@@ -310,15 +718,34 @@ function ReactionBadge({ emoji, count, isOwn }: { emoji: string; count: number; 
 
 ---
 
-## 4. Implementation Plan
+## 5. Error Handling Matrix
 
-### 4.1 Files to Create
+| # | Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|----------|-------------|------------|---------------------|-----------------|
+| 1 | 21st unique emoji reaction | 400 | `reaction_limit` | "Maximum 20 unique reactions per message" | Use an existing emoji or remove one first |
+| 2 | React on non-existent message | 404 | `message_not_found` | "Message not found" | Refresh conversation |
+| 3 | React on non-existent conversation | 404 | `conversation_not_found` | "Conversation not found" | Navigate back to messages list |
+| 4 | User not conversation participant | 403 | `not_participant` | "You are not a participant in this conversation" | Join the conversation first |
+| 5 | Invalid custom emoji shortcode | 200 | — | (Stored as-is; frontend shows `custom:unknown` text fallback) | No server error; shortcode resolution handles missing emojis gracefully |
+| 6 | Empty emoji string | 422 | `validation_error` | "emoji is required" | Select a valid emoji |
+| 7 | Emoji string too long (>64 chars) | 422 | `validation_error` | "emoji must be 64 characters or fewer" | Use a shorter emoji identifier |
+| 8 | Unreact emoji not in reactions | 200 | — | (Idempotent; no error) | No action needed |
+| 9 | Double-click on expired message | 200 | — | (Reaction added normally; expired messages can still receive reactions) | No restriction |
+| 10 | Reaction details for message with no reactions | 200 | — | `{ "reactions": {} }` | No error; empty state |
+| 11 | Batch user profile fetch partial failure | 200 | — | Missing names show truncated user_sub | Degraded gracefully; retry on next popover open |
+| 12 | Custom emoji deleted after reaction added | 200 | — | Badge shows `:shortcode:` text instead of image | Custom emoji deletion doesn't remove historical reactions |
+
+---
+
+## 6. Implementation Plan
+
+### 6.1 Files to Create
 
 | File | Purpose |
 |------|---------|
 | `frontend/src/pages/messages/ReactionDetailPopover.tsx` | Popover showing who reacted with what |
 
-### 4.2 Files to Modify
+### 6.2 Files to Modify
 
 | File | Changes |
 |------|---------|
@@ -326,7 +753,7 @@ function ReactionBadge({ emoji, count, isOwn }: { emoji: string; count: number; 
 | `frontend/src/pages/messages/MessageBubble.tsx` | Double-tap quick-react, animation, enhanced picker, custom emoji rendering |
 | `frontend/src/stores/emojiStore.ts` | Add `quickReactEmoji` field |
 
-### 4.3 Step-by-Step Order
+### 6.3 Step-by-Step Order
 
 1. Add reaction limit validation (backend)
 2. Add reaction details endpoint (backend)
@@ -340,13 +767,107 @@ function ReactionBadge({ emoji, count, isOwn }: { emoji: string; count: number; 
 
 ---
 
-## 5. E2E Test Plan
+## 7. Observability & Monitoring
 
-### 5.1 Test File
+### 7.1 Metrics
 
-`frontend/e2e/emoji-reactions-enhanced.spec.ts` — 10 tests across 3 sections.
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `msg011_reaction_added_total` | Counter | `type` (unicode/custom), `source` (picker/quick_react) | Reactions added |
+| `msg011_reaction_removed_total` | Counter | `type` (unicode/custom) | Reactions removed |
+| `msg011_reaction_limit_hit_total` | Counter | — | Times the 20-emoji limit was reached |
+| `msg011_reaction_details_fetched_total` | Counter | — | Reaction detail popover opened |
+| `msg011_quick_react_total` | Counter | `emoji` | Quick-react (double-tap) uses |
+| `msg011_custom_emoji_reaction_total` | Counter | — | Custom emoji reactions added |
 
-### 5.2 Test Setup
+### 7.2 Log Events
+
+| Event | Level | Fields | Description |
+|-------|-------|--------|-------------|
+| `reaction.added` | DEBUG | `user_sub`, `message_id`, `emoji`, `source` | Reaction added |
+| `reaction.removed` | DEBUG | `user_sub`, `message_id`, `emoji` | Reaction removed |
+| `reaction.limit_reached` | INFO | `user_sub`, `message_id`, `unique_count` | Attempt to add 21st unique emoji |
+| `reaction.details.fetched` | DEBUG | `user_sub`, `message_id`, `emoji_count`, `user_count` | Reaction details endpoint called |
+| `reaction.custom_emoji.unresolvable` | WARN | `shortcode` | Custom emoji shortcode could not be resolved to image URL |
+
+### 7.3 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Reaction limit hit rate > 100/hr | `increase(msg011_reaction_limit_hit_total[1h]) > 100` | Info | May indicate abuse or need to increase limit |
+| Reaction details latency p95 > 1s | `histogram_quantile(0.95, msg011_reaction_details_latency_ms) > 1000` | Warning | Check batch user profile fetch; add caching |
+| Custom emoji resolve failure rate > 10% | Custom emoji reactions with unresolvable shortcodes | Warning | Check custom_emojis table; verify shortcode cleanup on emoji deletion |
+
+### 7.4 Dashboard Queries
+
+```promql
+# Reaction engagement rate (reactions per message)
+sum(increase(msg011_reaction_added_total[24h])) / sum(increase(messages_sent_total[24h]))
+
+# Quick-react vs picker usage
+sum(increase(msg011_reaction_added_total{source="quick_react"}[24h]))
+sum(increase(msg011_reaction_added_total{source="picker"}[24h]))
+
+# Custom emoji reaction adoption
+sum(increase(msg011_custom_emoji_reaction_total[7d]))
+```
+
+---
+
+## 8. Rollout Plan
+
+### 8.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `MSG011_REACTION_LIMIT` | `true` | Enforce 20 unique emoji limit per message |
+| `MSG011_REACTION_DETAILS` | `false` | Enable reaction detail popover |
+| `MSG011_QUICK_REACT` | `false` | Enable double-tap quick-react gesture |
+| `MSG011_REACTION_ANIMATION` | `false` | Enable pop animation on reaction badges |
+| `MSG011_CUSTOM_EMOJI_REACTIONS` | `false` | Enable custom emoji in reaction picker |
+
+### 8.2 Rollout Phases
+
+| Phase | Duration | Actions |
+|-------|----------|---------|
+| 1. Backend deploy | Day 1 | Deploy reaction limit (always on) + details endpoint. Frontend flags OFF. |
+| 2. Reaction details | Day 2-3 | Enable `MSG011_REACTION_DETAILS`. Test popover with existing reactions. Verify user profile batch fetch performance. |
+| 3. Quick-react + animation | Day 4-5 | Enable `MSG011_QUICK_REACT` + `MSG011_REACTION_ANIMATION`. Test double-tap UX on desktop and mobile. |
+| 4. Custom emoji reactions | Day 6-7 | Enable `MSG011_CUSTOM_EMOJI_REACTIONS` (depends on MSG-007 being deployed). Test custom emoji rendering in badges and popover. |
+| 5. GA | Day 8 | Remove feature flags. All features enabled for all users. |
+
+### 8.3 Rollback Procedure
+
+1. **Reaction limit**: Cannot easily roll back (data is already limited). If limit causes issues, increase to 50 via config.
+2. **Reaction details**: Disable `MSG011_REACTION_DETAILS` → popover button hidden. No data impact.
+3. **Quick-react**: Disable `MSG011_QUICK_REACT` → double-tap handler removed. No data impact.
+4. **Animation**: Disable `MSG011_REACTION_ANIMATION` → CSS class not applied. No data impact.
+5. **Custom emoji reactions**: Disable `MSG011_CUSTOM_EMOJI_REACTIONS` → custom section hidden in picker. Existing `custom:*` reactions still render (shortcode text fallback if image unresolvable).
+
+---
+
+## 9. Performance Considerations
+
+| # | Concern | Impact | Mitigation |
+|---|---------|--------|------------|
+| 1 | Reaction details batch profile fetch | 20 unique emojis * N users per emoji = up to hundreds of profile fetches | `BatchGetItem` (DDB) with max 100 keys per call. Cache user profiles in a local TTL map (60s). Limit response to first 50 users per emoji. |
+| 2 | Custom emoji shortcode resolution | Each custom emoji badge triggers a `useQuery` | `staleTime: 10min` + `cacheTime: 30min` on resolve query. Batch all `custom:*` shortcodes in a single `resolveCustomShortcodes` call per message. |
+| 3 | Optimistic reaction updates | Updating React Query cache for every reaction toggle | Use granular cache update: modify only the affected message's `reactions` field, not the entire page list. Avoid full query invalidation on optimistic path. |
+| 4 | Animation re-renders | `animatingEmoji` state change triggers re-render of all badges | Isolate animation state per badge using `ReactionBadge` as a separate `React.memo` component. |
+| 5 | Double-click event conflicts | Double-click can conflict with text selection | Cancel text selection on double-click of message content. Use `event.preventDefault()` in handler. Only apply to message content area, not reaction bar. |
+| 6 | Reaction detail popover data freshness | Stale user list if reactions change while popover is open | `refetchOnWindowFocus: true` on the details query. Close popover on SSE reaction update. |
+| 7 | Many reactions on a single message | 20 unique emojis each with 100+ users = large reactions map | DDB item size: 20 emojis * 100 users * ~50 bytes = ~100KB — well within 400KB limit. Frontend renders up to 20 badges — negligible DOM. |
+| 8 | Quick-react default emoji not in recent | emojiStore.quickReactEmoji might be stale after emoji store reset | Default to "heart" if stored emoji is invalid. localStorage read on store init is sync — no flash. |
+
+---
+
+## 10. E2E Test Plan
+
+### 10.1 Test File
+
+`frontend/e2e/emoji-reactions-enhanced.spec.ts` — 16 tests across 4 sections.
+
+### 10.2 Test Setup
 
 ```typescript
 const TS = Date.now();
@@ -360,53 +881,57 @@ test.beforeAll(async ({ browser }) => {
 });
 ```
 
-### 5.3 Section 326: Reaction Limit & Details API (4 tests)
+### 10.3 Section 326: Reaction Limit & Details API (5 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
-| 326.1 | Add reaction to message | POST `/messages/{id}/reactions` with `emoji=😀`; 200 |
-| 326.2 | Reaction details endpoint returns user info | GET `/messages/{id}/reactions/details`; 200; has `reactions.😀` array with `user_sub` and `display_name` |
+| 326.1 | Add reaction to message | POST `/messages/{id}/reactions` with `emoji=smiley`; 200 |
+| 326.2 | Reaction details endpoint returns user info | GET `/messages/{id}/reactions/details`; 200; has `reactions.smiley` array with `user_sub` and `display_name` |
 | 326.3 | 20 unique reactions allowed | Add 20 different emojis; all succeed |
 | 326.4 | 21st unique reaction rejected | Add 21st emoji; 400; "Maximum 20 unique reactions per message" |
+| 326.5 | Adding same emoji by second user succeeds (not a new unique) | Bob adds `smiley` (already exists from Alice); 200; count increases |
 
-### 5.4 Section 327: Quick-React & Animation (3 tests)
+### 10.4 Section 327: Quick-React & Animation (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
-| 327.1 | Double-click message adds default reaction | Navigate to conversation; double-click message; ❤️ reaction appears |
-| 327.2 | Double-click again removes reaction | Double-click same message; ❤️ reaction removed |
+| 327.1 | Double-click message adds default reaction | Navigate to conversation; double-click message; heart reaction appears |
+| 327.2 | Double-click again removes reaction | Double-click same message; heart reaction removed |
 | 327.3 | Reaction badge shows count | After reaction; badge shows emoji + "1" |
+| 327.4 | Reaction badge has pop animation class | After adding reaction; badge element has `reaction-badge-enter` class |
 
-### 5.5 Section 328: Reaction Detail Popover UI (3 tests)
+### 10.5 Section 328: Reaction Detail Popover UI (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
 | 328.1 | Clicking reaction area opens detail popover | Click on reaction badge area; `[data-testid="reaction-detail-popover"]` visible |
 | 328.2 | Popover shows emoji tabs | Popover has tabs for each reacted emoji |
 | 328.3 | Popover shows user names | Under emoji tab; display name of reactor visible |
+| 328.4 | Closing popover hides it | Click outside popover; `[data-testid="reaction-detail-popover"]` not visible |
+
+### 10.6 Section 329: Custom Emoji Reactions (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 329.1 | React with custom emoji via API | POST with `emoji=custom:test_emoji`; 200 |
+| 329.2 | Custom emoji reaction appears in message | GET messages; message has `reactions.custom:test_emoji` with user entry |
+| 329.3 | Reaction details includes custom emoji | GET details; `reactions["custom:test_emoji"]` has user list |
 
 ---
 
-## 6. Error Handling
-
-| Scenario | Status | Detail |
-|----------|--------|--------|
-| 21st unique emoji | 400 | "Maximum 20 unique reactions per message" |
-| React on non-existent message | 404 | "Message not found" |
-| Invalid custom emoji shortcode | 200 | Stored as-is; frontend shows fallback text |
-
----
-
-## 7. Security Considerations
+## 11. Security Considerations
 
 - Reaction limit (20) prevents abuse/spam
 - Reaction details only visible to conversation participants
 - Custom emoji images served from platform S3 (no external URLs)
 - Double-tap handler is client-side only — no new attack surface
+- Emoji strings are stored as map keys in DDB — max key length enforced by validation (64 chars)
+- Custom emoji shortcodes are validated to match `^[a-zA-Z0-9_-]+$` pattern
+- No script injection possible via emoji keys (stored as DDB map keys, not rendered as HTML)
 
 ---
 
-## 8. Dependencies
+## 12. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|

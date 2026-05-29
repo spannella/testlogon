@@ -518,3 +518,599 @@ Templates store configuration references (key_id, instance_type) not actual secr
 8. Admin endpoint provides cross-user fleet metrics.
 9. Navigation includes the fleet dashboard in the sidebar under "AI Agents" group.
 10. Empty states guide new users to create their first worker.
+
+---
+
+## 9. Architecture & Data Flow
+
+### 9.1 Fleet Dashboard Request Flow
+
+```
+Browser (AgentsPage)
+  │
+  ├── GET /ui/agent/fleet/status ─────────────────────────────────┐
+  │                                                                │
+  │   ┌────────────────────────────────────────────────────────┐   │
+  │   │  agent_fleet_router (require_ui_session)               │   │
+  │   │    ↓                                                   │   │
+  │   │  fleet_status(user_id)                                 │   │
+  │   │    ├── list_workers(user_id)                           │   │
+  │   │    │     └── DDB: query agent_workers PK=USER#{uid}    │   │
+  │   │    ├── find_eligible_ticket_count(user_id)             │   │
+  │   │    │     └── DDB: query tickets GSI by space_id        │   │
+  │   │    └── aggregate status_counts, build worker summaries │   │
+  │   └────────────────────────────────────────────────────────┘   │
+  │                                                                │
+  │   Response: FleetStatusOut {total_workers, status_counts,      │
+  │             queue_depth, workers: WorkerSummary[]}             │
+  │                                                                │
+  ├── GET /ui/agent/fleet/events (SSE) ───────────────────────────┤
+  │                                                                │
+  │   ┌────────────────────────────────────────────────────────┐   │
+  │   │  SSE EventSource opened                                │   │
+  │   │    ↓                                                   │   │
+  │   │  _fleet_event_buses[user_id].add(queue)                │   │
+  │   │    ↓                                                   │   │
+  │   │  Worker lifecycle hooks → push events:                 │   │
+  │   │    worker:state_change, worker:ticket_claimed,         │   │
+  │   │    worker:ticket_completed, worker:heartbeat_missed,   │   │
+  │   │    worker:error, fleet:capacity_change                 │   │
+  │   │    ↓                                                   │   │
+  │   │  Frontend EventSource.onmessage → queryClient.setData  │   │
+  │   └────────────────────────────────────────────────────────┘   │
+  │                                                                │
+  ├── POST /ui/agent/fleet/start-all ─────────────────────────────┤
+  │     bulk_start(user_id) → iterate stopped workers → start     │
+  │     each → return BulkActionOut {count, errors[]}             │
+  │                                                                │
+  └── POST /ui/agent/fleet/templates ─────────────────────────────┘
+        save_template(user_id, config) → DDB put_item
+        SK=TEMPLATE#{template_id}
+```
+
+### 9.2 SSE Event Bus Architecture
+
+```
+  Worker Agent Framework (AGENT-003)            Fleet Event Bus
+  ┌───────────────────────────────┐      ┌──────────────────────┐
+  │  Worker state machine:        │      │  _fleet_event_buses  │
+  │  idle → running → error       │──────│  Dict[user_id, Set]  │
+  │  heartbeat loop (30s)         │ push │                      │
+  │  ticket claim/complete hooks  │──────│  queue.put(event)    │
+  └───────────────────────────────┘      └────────┬─────────────┘
+                                                  │
+                     ┌────────────────────────────┼──────────────────┐
+                     │                            │                  │
+              SSE Client 1               SSE Client 2         SSE Client N
+              (Browser Tab)              (Mobile)             (Admin)
+```
+
+---
+
+## 10. Detailed DynamoDB Access Patterns
+
+| # | Operation | Table | PK | SK / Key Condition | GSI | Notes |
+|---|-----------|-------|----|--------------------|-----|-------|
+| 1 | List all workers for user | `agent_workers` | `USER#{user_id}` | `begins_with(sk, "WORKER#")` | -- | Base table query |
+| 2 | List stopped workers only | `agent_workers` | `USER#{user_id}` | `begins_with(sk, "WORKER#")` | -- | FilterExpression on `worker_status = stopped` |
+| 3 | Get single worker | `agent_workers` | `USER#{user_id}` | `WORKER#{worker_id}` | -- | GetItem |
+| 4 | Save template | `agent_workers` | `USER#{user_id}` | `TEMPLATE#{template_id}` | -- | PutItem |
+| 5 | List templates | `agent_workers` | `USER#{user_id}` | `begins_with(sk, "TEMPLATE#")` | -- | Base table query |
+| 6 | Delete template | `agent_workers` | `USER#{user_id}` | `TEMPLATE#{template_id}` | -- | DeleteItem |
+| 7 | Get template by ID | `agent_workers` | `USER#{user_id}` | `TEMPLATE#{template_id}` | -- | GetItem |
+| 8 | Count eligible tickets | `tickets` | varies | varies | `gsi_space` | Query by space_id, filter `status=open` |
+| 9 | Admin: all workers globally | `agent_workers` | -- | -- | `gsi_status` | GSI PK=`STATUS#{status}`, used for admin fleet aggregation |
+| 10 | Fleet event log | `agent_workers` | `USER#{user_id}` | `EVENT#{timestamp}#{event_id}` | -- | Append-only event log for audit |
+
+---
+
+## 11. API Request/Response Examples
+
+### 11.1 Get Fleet Status
+
+```bash
+curl -s -X GET "http://localhost:8000/ui/agent/fleet/status" \
+  -H "Cookie: ui_session=SESS_abc; ui_access_token=JWT_abc; ui_csrf=CSRF_abc"
+```
+
+```json
+{
+  "total_workers": 4,
+  "status_counts": {
+    "ready": 1,
+    "running": 2,
+    "stopped": 1,
+    "error": 0,
+    "provisioning": 0
+  },
+  "queue_depth": 7,
+  "workers": [
+    {
+      "worker_id": "w_abc123",
+      "label": "Backend Coder #1",
+      "agent_type": "coder",
+      "tool": "claude_code",
+      "worker_status": "running",
+      "agent_state": "working",
+      "current_ticket_id": "tkt_xyz789",
+      "current_ticket_title": "Add user search endpoint",
+      "uptime_seconds": 3420,
+      "estimated_cost_cents": 285,
+      "tickets_completed": 3
+    }
+  ]
+}
+```
+
+### 11.2 Bulk Start All
+
+```bash
+curl -s -X POST "http://localhost:8000/ui/agent/fleet/start-all" \
+  -H "Cookie: ui_session=SESS_abc; ui_access_token=JWT_abc; ui_csrf=CSRF_abc" \
+  -H "x-csrf-token: CSRF_abc"
+```
+
+```json
+{
+  "count": 2,
+  "errors": []
+}
+```
+
+### 11.3 Bulk Stop All (with partial errors)
+
+```bash
+curl -s -X POST "http://localhost:8000/ui/agent/fleet/stop-all" \
+  -H "Cookie: ui_session=SESS_abc; ui_access_token=JWT_abc; ui_csrf=CSRF_abc" \
+  -H "x-csrf-token: CSRF_abc"
+```
+
+```json
+{
+  "count": 1,
+  "errors": [
+    {"worker_id": "w_terminated1", "error": "Cannot stop a terminated worker"}
+  ]
+}
+```
+
+### 11.4 Get Capacity
+
+```bash
+curl -s -X GET "http://localhost:8000/ui/agent/fleet/capacity" \
+  -H "Cookie: ui_session=SESS_abc; ui_access_token=JWT_abc; ui_csrf=CSRF_abc"
+```
+
+```json
+{
+  "queue_by_type": {"bug": 5, "feature": 2},
+  "workers_by_type": {"coder": 2, "qa": 1},
+  "workers_by_state": {"idle": 1, "working": 2},
+  "recommended_action": "Consider adding 1 more coder worker — 5 bug tickets queued."
+}
+```
+
+### 11.5 Save Template
+
+```bash
+curl -s -X POST "http://localhost:8000/ui/agent/fleet/templates" \
+  -H "Cookie: ui_session=SESS_abc; ui_access_token=JWT_abc; ui_csrf=CSRF_abc" \
+  -H "x-csrf-token: CSRF_abc" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label": "Backend Coder Standard",
+    "agent_type": "coder",
+    "tool": "claude_code",
+    "compute_type": "ec2",
+    "instance_type": "t3.medium",
+    "llm_key_id": "key_abc123",
+    "repo_url": "https://github.com/org/repo.git",
+    "branch_convention": "feat/{ticket_id}-{slug}",
+    "idle_timeout_seconds": 3600,
+    "ticket_filter": {"labels": ["type:development"], "complexity": ["low", "medium"]}
+  }'
+```
+
+```json
+{
+  "template_id": "tmpl_d4e5f6",
+  "label": "Backend Coder Standard",
+  "agent_type": "coder",
+  "tool": "claude_code",
+  "compute_type": "ec2",
+  "instance_type": "t3.medium",
+  "llm_key_id": "key_abc123",
+  "repo_url": "https://github.com/org/repo.git",
+  "branch_convention": "feat/{ticket_id}-{slug}",
+  "idle_timeout_seconds": 3600,
+  "ticket_filter": {"labels": ["type:development"], "complexity": ["low", "medium"]},
+  "created_at": 1748520000
+}
+```
+
+### 11.6 Create Worker from Template
+
+```bash
+curl -s -X POST "http://localhost:8000/ui/agent/fleet/templates/tmpl_d4e5f6/create" \
+  -H "Cookie: ui_session=SESS_abc; ui_access_token=JWT_abc; ui_csrf=CSRF_abc" \
+  -H "x-csrf-token: CSRF_abc" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "Backend Coder #3"}'
+```
+
+```json
+{
+  "worker_id": "w_new789",
+  "label": "Backend Coder #3",
+  "agent_type": "coder",
+  "tool": "claude_code",
+  "worker_status": "provisioning",
+  "template_id": "tmpl_d4e5f6",
+  "created_at": 1748520100
+}
+```
+
+### 11.7 Delete Template
+
+```bash
+curl -s -X DELETE "http://localhost:8000/ui/agent/fleet/templates/tmpl_d4e5f6" \
+  -H "Cookie: ui_session=SESS_abc; ui_access_token=JWT_abc; ui_csrf=CSRF_abc" \
+  -H "x-csrf-token: CSRF_abc"
+```
+
+```json
+{"ok": true}
+```
+
+### 11.8 Admin Fleet Metrics
+
+```bash
+curl -s -X GET "http://localhost:8000/ui/admin/agent/fleet" \
+  -H "Cookie: ui_session=SESS_root; ui_access_token=JWT_root; ui_csrf=CSRF_root"
+```
+
+```json
+{
+  "total_users": 12,
+  "total_workers": 47,
+  "status_counts": {"ready": 15, "running": 22, "stopped": 8, "error": 2},
+  "total_tickets_in_progress": 22,
+  "total_cost_cents_today": 18450,
+  "top_users": [
+    {"user_id": "usr_001", "worker_count": 8, "cost_cents": 4200}
+  ]
+}
+```
+
+---
+
+## 12. Error Handling Matrix
+
+| # | Scenario | HTTP | Error Code | Body | Recovery |
+|---|----------|------|------------|------|----------|
+| 1 | Unauthenticated request | 401 | `unauthorized` | `{"detail": "Not authenticated"}` | Redirect to login |
+| 2 | Non-admin calls admin fleet endpoint | 403 | `forbidden` | `{"detail": "Admin access required"}` | Use admin session |
+| 3 | Template not found | 404 | `not_found` | `{"detail": "Template not found"}` | List templates first |
+| 4 | Template label too long (>200 chars) | 422 | `validation_error` | Pydantic error detail | Shorten label |
+| 5 | idle_timeout_seconds below 600 | 422 | `validation_error` | `{"detail": "ensure this value is >= 600"}` | Use value >= 600 |
+| 6 | idle_timeout_seconds above 86400 | 422 | `validation_error` | `{"detail": "ensure this value is <= 86400"}` | Use value <= 86400 |
+| 7 | Bulk start with no stopped workers | 200 | -- | `{"count": 0, "errors": []}` | Informational, not error |
+| 8 | Bulk stop fails on terminated worker | 200 | -- | `{"count": 1, "errors": [{"worker_id": "...", "error": "Cannot stop terminated"}]}` | Partial success |
+| 9 | Worker start fails (compute exhausted) | 200 | -- | Error in `errors[]` array | Check compute quotas |
+| 10 | SSE connection dropped (session expired) | -- | -- | EventSource `onerror` fires | Reconnect with fresh session |
+| 11 | CSRF token mismatch on POST | 403 | `csrf_error` | `{"detail": "CSRF token mismatch"}` | Refresh page, retry |
+| 12 | Template references deleted LLM key | 200 | -- | Worker creation succeeds but worker enters `error` state on first LLM call | Update template llm_key_id |
+
+---
+
+## 13. Expanded Pydantic Models with Validators
+
+```python
+from pydantic import BaseModel, Field, field_validator
+from typing import Dict, List, Optional
+
+class WorkerTemplateIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=200)
+    agent_type: str = Field(..., min_length=1, max_length=50)
+    tool: str = Field(..., min_length=1, max_length=50)
+    compute_type: str = Field(..., min_length=1, max_length=50)
+    instance_type: str = Field(..., min_length=1, max_length=100)
+    llm_key_id: str = Field(..., min_length=1, max_length=100)
+    repo_url: str = Field(default="", max_length=500)
+    branch_convention: str = Field(default="", max_length=200)
+    idle_timeout_seconds: int = Field(default=7200, ge=600, le=86400)
+    ticket_filter: Optional[TicketFilterConfig] = None
+
+    @field_validator("agent_type")
+    @classmethod
+    def validate_agent_type(cls, v: str) -> str:
+        allowed = {"coder", "qa", "pm", "docs", "security", "stylist", "architect"}
+        if v not in allowed:
+            raise ValueError(f"agent_type must be one of {sorted(allowed)}")
+        return v
+
+    @field_validator("compute_type")
+    @classmethod
+    def validate_compute_type(cls, v: str) -> str:
+        allowed = {"ec2", "k8s", "local"}
+        if v not in allowed:
+            raise ValueError(f"compute_type must be one of {sorted(allowed)}")
+        return v
+
+    @field_validator("tool")
+    @classmethod
+    def validate_tool(cls, v: str) -> str:
+        allowed = {"claude_code", "codex", "custom"}
+        if v not in allowed:
+            raise ValueError(f"tool must be one of {sorted(allowed)}")
+        return v
+
+    @field_validator("repo_url")
+    @classmethod
+    def validate_repo_url(cls, v: str) -> str:
+        if v and not (v.startswith("https://") or v.startswith("git@")):
+            raise ValueError("repo_url must start with https:// or git@")
+        return v
+
+    @field_validator("branch_convention")
+    @classmethod
+    def validate_branch_convention(cls, v: str) -> str:
+        import re
+        if v and not re.match(r'^[a-zA-Z0-9_/{}\-]+$', v):
+            raise ValueError("branch_convention must only contain alphanumeric, _, /, {}, -")
+        return v
+
+
+class TicketFilterConfig(BaseModel):
+    labels: List[str] = Field(default_factory=list, max_length=20)
+    complexity: List[str] = Field(default_factory=list, max_length=4)
+    space_ids: List[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("complexity")
+    @classmethod
+    def validate_complexity(cls, v: list) -> list:
+        allowed = {"low", "medium", "high", "critical"}
+        for c in v:
+            if c not in allowed:
+                raise ValueError(f"complexity must be one of {sorted(allowed)}")
+        return v
+
+
+class FleetStatusOut(BaseModel):
+    total_workers: int = Field(ge=0)
+    status_counts: Dict[str, int]
+    queue_depth: int = Field(ge=0)
+    workers: List["WorkerSummary"]
+
+    @field_validator("status_counts")
+    @classmethod
+    def validate_status_counts(cls, v: dict) -> dict:
+        required = {"ready", "running", "stopped", "error", "provisioning"}
+        for key in required:
+            if key not in v:
+                v[key] = 0
+        return v
+```
+
+---
+
+## 14. Frontend Component Tree
+
+```
+AgentsPage
+├── FleetHeader
+│   ├── Heading ("Agent Fleet")
+│   ├── Button ("Create Worker")
+│   ├── Button ("Start All")   → useMutation(bulkStart)
+│   └── Button ("Stop All")    → useMutation(bulkStop)
+├── FleetStatsBar
+│   ├── StatCard (Total Workers)
+│   ├── StatCard (Active)
+│   ├── StatCard (Queue Depth)
+│   ├── StatCard (Tickets/Day)
+│   └── StatCard (Est. Cost Today)
+├── CapacityChart
+│   ├── HorizontalBarGroup (queue_by_type)
+│   ├── HorizontalBarGroup (workers_by_type)
+│   └── RecommendationText
+├── WorkerGrid
+│   └── WorkerCard[]
+│       ├── StatusBadge (color-coded)
+│       ├── AgentTypeIcon
+│       ├── ToolBadge
+│       ├── CurrentTicketLink
+│       ├── UptimeLabel
+│       └── ActionMenu (Terminal, Pause, Stop, Details)
+├── TemplatesSection
+│   └── TemplateCard[]
+│       ├── TemplateLabel
+│       ├── AgentTypeTag
+│       ├── Button ("Create from Template")
+│       └── Button ("Delete")
+└── WorkerDetailDrawer (Sheet)
+    ├── DrawerHeader (label, status, type)
+    └── Tabs
+        ├── Tab("Terminal")  → TerminalEmbed (read-only)
+        ├── Tab("Logs")      → ActivityTimeline
+        ├── Tab("Metrics")   → MetricsCards + TokenUsageChart
+        └── Tab("Config")    → ConfigSummary
+```
+
+### Component Props Interfaces
+
+```typescript
+interface FleetStatsBarProps {
+  status: FleetStatusOut;
+  isLoading: boolean;
+}
+
+interface WorkerCardProps {
+  worker: WorkerSummary;
+  onOpenDetail: (workerId: string) => void;
+  onStartStop: (workerId: string, action: "start" | "stop") => void;
+}
+
+interface CapacityChartProps {
+  capacity: CapacityOut | undefined;
+  isLoading: boolean;
+}
+
+interface WorkerDetailDrawerProps {
+  workerId: string | null;
+  open: boolean;
+  onClose: () => void;
+}
+
+interface TemplatesSectionProps {
+  templates: WorkerTemplateOut[];
+  onCreateFromTemplate: (templateId: string) => void;
+  onDeleteTemplate: (templateId: string) => void;
+}
+```
+
+---
+
+## 15. Observability
+
+### 15.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `fleet_status_requests_total` | Counter | `user_id` | Fleet status endpoint calls |
+| `fleet_bulk_action_total` | Counter | `action=start\|stop`, `user_id` | Bulk action invocations |
+| `fleet_bulk_action_count` | Histogram | `action` | Number of workers affected per bulk action |
+| `fleet_sse_connections_active` | Gauge | -- | Currently open SSE fleet event connections |
+| `fleet_sse_events_sent_total` | Counter | `event_type` | SSE events pushed to clients |
+| `fleet_template_crud_total` | Counter | `op=create\|delete\|use` | Template lifecycle operations |
+| `fleet_worker_state_transitions_total` | Counter | `from_state`, `to_state` | Worker state change frequency |
+
+### 15.2 Logging Events
+
+| Event | Level | Fields | When |
+|-------|-------|--------|------|
+| `fleet.status.fetched` | INFO | `user_id`, `total_workers`, `queue_depth` | Fleet status requested |
+| `fleet.bulk.start` | INFO | `user_id`, `count`, `errors_count` | Bulk start completed |
+| `fleet.bulk.stop` | INFO | `user_id`, `count`, `errors_count` | Bulk stop completed |
+| `fleet.template.created` | INFO | `user_id`, `template_id`, `agent_type` | Template saved |
+| `fleet.template.deleted` | INFO | `user_id`, `template_id` | Template removed |
+| `fleet.template.used` | INFO | `user_id`, `template_id`, `new_worker_id` | Worker created from template |
+| `fleet.sse.connected` | DEBUG | `user_id` | SSE client connected |
+| `fleet.sse.disconnected` | DEBUG | `user_id` | SSE client disconnected |
+
+### 15.3 Alerting Rules
+
+| Alert | Condition | Severity | Channel |
+|-------|-----------|----------|---------|
+| `FleetSSEConnectionSurge` | `fleet_sse_connections_active > 500` | Warning | Slack #ops |
+| `FleetBulkActionHighErrorRate` | `rate(errors) / rate(total) > 0.3 over 5m` | Critical | PagerDuty |
+| `FleetWorkerErrorStateSpike` | `fleet_worker_state_transitions_total{to_state="error"} > 10 in 5m` | Critical | Slack #ops + PagerDuty |
+
+---
+
+## 16. Rollout Plan
+
+### 16.1 Feature Flags
+
+| Flag | Scope | Default | Description |
+|------|-------|---------|-------------|
+| `AGENT_FLEET_DASHBOARD_ENABLED` | Global | `false` | Gates frontend route and all fleet API endpoints |
+| `AGENT_FLEET_SSE_ENABLED` | Global | `false` | Gates SSE event streaming (can disable if perf issues) |
+
+### 16.2 Phases
+
+**Phase 1 -- Backend only (Week 1)**
+- Deploy fleet service extensions, template CRUD, bulk operations.
+- Flag `AGENT_FLEET_DASHBOARD_ENABLED=false` -- endpoints return 404.
+- Internal testing via curl and admin scripts.
+- Monitor DDB write throughput for template operations.
+
+**Phase 2 -- Limited rollout (Week 2)**
+- Enable `AGENT_FLEET_DASHBOARD_ENABLED=true` for internal users (staff flag).
+- Enable `AGENT_FLEET_SSE_ENABLED=true` for internal users.
+- Frontend route visible only to flagged users.
+- Gather feedback on dashboard layout, capacity chart accuracy, SSE reliability.
+
+**Phase 3 -- General availability (Week 3)**
+- Enable both flags globally.
+- Announce in changelog.
+- Monitor SSE connection count, bulk action error rate.
+- Add admin fleet endpoint for platform-wide monitoring.
+
+---
+
+## 17. Performance Considerations
+
+### 17.1 Latency Targets
+
+| Endpoint | Target P50 | Target P99 | Notes |
+|----------|-----------|-----------|-------|
+| `GET /ui/agent/fleet/status` | 80ms | 250ms | Single DDB query + ticket count query |
+| `POST /ui/agent/fleet/start-all` | 200ms | 1000ms | Iterates workers; each start is ~50ms |
+| `POST /ui/agent/fleet/stop-all` | 200ms | 1000ms | Same as start-all |
+| `GET /ui/agent/fleet/capacity` | 100ms | 300ms | Ticket queue count + worker aggregation |
+| `POST /ui/agent/fleet/templates` | 30ms | 100ms | Single DDB PutItem |
+| `GET /ui/agent/fleet/templates` | 40ms | 150ms | Single DDB query, small result set |
+| `GET /ui/agent/fleet/events` (SSE) | <50ms per event | <100ms per event | In-memory queue push |
+
+### 17.2 Caching Strategy
+
+- **Fleet status**: React Query `staleTime: 5_000` with SSE-driven invalidation. SSE events call `queryClient.setQueryData(["fleet", "status"], updater)` to patch individual worker states without full refetch.
+- **Templates list**: React Query `staleTime: 30_000`. Invalidated on create/delete mutations.
+- **Capacity data**: React Query `staleTime: 10_000`. Ticket queue counts change less frequently.
+- **Worker detail**: Fetched on drawer open; not cached (always fresh via SSE updates).
+
+### 17.3 SSE Scalability
+
+- Each user has one `_fleet_event_buses[user_id]` set of queues.
+- Memory per SSE connection: ~4KB (asyncio.Queue + event buffer).
+- Maximum recommended: 1000 concurrent SSE connections per backend process.
+- If SSE is disabled (`AGENT_FLEET_SSE_ENABLED=false`), frontend falls back to `refetchInterval: 5_000` polling.
+- SSE auto-reconnect: `EventSource` reconnects on network drop with 3-second backoff.
+
+### 17.4 Bulk Operation Safeguards
+
+- Bulk start/stop process workers sequentially (not concurrently) to avoid DDB write throttling.
+- Maximum 50 workers per bulk operation. If user has more, return error suggesting pagination.
+- Rate limit: 1 bulk operation per user per 30 seconds (prevent accidental double-click).
+
+---
+
+## 18. Expanded E2E Tests
+
+### Section 639: Input Validation (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 639.1 | Template label empty string rejected | POST template with `label: ""` → 422 |
+| 639.2 | Template label exceeds 200 chars rejected | POST template with 201-char label → 422 |
+| 639.3 | idle_timeout below 600 rejected | POST template with `idle_timeout_seconds: 100` → 422 |
+| 639.4 | idle_timeout above 86400 rejected | POST template with `idle_timeout_seconds: 100000` → 422 |
+| 639.5 | Invalid agent_type rejected | POST template with `agent_type: "invalid"` → 422 |
+
+### Section 640: Authorization Boundary (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 640.1 | Unauthenticated fleet status returns 401 | GET status without cookies → 401 |
+| 640.2 | User A cannot see User B workers | Alice GET fleet status returns only Alice workers; no Bob workers leak |
+| 640.3 | Non-admin cannot call admin fleet endpoint | Alice GET `/ui/admin/agent/fleet` → 403 |
+| 640.4 | CSRF required for bulk start | POST start-all without `x-csrf-token` → 403 |
+
+### Section 641: SSE Event Handling (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 641.1 | SSE connection established | Open EventSource to `/ui/agent/fleet/events`; verify `onopen` fires within 2s |
+| 641.2 | Worker state change event received | Start a worker; verify `worker:state_change` event received with correct `worker_id`, `new_state` |
+| 641.3 | SSE reconnects on drop | Close the SSE connection; verify EventSource reconnects and receives subsequent events |
+| 641.4 | Multiple browser tabs receive same events | Open two SSE connections for same user; trigger state change; both receive the event |
+
+### Section 642: Template Edge Cases (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 642.1 | Create worker from deleted template fails | Delete template; POST create from that template_id → 404 "Template not found" |
+| 642.2 | Template with stale LLM key creates worker in error state | Delete LLM key; create worker from template referencing it; worker enters `error` state |
+| 642.3 | Duplicate template labels allowed | Create two templates with same label → both succeed with different template_ids |
+| 642.4 | Template ticket_filter with empty arrays is valid | POST template with `ticket_filter: {"labels": [], "complexity": []}` → 201 |
+| 642.5 | List templates returns empty for new user | Bob (with no templates) GET templates → `{"templates": [], "count": 0}` |

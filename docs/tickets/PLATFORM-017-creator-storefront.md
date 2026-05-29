@@ -34,9 +34,57 @@ The current public profile page is a minimal landing page that does not showcase
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
 
-### 2.1 Existing Infrastructure
+```
++-----------------------------------------------------------+
+|                     Browser (Visitor)                       |
+|                                                           |
+|  /creator/:identifier                                     |
+|  +-----------------------------------------------------+  |
+|  | CreatorStorefrontPage                                |  |
+|  | +--------+  +------+  +------+  +------+  +------+  |  |
+|  | | About  |  |Videos|  |Posts |  |Plans |  | Shop |  |  |
+|  | +----+---+  +--+---+  +--+---+  +--+---+  +--+---+  |  |
+|  |      |         |         |         |         |       |  |
+|  +------|---------|---------|---------|---------|-------+  |
++---------|---------|---------|---------|---------|---------+
+          |         |         |         |         |
+     1. GET         2. GET    3. GET    4. (from   5. GET
+     /storefront    /videos   /posts   storefront) /shop
+          |         |         |         |         |
+          v         v         v         v         v
++-----------------------------------------------------------+
+|                    Backend (FastAPI)                        |
+|                                                           |
+|  app/routers/profile.py                                   |
+|  +-----------------------------------------------------+  |
+|  | GET /profile/public/{id}/storefront                  |  |
+|  |   -> profile.py:get_profile()                       |  |
+|  |   -> social.py:get_follow_status()                  |  |
+|  |   -> subscription_server.py:list_plans()            |  |
+|  |   -> public_catalog.py:count_items()                |  |
+|  |   -> resolve_featured_content()                     |  |
+|  +-----------------------------------------------------+  |
+|  | GET /profile/public/{id}/shop                        |  |
+|  |   -> public_catalog.py:list_creator_catalog_items()  |  |
+|  +-----------------------------------------------------+  |
+|                                                           |
+|  DynamoDB Tables:                                         |
+|  +----------+  +-----------+  +----------+  +---------+  |
+|  | T.profile|  | T.catalog |  | T.subscr.|  | T.posts |  |
+|  | (featured|  | (ByCreator|  | (plans)  |  | (author)|  |
+|  |  content,|  |  GSI)     |  |          |  |         |  |
+|  |  social) |  |           |  |          |  |         |  |
+|  +----------+  +-----------+  +----------+  +---------+  |
++-----------------------------------------------------------+
+```
+
+---
+
+## 3. Current State Analysis
+
+### 3.1 Existing Infrastructure
 
 | Component | Location | Relevance |
 |-----------|----------|-----------|
@@ -51,7 +99,7 @@ The current public profile page is a minimal landing page that does not showcase
 | Social service | `app/services/social.py` | Follow/unfollow, follower counts |
 | Frontend route | `frontend/src/App.tsx` | `/profile/:identifier` route exists; no `/creator/:username` alias |
 
-### 2.2 Gaps
+### 3.2 Gaps
 
 1. **No tabbed layout** -- `PublicUserProfilePage` renders everything in a single scrollable column with no tabs for Videos, Posts, Plans, Shop.
 2. **No subscription plan display** -- `has_subscription_plans` boolean is returned but no plans are fetched or shown to the visitor. No plan comparison UI, no subscribe button.
@@ -64,11 +112,11 @@ The current public profile page is a minimal landing page that does not showcase
 
 ---
 
-## 3. Technical Design
+## 4. Technical Design
 
-### 3.1 DynamoDB Schema
+### 4.1 DynamoDB Schema
 
-#### 3.1.1 Featured Content (stored in profile table)
+#### 4.1.1 Featured Content (stored in profile table)
 
 No new table needed. Extend the existing profile item in `T.profile` with:
 
@@ -96,7 +144,7 @@ No new table needed. Extend the existing profile item in `T.profile` with:
 }
 ```
 
-#### 3.1.2 Public Catalog View (GSI on catalog table)
+#### 4.1.2 Public Catalog View (GSI on catalog table)
 
 Add a GSI to the existing `catalog` table for querying by creator:
 
@@ -107,7 +155,7 @@ Add a GSI to the existing `catalog` table for querying by creator:
 
 This enables `GET /catalog/public/{creator_id}/items` to query items by creator without auth.
 
-#### 3.1.3 TableDef Change
+#### 4.1.3 TableDef Change
 
 ```python
 # Modify existing catalog TableDef to add GSI:
@@ -115,7 +163,611 @@ This enables `GET /catalog/public/{creator_id}/items` to query items by creator 
 # attr_types={..., "GSI1SK": "N"}
 ```
 
-### 3.2 Backend Service
+---
+
+## 5. DynamoDB Access Patterns
+
+### 5.1 Profile Table (extended)
+
+| Access Pattern | PK | SK | Operation | Notes |
+|---------------|----|----|-----------|-------|
+| Get full profile with storefront data | `user_sub` | -- | get_item | Returns featured_content, social_links, storefront_settings |
+| Update featured content | `user_sub` | -- | update_item SET | SET featured_content = :fc |
+| Update social links | `user_sub` | -- | update_item SET | SET social_links = :sl |
+| Update storefront settings | `user_sub` | -- | update_item SET | SET storefront_settings = :ss |
+
+**Example profile item with storefront extensions:**
+
+```json
+{
+  "user_sub": "e2e_alice@test.local",
+  "display_name": "Alice Creator",
+  "title": "Digital Artist & Content Creator",
+  "description": "Creating digital art and tutorials since 2020.",
+  "avatar_url": "/mock/s3/avatars/alice.jpg",
+  "cover_photo_url": "/mock/s3/covers/alice_banner.jpg",
+  "follower_count": 1523,
+  "following_count": 42,
+  "post_count": 89,
+  "video_count": 23,
+  "created_at": 1716566400,
+  "updated_at": 1748520000,
+  "featured_content": [
+    {
+      "content_id": "post_abc123def456",
+      "content_type": "post",
+      "pinned_at": 1748520000
+    },
+    {
+      "content_id": "v_xyz789ghi012",
+      "content_type": "video",
+      "pinned_at": 1748520100
+    }
+  ],
+  "social_links": {
+    "twitter": "https://twitter.com/alicecreator",
+    "instagram": "https://instagram.com/alicecreator",
+    "youtube": "https://youtube.com/@alicecreator",
+    "tiktok": "",
+    "website": "https://alicecreator.art",
+    "discord": "https://discord.gg/alice",
+    "twitch": ""
+  },
+  "storefront_settings": {
+    "accent_color": "#7C3AED",
+    "default_tab": "about",
+    "show_follower_count": true,
+    "show_post_count": true
+  }
+}
+```
+
+### 5.2 Catalog Table (ByCreator GSI)
+
+| Access Pattern | GSI1PK | GSI1SK | Operation | Notes |
+|---------------|--------|--------|-----------|-------|
+| List creator's published items | `CREATOR#{creator_id}` | (scan forward, newest first) | Query with FilterExpression | Filter `status=published` |
+| Count creator's items | `CREATOR#{creator_id}` | -- | Query SELECT COUNT | For `has_shop_items` flag |
+| Paginated listing | `CREATOR#{creator_id}` | with ExclusiveStartKey | Query | cursor-based pagination |
+
+**Example catalog item with GSI keys:**
+
+```json
+{
+  "pk": "CATALOG#item_abc123",
+  "sk": "META",
+  "item_id": "item_abc123",
+  "creator_id": "e2e_alice@test.local",
+  "name": "Digital Art Print - Mountain Sunset",
+  "description": "High-resolution digital print, 4096x2160.",
+  "price_cents": 1500,
+  "currency": "USD",
+  "status": "published",
+  "thumbnail_url": "/mock/s3/catalog/mountain_sunset_thumb.jpg",
+  "category": "digital_art",
+  "created_at": 1748520000,
+  "GSI1PK": "CREATOR#e2e_alice@test.local",
+  "GSI1SK": 1748520000
+}
+```
+
+---
+
+## 6. API Request/Response Examples
+
+### 6.1 GET /profile/public/{identifier}/storefront
+
+```bash
+curl -s "http://localhost:8000/profile/public/e2e_alice@test.local/storefront" \
+  -H "Cookie: ui_session=sess_bob; ui_csrf=csrf_bob; ui_access_token=jwt_bob"
+```
+
+**Response (200):**
+```json
+{
+  "user_id": "e2e_alice@test.local",
+  "identifier": "e2e_alice@test.local",
+  "display_name": "Alice Creator",
+  "title": "Digital Artist",
+  "description": "Creating digital art and tutorials since 2020.",
+  "profile_photo_url": "/mock/s3/avatars/alice.jpg",
+  "cover_photo_url": "/mock/s3/covers/alice_banner.jpg",
+  "banner_url": null,
+  "follower_count": 1523,
+  "following_count": 42,
+  "post_count": 89,
+  "video_count": 23,
+  "is_following": true,
+  "is_followed_by": false,
+  "social_links": {
+    "twitter": "https://twitter.com/alicecreator",
+    "instagram": "https://instagram.com/alicecreator",
+    "youtube": "",
+    "tiktok": "",
+    "website": "https://alicecreator.art",
+    "discord": "",
+    "twitch": ""
+  },
+  "storefront_settings": {
+    "accent_color": "#7C3AED",
+    "default_tab": "about",
+    "show_follower_count": true,
+    "show_post_count": true
+  },
+  "featured_content": [
+    {
+      "content_id": "post_abc123",
+      "content_type": "post",
+      "pinned_at": 1748520000,
+      "title": "My Best Tutorial",
+      "thumbnail_url": "/mock/s3/posts/abc123_thumb.jpg",
+      "preview_text": "Learn how to create stunning digital art..."
+    }
+  ],
+  "subscription_plans": [
+    {
+      "plan_id": "plan_xyz789",
+      "name": "Premium Access",
+      "description": "Get access to all premium content",
+      "price_cents": 999,
+      "currency": "USD",
+      "billing_period": "monthly",
+      "features": ["All premium videos", "Early access", "Discord role"],
+      "is_popular": true
+    }
+  ],
+  "has_shop_items": true,
+  "created_at": 1716566400
+}
+```
+
+### 6.2 PUT /ui/profile/social-links
+
+```bash
+curl -s -X PUT http://localhost:8000/ui/profile/social-links \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=jwt_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -d '{
+    "twitter": "https://twitter.com/alicecreator",
+    "instagram": "https://instagram.com/alicecreator",
+    "website": "https://alicecreator.art"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "social_links": {
+    "twitter": "https://twitter.com/alicecreator",
+    "instagram": "https://instagram.com/alicecreator",
+    "youtube": "",
+    "tiktok": "",
+    "website": "https://alicecreator.art",
+    "discord": "",
+    "twitch": ""
+  }
+}
+```
+
+### 6.3 PUT /ui/profile/featured
+
+```bash
+curl -s -X PUT http://localhost:8000/ui/profile/featured \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=jwt_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -d '{
+    "items": [
+      {"content_id": "post_abc123", "content_type": "post"},
+      {"content_id": "v_xyz789", "content_type": "video"}
+    ]
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "featured_content": [
+    {"content_id": "post_abc123", "content_type": "post", "pinned_at": 1748523600},
+    {"content_id": "v_xyz789", "content_type": "video", "pinned_at": 1748523600}
+  ]
+}
+```
+
+**Error (400 -- too many items):**
+```json
+{
+  "detail": "Maximum 6 featured items allowed"
+}
+```
+
+### 6.4 GET /profile/public/{identifier}/shop
+
+```bash
+curl -s "http://localhost:8000/profile/public/e2e_alice@test.local/shop?limit=2"
+```
+
+**Response (200):**
+```json
+{
+  "items": [
+    {
+      "item_id": "item_abc123",
+      "name": "Digital Art Print",
+      "description": "High-res digital print",
+      "price_cents": 1500,
+      "currency": "USD",
+      "thumbnail_url": "/mock/s3/catalog/thumb.jpg",
+      "category": "digital_art"
+    },
+    {
+      "item_id": "item_def456",
+      "name": "Tutorial Bundle",
+      "description": "5 video tutorials",
+      "price_cents": 2999,
+      "currency": "USD",
+      "thumbnail_url": "/mock/s3/catalog/bundle_thumb.jpg",
+      "category": "courses"
+    }
+  ],
+  "next_cursor": "eyJHU0kxUEsiOi..."
+}
+```
+
+### 6.5 PUT /ui/profile/storefront-settings
+
+```bash
+curl -s -X PUT http://localhost:8000/ui/profile/storefront-settings \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=jwt_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -d '{
+    "accent_color": "#FF5733",
+    "default_tab": "videos",
+    "show_follower_count": true,
+    "show_post_count": false
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "storefront_settings": {
+    "accent_color": "#FF5733",
+    "default_tab": "videos",
+    "show_follower_count": true,
+    "show_post_count": false
+  }
+}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---------------|-------------|------------|---------------------|-----------------|
+| Storefront for non-existent user | 404 | `user_not_found` | "This creator profile could not be found." | Check URL or search |
+| Storefront for deactivated account | 404 | `account_deactivated` | "This profile is no longer available." | None |
+| Featured items exceed limit (>6) | 400 | `too_many_items` | "Maximum 6 featured items allowed." | Remove items before adding |
+| Featured content_type invalid | 422 | `validation_error` | "Content type must be 'post' or 'video'." | Fix request |
+| Social link URL too long (>500) | 422 | `validation_error` | "Social link URL must be under 500 characters." | Shorten URL |
+| Invalid accent_color format | 422 | `validation_error` | "Accent color must be a valid hex color (e.g., #7C3AED)." | Fix color format |
+| Invalid default_tab value | 422 | `validation_error` | "Default tab must be one of: about, videos, posts, plans, shop." | Use valid tab name |
+| Unauthorized settings update | 403 | `forbidden` | "You can only edit your own storefront." | Log in as the creator |
+| CSRF missing on PUT | 403 | `csrf_error` | "Session expired. Please refresh." | Reload page |
+| Shop pagination cursor invalid | 400 | `invalid_cursor` | "Invalid pagination cursor." | Restart from first page |
+| Social link key not recognized | 422 | `validation_error` | "Unknown social link platform." | Use supported platform |
+| Catalog GSI query timeout | 500 | `internal_error` | "Unable to load shop items. Please try again." | Retry |
+
+---
+
+## 8. Pydantic Models
+
+```python
+# -- Creator Storefront (PLATFORM-017) --
+
+from typing import Dict, List, Optional
+from pydantic import BaseModel, Field, validator
+
+
+class SocialLinks(BaseModel):
+    """Social media links for a creator's storefront."""
+    twitter: str = ""
+    instagram: str = ""
+    youtube: str = ""
+    tiktok: str = ""
+    website: str = ""
+    discord: str = ""
+    twitch: str = ""
+
+    @validator("*", pre=True, always=True)
+    def truncate_url(cls, v):
+        if isinstance(v, str) and len(v) > 500:
+            raise ValueError("URL must be under 500 characters")
+        return v or ""
+
+
+class StorefrontSettings(BaseModel):
+    """Display settings for the creator storefront."""
+    accent_color: str = Field(default="#7C3AED", max_length=7)
+    default_tab: str = Field(default="about", pattern="^(about|videos|posts|plans|shop)$")
+    show_follower_count: bool = True
+    show_post_count: bool = True
+
+    @validator("accent_color")
+    def validate_hex_color(cls, v):
+        import re
+        if not re.match(r"^#[0-9A-Fa-f]{6}$", v):
+            raise ValueError("Must be a valid 7-character hex color")
+        return v
+
+
+class FeaturedContentItem(BaseModel):
+    """A single featured content item to pin on storefront."""
+    content_id: str = Field(min_length=1, max_length=100)
+    content_type: str = Field(..., pattern="^(post|video)$")
+
+
+class FeaturedContentIn(BaseModel):
+    """Request model for PUT /ui/profile/featured."""
+    items: List[FeaturedContentItem] = Field(max_length=6)
+
+
+class FeaturedContentOut(BaseModel):
+    """Response model for a resolved featured content item."""
+    content_id: str
+    content_type: str
+    pinned_at: int = 0
+    title: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    preview_text: Optional[str] = None
+
+
+class StorefrontPlanOut(BaseModel):
+    """A subscription plan displayed on the storefront."""
+    plan_id: str
+    name: str
+    description: str = ""
+    price_cents: int = 0
+    currency: str = "USD"
+    billing_period: str = "monthly"
+    features: List[str] = Field(default_factory=list)
+    is_popular: bool = False
+
+
+class StorefrontOut(BaseModel):
+    """Aggregated storefront response - all data for one API call."""
+    user_id: str
+    identifier: str
+    display_name: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+    cover_photo_url: Optional[str] = None
+    banner_url: Optional[str] = None
+    follower_count: int = 0
+    following_count: int = 0
+    post_count: int = 0
+    video_count: int = 0
+    is_following: bool = False
+    is_followed_by: bool = False
+    social_links: SocialLinks = Field(default_factory=SocialLinks)
+    storefront_settings: StorefrontSettings = Field(default_factory=StorefrontSettings)
+    featured_content: List[FeaturedContentOut] = Field(default_factory=list)
+    subscription_plans: List[StorefrontPlanOut] = Field(default_factory=list)
+    has_shop_items: bool = False
+    created_at: Optional[int] = None
+
+
+class PublicCatalogItemOut(BaseModel):
+    """A public catalog item for the storefront shop tab."""
+    item_id: str
+    name: str
+    description: str = ""
+    price_cents: int = 0
+    currency: str = "USD"
+    thumbnail_url: Optional[str] = None
+    category: str = ""
+
+
+class PublicCatalogOut(BaseModel):
+    """Response for public catalog listing."""
+    items: List[PublicCatalogItemOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+```
+
+---
+
+## 9. Frontend Component Tree
+
+```
+CreatorStorefrontPage (pages/profile/CreatorStorefrontPage.tsx)
+├── useParams() -> { identifier }
+├── useQuery(["storefront", identifier]) -> GET /profile/public/{identifier}/storefront
+│
+├── Cover Banner
+│   ├── <img> src={cover_photo_url || banner_url}
+│   └── Gradient overlay (uses accent_color from storefront_settings)
+│
+├── Profile Header
+│   ├── Avatar (profile_photo_url)
+│   ├── Display Name + Title
+│   ├── Description / Bio (truncated with "Read more")
+│   ├── SocialLinksBar
+│   │   ├── For each non-empty link in social_links:
+│   │   │   └── <a> with platform icon (Twitter, Instagram, YouTube, etc.)
+│   │   └── Props: { links: SocialLinks }
+│   ├── Stats Row
+│   │   ├── "{follower_count} followers" (if show_follower_count)
+│   │   ├── "{post_count} posts" (if show_post_count)
+│   │   └── "{video_count} videos"
+│   └── Action Buttons
+│       ├── FollowButton (isFollowing state)
+│       │   └── useMutation -> POST/DELETE /ui/profile/{id}/follow
+│       └── "Subscribe" CTA (if has subscription_plans)
+│           └── scrollTo Plans tab
+│
+├── Tabs (shadcn Tabs component)
+│   ├── TabsTrigger: "About" (default_tab from settings)
+│   │   └── StorefrontAboutTab
+│   │       ├── FeaturedContentCarousel
+│   │       │   ├── Props: { items: FeaturedContentOut[] }
+│   │       │   └── For each item:
+│   │       │       ├── Thumbnail image
+│   │       │       ├── Title overlay
+│   │       │       ├── Type badge ("Post" | "Video")
+│   │       │       └── Link to /feed/{post_id} or /videos/{video_id}
+│   │       ├── Full Bio Text (untruncated)
+│   │       └── Recent Activity Summary
+│   │
+│   ├── TabsTrigger: "Videos"
+│   │   └── StorefrontVideoGrid (existing component, reused)
+│   │       └── useInfiniteQuery -> GET /profile/public/{id}/videos
+│   │
+│   ├── TabsTrigger: "Posts"
+│   │   └── StorefrontPostsFeed (existing component, reused)
+│   │       └── useInfiniteQuery -> GET /profile/public/{id}/posts
+│   │
+│   ├── TabsTrigger: "Plans" (if subscription_plans.length > 0)
+│   │   └── StorefrontPlansTab
+│   │       ├── Props: { plans: StorefrontPlanOut[] }
+│   │       └── Plan Card Grid
+│   │           └── For each plan:
+│   │               ├── Plan name (h3)
+│   │               ├── Price display ($X.XX/month)
+│   │               ├── Feature checklist
+│   │               ├── "Popular" badge (if is_popular)
+│   │               └── "Subscribe" button
+│   │                   └── onClick -> navigate to subscription flow
+│   │
+│   └── TabsTrigger: "Shop" (if has_shop_items)
+│       └── StorefrontShopTab
+│           ├── useInfiniteQuery(["storefront-shop", identifier])
+│           │   -> GET /profile/public/{id}/shop
+│           └── Item Card Grid
+│               └── For each item:
+│                   ├── Thumbnail image
+│                   ├── Item name
+│                   ├── Price ($X.XX)
+│                   ├── Category badge
+│                   └── "Add to Cart" button
+│                       └── useMutation -> POST /ui/cart/add
+│
+└── (Creator-only) StorefrontSettingsCard
+    ├── Only shown if viewer is the profile owner
+    ├── "Edit Storefront" button -> opens dialog
+    └── StorefrontSettingsDialog
+        ├── FeaturedContentEditor (drag-and-drop list)
+        ├── SocialLinksForm (text inputs per platform)
+        ├── AccentColorPicker
+        ├── DefaultTabSelector
+        └── Save button -> PUT /ui/profile/storefront-settings + /social-links + /featured
+
+State Management:
+  - React Query for all server state
+  - URL search params for active tab (e.g., ?tab=plans)
+  - No Zustand store needed (all state derived from URL + API)
+```
+
+---
+
+## 10. Observability & Monitoring
+
+### 10.1 Metrics to Track
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `storefront_page_views` | Counter | `creator_id` | Total storefront page loads |
+| `storefront_tab_views` | Counter | `creator_id`, `tab` | Views per tab (about, videos, posts, plans, shop) |
+| `storefront_follow_clicks` | Counter | `creator_id` | Follow button clicks from storefront |
+| `storefront_subscribe_clicks` | Counter | `creator_id`, `plan_id` | Subscribe CTA clicks |
+| `storefront_shop_add_to_cart` | Counter | `creator_id`, `item_id` | Add to cart from storefront |
+| `storefront_featured_resolves` | Histogram | -- | Time to resolve featured content metadata |
+| `storefront_api_latency_ms` | Histogram | `endpoint` | Response time for storefront endpoints |
+
+### 10.2 Log Events
+
+| Event | Level | Fields | Trigger |
+|-------|-------|--------|---------|
+| `storefront.view` | INFO | creator_id, viewer_id, tab | Page load or tab switch |
+| `storefront.featured.updated` | INFO | creator_id, item_count | Featured content changed |
+| `storefront.settings.updated` | INFO | creator_id, changed_fields | Storefront settings saved |
+| `storefront.featured.resolve_failed` | WARN | creator_id, content_id | Featured item not found (deleted content) |
+
+### 10.3 Alert Thresholds
+
+| Condition | Threshold | Severity |
+|-----------|-----------|----------|
+| Storefront API P95 latency > 2s | 2000ms | Warning |
+| Featured content resolution errors > 10/hour | 10 | Info |
+| Storefront 500 errors > 5/minute | 5 | Critical |
+
+---
+
+## 11. Rollout Plan
+
+### 11.1 Feature Flag Strategy
+
+| Flag | Location | Default | Purpose |
+|------|----------|---------|---------|
+| `VITE_CREATOR_STOREFRONT_ENABLED` | `frontend/.env.local` | `true` | Show/hide storefront route |
+| `S.storefront_shop_enabled` | `app/core/settings.py` | `True` | Enable shop tab (can disable if catalog not ready) |
+
+### 11.2 Migration Steps
+
+1. **Add ByCreator GSI** to catalog table (DDB migration -- GSI backfill runs automatically).
+2. **Deploy backend** with new storefront/shop/featured endpoints.
+3. **Deploy frontend** with new `CreatorStorefrontPage` and route.
+4. **Redirect** `/profile/:identifier` to `/creator/:identifier`.
+5. **Communicate** to creators that they can customize their storefront.
+
+### 11.3 Rollback Procedure
+
+1. Remove `/creator/:identifier` route; restore `/profile/:identifier` as primary.
+2. No data migration needed (profile extensions are additive).
+3. GSI can remain (no cost if unused).
+
+---
+
+## 12. Performance Considerations
+
+### 12.1 Query Costs
+
+| Operation | DDB Cost | Frequency | Notes |
+|-----------|----------|-----------|-------|
+| Get profile (with storefront data) | 1 RCU | Per storefront load | Single get_item |
+| Resolve featured content (up to 6 items) | 6 RCU | Per storefront load | 6 get_items (batch_get available) |
+| List subscription plans | 1-2 RCU | Per storefront load | GSI query (usually 1-5 plans) |
+| Count catalog items | 1 RCU | Per storefront load | GSI query SELECT COUNT |
+| List shop items (paginated) | 1-2 RCU | Per shop tab open | GSI query with limit |
+
+### 12.2 Caching Strategy
+
+- **Storefront data**: Cache in React Query with 60-second staleTime (visitors tolerate slightly stale data).
+- **Tab data (videos, posts, shop)**: Lazy-loaded on tab activation; cached for 5 minutes.
+- **Backend**: Profile data cached in-memory for 30 seconds per user_sub using TTL wrapper.
+
+### 12.3 Aggregated Endpoint
+
+`GET /profile/public/{identifier}/storefront` returns all data needed to render the header, about tab, plans preview, and shop indicator in a single request. This avoids 4-5 sequential API calls on initial page load.
+
+### 12.4 Rate Limiting
+
+| Endpoint | Limit | Window |
+|----------|-------|--------|
+| Public storefront GET | 60/min | Per IP |
+| Settings update endpoints | 20/hour | Per user |
+| Featured content update | 10/hour | Per user |
+
+---
+
+## 13. Backend Service
 
 **Modify `app/services/profile.py`** (~60 lines added):
 
@@ -186,195 +838,11 @@ def list_creator_catalog_items(creator_id: str, limit: int = 20, cursor: str = N
     return {"items": items, "next_cursor": next_cursor}
 ```
 
-### 3.3 Backend Router
-
-**Modify `app/routers/profile.py`** (~100 lines added):
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/profile/public/{identifier}/storefront` | Optional | Full storefront data (profile + plans + stats + social links + featured) |
-| `GET` | `/profile/public/{identifier}/plans` | None | Subscription plans for the creator |
-| `GET` | `/profile/public/{identifier}/shop` | None | Public catalog items for the creator |
-| `GET` | `/profile/public/{identifier}/featured` | None | Featured content items |
-| `PUT` | `/ui/profile/featured` | `require_ui_session` | Set featured content (creator only) |
-| `PUT` | `/ui/profile/social-links` | `require_ui_session` | Update social links |
-| `PUT` | `/ui/profile/storefront-settings` | `require_ui_session` | Update storefront settings |
-
-### 3.4 Request/Response Models
-
-**Add to `app/models.py`**:
-
-```python
-# -- Creator Storefront (PLATFORM-017) --
-
-class SocialLinks(BaseModel):
-    twitter: str = ""
-    instagram: str = ""
-    youtube: str = ""
-    tiktok: str = ""
-    website: str = ""
-    discord: str = ""
-    twitch: str = ""
-
-class StorefrontSettings(BaseModel):
-    accent_color: str = Field(default="#7C3AED", max_length=7)
-    default_tab: str = Field(default="about", pattern="^(about|videos|posts|plans|shop)$")
-    show_follower_count: bool = True
-    show_post_count: bool = True
-
-class FeaturedContentItem(BaseModel):
-    content_id: str = Field(min_length=1, max_length=100)
-    content_type: str = Field(..., pattern="^(post|video)$")
-
-class FeaturedContentIn(BaseModel):
-    items: List[FeaturedContentItem] = Field(max_length=6)
-
-class FeaturedContentOut(BaseModel):
-    content_id: str
-    content_type: str
-    pinned_at: int = 0
-    title: Optional[str] = None
-    thumbnail_url: Optional[str] = None
-    preview_text: Optional[str] = None
-
-class StorefrontPlanOut(BaseModel):
-    plan_id: str
-    name: str
-    description: str = ""
-    price_cents: int = 0
-    currency: str = "USD"
-    billing_period: str = "monthly"
-    features: List[str] = Field(default_factory=list)
-    is_popular: bool = False
-
-class StorefrontOut(BaseModel):
-    user_id: str
-    identifier: str
-    display_name: str
-    title: Optional[str] = None
-    description: Optional[str] = None
-    location: Optional[str] = None
-    profile_photo_url: Optional[str] = None
-    cover_photo_url: Optional[str] = None
-    banner_url: Optional[str] = None
-    follower_count: int = 0
-    following_count: int = 0
-    post_count: int = 0
-    video_count: int = 0
-    is_following: bool = False
-    is_followed_by: bool = False
-    social_links: SocialLinks = Field(default_factory=SocialLinks)
-    storefront_settings: StorefrontSettings = Field(default_factory=StorefrontSettings)
-    featured_content: List[FeaturedContentOut] = Field(default_factory=list)
-    subscription_plans: List[StorefrontPlanOut] = Field(default_factory=list)
-    has_shop_items: bool = False
-    created_at: Optional[int] = None
-
-class PublicCatalogItemOut(BaseModel):
-    item_id: str
-    name: str
-    description: str = ""
-    price_cents: int = 0
-    currency: str = "USD"
-    thumbnail_url: Optional[str] = None
-    category: str = ""
-
-class PublicCatalogOut(BaseModel):
-    items: List[PublicCatalogItemOut] = Field(default_factory=list)
-    next_cursor: Optional[str] = None
-```
-
-### 3.5 Frontend Components
-
-**New and modified files**:
-
-| File | Purpose | Estimated Lines |
-|------|---------|-----------------|
-| `frontend/src/pages/profile/CreatorStorefrontPage.tsx` | Main storefront page with tabs | ~350 |
-| `frontend/src/pages/profile/StorefrontAboutTab.tsx` | About tab: bio, social links, featured content | ~120 |
-| `frontend/src/pages/profile/StorefrontPlansTab.tsx` | Plans tab: plan cards with subscribe CTA | ~150 |
-| `frontend/src/pages/profile/StorefrontShopTab.tsx` | Shop tab: catalog items grid | ~120 |
-| `frontend/src/pages/profile/FeaturedContentCarousel.tsx` | Featured content carousel/grid | ~80 |
-| `frontend/src/pages/profile/SocialLinksBar.tsx` | Social media icon links | ~40 |
-| `frontend/src/pages/settings/StorefrontSettingsCard.tsx` | Creator storefront settings (featured, links, accent) | ~150 |
-| `frontend/src/api/endpoints/storefront.ts` | API client wrappers for storefront endpoints | ~60 |
-
-**Component tree**:
-
-```
-CreatorStorefrontPage
-├── Cover Banner (cover_photo_url or banner_url)
-├── Profile Header
-│   ├── Avatar
-│   ├── Display Name + Title
-│   ├── Description / Bio
-│   ├── SocialLinksBar (Twitter, Instagram, YouTube icons)
-│   ├── Stats (followers, posts, videos)
-│   └── Follow Button / Subscribe CTA
-├── Tabs
-│   ├── "About" Tab
-│   │   ├── FeaturedContentCarousel (pinned posts/videos)
-│   │   ├── Full bio text
-│   │   └── Recent activity summary
-│   ├── "Videos" Tab
-│   │   └── StorefrontVideoGrid (existing component)
-│   ├── "Posts" Tab
-│   │   └── StorefrontPostsFeed (existing component)
-│   ├── "Plans" Tab (if has_subscription_plans)
-│   │   └── StorefrontPlansTab
-│   │       └── Plan cards with price, features, Subscribe button
-│   └── "Shop" Tab (if has_shop_items)
-│       └── StorefrontShopTab
-│           └── Catalog item cards with Add to Cart
-```
-
-### 3.6 Frontend Routes
-
-**Add to `frontend/src/App.tsx`**:
-
-```typescript
-<Route path="/creator/:identifier" element={<CreatorStorefrontPage />} />
-```
-
-Keep existing `/profile/:identifier` route as an alias (redirect to `/creator/:identifier`).
-
-### 3.7 Sidebar Navigation
-
-No sidebar entry needed -- storefront is accessed via direct URL or links from other pages (user mentions, follower lists, etc.).
-
-### 3.8 Files to Create
-
-| File | Purpose | Estimated Lines |
-|------|---------|-----------------|
-| `app/services/public_catalog.py` | Public catalog query service | ~60 |
-| `frontend/src/pages/profile/CreatorStorefrontPage.tsx` | Storefront page | ~350 |
-| `frontend/src/pages/profile/StorefrontAboutTab.tsx` | About tab | ~120 |
-| `frontend/src/pages/profile/StorefrontPlansTab.tsx` | Plans tab | ~150 |
-| `frontend/src/pages/profile/StorefrontShopTab.tsx` | Shop tab | ~120 |
-| `frontend/src/pages/profile/FeaturedContentCarousel.tsx` | Featured carousel | ~80 |
-| `frontend/src/pages/profile/SocialLinksBar.tsx` | Social links | ~40 |
-| `frontend/src/pages/settings/StorefrontSettingsCard.tsx` | Settings card | ~150 |
-| `frontend/src/api/endpoints/storefront.ts` | API wrappers | ~60 |
-| `frontend/e2e/creator-storefront.spec.ts` | E2E tests | ~500 |
-
-### 3.9 Files to Modify
-
-| File | Change |
-|------|--------|
-| `app/services/profile.py` | Add `get_featured_content`, `set_featured_content`, `update_social_links`, `update_storefront_settings` |
-| `app/routers/profile.py` | Add storefront, plans, shop, featured public endpoints; add creator settings endpoints |
-| `app/models.py` | Add storefront Pydantic models |
-| `app/main.py` | Register new public catalog endpoints if separate router |
-| `scripts/local-ddb-init.py` | Add ByCreator GSI to catalog table |
-| `frontend/src/App.tsx` | Add `/creator/:identifier` route |
-| `frontend/src/api/types.ts` | Add storefront TypeScript interfaces |
-| `frontend/src/pages/profile/PublicUserProfilePage.tsx` | Redirect to `/creator/:identifier` or replace with new page |
-
 ---
 
-## 4. Storefront Data Flow
+## 14. Storefront Data Flow
 
-### 4.1 Aggregated Storefront Endpoint
+### 14.1 Aggregated Storefront Endpoint
 
 `GET /profile/public/{identifier}/storefront` returns all data needed to render the full page in a single request, reducing round trips:
 
@@ -385,7 +853,7 @@ No sidebar entry needed -- storefront is accessed via direct URL or links from o
 5. Resolve featured content metadata (post titles, video thumbnails).
 6. Return `StorefrontOut` with all fields populated.
 
-### 4.2 Lazy-Loaded Tabs
+### 14.2 Lazy-Loaded Tabs
 
 Individual tab content (videos, posts, shop items) is loaded on tab activation via separate endpoints to avoid fetching all content upfront:
 
@@ -394,7 +862,7 @@ Individual tab content (videos, posts, shop items) is loaded on tab activation v
 - Plans tab: data already in `StorefrontOut.subscription_plans`
 - Shop tab: `GET /profile/public/{identifier}/shop` (new, paginated)
 
-### 4.3 Featured Content Resolution
+### 14.3 Featured Content Resolution
 
 Featured items are stored as `[{content_id, content_type, pinned_at}]` on the profile. The storefront endpoint resolves each to its metadata:
 
@@ -405,11 +873,11 @@ Unresolvable items (deleted content) are silently filtered out.
 
 ---
 
-## 5. E2E Test Plan
+## 15. E2E Test Plan
 
 **File**: `frontend/e2e/creator-storefront.spec.ts`
 
-### Section 527: Storefront Public API (4 tests)
+### Section 527: Storefront Public API (6 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
@@ -417,8 +885,10 @@ Unresolvable items (deleted content) are silently filtered out.
 | 527.2 | Storefront returns subscription plans | Create a plan for Alice; GET storefront; `subscription_plans` array has at least 1 item with `plan_id`, `price_cents` |
 | 527.3 | Storefront for non-existent user returns 404 | GET `/profile/public/nonexistent_user/storefront`; 404 |
 | 527.4 | Featured content endpoint returns pinned items | PUT featured with 2 items; GET `/profile/public/{id}/featured`; response has 2 items with `content_id`, `content_type` |
+| 527.5 | Storefront includes follow status for authenticated viewer | Bob GETs Alice's storefront; `is_following` field present (true or false) |
+| 527.6 | Storefront without auth returns profile without follow status | Unauthenticated GET; `is_following` is false |
 
-### Section 528: Storefront Creator Settings API (4 tests)
+### Section 528: Storefront Creator Settings API (6 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
@@ -426,16 +896,20 @@ Unresolvable items (deleted content) are silently filtered out.
 | 528.2 | Update storefront settings | PUT `/ui/profile/storefront-settings` with `accent_color=#FF0000, default_tab=videos`; 200; GET confirms changes |
 | 528.3 | Set featured content (max 6) | PUT `/ui/profile/featured` with 6 items; 200; GET returns 6 items |
 | 528.4 | Exceed featured limit returns 400 | PUT `/ui/profile/featured` with 7 items; 400 response |
+| 528.5 | Invalid accent color returns 422 | PUT settings with `accent_color=notacolor`; 422 |
+| 528.6 | Social link with unrecognized key is ignored | PUT with `{"twitter": "https://...", "fakebook": "https://..."}; "fakebook" not in response |
 
-### Section 529: Public Catalog API (3 tests)
+### Section 529: Public Catalog API (5 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
 | 529.1 | List creator's public shop items | Create catalog item for Alice; GET `/profile/public/{id}/shop`; response has item with `name`, `price_cents` |
 | 529.2 | Empty shop returns empty array | GET shop for user with no items; response `{ items: [], next_cursor: null }` |
 | 529.3 | Shop pagination works | Create 3 items; GET with `limit=2`; response has 2 items and `next_cursor`; GET with cursor returns remaining 1 item |
+| 529.4 | Draft items not shown in public shop | Create item with status=draft; GET shop; draft item not in results |
+| 529.5 | Shop items sorted by creation date (newest first) | Create 3 items at different times; GET shop; items ordered newest first |
 
-### Section 530: Storefront UI (5 tests)
+### Section 530: Storefront UI (7 tests)
 
 | # | Test Title | Assertion |
 |---|-----------|-----------|
@@ -444,14 +918,24 @@ Unresolvable items (deleted content) are silently filtered out.
 | 530.3 | Plans tab shows subscription plan cards | Create plan; navigate to storefront; click "Plans" tab; plan card visible with price |
 | 530.4 | Featured content carousel renders | Pin 2 items; navigate to storefront; featured section shows 2 content cards |
 | 530.5 | Follow button toggles follow state | Navigate as Bob to Alice's storefront; click Follow; button text changes to "Following" |
+| 530.6 | Shop tab shows catalog items | Create published item; navigate to storefront; click "Shop" tab; item card visible |
+| 530.7 | Tab URL parameter works | Navigate to `/creator/{id}?tab=plans`; Plans tab is active |
 
-**Total E2E tests: 16**
+### Section 531: Concurrent Access and Edge Cases (3 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 531.1 | Storefront loads correctly when user has no profile extensions | GET storefront for user with no social_links/featured; returns defaults (empty social_links, empty featured, default settings) |
+| 531.2 | Featured content with deleted item is filtered | Pin an item, delete the underlying content; GET storefront; featured list excludes deleted item |
+| 531.3 | Multiple concurrent settings updates do not corrupt | Two rapid PUT requests to different settings; final state reflects both changes |
+
+**Total E2E tests: 27**
 
 ---
 
-## 6. Security Considerations
+## 16. Security Considerations
 
-### 6.1 Auth Requirements
+### 16.1 Auth Requirements
 
 | Endpoint | Auth | Authorization |
 |----------|------|---------------|
@@ -463,33 +947,33 @@ Unresolvable items (deleted content) are silently filtered out.
 | `PUT /ui/profile/social-links` | `require_ui_session` | Creator only (own profile) |
 | `PUT /ui/profile/storefront-settings` | `require_ui_session` | Creator only (own profile) |
 
-### 6.2 Content Filtering
+### 16.2 Content Filtering
 
 - Public catalog endpoint only returns items with `status=published`. Draft, archived, and soft-deleted items are never exposed.
 - Locked posts show title and lock indicator but no body content to unauthenticated visitors.
 - Featured content references are validated -- deleted content IDs are silently filtered from the response.
 
-### 6.3 Input Validation
+### 16.3 Input Validation
 
 - `social_links`: each URL max 500 characters; only allowed key names accepted.
 - `accent_color`: validated as 7-character hex color string.
 - `default_tab`: restricted to `about|videos|posts|plans|shop`.
 - `featured_content.items`: max 6 items; `content_type` restricted to `post|video`.
 
-### 6.4 Rate Limiting
+### 16.4 Rate Limiting
 
 - Public storefront GET: 60 requests per IP per minute (same as profile).
 - Settings update endpoints: 20 per user per hour.
 - All endpoints inherit global rate limiter.
 
-### 6.5 Discoverability
+### 16.5 Discoverability
 
 - Deactivated or deleted profiles return 404 on all storefront endpoints (existing discoverability check in `get_public_profile` is reused).
 - Hidden profiles are accessible by direct URL but excluded from search results (existing behavior).
 
 ---
 
-## 7. Dependencies
+## 17. Dependencies
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|
@@ -505,7 +989,37 @@ Unresolvable items (deleted content) are silently filtered out.
 
 ---
 
-## 8. Acceptance Criteria
+## 18. Files to Create
+
+| File | Purpose | Estimated Lines |
+|------|---------|-----------------|
+| `app/services/public_catalog.py` | Public catalog query service | ~60 |
+| `frontend/src/pages/profile/CreatorStorefrontPage.tsx` | Storefront page | ~350 |
+| `frontend/src/pages/profile/StorefrontAboutTab.tsx` | About tab | ~120 |
+| `frontend/src/pages/profile/StorefrontPlansTab.tsx` | Plans tab | ~150 |
+| `frontend/src/pages/profile/StorefrontShopTab.tsx` | Shop tab | ~120 |
+| `frontend/src/pages/profile/FeaturedContentCarousel.tsx` | Featured carousel | ~80 |
+| `frontend/src/pages/profile/SocialLinksBar.tsx` | Social links | ~40 |
+| `frontend/src/pages/settings/StorefrontSettingsCard.tsx` | Settings card | ~150 |
+| `frontend/src/api/endpoints/storefront.ts` | API wrappers | ~60 |
+| `frontend/e2e/creator-storefront.spec.ts` | E2E tests | ~500 |
+
+## 19. Files to Modify
+
+| File | Change |
+|------|--------|
+| `app/services/profile.py` | Add `get_featured_content`, `set_featured_content`, `update_social_links`, `update_storefront_settings` |
+| `app/routers/profile.py` | Add storefront, plans, shop, featured public endpoints; add creator settings endpoints |
+| `app/models.py` | Add storefront Pydantic models |
+| `app/main.py` | Register new public catalog endpoints if separate router |
+| `scripts/local-ddb-init.py` | Add ByCreator GSI to catalog table |
+| `frontend/src/App.tsx` | Add `/creator/:identifier` route |
+| `frontend/src/api/types.ts` | Add storefront TypeScript interfaces |
+| `frontend/src/pages/profile/PublicUserProfilePage.tsx` | Redirect to `/creator/:identifier` or replace with new page |
+
+---
+
+## 20. Acceptance Criteria
 
 1. `/creator/{identifier}` renders a tabbed storefront with About, Videos, Posts, Plans, and Shop tabs.
 2. Subscription plans are displayed with pricing, features, and a Subscribe button.
@@ -515,5 +1029,5 @@ Unresolvable items (deleted content) are silently filtered out.
 6. Storefront settings (accent color, default tab) persist and render correctly.
 7. Deactivated/deleted profiles return 404 on all storefront endpoints.
 8. Existing `/profile/:identifier` route redirects to `/creator/:identifier`.
-9. All 16 E2E tests pass.
+9. All 27 E2E tests pass.
 10. Storefront loads all essential data in a single aggregated API call.

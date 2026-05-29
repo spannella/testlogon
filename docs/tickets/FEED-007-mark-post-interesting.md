@@ -64,6 +64,40 @@ Posts in `app_single_table` have various counter fields (`like_count`, `comment_
 
 ## 3. Technical Design
 
+### 3.0 Architecture Diagram
+
+```
+                   Signal Post Flow (Interesting / Not Interesting)
+  ┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
+  │  PostCard     │────>│ POST /posts/     │────>│  DynamoDB          │
+  │  (frontend)   │     │  {id}/signal     │     │  billing table     │
+  │               │     │  newsfeed.py     │     │                    │
+  │  Overflow:    │     │                  │     │  PK=USER#sub       │
+  │  "Interesting"│     │  1. Check exist  │     │  SK=POST_SIGNAL#   │
+  │  "Not for me" │     │     signal       │     │    {post_id}       │
+  │               │     │  2. Swap counter │     │  signal=interesting │
+  └──────┬───────┘     │  3. Put signal   │     │  /not_interesting   │
+         │              │  4. Hide if neg  │     └──────────────────┘
+         │              └──────────────────┘              │
+         v                       │                        v
+  ┌──────────────┐              │              ┌──────────────────┐
+  │  Undo Toast   │              │              │  DynamoDB          │
+  │  (10s for     │              │              │  app_single_table  │
+  │  "not for me")│              └─────────────>│                    │
+  │               │                             │  PK=POST#{post_id} │
+  └──────────────┘                             │  SK=META            │
+                                               │  interesting_count  │
+  ┌──────────────┐     ┌──────────────────┐    │  not_interesting_   │
+  │  Feed Query   │<────│ GET /feed        │    │  count              │
+  │  (filtered)   │     │  newsfeed.py     │    │  (ADD :1 / ADD :-1) │
+  │               │     │                  │    └──────────────────┘
+  │  hidden_ids   │     │  hidden_ids      │
+  │  excludes     │     │  includes posts  │
+  │  "not for me" │     │  marked "not     │
+  │  posts        │     │  interesting"    │
+  └──────────────┘     └──────────────────┘
+```
+
 ### 3.1 Data Model
 
 **Per-user signal** (billing table pattern):
@@ -78,6 +112,57 @@ Posts in `app_single_table` have various counter fields (`like_count`, `comment_
 |-------|------|-------------|
 | `interesting_count` | Number | Count of "interesting" signals |
 | `not_interesting_count` | Number | Count of "not interesting" signals |
+
+### 3.1b Detailed DynamoDB Access Patterns
+
+| Access Pattern | Table | Key Condition | Filter | Use Case |
+|---------------|-------|---------------|--------|----------|
+| Store signal | `billing` | PK=`USER#{sub}`, SK=`POST_SIGNAL#{post_id}` | — | PutItem; write signal record |
+| Get user signal for post | `billing` | PK=`USER#{sub}`, SK=`POST_SIGNAL#{post_id}` | — | GetItem; check for existing signal before toggle |
+| Remove signal | `billing` | PK=`USER#{sub}`, SK=`POST_SIGNAL#{post_id}` | — | DeleteItem |
+| List all signals by user | `billing` | PK=`USER#{sub}`, SK begins_with `POST_SIGNAL#` | — | Query; for analytics or export |
+| Increment signal counter | `app_single_table` | PK=`POST#{post_id}`, SK=`META` | — | UpdateItem ADD `interesting_count :1` |
+| Decrement signal counter | `app_single_table` | PK=`POST#{post_id}`, SK=`META` | — | UpdateItem ADD `interesting_count :-1` |
+
+**Example DynamoDB Item** (signal record — interesting):
+
+```json
+{
+  "pk": {"S": "USER#bob@test.local"},
+  "sk": {"S": "POST_SIGNAL#p_7a8b9c0d1e2f"},
+  "signal": {"S": "interesting"},
+  "created_at": {"N": "1748520500"},
+  "post_id": {"S": "p_7a8b9c0d1e2f"}
+}
+```
+
+**Example DynamoDB Item** (signal record — not interesting):
+
+```json
+{
+  "pk": {"S": "USER#charlie@test.local"},
+  "sk": {"S": "POST_SIGNAL#p_7a8b9c0d1e2f"},
+  "signal": {"S": "not_interesting"},
+  "created_at": {"N": "1748521200"},
+  "post_id": {"S": "p_7a8b9c0d1e2f"}
+}
+```
+
+**Example post item with signal counters** (app_single_table):
+
+```json
+{
+  "pk": {"S": "POST#p_7a8b9c0d1e2f"},
+  "sk": {"S": "META"},
+  "post_id": {"S": "p_7a8b9c0d1e2f"},
+  "user_id": {"S": "alice@test.local"},
+  "body": {"S": "Check out my new video!"},
+  "like_count": {"N": "5"},
+  "comment_count": {"N": "2"},
+  "interesting_count": {"N": "12"},
+  "not_interesting_count": {"N": "3"}
+}
+```
 
 ### 3.2 Backend Service
 
@@ -198,6 +283,146 @@ return {
     "interesting_count": int(post.get("interesting_count", 0)),
     "not_interesting_count": int(post.get("not_interesting_count", 0)),
 }
+```
+
+### 3.4b API Request/Response Examples
+
+**Mark post as interesting** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/posts/p_7a8b9c0d1e2f/signal \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_bob123; ui_csrf=csrf_tok_b; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_b" \
+  -d '{"signal": "interesting"}'
+```
+
+**Response (200)**:
+```json
+{"ok": true}
+```
+
+**Mark post as not interesting** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/posts/p_7a8b9c0d1e2f/signal \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_bob123; ui_csrf=csrf_tok_b; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_b" \
+  -d '{"signal": "not_interesting"}'
+```
+
+**Response (200)**:
+```json
+{"ok": true}
+```
+
+**Remove signal** (curl):
+
+```bash
+curl -X DELETE http://localhost:8000/ui/posts/p_7a8b9c0d1e2f/signal \
+  -H "Cookie: ui_session=sess_bob123; ui_csrf=csrf_tok_b; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_b"
+```
+
+**Response (200)**:
+```json
+{"ok": true}
+```
+
+**Error: signal own post** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/posts/p_alice_own_post/signal \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice123; ui_csrf=csrf_tok_a; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_a" \
+  -d '{"signal": "interesting"}'
+```
+
+**Response (400)**:
+```json
+{"detail": "Cannot signal your own post"}
+```
+
+**Post response with signal counts** (curl):
+
+```bash
+curl -X GET http://localhost:8000/ui/posts/p_7a8b9c0d1e2f \
+  -H "Cookie: ui_session=sess_alice123; ui_csrf=csrf_tok_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "post_id": "p_7a8b9c0d1e2f",
+  "user_id": "alice@test.local",
+  "body": "Check out my new video!",
+  "interesting_count": 12,
+  "not_interesting_count": 3,
+  "like_count": 5,
+  "comment_count": 2
+}
+```
+
+### 3.4c Pydantic Models
+
+```python
+# In app/models.py
+
+class PostSignalIn(BaseModel):
+    """Request model for submitting a post signal."""
+    signal: str = Field(
+        ...,
+        pattern=r"^(interesting|not_interesting)$",
+        description="Signal type: 'interesting' or 'not_interesting'"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {"signal": "interesting"}
+        }
+
+class PostSignalOut(BaseModel):
+    """Response for signal operations."""
+    ok: bool = True
+
+class PostWithSignalCounts(BaseModel):
+    """Post response that includes aggregate signal counts."""
+    post_id: str
+    user_id: str
+    body: Optional[str] = None
+    interesting_count: int = 0
+    not_interesting_count: int = 0
+    like_count: int = 0
+    comment_count: int = 0
+    # Plus all other standard post fields...
+```
+
+### 3.4d Frontend Component Tree
+
+```
+PostCard (modified)
+├── PostHeader
+│   └── OverflowMenu (DropdownMenu)
+│       ├── "Interesting" (new) → signalPost(id, "interesting")
+│       │   └── ThumbsUp icon + "Interesting" text
+│       ├── "Not for me" (new) → signalPost(id, "not_interesting") + hide
+│       │   └── ThumbsDown icon + "Not for me" text
+│       ├── "Hide" (from FEED-006)
+│       ├── "Report"
+│       └── ...
+├── PostBody
+├── SignalIndicator (optional, creator-only, shows counts)
+│   ├── InterestingBadge (count + ThumbsUp icon)
+│   └── NotInterestingBadge (count + ThumbsDown icon)
+├── PostActions (like, comment, tip, react)
+└── CommentsThread
+
+UndoToast (reused from FEED-006)
+├── "Post hidden" title (for "not for me")
+├── "Thanks for the feedback" description
+└── Undo Button → removeSignal(id) + unhide
 ```
 
 ### 3.5 Frontend Types
@@ -327,25 +552,42 @@ test.beforeAll(async ({ browser }) => {
 | 321.2 | Counter decremented after remove | GET post; signal count back to 0 |
 | 321.3 | Cannot signal own post | POST `/posts/{own_id}/signal`; 400; "Cannot signal your own post" |
 
-### 5.5 Section 322: Signal UI (3 tests)
+### 5.5 Section 322: Signal UI (5 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
 | 322.1 | "Interesting" option in overflow menu | Navigate to feed; open overflow; "Interesting" visible |
 | 322.2 | "Not for me" option in overflow menu | "Not for me" visible in overflow menu |
 | 322.3 | "Not for me" hides post and shows undo toast | Click "Not for me"; post hidden; toast with "Undo" visible |
+| 322.4 | Clicking undo restores post after "not for me" | Click "Undo" on toast; post reappears in feed; signal removed |
+| 322.5 | Signal options not shown on own post | Open overflow on own post; neither "Interesting" nor "Not for me" present |
+
+### 5.6 Section 323: Signal Toggle & Edge Cases (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 323.1 | Toggle from "interesting" to "not_interesting" | Signal "interesting" then "not_interesting"; interesting_count decremented, not_interesting incremented, post hidden |
+| 323.2 | Toggle from "not_interesting" to "interesting" | Signal "not_interesting" then "interesting"; counters swap; post unhidden and reappears in feed |
+| 323.3 | Same signal twice is idempotent | Signal "interesting" twice; counter stays at 1 |
+| 323.4 | Two users signal same post independently | Bob signals "interesting", Charlie signals "not_interesting"; interesting_count=1, not_interesting_count=1 |
+| 323.5 | Remove signal on deleted post | Creator deletes post; remove signal returns 200 (idempotent); no crash |
 
 ---
 
-## 6. Error Handling
+## 6. Error Handling Matrix
 
-| Scenario | Status | Detail |
-|----------|--------|--------|
-| Post not found | 404 | "Post not found" |
-| Signal own post | 400 | "Cannot signal your own post" |
-| Invalid signal value | 422 | Pydantic pattern validation |
-| Remove non-existent signal | 200 | No-op (idempotent) |
-| Duplicate signal | 200 | No-op (same signal already set) |
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Post not found | 404 | `not_found` | "Post not found" | Redirect to feed |
+| Signal own post | 400 | `cannot_signal_own` | "Cannot signal your own post" | Don't show signal options for own posts |
+| Invalid signal value | 422 | `validation_error` | Pydantic pattern validation error | Show inline error |
+| Remove non-existent signal | 200 | — | No-op (idempotent) | No action needed |
+| Duplicate signal (same type) | 200 | — | No-op (already set) | No action needed |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Redirect to login |
+| CSRF token mismatch | 403 | `csrf_invalid` | "Invalid CSRF token" | Refresh page |
+| Rate limited | 429 | `rate_limited` | "Too many requests" | Retry after backoff |
+| DDB counter update failed | 500 | `internal_error` | "Something went wrong" | Retry; counter reconciliation job will fix drift |
+| Post deleted while signaling | 404 | `not_found` | "Post not found" | Remove from cache; show toast |
 
 ---
 
@@ -355,20 +597,129 @@ test.beforeAll(async ({ browser }) => {
 - Signal data is private (users cannot see who signaled their posts)
 - Aggregate counts are public (visible on post response)
 - Counter manipulation prevented by server-side deduplication (one signal per user per post)
+- Rate limiting prevents bulk signal abuse (50 signals per minute per user)
+- No PII in signal records (only user_sub + post_id + signal type)
 
 ---
 
 ## 8. Performance Considerations
 
-| Concern | Mitigation |
-|---------|-----------|
-| Atomic counter updates | DynamoDB `ADD` operation is atomic; no race conditions |
-| Signal change (interesting → not_interesting) | Two counter updates in sequence; eventual consistency is acceptable |
-| Counter accuracy | Counters may drift by 1 in rare race conditions; periodic reconciliation job (future) |
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Atomic counter updates | < 10ms | DynamoDB `ADD` operation is atomic; no race conditions |
+| Signal change (interesting → not_interesting) | < 25ms | Two counter updates in sequence; eventual consistency is acceptable |
+| Counter accuracy | Drift < 1 per 10K signals | Counters may drift by 1 in rare race conditions; periodic reconciliation job (future) |
+| Signal check on feed render | No per-post check | Signals are not displayed to non-creators in feed; no extra read needed |
+| Creator signal count display | < 5ms extra per post | Counts stored on post item; no join needed |
+| Optimistic UI | Instant | Remove post from feed cache on "not for me" before API response |
+
+### 8.1 Rate Limiting
+
+- Signal creation: 50 operations per minute per user
+- Signal removal: 50 operations per minute per user
+- Rate limit keyed on user_sub (not IP) to prevent abuse from authenticated users
+
+### 8.2 Counter Reconciliation
+
+Future improvement: a scheduled job that recounts signals from the billing table and updates post counters. This corrects any drift from failed partial operations (e.g., signal stored but counter update timed out).
+
+```python
+# Future: app/services/signal_reconciliation.py
+def reconcile_signal_counts(post_id: str) -> None:
+    """Recount signals from source-of-truth (billing table) and update post counters."""
+    interesting = 0
+    not_interesting = 0
+    # Scan all POST_SIGNAL# records referencing this post
+    # (requires GSI or scan — design deferred to implementation)
+    T.app_single_table.update_item(
+        Key={"pk": f"POST#{post_id}", "sk": "META"},
+        UpdateExpression="SET interesting_count = :ic, not_interesting_count = :nic",
+        ExpressionAttributeValues={":ic": interesting, ":nic": not_interesting},
+    )
+```
 
 ---
 
-## 9. Dependencies
+## 9. Observability
+
+### 9.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `post_signal_submitted_total` | Counter | `signal_type` (interesting/not_interesting) | Total signals submitted |
+| `post_signal_removed_total` | Counter | `signal_type` | Total signals removed |
+| `post_signal_toggled_total` | Counter | `from`, `to` | Signal changed from one type to another |
+| `post_signal_latency_ms` | Histogram | `operation` (submit/remove) | Latency of signal operations |
+| `post_signal_counter_drift` | Gauge | — | Detected drift between counted signals and stored counter (from reconciliation) |
+
+### 9.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Signal submitted | INFO | `user_sub`, `post_id`, `signal`, `previous_signal` |
+| Signal removed | INFO | `user_sub`, `post_id`, `previous_signal` |
+| Signal own post rejected | WARN | `user_sub`, `post_id` |
+| Counter update failed | ERROR | `post_id`, `signal`, `error` |
+| Signal change (toggle) | INFO | `user_sub`, `post_id`, `from_signal`, `to_signal` |
+
+### 9.3 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High not_interesting rate | > 30% of signals for single creator's posts are "not_interesting" | Medium | Review content quality |
+| Signal counter drift detected | Reconciliation finds drift > 5 | Low | Auto-corrects; log for investigation |
+| Signal error rate | > 5% of signal operations fail | High | Check DDB throughput |
+| Bulk signal abuse | Single user submits > 200 signals/hour | High | Rate limit and review |
+
+### 9.4 Dashboard Queries
+
+**Signal distribution per day**:
+```promql
+sum(increase(post_signal_submitted_total[1d])) by (signal_type)
+```
+
+**Interesting-to-not-interesting ratio**:
+```promql
+sum(rate(post_signal_submitted_total{signal_type="interesting"}[1h]))
+  /
+sum(rate(post_signal_submitted_total{signal_type="not_interesting"}[1h]))
+```
+
+---
+
+## 10. Rollout Plan
+
+### 10.1 Feature Flag
+
+```python
+# app/core/settings.py
+post_signals_enabled: bool = os.environ.get("POST_SIGNALS_ENABLED", "true").lower() == "true"
+```
+
+### 10.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend | Deploy signal endpoints; flag OFF | 1 day | Unit tests pass |
+| Phase 2: Internal | Enable for internal accounts; collect data | 3 days | E2E pass; no DDB errors |
+| Phase 3: Canary 10% | Enable for 10% of users | 3 days | Signal volume healthy; no counter drift |
+| Phase 4: GA | Enable for all users | Permanent | Positive signal data quality |
+
+### 10.3 Migration
+
+No DDB migration needed. New SK prefix `POST_SIGNAL#` in billing table. New fields `interesting_count` / `not_interesting_count` on post items are added on first signal (DDB ADD creates attribute if missing with initial value).
+
+### 10.4 Rollback
+
+1. Set `POST_SIGNALS_ENABLED=false` — disables signal endpoints
+2. Existing signal records remain in billing table (dormant)
+3. Signal counters remain on post items but are not displayed when flag is off
+4. "Not interesting" hide records persist (managed by FEED-006 independently)
+5. Re-enabling restores all accumulated signal data
+
+---
+
+## 11. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|

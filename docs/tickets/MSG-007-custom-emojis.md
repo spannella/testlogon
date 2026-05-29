@@ -456,3 +456,307 @@ test.beforeAll(async ({ browser }) => {
 |--------|-----------|
 | MSG-011 (Emoji Reactions Enhancement) | Custom emoji in reaction picker |
 | FEED-004 (Emoji/GIF/Sticker Comments) | Custom emoji in comment composer |
+
+---
+
+## 9. Architecture Diagram
+
+```
+Custom Emoji Upload Flow:
+
+  User/Admin                   FastAPI Backend              S3 (moto mock)
+      |                             |                           |
+      | POST /ui/emojis/custom      |                           |
+      | (multipart: file + metadata)|                           |
+      |----------------------------->|                           |
+      |                             | Validate:                 |
+      |                             |  - file size <= 256KB     |
+      |                             |  - MIME: PNG or GIF       |
+      |                             |  - dimensions <= 128x128  |
+      |                             |  - shortcode unique/scope |
+      |                             |  - user under limit (100) |
+      |                             |                           |
+      |                             | Upload to S3:             |
+      |                             | emojis/{scope}/{id}.png   |
+      |                             |-------------------------->|
+      |                             |                           |
+      |                             | Write DDB record:         |
+      |                             | PK=USER#{sub}/GLOBAL      |
+      |                             | SK=EMOJI#{emoji_id}       |
+      |                             |                           |
+      | <-- 201 { emoji_id, url }   |                           |
+
+Custom Emoji Resolution Flow:
+
+  MessageBubble.tsx             FastAPI Backend              DynamoDB
+      |                             |                           |
+      | Detect :shortcode: in text  |                           |
+      |                             |                           |
+      | GET /ui/emojis/custom/      |                           |
+      |   resolve?codes=my_cat,logo |                           |
+      |----------------------------->|                           |
+      |                             | Query USER#{sub} for      |
+      |                             | each shortcode            |
+      |                             |-------------------------->|
+      |                             |                           |
+      |                             | For unresolved: query     |
+      |                             | GLOBAL scope              |
+      |                             |-------------------------->|
+      |                             |                           |
+      | <-- { my_cat: url, logo: url}|                          |
+      |                             |                           |
+      | Render <img> for each       |                           |
+      | resolved shortcode          |                           |
+
+Table Layout:
+
+  custom_emojis table
+  +------------------+------------------+-------------------+
+  | owner_scope (PK) | emoji_sk (SK)    | Key Attributes    |
+  +------------------+------------------+-------------------+
+  | USER#alice-uuid  | EMOJI#ce_abc123  | shortcode, name,  |
+  | USER#alice-uuid  | EMOJI#ce_def456  | image_url, alt,   |
+  | GLOBAL           | EMOJI#ce_789xyz  | category, content |
+  | GLOBAL           | EMOJI#ce_qrs012  | _type, file_size  |
+  +------------------+------------------+-------------------+
+
+  GSI1: owner_scope -> shortcode (uniqueness check)
+  GSI2: created_by -> created_at (user's emoji list)
+```
+
+---
+
+## 10. DynamoDB Access Patterns
+
+| Access Pattern | PK | SK / Index | Operation | Notes |
+|---|---|---|---|---|
+| Create custom emoji | `USER#{sub}` or `GLOBAL` | `EMOJI#{emoji_id}` | PutItem | ConditionExpression: attribute_not_exists(pk) |
+| Check shortcode uniqueness | GSI1: `owner_scope` | `shortcode` | Query | Must be unique within scope |
+| List user's emojis | `USER#{sub}` | begins_with `EMOJI#` | Query | Returns all personal emojis |
+| List global emojis | `GLOBAL` | begins_with `EMOJI#` | Query | Returns all admin-uploaded emojis |
+| Get single emoji | `owner_scope` | `EMOJI#{emoji_id}` | GetItem | For delete/detail view |
+| Count user's emojis | GSI2: `created_by` | -- | Query (Select: COUNT) | Enforce per-user limit |
+| Delete emoji | `owner_scope` | `EMOJI#{emoji_id}` | DeleteItem | Also deletes S3 object |
+| Resolve shortcode (personal) | GSI1: `USER#{sub}` | `shortcode` | Query | First check personal scope |
+| Resolve shortcode (global) | GSI1: `GLOBAL` | `shortcode` | Query | Fallback for unresolved |
+
+**Example DynamoDB Items:**
+
+Personal emoji:
+```json
+{
+  "owner_scope": "USER#alice-uuid",
+  "emoji_sk": "EMOJI#ce_abc123def456",
+  "emoji_id": "ce_abc123def456",
+  "shortcode": "my_cat",
+  "name": "My Cat",
+  "image_url": "/mock/s3/emojis/USER%23alice-uuid/ce_abc123def456.png",
+  "alt_text": "A cute orange cat",
+  "category": "Pets",
+  "created_by": "alice-uuid",
+  "created_at": 1748520000,
+  "content_type": "image/png",
+  "file_size_bytes": 45000
+}
+```
+
+---
+
+## 11. API Request/Response Examples
+
+**Upload a personal custom emoji:**
+```bash
+curl -X POST http://localhost:8000/ui/emojis/custom \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=tok_alice" \
+  -H "x-csrf-token: csrf_alice" \
+  -F "shortcode=my_cat" \
+  -F "name=My Cat" \
+  -F "alt_text=A cute orange cat" \
+  -F "category=Pets" \
+  -F "file=@/path/to/cat.png"
+
+# Response 201:
+{
+  "emoji_id": "ce_abc123def456",
+  "shortcode": "my_cat",
+  "name": "My Cat",
+  "image_url": "/mock/s3/emojis/USER%23alice-uuid/ce_abc123def456.png",
+  "alt_text": "A cute orange cat",
+  "category": "Pets",
+  "owner_scope": "USER#alice-uuid",
+  "created_by": "alice-uuid",
+  "created_at": 1748520000
+}
+```
+
+**Resolve custom shortcodes:**
+```bash
+curl "http://localhost:8000/ui/emojis/custom/resolve?codes=my_cat,company_logo" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_alice; ui_access_token=tok_alice"
+
+# Response 200:
+{
+  "my_cat": "/mock/s3/emojis/USER%23alice-uuid/ce_abc123def456.png",
+  "company_logo": "/mock/s3/emojis/GLOBAL/ce_789xyzqrs012.png"
+}
+```
+
+**Admin upload global emoji:**
+```bash
+curl -X POST http://localhost:8000/v1/admin/emojis \
+  -H "Cookie: ui_session=sess_charlie; ui_csrf=csrf_charlie; ui_access_token=tok_charlie" \
+  -H "x-csrf-token: csrf_charlie" \
+  -F "shortcode=company_logo" \
+  -F "name=Company Logo" \
+  -F "category=Branding" \
+  -F "file=@/path/to/logo.png"
+
+# Response 201:
+{
+  "emoji_id": "ce_789xyzqrs012",
+  "shortcode": "company_logo",
+  "owner_scope": "GLOBAL",
+  "image_url": "/mock/s3/emojis/GLOBAL/ce_789xyzqrs012.png"
+}
+```
+
+---
+
+## 12. Pydantic Models
+
+```python
+# -- Custom Emojis (MSG-007) -- Add to app/models.py
+
+class CustomEmojiOut(BaseModel):
+    emoji_id: str
+    shortcode: str
+    name: str
+    image_url: str
+    alt_text: str = ""
+    category: str = "Uncategorized"
+    owner_scope: str
+    created_by: str
+    created_at: int = 0
+    content_type: str = "image/png"
+    file_size_bytes: int = 0
+
+class CustomEmojiListOut(BaseModel):
+    emojis: list[CustomEmojiOut] = Field(default_factory=list)
+    personal_count: int = 0
+    global_count: int = 0
+
+class ResolveShortcodesOut(BaseModel):
+    resolved: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of shortcode -> image_url"
+    )
+```
+
+---
+
+## 13. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|---|---|---|---|
+| File exceeds 256KB | 400 | `file_too_large` | "File size exceeds maximum of 256KB." | Compress or resize image |
+| Invalid MIME type (JPEG, BMP, etc.) | 400 | `invalid_content_type` | "Only PNG and GIF images are allowed." | Convert to PNG or GIF |
+| Image dimensions exceed 128x128 | 400 | `image_too_large` | "Image dimensions must be 128x128 pixels or smaller." | Resize image |
+| Duplicate shortcode in scope | 409 | `shortcode_exists` | "Shortcode already exists in this scope." | Choose a different shortcode |
+| User exceeds 100 emoji limit | 400 | `emoji_limit_reached` | "Maximum custom emoji limit reached (100)." | Delete existing emojis |
+| Invalid shortcode characters | 422 | `validation_error` | "Shortcode must be 2-32 alphanumeric characters or underscores." | Fix shortcode format |
+| Shortcode shadows built-in emoji | 409 | `shortcode_reserved` | "This shortcode is reserved for a built-in emoji." | Choose a different name |
+| Delete non-existent emoji | 404 | `emoji_not_found` | "Custom emoji not found." | Refresh emoji list |
+| Non-owner delete attempt | 403 | `forbidden` | "You can only delete your own custom emojis." | Contact admin |
+| Non-admin uploading global | 403 | `admin_required` | "Admin access required for global emojis." | Use personal upload |
+
+---
+
+## 14. Frontend Component Tree (Detailed)
+
+```
+CustomEmojisPage (settings route: /settings/emojis)
+  +-- PageHeader ("Custom Emojis")
+  +-- UploadSection
+  |     +-- Form
+  |     |     +-- FileInput (accept="image/png,image/gif", max 256KB)
+  |     |     +-- ImagePreview (canvas-based dimension check)
+  |     |     +-- ShortcodeInput (pattern: [a-z0-9_]{2,32})
+  |     |     +-- NameInput
+  |     |     +-- AltTextInput
+  |     |     +-- CategorySelect (dropdown with existing categories + custom)
+  |     |     +-- UploadButton
+  |     +-- UsageMeter ("45 / 100 emojis used")
+  |
+  +-- EmojiGrid
+        +-- For each personal emoji:
+              +-- EmojiCard
+                    +-- <img> (64x64 display)
+                    +-- Shortcode label (:my_cat:)
+                    +-- Category badge
+                    +-- DeleteButton (with confirmation dialog)
+
+EmojiPicker (modified from MSG-006)
+  +-- CategoryTabs
+  |     +-- ... existing Unicode categories ...
+  |     +-- "Custom" tab (star icon)
+  |
+  +-- CustomEmojiSection (when Custom tab active)
+        +-- PersonalEmojis group
+        |     +-- Grid of <img> emoji buttons
+        +-- GlobalEmojis group
+        |     +-- Grid of <img> emoji buttons
+        +-- UploadLink ("Upload new emoji ->")
+```
+
+---
+
+## 15. Observability & Monitoring
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `custom_emoji_uploads_total` | Counter | `scope` (personal/global), `status` | Upload attempts |
+| `custom_emoji_deletes_total` | Counter | `scope` | Deletion events |
+| `custom_emoji_resolve_requests_total` | Counter | -- | Shortcode resolution requests |
+| `custom_emoji_resolve_hit_rate` | Gauge | -- | % of shortcodes successfully resolved |
+| `custom_emoji_s3_upload_latency_ms` | Histogram | -- | S3 upload duration |
+
+### Alerting Rules
+
+| Alert | Condition | Severity |
+|---|---|---|
+| S3 upload failure rate | > 10% errors in 5 minutes | P2 |
+| Resolution endpoint latency | P95 > 1 second for 10 minutes | P3 |
+
+---
+
+## 16. Rollout Plan
+
+| Phase | Scope | Duration | Success Criteria |
+|---|---|---|---|
+| Phase 1: DDB table + service | Deploy backend without frontend | 1 day | API endpoints work, S3 uploads succeed |
+| Phase 2: Admin global emojis | Admin can upload global emojis | 1 day | 5+ global emojis uploaded |
+| Phase 3: Personal uploads | Users can upload personal emojis | 1 day | Upload + list + delete work |
+| Phase 4: EmojiPicker integration | Custom tab in picker | 1 day | Custom emojis selectable in conversations |
+| Phase 5: Message rendering | Inline <img> rendering | 1 day | Custom emojis display in messages |
+| Phase 6: Reactions integration | Custom emoji in reaction picker | 1 day | Custom reactions work |
+
+### Feature Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `CUSTOM_EMOJIS_ENABLED` | `true` | Master enable for custom emoji feature |
+| `CUSTOM_EMOJIS_PERSONAL_ENABLED` | `true` | Allow personal emoji uploads |
+| `CUSTOM_EMOJIS_IN_REACTIONS` | `true` | Allow custom emojis as reactions |
+
+---
+
+## 17. Performance Considerations
+
+| Concern | Mitigation | Impact |
+|---|---|---|
+| Resolution API called per message with `:...:` | React Query cache (staleTime: 10 min) | Cached after first resolve |
+| Batch resolution (multiple shortcodes per request) | Single API call with comma-separated codes | 1 request vs N requests |
+| S3 image load for custom emoji grid | Browser HTTP cache (S3 cache headers) | Cached after first load |
+| EmojiPicker custom tab fetch | React Query (staleTime: 5 min) | Single fetch per session |
+| Pillow image dimension check at upload | < 50ms for 128x128 PNG | Negligible |
+| Custom emoji count check (GSI2 query) | 1 RCU per upload | Constant cost |

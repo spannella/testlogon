@@ -562,3 +562,206 @@ This ensures cache isolation between the delegate's own conversations and the ma
 8. Multiple delegates can manage the same creator's chat simultaneously.
 9. Delegate mode UI shows "Managing @creator" banner with creator selector.
 10. All 15 E2E tests pass.
+
+---
+
+## 9. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                   Chat Delegation Architecture                      │
+└─────────────────────────────────────────────────────────────────────┘
+
+  Delegate User                      Creator Account
+       │                                  │
+       │  "Managing @creator" mode        │  Owner of conversations
+       │                                  │
+       ▼                                  │
+  ┌──────────────────────────────────┐    │
+  │ Frontend (delegate mode)         │    │
+  │                                  │    │
+  │ authStore.managingCreatorId set  │    │
+  │ API calls pass creator_id header │    │
+  │ Delegate banner shown            │    │
+  └──────────┬───────────────────────┘    │
+             │                            │
+             ▼                            │
+  ┌──────────────────────────────────┐    │
+  │ Backend (messaging.py)           │    │
+  │                                  │    │
+  │ require_delegate_permission()    │    │
+  │ ├── chat_read → list, read      │    │
+  │ ├── chat_respond → send         │    │
+  │ └── append delegate_tag         │    │
+  │                                  │    │
+  │ Encrypted msgs → "[Encrypted]"  │    │
+  │ Audit → delegate_sub logged     │    │
+  └──────────┬───────────────────────┘    │
+             │                            │
+             ▼                            │
+  ┌──────────────────────────────────┐    │
+  │ SSE Stream                       │    │
+  │                                  │    │
+  │ Delegate subscribes to creator's │    │
+  │ conversation events              │    │
+  │ Revocation → close connection    │    │
+  └──────────────────────────────────┘    │
+```
+
+---
+
+## 10. DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | Notes |
+|----------------|-------|----|----|-------|
+| Check delegate permission | `delegates` | `CREATOR#{creator_id}` | `DELEGATE#{delegate_id}` | Verify permission set |
+| List creator's conversations | `conversations` | `USER#{creator_id}` | begins_with `CONV#` | Delegate reads as creator |
+| Send delegated message | `messages` | `CONV#{conv_id}` | `MSG#{msg_id}` | Added: delegate_sub, delegate_tag |
+| Audit delegated messages | `messages` | `CONV#{conv_id}` | begins_with `MSG#` | Filter: delegate_sub is not null |
+| Revoke delegate access | `delegates` | `CREATOR#{creator_id}` | `DELEGATE#{delegate_id}` | DELETE item |
+
+---
+
+## 11. API Request/Response Examples
+
+```bash
+# --- GET /ui/messaging/conversations (as delegate for creator) ---
+curl http://localhost:8000/ui/messaging/conversations \
+  -H "Cookie: ui_session=delegate_sess; ui_access_token=eyJ..." \
+  -H "X-Managing-Creator: creator-sub-001"
+
+# Response 200:
+{
+  "conversations": [
+    {
+      "conversation_id": "conv-abc",
+      "participants": ["creator-sub-001", "fan-001"],
+      "last_message_at": 1748534400,
+      "last_message": {"text": "Hey creator!", "sender": "fan-001"}
+    }
+  ]
+}
+
+# --- POST /ui/messaging/conversations/{conv_id}/messages (as delegate) ---
+curl -X POST http://localhost:8000/ui/messaging/conversations/conv-abc/messages \
+  -H "Cookie: ui_session=delegate_sess; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "X-Managing-Creator: creator-sub-001" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Thanks for reaching out! -- sent by team"}'
+
+# Response 201:
+{
+  "message_id": "m_abc123",
+  "sender": "creator-sub-001",
+  "text": "Thanks for reaching out! -- sent by team",
+  "delegate_tag": "TeamMember",
+  "delegate_sub": "delegate-sub-001",
+  "created_at": 1748534500
+}
+```
+
+---
+
+## 12. Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| No delegation permission | 403 | `NO_DELEGATE_PERMISSION` | "You don't have permission to manage this creator's chat." | Request permission from creator |
+| chat_read only, tried to send | 403 | `CHAT_RESPOND_REQUIRED` | "You only have read access to this chat." | Request chat_respond permission |
+| Creator not found | 404 | `CREATOR_NOT_FOUND` | "Creator account not found." | Verify creator ID |
+| Permission revoked mid-session | 403 | `PERMISSION_REVOKED` | "Your delegation access has been revoked." | SSE closes; redirect to own account |
+| Encrypted message access | 200 | (placeholder shown) | "[Encrypted message]" | Cannot decrypt; intended behavior |
+| Conversation not found | 404 | `CONVERSATION_NOT_FOUND` | "Conversation not found." | Verify conversation ID |
+
+---
+
+## 13. Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class DelegatedMessageIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+    delegate_tag: Optional[str] = Field(default=None, max_length=50)
+
+class DelegatedMessageOut(BaseModel):
+    message_id: str
+    sender: str
+    text: str
+    delegate_tag: Optional[str] = None
+    delegate_sub: str
+    created_at: int
+
+class DelegateChatAuditOut(BaseModel):
+    messages: list[DelegatedMessageOut]
+    total_count: int
+    delegate_name: str
+```
+
+---
+
+## 14. Observability & Monitoring
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `delegate_chat_reads_total` | Counter | `creator_id` | Conversations read by delegates |
+| `delegate_chat_sends_total` | Counter | `creator_id`, `delegate_id` | Messages sent by delegates |
+| `delegate_sse_connections_gauge` | Gauge | -- | Active delegate SSE streams |
+| `delegate_permission_denied_total` | Counter | `reason` | Rejected delegate attempts |
+
+### Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| High delegate send rate | > 100 sends/min per delegate | P3 |
+| Permission denied spike | > 20 denials in 10min | P2 |
+
+---
+
+## 15. Rollout Plan
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `CHAT_DELEGATION_ENABLED` | `false` | Master kill switch |
+| `DELEGATE_TAG_ENABLED` | `true` | Show delegate attribution on messages |
+| `DELEGATE_SSE_ENABLED` | `true` | Real-time events for delegates |
+
+### Canary
+
+1. **Week 1**: Enable for 5 test creators. Verify read/send/audit flow.
+2. **Week 2**: Enable for all creators. Monitor SSE connection count.
+3. **Week 3**: Full rollout.
+
+---
+
+## 16. Performance Considerations
+
+| Concern | Mitigation |
+|---------|-----------|
+| Delegate SSE connections scale | Each delegate opens 1 SSE stream; reuse creator's event bus |
+| Permission check on every request | Cache delegate permissions (30s TTL) in backend |
+| Audit query on large conversation | Paginated query; filter delegate_sub != null |
+| Multiple delegates same creator | Each gets own SSE; no broadcast needed (SSE is per-user) |
+
+---
+
+## 17. Expanded E2E Test Details
+
+### Additional Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| E1 | Delegate sees new message in real-time | SSE delivers message; conversation list updates |
+| E2 | Permission revoked while viewing | SSE closes; next API call returns 403 |
+| E3 | Delegate sends to encrypted conversation | Message rejected or sent as plaintext with warning |
+| E4 | Multiple delegates send simultaneously | Both messages appear with correct delegate_tags |
+
+### Negative Tests (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| N1 | Send without X-Managing-Creator header | 400 or treated as own account |
+| N2 | Delegate tries to delete creator's message | 403 |
+| N3 | Expired delegation tries to read | 403 after expiry |

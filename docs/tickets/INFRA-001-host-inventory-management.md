@@ -606,7 +606,100 @@ Host records may contain internal IP addresses or DNS names that reveal infrastr
 
 ---
 
-## 7. Migration & Rollback
+## 7. Observability & Monitoring
+
+### 7.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `host_inventory_created_total` | Counter | `protocol`, `source` | Hosts created (manual, csv_import, ec2_auto, k8s_auto) |
+| `host_inventory_deleted_total` | Counter | `protocol` | Hosts deleted |
+| `host_inventory_csv_import_total` | Counter | `result` (success/partial/failed) | CSV import attempts |
+| `host_inventory_csv_rows_total` | Counter | `status` (imported/skipped/error) | Per-row import results |
+| `host_inventory_connection_total` | Counter | `protocol` | Quick-connect events |
+| `host_inventory_list_latency_seconds` | Histogram | `sort_by`, `has_filter` | List hosts query latency |
+| `host_inventory_count` | Gauge | `protocol` | Current host count per user (sampled) |
+
+### 7.2 Structured Log Events
+
+```json
+{"logger": "remote_hosts", "level": "info", "event": "host_created", "user_sub": "alice-uuid", "host_id": "h_abc123", "protocol": "ssh", "hostname": "10.0.1.10", "source": "manual"}
+
+{"logger": "remote_hosts", "level": "info", "event": "csv_import_complete", "user_sub": "alice-uuid", "imported": 15, "skipped": 2, "errors": 1, "total_rows": 18}
+
+{"logger": "remote_hosts", "level": "info", "event": "connection_recorded", "user_sub": "alice-uuid", "host_id": "h_abc123", "protocol": "ssh", "connection_count": 42}
+
+{"logger": "remote_hosts", "level": "warn", "event": "csv_import_too_large", "user_sub": "alice-uuid", "row_count": 250, "max_allowed": 200}
+```
+
+### 7.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| CSV import failure rate | `rate(host_inventory_csv_import_total{result=failed}[1h]) > 10` | Warning | Investigate CSV format issues |
+| Excessive host creation | User creates > 100 hosts in 1 hour | Warning | Possible automation abuse |
+| DDB throttling | ThrottledRequestCount > 0 on `remote_hosts` | Critical | Increase auto-scaling |
+| List query slow | `p99(host_inventory_list_latency_seconds) > 1s` | Warning | Check GSI health |
+
+---
+
+## 8. Rollout Plan
+
+### Phase 1: Backend (Days 1-2)
+
+- **Feature flag**: `REMOTE_HOSTS_ENABLED=false`
+- Deploy DDB table, service, router behind flag
+- All endpoints return 404 when flag is off
+- Run integration tests against staging
+
+### Phase 2: Internal Beta (Days 3-4)
+
+- **Feature flag**: `REMOTE_HOSTS_ENABLED=true` for internal users
+- Deploy frontend pages
+- QA exercises full CRUD + CSV import + quick-connect
+- Validate VNC `_resolve_target()` extension
+
+### Phase 3: GA (Day 5+)
+
+- **Feature flag**: `REMOTE_HOSTS_ENABLED=true` for all users
+- Monitor creation patterns and DDB capacity
+- **Rollback**: Set `REMOTE_HOSTS_ENABLED=false`; data preserved
+
+---
+
+## 9. Performance Considerations
+
+### 9.1 Latency Targets
+
+| Operation | Target p50 | Target p99 | Notes |
+|-----------|-----------|-----------|-------|
+| Create host | < 30ms | < 80ms | Single put_item |
+| Get host | < 10ms | < 40ms | Single get_item |
+| Update host | < 20ms | < 60ms | Single update_item |
+| List hosts (page) | < 40ms | < 120ms | GSI query, Limit=50 |
+| CSV import (100 rows) | < 2s | < 5s | Batch writes (25 per batch) |
+| Record connection | < 15ms | < 50ms | Single update_item |
+
+### 9.2 DynamoDB Costs
+
+| Operation | RCU | WCU | Notes |
+|-----------|-----|-----|-------|
+| Get host | 0.5 | — | Single item eventual read |
+| List hosts (50) | 5.0 | — | GSI query |
+| Create host | — | 1.0 | Single put |
+| CSV import (100) | — | 100 | 4 batch_write calls of 25 |
+| Record connection | — | 1.0 | Single update |
+
+### 9.3 Scalability
+
+- **Per-user host count**: Default max 500 hosts per user (configurable). Most users expected < 50 hosts.
+- **CSV import batch writes**: `batch_write_item` sends 25 items per batch. 200-row import = 8 batches, ~2s.
+- **GSI hot partitions**: Each user is a separate partition. No cross-user hot key concerns.
+- **Connection tracking writes**: `record_connection` is fire-and-forget (no retry). If write fails, connection still succeeds.
+
+---
+
+## 10. Migration & Rollback
 
 ### 7.1 DDB Changes
 

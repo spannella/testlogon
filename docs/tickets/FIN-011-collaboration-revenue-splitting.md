@@ -522,11 +522,154 @@ A content item can only be assigned to one active collaboration at a time. The `
 | 582.3 | Split history shows split records | Split history table has rows with date, amount, and source |
 | 582.4 | Dispute button opens dispute dialog | Click "Dispute" on a split row; dialog with reason textarea appears |
 
-**Total E2E tests: 16**
+### Section 583: Collaboration Edge Cases (5 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 583.1 | Split with 3-way collaboration | 3 participants with 50/30/20 split; tip $10; amounts are $5, $3, $2 |
+| 583.2 | Split with rounding (odd amounts) | 60/40 split on $1.01; one gets $0.61, other $0.40 (total = $1.01 exact) |
+| 583.3 | Revoked collaboration stops new splits | Revoke collab; new tip on content; no split executed (single credit to owner) |
+| 583.4 | Concurrent tips trigger independent splits | Two tips arrive simultaneously; each creates separate split record |
+| 583.5 | Zero-amount split (free content) | Tip $0 scenario or zero-revenue event; no split record created |
+
+**Total E2E tests: 21**
 
 ---
 
-## 6. Security Considerations
+## 6. API Request/Response Examples
+
+**Assign content to collaboration** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/collaborations/collab_abc/content \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_a" \
+  -d '{"content_id": "post_xyz", "content_type": "post"}'
+```
+
+**Response (200)**:
+```json
+{"ok": true, "content_id": "post_xyz", "collaboration_id": "collab_abc"}
+```
+
+**Get split history** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/ui/collaborations/collab_abc/splits?limit=20" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "splits": [
+    {
+      "split_id": "split_001",
+      "gross_cents": 1000,
+      "distributions": [
+        {"user_id": "alice@test.local", "amount_cents": 600, "ledger_entry_id": "le_a1"},
+        {"user_id": "bob@test.local", "amount_cents": 400, "ledger_entry_id": "le_b1"}
+      ],
+      "source_type": "tip",
+      "source_id": "tip_xyz",
+      "created_at": 1748520500,
+      "dispute_status": null
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+**File dispute** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/collaborations/collab_abc/splits/split_001/dispute \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_bob; ui_csrf=csrf_b; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_b" \
+  -d '{"reason": "Split percentage was incorrect for this content"}'
+```
+
+**Response (200)**:
+```json
+{"ok": true, "dispute_status": "disputed"}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Collaboration not active | 400 | `not_active` | "Collaboration is not active" | Wait for acceptance |
+| Content already assigned | 409 | `already_assigned` | "Content already in another collaboration" | Unassign first |
+| Not a participant | 403 | `forbidden` | "Not a collaboration participant" | Only participants allowed |
+| Split not found | 404 | `not_found` | "Split record not found" | Check split ID |
+| Dispute already filed | 409 | `already_disputed` | "Dispute already filed on this split" | Await resolution |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Log in |
+
+---
+
+## 8. Observability
+
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `collab_split_executed_total` | Counter | `source_type` | Splits executed |
+| `collab_split_amount_cents` | Histogram | — | Split gross amounts |
+| `collab_dispute_filed_total` | Counter | — | Disputes filed |
+| `collab_dispute_resolved_total` | Counter | `resolution` | Disputes resolved |
+| `collab_content_assigned_total` | Counter | `content_type` | Content assignments |
+
+### 8.2 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Dispute rate high | > 5% of splits disputed | Medium | Review collaboration terms |
+| Split rounding error | Any split where sum != gross | Critical | Bug in split calculation |
+| Unresolved disputes > 7d | > 10 disputes open for > 7 days | Medium | Admin review backlog |
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flag
+
+```python
+collab_revenue_split_enabled: bool = os.environ.get("COLLAB_REVENUE_SPLIT_ENABLED", "true").lower() == "true"
+```
+
+### 9.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend | Deploy split logic; flag OFF | 2 days | Unit tests pass |
+| Phase 2: Internal | Enable for internal accounts | 3 days | All 21 E2E pass |
+| Phase 3: Canary 10% | Enable for 10% of collaborations | 3 days | No rounding errors; no disputes |
+| Phase 4: GA | Enable for all | Permanent | Financial integrity verified |
+
+### 9.3 Rollback
+
+1. Set flag OFF — tips on collab content credit only the content owner (no split)
+2. Existing split records preserved for audit
+3. Disputes remain accessible
+
+---
+
+## 10. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Split calculation | < 5ms | Integer arithmetic only; no external calls |
+| Ledger entry writes | < 50ms for 3 participants | Sequential PutItem calls |
+| Split history query | < 50ms | GSI on collab_id + created_at |
+| Content assignment check | < 10ms | GetItem by content_id |
+
+---
+
+## 11. Security Considerations
 
 ### 6.1 Auth Requirements
 

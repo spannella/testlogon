@@ -73,6 +73,47 @@ From other tickets:
 
 ## 3. Technical Design
 
+### 3.0 Architecture Diagram
+
+```
+                    Enhanced Post Composer Architecture
+  ┌───────────────────────────────────────────────────────┐
+  │                     CreatePost.tsx                      │
+  │  ┌─────────────────────────────────────────────────┐   │
+  │  │  TextArea (body input + emoji insertion)         │   │
+  │  │  CharacterCount: {count} / 5,000                │   │
+  │  │  DraftIndicator: "Draft restored from Xm ago"   │   │
+  │  └─────────────────────────────────────────────────┘   │
+  │  ┌─────────────────────────────────────────────────┐   │
+  │  │  ContentTypeToolbar                              │   │
+  │  │  [📷] [📁] [📊] [🎥] [😀] [GIF] [📌] [📅] [⏱]  │   │
+  │  │  [🔒 Lock] [🕐 Schedule] [👁 Preview]            │   │
+  │  └─────────────────────────────────────────────────┘   │
+  │  ┌─────────────────────────────────────────────────┐   │
+  │  │  Sub-Composer Panel (one at a time)              │   │
+  │  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │   │
+  │  │  │ PollComp  │  │ GifPicker│  │FindDateComp  │  │   │
+  │  │  └──────────┘  └──────────┘  └──────────────┘  │   │
+  │  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │   │
+  │  │  │StickerPkr│  │CountComp │  │EmojiPicker   │  │   │
+  │  │  └──────────┘  └──────────┘  └──────────────┘  │   │
+  │  └─────────────────────────────────────────────────┘   │
+  │  ┌─────────────────────────────────────────────────┐   │
+  │  │  Preview Mode (conditional)                      │   │
+  │  │  PostCard(isPreview=true) → disabled actions     │   │
+  │  └─────────────────────────────────────────────────┘   │
+  │  [Publish Button]                                       │
+  └───────────────────────────────────────────────────────┘
+           │                                    │
+           │  localStorage                      │  POST /ui/posts
+           v                                    v
+  ┌─────────────────┐              ┌──────────────────┐
+  │  Draft Storage    │              │  Backend          │
+  │  feed_post_draft  │              │  newsfeed.py      │
+  │  (debounced 1s)   │              │  create_post()    │
+  └─────────────────┘              └──────────────────┘
+```
+
 ### 3.1 Content Type Architecture
 
 The composer supports multiple content types, but only one can be active at a time:
@@ -366,24 +407,43 @@ test.beforeAll(async ({ browser }) => {
 | 334.3 | Draft cleared on publish | Type + publish; localStorage draft removed |
 | 334.4 | Discard draft button works | Load page with draft; click "Discard"; textarea empty; draft removed |
 
-### 5.5 Section 335: Character Count & Preview (3 tests)
+### 5.5 Section 335: Character Count & Preview (5 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
 | 335.1 | Character count updates on input | Type "hello"; count shows "5 / 5,000" |
-| 335.2 | Character count turns red over limit | Paste 5001+ characters; count text has destructive class; publish disabled |
-| 335.3 | Preview mode renders post card | Type text; click Preview; PostCard-style rendering visible; "Edit" button returns to editor |
+| 335.2 | Character count turns yellow at 90% | Paste 4500+ characters; count text has yellow/warning style |
+| 335.3 | Character count turns red over limit | Paste 5001+ characters; count text has destructive class; publish disabled |
+| 335.4 | Preview mode renders post card | Type text; click Preview; PostCard-style rendering visible; interactions disabled |
+| 335.5 | Edit button returns from preview | Click "Edit" in preview mode; textarea visible again with same text |
+
+### 5.6 Section 336: Composer Edge Cases & Negative Tests (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 336.1 | Publish disabled when empty | No text or media; Publish button disabled |
+| 336.2 | Switch content type clears previous | Select Poll; add options; switch to GIF; poll composer hidden; switch back to Poll; options cleared |
+| 336.3 | Draft survives navigation away and back | Type text; navigate to /messages; navigate back to /feed; draft restored |
+| 336.4 | Multiple emojis at cursor position | Place cursor mid-text; insert emoji; emoji appears at cursor position, not at end |
+| 336.5 | Mobile toolbar overflow | Set viewport to 375px width; overflow items in "More" dropdown; all content types accessible |
 
 ---
 
-## 6. Error Handling
+## 6. Error Handling Matrix
 
-| Scenario | Handling |
-|----------|----------|
-| localStorage quota exceeded | Silently fail draft save (try-catch); show console warning |
-| Corrupt draft JSON | Discard corrupt draft; start fresh |
-| Over character limit | Publish button disabled; red character count |
-| No content (empty text + no media) | Publish button disabled |
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| localStorage quota exceeded | N/A (client) | — | Silent fail; console warning | Draft not saved; user can still publish |
+| Corrupt draft JSON | N/A (client) | — | Silent discard of corrupt draft | Start with empty composer |
+| Over character limit | N/A (client) | — | Red counter; "Publish" disabled | Delete text to come under 5000 chars |
+| No content (empty text + no media) | N/A (client) | — | "Publish" disabled | Add text or media |
+| Text exceeds server limit | 400 | `body_too_long` | "Post body exceeds maximum length" | Trim text |
+| Invalid image URL from GIF picker | 422 | `validation_error` | "Invalid image URL" | Re-select GIF |
+| Publish fails (network error) | N/A (client) | — | Toast: "Failed to publish. Your draft has been saved." | Draft preserved; retry |
+| Post creation rate limit | 429 | `rate_limited` | "Too many posts. Please wait." | Wait and retry |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Redirect to login |
+| CSRF token mismatch | 403 | `csrf_invalid` | "Invalid CSRF token" | Refresh page; draft preserved in localStorage |
+| Stale session during draft | 401 | `unauthorized` | "Session expired. Your draft has been saved." | Login; draft restored from localStorage |
 
 ---
 
@@ -392,21 +452,280 @@ test.beforeAll(async ({ browser }) => {
 - Draft stored in localStorage (client-side only, never sent to server until publish)
 - Preview mode renders mock PostCard (no API calls)
 - Emoji/GIF/sticker content goes through normal post creation validation
+- localStorage drafts cleared on logout to prevent data leakage between users on shared devices
+- GIF picker external URLs validated against allowlisted domains (e.g., giphy.com, tenor.com)
+- Character limit enforced both client-side and server-side (defense in depth)
 
 ---
 
 ## 8. Performance Considerations
 
-| Concern | Mitigation |
-|---------|-----------|
-| Draft save on every keystroke | Debounced to 1 second; only saves to localStorage |
-| EmojiPicker lazy loading | Dynamic import on first open; cached after |
-| GifPicker API calls | Debounced search (300ms); trending cached |
-| Preview mode re-rendering | React.memo on PostCard; preview only renders when mode toggled |
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Draft save on every keystroke | < 1ms per save | Debounced to 1 second; only saves to localStorage (sync, fast) |
+| EmojiPicker lazy loading | < 200ms first open | Dynamic import (`React.lazy`) on first open; cached after |
+| GifPicker API calls | < 500ms per search | Debounced search (300ms); trending results cached 5 min |
+| StickerPicker bundle | < 30KB | Static sticker pack bundled; no external API |
+| Preview mode re-rendering | < 50ms toggle | `React.memo` on PostCard; preview only renders when mode toggled |
+| Content type switch | Instant | Sub-composer panels unmounted on switch (no background state) |
+| Toolbar responsive layout | No jank | CSS flexbox wrap; "More" dropdown computed once on mount + resize |
+| Multiple large images | < 2s upload | Images uploaded one at a time with progress indicator |
+
+### 8.1 Bundle Size Impact
+
+| Component | Size (gzipped) | Loading Strategy |
+|-----------|---------------|-----------------|
+| EmojiPicker | ~40KB | Lazy loaded on first open |
+| GifPicker | ~15KB | Lazy loaded on first open |
+| StickerPicker | ~10KB | Lazy loaded on first open |
+| FindDateTimeComposer | ~8KB | Lazy loaded when content type selected |
+| CountdownComposerDialog | ~5KB | Lazy loaded when content type selected |
+| Total incremental | ~78KB | Only loaded on demand; no impact on initial page load |
+
+### 8.2 Draft Storage Limits
+
+- Max draft size: ~100KB (localStorage item limit)
+- Draft only stores: body text, content type, media URLs (not actual image data)
+- Stale draft cleanup: drafts older than 7 days are auto-discarded on load
 
 ---
 
-## 9. Dependencies
+## 9. Observability
+
+### 9.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `composer_content_type_selected_total` | Counter | `type` (text/poll/gif/sticker/fadt/countdown) | Content type selections |
+| `composer_draft_saved_total` | Counter | — | Draft auto-save events |
+| `composer_draft_restored_total` | Counter | — | Draft restored on page load |
+| `composer_draft_discarded_total` | Counter | `reason` (user/stale/publish) | Draft discards |
+| `composer_preview_toggled_total` | Counter | — | Preview mode toggles |
+| `composer_emoji_inserted_total` | Counter | — | Emojis inserted from picker |
+| `composer_gif_selected_total` | Counter | — | GIFs selected from picker |
+| `composer_char_limit_hit_total` | Counter | — | Times user exceeded character limit |
+| `composer_publish_latency_ms` | Histogram | `content_type` | Time from click Publish to API response |
+
+### 9.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Post published via enhanced composer | INFO | `user_sub`, `content_type`, `has_media`, `body_length`, `is_scheduled` |
+| Draft restored | DEBUG | `user_sub`, `draft_age_seconds`, `body_length` |
+| Draft discarded (stale) | DEBUG | `user_sub`, `draft_age_seconds` |
+| Character limit exceeded | DEBUG | `user_sub`, `char_count` |
+| Sub-composer opened | DEBUG | `user_sub`, `content_type` |
+
+### 9.3 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| High publish error rate | > 5% of publish attempts fail | High | Check backend health |
+| GIF picker API errors | > 20% of GIF searches fail | Medium | Check GIF provider API status |
+| Draft save failures | > 1% of save attempts throw | Low | Check localStorage availability |
+
+### 9.4 Dashboard Queries
+
+**Content type distribution**:
+```promql
+sum(increase(composer_content_type_selected_total[1d])) by (type)
+```
+
+**Draft usage rate** (% of sessions that use draft):
+```promql
+sum(rate(composer_draft_restored_total[1d])) / sum(rate(composer_draft_saved_total[1d])) * 100
+```
+
+---
+
+## 10. Rollout Plan
+
+### 10.1 Feature Flag
+
+```python
+# app/core/settings.py
+enhanced_composer_enabled: bool = os.environ.get("ENHANCED_COMPOSER_ENABLED", "true").lower() == "true"
+```
+
+Frontend flag passed via `/ui/feature-flags` endpoint:
+```typescript
+const { data: flags } = useQuery(["feature-flags"], fetchFlags);
+const showEnhancedComposer = flags?.enhanced_composer_enabled ?? false;
+```
+
+### 10.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend ready | All post creation validation supports new content types | 1 day | Unit tests pass |
+| Phase 2: Internal | Enhanced composer visible to internal users | 3 days | All 12 E2E tests pass; manual QA |
+| Phase 3: Canary 10% | Enable for 10% of creators | 3 days | No publish errors; positive feedback |
+| Phase 4: GA | Enable for all creators | Permanent | Content type adoption metrics positive |
+
+### 10.3 Migration
+
+No backend migration needed. All new content types (GIF, sticker, countdown, FADT) use existing post creation API with standard fields. Draft auto-save is entirely client-side.
+
+### 10.4 Rollback
+
+1. Set `ENHANCED_COMPOSER_ENABLED=false` — frontend falls back to legacy toolbar
+2. Existing drafts in localStorage persist but are not loaded by legacy composer
+3. All posts created with enhanced composer remain valid (same API)
+4. No data loss or corruption risk
+
+---
+
+## 11. Frontend Component Tree (Detailed)
+
+```
+CreatePost (enhanced)
+├── DraftIndicator (conditional)
+│   ├── Info icon + "Draft restored from {time} ago"
+│   └── DiscardButton → clearDraft()
+├── TextArea (with auto-resize)
+│   ├── placeholder: "What's on your mind?"
+│   ├── onInput → setBody + saveDraft (debounced)
+│   └── ref → textareaRef (for emoji cursor insertion)
+├── CharacterCount
+│   ├── count: body.length
+│   ├── max: 5000
+│   └── color: muted → yellow → red
+├── ContentTypeToolbar
+│   ├── Row 1 (always visible)
+│   │   ├── ImageButton → file input
+│   │   ├── FileButton → FilePickerDialog
+│   │   ├── PollButton → setContentType("poll")
+│   │   └── VideoButton → VideoPickerDialog
+│   ├── Row 2 (extended)
+│   │   ├── EmojiButton → Popover(EmojiPicker)
+│   │   ├── GifButton → setContentType("gif")
+│   │   ├── StickerButton → setContentType("sticker")
+│   │   ├── FindTimeButton → setContentType("find_datetime")
+│   │   └── CountdownButton → setContentType("countdown")
+│   └── Row 3 (actions)
+│       ├── LockToggle → lock_price_cents
+│       ├── ScheduleButton → publish_at DateTimePicker
+│       └── PreviewButton → toggle previewMode
+├── SubComposerPanel (conditional, one at a time)
+│   ├── PollComposer (existing)
+│   ├── GifPicker (lazy loaded)
+│   ├── StickerPicker (lazy loaded)
+│   ├── FindDateTimeComposer (lazy loaded)
+│   └── CountdownComposerDialog (lazy loaded)
+├── PreviewPanel (conditional, when previewMode=true)
+│   └── PostCard(isPreview=true)
+│       ├── PostHeader (author, "just now")
+│       ├── PostBody (rendered body text)
+│       ├── Media preview (images, GIF, sticker)
+│       └── Disabled action buttons (grayed out)
+├── MediaPreview (conditional, when images/GIF/sticker selected)
+│   └── Thumbnail grid with remove buttons
+└── PublishButton
+    ├── disabled: isOverLimit || noContent || isSubmitting
+    └── onClick → createPostMutation → clearDraft → resetState
+```
+
+---
+
+## 12. API Request/Response Examples
+
+**Publish a post with emoji in body** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/posts \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_a" \
+  -d '{
+    "body": "Hello world! 😀🎉 Check out this update!",
+    "image_urls": []
+  }'
+```
+
+**Response (201)**:
+```json
+{
+  "post_id": "p_abc123",
+  "user_id": "alice@test.local",
+  "body": "Hello world! 😀🎉 Check out this update!",
+  "created_at": 1748520100,
+  "like_count": 0,
+  "comment_count": 0
+}
+```
+
+**Publish a GIF post** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/posts \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_a" \
+  -d '{
+    "body": "When the code finally compiles",
+    "image_urls": ["https://media.giphy.com/media/xxx/giphy.gif"]
+  }'
+```
+
+**Response (201)**:
+```json
+{
+  "post_id": "p_gif001",
+  "user_id": "alice@test.local",
+  "body": "When the code finally compiles",
+  "image_urls": ["https://media.giphy.com/media/xxx/giphy.gif"],
+  "created_at": 1748520200,
+  "like_count": 0,
+  "comment_count": 0
+}
+```
+
+---
+
+## 13. Pydantic Models
+
+```python
+# In app/models.py — the CreatePostRequest already handles all content types.
+# No new Pydantic model needed for the enhanced composer, as it reuses
+# the existing CreatePostRequest with standard fields.
+
+class CreatePostRequest(ContentFieldsMixin):
+    """Unified post creation request supporting all content types."""
+    body: Optional[str] = Field(default=None, max_length=5000)
+    body_rich: Optional[str] = Field(default=None, max_length=20000)
+    image_urls: Optional[List[str]] = None
+    video_id: Optional[str] = None
+    # Poll fields
+    poll_question: Optional[str] = Field(default=None, max_length=500)
+    poll_options: Optional[List[str]] = None
+    # Countdown fields (FEED-005)
+    post_kind: Optional[str] = Field(default=None, pattern=r"^(text|countdown|find_datetime)$")
+    countdown_title: Optional[str] = Field(default=None, max_length=200)
+    target_datetime: Optional[int] = None
+    associated_event_type: Optional[str] = None
+    associated_event_id: Optional[str] = None
+    # Scheduling
+    publish_at: Optional[int] = None
+    schedule_timezone: Optional[str] = None
+    # Lock
+    lock_price_cents: Optional[int] = Field(default=None, ge=0)
+    lock_description: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_has_content(self):
+        """Ensure post has at least some content."""
+        has_text = bool(self.body and self.body.strip())
+        has_media = bool(self.image_urls or self.video_id)
+        has_poll = bool(self.poll_question)
+        has_countdown = bool(self.countdown_title)
+        if not (has_text or has_media or has_poll or has_countdown):
+            raise ValueError("Post must have text, media, poll, or countdown content")
+        return self
+```
+
+---
+
+## 14. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|

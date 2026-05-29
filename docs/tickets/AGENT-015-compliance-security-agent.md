@@ -530,3 +530,246 @@ let auditId: string;
 |--------|-----------|
 | AGENT-014 (Documentation Agent) | Compliance docs may be triggered by security findings |
 | AGENT-018 (Accountant Agent) | Security audit compute costs tracked per audit run |
+
+---
+
+## 10. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│              Compliance & Security Agent Architecture               │
+└─────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+  │ PR Webhook   │   │ Schedule     │   │ Manual Scan  │
+  │ (GitHub)     │   │ (weekly/     │   │ Trigger      │
+  │              │   │  monthly)    │   │              │
+  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
+         └──────────────────┼──────────────────┘
+                            ▼
+  ┌──────────────────────────────────────────────┐
+  │     Security Agent Core (agent_security.py)  │
+  │                                              │
+  │  ┌────────────────┐  ┌───────────────────┐  │
+  │  │ PR Review      │  │ Full Audit        │  │
+  │  │ - OWASP scan   │  │ - dependency scan │  │
+  │  │ - secrets scan │  │ - code scan       │  │
+  │  │ - compliance   │  │ - compliance      │  │
+  │  │ - XSS/SQLi     │  │ - GDPR/PCI/WCAG  │  │
+  │  └────────────────┘  └───────────────────┘  │
+  └──────┬──────────────────┬──────────────────┬┘
+         │                  │                  │
+         ▼                  ▼                  ▼
+  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+  │ Findings     │ │ Audit Log    │ │ Ticket System│
+  │ Table (DDB)  │ │ Table (DDB)  │ │ remediation  │
+  │ 3 GSIs       │ │              │ │ tickets      │
+  └──────────────┘ └──────────────┘ └──────────────┘
+```
+
+---
+
+## 11. DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | GSI | Notes |
+|----------------|-------|----|----|-----|-------|
+| Get finding | `security_findings` | `USER#{user_id}` | `FINDING#{id}` | -- | Single item |
+| List by severity | `security_findings` | -- | -- | `GSI1PK=USER#{id}#SEV#{sev}` | Critical/High first |
+| List by category | `security_findings` | -- | -- | `GSI2PK=USER#{id}#CAT#{cat}` | OWASP categories |
+| List open findings | `security_findings` | -- | -- | `GSI3PK=USER#{id}#STATUS#open` | Unresolved items |
+| Get audit record | `security_audits` | `USER#{user_id}` | `AUDIT#{id}` | -- | Single item |
+| List audits | `security_audits` | `USER#{user_id}` | begins_with `AUDIT#` | -- | All audits |
+
+---
+
+## 12. API Request/Response Examples
+
+```bash
+# --- GET /ui/agents/security/findings?severity=critical ---
+curl http://localhost:8000/ui/agents/security/findings?severity=critical \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "findings": [
+    {
+      "finding_id": "find-001",
+      "category": "hardcoded_secret",
+      "severity": "critical",
+      "title": "AWS secret key found in source",
+      "file_path": "app/services/legacy.py",
+      "line_number": 42,
+      "description": "Hardcoded AWS_SECRET_ACCESS_KEY detected",
+      "remediation": "Move to environment variable or secrets manager",
+      "status": "open",
+      "created_at": 1748534400
+    }
+  ],
+  "count": 1
+}
+
+# --- POST /ui/agents/security/audit ---
+curl -X POST http://localhost:8000/ui/agents/security/audit \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123"
+
+# Response 202:
+{
+  "audit_id": "audit-abc-123",
+  "status": "in_progress",
+  "started_at": 1748534400
+}
+```
+
+---
+
+## 13. Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| Finding not found | 404 | `FINDING_NOT_FOUND` | "Security finding not found." | Verify finding_id |
+| Audit not found | 404 | `AUDIT_NOT_FOUND` | "Audit record not found." | Verify audit_id |
+| Audit already running | 409 | `AUDIT_IN_PROGRESS` | "An audit is already in progress." | Wait for completion |
+| Invalid severity filter | 422 | `INVALID_SEVERITY` | "Severity must be critical, high, medium, or low." | Fix query parameter |
+| Invalid category filter | 422 | `INVALID_CATEGORY` | "Invalid OWASP category." | Use valid category |
+| Finding already resolved | 409 | `ALREADY_RESOLVED` | "Finding is already resolved." | No action needed |
+| Agent not configured | 404 | `AGENT_NOT_CONFIGURED` | "No Security Agent configured." | Create agent |
+| Not admin | 403 | `ADMIN_REQUIRED` | "Admin access required." | Use admin account |
+
+---
+
+## 14. Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal, Optional, List
+from enum import Enum
+
+class FindingSeverity(str, Enum):
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+class FindingStatus(str, Enum):
+    OPEN = "open"
+    RESOLVED = "resolved"
+    ACCEPTED_RISK = "accepted_risk"
+    FALSE_POSITIVE = "false_positive"
+
+class SecurityFindingOut(BaseModel):
+    finding_id: str
+    category: str
+    severity: FindingSeverity
+    title: str
+    file_path: Optional[str] = None
+    line_number: Optional[int] = None
+    description: str
+    remediation: str
+    status: FindingStatus
+    pr_url: Optional[str] = None
+    remediation_ticket_id: Optional[str] = None
+    created_at: int
+    resolved_at: Optional[int] = None
+
+class SecurityAuditOut(BaseModel):
+    audit_id: str
+    status: Literal["in_progress", "completed", "failed"]
+    findings_count: int = Field(ge=0)
+    critical_count: int = Field(ge=0)
+    high_count: int = Field(ge=0)
+    started_at: int
+    completed_at: Optional[int] = None
+    duration_seconds: Optional[int] = None
+
+class ResolveFindingIn(BaseModel):
+    resolution: Literal["resolved", "accepted_risk", "false_positive"]
+    notes: Optional[str] = Field(default=None, max_length=2000)
+```
+
+---
+
+## 15. Frontend Component Tree
+
+```
+SecurityDashboard                     data-testid="security-dashboard"
+├── div.grid.grid-cols-4
+│   ├── StatCard "Critical" → count (red)
+│   ├── StatCard "High" → count (orange)
+│   ├── StatCard "Medium" → count (yellow)
+│   └── StatCard "Low" → count (blue)
+├── Card "Findings by Category"
+│   └── BarChart (OWASP categories)
+├── Tabs
+│   ├── TabsTrigger "Open"
+│   ├── TabsTrigger "Resolved"
+│   └── TabsTrigger "Audits"
+├── DataTable (findings)
+│   ├── columns: [severity, category, title, file, status, created_at]
+│   └── row click → FindingDetail dialog
+└── Button "Run Full Audit"
+```
+
+---
+
+## 16. Observability & Monitoring
+
+### 16.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `security_findings_total` | Counter | `severity`, `category` | Findings detected |
+| `security_findings_open_gauge` | Gauge | `severity` | Currently open findings |
+| `security_audits_total` | Counter | `result` | Audit runs |
+| `security_audit_duration_seconds` | Histogram | -- | Audit execution time |
+| `security_pr_reviews_total` | Counter | `result={clean,issues_found}` | PR reviews |
+
+### 16.2 Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Critical finding detected | critical findings > 0 | P0 |
+| High findings growing | open high findings > 10 | P1 |
+| Audit failed | audit status=failed | P2 |
+
+---
+
+## 17. Rollout Plan
+
+### 17.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `SECURITY_AGENT_ENABLED` | `false` | Master kill switch |
+| `SECURITY_PR_REVIEW_ENABLED` | `false` | Auto-review PRs |
+| `SECURITY_PR_BLOCK_ENABLED` | `false` | Block PR merge on critical findings |
+| `SECURITY_REMEDIATION_TICKETS_ENABLED` | `false` | Auto-file remediation tickets |
+
+### 17.2 Canary
+
+1. **Week 1**: Enable audit-only mode. No PR blocking, no ticket creation.
+2. **Week 2**: Enable `SECURITY_PR_REVIEW_ENABLED`. Review comments only.
+3. **Week 3**: Enable `SECURITY_REMEDIATION_TICKETS_ENABLED`.
+4. **Week 4**: Enable `SECURITY_PR_BLOCK_ENABLED` after verifying low false-positive rate.
+
+---
+
+## 18. Expanded E2E Test Details
+
+### Section (additional): Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| E1 | Resolve finding as false positive | POST resolve with resolution="false_positive"; status updated |
+| E2 | Concurrent audit trigger | POST audit while one is running; 409 |
+| E3 | Finding with no file path (dependency issue) | Finding has null file_path; renders without error |
+| E4 | Audit with zero findings | Completed audit with findings_count=0; dashboard shows "All clear" |
+
+### Section (additional): Negative Tests (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| N1 | Non-admin cannot trigger audit | Alice (USER) POSTs audit; 403 |
+| N2 | Invalid resolution type | POST resolve with resolution="ignore"; 422 |
+| N3 | Resolve non-existent finding | POST resolve with fake finding_id; 404 |
+| N4 | List findings with invalid severity | GET findings?severity=mega; 422 |

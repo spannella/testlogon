@@ -587,3 +587,519 @@ test.beforeAll(async ({ browser }) => {
 | ADS-005 (Sponsored Posts) | Creator ad preferences from ADS-003 |
 | ADS-009 (User Ad Prefs) | User-side preference checks complement ADS-003 creator checks |
 | ADS-010 (Content Provider Controls) | Extends creator ad settings from ADS-003 |
+
+---
+
+## 9. Architecture & Data Flow
+
+```
+Ad Request Targeting Evaluation Flow
+─────────────────────────────────────
+
+  Client (ad surface)
+       │
+       │  POST /serve_ad { surface, content_type, creator_id, user_id, ... }
+       ▼
+  ┌──────────────────────────────┐
+  │   Ad Serving Engine (ADS-004)│
+  │                              │
+  │ 1. Build viewer context:     │
+  │    - IP → country (mock: US) │
+  │    - UA → device_type        │
+  │    - Profile → age, gender   │
+  │    - Content → categories    │
+  └──────────┬───────────────────┘
+             │
+             ▼
+  ┌──────────────────────────────┐
+  │   Campaign Selection Loop    │
+  │                              │
+  │ For each active campaign:    │
+  │   ┌────────────────────────┐ │
+  │   │ Load targeting sets    │ │
+  │   │ (ad_targeting table)   │ │
+  │   └──────────┬─────────────┘ │
+  │              │               │
+  │              ▼               │
+  │   ┌────────────────────────┐ │
+  │   │ evaluate_targeting()   │ │
+  │   │ Check each dimension:  │ │
+  │   │  age_ranges    ✓/✗    │ │
+  │   │  genders       ✓/✗    │ │
+  │   │  country_codes ✓/✗    │ │
+  │   │  device_types  ✓/✗    │ │
+  │   │  content_types ✓/✗    │ │
+  │   │  creator_ids   ✓/✗    │ │
+  │   │  exclude_*     ✓/✗    │ │
+  │   │  new_user_only ✓/✗    │ │
+  │   └──────────┬─────────────┘ │
+  │              │               │
+  │         ALL MATCH?           │
+  │        yes │    │ no         │
+  │            ▼    ▼            │
+  │       eligible  skip         │
+  └──────────┬───────────────────┘
+             │
+             ▼
+  ┌──────────────────────────────┐
+  │   Creator Preference Filter  │
+  │                              │
+  │ 1. get_creator_ad_settings() │
+  │    - allow_ads? → if false,  │
+  │      skip all ads            │
+  │ 2. allowed_ad_categories     │
+  │    - ad category in list?    │
+  │ 3. is_advertiser_blocked()   │
+  │    - advertiser on blocklist?│
+  │ 4. min_cpm_cents             │
+  │    - bid >= min?             │
+  └──────────┬───────────────────┘
+             │
+             ▼
+  ┌──────────────────────────────┐
+  │   Return winning ad or empty │
+  └──────────────────────────────┘
+```
+
+---
+
+## 10. Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | GSI | Query Type | Example |
+|---|---------------|-------|---------------|-----|-----------|---------|
+| 1 | Get targeting set by ID | `ad_targeting` | `pk=CAMP#{campaign_id}, sk=TARGETING#{target_set_id}` | -- | GetItem | Single targeting set fetch |
+| 2 | List targeting sets for campaign | `ad_targeting` | `pk=CAMP#{campaign_id}, sk begins_with TARGETING#` | -- | Query | All targeting sets for a campaign |
+| 3 | List targeting sets by created_at | `ad_targeting` | `campaign_id=X` | `ByCampaignCreatedAt` | Query | Targeting sets sorted by creation time |
+| 4 | Delete targeting set | `ad_targeting` | `pk=CAMP#{campaign_id}, sk=TARGETING#{target_set_id}` | -- | DeleteItem | Remove single targeting set |
+| 5 | Get creator ad settings | `billing` | `pk=USER#{creator_sub}, sk=AD_SETTINGS` | -- | GetItem | Creator's global ad preferences |
+| 6 | Update creator ad settings | `billing` | `pk=USER#{creator_sub}, sk=AD_SETTINGS` | -- | PutItem | Overwrite creator ad settings |
+| 7 | Check advertiser blocked | `billing` | `pk=USER#{creator_sub}, sk=AD_BLOCK#{account_id}` | -- | GetItem | Boolean blocked check |
+| 8 | List blocked advertisers | `billing` | `pk=USER#{creator_sub}, sk begins_with AD_BLOCK#` | -- | Query | All blocked accounts for creator |
+| 9 | Block advertiser | `billing` | `pk=USER#{creator_sub}, sk=AD_BLOCK#{account_id}` | -- | PutItem | Add to block list |
+| 10 | Unblock advertiser | `billing` | `pk=USER#{creator_sub}, sk=AD_BLOCK#{account_id}` | -- | DeleteItem | Remove from block list |
+
+---
+
+## 11. API Request/Response Examples
+
+### 11.1 Create Targeting Set
+
+```bash
+curl -X POST http://localhost:8000/ui/ads/campaigns/camp_abc123/targeting \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok" \
+  -d '{
+    "name": "US Gamers 25-34",
+    "age_ranges": ["25-34"],
+    "genders": ["male", "female"],
+    "country_codes": ["US"],
+    "device_types": ["mobile", "desktop"],
+    "content_categories": ["gaming"],
+    "new_user_only": false
+  }'
+```
+
+**Response (201)**:
+```json
+{
+  "target_set_id": "tgt_a1b2c3d4e5f6",
+  "campaign_id": "camp_abc123",
+  "name": "US Gamers 25-34",
+  "age_ranges": ["25-34"],
+  "genders": ["male", "female"],
+  "country_codes": ["US"],
+  "device_types": ["mobile", "desktop"],
+  "content_categories": ["gaming"],
+  "new_user_only": false,
+  "created_at": 1748534400,
+  "updated_at": 1748534400
+}
+```
+
+### 11.2 Estimate Audience
+
+```bash
+curl -X POST http://localhost:8000/ui/ads/campaigns/camp_abc123/targeting/estimate \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok" \
+  -d '{
+    "country_codes": ["US"],
+    "age_ranges": ["25-34"],
+    "content_categories": ["gaming"]
+  }'
+```
+
+**Response (200)**:
+```json
+{
+  "estimated_reach": 3000,
+  "targeting_summary": {
+    "country_codes": ["US"],
+    "age_ranges": ["25-34"],
+    "content_categories": ["gaming"]
+  }
+}
+```
+
+### 11.3 Update Creator Ad Settings
+
+```bash
+curl -X PATCH http://localhost:8000/ui/ads/creator/ad-settings \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_bob; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok" \
+  -d '{
+    "allow_ads": true,
+    "allowed_ad_categories": ["gaming", "fitness"],
+    "min_cpm_cents": 500
+  }'
+```
+
+**Response (200)**:
+```json
+{"ok": true}
+```
+
+### 11.4 Block Advertiser
+
+```bash
+curl -X POST http://localhost:8000/ui/ads/creator/ad-blocks \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_bob; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok" \
+  -d '{"account_id": "adv_alice_001", "reason": "Competitor brand"}'
+```
+
+**Response (200)**:
+```json
+{"ok": true}
+```
+
+---
+
+## 12. Error Handling Matrix
+
+| # | Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|----------------|-------------|------------|---------------------|-----------------|
+| 1 | Campaign not found | 404 | `CAMPAIGN_NOT_FOUND` | "Campaign not found." | Verify campaign_id exists |
+| 2 | Not campaign owner | 403 | `NOT_CAMPAIGN_OWNER` | "You do not own this campaign." | Use the owning account |
+| 3 | Targeting set not found | 404 | `TARGETING_NOT_FOUND` | "Targeting set not found." | Verify target_set_id |
+| 4 | Invalid age range format | 422 | `INVALID_AGE_RANGE` | "Invalid age range: must be 'N-N' or '55+'." | Use format like "25-34" |
+| 5 | Invalid country code | 422 | `INVALID_COUNTRY_CODE` | "Invalid country code: {code}." | Use ISO 3166-1 alpha-2 |
+| 6 | Contradictory targeting | 400 | `CONTRADICTORY_TARGETING` | "Cannot include and exclude the same creator." | Remove from one list |
+| 7 | Too many creator IDs | 400 | `TOO_MANY_CREATORS` | "Maximum 100 creator IDs per targeting set." | Reduce creator list |
+| 8 | Invalid content type | 422 | `INVALID_CONTENT_TYPE` | "Content type must be newsfeed, broadcast, or vod." | Use valid content type |
+| 9 | Invalid device type | 422 | `INVALID_DEVICE_TYPE` | "Device type must be mobile, desktop, or tablet." | Use valid device type |
+| 10 | Active hours out of range | 422 | `INVALID_HOURS` | "Active hours must be 0-23." | Use valid UTC hour values |
+| 11 | Invalid ad category (creator) | 400 | `INVALID_AD_CATEGORY` | "Invalid ad category: {cat}." | Use valid category enum |
+| 12 | Negative min CPM | 422 | `INVALID_MIN_CPM` | "min_cpm_cents must be >= 0." | Use non-negative value |
+
+---
+
+## 13. Expanded Pydantic Models with Validators
+
+```python
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional
+import re
+
+VALID_AGE_RANGES = {"18-24", "25-34", "35-44", "45-54", "55+"}
+VALID_GENDERS = {"male", "female", "other"}
+VALID_DEVICE_TYPES = {"mobile", "desktop", "tablet"}
+VALID_CONTENT_TYPES = {"newsfeed", "broadcast", "vod"}
+ISO_3166_PATTERN = re.compile(r"^[A-Z]{2}$")
+
+class TargetingCreateIn(BaseModel):
+    name: str = Field(default="Default", max_length=100)
+    age_ranges: Optional[list[str]] = None
+    genders: Optional[list[str]] = None
+    country_codes: Optional[list[str]] = None
+    regions: Optional[list[str]] = None
+    cities: Optional[list[str]] = None
+    content_categories: Optional[list[str]] = None
+    active_hours: Optional[list[int]] = None
+    device_types: Optional[list[str]] = None
+    new_user_only: bool = False
+    creator_ids: Optional[list[str]] = None
+    content_types: Optional[list[str]] = None
+    exclude_creator_ids: Optional[list[str]] = None
+    exclude_categories: Optional[list[str]] = None
+
+    @field_validator("age_ranges")
+    @classmethod
+    def validate_age_ranges(cls, v):
+        if v is None:
+            return v
+        for r in v:
+            if r not in VALID_AGE_RANGES:
+                raise ValueError(f"Invalid age range: {r}. Must be one of {VALID_AGE_RANGES}")
+        return v
+
+    @field_validator("genders")
+    @classmethod
+    def validate_genders(cls, v):
+        if v is None:
+            return v
+        for g in v:
+            if g not in VALID_GENDERS:
+                raise ValueError(f"Invalid gender: {g}. Must be one of {VALID_GENDERS}")
+        return v
+
+    @field_validator("country_codes")
+    @classmethod
+    def validate_country_codes(cls, v):
+        if v is None:
+            return v
+        for code in v:
+            if not ISO_3166_PATTERN.match(code):
+                raise ValueError(f"Invalid country code: {code}. Must be ISO 3166-1 alpha-2")
+        return v
+
+    @field_validator("active_hours")
+    @classmethod
+    def validate_active_hours(cls, v):
+        if v is None:
+            return v
+        for h in v:
+            if not (0 <= h <= 23):
+                raise ValueError(f"Active hour {h} out of range. Must be 0-23")
+        return v
+
+    @field_validator("device_types")
+    @classmethod
+    def validate_device_types(cls, v):
+        if v is None:
+            return v
+        for d in v:
+            if d not in VALID_DEVICE_TYPES:
+                raise ValueError(f"Invalid device type: {d}. Must be one of {VALID_DEVICE_TYPES}")
+        return v
+
+    @field_validator("creator_ids")
+    @classmethod
+    def validate_creator_ids_limit(cls, v):
+        if v is not None and len(v) > 100:
+            raise ValueError("Maximum 100 creator IDs per targeting set")
+        return v
+
+    @field_validator("exclude_creator_ids")
+    @classmethod
+    def validate_no_contradictory_creators(cls, v, info):
+        if v is None:
+            return v
+        creator_ids = info.data.get("creator_ids") or []
+        overlap = set(v) & set(creator_ids)
+        if overlap:
+            raise ValueError(f"Cannot exclude and include the same creator: {overlap}")
+        return v
+
+class CreatorAdSettingsIn(BaseModel):
+    allow_ads: Optional[bool] = None
+    allowed_ad_categories: Optional[list[str]] = None
+    min_cpm_cents: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("allowed_ad_categories")
+    @classmethod
+    def validate_ad_categories(cls, v):
+        if v is None:
+            return v
+        valid = {"gaming", "music", "fitness", "beauty", "tech", "food", "travel",
+                 "finance", "education", "entertainment", "lifestyle", "sports"}
+        for cat in v:
+            if cat not in valid:
+                raise ValueError(f"Invalid ad category: {cat}")
+        return v
+```
+
+---
+
+## 14. Frontend Component Tree
+
+```
+TargetingEditor (data-testid="targeting-editor")
+├── DemographicsPanel
+│   ├── AgeRangeCheckboxGroup (checkboxes: 18-24, 25-34, 35-44, 45-54, 55+)
+│   └── GenderCheckboxGroup (checkboxes: male, female, other)
+├── GeographyPanel
+│   ├── CountryMultiSelect (searchable, ISO codes)
+│   ├── RegionMultiSelect (optional, depends on selected countries)
+│   └── CityMultiSelect (optional)
+├── InterestsPanel
+│   └── CategoryTagInput (tag chips for content categories)
+├── BehaviorPanel
+│   ├── DeviceTypeCheckboxGroup (mobile, desktop, tablet)
+│   ├── ActiveHoursSlider (multi-range 0-23 UTC)
+│   └── NewUserOnlyToggle (Switch component)
+├── ContentPanel
+│   ├── CreatorIdSearch (autocomplete search input)
+│   └── ContentTypeCheckboxGroup (newsfeed, broadcast, vod)
+├── ExclusionPanel
+│   ├── ExcludeCreatorIdSearch
+│   └── ExcludeCategoryTagInput
+└── AudienceEstimateCard
+    ├── ReachNumber (formatted integer)
+    ├── TargetingSummaryList
+    └── RefreshButton (debounced, fires on each targeting change)
+```
+
+### Props Interfaces
+
+```typescript
+interface TargetingEditorProps {
+  campaignId: string;
+  initialTargeting?: AdTargeting | null;
+  onSave: (targeting: AdTargeting) => void;
+  onCancel: () => void;
+}
+
+interface AudienceEstimateCardProps {
+  campaignId: string;
+  targeting: Partial<AdTargeting>;
+  debounceMs?: number;  // default 500
+}
+
+interface CreatorAdSettingsFormProps {
+  initialSettings?: CreatorAdSettings;
+  onSave: (settings: CreatorAdSettingsIn) => void;
+}
+
+interface AdvertiserBlockListProps {
+  blocks: Array<{ account_id: string; blocked_at: number; reason: string }>;
+  onBlock: (accountId: string, reason: string) => void;
+  onUnblock: (accountId: string) => void;
+}
+```
+
+---
+
+## 15. Observability
+
+### 15.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `ad_targeting_created_total` | Counter | `campaign_id` | Targeting sets created |
+| `ad_targeting_evaluated_total` | Counter | `result` (match/miss) | Targeting evaluations performed |
+| `ad_targeting_dimension_miss_total` | Counter | `dimension` | Which dimension caused the miss |
+| `ad_audience_estimate_requests_total` | Counter | -- | Audience estimate API calls |
+| `ad_creator_ad_settings_updated_total` | Counter | `creator_id` | Creator settings updates |
+| `ad_advertiser_blocked_total` | Counter | -- | Advertiser blocks recorded |
+| `ad_targeting_evaluation_duration_ms` | Histogram | -- | Time spent in evaluate_targeting() |
+
+### 15.2 Log Events
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| `targeting_created` | INFO | campaign_id, target_set_id, dimension_count |
+| `targeting_updated` | INFO | campaign_id, target_set_id, changed_fields |
+| `targeting_deleted` | INFO | campaign_id, target_set_id |
+| `targeting_evaluated` | DEBUG | campaign_id, context_hash, result (match/miss), miss_dimension |
+| `audience_estimated` | INFO | campaign_id, estimated_reach, dimension_count |
+| `creator_settings_updated` | INFO | creator_sub, allow_ads, category_count |
+| `advertiser_blocked` | INFO | creator_sub, account_id |
+| `advertiser_unblocked` | INFO | creator_sub, account_id |
+
+### 15.3 Alerting Rules
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| High targeting miss rate | >95% of evaluations return miss over 1 hour | P3 — warn |
+| Audience estimate latency | p99 > 2000ms over 15 minutes | P3 — warn |
+| Creator settings error rate | >5% error rate on PATCH ad-settings | P2 — page |
+
+---
+
+## 16. Rollout Plan
+
+### 16.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `AD_TARGETING_ENABLED` | `false` | Enable targeting evaluation in ad serving |
+| `AD_CREATOR_PREFS_ENABLED` | `true` | Enable creator ad preference management |
+
+### 16.2 Phased Deployment
+
+| Phase | Scope | Duration | Details |
+|-------|-------|----------|---------|
+| Phase 1: Backend + Storage | Internal only | Week 1 | Deploy ad_targeting table, service, and endpoints. Targeting evaluation runs in shadow mode (logs results but does not filter ads). Creator settings endpoints live. |
+| Phase 2: Targeting Active | All advertisers | Week 2 | `AD_TARGETING_ENABLED=true`. Targeting evaluation filters ad selection. Monitor miss rates and latency. Audience estimation available. |
+| Phase 3: Frontend + GA | All users | Week 3 | TargetingEditor deployed. Creator ad settings UI live. Full documentation. Remove feature flag gate. |
+
+### 16.3 Rollback
+
+Set `AD_TARGETING_ENABLED=false`. All ads revert to untargeted serving. Targeting data remains in DDB for re-enablement.
+
+---
+
+## 17. Performance Considerations
+
+### 17.1 Latency Targets
+
+| Endpoint | Target p50 | Target p99 |
+|----------|-----------|-----------|
+| POST targeting (create) | 50ms | 200ms |
+| GET targeting (list) | 30ms | 150ms |
+| PUT targeting (update) | 50ms | 200ms |
+| POST estimate | 100ms | 500ms |
+| evaluate_targeting() (per campaign) | 1ms | 5ms |
+| GET creator/ad-settings | 20ms | 100ms |
+| PATCH creator/ad-settings | 50ms | 200ms |
+
+### 17.2 Caching Strategy
+
+| Data | Cache | staleTime | Invalidation |
+|------|-------|-----------|-------------|
+| Targeting sets (per campaign) | React Query | 30_000ms | On create/update/delete mutation |
+| Audience estimate | React Query | 10_000ms | On targeting dimension change (debounced) |
+| Creator ad settings | React Query | 60_000ms | On PATCH mutation |
+| Blocked advertisers list | React Query | 60_000ms | On block/unblock mutation |
+| Creator settings (server-side) | In-memory LRU | 60s TTL | On update |
+
+### 17.3 Pagination
+
+Targeting sets are queried per campaign using the table PK (`CAMP#{campaign_id}`). Most campaigns will have 1-5 targeting sets, so pagination is not required for the MVP. If a campaign has more than 50 targeting sets, standard `LastEvaluatedKey` cursor pagination applies. The `ByCampaignCreatedAt` GSI supports time-sorted listing.
+
+---
+
+## 18. Expanded E2E Tests
+
+### 18.1 Section 354: Input Validation (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 354.1 | Invalid age range rejected | POST targeting with `age_ranges=["10-15"]`; 422; error mentions invalid age range |
+| 354.2 | Invalid country code rejected | POST targeting with `country_codes=["ZZZ"]`; 422; error mentions ISO 3166-1 |
+| 354.3 | Too many creator IDs rejected | POST targeting with 101 creator_ids; 400; "Maximum 100 creator IDs" |
+| 354.4 | Contradictory creators rejected | POST with `creator_ids=["c1"]` and `exclude_creator_ids=["c1"]`; 400; "Cannot exclude and include" |
+| 354.5 | Active hours out of range | POST targeting with `active_hours=[25]`; 422; error mentions 0-23 |
+
+### 18.2 Section 355: Concurrent Operations (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 355.1 | Create two targeting sets simultaneously | Parallel POST requests; both succeed; list returns 2 sets |
+| 355.2 | Update and delete same set concurrently | PUT and DELETE same target_set_id; one succeeds, one gets 404 |
+| 355.3 | Estimate with empty targeting | POST estimate with no dimensions; estimated_reach >= 50000 |
+| 355.4 | Estimate with all dimensions | POST with every dimension specified; estimated_reach < 1000 |
+
+### 18.3 Section 356: Authorization Boundary (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 356.1 | Non-owner cannot create targeting | Bob POST to Alice's campaign targeting; 403 |
+| 356.2 | Non-owner cannot list targeting | Bob GET Alice's campaign targeting; 403 |
+| 356.3 | Non-owner cannot update targeting | Bob PUT on Alice's targeting set; 403 |
+| 356.4 | Non-owner cannot delete targeting | Bob DELETE Alice's targeting set; 403 |
+| 356.5 | Non-owner cannot estimate audience | Bob POST estimate on Alice's campaign; 403 |
+
+### 18.4 Section 357: Creator Ad Settings Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 357.1 | Negative min_cpm rejected | Bob PATCH min_cpm_cents=-100; 422 |
+| 357.2 | Invalid ad category rejected | Bob PATCH allowed_ad_categories=["invalid_cat"]; 400 |
+| 357.3 | Block already-blocked advertiser is idempotent | Bob blocks Alice twice; 200 both times; block list has one entry |
+| 357.4 | Unblock non-blocked advertiser is idempotent | Bob unblocks non-existent account; 200; block list unchanged |

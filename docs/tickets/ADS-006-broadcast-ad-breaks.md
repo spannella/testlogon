@@ -459,3 +459,394 @@ test.beforeAll(async ({ browser }) => {
 | ADS-007 (Billing) | Broadcast impression charges |
 | ADS-008 (Analytics) | Broadcast ad impression/skip data |
 | ADS-010 (Content Provider) | Broadcaster ad settings |
+
+---
+
+## 9. Architecture & Data Flow
+
+```
+Pre-Roll Ad Flow
+─────────────────
+
+  Viewer → POST /broadcast/sessions/{id}/join
+       │
+       ▼
+  ┌────────────────────────────────────┐
+  │  _build_join_response()            │
+  │                                    │
+  │  1. Check pre_roll_enabled         │
+  │  2. has_active_subscription()?     │
+  │     ├─ Yes → ad_free=true, skip    │
+  │     └─ No  → serve_ad()           │
+  │              ├─ filled → pre_roll  │
+  │              └─ empty  → skip      │
+  └──────────┬─────────────────────────┘
+             │
+             ▼
+  Response: { stream_url, pre_roll: {...} | null, ad_free: bool }
+
+
+Mid-Roll Ad Break Flow
+──────────────────────
+
+  Broadcaster → POST /broadcast/sessions/{id}/ad-break
+       │
+       ▼
+  ┌────────────────────────────────────┐
+  │  1. Validate broadcaster owns session   │
+  │  2. Validate session is live            │
+  │  3. Validate no active ad break         │
+  │  4. Update DDB: ad_break_active=true    │
+  │  5. SSE broadcast: ad_break:start       │
+  │  6. Schedule auto-end (asyncio.sleep)   │
+  └──────────┬─────────────────────────┘
+             │
+             ▼ (to all connected viewers)
+  ┌────────────────────────────────────┐
+  │  SSE Event: ad_break:start         │
+  │  {                                 │
+  │    type: "ad_break:start",         │
+  │    duration_seconds: 30,           │
+  │    skip_after_seconds: 15,         │
+  │    started_at: 1748534400          │
+  │  }                                 │
+  └──────────┬─────────────────────────┘
+             │
+             ▼ (viewer client)
+  ┌────────────────────────────────────┐
+  │  Viewer Client Processing          │
+  │                                    │
+  │  Is subscriber?                    │
+  │  ├─ Yes → Ignore event (ad-free)  │
+  │  └─ No  → Show AdOverlay          │
+  │           serve_ad(midroll)        │
+  │           Start skip countdown     │
+  └────────────────────────────────────┘
+             │
+             ▼ (after duration or manual end)
+  ┌────────────────────────────────────┐
+  │  SSE Event: ad_break:end           │
+  │  AdOverlay dismissed               │
+  │  Stream visible again              │
+  └────────────────────────────────────┘
+```
+
+---
+
+## 10. Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | Notes |
+|---|---------------|-------|---------------|-------|
+| 1 | Get session by ID | `broadcast_sessions` | `session_id=X` | GetItem, includes ad config fields |
+| 2 | Update session ad config | `broadcast_sessions` | `session_id=X` | UpdateItem: pre_roll_enabled, mid_roll settings |
+| 3 | Set ad_break_active=true | `broadcast_sessions` | `session_id=X` | UpdateItem with SET + increment total_ad_breaks |
+| 4 | Clear ad_break_active | `broadcast_sessions` | `session_id=X` | UpdateItem: ad_break_active=false, ad_break_started_at=null |
+| 5 | Check subscriber status | `billing` | `pk=USER#{viewer}, sk=SUB#{creator}` | GetItem for ad-free check |
+
+---
+
+## 11. API Request/Response Examples
+
+### 11.1 Create Session with Ad Config
+
+```bash
+curl -X POST http://localhost:8000/ui/broadcast/sessions \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok" \
+  -d '{
+    "title": "Friday Night Stream",
+    "pre_roll_enabled": true,
+    "mid_roll_ad_break_duration_seconds": 30,
+    "mid_roll_skip_after_seconds": 15
+  }'
+```
+
+**Response (201)**:
+```json
+{
+  "session_id": "bcast_abc123",
+  "title": "Friday Night Stream",
+  "status": "created",
+  "pre_roll_enabled": true,
+  "mid_roll_ad_break_duration_seconds": 30,
+  "mid_roll_skip_after_seconds": 15,
+  "ad_break_active": false,
+  "total_ad_breaks": 0,
+  "created_at": 1748534400
+}
+```
+
+### 11.2 Trigger Mid-Roll Ad Break
+
+```bash
+curl -X POST http://localhost:8000/ui/broadcast/sessions/bcast_abc123/ad-break \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok"
+```
+
+**Response (200)**:
+```json
+{
+  "ok": true,
+  "duration_seconds": 30,
+  "started_at": 1748534500
+}
+```
+
+### 11.3 End Ad Break Early
+
+```bash
+curl -X POST http://localhost:8000/ui/broadcast/sessions/bcast_abc123/ad-break/end \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok"
+```
+
+**Response (200)**:
+```json
+{"ok": true}
+```
+
+### 11.4 Viewer Join with Pre-Roll
+
+```bash
+curl -X POST http://localhost:8000/ui/broadcast/sessions/bcast_abc123/join \
+  -H "Cookie: ui_session=sess_bob; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok"
+```
+
+**Response (200)**:
+```json
+{
+  "session_id": "bcast_abc123",
+  "stream_url": "https://stream.example.com/bcast_abc123/live.m3u8",
+  "pre_roll": {
+    "creative_id": "cre_video_001",
+    "format": "video",
+    "video_url": "/mock/s3/ad-creatives/cre_video_001.mp4",
+    "skip_after_seconds": 5,
+    "impression_url": "/ui/ads/impressions/cre_video_001/track",
+    "click_url": "/ui/ads/clicks/cre_video_001/track",
+    "skip_url": "/ui/ads/skips/cre_video_001/track"
+  },
+  "ad_free": false
+}
+```
+
+---
+
+## 12. Error Handling Matrix
+
+| # | Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|----------------|-------------|------------|---------------------|-----------------|
+| 1 | Session not found | 404 | `SESSION_NOT_FOUND` | "Session not found." | Verify session_id |
+| 2 | Not the broadcaster | 403 | `NOT_BROADCASTER` | "Only the broadcaster can trigger ad breaks." | Use broadcaster's session |
+| 3 | Session not live | 400 | `SESSION_NOT_LIVE` | "Session must be live to trigger ad break." | Start the session first |
+| 4 | Ad break already active | 400 | `AD_BREAK_ACTIVE` | "Ad break already active." | Wait for current break to end |
+| 5 | Invalid mid_roll duration | 422 | `INVALID_DURATION` | "Duration must be between 15 and 60 seconds." | Use 15, 30, or 60 |
+| 6 | Invalid skip_after value | 422 | `INVALID_SKIP` | "Skip delay must be between 5 and 30 seconds." | Use valid range |
+| 7 | Ad serving fails during pre-roll | -- | -- | Pre-roll skipped; stream plays immediately | Automatic |
+| 8 | Ad serving fails during mid-roll | -- | -- | Overlay dismissed; stream visible | Automatic |
+| 9 | SSE connection drops during break | -- | -- | Client reconnects; checks ad_break_active | Auto-reconnect |
+
+---
+
+## 13. Expanded Pydantic Models
+
+```python
+from pydantic import BaseModel, Field, field_validator
+
+class BroadcastAdConfigIn(BaseModel):
+    pre_roll_enabled: bool = Field(default=True)
+    mid_roll_ad_break_duration_seconds: int = Field(default=30, ge=15, le=60)
+    mid_roll_skip_after_seconds: int = Field(default=15, ge=5, le=30)
+
+    @field_validator("mid_roll_ad_break_duration_seconds")
+    @classmethod
+    def validate_duration(cls, v):
+        if v not in (15, 30, 60):
+            raise ValueError("mid_roll_ad_break_duration_seconds must be 15, 30, or 60")
+        return v
+
+class AdBreakOut(BaseModel):
+    ok: bool = True
+    duration_seconds: int
+    started_at: int
+
+class PreRollOut(BaseModel):
+    creative_id: str
+    format: str
+    video_url: str | None = None
+    image_url: str | None = None
+    skip_after_seconds: int = 5
+    impression_url: str
+    click_url: str
+    skip_url: str
+
+class BroadcastJoinOut(BaseModel):
+    session_id: str
+    stream_url: str
+    pre_roll: PreRollOut | None = None
+    ad_free: bool = False
+```
+
+---
+
+## 14. Frontend Component Tree
+
+```
+LivePlayer
+├── PreRollOverlay (shown on join if pre_roll != null)
+│   └── AdOverlay (data-testid="broadcast-ad-overlay")
+│       ├── VideoAdPlayer / ImageAdDisplay
+│       ├── CountdownTimer ("Ad ends in {N}s")
+│       ├── SkipButton (appears after skip_after_seconds)
+│       ├── CTAOverlayButton (optional)
+│       └── ImpressionTracker (fires on mount)
+│
+├── MidRollOverlay (shown on ad_break:start SSE event)
+│   └── AdOverlay (reuses same component)
+│       ├── Fetches ad from serve_ad(midroll) on mount
+│       └── Auto-dismisses on ad_break:end SSE event
+│
+└── BroadcasterControls (shown only to session owner)
+    └── AdBreakButton (data-testid="ad-break-button")
+        ├── "Insert Ad Break" label + Timer icon
+        ├── ConfirmDialog ("Insert {duration}s ad break?")
+        ├── disabled during active break (shows countdown)
+        └── disabled if session not live
+```
+
+### Props Interfaces
+
+```typescript
+interface AdOverlayProps {
+  ad: BroadcastPreRoll | MidRollAd;
+  skipAfterSeconds: number;
+  onSkip: () => void;
+  onComplete: () => void;
+  onCtaClick: (url: string) => void;
+}
+
+interface AdBreakButtonProps {
+  sessionId: string;
+  isLive: boolean;
+  adBreakActive: boolean;
+  durationSeconds: number;
+  onTrigger: () => void;
+}
+```
+
+---
+
+## 15. Observability
+
+### 15.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `broadcast_preroll_shown_total` | Counter | `session_id` | Pre-roll ads shown to viewers |
+| `broadcast_preroll_skipped_total` | Counter | `session_id` | Pre-rolls skipped by viewers |
+| `broadcast_midroll_triggered_total` | Counter | `session_id` | Mid-roll breaks triggered by broadcasters |
+| `broadcast_midroll_ended_early_total` | Counter | `session_id` | Mid-roll breaks ended early by broadcaster |
+| `broadcast_ad_free_joins_total` | Counter | -- | Subscribers who joined ad-free |
+| `broadcast_ad_break_duration_seconds` | Histogram | -- | Actual ad break duration |
+
+### 15.2 Log Events
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| `preroll_served` | INFO | session_id, viewer_id, creative_id |
+| `preroll_skipped` | INFO | session_id, viewer_id, skip_after_seconds |
+| `preroll_ad_free` | DEBUG | session_id, viewer_id, subscription_id |
+| `midroll_triggered` | INFO | session_id, broadcaster_id, duration_seconds |
+| `midroll_ended` | INFO | session_id, ended_by (auto/manual), actual_duration |
+| `midroll_sse_sent` | DEBUG | session_id, event_type, viewer_count |
+
+### 15.3 Alerting Rules
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Pre-roll failures spike | >10% pre-roll serve failures in 15 min | P3 |
+| Ad break stuck | ad_break_active=true for >3x configured duration | P2 |
+| SSE delivery failures | >5% SSE events undelivered in 1 hour | P2 |
+
+---
+
+## 16. Rollout Plan
+
+### 16.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `BROADCAST_PREROLL_ENABLED` | `false` | Enable pre-roll ads on broadcast join |
+| `BROADCAST_MIDROLL_ENABLED` | `false` | Enable mid-roll ad break button |
+
+### 16.2 Phased Deployment
+
+| Phase | Scope | Duration | Details |
+|-------|-------|----------|---------|
+| Phase 1: Backend + Session Model | Internal | Week 1 | Deploy session model extensions, ad-break endpoints, pre-roll in join response. Both flags off. |
+| Phase 2: Pre-Roll Only | All users | Week 2 | `BROADCAST_PREROLL_ENABLED=true`. Viewers see pre-roll on join. Monitor skip rates and subscriber bypass. |
+| Phase 3: Mid-Roll + UI | All users | Week 3 | `BROADCAST_MIDROLL_ENABLED=true`. AdBreakButton visible. AdOverlay deployed. Full SSE integration. |
+
+---
+
+## 17. Performance Considerations
+
+### 17.1 Latency Targets
+
+| Endpoint | Target p50 | Target p99 |
+|----------|-----------|-----------|
+| POST /join (with pre-roll) | 80ms | 300ms |
+| POST /ad-break (trigger) | 50ms | 200ms |
+| POST /ad-break/end | 30ms | 100ms |
+| SSE event delivery | 50ms | 200ms |
+
+### 17.2 SSE Scalability
+
+Each broadcast session maintains a set of SSE connections for all connected viewers. `ad_break:start` and `ad_break:end` events are broadcast to all viewers simultaneously. For sessions with 1000+ concurrent viewers, the SSE publish loop iterates through all connections sequentially. Future optimization: batch SSE publish with fan-out.
+
+### 17.3 Ad Break Auto-End
+
+The `_schedule_ad_break_end()` function uses `asyncio.sleep(duration)` to auto-end breaks. This runs in the uvicorn event loop. For reliability, a secondary check runs every 60s scanning for sessions with `ad_break_active=true` and `ad_break_started_at + duration < now_ts()`, ending any stuck breaks.
+
+---
+
+## 18. Expanded E2E Tests
+
+### 18.1 Section 369: Input Validation (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 369.1 | Invalid mid_roll duration (10s) | PATCH session with 10; 422; "must be between 15 and 60" |
+| 369.2 | Invalid mid_roll duration (90s) | PATCH session with 90; 422 |
+| 369.3 | Invalid skip_after (2s) | PATCH skip_after=2; 422; "must be between 5 and 30" |
+| 369.4 | Valid extreme values accepted | PATCH duration=60, skip_after=30; 200 |
+
+### 18.2 Section 370: Authorization Boundary (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 370.1 | Non-broadcaster cannot trigger ad break | Bob POST ad-break on Alice's session; 403 |
+| 370.2 | Non-broadcaster cannot end ad break | Bob POST ad-break/end on Alice's session; 403 |
+| 370.3 | Non-broadcaster cannot update ad config | Bob PATCH ad config on Alice's session; 403 |
+| 370.4 | Viewer can join session (ad shows) | Bob POST join; 200; pre_roll present |
+
+### 18.3 Section 371: Ad Break Lifecycle (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 371.1 | Trigger → End → Trigger again | POST ad-break; POST end; POST ad-break again; 200 |
+| 371.2 | Total ad breaks increments | After 2 ad breaks, GET session; total_ad_breaks=2 |
+| 371.3 | Ad break on non-live session | Stop session; POST ad-break; 400 "must be live" |
+| 371.4 | Pre-roll disabled returns null | Create session with pre_roll_enabled=false; Bob joins; pre_roll=null |
+
+### 18.4 Section 372: Subscriber Ad-Free (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 372.1 | Subscriber joins ad-free | Subscribe Bob to Alice; Bob joins; ad_free=true, pre_roll=null |
+| 372.2 | Non-subscriber sees pre-roll | Unsubscribed viewer joins; pre_roll != null |
+| 372.3 | Subscriber ignores mid-roll SSE | Subscriber connected; ad_break:start received; client should not show overlay |
+| 372.4 | Expired subscription sees ads | Expire Bob's sub; Bob joins; ad_free=false, pre_roll present |

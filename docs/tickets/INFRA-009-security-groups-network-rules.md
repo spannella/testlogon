@@ -486,3 +486,341 @@ SGs use `user_sub` as PK. Users cannot view or modify other users' security grou
 8. Frontend shows rule tables with add/edit/delete capabilities.
 9. "Platform Only" shortcut simplifies common security configuration.
 10. All SG mutations produce audit events.
+
+---
+
+## 8. Architecture & Data Flow
+
+```
+  User creates Security Group
+       │
+       ▼
+  POST /ui/remote/security-groups { name, rules[] }
+       │
+       ├── validate_rule() for each rule
+       │     ├── Protocol in (tcp/udp/icmp/all)?
+       │     ├── Port range valid (0-65535, from <= to)?
+       │     ├── Source: CIDR → normalize_cidr()
+       │     │           platform_only → resolve later
+       │     │           sg:{id} → validate SG exists
+       │     └── Dangerous rule check: SSH on 0.0.0.0/0 → BLOCKED
+       │
+       ├── DDB PutItem: PK=user_sub, SK=SG#{sg_id}
+       │     └── Stores rules as List of Maps
+       │
+       └── audit_event("compute.sg_created", ...)
+
+  Instance Launch with SG
+       │
+       ▼
+  POST /ui/remote/ec2/launch { security_group_id }
+       │
+       ├── Validate SG exists + belongs to user
+       │     └── If no SG provided → ensure_default_sg(user_sub)
+       │           └── Auto-creates default SG (SSH + VNC from platform_only)
+       │
+       ├── Record SG association on instance item
+       │     └── DDB UpdateItem: SET security_group_id = :sg_id
+       │
+       └── Production: translate rules → AWS authorize-security-group-ingress
+             └── Dev: mock enforcement (DDB tracking only)
+```
+
+---
+
+## 9. Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table / GSI | PK | SK | Operation | Notes |
+|---|---------------|-------------|----|----|-----------|-------|
+| 1 | Get SG by ID | Main table | `user_sub` | `SG#{sg_id}` | GetItem | Returns full SG with rules |
+| 2 | List user SGs | Main table | `user_sub` | begins_with `SG#` | Query | All SGs for a user |
+| 3 | List by creation date | GSI `ByCreatedAt` | `user_sub` | `created_at` (N) | Query | Newest-first ordering |
+| 4 | Create SG | Main table | `user_sub` | `SG#{sg_id}` | PutItem with ConditionExpression `attribute_not_exists(sk)` | Prevents duplicates |
+| 5 | Update SG rules | Main table | `user_sub` | `SG#{sg_id}` | UpdateItem SET rules = :rules, updated_at = :ts | Replaces entire rules list |
+| 6 | Delete SG | Main table | `user_sub` | `SG#{sg_id}` | DeleteItem with ConditionExpression `is_default = :false` | Prevents default SG deletion |
+| 7 | Find default SG | Main table | `user_sub` | begins_with `SG#` | Query + FilterExpression `is_default = :true` | Used during auto-creation check |
+| 8 | Add SG association to instance | `ec2_instances` | `user_sub` | `INSTANCE#{id}` | UpdateItem SET security_group_id | Links instance to SG |
+
+---
+
+## 10. API Request/Response Examples
+
+**POST /ui/remote/security-groups** (Create SG)
+
+```bash
+curl -X POST http://localhost:8000/ui/remote/security-groups \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_xxx; ui_csrf=csrf_xxx; ui_access_token=jwt_xxx" \
+  -H "x-csrf-token: csrf_xxx" \
+  -d '{
+    "name": "Web Server Rules",
+    "description": "Allow HTTP/HTTPS and SSH from platform",
+    "rules": [
+      { "protocol": "tcp", "port_from": 80, "port_to": 80, "source": "0.0.0.0/0", "direction": "inbound", "description": "HTTP" },
+      { "protocol": "tcp", "port_from": 443, "port_to": 443, "source": "0.0.0.0/0", "direction": "inbound", "description": "HTTPS" },
+      { "protocol": "tcp", "port_from": 22, "port_to": 22, "source": "platform_only", "direction": "inbound", "description": "SSH from platform" }
+    ]
+  }'
+```
+
+Response (201):
+```json
+{
+  "sg_id": "sg-a1b2c3d4",
+  "name": "Web Server Rules",
+  "description": "Allow HTTP/HTTPS and SSH from platform",
+  "rules": [
+    { "rule_id": "r-001", "protocol": "tcp", "port_from": 80, "port_to": 80, "source": "0.0.0.0/0", "direction": "inbound", "description": "HTTP" },
+    { "rule_id": "r-002", "protocol": "tcp", "port_from": 443, "port_to": 443, "source": "0.0.0.0/0", "direction": "inbound", "description": "HTTPS" },
+    { "rule_id": "r-003", "protocol": "tcp", "port_from": 22, "port_to": 22, "source": "platform_only", "direction": "inbound", "description": "SSH from platform" }
+  ],
+  "is_default": false,
+  "created_at": 1748520000,
+  "updated_at": 1748520000,
+  "associated_instances": []
+}
+```
+
+**GET /ui/remote/security-groups**
+
+Response (200):
+```json
+{
+  "security_groups": [
+    {
+      "sg_id": "sg-default-alice",
+      "name": "Default Security Group",
+      "rules": [
+        { "rule_id": "default-ssh", "protocol": "tcp", "port_from": 22, "port_to": 22, "source": "platform_only", "direction": "inbound" },
+        { "rule_id": "default-vnc", "protocol": "tcp", "port_from": 5900, "port_to": 5999, "source": "platform_only", "direction": "inbound" },
+        { "rule_id": "default-outbound", "protocol": "all", "port_from": 0, "port_to": 65535, "source": "0.0.0.0/0", "direction": "outbound" }
+      ],
+      "is_default": true,
+      "associated_instances": ["i-abc123"]
+    }
+  ],
+  "count": 1
+}
+```
+
+**POST /ui/remote/security-groups/{sg_id}/rules** (Add rule)
+
+```json
+// Request
+{ "protocol": "tcp", "port_from": 8080, "port_to": 8080, "source": "10.0.0.0/8", "direction": "inbound", "description": "Dev server" }
+
+// Response (200) — returns full updated SG
+```
+
+**Attempting to add SSH open to all:**
+
+```json
+// Request
+{ "protocol": "tcp", "port_from": 22, "port_to": 22, "source": "0.0.0.0/0", "direction": "inbound" }
+
+// Response (400)
+{ "detail": "SSH (port 22) open to 0.0.0.0/0 is not recommended. Use 'platform_only' or a specific CIDR." }
+```
+
+---
+
+## 11. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| SG not found | 404 | `sg_not_found` | "Security group not found" | Verify SG ID |
+| Delete default SG | 409 | `cannot_delete_default` | "Cannot delete default security group" | Create a custom SG instead |
+| Delete SG with associated instances | 409 | `sg_in_use` | "Cannot delete SG with associated instances" | Disassociate instances first |
+| Invalid CIDR source | 400 | `invalid_cidr` | "Invalid CIDR: not-a-cidr" | Use valid CIDR notation |
+| SSH open to 0.0.0.0/0 | 400 | `dangerous_rule` | "SSH open to all is blocked" | Use `platform_only` or specific CIDR |
+| port_from > port_to | 422 | `validation_error` | "port_from must be <= port_to" | Fix port range |
+| Max 50 rules exceeded | 409 | `max_rules_exceeded` | "Security group cannot have more than 50 rules" | Remove unused rules |
+| Invalid protocol | 422 | `validation_error` | "Protocol must be tcp, udp, icmp, or all" | Fix protocol |
+| Other user's SG | 403 | `forbidden` | "Access denied" | Use your own SGs |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Log in |
+
+---
+
+## 12. Frontend Component Tree
+
+```
+SecurityGroupsPage
+├── PageHeader
+│   ├── Title ("Security Groups")
+│   └── CreateSgButton → opens CreateSgDialog
+├── SgList (accordion or card layout)
+│   └── SgCard[]
+│       ├── SgHeader
+│       │   ├── SgName
+│       │   ├── DefaultBadge (if is_default)
+│       │   ├── RuleCount ("5 rules")
+│       │   ├── InstanceCount ("2 instances")
+│       │   └── ActionsDropdown (edit name / delete — disabled for default)
+│       └── RuleTable (expanded view)
+│           ├── TableHeader: Direction | Protocol | Port Range | Source | Description | Actions
+│           └── RuleRow[]
+│               ├── DirectionIcon (↓ inbound / ↑ outbound)
+│               ├── ProtocolBadge ("TCP" / "UDP" / "ICMP" / "ALL")
+│               ├── PortRange ("22" or "5900-5999")
+│               ├── SourceDisplay
+│               │   ├── "Platform Only" (blue badge)
+│               │   ├── CIDR (monospace text)
+│               │   └── "Anywhere" (red warning badge for 0.0.0.0/0)
+│               ├── Description
+│               └── RuleActions (Edit / Delete buttons)
+├── AddRuleDialog
+│   ├── ProtocolSelect (TCP / UDP / ICMP / All)
+│   ├── PortFromInput + PortToInput (disabled for ICMP/All)
+│   ├── SourceInput
+│   │   ├── PlatformOnlyButton → auto-fills "platform_only"
+│   │   ├── AnywhereButton → auto-fills "0.0.0.0/0" with WarningBanner
+│   │   └── CidrInput (text input with validation feedback)
+│   ├── DirectionToggle (Inbound / Outbound)
+│   ├── DescriptionInput
+│   └── SubmitButton
+└── WarningBanner (shown when any rule has 0.0.0.0/0 on SSH/VNC)
+```
+
+**Props interfaces:**
+
+```typescript
+interface SgCardProps {
+  sg: SecurityGroupOut;
+  onAddRule: (sgId: string) => void;
+  onDeleteRule: (sgId: string, ruleId: string) => void;
+  onDelete: (sgId: string) => void;
+}
+
+interface AddRuleDialogProps {
+  open: boolean;
+  onClose: () => void;
+  sgId: string;
+  onRuleAdded: (sg: SecurityGroupOut) => void;
+}
+
+interface SourceInputProps {
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+}
+```
+
+---
+
+## 13. Observability
+
+### 13.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `security_group_created_total` | Counter | `is_default` (true/false) | SGs created |
+| `security_group_rule_added_total` | Counter | `protocol`, `direction` | Rules added |
+| `security_group_dangerous_rule_blocked_total` | Counter | `port`, `source` | Dangerous rule attempts blocked |
+| `security_group_default_auto_created_total` | Counter | | Default SGs auto-created |
+| `security_group_launch_association_total` | Counter | | SGs associated with launched instances |
+
+### 13.2 Structured Logging
+
+| Log Event | Level | Fields | Trigger |
+|-----------|-------|--------|---------|
+| `sg.created` | INFO | `sg_id`, `user_sub`, `rule_count` | SG creation |
+| `sg.rule_added` | INFO | `sg_id`, `rule_id`, `protocol`, `port_range`, `source` | Rule added |
+| `sg.rule_removed` | INFO | `sg_id`, `rule_id` | Rule removed |
+| `sg.dangerous_rule_blocked` | WARN | `user_sub`, `protocol`, `port`, `source` | 0.0.0.0/0 on SSH blocked |
+| `sg.deleted` | INFO | `sg_id`, `user_sub` | SG deleted |
+| `sg.default_created` | INFO | `sg_id`, `user_sub` | Default SG auto-created |
+
+### 13.3 Alerting
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Spike in dangerous rule attempts | > 10 blocked dangerous rules in 1 hour | Warning | Review user activity for abuse |
+| Default SG auto-creation failures | Any exception in `ensure_default_sg` | Critical | Check DDB connectivity |
+
+---
+
+## 14. Performance Considerations
+
+### 14.1 Latency Targets
+
+| Operation | Target P95 | Notes |
+|-----------|-----------|-------|
+| List SGs | < 100ms | Single DDB Query on PK=user_sub |
+| Get SG detail | < 50ms | Single GetItem |
+| Create SG | < 100ms | PutItem with condition |
+| Add/remove rule | < 100ms | UpdateItem with rule list replacement |
+| Validate rule | < 5ms | In-memory validation, no DDB call |
+
+### 14.2 Rule Validation Performance
+
+- CIDR validation uses Python's `ipaddress` module (in-memory, microseconds).
+- Rule limit of 50 per SG keeps the `rules` list small (< 10KB serialized).
+- Full SG item size: < 20KB (well under DDB 400KB limit).
+
+### 14.3 Platform CIDR Resolution
+
+- `platform_only` resolves to `S.platform_egress_cidrs` at read time (not stored expanded).
+- Resolution is O(1) — simple config lookup, no external call.
+
+---
+
+## 15. Rollout Plan
+
+### 15.1 Feature Flags
+
+| Flag | Environment Variable | Default | Description |
+|------|---------------------|---------|-------------|
+| `security_groups_enabled` | `SECURITY_GROUPS_ENABLED` | `true` | Master switch |
+| `sg_dangerous_rule_block` | `SG_BLOCK_DANGEROUS_RULES` | `true` | Block SSH to 0.0.0.0/0 |
+| `sg_max_rules_per_group` | `SG_MAX_RULES` | `50` | Max rules per SG |
+
+### 15.2 Phased Rollout
+
+**Phase 1 (Day 1-2)**: Backend service + DDB table + default SG auto-creation + rule validation.
+
+**Phase 2 (Day 3-4)**: API router (8 endpoints) + launch integration.
+
+**Phase 3 (Day 5-6)**: Frontend SecurityGroupsPage with rule management.
+
+**Phase 4 (Day 7)**: E2E tests, production rollout.
+
+### 15.3 Rollback
+
+1. Set `SECURITY_GROUPS_ENABLED=false` — API returns 400.
+2. Instance launches fall back to no SG association.
+3. Existing SG records remain in DDB but are inert.
+
+---
+
+## 16. Expanded E2E Tests
+
+### Section 270: Security Group CRUD API (5 tests) -- existing
+
+1-5. (As defined above in Section 5)
+
+### Section 271: Rule Management API (5 tests) -- existing
+
+6-10. (As defined above in Section 5)
+
+### Section 272: Security Groups UI (5 tests) -- existing
+
+11-15. (As defined above in Section 5)
+
+### Section 273: Rule Validation Edge Cases (7 tests)
+
+16. `ICMP rule ignores port range` -- Add ICMP inbound rule with port_from=0, port_to=0. Verify accepted.
+17. `Protocol "all" ignores port range` -- Add "all" protocol rule. Verify accepted.
+18. `Port range 0-65535 accepted for TCP` -- Full port range rule. Verify accepted.
+19. `Source "sg:{sg_id}" accepted for SG reference` -- Add rule referencing another SG. Verify accepted.
+20. `Rule with empty description accepted` -- Add rule with `description: ""`. Verify accepted.
+21. `50th rule succeeds, 51st rejected` -- Add 50 rules (verify ok), add 51st (verify 409).
+22. `platform_only resolves to non-empty CIDR list` -- GET effective rules. Verify platform_only source is expanded.
+
+### Section 274: SG Launch Integration & Multi-User Isolation (6 tests)
+
+23. `Launch with custom SG associates instance` -- Launch with `security_group_id`. GET SG, verify `associated_instances` includes instance ID.
+24. `Launch without SG auto-creates default` -- Launch without SG. GET SGs, verify default exists.
+25. `Alice cannot view Bob's SGs` -- Bob creates SG. Alice lists SGs. Bob's SG not visible.
+26. `Alice cannot add rule to Bob's SG` -- POST rule to Bob's SG. Verify 403.
+27. `Delete SG with associated instance fails` -- Launch instance with SG, DELETE SG. Verify 409.
+28. `Delete SG succeeds after disassociating instances` -- Terminate instance, DELETE SG. Verify 200.

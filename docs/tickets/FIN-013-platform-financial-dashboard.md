@@ -515,9 +515,148 @@ export const exportFinancialPdf = (params: { start_date: string; end_date: strin
 | 14 | `Root can trigger manual rollup` | POST `/v1/admin/financials/rollup` as Root -> 200; response has `computed_at` |
 | 15 | `Non-root cannot trigger rollup` | POST as Charlie (ADMIN, not ROOT) -> 403 |
 
+**Section 527: Financial Dashboard Edge Cases (5 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 16 | `KPIs with single transaction` | Seed only 1 transaction; GET KPIs; values correct for 1 tx |
+| 17 | `Trends with no data in range` | GET trends for future range; empty array |
+| 18 | `Provider breakdown with single provider` | All txns via Stripe; Stripe pct=100.0 |
+| 19 | `Top creators limited by count param` | GET top-creators?limit=2; exactly 2 entries |
+| 20 | `CSV export includes correct date range` | Export with date params; first data row date >= start_date |
+
+**Total E2E tests: 20**
+
 ---
 
-## 6. Security Considerations
+## 6. API Request/Response Examples
+
+**Get financial KPIs** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/v1/admin/financials/kpis?start_date=2026-05-01&end_date=2026-05-29" \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_r; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "gmv_cents": 1250000,
+  "net_revenue_cents": 125000,
+  "take_rate_bps": 1000,
+  "tx_count": 342,
+  "unique_payers": 156,
+  "avg_tx_cents": 3655
+}
+```
+
+**Get revenue trends** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/v1/admin/financials/trends?granularity=daily&start_date=2026-05-22&end_date=2026-05-29" \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_r; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "data": [
+    {"date": "2026-05-22", "gmv_cents": 42000, "net_revenue_cents": 4200, "tx_count": 12},
+    {"date": "2026-05-23", "gmv_cents": 55000, "net_revenue_cents": 5500, "tx_count": 15}
+  ]
+}
+```
+
+**Get provider breakdown** (curl):
+
+```bash
+curl -X GET http://localhost:8000/v1/admin/financials/providers \
+  -H "Cookie: ui_session=sess_root; ui_csrf=csrf_r; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "data": [
+    {"provider": "stripe", "total_cents": 980000, "tx_count": 280, "pct": 78.4},
+    {"provider": "paypal", "total_cents": 270000, "tx_count": 62, "pct": 21.6}
+  ]
+}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Non-admin access | 403 | `forbidden` | "Admin access required" | Use admin account |
+| Non-root rollup trigger | 403 | `root_required` | "Root access required" | Use root account |
+| Invalid date range | 422 | `validation_error` | "start_date must be before end_date" | Fix date params |
+| Invalid granularity | 422 | `validation_error` | "granularity must be daily, weekly, or monthly" | Use valid value |
+| Rollup rate limited | 429 | `rate_limited` | "Rollup can only run once per hour" | Wait |
+| No data in range | 200 | — | Returns zeroes/empty array | Normal; no error |
+
+---
+
+## 8. Observability
+
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `financial_kpi_query_total` | Counter | `admin_sub` | KPI endpoint queries |
+| `financial_rollup_duration_ms` | Histogram | — | Rollup computation time |
+| `financial_export_total` | Counter | `format` (csv) | Export downloads |
+| `financial_rollup_triggered_total` | Counter | `trigger` (manual/scheduled) | Rollup triggers |
+
+### 8.2 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Rollup failed | Rollup job returned error | High | Check DDB scan performance |
+| GMV anomaly | Daily GMV drops > 50% vs 7-day avg | High | Investigate payment pipeline |
+| Export timeout | Export takes > 30s | Medium | Check data volume |
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flag
+
+```python
+financial_dashboard_enabled: bool = os.environ.get("FINANCIAL_DASHBOARD_ENABLED", "true").lower() == "true"
+```
+
+### 9.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend + rollup | Deploy endpoints; schedule daily rollup | 2 days | Unit tests pass |
+| Phase 2: Internal | Enable admin dashboard | 3 days | All 20 E2E pass |
+| Phase 3: GA | Visible to all admins | Permanent | KPI values validated |
+
+### 9.3 Rollback
+
+1. Set flag OFF — dashboard shows "Financial dashboard unavailable"
+2. Rollup data preserved; resume on re-enable
+3. No impact on billing operations
+
+---
+
+## 10. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Daily rollup scan | < 60s for 100K ledger entries | Scan with page_size=100; aggregate in-memory |
+| KPI query | < 100ms | Read from pre-computed rollup DDB items |
+| Trends query | < 200ms | Query rollup GSI by date range |
+| CSV export | < 10s for 1 year of daily data | Stream CSV rows; don't buffer entire file |
+| Provider breakdown | < 100ms | Read from rollup summary item |
+
+---
+
+## 11. Security Considerations
 
 ### 6.1 Role-Based Access
 - All read endpoints require ADMIN role (`require_admin_session`)

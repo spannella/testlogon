@@ -35,7 +35,68 @@ Product management requires continuous attention to the evolving needs of users,
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  Product Manager Agent System Architecture                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+  │ Schedule      │   │ Manual       │   │ Support      │
+  │ Trigger       │   │ Trigger      │   │ Tickets      │
+  │ (cron/daily/  │   │ (owner click │   │ (helpdesk    │
+  │  weekly)      │   │  in UI)      │   │  analysis)   │
+  └──────┬────────┘   └──────┬───────┘   └──────┬───────┘
+         │                   │                   │
+         └───────────────────┼───────────────────┘
+                             ▼
+  ┌──────────────────────────────────────────────────────┐
+  │           PM Agent Core (agent_pm.py)                │
+  │                                                      │
+  │  1. Gather context (preferences, recent rejections)  │
+  │  2. Browse live app via Playwright                   │
+  │  3. Analyze competitor URLs                          │
+  │  4. Analyze support ticket pain points               │
+  │  5. Generate feature ideas with evidence             │
+  │  6. Store ideas as pending for owner review          │
+  └────────┬──────────────┬──────────────┬───────────────┘
+           │              │              │
+           ▼              ▼              ▼
+  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+  │ Feature Ideas│ │ Preference   │ │ S3           │
+  │ Table (DDB)  │ │ Learning     │ │ Screenshots  │
+  │              │ │ Table (DDB)  │ │ & Traces     │
+  │ pk=USER#id   │ │              │ │              │
+  │ sk=IDEA#id   │ │ pk=USER#id   │ └──────────────┘
+  └──────┬───────┘ │ sk=PREF#cat  │
+         │         └──────────────┘
+         │
+         ▼  (on approve)
+  ┌──────────────┐
+  │ Ticket System│
+  │              │
+  │ type:product │
+  │ _request     │
+  └──────────────┘
+
+  ┌──────────────────────────────────────────────────────┐
+  │              Idea Lifecycle State Machine             │
+  │                                                      │
+  │  ┌─────────┐  approve  ┌──────────┐                │
+  │  │ pending │──────────▶│ approved │                │
+  │  └────┬────┘           └────┬─────┘                │
+  │       │ reject              │ archive              │
+  │       ▼                     ▼                      │
+  │  ┌──────────┐         ┌──────────┐                │
+  │  │ rejected │────────▶│ archived │                │
+  │  └──────────┘ archive └──────────┘                │
+  └──────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Current State Analysis
 
 ### 2.1 Existing Infrastructure
 
@@ -154,7 +215,43 @@ Stored as a DDB map on the agent registry entry (`pm_config` field):
 }
 ```
 
-### 3.2 Backend Service (`app/services/agent_pm.py`)
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | GSI | Notes |
+|----------------|-------|----|----|-----|-------|
+| Get idea by ID | `agent_feature_ideas` | `USER#{user_id}` | `IDEA#{idea_id}` | -- | Single item read |
+| List ideas by status | `agent_feature_ideas` | -- | -- | `GSI1PK=USER#{user_id}#STATUS#{status}, GSI1SK=created_at` | Paginated, newest first |
+| List all ideas for user | `agent_feature_ideas` | `USER#{user_id}` | begins_with `IDEA#` | -- | All statuses |
+| List ideas by agent | `agent_feature_ideas` | -- | -- | `GSI2PK=AGENT#{agent_id}, GSI2SK=created_at` | All ideas from one agent run |
+| Update idea status | `agent_feature_ideas` | `USER#{user_id}` | `IDEA#{idea_id}` | -- | Conditional: status=pending |
+| Get preference by category | `agent_preference_learning` | `USER#{user_id}` | `PREF#{category}` | -- | Single item |
+| List all preferences | `agent_preference_learning` | `USER#{user_id}` | begins_with `PREF#` | -- | All categories |
+| Update preference counters | `agent_preference_learning` | `USER#{user_id}` | `PREF#{category}` | -- | ADD total_approved/rejected |
+
+**Example DynamoDB item -- feature idea:**
+
+```json
+{
+  "pk": {"S": "USER#alice-sub-001"},
+  "sk": {"S": "IDEA#idea-abc-123"},
+  "idea_id": {"S": "idea-abc-123"},
+  "user_id": {"S": "alice-sub-001"},
+  "agent_id": {"S": "pm-agent-001"},
+  "title": {"S": "Add emoji reactions to newsfeed posts"},
+  "description": {"S": "Users frequently request the ability to react to posts with emoji..."},
+  "category": {"S": "feature"},
+  "priority_suggestion": {"S": "high"},
+  "user_impact": {"S": "Increases engagement by 20-30% based on competitor data"},
+  "status": {"S": "pending"},
+  "created_at": {"N": "1748534400"},
+  "GSI1PK": {"S": "USER#alice-sub-001#STATUS#pending"},
+  "GSI1SK": {"N": "1748534400"},
+  "GSI2PK": {"S": "AGENT#pm-agent-001"},
+  "GSI2SK": {"N": "1748534400"}
+}
+```
+
+### 3.3 Backend Service (`app/services/agent_pm.py`)
 
 ```python
 def create_feature_idea(*, user_id: str, agent_id: str, worker_id: str,
@@ -298,7 +395,205 @@ export interface PmAgentConfig {
 }
 ```
 
-### 3.5 Frontend API (`frontend/src/api/endpoints/agents.ts`)
+### 3.5 API Request/Response Examples
+
+```bash
+# --- GET /ui/agents/pm/ideas?status=pending ---
+curl http://localhost:8000/ui/agents/pm/ideas?status=pending \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "ideas": [
+    {
+      "idea_id": "idea-abc-123",
+      "title": "Add emoji reactions to newsfeed posts",
+      "category": "feature",
+      "priority_suggestion": "high",
+      "user_impact": "Increases engagement by 20-30%",
+      "status": "pending",
+      "created_at": 1748534400
+    }
+  ],
+  "next_cursor": null
+}
+
+# --- POST /ui/agents/pm/ideas/{idea_id}/approve ---
+curl -X POST http://localhost:8000/ui/agents/pm/ideas/idea-abc-123/approve \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123"
+
+# Response 200:
+{
+  "idea_id": "idea-abc-123",
+  "status": "approved",
+  "created_ticket_id": "TICKET-600",
+  "reviewed_at": 1748538000
+}
+
+# --- POST /ui/agents/pm/ideas/{idea_id}/reject ---
+curl -X POST http://localhost:8000/ui/agents/pm/ideas/idea-def-456/reject \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Not aligned with current roadmap priorities"}'
+
+# Response 200:
+{
+  "idea_id": "idea-def-456",
+  "status": "rejected",
+  "rejection_reason": "Not aligned with current roadmap priorities",
+  "reviewed_at": 1748538100
+}
+
+# --- GET /ui/agents/pm/preferences ---
+curl http://localhost:8000/ui/agents/pm/preferences \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "preferences": [
+    {"category": "feature", "total_suggested": 12, "total_approved": 8, "total_rejected": 4, "approval_rate": 0.667},
+    {"category": "ux", "total_suggested": 5, "total_approved": 1, "total_rejected": 4, "approval_rate": 0.2},
+    {"category": "monetization", "total_suggested": 3, "total_approved": 3, "total_rejected": 0, "approval_rate": 1.0}
+  ]
+}
+```
+
+### 3.6 Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal, Optional, List
+from enum import Enum
+
+
+class IdeaCategory(str, Enum):
+    UX = "ux"
+    FEATURE = "feature"
+    PERFORMANCE = "performance"
+    INTEGRATION = "integration"
+    MONETIZATION = "monetization"
+    ACCESSIBILITY = "accessibility"
+
+
+class IdeaPriority(str, Enum):
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class IdeaStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    ARCHIVED = "archived"
+
+
+class EvidenceItem(BaseModel):
+    type: str = Field(max_length=50)
+    url: Optional[str] = Field(default=None, max_length=500)
+    description: str = Field(max_length=500)
+
+
+class CompetitorRef(BaseModel):
+    url: str = Field(max_length=500)
+    feature: str = Field(max_length=200)
+    notes: str = Field(max_length=500)
+
+
+class FeatureIdeaOut(BaseModel):
+    idea_id: str
+    user_id: str
+    agent_id: str
+    title: str
+    description: str
+    category: IdeaCategory
+    priority_suggestion: IdeaPriority
+    user_impact: str
+    mockup_description: Optional[str] = None
+    evidence: Optional[List[EvidenceItem]] = None
+    competitor_refs: Optional[List[CompetitorRef]] = None
+    support_ticket_refs: Optional[List[str]] = None
+    status: IdeaStatus
+    rejection_reason: Optional[str] = None
+    created_ticket_id: Optional[str] = None
+    created_at: int
+    reviewed_at: Optional[int] = None
+
+
+class RejectIdeaIn(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+
+class PreferenceSummaryOut(BaseModel):
+    category: str
+    total_suggested: int = Field(ge=0)
+    total_approved: int = Field(ge=0)
+    total_rejected: int = Field(ge=0)
+    approval_rate: float = Field(ge=0.0, le=1.0)
+
+
+class UpdatePmConfigIn(BaseModel):
+    review_frequency: Optional[Literal["daily", "weekly", "biweekly"]] = None
+    review_day: Optional[Literal["monday", "tuesday", "wednesday", "thursday", "friday"]] = None
+    review_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
+    focus_areas: Optional[List[str]] = None
+    competitor_urls: Optional[List[dict]] = None
+    max_ideas_per_review: Optional[int] = Field(default=None, ge=1, le=20)
+    analyze_support_tickets: Optional[bool] = None
+    support_ticket_lookback_days: Optional[int] = Field(default=None, ge=1, le=90)
+```
+
+### 3.7 Frontend Component Tree
+
+```
+FeatureIdeasPage                      data-testid="feature-ideas-page"
+├── Tabs (status filter)
+│   ├── TabsTrigger "Pending"
+│   ├── TabsTrigger "Approved"
+│   ├── TabsTrigger "Rejected"
+│   └── TabsTrigger "Archived"
+├── div.grid.grid-cols-1.md:grid-cols-2.lg:grid-cols-3
+│   └── ideas.map(idea =>
+│       ├── Card
+│       │   ├── CardHeader
+│       │   │   ├── span.font-semibold (idea.title)
+│       │   │   ├── Badge (category)
+│       │   │   └── Badge (priority_suggestion)
+│       │   ├── CardContent
+│       │   │   └── p.text-sm (user_impact, truncated)
+│       │   └── CardFooter (if pending)
+│       │       ├── Button "Approve" variant="default"
+│       │       └── Button "Reject" variant="outline"
+│       └── onClick → open IdeaDetailDialog
+│   )
+└── PmConfigPanel (collapsible sidebar or separate tab)
+
+IdeaDetailDialog                      data-testid="idea-detail-dialog"
+├── DialogHeader (idea.title)
+├── div.space-y-4
+│   ├── div "Category" + Badge
+│   ├── div "Priority" + Badge
+│   ├── div "User Impact" + p
+│   ├── div "Description" + Markdown render
+│   ├── div "Mockup" + p (if mockup_description)
+│   ├── div "Evidence" + list (if evidence)
+│   ├── div "Competitor Refs" + list (if competitor_refs)
+│   └── div "Support Tickets" + links (if support_ticket_refs)
+├── (if pending) div.flex.gap-2
+│   ├── Button "Approve"
+│   └── Button "Reject" → shows Textarea for reason
+└── (if rejected) div "Rejection Reason" + p
+
+PreferenceDashboard                   data-testid="preference-dashboard"
+├── BarChart (approval_rate per category)
+└── Table
+    └── columns: [category, total_suggested, total_approved, total_rejected, approval_rate]
+```
+
+### 3.8 Frontend API (`frontend/src/api/endpoints/agents.ts`)
 
 Standard CRUD wrappers: `listFeatureIdeas(status?)`, `getFeatureIdea(ideaId)`, `approveIdea(ideaId)`, `rejectIdea(ideaId, reason)`, `archiveIdea(ideaId)`, `getPreferenceSummary()`, `listReviewSessions()`, `getReviewScreenshots(reviewId)`, `updatePmConfig(config)`, `triggerReview()`.
 
@@ -391,6 +686,26 @@ let ideaId3: string;
 | 674.3 | Approve idea via UI | Click idea card; detail dialog opens; click Approve; idea moves to Approved tab |
 | 674.4 | Reject idea via UI | Create new pending idea; click Reject; enter reason in dialog; confirm; idea moves to Rejected tab |
 
+### 5.7 Expanded E2E Test Details
+
+#### Section 675: Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 675.1 | Approve already-approved idea | POST approve on approved idea; 409 |
+| 675.2 | Reject without reason | POST reject with empty body; 422 |
+| 675.3 | List ideas with pagination | Create 30 ideas; GET with limit=10; verify cursor and next page |
+| 675.4 | Trigger review while one is running | POST trigger-review twice; second returns 409 |
+
+#### Section 676: Negative Tests (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 676.1 | Other user cannot view ideas | Bob tries to GET Alice's idea; 403 |
+| 676.2 | Invalid category in idea creation | POST idea with category="invalid"; 422 |
+| 676.3 | Exceed max_ideas_per_review | Set max to 2; create 3 ideas in one batch; third rejected |
+| 676.4 | Invalid review frequency | PUT config with review_frequency="hourly"; 422 |
+
 ---
 
 ## 6. Error Handling
@@ -407,9 +722,82 @@ let ideaId3: string;
 | Review already in progress | 409 | "A review session is already running" |
 | Max ideas per review exceeded | 400 | "Cannot create more than {max} ideas per review" |
 
+### 6.2 Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| Idea not found | 404 | `IDEA_NOT_FOUND` | "Feature idea not found." | Verify idea_id |
+| Not owner | 403 | `NOT_IDEA_OWNER` | "You do not own this idea." | Use own account |
+| Invalid status transition | 409 | `INVALID_STATUS_TRANSITION` | "Cannot approve idea with status: {s}." | Check current status first |
+| No rejection reason | 422 | `REASON_REQUIRED` | "Rejection reason is required." | Provide reason text |
+| Invalid category | 422 | `INVALID_CATEGORY` | "Invalid category: {value}." | Use valid category enum |
+| Config validation | 422 | `CONFIG_INVALID` | "review_hour_utc must be 0-23." | Fix config value |
+| No PM agent configured | 404 | `PM_NOT_CONFIGURED` | "No PM Agent configured." | Create PM agent type first |
+| Review in progress | 409 | `REVIEW_IN_PROGRESS` | "A review is already running." | Wait for completion |
+| Max ideas exceeded | 400 | `MAX_IDEAS_EXCEEDED` | "Max ideas per review reached." | Increase limit or wait |
+| Rate limit on trigger | 429 | `RATE_LIMITED` | "Manual trigger limited to 1/hour." | Wait and retry |
+
 ---
 
-## 7. Security Considerations
+## 7. Observability & Monitoring
+
+### 7.1 Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `pm_ideas_created_total` | Counter | `category`, `priority` | Ideas generated |
+| `pm_ideas_approved_total` | Counter | `category` | Ideas approved |
+| `pm_ideas_rejected_total` | Counter | `category` | Ideas rejected |
+| `pm_review_duration_seconds` | Histogram | -- | Review session duration |
+| `pm_review_ideas_count` | Histogram | -- | Ideas per review session |
+| `pm_approval_rate` | Gauge | `category` | Rolling approval rate |
+| `pm_pending_ideas_gauge` | Gauge | -- | Pending ideas awaiting review |
+
+### 7.2 Log Events
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| `pm_review_started` | INFO | agent_id, user_id, focus_areas |
+| `pm_idea_created` | INFO | idea_id, category, priority |
+| `pm_idea_approved` | INFO | idea_id, ticket_id |
+| `pm_idea_rejected` | INFO | idea_id, reason |
+| `pm_review_completed` | INFO | agent_id, ideas_count, duration |
+| `pm_preference_updated` | DEBUG | user_id, category, approval_rate |
+
+### 7.3 Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| No reviews in 7 days | review count = 0 (7d) | P3 |
+| Approval rate < 10% | Rolling 30d approval rate < 0.1 | P3 |
+| Review session stuck | Duration > 45 min | P2 |
+
+---
+
+## 8. Rollout Plan
+
+### 8.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `PM_AGENT_ENABLED` | `false` | Master kill switch |
+| `PM_COMPETITOR_ANALYSIS_ENABLED` | `false` | Allow competitor URL browsing |
+| `PM_SUPPORT_ANALYSIS_ENABLED` | `true` | Analyze support tickets |
+| `PM_AUTO_TICKET_CREATION` | `true` | Create tickets on approval (vs manual) |
+
+### 8.2 Canary Deployment
+
+1. **Week 1**: Enable for a single test user. Review ideas manually. Verify preference learning.
+2. **Week 2**: Enable for all users with `PM_COMPETITOR_ANALYSIS_ENABLED=false` (no external browsing).
+3. **Week 3**: Enable competitor analysis. Monitor for SSRF or credential leak.
+
+### 8.3 Rollback
+
+Set `PM_AGENT_ENABLED=false`. Existing ideas and preferences remain; no new reviews scheduled.
+
+---
+
+## 9. Security Considerations
 
 - **Ownership enforcement**: All idea operations verify `user_id` matches the authenticated session. Users cannot view or act on other users' ideas.
 - **Agent credential isolation**: PM Agent's app browsing credentials are stored in a secrets manager reference (`app_auth_credentials_secret`), never in the DDB config directly. The agent terminal receives credentials via environment variable injection.

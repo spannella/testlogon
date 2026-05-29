@@ -593,7 +593,212 @@ Default 90-day retention with automatic cleanup. This limits the exposure window
 
 ---
 
-## 7. Acceptance Criteria
+## 7. DynamoDB Access Patterns
+
+| Access Pattern | Table/GSI | PK | SK / Condition | Projection | Frequency |
+|---------------|-----------|-----|----------------|------------|-----------|
+| Get recording by ID | Main table | `user_sub` | `SK = RECORDING#{recording_id}` | All | High — detail/stream/delete |
+| List user recordings | Main table | `user_sub` | `SK begins_with RECORDING#` | All | High — recordings page |
+| List by host | ByHost GSI | `user_sub` | `host_key = {hostname}:{port}` | All | Medium — host filter |
+| List by date range | ByCreatedAt GSI | `user_sub` | `created_at BETWEEN :start AND :end` | All | Medium — date filter |
+| Cleanup expired | ByCreatedAt GSI | Scan | `expires_at <= :now` | recording_id, user_sub, s3_key | Daily (background) |
+
+**Example DynamoDB item (recording metadata):**
+
+```json
+{
+  "user_sub":          {"S": "abc-123-def"},
+  "sk":                {"S": "RECORDING#rec_4f8a1b2c"},
+  "recording_id":      {"S": "rec_4f8a1b2c"},
+  "session_id":        {"S": "sess_7e2d9c"},
+  "host_id":           {"S": "host_a2c8e4"},
+  "hostname":          {"S": "dev-server.example.com"},
+  "port":              {"N": "22"},
+  "username":          {"S": "ubuntu"},
+  "host_key":          {"S": "dev-server.example.com:22"},
+  "start_time":        {"N": "1748520000"},
+  "end_time":          {"N": "1748521800"},
+  "duration_seconds":  {"N": "1800"},
+  "file_size_bytes":   {"N": "24576"},
+  "s3_key":            {"S": "ssh-recordings/abc-123-def/rec_4f8a1b2c.cast"},
+  "created_at":        {"N": "1748520000"},
+  "terminal_cols":     {"N": "120"},
+  "terminal_rows":     {"N": "40"},
+  "event_count":       {"N": "3472"},
+  "retention_days":    {"N": "90"},
+  "expires_at":        {"N": "1756296000"}
+}
+```
+
+---
+
+## 8. API Request/Response Examples
+
+### 8.1 List Recordings
+
+```bash
+curl -s http://localhost:8000/ui/remote/recordings \
+  -H "Cookie: ui_session=sess_abc; ui_csrf=tok123; ui_access_token=eyJ..."
+```
+
+**Response (200):**
+
+```json
+{
+  "recordings": [
+    {
+      "recording_id": "rec_4f8a1b2c",
+      "hostname": "dev-server.example.com",
+      "port": 22,
+      "username": "ubuntu",
+      "start_time": 1748520000,
+      "end_time": 1748521800,
+      "duration_seconds": 1800,
+      "file_size_bytes": 24576,
+      "event_count": 3472,
+      "created_at": 1748520000
+    }
+  ],
+  "count": 1,
+  "cursor": null
+}
+```
+
+### 8.2 Stream a Recording
+
+```bash
+curl -s http://localhost:8000/ui/remote/recordings/rec_4f8a1b2c/stream \
+  -H "Cookie: ui_session=sess_abc; ui_csrf=tok123; ui_access_token=eyJ..."
+```
+
+**Response (200):**
+
+```json
+{
+  "recording_id": "rec_4f8a1b2c",
+  "stream_url": "http://localhost:4566/my-bucket/ssh-recordings/abc-123-def/rec_4f8a1b2c.cast?X-Amz-Expires=3600&...",
+  "content_type": "application/x-asciicast",
+  "file_size_bytes": 24576
+}
+```
+
+---
+
+## 9. Error Handling Matrix
+
+| HTTP | Error Code | Condition | Response Body | Client Recovery |
+|------|-----------|-----------|---------------|-----------------|
+| 404 | `RECORDING_NOT_FOUND` | Recording ID doesn't exist or belongs to another user | `{"detail": "Recording not found"}` | Refresh list |
+| 404 | `HOST_NOT_FOUND` | Referenced host for filter doesn't exist | `{"detail": "Host not found"}` | Clear filter |
+| 410 | `RECORDING_EXPIRED` | Recording past retention period, S3 object deleted | `{"detail": "Recording has expired and been deleted"}` | Remove from UI |
+| 422 | `INVALID_DATE_RANGE` | Start date > end date in filter | `{"detail": "Start date must precede end date"}` | Fix date picker |
+| 500 | `S3_UPLOAD_FAILED` | S3 put_object failed during finalize | `{"detail": "Failed to save recording"}` | Recording lost (logged) |
+| 500 | `S3_PRESIGN_FAILED` | S3 presigned URL generation failed | `{"detail": "Failed to generate stream URL"}` | Retry |
+| 503 | `RECORDING_DISABLED` | Feature flag `ssh_recording_enabled=false` | `{"detail": "Session recording is disabled"}` | N/A |
+
+---
+
+## 10. Observability & Monitoring
+
+### 10.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `ssh_recording_created_total` | Counter | `host_id` | Recordings saved |
+| `ssh_recording_finalize_latency_seconds` | Histogram | — | Time to upload .cast + write DDB |
+| `ssh_recording_file_size_bytes` | Histogram | — | Distribution of recording file sizes |
+| `ssh_recording_duration_seconds` | Histogram | — | Distribution of session durations |
+| `ssh_recording_event_count` | Histogram | — | Events per recording |
+| `ssh_recording_stream_total` | Counter | — | Playback stream requests |
+| `ssh_recording_delete_total` | Counter | — | Recordings deleted (manual + cleanup) |
+| `ssh_recording_cleanup_expired_total` | Counter | — | Expired recordings purged |
+
+### 10.2 Structured Log Events
+
+```json
+{"logger": "ssh_recorder", "level": "info", "event": "recording_saved", "user_sub": "abc-123", "recording_id": "rec_4f8a1b2c", "duration_s": 1800, "events": 3472, "size_bytes": 24576}
+
+{"logger": "ssh_recorder", "level": "warn", "event": "recording_finalize_failed", "user_sub": "abc-123", "error": "S3 put_object timeout"}
+
+{"logger": "ssh_recorder", "level": "info", "event": "recording_cleanup", "expired_count": 12, "deleted_s3_objects": 12, "duration_ms": 450}
+
+{"logger": "ssh_recorder", "level": "info", "event": "recording_streamed", "user_sub": "abc-123", "recording_id": "rec_4f8a1b2c"}
+```
+
+### 10.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Recording finalize failures | `rate(ssh_recording_finalize_failed[1h]) > 5` | Warning | Check S3 connectivity |
+| Large recording files | `ssh_recording_file_size_bytes{quantile="0.99"} > 50MB` | Warning | Check for infinite loops in terminals |
+| Cleanup job failure | Background task errors > 2 consecutive | Critical | Manual S3 + DDB cleanup |
+| High recording volume | `rate(ssh_recording_created_total[1h]) > 100` | Info | Monitor S3 costs |
+
+---
+
+## 11. Rollout Plan
+
+### Phase 1: Shadow Mode (Days 1-2)
+
+- **Feature flag**: `SSH_RECORDING_ENABLED=false`
+- Deploy recorder code but disabled
+- Validate no performance impact on SSH sessions
+- Test S3 upload path with synthetic data
+
+### Phase 2: Opt-In (Days 3-4)
+
+- **Feature flag**: `SSH_RECORDING_ENABLED=true`, `SSH_RECORDING_DEFAULT_ENABLED=false`
+- Recording only for hosts with `record_sessions: true`
+- Deploy frontend RecordingsPage
+- Validate end-to-end recording + playback flow
+
+### Phase 3: Default On (Day 5+)
+
+- Set `SSH_RECORDING_DEFAULT_ENABLED=true`
+- All SSH sessions recorded unless host opts out
+- Monitor S3 storage growth and DDB costs
+- **Rollback**: Set `SSH_RECORDING_ENABLED=false`; existing recordings remain accessible
+
+---
+
+## 12. Performance Considerations
+
+### 12.1 Latency Targets
+
+| Operation | Target p50 | Target p99 | Notes |
+|-----------|-----------|-----------|-------|
+| Record event (in-memory append) | < 0.01ms | < 0.05ms | String concatenation |
+| Finalize (S3 upload + DDB write) | < 200ms | < 800ms | Async after WS close |
+| List recordings | < 30ms | < 100ms | DDB query |
+| Stream (presign URL) | < 20ms | < 80ms | S3 presign is local |
+| Delete recording | < 100ms | < 300ms | DDB delete + S3 delete |
+
+### 12.2 Memory Impact
+
+- Each `SessionRecorder` buffers events in a Python list of JSON strings
+- Average recording: ~3000 events, ~25KB memory
+- Worst case (long session, heavy output): ~50000 events, ~500KB memory
+- Memory freed on `finalize()` when WebSocket closes
+
+### 12.3 S3 Storage Costs
+
+- Average .cast file: ~25KB (30-minute session)
+- At 100 recordings/day: ~2.5MB/day, ~75MB/month
+- 90-day retention: ~225MB steady-state
+- S3 cost: negligible at this scale (~$0.01/month)
+
+### 12.4 DynamoDB Costs
+
+| Operation | RCU | WCU | Notes |
+|-----------|-----|-----|-------|
+| Write recording metadata | — | 1.0 | Single item put |
+| List recordings | 1.0 | — | Query per user |
+| Delete recording | — | 1.0 | Single item delete |
+| Cleanup scan | 5.0 | varies | Daily batch |
+
+---
+
+## 13. Acceptance Criteria
 
 1. SSH sessions to hosts with `record_sessions: true` produce .cast recordings.
 2. Recordings are stored in S3 in asciicast v2 format.

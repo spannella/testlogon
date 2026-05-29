@@ -64,7 +64,43 @@ The shared `AvailabilityGrid` component in `frontend/src/components/shared/Avail
 
 ## 3. Technical Design
 
-### 3.1 Data Model Extension
+### 3.1 Architecture & Data Flow
+
+```
+                    Find-a-DateTime Post Creation Flow
+  ┌──────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │  CreatePost   │────>│ POST /posts/       │────>│  DynamoDB     │
+  │  (frontend)   │     │  find-datetime     │     │               │
+  │               │     │  (newsfeed.py)      │     │  app_single   │
+  │  title +      │     │                    │     │  _table       │
+  │  from_date +  │     │  1. create post    │     │  PK=POST#id   │
+  │  to_date +    │     │  2. create FADT    │     │  SK=META       │
+  │  hours +      │     │     poll in cal    │     │               │
+  │  body         │     │     table          │     │  calendar     │
+  └──────────────┘     └────────────────────┘     │  PK=FADT#pid  │
+                                                   └──────────────┘
+
+                    Availability Submission Flow
+  ┌──────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │ Availability  │────>│ POST /posts/find-  │────>│  calendar     │
+  │ Grid (shared) │     │  datetime/{id}/    │     │  table        │
+  │               │     │  availability      │     │               │
+  │  selected     │     │                    │     │  PK=FADT#pid  │
+  │  time slots   │     │  submit_avail()    │     │  SK=AVAIL#usr │
+  └──────────────┘     └────────────────────┘     └──────────────┘
+
+                    Close & Compute Flow
+  ┌──────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │  Creator      │────>│ POST /posts/find-  │────>│  calendar     │
+  │  clicks Close │     │  datetime/{id}/    │     │  table        │
+  │               │     │  close             │     │               │
+  │               │     │                    │     │  PK=FADT#pid  │
+  │               │     │  close_and_compute │     │  status=closed│
+  │               │     │  → best_windows    │     │  best_windows │
+  └──────────────┘     └────────────────────┘     └──────────────┘
+```
+
+### 3.2 Data Model Extension
 
 The Find-a-DateTime poll record (stored in `calendar` table with PK `FADT#{poll_id}`) will be extended with an optional `post_id` field:
 
@@ -79,7 +115,20 @@ The post item in `app_single_table` stores:
 | `find_datetime_id` | String | `fadt_<uuid4_hex>` |
 | `post_kind` | String | `"find_datetime"` |
 
-### 3.2 Backend Service Extension
+### 3.3 Detailed DynamoDB Access Patterns
+
+| Access Pattern | Table | Key Condition | Filter | Use Case |
+|---------------|-------|---------------|--------|----------|
+| Create FADT post | `app_single_table` | PK=`POST#{post_id}`, SK=`META` | -- | Write new post with `post_kind=find_datetime`, `find_datetime_id` |
+| Create FADT poll | `calendar` | PK=`FADT#{poll_id}`, SK=`META` | -- | Write poll record with `post_id`, dates, hours, deadline |
+| Submit availability | `calendar` | PK=`FADT#{poll_id}`, SK=`AVAIL#{user_sub}` | -- | Write user's selected time slots |
+| Update availability | `calendar` | PK=`FADT#{poll_id}`, SK=`AVAIL#{user_sub}` | -- | Overwrite previous slot selection |
+| List all availabilities | `calendar` | PK=`FADT#{poll_id}`, SK `begins_with("AVAIL#")` | -- | Fetch all submissions for overlap computation |
+| Close poll + compute | `calendar` | PK=`FADT#{poll_id}`, SK=`META` | -- | Update status=closed, write best_windows |
+| Get FADT poll details | `calendar` | PK=`FADT#{poll_id}`, SK=`META` | -- | Read poll metadata + results for rendering |
+| List FADT posts in feed | `app_single_table` GSI1 | GSI1PK=`FEED#{user_id}` | `post_kind=find_datetime` | Filter feed for FADT posts only (optional) |
+
+### 3.4 Backend Service Extension
 
 **File**: `app/services/messaging_find_datetime.py`
 
@@ -109,7 +158,7 @@ Access control for post-linked polls:
 - Anyone can submit availability (the post is public/follower-visible)
 - Only the post creator can close the poll
 
-### 3.3 Backend Router
+### 3.5 Backend Router
 
 **File**: `app/routers/newsfeed.py`
 
@@ -150,7 +199,229 @@ def get_post_find_datetime(poll_id: str, ctx=Depends(require_ui_session)):
     # Delegates to messaging_find_datetime.get_find_datetime()
 ```
 
-### 3.4 Frontend Types
+### 3.6 API Request/Response Examples
+
+**Create FADT post**:
+
+```
+POST /ui/posts/find-datetime
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "title": "Community Meetup - When are you free?",
+  "from_date": "2026-06-05",
+  "to_date": "2026-06-07",
+  "start_hour": 9,
+  "end_hour": 21,
+  "slot_duration_minutes": 60,
+  "deadline_hours": 72,
+  "body": "Let's find the best time for our monthly community meetup! Mark your availability below."
+}
+```
+
+**Response (201)**:
+```json
+{
+  "post_id": "p_a1b2c3d4e5f6",
+  "user_id": "alice@test.local",
+  "user_name": "Alice Creator",
+  "post_kind": "find_datetime",
+  "find_datetime_id": "fadt_7a8b9c0d1e2f",
+  "body": "Let's find the best time for our monthly community meetup!",
+  "created_at": 1748520100,
+  "like_count": 0,
+  "comment_count": 0
+}
+```
+
+**Submit availability**:
+
+```
+POST /ui/posts/find-datetime/fadt_7a8b9c0d1e2f/availability
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "slots": [
+    "2026-06-05T09:00",
+    "2026-06-05T10:00",
+    "2026-06-05T14:00",
+    "2026-06-06T09:00",
+    "2026-06-06T10:00"
+  ]
+}
+```
+
+**Response (200)**:
+```json
+{
+  "ok": true,
+  "participant_count": 5,
+  "your_slot_count": 5
+}
+```
+
+**Close poll and compute results**:
+
+```
+POST /ui/posts/find-datetime/fadt_7a8b9c0d1e2f/close
+x-csrf-token: <csrf>
+```
+
+**Response (200)**:
+```json
+{
+  "status": "closed",
+  "participant_count": 8,
+  "best_windows": [
+    {
+      "start": "2026-06-05T10:00",
+      "end": "2026-06-05T11:00",
+      "count": 7,
+      "participants": ["alice@test.local", "bob@test.local", "charlie@test.local", "dave@test.local", "eve@test.local", "frank@test.local", "grace@test.local"]
+    },
+    {
+      "start": "2026-06-06T09:00",
+      "end": "2026-06-06T10:00",
+      "count": 6,
+      "participants": ["alice@test.local", "bob@test.local", "charlie@test.local", "dave@test.local", "eve@test.local", "frank@test.local"]
+    },
+    {
+      "start": "2026-06-05T14:00",
+      "end": "2026-06-05T15:00",
+      "count": 5,
+      "participants": ["alice@test.local", "bob@test.local", "charlie@test.local", "dave@test.local", "eve@test.local"]
+    }
+  ]
+}
+```
+
+**Get FADT poll details**:
+
+```
+GET /ui/posts/find-datetime/fadt_7a8b9c0d1e2f
+```
+
+**Response (200)**:
+```json
+{
+  "poll_id": "fadt_7a8b9c0d1e2f",
+  "title": "Community Meetup - When are you free?",
+  "from_date": "2026-06-05",
+  "to_date": "2026-06-07",
+  "start_hour": 9,
+  "end_hour": 21,
+  "slot_duration_minutes": 60,
+  "deadline_at": 1748779300,
+  "status": "open",
+  "participant_count": 5,
+  "availabilities": [
+    {
+      "user_sub": "bob@test.local",
+      "user_name": "Bob",
+      "slots": ["2026-06-05T09:00", "2026-06-05T10:00"]
+    }
+  ],
+  "best_windows": null
+}
+```
+
+### 3.7 Pydantic Model Definitions
+
+```python
+# In app/models.py
+
+class CreateFindDateTimePostIn(BaseModel):
+    """Request model for creating a Find-a-DateTime newsfeed post."""
+    title: str = Field(..., min_length=1, max_length=200)
+    from_date: str = Field(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="Start date in YYYY-MM-DD format",
+    )
+    to_date: str = Field(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="End date in YYYY-MM-DD format",
+    )
+    start_hour: int = Field(..., ge=0, le=23, description="Earliest hour of day (0-23)")
+    end_hour: int = Field(..., ge=1, le=24, description="Latest hour of day (1-24)")
+    slot_duration_minutes: int = Field(
+        default=30,
+        ge=15,
+        le=120,
+        description="Duration of each time slot in minutes",
+    )
+    deadline_hours: int = Field(
+        default=48,
+        ge=1,
+        le=336,
+        description="Hours from creation until submission deadline",
+    )
+    body: str = Field(
+        default="",
+        max_length=5000,
+        description="Optional description text for the post",
+    )
+
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        from datetime import datetime
+        try:
+            fd = datetime.strptime(self.from_date, "%Y-%m-%d")
+            td = datetime.strptime(self.to_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("Invalid date format")
+        if fd >= td:
+            raise ValueError("from_date must be before to_date")
+        if (td - fd).days > 14:
+            raise ValueError("Date range cannot exceed 14 days")
+        if self.start_hour >= self.end_hour:
+            raise ValueError("start_hour must be less than end_hour")
+        return self
+
+
+class SubmitAvailabilityIn(BaseModel):
+    """Request model for submitting availability on a FADT poll."""
+    slots: List[str] = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="List of time slot strings in YYYY-MM-DDTHH:MM format",
+    )
+
+
+class FindDateTimePollOut(BaseModel):
+    """Response model for FADT poll data."""
+    poll_id: str
+    title: str
+    from_date: str
+    to_date: str
+    start_hour: int
+    end_hour: int
+    slot_duration_minutes: int
+    deadline_at: int
+    status: str  # "open" or "closed"
+    participant_count: int = 0
+    availabilities: List[Dict[str, Any]] = Field(default_factory=list)
+    best_windows: Optional[List[Dict[str, Any]]] = None
+
+
+class FindDateTimePostOut(BaseModel):
+    """Response model for a FADT post (includes post + poll metadata)."""
+    post_id: str
+    user_id: str
+    user_name: Optional[str] = None
+    post_kind: Literal["find_datetime"] = "find_datetime"
+    find_datetime_id: str
+    body: str = ""
+    created_at: int = 0
+    like_count: int = 0
+    comment_count: int = 0
+```
+
+### 3.8 Frontend Types
 
 **File**: `frontend/src/api/types.ts`
 
@@ -184,7 +455,7 @@ export interface FindDateTimePollData {
 }
 ```
 
-### 3.5 Frontend API
+### 3.9 Frontend API
 
 **File**: `frontend/src/api/endpoints/newsfeed.ts`
 
@@ -202,13 +473,57 @@ export const getPostFindDateTime = (pollId: string) =>
   api.get<FindDateTimePollData>(`/ui/posts/find-datetime/${pollId}`);
 ```
 
-### 3.6 Frontend Components
+### 3.10 Frontend Component Tree
+
+```
+PostCard (modified)
+├── PostHeader (author, timestamp, overflow menu)
+├── PostBody (text content, images)
+├── FindDateTimeSection (new, conditional on post_kind=find_datetime)
+│   ├── FindDateTimePostCard (new component)
+│   │   ├── TitleDisplay (poll title, date range summary)
+│   │   ├── ParticipantCount badge
+│   │   ├── StatusBadge ("Open" / "Closed")
+│   │   ├── DeadlineDisplay (countdown to deadline if open)
+│   │   ├── SubmitButton → opens AvailabilityGridDialog
+│   │   │   └── Dialog
+│   │   │       ├── AvailabilityGrid (shared from MSG-009)
+│   │   │       │   ├── DateHeaders (columns)
+│   │   │       │   ├── TimeLabels (rows)
+│   │   │       │   └── SlotCells (clickable grid cells)
+│   │   │       ├── SelectedCount display
+│   │   │       └── Submit / Cancel buttons
+│   │   ├── CloseButton (creator only, when status=open)
+│   │   └── ResultsPanel (when status=closed)
+│   │       ├── BestWindowCard (top 3 windows)
+│   │       │   ├── TimeRange display
+│   │       │   ├── ParticipantCount
+│   │       │   └── ParticipantAvatars (truncated list)
+│   │       └── HeatMapGrid (visual overlay showing density)
+├── PostActions (like, comment, tip, react)
+└── CommentsThread (if expanded)
+
+CreatePost (modified)
+├── TextArea (body input)
+├── ContentTypeToolbar
+│   ├── ...existing buttons
+│   └── FindTimeButton (new) ← opens FindDateTimeComposer
+├── FindDateTimeComposer (conditional, reused from MSG-009)
+│   ├── Input: title
+│   ├── DateRangePicker: from_date / to_date
+│   ├── HourSelectors: start_hour / end_hour
+│   ├── SlotDurationSelect: 15 / 30 / 60 / 120 min
+│   └── DeadlineHoursInput
+└── PublishButton
+```
+
+### 3.11 Frontend Components
 
 **FindDateTimePostCard** (`frontend/src/pages/feed/FindDateTimePostCard.tsx`):
 
 - Renders as a card within PostCard when `post.post_kind === "find_datetime"`
 - Shows title, date range, time window, participant count
-- "Submit Availability" button → opens AvailabilityGrid dialog
+- "Submit Availability" button opens AvailabilityGrid dialog
 - Creator sees "Close Poll" button
 - After close: shows top 3 best windows with participant names
 - Heat map visualization of all availability data
@@ -240,7 +555,7 @@ Opens `FindDateTimeComposer` (from MSG-009, reused) in a dialog.
 |------|---------|
 | `app/services/messaging_find_datetime.py` | Add `post_id` parameter to `create_find_datetime()` |
 | `app/routers/newsfeed.py` | Add FADT post endpoints |
-| `app/models.py` | Add `CreateFindDateTimePostIn` model |
+| `app/models.py` | Add `CreateFindDateTimePostIn`, `FindDateTimePollOut`, `FindDateTimePostOut` models |
 | `frontend/src/api/types.ts` | Add FADT post types |
 | `frontend/src/api/endpoints/newsfeed.ts` | Add FADT API functions |
 | `frontend/src/pages/feed/CreatePost.tsx` | Add "Find a Time" button + composer integration |
@@ -262,7 +577,7 @@ Opens `FindDateTimeComposer` (from MSG-009, reused) in a dialog.
 
 ### 5.1 Test File
 
-`frontend/e2e/feed-find-datetime.spec.ts` — 12 tests across 3 sections.
+`frontend/e2e/feed-find-datetime.spec.ts` — 24 tests across 6 sections.
 
 ### 5.2 Test Setup
 
@@ -305,17 +620,50 @@ test.beforeAll(async ({ browser }) => {
 | 302.2 | Closed FADT post includes best_windows in poll data | GET poll after close; `best_windows` array length > 0 |
 | 302.3 | Participant count reflects submissions | GET poll; `participant_count` matches actual submissions |
 
+### 5.6 Section 303: FADT Post Validation Edge Cases (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 303.1 | Reject date range exceeding 14 days | POST with 15-day range; 400; "Date range cannot exceed 14 days" |
+| 303.2 | Reject start_hour >= end_hour | POST with `start_hour=18, end_hour=9`; 400/422 |
+| 303.3 | Reject empty title | POST with `title=""`; 422; min_length validation |
+| 303.4 | Reject deadline_hours > 336 (14 days) | POST with `deadline_hours=500`; 422; le validation |
+| 303.5 | Accept slot_duration_minutes 15, 30, 60, 120 | POST with `slot_duration_minutes=60`; 201 |
+
+### 5.7 Section 304: Availability Update & Deadline (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 304.1 | Update availability overwrites previous | Bob submits 3 slots; Bob resubmits with 5 slots; GET poll; Bob's slots count = 5 |
+| 304.2 | Availability rejected on closed poll | Close poll; Bob submits; 400; "Poll is closed" |
+| 304.3 | Empty slots array rejected | POST availability with `slots=[]`; 422 |
+| 304.4 | Slots outside date range rejected | POST availability with slot outside from_date/to_date; 400 |
+
+### 5.8 Section 305: FADT Post Interactions (3 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 305.1 | Like FADT post | POST `/posts/{id}/like`; 200; `like_count` incremented |
+| 305.2 | Comment on FADT post | POST `/posts/{id}/comments`; 201; comment_count incremented |
+| 305.3 | React to FADT post | POST `/posts/{id}/reactions` with emoji; 200; reactions_counts updated |
+
 ---
 
 ## 6. Error Handling
 
-| Scenario | Status | Detail |
-|----------|--------|--------|
-| Invalid date range | 400 | "from_date must be before to_date" |
-| Date range > 14 days | 400 | "Date range cannot exceed 14 days" |
-| Non-creator closes poll | 403 | "Only the creator can close this poll" |
-| Availability after deadline | 400 | "Submission deadline has passed" |
-| Availability on closed poll | 400 | "Poll is closed" |
+### 6.1 Error Matrix
+
+| Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|----------|-------------|------------|---------------|-----------------|
+| Invalid date range (from >= to) | 400 | `invalid_date_range` | "from_date must be before to_date" | Show form validation error on date pickers |
+| Date range > 14 days | 400 | `date_range_exceeded` | "Date range cannot exceed 14 days" | Constrain date pickers to 14-day max |
+| Non-creator closes poll | 403 | `forbidden` | "Only the creator can close this poll" | Hide Close button for non-creators |
+| Availability after deadline | 400 | `deadline_passed` | "Submission deadline has passed" | Disable Submit Availability button; show deadline |
+| Availability on closed poll | 400 | `poll_closed` | "Poll is closed" | Show "closed" badge; disable grid |
+| Empty title | 422 | `validation_error` | Pydantic min_length validation | Show inline form error |
+| start_hour >= end_hour | 400 | `invalid_hours` | "start_hour must be less than end_hour" | Show form validation error |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Redirect to login |
+| Poll not found | 404 | `not_found` | "Poll not found" | Show error message; return to feed |
 
 ---
 
@@ -325,10 +673,76 @@ test.beforeAll(async ({ browser }) => {
 - Creator-only close enforcement via `creator_sub` check
 - Slot validation prevents submission of slots outside the defined date/time range
 - Deadline enforcement is server-side (not trusting client clocks)
+- Availabilities are visible to all participants after close (by design for community scheduling)
+- Rate limiting on availability submission: 10 per user per poll per hour
 
 ---
 
-## 8. Dependencies
+## 8. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| Poll data fetch latency | < 200ms p95 | Single DDB query on FADT#{poll_id}; no joins |
+| Availability grid render | < 100ms for 14-day grid | AvailabilityGrid uses virtualization for large grids; memoized cell components |
+| Close & compute latency | < 500ms for 100 participants | Overlap computation is O(slots * participants); pre-sorted slot arrays |
+| Heat map rendering | 60fps scroll | Canvas-based heat map for large grids; rasterized at render time |
+| Feed query with FADT posts | < 200ms p95 | FADT posts are regular post items; no additional query needed |
+| Many concurrent submissions | Consistent writes | DDB put_item is idempotent per user per poll; no race conditions |
+
+---
+
+## 9. Observability
+
+### 9.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `fadt_post_created_total` | Counter | -- | Number of FADT posts created |
+| `fadt_availability_submitted_total` | Counter | -- | Number of availability submissions |
+| `fadt_poll_closed_total` | Counter | -- | Number of polls closed |
+| `fadt_best_window_participants_avg` | Gauge | -- | Average participant count in best windows |
+
+### 9.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| FADT post created | INFO | `post_id`, `poll_id`, `user_id`, `from_date`, `to_date` |
+| Availability submitted | INFO | `poll_id`, `user_id`, `slot_count` |
+| Poll closed | INFO | `poll_id`, `user_id`, `participant_count`, `best_window_count` |
+| Availability rejected (deadline) | WARN | `poll_id`, `user_id`, `deadline_at` |
+| Non-creator close attempt | WARN | `poll_id`, `user_id`, `creator_sub` |
+
+### 9.3 Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| FADT poll close failures | > 10 errors/hour in close_and_compute | Medium |
+| Availability submission rate | > 500 submissions/hour (DDB throttle risk) | Low |
+
+---
+
+## 10. Rollout Plan
+
+### 10.1 Feature Flag
+
+```python
+# app/core/settings.py
+find_datetime_posts_enabled: bool = os.environ.get("FIND_DATETIME_POSTS_ENABLED", "true").lower() == "true"
+```
+
+When disabled, the backend rejects `POST /posts/find-datetime` with 400 "Find-a-DateTime posts are not enabled". The frontend hides the "Find a Time" button in CreatePost.
+
+### 10.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend only | Deploy backend endpoints; feature flag ON in dev only | 1 day | All unit tests pass |
+| Phase 2: Internal testing | Enable for test accounts; test full flow with AvailabilityGrid | 2 days | E2E tests pass; manual QA with 5+ participants |
+| Phase 3: GA | Enable for all users; monitor poll creation and submission rates | Permanent | No errors in Phase 2; submission latency < 200ms p95 |
+
+---
+
+## 11. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|

@@ -39,74 +39,71 @@ These systems exist in silos. An advertiser who wants to run an ad that offers a
 
 5. **ROAS measurement**: Advertisers need Return on Ad Spend to evaluate campaign effectiveness. Without conversion attribution linked to ad spend, ROAS is impossible to calculate.
 
-### Architecture After This Change
+### Architecture Diagram
 
 ```
-Ad Creative Record (ad_creatives table)
-│
-├── creative_id
-├── image_url / video_url
-├── click_through_url: "https://shop.com/product"
-├── affiliate_code: "ABC12345"          ← NEW
-├── promo_code: "SUMMER20"             ← NEW
-├── promo_value_display: "20% OFF"     ← NEW
-│
-│   Ad Serving → Ad Displayed
-│        │
-│        ▼
-│   ┌──────────────────────────┐
-│   │ Ad Render (frontend)     │
-│   │                          │
-│   │ ┌──────────────────────┐ │
-│   │ │ [Ad Image/Video]     │ │
-│   │ │                      │ │
-│   │ │   ┌──────────────┐   │ │
-│   │ │   │ Save 20% OFF │   │ │ ← Promo badge overlay
-│   │ │   └──────────────┘   │ │
-│   │ │                      │ │
-│   │ └──────────────────────┘ │
-│   │ [Click to Shop →]       │
-│   └──────────────────────────┘
-│        │
-│        │ User clicks ad
-│        ▼
-│   ┌──────────────────────────┐
-│   │ Click Handler            │
-│   │                          │
-│   │ 1. Record ad click       │
-│   │ 2. Record affiliate      │
-│   │    click (ABC12345)      │
-│   │ 3. Set promo cookie      │
-│   │    (SUMMER20)            │
-│   │ 4. Redirect to           │
-│   │    click_through_url     │
-│   │    + ?ref=ABC12345       │
-│   └──────────────────────────┘
-│        │
-│        ▼
-│   ┌──────────────────────────┐
-│   │ Checkout Page            │
-│   │                          │
-│   │ Promo code auto-filled:  │
-│   │ [SUMMER20] ✓ Applied     │
-│   │                          │
-│   │ Subtotal: $50.00         │
-│   │ Discount: -$10.00 (20%) │
-│   │ Total:    $40.00         │
-│   └──────────────────────────┘
-│        │
-│        ▼ (on purchase)
-│   ┌──────────────────────────┐
-│   │ Conversion Attribution   │
-│   │                          │
-│   │ 1. Affiliate conversion  │
-│   │    recorded for ABC12345 │
-│   │ 2. Linked to campaign    │
-│   │    for ROAS calculation  │
-│   │ 3. Creator gets:         │
-│   │    - Ad CPM revenue      │
-│   │    - Affiliate commission │
-│   └──────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│              Ad Creative + Affiliate + Promo Integration                 │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────┐            │
+│  │                  Ad Creative Record                      │            │
+│  │                  (ad_creatives table)                     │            │
+│  │                                                          │            │
+│  │  creative_id: "creat_xyz789"                             │            │
+│  │  image_url: "https://cdn/ad.png"                         │            │
+│  │  click_through_url: "https://shop.com/product"           │            │
+│  │  affiliate_code: "ABC12345"          ← NEW               │            │
+│  │  promo_code: "SUMMER20"             ← NEW               │            │
+│  │  promo_value_display: "20% OFF"     ← NEW               │            │
+│  └─────────────┬───────────────────────────────────────────┘            │
+│                │                                                        │
+│                │ Ad Served to Viewer                                     │
+│                ▼                                                        │
+│  ┌─────────────────────────────────────────────────────────┐            │
+│  │  Ad Render (browser)                                     │            │
+│  │  ┌───────────────────────────────┐                      │            │
+│  │  │  [Ad Image/Video]             │                      │            │
+│  │  │         ┌──────────────┐      │                      │            │
+│  │  │         │ Save 20% OFF │      │ ← Promo badge        │            │
+│  │  │         └──────────────┘      │                      │            │
+│  │  │  [Click to Shop ->]           │                      │            │
+│  │  └───────────────────────────────┘                      │            │
+│  └─────────────┬───────────────────────────────────────────┘            │
+│                │ User clicks ad                                         │
+│                ▼                                                        │
+│  ┌─────────────────────────────────────────────────────────┐            │
+│  │  Click Handler (backend)                                  │            │
+│  │  app/services/ad_click_handler.py                         │            │
+│  │                                                           │            │
+│  │  1. Record ad click (ad_impressions table)                │            │
+│  │  2. Record affiliate click (affiliate_links table)        │            │
+│  │  3. Set promo cookie: ad_promo_code=SUMMER20              │            │
+│  │  4. 302 Redirect → shop.com/product?ref=ABC12345         │            │
+│  └─────────────┬───────────────────────────────────────────┘            │
+│                │                                                        │
+│                ▼                                                        │
+│  ┌─────────────────────────────────────────────────────────┐            │
+│  │  Checkout Page (browser)                                  │            │
+│  │                                                           │            │
+│  │  Reads ad_promo_code cookie                               │            │
+│  │  Auto-fills: [SUMMER20] Applied                          │            │
+│  │  Subtotal: $50.00  Discount: -$10.00 (20%)              │            │
+│  │  Total: $40.00                                            │            │
+│  │                                                           │            │
+│  │  On purchase → record_affiliate_conversion(ABC12345)      │            │
+│  │             → link campaign_id for ROAS                   │            │
+│  └─────────────────────────────────────────────────────────┘            │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────┐            │
+│  │  ROAS Calculation                                         │            │
+│  │  app/services/ad_roas.py                                  │            │
+│  │                                                           │            │
+│  │  ROAS = conversion_revenue / ad_spend                     │            │
+│  │  Per campaign: sum conversions linked via affiliate_code  │            │
+│  │                                                           │            │
+│  │  Creator gets: CPM revenue + affiliate commission         │            │
+│  └─────────────────────────────────────────────────────────┘            │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -173,7 +170,57 @@ The existing checkout flow (catalog purchases, subscriptions, VOD purchases) rea
 
 ## 3. Technical Design
 
-### 3.1 Creative Schema Extension
+### 3.1 DynamoDB Access Patterns
+
+| Access Pattern | Table | Key | Operation | Description |
+|---|---|---|---|---|
+| Get creative with affiliate/promo fields | `ad_creatives` | PK=`ACCT#{account_id}`, SK=`CREATIVE#{creative_id}` | GetItem | Read creative including new fields |
+| Update creative with affiliate/promo | `ad_creatives` | PK=`ACCT#{account_id}`, SK=`CREATIVE#{creative_id}` | UpdateItem | Set affiliate_code, promo_code, promo_value_display |
+| Validate affiliate code exists | `affiliate_links` | PK=`CODE#{code}`, SK=`META` | GetItem | Check code exists and belongs to advertiser |
+| Validate promo code exists | `promo_codes` | PK=`CODE#{code}`, SK=`META` | GetItem | Check code exists and belongs to advertiser |
+| Record affiliate click | `affiliate_links` | PK=`CODE#{code}`, SK=`CLICK#{ts}#{id}` | PutItem | Click event record |
+| Record affiliate conversion | `affiliate_links` | PK=`CODE#{code}`, SK=`CONV#{ts}#{id}` | PutItem | Conversion record with campaign_id |
+| Get ROAS data | `ad_billing` (GSI ByCampaign) + `affiliate_links` | PK=campaign_id | Query | Ad spend + affiliate conversions |
+| Write ad click event | `ad_impressions` | PK=`AD_IMP#{date}`, SK=event key | PutItem | Click event |
+
+#### Example DynamoDB Items (JSON)
+
+**Ad Creative with Affiliate/Promo Fields**:
+```json
+{
+  "pk": {"S": "ACCT#acct_adv001"},
+  "sk": {"S": "CREATIVE#creat_xyz789"},
+  "creative_id": {"S": "creat_xyz789"},
+  "advertiser_account_id": {"S": "acct_adv001"},
+  "name": {"S": "Summer Sale Banner"},
+  "type": {"S": "image"},
+  "asset_url": {"S": "https://cdn.example.com/ads/summer-sale.png"},
+  "click_through_url": {"S": "https://shop.com/summer-sale"},
+  "status": {"S": "approved"},
+  "affiliate_code": {"S": "ABC12345"},
+  "promo_code": {"S": "SUMMER20"},
+  "promo_value_display": {"S": "20% OFF"},
+  "created_at": {"N": "1748534400"}
+}
+```
+
+**Affiliate Conversion with Campaign Attribution**:
+```json
+{
+  "pk": {"S": "CODE#ABC12345"},
+  "sk": {"S": "CONV#1748534900#conv_g7h8i9"},
+  "conversion_id": {"S": "conv_g7h8i9"},
+  "code": {"S": "ABC12345"},
+  "transaction_id": {"S": "txn_12345"},
+  "amount_cents": {"N": "4000"},
+  "campaign_id": {"S": "camp_abc123"},
+  "creative_id": {"S": "creat_xyz789"},
+  "source": {"S": "ad_creative"},
+  "created_at": {"N": "1748534900"}
+}
+```
+
+### 3.2 Creative Schema Extension
 
 **Ad creative record** — add fields:
 
@@ -184,7 +231,7 @@ promo_code: Optional[str]            # Discount code from promo_codes
 promo_value_display: Optional[str]   # Display text: "20% OFF", "$10 OFF"
 ```
 
-### 3.2 Creative Validation
+### 3.3 Creative Validation
 
 When creating/updating a creative with `affiliate_code` or `promo_code`, the service validates:
 
@@ -214,7 +261,7 @@ def validate_creative_affiliate_promo(
     return None, {"affiliate_code": affiliate_code, "promo_code": promo_code}
 ```
 
-### 3.3 Ad Click Handler with Attribution
+### 3.4 Ad Click Handler with Attribution
 
 **File**: `app/services/ad_click_handler.py`
 
@@ -293,7 +340,7 @@ def handle_ad_click(
     }
 ```
 
-### 3.4 Ad Click Endpoint
+### 3.5 Ad Click Endpoint
 
 **File**: `app/routers/ad_serving.py` (extend existing ad serving router)
 
@@ -325,7 +372,7 @@ async def ad_click_redirect(
     return response
 ```
 
-### 3.5 Promo Code Auto-Apply
+### 3.6 Promo Code Auto-Apply
 
 **Frontend**: Read `ad_promo_code` cookie and auto-fill in checkout forms.
 
@@ -348,7 +395,7 @@ useEffect(() => {
 }, []);
 ```
 
-### 3.6 ROAS Calculation
+### 3.7 ROAS Calculation
 
 **File**: `app/services/ad_roas.py`
 
@@ -383,7 +430,7 @@ def calculate_campaign_roas(
     ...
 ```
 
-### 3.7 Creator Dual Revenue
+### 3.8 Creator Dual Revenue
 
 When an ad with an affiliate code runs on a creator's content:
 
@@ -402,7 +449,7 @@ Both revenue streams are tracked independently:
 
 The creator's earnings dashboard should show both streams. The ROAS calculation includes both.
 
-### 3.8 Promo Badge Rendering
+### 3.9 Promo Badge Rendering
 
 **Frontend**: Ad display components render a promo badge overlay when the creative has `promo_value_display`.
 
@@ -434,7 +481,7 @@ function AdCreativeDisplay({ creative, onClick }: AdCreativeDisplayProps) {
 }
 ```
 
-### 3.9 Pydantic Models
+### 3.10 Pydantic Models
 
 **File**: `app/models.py`
 
@@ -461,7 +508,7 @@ class CampaignRoasOut(BaseModel):
     period_end: str
 ```
 
-### 3.10 Frontend Types
+### 3.11 Frontend Types
 
 **File**: `frontend/src/api/types.ts`
 
@@ -484,69 +531,194 @@ export interface CampaignRoas {
 }
 ```
 
+### 3.12 Frontend Component Tree
+
+```
+AdCreativeDisplay (shared component)
+├── Props: { creative: AdCreative, onClick: () => void }
+├── ImageAdCreative | VideoAdCreative (based on creative.type)
+├── PromoBadge (overlay, visible when promo_value_display is set)
+│   ├── Positioned: absolute top-2 right-2
+│   ├── Style: bg-red-600 text-white text-xs font-bold
+│   └── Content: creative.promo_value_display (e.g., "20% OFF")
+└── ClickHandler
+    └── Navigates to /ui/ads/click/{creative_id}?campaign_id=...
+
+CheckoutPage (modified)
+├── PromoCodeInput (existing)
+│   └── useEffect: reads ad_promo_code cookie and auto-fills
+├── PromoValidation: validatePromoMutation
+└── PromoDisplay: shows applied discount
+
+CreativeEditorForm (modified, in ads management page)
+├── Existing fields (name, type, asset, click_through_url)
+├── AffiliateCodeField (NEW)
+│   ├── Input with autocomplete from user's affiliate links
+│   └── Validation: code exists and belongs to advertiser
+├── PromoCodeField (NEW)
+│   ├── Input with autocomplete from user's promo codes
+│   └── Validation: code exists and belongs to advertiser
+└── PromoValueDisplayField (NEW)
+    ├── Input: "Enter display text, e.g., 20% OFF"
+    └── Preview: renders PromoBadge with entered text
+
+CampaignRoasCard (in campaign detail view)
+├── Props: { campaignId, startDate, endDate }
+├── State: useQuery(["campaign-roas", campaignId])
+├── ROAS value: "3.5x" (conversion revenue / ad spend)
+├── Conversions: count
+├── Conversion rate: percentage
+├── Ad spend: formatted cents
+└── Conversion revenue: formatted cents
+```
+
 ---
 
-## 4. Implementation Plan
+## 4. API Request/Response Examples
 
-### 4.1 Backend — Phase 1: Creative Extension (Days 1-2)
+### 4.1 Create Creative with Affiliate & Promo
+
+```bash
+curl -X POST http://localhost:8000/ui/ads/accounts/acct_adv001/creatives \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=tok_csrf_001" \
+  -H "x-csrf-token: tok_csrf_001" \
+  -d '{
+    "name": "Summer Sale Banner",
+    "type": "image",
+    "asset_url": "https://cdn.example.com/ads/summer-sale.png",
+    "click_through_url": "https://shop.com/summer-sale",
+    "affiliate_code": "ABC12345",
+    "promo_code": "SUMMER20",
+    "promo_value_display": "20% OFF"
+  }'
+
+# Response (201 Created)
+{
+  "creative_id": "creat_xyz789",
+  "name": "Summer Sale Banner",
+  "type": "image",
+  "asset_url": "https://cdn.example.com/ads/summer-sale.png",
+  "click_through_url": "https://shop.com/summer-sale",
+  "affiliate_code": "ABC12345",
+  "promo_code": "SUMMER20",
+  "promo_value_display": "20% OFF",
+  "status": "draft"
+}
+```
+
+### 4.2 Ad Click Redirect
+
+```bash
+# Browser navigates to this URL when user clicks an ad
+curl -v http://localhost:8000/ui/ads/click/creat_xyz789?campaign_id=camp_abc123 \
+  -H "Cookie: ui_session=sess_bob; ui_access_token=eyJ..."
+
+# Response (302 Found)
+# Location: https://shop.com/summer-sale?ref=ABC12345
+# Set-Cookie: ad_promo_code=SUMMER20; Max-Age=86400; Path=/; SameSite=Lax
+```
+
+### 4.3 Get Campaign ROAS
+
+```bash
+curl "http://localhost:8000/ui/ads/campaigns/camp_abc123/roas?start_date=2026-05-01&end_date=2026-05-31" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ..."
+
+# Response (200 OK)
+{
+  "campaign_id": "camp_abc123",
+  "ad_spend_cents": 5000,
+  "conversion_revenue_cents": 17500,
+  "roas": 3.5,
+  "conversions": 12,
+  "conversion_rate": 0.023,
+  "period_start": "2026-05-01",
+  "period_end": "2026-05-31"
+}
+```
+
+---
+
+## 5. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Affiliate code not found | 400 | `invalid_affiliate_code` | "Affiliate code not found" | Create the affiliate link first |
+| Affiliate code belongs to another user | 403 | `affiliate_code_mismatch` | "Affiliate code does not belong to this account" | Use your own affiliate code |
+| Promo code not found | 400 | `invalid_promo_code` | "Promo code not found" | Create the promo code first |
+| Promo code belongs to another user | 403 | `promo_code_mismatch` | "Promo code does not belong to this account" | Use your own promo code |
+| Creative not found (click handler) | 404 | `creative_not_found` | "Ad creative not found" | Check creative ID |
+| Non-owner views ROAS | 403 | `forbidden` | "You do not own this campaign" | Use your own campaign |
+| ROAS with no ad spend | 200 | — | `roas: 0, conversions: 0` | Run the campaign to accumulate spend |
+| Invalid date range for ROAS | 400 | `invalid_date_range` | "start_date must be before end_date" | Fix date parameters |
+| Promo code expired at checkout auto-apply | 200 | — | Cookie auto-fills but validation returns "expired" | User sees "Code expired" message |
+| Affiliate click recording failure | 200 | — | (best-effort; redirect still works) | Log warning; affiliate stats may be slightly low |
+| Session expired | 401 | `unauthorized` | "Session expired" | Re-authenticate |
+
+---
+
+## 6. Implementation Plan
+
+### 6.1 Backend — Phase 1: Creative Extension (Days 1-2)
 
 1. **Ad creative schema**: Add `affiliate_code`, `promo_code`, `promo_value_display` fields to ad creative records.
 2. **`app/services/ad_creative_affiliate.py`**: New file. Validation of affiliate/promo code ownership, creative update helpers.
 3. **Creative CRUD update**: Extend creative create/update endpoints to accept and validate affiliate/promo fields.
 
-### 4.2 Backend — Phase 2: Click Handler & Attribution (Days 3-4)
+### 6.2 Backend — Phase 2: Click Handler & Attribution (Days 3-4)
 
 4. **`app/services/ad_click_handler.py`**: New file. Ad click processing with affiliate click recording and promo cookie preparation.
 5. **`app/routers/ad_serving.py`**: Add `/ui/ads/click/{creative_id}` redirect endpoint.
 6. **`app/services/affiliate_links.py`**: Extend `record_affiliate_click()` to accept `source` and `source_id` params for attribution.
 
-### 4.3 Backend — Phase 3: ROAS & Conversion Linking (Days 5-6)
+### 6.3 Backend — Phase 3: ROAS & Conversion Linking (Days 5-6)
 
 7. **`app/services/ad_roas.py`**: New file. ROAS calculation linking affiliate conversions to ad campaigns.
 8. **ROAS endpoint**: Add `GET /ui/ads/campaigns/{id}/roas` to the ads router.
 9. **Conversion attribution**: Extend `record_affiliate_conversion()` to store `campaign_id` when the affiliate code is linked to a creative.
 
-### 4.4 Frontend (Days 6-7)
+### 6.4 Frontend (Days 6-7)
 
 10. **`frontend/src/components/shared/AdCreativeDisplay.tsx`**: Add promo badge overlay rendering.
 11. **Creative editor**: Add affiliate code and promo code fields to the creative creation/editing form.
 12. **Checkout auto-apply**: Add `ad_promo_code` cookie reading and auto-fill in checkout pages.
 13. **ROAS display**: Add ROAS metrics to campaign detail view.
 
-### 4.5 E2E Tests (Days 7-8)
+### 6.5 E2E Tests (Days 7-8)
 
-14. **`frontend/e2e/ad-affiliate-promo.spec.ts`**: New file. 12 tests across 3 sections.
+14. **`frontend/e2e/ad-affiliate-promo.spec.ts`**: New file. 18 tests across 4 sections.
 
 ---
 
-## 5. Security Considerations
+## 7. Security Considerations
 
-### 5.1 Affiliate Code Ownership
+### 7.1 Affiliate Code Ownership
 
 - Creative can only use affiliate codes that belong to the same advertiser account.
 - Server-side validation prevents using another advertiser's tracking codes.
 
-### 5.2 Promo Code Cookie
+### 7.2 Promo Code Cookie
 
 - `ad_promo_code` cookie is `httponly: false` (frontend JS needs to read it) but `samesite: lax`.
 - Cookie cleared after auto-apply to prevent stale discounts.
 - Max-age: 24 hours (promo only applies if checkout happens within a day of the ad click).
 
-### 5.3 Redirect URL Safety
+### 7.3 Redirect URL Safety
 
 - `click_through_url` is validated at creative creation time (must be HTTPS or relative path).
 - Redirect endpoint uses 302 (not 301) to prevent browser caching.
 
-### 5.4 ROAS Data Access
+### 7.4 ROAS Data Access
 
 - ROAS metrics are visible only to the campaign's advertiser.
 - Creators see their own ad revenue and affiliate commissions but not advertiser ROAS.
 
 ---
 
-## 6. Testing Strategy
+## 8. Testing Strategy
 
-### 6.1 Unit Tests (`tests/test_ad_affiliate_promo.py`)
+### 8.1 Unit Tests (`tests/test_ad_affiliate_promo.py`)
 
 | # | Test | Description |
 |---|------|-------------|
@@ -555,9 +727,9 @@ export interface CampaignRoas {
 | 3 | Creative with another user's code rejected | 403: code ownership mismatch |
 | 4 | Ad click records affiliate click | Affiliate click count increases |
 | 5 | Ad click sets promo cookie | Response includes set-cookie header |
-| 6 | ROAS calculation correct | spend=1000, conversions=500 → ROAS=0.5 |
+| 6 | ROAS calculation correct | spend=1000, conversions=500 -> ROAS=0.5 |
 
-### 6.2 E2E Tests (`frontend/e2e/ad-affiliate-promo.spec.ts`)
+### 8.2 E2E Tests (`frontend/e2e/ad-affiliate-promo.spec.ts`)
 
 **Test File**: `frontend/e2e/ad-affiliate-promo.spec.ts`
 
@@ -567,36 +739,125 @@ export interface CampaignRoas {
 - Create a promo code as Alice (20% off)
 - Create an ad creative as Alice with affiliate_code and promo_code
 
-**Section 405: Creative Affiliate & Promo Fields (4 tests)**
+**Section 405: Creative Affiliate & Promo Fields (5 tests)**
 
 | # | Test | Assertion |
 |---|------|-----------|
-| 1 | `Create creative with affiliate code` | POST creative with affiliate_code → 201, affiliate_code saved |
-| 2 | `Create creative with promo code and badge text` | POST with promo_code + promo_value_display → 201, both saved |
-| 3 | `Invalid affiliate code rejected` | POST with nonexistent affiliate_code → 400 |
-| 4 | `Get creative includes affiliate and promo fields` | GET creative → response has affiliate_code, promo_code, promo_value_display |
+| 1 | `Create creative with affiliate code` | POST creative with affiliate_code -> 201, affiliate_code saved |
+| 2 | `Create creative with promo code and badge text` | POST with promo_code + promo_value_display -> 201, both saved |
+| 3 | `Invalid affiliate code rejected` | POST with nonexistent affiliate_code -> 400 |
+| 4 | `Get creative includes affiliate and promo fields` | GET creative -> response has affiliate_code, promo_code, promo_value_display |
+| 5 | `Another user's affiliate code rejected` | POST with Bob's affiliate_code -> 403 |
 
-**Section 406: Ad Click Attribution (4 tests)**
+**Section 406: Ad Click Attribution (5 tests)**
 
 | # | Test | Assertion |
 |---|------|-----------|
-| 5 | `Ad click records affiliate click` | GET /ads/click/{creative_id} → 302 redirect; affiliate click count increased |
-| 6 | `Redirect URL includes ref param` | 302 Location header contains ?ref={affiliate_code} |
-| 7 | `Ad click without affiliate code still redirects` | Creative without affiliate_code → 302 to click_through_url, no ref param |
-| 8 | `Multiple clicks from same user tracked` | 3 clicks → affiliate click count = 3 |
+| 6 | `Ad click records affiliate click` | GET /ads/click/{creative_id} -> 302 redirect; affiliate click count increased |
+| 7 | `Redirect URL includes ref param` | 302 Location header contains ?ref={affiliate_code} |
+| 8 | `Ad click without affiliate code still redirects` | Creative without affiliate_code -> 302 to click_through_url, no ref param |
+| 9 | `Multiple clicks from same user tracked` | 3 clicks -> affiliate click count = 3 |
+| 10 | `Click on creative without promo sets no cookie` | Verify no ad_promo_code cookie in response |
 
 **Section 407: ROAS Calculation (4 tests)**
 
 | # | Test | Assertion |
 |---|------|-----------|
-| 9 | `ROAS with no conversions returns 0` | GET /campaigns/{id}/roas → roas=0, conversions=0 |
-| 10 | `ROAS calculated after conversion` | Record affiliate conversion → GET /roas → roas > 0 |
-| 11 | `ROAS includes conversion count and revenue` | Response has conversions, conversion_revenue_cents fields |
-| 12 | `Non-owner cannot view campaign ROAS` | GET /campaigns/{id}/roas as Bob → 403 |
+| 11 | `ROAS with no conversions returns 0` | GET /campaigns/{id}/roas -> roas=0, conversions=0 |
+| 12 | `ROAS calculated after conversion` | Record affiliate conversion -> GET /roas -> roas > 0 |
+| 13 | `ROAS includes conversion count and revenue` | Response has conversions, conversion_revenue_cents fields |
+| 14 | `Non-owner cannot view campaign ROAS` | GET /campaigns/{id}/roas as Bob -> 403 |
+
+**Section 408: Edge Cases & Concurrent Access (4 tests)**
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 15 | `Creative with both affiliate and promo stored correctly` | Both fields present in GET response |
+| 16 | `Update creative to remove affiliate code` | PATCH with affiliate_code=null -> field cleared |
+| 17 | `Promo code validation at creative creation` | Expired promo code -> 400 |
+| 18 | `ROAS calculation with zero ad spend returns 0` | No impressions -> ad_spend_cents=0, roas=0 |
 
 ---
 
-## 7. Files to Create
+## 9. Observability & Monitoring
+
+### 9.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `ad_click_redirect_total` | Counter | `has_affiliate`, `has_promo` | Total ad click redirects |
+| `ad_affiliate_click_total` | Counter | — | Affiliate clicks attributed to ads |
+| `ad_promo_cookie_set_total` | Counter | — | Promo cookies set via ad clicks |
+| `ad_roas_queries_total` | Counter | — | ROAS calculation requests |
+| `ad_promo_auto_applied_total` | Counter | — | Promo codes auto-applied from cookie at checkout |
+
+### 9.2 Log Events
+
+| Event | Level | Fields | Description |
+|-------|-------|--------|-------------|
+| `ad_click_redirect` | INFO | `creative_id`, `campaign_id`, `affiliate_code`, `promo_code`, `user_id` | Ad click processed |
+| `ad_affiliate_click_recorded` | INFO | `affiliate_code`, `creative_id`, `user_id` | Affiliate click recorded from ad |
+| `ad_promo_auto_applied` | INFO | `promo_code`, `user_id`, `checkout_type` | Promo code auto-applied at checkout |
+| `ad_roas_calculated` | INFO | `campaign_id`, `roas`, `conversions`, `ad_spend_cents` | ROAS calculation completed |
+
+### 9.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Click redirect failures | `rate(5xx on /ui/ads/click) > 5/min` | Warning | Check creative lookup or affiliate service |
+| Low conversion rate | ROAS < 0.5 for campaigns spending > $100 | Info | Review targeting and creative quality |
+
+---
+
+## 10. Rollout Plan
+
+### 10.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `AD_AFFILIATE_PROMO_ENABLED` | `false` | When false, affiliate/promo fields are ignored on creatives |
+| `AD_PROMO_COOKIE_ENABLED` | `false` | When false, no promo cookie is set on ad clicks |
+| `AD_ROAS_ENABLED` | `false` | When false, ROAS endpoint returns 404 |
+
+### 10.2 Migration Steps
+
+1. **Phase 1 — Schema extension**: Add nullable `affiliate_code`, `promo_code`, `promo_value_display` to ad creative records. No application behavior change.
+2. **Phase 2 — Click handler**: Deploy click redirect endpoint. Clicks are processed but affiliate/promo features gated by flags.
+3. **Phase 3 — Enable affiliate attribution**: Set `AD_AFFILIATE_PROMO_ENABLED=true`. Affiliate clicks recorded on ad clicks.
+4. **Phase 4 — Enable promo cookies**: Set `AD_PROMO_COOKIE_ENABLED=true`. Checkout auto-apply begins.
+5. **Phase 5 — Enable ROAS**: Set `AD_ROAS_ENABLED=true`. Advertisers can view conversion attribution.
+
+### 10.3 Rollback Procedure
+
+1. Set all flags to `false`. Affiliate/promo features disabled.
+2. Existing creatives retain their affiliate_code/promo_code fields (harmless).
+3. Promo cookies already set expire within 24 hours.
+
+---
+
+## 11. Performance Considerations
+
+### 11.1 Click Handler Latency
+
+The click handler must respond quickly (user is waiting for redirect):
+- GetItem for creative: ~5ms
+- PutItem for click event: ~5ms (fire-and-forget)
+- PutItem for affiliate click: ~5ms (fire-and-forget)
+- **Total target: < 50ms**
+
+The affiliate click and ad event recordings are fire-and-forget (logged but non-blocking for the redirect).
+
+### 11.2 ROAS Calculation Cost
+
+ROAS queries the `ad_billing` GSI (ByCampaign) for ad spend and the `affiliate_links` table for conversions. For campaigns with >10K entries, the query may take 200-500ms. Pre-aggregate ROAS daily using a background task for frequently-queried campaigns.
+
+### 11.3 Cookie Overhead
+
+The `ad_promo_code` cookie adds ~30 bytes to each subsequent request. It is cleared after first use at checkout, limiting the overhead to a single session.
+
+---
+
+## 12. Files to Create
 
 | File | Purpose |
 |------|---------|
@@ -604,10 +865,10 @@ export interface CampaignRoas {
 | `app/services/ad_creative_affiliate.py` | Creative affiliate/promo validation |
 | `app/services/ad_roas.py` | ROAS calculation |
 | `frontend/src/components/shared/AdCreativeDisplay.tsx` | Ad display with promo badge |
-| `frontend/e2e/ad-affiliate-promo.spec.ts` | E2E tests (12 tests, sections 405-407) |
+| `frontend/e2e/ad-affiliate-promo.spec.ts` | E2E tests (18 tests, sections 405-408) |
 | `tests/test_ad_affiliate_promo.py` | Unit tests |
 
-## 8. Files to Modify
+## 13. Files to Modify
 
 | File | Change |
 |------|--------|
@@ -617,7 +878,7 @@ export interface CampaignRoas {
 | `frontend/src/api/types.ts` | Add affiliate/promo TypeScript types |
 | `frontend/src/pages/shop/CheckoutPage.tsx` | Add promo cookie auto-apply logic |
 
-## 9. Acceptance Criteria
+## 14. Acceptance Criteria
 
 1. Ad creatives can be created with optional `affiliate_code`, `promo_code`, and `promo_value_display` fields
 2. Affiliate and promo codes are validated for existence and ownership at creative creation time
@@ -627,4 +888,4 @@ export interface CampaignRoas {
 6. Promo badge overlay renders on ad creatives that have `promo_value_display`
 7. ROAS calculation links affiliate conversions to ad campaign spend
 8. Creators hosting ads with affiliate codes earn both ad CPM revenue and affiliate commissions
-9. All 12 E2E tests pass in `frontend/e2e/ad-affiliate-promo.spec.ts`
+9. All 18 E2E tests pass in `frontend/e2e/ad-affiliate-promo.spec.ts`

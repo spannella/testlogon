@@ -160,6 +160,33 @@ def _next_invoice_number() -> str:
     return f"INV-{year}-{seq:05d}"
 ```
 
+### 3.2b Pydantic Models
+
+```python
+# In app/models.py
+
+class InvoiceLineItemOut(BaseModel):
+    description: str
+    quantity: int = 1
+    amount_cents: int
+
+class InvoiceOut(BaseModel):
+    invoice_number: str
+    invoice_type: str  # "tip", "unlock", "shop", "subscription", "deposit"
+    user_sub: str
+    total_cents: int
+    currency: str = "usd"
+    status: str = "paid"
+    created_at: int
+    line_items: List[InvoiceLineItemOut]
+    buyer_name: Optional[str] = None
+    seller_name: Optional[str] = None
+
+class InvoiceListOut(BaseModel):
+    invoices: List[InvoiceOut]
+    next_cursor: Optional[str] = None
+```
+
 ### 3.3 PDF Generation
 
 Use `fpdf2` (pure-Python, no system dependencies) to render invoices.
@@ -481,9 +508,149 @@ Add "Invoices" link to billing sidebar/navigation.
 
 **Total E2E tests: 16**
 
+### Section 543: Invoice Edge Cases & Concurrent Access (5 tests)
+
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 543.1 | Concurrent tips create separate invoices | Alice tips Bob twice rapidly; GET invoices returns exactly 2 tip invoices |
+| 543.2 | Invoice for zero-amount transaction not created | Attempt to trigger 0-cent ledger entry; no invoice created |
+| 543.3 | Invoice PDF includes correct tax calculation | Download PDF; verify tax line matches expected percentage of subtotal |
+| 543.4 | Email invoice idempotent | POST email twice for same invoice; second returns 200 (no duplicate email) |
+| 543.5 | Invoice list returns empty for new user | New user with no transactions; GET invoices returns empty array |
+
+**Total E2E tests: 21**
+
 ---
 
-## 6. Security Considerations
+## 6. API Request/Response Examples
+
+**List invoices** (curl):
+
+```bash
+curl -X GET "http://localhost:8000/ui/invoices?limit=10" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..."
+```
+
+**Response (200)**:
+```json
+{
+  "invoices": [
+    {
+      "invoice_number": "INV-2026-00042",
+      "invoice_type": "tip",
+      "user_sub": "alice@test.local",
+      "total_cents": 500,
+      "currency": "usd",
+      "status": "paid",
+      "created_at": 1748520100,
+      "line_items": [
+        {"description": "Tip to bob@test.local", "amount_cents": 500}
+      ]
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+**Download invoice PDF** (curl):
+
+```bash
+curl -X GET http://localhost:8000/ui/invoices/INV-2026-00042/pdf \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..." \
+  -o invoice.pdf
+```
+
+**Response (200)**: Binary PDF with `Content-Type: application/pdf`.
+
+**Email invoice** (curl):
+
+```bash
+curl -X POST http://localhost:8000/ui/invoices/INV-2026-00042/email \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_a; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_a"
+```
+
+**Response (200)**:
+```json
+{"ok": true, "emailed_to": "alice@test.local"}
+```
+
+---
+
+## 7. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Invoice not found | 404 | `not_found` | "Invoice not found" | Check invoice number |
+| Not owner of invoice | 404 | `not_found` | "Invoice not found" | Cannot access others' invoices |
+| PDF generation failed | 500 | `internal_error` | "Unable to generate PDF" | Retry; check server logs |
+| Email delivery failed | 500 | `email_failed` | "Unable to send email" | Retry later |
+| Rate limited (PDF) | 429 | `rate_limited` | "Too many download requests" | Wait 1 minute |
+| Rate limited (email) | 429 | `rate_limited` | "Too many email requests" | Wait 1 hour |
+| Unauthenticated | 401 | `unauthorized` | "Authentication required" | Log in |
+| Admin endpoint without admin role | 403 | `forbidden` | "Admin access required" | Use admin account |
+
+---
+
+## 8. Observability
+
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `invoice_created_total` | Counter | `type` (tip/unlock/shop/subscription/deposit) | Invoices created |
+| `invoice_pdf_downloaded_total` | Counter | — | PDF downloads |
+| `invoice_emailed_total` | Counter | — | Invoices emailed |
+| `invoice_pdf_generation_ms` | Histogram | — | PDF generation latency |
+| `invoice_creation_latency_ms` | Histogram | `type` | Invoice record creation latency |
+
+### 8.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Invoice created | INFO | `invoice_number`, `user_sub`, `type`, `total_cents` |
+| Invoice PDF downloaded | INFO | `invoice_number`, `user_sub` |
+| Invoice emailed | INFO | `invoice_number`, `user_sub`, `email` |
+| Invoice creation failed | ERROR | `user_sub`, `type`, `error` |
+| PDF generation failed | ERROR | `invoice_number`, `error` |
+
+### 8.3 Alerts
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Invoice creation failures | > 1% of transactions miss invoices | High | Check ledger hook integration |
+| PDF generation slow | p95 > 5s | Medium | Check fpdf2 performance |
+| Email delivery failures | > 5% of email attempts fail | High | Check SES configuration |
+
+---
+
+## 9. Rollout Plan
+
+### 9.1 Feature Flag
+
+```python
+invoices_enabled: bool = os.environ.get("INVOICES_ENABLED", "true").lower() == "true"
+```
+
+### 9.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Backend | Deploy invoice table + endpoints; flag OFF | 2 days | Unit tests pass |
+| Phase 2: Internal | Enable; verify invoices created for all transaction types | 3 days | All 21 E2E pass |
+| Phase 3: Canary 10% | Enable for 10% | 3 days | No missing invoices; PDF quality OK |
+| Phase 4: GA | Enable for all | Permanent | No regressions |
+
+### 9.3 Rollback
+
+1. Set `INVOICES_ENABLED=false` — hooks stop creating invoices
+2. Existing invoices remain accessible
+3. PDF download and email still work for existing invoices
+4. Missing invoices can be backfilled from ledger entries
+
+---
+
+## 10. Security Considerations
 
 ### 6.1 Auth Requirements
 
@@ -509,7 +676,21 @@ Add "Invoices" link to billing sidebar/navigation.
 
 ---
 
-## 7. Dependencies
+## 11. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| PDF generation CPU | < 2s per invoice | fpdf2 is lightweight; cache generated PDFs in S3 |
+| PDF re-generation on download | Avoid | Generate once on creation; store in S3; serve cached on download |
+| Invoice list query | < 50ms for 100 invoices | GSI1 on user_sub + created_at; paginated with cursor |
+| Invoice number sequence | Globally unique | DDB atomic counter on `INVOICE_SEQ` item; ADD :1 returns new value |
+| Concurrent invoice creation | No duplicates | `ledger_entry_id` ConditionExpression prevents duplicate invoices |
+| S3 PDF storage cost | < $0.001 per invoice | Small PDFs (~50-200KB each); lifecycle policy archives after 2 years |
+| Email attachment size | < 5MB | PDF size always well under limit; reject if exceeds |
+
+---
+
+## 12. Dependencies
 
 | Dependency | Status | Required For |
 |------------|--------|-------------|

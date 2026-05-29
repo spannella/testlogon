@@ -45,9 +45,74 @@ or conduct a live verification interview as part of the case workflow.
 
 ---
 
-## 2. Current State Analysis
+## 2. Architecture Diagram
 
-### 2.1 Call Lifecycle
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                       Frontend                                         │
+│                                                                        │
+│  KycCaseDetailPage (admin)              KycCaseStatusPage (applicant)  │
+│  ┌──────────────────────────┐          ┌──────────────────────────┐   │
+│  │ VerificationCallPanel    │          │ ScheduledCallBanner      │   │
+│  │  ├─ StatusBadge          │          │  ├─ Countdown Timer      │   │
+│  │  ├─ ScheduledDateTime    │          │  ├─ "Join Call" Button   │   │
+│  │  ├─ VerifierName         │          │  └─ CallResult (after)   │   │
+│  │  ├─ "Schedule Call" btn  │          └──────────────────────────┘   │
+│  │  ├─ "Join Call" btn      │                                         │
+│  │  ├─ CallResult display   │                                         │
+│  │  └─ RecordingPlayer      │                                         │
+│  └──────────────────────────┘                                         │
+└──────────────────┬─────────────────────────────┬──────────────────────┘
+                   │                             │
+                   ▼                             ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                     Backend (FastAPI)                                   │
+│                                                                        │
+│  kyc_cases.py (extended)                                              │
+│  ┌──────────────────────────────────────────────────────────────┐     │
+│  │ POST /admin/cases/{id}/schedule-verification-call            │     │
+│  │ POST /admin/cases/{id}/verification-call-result              │     │
+│  │ GET  /admin/verifiers                                        │     │
+│  │ GET  /admin/verifiers/{sub}/schedule                         │     │
+│  │ GET  /{case_id}/verification-call                            │     │
+│  └──────────────────────────────────────────────────────────────┘     │
+│                                                                        │
+│  kyc_verifier_pool.py (NEW)              messaging_call_lifecycle.py  │
+│  ┌─────────────────────────────┐        ┌─────────────────────┐      │
+│  │ list_verifiers()            │        │ create_call()        │      │
+│  │ get_next_available()        │        │ accept_call()        │      │
+│  │ get_verifier_schedule()     │        │ end_call()           │      │
+│  └─────────────────────────────┘        └─────────────────────┘      │
+│                                                                        │
+│  calendar.py                            messaging_call_sessions.py   │
+│  ┌────────────────────┐                ┌──────────────────────┐      │
+│  │ create_event()     │                │ recording_s3_key     │      │
+│  │ get_event()        │                │ post-call hook       │      │
+│  └────────────────────┘                └──────────────────────┘      │
+└──────────────────┬─────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                      DynamoDB                                          │
+│  ┌──────────────┐  ┌─────────────┐  ┌──────────────┐  ┌───────────┐ │
+│  │ kyc_cases     │  │ admin_roles │  │ calendar     │  │ call      │ │
+│  │ verification_ │  │ KYC_VERIFIER│  │ cal_id,      │  │ sessions  │ │
+│  │ call nested   │  │ scope       │  │ event_id     │  │ call_id   │ │
+│  └──────────────┘  └─────────────┘  └──────────────┘  └───────────┘ │
+└────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                      S3 (moto mock)                                    │
+│  recordings/{call_id}/recording.webm                                  │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Current State Analysis
+
+### 3.1 Call Lifecycle
 
 `app/services/messaging_call_lifecycle.py` manages the call state machine:
 ```
@@ -59,34 +124,239 @@ Call sessions are stored in the `MessageCallSessions` DDB table (PK: `call_id`, 
 `CallSessionRecord` fields: `call_id`, `conversation_id`, `caller_user_id`, `callee_user_id`,
 `initial_mode`, `state`, `start_ts`, `connect_ts`, `end_ts`, `end_reason`, `lifecycle_events`.
 
-### 2.2 Call Recording
+### 3.2 Call Recording
 
 `app/services/messaging_call_sessions.py` tracks recording state. When recording is enabled,
 the system stores `recording_s3_key` on the call session after the call ends. Recordings are
 stored in S3 at `recordings/{call_id}/recording.webm`.
 
-### 2.3 Calendar Integration
+### 3.3 Calendar Integration
 
 The calendar system (`app/routers/calendar.py`, `app/services/calendar.py`) supports event
 creation with structured fields: `title`, `description`, `start_time`, `end_time`, `attendees`.
 Calendar events are stored in the `calendar` DDB table (PK: `calendar_id`, SK: `event_id`).
 
-### 2.4 Admin Scopes
+### 3.4 Admin Scopes
 
 `app/auth/roles.py` defines `AdminScope` enum (line 14). Current scopes:
 `AUTH_SUPPORT`, `BILLING_SUPPORT`, `CONTENT_MODERATION`, `CONTENT_MODERATION_SENIOR`.
 A new `KYC_VERIFIER` scope will be added for verifier pool membership.
 
-### 2.5 KYC Case Structure
+### 3.5 KYC Case Structure
 
 The case item in DDB stores nested objects for questionnaire, files, signature, submission,
 and review. A new `verification_call` nested object will be added at the same level.
 
 ---
 
-## 3. Technical Design
+## 4. DynamoDB Access Patterns
 
-### 3.1 New Admin Scope
+| Access Pattern | Table | PK | SK / GSI | Notes |
+|---------------|-------|-----|----------|-------|
+| Get case verification call | `kyc_cases` | `KYC#{case_id}` | `META` → nested `verification_call` | Part of case record |
+| List verifiers | `admin_roles` | GSI `ByScope` PK=`kyc_verifier` | All items | Filter active admins |
+| Count active calls per verifier | `kyc_cases` | GSI `status-updated-index` PK=`STATUS#under_review` | Filter `verification_call.verifier_sub` | Cross-reference |
+| Get verifier schedule | `calendar` | `cal_admin_kyc` | SK range `evt_` + time range | Calendar event query |
+| Get call recording | `MessageCallSessions` | `call_id` | — | Get `recording_s3_key` |
+
+### Example: Verification Call Nested Object
+
+```json
+{
+  "verification_call": {
+    "call_id": "call_abc123def456",
+    "calendar_event_id": "evt_xyz789abc",
+    "calendar_id": "cal_admin_kyc",
+    "scheduled_at": 1716768000,
+    "duration_minutes": 15,
+    "verifier_sub": "root.admin@testdev.local",
+    "status": "scheduled",
+    "result": null,
+    "result_notes": null,
+    "result_set_at": null,
+    "recording_ref": null,
+    "created_at": 1716681600,
+    "updated_at": 1716681600
+  }
+}
+```
+
+---
+
+## 5. API Request/Response Examples
+
+### 5.1 Schedule Verification Call
+
+```bash
+curl -X POST "http://localhost:8000/v1/kyc/cases/admin/cases/kyc_a1b2c3d4/schedule-verification-call" \
+  -H "Cookie: ui_session=sess_root; ui_access_token=eyJ...; ui_csrf=csrf_r" \
+  -H "x-csrf-token: csrf_r" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "expected_version": 3,
+    "scheduled_at": 1716768000,
+    "duration_minutes": 15,
+    "verifier_sub": null,
+    "note": "Verify identity match for enhanced profile"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "call_id": "call_abc123def456",
+  "verifier_sub": "root.admin@testdev.local",
+  "calendar_event_id": "evt_xyz789abc",
+  "scheduled_at": 1716768000,
+  "status": "scheduled"
+}
+```
+
+### 5.2 Set Verification Call Result
+
+```bash
+curl -X POST "http://localhost:8000/v1/kyc/cases/admin/cases/kyc_a1b2c3d4/verification-call-result" \
+  -H "Cookie: ui_session=sess_root; ui_access_token=eyJ...; ui_csrf=csrf_r" \
+  -H "x-csrf-token: csrf_r" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "expected_version": 4,
+    "result": "passed",
+    "notes": "Identity confirmed visually. Person matches ID photo. Answered security questions correctly.",
+    "recording_linked": true
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "case_id": "kyc_a1b2c3d4",
+  "result": "passed",
+  "recording_ref": "recordings/call_abc123def456/recording.webm",
+  "result_set_at": 1716771600
+}
+```
+
+### 5.3 List Verifier Pool
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/cases/admin/verifiers" \
+  -H "Cookie: ui_session=sess_root; ui_access_token=eyJ...; ui_csrf=csrf_r"
+```
+
+**Response (200):**
+```json
+{
+  "verifiers": [
+    {
+      "user_sub": "root.admin@testdev.local",
+      "display_name": "Root Admin",
+      "active_call_count": 2,
+      "last_assigned_at": 1716681500
+    },
+    {
+      "user_sub": "e2e_charlie@test.local",
+      "display_name": "Charlie Admin",
+      "active_call_count": 1,
+      "last_assigned_at": 1716681400
+    }
+  ]
+}
+```
+
+### 5.4 Applicant View Verification Call Status
+
+```bash
+curl -X GET "http://localhost:8000/v1/kyc/cases/kyc_a1b2c3d4/verification-call" \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=eyJ...; ui_csrf=csrf_a"
+```
+
+**Response (200):**
+```json
+{
+  "verification_call": {
+    "status": "scheduled",
+    "scheduled_at": 1716768000,
+    "duration_minutes": 15,
+    "result": null,
+    "join_url": "/call/call_abc123def456"
+  }
+}
+```
+
+---
+
+## 6. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|----------------|
+| Schedule call on non-existent case | 404 | `kyc_case_not_found` | "Case not found." | Verify case ID |
+| Schedule call with past timestamp | 400 | `kyc_invalid_schedule_time` | "Scheduled time must be at least 1 hour in the future." | Pick future time |
+| Schedule call on already-scheduled case | 409 | `kyc_call_already_scheduled` | "A verification call is already scheduled for this case." | Cancel existing first |
+| No available verifiers in pool | 400 | `kyc_no_verifiers_available` | "No verification agents are available. Try again later." | Add verifiers to pool |
+| Set result on case without call | 400 | `kyc_no_call_scheduled` | "No verification call exists for this case." | Schedule call first |
+| Wrong expected_version on set result | 409 | `kyc_case_update_conflict` | "Case was modified. Please refresh." | Reload case |
+| Non-admin schedules call | 403 | `kyc_admin_role_required` | "Admin access required." | Use admin credentials |
+| Non-owner views call status | 403 | `kyc_access_forbidden` | "You do not own this case." | Use correct session |
+| Verifier not in pool | 400 | `kyc_invalid_verifier` | "The specified user is not in the verifier pool." | Check verifier scope |
+
+---
+
+## 7. Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+class KycScheduleVerificationCallRequest(BaseModel):
+    expected_version: int = Field(..., ge=1)
+    scheduled_at: int = Field(..., description="Unix timestamp, must be >= now + 1 hour")
+    verifier_sub: str | None = Field(default=None, description="Auto-assign if None")
+    duration_minutes: int = Field(default=15, ge=5, le=60)
+    note: str | None = Field(default=None, max_length=500)
+
+class KycVerificationCallResultRequest(BaseModel):
+    expected_version: int = Field(..., ge=1)
+    result: Literal["passed", "failed", "inconclusive"]
+    notes: str = Field(..., min_length=1, max_length=2000)
+    recording_linked: bool = Field(default=True)
+
+class KycScheduleCallResponse(BaseModel):
+    ok: bool = True
+    call_id: str
+    verifier_sub: str
+    calendar_event_id: str
+    scheduled_at: int
+    status: str = "scheduled"
+
+class KycCallResultResponse(BaseModel):
+    ok: bool = True
+    case_id: str
+    result: Literal["passed", "failed", "inconclusive"]
+    recording_ref: str | None = None
+    result_set_at: int
+
+class KycVerifierOut(BaseModel):
+    user_sub: str
+    display_name: str | None = None
+    active_call_count: int = 0
+    last_assigned_at: int | None = None
+
+class KycVerificationCallStatusOut(BaseModel):
+    status: Literal["scheduled", "in_progress", "completed", "missed", "canceled"]
+    scheduled_at: int | None = None
+    duration_minutes: int | None = None
+    result: Literal["passed", "failed", "inconclusive"] | None = None
+    join_url: str | None = None
+```
+
+---
+
+## 8. Technical Design
+
+### 8.1 New Admin Scope
 
 **File: `app/auth/roles.py`** -- add to `AdminScope`:
 
@@ -99,32 +369,7 @@ class AdminScope(str, Enum):
     KYC_VERIFIER = "kyc_verifier"  # new
 ```
 
-Update `CANONICAL_ADMIN_SCOPES` tuple to include `AdminScope.KYC_VERIFIER`.
-
-### 3.2 KYC Case Verification Call Field
-
-New nested object on the KYC case item:
-
-```python
-{
-    "verification_call": {
-        "call_id": "call_abc123",
-        "calendar_event_id": "evt_xyz789",
-        "calendar_id": "cal_admin_kyc",
-        "scheduled_at": 1716768000,
-        "verifier_sub": "admin_user_sub",
-        "status": "scheduled",       # scheduled | in_progress | completed | missed | canceled
-        "result": null,               # passed | failed | inconclusive (set after call)
-        "result_notes": null,
-        "result_set_at": null,
-        "recording_ref": null,        # S3 key of call recording
-        "created_at": 1716681600,
-        "updated_at": 1716681600,
-    }
-}
-```
-
-### 3.3 Verifier Pool Service
+### 8.2 Verifier Pool Service
 
 **File: `app/services/kyc_verifier_pool.py`** (new, ~150 lines)
 
@@ -141,90 +386,7 @@ class KycVerifierPool:
         """Get scheduled verification calls for a verifier in a time range."""
 ```
 
-The pool queries the `admin_roles` table for users with `kyc_verifier` scope, then
-cross-references the `kyc_cases` table (via GSI on status=under_review) to count active
-verification calls per verifier.
-
-### 3.4 New Router Endpoints
-
-**File: `app/routers/kyc_cases.py`** -- add endpoints:
-
-```python
-@router.post("/admin/cases/{case_id}/schedule-verification-call")
-def schedule_verification_call(
-    case_id: str,
-    body: KycScheduleVerificationCallRequest,
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """Schedule a verification video call for a KYC case.
-    Auto-assigns a verifier from the pool if verifier_sub not specified.
-    Creates a calendar event and a DM conversation for the call.
-    Requires ADMIN or ROOT role."""
-
-@router.post("/admin/cases/{case_id}/verification-call-result")
-def set_verification_call_result(
-    case_id: str,
-    body: KycVerificationCallResultRequest,
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """Record the result of a verification call (passed/failed/inconclusive).
-    Only the assigned verifier or ROOT can set the result.
-    Links call recording to the case if available."""
-
-@router.get("/admin/verifiers")
-def list_verifier_pool(
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """List all admins in the KYC verifier pool with their active call counts."""
-
-@router.get("/admin/verifiers/{verifier_sub}/schedule")
-def get_verifier_schedule(
-    verifier_sub: str,
-    from_ts: int = Query(...),
-    to_ts: int = Query(...),
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """Get a verifier's scheduled verification calls in a time range."""
-
-@router.get("/{case_id}/verification-call")
-def get_verification_call_status(
-    case_id: str,
-    request: Request,
-    _ctx: dict = Depends(require_ui_session),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
-):
-    """Get verification call status for the case owner's view.
-    Shows scheduled_at, status, and join link (when applicable)."""
-```
-
-### 3.5 Request/Response Models
-
-**File: `app/contracts/kyc_cases_contract.py`** -- add:
-
-```python
-class KycScheduleVerificationCallRequest(BaseModel):
-    expected_version: int = Field(..., ge=1)
-    scheduled_at: int = Field(..., description="Unix timestamp, must be >= now + 1 hour")
-    verifier_sub: str | None = Field(default=None, description="Auto-assign if None")
-    duration_minutes: int = Field(default=15, ge=5, le=60)
-    note: str | None = Field(default=None, max_length=500)
-
-class KycVerificationCallResultRequest(BaseModel):
-    expected_version: int = Field(..., ge=1)
-    result: Literal["passed", "failed", "inconclusive"]
-    notes: str = Field(..., min_length=1, max_length=2000)
-    recording_linked: bool = Field(default=True)
-```
-
-### 3.6 Scheduling Flow
+### 8.3 Scheduling Flow
 
 ```
 Admin (reviewer)                    Backend                         Applicant
@@ -246,36 +408,113 @@ Admin (reviewer)                    Backend                         Applicant
   |                                   |                                |   (scheduled call shown)
 ```
 
-### 3.7 Call Recording Linkage
+### 8.4 Call Recording Linkage
 
 When a verification call ends (state transitions to `ended`), a post-call hook checks if
 the call is associated with a KYC case (by matching `call_id` against
 `case.verification_call.call_id`). If so, the `recording_ref` on the verification_call
 object is updated with the call session's `recording_s3_key`.
 
-### 3.8 Frontend Changes
+---
 
-**File: `frontend/src/pages/admin/KycCaseDetailPage.tsx`** -- extend:
+## 9. Frontend Component Tree
 
-Add `VerificationCallPanel` component showing:
-- Status badge (scheduled/in_progress/completed/missed/canceled)
-- Scheduled date/time with verifier name
-- "Join Call" button (active when call is in scheduled state and current time is within window)
-- Call result display (passed/failed/inconclusive with notes)
-- Recording playback widget (audio/video player for the recording)
-- "Schedule Call" button (shown when no call is scheduled)
+```
+KycCaseDetailPage (admin view, extended)
+└── VerificationCallPanel
+    ├── StatusBadge (scheduled | in_progress | completed | missed | canceled)
+    ├── ScheduleSection (when no call)
+    │   └── Button "Schedule Verification Call" → ScheduleCallDialog
+    │       ├── DateTimePicker (scheduled_at)
+    │       ├── Select (duration: 5/10/15/30/60 min)
+    │       ├── Select (verifier: auto-assign or pick from pool)
+    │       ├── Textarea (note)
+    │       └── Button "Schedule"
+    ├── ScheduledSection (when scheduled)
+    │   ├── Text "Scheduled for {datetime}"
+    │   ├── Text "Verifier: {name}"
+    │   ├── Button "Join Call" (active when within 5min of scheduled time)
+    │   └── Button "Cancel Call"
+    ├── ResultSection (when completed)
+    │   ├── ResultBadge (passed=green | failed=red | inconclusive=yellow)
+    │   ├── Text "Notes: {result_notes}"
+    │   └── RecordingPlayer (audio/video element, src=recording presigned URL)
+    └── SetResultSection (for assigned verifier, when call completed)
+        ├── RadioGroup (passed | failed | inconclusive)
+        ├── Textarea (notes, required)
+        └── Button "Submit Result"
 
-**File: `frontend/src/pages/kyc/KycCaseStatusPage.tsx`** -- extend:
-
-Add verification call status section for the applicant:
-- Scheduled date/time
-- "Join Call" button when within 5 minutes of scheduled time
-- Countdown timer to call
-- Call result (if completed)
+KycCaseStatusPage (applicant view, extended)
+└── VerificationCallBanner
+    ├── StatusBadge
+    ├── CountdownTimer (to scheduled_at)
+    ├── Button "Join Call" (active when within 5min window)
+    └── ResultDisplay (after completion)
+```
 
 ---
 
-## 4. E2E Test Plan
+## 10. Observability & Monitoring
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `kyc_verification_call_scheduled` | Counter | `auto_assigned` (bool) | Calls scheduled |
+| `kyc_verification_call_result` | Counter | `result` (passed/failed/inconclusive) | Call outcomes |
+| `kyc_verification_call_duration_seconds` | Histogram | — | Actual call durations |
+| `kyc_verifier_pool_size` | Gauge | — | Number of active verifiers |
+| `kyc_verifier_active_calls` | Gauge | `verifier_sub` | Active calls per verifier |
+| `kyc_verification_call_missed` | Counter | — | Missed calls (no-show) |
+| `kyc_verification_call_recording_linked` | Counter | — | Recordings successfully linked |
+
+### Alert Thresholds
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Verifier pool empty | `pool_size == 0` | P1 |
+| High miss rate | `missed / total > 20%` in 24h | P2 |
+| Recording linkage failure | `recording_linked_failures > 5` in 1h | P3 |
+| Call scheduled but not joined within 15min | Per-call timeout check | P3 (send reminder) |
+
+---
+
+## 11. Rollout Plan
+
+### 11.1 Feature Flag
+
+**Flag:** `KYC_VERIFICATION_CALLS_ENABLED` (default `false`)
+
+### 11.2 Steps
+
+1. Add `KYC_VERIFIER` scope to roles.py (backward compatible)
+2. Deploy verifier pool service + endpoints (hidden behind flag)
+3. Grant `KYC_VERIFIER` scope to at least 2 admins in staging
+4. Enable flag in staging, run E2E tests
+5. Enable flag in production, grant scope to compliance verifiers
+6. Monitor miss rates and call quality for 1 week
+
+### 11.3 Rollback
+
+1. Set flag to `false` -- "Schedule Call" button hidden
+2. Existing scheduled calls remain in DDB but no new ones created
+3. Verifier scope remains (harmless if feature off)
+
+---
+
+## 12. Performance Considerations
+
+| Operation | Cost | Notes |
+|-----------|------|-------|
+| Schedule call | 3 WCU | Case update + calendar event + audit |
+| List verifiers | 5-10 RCU | Scan admin_roles table (small) |
+| Auto-assign (count active) | 10-20 RCU | Cross-reference cases by status |
+| Get call status | 1 RCU | Single GetItem on case |
+| Recording linkage | 2 WCU | Update case record + audit |
+
+Caching: Verifier pool list cached for 60s (pool changes infrequently).
+
+---
+
+## 13. E2E Test Plan
 
 **File**: `frontend/e2e/kyc-verification-call.spec.ts`
 **Total**: ~18 tests across 4 sections (160-163)
@@ -390,9 +629,30 @@ test("163.4 Case with no verification call returns null/empty", async () => {
 });
 ```
 
+### Expanded E2E: Edge Cases
+
+```typescript
+test("160.6 Double-scheduling returns 409", async () => {
+  // Schedule call, then try scheduling again
+  // Expect 409 kyc_call_already_scheduled
+});
+
+test("161.6 Recording ref is populated after call completes", async () => {
+  // After setting result with recording_linked=true
+  // GET case detail
+  // Verify verification_call.recording_ref is non-null
+});
+
+test("162.5 Auto-assignment picks verifier with fewest active calls", async () => {
+  // Create 2 verifiers, one with 0 active calls, one with 2
+  // Schedule call with auto-assign
+  // Verify assigned to verifier with 0 active calls
+});
+```
+
 ---
 
-## 5. File Change Summary
+## 14. File Change Summary
 
 | File | Change Type | Description |
 |------|-------------|-------------|
@@ -403,4 +663,80 @@ test("163.4 Case with no verification call returns null/empty", async () => {
 | `app/contracts/kyc_cases_contract.py` | Modify | Add schedule/result request models and response types |
 | `frontend/src/pages/admin/KycCaseDetailPage.tsx` | Modify | Add VerificationCallPanel component |
 | `frontend/src/api/endpoints/kyc-admin.ts` | Modify | Add verification call API functions |
-| `frontend/e2e/kyc-verification-call.spec.ts` | **New** | 18 E2E tests across sections 160-163 |
+| `frontend/e2e/kyc-verification-call.spec.ts` | **New** | 18+ E2E tests across sections 160-163 |
+
+---
+
+## 15. Expanded E2E Tests: Additional Edge Cases
+
+### Section 160 Additions (3 tests)
+
+```typescript
+test("160.7 Schedule call with explicit verifier_sub assigns that verifier", async () => {
+  // POST with verifier_sub = charlie_admin's sub
+  // Verify response verifier_sub matches charlie's sub
+  // Verify calendar event created for charlie
+});
+
+test("160.8 Schedule call creates DM conversation between verifier and applicant", async () => {
+  // After scheduling, check applicant's conversations
+  // Verify a DM exists with the assigned verifier (or system message referencing the call)
+});
+
+test("160.9 Duration must be between 5 and 60 minutes", async () => {
+  // POST with duration_minutes=3 → expect 422
+  // POST with duration_minutes=61 → expect 422
+  // POST with duration_minutes=30 → expect 200
+});
+```
+
+### Section 161 Additions (3 tests)
+
+```typescript
+test("161.7 Setting result to inconclusive does not block case progression", async () => {
+  // Set result=inconclusive
+  // Verify case can still be re-scheduled for another call
+});
+
+test("161.8 Result notes are required (empty string rejected)", async () => {
+  // POST with notes=""
+  // Expect 422 (min_length=1)
+});
+
+test("161.9 Result notes max length enforced", async () => {
+  // POST with notes of 2001 characters
+  // Expect 422 (max_length=2000)
+});
+```
+
+### Section 162 Additions (2 tests)
+
+```typescript
+test("162.6 Verifier with most active calls is not auto-assigned", async () => {
+  // Create verifier A with 3 active calls, verifier B with 0
+  // Schedule with auto-assign
+  // Verify assigned to verifier B (fewest active)
+});
+
+test("162.7 Verifier schedule respects time range filter", async () => {
+  // Schedule call at time T
+  // GET schedule with from_ts=T-1h, to_ts=T+1h → includes call
+  // GET schedule with from_ts=T+2h, to_ts=T+3h → empty
+});
+```
+
+### Section 163 Additions (2 tests)
+
+```typescript
+test("163.5 Applicant sees join_url when within 5 minutes of scheduled time", async () => {
+  // Schedule call for now+4min (in test, use mock time or a near-future time)
+  // GET verification-call as applicant
+  // Verify join_url is present and non-null
+});
+
+test("163.6 Applicant cannot see verifier's full profile data", async () => {
+  // GET verification-call as applicant
+  // Verify response does NOT include verifier's email or internal sub
+  // Only includes verifier display name (if any)
+});
+```

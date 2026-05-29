@@ -89,7 +89,7 @@ The broadcast reconciler (`app/services/broadcast_reconciler.py`) is the closest
 - **No job queue table**: There is no DynamoDB table for transcode jobs.
 - **No worker process**: There is no asyncio task or external worker that picks up and executes transcode jobs.
 - **No progress tracking**: `VideoPipelineJobEvent` defines event types (`job.accepted`, `job.running`, `job.failed`, `job.completed`) but nothing persists or emits them.
-- **No concurrency limiter**: No `asyncio.Semaphore` or similar mechanism exists in the services layer. NOTE: `asyncio.Semaphore` and `asyncio.create_subprocess_exec` are novel patterns in this codebase — no existing precedent. Existing subprocess calls use synchronous `subprocess.run` or `subprocess.Popen`.
+- **No concurrency limiter**: No `asyncio.Semaphore` or similar mechanism exists in the services layer. NOTE: `asyncio.Semaphore` and `asyncio.create_subprocess_exec` are novel patterns in this codebase -- no existing precedent. Existing subprocess calls use synchronous `subprocess.run` or `subprocess.Popen`.
 - **No retry logic**: The existing background loops have bare `except Exception: pass` - they retry on the *next* interval tick but have no per-item retry count or backoff.
 - **No SQS queue for video jobs**: The only SQS integration is the newsfeed SSE fan-out poller (`EVENTS_SQS_URL`) and the Jira outbound sync (`app/services/jira_outbound_sync.py`).
 
@@ -109,7 +109,100 @@ The following building blocks are in place and ready for orchestration:
 
 ## 3. Technical Design
 
-### 3.1 DynamoDB Job Model
+### 3.1 Architecture Diagram
+
+```
+  +-----------------+
+  |   Creator UI    |
+  | (VideosPage)    |
+  +-----------------+
+        |
+        | POST /ui/transcode-jobs (submit)
+        | GET  /ui/transcode-jobs/{id} (poll status)
+        | GET  /ui/transcode-jobs (list)
+        | DELETE /ui/transcode-jobs/{id} (cancel)
+        v
+  +-----------------+       +-----------------------+
+  | transcode_jobs  |       | transcode_job_submit  |
+  |   Router        |------>|   Service             |
+  +-----------------+       +-----------------------+
+                                   |
+                                   | 1. Validate via VideoPipelineJobRequest
+                                   | 2. create_job() -> DDB (status=pending)
+                                   | 3. [prod] SQS send_message()
+                                   v
+                            +-----------------------+
+                            | transcode_job_store   |
+                            |   (DDB CRUD)          |
+                            +-----------------------+
+                                   |
+                                   | TranscodeJobs table
+                                   v
+                            +-----------------------+
+                            |   TranscodeJobs DDB   |
+                            +-----------------------+
+                            | PK: job_id            |
+                            | GSI-Status:           |
+                            |   status / created_at |
+                            | GSI-TenantStatus:     |
+                            |   tenant_id /         |
+                            |   status_created_at   |
+                            +-----------------------+
+                                   ^
+                                   |
+                    +--------------+------------------+
+                    |                                  |
+          [Dev Mode]                        [Prod Mode]
+  +---------------------+            +---------------------+
+  | transcode_worker    |            |   SQS FIFO Queue    |
+  |  (asyncio loop)     |            +---------------------+
+  +---------------------+                     |
+  | 1. poll_pending()   |            +---------------------+
+  | 2. claim_job()      |            | Lambda / ECS Worker |
+  | 3. download source  |            +---------------------+
+  | 4. per-rendition:   |            | 1. receive message  |
+  |    FFmpeg exec      |            | 2. claim_job()      |
+  |    progress update  |            | 3. transcode        |
+  | 5. upload outputs   |            | 4. upload outputs   |
+  | 6. complete/fail    |            | 5. complete/fail    |
+  +---------------------+            | 6. delete message   |
+        |                            +---------------------+
+        | asyncio.create_subprocess_exec
+        v
+  +---------------------+
+  |   FFmpeg Process    |
+  | -progress pipe:1    |
+  | (per rendition)     |
+  +---------------------+
+        |
+        | stdout: out_time_us=...
+        v
+  +---------------------+       +---------------------+
+  | Progress Parser     |------>| update_progress()   |
+  | (throttled 5s)      |       | (DDB conditional)   |
+  +---------------------+       +---------------------+
+        |
+        | On success:
+        v
+  +---------------------+       +---------------------+
+  | write_master_       |------>| S3 upload           |
+  |  playlist()         |       | (outputs to bucket) |
+  +---------------------+       +---------------------+
+        |
+        v
+  +---------------------+       +---------------------+
+  | complete_job()      |------>| _emit_job_event()   |
+  | (DDB update)        |       | (alerts/SSE)        |
+  +---------------------+       +---------------------+
+
+Retry Flow:
+  FFmpeg fails -> RetryableError
+    -> attempt < max_attempts?
+       Yes -> status=pending, next_retry_at=now+backoff, attempt++
+       No  -> status=failed, emit alert
+```
+
+### 3.2 DynamoDB Job Model
 
 **Table**: `TranscodeJobs`
 **Partition key**: `job_id` (S)
@@ -174,7 +267,106 @@ The following building blocks are in place and ready for orchestration:
 }
 ```
 
-### 3.2 Job State Machine
+### 3.3 DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK / Index | Operation | Expected Latency |
+|---------------|-------|-----|------------|-----------|-----------------|
+| Get job by ID | TranscodeJobs | `job_id` | Table PK | `get_item(ConsistentRead=True)` | ~5ms |
+| Create job | TranscodeJobs | `job_id` | Table PK | `put_item(Condition=attr_not_exists)` | ~8ms |
+| Claim job (worker) | TranscodeJobs | `job_id` | Table PK | `update_item(Condition=status=pending)` | ~8ms |
+| Update progress | TranscodeJobs | `job_id` | Table PK | `update_item(Condition=worker_id=me)` | ~8ms |
+| Complete job | TranscodeJobs | `job_id` | Table PK | `update_item(Condition=worker_id=me)` | ~8ms |
+| Fail job (retry) | TranscodeJobs | `job_id` | Table PK | `update_item` | ~8ms |
+| Cancel job | TranscodeJobs | `job_id` | Table PK | `update_item(Condition=status IN pending,running)` | ~8ms |
+| Poll pending jobs | TranscodeJobs | `status=pending` | GSI-Status, `ScanIndexForward=True` | `query(Limit=N)` | ~10ms |
+| List tenant jobs | TranscodeJobs | `tenant_id` | GSI-TenantStatus, begins_with `status#` | `query` | ~10ms |
+
+#### Example DynamoDB Items
+
+**Newly submitted job** (status=pending):
+```json
+{
+  "job_id": "tj_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+  "tenant_id": "tenant_abc",
+  "asset_id": "v_f1e2d3c4b5a6f7e8d9c0b1a2f3e4d5c6",
+  "status": "pending",
+  "status_created_at": "pending#1748500000",
+  "created_at": 1748500000,
+  "updated_at": 1748500000,
+  "attempt": 0,
+  "max_attempts": 3,
+  "priority": 0,
+  "contract_version": "2026-03-video-pipeline-v1",
+  "source_uri": "s3://uploads/raw/e2e_alice/tutorial.mp4",
+  "input_codec": "h264",
+  "input_fps": 30,
+  "input_width": 1920,
+  "input_height": 1080,
+  "audio_layout": "stereo",
+  "renditions": [
+    {"name": "1080p", "width": 1920, "height": 1080, "bitrate_kbps": 5000},
+    {"name": "720p", "width": 1280, "height": 720, "bitrate_kbps": 2500},
+    {"name": "480p", "width": 854, "height": 480, "bitrate_kbps": 1200}
+  ],
+  "watermark": {"mode": "none"},
+  "drm": {"profile": "none"},
+  "retention_days": 30,
+  "progress_pct": 0,
+  "renditions_completed": [],
+  "ttl": 1751092000
+}
+```
+
+**Running job with progress** (status=running, 2 of 3 renditions done):
+```json
+{
+  "job_id": "tj_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+  "tenant_id": "tenant_abc",
+  "asset_id": "v_f1e2d3c4b5a6f7e8d9c0b1a2f3e4d5c6",
+  "status": "running",
+  "status_created_at": "running#1748500000",
+  "created_at": 1748500000,
+  "updated_at": 1748501500,
+  "started_at": 1748500010,
+  "worker_id": "devhost:12345",
+  "attempt": 0,
+  "progress_pct": 78,
+  "current_rendition": "1080p",
+  "renditions_completed": ["480p", "720p"],
+  "eta_seconds": 180
+}
+```
+
+**Completed job** (status=completed):
+```json
+{
+  "job_id": "tj_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+  "status": "completed",
+  "status_created_at": "completed#1748500000",
+  "completed_at": 1748502000,
+  "progress_pct": 100,
+  "renditions_completed": ["480p", "720p", "1080p"],
+  "output_hls_manifest_uri": "s3://vod-output/tenants/tenant_abc/assets/v_f1e2d3/hls/master.m3u8",
+  "output_s3_prefix": "tenants/tenant_abc/assets/v_f1e2d3/hls/"
+}
+```
+
+**Failed job after max retries** (status=failed):
+```json
+{
+  "job_id": "tj_b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6a7",
+  "status": "failed",
+  "status_created_at": "failed#1748510000",
+  "completed_at": 1748512000,
+  "attempt": 3,
+  "max_attempts": 3,
+  "error_code": "ffmpeg_exit_nonzero",
+  "error_message": "FFmpeg exited with code 1",
+  "error_details": "[libx264 @ 0x...] Error: height not divisible by 2 (1920x1079)\n..."
+}
+```
+
+### 3.4 Job State Machine
 
 ```
                  submit
@@ -214,7 +406,110 @@ The following building blocks are in place and ready for orchestration:
 
 All transitions use `ConditionExpression` to prevent race conditions. If the conditional write fails with `ConditionalCheckFailedException`, the worker abandons the job (another worker or cancellation won).
 
-### 3.3 In-Process Asyncio Worker (Dev Mode)
+### 3.5 Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---------------|-------------|------------|---------------------|-----------------|
+| Job not found | 404 | `JOB_NOT_FOUND` | "Transcode job not found" | Verify job ID |
+| Invalid job request (validation) | 422 | `VALIDATION_ERROR` | "Invalid transcode job request: {details}" | Fix request fields |
+| Source file not found in S3 | 400 | `SOURCE_NOT_FOUND` | "Source video file not found" | Re-upload source file |
+| Invalid codec in source | 400 | `INVALID_CODEC` | "Source video codec not supported" | Convert to supported codec |
+| Cancel completed job | 409 | `CANNOT_CANCEL_COMPLETED` | "Cannot cancel a completed job" | None |
+| Cancel already-cancelled job | 409 | `ALREADY_CANCELLED` | "Job is already cancelled" | None |
+| FFmpeg process crashed | N/A (internal) | `ffmpeg_exit_nonzero` | "Transcoding failed (will retry)" | Automatic retry |
+| Disk full during transcode | N/A (internal) | `disk_full` | "Transcoding failed due to disk space" | Automatic retry |
+| Rendition timeout | N/A (internal) | `timeout` | "Transcoding timed out" | Automatic retry |
+| S3 upload failed | N/A (internal) | `s3_upload_failed` | "Failed to upload outputs" | Automatic retry |
+| Max retries exhausted | N/A (internal) | `max_retries_exhausted` | "Transcoding failed after {N} attempts" | Manual re-submit |
+| Per-tenant concurrency limit | 429 | `TENANT_THROTTLED` | "Too many concurrent jobs. Please wait." | Wait for running jobs |
+| Contract validation failed | 422 | `CONTRACT_VALIDATION_ERROR` | "Job specification does not match pipeline contract" | Fix rendition profiles |
+| Worker claim race condition | N/A (internal) | `claim_failed` | N/A (transparent to user) | Another worker processes job |
+
+### 3.6 Pydantic Models for API Layer
+
+```python
+# -- Transcode Job API Models (VOD-003) --
+
+class TranscodeJobSubmitIn(BaseModel):
+    """Request body for job submission."""
+    asset_id: str = Field(min_length=1, max_length=100)
+    source_uri: str = Field(min_length=1, max_length=500)
+    renditions: List[Dict[str, Any]] = Field(min_length=1, max_length=6)
+    watermark: Optional[Dict[str, Any]] = None
+    drm: Optional[Dict[str, Any]] = None
+    priority: int = Field(default=0, ge=-10, le=10)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    retention_days: int = Field(default=30, ge=1, le=365)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "asset_id": "v_abc123",
+                "source_uri": "s3://uploads/raw/video.mp4",
+                "renditions": [
+                    {"name": "1080p", "width": 1920, "height": 1080, "bitrate_kbps": 5000},
+                    {"name": "720p", "width": 1280, "height": 720, "bitrate_kbps": 2500}
+                ],
+                "priority": 0,
+                "max_attempts": 3,
+            }
+        }
+
+class TranscodeJobOut(BaseModel):
+    """Response model for job status."""
+    job_id: str
+    tenant_id: str
+    asset_id: str
+    status: str  # pending | running | completed | failed | cancelled
+    created_at: int
+    updated_at: int
+    started_at: Optional[int] = None
+    completed_at: Optional[int] = None
+    attempt: int = 0
+    max_attempts: int = 3
+    progress_pct: int = 0
+    current_rendition: Optional[str] = None
+    renditions_completed: List[str] = Field(default_factory=list)
+    eta_seconds: Optional[int] = None
+    output_hls_manifest_uri: Optional[str] = None
+    output_s3_prefix: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "job_id": "tj_a1b2c3d4",
+                "tenant_id": "tenant_abc",
+                "asset_id": "v_abc123",
+                "status": "running",
+                "created_at": 1748500000,
+                "updated_at": 1748501000,
+                "started_at": 1748500010,
+                "attempt": 0,
+                "max_attempts": 3,
+                "progress_pct": 45,
+                "current_rendition": "720p",
+                "renditions_completed": ["480p"],
+                "eta_seconds": 300,
+            }
+        }
+
+class TranscodeJobListOut(BaseModel):
+    """Response model for job listing."""
+    items: List[TranscodeJobOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "items": [],
+                "cursor": None,
+            }
+        }
+```
+
+### 3.7 In-Process Asyncio Worker (Dev Mode)
 
 For `S.dev_mode = True`, the worker runs as an asyncio background task, identical in structure to the broadcast reconciler:
 
@@ -252,7 +547,7 @@ def start_transcode_worker_task() -> None:
 
 **FFmpeg execution**: Uses `asyncio.create_subprocess_exec` (not `subprocess.run`) to avoid blocking the event loop. Progress is parsed from FFmpeg's `-progress pipe:1` output and written to DynamoDB every 5 seconds.
 
-### 3.4 SQS + Lambda Architecture (Production)
+### 3.8 SQS + Lambda Architecture (Production)
 
 In production, the in-process worker loop is disabled (`transcode_worker_enabled=false`). Instead:
 
@@ -274,7 +569,7 @@ In production, the in-process worker loop is disabled (`transcode_worker_enabled
 
 The SQS client factory already exists (`app/core/aws_clients.py:sqs_client()`), and the pattern for SQS message publishing is demonstrated in `app/services/jira_outbound_sync.py:_enqueue_to_sqs()`.
 
-### 3.5 Progress Tracking
+### 3.9 Progress Tracking
 
 Progress is tracked at two granularities:
 
@@ -290,7 +585,7 @@ DynamoDB updates are throttled to one write per 5 seconds to avoid exceeding pro
 
 **Client-side polling**: The API exposes `GET /ui/transcode-jobs/{job_id}` which returns the current job state including `progress_pct`, `current_rendition`, and `eta_seconds`. Clients poll every 3-5 seconds. Future enhancement: SSE endpoint following the `app/services/alerts.py` subscriber pattern.
 
-### 3.6 Retry Logic
+### 3.10 Retry Logic
 
 Retry follows exponential backoff with jitter:
 
@@ -323,13 +618,88 @@ Default `max_attempts = 3` (configurable per-job). After exhausting retries, the
 - `timeout` - exceeded per-rendition time limit
 - `s3_upload_failed` - network error uploading output
 
-### 3.7 Concurrency Limits
+### 3.11 Concurrency Limits
 
 **Dev mode**: `asyncio.Semaphore(S.transcode_max_concurrent_jobs)` (default: 2). This prevents the single-process backend from spawning more FFmpeg processes than the dev machine can handle.
 
 **Production**: Concurrency is controlled at two levels:
 1. **SQS Lambda concurrency**: Reserved concurrency setting on the Lambda function (e.g., 10 concurrent invocations across the fleet).
 2. **Per-tenant throttle**: Before claiming a job, the worker queries `GSI-TenantStatus` for `status=running` count. If `>= S.transcode_max_per_tenant` (default: 3), the message is returned to the queue (visibility timeout reset to 30s).
+
+### 3.12 API Request/Response Examples
+
+**Submit a transcode job**:
+```bash
+curl -X POST http://localhost:8000/ui/transcode-jobs \
+  -H "Cookie: ui_session=sess_xxx; ui_csrf=csrf_xxx; ui_access_token=jwt_xxx" \
+  -H "x-csrf-token: csrf_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "asset_id": "v_abc123",
+    "source_uri": "s3://uploads/raw/e2e_alice/tutorial.mp4",
+    "renditions": [
+      {"name": "1080p", "width": 1920, "height": 1080, "bitrate_kbps": 5000},
+      {"name": "720p", "width": 1280, "height": 720, "bitrate_kbps": 2500}
+    ],
+    "priority": 0,
+    "max_attempts": 3
+  }'
+
+# 201 Created
+{
+  "job_id": "tj_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+  "tenant_id": "tenant_abc",
+  "asset_id": "v_abc123",
+  "status": "pending",
+  "created_at": 1748500000,
+  "updated_at": 1748500000,
+  "attempt": 0,
+  "max_attempts": 3,
+  "progress_pct": 0,
+  "renditions_completed": []
+}
+```
+
+**Poll job status**:
+```bash
+curl http://localhost:8000/ui/transcode-jobs/tj_a1b2c3d4 \
+  -H "Cookie: ui_session=sess_xxx; ui_csrf=csrf_xxx; ui_access_token=jwt_xxx"
+
+# 200 OK
+{
+  "job_id": "tj_a1b2c3d4",
+  "status": "running",
+  "progress_pct": 45,
+  "current_rendition": "720p",
+  "renditions_completed": ["480p"],
+  "eta_seconds": 300,
+  "attempt": 0
+}
+```
+
+**Cancel a job**:
+```bash
+curl -X DELETE http://localhost:8000/ui/transcode-jobs/tj_a1b2c3d4 \
+  -H "Cookie: ui_session=sess_xxx; ui_csrf=csrf_xxx; ui_access_token=jwt_xxx" \
+  -H "x-csrf-token: csrf_xxx"
+
+# 200 OK
+{"ok": true, "job_id": "tj_a1b2c3d4", "status": "cancelled"}
+```
+
+**List jobs** (paginated):
+```bash
+curl "http://localhost:8000/ui/transcode-jobs?limit=10" \
+  -H "Cookie: ui_session=sess_xxx; ui_csrf=csrf_xxx; ui_access_token=jwt_xxx"
+
+# 200 OK
+{
+  "items": [
+    {"job_id": "tj_a1b2c3d4", "status": "running", "progress_pct": 45, "asset_id": "v_abc123"}
+  ],
+  "cursor": null
+}
+```
 
 ---
 
@@ -547,9 +917,147 @@ async def _run_ffmpeg_async(job_id: str, worker_id: str, args: list[str], rendit
 
 ---
 
-## 5. Testing Strategy
+## 5. Observability & Monitoring
 
-### 5.1 Unit Tests for Job State Machine (`tests/test_transcode_job_store.py`)
+### 5.1 Metrics to Track
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `transcode_job_submitted_total` | Counter | `tenant_id` | Jobs submitted |
+| `transcode_job_completed_total` | Counter | `tenant_id`, `rendition_count` | Jobs completed successfully |
+| `transcode_job_failed_total` | Counter | `tenant_id`, `error_code` | Jobs failed (terminal) |
+| `transcode_job_retried_total` | Counter | `tenant_id`, `attempt` | Retry events |
+| `transcode_job_cancelled_total` | Counter | `tenant_id` | Jobs cancelled by user |
+| `transcode_job_duration_seconds` | Histogram | `rendition_count` | Wall-clock time from submit to complete |
+| `transcode_rendition_duration_seconds` | Histogram | `rendition_label` | Per-rendition encoding time |
+| `transcode_worker_active_jobs` | Gauge | | Currently running jobs |
+| `transcode_worker_poll_empty` | Counter | | Poll cycles with no pending jobs |
+| `transcode_progress_update_total` | Counter | | DDB progress writes |
+
+### 5.2 Log Events
+
+| Event | Level | Fields | When |
+|-------|-------|--------|------|
+| `transcode.submitted` | INFO | `job_id`, `tenant_id`, `asset_id`, `rendition_count` | Job created |
+| `transcode.claimed` | INFO | `job_id`, `worker_id` | Worker claims job |
+| `transcode.rendition_started` | INFO | `job_id`, `rendition_name`, `rendition_idx` | FFmpeg started for rendition |
+| `transcode.rendition_completed` | INFO | `job_id`, `rendition_name`, `duration_seconds` | Rendition done |
+| `transcode.completed` | INFO | `job_id`, `total_duration_seconds`, `output_uri` | Job fully done |
+| `transcode.failed` | ERROR | `job_id`, `error_code`, `error_message`, `attempt` | Job failed |
+| `transcode.retrying` | WARN | `job_id`, `attempt`, `next_retry_at` | Scheduling retry |
+| `transcode.cancelled` | INFO | `job_id`, `cancelled_by` | User cancelled |
+| `transcode.claim_failed` | DEBUG | `job_id`, `worker_id` | Conditional write failed (another worker) |
+| `transcode.progress` | DEBUG | `job_id`, `progress_pct`, `current_rendition` | Progress update |
+
+### 5.3 Alert Thresholds
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Job failure rate > 20% | > 20% of completed jobs are `failed` in 1h | Critical | Check FFmpeg/disk/S3 |
+| Job queue backing up | > 50 pending jobs | Warning | Scale workers or increase concurrency |
+| Worker stalled | No progress update for running job in > 5 min | Warning | Worker may have crashed |
+| Disk usage high | Scratch dir > 80% capacity | Warning | Clean up or expand storage |
+| All retries exhausted | Any `max_retries_exhausted` alert | Critical | Manual intervention needed |
+
+### 5.4 Dashboard Queries
+
+**Jobs by status** (admin overview):
+```
+SELECT status, COUNT(*) as count,
+       AVG(progress_pct) as avg_progress
+FROM transcode_jobs
+GROUP BY status
+```
+
+**Average encoding time by rendition**:
+```
+SELECT rendition_name,
+       AVG(rendition_duration_seconds) as avg_time,
+       p95(rendition_duration_seconds) as p95_time
+FROM transcode_rendition_metrics
+WHERE completed_at > now() - interval '7 days'
+GROUP BY rendition_name
+```
+
+---
+
+## 6. Rollout Plan
+
+### 6.1 Feature Flag Strategy
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `TRANSCODE_WORKER_ENABLED` | `true` (dev), `false` (prod) | Enable in-process worker loop |
+| `TRANSCODE_API_ENABLED` | `true` (dev), `true` (prod) | Enable job submission API |
+| `TRANSCODE_SQS_ENABLED` | `false` (dev), `true` (prod) | Enable SQS message publishing |
+
+### 6.2 Migration Steps
+
+1. **Phase 1 -- Table and store**: Deploy TranscodeJobs DDB table + store module. No API or worker.
+2. **Phase 2 -- API endpoints**: Deploy submission, status, list, cancel endpoints. Jobs go to `pending` state.
+3. **Phase 3 -- Dev worker**: Enable in-process worker. Jobs start processing locally.
+4. **Phase 4 -- SQS integration**: Deploy SQS queue. Enable `TRANSCODE_SQS_ENABLED`. Messages published on submit.
+5. **Phase 5 -- Lambda worker**: Deploy Lambda worker. Disable in-process worker in prod.
+
+### 6.3 Canary Deployment
+
+- Start with `TRANSCODE_MAX_CONCURRENT_JOBS=1` in production.
+- Monitor for 48h with real workloads.
+- Gradually increase to target concurrency.
+
+### 6.4 Rollback Procedure
+
+1. Set `TRANSCODE_WORKER_ENABLED=false` to stop the in-process worker.
+2. Set `TRANSCODE_API_ENABLED=false` to reject new submissions (returns 503).
+3. Running jobs will complete or timeout (no new jobs claimed).
+4. Pending jobs remain in DDB; resume processing when re-enabled.
+5. SQS messages in DLQ can be redriven when ready.
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Query Cost Analysis
+
+| Operation | DDB Reads | DDB Writes | Expected Latency |
+|-----------|-----------|------------|-------------------|
+| Create job | 0 | 1 (conditional put) | ~8ms |
+| Claim job | 0 | 1 (conditional update) | ~8ms |
+| Update progress | 0 | 1 (conditional update) | ~8ms |
+| Complete job | 0 | 1 (update) | ~8ms |
+| Poll pending (10 jobs) | 1 query | 0 | ~10ms |
+| List tenant jobs (50) | 1 query | 0 | ~12ms |
+| Get job status | 1 get | 0 | ~5ms |
+
+### 7.2 Progress Update Throttling
+
+Progress writes are throttled to 1 per 5 seconds (`TRANSCODE_PROGRESS_UPDATE_INTERVAL_SECONDS`). For a 30-minute transcode, this is ~360 writes per job. At 10 concurrent jobs, ~72 writes/minute -- well within DDB on-demand throughput.
+
+### 7.3 Scratch Disk Management
+
+- Each job uses `{TRANSCODE_SCRATCH_DIR}/{job_id}/` for source download and output.
+- Cleanup: `shutil.rmtree` in `finally` block ensures cleanup even on failure.
+- Disk pressure monitoring: Worker should check available disk before accepting a job.
+- Estimated disk usage per job: source file size x 2 (source + outputs). For a 1GB source with 4 renditions, ~3-4GB peak.
+
+### 7.4 FFmpeg Memory Usage
+
+- FFmpeg memory scales with resolution and GOP length.
+- 1080p with GOP=60: ~200-400MB per process.
+- With 2 concurrent jobs: ~400-800MB peak.
+- Monitor with `psutil.Process(proc.pid).memory_info().rss`.
+
+### 7.5 GSI Hot Partition: `status=pending`
+
+The `GSI-Status` index has `status` as PK. During burst submissions, many jobs will have `status=pending`, creating a hot partition. DDB on-demand mode auto-scales, but if sustained write rate exceeds 1000 WCU/s on this partition, consider:
+- Adding a shard key (`status#shard_N` with N = job_id hash % 4).
+- Using SQS as the primary dispatch mechanism (not DDB polling) in production.
+
+---
+
+## 8. Testing Strategy
+
+### 8.1 Unit Tests for Job State Machine (`tests/test_transcode_job_store.py`)
 
 Tests run against moto-mocked DynamoDB (same pattern as all other unit tests in `tests/`).
 
@@ -585,7 +1093,7 @@ Tests run against moto-mocked DynamoDB (same pattern as all other unit tests in 
 
 15. `test_update_progress_only_if_owner` - Worker that does not own the job gets `ConditionalCheckFailedException`.
 
-### 5.2 Integration Test with FFmpeg Execution (`tests/test_transcode_worker.py`)
+### 8.2 Integration Test with FFmpeg Execution (`tests/test_transcode_worker.py`)
 
 These tests require `ffmpeg` on PATH (skip with `pytest.mark.skipif(not shutil.which("ffmpeg"))`).
 
@@ -610,7 +1118,7 @@ These tests require `ffmpeg` on PATH (skip with `pytest.mark.skipif(not shutil.w
 
 6. `test_source_not_found_is_non_retryable` - Point `source_uri` to nonexistent S3 key. Verify immediate failure with `status=failed` (no retry).
 
-### 5.3 Testing Retry Behavior
+### 8.3 Testing Retry Behavior
 
 1. `test_exponential_backoff_calculation` - Unit test for `_compute_next_retry_at()`:
    - attempt=0 -> delay in [30, 37]
@@ -624,7 +1132,7 @@ These tests require `ffmpeg` on PATH (skip with `pytest.mark.skipif(not shutil.w
 
 4. `test_max_attempts_exhaustion_emits_alert` - After final failure, verify an alert is created in the alerts table for the tenant (using `app/services/alerts.py:write_alert()`).
 
-### 5.4 Testing Concurrency Limits
+### 8.4 Testing Concurrency Limits
 
 1. `test_per_tenant_throttle` - Set `max_per_tenant=2`. Submit 4 jobs for same tenant. Start worker. Verify at most 2 are `status=running` simultaneously (third waits).
 
@@ -632,18 +1140,20 @@ These tests require `ffmpeg` on PATH (skip with `pytest.mark.skipif(not shutil.w
 
 3. `test_cancelled_job_releases_concurrency_slot` - Start a job, cancel it, verify the semaphore slot is released and the next pending job is picked up immediately.
 
-### 5.5 E2E Test (`frontend/e2e/transcode-jobs.spec.ts`)
+### 8.5 E2E Test (`frontend/e2e/transcode-jobs.spec.ts`)
 
 A lightweight E2E test that exercises the API endpoints through the browser context:
 
-1. Submit a transcode job via `POST /ui/transcode-jobs` with a test asset.
-2. Poll `GET /ui/transcode-jobs/{id}` until `status != pending`.
-3. Verify the response includes `progress_pct`, `current_rendition`.
-4. Cancel a second job via `DELETE /ui/transcode-jobs/{id}`.
-5. Verify cancelled job has `status=cancelled`.
-6. List jobs via `GET /ui/transcode-jobs` and verify pagination.
+| # | Test Title | Assertion |
+|---|-----------|-----------|
+| 1 | Submit transcode job returns 201 | POST with valid body; response has `job_id`, `status=pending` |
+| 2 | Get job status returns progress | GET after submission; response has `progress_pct`, `current_rendition` |
+| 3 | Cancel pending job | DELETE; response `status=cancelled` |
+| 4 | List jobs includes submitted job | GET list; contains the submitted job |
+| 5 | Cancelled job cannot be cancelled again | DELETE cancelled job; 409 |
+| 6 | Pagination works for job list | Submit 5 jobs; list with `limit=2`; cursor returned |
 
-### 5.6 Test Fixtures
+### 8.6 Test Fixtures
 
 Add a short (2-second, 320x240) test video to `tests/fixtures/test_video.mp4` for integration tests. Generate with:
 ```bash
@@ -697,3 +1207,28 @@ def _emit_job_event(job: dict, event_type: str) -> None:
 ```
 
 This integrates with the existing `app/services/alerts.py` SSE subscriber system (in-memory `asyncio.Queue` per connected client) for real-time UI updates.
+
+## Appendix C: Frontend Component Tree (for TranscodeJobs UI)
+
+```
+TranscodeJobsPanel (embedded in VideosPage, VOD-007)
+├── JobProgressCard (for each active/recent job)
+│   ├── Card
+│   │   ├── CardHeader
+│   │   │   ├── Asset title (or asset_id)
+│   │   │   └── StatusBadge: "pending" | "running" | "completed" | "failed" | "cancelled"
+│   │   ├── CardContent
+│   │   │   ├── ProgressBar (progress_pct%)
+│   │   │   ├── Current rendition label: "Encoding 720p..."
+│   │   │   ├── Renditions completed checklist: [x] 480p [x] 720p [ ] 1080p
+│   │   │   ├── ETA display: "~5 minutes remaining"
+│   │   │   └── Error display (if failed): error_code + error_message
+│   │   └── CardFooter
+│   │       └── Button: "Cancel" (visible for pending/running, disabled for others)
+│   └── [Polling: useQuery with refetchInterval=3000 while status=running]
+├── JobHistoryTable (expandable)
+│   ├── DataTable columns: job_id, asset, status, progress, created_at, duration
+│   ├── Sortable by created_at
+│   └── Pagination (cursor-based)
+└── EmptyState: "No transcode jobs" (when no jobs exist)
+```

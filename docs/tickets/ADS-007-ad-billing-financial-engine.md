@@ -27,7 +27,70 @@ ADS-007 implements the complete financial system for the advertising platform. I
 | Creator | As a creator, I want to see my ad revenue share. | Creator dashboard shows ad revenue credited to billing ledger. |
 | Platform | As the platform, I want to take a configurable revenue share (default 30%). | Each impression generates platform + creator ledger entries. |
 
-### 1.3 Financial Flow
+### 1.3 Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          Ad Billing Flow                                │
+│                                                                         │
+│  ┌──────────────────┐                                                   │
+│  │ Ad Serving Engine │   track_ad_event(event="impression")             │
+│  │ (ADS-004)         │──────────────────────┐                           │
+│  └──────────────────┘                       │                           │
+│                                              ▼                           │
+│  ┌──────────────────────────────────────────────────────────────┐       │
+│  │                   Ad Billing Engine                           │       │
+│  │                   app/services/ad_billing.py                  │       │
+│  │                                                               │       │
+│  │  1. Determine billing model                                   │       │
+│  │     ├── CPM: charge = bid_cpm / 1000  (per impression)       │       │
+│  │     ├── CPC: charge = bid_cpc         (per click)            │       │
+│  │     └── CPA: charge = bid_cpa         (per conversion)       │       │
+│  │                                                               │       │
+│  │  2. Process charge                                            │       │
+│  │     ├── Write ad_billing LEDGER entry                        │       │
+│  │     ├── Debit advertiser balance (ad_accounts)               │       │
+│  │     └── Increment campaign spend counters                    │       │
+│  │                                                               │       │
+│  │  3. Revenue split (70/30)                                    │       │
+│  │     ├── Creator (70%): billing LEDGER credit                 │       │
+│  │     └── Platform (30%): internal accounting                  │       │
+│  │                                                               │       │
+│  │  4. Budget enforcement                                       │       │
+│  │     ├── Check lifetime/daily budget thresholds               │       │
+│  │     └── Auto-pause campaign if budget exhausted              │       │
+│  │                                                               │       │
+│  │  5. Spending alerts                                          │       │
+│  │     ├── 50% threshold → warning alert                        │       │
+│  │     ├── 80% threshold → warning alert                        │       │
+│  │     └── 100% threshold → critical alert + auto-pause         │       │
+│  └──────────┬────────────────────────────────┬──────────────────┘       │
+│             │                                │                           │
+│             ▼                                ▼                           │
+│  ┌──────────────────┐            ┌────────────────────┐                 │
+│  │    DynamoDB       │            │   Alerts Service    │                 │
+│  │                   │            │   (write_alert)     │                 │
+│  │  ad_billing       │            └────────────────────┘                 │
+│  │  ad_accounts      │                                                   │
+│  │  ad_campaigns     │                                                   │
+│  │  billing (creator)│                                                   │
+│  └──────────────────┘                                                   │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────┐       │
+│  │                   Frontend                                    │       │
+│  │                                                               │       │
+│  │  AdBillingPage (/ads/billing)                                │       │
+│  │  ├── BalanceCard: current balance + deposit button           │       │
+│  │  ├── SpendingChart: 30-day daily spend bar chart             │       │
+│  │  ├── BudgetMeters: per-campaign progress bars                │       │
+│  │  ├── TransactionList: scrollable ledger                      │       │
+│  │  ├── InvoiceList: monthly invoices with "View" button        │       │
+│  │  └── DepositDialog: amount input + payment method selector   │       │
+│  └──────────────────────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.4 Financial Flow
 
 ```
 Billing Flow (per tracked ad event)
@@ -57,7 +120,7 @@ track_ad_event()
         └── If crossing 50% / 80% / 100% threshold → write_alert()
 ```
 
-### 1.4 Revenue Split Detail
+### 1.5 Revenue Split Detail
 
 ```
 $5 CPM (500 cents per 1000 impressions)
@@ -140,7 +203,82 @@ TableDef(
 ),
 ```
 
-### 3.2 Backend Service
+### 3.2 DynamoDB Access Patterns
+
+| Access Pattern | Table | Key | GSI | Example |
+|---|---|---|---|---|
+| Write charge ledger entry | `ad_billing` | PK=`ACCT#{account_id}`, SK=`LEDGER#{ts}#{entry_id}` | — | PutItem |
+| Get billing history for account | `ad_billing` | PK=`ACCT#{account_id}`, SK begins_with `LEDGER#` | — | Query, ScanIndexForward=False, Limit=50 |
+| Get spending by campaign | `ad_billing` | — | `ByCampaign` (PK=campaign_id) | Query GSI |
+| Get entries for invoice month | `ad_billing` | — | `ByMonth` (PK=month_key) + FilterExpression(account_id) | Query GSI |
+| Write deposit entry | `ad_billing` | PK=`ACCT#{account_id}`, SK=`LEDGER#{ts}#{dep_id}` | — | PutItem |
+| Debit advertiser balance | `ad_accounts` | PK=`ACCT#{account_id}`, SK=`META` | — | UpdateItem (atomic decrement) |
+| Increment campaign spend | `ad_campaigns` | PK=`ACCT#{account_id}`, SK=`CAMPAIGN#{campaign_id}` | — | UpdateItem (atomic increment) |
+| Credit creator revenue | `billing` | PK=`USER#{creator_id}`, SK=`LEDGER#{ts}#{entry_id}` | — | PutItem |
+| Write spending alert guard | `billing` | PK=`USER#{owner_sub}`, SK=`AD_BUDGET_ALERT#{campaign_id}#{threshold}` | — | PutItem (conditional) |
+| Get account balance | `ad_accounts` | PK=`ACCT#{account_id}`, SK=`META` | — | GetItem |
+
+#### Example DynamoDB Items (JSON)
+
+**Impression Charge Entry**:
+```json
+{
+  "pk": {"S": "ACCT#acct_adv001"},
+  "sk": {"S": "LEDGER#1748534400#chg_a1b2c3d4e5f6"},
+  "entry_id": {"S": "chg_a1b2c3d4e5f6"},
+  "account_id": {"S": "acct_adv001"},
+  "campaign_id": {"S": "camp_abc123"},
+  "entry_type": {"S": "impression_charge"},
+  "amount_cents": {"N": "1"},
+  "state": {"S": "settled"},
+  "reason": {"S": "Ad impression"},
+  "meta": {"M": {
+    "creative_id": {"S": "creat_xyz789"},
+    "content_id": {"S": "post_12345"},
+    "model": {"S": "cpm"}
+  }},
+  "month_key": {"S": "2026-05"},
+  "created_at": {"N": "1748534400"}
+}
+```
+
+**Budget Deposit Entry**:
+```json
+{
+  "pk": {"S": "ACCT#acct_adv001"},
+  "sk": {"S": "LEDGER#1748530000#dep_f6e5d4c3b2a1"},
+  "entry_id": {"S": "dep_f6e5d4c3b2a1"},
+  "account_id": {"S": "acct_adv001"},
+  "campaign_id": {"S": ""},
+  "entry_type": {"S": "budget_deposit"},
+  "amount_cents": {"N": "10000"},
+  "state": {"S": "settled"},
+  "reason": {"S": "Account deposit"},
+  "meta": {"M": {"payment_method_id": {"S": "pm_visa_4242"}}},
+  "month_key": {"S": "2026-05"},
+  "created_at": {"N": "1748530000"}
+}
+```
+
+**Creator Revenue Credit (in billing table)**:
+```json
+{
+  "pk": {"S": "USER#e2e_alice@test.local"},
+  "sk": {"S": "LEDGER#1748534400#adrev_g7h8i9"},
+  "entry_type": {"S": "ad_revenue_credit"},
+  "amount_cents": {"N": "1"},
+  "state": {"S": "settled"},
+  "reason": {"S": "Ad revenue share"},
+  "meta": {"M": {
+    "creative_id": {"S": "creat_xyz789"},
+    "content_id": {"S": "post_12345"},
+    "model": {"S": "cpm"},
+    "platform_share_pct": {"N": "30"}
+  }}
+}
+```
+
+### 3.3 Backend Service
 
 **File**: `app/services/ad_billing.py`
 
@@ -447,7 +585,71 @@ def _get_balance(account_id: str) -> int:
     return int(item.get("balance_cents", 0)) if item else 0
 ```
 
-### 3.3 Backend Router
+### 3.4 Pydantic Models
+
+**File**: `app/models.py`
+
+```python
+# -- Ad Billing (ADS-007) --
+
+class AdDepositIn(BaseModel):
+    """Request body for POST /ui/ads/accounts/{id}/deposit."""
+    amount_cents: int = Field(..., ge=5000, le=10000000,
+                              description="Deposit amount in cents ($50 minimum, $100k maximum)")
+    payment_method_id: str = Field(default="",
+                                    description="Payment method ID from billing system")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {"amount_cents": 10000, "payment_method_id": "pm_visa_4242"}
+    })
+
+
+class AdDepositOut(BaseModel):
+    """Response from POST /ui/ads/accounts/{id}/deposit."""
+    ok: bool
+    entry_id: str
+    new_balance_cents: int
+
+
+class AdBillingEntryOut(BaseModel):
+    """Single billing ledger entry."""
+    entry_id: str
+    account_id: str
+    campaign_id: str
+    entry_type: str  # impression_charge, click_charge, conversion_charge, budget_deposit, refund, adjustment
+    amount_cents: int
+    state: str  # settled, pending, refunded
+    reason: str
+    meta: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int
+
+
+class AdBillingHistoryOut(BaseModel):
+    """Response from GET /ui/ads/accounts/{id}/billing."""
+    entries: List[AdBillingEntryOut]
+    count: int
+
+
+class AdInvoiceCampaignLine(BaseModel):
+    """One campaign's line item in an invoice."""
+    campaign_id: str
+    impressions: int
+    clicks: int
+    conversions: int
+    total_cents: int
+
+
+class AdInvoiceOut(BaseModel):
+    """Monthly invoice summary."""
+    account_id: str
+    month: str
+    campaigns: List[AdInvoiceCampaignLine]
+    total_charges_cents: int
+    total_deposits_cents: int
+    entry_count: int
+```
+
+### 3.5 Backend Router
 
 **File**: `app/routers/ads.py` (extend)
 
@@ -477,7 +679,7 @@ def invoice_endpoint(account_id: str, month: str, ctx=Depends(require_ui_session
     return generate_invoice(account_id, month)
 ```
 
-### 3.4 Frontend Pages
+### 3.6 Frontend Pages
 
 **File**: `frontend/src/pages/ads/AdBillingPage.tsx`
 
@@ -491,7 +693,7 @@ def invoice_endpoint(account_id: str, month: str, ctx=Depends(require_ui_session
 - Deposit dialog: amount input (minimum $50), payment method selector
 - `data-testid="ad-billing-page"`
 
-### 3.5 Frontend Types
+### 3.7 Frontend Types
 
 **File**: `frontend/src/api/types.ts`
 
@@ -524,18 +726,197 @@ export interface AdInvoice {
 }
 ```
 
+### 3.8 Frontend Component Tree
+
+```
+AdBillingPage (/ads/billing)
+├── Props: none (page component)
+├── State: useQuery(["ad-billing", accountId], fetchBillingHistory)
+│          useQuery(["ad-balance", accountId], fetchAccountBalance)
+│          useQuery(["ad-invoices", accountId, month], fetchInvoice)
+│
+├── AccountSelector
+│   ├── Props: { accounts: AdAccount[], selected: string, onChange }
+│   └── Select dropdown listing user's ad accounts
+│
+├── BalanceCard
+│   ├── Props: { balance_cents, lifetime_spend_cents }
+│   ├── Current balance display (formatted as $XX.XX)
+│   ├── Lifetime spend display
+│   └── DepositButton → opens DepositDialog
+│
+├── DepositDialog
+│   ├── Props: { open, onClose, accountId, onSuccess }
+│   ├── Amount input with preset buttons ($50, $100, $250, $500)
+│   ├── PaymentMethodSelector (reuses billing/PaymentMethods component)
+│   ├── Form validation: amount >= $50
+│   └── useMutation(depositFunds, { onSuccess: invalidateQueries })
+│
+├── SpendingChart
+│   ├── Props: { entries: AdBillingEntry[], days: number }
+│   ├── Bar chart (recharts) showing daily spend over last 30 days
+│   └── Aggregates charge entries by date
+│
+├── BudgetMeters
+│   ├── Props: { campaigns: CampaignBudgetInfo[] }
+│   ├── For each active campaign:
+│   │   ├── Campaign name label
+│   │   ├── Progress bar (spent / budget * 100)
+│   │   └── "$XX / $YY spent" text
+│   └── Color coding: green (<50%), yellow (50-80%), red (>80%)
+│
+├── TransactionList
+│   ├── Props: { entries: AdBillingEntry[], loading: boolean }
+│   ├── ScrollArea with DataTable
+│   ├── Columns: Date, Type (badge), Campaign, Amount, State
+│   └── Entry type badges: deposit (green), charge (red), refund (blue)
+│
+└── InvoiceList
+    ├── Props: { months: string[] }
+    ├── List of monthly invoice cards
+    ├── Each card: month name, total charges, total deposits, "View" button
+    └── InvoiceDetailDialog (expandable per-campaign breakdown)
+```
+
 ---
 
-## 4. Implementation Plan
+## 4. API Request/Response Examples
 
-### 4.1 Files to Create
+### 4.1 Deposit Funds
+
+```bash
+curl -X POST http://localhost:8000/ui/ads/accounts/acct_adv001/deposit \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_abc123; ui_access_token=eyJ...; ui_csrf=tok_csrf_001" \
+  -H "x-csrf-token: tok_csrf_001" \
+  -d '{"amount_cents": 10000, "payment_method_id": "pm_visa_4242"}'
+
+# Response (200 OK)
+{
+  "ok": true,
+  "entry_id": "dep_f6e5d4c3b2a1",
+  "new_balance_cents": 10000
+}
+
+# Error: below minimum (400)
+# Request: {"amount_cents": 1000}
+{
+  "detail": "Minimum deposit is $50"
+}
+```
+
+### 4.2 Get Billing History
+
+```bash
+curl http://localhost:8000/ui/ads/accounts/acct_adv001/billing?limit=10 \
+  -H "Cookie: ui_session=sess_abc123; ui_access_token=eyJ..."
+
+# Response (200 OK)
+[
+  {
+    "entry_id": "chg_a1b2c3d4e5f6",
+    "account_id": "acct_adv001",
+    "campaign_id": "camp_abc123",
+    "entry_type": "impression_charge",
+    "amount_cents": 1,
+    "state": "settled",
+    "reason": "Ad impression",
+    "meta": {"creative_id": "creat_xyz789", "content_id": "post_12345", "model": "cpm"},
+    "created_at": 1748534400
+  },
+  {
+    "entry_id": "dep_f6e5d4c3b2a1",
+    "account_id": "acct_adv001",
+    "campaign_id": "",
+    "entry_type": "budget_deposit",
+    "amount_cents": 10000,
+    "state": "settled",
+    "reason": "Account deposit",
+    "meta": {"payment_method_id": "pm_visa_4242"},
+    "created_at": 1748530000
+  }
+]
+```
+
+### 4.3 Get Campaign Spending
+
+```bash
+curl http://localhost:8000/ui/ads/accounts/acct_adv001/billing/campaigns/camp_abc123?limit=50 \
+  -H "Cookie: ui_session=sess_abc123; ui_access_token=eyJ..."
+
+# Response (200 OK)
+[
+  {
+    "entry_id": "chg_a1b2c3d4e5f6",
+    "account_id": "acct_adv001",
+    "campaign_id": "camp_abc123",
+    "entry_type": "impression_charge",
+    "amount_cents": 1,
+    "state": "settled",
+    "reason": "Ad impression",
+    "meta": {"creative_id": "creat_xyz789", "model": "cpm"},
+    "created_at": 1748534400
+  }
+]
+```
+
+### 4.4 Generate Invoice
+
+```bash
+curl http://localhost:8000/ui/ads/accounts/acct_adv001/invoices/2026-05 \
+  -H "Cookie: ui_session=sess_abc123; ui_access_token=eyJ..."
+
+# Response (200 OK)
+{
+  "account_id": "acct_adv001",
+  "month": "2026-05",
+  "campaigns": [
+    {
+      "campaign_id": "camp_abc123",
+      "impressions": 5420,
+      "clicks": 87,
+      "conversions": 12,
+      "total_cents": 6919
+    }
+  ],
+  "total_charges_cents": 6919,
+  "total_deposits_cents": 10000,
+  "entry_count": 5519
+}
+```
+
+---
+
+## 5. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------|-------------|------------|---------------------|-----------------|
+| Deposit below minimum ($50) | 400 | `deposit_too_small` | "Minimum deposit is $50" | Increase deposit amount |
+| Deposit exceeds maximum ($100,000) | 400 | `deposit_too_large` | "Maximum deposit is $100,000" | Decrease deposit amount |
+| Account not found | 404 | `account_not_found` | "Ad account not found" | Verify account ID |
+| Non-owner accessing billing | 403 | `forbidden` | "You do not own this account" | Use correct account |
+| Invalid payment method | 400 | `invalid_payment_method` | "Payment method not found or expired" | Update payment method |
+| Invalid month format for invoice | 400 | `invalid_month` | "Invalid month format, use YYYY-MM" | Fix month parameter |
+| Insufficient balance for charge | 200 | — | (best-effort; balance goes negative) | Advertiser should deposit more funds |
+| Campaign not found during budget check | 200 | — | (silent; charge proceeds without alert check) | No user action |
+| Billing ledger write failure | 500 | `internal_error` | "Failed to process charge" | Retry; charge tracked in ad_impressions as fallback |
+| Revenue split write failure | 200 | — | (logged as warning; charge succeeds, creator credit skipped) | Platform reconciliation job catches missed credits |
+| Alert write failure | 200 | — | (silent; spending alert may not fire) | Budget alert sent on next threshold crossing |
+| Session expired | 401 | `unauthorized` | "Session expired" | Re-authenticate |
+| CSRF token mismatch | 403 | `csrf_invalid` | "Invalid CSRF token" | Refresh page |
+
+---
+
+## 6. Implementation Plan
+
+### 6.1 Files to Create
 
 | File | Purpose |
 |------|---------|
 | `app/services/ad_billing.py` | Billing engine: charges, deposits, splits, invoices |
 | `frontend/src/pages/ads/AdBillingPage.tsx` | Billing dashboard with spending chart + invoice list |
 
-### 4.2 Files to Modify
+### 6.2 Files to Modify
 
 | File | Changes |
 |------|---------|
@@ -544,30 +925,32 @@ export interface AdInvoice {
 | `app/core/settings.py` | Add `ad_billing_table_name` |
 | `app/core/tables.py` | Add `ad_billing` table handle |
 | `scripts/local-ddb-init.py` | Add `AdBilling` table definition |
+| `app/models.py` | Add `AdDepositIn`, `AdDepositOut`, `AdBillingEntryOut`, `AdInvoiceOut` models |
 | `frontend/src/api/types.ts` | Add `AdBillingEntry`, `AdInvoice` types |
 | `frontend/src/api/endpoints/ads.ts` | Add billing API functions |
 | `frontend/src/App.tsx` | Add `/ads/billing` route |
 
-### 4.3 Step-by-Step Order
+### 6.3 Step-by-Step Order
 
 1. Add DDB table definition
 2. Add settings + table handle
-3. Implement `ad_billing.py` service
-4. Add billing endpoints to router
-5. Wire `track_ad_event()` to billing charges
-6. Add frontend types + API endpoints
-7. Build AdBillingPage
-8. Write E2E tests
+3. Add Pydantic models
+4. Implement `ad_billing.py` service
+5. Add billing endpoints to router
+6. Wire `track_ad_event()` to billing charges
+7. Add frontend types + API endpoints
+8. Build AdBillingPage
+9. Write E2E tests
 
 ---
 
-## 5. E2E Test Plan
+## 7. E2E Test Plan
 
-### 5.1 Test File
+### 7.1 Test File
 
-`frontend/e2e/ads-billing.spec.ts` — 20 tests across 5 sections.
+`frontend/e2e/ads-billing.spec.ts` — 28 tests across 7 sections.
 
-### 5.2 Test Setup
+### 7.2 Test Setup
 
 ```typescript
 const TS = Date.now();
@@ -581,7 +964,7 @@ test.beforeAll(async ({ browser }) => {
 });
 ```
 
-### 5.3 Section 369: Deposit API (4 tests)
+### 7.3 Section 369: Deposit API (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -590,7 +973,7 @@ test.beforeAll(async ({ browser }) => {
 | 369.3 | Deposit creates billing entry | GET billing history; entry_type=budget_deposit, amount=10000 |
 | 369.4 | Multiple deposits accumulate | Second deposit 5000; balance=15000 |
 
-### 5.4 Section 370: Impression Charging (4 tests)
+### 7.4 Section 370: Impression Charging (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -599,7 +982,7 @@ test.beforeAll(async ({ browser }) => {
 | 370.3 | Campaign spend incremented | Campaign lifetime_spent_cents increased |
 | 370.4 | Creator receives revenue share | Creator billing ledger has ad_revenue_credit entry; amount = 70% of charge |
 
-### 5.5 Section 371: Budget Enforcement (4 tests)
+### 7.5 Section 371: Budget Enforcement (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -608,7 +991,7 @@ test.beforeAll(async ({ browser }) => {
 | 371.3 | Spending alert at 80% | Spend to 80%; alert with "budget 80% spent" exists |
 | 371.4 | Daily budget reset works | Set budget_type=daily; spend today; verify spent_today_cents tracks correctly |
 
-### 5.6 Section 372: Invoice Generation (4 tests)
+### 7.6 Section 372: Invoice Generation (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -617,7 +1000,7 @@ test.beforeAll(async ({ browser }) => {
 | 372.3 | Invoice shows total charges | total_charges_cents matches sum of campaign totals |
 | 372.4 | Invoice shows deposits | total_deposits_cents matches deposited amount |
 
-### 5.7 Section 373: Billing Dashboard UI (4 tests)
+### 7.7 Section 373: Billing Dashboard UI (4 tests)
 
 | # | Test | Assertion |
 |---|------|-----------|
@@ -626,21 +1009,122 @@ test.beforeAll(async ({ browser }) => {
 | 373.3 | Spending history displays | Ledger entries visible with entry type and amount |
 | 373.4 | Campaign budget meter shows progress | Budget progress bar for campaign with correct percentage |
 
+### 7.8 Section 374: CPC/CPA Billing (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 374.1 | CPC click charge recorded | Track click event on CPC campaign; billing ledger has click_charge entry |
+| 374.2 | CPC charge amount matches bid_cpc | Charge amount_cents equals campaign's bid_cpc_cents |
+| 374.3 | CPA conversion charge recorded | Record conversion; billing ledger has conversion_charge entry |
+| 374.4 | No charge for impression on CPC campaign | Track impression on CPC-only campaign; no impression_charge entry |
+
+### 7.9 Section 375: Authorization & Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 375.1 | Non-owner cannot access billing | Bob tries GET billing for Alice's account; 403 |
+| 375.2 | Non-owner cannot deposit | Bob tries POST deposit to Alice's account; 403 |
+| 375.3 | Invalid month format returns 400 | GET invoices with month="May-2026"; 400 |
+| 375.4 | Invoice for empty month returns zero totals | GET invoices for future month; total_charges_cents=0, campaigns=[] |
+
 ---
 
-## 6. Error Handling
+## 8. Observability & Monitoring
 
-| Scenario | Status | Detail |
-|----------|--------|--------|
-| Deposit below minimum | 400 | "Minimum deposit is $50" |
-| Account not found | 404 | "Account not found" |
-| Insufficient balance for charge | — | Best-effort; charge proceeds, balance can go negative (over-delivery) |
-| Invalid month format for invoice | 400 | "Invalid month format, use YYYY-MM" |
-| Billing write failure | — | Logged; charge still tracked in ad_impressions |
+### 8.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `ad_billing_charges_total` | Counter | `entry_type` (impression/click/conversion), `billing_model` (cpm/cpc/cpa) | Total charge events by type |
+| `ad_billing_charge_cents_total` | Counter | `entry_type`, `billing_model` | Total cents charged |
+| `ad_billing_deposits_total` | Counter | — | Total deposit events |
+| `ad_billing_deposit_cents_total` | Counter | — | Total cents deposited |
+| `ad_billing_revenue_split_cents` | Counter | `recipient` (platform/creator) | Revenue split tracking |
+| `ad_billing_budget_alerts_total` | Counter | `threshold` (50/80/100) | Budget alert events |
+| `ad_billing_auto_pause_total` | Counter | — | Campaigns auto-paused due to budget exhaustion |
+
+### 8.2 Log Events
+
+| Event | Level | Fields | Description |
+|-------|-------|--------|-------------|
+| `ad_billing_deposit` | INFO | `account_id`, `amount_cents`, `new_balance_cents` | Deposit processed |
+| `ad_billing_charge` | INFO | `account_id`, `campaign_id`, `entry_type`, `charge_cents`, `creator_id` | Charge processed |
+| `ad_billing_revenue_split` | INFO | `creator_id`, `creator_share_cents`, `platform_share_cents` | Revenue split applied |
+| `ad_billing_budget_alert` | WARN | `account_id`, `campaign_id`, `threshold_pct`, `spent_cents`, `budget_cents` | Budget threshold crossed |
+| `ad_billing_campaign_paused` | WARN | `account_id`, `campaign_id`, `lifetime_spent_cents` | Campaign auto-paused at 100% |
+| `ad_billing_creator_credit_failed` | WARN | `creator_id`, `error` | Failed to credit creator revenue share |
+| `ad_billing_invoice_generated` | INFO | `account_id`, `month`, `total_charges_cents`, `entry_count` | Invoice generated |
+
+### 8.3 Alert Rules
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| Negative advertiser balance | Any account `balance_cents < -5000` | Warning | Review over-delivery; contact advertiser |
+| Revenue split failure rate | `rate(ad_billing_creator_credit_failed) > 5/min` | Critical | Check billing table capacity; reconcile missed credits |
+| High charge rate | `rate(ad_billing_charges_total) > 10000/min` | Warning | Investigate potential fraud or bot traffic |
+| Zero deposits in 7 days | No deposit events for 7 consecutive days | Info | Marketing/sales follow-up with advertisers |
 
 ---
 
-## 7. Security Considerations
+## 9. Rollout Plan
+
+### 9.1 Feature Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `AD_BILLING_ENABLED` | `false` | Master switch: when false, track_ad_event skips billing charges |
+| `AD_BILLING_REVENUE_SPLIT_ENABLED` | `true` | When false, charges are recorded but no creator credit is written |
+| `AD_BILLING_ALERTS_ENABLED` | `true` | When false, budget threshold alerts are suppressed |
+
+### 9.2 Migration Steps
+
+1. **Phase 1 — Table creation**: Deploy `scripts/local-ddb-init.py` to create `AdBilling` table with GSIs.
+2. **Phase 2 — Backend deployment**: Deploy `ad_billing.py` with `AD_BILLING_ENABLED=false`. Billing code is present but dormant.
+3. **Phase 3 — Shadow billing**: Enable billing in shadow mode: process charges internally but don't debit advertiser balance. Log expected charges for reconciliation.
+4. **Phase 4 — Deposit endpoint**: Enable deposit endpoint first. Advertisers can fund accounts before charges begin.
+5. **Phase 5 — Charge activation**: Set `AD_BILLING_ENABLED=true`. Charges begin flowing.
+6. **Phase 6 — Revenue split**: Verify creator credits are accurate. Enable `AD_BILLING_REVENUE_SPLIT_ENABLED=true`.
+
+### 9.3 Rollback Procedure
+
+1. Set `AD_BILLING_ENABLED=false` — charges stop immediately. Impressions still tracked in ad_impressions but no billing entries written.
+2. Deposits already made remain in accounts — no money movement on rollback.
+3. If revenue split is incorrect, set `AD_BILLING_REVENUE_SPLIT_ENABLED=false` and run reconciliation to correct creator credits.
+
+---
+
+## 10. Performance Considerations
+
+### 10.1 Write Amplification per Impression
+
+Each CPM impression charge requires 5 DDB writes:
+1. `ad_billing` PutItem (ledger entry)
+2. `ad_accounts` UpdateItem (balance decrement)
+3. `ad_campaigns` UpdateItem (spend increment)
+4. `billing` PutItem (creator revenue credit)
+5. `billing` PutItem (spending alert guard — conditional, only on threshold crossings)
+
+At 1000 impressions/second = ~4000-5000 WCUs total.
+
+### 10.2 Invoice Query Cost
+
+`generate_invoice` queries the `ByMonth` GSI with a `FilterExpression` on `account_id`. For months with high volume (>100K entries across all accounts), the filter scans all entries for that month. At scale, consider adding `ACCT#{account_id}#YYYY-MM` as a dedicated PK pattern instead of relying on FilterExpression.
+
+### 10.3 Batch Charging
+
+For high-volume impressions, consider batching charges:
+- Accumulate charges in-memory for 5 seconds
+- Write a single aggregate charge entry instead of one per impression
+- Reduces DDB write costs by 10-50x at scale
+- Trade-off: 5-second delay in billing visibility
+
+### 10.4 Daily Budget Reset
+
+`spent_today_cents` must be reset to 0 at midnight UTC. A background task runs every 5 minutes, scanning for campaigns with `budget_type=daily` and resetting `spent_today_cents` when the date changes. Uses `last_reset_date` field to prevent double-resets.
+
+---
+
+## 11. Security Considerations
 
 - Deposit requires account ownership verification
 - Billing history accessible only to account owner
@@ -648,10 +1132,12 @@ test.beforeAll(async ({ browser }) => {
 - Budget alerts use conditional writes to prevent duplicate alerts
 - Invoice data is read-only; no modification endpoints
 - Payment method validation on deposit (reuses existing Stripe/PayPal mock)
+- Charges cannot be manually created via API — only triggered by ad tracking events
+- Negative balance is allowed (over-delivery) but triggers monitoring alerts
 
 ---
 
-## 8. Dependencies
+## 12. Dependencies
 
 | Dependency | Ticket | Status |
 |------------|--------|--------|
@@ -660,8 +1146,25 @@ test.beforeAll(async ({ browser }) => {
 | Billing infrastructure | `app/services/billing_shared.py` | Existing |
 | Alert system | `app/services/alerts.py` | Existing |
 
-### 8.1 Downstream Dependents
+### 12.1 Downstream Dependents
 
 | Ticket | Depends On |
 |--------|-----------|
 | ADS-008 (Analytics) | Spending data from billing ledger |
+| ADS-012 (Content Boosting) | Wallet deduction pattern reused |
+| ADS-015 (Affiliate/Promo) | ROAS calculation uses ad spend data |
+
+---
+
+## 13. Acceptance Criteria
+
+1. Advertisers can deposit funds ($50 minimum) into their ad account with immediate balance update.
+2. CPM impressions charge `max(1, bid_cpm / 1000)` cents per impression.
+3. CPC clicks charge `bid_cpc` cents per click.
+4. CPA conversions charge `bid_cpa` cents per conversion.
+5. Revenue split credits 70% to creator and retains 30% for platform on every charge.
+6. Campaigns auto-pause when lifetime budget is exhausted (spent >= budget).
+7. Spending alerts fire at 50%, 80%, and 100% budget thresholds (each fires exactly once).
+8. Monthly invoices aggregate charges by campaign with impression/click/conversion counts.
+9. Billing history is accessible only to the account owner.
+10. All 28 E2E tests pass in `frontend/e2e/ads-billing.spec.ts`.

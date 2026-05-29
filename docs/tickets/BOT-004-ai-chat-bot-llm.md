@@ -218,140 +218,57 @@ The cost table maps known model names (gpt-4o, gpt-4o-mini, gpt-3.5-turbo) to pe
 ### 3.3 Backend Service (`app/services/bot_ai.py`)
 
 ```python
-def configure_ai_bot(*, bot_id: str, creator_id: str,
-                      provider_url: str, api_key: str, model: str,
-                      system_prompt: str, temperature: float = 0.7,
-                      max_tokens: int = 500,
-                      stop_sequences: list[str] | None = None,
-                      context_window_size: int = 20,
-                      forbidden_topics: list[str] | None = None,
-                      fallback_template_id: str | None = None,
-                      max_responses_per_user_per_hour: int = 30) -> dict:
-    """Configure AI capabilities for an existing bot."""
-    # 1. Verify bot ownership
-    # 2. Validate provider_url is a valid HTTPS URL
-    # 3. Encrypt api_key via KMS
-    # 4. Update bot record with ai_* fields
-    # 5. Set ai_enabled=True
+# --- AI Configuration ---
+def configure_ai_bot(*, bot_id, creator_id, provider_url, api_key, model,
+                      system_prompt, temperature=0.7, max_tokens=500, ...) -> dict:
+    """Verify ownership, validate HTTPS URL, encrypt api_key via KMS, update bot record."""
 
-def test_ai_connection(*, bot_id: str, creator_id: str) -> dict:
-    """Send a test message to verify API connectivity."""
-    # 1. Decrypt API key
-    # 2. Send simple test prompt
-    # 3. Return {"ok": bool, "model": str, "response_time_ms": int, "error": str | None}
+def test_ai_connection(*, bot_id, creator_id) -> dict:
+    """Decrypt key, send test prompt, return {ok, model, response_time_ms, error}."""
 
-def update_ai_config(*, bot_id: str, creator_id: str, **fields) -> dict:
-    """Update AI configuration fields (system prompt, temperature, etc.)."""
+def update_ai_config(*, bot_id, creator_id, **fields) -> dict:
+def disable_ai(*, bot_id, creator_id) -> dict:
 
-def disable_ai(*, bot_id: str, creator_id: str) -> dict:
-    """Disable AI for a bot (keeps config but stops LLM calls)."""
+# --- Knowledge Base ---
+def upload_knowledge_doc(*, bot_id, creator_id, title, content, source_filename=None) -> dict:
+    """Validate length (50K max per doc, 200K total), compute hash for dedup, write to BotKnowledge."""
 
-# Knowledge base management
-def upload_knowledge_doc(*, bot_id: str, creator_id: str, title: str,
-                          content: str, source_filename: str | None = None) -> dict:
-    """Upload a knowledge base document."""
-    # 1. Verify bot ownership
-    # 2. Validate content length (max 50000 chars)
-    # 3. Compute content_hash for dedup
-    # 4. Check total knowledge base size (max 200000 chars across all docs)
-    # 5. Write to BotKnowledge table
+def list_knowledge_docs(*, bot_id) -> list[dict]:
+def delete_knowledge_doc(*, bot_id, doc_id, creator_id) -> dict:
+def get_knowledge_context(*, bot_id) -> str:
+    """Concatenate all docs with section separators for system prompt injection."""
 
-def list_knowledge_docs(*, bot_id: str) -> list[dict]:
-    """List all knowledge documents for a bot."""
+# --- Conversation History ---
+def append_to_history(*, bot_id, user_id, role, content, message_id) -> None:
+    """Write to BotConversationHistory with 30-day TTL."""
 
-def delete_knowledge_doc(*, bot_id: str, doc_id: str, creator_id: str) -> dict:
-    """Delete a knowledge document."""
+def get_conversation_history(*, bot_id, user_id, max_messages=20) -> list[dict]:
+    """Query last N messages, reverse to chronological, return [{role, content}]."""
 
-def get_knowledge_context(*, bot_id: str) -> str:
-    """Assemble all knowledge docs into a single context string for injection."""
-    # Fetch all docs; concatenate with section separators
-    # Truncate if total exceeds context budget
+def clear_conversation_history(*, bot_id, user_id) -> dict:
 
-# Conversation history management
-def append_to_history(*, bot_id: str, user_id: str, role: str,
-                       content: str, message_id: str) -> None:
-    """Append a message to the conversation history."""
-    # Write to BotConversationHistory with TTL (30 days)
+# --- Core AI Response ---
+async def generate_ai_response(*, bot_id, conversation_id, user_id, user_message) -> dict:
+    """Main flow: (1) check rate limit, (2) check forbidden topics in input,
+    (3) decrypt API key, (4) build messages [system prompt + knowledge + history + user msg],
+    (5) call LLM, (6) check forbidden topics in output, (7) content filter,
+    (8) send bot message, (9) append to history, (10) track cost."""
 
-def get_conversation_history(*, bot_id: str, user_id: str,
-                              max_messages: int = 20) -> list[dict]:
-    """Fetch recent conversation history for context window."""
-    # Query PK=BOT#{bot_id}#USER#{user_id}, ScanIndexForward=False, Limit=max_messages
-    # Reverse to chronological order
-    # Return [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+# --- Safety Helpers ---
+def _check_ai_rate_limit(*, bot_id, user_id, max_per_hour) -> bool:
+def _check_forbidden_topics(text, forbidden) -> str | None:
+    """Case-insensitive substring match against forbidden topic set."""
 
-def clear_conversation_history(*, bot_id: str, user_id: str) -> dict:
-    """Clear all history for a user-bot pair (used for escalation reset)."""
+def _build_system_prompt(*, base_prompt, knowledge_context, bot_name) -> str:
+    """Assemble system prompt with knowledge context section and bot identity."""
 
-# Core AI response flow
-async def generate_ai_response(*, bot_id: str, conversation_id: str,
-                                 user_id: str, user_message: str) -> dict:
-    """Generate an AI response to a user message."""
-    # 1. Fetch bot record (including AI config)
-    # 2. Check ai_enabled
-    # 3. Check per-user rate limit
-    # 4. Check forbidden topics in user_message
-    #    If match: create escalation, send fallback, return
-    # 5. Decrypt API key
-    # 6. Build messages array:
-    #    a. System prompt (includes knowledge context)
-    #    b. Conversation history (last N messages)
-    #    c. Current user message
-    # 7. Call LLM API
-    # 8. Check forbidden topics in response
-    #    If match: discard response, send fallback, create escalation
-    # 9. If content_filter_enabled: run response through content filter
-    #    If rejected: discard response, send fallback
-    # 10. Send bot message with response text
-    # 11. Append both user message and bot response to history
-    # 12. Track cost (update BotCostTracking)
-    # 13. Record impression on template if applicable
-    # 14. Return message dict
-
-def _check_ai_rate_limit(*, bot_id: str, user_id: str,
-                          max_per_hour: int) -> bool:
-    """Check if user has exceeded AI response rate limit.
-    Uses in-memory counter with hourly window."""
-
-def _check_forbidden_topics(text: str, forbidden: set[str]) -> str | None:
-    """Check if text contains any forbidden topic.
-    Returns matched topic or None."""
-    text_lower = text.lower()
-    for topic in forbidden:
-        if topic.lower() in text_lower:
-            return topic
-    return None
-
-def _build_system_prompt(*, base_prompt: str, knowledge_context: str,
-                          bot_name: str) -> str:
-    """Assemble full system prompt with knowledge context."""
-    parts = [base_prompt]
-    if knowledge_context:
-        parts.append(f"\n\n--- Knowledge Base ---\n{knowledge_context}")
-    parts.append(f"\n\nYour name is {bot_name}. You are an AI assistant.")
-    return "\n".join(parts)
-
-# Escalation management
-def create_escalation(*, creator_id: str, bot_id: str, conversation_id: str,
-                       user_id: str, reason: str,
-                       trigger_text: str | None = None) -> dict:
-    """Create an escalation record for human review."""
-
-def list_escalations(*, creator_id: str, status: str | None = None) -> list[dict]:
-    """List escalations for a creator, optionally filtered by status."""
-
-def review_escalation(*, creator_id: str, escalation_id: str,
-                       action: str) -> dict:
-    """Mark escalation as reviewed or dismissed."""
-
-# Cost tracking
-def track_api_cost(*, bot_id: str, prompt_tokens: int,
-                    completion_tokens: int, model: str) -> None:
-    """Update monthly cost tracking record."""
-    # Atomic ADD on api_calls, prompt_tokens, completion_tokens, estimated_cost_cents
-
-def get_cost_summary(*, bot_id: str, months: int = 3) -> list[dict]:
-    """Fetch cost summary for recent months."""
+# --- Escalation & Cost ---
+def create_escalation(*, creator_id, bot_id, conversation_id, user_id, reason, trigger_text=None) -> dict:
+def list_escalations(*, creator_id, status=None) -> list[dict]:
+def review_escalation(*, creator_id, escalation_id, action) -> dict:
+def track_api_cost(*, bot_id, prompt_tokens, completion_tokens, model) -> None:
+    """Atomic ADD on monthly cost record."""
+def get_cost_summary(*, bot_id, months=3) -> list[dict]:
 ```
 
 ### 3.4 Backend Router (`app/routers/bot_ai.py`)
@@ -433,48 +350,24 @@ export interface AiConfig {
 }
 
 export interface KnowledgeDoc {
-  doc_id: string;
-  bot_id: string;
-  title: string;
-  char_count: number;
-  source_filename?: string;
-  created_at: number;
-  updated_at: number;
+  doc_id: string; bot_id: string; title: string; char_count: number;
+  source_filename?: string; created_at: number; updated_at: number;
 }
 
 export interface BotEscalation {
-  escalation_id: string;
-  bot_id: string;
-  conversation_id: string;
-  user_id: string;
-  reason: string;
-  trigger_text?: string;
+  escalation_id: string; bot_id: string; conversation_id: string;
+  user_id: string; reason: string; trigger_text?: string;
   status: "pending" | "reviewed" | "dismissed";
-  created_at: number;
-  reviewed_at?: number;
+  created_at: number; reviewed_at?: number;
 }
 
 export interface MonthlyCost {
-  month: string;
-  api_calls: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  estimated_cost_cents: number;
-}
-
-export interface AiTestResult {
-  response: string;
-  prompt_tokens: number;
-  completion_tokens: number;
-  response_time_ms: number;
-}
-
-// Extend MessageOut
-export interface MessageOut {
-  // ... existing fields ...
-  ai_generated?: boolean;  // true for AI bot responses
+  month: string; api_calls: number; prompt_tokens: number;
+  completion_tokens: number; estimated_cost_cents: number;
 }
 ```
+
+Extend `MessageOut` with `ai_generated?: boolean` (true for AI bot responses).
 
 ### 3.8 Frontend API (`frontend/src/api/endpoints/bots.ts`)
 
@@ -650,3 +543,255 @@ let escalationId: string;
 |--------|-----------|
 | ANALYTICS-001 (Creator Analytics) | AI cost data feeds into creator analytics |
 | MOD-001 (Content Review) | Escalated AI conversations surface in moderation queue |
+
+---
+
+## 10. Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  AI Chat Bot (LLM) Architecture                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+  User Message (via messaging system)
+         │
+         ▼
+  ┌──────────────────────────────────────┐
+  │   Bot Framework Trigger (BOT-001)    │
+  │   → message_received trigger         │
+  └──────────┬───────────────────────────┘
+             │
+             ▼
+  ┌──────────────────────────────────────┐
+  │   AI Chat Bot Engine                 │
+  │                                      │
+  │  1. Check forbidden topics           │
+  │  2. Assemble knowledge context       │
+  │  3. Build conversation history       │
+  │  4. Call LLM API (Claude/GPT/etc)    │
+  │  5. Apply safety guardrails          │
+  │  6. send_bot_message with response   │
+  │  7. Track cost (tokens used)         │
+  │  8. Escalate if needed               │
+  └──┬──────┬──────┬──────┬─────────────┘
+     │      │      │      │
+     ▼      ▼      ▼      ▼
+  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────────┐
+  │Know- │ │Conv. │ │Cost  │ │Escalation│
+  │ledge │ │Hist. │ │Track │ │Table     │
+  │Table │ │Table │ │Table │ │(DDB)     │
+  │(DDB) │ │(DDB) │ │(DDB) │ └──────────┘
+  └──────┘ └──────┘ └──────┘
+```
+
+---
+
+## 11. DynamoDB Access Patterns
+
+| Access Pattern | Table | PK | SK | GSI | Notes |
+|----------------|-------|----|----|-----|-------|
+| Get knowledge doc | `bot_knowledge` | `BOT#{bot_id}` | `DOC#{doc_id}` | -- | Single doc |
+| List knowledge | `bot_knowledge` | `BOT#{bot_id}` | begins_with `DOC#` | -- | All docs for bot |
+| Get conversation history | `bot_conversation_history` | `CONV#{conversation_id}` | `MSG#{ts}` | -- | Last N messages |
+| Track cost (monthly) | `bot_cost_tracking` | `BOT#{bot_id}` | `MONTH#{YYYY-MM}` | -- | ADD tokens_used, api_cost_cents |
+| Get escalation | `bot_escalations` | `BOT#{bot_id}` | `ESC#{escalation_id}` | -- | Single escalation |
+| List active escalations | `bot_escalations` | `BOT#{bot_id}` | begins_with `ESC#` | -- | Filter status=pending |
+
+---
+
+## 12. API Request/Response Examples
+
+```bash
+# --- GET /ui/bots/{bot_id}/ai/knowledge ---
+curl http://localhost:8000/ui/bots/bot-001/ai/knowledge \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "documents": [
+    {"doc_id": "doc-001", "title": "FAQ", "content_length": 2500, "created_at": 1748534400},
+    {"doc_id": "doc-002", "title": "Pricing", "content_length": 800, "created_at": 1748534500}
+  ]
+}
+
+# --- GET /ui/bots/{bot_id}/ai/costs ---
+curl http://localhost:8000/ui/bots/bot-001/ai/costs?period=2026-05 \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..."
+
+# Response 200:
+{
+  "bot_id": "bot-001",
+  "period": "2026-05",
+  "total_tokens": 125000,
+  "total_cost_cents": 450,
+  "messages_processed": 340,
+  "avg_tokens_per_message": 368
+}
+
+# --- POST /ui/bots/{bot_id}/ai/knowledge ---
+curl -X POST http://localhost:8000/ui/bots/bot-001/ai/knowledge \
+  -H "Cookie: ui_session=sess_abc; ui_access_token=eyJ..." \
+  -H "x-csrf-token: csrf_tok_123" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Return Policy", "content": "We offer 30-day returns on all digital purchases..."}'
+
+# Response 201:
+{"doc_id": "doc-003", "title": "Return Policy", "content_length": 52, "created_at": 1748534600}
+```
+
+---
+
+## 13. Error Handling Matrix
+
+| Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|----------------|-------------|------------|---------------------|-----------------|
+| Bot not found | 404 | `BOT_NOT_FOUND` | "Bot not found." | Verify bot_id |
+| AI not configured | 404 | `AI_NOT_CONFIGURED` | "AI chat not configured for this bot." | Set up LLM config |
+| LLM API error | 502 | `LLM_API_ERROR` | "AI service temporarily unavailable." | Retry; check API key |
+| LLM timeout | 504 | `LLM_TIMEOUT` | "AI response timed out." | Send shorter message; retry |
+| Monthly cost limit | 429 | `COST_LIMIT_REACHED` | "Monthly AI budget exceeded." | Increase budget or wait |
+| Knowledge doc not found | 404 | `DOC_NOT_FOUND` | "Knowledge document not found." | Verify doc_id |
+| Forbidden topic triggered | 200 | (canned response) | Bot responds with configured fallback | Review forbidden_topics |
+| Escalation already exists | 409 | `ESCALATION_EXISTS` | "Conversation already escalated." | Check escalation queue |
+| Content too long | 422 | `CONTENT_TOO_LONG` | "Knowledge document exceeds 10KB limit." | Shorten content |
+
+---
+
+## 14. Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal, Optional, List
+
+class KnowledgeDocIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    content: str = Field(..., min_length=1, max_length=10000)
+
+class KnowledgeDocOut(BaseModel):
+    doc_id: str
+    title: str
+    content_length: int
+    created_at: int
+
+class AIConfigIn(BaseModel):
+    llm_provider: Literal["claude", "openai", "custom"]
+    model_id: str = Field(max_length=100)
+    system_prompt: str = Field(max_length=5000)
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=500, ge=50, le=4000)
+    history_depth: int = Field(default=20, ge=1, le=100)
+    monthly_cost_limit_cents: int = Field(default=10000, ge=0)
+    forbidden_topics: List[str] = Field(default_factory=list, max_length=50)
+    escalation_keywords: List[str] = Field(default_factory=list, max_length=50)
+    fallback_message: str = Field(default="I'm unable to help with that. Let me connect you with a human.", max_length=500)
+
+class CostSummaryOut(BaseModel):
+    bot_id: str
+    period: str
+    total_tokens: int
+    total_cost_cents: int
+    messages_processed: int
+    avg_tokens_per_message: float
+
+class EscalationOut(BaseModel):
+    escalation_id: str
+    conversation_id: str
+    user_id: str
+    reason: str
+    status: Literal["pending", "claimed", "resolved"]
+    created_at: int
+```
+
+---
+
+## 15. Frontend Component Tree
+
+```
+AIBotConfigPage                       data-testid="ai-bot-config-page"
+├── Tabs
+│   ├── TabsTrigger "Config"
+│   ├── TabsTrigger "Knowledge Base"
+│   ├── TabsTrigger "Costs"
+│   └── TabsTrigger "Escalations"
+├── TabsContent "config"
+│   ├── Select (llm_provider)
+│   ├── Input (model_id)
+│   ├── Textarea (system_prompt)
+│   ├── Slider (temperature) 0.0-2.0
+│   ├── Input (max_tokens)
+│   ├── Input (history_depth)
+│   ├── Input (monthly_cost_limit_cents)
+│   ├── TagInput (forbidden_topics)
+│   ├── TagInput (escalation_keywords)
+│   └── Button "Save"
+├── TabsContent "knowledge"
+│   ├── Button "Add Document"
+│   ├── DataTable (documents)
+│   └── Dialog (create/edit doc)
+├── TabsContent "costs"
+│   ├── StatCard "Monthly Tokens" / "Monthly Cost" / "Messages"
+│   └── BarChart (daily cost breakdown)
+└── TabsContent "escalations"
+    └── DataTable (pending escalations)
+        └── columns: [user, reason, created_at, actions]
+```
+
+---
+
+## 16. Observability & Monitoring
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `ai_bot_messages_total` | Counter | `bot_id`, `provider` | Messages processed |
+| `ai_bot_tokens_total` | Counter | `bot_id`, `type={input,output}` | Token usage |
+| `ai_bot_latency_seconds` | Histogram | `bot_id`, `provider` | LLM response time |
+| `ai_bot_cost_cents_total` | Counter | `bot_id` | Accumulated cost |
+| `ai_bot_escalations_total` | Counter | `bot_id`, `reason` | Escalation triggers |
+| `ai_bot_forbidden_hits_total` | Counter | `bot_id` | Forbidden topic matches |
+| `ai_bot_errors_total` | Counter | `bot_id`, `error_type` | API/timeout errors |
+
+### Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Cost approaching limit | > 80% of monthly limit | P3 |
+| LLM error rate spike | > 10% errors in 1h | P2 |
+| Escalation queue backing up | > 20 pending escalations | P2 |
+
+---
+
+## 17. Rollout Plan
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `AI_BOT_ENABLED` | `false` | Master kill switch |
+| `AI_BOT_ESCALATION_ENABLED` | `true` | Allow escalation to human |
+| `AI_BOT_COST_TRACKING_ENABLED` | `true` | Track token costs |
+
+### Canary
+
+1. **Week 1**: Single bot, test conversations only. Monitor latency and cost.
+2. **Week 2**: Enable for all bots. Monitor forbidden topic hit rate.
+3. **Week 3**: Enable cost limits. Alert on approaching limits.
+
+---
+
+## 18. Expanded E2E Test Details
+
+### Edge Cases (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| E1 | Bot with empty knowledge base | Bot responds using system prompt only; no crash |
+| E2 | Message triggers forbidden topic | Bot responds with fallback_message; no LLM call |
+| E3 | LLM returns empty response | Bot sends "I'm sorry, I couldn't generate a response." |
+| E4 | Cost limit reached mid-conversation | Bot responds with "AI budget exceeded" message |
+
+### Negative Tests (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| N1 | Non-owner cannot modify AI config | Bob (not bot owner) PUTs config; 403 |
+| N2 | Invalid LLM provider | PUT config with provider="invalid"; 422 |
+| N3 | Knowledge doc over 10KB | POST doc with 15KB content; 422 |
+| N4 | Delete non-existent knowledge doc | DELETE with fake doc_id; 404 |

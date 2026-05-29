@@ -534,3 +534,613 @@ let contentId3: string;  // release notes
 |--------|-----------|
 | AGENT-014 (Documentation Agent) | Marketing agent reads documentation for content generation |
 | AGENT-018 (Accountant Agent) | Tracks LLM costs for content generation |
+
+---
+
+## 10. Architecture & Data Flow
+
+```
+                    Marketing Agent Content Generation Flow
+  ┌───────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │ Feature Ticket │────>│ Marketing Agent    │────>│  LLM API      │
+  │ Completion     │     │ Trigger            │     │  (Claude/GPT) │
+  │ Event          │     │ (marketing_agent   │     │               │
+  │                │     │  _service.py)       │     │  Generate:    │
+  │ ticket_id,     │     │                    │     │  - blog post  │
+  │ feature_name,  │     │ 1. load template   │     │  - changelog  │
+  │ description    │     │ 2. inject context  │     │  - social     │
+  │                │     │ 3. call LLM        │     │  - email      │
+  └───────────────┘     └────────────────────┘     └──────────────┘
+                                │                         │
+                                v                         v
+  ┌───────────────┐     ┌────────────────────┐     ┌──────────────┐
+  │ A/B Test       │<────│ Content Store      │<────│ Generated     │
+  │ Engine         │     │ (DDB)              │     │ Content       │
+  │                │     │                    │     │               │
+  │ variant_a,     │     │ PK=MKTG#agent_id  │     │ blog_html,    │
+  │ variant_b,     │     │ SK=CONTENT#id      │     │ changelog_md, │
+  │ impressions,   │     │                    │     │ social_text,  │
+  │ engagement     │     │ status=draft|      │     │ email_html    │
+  │                │     │  published|ab_test │     │               │
+  └───────────────┘     └────────────────────┘     └──────────────┘
+```
+
+---
+
+## 11. Observability
+
+### 11.1 Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `marketing_agent_content_generated_total` | Counter | `content_type`, `status` | Number of content pieces generated |
+| `marketing_agent_llm_latency_ms` | Histogram | `content_type`, `model` | LLM API call duration |
+| `marketing_agent_llm_tokens_total` | Counter | `content_type`, `direction` (input/output) | Token usage per generation |
+| `marketing_agent_llm_cost_cents` | Counter | `content_type`, `model` | Estimated cost per generation |
+| `marketing_agent_ab_test_impressions_total` | Counter | `test_id`, `variant` | A/B test impressions |
+| `marketing_agent_content_published_total` | Counter | `content_type`, `channel` | Published content count |
+| `marketing_agent_engagement_score_avg` | Gauge | `content_type` | Average engagement score |
+
+### 11.2 Logging
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Content generation started | INFO | `agent_id`, `ticket_id`, `content_type` |
+| Content generation completed | INFO | `agent_id`, `content_id`, `tokens_used`, `cost_cents`, `duration_ms` |
+| Content generation failed | ERROR | `agent_id`, `ticket_id`, `error`, `model` |
+| A/B test created | INFO | `test_id`, `content_id`, `variant_count` |
+| Content published | INFO | `content_id`, `channel`, `scheduled_at` |
+| Content moderation flagged | WARN | `content_id`, `flag_reason` |
+
+### 11.3 Alerts
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| LLM generation failure rate | > 20% failures in 1 hour | High |
+| LLM cost budget exceeded | Daily cost > configured budget | High |
+| Content backlog growing | > 10 unprocessed tickets | Medium |
+| A/B test stalled | No impressions in 24h on active test | Low |
+
+---
+
+## 12. Rollout Plan
+
+### 12.1 Feature Flag
+
+```python
+# app/core/settings.py
+marketing_agent_enabled: bool = os.environ.get("MARKETING_AGENT_ENABLED", "false").lower() == "true"
+marketing_agent_auto_publish: bool = os.environ.get("MARKETING_AGENT_AUTO_PUBLISH", "false").lower() == "true"
+```
+
+### 12.2 Phased Rollout
+
+| Phase | Description | Duration | Criteria |
+|-------|-------------|----------|----------|
+| Phase 1: Draft generation | Agent generates content as drafts (no auto-publish) | 1 week | Content quality review by team; cost within budget |
+| Phase 2: Manual publish | Enable publish button; human reviews before publishing | 1 week | Published content meets quality bar |
+| Phase 3: A/B testing | Enable A/B test engine for variant selection | 1 week | A/B engine metrics reporting correctly |
+| Phase 4: Auto-publish | Enable auto-publish for low-risk content (changelog) | Permanent | No quality regressions; cost stable |
+
+---
+
+## 13. Performance Considerations
+
+| Concern | Target | Mitigation |
+|---------|--------|-----------|
+| LLM generation latency | < 30s per content piece | Stream responses; timeout at 60s |
+| Content store query | < 100ms p95 | DDB query on PK; small result sets |
+| A/B test variant selection | < 10ms | In-memory weighted random; no DDB call |
+| Scheduled publish execution | Within 60s of scheduled time | Background loop every 30s |
+| Context injection size | < 16K tokens | Truncate feature description to key sections |
+| Concurrent generation | Max 3 parallel | Semaphore in agent worker; queue overflow |
+
+---
+
+## 14. Error Handling Matrix
+
+| Scenario | HTTP Status | Error Code | Error Message | Recovery Action |
+|----------|-------------|------------|---------------|-----------------|
+| LLM API timeout | 504 | `llm_timeout` | "Content generation timed out" | Retry with exponential backoff (max 3) |
+| LLM API rate limit | 429 | `llm_rate_limited` | "LLM provider rate limited" | Queue message; retry after backoff |
+| Content moderation flag | 200 (draft) | `content_flagged` | "Content flagged for review" | Set status=flagged; notify admin |
+| Budget exceeded | 400 | `budget_exceeded` | "Marketing agent budget exhausted" | Pause generation; alert admin |
+| Feature ticket not found | 404 | `ticket_not_found` | "Feature ticket not found" | Log warning; skip generation |
+| Template not found | 404 | `template_not_found` | "Content template not found" | Use default template |
+| A/B test variant exhausted | 400 | `variants_exhausted` | "No more variants to test" | Close A/B test; use winner |
+| Publish channel unavailable | 503 | `channel_unavailable` | "Publish channel temporarily unavailable" | Retry in 5 minutes |
+
+---
+
+## 15. API Request/Response Examples
+
+**Trigger content generation for a feature**:
+
+```
+POST /ui/agents/marketing/generate
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "ticket_id": "FEED-005",
+  "content_types": ["blog_post", "changelog", "social"],
+  "tone": "enthusiastic",
+  "target_audience": "creators"
+}
+```
+
+**Response (202 — accepted for async generation)**:
+```json
+{
+  "generation_id": "gen_abc123",
+  "status": "queued",
+  "estimated_duration_seconds": 30,
+  "content_types_requested": ["blog_post", "changelog", "social"]
+}
+```
+
+**Get generated content**:
+
+```
+GET /ui/agents/marketing/content/gen_abc123
+```
+
+**Response (200)**:
+```json
+{
+  "generation_id": "gen_abc123",
+  "status": "completed",
+  "contents": [
+    {
+      "content_id": "cnt_blog_001",
+      "type": "blog_post",
+      "title": "Introducing Countdown Posts: Build Anticipation in Your Feed",
+      "body_html": "<h2>What are Countdown Posts?</h2><p>We're excited to announce...</p>",
+      "status": "draft",
+      "tokens_used": 1250,
+      "cost_cents": 3
+    },
+    {
+      "content_id": "cnt_cl_001",
+      "type": "changelog",
+      "title": "Countdown Posts Now Available",
+      "body_markdown": "## New Feature: Countdown Posts\n\nCreate posts with live countdown timers...",
+      "status": "draft",
+      "tokens_used": 450,
+      "cost_cents": 1
+    }
+  ],
+  "total_tokens": 2100,
+  "total_cost_cents": 5,
+  "duration_ms": 18500
+}
+```
+
+**Create A/B test from content**:
+
+```
+POST /ui/agents/marketing/ab-test
+Content-Type: application/json
+x-csrf-token: <csrf>
+
+{
+  "content_id": "cnt_blog_001",
+  "variant_count": 2,
+  "test_duration_hours": 48,
+  "success_metric": "engagement_rate"
+}
+```
+
+**Response (201)**:
+```json
+{
+  "test_id": "abt_xyz789",
+  "content_id": "cnt_blog_001",
+  "variants": [
+    {"variant_id": "var_a", "title": "Introducing Countdown Posts"},
+    {"variant_id": "var_b", "title": "Build Hype with Live Countdown Timers"}
+  ],
+  "status": "running",
+  "ends_at": 1748693300
+}
+```
+
+---
+
+## 16. Architecture Diagram
+
+```
+                        Marketing Agent — System Architecture
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                            Platform Frontend                                │
+  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐  │
+  │  │ ContentDashboard  │  │ ContentEditor    │  │ ContentCalendar          │  │
+  │  │ Page              │  │ Page             │  │ Page                     │  │
+  │  │                   │  │                  │  │                          │  │
+  │  │ - list/filter     │  │ - markdown edit  │  │ - monthly calendar       │  │
+  │  │ - status badges   │  │ - SEO panel      │  │ - color-coded types      │  │
+  │  │ - inline actions  │  │ - A/B variants   │  │ - drag to reschedule     │  │
+  │  │ - engagement      │  │ - variable refs  │  │ - click for detail       │  │
+  │  │   sparklines      │  │ - schedule pick  │  │                          │  │
+  │  └────────┬─────────┘  └────────┬─────────┘  └─────────────┬────────────┘  │
+  │           │                     │                           │               │
+  │  ┌────────┴─────────────────────┴───────────────────────────┴────────────┐  │
+  │  │                     React Query + Axios Client                        │  │
+  │  │    listContent() | createContent() | scheduleContent() | publish()    │  │
+  │  └───────────────────────────────────┬──────────────────────────────────┘  │
+  └──────────────────────────────────────┼──────────────────────────────────────┘
+                                         │ HTTP (CSRF + cookies)
+  ┌──────────────────────────────────────┼──────────────────────────────────────┐
+  │                           FastAPI Backend                                   │
+  │  ┌───────────────────────────────────┴──────────────────────────────────┐  │
+  │  │              app/routers/agent_marketing.py                           │  │
+  │  │   POST /generate | GET /content | POST /content/{id}/publish         │  │
+  │  │   POST /content/{id}/schedule | PUT /config | GET /calendar          │  │
+  │  └───────────────────────────────────┬──────────────────────────────────┘  │
+  │                                      │                                     │
+  │  ┌───────────────────────────────────┴──────────────────────────────────┐  │
+  │  │              app/services/agent_marketing.py                          │  │
+  │  │                                                                       │  │
+  │  │   create_content()   list_content()   approve_content()               │  │
+  │  │   schedule_content() publish_content() archive_content()              │  │
+  │  │   get_calendar()     record_engagement() get_engagement_stats()       │  │
+  │  │   generate_content_for_feature()                                      │  │
+  │  │           │                 │                    │                     │  │
+  │  │           │                 │                    │                     │  │
+  │  │   ┌───────┴──────┐  ┌──────┴──────┐  ┌─────────┴──────────┐         │  │
+  │  │   │ LLM Client   │  │ Template    │  │ Content Scheduler   │         │  │
+  │  │   │ (Claude/GPT) │  │ Engine      │  │ (background loop    │         │  │
+  │  │   │              │  │ brand voice │  │  every 30s; publish  │         │  │
+  │  │   │ stream resp  │  │ tone rules  │  │  scheduled content)  │         │  │
+  │  │   └──────────────┘  └─────────────┘  └──────────────────────┘         │  │
+  │  └──────────────────────────────────────────────────────────────────────┘  │
+  │                                      │                                     │
+  │  ┌───────────────────────────────────┴──────────────────────────────────┐  │
+  │  │                          DynamoDB Tables                              │  │
+  │  │   ┌─────────────────────┐    ┌──────────────────────────────┐       │  │
+  │  │   │ agent_marketing_    │    │ agent_content_engagement     │       │  │
+  │  │   │ content              │    │                              │       │  │
+  │  │   │ PK=USER#{user_id}   │    │ PK=CONTENT#{content_id}     │       │  │
+  │  │   │ SK=CONTENT#{cid}    │    │ SK=DAY#{YYYY-MM-DD}          │       │  │
+  │  │   │                     │    │                              │       │  │
+  │  │   │ GSI1: by type+date  │    │ views, clicks, signups,     │       │  │
+  │  │   │ GSI2: by status+date│    │ shares, variant_id           │       │  │
+  │  │   │ GSI3: by sched date │    │ TTL: 365 days                │       │  │
+  │  │   └─────────────────────┘    └──────────────────────────────┘       │  │
+  │  └──────────────────────────────────────────────────────────────────────┘  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 17. DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | GSI | Example |
+|---|---------------|-------|---------------|-----|---------|
+| 1 | Create content draft | `agent_marketing_content` | `PK=USER#{user_id}, SK=CONTENT#{content_id}` | -- | `put_item` with `status=draft` |
+| 2 | Get content by ID | `agent_marketing_content` | `PK=USER#{user_id}, SK=CONTENT#{content_id}` | -- | `get_item` |
+| 3 | List content by type | `agent_marketing_content` | `GSI1PK=USER#{user_id}#TYPE#{content_type}, GSI1SK desc` | GSI1 | Blog posts sorted by `created_at` |
+| 4 | List content by status | `agent_marketing_content` | `GSI2PK=USER#{user_id}#STATUS#{status}, GSI2SK desc` | GSI2 | All drafts sorted by creation date |
+| 5 | List scheduled content for month | `agent_marketing_content` | `GSI3PK=USER#{user_id}#SCHEDULED, GSI3SK between(start, end)` | GSI3 | Calendar view for a month |
+| 6 | Update content status | `agent_marketing_content` | `PK=USER#{user_id}, SK=CONTENT#{content_id}` | -- | `update_item` set `status`, `updated_at` |
+| 7 | Record daily engagement | `agent_content_engagement` | `PK=CONTENT#{content_id}, SK=DAY#{YYYY-MM-DD}` | -- | `update_item` ADD `views 1` |
+| 8 | Get engagement for date range | `agent_content_engagement` | `PK=CONTENT#{content_id}, SK between(DAY#start, DAY#end)` | -- | Last 30 days of engagement data |
+| 9 | Delete draft content | `agent_marketing_content` | `PK=USER#{user_id}, SK=CONTENT#{content_id}` | -- | `delete_item` (only if `status=draft`) |
+
+**Example DynamoDB item (MarketingContent)**:
+
+```json
+{
+  "pk": {"S": "USER#alice_sub_123"},
+  "sk": {"S": "CONTENT#a1b2c3d4e5f6"},
+  "content_id": {"S": "a1b2c3d4e5f6"},
+  "user_id": {"S": "alice_sub_123"},
+  "agent_id": {"S": "mkt_agent_001"},
+  "content_type": {"S": "blog_post"},
+  "title": {"S": "Introducing Countdown Posts: Build Anticipation in Your Feed"},
+  "body": {"S": "## What are Countdown Posts?\n\nWe are excited to announce a powerful new feature..."},
+  "summary": {"S": "Countdown posts let creators build hype with live timers in their feed."},
+  "feature_refs": {"S": "[\"FEED-005\", \"FEED-006\"]"},
+  "tags": {"S": "[\"launch\", \"newsfeed\", \"countdown\"]"},
+  "seo_meta": {"S": "{\"title\": \"Countdown Posts - Build Anticipation\", \"description\": \"Create posts with live countdown timers...\", \"keywords\": [\"countdown\", \"timer\", \"newsfeed\"]}"},
+  "variations": {"S": "[{\"variant_id\": \"A\", \"title\": \"Introducing Countdown Posts\", \"body\": \"...\"}, {\"variant_id\": \"B\", \"title\": \"Build Hype with Live Timers\", \"body\": \"...\"}]"},
+  "status": {"S": "scheduled"},
+  "scheduled_publish_at": {"N": "1748606500"},
+  "target_platform": {"S": "blog"},
+  "created_at": {"N": "1748520100"},
+  "updated_at": {"N": "1748520200"},
+  "GSI1PK": {"S": "USER#alice_sub_123#TYPE#blog_post"},
+  "GSI1SK": {"N": "1748520100"},
+  "GSI2PK": {"S": "USER#alice_sub_123#STATUS#scheduled"},
+  "GSI2SK": {"N": "1748520100"},
+  "GSI3PK": {"S": "USER#alice_sub_123#SCHEDULED"},
+  "GSI3SK": {"N": "1748606500"}
+}
+```
+
+**Example DynamoDB item (ContentEngagement)**:
+
+```json
+{
+  "pk": {"S": "CONTENT#a1b2c3d4e5f6"},
+  "sk": {"S": "DAY#2026-05-29"},
+  "views": {"N": "342"},
+  "clicks": {"N": "45"},
+  "signups": {"N": "3"},
+  "shares": {"N": "12"},
+  "variant_id": {"S": "A"},
+  "ttl": {"N": "1779883200"}
+}
+```
+
+---
+
+## 18. Pydantic Models
+
+```python
+# In app/models.py
+
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, Literal
+
+
+class CreateMarketingContentIn(BaseModel):
+    """Request model for creating marketing content."""
+    content_type: Literal[
+        "blog_post", "social_twitter", "social_linkedin",
+        "social_instagram", "newsletter", "release_notes",
+        "changelog", "landing_page", "meta_seo"
+    ]
+    title: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1, max_length=20000)
+    summary: Optional[str] = Field(default=None, max_length=500)
+    feature_refs: Optional[List[str]] = Field(
+        default=None, max_length=10,
+        description="Ticket IDs this content references"
+    )
+    tags: Optional[List[str]] = Field(
+        default=None, max_length=20,
+        description="Content tags for categorization"
+    )
+    seo_meta: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="SEO metadata: title, description, keywords"
+    )
+    variations: Optional[List[Dict[str, str]]] = Field(
+        default=None, max_length=5,
+        description="A/B test variations"
+    )
+    target_platform: Optional[str] = Field(
+        default=None, max_length=50,
+        description="Target platform for publishing"
+    )
+
+
+class UpdateMarketingContentIn(BaseModel):
+    """Request model for updating marketing content."""
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    body: Optional[str] = Field(default=None, min_length=1, max_length=20000)
+    summary: Optional[str] = Field(default=None, max_length=500)
+    feature_refs: Optional[List[str]] = Field(default=None, max_length=10)
+    tags: Optional[List[str]] = Field(default=None, max_length=20)
+    seo_meta: Optional[Dict[str, Any]] = None
+    variations: Optional[List[Dict[str, str]]] = Field(default=None, max_length=5)
+    target_platform: Optional[str] = Field(default=None, max_length=50)
+
+
+class ScheduleMarketingContentIn(BaseModel):
+    """Request model for scheduling marketing content."""
+    publish_at: int = Field(
+        ..., gt=0,
+        description="Unix timestamp for scheduled publish date"
+    )
+
+    @model_validator(mode="after")
+    def validate_publish_at_future(self):
+        from app.core.time import now_ts
+        if self.publish_at <= now_ts():
+            raise ValueError("publish_at must be in the future")
+        return self
+
+
+class GenerateMarketingContentIn(BaseModel):
+    """Request model for triggering content generation."""
+    feature_ticket_ids: List[str] = Field(
+        ..., min_length=1, max_length=10,
+        description="Ticket IDs to generate marketing content for"
+    )
+    content_types: List[str] = Field(
+        default_factory=lambda: ["blog_post", "changelog"],
+        description="Content types to generate"
+    )
+    tone_override: Optional[str] = Field(
+        default=None, max_length=100,
+        description="Override brand voice tone for this generation"
+    )
+    target_audience_override: Optional[str] = Field(
+        default=None, max_length=200,
+        description="Override target audience for this generation"
+    )
+
+
+class MarketingContentOut(BaseModel):
+    """Response model for marketing content."""
+    content_id: str
+    user_id: str
+    agent_id: Optional[str] = None
+    content_type: str
+    title: str
+    body: str
+    summary: Optional[str] = None
+    feature_refs: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    seo_meta: Optional[Dict[str, Any]] = None
+    variations: Optional[List[Dict[str, str]]] = None
+    status: str
+    scheduled_publish_at: Optional[int] = None
+    published_at: Optional[int] = None
+    target_platform: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class EngagementStatsOut(BaseModel):
+    """Response model for content engagement statistics."""
+    content_id: str
+    total_views: int = 0
+    total_clicks: int = 0
+    total_signups: int = 0
+    total_shares: int = 0
+    click_rate: float = 0.0
+    signup_rate: float = 0.0
+    by_day: List[Dict[str, Any]] = Field(default_factory=list)
+    by_variant: Optional[List[Dict[str, Any]]] = None
+
+
+class CalendarEntryOut(BaseModel):
+    """Response model for content calendar entry."""
+    content_id: str
+    title: str
+    content_type: str
+    status: str
+    date: int
+
+
+class EngagementSummaryOut(BaseModel):
+    """Response model for aggregate engagement summary."""
+    total_content: int = 0
+    total_views: int = 0
+    total_clicks: int = 0
+    total_signups: int = 0
+    avg_click_rate: float = 0.0
+    avg_signup_rate: float = 0.0
+    top_performing: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class UpdateMarketingConfigIn(BaseModel):
+    """Request model for updating marketing agent configuration."""
+    trigger_on_feature_completion: Optional[bool] = None
+    auto_generate_content_types: Optional[List[str]] = None
+    brand_voice: Optional[Dict[str, Any]] = None
+    target_audience: Optional[Dict[str, Any]] = None
+    social_platforms: Optional[List[str]] = None
+    content_calendar_enabled: Optional[bool] = None
+    newsletter_frequency: Optional[Literal["daily", "weekly", "biweekly", "monthly"]] = None
+    newsletter_day: Optional[str] = None
+    ab_test_variations: Optional[int] = Field(default=None, ge=0, le=5)
+    seo_keywords: Optional[List[str]] = None
+    max_content_per_feature: Optional[int] = Field(default=None, ge=1, le=10)
+```
+
+---
+
+## 19. Frontend Component Tree
+
+```
+/agents/marketing — ContentDashboardPage
+├── PageHeader
+│   ├── <h1> "Marketing Content"
+│   ├── ContentStatsBar (total drafts, published, scheduled counts)
+│   └── CreateContentButton → opens ContentEditorPage (new)
+├── FilterTabs
+│   ├── Tab: "All"
+│   ├── Tab: "Blog Posts"
+│   ├── Tab: "Social Media"
+│   ├── Tab: "Newsletter"
+│   ├── Tab: "Release Notes"
+│   └── Tab: "Changelog"
+├── StatusFilter
+│   ├── Chip: "Draft"
+│   ├── Chip: "Review"
+│   ├── Chip: "Approved"
+│   ├── Chip: "Scheduled"
+│   ├── Chip: "Published"
+│   └── Chip: "Archived"
+├── ContentGrid (or ContentTable depending on view toggle)
+│   └── ContentCard (one per content piece)
+│       ├── TypeBadge (colored pill: Blog, Social, Newsletter, etc.)
+│       ├── StatusBadge (draft=gray, approved=blue, scheduled=yellow, published=green)
+│       ├── TitleLink → navigates to ContentEditorPage
+│       ├── SummarySnippet (truncated summary or first 100 chars of body)
+│       ├── FeatureRefChips (linked ticket IDs)
+│       ├── TagChips (content tags)
+│       ├── DateDisplay (created_at or scheduled_publish_at)
+│       ├── EngagementSparkline (mini chart of views/clicks for published content)
+│       ├── VariantCount badge (if A/B variations exist)
+│       └── ActionsDropdown
+│           ├── "Edit" → ContentEditorPage
+│           ├── "Approve" (if draft/review)
+│           ├── "Schedule" → ScheduleDialog
+│           ├── "Publish Now" (if approved)
+│           ├── "Archive" (if published)
+│           └── "Delete" (if draft)
+└── PaginationControls
+
+/agents/marketing/content/:contentId — ContentEditorPage
+├── TopBar
+│   ├── BackButton → ContentDashboardPage
+│   ├── StatusBadge
+│   └── ActionButtons (Approve, Schedule, Publish based on status)
+├── EditorLayout (two-column)
+│   ├── MainColumn
+│   │   ├── TitleInput (<Input> for content title)
+│   │   ├── MarkdownEditor (code-mirror or textarea with preview toggle)
+│   │   │   ├── EditorToolbar (bold, italic, link, heading, list, image)
+│   │   │   ├── EditorPane (markdown source)
+│   │   │   └── PreviewPane (rendered HTML via react-markdown)
+│   │   └── SummaryInput (<Textarea> for excerpt/summary)
+│   └── SidePanel
+│       ├── TypeSelector (dropdown for content_type)
+│       ├── SEOSection (collapsible)
+│       │   ├── MetaTitleInput
+│       │   ├── MetaDescriptionTextarea
+│       │   └── KeywordsInput (tag input)
+│       ├── TagsSection (tag input with autocomplete)
+│       ├── FeatureRefsSection (multi-select for ticket IDs)
+│       ├── VariationsSection (collapsible)
+│       │   ├── VariantList (one row per A/B variant)
+│       │   │   ├── VariantTitleInput
+│       │   │   ├── VariantBodyEditor
+│       │   │   └── RemoveVariantButton
+│       │   └── AddVariantButton
+│       └── ScheduleSection
+│           ├── DateTimePicker (for scheduled_publish_at)
+│           └── TargetPlatformSelect
+└── SaveButton (auto-saves on change via debounced mutation)
+
+/agents/marketing/calendar — ContentCalendarPage
+├── CalendarHeader
+│   ├── MonthNavigator (prev / current month / next)
+│   ├── TodayButton
+│   └── ViewToggle (Month / Week)
+├── CalendarGrid
+│   ├── DayHeaders (Mon-Sun)
+│   └── DayCells (one per day)
+│       └── ContentChip (one per scheduled/published item)
+│           ├── ColorDot (by content_type)
+│           ├── TruncatedTitle
+│           └── StatusIcon
+├── ContentDetailPopover (on click of chip)
+│   ├── Title, Type, Status, Summary
+│   ├── EditLink → ContentEditorPage
+│   └── QuickActions (publish, reschedule)
+└── DragDropHandler (reschedule by dragging chips between days)
+
+/agents/marketing/engagement — EngagementDashboardPage
+├── SummaryCards (row of 4)
+│   ├── TotalViewsCard (number + trend arrow)
+│   ├── TotalClicksCard
+│   ├── TotalSignupsCard
+│   └── ConversionRateCard (clicks/views %)
+├── EngagementChart (line chart with date x-axis)
+│   ├── ViewsLine
+│   ├── ClicksLine
+│   └── SignupsLine
+├── TopPerformingTable
+│   ├── Columns: Title, Type, Views, Clicks, Signups, Click Rate
+│   └── Rows sorted by clicks desc
+└── ABTestComparison (if any active tests)
+    ├── TestSelector (dropdown)
+    ├── VariantComparisonChart (bar chart: views + clicks per variant)
+    └── WinnerBadge (if test concluded)
+```

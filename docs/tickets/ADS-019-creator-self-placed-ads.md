@@ -472,3 +472,353 @@ test.afterAll(async () => {
 2. Should self-promos count toward a creator's post limit (if any)? Current design: no (they're separate entities).
 3. Should viewers be able to hide/dismiss individual self-promos? Current design: not in MVP. Could add in a follow-up.
 4. Should self-promo analytics be included in the creator analytics dashboard (ENGAGE-005)? Current design: separate analytics endpoint, but could be integrated.
+
+---
+
+## 11. Architecture & Data Flow
+
+```
+Self-Promo Lifecycle
+────────────────────
+
+  Creator → POST /ui/self-promos
+       │
+       ▼
+  ┌────────────────────────────────────┐
+  │  Create Self-Promo                 │
+  │  SelfPromos table:                 │
+  │  pk=CREATOR#{user_id}              │
+  │  sk=PROMO#{promo_id}              │
+  │  status=draft                      │
+  └──────────┬─────────────────────────┘
+             │
+             ▼ (creator activates)
+  POST /ui/self-promos/{id}/activate
+       │
+       ▼
+  status=active
+       │
+       ▼ (viewer requests feed/video/profile)
+  ┌────────────────────────────────────┐
+  │  Feed Injection Point              │
+  │  get_feed_promos(creator_id)       │
+  │  → Query SelfPromos table          │
+  │    pk=CREATOR#{id}, status=active  │
+  │    placement_types contains        │
+  │    "feed_inline"                   │
+  │                                    │
+  │  Insert at feed_position interval  │
+  │  Label: "Promoted by @creator"     │
+  │  billing_exempt: true              │
+  └──────────┬─────────────────────────┘
+             │
+             ▼ (viewer sees promo)
+  ┌────────────────────────────────────┐
+  │  Impression/Click Tracking         │
+  │                                    │
+  │  POST /self-promos/{id}/event      │
+  │  event_type=impression|click       │
+  │                                    │
+  │  → AdImpressions table             │
+  │    promo_type=self_promo           │
+  │  → NO billing ledger entry         │
+  │  → Increment counter on promo      │
+  └────────────────────────────────────┘
+
+  Event-Linked Activation
+  ────────────────────────
+
+  Broadcast starts → activate_event_promos(broadcast_id)
+       │
+       ▼
+  Query ByLinkedEvent GSI
+  linked_event_id = broadcast_id
+       │
+       ▼
+  Set matching promos status=active
+       │
+       ▼
+  Broadcast ends → deactivate_event_promos(broadcast_id)
+```
+
+---
+
+## 12. Detailed DynamoDB Access Patterns
+
+| # | Access Pattern | Table | Key Condition | GSI | Notes |
+|---|---------------|-------|---------------|-----|-------|
+| 1 | Get promo by ID | `SelfPromos` | `pk=CREATOR#{user_id}, sk=PROMO#{promo_id}` | -- | GetItem |
+| 2 | List creator's promos | `SelfPromos` | `pk=CREATOR#{user_id}, sk begins_with PROMO#` | -- | Query, paginated |
+| 3 | List active promos (admin) | `SelfPromos` | `status=active` | `ByStatusCreatedAt` | GSI query |
+| 4 | Find event-linked promos | `SelfPromos` | `linked_event_id=X` | `ByLinkedEvent` | GSI query |
+| 5 | Record impression | `AdImpressions` | `pk=AD_IMP#{date}, sk=PROMO#{promo_id}#{viewer}#{ts}` | -- | PutItem with promo_type=self_promo |
+| 6 | Increment promo counters | `SelfPromos` | `pk=CREATOR#{user_id}, sk=PROMO#{promo_id}` | -- | UpdateItem ADD |
+
+---
+
+## 13. API Request/Response Examples
+
+### 13.1 Create Self-Promo
+
+```bash
+curl -X POST http://localhost:8000/ui/self-promos \
+  -H "Content-Type: application/json" \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok" \
+  -d '{
+    "title": "Check out my new video!",
+    "description": "My latest tutorial on React hooks",
+    "creative_type": "card",
+    "click_action": "open_video",
+    "target_content_id": "vid_abc123",
+    "target_content_type": "video",
+    "placement_types": ["feed_inline"],
+    "feed_position": 3
+  }'
+```
+
+**Response (200)**:
+```json
+{
+  "promo_id": "promo_a1b2c3",
+  "creator_id": "alice-sub",
+  "title": "Check out my new video!",
+  "status": "draft",
+  "placement_types": ["feed_inline"],
+  "feed_position": 3,
+  "impression_count": 0,
+  "click_count": 0,
+  "created_at": 1748534400
+}
+```
+
+### 13.2 Activate Promo
+
+```bash
+curl -X POST http://localhost:8000/ui/self-promos/promo_a1b2c3/activate \
+  -H "Cookie: ui_session=sess_alice; ui_csrf=csrf_tok; ui_access_token=jwt_tok" \
+  -H "x-csrf-token: csrf_tok"
+```
+
+**Response (200)**:
+```json
+{"ok": true, "status": "active"}
+```
+
+### 13.3 Get Promo Analytics
+
+```bash
+curl http://localhost:8000/ui/self-promos/promo_a1b2c3/analytics \
+  -H "Cookie: ui_session=sess_alice; ui_access_token=jwt_tok"
+```
+
+**Response (200)**:
+```json
+{
+  "promo_id": "promo_a1b2c3",
+  "impression_count": 142,
+  "click_count": 23,
+  "ctr_pct": 16.2
+}
+```
+
+---
+
+## 14. Error Handling Matrix
+
+| # | Error Scenario | HTTP Status | Error Code | User-Facing Message | Recovery Action |
+|---|----------------|-------------|------------|---------------------|-----------------|
+| 1 | Promo not found | 404 | `PROMO_NOT_FOUND` | "Self-promo not found." | Verify promo_id |
+| 2 | Not promo owner | 403 | `NOT_PROMO_OWNER` | "You do not own this self-promo." | Use own account |
+| 3 | Max active promos (20) | 400 | `MAX_PROMOS_REACHED` | "Maximum 20 active self-promos." | Deactivate or delete existing |
+| 4 | Invalid creative_type | 422 | `INVALID_CREATIVE_TYPE` | "creative_type must be image, video, text, or card." | Use valid type |
+| 5 | Invalid placement_type | 422 | `INVALID_PLACEMENT` | "Invalid placement type." | Use valid placement enum |
+| 6 | Invalid click_action | 422 | `INVALID_CLICK_ACTION` | "Invalid click action." | Use valid action enum |
+| 7 | Title too long | 422 | `TITLE_TOO_LONG` | "Title must be 120 characters or fewer." | Shorten title |
+| 8 | Invalid feed_position | 422 | `INVALID_POSITION` | "feed_position must be >= 0." | Use non-negative integer |
+
+---
+
+## 15. Expanded Pydantic Models
+
+```python
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional
+
+VALID_CREATIVE_TYPES = {"image", "video", "text", "card"}
+VALID_CLICK_ACTIONS = {"navigate", "open_post", "open_video", "open_profile", "external_link"}
+VALID_PLACEMENT_TYPES = {"feed_inline", "video_preroll", "video_midroll", "video_overlay", "profile_banner", "broadcast_overlay"}
+VALID_CONTENT_TYPES = {"post", "video", "broadcast", "profile", "external"}
+
+class SelfPromoCreateIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    creative_type: str = Field(...)
+    creative_url: Optional[str] = None
+    click_url: Optional[str] = None
+    click_action: str = Field(default="navigate")
+    target_content_id: Optional[str] = None
+    target_content_type: Optional[str] = None
+    cross_promo_creator_id: Optional[str] = None
+    placement_types: list[str] = Field(...)
+    feed_position: int = Field(default=3, ge=0)
+    schedule_start: Optional[int] = None
+    schedule_end: Optional[int] = None
+    linked_event_id: Optional[str] = None
+
+    @field_validator("creative_type")
+    @classmethod
+    def validate_creative_type(cls, v):
+        if v not in VALID_CREATIVE_TYPES:
+            raise ValueError(f"creative_type must be one of {VALID_CREATIVE_TYPES}")
+        return v
+
+    @field_validator("click_action")
+    @classmethod
+    def validate_click_action(cls, v):
+        if v not in VALID_CLICK_ACTIONS:
+            raise ValueError(f"click_action must be one of {VALID_CLICK_ACTIONS}")
+        return v
+
+    @field_validator("placement_types")
+    @classmethod
+    def validate_placement_types(cls, v):
+        for p in v:
+            if p not in VALID_PLACEMENT_TYPES:
+                raise ValueError(f"Invalid placement type: {p}")
+        return v
+
+class SelfPromoOut(BaseModel):
+    promo_id: str
+    creator_id: str
+    title: str
+    description: str
+    creative_type: str
+    status: str
+    placement_types: list[str]
+    feed_position: int
+    impression_count: int = 0
+    click_count: int = 0
+    created_at: int
+    updated_at: int
+```
+
+---
+
+## 16. Frontend Component Tree
+
+```
+SelfPromosPage (route: /self-promos)
+├── PromoStatusFilter (tabs: All / Active / Draft / Paused / Expired)
+├── CreatePromoButton → CreatePromoDialog
+│   ├── SelfPromoCreativeUpload
+│   ├── SelfPromoPlacementPicker (multi-checkbox)
+│   ├── SelfPromoScheduler (date pickers + event link)
+│   └── CrossPromoCreatorSearch (optional)
+├── PromoList
+│   └── PromoCard (per promo)
+│       ├── Title + CreativeTypeBadge
+│       ├── StatusBadge (active/draft/paused/expired)
+│       ├── PlacementTags (feed_inline, video_preroll, etc.)
+│       ├── AnalyticsMini (impressions, clicks, CTR)
+│       └── ActionMenu (Activate / Pause / Edit / Delete)
+└── SelfPromoAnalytics (detail panel per promo)
+    ├── ImpressionCount
+    ├── ClickCount
+    └── CTRPercentage
+
+Feed Integration
+├── SelfPromoCard (data-testid="self-promo-card")
+│   ├── "Promoted by @{creator_name}" label
+│   ├── Creative (image/video/text)
+│   ├── CTAButton (linked action)
+│   └── InfoIcon → tooltip: "Free self-promotion by the creator"
+
+ProfilePromoBanner (on creator profile page)
+├── BannerImage or BannerCard
+├── Title + Description
+└── CTAButton
+```
+
+---
+
+## 17. Expanded Observability
+
+### 17.1 Extended Metrics
+
+| Metric Name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `self_promo_created_total` | Counter | `creator_id`, `creative_type` | Promos created |
+| `self_promo_activated_total` | Counter | `creator_id` | Promos activated |
+| `self_promo_impression_total` | Counter | `creator_id`, `placement_type` | Impressions (analytics only) |
+| `self_promo_click_total` | Counter | `creator_id`, `placement_type` | Clicks (analytics only) |
+| `self_promo_active_gauge` | Gauge | -- | Currently active promos |
+| `self_promo_event_linked_total` | Counter | -- | Event-linked activations |
+| `self_promo_billing_blocked_total` | Counter | -- | Billing attempts blocked (should be 0) |
+
+### 17.2 Alerting Rules
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Billing entry created for self-promo | Any ledger entry with promo_id | P1 (critical) |
+| Active promo count exceeds limit | >20 active per creator | P3 |
+| Event-linked activation failure | Activate returns 0 promos for valid event | P3 |
+
+---
+
+## 18. Performance Considerations
+
+### 18.1 Latency Targets
+
+| Endpoint | Target p50 | Target p99 |
+|----------|-----------|-----------|
+| POST /self-promos (create) | 50ms | 200ms |
+| GET /self-promos (list) | 40ms | 150ms |
+| POST /self-promos/{id}/event | 20ms | 80ms |
+| GET /self-promos/feed/{id} | 30ms | 100ms |
+| activate_event_promos() | 100ms | 500ms |
+
+### 18.2 Feed Injection Performance
+
+`get_feed_promos()` queries the SelfPromos table with PK=CREATOR#{id} and filters for active status + feed_inline placement. With the 20 active promo limit, this returns at most 20 items. The feed injection iterates through organic posts and inserts promos at configured positions. Total overhead per feed request: ~30ms.
+
+---
+
+## 19. Expanded E2E Tests
+
+### 19.1 Section 423: Input Validation (5 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 423.1 | Invalid creative_type rejected | POST with creative_type="audio"; 422 |
+| 423.2 | Invalid placement_type rejected | POST with placement_types=["sidebar"]; 422 |
+| 423.3 | Title too long rejected | POST with 150-char title; 422 |
+| 423.4 | Negative feed_position rejected | POST with feed_position=-1; 422 |
+| 423.5 | Invalid click_action rejected | POST with click_action="execute"; 422 |
+
+### 19.2 Section 424: Authorization Boundary (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 424.1 | Non-owner cannot update promo | Bob PATCH Alice's promo; 403 |
+| 424.2 | Non-owner cannot activate promo | Bob POST activate on Alice's promo; 403 |
+| 424.3 | Non-owner cannot delete promo | Bob DELETE Alice's promo; 403 |
+| 424.4 | Non-owner cannot view analytics | Bob GET Alice's promo analytics; 403 |
+
+### 19.3 Section 425: Billing Guarantee (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 425.1 | Impression creates no billing entry | Record impression; scan billing ledger; no entry for promo_id |
+| 425.2 | Click creates no billing entry | Record click; scan billing ledger; no entry for promo_id |
+| 425.3 | AdImpressions records promo_type | Query AdImpressions; record has promo_type=self_promo |
+| 425.4 | Wallet balance unchanged after impressions | Check creator wallet before/after; same balance |
+
+### 19.4 Section 426: Event-Linked Promos (4 tests)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 426.1 | Create event-linked promo | POST with linked_event_id=broadcast_id; 200; linked_event_id stored |
+| 426.2 | Activate via event | Call activate_event_promos(broadcast_id); promo status=active |
+| 426.3 | Deactivate via event | Call deactivate_event_promos(broadcast_id); promo status=paused |
+| 426.4 | Scheduled promo with past end time filtered | Create with schedule_end in past; query feed promos; not returned |
