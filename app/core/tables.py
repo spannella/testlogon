@@ -138,6 +138,7 @@ class Tables:
     chat_bots: Any
     bot_assignments: Any
     user_groups: Any
+    ssh_keys: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -270,4 +271,5 @@ T = Tables(
     chat_bots=ddb.Table(S.chat_bots_table_name),
     bot_assignments=ddb.Table(S.bot_assignments_table_name),
     user_groups=ddb.Table(S.ddb_user_groups_table),
+    ssh_keys=ddb.Table(S.ssh_keys_table_name),
 )

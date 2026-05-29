@@ -4270,3 +4270,44 @@ class GroupListOut(BaseModel):
 class GroupMemberListOut(BaseModel):
     members: List[GroupMemberOut] = Field(default_factory=list)
     count: int = 0
+# ─── SSH Key Manager (INFRA-002) ──────────────────────────────────────────────
+
+class UploadSshKeyIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=100)
+    private_key_pem: str = Field(..., min_length=50, max_length=16_384)
+    passphrase: Optional[str] = Field(default=None, max_length=256)
+
+
+class GenerateSshKeyIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=100)
+    key_type: str = Field(default="ed25519", pattern="^(rsa|ed25519)$")
+    key_bits: int = Field(default=4096, ge=2048, le=8192)
+
+
+class SshKeyOut(BaseModel):
+    key_id: str
+    label: str
+    key_type: str
+    key_bits: int
+    public_key_openssh: str
+    public_key_fingerprint: str
+    passphrase_protected: bool
+    created_at: int
+    last_used_at: int
+    associated_hosts: List[str] = []
+    use_count: int = 0
+
+
+class SshKeyListOut(BaseModel):
+    keys: List[SshKeyOut]
+    count: int
+
+
+class PublicKeyOut(BaseModel):
+    key_id: str
+    public_key_openssh: str
+    public_key_fingerprint: str
+
+
+class AssociateKeyIn(BaseModel):
+    host_id: str = Field(..., min_length=1)

@@ -1228,6 +1228,15 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        # SSH Key Manager (INFRA-002)
+        TableDef(
+            _resolve_table_name(S.ssh_keys_table_name, "ssh_keys"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
         ),
     ]
 

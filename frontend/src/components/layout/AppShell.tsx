@@ -219,6 +219,8 @@ const MOBILE_NAV_GROUPS = [
       { label: "Tickets", path: "/tickets", icon: LifeBuoy },
   { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
       { label: "Delegates", path: "/delegates", icon: UserCog },
+      { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
+      { label: "SSH Keys", path: "/remote/ssh-keys", icon: KeyRound },
       { label: "Settings", path: "/settings", icon: Settings },
       { label: "Privacy", path: "/settings/privacy", icon: ShieldCheck },
       { label: "Webhooks", path: "/settings/webhooks", icon: Webhook },

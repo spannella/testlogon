@@ -4841,4 +4841,41 @@ export interface GroupListOut {
 export interface GroupMemberListOut {
   members: GroupMember[];
   count: number;
+// ─── SSH Key Manager (INFRA-002) ─────────────────────────────────
+
+export interface SshKeyOut {
+  key_id: string;
+  label: string;
+  key_type: string;
+  key_bits: number;
+  public_key_openssh: string;
+  public_key_fingerprint: string;
+  passphrase_protected: boolean;
+  created_at: number;
+  last_used_at: number;
+  associated_hosts: string[];
+  use_count: number;
+}
+
+export interface SshKeyListOut {
+  keys: SshKeyOut[];
+  count: number;
+}
+
+export interface PublicKeyOut {
+  key_id: string;
+  public_key_openssh: string;
+  public_key_fingerprint: string;
+}
+
+export interface GenerateSshKeyIn {
+  label: string;
+  key_type?: "rsa" | "ed25519";
+  key_bits?: number;
+}
+
+export interface UploadSshKeyIn {
+  label: string;
+  private_key_pem: string;
+  passphrase?: string;
 }
