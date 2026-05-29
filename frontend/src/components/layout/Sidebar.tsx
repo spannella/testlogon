@@ -144,6 +144,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Tickets", i18nKey: "nav.tickets", path: "/tickets", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
+      { label: "SSH Keys", i18nKey: "nav.sshKeys", path: "/remote/ssh-keys", icon: <KeyRound className="h-5 w-5" /> },
       { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
       { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "Blocked Users", i18nKey: "nav.blockedUsers", path: "/settings/blocked", icon: <Ban className="h-5 w-5" /> },

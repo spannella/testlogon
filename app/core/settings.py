@@ -1490,5 +1490,9 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # SSH Key Manager (INFRA-002)
+    ssh_keys_table_name: str = os.environ.get("SSH_KEYS_TABLE_NAME", "ssh_keys")
+    ssh_key_max_per_user: int = int(os.environ.get("SSH_KEY_MAX_PER_USER", "20"))
+
 
 S = Settings()

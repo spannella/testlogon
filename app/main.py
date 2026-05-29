@@ -83,6 +83,7 @@ from app.routers.browser_ssh_terminal import (
     browser_ssh_terminal_enabled,
     router as browser_ssh_terminal_router,
 )
+from app.routers.ssh_key_manager import router as ssh_key_manager_router
 from app.routers.questionnaires import router as questionnaires_router
 from app.routers.vnc_sessions import router as vnc_sessions_router
 from app.routers.kyc_cases import router as kyc_cases_router
@@ -402,6 +403,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_jira_integration_router)
     app.include_router(jira_integrations_router)
     app.include_router(browser_ssh_terminal_router)
+    app.include_router(ssh_key_manager_router)
     app.include_router(questionnaires_router)
     app.include_router(kyc_cases_router)
     app.include_router(vnc_sessions_router)

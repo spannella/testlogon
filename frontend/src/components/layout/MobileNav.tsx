@@ -37,6 +37,7 @@ import {
   Trophy,
   CalendarClock,
   Scissors,
+  KeyRound,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -81,6 +82,7 @@ const MORE_LINKS = [
   { label: "Tickets", i18nKey: "nav.tickets", path: "/tickets", icon: LifeBuoy },
   { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: LifeBuoy },
   { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: MonitorSmartphone },
+  { label: "SSH Keys", i18nKey: "nav.sshKeys", path: "/remote/ssh-keys", icon: KeyRound },
   { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: Settings },
   { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: ShieldCheck },
   { label: "Webhooks", i18nKey: "nav.webhooks", path: "/settings/webhooks", icon: Webhook },
