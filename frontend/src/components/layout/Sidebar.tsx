@@ -46,6 +46,8 @@ import {
   Building2,
   Tv,
   Scissors,
+  Bot,
+  KeyRound,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -132,6 +134,13 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Broadcast", i18nKey: "nav.broadcast", path: "/broadcast", icon: <Radio className="h-5 w-5" /> },
       { label: "Clips", i18nKey: "nav.clips", path: "/clips", icon: <Scissors className="h-5 w-5" /> },
       { label: "Watch Parties", i18nKey: "nav.watchParties", path: "/watch-parties", icon: <Tv className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "AI Agents",
+    i18nKey: "nav.aiAgents",
+    items: [
+      { label: "LLM Keys", i18nKey: "nav.llmKeys", path: "/agents/llm-keys", icon: <KeyRound className="h-5 w-5" /> },
     ],
   },
   {

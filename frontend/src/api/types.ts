@@ -4533,3 +4533,80 @@ export interface UnfollowResponse {
   ok: boolean;
   status: "unfollowed" | "not_following";
 }
+
+// -- LLM Provider Keys (AGENT-001) --
+
+export interface LlmKeyOut {
+  key_id: string;
+  user_id?: string;
+  provider: string;
+  label: string;
+  key_suffix: string;
+  base_url: string;
+  model_preference: string;
+  available_models: string[];
+  rate_limit_rpm: number;
+  monthly_budget_cents: number;
+  current_month_usage_cents: number;
+  total_requests: number;
+  total_tokens_used: number;
+  status: string;
+  last_tested_at: number;
+  last_used_at: number;
+  created_at: number;
+  updated_at: number;
+  assigned_worker_ids: string[];
+}
+
+export interface LlmKeyListOut {
+  keys: LlmKeyOut[];
+  count: number;
+}
+
+export interface LlmKeyCreateIn {
+  provider: string;
+  label: string;
+  api_key: string;
+  base_url?: string;
+  model_preference?: string;
+  rate_limit_rpm?: number;
+  monthly_budget_cents?: number;
+}
+
+export interface LlmKeyRotateIn {
+  new_api_key: string;
+}
+
+export interface LlmKeyAssignIn {
+  worker_id: string;
+}
+
+export interface LlmKeyTestOut {
+  ok: boolean;
+  models: string[];
+  error: string;
+  latency_ms: number;
+}
+
+export interface LlmKeyUsageOut {
+  key_id: string;
+  provider: string;
+  local_usage_cents: number;
+  local_total_requests: number;
+  local_total_tokens: number;
+  provider_balance_cents?: number;
+  provider_usage_cents?: number;
+  budget_remaining_cents?: number;
+}
+
+export interface LlmProviderInfo {
+  provider: string;
+  display_name: string;
+  base_url: string;
+  models: string[];
+  supports_usage_api: boolean;
+}
+
+export interface LlmProviderListOut {
+  providers: LlmProviderInfo[];
+}

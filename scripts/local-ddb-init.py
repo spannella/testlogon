@@ -1160,6 +1160,17 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # LLM Provider Keys (AGENT-001)
+        TableDef(
+            _resolve_table_name(S.llm_provider_keys_table_name, "llm_provider_keys"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByProvider", "partition_key": "pk", "sort_key": "provider"},
+                {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

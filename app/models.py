@@ -3934,3 +3934,81 @@ class FollowStatusResponse(BaseModel):
     is_following: bool
     is_followed_by: bool
     is_mutual: bool
+
+
+# -- LLM Provider Keys (AGENT-001) --
+
+
+class LlmKeyCreateIn(BaseModel):
+    provider: str = Field(..., pattern=r"^(openai|anthropic|deepseek|gemini|custom)$")
+    label: str = Field(..., min_length=1, max_length=200)
+    api_key: str = Field(..., min_length=8, max_length=500)
+    base_url: str = Field(default="", max_length=500)
+    model_preference: str = Field(default="", max_length=200)
+    rate_limit_rpm: int = Field(default=60, ge=1, le=10000)
+    monthly_budget_cents: int = Field(default=0, ge=0)
+
+
+class LlmKeyRotateIn(BaseModel):
+    new_api_key: str = Field(..., min_length=8, max_length=500)
+
+
+class LlmKeyAssignIn(BaseModel):
+    worker_id: str = Field(..., min_length=1)
+
+
+class LlmKeyOut(BaseModel):
+    key_id: str
+    user_id: str = ""
+    provider: str
+    label: str
+    key_suffix: str = ""
+    base_url: str = ""
+    model_preference: str = ""
+    available_models: List[str] = Field(default_factory=list)
+    rate_limit_rpm: int = 60
+    monthly_budget_cents: int = 0
+    current_month_usage_cents: int = 0
+    total_requests: int = 0
+    total_tokens_used: int = 0
+    status: str = "active"
+    last_tested_at: int = 0
+    last_used_at: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+    assigned_worker_ids: List[str] = Field(default_factory=list)
+
+
+class LlmKeyListOut(BaseModel):
+    keys: List[LlmKeyOut]
+    count: int
+
+
+class LlmKeyTestOut(BaseModel):
+    ok: bool
+    models: List[str] = Field(default_factory=list)
+    error: str = ""
+    latency_ms: int = 0
+
+
+class LlmKeyUsageOut(BaseModel):
+    key_id: str
+    provider: str
+    local_usage_cents: int = 0
+    local_total_requests: int = 0
+    local_total_tokens: int = 0
+    provider_balance_cents: Optional[int] = None
+    provider_usage_cents: Optional[int] = None
+    budget_remaining_cents: Optional[int] = None
+
+
+class LlmProviderInfo(BaseModel):
+    provider: str
+    display_name: str
+    base_url: str
+    models: List[str] = Field(default_factory=list)
+    supports_usage_api: bool = False
+
+
+class LlmProviderListOut(BaseModel):
+    providers: List[LlmProviderInfo]
