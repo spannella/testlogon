@@ -4492,3 +4492,40 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// -- User Groups (GROUP-001) --
+
+export interface UserGroup {
+  group_id: string;
+  name: string;
+  description: string;
+  topic?: string;
+  visibility: "public" | "private";
+  status: "active" | "dissolved";
+  admin_user_id: string;
+  cover_image_url?: string;
+  member_count: number;
+  created_at: number;
+  updated_at: number;
+  my_role?: "admin" | "moderator" | "member";
+}
+
+export interface GroupMember {
+  user_id: string;
+  role: "admin" | "moderator" | "member";
+  status: "active" | "invited" | "pending_approval";
+  display_name: string;
+  joined_at?: number;
+  promoted_at?: number;
+}
+
+export interface GroupListOut {
+  groups: UserGroup[];
+  cursor?: string;
+  has_more: boolean;
+}
+
+export interface GroupMemberListOut {
+  members: GroupMember[];
+  count: number;
+}

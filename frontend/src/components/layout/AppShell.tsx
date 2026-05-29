@@ -142,6 +142,7 @@ import {
   Trophy,
   Building2,
   Scissors,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -174,6 +175,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Referrals", path: "/referrals", icon: Share2 },
       { label: "Promo Codes", path: "/promo", icon: Tag },
       { label: "Fan Club", path: "/fan-club", icon: UsersRound },
+      { label: "Groups", path: "/groups", icon: Users },
     ],
   },
   {

@@ -18,6 +18,7 @@ import {
   Bell,
   LifeBuoy,
   UsersRound,
+  Users,
   BookUser,
   Headphones,
   PanelLeftClose,
@@ -108,6 +109,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Affiliates", i18nKey: "nav.affiliates", path: "/affiliates", icon: <Link2 className="h-5 w-5" /> },
       { label: "Collaborations", i18nKey: "nav.collaborations", path: "/collaborations", icon: <Handshake className="h-5 w-5" /> },
       { label: "Fan Club", i18nKey: "nav.fanClub", path: "/fan-club", icon: <UsersRound className="h-5 w-5" /> },
+      { label: "Groups", i18nKey: "nav.groups", path: "/groups", icon: <Users className="h-5 w-5" /> },
     ],
   },
   {

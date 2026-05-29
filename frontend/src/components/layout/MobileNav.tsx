@@ -17,6 +17,7 @@ import {
   FilePen,
   Settings,
   UsersRound,
+  Users,
   MonitorSmartphone,
   Radio,
   Video,
@@ -97,6 +98,7 @@ const MORE_LINKS = [
   { label: "Affiliates", i18nKey: "nav.affiliates", path: "/affiliates", icon: Link2 },
   { label: "Collaborations", i18nKey: "nav.collaborations", path: "/collaborations", icon: Handshake },
   { label: "Fan Club", i18nKey: "nav.fanClub", path: "/fan-club", icon: UsersRound },
+  { label: "Groups", i18nKey: "nav.groups", path: "/groups", icon: Users },
   { label: "Achievements", i18nKey: "nav.achievements", path: "/achievements", icon: Trophy },
 ];
 

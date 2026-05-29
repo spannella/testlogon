@@ -3878,3 +3878,68 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# -- User Groups (GROUP-001) --
+
+class CreateGroupIn(BaseModel):
+    name: str = Field(..., min_length=3, max_length=100)
+    description: str = Field(default="", max_length=2000)
+    visibility: Literal["public", "private"] = "public"
+    topic: Optional[str] = Field(default=None, max_length=50)
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Group name cannot be blank")
+        return v.strip()
+
+class UpdateGroupIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=3, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    visibility: Optional[Literal["public", "private"]] = None
+    topic: Optional[str] = Field(default=None, max_length=50)
+
+class GroupInviteIn(BaseModel):
+    user_id: str
+
+class GroupInviteResponseIn(BaseModel):
+    accept: bool
+
+class GroupReviewRequestIn(BaseModel):
+    approved: bool
+
+class GroupUpdateRoleIn(BaseModel):
+    role: Literal["moderator", "member"]
+
+class GroupOut(BaseModel):
+    group_id: str
+    name: str
+    description: str = ""
+    topic: Optional[str] = None
+    visibility: str = "public"
+    status: str = "active"
+    admin_user_id: str
+    cover_image_url: Optional[str] = None
+    member_count: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+    my_role: Optional[str] = None
+
+class GroupMemberOut(BaseModel):
+    user_id: str
+    role: str = "member"
+    status: str = "active"
+    display_name: str = ""
+    joined_at: Optional[int] = None
+    promoted_at: Optional[int] = None
+
+class GroupListOut(BaseModel):
+    groups: List[GroupOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    has_more: bool = False
+
+class GroupMemberListOut(BaseModel):
+    members: List[GroupMemberOut] = Field(default_factory=list)
+    count: int = 0
