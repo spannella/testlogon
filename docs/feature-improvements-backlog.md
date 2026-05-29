@@ -345,18 +345,31 @@ SYND-005 (page/feed) + SYND-006 (advertising) ← consumer-facing features
 
 ## Content Licensing (Deep Dive — 2026-05-29)
 
-6 detailed ticket specs in progress in `docs/tickets/LICENSE-*.md`. Sections 463-486.
+6 detailed ticket specs generated in `docs/tickets/LICENSE-*.md`. ~95 planned E2E tests total.
 
 ### Licensing Tickets
 
 | # | Ticket | Feature | Priority | Tests | Sections |
 |---|--------|---------|----------|-------|----------|
-| 114 | LICENSE-001 | License Agreement Upload & Management | P1 | ~15 | 463-466 |
-| 115 | LICENSE-002 | Content License Issuance | P0 | ~15 | 467-470 |
-| 116 | LICENSE-003 | License Terms & Revenue Sharing | P0 | ~15 | 471-474 |
-| 117 | LICENSE-004 | License Request & Approval Workflow | P1 | ~15 | 475-478 |
-| 118 | LICENSE-005 | Syndicate Open Licensing | P1 | ~12 | 479-482 |
-| 119 | LICENSE-006 | License Compliance & Verification | P1 | ~15 | 483-486 |
+| 114 | LICENSE-001 | License Agreement Upload & Management | P1 | 16 | 463-466 |
+| 115 | LICENSE-002 | Content License Issuance | P0 | 16 | 467-470 |
+| 116 | LICENSE-003 | License Terms & Revenue Sharing | P0 | 15 | 471-474 |
+| 117 | LICENSE-004 | License Request & Approval Workflow | P1 | 16 | 475-478 |
+| 118 | LICENSE-005 | Syndicate Open Licensing | P1 | 16 | 479-482 |
+| 119 | LICENSE-006 | License Compliance & Verification | P1 | 16 | 483-486 |
+
+### Dependency Chain
+
+```
+LICENSE-001 (upload agreements) ← standalone
+LICENSE-002 (issue licenses) ← standalone
+    ↓
+LICENSE-003 (revenue sharing) ← depends on LICENSE-002 terms
+LICENSE-004 (request workflow) ← depends on LICENSE-002 issuance
+    ↓
+LICENSE-005 (syndicate licensing) ← depends on LICENSE-002 + SYND-001
+LICENSE-006 (compliance) ← depends on LICENSE-001 + LICENSE-002
+```
 
 ---
 
