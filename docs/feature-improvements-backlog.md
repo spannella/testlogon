@@ -144,10 +144,65 @@ Last updated: 2026-05-29
 
 ---
 
+## Cloud Infrastructure & Remote Compute (Deep Dive — 2026-05-29)
+
+12 detailed ticket specs generated in `docs/tickets/INFRA-*.md`. ~206 planned E2E tests total.
+
+### Existing Remote Access Infrastructure (Reference)
+
+**Already implemented:**
+- VNC remote desktop (noVNC, JWT sessions, capability negotiation, timeout policies, audit)
+- SSH terminal (Paramiko WebSocket bridge, destination policy, rate limiting, role-based access)
+- Targets hardcoded in env vars (no DDB table, no dynamic host inventory)
+- Credentials supplied per-session (not stored server-side)
+- Prometheus metrics for session lifecycle, duration, errors
+
+### Foundation Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 57 | INFRA-001 | Host Inventory Management | P0 | 20 | 240-243 |
+| 58 | INFRA-002 | SSH Key Manager | P0 | 18 | 244-247 |
+| 59 | INFRA-006 | Connection Profiles & Quick Connect | P1 | 15 | 261-263 |
+
+### Cloud Compute Provisioning Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 60 | INFRA-003 | EC2 Instance Launcher | P0 | 22 | 248-252 |
+| 61 | INFRA-004 | Kubernetes Container Launcher | P0 | 20 | 253-256 |
+| 62 | INFRA-005 | Compute Cost Tracking | P0 | 18 | 257-260 |
+| 63 | INFRA-007 | Instance Templates & Presets | P1 | 15 | 264-266 |
+
+### Monitoring, Security & Admin Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 64 | INFRA-008 | Instance Monitoring & Health | P1 | 15 | 267-269 |
+| 65 | INFRA-009 | Security Groups & Network Rules | P1 | 15 | 270-272 |
+| 66 | INFRA-010 | SSH Session Recording & Playback | P1 | 18 | 273-276 |
+| 67 | INFRA-011 | Multi-Hop SSH (Bastion/Jump Host) | P2 | 12 | 277-279 |
+| 68 | INFRA-012 | Admin Compute Dashboard | P1 | 18 | 280-283 |
+
+### Dependency Chain
+
+```
+INFRA-001 (hosts) + INFRA-002 (keys) ← foundation
+    ↓
+INFRA-003 (EC2) + INFRA-004 (K8s) ← launchers auto-register hosts + inject keys
+    ↓
+INFRA-005 (billing) ← tracks launcher costs via per-minute metering
+    ↓
+INFRA-006-012 ← advanced features on top
+```
+
+---
+
 ## Investigation Queue
 
 - [x] Accounting deep dive: basic user, content provider, admin perspectives
 - [x] KYC deep dive: existing infrastructure, verification, compliance, signing, video calls
+- [x] Cloud infrastructure deep dive: SSH/VNC, host management, compute provisioning, billing
 - [ ] Additional gaps from `docs/gap-analysis.md` (30 verified gaps)
 - [ ] Messaging/social feature gaps
 - [ ] Media/streaming feature gaps

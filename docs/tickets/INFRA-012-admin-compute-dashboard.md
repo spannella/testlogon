@@ -1,0 +1,625 @@
+# INFRA-012: Admin Compute Dashboard
+
+**Status**: Proposed  
+**Author**: Engineering  
+**Date**: 2026-05-29  
+**Priority**: Medium  
+**Estimated effort**: 6-8 days  
+**Dependencies**: INFRA-003 (EC2 Launcher), INFRA-004 (K8s Launcher), INFRA-005 (Cost Tracking)
+
+---
+
+## 1. Overview & Motivation
+
+### The Gap
+
+INFRA-003 through INFRA-005 give individual users the ability to launch instances/pods, track costs, and manage budgets. However, platform administrators have no visibility into:
+
+1. All compute resources across all users
+2. Platform-wide spending totals and trends
+3. Per-user resource usage and spending breakdown
+4. The ability to force-terminate any instance (for abuse or cost control)
+5. Per-user resource quotas (max instances, max spend, allowed instance types)
+6. Instance type popularity metrics (which types are most used)
+
+The platform already has admin infrastructure:
+
+- **Admin auth**: `require_admin_session` in `app/auth/deps.py` (requires `role >= ADMIN`)
+- **Root auth**: `require_root_session` (requires `role == ROOT`)
+- **Admin roles**: `app/auth/roles.py` with `USER`, `ADMIN`, `ROOT` enum
+- **Audit events**: `audit_event()` from `app/services/alerts.py`
+- **Role audit table**: `role_audit` DDB table for tracking admin actions
+- **Admin E2E pattern**: `e2e_admin_session_setup.py` seeds sessions for `root`, `charlie_admin`
+
+However, there are no admin endpoints for compute resource management.
+
+### Why This Matters
+
+1. **Platform governance**: Admins need a single pane of glass to see all compute resources.
+2. **Cost control**: Without platform-wide spending visibility, costs can spiral unchecked.
+3. **Abuse prevention**: A user could launch max instances on multiple accounts. Admins need force-terminate capability.
+4. **Quota management**: Different users/tiers should have different resource limits.
+5. **Capacity planning**: Instance type popularity data informs infrastructure provisioning decisions.
+
+### Architecture After This Change
+
+```
+Admin Compute Dashboard
+
+  require_admin_session / require_root_session
+       |
+       v
+  Admin API Endpoints (/v1/admin/compute/*)
+       |
+       +---> All instances across all users
+       |     Query: Scan ec2_instances + k8s_pods tables
+       |     Filters: by user, by status, by instance type
+       |
+       +---> Platform-wide spending
+       |     Aggregate compute_billing table across all users
+       |
+       +---> Force-terminate any instance
+       |     With audit trail: who terminated, why
+       |
+       +---> Per-user quotas
+       |     DDB: compute_quotas table
+       |     PK=user_sub, fields: max_instances, max_pods,
+       |     max_monthly_spend, allowed_instance_types
+       |
+       +---> AdminComputeDashboard (frontend)
+             Route: /admin/compute
+             Instance table, spending charts, quota editor
+```
+
+---
+
+## 2. Current State Analysis
+
+### 2.1 Admin Auth Pattern (`app/auth/deps.py`)
+
+```python
+async def require_admin_session(request: Request) -> dict:
+    """Requires role >= ADMIN. Returns {user_sub, role, admin_profile}."""
+
+async def require_root_session(request: Request) -> dict:
+    """Requires role == ROOT."""
+```
+
+Admin endpoints use `Depends(require_admin_session)`. Root-only operations (like modifying quotas) use `Depends(require_root_session)`.
+
+### 2.2 Admin Router Pattern (`app/routers/admin_roles.py`)
+
+Existing admin routers use the `/v1/admin/` prefix pattern:
+
+```python
+router = APIRouter(prefix="/v1/admin/roles", tags=["admin-roles"])
+
+@router.post("/grant")
+async def grant_role(..., ctx=Depends(require_root_session)):
+    ...
+```
+
+### 2.3 Admin E2E Test Pattern
+
+Admin E2E tests use `e2e_admin_session_setup.py`:
+
+```typescript
+const { getOrCreateAdminSession } = await import("../../e2e_admin_session_setup");
+sessions["root"] = await getOrCreateAdminSession("root");
+sessions["charlie_admin"] = await getOrCreateAdminSession("charlie_admin");
+```
+
+### 2.4 EC2/K8s Instance Tables
+
+The `ec2_instances` and `k8s_pods` tables use `user_sub` as PK. To query across all users, the admin API must perform a table scan (acceptable for admin operations with < 10K total instances) or maintain a global secondary index.
+
+### 2.5 Compute Billing Table (INFRA-005)
+
+The `compute_billing` table stores per-user billing entries. Platform-wide aggregation requires scanning across all partition keys.
+
+---
+
+## 3. Technical Design
+
+### 3.1 DynamoDB Table: `compute_quotas`
+
+```python
+# scripts/local-ddb-init.py
+TableDef(
+    _resolve_table_name(S.compute_quotas_table_name, "compute_quotas"),
+    "user_sub",            # PK — user subject to quotas
+)
+```
+
+**Item schema**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_sub` | S (PK) | User subject to these quotas |
+| `max_ec2_instances` | N | Maximum concurrent EC2 instances (default: 3) |
+| `max_k8s_pods` | N | Maximum concurrent K8s pods (default: 5) |
+| `max_monthly_spend_cents` | N | Monthly spending cap in cents (default: 5000 = $50) |
+| `allowed_instance_types` | L[S] | Allowed EC2 instance types (empty = all from INSTANCE_TYPES) |
+| `allowed_k8s_presets` | L[S] | Allowed K8s presets (empty = all from RESOURCE_PRESETS) |
+| `updated_at` | N | Last quota modification timestamp |
+| `updated_by` | S | Admin who set the quotas |
+| `notes` | S | Admin notes about this quota configuration |
+
+### 3.2 Global Secondary Index for Cross-User Queries
+
+Add a GSI to `ec2_instances` and `k8s_pods` for admin queries:
+
+```python
+# For ec2_instances — add GSI:
+{"index_name": "ByGlobalStatus", "partition_key": "status", "sort_key": "created_at"},
+
+# For k8s_pods — add GSI:
+{"index_name": "ByGlobalStatus", "partition_key": "status", "sort_key": "created_at"},
+```
+
+This allows efficient queries like "all running instances across all users" without table scans.
+
+### 3.3 Service Layer: `app/services/admin_compute.py`
+
+New file (~300 lines):
+
+```python
+"""Admin compute resource management — cross-user instance visibility, quotas, force-terminate."""
+
+from __future__ import annotations
+from typing import Any, Dict, List, Optional
+from decimal import Decimal
+
+from boto3.dynamodb.conditions import Key, Attr
+from app.core.tables import T
+from app.core.time import now_ts
+from app.services.alerts import audit_event, write_alert
+from app.services.ec2_launcher import terminate_instance as _user_terminate_ec2
+from app.services.k8s_launcher import terminate_pod as _user_terminate_k8s
+
+
+def list_all_instances(
+    *,
+    status: str | None = None,
+    user_sub: str | None = None,
+    instance_type: str | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+) -> Dict[str, Any]:
+    """List all EC2 instances across all users with optional filters."""
+
+def list_all_pods(
+    *,
+    status: str | None = None,
+    user_sub: str | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+) -> Dict[str, Any]:
+    """List all K8s pods across all users with optional filters."""
+
+def force_terminate_instance(
+    admin_sub: str,
+    user_sub: str,
+    instance_id: str,
+    *,
+    reason: str = "",
+) -> Dict[str, Any]:
+    """Force-terminate any user's instance. Audit-logged."""
+    audit_event(admin_sub, event="admin.compute.force_terminate",
+                outcome="success",
+                details={"target_user": user_sub, "instance_id": instance_id, "reason": reason})
+    write_alert(user_sub, event="compute.admin_terminated", outcome="warning",
+                title="An administrator terminated your instance",
+                details={"instance_id": instance_id, "reason": reason})
+    return _user_terminate_ec2(user_sub, instance_id)
+
+def force_terminate_pod(
+    admin_sub: str,
+    user_sub: str,
+    pod_id: str,
+    *,
+    reason: str = "",
+) -> Dict[str, Any]:
+    """Force-terminate any user's pod. Audit-logged."""
+    audit_event(admin_sub, event="admin.compute.force_terminate_pod",
+                outcome="success",
+                details={"target_user": user_sub, "pod_id": pod_id, "reason": reason})
+    write_alert(user_sub, event="compute.admin_terminated", outcome="warning",
+                title="An administrator terminated your container",
+                details={"pod_id": pod_id, "reason": reason})
+    return _user_terminate_k8s(user_sub, pod_id)
+
+def get_platform_spending(*, month: str | None = None) -> Dict[str, Any]:
+    """Aggregate spending across all users for a given month."""
+
+def get_per_user_spending(*, month: str | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """Per-user spending breakdown, sorted by total descending."""
+
+def get_instance_type_stats() -> List[Dict[str, Any]]:
+    """Instance type popularity: count of running instances per type."""
+
+def get_quota(user_sub: str) -> Dict[str, Any]:
+    """Get a user's compute quotas. Returns defaults if no custom quota set."""
+
+def set_quota(
+    admin_sub: str,
+    user_sub: str,
+    *,
+    max_ec2_instances: int | None = None,
+    max_k8s_pods: int | None = None,
+    max_monthly_spend_cents: int | None = None,
+    allowed_instance_types: list[str] | None = None,
+    allowed_k8s_presets: list[str] | None = None,
+    notes: str = "",
+) -> Dict[str, Any]:
+    """Set/update a user's compute quotas. Root-only."""
+    audit_event(admin_sub, event="admin.compute.set_quota",
+                outcome="success",
+                details={"target_user": user_sub, "quotas": {
+                    "max_ec2_instances": max_ec2_instances,
+                    "max_k8s_pods": max_k8s_pods,
+                    "max_monthly_spend_cents": max_monthly_spend_cents,
+                }})
+
+def delete_quota(admin_sub: str, user_sub: str) -> bool:
+    """Remove custom quotas for a user (reverts to platform defaults). Root-only."""
+```
+
+### 3.4 Quota Enforcement Integration
+
+Modify `app/services/ec2_launcher.py` and `app/services/k8s_launcher.py` to check quotas before launch:
+
+```python
+# In ec2_launcher.py::launch_instance()
+from app.services.admin_compute import get_quota
+
+def launch_instance(user_sub, *, instance_type, ...):
+    quota = get_quota(user_sub)
+
+    # Check instance count limit
+    active = list_instances(user_sub, status="running") + list_instances(user_sub, status="stopped")
+    if len(active) >= quota["max_ec2_instances"]:
+        raise ValueError(f"Maximum {quota['max_ec2_instances']} instances allowed")
+
+    # Check allowed instance types
+    if quota["allowed_instance_types"] and instance_type not in quota["allowed_instance_types"]:
+        raise ValueError(f"Instance type {instance_type} not allowed by your quota")
+
+    # Check spending limit
+    from app.services.compute_billing import get_monthly_summary
+    summary = get_monthly_summary(user_sub)
+    if summary["total_cents"] >= quota["max_monthly_spend_cents"]:
+        raise ValueError("Monthly spending limit reached")
+
+    # ... proceed with launch ...
+```
+
+### 3.5 API Router: `app/routers/admin_compute.py`
+
+New file (~250 lines). Prefix: `/v1/admin/compute`.
+
+| Method | Path | Auth | Request | Response | Description |
+|--------|------|------|---------|----------|-------------|
+| `GET` | `/v1/admin/compute/instances` | admin | query params | `AdminInstanceListOut` | All instances |
+| `GET` | `/v1/admin/compute/pods` | admin | query params | `AdminPodListOut` | All pods |
+| `POST` | `/v1/admin/compute/instances/{user_sub}/{id}/terminate` | admin | `ForceTerminateIn` | `InstanceOut` | Force-terminate |
+| `POST` | `/v1/admin/compute/pods/{user_sub}/{id}/terminate` | admin | `ForceTerminateIn` | `PodOut` | Force-terminate pod |
+| `GET` | `/v1/admin/compute/spending` | admin | `?month=YYYY-MM` | `PlatformSpendingOut` | Platform spending |
+| `GET` | `/v1/admin/compute/spending/users` | admin | `?month=YYYY-MM` | `PerUserSpendingOut` | Per-user breakdown |
+| `GET` | `/v1/admin/compute/stats/instance-types` | admin | — | `InstanceTypeStatsOut` | Type popularity |
+| `GET` | `/v1/admin/compute/quotas/{user_sub}` | admin | — | `QuotaOut` | Get user quota |
+| `PUT` | `/v1/admin/compute/quotas/{user_sub}` | root | `SetQuotaIn` | `QuotaOut` | Set user quota |
+| `DELETE` | `/v1/admin/compute/quotas/{user_sub}` | root | — | `{"ok": true}` | Delete custom quota |
+
+#### Pydantic Models
+
+```python
+class AdminInstanceOut(BaseModel):
+    """Instance with owner information for admin views."""
+    instance_id: str
+    user_sub: str
+    label: str
+    instance_type: str
+    ami_name: str
+    status: str
+    public_ip: str
+    created_at: int
+    last_activity_at: int
+    auto_terminate_after: int
+
+class AdminInstanceListOut(BaseModel):
+    instances: List[AdminInstanceOut]
+    count: int
+    cursor: Optional[str] = None
+
+class AdminPodOut(BaseModel):
+    pod_id: str
+    user_sub: str
+    label: str
+    image: str
+    preset: str
+    status: str
+    pod_ip: str
+    created_at: int
+    ttl_seconds: int
+    expires_at: int
+
+class AdminPodListOut(BaseModel):
+    pods: List[AdminPodOut]
+    count: int
+    cursor: Optional[str] = None
+
+class ForceTerminateIn(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+class PlatformSpendingOut(BaseModel):
+    month: str
+    total_cents: int
+    ec2_total_cents: int
+    k8s_total_cents: int
+    active_user_count: int
+    active_instance_count: int
+    active_pod_count: int
+
+class PerUserSpendingEntry(BaseModel):
+    user_sub: str
+    total_cents: int
+    ec2_cents: int
+    k8s_cents: int
+    instance_count: int
+    pod_count: int
+
+class PerUserSpendingOut(BaseModel):
+    users: List[PerUserSpendingEntry]
+    month: str
+
+class InstanceTypeStatEntry(BaseModel):
+    instance_type: str
+    running_count: int
+    total_launched: int
+
+class InstanceTypeStatsOut(BaseModel):
+    stats: List[InstanceTypeStatEntry]
+
+class QuotaOut(BaseModel):
+    user_sub: str
+    max_ec2_instances: int
+    max_k8s_pods: int
+    max_monthly_spend_cents: int
+    allowed_instance_types: List[str]
+    allowed_k8s_presets: List[str]
+    is_custom: bool  # False = using platform defaults
+    updated_at: int = 0
+    updated_by: str = ""
+    notes: str = ""
+
+class SetQuotaIn(BaseModel):
+    max_ec2_instances: int = Field(default=3, ge=0, le=100)
+    max_k8s_pods: int = Field(default=5, ge=0, le=100)
+    max_monthly_spend_cents: int = Field(default=5000, ge=0, le=1_000_000)
+    allowed_instance_types: List[str] = Field(default_factory=list)
+    allowed_k8s_presets: List[str] = Field(default_factory=list)
+    notes: str = Field(default="", max_length=500)
+```
+
+### 3.6 Frontend Components
+
+#### AdminComputeDashboard (`frontend/src/pages/admin/AdminComputeDashboard.tsx`)
+
+New page (~500 lines):
+
+- **Header**: "Compute Dashboard" with platform-wide summary cards:
+  - Total Spending (this month) — large dollar amount
+  - Active Instances — count with breakdown (EC2/K8s)
+  - Active Users — count of users with running resources
+  - Budget Utilization — platform-wide percentage
+
+- **Spending chart section**:
+  - Daily spending bar chart for current month
+  - Toggle: EC2 only / K8s only / Combined
+  - Month navigation (previous/next)
+
+- **Per-user spending table**:
+  - DataTable: User, EC2 Spending, K8s Spending, Total, Instance Count, Pod Count, Quota Status
+  - Sort by total spending (descending)
+  - Click user → opens quota editor dialog
+
+- **All instances table**:
+  - Tab: EC2 Instances | K8s Pods
+  - DataTable: User, Label, Type/Image, Status, IP, Created, Idle Time, Actions
+  - Filter: by status, by user, by instance type
+  - Action: Force Terminate (with reason dialog)
+
+- **Instance type popularity**:
+  - Horizontal bar chart showing running count per instance type
+  - Helps with capacity planning
+
+#### QuotaEditorDialog (`frontend/src/pages/admin/QuotaEditorDialog.tsx`)
+
+Dialog (~150 lines):
+
+- User ID display
+- Current quota values (editable)
+- Max EC2 instances slider (0-100)
+- Max K8s pods slider (0-100)
+- Monthly spending cap input (dollars)
+- Allowed instance types checklist
+- Admin notes textarea
+- Save button (root-only)
+- "Reset to Defaults" button (deletes custom quota)
+
+#### Route & Navigation
+
+```tsx
+<Route path="/admin/compute" element={<AdminComputeDashboard />} />
+```
+
+Admin sidebar: "Compute" with `Server` icon (only visible to ADMIN/ROOT role).
+
+---
+
+## 4. Implementation Plan
+
+### Phase 1: Backend Admin Service (2 days)
+
+| File | Change |
+|------|--------|
+| `app/core/settings.py` | Add `compute_quotas_table_name` |
+| `app/core/tables.py` | Add `compute_quotas` table handle |
+| `scripts/local-ddb-init.py` | Add `compute_quotas` TableDef, add ByGlobalStatus GSI to ec2_instances and k8s_pods |
+| `app/services/admin_compute.py` | New file: cross-user queries, force-terminate, quotas, spending aggregation |
+
+### Phase 2: API Endpoints (1-2 days)
+
+| File | Change |
+|------|--------|
+| `app/routers/admin_compute.py` | New file: 10 endpoints |
+| `app/models.py` | Add admin compute Pydantic models |
+| `app/main.py` | Register admin_compute router |
+
+### Phase 3: Quota Enforcement (1 day)
+
+| File | Change |
+|------|--------|
+| `app/services/ec2_launcher.py` | Check quotas before launch |
+| `app/services/k8s_launcher.py` | Check quotas before launch |
+
+### Phase 4: Frontend (2-3 days)
+
+| File | Change |
+|------|--------|
+| `frontend/src/api/types.ts` | Add admin compute types |
+| `frontend/src/api/endpoints/admin-compute.ts` | New file: API wrappers |
+| `frontend/src/pages/admin/AdminComputeDashboard.tsx` | New file: dashboard page |
+| `frontend/src/pages/admin/QuotaEditorDialog.tsx` | New file: quota editor |
+| `frontend/src/App.tsx` | Add `/admin/compute` route |
+| `frontend/src/components/layout/Sidebar.tsx` | Add "Compute" to admin nav section |
+
+### Phase 5: E2E Tests (1 day)
+
+| File | Change |
+|------|--------|
+| `frontend/e2e/admin-compute.spec.ts` | New file: ~18 tests in 4 sections |
+
+---
+
+## 5. E2E Test Plan (`frontend/e2e/admin-compute.spec.ts`)
+
+**Section 280: Admin Instance Visibility API (4 tests)**
+
+1. `Admin lists all instances across users` — Alice launches instance, root GETs `/v1/admin/compute/instances`. Verify Alice's instance in list with `user_sub` populated.
+2. `Admin filters by status` — GET `?status=running`. Verify only running instances.
+3. `Admin filters by user` — GET `?user_sub=<alice_sub>`. Verify only Alice's instances.
+4. `Non-admin cannot access admin endpoints` — Alice (USER role) GETs `/v1/admin/compute/instances` → 403.
+
+**Section 281: Force-Terminate & Alerts API (5 tests)**
+
+5. `Admin force-terminates user instance` — Alice launches instance. Root POSTs `/v1/admin/compute/instances/{alice_sub}/{id}/terminate` with `reason: "resource abuse"`. Verify instance `status: "terminated"`.
+6. `User receives alert on admin termination` — After force-terminate, check Alice's alerts for `compute.admin_terminated` event with reason.
+7. `Force-terminate is audit-logged` — Check audit events for `admin.compute.force_terminate` with admin's sub and target user.
+8. `Admin force-terminates pod` — Alice launches pod. Root terminates. Verify pod terminated.
+9. `Force-terminate non-existent returns 404` — POST with invalid instance_id → 404.
+
+**Section 282: Quota Management API (5 tests)**
+
+10. `Get default quota for user without custom quota` — GET `/quotas/{alice_sub}`. Verify defaults: `max_ec2_instances: 3`, `max_k8s_pods: 5`, `is_custom: false`.
+11. `Root sets custom quota` — PUT `/quotas/{alice_sub}` with `max_ec2_instances: 1`. Verify `is_custom: true`, `max_ec2_instances: 1`.
+12. `Quota limits instance launch` — Set Alice's quota to `max_ec2_instances: 0`. Alice tries to launch → 409 "Maximum 0 instances allowed".
+13. `Delete custom quota reverts to defaults` — DELETE `/quotas/{alice_sub}`. GET, verify `is_custom: false`, default values.
+14. `Admin (non-root) cannot set quotas` — Charlie (ADMIN) tries PUT quotas → 403 (root-only).
+
+**Section 283: Platform Spending & Stats API (4 tests)**
+
+15. `Platform spending summary` — Seed billing data for Alice and Bob. GET `/spending`. Verify `total_cents > 0`, `active_user_count >= 1`.
+16. `Per-user spending breakdown` — GET `/spending/users`. Verify entries for Alice and Bob with individual totals.
+17. `Instance type stats` — Launch instances of different types. GET `/stats/instance-types`. Verify breakdown.
+18. `Admin compute dashboard renders` — Root navigates to `/admin/compute`. Verify "Compute Dashboard" heading, spending summary cards, instance table.
+
+**Test Setup**:
+
+```typescript
+test.beforeAll(async ({ browser }) => {
+  const { getOrCreateSession } = await import("../../e2e_session_setup");
+  const { getOrCreateAdminSession } = await import("../../e2e_admin_session_setup");
+  sessions["alice"] = await getOrCreateSession("alice");
+  sessions["bob"] = await getOrCreateSession("bob");
+  sessions["root"] = await getOrCreateAdminSession("root");
+  sessions["charlie_admin"] = await getOrCreateAdminSession("charlie_admin");
+
+  rootPage = await browser.newPage();
+  await injectAuth(rootPage, "root");
+  alicePage = await browser.newPage();
+  await injectAuth(alicePage, "alice");
+  charliePage = await browser.newPage();
+  await injectAuth(charliePage, "charlie_admin");
+});
+
+async function apiPost(page: Page, identity: string, path: string, body: any) {
+  return page.request.post(`http://localhost:3000${path}`, {
+    headers: { "x-csrf-token": sessions[identity].csrf_token },
+    data: body,
+  }).then(r => r.json());
+}
+```
+
+---
+
+## 6. Security Considerations
+
+### 6.1 Role-Based Access
+
+- **Instance/pod listing, spending, stats**: `require_admin_session` (ADMIN or ROOT)
+- **Force-terminate**: `require_admin_session` (ADMIN or ROOT) — with audit trail
+- **Quota management (set/delete)**: `require_root_session` (ROOT only) — prevents admins from self-escalating their own quotas
+- **Quota viewing**: `require_admin_session` — admins can view any user's quota
+
+### 6.2 Force-Terminate Audit Trail
+
+Every force-terminate creates:
+1. An audit event logged against the admin's user_sub
+2. An in-app alert to the affected user
+3. A timeline event on the resource (INFRA-008)
+
+This creates a complete chain of accountability.
+
+### 6.3 Cross-User Data Access
+
+Admin endpoints deliberately expose `user_sub` on instance/pod/spending records. This is necessary for admin operations but would be a data leak if the endpoints were accessible to regular users. The `require_admin_session` dependency prevents this.
+
+### 6.4 Quota Self-Service Restriction
+
+Quota modification is root-only. This prevents:
+- Admins from raising their own quotas
+- Users from escalating through admin impersonation (impersonation doesn't grant ROOT)
+
+---
+
+## 7. Migration & Rollback
+
+### 7.1 DDB Changes
+
+- New table `compute_quotas` — simple PK-only table
+- New GSI `ByGlobalStatus` on `ec2_instances` and `k8s_pods` tables — required for cross-user queries without table scans
+
+### 7.2 Rollback
+
+- Remove admin_compute router from `app/main.py`
+- Remove quota checks from launch functions (launcher reverts to hardcoded limits)
+- DDB changes are non-destructive (GSI removal is optional)
+
+---
+
+## 8. Acceptance Criteria
+
+1. Admins can view all instances and pods across all users.
+2. Admins can force-terminate any user's instance or pod with a reason.
+3. Force-terminated users receive an in-app alert with the termination reason.
+4. All force-terminate actions are audit-logged with the admin's identity.
+5. Root users can set per-user compute quotas (instance limits, spending caps, allowed types).
+6. Quotas are enforced on instance/pod launch — users cannot exceed their limits.
+7. Deleting a custom quota reverts the user to platform defaults.
+8. Platform-wide spending summary shows monthly totals, user count, and resource count.
+9. Per-user spending breakdown is available for admin review.
+10. Instance type popularity stats are available for capacity planning.
+11. Admin dashboard renders with summary cards, instance tables, and spending charts.
+12. Non-admin users receive 403 on all admin compute endpoints.
