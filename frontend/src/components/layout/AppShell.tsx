@@ -142,6 +142,7 @@ import {
   Trophy,
   Building2,
   Scissors,
+  KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -194,6 +195,12 @@ const MOBILE_NAV_GROUPS = [
       { label: "Videos", path: "/videos", icon: Video },
       { label: "Broadcast", path: "/broadcast", icon: Radio },
       { label: "Clips", path: "/clips", icon: Scissors },
+    ],
+  },
+  {
+    title: "AI Agents",
+    items: [
+      { label: "LLM Keys", path: "/agents/llm-keys", icon: KeyRound },
     ],
   },
   {

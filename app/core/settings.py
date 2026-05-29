@@ -1490,5 +1490,10 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Agent LLM Key Management (AGENT-001)
+    agent_llm_keys_enabled: bool = os.environ.get("AGENT_LLM_KEYS_ENABLED", "1") not in ("0", "false", "False")
+    agent_llm_key_testing_enabled: bool = os.environ.get("AGENT_LLM_KEY_TESTING_ENABLED", "1") not in ("0", "false", "False")
+    llm_provider_keys_table_name: str = os.environ.get("LLM_PROVIDER_KEYS_TABLE_NAME", "llm_provider_keys")
+
 
 S = Settings()
