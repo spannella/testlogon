@@ -3878,3 +3878,59 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ─── Social / Follow System (SOC-001) ─────────────────────────────────
+
+
+class FollowRequest(BaseModel):
+    """Request body for POST /social/follow and POST /social/unfollow."""
+    target_user_id: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("target_user_id")
+    @classmethod
+    def strip_whitespace(cls, v: str) -> str:
+        return v.strip()
+
+
+class FollowResponse(BaseModel):
+    """Response for POST /social/follow."""
+    ok: bool
+    status: Literal["followed", "already_following"]
+    follower_count: int = Field(ge=0)
+    following_count: int = Field(ge=0)
+
+
+class UnfollowResponse(BaseModel):
+    """Response for POST /social/unfollow."""
+    ok: bool
+    status: Literal["unfollowed", "not_following"]
+
+
+class FollowUser(BaseModel):
+    """A user in a follower/following list."""
+    user_id: str
+    display_name: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+    is_following: bool = False
+    is_mutual: bool = False
+
+
+class FollowListResponse(BaseModel):
+    """Paginated list of followers or following."""
+    items: List[FollowUser]
+    next_cursor: Optional[str] = None
+    total_count: int = Field(ge=0)
+
+
+class FollowCountsResponse(BaseModel):
+    """Follower and following counts for a user."""
+    follower_count: int = Field(ge=0)
+    following_count: int = Field(ge=0)
+
+
+class FollowStatusResponse(BaseModel):
+    """Bidirectional follow status between viewer and target."""
+    is_following: bool
+    is_followed_by: bool
+    is_mutual: bool

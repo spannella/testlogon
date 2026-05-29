@@ -4492,3 +4492,44 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ─── Social / Follow System (SOC-001) ────────────────────────────
+
+export interface FollowUser {
+  user_id: string;
+  display_name?: string;
+  profile_photo_url?: string;
+  is_following: boolean;
+  is_mutual: boolean;
+}
+
+export interface FollowListResponse {
+  items: FollowUser[];
+  next_cursor?: string;
+  total_count: number;
+}
+
+export interface FollowCounts {
+  follower_count: number;
+  following_count: number;
+}
+
+export interface FollowStatus {
+  is_following: boolean;
+  is_followed_by: boolean;
+  is_mutual: boolean;
+  is_blocked_by_me?: boolean;
+  is_blocking_me?: boolean;
+}
+
+export interface FollowResponse {
+  ok: boolean;
+  status: "followed" | "already_following";
+  follower_count: number;
+  following_count: number;
+}
+
+export interface UnfollowResponse {
+  ok: boolean;
+  status: "unfollowed" | "not_following";
+}

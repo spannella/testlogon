@@ -14,6 +14,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuthStore } from "@/stores/authStore";
 import { FollowButton } from "./FollowButton";
+import { FollowersTab } from "./FollowersTab";
+import { FollowingTab } from "./FollowingTab";
 import { StorefrontVideoGrid } from "./StorefrontVideoGrid";
 import { StorefrontPostsFeed } from "./StorefrontPostsFeed";
 import { PlanBrowser } from "@/pages/subscriptions/PlanBrowser";
@@ -278,6 +280,12 @@ export default function PublicUserProfilePage() {
             <TabsTrigger value="videos">Videos</TabsTrigger>
           )}
           <TabsTrigger value="posts">Posts</TabsTrigger>
+          {isAuthenticated && (
+            <TabsTrigger value="followers">Followers</TabsTrigger>
+          )}
+          {isAuthenticated && (
+            <TabsTrigger value="following">Following</TabsTrigger>
+          )}
           <TabsTrigger value="about">About</TabsTrigger>
         </TabsList>
 
@@ -290,6 +298,18 @@ export default function PublicUserProfilePage() {
         <TabsContent value="posts">
           <StorefrontPostsFeed identifier={profileIdentifier} />
         </TabsContent>
+
+        {isAuthenticated && (
+          <TabsContent value="followers" data-testid="followers-tab-content">
+            <FollowersTab userId={pub.user_id} />
+          </TabsContent>
+        )}
+
+        {isAuthenticated && (
+          <TabsContent value="following" data-testid="following-tab-content">
+            <FollowingTab userId={pub.user_id} />
+          </TabsContent>
+        )}
 
         <TabsContent value="about" data-testid="about-tab-content">
           <div className="space-y-3 rounded-lg border bg-card p-4">
