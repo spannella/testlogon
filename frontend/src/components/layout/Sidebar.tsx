@@ -155,6 +155,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Video Review", i18nKey: "nav.videoReview", path: "/admin/video-review", icon: <Video className="h-5 w-5" /> },
       { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: <Scale className="h-5 w-5" /> },
       { label: "Refund Queue", i18nKey: "nav.refundQueue", path: "/admin/refunds", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "KYC Review", i18nKey: "nav.kycReview", path: "/admin/kyc", icon: <ShieldCheck className="h-5 w-5" /> },
     ],
   },
 ];
@@ -221,6 +222,7 @@ export default function Sidebar() {
             if (item.path === "/admin/payment-incidents") return showPaymentIncidents;
             if (item.path === "/admin/video-review") return showModerationBoard;
             if (item.path === "/admin/dmca") return showModerationBoard;
+            if (item.path === "/admin/kyc") return showModerationBoard;
             return true;
           });
           if (items.length === 0) return null;
