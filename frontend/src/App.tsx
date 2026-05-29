@@ -59,6 +59,9 @@ const ClipGalleryPage = lazy(() => import("@/pages/clips/ClipGalleryPage"));
 const ClipPlayerPage = lazy(() => import("@/pages/clips/ClipPlayerPage"));
 const DmcaClaimForm = lazy(() => import("@/pages/dmca/DmcaClaimForm"));
 const DmcaDashboardPage = lazy(() => import("@/pages/admin/DmcaDashboardPage"));
+const KycQueuePage = lazy(() => import("@/pages/admin/KycQueuePage"));
+const KycCaseDetailPage = lazy(() => import("@/pages/admin/KycCaseDetailPage"));
+const KycMetricsDashboard = lazy(() => import("@/pages/admin/KycMetricsDashboard"));
 const RateLimitDashboard = lazy(() => import("@/pages/admin/RateLimitDashboard"));
 const GalleryPage = lazy(() => import("@/pages/gallery/GalleryPage"));
 const GalleryVideoDetailPage = lazy(() => import("@/pages/gallery/VideoDetailPage"));
@@ -217,6 +220,9 @@ export default function App() {
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />
           <Route path="agents/llm-keys" element={<LlmKeysPage />} />
+          <Route path="admin/kyc" element={<KycQueuePage />} />
+          <Route path="admin/kyc/cases/:caseId" element={<KycCaseDetailPage />} />
+          <Route path="admin/kyc/metrics" element={<KycMetricsDashboard />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

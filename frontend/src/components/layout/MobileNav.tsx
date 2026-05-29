@@ -96,6 +96,7 @@ const MORE_LINKS = [
   { label: "Moderation Board", i18nKey: "nav.moderationBoard", path: "/admin/moderation", icon: Scale },
   { label: "Video Review", i18nKey: "nav.videoReview", path: "/admin/video-review", icon: Video },
   { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: Scale },
+  { label: "KYC Review", i18nKey: "nav.kycReview", path: "/admin/kyc", icon: ShieldCheck },
   { label: "Creator Dashboard", i18nKey: "nav.creatorDashboard", path: "/creator-dashboard", icon: BarChart3 },
   { label: "Analytics", i18nKey: "nav.analytics", path: "/analytics", icon: BarChart3 },
   { label: "Payouts", i18nKey: "nav.payouts", path: "/payouts", icon: Wallet },
@@ -127,6 +128,7 @@ export default function MobileNav() {
     if (item.path === "/admin/moderation") return showModerationBoard;
     if (item.path === "/admin/video-review") return showModerationBoard;
     if (item.path === "/admin/dmca") return showModerationBoard;
+    if (item.path === "/admin/kyc") return showModerationBoard;
     return true;
   });
 
