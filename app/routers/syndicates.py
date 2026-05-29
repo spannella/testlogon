@@ -6,7 +6,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, Query
 
-from app.auth.deps import require_ui_session
+from app.services.sessions import require_ui_session
 from app.models import (
     SyndicateAuditOut,
     SyndicateCreateIn,

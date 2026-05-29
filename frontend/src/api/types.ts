@@ -1021,12 +1021,6 @@ export interface Message {
   expired?: boolean;
   scheduled?: boolean;
   deliver_at?: number;
-  // Bot identity fields (BOT-001)
-  sender_type?: "user" | "bot" | "system";
-  bot_id?: string;
-  bot_name?: string;
-  bot_avatar_url?: string;
-
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -1990,6 +1984,9 @@ export interface FeedPost {
   poll_vote_counts?: PollVoteCounts | null;
   /** ENGAGE-002: viewer's own votes per question */
   poll_my_votes?: PollMyVotes | null;
+
+  /** SOC-002: feed source attribution — "own" for viewer's posts, "following" for fan-out posts */
+  source?: "own" | "following";
 
   /** PWA-005: Offline queue metadata — only present for locally-queued posts */
   __offline?: {

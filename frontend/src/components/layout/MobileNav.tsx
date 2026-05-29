@@ -41,7 +41,6 @@ import {
   KeyRound,
   Megaphone,
   UserCog,
-  Users,
   Bot,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";

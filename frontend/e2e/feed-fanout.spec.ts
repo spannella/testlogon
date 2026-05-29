@@ -2,6 +2,8 @@
  * E2E tests for SOC-002: Feed Fan-Out on Write
  *
  * Section 115: Fan-out API (8 tests)
+ * Section 116: Source attribution API (4 tests)
+ * Section 117: Feed Timeline UI (3 tests)
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -209,6 +211,160 @@ test.describe("Section 115 - Feed Fan-Out API", () => {
 
     // Clean up
     await apiDelete(bobPage, BOB, `/posts/${bobPostId}`);
+    await apiPost(bobPage, BOB, "/ui/social/unfollow", { target_user_id: ALICE_SUB });
+  });
+});
+
+test.describe("Section 116 - Feed Source Attribution API", () => {
+  let alicePage: Page;
+  let bobPage: Page;
+  let aliceSourcePostId: string;
+  let bobOwnPostId: string;
+
+  test.beforeAll(async ({ browser }) => {
+    const aliceCtx = await browser.newContext();
+    alicePage = await aliceCtx.newPage();
+    await injectAuth(alicePage, ALICE);
+
+    const bobCtx = await browser.newContext();
+    bobPage = await bobCtx.newPage();
+    await injectAuth(bobPage, BOB);
+
+    // Clean slate: unfollow then follow
+    await apiPost(bobPage, BOB, "/ui/social/unfollow", { target_user_id: ALICE_SUB });
+    await apiPost(bobPage, BOB, "/ui/social/follow", { target_user_id: ALICE_SUB });
+
+    // Alice creates a post for fan-out
+    const postResp = await apiPost(alicePage, ALICE, "/posts", {
+      body: `Source test alice post ${TS}`,
+      visibility: "public",
+    });
+    const postData = await postResp.json();
+    aliceSourcePostId = postData.post_id;
+
+    // Bob creates his own post
+    const bobPostResp = await apiPost(bobPage, BOB, "/posts", {
+      body: `Source test bob own post ${TS}`,
+      visibility: "public",
+    });
+    const bobPostData = await bobPostResp.json();
+    bobOwnPostId = bobPostData.post_id;
+  });
+
+  test("116.1 Fan-out post has source='following' in Bob's feed", async () => {
+    const feedResp = await apiGet(bobPage, BOB, "/feed?limit=50");
+    expect(feedResp.status()).toBe(200);
+    const feedData = await feedResp.json();
+    const alicePost = feedData.items.find((p: any) => p.post_id === aliceSourcePostId);
+    expect(alicePost).toBeTruthy();
+    expect(alicePost.source).toBe("following");
+  });
+
+  test("116.2 Own post has source='own' in Bob's feed", async () => {
+    const feedResp = await apiGet(bobPage, BOB, "/feed?limit=50");
+    expect(feedResp.status()).toBe(200);
+    const feedData = await feedResp.json();
+    const bobPost = feedData.items.find((p: any) => p.post_id === bobOwnPostId);
+    expect(bobPost).toBeTruthy();
+    expect(bobPost.source).toBe("own");
+  });
+
+  test("116.3 Alice sees her own post with source='own'", async () => {
+    const feedResp = await apiGet(alicePage, ALICE, "/feed?limit=50");
+    expect(feedResp.status()).toBe(200);
+    const feedData = await feedResp.json();
+    const alicePost = feedData.items.find((p: any) => p.post_id === aliceSourcePostId);
+    expect(alicePost).toBeTruthy();
+    expect(alicePost.source).toBe("own");
+  });
+
+  test("116.4 Author filter feed does not include source field", async () => {
+    // When filtering by author, source is not relevant
+    const feedResp = await apiGet(bobPage, BOB, `/feed?author_id=${ALICE_SUB}&limit=50`);
+    expect(feedResp.status()).toBe(200);
+    const feedData = await feedResp.json();
+    const alicePost = feedData.items.find((p: any) => p.post_id === aliceSourcePostId);
+    expect(alicePost).toBeTruthy();
+    // source should be undefined when author_filter is set
+    expect(alicePost.source).toBeUndefined();
+
+    // Clean up
+    await apiDelete(alicePage, ALICE, `/posts/${aliceSourcePostId}`);
+    await apiDelete(bobPage, BOB, `/posts/${bobOwnPostId}`);
+    await apiPost(bobPage, BOB, "/ui/social/unfollow", { target_user_id: ALICE_SUB });
+  });
+});
+
+test.describe("Section 117 - Feed Timeline UI", () => {
+  let alicePage: Page;
+  let bobPage: Page;
+  let aliceUIPostId: string;
+  let bobUIPostId: string;
+
+  test.beforeAll(async ({ browser }) => {
+    const aliceCtx = await browser.newContext();
+    alicePage = await aliceCtx.newPage();
+    await injectAuth(alicePage, ALICE);
+
+    const bobCtx = await browser.newContext();
+    bobPage = await bobCtx.newPage();
+    await injectAuth(bobPage, BOB);
+
+    // Clean slate
+    await apiPost(bobPage, BOB, "/ui/social/unfollow", { target_user_id: ALICE_SUB });
+    await apiPost(bobPage, BOB, "/ui/social/follow", { target_user_id: ALICE_SUB });
+
+    // Alice creates a post
+    const postResp = await apiPost(alicePage, ALICE, "/posts", {
+      body: `UI fanout test alice ${TS}`,
+      visibility: "public",
+    });
+    aliceUIPostId = (await postResp.json()).post_id;
+
+    // Bob creates his own post
+    const bobResp = await apiPost(bobPage, BOB, "/posts", {
+      body: `UI fanout test bob ${TS}`,
+      visibility: "public",
+    });
+    bobUIPostId = (await bobResp.json()).post_id;
+  });
+
+  test("117.1 Following posts show author attribution in feed UI", async () => {
+    // Navigate to feed page
+    await bobPage.goto(BASE + "/", { waitUntil: "domcontentloaded" });
+    // Click Feed in sidebar
+    await bobPage.getByRole("link", { name: "Feed" }).first().click();
+    await bobPage.waitForResponse((r) => r.url().includes("/feed") && r.status() === 200);
+
+    // Look for the following-attribution label for Alice's post
+    const attribution = bobPage.locator('[data-testid="following-attribution"]').filter({
+      hasText: ALICE_SUB,
+    });
+    await expect(attribution.first()).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("117.2 Own posts do not show following attribution", async () => {
+    // Bob's own post text should be visible
+    await expect(bobPage.getByText(`UI fanout test bob ${TS}`).first()).toBeVisible({ timeout: 5_000 });
+
+    // There should be no following-attribution for Bob's own post
+    // Get all following attributions and verify none mention Bob
+    const attributions = bobPage.locator('[data-testid="following-attribution"]');
+    const count = await attributions.count();
+    for (let i = 0; i < count; i++) {
+      const text = await attributions.nth(i).textContent();
+      expect(text).not.toContain(BOB_SUB);
+    }
+  });
+
+  test("117.3 Feed loads both own and followed posts", async () => {
+    // Both posts should appear in the feed
+    await expect(bobPage.getByText(`UI fanout test alice ${TS}`).first()).toBeVisible({ timeout: 5_000 });
+    await expect(bobPage.getByText(`UI fanout test bob ${TS}`).first()).toBeVisible({ timeout: 5_000 });
+
+    // Clean up
+    await apiDelete(alicePage, ALICE, `/posts/${aliceUIPostId}`);
+    await apiDelete(bobPage, BOB, `/posts/${bobUIPostId}`);
     await apiPost(bobPage, BOB, "/ui/social/unfollow", { target_user_id: ALICE_SUB });
   });
 });
