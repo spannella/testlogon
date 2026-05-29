@@ -918,7 +918,10 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
 
           {showSender && !isOwn && (
             <p className="mb-0.5 text-xs font-semibold text-primary">
-              {message.sender_id}
+              {message.sender_type === "bot" ? (message.bot_name ?? message.sender_id) : message.sender_id}
+              {message.sender_type === "bot" && (
+                <span className="ml-1 inline-flex items-center rounded border px-1 py-0 text-[10px] font-medium text-muted-foreground align-middle">Bot</span>
+              )}
             </p>
           )}
 

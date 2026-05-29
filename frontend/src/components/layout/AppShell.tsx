@@ -142,6 +142,7 @@ import {
   Trophy,
   Building2,
   Scissors,
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -184,6 +185,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Content Calendar", path: "/content-calendar", icon: CalendarClock },
       { label: "Scheduled", path: "/scheduler", icon: CalendarClock },
       { label: "Signing", path: "/signing", icon: FilePen },
+      { label: "Bots", path: "/bots", icon: Bot },
       { label: "Organizations", path: "/orgs", icon: Building2 },
     ],
   },

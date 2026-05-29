@@ -1482,6 +1482,12 @@ class Settings:
     sso_assertion_max_clock_skew_seconds: int = int(os.environ.get("SSO_ASSERTION_MAX_CLOCK_SKEW_SECONDS", "180"))
     sso_session_link_ttl_seconds: int = int(os.environ.get("SSO_SESSION_LINK_TTL_SECONDS", "86400"))
 
+    # Bot Framework (BOT-001)
+    bot_framework_enabled: bool = os.environ.get("BOT_FRAMEWORK_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    chat_bots_table_name: str = os.environ.get("CHAT_BOTS_TABLE_NAME", "chat_bots")
+    bot_assignments_table_name: str = os.environ.get("BOT_ASSIGNMENTS_TABLE_NAME", "bot_assignments")
+    bot_max_per_creator: int = int(os.environ.get("BOT_MAX_PER_CREATOR", "10"))
+
     # Multi-Tenancy (ENTERPRISE-001)
     multi_tenancy_enabled: bool = os.environ.get("MULTI_TENANCY_ENABLED", "0") not in ("0", "false", "False")
     tenants_table_name: str = os.environ.get("TENANTS_TABLE_NAME", "tenants")

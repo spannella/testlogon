@@ -1142,6 +1142,26 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "user-tenant-index", "partition_key": "user_sub", "sort_key": "tenant_id"},
             ],
         ),
+        # Chat Bots (BOT-001)
+        TableDef(
+            _resolve_table_name(S.chat_bots_table_name, "chat_bots"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"created_at": "N", "updated_at": "N"},
+        ),
+        # Bot Assignments (BOT-001)
+        TableDef(
+            _resolve_table_name(S.bot_assignments_table_name, "bot_assignments"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # SSO / SAML (ENTERPRISE-002)
         TableDef(
             _resolve_table_name(S.sso_providers_table_name, "sso_providers"),
