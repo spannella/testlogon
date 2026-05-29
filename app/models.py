@@ -4311,3 +4311,103 @@ class PublicKeyOut(BaseModel):
 
 class AssociateKeyIn(BaseModel):
     host_id: str = Field(..., min_length=1)
+
+
+# --- Ad Creatives (ADS-002) ---
+
+class CreativeCreateIn(BaseModel):
+    format: str = Field(..., pattern=r"^(image|video|native_post)$")
+    title: str = Field(..., min_length=1, max_length=200)
+    headline: Optional[str] = Field(default=None, max_length=100)
+    body_text: Optional[str] = Field(default=None, max_length=300)
+    cta_text: Optional[str] = Field(default=None, max_length=25)
+    cta_url: Optional[str] = Field(default=None, max_length=1024)
+    alt_text: Optional[str] = Field(default=None, max_length=200)
+    width: Optional[int] = Field(default=None, ge=100, le=4096)
+    height: Optional[int] = Field(default=None, ge=100, le=4096)
+    duration_seconds: Optional[int] = Field(default=None, ge=5, le=60)
+    skip_after_seconds: Optional[int] = Field(default=5, ge=0, le=30)
+    rotation_weight: int = Field(default=50, ge=0, le=100)
+    promo_code_id: Optional[str] = None
+    affiliate_link_id: Optional[str] = None
+
+    @field_validator("cta_url")
+    @classmethod
+    def validate_cta_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("CTA URL must start with http:// or https://")
+        return v
+
+    @field_validator("title")
+    @classmethod
+    def strip_title(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("headline")
+    @classmethod
+    def strip_headline(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() if v else v
+
+    @field_validator("body_text")
+    @classmethod
+    def sanitize_body(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return re.sub(r"<script[^>]*>.*?</script>", "", v, flags=re.DOTALL | re.IGNORECASE).strip()
+
+
+class CreativeUpdateIn(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    headline: Optional[str] = Field(default=None, max_length=100)
+    body_text: Optional[str] = Field(default=None, max_length=300)
+    cta_text: Optional[str] = Field(default=None, max_length=25)
+    cta_url: Optional[str] = Field(default=None, max_length=1024)
+    alt_text: Optional[str] = Field(default=None, max_length=200)
+    rotation_weight: Optional[int] = Field(default=None, ge=0, le=100)
+    skip_after_seconds: Optional[int] = Field(default=None, ge=0, le=30)
+    promo_code_id: Optional[str] = None
+    affiliate_link_id: Optional[str] = None
+
+    @field_validator("cta_url")
+    @classmethod
+    def validate_cta_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("CTA URL must start with http:// or https://")
+        return v
+
+
+class CreativeOut(BaseModel):
+    creative_id: str
+    campaign_id: str
+    account_id: str
+    format: str
+    title: str
+    headline: Optional[str] = None
+    body_text: Optional[str] = None
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    image_url: Optional[str] = None
+    video_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    alt_text: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_seconds: Optional[int] = None
+    skip_after_seconds: int = 5
+    rotation_weight: int = 50
+    status: str
+    review_notes: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    promo_code_id: Optional[str] = None
+    affiliate_link_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CreativeReviewIn(BaseModel):
+    decision: str = Field(..., pattern=r"^(approve|reject)$")
+    notes: Optional[str] = Field(default=None, max_length=1000)

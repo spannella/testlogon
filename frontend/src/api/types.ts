@@ -4876,3 +4876,33 @@ export interface UploadSshKeyIn {
   private_key_pem: string;
   passphrase?: string;
 }
+
+// --- Ad Creatives (ADS-002) ---
+
+export interface AdCreative {
+  creative_id: string;
+  campaign_id: string;
+  account_id: string;
+  format: "image" | "video" | "native_post";
+  title: string;
+  headline?: string | null;
+  body_text?: string | null;
+  cta_text?: string | null;
+  cta_url?: string | null;
+  image_url?: string | null;
+  video_url?: string | null;
+  thumbnail_url?: string | null;
+  alt_text?: string | null;
+  width?: number | null;
+  height?: number | null;
+  duration_seconds?: number | null;
+  skip_after_seconds: number;
+  rotation_weight: number;
+  status: "draft" | "pending_review" | "approved" | "rejected" | "archived";
+  review_notes?: string | null;
+  reviewed_by?: string | null;
+  promo_code_id?: string | null;
+  affiliate_link_id?: string | null;
+  created_at: number;
+  updated_at: number;
+}
