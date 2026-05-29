@@ -4492,3 +4492,34 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// --- Advertiser Accounts & Campaigns (ADS-001) ---
+
+export interface AdAccount {
+  account_id: string;
+  owner_sub: string;
+  company_name: string;
+  billing_email: string;
+  status: "pending_review" | "active" | "suspended" | "rejected";
+  balance_cents: number;
+  lifetime_spend_cents: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface Campaign {
+  campaign_id: string;
+  account_id: string;
+  name: string;
+  objective: "awareness" | "traffic" | "conversions";
+  budget_cents: number;
+  budget_type: "daily" | "lifetime";
+  daily_budget_cents: number;
+  spent_today_cents: number;
+  lifetime_spent_cents: number;
+  status: "draft" | "pending_review" | "active" | "paused" | "completed" | "rejected" | "archived";
+  start_date?: number | null;
+  end_date?: number | null;
+  created_at: number;
+  updated_at: number;
+}

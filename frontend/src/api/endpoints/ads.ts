@@ -87,3 +87,47 @@ export const setAdConfig = (
   body: AdConfigRequest,
 ): Promise<AdConfigResponse> =>
   api.patch<AdConfigResponse>(`/ui/videos/${videoId}/ad-config`, body);
+
+
+// ─── Advertiser Campaign Manager (ADS-001) ────────────────────────────────
+
+import type { AdAccount, Campaign } from "../types";
+
+/** Create a new advertiser account */
+export const createAdAccount = (data: { company_name: string; billing_email: string }) =>
+  api.post<AdAccount>("/ui/ads/accounts", data);
+
+/** List advertiser accounts owned by the current user */
+export const listMyAdAccounts = () =>
+  api.get<AdAccount[]>("/ui/ads/accounts");
+
+/** Get a single advertiser account by ID */
+export const getAdAccount = (accountId: string) =>
+  api.get<AdAccount>(`/ui/ads/accounts/${accountId}`);
+
+/** Create a campaign under an advertiser account */
+export const createCampaign = (accountId: string, data: {
+  name: string;
+  objective: string;
+  budget_cents: number;
+  budget_type: string;
+  start_date?: number;
+  end_date?: number;
+}) =>
+  api.post<Campaign>(`/ui/ads/accounts/${accountId}/campaigns`, data);
+
+/** List campaigns for an advertiser account */
+export const listCampaigns = (accountId: string) =>
+  api.get<Campaign[]>(`/ui/ads/accounts/${accountId}/campaigns`);
+
+/** Get a single campaign */
+export const getCampaign = (accountId: string, campaignId: string) =>
+  api.get<Campaign>(`/ui/ads/accounts/${accountId}/campaigns/${campaignId}`);
+
+/** Update a campaign */
+export const updateCampaign = (accountId: string, campaignId: string, data: Partial<Campaign>) =>
+  api.patch<{ ok: boolean }>(`/ui/ads/accounts/${accountId}/campaigns/${campaignId}`, data);
+
+/** Submit a campaign for admin review */
+export const submitCampaignForReview = (accountId: string, campaignId: string) =>
+  api.post(`/ui/ads/accounts/${accountId}/campaigns/${campaignId}/submit`);

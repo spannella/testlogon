@@ -90,6 +90,8 @@ const WebhookEndpointDetail = lazy(() => import("@/pages/webhooks/WebhookEndpoin
 const PartyListPage = lazy(() => import("@/pages/watch-parties/PartyListPage"));
 const WatchPartyPage = lazy(() => import("@/pages/watch-parties/WatchPartyPage"));
 const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
+const AdvertiserDashboard = lazy(() => import("@/pages/ads/AdvertiserDashboard"));
+const CampaignListPage = lazy(() => import("@/pages/ads/CampaignList"));
 
 function PageSpinner() {
   return (
@@ -201,6 +203,8 @@ export default function App() {
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
           <Route path="admin/audit-exports" element={<AuditExportPage />} />
+          <Route path="ads/dashboard" element={<AdvertiserDashboard />} />
+          <Route path="ads/campaigns" element={<CampaignListPage />} />
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />

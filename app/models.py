@@ -3878,3 +3878,67 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# --- Advertiser Accounts & Campaigns (ADS-001) ---
+
+class AdAccountCreateIn(BaseModel):
+    company_name: str = Field(..., min_length=1, max_length=200)
+    billing_email: str = Field(..., min_length=5, max_length=254)
+
+
+class AdAccountOut(BaseModel):
+    account_id: str
+    owner_sub: str
+    company_name: str
+    billing_email: str
+    status: str  # pending_review, active, suspended, rejected
+    balance_cents: int = 0
+    lifetime_spend_cents: int = 0
+    created_at: int
+    updated_at: int
+
+
+class AdAccountReviewIn(BaseModel):
+    decision: str = Field(..., pattern=r"^(approve|reject|suspend)$")
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class CampaignCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    objective: str = Field(..., pattern=r"^(awareness|traffic|conversions)$")
+    budget_cents: int = Field(..., ge=100)  # Minimum $1
+    budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
+    start_date: Optional[int] = None  # Unix timestamp
+    end_date: Optional[int] = None    # Unix timestamp
+
+
+class CampaignUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    budget_cents: Optional[int] = Field(default=None, ge=100)
+    budget_type: Optional[str] = Field(default=None, pattern=r"^(daily|lifetime)$")
+    status: Optional[str] = Field(default=None, pattern=r"^(draft|active|paused|archived)$")
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class CampaignOut(BaseModel):
+    campaign_id: str
+    account_id: str
+    name: str
+    objective: str
+    budget_cents: int
+    budget_type: str
+    daily_budget_cents: int = 0
+    spent_today_cents: int = 0
+    lifetime_spent_cents: int = 0
+    status: str
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    created_at: int
+    updated_at: int
+
+
+class CampaignReviewIn(BaseModel):
+    decision: str = Field(..., pattern=r"^(approve|reject)$")
+    notes: Optional[str] = Field(default=None, max_length=1000)
