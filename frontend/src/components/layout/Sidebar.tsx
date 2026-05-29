@@ -48,6 +48,7 @@ import {
   Scissors,
   Bot,
   KeyRound,
+  Megaphone,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -110,6 +111,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Affiliates", i18nKey: "nav.affiliates", path: "/affiliates", icon: <Link2 className="h-5 w-5" /> },
       { label: "Collaborations", i18nKey: "nav.collaborations", path: "/collaborations", icon: <Handshake className="h-5 w-5" /> },
       { label: "Fan Club", i18nKey: "nav.fanClub", path: "/fan-club", icon: <UsersRound className="h-5 w-5" /> },
+      { label: "Ads Manager", i18nKey: "nav.adsManager", path: "/ads/dashboard", icon: <Megaphone className="h-5 w-5" /> },
     ],
   },
   {
