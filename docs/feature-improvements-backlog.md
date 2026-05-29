@@ -1,7 +1,7 @@
 # Feature Improvements Backlog
 
 Living document of identified gaps and improvement opportunities.
-Last updated: 2026-05-29
+Last updated: 2026-05-29 (119 tickets across 8 feature areas)
 
 ---
 
@@ -198,12 +198,178 @@ INFRA-006-012 ← advanced features on top
 
 ---
 
+## Messaging & Social Features (Deep Dive — 2026-05-29)
+
+16 detailed ticket specs generated in `docs/tickets/MSG-*.md`, `FEED-0*.md`, `FILES-*.md`, `SOCIAL-007*.md`. ~196 planned E2E tests total.
+
+### Messaging Enhancements
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 69 | MSG-006 | Emoji Messages | P1 | 15 | 284-286 |
+| 70 | MSG-007 | Custom Emojis | P1 | 18 | 287-290 |
+| 71 | MSG-008 | GIF & Sticker Messages | P1 | 22 | 291-295 |
+| 72 | MSG-009 | Find-a-DateTime Message | P1 | 20 | 296-299 |
+| 73 | MSG-010 | Countdown Messages | P2 | 12 | 306-308 |
+| 74 | MSG-011 | Emoji Reactions Enhancement | P1 | 10 | 326-328 |
+| 75 | MSG-012 | Message Formatting & Rich Text | P1 | 15 | 329-332 |
+
+### Newsfeed Enhancements
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 76 | FEED-003 | Find-a-DateTime Newsfeed Post | P1 | 12 | 300-302 |
+| 77 | FEED-004 | Emoji/GIF/Sticker Comments | P1 | 12 | 303-305 |
+| 78 | FEED-005 | Countdown Newsfeed Posts | P2 | 10 | 309-311 |
+| 79 | FEED-006 | Hide Post | P1 | 10 | 317-319 |
+| 80 | FEED-007 | Mark Post Interesting / Not Interesting | P1 | 10 | 320-322 |
+| 81 | FEED-008 | Enhanced Post Composer | P1 | 12 | 333-335 |
+| 82 | FEED-009 | Post Bookmarks / Save Collections | P0 | 18 | 336-339 |
+
+### File Sharing & Social
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 83 | FILES-001 | Encrypted One-Time Share Links | P1 | 20 | 312-316 |
+| 84 | SOCIAL-007 | Snooze Following | P1 | 12 | 323-325 |
+
+---
+
+## Advertising Platform (Deep Dive — 2026-05-29)
+
+19 detailed ticket specs generated in `docs/tickets/ADS-*.md`. ~325 planned E2E tests total.
+
+### Core Ad Infrastructure
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 85 | ADS-001 | Advertiser Accounts & Campaign Manager | P0 | 22 | 340-344 |
+| 86 | ADS-002 | Ad Creative Management | P0 | 20 | 345-349 |
+| 87 | ADS-003 | Ad Targeting Engine | P0 | 18 | 350-353 |
+| 88 | ADS-004 | Ad Serving Engine | P0 | 20 | 354-358 |
+| 89 | ADS-007 | Ad Billing & Financial Engine | P0 | 20 | 369-373 |
+
+### Ad Placements & Formats
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 90 | ADS-005 | Newsfeed Sponsored Posts | P0 | 18 | 359-363 |
+| 91 | ADS-006 | Broadcast Ad Breaks | P1 | 18 | 364-368 |
+
+### User & Provider Controls
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 92 | ADS-009 | User Ad Preferences & Ad-Free Tiers | P1 | 15 | 379-382 |
+| 93 | ADS-010 | Content Provider Ad Controls | P1 | 18 | 383-387 |
+| 94 | ADS-019 | Content Provider Self-Placed Ads | P1 | 18 | 419-422 |
+
+### Analytics, API & Optimization
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 95 | ADS-008 | Ad Analytics Dashboard | P1 | 18 | 374-378 |
+| 96 | ADS-011 | Advertiser API | P1 | 18 | 388-391 |
+| 97 | ADS-017 | Ad Performance Optimization | P2 | 12 | 411-413 |
+| 98 | ADS-016 | Ad Scheduling & Dayparting | P1 | 12 | 408-410 |
+
+### Partnerships, Promotions & Fraud
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 99 | ADS-012 | Self-Promotion & Content Boosting | P1 | 15 | 392-395 |
+| 100 | ADS-013 | Sponsored Content & Creator Partnerships | P1 | 18 | 396-400 |
+| 101 | ADS-014 | Ad Fraud Prevention | P1 | 15 | 401-404 |
+| 102 | ADS-015 | Ad Creative with Affiliate Links & Discounts | P2 | 12 | 405-407 |
+| 103 | ADS-018 | Admin Ad Platform Management | P1 | 18 | 414-418 |
+
+### Dependency Chain
+
+```
+ADS-001 (accounts) + ADS-002 (creatives) + ADS-003 (targeting) ← foundation
+    ↓
+ADS-004 (serving) ← resolves ads from campaigns
+    ↓
+ADS-005 (newsfeed) + ADS-006 (broadcast) ← placement surfaces
+    ↓
+ADS-007 (billing) ← charges advertisers per impression/click
+    ↓
+ADS-008-019 ← analytics, API, controls, optimization, fraud, self-promo
+```
+
+---
+
+## Content Provider Syndicates (Deep Dive — 2026-05-29)
+
+6 detailed ticket specs generated in `docs/tickets/SYND-*.md`. ~101 planned E2E tests total.
+
+### Syndicate Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 104 | SYND-001 | Syndicate Creation & Membership Management | P0 | 18 | 423-426 |
+| 105 | SYND-002 | Bundled Subscription Plans | P0 | 17 | 427-430 |
+| 106 | SYND-003 | Revenue Splitting Engine | P0 | 16 | 431-434 |
+| 107 | SYND-004 | Treasury & Fund Management | P0 | 16 | 435-438 |
+| 108 | SYND-005 | Syndicate Page & Newsfeed | P1 | 18 | 439-442 |
+| 109 | SYND-006 | Syndicate Advertising | P1 | 16 | 443-446 |
+
+### Dependency Chain
+
+```
+SYND-001 (membership) ← foundation
+    ↓
+SYND-002 (bundled subs) + SYND-004 (treasury) ← financial primitives
+    ↓
+SYND-003 (revenue splitting) ← depends on subs + treasury
+    ↓
+SYND-005 (page/feed) + SYND-006 (advertising) ← consumer-facing features
+```
+
+---
+
+## User Groups (Deep Dive — 2026-05-29)
+
+4 detailed ticket specs generated in `docs/tickets/GROUP-*.md`. ~64 planned E2E tests total.
+
+### Group Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 110 | GROUP-001 | User Group Creation & Membership | P1 | 16 | 447-450 |
+| 111 | GROUP-002 | Group Page & Newsfeed | P1 | 16 | 451-454 |
+| 112 | GROUP-003 | Group Advertising & External Fundraising | P2 | 16 | 455-458 |
+| 113 | GROUP-004 | Group Treasury Management | P2 | 16 | 459-462 |
+
+---
+
+## Content Licensing (Deep Dive — 2026-05-29)
+
+6 detailed ticket specs in progress in `docs/tickets/LICENSE-*.md`. Sections 463-486.
+
+### Licensing Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 114 | LICENSE-001 | License Agreement Upload & Management | P1 | ~15 | 463-466 |
+| 115 | LICENSE-002 | Content License Issuance | P0 | ~15 | 467-470 |
+| 116 | LICENSE-003 | License Terms & Revenue Sharing | P0 | ~15 | 471-474 |
+| 117 | LICENSE-004 | License Request & Approval Workflow | P1 | ~15 | 475-478 |
+| 118 | LICENSE-005 | Syndicate Open Licensing | P1 | ~12 | 479-482 |
+| 119 | LICENSE-006 | License Compliance & Verification | P1 | ~15 | 483-486 |
+
+---
+
 ## Investigation Queue
 
 - [x] Accounting deep dive: basic user, content provider, admin perspectives
 - [x] KYC deep dive: existing infrastructure, verification, compliance, signing, video calls
 - [x] Cloud infrastructure deep dive: SSH/VNC, host management, compute provisioning, billing
+- [x] Messaging/social feature gaps: emoji, GIF/stickers, find-a-datetime, countdown, bookmarks, etc.
+- [x] Advertising platform: full ad system from accounts to fraud prevention
+- [x] Content provider syndicates: bundled subs, revenue splitting, treasury
+- [x] User groups: membership, newsfeeds, fundraising, treasury
+- [x] Content licensing: agreements, issuance, revenue sharing, syndicate licensing, compliance
 - [ ] Additional gaps from `docs/gap-analysis.md` (30 verified gaps)
-- [ ] Messaging/social feature gaps
 - [ ] Media/streaming feature gaps
 - [ ] Admin tooling gaps
