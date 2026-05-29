@@ -42,7 +42,6 @@ import {
   Megaphone,
   UserCog,
   Bot,
-  Megaphone,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";

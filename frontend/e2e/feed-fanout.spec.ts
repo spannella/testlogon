@@ -3,6 +3,7 @@
  *
  * Section 115: Fan-out API (8 tests)
  * Section 116: Source attribution API (4 tests)
+ * Section 116: Source attribution API (3 tests)
  * Section 117: Feed Timeline UI (3 tests)
  */
 
@@ -335,6 +336,18 @@ test.describe("Section 117 - Feed Timeline UI", () => {
     // Click Feed in sidebar
     await bobPage.getByRole("link", { name: "Feed" }).first().click();
     await bobPage.waitForResponse((r) => r.url().includes("/feed") && r.status() === 200);
+    test.setTimeout(30_000);
+    // Navigate to the root page, which shows the feed
+    await bobPage.goto(BASE + "/", { waitUntil: "domcontentloaded" });
+
+    // Click Feed in sidebar to trigger client-side navigation
+    const feedLink = bobPage.getByRole("link", { name: "Feed" }).first();
+    await feedLink.click();
+    // Wait for the feed API response
+    await bobPage.waitForResponse(
+      (r) => r.url().includes("/feed") && r.status() === 200,
+      { timeout: 10_000 },
+    );
 
     // Look for the following-attribution label for Alice's post
     const attribution = bobPage.locator('[data-testid="following-attribution"]').filter({
@@ -344,6 +357,7 @@ test.describe("Section 117 - Feed Timeline UI", () => {
   });
 
   test("117.2 Own posts do not show following attribution", async () => {
+    test.setTimeout(15_000);
     // Bob's own post text should be visible
     await expect(bobPage.getByText(`UI fanout test bob ${TS}`).first()).toBeVisible({ timeout: 5_000 });
 
@@ -358,6 +372,7 @@ test.describe("Section 117 - Feed Timeline UI", () => {
   });
 
   test("117.3 Feed loads both own and followed posts", async () => {
+    test.setTimeout(15_000);
     // Both posts should appear in the feed
     await expect(bobPage.getByText(`UI fanout test alice ${TS}`).first()).toBeVisible({ timeout: 5_000 });
     await expect(bobPage.getByText(`UI fanout test bob ${TS}`).first()).toBeVisible({ timeout: 5_000 });

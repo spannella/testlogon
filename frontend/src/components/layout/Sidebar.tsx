@@ -51,7 +51,6 @@ import {
   KeyRound,
   Megaphone,
   UserCog,
-  Megaphone,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";

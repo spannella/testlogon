@@ -103,8 +103,6 @@ const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetai
 const BotManagerPage = lazy(() => import("@/pages/bots/BotManagerPage"));
 const GroupsListPage = lazy(() => import("@/pages/groups/GroupsListPage"));
 const GroupSettingsPage = lazy(() => import("@/pages/groups/GroupSettingsPage"));
-const AdvertiserDashboard = lazy(() => import("@/pages/ads/AdvertiserDashboard"));
-const CampaignListPage = lazy(() => import("@/pages/ads/CampaignList"));
 const CreativeListPage = lazy(() => import("@/pages/ads/CreativeListPage"));
 const AdminCreativeReviewPage = lazy(() => import("@/pages/ads/AdminCreativeReviewPage"));
 
