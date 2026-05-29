@@ -860,6 +860,18 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Ad Creatives (ADS-002)
+        TableDef(
+            _resolve_table_name(S.ad_creatives_table_name, "AdCreatives"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByFormat", "partition_key": "format", "sort_key": "created_at"},
+                {"index_name": "ByCreativeId", "partition_key": "creative_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Rate limiting (PLATFORM-001)
         TableDef(
             _resolve_table_name(S.rate_limits_table_name, "rate_limits"),

@@ -93,6 +93,7 @@ class Tables:
     ad_impressions: Any
     ad_accounts: Any
     ad_campaigns: Any
+    ad_creatives: Any
     call_billing_ledger: Any
     rate_limits: Any
     rate_limit_events: Any
@@ -219,6 +220,7 @@ T = Tables(
     ad_impressions=ddb.Table(S.ad_impressions_table_name),
     ad_accounts=ddb.Table(S.ad_accounts_table_name),
     ad_campaigns=ddb.Table(S.ad_campaigns_table_name),
+    ad_creatives=ddb.Table(S.ad_creatives_table_name),
     call_billing_ledger=ddb.Table(S.call_billing_ledger_table_name),
     rate_limits=ddb.Table(S.rate_limits_table_name),
     rate_limit_events=ddb.Table(S.rate_limit_events_table_name),

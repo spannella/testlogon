@@ -92,6 +92,8 @@ const WatchPartyPage = lazy(() => import("@/pages/watch-parties/WatchPartyPage")
 const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
 const AdvertiserDashboard = lazy(() => import("@/pages/ads/AdvertiserDashboard"));
 const CampaignListPage = lazy(() => import("@/pages/ads/CampaignList"));
+const CreativeListPage = lazy(() => import("@/pages/ads/CreativeListPage"));
+const AdminCreativeReviewPage = lazy(() => import("@/pages/ads/AdminCreativeReviewPage"));
 
 function PageSpinner() {
   return (
@@ -205,6 +207,8 @@ export default function App() {
           <Route path="admin/audit-exports" element={<AuditExportPage />} />
           <Route path="ads/dashboard" element={<AdvertiserDashboard />} />
           <Route path="ads/campaigns" element={<CampaignListPage />} />
+          <Route path="ads/creatives" element={<CreativeListPage />} />
+          <Route path="admin/ads/creatives/review" element={<AdminCreativeReviewPage />} />
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />

@@ -91,7 +91,7 @@ export const setAdConfig = (
 
 // ─── Advertiser Campaign Manager (ADS-001) ────────────────────────────────
 
-import type { AdAccount, Campaign } from "../types";
+import type { AdAccount, AdCreative, Campaign } from "../types";
 
 /** Create a new advertiser account */
 export const createAdAccount = (data: { company_name: string; billing_email: string }) =>
@@ -131,3 +131,63 @@ export const updateCampaign = (accountId: string, campaignId: string, data: Part
 /** Submit a campaign for admin review */
 export const submitCampaignForReview = (accountId: string, campaignId: string) =>
   api.post(`/ui/ads/accounts/${accountId}/campaigns/${campaignId}/submit`);
+
+
+// ─── Ad Creatives (ADS-002) ──────────────────────────────────────────────
+
+/** Create a creative under a campaign */
+export const createCreative = (campaignId: string, data: {
+  format: string;
+  title: string;
+  headline?: string;
+  body_text?: string;
+  cta_text?: string;
+  cta_url?: string;
+  alt_text?: string;
+  width?: number;
+  height?: number;
+  duration_seconds?: number;
+  skip_after_seconds?: number;
+  rotation_weight?: number;
+  promo_code_id?: string;
+  affiliate_link_id?: string;
+}) =>
+  api.post<AdCreative>(`/ui/ads/campaigns/${campaignId}/creatives`, data);
+
+/** List creatives for a campaign */
+export const listCreatives = (campaignId: string) =>
+  api.get<AdCreative[]>(`/ui/ads/campaigns/${campaignId}/creatives`);
+
+/** Get a single creative */
+export const getCreative = (campaignId: string, creativeId: string) =>
+  api.get<AdCreative>(`/ui/ads/campaigns/${campaignId}/creatives/${creativeId}`);
+
+/** Update a creative */
+export const updateCreative = (campaignId: string, creativeId: string, data: Partial<AdCreative>) =>
+  api.patch<{ ok: boolean }>(`/ui/ads/campaigns/${campaignId}/creatives/${creativeId}`, data);
+
+/** Delete a creative */
+export const deleteCreative = (campaignId: string, creativeId: string) =>
+  api.delete<{ ok: boolean }>(`/ui/ads/campaigns/${campaignId}/creatives/${creativeId}`);
+
+/** Upload an asset (image/video/thumbnail) for a creative */
+export const uploadCreativeAsset = (campaignId: string, creativeId: string, file: File, assetType: string = "image") => {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("asset_type", assetType);
+  return api.post<{ url: string }>(`/ui/ads/campaigns/${campaignId}/creatives/${creativeId}/upload`, form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+};
+
+/** Submit a creative for admin review */
+export const submitCreativeForReview = (campaignId: string, creativeId: string) =>
+  api.post<{ ok: boolean }>(`/ui/ads/campaigns/${campaignId}/creatives/${creativeId}/submit`);
+
+/** List pending creatives (admin) */
+export const listPendingCreatives = () =>
+  api.get<AdCreative[]>("/ui/admin/ads/creatives/pending");
+
+/** Review a creative (admin) */
+export const reviewCreative = (creativeId: string, data: { decision: string; notes?: string }) =>
+  api.post<{ ok: boolean; status: string }>(`/ui/admin/ads/creatives/${creativeId}/review`, data);
