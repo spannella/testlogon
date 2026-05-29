@@ -46,6 +46,7 @@ import {
   Building2,
   Tv,
   Scissors,
+  Users,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -108,6 +109,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Affiliates", i18nKey: "nav.affiliates", path: "/affiliates", icon: <Link2 className="h-5 w-5" /> },
       { label: "Collaborations", i18nKey: "nav.collaborations", path: "/collaborations", icon: <Handshake className="h-5 w-5" /> },
       { label: "Fan Club", i18nKey: "nav.fanClub", path: "/fan-club", icon: <UsersRound className="h-5 w-5" /> },
+      { label: "Syndicates", i18nKey: "nav.syndicates", path: "/syndicates", icon: <Users className="h-5 w-5" /> },
     ],
   },
   {

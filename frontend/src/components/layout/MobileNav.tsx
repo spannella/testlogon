@@ -37,6 +37,7 @@ import {
   Trophy,
   CalendarClock,
   Scissors,
+  Users,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -98,6 +99,7 @@ const MORE_LINKS = [
   { label: "Collaborations", i18nKey: "nav.collaborations", path: "/collaborations", icon: Handshake },
   { label: "Fan Club", i18nKey: "nav.fanClub", path: "/fan-club", icon: UsersRound },
   { label: "Achievements", i18nKey: "nav.achievements", path: "/achievements", icon: Trophy },
+  { label: "Syndicates", i18nKey: "nav.syndicates", path: "/syndicates", icon: Users },
 ];
 
 // ─── MobileNav Component ────────────────────────────────────────

@@ -4492,3 +4492,58 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// -- Syndicates (SYND-001) --
+
+export interface SyndicateOut {
+  syndicate_id: string;
+  name: string;
+  description: string;
+  admin_user_id: string;
+  status: string;
+  member_count: number;
+  created_at: number;
+  updated_at: number;
+  members: SyndicateMemberOut[];
+}
+
+export interface SyndicateMemberOut {
+  user_id: string;
+  display_name: string;
+  role: string;
+  joined_at: number;
+}
+
+export interface SyndicateInviteOut {
+  syndicate_id: string;
+  syndicate_name: string;
+  user_id: string;
+  invited_by: string;
+  invited_at: number;
+  status: string;
+}
+
+export interface SyndicateRequestOut {
+  syndicate_id: string;
+  user_id: string;
+  display_name: string;
+  requested_at: number;
+  message: string;
+  status: string;
+}
+
+export interface SyndicateAuditOut {
+  event_id: string;
+  actor_id: string;
+  action: string;
+  target_id: string;
+  details?: Record<string, unknown>;
+  ts: number;
+}
+
+export interface SyndicateUserEntry {
+  syndicate_id: string;
+  syndicate_name: string;
+  role: string;
+  joined_at: number;
+}
