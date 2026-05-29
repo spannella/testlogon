@@ -1195,6 +1195,9 @@ def _table_defs() -> List[TableDef]:
         # Delegates (DELEGATE-001)
         TableDef(
             _resolve_table_name(S.delegates_table_name, "delegates"),
+        # Syndicates (SYND-001)
+        TableDef(
+            _resolve_table_name(S.syndicates_table_name, "syndicates"),
             "pk",
             "sk",
             gsi=[

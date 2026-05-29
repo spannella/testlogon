@@ -4145,3 +4145,65 @@ class PermissionPresetOut(BaseModel):
     key: str
     label: str
     permissions: List[str]
+# -- Syndicates (SYND-001) --
+
+class SyndicateCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    description: str = Field(default="", max_length=500)
+
+class SyndicateUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=500)
+
+class SyndicateInviteIn(BaseModel):
+    user_id: str
+
+class SyndicateInviteRespondIn(BaseModel):
+    accept: bool
+
+class SyndicateJoinRequestIn(BaseModel):
+    message: str = Field(default="", max_length=500)
+
+class SyndicateTransferAdminIn(BaseModel):
+    new_admin_user_id: str
+
+class SyndicateMemberOut(BaseModel):
+    user_id: str
+    display_name: str = ""
+    role: str = "member"
+    joined_at: int = 0
+
+class SyndicateOut(BaseModel):
+    syndicate_id: str
+    name: str
+    description: str = ""
+    admin_user_id: str
+    status: str = "active"
+    member_count: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+    members: List[SyndicateMemberOut] = Field(default_factory=list)
+
+class SyndicateInviteOut(BaseModel):
+    syndicate_id: str
+    syndicate_name: str = ""
+    user_id: str
+    invited_by: str
+    invited_at: int = 0
+    status: str
+
+class SyndicateRequestOut(BaseModel):
+    syndicate_id: str
+    user_id: str
+    display_name: str = ""
+    requested_at: int = 0
+    message: str = ""
+    status: str
+
+class SyndicateAuditOut(BaseModel):
+    event_id: str
+    actor_id: str
+    action: str
+    target_id: str = ""
+    details: Optional[Dict[str, Any]] = None
+    ts: int = 0

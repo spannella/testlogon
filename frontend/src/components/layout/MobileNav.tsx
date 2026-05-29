@@ -40,6 +40,7 @@ import {
   KeyRound,
   Megaphone,
   UserCog,
+  Users,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -104,6 +105,7 @@ const MORE_LINKS = [
   { label: "Achievements", i18nKey: "nav.achievements", path: "/achievements", icon: Trophy },
   { label: "LLM Keys", i18nKey: "nav.llmKeys", path: "/agents/llm-keys", icon: KeyRound },
   { label: "Ads Manager", i18nKey: "nav.adsManager", path: "/ads/dashboard", icon: Megaphone },
+  { label: "Syndicates", i18nKey: "nav.syndicates", path: "/syndicates", icon: Users },
 ];
 
 // ─── MobileNav Component ────────────────────────────────────────

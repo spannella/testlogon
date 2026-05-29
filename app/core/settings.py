@@ -1499,6 +1499,8 @@ class Settings:
     agent_llm_keys_enabled: bool = os.environ.get("AGENT_LLM_KEYS_ENABLED", "1") not in ("0", "false", "False")
     agent_llm_key_testing_enabled: bool = os.environ.get("AGENT_LLM_KEY_TESTING_ENABLED", "1") not in ("0", "false", "False")
     llm_provider_keys_table_name: str = os.environ.get("LLM_PROVIDER_KEYS_TABLE_NAME", "llm_provider_keys")
+    # Syndicates (SYND-001)
+    syndicates_table_name: str = os.environ.get("SYNDICATES_TABLE_NAME", "syndicates")
 
 
 S = Settings()

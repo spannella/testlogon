@@ -94,6 +94,8 @@ const LlmKeysPage = lazy(() => import("@/pages/agents/LlmKeysPage"));
 const AdvertiserDashboard = lazy(() => import("@/pages/ads/AdvertiserDashboard"));
 const CampaignListPage = lazy(() => import("@/pages/ads/CampaignList"));
 const DelegatesPage = lazy(() => import("@/pages/delegates/DelegatesPage"));
+const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
+const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetailPage"));
 
 function PageSpinner() {
   return (
@@ -195,6 +197,8 @@ export default function App() {
           <Route path="collaborations" element={<CollaborationsPage />} />
           <Route path="delegates" element={<DelegatesPage />} />
           <Route path="fan-club" element={<FanClubPage />} />
+          <Route path="syndicates" element={<SyndicatesPage />} />
+          <Route path="syndicates/:syndicateId" element={<SyndicateDetailPage />} />
           <Route path="orgs" element={<OrgsPage />} />
           <Route path="orgs/:orgId" element={<OrgDashboard />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />

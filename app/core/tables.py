@@ -134,6 +134,7 @@ class Tables:
     broadcast_clips: Any
     llm_provider_keys: Any
     delegates: Any
+    syndicates: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -262,4 +263,5 @@ T = Tables(
     broadcast_clips=ddb.Table(S.broadcast_clips_table_name),
     llm_provider_keys=ddb.Table(S.llm_provider_keys_table_name),
     delegates=ddb.Table(S.delegates_table_name),
+    syndicates=ddb.Table(S.syndicates_table_name),
 )
