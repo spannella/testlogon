@@ -1,7 +1,7 @@
 # Feature Improvements Backlog
 
 Living document of identified gaps and improvement opportunities.
-Last updated: 2026-05-29 (128 tickets across 10 feature areas)
+Last updated: 2026-05-29 (153 tickets across 13 feature areas)
 
 ---
 
@@ -424,6 +424,74 @@ BOT-004 (AI/LLM) ← most advanced, depends on framework
 
 ---
 
+## Core Platform Gaps (Deep Dive — 2026-05-29)
+
+4 detailed ticket specs generated in `docs/tickets/PLATFORM-01{6-9}*.md`. ~63 planned E2E tests total.
+
+### Platform Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 129 | PLATFORM-016 | Web Push Delivery | P0 | 15 | 523-526 |
+| 130 | PLATFORM-017 | Creator Storefront | P1 | 16 | 527-530 |
+| 131 | PLATFORM-018 | Privacy Account Deletion | P0 | 16 | 531-534 |
+| 132 | PLATFORM-019 | Analytics Engine | P0 | 16 | 535-538 |
+
+---
+
+## Financial Features (Deep Dive — 2026-05-29)
+
+18 detailed ticket specs generated in `docs/tickets/FIN-*.md`. ~278 planned E2E tests total.
+
+### Consumer Financial
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 133 | FIN-001 | Invoice / Receipt PDF Download | P0 | 16 | 539-542 |
+| 134 | FIN-002 | Promo Codes in Checkout UI | P1 | 18 | 543-546 |
+| 135 | FIN-003 | Cart Abandonment Reminders | P1 | 15 | 547-550 |
+| 136 | FIN-004 | Consumer Tax Documents | P2 | 16 | 551-554 |
+| 137 | FIN-005 | Multi-Currency Display | P2 | 15 | 555-558 |
+
+### Creator Financial
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 138 | FIN-006 | Per-Content Revenue Breakdown | P0 | 16 | 559-562 |
+| 139 | FIN-007 | Platform Commission Visibility | P0 | 16 | 563-566 |
+| 140 | FIN-008 | Tax Form Generation (1099/W-9) | P0 | 18 | 567-570 |
+| 141 | FIN-009 | Payout Dashboard Frontend | P1 | 18 | 571-574 |
+| 142 | FIN-010 | Affiliate Earnings Dashboard | P1 | 16 | 575-578 |
+| 143 | FIN-011 | Collaboration Revenue Splitting | P1 | 16 | 579-582 |
+| 144 | FIN-012 | Engagement Rate Calculation | P2 | 16 | 583-586 |
+
+### Admin Financial
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 145 | FIN-013 | Platform Financial Dashboard | P0 | 15 | 587-590 |
+| 146 | FIN-014 | Payment Provider Health Monitoring | P1 | 14 | 591-594 |
+| 147 | FIN-015 | Fraud Detection Dashboard | P1 | 16 | 595-598 |
+| 148 | FIN-016 | Financial Audit Log Export | P1 | 14 | 599-602 |
+| 149 | FIN-017 | Bulk Payout/Refund Tools | P2 | 15 | 603-606 |
+| 150 | FIN-018 | Billing Configuration UI | P2 | 13 | 607-610 |
+
+---
+
+## Admin Tools (Deep Dive — 2026-05-29)
+
+3 detailed ticket specs generated in `docs/tickets/ADMIN-*.md`. ~47 planned E2E tests total.
+
+### Admin Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 151 | ADMIN-001 | Subscription Tier Manager UI | P1 | 16 | 611-614 |
+| 152 | ADMIN-002 | Admin Email/SMS Dashboards | P1 | 16 | 615-618 |
+| 153 | ADMIN-003 | Rate Limit Admin UI | P2 | 15 | 619-622 |
+
+---
+
 ## Investigation Queue
 
 - [x] Accounting deep dive: basic user, content provider, admin perspectives
@@ -436,6 +504,8 @@ BOT-004 (AI/LLM) ← most advanced, depends on framework
 - [x] Content licensing: agreements, issuance, revenue sharing, syndicate licensing, compliance
 - [x] Provider delegation & external control: chat, feed, broadcast delegation + API
 - [x] Chat bots: framework, templates, content promotion, AI/LLM integration
+- [x] Core platform gaps: web push, creator storefront, privacy deletion, analytics engine
+- [x] Financial gaps: consumer (invoices, promo, cart, tax, currency), creator (revenue, commission, tax, payouts, affiliate, collab, engagement), admin (dashboard, health, fraud, audit, bulk ops, config)
+- [x] Admin tooling: subscription tier UI, email/SMS dashboards, rate limit admin UI
 - [ ] Additional gaps from `docs/gap-analysis.md` (30 verified gaps)
 - [ ] Media/streaming feature gaps
-- [ ] Admin tooling gaps
