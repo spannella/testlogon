@@ -1,7 +1,7 @@
 # Feature Improvements Backlog
 
 Living document of identified gaps and improvement opportunities.
-Last updated: 2026-05-29 (119 tickets across 8 feature areas)
+Last updated: 2026-05-29 (128 tickets across 10 feature areas)
 
 ---
 
@@ -373,6 +373,57 @@ LICENSE-006 (compliance) ← depends on LICENSE-001 + LICENSE-002
 
 ---
 
+## Provider Delegation & External Control (Deep Dive — 2026-05-29)
+
+5 detailed ticket specs generated in `docs/tickets/DELEGATE-*.md`. ~79 planned E2E tests total.
+
+### Delegation Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 120 | DELEGATE-001 | Delegate Management & Permissions | P0 | 16 | 487-490 |
+| 121 | DELEGATE-002 | Chat Delegation | P0 | 15 | 491-494 |
+| 122 | DELEGATE-003 | Newsfeed Delegation | P1 | 16 | 495-498 |
+| 123 | DELEGATE-004 | Broadcast Chat Delegation | P1 | 16 | 499-502 |
+| 124 | DELEGATE-005 | Delegation API | P1 | 16 | 503-506 |
+
+### Dependency Chain
+
+```
+DELEGATE-001 (permissions) ← foundation for all delegation
+    ↓
+DELEGATE-002 (chat) + DELEGATE-003 (feed) + DELEGATE-004 (broadcast) ← domain surfaces
+    ↓
+DELEGATE-005 (API) ← wraps all delegation services for external tools
+```
+
+---
+
+## Chat Bots (Deep Dive — 2026-05-29)
+
+4 detailed ticket specs generated in `docs/tickets/BOT-*.md`. ~64 planned E2E tests total.
+
+### Bot Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 125 | BOT-001 | Bot Framework & Lifecycle | P0 | 16 | 507-510 |
+| 126 | BOT-002 | Template & Scheduled Messages | P1 | 16 | 511-514 |
+| 127 | BOT-003 | Content & Event Promotion Bot | P1 | 16 | 515-518 |
+| 128 | BOT-004 | AI Chat Bot (LLM Integration) | P1 | 16 | 519-522 |
+
+### Dependency Chain
+
+```
+BOT-001 (framework) ← foundation
+    ↓
+BOT-002 (templates) + BOT-003 (promotion) ← rule-based bots
+    ↓
+BOT-004 (AI/LLM) ← most advanced, depends on framework
+```
+
+---
+
 ## Investigation Queue
 
 - [x] Accounting deep dive: basic user, content provider, admin perspectives
@@ -383,6 +434,8 @@ LICENSE-006 (compliance) ← depends on LICENSE-001 + LICENSE-002
 - [x] Content provider syndicates: bundled subs, revenue splitting, treasury
 - [x] User groups: membership, newsfeeds, fundraising, treasury
 - [x] Content licensing: agreements, issuance, revenue sharing, syndicate licensing, compliance
+- [x] Provider delegation & external control: chat, feed, broadcast delegation + API
+- [x] Chat bots: framework, templates, content promotion, AI/LLM integration
 - [ ] Additional gaps from `docs/gap-analysis.md` (30 verified gaps)
 - [ ] Media/streaming feature gaps
 - [ ] Admin tooling gaps
