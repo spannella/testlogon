@@ -87,9 +87,67 @@ Last updated: 2026-05-29
 
 ---
 
+## KYC / Compliance (Deep Dive — 2026-05-29)
+
+24 detailed ticket specs generated in `docs/tickets/KYC-*.md`. ~422 planned E2E tests total.
+
+### Existing KYC Infrastructure (Reference)
+
+**Already implemented:**
+- Full case lifecycle (draft→submitted→under_review→needs_more_info→approved/rejected/expired)
+- Document uploads (selfie, id_front, id_back, proof_of_address) with verification_state tracking
+- Questionnaire integration with PDF generation
+- Signature packet integration (multi-signer, legal notice, audit trail)
+- Admin queue with metrics, assignment, and ticket-based communication
+- Optimistic locking, idempotency hashing, evidence snapshots
+- Retention purge automation (30/90 day windows)
+- Comprehensive audit logging (15+ KYC-specific event types)
+
+### Core KYC Infrastructure Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 33 | KYC-001 | Admin KYC Review Dashboard | P0 | 25 | 150-155 |
+| 34 | KYC-002 | Identity Document Verification / OCR | P0 | 20 | 156-159 |
+| 35 | KYC-003 | Liveness Video Verification Call | P0 | 18 | 160-163 |
+| 36 | KYC-004 | Proof of Residency Verification | P0 | 15 | 164-166 |
+| 37 | KYC-005 | Proof of Funds / Source of Funds | P0 | 15 | 167-169 |
+| 38 | KYC-006 | Sanctions & PEP Screening | P0 | 20 | 170-173 |
+| 39 | KYC-007 | Enhanced Document Signing for KYC | P1 | 18 | 174-177 |
+| 40 | KYC-008 | KYC Risk Scoring Engine | P0 | 18 | 178-181 |
+
+### Tiering, Scanning & Monitoring Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 41 | KYC-009 | Tiered Verification Levels | P0 | 22 | 182-186 |
+| 42 | KYC-010 | Passport & National ID Scanner (MRZ) | P0 | 20 | 187-190 |
+| 43 | KYC-011 | KYC Webhooks & Notifications | P1 | 15 | 191-193 |
+| 44 | KYC-012 | Compliance Reporting & Export | P1 | 15 | 194-196 |
+| 45 | KYC-013 | User Self-Service Portal (Wizard) | P0 | 25 | 197-202 |
+| 46 | KYC-014 | Facial Comparison (Selfie vs ID) | P1 | 15 | 203-205 |
+| 47 | KYC-015 | Business / Corporate KYC (KYB) | P1 | 20 | 206-209 |
+| 48 | KYC-016 | Ongoing Monitoring & Periodic Review | P1 | 18 | 210-213 |
+
+### Templates, Privacy & Analytics Tickets
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 49 | KYC-017 | Document Signing Template Library | P1 | 18 | 214-217 |
+| 50 | KYC-018 | Address Verification Service | P1 | 15 | 218-220 |
+| 51 | KYC-019 | Case Assignment & Workload Management | P1 | 18 | 221-224 |
+| 52 | KYC-020 | Multi-Language KYC Support | P2 | 12 | 225-227 |
+| 53 | KYC-021 | KYC API for Third-Party Integration | P2 | 15 | 228-230 |
+| 54 | KYC-022 | Electronic Identity Verification (eID) | P2 | 15 | 231-233 |
+| 55 | KYC-023 | KYC Data Encryption & Privacy | P1 | 15 | 234-236 |
+| 56 | KYC-024 | KYC Analytics & Funnel Dashboard | P2 | 15 | 237-239 |
+
+---
+
 ## Investigation Queue
 
 - [x] Accounting deep dive: basic user, content provider, admin perspectives
+- [x] KYC deep dive: existing infrastructure, verification, compliance, signing, video calls
 - [ ] Additional gaps from `docs/gap-analysis.md` (30 verified gaps)
 - [ ] Messaging/social feature gaps
 - [ ] Media/streaming feature gaps
