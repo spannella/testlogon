@@ -1636,3 +1636,124 @@ The creator always has access to their own channels regardless of tier.
 | `frontend/src/pages/fan-club/FanClubPage.tsx` | all | Main page (single file, all components inline) |
 | `frontend/src/App.tsx` | 80, 192 | Lazy import + route for `/fan-club` |
 | `frontend/src/components/layout/Sidebar.tsx` | 110 | "Fan Club" nav item |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_fan_clubs.py`
+
+| Test Function | What It Validates | Mock Setup |
+|---|---|---|
+| `test_create_tier_success` | Tier record created under `CREATOR#{id}/TIER#{tier_id}` with correct fields | moto DDB `subscriptions` table |
+| `test_create_tier_duplicate_level` | 409 when two tiers share same level for same creator | Pre-seed existing tier |
+| `test_create_tier_max_six` | 409 when creator already has 6 active tiers | Pre-seed 6 tiers |
+| `test_update_tier_partial` | PATCH updates only provided fields, leaves others unchanged | Pre-seed tier |
+| `test_archive_tier_soft_delete` | Sets `active=false`, does not remove record | Pre-seed tier |
+| `test_reorder_tiers` | `sort_order` updated for each tier in provided order | Pre-seed 3 tiers |
+| `test_resolve_member_badge` | Returns correct badge data for subscribed user | Seed subscription + tier in DDB |
+| `test_resolve_badge_no_subscription` | Returns None for non-subscriber | Empty subscriptions table |
+| `test_resolve_badge_inactive_tier` | Returns None when tier is archived | Seed subscription + inactive tier |
+| `test_badge_cache_ttl` | Cached badge expires after 60 seconds | Direct cache manipulation |
+| `test_get_subscriber_tier_level` | Returns integer level for subscribed user | Seed subscription + tier |
+| `test_create_channel` | Channel record created with correct fields | moto DDB `fan_club_channels` table |
+| `test_enforce_channel_access_granted` | No exception for user with sufficient tier level | Seed subscription at level 2, channel requires level 2 |
+| `test_enforce_channel_access_denied` | 403 for user with insufficient tier level | Seed subscription at level 1, channel requires level 2 |
+| `test_enforce_channel_access_creator` | Creator always has access regardless of tier | No subscription needed |
+| `test_send_channel_message` | Message written to `fan_club_messages` with badge resolved | moto DDB |
+| `test_channel_slowmode` | 429 when sending within slowmode window | Send two messages rapidly |
+| `test_channel_message_length_limit` | 400 when message exceeds `max_message_length` | Channel with max=100 |
+| `test_can_view_content_early_access` | High-tier user sees content, low-tier gets false | Seed tiers + subscriptions |
+| `test_can_view_content_past_release` | All subscribers see content after `general_release_at` | Set release time in past |
+| `test_increment_tier_member_count` | Atomic increment/decrement on tier record | Pre-seed tier |
+
+**Mock Setup**: `moto.mock_dynamodb` with `subscriptions`, `fan_club_channels`, `fan_club_messages` tables.
+
+### Integration Tests
+
+| Test | What It Validates |
+|---|---|
+| `test_tier_linked_to_plan` | Creating a tier with a valid `plan_id` links correctly; badge resolution follows plan -> tier chain |
+| `test_subscription_lifecycle_tier_count` | Subscribe increments member_count, cancel decrements it |
+| `test_channel_access_on_tier_change` | Upgrading tier grants channel access, downgrading revokes it |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/fan-club.spec.ts`
+
+**Auth Pattern**: `injectAuth(page, "alice")` for creator, `injectAuth(page, "bob")` for VIP subscriber, `injectAuth(page, "charlie")` for Basic subscriber. CSRF headers on all POST/PATCH/DELETE.
+
+| Section | Title | Tests | Key Assertions |
+|---|---|---|---|
+| 1 | Tier CRUD API | 7 | `expect(resp.status()).toBe(201)`, `expect(body.tier_id).toBeTruthy()`, `expect(body.level).toBe(2)`, `expect(body.color).toBe("#FFD700")` |
+| 2 | Badge Resolution API | 4 | `expect(badge.tier_name).toBe("VIP")`, `expect(badge.badge_emoji).toBe("crown")`, non-subscriber returns null |
+| 3 | Exclusive Chat Channels API | 6 | `expect(resp.status()).toBe(200)` for VIP, `expect(resp.status()).toBe(403)` for Basic on VIP channel, message has `sender_badge` |
+| 4 | Early Access Content API | 4 | High-tier 200, low-tier 403, post-release 200 for all |
+| 5 | Fan Club Page UI | 5 | `page.getByRole("tab", { name: /tiers/i })`, `page.getByText("VIP")`, `page.getByText("#FFD700")` |
+| 6 | Badge Display Integration | 4 | Badge visible in broadcast chat, DM message, newsfeed comment; absent for non-member |
+| 7 | Tier Upgrade/Downgrade API | 4 | Badge changes after upgrade, channel access revoked after downgrade, `member_count` updates |
+| 8 | Channel Features API | 4 | Slowmode 429, message length 400, pin message, reactions on channel message |
+
+**Negative Tests**: 403 (insufficient tier for channel, non-subscriber badge resolution), 409 (duplicate tier level), 429 (slowmode), 400 (message too long).
+
+**Setup/Teardown**: `beforeAll` creates subscription plans via `/api/plans`, creates tiers via `/ui/fan-club/tiers`, creates VIP channel, subscribes Bob to VIP and Charlie to Basic via DDB writes.
+
+### Test Data Requirements
+
+| Data | Table | Seeded By |
+|---|---|---|
+| Alice, Bob, Charlie sessions | `sessions` | `e2e_admin_session_setup.py` |
+| Subscription plans | `subscriptions` | Created via API in `beforeAll` |
+| Tier records | `subscriptions` | Created via API in `beforeAll` |
+| Bob VIP subscription | `subscriptions` | Direct DDB write in `beforeAll` |
+| Charlie Basic subscription | `subscriptions` | Direct DDB write in `beforeAll` |
+| Exclusive channel | `fan_club_channels` | Created via API in `beforeAll` |
+
+### CI / Pipeline
+
+- **Feature flag**: `FAN_CLUBS_ENABLED=true` (default). Controls router registration.
+- **Serial execution**: Required -- tests share subscription and tier state across sections.
+- **Retry safety**: Plan names and channel names include `TS` suffix. Subscriptions are seeded fresh per run via DDB writes.
+- **DDB tables**: `fan_club_channels` and `fan_club_messages` must exist (created by `scripts/local-ddb-init.py`).
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| Subscription System (`app/routers/subscription_server.py`) | Plan CRUD, subscription lifecycle, `has_active_subscription` | Implemented (core platform) | Yes |
+| Broadcast Chat (`app/services/broadcast_chat_store.py`) | Chat message model, SSE events, rate limiting patterns | Implemented (core platform) | Yes |
+| Profile Identity (`app/services/profile.py`) | `get_profile_identity` for badge enrichment | Implemented (core platform) | Yes |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|---|---|
+| None currently | CREATOR-002 is a standalone creator feature. Future tickets for custom emojis or advanced tier perks may depend on the tier infrastructure. |
+
+### Merge Strategy
+
+**Independent**. CREATOR-002 extends the existing `subscriptions` table (adds `TIER#` SK pattern), introduces two new tables (`fan_club_channels`, `fan_club_messages`), and adds new router + services. Modifications to existing files are additive:
+- `app/main.py` (router registration)
+- `app/models.py` (new models appended)
+- `app/core/settings.py` (feature flag + table names)
+- `app/core/tables.py` (new table handles)
+- `scripts/local-ddb-init.py` (new table definitions)
+- `frontend/src/App.tsx` (new route)
+- `frontend/src/components/layout/Sidebar.tsx` + `MobileNav.tsx` (nav entries)
+
+No existing behavior is changed. Tier records coexist with existing plan records in the subscriptions table.
+
+### Merge Checklist
+
+- [ ] `fan_club_channels` and `fan_club_messages` tables created in `scripts/local-ddb-init.py`
+- [ ] Feature flag `FAN_CLUBS_ENABLED` added to `.env.local.example`
+- [ ] Router registered in `app/main.py` (both `fan_club_router` and `fan_club_public_router`)
+- [ ] Badge resolution does not break existing broadcast chat (returns None when no tiers exist)
+- [ ] All 38 E2E tests pass (`npx playwright test e2e/fan-club.spec.ts`)
+- [ ] `just test` passes (no regressions)

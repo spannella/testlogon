@@ -1040,6 +1040,152 @@ All tier management operations log structured events:
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**Test file**: `tests/test_tier_management.py`
+
+**Mock setup**: All DynamoDB operations mocked via `moto` (in-memory DDB). Subscription access functions mocked with `unittest.mock.patch` where cross-service calls occur.
+
+**Fixtures**:
+- `tier_table`: moto-backed DynamoDB table with PK=`CREATOR#{id}`, SK=`TIER#{id}` schema
+- `creator_session`: Fake UI session dict `{"user_sub": "creator-alice", "role": "USER"}`
+- `sample_tier`: Pre-built tier dict with all required fields for reuse across tests
+
+**Test functions**:
+
+| Function | What it tests |
+|----------|---------------|
+| `test_create_tier_returns_tier_out` | `create_tier()` writes to DDB and returns a valid `TierOut` with `status="active"`, auto-assigned `display_order`, and `subscriber_count=0` |
+| `test_create_tier_validates_price_minimum` | `price_cents < 100` raises `ValueError` or returns 422 |
+| `test_create_tier_validates_price_maximum` | `price_cents > 100000` raises `ValueError` or returns 422 |
+| `test_create_tier_validates_name_length` | Empty name or name > 100 chars raises validation error |
+| `test_create_tier_validates_billing_cycle` | Invalid billing cycle value (e.g., `"biannual"`) raises validation error |
+| `test_create_tier_validates_benefits_count` | More than 20 benefits raises validation error |
+| `test_create_tier_auto_increments_display_order` | Second tier gets `display_order = 1` when first has `display_order = 0` |
+| `test_update_tier_partial_fields` | `update_tier()` with only `description` leaves other fields unchanged |
+| `test_update_tier_not_found` | `update_tier()` for nonexistent tier_id raises 404 |
+| `test_archive_tier_sets_status_and_timestamp` | `archive_tier()` sets `status="archived"` and populates `archived_at` |
+| `test_archive_already_archived_returns_400` | Archiving an already-archived tier returns 400 |
+| `test_unarchive_tier_clears_archived_at` | `unarchive_tier()` sets `status="active"` and clears `archived_at` |
+| `test_unarchive_active_tier_returns_400` | Unarchiving an already-active tier returns 400 |
+| `test_delete_tier_zero_subscribers` | `delete_tier()` succeeds when `subscriber_count == 0` |
+| `test_delete_tier_with_subscribers_returns_409` | `delete_tier()` with `subscriber_count > 0` returns 409 with descriptive message |
+| `test_list_tiers_sorted_by_display_order` | `list_tiers()` returns tiers in ascending `display_order` |
+| `test_list_tiers_excludes_archived_by_default` | `list_tiers(include_archived=False)` omits archived tiers |
+| `test_list_tiers_includes_archived_when_flagged` | `list_tiers(include_archived=True)` includes archived tiers |
+| `test_reorder_tiers_updates_display_order` | `reorder_tiers()` sets `display_order` based on position in `tier_ids` list |
+| `test_reorder_with_unknown_id_returns_400` | `reorder_tiers()` with an unknown tier ID returns 400 |
+| `test_reorder_with_duplicate_ids_returns_422` | `reorder_tiers()` with duplicate IDs returns 422 |
+| `test_get_tier_analytics_aggregates` | `get_tier_analytics()` returns `total_subscribers`, `total_revenue_cents`, per-tier breakdown |
+| `test_preview_tiers_active_only` | `preview_tiers()` returns only active tiers in display order |
+| `test_tier_scoped_to_creator` | Creator A cannot read or modify Creator B's tiers |
+
+### Integration Tests
+
+**Test file**: `tests/test_tier_management_integration.py`
+
+Tests service functions with real moto DynamoDB (no patching of DDB calls). Validates cross-service interactions:
+
+| Test | What it validates |
+|------|-------------------|
+| `test_create_then_list_roundtrip` | Create 3 tiers, list returns all 3 in correct order |
+| `test_archive_then_filter_roundtrip` | Archive a tier, default list excludes it, `include_archived=true` includes it |
+| `test_delete_condition_expression` | DDB ConditionExpression on `subscriber_count = 0` actually fires (not just Python-side check) |
+| `test_reorder_batch_write` | BatchWriteItem updates all `display_order` values atomically |
+| `test_analytics_with_subscription_data` | Seed subscription records, verify `get_tier_analytics()` counts match |
+| `test_concurrent_archive_and_delete` | Archive + delete race condition handled by ConditionExpression |
+
+### E2E Tests (Playwright)
+
+**Test file**: `frontend/e2e/tier-manager.spec.ts`  
+**Sections**: 547-550b (30 tests) as detailed in section 5 above.
+
+**Auth pattern**: `injectAuth(page, "alice")` for creator operations; `injectAuth(page, "bob")` for subscriber perspective.
+
+**CSRF handling**: All POST/PATCH/PUT/DELETE requests via `page.request` include `headers: { "x-csrf-token": sessions["alice"].csrf_token }`.
+
+**Setup/teardown**:
+- `beforeAll`: Inject auth for Alice, create baseline "Gold" tier via API
+- `afterAll`: Delete all test tiers created during the run (cleanup via DELETE endpoint, skipping 409s for tiers with subscribers)
+
+**Negative tests**: 401 (no session), 403 (missing CSRF), 404 (nonexistent tier), 409 (delete with subscribers), 422 (validation failures for name, price, benefits, billing_cycle, duplicate tier_ids)
+
+**Key selectors**:
+- Tier card: `page.getByRole("heading", { name: "Gold Tier" })` or `page.locator(".card").filter({ hasText: "Gold Tier" })`
+- Create button: `page.getByRole("button", { name: /create tier/i })`
+- Archive action: `page.getByRole("menuitem", { name: /archive/i })`
+- Status badge: `page.getByText("active")` scoped within tier card
+- Analytics heading: `page.getByRole("heading", { name: /tier analytics/i })`
+
+### Test Data Requirements
+
+**DDB seed data**:
+- `billing` table: `PK=CREATOR#{alice_sub}`, `SK=TIER#{tier_id}` — tier records with all required fields
+- Subscription records for analytics tests: `PK=SUB#{subscriber_id}`, `SK=CREATOR#{creator_id}` with `tier_id` reference
+- No special table creation needed — uses existing `billing` table (single-table pattern)
+
+**Test user roles**:
+- Alice (USER): Creator managing tiers
+- Bob (USER): Subscriber for authorization boundary tests
+
+**Cleanup strategy**: `afterAll` deletes all tiers created with test-specific prefixes (e.g., tier names starting with `"E2E_"`)
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `TIER_MANAGEMENT_ENABLED=true` must be set in `.env.local` for E2E tests
+- **Serial execution**: E2E tests in sections 547-550b depend on shared state (tier created in beforeAll) — must run in declared order within the describe block (Playwright default)
+- **Retry safety**: Each test uses unique tier names with timestamp suffix (`Silver_${Date.now()}`) to avoid collisions across retries
+- **No database migration**: Uses existing DDB table with new PK/SK patterns — no schema change needed in `local-ddb-init.py`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On (upstream)
+
+| Ticket / Component | What's needed | Status | Can work start before dependency merges? |
+|-------------------|---------------|--------|------------------------------------------|
+| `app/services/subscription_access.py` | `get_subscription_settings`, `has_active_subscription`, `can_access_creator` | **Implemented** (exists in codebase) | Yes — already merged |
+| `app/services/subscription_entitlement_templates.py` | Entitlement template CRUD for tier benefits | **Implemented** (exists in codebase) | Yes — already merged |
+| `app/services/subscription_cycle_orders.py` | Subscription lifecycle for subscriber count tracking | **Implemented** (exists in codebase) | Yes — already merged |
+| `app/auth/deps.py` | `require_ui_session` for cookie auth + CSRF | **Implemented** (exists in codebase) | Yes — already merged |
+| `frontend/src/pages/subscriptions/TierManager.tsx` | Existing 308-line page to extend | **Implemented** (exists in codebase) | Yes — already merged |
+| `frontend/src/api/endpoints/subscriptions.ts` | Existing `listPlans`, `archivePlan`, `updatePlan` wrappers | **Implemented** (exists in codebase) | Yes — already merged |
+
+All upstream dependencies are already implemented and merged. This ticket has no blocking dependencies.
+
+### Depended On By (downstream)
+
+| Ticket | What it needs from ADMIN-001 |
+|--------|------------------------------|
+| None identified | No other tickets reference ADMIN-001 as a dependency |
+
+### Merge Strategy
+
+**Classification**: **Independent**
+
+This ticket is fully self-contained. It creates new service/router files and extends an existing frontend page. No other in-flight tickets modify the same files (TierManager.tsx, subscriptions.ts, billing table tier records).
+
+- **No cross-ticket conflicts**: The `billing` table PK/SK patterns (`CREATOR#/TIER#`) are unique to this feature
+- **Feature flag gated**: `TIER_MANAGEMENT_ENABLED` defaults to `false`, so the feature is inert until explicitly enabled
+- **Safe to merge to main independently** at any time
+
+### Merge Checklist
+
+- [ ] **DDB tables**: No new tables required. Uses existing `billing` table with new PK/SK patterns (`CREATOR#{id}`, `TIER#{id}`). Verify no collision with existing billing records.
+- [ ] **Settings**: Add `TIER_MANAGEMENT_ENABLED`, `TIER_MANAGEMENT_ALLOWLIST`, `TIER_ANALYTICS_ENABLED` to `app/core/settings.py` and `.env.local.example`
+- [ ] **Router registration**: Register `tier_management_router` in `app/main.py` (follow pattern at lines 113-162)
+- [ ] **Frontend route**: Route `/subscriptions/manage` already exists in `App.tsx` line 182 — no change needed
+- [ ] **Frontend sidebar**: Add "Manage Tiers" link in `Sidebar.tsx` under Subscriptions group
+- [ ] **E2E tests**: All 30 tests in `frontend/e2e/tier-manager.spec.ts` pass
+- [ ] **Unit tests**: All tests in `tests/test_tier_management.py` pass
+- [ ] **No breaking changes**: Existing subscription endpoints, frontend pages, and DDB records are unaffected
+- [ ] **Feature flag default**: Verify `TIER_MANAGEMENT_ENABLED` defaults to `false` in production
+
+---
+
 ## Codebase References
 
 | File | Line(s) | What |

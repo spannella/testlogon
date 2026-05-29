@@ -746,68 +746,135 @@ export const generateReport = (type: string, params: { start_date: string; end_d
 
 ### 6.1 Unit Tests (`tests/test_admin_ads.py`)
 
+**Test file**: `tests/test_admin_ads.py`
+
+**Mock setup**: Use `moto` to mock DynamoDB. Create `ad_house_ads`, `billing`, and `ad_impressions` tables via `@pytest.fixture(autouse=True)` in the test module. Seed billing ledger entries with `new_ledger_entry()` for revenue aggregation tests. Use `httpx.AsyncClient` with the FastAPI test app from `tests/conftest.py`.
+
+**Auth fixtures**: Override `require_admin_scope(AdminScope.AD_MANAGEMENT)` and `require_root_session` dependencies to inject mock admin/root sessions. For negative auth tests, override with a dependency that raises `HTTPException(403)`.
+
+| # | Function name | Description | Key assertions |
+|---|---------------|-------------|----------------|
+| 1 | `test_revenue_summary_aggregates_correctly` | Seed 5 billing ledger entries (3 `ad_revenue_credit`, 2 `platform_ad_commission`), call `get_revenue_summary()` | `platform_share_cents + creator_share_cents == total_revenue_cents`; `impressions >= 0`; period matches input |
+| 2 | `test_revenue_by_content_type_groups` | Seed impressions with different `content_type` values (newsfeed, vod, broadcast), call `get_revenue_by_content_type()` | Returns 3 entries; each entry has `content_type`, `revenue_cents`, `impressions` |
+| 3 | `test_campaign_approval_changes_status` | Create campaign with `status="pending_review"`, call `approve_campaign()` | Campaign status → `"active"`; moderation event created with `action="approved"`, `admin_sub` matches |
+| 4 | `test_campaign_rejection_records_reason` | Create campaign, call `reject_campaign(reason="Policy violation")` | Status → `"rejected"`; moderation event has `reason="Policy violation"` |
+| 5 | `test_approve_already_approved_returns_409` | Approve campaign, call `approve_campaign()` again | Raises `HTTPException(409)` or returns error indicating already approved |
+| 6 | `test_account_suspend_sets_status` | Create advertiser account, call suspend | `admin_status="suspended"`, `suspended_at` is set, `suspended_by` matches admin sub |
+| 7 | `test_account_suspend_pauses_active_campaigns` | Create account with 2 active campaigns, suspend account | Both campaigns have `status="paused"` |
+| 8 | `test_kill_switch_disables_serving` | Set `ads_enabled=false` via `toggle_kill_switch()`, check settings | `ads_enabled` is `False`; audit entry recorded with reason |
+| 9 | `test_kill_switch_requires_root` | Call kill switch endpoint with admin (non-root) session | Returns 403 |
+| 10 | `test_house_ad_crud` | Create house ad, update priority, delete | Create returns `house_ad_id`; update changes priority; delete removes from list |
+| 11 | `test_house_ad_selection_weighted` | Create 2 house ads (priority 90 vs 10), call `get_house_ad()` 100 times | High-priority ad selected significantly more often (>60% of selections) |
+| 12 | `test_platform_settings_roundtrip` | Write settings with all fields, read back | All values match; `updated_at` is set; `updated_by` matches admin sub |
+| 13 | `test_platform_settings_partial_update` | Write full settings, then PATCH with only `default_cpm_cents` | Only `default_cpm_cents` changed; other fields unchanged |
+| 14 | `test_non_admin_gets_403` | Call revenue endpoint without admin scope | Returns 403 |
+| 15 | `test_financial_report_advertiser_spending` | Seed billing entries for 3 advertisers, generate report | Report contains per-advertiser breakdown; totals sum correctly |
+| 16 | `test_financial_report_csv_format` | Generate report with `format="csv"` | Response contains CSV headers and data rows |
+
+### 6.2 Integration Tests (`tests/test_admin_ads_integration.py`)
+
+**Mock setup**: Full DynamoDB mock via `moto` with all required tables (`ad_house_ads`, `billing`, `ad_impressions`, plus `ad_campaigns`/`ad_creatives` when ADS-001/002 are available). Tests exercise the full request cycle through the FastAPI router.
+
 | # | Test | Description |
 |---|------|-------------|
-| 1 | Revenue summary aggregates correctly | Sum of platform + creator = total |
-| 2 | Campaign approval changes status | status → "active" |
-| 3 | Campaign rejection records reason | rejection event has reason text |
-| 4 | Account suspend pauses campaigns | Active campaigns → paused |
-| 5 | Kill switch disables ad serving | serve_ad returns null |
-| 6 | House ad selection weighted by priority | Higher priority → more selections |
-| 7 | Platform settings saved and loaded | Write → read → values match |
-| 8 | Non-admin cannot access admin endpoints | 403 response |
+| 1 | `test_moderation_approve_notifies_advertiser` | Approve campaign via router, verify notification service called |
+| 2 | `test_suspend_account_cascades_to_campaigns` | Suspend advertiser via router, verify all campaigns paused via campaign service |
+| 3 | `test_kill_switch_toggle_audit_trail` | Toggle kill switch on/off, verify audit entries in settings history |
+| 4 | `test_revenue_dashboard_with_empty_data` | Query revenue endpoints with no billing data | Returns zero values, no errors |
 
-### 6.2 E2E Tests (`frontend/e2e/admin-ads.spec.ts`)
+### 6.3 E2E Tests (`frontend/e2e/admin-ads.spec.ts`)
 
-**Test File**: `frontend/e2e/admin-ads.spec.ts`
+**Test file**: `frontend/e2e/admin-ads.spec.ts`
 
-**Test setup (beforeAll):**
-- Seed sessions for Alice (advertiser), Root (admin), Charlie (admin)
-- Create an advertiser account as Alice
-- Create a campaign and creative (status="pending_review")
+**Auth pattern**: Use `injectAuth(page, "root")` for ROOT-level endpoints (settings, kill switch). Use `injectAuth(page, "charlie_admin")` for ADMIN-scoped endpoints (revenue, moderation, accounts, house ads). Use `injectAuth(page, "alice")` for negative auth tests (USER role, expect 403).
+
+**CSRF**: All POST/PATCH/DELETE requests via `page.request` must include `headers: { "x-csrf-token": sessions[identity].csrf_token }`.
+
+**Test setup (`beforeAll`)**:
+- Call `injectAuth(page, "root")` and `injectAuth(page, "charlie_admin")` and `injectAuth(page, "alice")`
+- Create an advertiser account as Alice via API
+- Create a campaign with `status="pending_review"` via API
+- Create a creative with `status="pending_review"` via API
+- Seed billing ledger entries for revenue dashboard tests
+
+**Test teardown (`afterAll`)**:
+- Delete created house ads
+- Clean up test campaigns/creatives
 
 **Section 414: Revenue Dashboard API (4 tests)**
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | `Admin can view revenue summary` | GET /admin/ads/revenue as Root → 200, has total_revenue_cents, platform_share_cents |
-| 2 | `Daily revenue returns time series` | GET /admin/ads/revenue/daily → 200, array of daily entries |
-| 3 | `Top earners returns creator list` | GET /admin/ads/revenue/top-earners → 200, sorted array |
-| 4 | `Non-admin cannot access revenue` | GET /admin/ads/revenue as Alice → 403 |
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 1 | `Admin can view revenue summary` | Root | `const resp = await page.request.get("/v1/admin/ads/revenue", { params: { start_date: "2026-01-01", end_date: "2026-12-31" } })` → `expect(resp.status()).toBe(200)`; `expect(body.total_revenue_cents).toBeGreaterThanOrEqual(0)`; `expect(body).toHaveProperty("platform_share_cents")` |
+| 2 | `Daily revenue returns time series` | Root | GET `/v1/admin/ads/revenue/daily` → 200; `expect(Array.isArray(body)).toBe(true)` |
+| 3 | `Top earners returns creator list` | Root | GET `/v1/admin/ads/revenue/top-earners` → 200; array sorted by `revenue_cents` descending |
+| 4 | `Non-admin cannot access revenue` | Alice | GET `/v1/admin/ads/revenue` → `expect(resp.status()).toBe(403)` |
 
-**Section 415: Campaign Moderation API (4 tests)**
+**Section 415: Campaign Moderation API (5 tests)**
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 5 | `Moderation queue lists pending items` | GET /admin/ads/moderation → 200, includes the pending campaign |
-| 6 | `Admin approves campaign` | POST /moderation/campaign/{id}/approve → 200, status="active" |
-| 7 | `Admin rejects creative with reason` | POST /moderation/creative/{id}/reject with reason → 200, status="rejected" |
-| 8 | `Moderation history records all actions` | GET /moderation/campaign/{id}/history → array with approve/reject events |
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 5 | `Moderation queue lists pending items` | Charlie | GET `/v1/admin/ads/moderation` → 200; `expect(body.items.some(i => i.item_id === campaignId)).toBe(true)` |
+| 6 | `Admin approves campaign` | Charlie | POST `/v1/admin/ads/moderation/campaign/${campaignId}/approve` with CSRF → 200; `expect(body.status).toBe("active")` |
+| 7 | `Admin rejects creative with reason` | Charlie | POST `/v1/admin/ads/moderation/creative/${creativeId}/reject` with `{ reason: "Violates content policy" }` → 200; `expect(body.status).toBe("rejected")` |
+| 8 | `Moderation history records all actions` | Charlie | GET `/v1/admin/ads/moderation/campaign/${campaignId}/history` → 200; `expect(body.length).toBeGreaterThanOrEqual(1)`; `expect(body[0]).toHaveProperty("action")` |
+| 9 | `Reject without reason returns 422` | Charlie | POST reject with `{ reason: "" }` → `expect(resp.status()).toBe(422)` |
 
-**Section 416: Advertiser Account Management API (4 tests)**
+**Section 416: Advertiser Account Management API (5 tests)**
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 9 | `Admin lists advertiser accounts` | GET /admin/ads/accounts → 200, includes Alice's account |
-| 10 | `Admin suspends account` | POST /accounts/{id}/suspend → 200, status="suspended" |
-| 11 | `Admin unsuspends account` | POST /accounts/{id}/unsuspend → 200, status="active" |
-| 12 | `Admin sets credit limit` | PATCH /accounts/{id}/credit-limit → 200, credit_limit_cents updated |
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 10 | `Admin lists advertiser accounts` | Charlie | GET `/v1/admin/ads/accounts` → 200; `expect(body.some(a => a.advertiser_id === aliceAccountId)).toBe(true)` |
+| 11 | `Admin suspends account` | Charlie | POST `/v1/admin/ads/accounts/${aliceAccountId}/suspend` with `{ reason: "Policy violation" }` → 200; `expect(body.admin_status).toBe("suspended")` |
+| 12 | `Admin unsuspends account` | Charlie | POST `.../unsuspend` → 200; `expect(body.admin_status).toBe("active")` |
+| 13 | `Admin sets credit limit` | Charlie | PATCH `.../credit-limit` with `{ credit_limit_cents: 500000 }` → 200; `expect(body.credit_limit_cents).toBe(500000)` |
+| 14 | `Suspend non-existent account returns 404` | Charlie | POST `/v1/admin/ads/accounts/nonexistent/suspend` → `expect(resp.status()).toBe(404)` |
 
-**Section 417: Platform Settings & Kill Switch API (3 tests)**
+**Section 417: Platform Settings & Kill Switch API (4 tests)**
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 13 | `Root can update platform settings` | PATCH /admin/ads/settings as Root → 200, settings saved |
-| 14 | `Root can toggle kill switch` | POST /admin/ads/kill-switch {enabled: false} → 200, ads_enabled=false |
-| 15 | `Admin (non-root) cannot update settings` | PATCH /admin/ads/settings as Charlie → 403 |
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 15 | `Root can update platform settings` | Root | PATCH `/v1/admin/ads/settings` with `{ default_cpm_cents: 600, revenue_share_bps: 2500 }` → 200; GET settings → values match |
+| 16 | `Root can toggle kill switch` | Root | POST `/v1/admin/ads/kill-switch` with `{ enabled: false, reason: "Emergency" }` → 200; `expect(body.ads_enabled).toBe(false)` |
+| 17 | `Admin (non-root) cannot update settings` | Charlie | PATCH `/v1/admin/ads/settings` → `expect(resp.status()).toBe(403)` |
+| 18 | `Admin (non-root) cannot toggle kill switch` | Charlie | POST `/v1/admin/ads/kill-switch` → `expect(resp.status()).toBe(403)` |
 
-**Section 418: House Ads CRUD API (3 tests)**
+**Section 418: House Ads CRUD API (4 tests)**
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 16 | `Admin creates house ad` | POST /admin/ads/house-ads → 201, house_ad_id present |
-| 17 | `Admin lists house ads` | GET /admin/ads/house-ads → 200, array includes created house ad |
-| 18 | `Admin deletes house ad` | DELETE /admin/ads/house-ads/{id} → 200, re-list excludes it |
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 19 | `Admin creates house ad` | Charlie | POST `/v1/admin/ads/house-ads` with `{ name: "E2E House Ad", creative_url: "https://example.com/img.png", creative_type: "image", click_through_url: "https://example.com", priority: 80 }` → `expect(resp.status()).toBe(201)`; `expect(body.house_ad_id).toBeTruthy()` |
+| 20 | `Admin lists house ads` | Charlie | GET `/v1/admin/ads/house-ads` → 200; `expect(body.some(h => h.name === "E2E House Ad")).toBe(true)` |
+| 21 | `Admin updates house ad` | Charlie | PATCH `/v1/admin/ads/house-ads/${houseAdId}` with `{ priority: 30 }` → 200; `expect(body.priority).toBe(30)` |
+| 22 | `Admin deletes house ad` | Charlie | DELETE `/v1/admin/ads/house-ads/${houseAdId}` → 200; re-list → `expect(body.some(h => h.house_ad_id === houseAdId)).toBe(false)` |
+
+**Section 419: Admin Ad Dashboard UI (4 tests)**
+
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 23 | `Dashboard loads with revenue tab` | Root | `await page.goto("/admin/ads")`; `await expect(page.getByRole("tab", { name: "Revenue" })).toBeVisible()` |
+| 24 | `Moderation tab shows queue` | Root | Click "Moderation" tab; `await expect(page.getByText("Pending")).toBeVisible()` |
+| 25 | `Settings tab shows kill switch` | Root | Click "Settings" tab; `await expect(page.getByRole("button", { name: /kill switch/i })).toBeVisible()` |
+| 26 | `House Ads tab shows CRUD` | Root | Click "House Ads" tab; `await expect(page.getByRole("button", { name: /create/i })).toBeVisible()` |
+
+### 6.4 Test Data Requirements
+
+| Data | Source | Details |
+|------|--------|---------|
+| Root session | `e2e_admin_session_setup.py` | `root.admin@testdev.local`, role=ROOT |
+| Charlie admin session | `e2e_admin_session_setup.py` | `e2e_charlie@test.local`, role=ADMIN with AD_MANAGEMENT scope |
+| Alice user session | `e2e_session_setup.py` | `e2e_alice@test.local`, role=USER |
+| Billing ledger entries | Seeded in `beforeAll` | DDB `billing` table, `type="ad_revenue_credit"` and `type="platform_ad_commission"` |
+| Ad impressions | Seeded in `beforeAll` | DDB `ad_impressions` table with `video_id`, `creator_id`, `content_type` fields |
+| `ad_house_ads` DDB table | `scripts/local-ddb-init.py` | Must exist before tests run |
+
+### 6.5 CI / Pipeline
+
+- **Feature flag**: No feature flag needed (admin-only endpoints behind auth scope)
+- **Serial tests**: E2E tests must run serially (`workers: 1`) due to shared DDB state (moderation queue, settings)
+- **Retry safety**: Each test uses unique identifiers (`E2E_${Date.now()}`); house ad cleanup in `afterAll` prevents accumulation; kill switch restored to `enabled: true` in teardown
+- **Pre-requisite**: `just restart` before full suite run to clear accumulated ad data from prior runs
+- **DDB tables required**: `ad_house_ads` must be added to `scripts/local-ddb-init.py` before E2E tests run
 
 ---
 
@@ -850,6 +917,55 @@ export const generateReport = (type: string, params: { start_date: string; end_d
 8. House ads can be created, listed, updated, and deleted with priority-based selection
 9. Financial reports can be generated for advertiser spending, creator earnings, and platform revenue
 10. All 18 E2E tests pass in `frontend/e2e/admin-ads.spec.ts`
+
+---
+
+## 10. Dependencies & Merge Safety
+
+### 10.1 Depends On
+
+| Ticket | What's needed | Status | Can overlap? |
+|--------|---------------|--------|--------------|
+| ADS-001 (Advertiser Accounts & Campaign Manager) | `ad_campaigns` table, campaign CRUD service, campaign status field | **Not implemented** | Partial — house ads, settings, kill switch, revenue dashboard can be built independently; moderation queue and account management endpoints require ADS-001 tables to exist |
+| ADS-002 (Ad Creative Management) | `ad_creatives` table, creative status field, creative review flow | **Not implemented** | Partial — creative moderation queue requires ADS-002; other features are independent |
+| ADS-004 (Ad Serving Engine) | `serve_ad()` function to integrate kill switch check | **Not implemented** | Yes — kill switch can be built as a standalone settings flag; integration point is a single `if` check in the serving engine |
+| ADS-007 (Ad Billing) | Billing ledger entry types `ad_revenue_credit`, `platform_ad_commission` | **Not implemented** | Yes — revenue dashboard can query existing billing table with these types; types just need to be defined |
+| ADS-008 (Ad Analytics) | Impression/click aggregation functions | **Not implemented** | Yes — revenue dashboard can query `ad_impressions` table directly; analytics service is an optimization |
+| ADS-014 (Ad Fraud Prevention) | Fraud status flags on campaigns/creatives | **Not implemented** | Yes — moderation queue can operate without fraud data; fraud flags are additive |
+
+### 10.2 Depended On By
+
+| Ticket | What it needs from ADS-018 | Notes |
+|--------|----------------------------|-------|
+| ADS-019 (Creator Self-Placed Ads) | Platform ad settings (CPM rates, policies) and potentially house ad fallback patterns | ADS-019 can implement its own settings if ADS-018 is not ready |
+
+### 10.3 Merge Strategy
+
+**Classification**: Sequential (partially parallelizable)
+
+ADS-018 sits at the top of the ADS dependency chain as an admin overlay. The core features (house ads, platform settings, kill switch, financial reports) can be implemented independently of ADS-001 through ADS-017. The moderation queue and account management features require the upstream campaign/creative/account tables to exist.
+
+**Recommended approach**:
+1. Implement house ads, platform settings, kill switch, and revenue dashboard first (no upstream dependencies)
+2. Stub moderation queue and account management behind feature checks (`if campaign_table_exists`)
+3. Wire moderation and account management when ADS-001/002 land
+
+### 10.4 Merge Checklist
+
+- [ ] DDB table `ad_house_ads` added to `scripts/local-ddb-init.py`
+- [ ] `ad_house_ads_table_name` setting added to `app/core/settings.py`
+- [ ] `ad_house_ads` table handle added to `app/core/tables.py`
+- [ ] `AdminScope.AD_MANAGEMENT` added to `app/auth/roles.py` `CANONICAL_ADMIN_SCOPES`
+- [ ] `admin_ads_router` registered in `app/main.py` with prefix `/v1/admin/ads`
+- [ ] `/admin/ads` route added to `frontend/src/App.tsx`
+- [ ] "Ad Management" link added to `Sidebar.tsx` (visible to ADMIN+ roles)
+- [ ] All Pydantic models added to `app/models.py`
+- [ ] All TypeScript types added to `frontend/src/api/types.ts`
+- [ ] `frontend/src/api/endpoints/adminAds.ts` created
+- [ ] Unit tests pass: `pytest tests/test_admin_ads.py`
+- [ ] E2E tests pass: `npx playwright test e2e/admin-ads.spec.ts`
+- [ ] No breaking changes to existing ad serving endpoints (ADS-004 integration is additive)
+- [ ] Kill switch default is `ads_enabled: true` (safe default)
 
 ---
 

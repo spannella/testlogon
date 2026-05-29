@@ -1658,3 +1658,124 @@ test("2.1 — Revenue split distributes correctly", async ({ browser }) => {
 | `frontend/src/App.tsx` | 79, 191 | Lazy import + route for `/collaborations` |
 | `frontend/src/components/layout/Sidebar.tsx` | 109 | "Collaborations" nav item |
 | `frontend/src/components/layout/MobileNav.tsx` | 98 | "Collaborations" in MORE_LINKS |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_collaborations.py`
+
+| Test Function | What It Validates | Mock Setup |
+|---|---|---|
+| `test_create_collaboration_success` | Collaboration record created with correct split, status=pending, GSI keys | moto DDB `collaboration_agreements` table |
+| `test_create_self_collab_rejected` | 400 when `initiator_id == recipient_id` | moto DDB |
+| `test_create_duplicate_pending_rejected` | 409 when pending request already exists between same users | Pre-seed a pending collab in moto DDB |
+| `test_accept_collaboration` | Status transitions to accepted, `accepted_at` set, GSI3PK updated | Pre-seed pending collab |
+| `test_reject_collaboration` | Status transitions to rejected | Pre-seed pending collab |
+| `test_counter_proposal_creates_revision` | Revision snapshot written under `REV#NNNN` SK, revision incremented | Pre-seed pending collab |
+| `test_counter_split_validation` | Counter split_pct must be 1-99 | Pydantic model validation |
+| `test_cancel_by_initiator_only` | 403 when recipient tries to cancel | Pre-seed collab with known initiator |
+| `test_terminate_active_only` | 409 when terminating a non-accepted collab | Pre-seed pending collab |
+| `test_recipient_not_accepting` | 403 when recipient has `accepting_requests=false` | Seed collab settings in app single table |
+| `test_min_split_enforcement` | 400 when recipient share < recipient's `min_split_pct` | Seed collab settings |
+| `test_max_pending_outgoing` | 429 when user has 10 pending outgoing requests | Seed 10 pending collabs |
+| `test_split_ledger_write` | `write_collaboration_split_ledger` distributes credits proportionally | moto DDB billing table + collab table |
+| `test_split_rounding_remainder` | Remainder cents go to initiator | Direct call to split function |
+| `test_split_on_non_accepted_collab` | ValueError raised | Seed collab with status=terminated |
+| `test_collab_expiry_worker` | `process_expired_collaborations` transitions past-valid_until collabs to expired | Seed collab with old `valid_until` |
+| `test_collab_settings_crud` | GET returns defaults, PUT persists changes | moto DDB app single table |
+| `test_content_tag_validation` | 403 for non-participant, 409 for non-accepted, 400 for wrong content_type | moto DDB |
+
+**Mock Setup**: All tests use `@pytest.fixture` with `moto.mock_dynamodb` to create `collaboration_agreements`, `billing`, and `app` tables. FastAPI `TestClient` with overridden DDB resource.
+
+### Integration Tests
+
+| Test | What It Validates |
+|---|---|
+| `test_collab_tip_split_end_to_end` | Create collab, accept, write tip via `write_collaboration_split_ledger`, verify both collaborators have correct billing ledger credits |
+| `test_collab_revenue_counter_atomic` | Concurrent split writes increment `total_revenue_cents` atomically |
+| `test_notification_on_status_change` | `put_notification` called with correct `notif_type` and `payload` on accept/reject/counter |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/creator-collaborations.spec.ts`
+
+**Auth Pattern**: `injectAuth(page, "alice")` / `injectAuth(page, "bob")` for cookie-based sessions. All POST/PATCH requests include `headers: { "x-csrf-token": sessions[identity].csrf_token }`.
+
+| Section | Title | Tests | Key Assertions |
+|---|---|---|---|
+| 1 | Collaboration CRUD API | 8 | `expect(resp.status()).toBe(201)`, `expect(body.status).toBe("pending")`, `expect(body.split[aliceSub]).toBe(60)` |
+| 2 | Revenue Split API | 5 | Verify billing ledger has two credit entries with correct `amount_cents`, `meta.collaboration_id`, `meta.split_pct` |
+| 3 | Collaborative Broadcast API | 4 | Session created with `collaboration_id`, tip split distributes proportionally |
+| 4 | Collaborative Post API | 4 | Post has `co_authors`, post tip split writes proportional credits |
+| 5 | Collaboration Lifecycle | 4 | Expired collab returns 409 on new content, terminated collab blocks tagging, existing content retains split |
+| 6 | CollaborationsPage UI | 5 | `page.getByRole("tab", { name: "Active" })`, `page.getByRole("button", { name: /new collaboration/i })`, `page.getByText("60/40 split")` |
+| 7 | Collaboration Settings API | 4 | `expect(body.accepting_requests).toBe(false)`, 403 when sending request to non-accepting creator |
+| 8 | Validation & Edge Cases | 4 | Self-collab 400, duplicate pending 409, split > 99 returns 422, max 10 revisions returns 409 |
+
+**Negative Tests**: Section 8 covers 400 (self-collab, bad split), 409 (duplicate pending, max revisions, expired collab), 403 (non-participant, not-accepting creator), 429 (max pending outgoing).
+
+**Concurrency**: Section 5 tests concurrent accept + cancel on same collab (DDB conditional update ensures only one wins).
+
+**Setup/Teardown**: `beforeAll` creates Alice+Bob sessions via `injectAuth`, creates a collab proposal, Bob accepts. `afterAll` not needed (data is test-run-scoped via TS suffix).
+
+### Test Data Requirements
+
+| Data | Table | Seeded By |
+|---|---|---|
+| Alice + Bob sessions | `sessions` | `e2e_session_setup.py` / `e2e_admin_session_setup.py` |
+| Collaboration agreements | `collaboration_agreements` | Created in `beforeAll` via API |
+| Billing ledger entries | `billing` | Created by split ledger writes during tests |
+| Collab settings | `app` (single table) | Created via settings PUT endpoint |
+
+**Test Users**: Alice (initiator), Bob (recipient), Root (admin audit endpoints).
+
+### CI / Pipeline
+
+- **Feature flag**: `COLLABORATIONS_ENABLED=true` (default). Set to `false` to disable all collab endpoints.
+- **Serial execution**: Tests must run serially (Playwright workers=1) due to shared collaboration state between Alice and Bob.
+- **Retry safety**: All test data is keyed with `Date.now()` suffix (`TS`), so retries create fresh collabs without conflicting with prior run data.
+- **DDB table**: `collaboration_agreements` table must exist in local DDB (created by `scripts/local-ddb-init.py`).
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-016 (Multi-Input Broadcasts) | Multi-input/co-streaming session fields used by collaborative broadcasts | Implemented | Yes -- collab adds `collaboration_id` alongside existing multi-input fields |
+| Billing Ledger (`app/services/tip_ledger.py`) | `TipLedgerEntry` + `write_tip_ledger` for split writes | Implemented (core platform) | Yes -- no modifications to existing ledger API needed |
+| Notifications (`put_notification`) | In-app notification delivery for collab events | Implemented (core platform) | Yes |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|---|---|
+| None currently | CREATOR-001 is a standalone creator feature with no downstream ticket dependencies |
+
+### Merge Strategy
+
+**Independent**. CREATOR-001 introduces a new `collaboration_agreements` DDB table, new router (`app/routers/collaborations.py`), new services (`app/services/collaborations.py`, `collaboration_splits.py`, `collaboration_expiry.py`), and new frontend page. It modifies:
+- `app/main.py` (router registration)
+- `app/models.py` (new models appended)
+- `app/core/settings.py` (new feature flag + table name)
+- `app/core/tables.py` (new table handle)
+- `scripts/local-ddb-init.py` (new table definition)
+- `app/services/creator_earnings.py` (new "collaborations" category)
+- `frontend/src/App.tsx` (new route)
+- `frontend/src/components/layout/Sidebar.tsx` + `MobileNav.tsx` (nav entries)
+
+All modifications are additive. No existing behavior is changed. Safe to merge independently or in parallel with other CREATOR-* tickets.
+
+### Merge Checklist
+
+- [ ] `collaboration_agreements` table created in `scripts/local-ddb-init.py` with 3 GSIs and numeric sort key attrs
+- [ ] Feature flag `COLLABORATIONS_ENABLED` added to `.env.local.example`
+- [ ] Router registered in `app/main.py`
+- [ ] `_reason_to_category` in `creator_earnings.py` includes "collaborations" category
+- [ ] All 38 E2E tests pass (`npx playwright test e2e/creator-collaborations.spec.ts`)
+- [ ] `just test` passes (no regressions in existing pytest suite)
