@@ -888,3 +888,41 @@ Both Pydantic model validation (returns 422) and server-side enforcement (return
 | `frontend/src/api/endpoints/vod.ts` | 81-84 | `presignVideoUpload`, `completeVideoUpload` |
 | `frontend/src/pages/videos/VideosPage.tsx` | — | Video management page |
 | `frontend/e2e/video-upload.spec.ts` | — | E2E upload tests |
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|--------------|--------|--------------|
+| VOD-001 | `VideoMetadata` DynamoDB table, `VideoMetadataModel`, `video_metadata_store.py` CRUD | Implemented | Yes -- VOD-002 only writes records; schema must be stable |
+| MEDIA-002 | FFmpeg binary manager (optional: `ffprobe` for duration probing on complete) | Implemented | Yes -- duration probing is optional at upload time |
+
+### Depended On By
+
+| Ticket | What It Needs from VOD-002 |
+|--------|---------------------------|
+| VOD-003 | Source S3 URI from upload ticket for transcode job input |
+| VOD-005 | S3 bucket and key conventions for output uploads |
+| VOD-007 | Frontend presign/complete API wrappers (`presignVideoUpload`, `completeVideoUpload`) |
+| VOD-011 | E2E test helpers that exercise the upload flow |
+| VOD-012 | Source MP4 key for download generation |
+| VOD-014 | Upload ticket pattern reused for file-bridge imports |
+| VOD-015 | Source file download from S3 for clip extraction |
+| VOD-016 | Source file download from S3 for concatenation |
+
+### Merge Strategy
+
+**Independent** -- VOD-002 can be merged independently once VOD-001 is in place. No feature flag required; the endpoints are additive. The router prefix (`/ui/videos`) is shared with VOD-006's listing router but uses distinct path segments (`/upload/presign`, `/upload/complete`).
+
+### Merge Checklist
+
+- [ ] `VideoMetadata` table exists in `scripts/local-ddb-init.py` (VOD-001)
+- [ ] `video_upload_bucket` setting populated in `.env.local`
+- [ ] VOD buckets included in `_dev_buckets` list in `app/main.py`
+- [ ] `vod_router` registered in `app/main.py`
+- [ ] E2E sessions seeded (`python3 e2e_session_setup.py`)
+- [ ] `just test` passes (unit tests with moto)
+- [ ] `just e2e` passes (E2E upload flow tests)

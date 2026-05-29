@@ -335,59 +335,160 @@ When Creator A promotes Creator B's content:
 
 ---
 
-## 5. E2E Test Plan
+## 5. Testing Strategy
 
-### 5.1 Test File: `frontend/e2e/self-promo-ads.spec.ts`
+### 5.1 Unit Tests (`tests/test_self_promos.py`)
 
-~350 lines, 18 tests across 4 sections.
+**Test file**: `tests/test_self_promos.py`
+
+**Mock setup**: Use `moto` to mock DynamoDB. Create `SelfPromos` table (with both GSIs: `ByStatusCreatedAt`, `ByLinkedEvent`) and `AdImpressions` table via `@pytest.fixture(autouse=True)`. Use `httpx.AsyncClient` with the FastAPI test app. Override `require_ui_session` to inject mock creator sessions.
+
+| # | Function name | Description | Key assertions |
+|---|---------------|-------------|----------------|
+| 1 | `test_create_self_promo_returns_draft` | Create promo with valid data | `status == "draft"`; `promo_id` is UUID; `creator_id` matches session user |
+| 2 | `test_create_promo_validates_creative_type` | POST with `creative_type="audio"` | Returns 422; error message mentions `creative_type` |
+| 3 | `test_create_promo_validates_placement_types` | POST with `placement_types=["sidebar"]` | Returns 422 |
+| 4 | `test_create_promo_validates_title_max_length` | POST with 150-char title | Returns 422 |
+| 5 | `test_list_promos_returns_only_own` | Create promos for Alice and Bob, list as Alice | Alice sees only her promos |
+| 6 | `test_update_promo_changes_fields` | Create promo, PATCH title and feed_position | Updated fields match; unchanged fields preserved |
+| 7 | `test_activate_promo_changes_status` | Create draft promo, POST activate | `status == "active"` |
+| 8 | `test_pause_promo_changes_status` | Activate promo, POST pause | `status == "paused"` |
+| 9 | `test_delete_promo_soft_deletes` | Delete promo, try to GET it | GET returns 404 or `status == "deleted"` |
+| 10 | `test_non_owner_cannot_update` | Alice creates promo, Bob tries PATCH | Returns 403 with `NOT_PROMO_OWNER` |
+| 11 | `test_non_owner_cannot_activate` | Bob tries to activate Alice's promo | Returns 403 |
+| 12 | `test_max_active_promos_limit` | Create and activate 20 promos, try to activate 21st | Returns 400 with `MAX_PROMOS_REACHED` |
+| 13 | `test_record_impression_no_billing` | Record impression, scan billing table for promo_id | No billing entry found; `AdImpressions` record has `promo_type="self_promo"` |
+| 14 | `test_record_click_increments_counter` | Record click, get analytics | `click_count >= 1` |
+| 15 | `test_get_feed_promos_active_only` | Create active + paused promos, query feed promos | Only active promo returned |
+| 16 | `test_feed_promo_position_ordering` | Create promos at position 0 and 3, query | Position 0 promo is first |
+| 17 | `test_cross_promo_stores_creator_id` | Create promo with `cross_promo_creator_id` | Field stored and returned correctly |
+| 18 | `test_event_linked_activate` | Create promo with `linked_event_id`, call `activate_event_promos()` | Promo status → `"active"` |
+| 19 | `test_event_linked_deactivate` | Activate event-linked promo, call `deactivate_event_promos()` | Promo status → `"paused"` |
+| 20 | `test_expired_promo_filtered` | Create promo with `schedule_end` in the past, query feed promos | Not returned |
+| 21 | `test_get_video_promos` | Create promo with `placement_types=["video_preroll"]`, activate, query | Promo returned for correct video_id |
+| 22 | `test_get_profile_promo` | Create profile_banner promo, activate, query | Promo returned for correct creator_id |
+
+### 5.2 Integration Tests (`tests/test_self_promos_integration.py`)
+
+**Mock setup**: Full DynamoDB mock via `moto` with `SelfPromos`, `AdImpressions`, and `billing` tables. Tests exercise the full request cycle through the FastAPI router.
+
+| # | Test | Description |
+|---|------|-------------|
+| 1 | `test_billing_ledger_clean_after_impressions` | Record 10 impressions via router, scan entire billing table | Zero entries with promo-related type/reason |
+| 2 | `test_ad_impressions_records_promo_type` | Record impression via router, query AdImpressions | Record exists with `promo_type="self_promo"` |
+| 3 | `test_feed_injection_with_organic_posts` | Create 10 posts + 2 feed promos, call feed endpoint | Promos injected at correct positions among organic posts |
+
+### 5.3 E2E Tests (`frontend/e2e/self-promo-ads.spec.ts`)
+
+**Test file**: `frontend/e2e/self-promo-ads.spec.ts`
+
+**Auth pattern**: Use `injectAuth(page, "alice")` for Alice (creator/promo owner). Use `injectAuth(bobPage, "bob")` for Bob (non-owner, viewer). All POST/PATCH/DELETE requests via `page.request` must include `headers: { "x-csrf-token": sessions[identity].csrf_token }`.
+
+**Test setup (`beforeAll`)**:
+- Inject sessions for Alice (creator) and Bob (viewer) via `injectAuth`
+- Create a test video as Alice via API (`page.request.post`)
+- Create a test post as Alice via API
+- Store `aliceSub`, `bobSub`, `videoId`, `postId` for use in tests
+
+**Test teardown (`afterAll`)**:
+- Delete all test promos created during the run
+- Promos use `E2E_${Date.now()}` prefixed titles for uniqueness across retries
 
 **Section 419: Self-Promo CRUD API (5 tests)**
 
-1. `Creator creates a self-promo` — POST `/ui/self-promos` with title, creative_type=image, placement_types=["feed_inline"], feed_position=3. Verify 200, promo_id returned, status=draft.
-2. `Creator lists own promos` — GET `/ui/self-promos`. Verify array includes the created promo.
-3. `Creator updates promo title and placement` — PATCH `/ui/self-promos/{promo_id}` with new title. Verify 200, title updated.
-4. `Creator activates a draft promo` — POST `/ui/self-promos/{promo_id}/activate`. Verify status=active.
-5. `Non-owner cannot update another creator's promo` — PATCH as Bob on Alice's promo. Verify 403.
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 1 | `Creator creates a self-promo` | Alice | `const resp = await page.request.post("/ui/self-promos", { headers: { "x-csrf-token": sessions.alice.csrf_token }, data: { title: "E2E_${TS} promo", creative_type: "card", placement_types: ["feed_inline"], feed_position: 3 } })` → `expect(resp.status()).toBe(200)`; `expect(body.promo_id).toBeTruthy()`; `expect(body.status).toBe("draft")` |
+| 2 | `Creator lists own promos` | Alice | GET `/ui/self-promos` → 200; `expect(body.some(p => p.promo_id === promoId)).toBe(true)` |
+| 3 | `Creator updates promo title` | Alice | PATCH `/ui/self-promos/${promoId}` with `{ title: "Updated_${TS}" }` → 200; `expect(body.title).toContain("Updated")` |
+| 4 | `Creator activates draft promo` | Alice | POST `/ui/self-promos/${promoId}/activate` → 200; `expect(body.status).toBe("active")` |
+| 5 | `Non-owner cannot update promo` | Bob | PATCH Alice's promo as Bob → `expect(resp.status()).toBe(403)` |
 
 **Section 420: Self-Promo Feed Injection (4 tests)**
 
-6. `Active feed promo appears in feed promos endpoint` — GET `/ui/self-promos/feed/{creator_id}`. Verify promo returned.
-7. `Paused promo does not appear in feed promos` — Pause the promo, re-query. Verify empty.
-8. `Feed promo position=0 means pinned to top` — Create promo with feed_position=0, query feed promos. Verify it's first.
-9. `Cross-promo references another creator's content` — Create promo with cross_promo_creator_id=Bob's ID, target_content_type=profile. Verify 200, cross_promo_creator_id stored.
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 6 | `Active feed promo appears in feed promos` | Alice | GET `/ui/self-promos/feed/${aliceSub}` → 200; `expect(body.some(p => p.promo_id === promoId)).toBe(true)` |
+| 7 | `Paused promo not in feed promos` | Alice | POST pause → 200; GET feed promos → `expect(body.some(p => p.promo_id === promoId)).toBe(false)` |
+| 8 | `Feed position=0 means pinned top` | Alice | Create promo with `feed_position: 0`, activate; GET feed promos → `expect(body[0].feed_position).toBe(0)` |
+| 9 | `Cross-promo references other creator` | Alice | POST with `cross_promo_creator_id: bobSub` → 200; `expect(body.cross_promo_creator_id).toBe(bobSub)` |
 
 **Section 421: Self-Promo Analytics (No Billing) (5 tests)**
 
-10. `Record self-promo impression` — POST `/ui/self-promos/{promo_id}/event` with event_type=impression. Verify 200.
-11. `Record self-promo click` — POST event_type=click. Verify 200.
-12. `Analytics show impression and click counts` — GET `/ui/self-promos/{promo_id}/analytics`. Verify impression_count >= 1, click_count >= 1.
-13. `Self-promo impression creates NO billing ledger entry` — Query billing ledger for creator. Verify no entry with reason containing "self_promo" or the promo_id.
-14. `Self-promo impression writes to AdImpressions with promo_type=self_promo` — Query DDB AdImpressions for the promo_id. Verify record exists with promo_type=self_promo.
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 10 | `Record self-promo impression` | Bob | POST `/ui/self-promos/${promoId}/event` with `{ event_type: "impression" }` → `expect(resp.status()).toBe(200)` |
+| 11 | `Record self-promo click` | Bob | POST event with `{ event_type: "click" }` → 200 |
+| 12 | `Analytics show counts` | Alice | GET `/ui/self-promos/${promoId}/analytics` → `expect(body.impression_count).toBeGreaterThanOrEqual(1)`; `expect(body.click_count).toBeGreaterThanOrEqual(1)` |
+| 13 | `No billing ledger entry for self-promo` | Alice | Query billing API for creator; verify no entry with `promo_id` or `self_promo` in reason |
+| 14 | `AdImpressions has promo_type=self_promo` | Alice | (DDB scan or dedicated analytics endpoint) verify `promo_type === "self_promo"` |
 
 **Section 422: Self-Promo Video & Profile Placement (4 tests)**
 
-15. `Creator configures video self-promo` — Create promo with placement_types=["video_preroll"], target_content_id=video_id. Activate it. GET `/ui/self-promos/video/{video_id}`. Verify promo returned with is_self_promo=true.
-16. `Creator sets profile banner promo` — Create promo with placement_types=["profile_banner"]. Activate it. GET `/ui/self-promos/profile/{creator_id}`. Verify promo returned.
-17. `Deleting a promo removes it from video promos` — DELETE the video promo. Re-query. Verify empty.
-18. `Expired promo auto-filters from active queries` — Create promo with schedule_end in the past. Query feed promos. Verify not returned.
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 15 | `Creator configures video self-promo` | Alice | Create promo with `placement_types: ["video_preroll"]`, `target_content_id: videoId`; activate; GET `/ui/self-promos/video/${videoId}` → promo returned |
+| 16 | `Creator sets profile banner promo` | Alice | Create with `placement_types: ["profile_banner"]`; activate; GET `/ui/self-promos/profile/${aliceSub}` → promo returned |
+| 17 | `Deleting promo removes from video promos` | Alice | DELETE video promo; GET video promos → empty |
+| 18 | `Expired promo auto-filtered` | Alice | Create with `schedule_end` = past timestamp; GET feed promos → not returned |
 
-### 5.2 Test Setup
+**Section 423: Input Validation (5 tests)**
 
-```typescript
-test.beforeAll(async ({ browser, request }) => {
-    // Inject sessions for Alice (creator) and Bob (viewer)
-    // Create a test video as Alice
-    // Create a test post as Alice
-});
-```
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 19 | `Invalid creative_type rejected` | Alice | POST with `creative_type: "audio"` → `expect(resp.status()).toBe(422)` |
+| 20 | `Invalid placement_type rejected` | Alice | POST with `placement_types: ["sidebar"]` → 422 |
+| 21 | `Title too long rejected` | Alice | POST with 150-char title → 422 |
+| 22 | `Negative feed_position rejected` | Alice | POST with `feed_position: -1` → 422 |
+| 23 | `Invalid click_action rejected` | Alice | POST with `click_action: "execute"` → 422 |
 
-### 5.3 Test Teardown
+**Section 424: Authorization Boundary (4 tests)**
 
-```typescript
-test.afterAll(async () => {
-    // Clean up: delete all test promos
-});
-```
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 24 | `Non-owner cannot update promo` | Bob | PATCH Alice's promo → `expect(resp.status()).toBe(403)` |
+| 25 | `Non-owner cannot activate promo` | Bob | POST activate → 403 |
+| 26 | `Non-owner cannot delete promo` | Bob | DELETE → 403 |
+| 27 | `Non-owner cannot view analytics` | Bob | GET analytics → 403 |
+
+**Section 425: Billing Guarantee (4 tests)**
+
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 28 | `Impression creates no billing entry` | Bob | Record impression; scan billing table → no promo-related entries |
+| 29 | `Click creates no billing entry` | Bob | Record click; scan billing table → no promo-related entries |
+| 30 | `AdImpressions records promo_type` | Alice | Query analytics → `promo_type === "self_promo"` |
+| 31 | `Wallet balance unchanged` | Alice | GET wallet before/after impressions → same `balance_cents` |
+
+**Section 426: Event-Linked Promos (4 tests)**
+
+| # | Test | Auth | Assertion |
+|---|------|------|-----------|
+| 32 | `Create event-linked promo` | Alice | POST with `linked_event_id: broadcastId` → 200; `expect(body.linked_event_id).toBe(broadcastId)` |
+| 33 | `Activate via event` | Alice | Call activate endpoint for event → promo `status === "active"` |
+| 34 | `Deactivate via event` | Alice | Call deactivate endpoint → promo `status === "paused"` |
+| 35 | `Past schedule_end filters promo` | Alice | Create with past `schedule_end`; query → not returned |
+
+### 5.4 Test Data Requirements
+
+| Data | Source | Details |
+|------|--------|---------|
+| Alice user session | `e2e_session_setup.py` | `e2e_alice@test.local`, role=USER (acts as creator) |
+| Bob user session | `e2e_session_setup.py` | `e2e_bob@test.local`, role=USER (acts as viewer) |
+| Test video | Created in `beforeAll` | Alice's video via video upload API |
+| Test post | Created in `beforeAll` | Alice's newsfeed post via post API |
+| `SelfPromos` DDB table | `scripts/local-ddb-init.py` | Must exist with both GSIs (`ByStatusCreatedAt`, `ByLinkedEvent`); `attr_types={"created_at": "N"}` |
+| `AdImpressions` DDB table | Already exists | Extended with `promo_type` attribute |
+| `billing` DDB table | Already exists | Used for billing guarantee verification |
+
+### 5.5 CI / Pipeline
+
+- **Feature flag**: No feature flag (self-promos are a standard creator feature gated by auth)
+- **Serial tests**: E2E tests run serially (`workers: 1`); shared promo state between sections
+- **Retry safety**: All promo titles use `E2E_${Date.now()}` prefix for uniqueness; `afterAll` deletes test promos; promo counters are additive (analytics tests use `toBeGreaterThanOrEqual`)
+- **Pre-requisite**: `just restart` before full suite to clear accumulated promos from prior runs
+- **DDB tables required**: `SelfPromos` table with GSIs must be added to `scripts/local-ddb-init.py`
+- **Zero-billing invariant**: CI should assert zero billing entries for `self_promo` type as a post-run check
 
 ---
 
@@ -784,44 +885,54 @@ ProfilePromoBanner (on creator profile page)
 
 ---
 
-## 19. Expanded E2E Tests
+## 19. Dependencies & Merge Safety
 
-### 19.1 Section 423: Input Validation (5 tests)
+### 19.1 Depends On
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 423.1 | Invalid creative_type rejected | POST with creative_type="audio"; 422 |
-| 423.2 | Invalid placement_type rejected | POST with placement_types=["sidebar"]; 422 |
-| 423.3 | Title too long rejected | POST with 150-char title; 422 |
-| 423.4 | Negative feed_position rejected | POST with feed_position=-1; 422 |
-| 423.5 | Invalid click_action rejected | POST with click_action="execute"; 422 |
+| Ticket | What's needed | Status | Can overlap? |
+|--------|---------------|--------|--------------|
+| Existing newsfeed system | `newsfeed_feed_query.py`, `newsfeed_fanout.py` for feed injection | **Implemented** | N/A — already available |
+| VOD-018 (Ad-Supported Video Tier) | `ad_placement.py`, `AdImpressions` table, video ad-config endpoint | **Implemented** | N/A — already available |
+| Existing broadcast system | `broadcast_store.py`, `broadcast_orchestrator.py` for event lifecycle hooks | **Implemented** | N/A — already available |
+| Existing profiles system | `profile.py` for profile banner placement | **Implemented** | N/A — already available |
+| Existing content upload pipeline | S3 upload for creative images/videos | **Implemented** | N/A — already available |
 
-### 19.2 Section 424: Authorization Boundary (4 tests)
+### 19.2 Depended On By
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 424.1 | Non-owner cannot update promo | Bob PATCH Alice's promo; 403 |
-| 424.2 | Non-owner cannot activate promo | Bob POST activate on Alice's promo; 403 |
-| 424.3 | Non-owner cannot delete promo | Bob DELETE Alice's promo; 403 |
-| 424.4 | Non-owner cannot view analytics | Bob GET Alice's promo analytics; 403 |
+| Ticket | What it needs from ADS-019 | Notes |
+|--------|----------------------------|-------|
+| SYND-006 (Syndicate Advertising) | Self-promo placement model for syndicated content | SYND-006 can stub self-promo integration if ADS-019 is not ready |
+| ADS-018 (Admin Ad Platform Management) | Admin moderation of self-promos (future) | ADS-018 admin dashboard can add self-promo moderation tab later; not a hard dependency |
 
-### 19.3 Section 425: Billing Guarantee (4 tests)
+### 19.3 Merge Strategy
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 425.1 | Impression creates no billing entry | Record impression; scan billing ledger; no entry for promo_id |
-| 425.2 | Click creates no billing entry | Record click; scan billing ledger; no entry for promo_id |
-| 425.3 | AdImpressions records promo_type | Query AdImpressions; record has promo_type=self_promo |
-| 425.4 | Wallet balance unchanged after impressions | Check creator wallet before/after; same balance |
+**Classification**: Independent (all upstream dependencies are already implemented)
 
-### 19.4 Section 426: Event-Linked Promos (4 tests)
+ADS-019 can be implemented and merged independently. All required infrastructure (newsfeed, VOD ad placement, broadcast, profiles, AdImpressions table) already exists. The only new table is `SelfPromos`. No other pending tickets need to land first.
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 426.1 | Create event-linked promo | POST with linked_event_id=broadcast_id; 200; linked_event_id stored |
-| 426.2 | Activate via event | Call activate_event_promos(broadcast_id); promo status=active |
-| 426.3 | Deactivate via event | Call deactivate_event_promos(broadcast_id); promo status=paused |
-| 426.4 | Scheduled promo with past end time filtered | Create with schedule_end in past; query feed promos; not returned |
+**Recommended approach**:
+1. Implement `SelfPromos` table, service, router, and frontend page
+2. Wire feed injection into existing newsfeed query
+3. Wire video promo slots into existing ad placement service
+4. All changes are additive — no modifications to existing API contracts
+
+### 19.4 Merge Checklist
+
+- [ ] DDB table `SelfPromos` added to `scripts/local-ddb-init.py` with 2 GSIs and `attr_types={"created_at": "N"}`
+- [ ] `self_promos_table_name` setting added to `app/core/settings.py`
+- [ ] `self_promos` table handle added to `app/core/tables.py`
+- [ ] `self_promos_router` registered in `app/main.py` with prefix `/ui/self-promos`
+- [ ] `/self-promos` route added to `frontend/src/App.tsx`
+- [ ] "My Promos" link added to `Sidebar.tsx` under Creator Tools section
+- [ ] All Pydantic models (`SelfPromoCreateIn`, `SelfPromoOut`, etc.) added to `app/models.py`
+- [ ] All TypeScript types added to `frontend/src/api/types.ts`
+- [ ] `frontend/src/api/endpoints/selfPromos.ts` created
+- [ ] `AdImpressions` table schema unchanged (just new `promo_type` attribute on records)
+- [ ] Zero-billing invariant verified: no `new_ledger_entry` calls in self-promo impression/click path
+- [ ] Unit tests pass: `pytest tests/test_self_promos.py`
+- [ ] E2E tests pass: `npx playwright test e2e/self-promo-ads.spec.ts`
+- [ ] No breaking changes to existing newsfeed, VOD, or broadcast endpoints
+- [ ] Feed injection is additive (mixed post/promo items returned by feed endpoint)
 
 ---
 

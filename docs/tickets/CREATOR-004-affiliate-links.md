@@ -1300,3 +1300,97 @@ test.beforeAll(async ({ browser }) => {
 | `frontend/src/App.tsx` | 78, 189 | Lazy import + route for `/affiliates` |
 | `frontend/src/pages/affiliates/AffiliateDashboard.tsx` | all | Main affiliate page |
 | `frontend/src/api/endpoints/affiliates.ts` | all | Frontend API functions |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_affiliate_links.py`
+
+| Test Function | What It Validates | Mock Setup |
+|---|---|---|
+| `test_create_affiliate_link` | Link record created with correct fields, tracking code generated | moto DDB `affiliate_links` table |
+| `test_create_link_duplicate_code` | 409 when tracking code already exists | Pre-seed link with same code |
+| `test_list_creator_links` | Paginated links for creator, sorted by created_at | Pre-seed 5 links |
+| `test_pause_resume_revoke_link` | Status transitions: active->paused->active->revoked | Pre-seed active link |
+| `test_record_click` | Click record written to `affiliate_clicks`, counter incremented | moto DDB |
+| `test_record_click_bot_filtered` | Bot user-agent clicks not counted toward conversions | Set UA to known bot pattern |
+| `test_record_conversion_attributed` | Conversion attributed, commission calculated, ledger entries written | Seed click within attribution window |
+| `test_conversion_expired_window` | No attribution when click outside window | Seed old click |
+| `test_conversion_self_click_ignored` | Self-referral not attributed | Click from link creator |
+| `test_conversion_paused_link` | Paused links do not attribute | Seed paused link |
+| `test_commission_calculation` | `amount_cents * rate / 100` with correct rounding | Direct function call |
+| `test_per_product_override` | Per-product rate overrides default | Seed override |
+| `test_refund_clawback` | Refunded order reverses commission with negative ledger entry | Seed conversion then refund |
+| `test_get_link_stats` | Aggregates clicks, conversions, revenue, commission | Seed clicks + conversions |
+
+**Mock Setup**: `moto.mock_dynamodb` with `affiliate_links`, `affiliate_clicks`, `billing` tables.
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/affiliate-links.spec.ts`
+
+**Auth Pattern**: `injectAuth(page, "alice")` / `injectAuth(page, "bob")`. CSRF headers on all mutations.
+
+| Section | Title | Tests | Key Assertions |
+|---|---|---|---|
+| 1 | Link CRUD API | 7 | `expect(body.tracking_code).toBeTruthy()`, `expect(body.status).toBe("active")` |
+| 2 | Click Tracking API | 5 | Redirect 302, click count incremented, attribution cookie set |
+| 3 | Conversion Attribution API | 6 | Commission > 0, ledger entries present, expired window no attribution |
+| 4 | Commission Settings API | 4 | Default rate persists, per-product override, per-affiliate override priority |
+| 5 | Performance Dashboard API | 4 | Aggregates correct, top links sorted, pagination |
+| 6 | Affiliate Page UI | 5 | `page.getByRole("tab", { name: /links/i })`, create dialog, copy button |
+| 7 | Refund Clawback | 3 | Negative commission entry, stats adjusted |
+| 8 | Cross-Creator Affiliate | 3 | Alice link to Bob product, commission flows to Alice |
+
+**Negative Tests**: 409 (duplicate code), 403 (non-affiliate-enabled product), 404 (revoked link redirect), 400 (invalid rate).
+
+**Setup/Teardown**: `beforeAll` creates Bob's catalog product via API, Alice creates affiliate link. TS-prefixed names.
+
+### Test Data Requirements
+
+| Data | Table | Seeded By |
+|---|---|---|
+| Alice, Bob sessions | `sessions` | `e2e_session_setup.py` |
+| Catalog product | Catalog tables | API in `beforeAll` |
+| Affiliate links | `affiliate_links` | API in `beforeAll` |
+
+### CI / Pipeline
+
+- **Feature flag**: `AFFILIATE_LINKS_ENABLED=true` (default).
+- **Serial execution**: Required -- conversion tests depend on click data.
+- **Retry safety**: Tracking codes and product names include `TS` suffix.
+- **DDB tables**: `affiliate_links`, `affiliate_clicks` in `scripts/local-ddb-init.py`.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| Catalog System (`app/routers/catalog.py`) | Product records for link targets | Implemented (core) | Yes |
+| Billing Ledger (`app/services/tip_ledger.py`) | Commission debit/credit writes | Implemented (core) | Yes |
+| Creator Earnings (`app/services/creator_earnings.py`) | Needs new "affiliate" category in `_reason_to_category` | Implemented (core) | Yes |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|---|---|
+| None currently | Standalone affiliate feature |
+
+### Merge Strategy
+
+**Independent**. Introduces two new DDB tables, new router + services. All modifications additive. No existing behavior changed.
+
+### Merge Checklist
+
+- [ ] `affiliate_links` and `affiliate_clicks` tables in `scripts/local-ddb-init.py`
+- [ ] Feature flag `AFFILIATE_LINKS_ENABLED` in `.env.local.example`
+- [ ] `_reason_to_category` includes "affiliate" category
+- [ ] Redirect endpoint (`GET /a/{code}`) does not require auth
+- [ ] All 37 E2E tests pass
+- [ ] `just test` passes

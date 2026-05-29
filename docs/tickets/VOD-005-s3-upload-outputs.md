@@ -1088,3 +1088,40 @@ Upload time at 500 Mbps network: ~8 minutes. With 4-thread multipart: ~2 minutes
 | `app/main.py` | 369 | `vod_output_bucket` in dev bucket list |
 | `app/services/broadcast_playback.py` | -- | Reference pattern for local playback URLs |
 | `app/services/broadcast_cloudfront.py` | -- | Reference pattern for CloudFront signed URLs |
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|--------------|--------|--------------|
+| VOD-002 | S3 bucket conventions and `video_upload_bucket` / `vod_output_bucket` settings | Implemented | Yes -- uses separate output bucket |
+| VOD-003 | `TranscodeJobs` table for `complete_job_with_outputs()` to update job records with output URIs | Implemented | Yes -- only writes to existing job records |
+| VOD-004 | HLS output directory structure on scratch disk (manifests, segments, thumbnails) | Implemented | Yes -- consumes output directory; no shared mutable state |
+
+### Depended On By
+
+| Ticket | What It Needs from VOD-005 |
+|--------|---------------------------|
+| VOD-006 | `hls_manifest_url` and `thumbnail_url` on video records for listing API responses |
+| VOD-008 | Playback URL generation (`mint_vod_playback_url`) for the video player |
+| VOD-010 | Encrypted segment upload alongside DRM key metadata |
+| VOD-012 | S3 key patterns for MP4 download generation |
+| VOD-017 | Thumbnail URLs for gallery cards |
+
+### Merge Strategy
+
+**Sequential after VOD-003 + VOD-004** -- This is the final piece of the core transcode pipeline. Must be merged after the job queue and FFmpeg executor are in place. No feature flag needed; upload logic is invoked only by the transcode worker on job completion.
+
+### Merge Checklist
+
+- [ ] `vod_output_bucket` configured in `.env.local` (default: `"vod-output"`)
+- [ ] Bucket included in `_dev_buckets` list in `app/main.py`
+- [ ] Content-type mapping covers `.m3u8`, `.ts`, `.jpg`, `.json`
+- [ ] `metadata.json` written with rendition list and thumbnail keys
+- [ ] Multipart upload threshold configured (default: 8 MB)
+- [ ] `abort_incomplete_uploads()` called on failure path
+- [ ] `just test` passes (S3 upload unit tests with moto)
+- [ ] Full pipeline E2E: upload -> transcode -> S3 outputs -> playback URL resolves

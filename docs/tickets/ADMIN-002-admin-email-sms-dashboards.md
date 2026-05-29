@@ -1209,6 +1209,158 @@ export const testSendTemplate = (id: string, data: TemplateTestSend) =>
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**Test file**: `tests/test_notification_templates.py`
+
+**Mock setup**: DynamoDB mocked via `moto`. Email sending mocked with `unittest.mock.patch("app.services.email_delivery.send_email")`. SMS sending mocked with `unittest.mock.patch("app.services.sms_delivery.send_sms")`.
+
+**Fixtures**:
+- `templates_table`: moto-backed `notification_templates` table with PK=`TEMPLATE#{id}`, SK=`META`
+- `admin_session`: Fake session dict `{"user_sub": "root.admin@testdev.local", "role": "ROOT", "admin_profile": {...}}`
+- `sample_email_template`: Pre-built email template dict with subject, body, variables
+- `sample_sms_template`: Pre-built SMS template dict
+
+**Test functions**:
+
+| Function | What it tests |
+|----------|---------------|
+| `test_list_templates_returns_all` | `list_templates()` returns all seeded templates from DDB |
+| `test_list_templates_filters_by_channel` | `list_templates(channel="email")` returns only email templates |
+| `test_get_template_by_id` | `get_template("email_welcome")` returns correct template record |
+| `test_get_template_not_found` | `get_template("nonexistent")` raises 404 |
+| `test_update_template_body` | `update_template("email_welcome", body="new body")` persists change |
+| `test_update_template_strips_script_tags` | Body with `<script>` tags has them removed by `TemplateUpdate` validator |
+| `test_update_template_preserves_immutable_fields` | `channel` and `template_id` cannot be changed via update |
+| `test_preview_template_renders_variables` | `preview_template("email_welcome", sample_vars={"user_name": "Alice"})` returns rendered HTML with "Alice" |
+| `test_preview_template_reports_missing_vars` | Preview with incomplete vars returns `missing_vars` list |
+| `test_test_send_email_calls_send_email` | `test_send("email_welcome", recipient="admin@test.local")` calls patched `send_email` with rendered content |
+| `test_test_send_sms_calls_send_sms` | `test_send("sms_verification", recipient="+15551234567")` calls patched `send_sms` |
+| `test_test_send_rate_limit` | 11th test send within 1 hour returns 429 |
+| `test_seed_default_templates` | `seed_default_templates()` populates DDB from `alert_email_templates.py` functions |
+| `test_suppression_add_idempotent` | Adding same address twice returns 200 both times, list has one entry |
+| `test_suppression_remove_not_found` | Removing nonexistent address returns 404 |
+
+**Test file**: `tests/test_admin_email_router.py` (existing router, add coverage)
+
+| Function | What it tests |
+|----------|---------------|
+| `test_email_stats_returns_rates` | GET `/ui/admin/email/stats` returns `delivery_rate`, `bounce_rate`, `complaint_rate` as floats |
+| `test_email_stats_invalid_days_returns_422` | `days=0` or `days=400` returns 422 |
+| `test_email_deliveries_pagination` | Cursor-based pagination returns correct pages |
+| `test_non_admin_gets_403` | USER role on email stats returns 403 |
+
+### Integration Tests
+
+**Test file**: `tests/test_admin_communications_integration.py`
+
+Tests with real moto DynamoDB (no patching of DDB calls):
+
+| Test | What it validates |
+|------|-------------------|
+| `test_template_crud_roundtrip` | Create template, update body, re-read, verify changes persisted |
+| `test_template_preview_with_all_variables` | Seed template with 5 variables, preview with all provided, no `missing_vars` |
+| `test_email_stats_aggregation_across_dates` | Seed delivery records across 7 dates, verify `get_delivery_stats(days=7)` aggregates correctly |
+| `test_sms_stats_aggregation` | Seed SMS records, verify `get_sms_delivery_stats()` counts match |
+| `test_suppression_lifecycle` | Add suppression, verify `is_suppressed()` returns True, remove, verify returns False |
+| `test_test_send_with_real_template` | Seed template, call test_send, verify email_delivery.send_email was called with rendered content |
+
+### E2E Tests (Playwright)
+
+**Test file**: `frontend/e2e/admin-communications.spec.ts`
+**Sections**: 551-558 (30 tests) as detailed in section 9 above.
+
+**Auth pattern**: `injectAuth(page, "root")` for admin operations; `injectAuth(page, "alice")` for authorization boundary tests.
+
+**CSRF handling**: All POST/PATCH/DELETE requests via `page.request` include `headers: { "x-csrf-token": sessions["root"].csrf_token }`.
+
+**Setup/teardown**:
+- `beforeAll`: Inject auth for Root and Alice. Seed email delivery records (5 sent, 1 bounced, 1 complained), SMS records (3 sent, 1 failed), and 2 notification templates via direct DDB writes.
+- `afterAll`: Clean up seeded suppression entries and test templates.
+
+**Negative tests**: 403 (non-admin on all endpoints), 404 (nonexistent template, nonexistent suppression removal), 422 (empty suppression address, invalid `days` param, template body > 10000 chars)
+
+**Key selectors**:
+- Email tab: `page.getByRole("tab", { name: /email/i })`
+- SMS tab: `page.getByRole("tab", { name: /sms/i })`
+- Templates tab: `page.getByRole("tab", { name: /templates/i })`
+- KPI card: `page.locator("[data-testid='kpi-sent']")` or `page.getByText(/sent \(7d\)/i)`
+- Suppression add button: `page.getByRole("button", { name: /add/i })` scoped within suppression card
+- Template row: `page.getByText("Welcome Email")` in templates list
+
+### Test Data Requirements
+
+**DDB seed data**:
+- `email_delivery` table: PK=`EMAIL_STATS`, SK=`DATE#2026-05-{dd}` records for 7 days; PK=`EMAIL_DELIVERY`, PK=`EMAIL_BOUNCE`, PK=`EMAIL_COMPLAINT` records
+- `sms_delivery` table: PK=`SMS_STATS`, PK=`SMS_DELIVERY`, PK=`SMS_FAILURE` records
+- `notification_templates` table: PK=`TEMPLATE#email_welcome`, SK=`META`; PK=`TEMPLATE#sms_verification`, SK=`META`
+
+**Test user roles**:
+- Root (ROOT): Full admin access to all endpoints
+- Charlie (ADMIN): Admin access for section 557 authorization tests
+- Alice (USER): Non-admin for 403 boundary tests
+
+**Cleanup strategy**: Delete all seeded records in `afterAll` using known PKs/SKs. Suppression entries cleaned by DELETE endpoint calls.
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `ADMIN_COMMS_DASHBOARD_ENABLED=true` in `.env.local` for E2E tests
+- **New DDB table**: `notification_templates` must be created in `scripts/local-ddb-init.py` before tests run
+- **Serial execution**: Template tests (section 554) depend on seeded data from `beforeAll` — run in declared order
+- **Retry safety**: Each test uses unique suppression addresses with timestamp suffix (`spam_${Date.now()}@test.local`) to avoid cross-retry collisions
+- **Test send mocking**: In dev mode, `send_email` and `send_sms` write to dev log instead of sending real notifications — no external service dependency
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On (upstream)
+
+| Ticket / Component | What's needed | Status | Can work start before dependency merges? |
+|-------------------|---------------|--------|------------------------------------------|
+| `app/services/email_delivery.py` | Email stats, deliveries, bounces, complaints, suppression functions | **Implemented** (exists in codebase) | Yes — already merged |
+| `app/services/sms_delivery.py` | SMS stats, deliveries, failures, suppression functions | **Implemented** (exists in codebase) | Yes — already merged |
+| `app/routers/admin_email.py` | Existing admin email router (8 endpoints, prefix `/ui/admin/email`) | **Implemented** (registered in `main.py:162,439`) | Yes — already merged |
+| `app/routers/admin_sms.py` | Existing admin SMS router (8 endpoints, prefix `/ui/admin/sms`) | **Implemented** (registered in `main.py:161,438`) | Yes — already merged |
+| `app/auth/policy.py` | `require_admin_or_root` auth dependency | **Implemented** (exists in codebase) | Yes — already merged |
+| `app/services/alert_email_templates.py` | Hardcoded templates to seed into DDB | **Implemented** (exists in codebase) | Yes — already merged |
+
+All upstream dependencies are already implemented and merged. This ticket has no blocking dependencies.
+
+### Depended On By (downstream)
+
+| Ticket | What it needs from ADMIN-002 |
+|--------|------------------------------|
+| None identified | No other tickets reference ADMIN-002 as a dependency |
+
+### Merge Strategy
+
+**Classification**: **Independent**
+
+This ticket is fully self-contained. It creates new service/router/frontend files and adds a new DDB table. No other in-flight tickets modify the same files or tables.
+
+- **No cross-ticket conflicts**: The `notification_templates` table is unique to this feature; existing `admin_email.py` and `admin_sms.py` are read-only dependencies (not modified)
+- **New DDB table**: `notification_templates` requires addition to `scripts/local-ddb-init.py`
+- **Feature flag gated**: `ADMIN_COMMS_DASHBOARD_ENABLED` defaults to `false`
+- **Safe to merge to main independently** at any time
+
+### Merge Checklist
+
+- [ ] **DDB tables**: Add `notification_templates` table to `scripts/local-ddb-init.py` (PK=`pk`, SK=`sk`, no GSIs)
+- [ ] **Settings**: Add `notification_templates_table_name` to `app/core/settings.py` and `.env.local.example`; add `ADMIN_COMMS_DASHBOARD_ENABLED`, `ADMIN_TEMPLATE_EDIT_ENABLED`, `ADMIN_TEST_SEND_ENABLED` feature flags
+- [ ] **Table handle**: Add `notification_templates` to `app/core/tables.py`
+- [ ] **Router registration**: Register `admin_notifications_router` in `app/main.py` (existing `admin_email_router` and `admin_sms_router` already registered)
+- [ ] **Frontend route**: Add `/admin/communications` route to `App.tsx` with admin role guard
+- [ ] **Frontend sidebar**: Add "Communications" link in admin section of `Sidebar.tsx`
+- [ ] **E2E tests**: All 30 tests in `frontend/e2e/admin-communications.spec.ts` pass
+- [ ] **Unit tests**: All tests in `tests/test_notification_templates.py` pass
+- [ ] **No breaking changes**: Existing admin email/SMS endpoints, frontend pages, and DDB records are unaffected
+- [ ] **Template seeding**: `seed_default_templates()` runs at startup to populate DDB from `alert_email_templates.py`
+
+---
+
 ## Codebase References
 
 | File | Line(s) | What |

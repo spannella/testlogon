@@ -1151,6 +1151,156 @@ export const removeFromAllowlist = (entryId: string) =>
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**Test file**: `tests/test_rate_limit_admin.py`
+
+**Mock setup**: DynamoDB mocked via `moto`. Rate limit event logging mocked with `unittest.mock.patch("app.services.rate_limit_dashboard.log_rate_limit_event")` where needed. IP validation uses real logic (no mocking).
+
+**Fixtures**:
+- `rate_limit_tables`: moto-backed `rate_limit_config`, `rate_limit_store`, and `rate_limit_events` DDB tables
+- `root_session`: Fake session dict `{"user_sub": "root.admin@testdev.local", "role": "ROOT"}`
+- `sample_events`: Pre-seeded rate limit events across multiple groups and source IPs
+- `sample_blocklist`: Pre-seeded blocklist entries for testing removal
+
+**Test functions**:
+
+| Function | What it tests |
+|----------|---------------|
+| `test_get_all_configs_returns_defaults` | `get_all_configs()` returns all endpoint groups with default values |
+| `test_save_group_override_persists` | `save_group_override("messaging", requests_per_window=200)` persists and `get_group_config("messaging")` reflects change |
+| `test_save_group_override_marks_is_override` | After override, config has `is_override=True` |
+| `test_config_update_validates_min_requests` | `requests_per_window=0` raises validation error |
+| `test_config_update_validates_max_burst` | `burst=10001` raises validation error |
+| `test_config_update_validates_group_name` | Empty group name raises validation error |
+| `test_add_to_blocklist_persists` | `add_to_blocklist("192.168.1.100", reason="bot")` and `is_blocked("192.168.1.100")` returns True |
+| `test_remove_from_blocklist` | After `remove_from_blocklist`, `is_blocked` returns False |
+| `test_blocklist_entry_not_found_returns_404` | Removing nonexistent entry returns 404 |
+| `test_add_to_allowlist_with_cidr` | `add_to_allowlist("10.0.0.0/8")` and `is_allowlisted("10.0.0.1")` returns True |
+| `test_invalid_ip_format_rejected` | `add_to_blocklist("not-an-ip")` raises validation error |
+| `test_invalid_cidr_format_rejected` | `add_to_allowlist("10.0.0.0")` (no prefix) raises validation error |
+| `test_query_events_by_time_range` | `query_events(start=T-3600, end=T)` returns only events within range |
+| `test_query_events_by_group_filter` | `query_events(group="auth")` returns only auth group events |
+| `test_get_top_offenders_sorted_by_count` | `get_top_offenders()` returns list sorted by `hit_count` descending |
+| `test_live_summary_aggregates_by_group` | Live summary endpoint returns `by_group` dict with correct counts per group |
+| `test_live_summary_buckets_time_series` | `time_series` has 5-minute buckets with correct counts |
+| `test_live_summary_top_sources` | `by_source` returns top N source IPs by count |
+| `test_events_export_csv_format` | Export returns valid CSV with header row and correct columns |
+| `test_events_export_caps_at_10000` | Export with >10000 events returns exactly 10000 rows |
+| `test_non_root_gets_403` | USER role on any endpoint returns 403 |
+| `test_admin_role_gets_403` | ADMIN (non-root) role on any endpoint returns 403 (these endpoints require ROOT) |
+
+### Integration Tests
+
+**Test file**: `tests/test_rate_limit_admin_integration.py`
+
+Tests with real moto DynamoDB (no patching of DDB calls):
+
+| Test | What it validates |
+|------|-------------------|
+| `test_config_override_then_reset_roundtrip` | Override config, verify `is_override=True`, delete override row, verify config returns to default |
+| `test_blocklist_add_remove_roundtrip` | Add IP, verify `is_blocked`, remove, verify no longer blocked |
+| `test_allowlist_cidr_matching` | Add `10.0.0.0/8`, verify `10.1.2.3` is allowlisted, verify `192.168.1.1` is not |
+| `test_event_query_pagination` | Seed 100 events, query with `limit=20`, use cursor for next page, verify all 100 retrieved |
+| `test_live_summary_with_fresh_events` | Log events, immediately query live summary, verify counts match |
+| `test_concurrent_blocklist_operations` | Add and remove different IPs concurrently, verify final state is correct |
+
+### E2E Tests (Playwright)
+
+**Test file**: `frontend/e2e/admin-rate-limits.spec.ts`
+**Sections**: 555-562 (30 tests) as detailed in section 9 above.
+
+**Auth pattern**: `injectAuth(page, "root")` for root operations; `injectAuth(page, "alice")` for authorization boundary tests.
+
+**CSRF handling**: All POST/PUT/DELETE requests via `page.request` include `headers: { "x-csrf-token": sessions["root"].csrf_token }`.
+
+**Setup/teardown**:
+- `beforeAll`: Inject auth for Root and Alice. Seed 5 rate limit events via direct DDB writes to `rate_limit_events` table. Seed 1 blocklist entry and 1 allowlist entry via POST endpoints.
+- `afterAll`: Remove seeded blocklist/allowlist entries. Reset any config overrides via DELETE or reset endpoint.
+
+**Negative tests**: 403 (non-root on all endpoints including Alice as USER and Charlie as ADMIN), 404 (nonexistent blocklist entry removal), 422 (invalid IP, invalid CIDR, zero requests_per_window, negative burst)
+
+**Key selectors**:
+- Rules tab: `page.getByRole("tab", { name: /rules/i })`
+- Blocklist tab: `page.getByRole("tab", { name: /blocklist/i })`
+- Live dashboard tab: `page.getByRole("tab", { name: /live/i })`
+- Config table row: `page.getByRole("row").filter({ hasText: "messaging" })`
+- Block IP button: `page.getByRole("button", { name: /block ip/i })`
+- Override badge: `page.getByText("Custom")` scoped within config row
+- Export CSV button: `page.getByRole("button", { name: /export csv/i })`
+
+### Test Data Requirements
+
+**DDB seed data**:
+- `rate_limit_events` table: 5 events with varying `group` (auth, messaging, search), `source_ip`, `action` (limited, allowed), `timestamp` within last hour
+- `rate_limit_store` table (blocklist): PK=`BLOCKLIST`, SK=`IP#192.168.1.50` with `reason` and `added_at`
+- `rate_limit_store` table (allowlist): PK=`ALLOWLIST`, SK=`CIDR#172.16.0.0/12` with `reason` and `added_at`
+
+**Test user roles**:
+- Root (ROOT): Full access to all rate limit admin endpoints
+- Alice (USER): Non-root for 403 boundary tests
+
+**Cleanup strategy**: `afterAll` removes blocklist/allowlist entries created during tests via DELETE endpoints. Config overrides are reset. Events are not cleaned (they accumulate harmlessly and are filtered by timestamp).
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `ADMIN_RATE_LIMITS_UI_ENABLED=true` in `.env.local` for E2E tests
+- **No new DDB tables**: All required tables (`rate_limits`, `rate_limit_events`) already exist in `scripts/local-ddb-init.py`
+- **Serial execution**: Blocklist tests depend on `beforeAll` seeding; config tests modify shared state — run in declared order
+- **Retry safety**: Each test uses unique IPs/CIDRs with timestamp suffix (e.g., `192.168.${Math.floor(Date.now() % 255)}.100`) to avoid cross-retry collisions
+- **Live summary timing**: Tests that validate live summary counts may see events from other tests in the same run; assert `total_hits >= expected` (not exact equality)
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On (upstream)
+
+| Ticket / Component | What's needed | Status | Can work start before dependency merges? |
+|-------------------|---------------|--------|------------------------------------------|
+| `app/services/rate_limit_config.py` | `get_all_configs`, `save_group_override`, `get_group_config` | **Implemented** (exists in codebase) | Yes — already merged |
+| `app/services/rate_limit_store.py` | Blocklist/allowlist CRUD, `is_blocked`, `is_allowlisted` | **Implemented** (exists in codebase) | Yes — already merged |
+| `app/services/rate_limit_dashboard.py` | `log_rate_limit_event`, `query_events`, `get_top_offenders` | **Implemented** (exists in codebase) | Yes — already merged |
+| `app/routers/admin_rate_limits.py` | Existing 10-endpoint router (prefix `/ui/admin/rate-limits`) | **Implemented** (registered in `main.py:113,436`) | Yes — already merged |
+| `app/auth/policy.py` | `require_root` auth dependency | **Implemented** (exists in codebase) | Yes — already merged |
+| `frontend/src/pages/admin/RateLimitDashboard.tsx` | Existing 544-line dashboard page to extend | **Implemented** (exists in codebase) | Yes — already merged |
+| `frontend/src/api/endpoints/adminRateLimits.ts` | Existing 122-line API wrappers | **Implemented** (exists in codebase) | Yes — already merged |
+
+All upstream dependencies are already implemented and merged. This ticket has no blocking dependencies.
+
+### Depended On By (downstream)
+
+| Ticket | What it needs from ADMIN-003 |
+|--------|------------------------------|
+| None identified | No other tickets reference ADMIN-003 as a dependency |
+
+### Merge Strategy
+
+**Classification**: **Independent**
+
+This ticket modifies existing files only (no new tables, no new services). It adds 2 endpoints to an existing router and enhances an existing frontend page.
+
+- **No cross-ticket conflicts**: The `admin_rate_limits.py` router and `RateLimitDashboard.tsx` page are not modified by any other in-flight ticket
+- **No new DDB tables**: Uses existing `rate_limits` and `rate_limit_events` tables
+- **Feature flag gated**: `ADMIN_RATE_LIMITS_UI_ENABLED` defaults to `false`
+- **Safe to merge to main independently** at any time
+
+### Merge Checklist
+
+- [ ] **DDB tables**: No new tables required. Existing `rate_limits` (line 842) and `rate_limit_events` (line 848) in `local-ddb-init.py` are sufficient
+- [ ] **Settings**: Add `ADMIN_RATE_LIMITS_UI_ENABLED` and `RATE_LIMIT_LIVE_REFRESH_INTERVAL` to `app/core/settings.py` and `.env.local.example`
+- [ ] **Router registration**: No new router registration needed — adding endpoints to existing `admin_rate_limits.py`
+- [ ] **Frontend route**: Route `/admin/rate-limits` already exists in `App.tsx` line 202 — no change needed
+- [ ] **Frontend sidebar**: Verify "Rate Limits" link already present in admin section of `Sidebar.tsx` (may already exist)
+- [ ] **E2E tests**: All 30 tests in `frontend/e2e/admin-rate-limits.spec.ts` pass
+- [ ] **Unit tests**: All tests in `tests/test_rate_limit_admin.py` pass
+- [ ] **No breaking changes**: Existing 10 endpoints in `admin_rate_limits.py` unchanged; existing `RateLimitDashboard.tsx` UI extended (not replaced)
+- [ ] **Feature flag default**: Verify `ADMIN_RATE_LIMITS_UI_ENABLED` defaults to `false` in production
+
+---
+
 ## Codebase References
 
 | File | Line(s) | What |

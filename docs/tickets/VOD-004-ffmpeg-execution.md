@@ -1149,3 +1149,38 @@ Note: FFmpeg cannot process SVG files directly as overlay inputs. The executor m
 | `scripts/video/run_abr_transcoder.py` | -- | Script-based parallel rendition launcher |
 
 The recommended approach is (2) for the initial implementation, with SVG-to-PNG conversion as a future enhancement.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|--------------|--------|--------------|
+| VOD-003 | `transcode_worker.py` calls `execute_rendition()`; `transcode_job_store.py` provides `update_progress()` for the callback | Implemented | Yes -- executor has zero imports from VOD-003; communicates via callback/event params |
+| MEDIA-002 | `ffmpeg_manager.py` for binary path resolution (`get_ffmpeg_path()`) and codec validation | Implemented | Yes -- executor can fall back to `"ffmpeg"` on PATH |
+
+### Depended On By
+
+| Ticket | What It Needs from VOD-004 |
+|--------|---------------------------|
+| VOD-005 | Completed HLS output directory structure for S3 upload |
+| VOD-010 | DRM encryption key injection into FFmpeg args |
+| VOD-015 | `execute_rendition()` for clip extraction with resource limits |
+| VOD-016 | `execute_rendition()` for concat pre-processing and re-encoding |
+| VOD-020 | FFmpeg `drawtext` filter execution for watermark embedding |
+
+### Merge Strategy
+
+**Parallel-safe with VOD-003** -- The executor module has zero imports from VOD-003 and can be developed/tested independently. The integration point is the `on_progress` callback and `cancel_event` parameter, both injected by the caller. Merge after or alongside VOD-003.
+
+### Merge Checklist
+
+- [ ] `ffmpeg` binary available on PATH (installed by `scripts/setup_ubuntu.sh`)
+- [ ] `ffmpeg_executor.py` passes all unit tests with mocked subprocess
+- [ ] Integration tests pass with real FFmpeg (skipped gracefully if unavailable)
+- [ ] `tests/fixtures/test_video_2s.mp4` committed (or generated in conftest.py)
+- [ ] Resource limits (`_apply_resource_limits`) do not interfere with CI runners
+- [ ] VOD HLS flags patched correctly (`-hls_playlist_type vod`, `-hls_list_size 0`)
+- [ ] Error classification covers all patterns in `_ERROR_PATTERNS`

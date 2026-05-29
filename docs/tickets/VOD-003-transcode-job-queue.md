@@ -1284,3 +1284,41 @@ TranscodeJobsPanel (embedded in VideosPage, VOD-007)
 | `app/core/settings.py` | 1082 | `transcode_jobs_table_name` setting |
 | `scripts/local-ddb-init.py` | 739-760 | `TranscodeJobs` table definition with 3 GSIs |
 | `frontend/e2e/vod-pipeline.spec.ts` | -- | E2E pipeline tests |
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|--------------|--------|--------------|
+| VOD-001 | `VideoMetadata` table and `video_metadata_store.py` for video record updates on job completion | Implemented | Yes -- VOD-003 writes to `TranscodeJobs`, only reads/updates VideoMetadata |
+| VOD-002 | Source S3 URI from upload flow; presigned upload ticket establishes the raw file location | Implemented | Yes -- VOD-003 can be developed with hardcoded test URIs |
+
+### Depended On By
+
+| Ticket | What It Needs from VOD-003 |
+|--------|---------------------------|
+| VOD-004 | Job lifecycle (claim, progress update, complete/fail) for FFmpeg executor integration |
+| VOD-005 | Job `complete_job_with_outputs()` to record S3 output URIs after upload |
+| VOD-010 | DRM key injection integrated into the transcode pipeline |
+| VOD-011 | E2E test coverage of job submission, polling, and cancellation |
+| VOD-012 | Reuses `TranscodeJobs` table for MP4 mux jobs (`job_type="mp4_mux"`) |
+| VOD-015 | Creates clip jobs (`job_type="clip"`) in the same queue |
+| VOD-016 | Creates concat jobs (`job_type="concat"`) in the same queue |
+
+### Merge Strategy
+
+**Sequential after VOD-001 + VOD-002** -- The transcode queue is the core orchestration layer; it should be merged before VOD-004 and VOD-005. Feature-flag-gated: `TRANSCODE_WORKER_ENABLED` controls the in-process worker loop, `TRANSCODE_API_ENABLED` controls API endpoint availability.
+
+### Merge Checklist
+
+- [ ] `TranscodeJobs` table exists in `scripts/local-ddb-init.py` with GSIs `ByStatusCreatedAt`, `ByVideoId`, `ByTenantStatus`
+- [ ] `attr_types={"created_at": "N"}` set for numeric GSI sort key
+- [ ] `transcode_jobs_router` registered in `app/main.py`
+- [ ] `start_transcode_worker_task` registered as startup event handler
+- [ ] `TRANSCODE_WORKER_ENABLED` defaults to `true` in dev mode
+- [ ] `just test` passes (job store unit tests with moto)
+- [ ] `just e2e` passes (pipeline E2E tests)
+- [ ] Worker loop does not crash when no pending jobs (empty poll returns gracefully)

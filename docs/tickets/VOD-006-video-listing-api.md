@@ -908,3 +908,44 @@ test("Regular user cannot access admin listing", async ({ page }) => {
 | `app/services/sessions.py` | 283 | `require_ui_session()` (used by video_listing.py) |
 | `scripts/local-ddb-init.py` | 707-737 | `VideoMetadata` table with 5 GSIs |
 | `frontend/e2e/video-listing.spec.ts` | -- | E2E listing tests |
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|--------------|--------|--------------|
+| VOD-001 | `VideoMetadata` table with `ByOwnerCreatedAt`, `ByStatusCreatedAt` GSIs; `video_metadata_store.py` CRUD | Implemented | Yes -- listing is read-only against existing records |
+| VOD-005 | `hls_manifest_url` and `thumbnail_url` fields populated on video records (for playback token generation) | Implemented | Soft dependency -- listing works without these fields; playback fields return `null` |
+
+### Depended On By
+
+| Ticket | What It Needs from VOD-006 |
+|--------|---------------------------|
+| VOD-007 | Video grid data source (`listOwnVideos`) for the upload UI page |
+| VOD-008 | `GET /ui/videos/{id}` for video detail + playback token |
+| VOD-009 | Route wiring for `/videos` listing page |
+| VOD-011 | E2E test assertions against listing and detail endpoints |
+| VOD-013 | Video metadata lookup for shared video cards in messages |
+| VOD-014 | Video listing for file-bridge "In Files" indicator |
+| VOD-015 | Extended `VideoDetailOut` with clip provenance fields |
+| VOD-016 | Extended `VideoDetailOut` with `source_video_ids` |
+| VOD-017 | Public listing endpoints for gallery discovery |
+| VOD-021 | Extended `VideoDetailOut` with `subtitle_tracks` |
+
+### Merge Strategy
+
+**Independent after VOD-001** -- The listing API is purely read-oriented and does not conflict with the upload (VOD-002) or transcode (VOD-003) paths. Can be merged in parallel with the transcode pipeline. Shares the `/ui/videos` router prefix with VOD-002 but uses distinct path segments (`/`, `/{id}`, `/public`, `/admin/*`).
+
+### Merge Checklist
+
+- [ ] `VideoMetadata` table with all 5 GSIs exists in `scripts/local-ddb-init.py`
+- [ ] `video_listing_router` registered in `app/main.py`
+- [ ] Cursor encode/decode uses HMAC-signed cursors (prevents tampering)
+- [ ] `FilterExpression` loop capped at 10 DDB pages (safety limit)
+- [ ] Admin endpoints require `require_admin_session` or `require_root_session`
+- [ ] CSRF validation enforced on PATCH and DELETE endpoints
+- [ ] `just test` passes (listing unit tests + integration tests)
+- [ ] `just e2e` passes (video-listing.spec.ts)

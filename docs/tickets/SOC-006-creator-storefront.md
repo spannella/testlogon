@@ -921,58 +921,98 @@ Response: `{ "ok": true, ... }`
 
 ---
 
-## 7. Testing Plan
+## 7. Testing Strategy
 
-### 7.1 E2E Tests
+### 7.1 Unit Tests (pytest)
+
+No new backend code is introduced by this ticket -- all endpoints already exist. No new unit tests are required. Existing unit tests for the following backend modules remain unchanged and must continue to pass:
+
+- `tests/test_profile.py` -- public profile endpoint, profile posts endpoint
+- `tests/test_social.py` -- follow/unfollow, follow status
+- `tests/test_video_listing.py` -- creator video listing
+- `tests/test_subscription_server.py` -- plan listing
+
+### 7.2 Integration Tests
+
+No new cross-service integration tests needed. The storefront is a frontend aggregation of four existing API endpoints. Existing integration tests covering `profile.py` + `social.py` interaction (follow status on profile) already validate the cross-service path.
+
+### 7.3 E2E Tests (Playwright)
 
 **Test file**: `frontend/e2e/creator-storefront.spec.ts`
+**Auth pattern**: `injectAuth(page, "alice")` for cookie-based session; CSRF via `x-csrf-token` header for POST requests. Unauthenticated tests use a fresh `browser.newPage()` with no `injectAuth` call.
+**Test users**: Alice (viewer, USER), Bob (creator, USER), Root (ROOT) for admin seeding.
 
 **Section 1: Profile Page Tabs (5 tests)**
 
 | # | Test | Setup | Assertion |
 |---|------|-------|-----------|
-| 1 | Tabs visible on authenticated profile view | injectAuth(alice); navigate to /u/{bob_identifier} | "Videos", "Posts", "About" tabs visible |
-| 2 | Videos tab shows video grid for creator with videos | Seed videos for Bob; click Videos tab | Video thumbnail cards visible |
-| 3 | Posts tab shows post cards | Seed posts for Bob; click Posts tab | Post body text visible |
-| 4 | About tab shows bio and location | Click About tab | Description text visible; location visible |
-| 5 | Subscription plans section shown when creator has plans | Seed plan for Bob | "Subscription Plans" heading visible; plan card rendered |
+| 1 | Tabs visible on authenticated profile view | `injectAuth(page, "alice")`; `page.goto("/u/bob")` | `page.getByRole("tab", { name: "Videos" }).toBeVisible()`; same for "Posts", "About" |
+| 2 | Videos tab shows video grid for creator with videos | Seed videos for Bob via API in `beforeAll`; click Videos tab | `page.locator("[data-testid='video-card']").first().toBeVisible()` |
+| 3 | Posts tab shows post cards | Seed posts for Bob in `beforeAll`; click Posts tab | `page.locator("[data-testid='post-card']").first().toBeVisible()` |
+| 4 | About tab shows bio and location | Click About tab | `page.getByText(BOB_BIO).toBeVisible()`; `page.getByText(BOB_LOCATION).toBeVisible()` |
+| 5 | Subscription plans section shown when creator has plans | Seed plan for Bob via DDB in `beforeAll` | `page.getByRole("heading", { name: "Subscription Plans" }).toBeVisible()` |
 
 **Section 2: Follow Button (4 tests)**
 
 | # | Test | Setup | Assertion |
 |---|------|-------|-----------|
-| 6 | Follow button visible on other user's profile | Alice views Bob's profile | "Follow" button visible |
-| 7 | Clicking Follow changes state to Following | Click "Follow" | Button text changes to "Following" |
-| 8 | Clicking Following (unfollow) reverts to Follow | Hover "Following"; click | Button text reverts to "Follow" |
-| 9 | Follow button not visible on own profile | Alice views own profile | No "Follow" button |
+| 6 | Follow button visible on other user's profile | Alice views Bob's profile | `page.getByRole("button", { name: /follow/i }).toBeVisible()` |
+| 7 | Clicking Follow changes state to Following | Click "Follow"; `waitForResponse` POST `/ui/social/follow` | `page.getByRole("button", { name: /following/i }).toBeVisible()` |
+| 8 | Clicking Following (unfollow) reverts to Follow | Hover "Following" button; click | `page.getByRole("button", { name: /follow/i }).toBeVisible()` (not "Following") |
+| 9 | Follow button not visible on own profile | Alice views own profile `/u/alice` | `page.getByRole("button", { name: /follow/i }).not.toBeVisible()` |
 
-**Section 3: Content Loading (4 tests)**
+**Section 3: Content Loading & Empty States (4 tests)**
 
 | # | Test | Setup | Assertion |
 |---|------|-------|-----------|
-| 10 | Videos tab shows empty state when no videos | View user with 0 videos | "No videos yet" message visible |
-| 11 | Posts tab shows empty state when no posts | View user with 0 posts | "No posts yet" message visible |
-| 12 | Posts tab supports filter pills | Click "Images" filter | Only image posts shown (or empty state) |
-| 13 | Subscribe button on plan card triggers subscription | Click "Subscribe" on plan card | Success toast or subscription flow initiates |
+| 10 | Videos tab shows empty state when no videos | View profile of user with 0 videos | `page.getByText("No videos yet").toBeVisible()` |
+| 11 | Posts tab shows empty state when no posts | View profile of user with 0 posts | `page.getByText("No posts yet").toBeVisible()` |
+| 12 | Posts tab supports filter pills | Click filter pill with text "Images" | URL or query includes `filter=image`; filtered results or empty state shown |
+| 13 | Subscribe button on plan card triggers subscription | Click "Subscribe" on plan card | `waitForResponse` POST to subscription endpoint; success toast appears |
 
 **Section 4: Unauthenticated View (3 tests)**
 
 | # | Test | Setup | Assertion |
 |---|------|-------|-----------|
-| 14 | Unauthenticated user sees Posts and About tabs | Navigate to /u/{identifier} without auth | "Posts" and "About" tabs visible |
-| 15 | Videos tab hidden for unauthenticated users | No auth | "Videos" tab not visible |
-| 16 | Subscribe button prompts login for unauthenticated | Click "Subscribe" without auth | Redirected to /login |
+| 14 | Unauthenticated user sees Posts and About tabs | `browser.newPage()` (no auth); `page.goto("/u/bob")` | `page.getByRole("tab", { name: "Posts" }).toBeVisible()`; "About" visible |
+| 15 | Videos tab hidden for unauthenticated users | Same unauthenticated page | `page.getByRole("tab", { name: "Videos" }).not.toBeVisible()` |
+| 16 | Subscribe button prompts login for unauthenticated | Click "Subscribe" on plan card | `page.waitForURL(/\/login/)` |
 
 **Section 5: Stats Row (2 tests)**
 
 | # | Test | Setup | Assertion |
 |---|------|-------|-----------|
-| 17 | Stats row shows follower/following/post counts | View profile with counts | "N followers", "N following", "N posts" visible |
-| 18 | Stats row formats large numbers | Profile with 1500 followers | "1.5K followers" visible |
+| 17 | Stats row shows follower/following/post counts | View profile with seeded counts | `page.getByText(/followers/).toBeVisible()`; `page.getByText(/following/).toBeVisible()`; `page.getByText(/posts/).toBeVisible()` |
+| 18 | Stats row formats large numbers | Seed profile with `follower_count=1500` in DDB | `page.getByText("1.5K").toBeVisible()` |
 
-### 7.2 Unit Tests (pytest)
+**Negative & Edge-Case Tests (included in sections above)**:
+- **401 on video fetch for unauth**: Covered by test 15 (tab hidden so fetch never fires)
+- **Concurrent follow/unfollow**: Rapid double-click on Follow should not produce 409; optimistic update handles race
+- **Empty creator profile**: Tests 10-11 cover zero-content creators
+- **Blocked user cannot follow**: Seed block relationship in DDB; Follow click returns error; button remains "Follow"
 
-No new backend code -- no unit tests needed. Existing profile.py and video_listing.py tests remain unchanged.
+**Setup / Teardown**:
+- `beforeAll`: Run `e2e_admin_session_setup.py`; seed Bob's profile with `display_name`, `description`, `location`, follower/following/post counts; optionally seed videos, posts, and subscription plans via DDB
+- `afterAll`: Clean up seeded data (videos, posts, plans) to avoid cross-test pollution
+
+**Retry Safety**: All tests use unique timestamp-suffixed identifiers for seeded content. Tests are idempotent -- re-running does not depend on state from prior runs. `getOrCreateDm` is not used (no messaging in this spec).
+
+### 7.4 Test Data Requirements
+
+| Data | Table | Key Pattern | Seeded By |
+|------|-------|-------------|-----------|
+| Bob's profile | `app_single_table` | `PK=USER#bob_sub` | `e2e_session_setup.py` + DDB update in `beforeAll` |
+| Bob's videos | `videos` | `PK=VIDEO#{id}` | API call `POST /ui/videos` in `beforeAll` |
+| Bob's posts | `posts` | `PK=POST#{id}, GSI2PK=POST_AUTHOR#bob_sub` | API call `POST /feed` in `beforeAll` |
+| Bob's subscription plans | `subscriptions` | `PK=CREATOR#bob_sub, SK=PLAN#{id}` | DDB seed in `beforeAll` |
+| Alice/Bob sessions | `sessions` | `PK=SESSION#{id}` | `e2e_session_setup.py` |
+
+### 7.5 CI / Pipeline
+
+- **Feature flags**: None required (frontend-only change; no backend feature flag gating)
+- **Serial execution**: Tests run with `workers: 1` per `playwright.config.ts`
+- **Retry**: `retries: 1` in config; all tests are self-contained and retry-safe
+- **Pre-requisites**: `just up` (starts dev stack + seeds sessions) must complete before test run
 
 ---
 
@@ -1190,3 +1230,40 @@ No backend or database changes to revert.
 | social.ts endpoint file (listed as "to create") | `frontend/src/api/endpoints/social.ts` | — | **ALREADY EXISTS** |
 | StorefrontVideoGrid.tsx (listed as "to create") | `frontend/src/pages/profile/StorefrontVideoGrid.tsx` | — | **ALREADY EXISTS** — used at PublicUserProfilePage.tsx:286 |
 | StorefrontPostsFeed.tsx (listed as "to create") | `frontend/src/pages/profile/StorefrontPostsFeed.tsx` | — | **ALREADY EXISTS** — used at PublicUserProfilePage.tsx:291 |
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|--------------|--------|--------------|
+| SOC-001 (Follow System) | Follow/unfollow endpoints (`/ui/social/follow`, `/ui/social/unfollow`) and `get_follow_status` service used by FollowButton | Implemented | Yes -- no code conflicts |
+| SOC-005 (Public Profile Page) | Base `PublicUserProfilePage.tsx` being extended with tabs, stats row, PlanBrowser | Implemented | Yes -- no code conflicts |
+| MON-005 (Subscription-Gated VOD) | Plan listing endpoint (`/api/creators/{id}/plans`) consumed by PlanBrowser | Implemented | Yes -- read-only consumption |
+| VOD-006 (Video Listing API) | Creator video listing endpoint (`/ui/videos/creator/{id}`) consumed by StorefrontVideoGrid | Implemented | Yes -- read-only consumption |
+| Newsfeed system (core) | Posts table, `GSI2PK=POST_AUTHOR#{sub}`, profile posts endpoint (`/profile/public/{identifier}/posts`) | Implemented | Yes -- read-only consumption |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| SOCIAL-005 (Tip Leaderboards) | References SOC-006 storefront as the display surface for leaderboard badges on creator profiles |
+| PLATFORM-017 (Creator Storefront) | Extended storefront features that layer on top of this base implementation |
+| UX-003 (Drag & Drop Reorder) | Reorder support in storefront catalog sections references storefront layout |
+| UX-004 (Bulk Operations) | Bulk video/post management from storefront context |
+
+### Merge Strategy
+
+**Independent / parallel-safe.** This ticket is purely frontend -- it aggregates four existing backend endpoints into a tabbed profile page. No backend code is modified. All upstream dependencies are already implemented and stable. Can be merged independently at any time.
+
+### Merge Checklist
+
+- [ ] All 18 E2E tests in `creator-storefront.spec.ts` pass
+- [ ] Existing `profile.spec.ts` / `social.spec.ts` E2E tests still pass (no regressions)
+- [ ] `PublicUserProfilePage.tsx` renders correctly at `/u/{identifier}` for auth and unauth visitors
+- [ ] `StorefrontVideoGrid.tsx`, `StorefrontPostsFeed.tsx`, `FollowButton.tsx` render without console errors
+- [ ] No new TypeScript compiler warnings
+- [ ] Bundle size increase < 15KB gzipped
+- [ ] Manual smoke test: visit `/u/{creator}` as auth user, verify Videos/Posts/About tabs, Follow button, plan cards

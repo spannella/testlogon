@@ -873,6 +873,116 @@ Unresolvable items (deleted content) are silently filtered out.
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_creator_storefront.py`
+
+| Function | Description | Mock Setup |
+|----------|-------------|------------|
+| `test_get_storefront_aggregated_data` | Verify aggregated storefront returns profile, plans, social links, featured content, catalog count | moto DDB: seed `T.profile` with social_links + featured_content; seed `T.subscriptions` with a plan; seed `T.catalog` with 2 published items |
+| `test_get_storefront_nonexistent_user_404` | GET storefront for unknown identifier returns 404 | moto DDB: empty profiles table |
+| `test_get_storefront_follow_status_authenticated` | Authenticated viewer sees `is_following: true/false` | moto DDB: seed follow record in `app_single_table` GSI5 |
+| `test_get_storefront_follow_status_unauthenticated` | Unauthenticated GET returns `is_following: false` | moto DDB: no auth headers |
+| `test_update_social_links_valid` | PUT social links saves and returns cleaned links | moto DDB: seed profile |
+| `test_update_social_links_unrecognized_key_ignored` | Unrecognized key name stripped from saved links | moto DDB: seed profile |
+| `test_update_social_links_url_max_length` | URL exceeding 500 chars truncated | moto DDB: seed profile |
+| `test_update_storefront_settings_valid` | PUT accent_color + default_tab persists | moto DDB: seed profile |
+| `test_update_storefront_settings_invalid_color_422` | Non-hex accent_color returns 422 | No DDB needed (validation layer) |
+| `test_update_storefront_settings_invalid_tab_422` | Invalid default_tab returns 422 | No DDB needed (validation layer) |
+| `test_set_featured_content_max_6` | PUT 6 items succeeds | moto DDB: seed profile |
+| `test_set_featured_content_exceeds_limit_400` | PUT 7 items returns 400 | No DDB needed (validation layer) |
+| `test_featured_content_deleted_item_filtered` | Featured item referencing deleted content silently excluded from GET | moto DDB: seed profile with featured refs; do NOT seed referenced content |
+| `test_list_creator_catalog_items_published_only` | Public catalog returns only `status=published` items | moto DDB: seed catalog with 1 published + 1 draft item |
+| `test_list_creator_catalog_items_pagination` | Cursor pagination returns next page | moto DDB: seed 3 published items; request with limit=2 |
+| `test_list_creator_catalog_items_empty` | No items for creator returns `{items: [], next_cursor: null}` | moto DDB: empty catalog |
+
+**Mock setup pattern**:
+```python
+@pytest.fixture
+def storefront_tables(moto_ddb):
+    """Create profiles, catalog, subscriptions tables with GSIs."""
+    # profiles table (PK=user_sub)
+    # shopping_catalog table (PK=PK, SK=SK, GSI1: GSI1PK/GSI1SK)
+    # subscriptions table (PK=pk, SK=sk)
+    ...
+```
+
+### Integration Tests
+
+**File**: `tests/test_creator_storefront_integration.py`
+
+| Test | Cross-Service Validation |
+|------|--------------------------|
+| `test_storefront_aggregation_queries_all_tables` | Single GET storefront hits profile, subscriptions, catalog, app_single_table (featured resolution) |
+| `test_social_links_update_reflected_in_storefront` | PUT social links via profile service; GET storefront shows updated links |
+| `test_featured_resolution_with_real_posts` | Seed actual post items in `app_single_table`; featured content resolution returns title + thumbnail |
+| `test_catalog_gsi_query_matches_creator` | Seed items for 2 creators; public catalog query returns only the target creator's published items |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/creator-storefront.spec.ts`
+**Total tests**: 27
+**Sections**: 527--531
+
+**Auth pattern**:
+- Public storefront GET endpoints: no auth required (use global `request` fixture)
+- Authenticated viewer (follow status): `await injectAuth(page, "bob")`
+- Creator settings PUT endpoints: `await injectAuth(page, "alice")` + CSRF header via `headers: { "x-csrf-token": sessions.alice.csrf_token }`
+
+**Setup/teardown**:
+```typescript
+test.beforeAll(async ({ browser, request }) => {
+  // Seed Alice's profile with social links, featured content, storefront settings
+  // Create subscription plan for Alice
+  // Create published catalog item for Alice
+  alicePage = await browser.newPage();
+  await injectAuth(alicePage, "alice");
+  bobPage = await browser.newPage();
+  await injectAuth(bobPage, "bob");
+});
+test.afterAll(async () => {
+  await alicePage?.close();
+  await bobPage?.close();
+});
+```
+
+**Key assertions**:
+- Section 527 (Public API): `expect(resp.status()).toBe(200)`, `expect(body.display_name).toBeTruthy()`, `expect(body.subscription_plans.length).toBeGreaterThanOrEqual(1)`
+- Section 528 (Settings API): `expect(resp.status()).toBe(200)`, `expect(body.social_links.twitter).toBe("https://...")`, `expect(resp.status()).toBe(400)` for limit exceed, `expect(resp.status()).toBe(422)` for invalid color
+- Section 529 (Catalog API): `expect(body.items.length).toBe(expectedCount)`, `expect(body.next_cursor).toBeTruthy()` for pagination
+- Section 530 (UI): `await expect(page.getByRole("tab", { name: "About" })).toBeVisible()`, `await expect(page.getByRole("tab", { name: "Plans" })).toBeVisible()`, `await expect(page.getByRole("button", { name: /follow/i })).toBeVisible()`
+- Section 531 (Edge cases): `expect(body.featured.length).toBe(0)` for empty defaults, concurrent PUT assertions
+
+**Negative tests**:
+- 527.3: 404 for nonexistent user
+- 528.4: 400 for exceeding featured limit (7 items)
+- 528.5: 422 for invalid accent_color
+- 529.4: Draft items excluded from public catalog
+
+**Concurrency tests**:
+- 531.3: Two rapid PUT requests to different settings; final state reflects both
+
+### Test Data Requirements
+
+| Data | Table | Seed Method |
+|------|-------|-------------|
+| Alice profile with social_links, featured_content, storefront_settings | `profiles` | `e2e_session_setup.py` + API calls in `beforeAll` |
+| Alice subscription plan | `subscriptions` | API call `POST /api/plans` in `beforeAll` |
+| Alice published catalog items (3+) | `shopping_catalog` | API call `POST /ui/catalog/items` in `beforeAll` |
+| Bob follow record for Alice | `app_single_table` GSI5 | API call `POST /social/follow` in `beforeAll` |
+| Test users: Alice (creator), Bob (visitor) | `sessions` | `e2e_session_setup.py` + `e2e_admin_session_setup.py` |
+
+### CI/Pipeline
+
+- **Feature flag**: `VITE_CREATOR_STOREFRONT_ENABLED` frontend flag + `S.storefront_shop_enabled` backend setting; tests skip if disabled
+- **Serial execution**: E2E tests must run serially (shared Alice profile state across sections 527--531)
+- **Retry safety**: Tests use unique timestamps for catalog item names; featured content cleanup in `afterAll`; idempotent settings PUTs
+- **DDB table dependency**: Requires `profiles`, `shopping_catalog` (with GSI1), `subscriptions`, `app_single_table` tables
+
+---
+
 ## 15. E2E Test Plan
 
 **File**: `frontend/e2e/creator-storefront.spec.ts`

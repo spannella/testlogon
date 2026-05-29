@@ -1464,3 +1464,113 @@ test("3.1 — Dashboard page loads with KPI cards", async ({ browser }) => {
 | `app/main.py` | 110, 433 | Import + registration of `creator_dashboard_router` |
 | `frontend/src/App.tsx` | 85, 183 | Lazy import + route for `/creator-dashboard` |
 | `frontend/src/pages/dashboard/` | all | CreatorDashboard, EarningsSummaryCard, KpiCard, MilestoneSettingsDialog, QuickActionBar, TopContentList |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_creator_dashboard.py`
+
+| Test Function | What It Validates | Mock Setup |
+|---|---|---|
+| `test_dashboard_summary_all_fields` | Response includes all required fields (today_earnings_cents, period_views, etc.) | moto DDB with billing + analytics_rollups tables seeded |
+| `test_dashboard_today_earnings` | `today_earnings_cents` sums credit entries from start-of-day UTC | Seed 3 billing credit entries for today |
+| `test_dashboard_period_analytics` | `period_views` and `period_revenue_cents` aggregate 7-day rollups | Seed 7 daily rollup rows |
+| `test_dashboard_active_broadcasts` | Only `status=live` sessions returned, max 3 | Seed sessions with mixed statuses |
+| `test_dashboard_graceful_degradation` | Partial data returned with warnings when analytics service throws | Mock `get_overview` to raise, verify `warnings: ["analytics_overview"]` |
+| `test_milestone_check_threshold_crossed` | `check_milestone` records milestone when value crosses threshold | moto DDB app single table |
+| `test_milestone_check_idempotent` | No duplicate milestone on repeated calls | Pre-seed existing milestone |
+| `test_milestone_acknowledge` | Sets `acknowledged=true` on milestone record | Pre-seed milestone |
+| `test_milestone_settings_crud` | GET returns defaults, PATCH persists changes | moto DDB app single table |
+| `test_milestone_format_threshold` | `_format_threshold` formats cents as `$10`, `$1K`, numbers as `100K`, `1M` | Direct function call |
+| `test_dashboard_sse_subscribe_replaces` | New SSE subscription replaces existing one (max 1 per user) | Direct call to `dashboard_sse_subscribe` |
+| `test_dashboard_sse_publish_dead_queue` | Full queues are cleaned up on publish | Fill queue to capacity, then publish |
+
+**Mock Setup**: `moto.mock_dynamodb` with `billing`, `analytics_rollups`, `app` (single table), `broadcast_sessions` tables. `unittest.mock.patch` for cross-service calls that may fail.
+
+### Integration Tests
+
+| Test | What It Validates |
+|---|---|
+| `test_tip_triggers_dashboard_sse` | Writing a tip ledger entry publishes `earnings:update` SSE event to connected dashboard |
+| `test_milestone_notification_created` | Crossing a milestone threshold creates an in-app notification via `put_notification` |
+| `test_dashboard_refresh_rate_limit` | Second refresh within 5 minutes returns 429 |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/creator-dashboard.spec.ts`
+
+**Auth Pattern**: `injectAuth(page, "alice")` for all tests (Alice is the creator). CSRF headers on POST endpoints.
+
+| Section | Title | Tests | Key Assertions |
+|---|---|---|---|
+| 1 | Dashboard Summary API | 5 | `expect(body.today_earnings_cents).toBeGreaterThanOrEqual(0)`, `expect(body.currency).toBe("USD")`, `expect(body.generated_at).toBeGreaterThan(0)` |
+| 2 | Milestone API | 5 | `expect(milestone.metric).toBe("subscribers")`, `expect(milestone.acknowledged).toBe(false)`, no duplicate after re-check |
+| 3 | Dashboard UI - Mobile | 6 | `page.getByText("Today's Earnings").toBeVisible()`, `page.getByText("Subscribers").toBeVisible()`, `page.getByText("7d Views").toBeVisible()` |
+| 4 | Dashboard UI - Quick Actions | 3 | `page.getByRole("button", { name: /new post/i }).toBeVisible()`, `page.getByRole("button", { name: /go live/i }).toBeVisible()` |
+| 5 | Dashboard SSE | 3 | SSE connection established (EventSource), earnings:update event received, milestone:reached event received |
+| 6 | Milestone Settings UI | 3 | Settings dialog opens, toggle persists, tip threshold updates |
+| 7 | Graceful Degradation | 3 | Partial data displayed when one service fails, warning banner visible, refresh recovers |
+| 8 | Milestone Acknowledge | 2 | Acknowledge hides milestone, acknowledged excluded from recent list |
+
+**Negative Tests**: 429 on rate-limited refresh (section 7), graceful fallback on service failure.
+
+**Setup/Teardown**: `beforeAll` seeds billing ledger entries (3 tip credits for today), analytics rollup rows (7 days), and SUMMARY sentinel via direct DDB writes. Uses `TS` suffix for entry IDs.
+
+### Test Data Requirements
+
+| Data | Table | Seeded By |
+|---|---|---|
+| Alice session | `sessions` | `e2e_session_setup.py` |
+| Billing credit entries (today) | `billing` | Direct DDB write in `beforeAll` |
+| Analytics daily rollups (7 days) | `analytics_rollups` | Direct DDB write in `beforeAll` |
+| Analytics SUMMARY sentinel | `analytics_rollups` | Direct DDB write in `beforeAll` |
+| Milestone records | `app` (single table) | Created by milestone API during tests |
+
+### CI / Pipeline
+
+- **Feature flag**: No dedicated feature flag (dashboard is always available). Milestone thresholds are configurable server-side.
+- **Serial execution**: Required -- milestone tests depend on state from summary tests.
+- **Retry safety**: Billing entries and rollups use `TS` suffix. Milestones use metric+threshold as idempotency key.
+- **DDB tables**: `analytics_rollups` table must exist. Milestones use existing `app` single table.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| Creator Analytics (`app/services/creator_analytics.py`) | `get_overview`, `_query_rollups`, analytics rollup table | Implemented (core platform) | Yes |
+| Creator Earnings (`app/services/creator_earnings.py`) | `get_earnings_summary` from billing ledger | Implemented (core platform) | Yes |
+| Broadcast Store (`app/services/broadcast_store.py`) | `list_sessions_by_creator` for active broadcasts | Implemented (core platform) | Yes |
+| Notifications (`put_notification`) | Milestone notification delivery | Implemented (core platform) | Yes |
+| Broadcast SSE (`app/services/broadcast_sse.py`) | Pattern for SSE infrastructure (dashboard SSE follows same design) | Implemented (core platform) | Yes |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|---|---|
+| CREATOR-005 (Content Calendar) | Quick action "Schedule" button links to content calendar |
+| CREATOR-001 (Collaborations) | Collaboration revenue could appear in dashboard earnings breakdown (future integration) |
+
+### Merge Strategy
+
+**Independent**. CREATOR-003 adds a new router (`app/routers/creator_dashboard.py`), new services (`app/services/milestones.py`, `app/services/dashboard_sse.py`), and new frontend page. All modifications are additive:
+- `app/main.py` (router registration)
+- `app/models.py` (new models appended)
+- `frontend/src/App.tsx` (new route)
+
+Uses existing tables (`app` single table for milestones, `billing` for earnings, `analytics_rollups` for overview). No new DDB tables needed.
+
+### Merge Checklist
+
+- [ ] `creator_dashboard_router` registered in `app/main.py`
+- [ ] Milestone settings use `app` single table (no new table needed)
+- [ ] SSE endpoint follows same pattern as broadcast SSE (max 1 per user)
+- [ ] Dashboard gracefully degrades when sub-services fail (partial data + warnings)
+- [ ] All 30 E2E tests pass (`npx playwright test e2e/creator-dashboard.spec.ts`)
+- [ ] `just test` passes (no regressions)

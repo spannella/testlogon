@@ -902,3 +902,151 @@ interface RestartPolicySectionProps {
 | `HealthSummaryOut` model | `app/models.py` | NOT FOUND -- new model required |
 | Health/timeline settings (feature flags) | `app/core/settings.py` | NOT FOUND -- new settings required |
 | `frontend/src/pages/remote/InstanceDetailPage.tsx` | `frontend/src/pages/remote/` | NOT FOUND -- new page required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_instance_health.py`)
+
+**Mock setup**: Use `moto` to mock DynamoDB. Create `ec2_instances` and `k8s_pods` tables with health fields and TIMELINE SK pattern. Patch `app.core.tables.T` to point at moto tables. Patch `_mock_health_probe` to return deterministic results.
+
+**Test functions**:
+
+| Function | What it validates |
+|----------|-------------------|
+| `test_mock_health_probe_returns_valid_status` | `_mock_health_probe(id)` returns one of `healthy`, `degraded`, `unreachable`. |
+| `test_mock_metrics_returns_all_fields` | `_mock_metrics(id)` returns dict with `cpu_percent`, `memory_percent`, `memory_used_mb`, `memory_total_mb`, `disk_percent`, `disk_used_gb`, `disk_total_gb`, `network_in_mbps`, `network_out_mbps`, `timestamp`. All numeric and non-negative. |
+| `test_record_timeline_event_stores_item` | `record_timeline_event(user, "ec2", id, event_type="launched")` writes DDB item with SK starting with `TIMELINE#`. |
+| `test_get_timeline_newest_first` | Write 3 events with different timestamps. `get_timeline(...)` returns events sorted newest first. |
+| `test_get_timeline_respects_limit` | Write 5 events. `get_timeline(limit=2)` returns exactly 2 events. |
+| `test_handle_health_change_writes_timeline` | Call `_handle_health_change(user, "ec2", id, old="healthy", new="degraded")`. Verify timeline event with `event_type="status_changed"`. |
+| `test_handle_health_change_sends_alert_on_degradation` | Patch `write_alert`. Call `_handle_health_change(old="healthy", new="unreachable")`. Verify `write_alert` called with `event="compute.health_degraded"`. |
+| `test_handle_health_change_no_alert_on_recovery` | Patch `write_alert`. Call `_handle_health_change(old="unreachable", new="healthy")`. Verify `write_alert` NOT called. |
+| `test_check_restart_policy_restarts_on_3_failures` | Set instance with `auto_restart_enabled=True`, `consecutive_failures=3`, `restart_count=0`, `max_restarts=3`. Patch EC2 stop/start. Call `_check_restart_policy`. Verify stop+start called, timeline event "restarted" written. |
+| `test_check_restart_policy_skips_when_disabled` | Set `auto_restart_enabled=False`, `consecutive_failures=5`. Call `_check_restart_policy`. Verify no restart triggered. |
+| `test_check_restart_policy_skips_when_under_threshold` | Set `auto_restart_enabled=True`, `consecutive_failures=2`. Verify no restart (threshold is 3). |
+| `test_check_restart_policy_exhausted` | Set `restart_count=3`, `max_restarts=3`. Verify no restart, alert with `event="compute.restart_exhausted"`. |
+| `test_get_health_summary_returns_all_fields` | Populate health fields on instance. `get_health_summary(...)` returns `HealthSummaryOut`-compatible dict with all expected keys. |
+| `test_consecutive_failures_reset_on_healthy` | After setting `consecutive_failures=5`, simulate healthy probe. Verify `consecutive_failures` reset to 0. |
+| `test_health_check_count_increments` | Simulate 3 probe cycles. Verify `health_check_count == 3`. |
+
+### Integration Tests (`tests/test_instance_health_integration.py`)
+
+**Setup**: Full FastAPI test client with moto DDB. Pre-seed one running EC2 instance and one running K8s pod.
+
+| Test | What it validates |
+|------|-------------------|
+| `test_get_health_api_returns_200` | GET `/ui/remote/instances/ec2/{id}/health` returns 200 with valid `HealthSummaryOut`. |
+| `test_get_metrics_api_returns_200` | GET `/ui/remote/instances/ec2/{id}/metrics` returns 200 with valid `MetricsOut`. |
+| `test_get_timeline_api_returns_200` | GET `/ui/remote/instances/ec2/{id}/timeline` returns 200 with `events` array. |
+| `test_patch_restart_policy_api` | PATCH `/ui/remote/instances/ec2/{id}/restart-policy` with `{auto_restart_enabled: true, max_restarts: 5}`. Verify 200 and returned values. |
+| `test_invalid_resource_type_returns_400` | GET `/ui/remote/instances/invalid/{id}/health` returns 400. |
+| `test_nonexistent_instance_returns_404` | GET `/ui/remote/instances/ec2/nonexistent/health` returns 404. |
+| `test_user_isolation_returns_403` | Alice requests Bob's instance health. Returns 403 or 404. |
+| `test_max_restarts_validation` | PATCH with `max_restarts: 15` returns 422. PATCH with `max_restarts: -1` returns 422. |
+| `test_k8s_pod_health_same_schema` | GET `/ui/remote/instances/k8s/{id}/health` returns same schema fields as EC2. |
+
+### E2E Tests (`frontend/e2e/instance-monitoring.spec.ts`)
+
+**Auth pattern**: `injectAuth(page, "alice")` for all operations. CSRF via `sessions["alice"].csrf_token` on PATCH.
+
+**Section 267: Health & Metrics API (5 tests)**
+- Setup: Launch EC2 instance via `page.request.post("/ui/remote/ec2/launch", ...)`.
+- Test 1: `GET /ui/remote/instances/ec2/${id}/health` — assert 200, `body.health_status` is one of `["healthy", "degraded", "unreachable", "unknown"]`, `body.health_check_count >= 0`.
+- Test 2: `GET /ui/remote/instances/ec2/${id}/metrics` — assert 200, `body.cpu_percent >= 0`, `body.memory_percent >= 0`, `body.timestamp > 0`.
+- Test 3: Terminate instance. `GET /health` — assert 404 or `body.health_status === "unknown"`.
+- Test 4: `PATCH /restart-policy` with `{ auto_restart_enabled: true, max_restarts: 5 }`, CSRF header. GET health, assert `auto_restart_enabled === true`, `max_restarts === 5`.
+- Test 5: Launch K8s pod. `GET /ui/remote/instances/k8s/${podId}/health` — assert 200, same schema.
+
+**Section 268: Timeline API (5 tests)**
+- Test 6: After launch, GET `/timeline` — assert `body.events.length >= 1`, find event with `event_type === "launched"`.
+- Test 7: Stop then start instance. GET `/timeline` — find events for transitions.
+- Test 8: Verify `body.events[0].timestamp >= body.events[1].timestamp` (newest first).
+- Test 9: GET `/timeline?limit=2` — assert `body.events.length <= 2`.
+- Test 10: Terminate instance. GET `/timeline` — find termination event.
+
+**Section 269: Instance Detail UI (5 tests)**
+- Test 11: Navigate to `/remote/instances/ec2/${id}`. Assert health badge: `page.locator("[data-testid='health-badge']")` or `page.getByText(/healthy|degraded|unreachable/i)` visible.
+- Test 12: Assert metrics labels: `page.getByText("CPU")`, `page.getByText("Memory")` visible with percentage values.
+- Test 13: Assert timeline section: `page.getByText("Launched")` or equivalent event in timeline list.
+- Test 14: Toggle auto-restart switch. Reload page. Verify toggle state persists.
+- Test 15: Click back button. Assert URL matches `/remote/instances` or EC2 list.
+
+**Section 270: Health Edge Cases & Auto-Restart (8 tests)**
+- Tests 16-23: Health check count increments, consecutive failures reset, auto-restart default off, restart policy persistence, max_restarts=0, K8s schema parity, non-negative metrics, resource_id in timeline details.
+
+**Section 271: Multi-Instance Health Isolation (5 tests)**
+- Tests 24-28: Bob-to-Alice isolation (403/404), Alice can't PATCH Bob's policy, terminated health=unknown, stopped health=unknown, timeline survives stop/start cycle.
+
+**Negative tests**: 401 (no auth), 403 (cross-user), 404 (nonexistent instance), 400 (invalid resource type), 422 (max_restarts out of range).
+
+**Teardown**: Terminate launched instances in `afterAll`.
+
+**Retry safety**: Each test run uses unique instance labels with `Date.now()` suffix. Health checks are non-deterministic but tests assert range-based values (>= 0, one of valid set) not exact values.
+
+### Test Data Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| DynamoDB tables | `ec2_instances` and `k8s_pods` with health fields + TIMELINE SK pattern + `ByStatus` GSI |
+| Running instances | Launched in `beforeAll` via EC2/K8s launch endpoints (INFRA-003/004 must exist) |
+| Test users | Alice (USER) for primary tests, Bob (USER) for isolation tests |
+| Session seeding | `e2e_session_setup.py` |
+| Background health checker | Must be running (started via `app/main.py` startup event) |
+
+### CI / Pipeline
+
+| Concern | Approach |
+|---------|----------|
+| Feature flag | Set `INSTANCE_HEALTH_ENABLED=true` in CI `.env.local` |
+| Health checker timing | Tests may need a brief wait (up to 35s) after launch for first health check cycle; use `page.waitForResponse` or retry loop |
+| Serial execution | Single-worker; health checker modifies shared DDB state |
+| Non-deterministic probes | Mock probes return random results; test assertions use `oneOf` / range checks, not exact values |
+| Dependencies | INFRA-003 and INFRA-004 must be deployed for launch endpoints |
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|---------------|--------|--------------|
+| INFRA-003 (EC2 Launcher) | `ec2_instances` DDB table, `launch_instance`, `stop_instance`, `start_instance` functions, instance status tracking | **Not yet implemented** | Partially — service layer can be written against interface, but integration tests require INFRA-003 |
+| INFRA-004 (K8s Launcher) | `k8s_pods` DDB table, `launch_pod`, `terminate_pod` functions, pod status tracking | **Not yet implemented** | Same as above |
+
+### Depended On By
+
+| Ticket | What It Needs From INFRA-008 |
+|--------|------------------------------|
+| INFRA-012 (Admin Compute Dashboard) | Health status data for admin-level instance overview, timeline events for admin audit view |
+| AGENT-010 (DevOps SRE Agent) | Health monitoring data for automated incident response |
+
+### Merge Strategy
+
+**Sequential after INFRA-003/004, feature-flag-gated**
+
+- The health checker service must integrate with `ec2_instances` and `k8s_pods` DDB tables created by INFRA-003/004.
+- The `instance_health.py` service imports from `ec2_launcher.py` and `k8s_launcher.py` for auto-restart. These files must exist.
+- The router uses a new prefix (`/ui/remote/instances/{type}/{id}/...`) that does not conflict with existing routes.
+- Feature flag `INSTANCE_HEALTH_ENABLED` gates both the background checker and API endpoints.
+- Timeline events use the same DDB table as instances (single-table design), so no new table is needed.
+
+### Merge Checklist
+
+- [ ] INFRA-003 and INFRA-004 merged and functional
+- [ ] `app/services/instance_health.py` — all functions implemented (probes, metrics, timeline, restart logic)
+- [ ] `app/routers/instance_health.py` — 4 endpoints registered
+- [ ] `app/main.py` — router registered + `run_health_checker()` background task started
+- [ ] `app/models.py` — `HealthSummaryOut`, `MetricsOut`, `TimelineEvent`, `TimelineOut`, `RestartPolicyIn`, `RestartPolicyOut` added
+- [ ] `app/core/settings.py` — `INSTANCE_HEALTH_ENABLED`, `INSTANCE_AUTO_RESTART_ENABLED`, `HEALTH_CHECK_INTERVAL_SECONDS` settings
+- [ ] Health fields added to EC2 instance and K8s pod DDB items (in INFRA-003/004 service layers)
+- [ ] `frontend/src/api/types.ts` — health/metrics/timeline TypeScript types
+- [ ] `frontend/src/api/endpoints/instance-health.ts` — API wrappers
+- [ ] `frontend/src/pages/remote/InstanceDetailPage.tsx` — detail page with metrics, timeline, restart policy
+- [ ] `frontend/src/App.tsx` — `/remote/instances/:type/:id` route
+- [ ] Feature flags in `.env.local.example`
+- [ ] E2E tests pass: `npx playwright test e2e/instance-monitoring.spec.ts`
+- [ ] Unit tests pass: `pytest tests/test_instance_health.py`
+- [ ] Health checker does not crash the backend if DDB tables are missing (graceful degradation)

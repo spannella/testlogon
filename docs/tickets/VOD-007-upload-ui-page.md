@@ -827,3 +827,40 @@ test("4.1 Drag overlay appears on file drag", async ({ page }) => {
 | `frontend/src/App.tsx` | 55, 165 | `VideoPlayerPage` lazy import and route (`/videos/:videoId`) |
 | `frontend/e2e/video-upload.spec.ts` | -- | **Already exists**: E2E upload tests |
 | `docs/tickets/VOD-002-video-upload-endpoint.md` | Backend endpoint specification (API contract) |
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|--------------|--------|--------------|
+| VOD-002 | Backend presign + complete endpoints (`POST /ui/videos/upload/presign`, `POST /ui/videos/upload/complete`) | Implemented | No -- frontend upload requires working backend endpoints |
+| VOD-006 | `GET /ui/videos` listing endpoint for video grid; `PATCH` and `DELETE` for card actions | Implemented | Soft dependency -- upload works without listing; grid shows empty until videos exist |
+
+### Depended On By
+
+| Ticket | What It Needs from VOD-007 |
+|--------|---------------------------|
+| VOD-008 | Navigation from video card to player page (`/videos/:videoId`) |
+| VOD-009 | `/videos` route registered in `App.tsx` for sidebar navigation |
+| VOD-011 | Upload UI E2E tests (file input, drag-and-drop, progress) |
+| VOD-015 | Clip dialog launched from video card actions menu |
+| VOD-016 | Concat dialog launched from video selection UI |
+| VOD-017 | Gallery publish action in video card actions menu |
+
+### Merge Strategy
+
+**Sequential after VOD-002 + VOD-006** -- The upload page depends on both the upload API and the listing API. Can be merged as soon as both backend endpoints exist. No feature flag needed; the `/videos` route is additive.
+
+### Merge Checklist
+
+- [ ] `presignVideoUpload` and `completeVideoUpload` API wrappers in `frontend/src/api/endpoints/vod.ts`
+- [ ] `VideosPage` lazy-loaded in `App.tsx` at `/videos`
+- [ ] File input accepts `video/*` MIME types
+- [ ] Client-side validation rejects non-video files and files > 10 GB
+- [ ] XHR progress events throttled (max 1 dispatch per 100ms)
+- [ ] `beforeunload` handler warns about in-progress uploads
+- [ ] Drag-and-drop zone has `aria-label` for accessibility
+- [ ] `just e2e` passes (vod-upload.spec.ts and video-upload.spec.ts)

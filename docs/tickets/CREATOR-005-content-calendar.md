@@ -3267,3 +3267,94 @@ async function createScheduledBroadcast(
 | `frontend/src/pages/feed/ScheduledPostsPanel.tsx` | 26 | `ScheduledPostsPanel` component (166 lines) |
 | `frontend/src/pages/calendar/CalendarView.tsx` | 28-80 | Calendar utility functions (DAYS, HOURS, getMonthDays, getWeekDays, isSameDay, eventOnDay) |
 | `frontend/src/pages/calendar/CalendarPage.tsx` | 11 | `CalendarPage` component |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_content_calendar.py`
+
+| Test Function | What It Validates | Mock Setup |
+|---|---|---|
+| `test_list_calendar_items` | Aggregates scheduled posts, broadcasts, and VOD into unified list | moto DDB with newsfeed, broadcast_sessions, video_metadata tables |
+| `test_filter_by_content_type` | `type` query param filters to single content type | Seed mixed content types |
+| `test_date_range_filter` | Items filtered by `from_ts` / `to_ts` | Seed items across date range |
+| `test_reschedule_post` | Updates `scheduled_publish_at` on post record | Pre-seed scheduled post |
+| `test_reschedule_broadcast` | Updates `scheduled_at` on broadcast session | Pre-seed scheduled broadcast |
+| `test_reschedule_vod` | Updates `scheduled_publish_at` on video metadata | Pre-seed scheduled VOD |
+| `test_conflict_detection` | Identifies overlapping scheduled items within 30-minute window | Seed two items at same time |
+| `test_today_agenda` | Returns items scheduled for current UTC day | Seed items for today and tomorrow |
+| `test_delete_calendar_item` | Removes scheduled item (cancels scheduling, does not delete content) | Pre-seed item |
+| `test_unauthorized_reschedule` | 403 when user tries to reschedule another creator's content | Seed content owned by different user |
+
+**Mock Setup**: `moto.mock_dynamodb` with newsfeed, broadcast_sessions, and video_metadata tables. Cross-table queries mocked.
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/content-calendar.spec.ts`
+
+**Auth Pattern**: `injectAuth(page, "alice")`. CSRF headers on all mutations.
+
+| Section | Title | Tests | Key Assertions |
+|---|---|---|---|
+| 1 | Calendar API - List Items | 5 | `expect(body.items).toBeInstanceOf(Array)`, items have `type`, `scheduled_at`, `title` |
+| 2 | Calendar API - Reschedule | 4 | `expect(resp.status()).toBe(200)`, `expect(body.scheduled_at).toBe(newTime)` |
+| 3 | Calendar API - Conflicts | 3 | Conflict detected for overlapping items, no conflict for non-overlapping |
+| 4 | Calendar API - Today Agenda | 3 | Returns items for today, excludes past items, includes all content types |
+| 5 | Calendar UI - Month View | 5 | `page.getByRole("button", { name: /month/i })`, day cells show item count badges |
+| 6 | Calendar UI - Week View | 4 | `page.getByRole("button", { name: /week/i })`, time slots show items, drag-and-drop reschedule |
+| 7 | Calendar UI - Day View | 3 | Hour-by-hour layout, item detail on click, quick-create button |
+| 8 | Calendar UI - Conflict Warnings | 3 | Yellow warning badge on conflicting items, conflict detail dialog |
+| 9 | Calendar API - CRUD Edge Cases | 4 | Reschedule to past returns 400, delete non-existent returns 404, cross-user reschedule 403 |
+
+**Negative Tests**: 400 (reschedule to past time), 403 (cross-user access), 404 (non-existent item).
+
+**Setup/Teardown**: `beforeAll` creates scheduled posts, broadcasts, and VOD content via respective APIs.
+
+### Test Data Requirements
+
+| Data | Table | Seeded By |
+|---|---|---|
+| Alice session | `sessions` | `e2e_session_setup.py` |
+| Scheduled posts | Newsfeed table | API in `beforeAll` |
+| Scheduled broadcasts | `broadcast_sessions` | API in `beforeAll` |
+| Scheduled VOD | Video metadata table | API in `beforeAll` |
+
+### CI / Pipeline
+
+- **Feature flag**: No dedicated flag. Content calendar aggregates existing scheduling features.
+- **Serial execution**: Required -- reschedule tests modify shared data.
+- **Retry safety**: Content names include `TS` suffix.
+- **DDB tables**: Uses existing tables (newsfeed, broadcast_sessions, video_metadata).
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-010 (Broadcast Scheduling) | Scheduled broadcast sessions with `scheduled_at` field | Implemented | Yes |
+| Newsfeed Scheduling (`app/routers/newsfeed.py`) | `SCHEDULEDPOST` prefix, scheduled post query | Implemented (core) | Yes |
+| VOD Scheduling (`app/models_video.py`) | `scheduled_publish_at` field on VideoMetadataModel | Implemented (field exists per CREATOR-005 comment) | Yes |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|---|---|
+| CREATOR-003 (Mobile Dashboard) | "Schedule" quick-action button links to `/content-calendar` |
+
+### Merge Strategy
+
+**Independent**. CREATOR-005 introduces a new router (`app/routers/content_calendar.py`), a new service for cross-table aggregation, and a new frontend page. It reads from existing tables without modifying their schemas. All changes are additive.
+
+### Merge Checklist
+
+- [ ] Content calendar router registered in `app/main.py`
+- [ ] Cross-table aggregation handles missing tables gracefully (empty results)
+- [ ] Reschedule endpoint validates ownership before modifying content
+- [ ] All E2E tests pass (`npx playwright test e2e/content-calendar.spec.ts`)
+- [ ] `just test` passes

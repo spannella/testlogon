@@ -940,3 +940,163 @@ interface TemplateGalleryProps {
 | `frontend/src/pages/remote/TemplateBrowserPage.tsx` | `frontend/src/pages/remote/` | NOT FOUND -- new page required |
 | `frontend/src/api/endpoints/instance-templates.ts` | `frontend/src/api/endpoints/` | NOT FOUND -- new endpoint file required |
 | `/remote/templates` route | `frontend/src/App.tsx` | NOT FOUND -- new route required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_instance_templates.py`)
+
+**Mock setup**: Use `moto` to mock DynamoDB. Create the `instance_templates` table in a pytest fixture with the same schema and GSIs defined in `scripts/local-ddb-init.py`. Patch `app.core.tables.T.instance_templates` to point at the moto table.
+
+**Test functions**:
+
+| Function | What it validates |
+|----------|-------------------|
+| `test_ensure_system_templates_seeds_all` | `ensure_system_templates()` creates all 6 system templates (4 EC2 + 2 K8s). Calling twice is idempotent (no duplicates). |
+| `test_create_template_stores_item` | `create_template(user_sub, name=..., target="ec2", ...)` writes item with correct PK=user_sub, SK=`TEMPLATE#{id}`, `is_system=False`, `use_count=0`. |
+| `test_create_template_sets_name_lower` | Verify `name_lower` is set to `name.lower()` for GSI sort. |
+| `test_get_template_returns_none_for_missing` | `get_template("user", "nonexistent")` returns `None`. |
+| `test_list_templates_combines_system_and_user` | After seeding system + creating 2 user templates, `list_templates(user_sub, include_system=True)` returns 8 items. |
+| `test_list_templates_filters_by_category` | `list_templates(user_sub, category="database")` returns only database templates. |
+| `test_list_templates_filters_by_target` | `list_templates(user_sub, target="k8s")` returns only K8s templates. |
+| `test_update_template_modifies_fields` | Update `description` and `instance_type`. Verify `updated_at` changes. |
+| `test_update_system_template_raises` | Attempting to update a system template raises `ValueError` or returns 403-equivalent. |
+| `test_delete_template_removes_item` | Delete user template, verify `get_template` returns `None`. |
+| `test_delete_system_template_raises` | Attempting to delete system template raises error / is blocked by ConditionExpression. |
+| `test_clone_template_copies_all_fields` | Clone system template. Verify new `template_id`, `owner_sub=user_sub`, `is_system=False`, all config fields match source. |
+| `test_clone_preserves_startup_script_and_env` | Clone template with multi-line startup_script and env_vars dict. Verify exact match. |
+| `test_resolve_template_checks_user_first` | Create user template with same name as system. `resolve_template(id, user_sub)` returns user's version. |
+| `test_resolve_template_falls_back_to_system` | `resolve_template("sys-dev-workspace", user_sub)` returns system template when user has none with that ID. |
+| `test_increment_use_count_atomic` | Call `increment_use_count` 3 times. Verify `use_count == 3`. |
+| `test_auto_terminate_after_bounds` | Verify service rejects values < 600 or > 86400 at the model validation layer. |
+
+### Integration Tests (`tests/test_instance_templates_integration.py`)
+
+**Setup**: Full FastAPI test client with moto-backed DynamoDB. Seed system templates on startup.
+
+| Test | What it validates |
+|------|-------------------|
+| `test_create_and_list_round_trip` | POST create template via API, GET list, verify template appears with correct fields. |
+| `test_clone_via_api_and_launch` | POST clone system template, POST launch EC2 with cloned template_id. Verify launch params match template. |
+| `test_category_filter_via_api` | GET `/ui/remote/templates?category=ml`. Verify only ML templates returned. |
+| `test_csrf_required_for_mutations` | POST/PATCH/DELETE without `x-csrf-token` header returns 403. |
+| `test_unauthenticated_returns_401` | Requests without session cookie return 401. |
+| `test_system_template_protection_via_api` | PATCH and DELETE system templates return 403. |
+| `test_user_isolation` | Alice creates template. Bob's GET list does not include it. |
+| `test_launch_with_template_overrides` | Launch with `template_id` + explicit `instance_type`. Verify explicit value wins. |
+| `test_use_count_increments_on_launch` | Launch from template, GET template, verify `use_count` incremented. |
+
+### E2E Tests (`frontend/e2e/instance-templates.spec.ts`)
+
+**Auth pattern**: `injectAuth(page, "alice")` for user operations, `injectAuth(page, "root")` for admin verification. CSRF via `sessions["alice"].csrf_token` on all POST/PATCH/DELETE.
+
+**Section 264: Template CRUD API (5 tests)**
+- Setup: `injectAuth(page, "alice")`.
+- Test 1: `GET /ui/remote/templates` — assert `resp.ok`, `body.templates.length >= 4`, every system template has `is_system: true`.
+- Test 2: `POST /ui/remote/templates` with `{ name: "E2E Custom", target: "ec2", ... }` — assert status 201, `body.is_system === false`, `body.owner_sub` is Alice's sub.
+- Test 3: `PATCH /ui/remote/templates/${id}` with `{ description: "updated" }` — assert 200, `body.description === "updated"`.
+- Test 4: `PATCH /ui/remote/templates/sys-dev-workspace` — assert 403 with `detail` containing "system template".
+- Test 5: `DELETE /ui/remote/templates/${id}` — assert 200. `GET /ui/remote/templates/${id}` — assert 404.
+
+**Section 265: Template Clone & Launch API (5 tests)**
+- Test 6: `POST /ui/remote/templates/sys-dev-workspace/clone` — assert 201, `body.is_system === false`, `body.instance_type === "t3.small"`.
+- Test 7: `POST /ui/remote/ec2/launch` with `template_id` — assert 200/201, instance launched.
+- Test 8: `POST /ui/remote/k8s/launch` with `template_id: "sys-k8s-dev"` — assert 200/201, pod launched.
+- Test 9: After launch, `GET /ui/remote/templates/sys-dev-workspace` — assert `use_count >= 1`.
+- Test 10: `POST /ui/remote/ec2/launch` with `template_id` AND `instance_type: "t3.large"` — assert instance uses `t3.large`.
+
+**Section 266: Templates UI (5 tests)**
+- Setup: navigate to `/remote/templates`.
+- Test 11: `page.getByRole("heading", { name: "Templates" })` visible. System template cards: `page.getByText("Dev Workspace")`, `page.getByText("Database Server")`.
+- Test 12: Click `page.getByRole("tab", { name: "Database" })`. Verify `page.getByText("Database Server").toBeVisible()`, `page.getByText("Dev Workspace").not.toBeVisible()`.
+- Test 13: Click `page.getByRole("button", { name: /create template/i })`. Fill form. Submit. Verify new card: `page.getByText("Test Template")`.
+- Test 14: Click Clone button on system template card. Verify new card with cloned name.
+- Test 15: Click Launch on template. Verify launch dialog opens with `page.getByDisplayValue("t3.small")` or equivalent pre-filled value.
+
+**Section 267: Validation & Edge Cases (8 tests)**
+- Tests 16-23: Boundary tests for name length (100/101), script size (16384/16385 bytes), auto_terminate bounds (600/500, 86400/90000), empty env_vars, clone field preservation.
+
+**Section 268: System Template Protection & Multi-User Isolation (7 tests)**
+- Tests 24-30: System count >= 6, Bob cannot see Alice's templates, PATCH/DELETE system returns 403, owner_sub correct, self-clone works, launch increments use_count.
+
+**Negative tests** (embedded in sections above):
+- 401: unauthenticated request (no cookies).
+- 403: modify/delete system template; access other user's template.
+- 404: GET/DELETE non-existent template; launch with invalid template_id.
+- 422: validation failures (name too long, script too large, invalid auto_terminate).
+
+**Teardown**: Delete user-created templates in `afterAll` to avoid polluting subsequent runs.
+
+**Retry safety**: Each test run uses unique template names with `Date.now()` suffix. Clone tests use unique `new_name`. System templates are idempotent (seeded once, never deleted by tests).
+
+### Test Data Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| DynamoDB table | `instance_templates` with PK `owner_sub` (S), SK `sk` (S), GSIs `ByCategory` and `ByCreatedAt` (sort key `created_at` type N) |
+| System templates | Seeded by `ensure_system_templates()` on backend startup (6 templates) |
+| Test users | Alice (USER) for CRUD, Bob (USER) for isolation tests, Root (ROOT) for admin verification |
+| Session seeding | `e2e_session_setup.py` + `e2e_admin_session_setup.py` |
+| INFRA-003/004 tables | EC2 instances and K8s pods tables must exist for launch integration tests |
+
+### CI / Pipeline
+
+| Concern | Approach |
+|---------|----------|
+| Feature flag | Set `INSTANCE_TEMPLATES_ENABLED=true` in CI `.env.local` |
+| Serial execution | Tests must run single-worker (`workers: 1`) — shared DDB state |
+| Retry safety | Unique names per run; `afterAll` cleanup of user templates |
+| Dependencies | INFRA-003 and INFRA-004 tables/services must be deployed first |
+| Startup | Backend `ensure_system_templates()` runs on startup — no separate seed script needed |
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|---------------|--------|--------------|
+| INFRA-003 (EC2 Launcher) | `LaunchInstanceIn` model, `ec2_launcher.py` service, EC2 DDB table, launch endpoint | **Not yet implemented** | Yes — template CRUD can be built independently; launch integration wired after INFRA-003 lands |
+| INFRA-004 (K8s Launcher) | `LaunchPodIn` model, `k8s_launcher.py` service, K8s pods DDB table, launch endpoint | **Not yet implemented** | Yes — same as above; K8s launch integration wired after INFRA-004 lands |
+
+### Depended On By
+
+| Ticket | What It Needs From INFRA-007 |
+|--------|------------------------------|
+| INFRA-003 (EC2 Launcher) | References `template_id` field in `LaunchInstanceIn` — expects template resolution |
+| INFRA-004 (K8s Launcher) | References `template_id` field in `LaunchPodIn` — expects template resolution |
+
+> No other tickets in the current backlog explicitly depend on INFRA-007.
+
+### Merge Strategy
+
+**Feature-flag-gated + parallel-safe**
+
+- The `instance_templates` DDB table and service are entirely new — no conflicts with existing code.
+- Template CRUD endpoints live under a new router (`/ui/remote/templates`) with no overlap to existing routes.
+- Launch integration (wiring `resolve_template` into `ec2_launcher.py` / `k8s_launcher.py`) is the only merge-order-sensitive piece — these files must exist first (INFRA-003/004).
+- Feature flag `INSTANCE_TEMPLATES_ENABLED` gates the router, so the feature can be merged to main even before INFRA-003/004 if needed.
+
+### Merge Checklist
+
+- [ ] `scripts/local-ddb-init.py` — `instance_templates` table definition added with correct `attr_types={"created_at": "N"}`
+- [ ] `app/core/settings.py` — `instance_templates_table_name` setting added
+- [ ] `app/core/tables.py` — `instance_templates` table handle added
+- [ ] `app/services/instance_templates.py` — all 8 service functions implemented
+- [ ] `app/routers/instance_templates.py` — 6 endpoints registered
+- [ ] `app/main.py` — router registered + `ensure_system_templates()` called in startup event
+- [ ] `app/models.py` — `CreateTemplateIn`, `TemplateOut`, `TemplateListOut`, `CloneTemplateIn`, `UpdateTemplateIn` added
+- [ ] `app/services/ec2_launcher.py` — `resolve_template` + `increment_use_count` wired (after INFRA-003)
+- [ ] `app/services/k8s_launcher.py` — `resolve_template` + `increment_use_count` wired (after INFRA-004)
+- [ ] `frontend/src/api/types.ts` — template TypeScript types added
+- [ ] `frontend/src/api/endpoints/instance-templates.ts` — API wrappers
+- [ ] `frontend/src/pages/remote/TemplateBrowserPage.tsx` — gallery page
+- [ ] `frontend/src/pages/remote/TemplateEditorDialog.tsx` — editor dialog
+- [ ] `frontend/src/App.tsx` — `/remote/templates` route
+- [ ] `frontend/src/components/layout/Sidebar.tsx` — Templates nav item
+- [ ] Feature flag `INSTANCE_TEMPLATES_ENABLED` in `.env.local.example`
+- [ ] E2E tests pass: `npx playwright test e2e/instance-templates.spec.ts`
+- [ ] Unit tests pass: `pytest tests/test_instance_templates.py`
+- [ ] System templates seed correctly on fresh startup (`just restart && just status`)
