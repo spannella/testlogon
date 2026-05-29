@@ -1985,6 +1985,9 @@ export interface FeedPost {
   /** ENGAGE-002: viewer's own votes per question */
   poll_my_votes?: PollMyVotes | null;
 
+  /** SOC-002: feed source attribution — "own" for viewer's posts, "following" for fan-out posts */
+  source?: "own" | "following";
+
   /** PWA-005: Offline queue metadata — only present for locally-queued posts */
   __offline?: {
     queueId: string;

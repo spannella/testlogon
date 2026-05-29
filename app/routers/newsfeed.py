@@ -4216,6 +4216,7 @@ def view_feed(
         eks = decode_cursor_or_400(cursor)
         rate_limit_feed_query(user_id, mode)
         ordered: List[Dict[str, Any]] = []
+        _fanout_source_by_post: Dict[str, str] = {}
         filter_params = FeedFilterParams(author_id=author_filter, q=normalized_q, from_dt=from_dt, to_dt=to_dt, has_media=has_media)
         next_eks = eks
 
@@ -4270,6 +4271,11 @@ def view_feed(
                     ExclusiveStartKey=next_eks if next_eks else None,
                 )
                 refs = resp.get("Items", [])
+                # SOC-002: Build fan-out source map from feed refs
+                for ref in refs:
+                    _rpid = ref.get("post_id")
+                    if _rpid and _rpid not in _fanout_source_by_post:
+                        _fanout_source_by_post[_rpid] = "following" if ref.get("fanout") else "own"
                 # SOCIAL-002: Build repost metadata map from feed refs
                 for ref in refs:
                     if ref.get("ref_type") == "repost" and ref.get("post_id"):
@@ -4359,6 +4365,9 @@ def view_feed(
                     post_dict["reposted_by"] = {"user_id": reposter_id, "display_name": reposter_display}
                     if repost_meta.get("repost_quote"):
                         post_dict["repost_quote"] = repost_meta["repost_quote"]
+                # SOC-002: Add feed source attribution
+                if not author_filter:
+                    post_dict["source"] = _fanout_source_by_post.get(post_id, "own")
                 ordered.append(post_dict)
                 if len(ordered) >= limit:
                     break

@@ -204,6 +204,13 @@ def _publish_due_post(item: Dict[str, Any], *, now_ts: int, now_iso: str) -> str
     except ClientError:
         pass
 
+    # SOC-002: Fan out published scheduled post to followers
+    try:
+        from app.services.newsfeed_fanout import fan_out_post_to_followers
+        fan_out_post_to_followers(author_id=user_id, post_id=post_id, created_at=now_iso)
+    except Exception:
+        logger.exception("Fan-out failed for scheduled post %s by %s", post_id, user_id)
+
     return "published"
 
 
