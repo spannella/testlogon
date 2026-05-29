@@ -143,6 +143,7 @@ import {
   Building2,
   Scissors,
   KeyRound,
+  UserCog,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -211,6 +212,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Alerts", path: "/alerts", icon: Bell },
       { label: "Tickets", path: "/tickets", icon: LifeBuoy },
   { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
+      { label: "Delegates", path: "/delegates", icon: UserCog },
       { label: "Settings", path: "/settings", icon: Settings },
       { label: "Privacy", path: "/settings/privacy", icon: ShieldCheck },
       { label: "Webhooks", path: "/settings/webhooks", icon: Webhook },

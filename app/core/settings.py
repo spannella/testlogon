@@ -1484,6 +1484,9 @@ class Settings:
     sso_assertion_max_clock_skew_seconds: int = int(os.environ.get("SSO_ASSERTION_MAX_CLOCK_SKEW_SECONDS", "180"))
     sso_session_link_ttl_seconds: int = int(os.environ.get("SSO_SESSION_LINK_TTL_SECONDS", "86400"))
 
+    # Delegates (DELEGATE-001)
+    delegates_table_name: str = os.environ.get("DELEGATES_TABLE_NAME", "delegates")
+
     # Multi-Tenancy (ENTERPRISE-001)
     multi_tenancy_enabled: bool = os.environ.get("MULTI_TENANCY_ENABLED", "0") not in ("0", "false", "False")
     tenants_table_name: str = os.environ.get("TENANTS_TABLE_NAME", "tenants")

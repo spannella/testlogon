@@ -133,6 +133,7 @@ class Tables:
     sso_assertion_cache: Any
     broadcast_clips: Any
     llm_provider_keys: Any
+    delegates: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -260,4 +261,5 @@ T = Tables(
     sso_assertion_cache=ddb.Table(S.sso_assertion_cache_table_name),
     broadcast_clips=ddb.Table(S.broadcast_clips_table_name),
     llm_provider_keys=ddb.Table(S.llm_provider_keys_table_name),
+    delegates=ddb.Table(S.delegates_table_name),
 )

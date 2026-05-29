@@ -93,6 +93,7 @@ const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentC
 const LlmKeysPage = lazy(() => import("@/pages/agents/LlmKeysPage"));
 const AdvertiserDashboard = lazy(() => import("@/pages/ads/AdvertiserDashboard"));
 const CampaignListPage = lazy(() => import("@/pages/ads/CampaignList"));
+const DelegatesPage = lazy(() => import("@/pages/delegates/DelegatesPage"));
 
 function PageSpinner() {
   return (
@@ -192,6 +193,7 @@ export default function App() {
           <Route path="affiliates" element={<AffiliateDashboard />} />
           <Route path="achievements" element={<AchievementsPage />} />
           <Route path="collaborations" element={<CollaborationsPage />} />
+          <Route path="delegates" element={<DelegatesPage />} />
           <Route path="fan-club" element={<FanClubPage />} />
           <Route path="orgs" element={<OrgsPage />} />
           <Route path="orgs/:orgId" element={<OrgDashboard />} />
