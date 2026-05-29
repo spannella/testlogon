@@ -146,6 +146,7 @@ import {
   UserCog,
   Users,
   Bot,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -179,6 +180,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Promo Codes", path: "/promo", icon: Tag },
       { label: "Fan Club", path: "/fan-club", icon: UsersRound },
       { label: "Syndicates", path: "/syndicates", icon: Users },
+      { label: "Groups", path: "/groups", icon: Users },
     ],
   },
   {

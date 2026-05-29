@@ -18,6 +18,7 @@ import {
   Bell,
   LifeBuoy,
   UsersRound,
+  Users,
   BookUser,
   Headphones,
   PanelLeftClose,
@@ -115,6 +116,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Fan Club", i18nKey: "nav.fanClub", path: "/fan-club", icon: <UsersRound className="h-5 w-5" /> },
       { label: "Ads Manager", i18nKey: "nav.adsManager", path: "/ads/dashboard", icon: <Megaphone className="h-5 w-5" /> },
       { label: "Syndicates", i18nKey: "nav.syndicates", path: "/syndicates", icon: <Users className="h-5 w-5" /> },
+      { label: "Groups", i18nKey: "nav.groups", path: "/groups", icon: <Users className="h-5 w-5" /> },
     ],
   },
   {

@@ -1218,6 +1218,9 @@ def _table_defs() -> List[TableDef]:
         # Syndicates (SYND-001)
         TableDef(
             _resolve_table_name(S.syndicates_table_name, "syndicates"),
+        # User Groups (GROUP-001)
+        TableDef(
+            _resolve_table_name(S.ddb_user_groups_table, "user_groups"),
             "pk",
             "sk",
             gsi=[

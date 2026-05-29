@@ -1506,6 +1506,11 @@ class Settings:
     llm_provider_keys_table_name: str = os.environ.get("LLM_PROVIDER_KEYS_TABLE_NAME", "llm_provider_keys")
     # Syndicates (SYND-001)
     syndicates_table_name: str = os.environ.get("SYNDICATES_TABLE_NAME", "syndicates")
+    # User Groups (GROUP-001)
+    user_groups_enabled: bool = os.environ.get("USER_GROUPS_ENABLED", "1") not in ("0", "false", "False")
+    ddb_user_groups_table: str = os.environ.get("DDB_USER_GROUPS_TABLE", "user_groups")
+    user_group_max_members: int = int(os.environ.get("USER_GROUP_MAX_MEMBERS", "10000"))
+    user_group_max_per_user: int = int(os.environ.get("USER_GROUP_MAX_PER_USER", "50"))
 
 
 S = Settings()
