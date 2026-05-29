@@ -1254,6 +1254,25 @@ def _content_from_payload(req: ContentFieldsMixin) -> Dict[str, Any]:
     }
 
 
+class PollOptionIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=200)
+
+class PollQuestionIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+    choice_mode: Literal["single", "multi"] = "single"
+    options: List[PollOptionIn] = Field(..., min_length=2, max_length=10)
+    max_selections: Optional[int] = Field(default=None, ge=1, le=10)
+
+class PollDataIn(BaseModel):
+    questions: List[PollQuestionIn] = Field(..., min_length=1, max_length=10)
+    closes_at: Optional[int] = Field(default=None, ge=0)
+    anonymous: bool = True
+    allow_vote_change: bool = True
+
+class VoteIn(BaseModel):
+    question_id: str = Field(..., min_length=1, max_length=64)
+    option_id: str = Field(..., min_length=1, max_length=64)
+
 class CreatePostRequest(ContentFieldsMixin):
     image_urls: List[str] = Field(default_factory=list)
     image_variants: Optional[List[Dict[str, Any]]] = Field(default=None)
@@ -1272,6 +1291,9 @@ class CreatePostRequest(ContentFieldsMixin):
     lottery_won_at: Optional[str] = None
     lottery_version: Optional[int] = Field(default=None, ge=0)
     file_paths: List[str] = Field(default_factory=list)
+    # ENGAGE-002: Poll/Survey post type
+    post_type: Optional[Literal["standard", "poll", "survey"]] = None
+    poll_data: Optional[PollDataIn] = None
     publish_at: Optional[int] = Field(
         default=None,
         ge=0,
@@ -1364,6 +1386,11 @@ class PostResponse(BaseModel):
     like_count: int = 0
     comment_count: int = 0
     video: Optional[PostVideoEmbed] = None
+    # ENGAGE-002: Poll fields
+    post_type: str = "standard"
+    poll_data: Optional[Dict[str, Any]] = None
+    poll_vote_counts: Optional[Dict[str, Any]] = None
+    poll_my_votes: Optional[Dict[str, Any]] = None
 
 
 class ScheduledPostsResponse(BaseModel):
@@ -1861,6 +1888,15 @@ def pk_repost_lookup(user_id: str) -> str:
     return f"REPOST#{user_id}"
 
 
+def _poll_fields_for_post(post: Dict[str, Any], locked_body: bool, viewer_id: Optional[str]) -> Dict[str, Any]:
+    """Extract ENGAGE-002 poll fields for _post_to_dict output."""
+    post_type = post.get("post_type", "standard")
+    if post_type not in ("poll", "survey") or locked_body:
+        return {"poll_data": None, "poll_vote_counts": None, "poll_my_votes": None}
+    from app.services.newsfeed_polls import serialize_poll_for_post
+    return serialize_poll_for_post(post, viewer_id)
+
+
 def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None) -> Dict[str, Any]:
     """Map a raw DDB post item to the FeedPost shape expected by the frontend."""
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, body_version = _resolve_read_body_fields(post)
@@ -1974,6 +2010,8 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "reposted_by_me": _check_reposted_by_me(viewer_id, post_id) if viewer_id else False,
         # SOCIAL-006: hashtags/topics
         "tags": list(post.get("tags") or []),
+        # ENGAGE-002: Poll data
+        **_poll_fields_for_post(post, locked_body, viewer_id),
     }
 
 
@@ -3159,6 +3197,25 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         if _vid_record.status != "published":
             raise HTTPException(status_code=400, detail="video must be in published status to attach to a post")
 
+    # --- ENGAGE-002: Poll/Survey validation ---
+    req_post_type = getattr(req, "post_type", None) or "standard"
+    poll_data_built = None
+    poll_vote_counts_init = None
+    if req_post_type in ("poll", "survey"):
+        if not getattr(S, "newsfeed_polls_enabled", True):
+            raise HTTPException(status_code=403, detail="Polls are disabled")
+        if not req.poll_data:
+            raise HTTPException(status_code=400, detail="poll_data is required for poll/survey posts")
+        from app.services.newsfeed_polls import create_poll_data, build_initial_vote_counts
+        raw_questions = [q.model_dump() for q in req.poll_data.questions]
+        poll_data_built = create_poll_data(
+            questions=raw_questions,
+            closes_at=req.poll_data.closes_at,
+            anonymous=req.poll_data.anonymous,
+            allow_vote_change=req.poll_data.allow_vote_change,
+        )
+        poll_vote_counts_init = build_initial_vote_counts(poll_data_built)
+
     content = _content_from_payload(req)
     _emit_newsfeed_content_metric(
         "create_post",
@@ -3212,6 +3269,19 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "tags": all_tags,
         "body_plain_lc": (content.get("body_plain") or content.get("body") or "").lower(),
     }
+    # ENGAGE-002: Attach poll data to post item
+    if req_post_type in ("poll", "survey") and poll_data_built:
+        post_item["post_type"] = req_post_type
+        post_item["poll_data"] = poll_data_built
+        post_item["poll_votes"] = {}
+        post_item["poll_vote_counts"] = poll_vote_counts_init or {}
+        post_item["poll_total_votes"] = 0
+        # Initialize nested vote maps for each question/option
+        for q in poll_data_built.get("questions", []):
+            qid = q["question_id"]
+            post_item["poll_votes"][qid] = {}
+            for opt in q.get("options", []):
+                post_item["poll_votes"][qid][opt["option_id"]] = {}
     if unlock_limit is not None:
         post_item["unlock_limit"] = unlock_limit
         post_item["unlock_count"] = 0
@@ -3293,6 +3363,10 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         lottery_version=lottery_version,
         like_count=0,
         comment_count=0,
+        post_type=req_post_type,
+        poll_data=poll_data_built if poll_data_built else None,
+        poll_vote_counts=poll_vote_counts_init if poll_vote_counts_init else None,
+        poll_my_votes=None,
     )
 
 
@@ -5763,6 +5837,111 @@ def bulk_archive_posts(body: PostBulkArchiveReq, user_id: UserIdDep):
 # -----------------------------
 # Health
 # -----------------------------
+# ─── ENGAGE-002: Poll Endpoints ──────────────────────────────────────────────
+
+
+@router.post("/posts/{post_id}/vote")
+def vote_on_poll(post_id: str, body: VoteIn, user_id: UserIdDep):
+    """Cast or change a vote on a poll/survey post."""
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("post_type") not in ("poll", "survey"):
+        raise HTTPException(status_code=400, detail="Post is not a poll")
+
+    from app.services.newsfeed_polls import cast_vote, get_user_vote_for_question, get_user_multi_votes
+    updated_counts = cast_vote(
+        post=post,
+        post_id=post_id,
+        question_id=body.question_id,
+        option_id=body.option_id,
+        user_sub=user_id,
+    )
+
+    # Re-fetch post to get updated state
+    refreshed = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    total_votes = int(refreshed.get("poll_total_votes", 0)) if refreshed else 0
+    poll_data = (refreshed or post).get("poll_data", {})
+    question = None
+    for q in poll_data.get("questions", []):
+        if q.get("question_id") == body.question_id:
+            question = q
+            break
+    choice_mode = question.get("choice_mode", "single") if question else "single"
+
+    my_vote = None
+    my_votes = None
+    if choice_mode == "single":
+        my_vote = get_user_vote_for_question(refreshed or post, body.question_id, user_id)
+    else:
+        my_votes = list(get_user_multi_votes(refreshed or post, body.question_id, user_id))
+
+    return {
+        "ok": True,
+        "question_id": body.question_id,
+        "option_id": body.option_id,
+        "vote_counts": updated_counts,
+        "total_votes": total_votes,
+        "my_vote": my_vote,
+        "my_votes": my_votes,
+    }
+
+
+@router.delete("/posts/{post_id}/vote")
+def remove_poll_vote(post_id: str, question_id: str = Query(...), user_id: UserIdDep = None):
+    """Remove user's vote on a poll question."""
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("post_type") not in ("poll", "survey"):
+        raise HTTPException(status_code=400, detail="Post is not a poll")
+
+    from app.services.newsfeed_polls import remove_vote
+    updated_counts = remove_vote(
+        post=post,
+        post_id=post_id,
+        question_id=question_id,
+        user_sub=user_id,
+    )
+
+    refreshed = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    total_votes = int(refreshed.get("poll_total_votes", 0)) if refreshed else 0
+
+    return {
+        "ok": True,
+        "question_id": question_id,
+        "vote_counts": updated_counts,
+        "total_votes": total_votes,
+        "my_vote": None,
+    }
+
+
+@router.post("/posts/{post_id}/close-poll")
+def close_poll_endpoint(post_id: str, user_id: UserIdDep):
+    """Close a poll early. Only the post author can do this."""
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("post_type") not in ("poll", "survey"):
+        raise HTTPException(status_code=400, detail="Post is not a poll")
+
+    from app.services.newsfeed_polls import close_poll
+    return close_poll(post=post, post_id=post_id, user_sub=user_id)
+
+
+@router.get("/posts/{post_id}/poll-results")
+def get_poll_results_endpoint(post_id: str, question_id: str = Query(...), user_id: UserIdDep = None):
+    """Get detailed poll results for a specific question."""
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("post_type") not in ("poll", "survey"):
+        raise HTTPException(status_code=400, detail="Post is not a poll")
+
+    from app.services.newsfeed_polls import get_poll_results
+    return get_poll_results(post=post, question_id=question_id, viewer_id=user_id)
+
+
 @router.get("/health")
 def health():
     return {

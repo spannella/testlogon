@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { List, Columns } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +25,7 @@ import {
   type TicketStatus,
 } from "@/api/endpoints/tickets";
 import { JiraLinkedPanel } from "./JiraLinkedPanel";
+import { TicketKanbanBoard } from "./TicketKanbanBoard";
 
 const POLL_MS = 15000;
 
@@ -45,6 +47,7 @@ export default function TicketsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replyBody, setReplyBody] = useState("");
 
+  const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
   const [statusFilter, setStatusFilter] = useState<"" | TicketStatus>("");
   const [assigneeFilter, setAssigneeFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
@@ -157,7 +160,30 @@ export default function TicketsPage() {
     <div className="space-y-6 p-4 md:p-6 lg:p-8">
       <PageHeader title="Support Tickets" description="Open, track, and resolve support issues." />
 
-      {isAdmin && (
+      <div className="flex items-center gap-2" data-testid="view-toggle">
+        <Button
+          variant={viewMode === "list" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setViewMode("list")}
+          data-testid="view-list-btn"
+        >
+          <List className="h-4 w-4 mr-1" /> List
+        </Button>
+        <Button
+          variant={viewMode === "kanban" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setViewMode("kanban")}
+          data-testid="view-kanban-btn"
+        >
+          <Columns className="h-4 w-4 mr-1" /> Board
+        </Button>
+      </div>
+
+      {viewMode === "kanban" && (
+        <TicketKanbanBoard tickets={listItems} isAdmin={isAdmin} />
+      )}
+
+      {isAdmin && viewMode === "list" && (
         <div className="grid gap-3 md:grid-cols-4">
           <Card><CardHeader><CardTitle className="text-sm">Open</CardTitle></CardHeader><CardContent>{statusCounts.open ?? 0}</CardContent></Card>
           <Card><CardHeader><CardTitle className="text-sm">In progress</CardTitle></CardHeader><CardContent>{statusCounts.in_progress ?? 0}</CardContent></Card>
@@ -166,7 +192,7 @@ export default function TicketsPage() {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      {viewMode === "list" && <div className="grid gap-6 lg:grid-cols-3">
         <Card>
           <CardHeader>
             <CardTitle>Open a ticket</CardTitle>
@@ -313,7 +339,7 @@ export default function TicketsPage() {
             )}
           </CardContent>
         </Card>
-      </div>
+      </div>}
     </div>
   );
 }

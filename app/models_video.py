@@ -100,6 +100,9 @@ class VideoMetadataModel(BaseModel):
     published_at: Optional[int] = None
     deleted_at: Optional[int] = None
 
+    # Scheduled Publishing (CREATOR-005)
+    scheduled_publish_at: Optional[int] = None  # Unix timestamp for future auto-publish
+
     # Download (VOD-012)
     allow_download: bool = False
     download_mp4_key: str = ""

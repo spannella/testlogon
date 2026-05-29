@@ -19,7 +19,7 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       userId: null,
       accessToken: null,
       isAuthenticated: false,
@@ -31,8 +31,25 @@ export const useAuthStore = create<AuthState>()(
       setAccessToken: (accessToken) =>
         set({ accessToken }),
 
-      logout: (reason?: string) =>
-        set({ userId: null, accessToken: null, isAuthenticated: false, logoutReason: reason ?? null }),
+      logout: (reason?: string) => {
+        const prevUserId = get().userId;
+        set({
+          userId: null,
+          accessToken: null,
+          isAuthenticated: false,
+          logoutReason: reason ?? null,
+        });
+        // Clear offline cache for the logged-out user (fire-and-forget)
+        if (prevUserId) {
+          import("@/lib/offlineCache")
+            .then(({ clearAllCacheForUser }) =>
+              clearAllCacheForUser(prevUserId),
+            )
+            .catch(() => {
+              // Cache cleanup is best-effort
+            });
+        }
+      },
 
       clearLogoutReason: () => set({ logoutReason: null }),
     }),

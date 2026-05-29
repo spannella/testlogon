@@ -30,8 +30,11 @@ from app.models import (
     AlertTypePreferenceUpdate,
     MarkReadReq,
 )
+from boto3.dynamodb.conditions import Attr
 from app.services.alerts import (
     ALERT_EVENT_TYPES,
+    ALERT_CATEGORIES,
+    get_alert_category,
     audit_event,
     get_alert_prefs,
     send_alert_email,
@@ -87,6 +90,13 @@ def _alert_out(item: Dict[str, Any]) -> Dict[str, Any]:
         "read_at": item.get("read_at", 0),
         "toast_delivered": item.get("toast_delivered", False),
         "priority": item.get("priority", "normal"),
+        # Activity feed fields
+        "action_url": item.get("action_url"),
+        "category": item.get("category", "security"),
+        "actors": item.get("actors", []),
+        "actor_count": int(item.get("actor_count", 0)),
+        "source_type": item.get("source_type"),
+        "source_id": item.get("source_id"),
     }
 
 
@@ -446,6 +456,266 @@ async def alert_email_remove(req: Request, body: AlertEmailRemoveReq, ctx: Dict[
     prefs2 = set_alert_prefs(user_sub, emails=emails)
     audit_event("alerts_email_remove", user_sub, req, outcome="success", email=email)
     return prefs2
+
+
+# --------------------------------------------------------------------------- #
+#  PLATFORM-012: Activity feed, tips summary, mark-group-read                   #
+# --------------------------------------------------------------------------- #
+
+
+def _format_activity_title(group: Dict[str, Any]) -> str:
+    """Generate a human-readable title for a grouped activity item."""
+    parts = []
+    aggs = group.get("aggregations", {})
+
+    for event_type, agg in aggs.items():
+        count = agg["count"]
+        total_cents = agg.get("total_cents", 0)
+
+        if event_type == "post_liked":
+            parts.append(f"{count} like{'s' if count != 1 else ''}")
+        elif event_type == "post_reaction":
+            parts.append(f"{count} reaction{'s' if count != 1 else ''}")
+        elif event_type == "post_comment":
+            parts.append(f"{count} comment{'s' if count != 1 else ''}")
+        elif event_type == "post_tip":
+            total_str = f" ${total_cents / 100:.2f}" if total_cents else ""
+            parts.append(f"{count} tip{'s' if count != 1 else ''}{total_str}")
+        elif event_type == "post_shared":
+            parts.append(f"{count} share{'s' if count != 1 else ''}")
+        elif event_type == "message_tip":
+            total_str = f" ${total_cents / 100:.2f}" if total_cents else ""
+            parts.append(f"tipped{total_str}")
+        elif event_type == "new_follower":
+            parts.append(f"{count} new follower{'s' if count != 1 else ''}")
+
+    source_type = group.get("source_type", "")
+    if source_type == "post":
+        return f"Your post received {', '.join(parts)}" if parts else "Activity on your post"
+    elif source_type == "message":
+        return f"Your message was {', '.join(parts)}" if parts else "Activity on your message"
+    elif source_type == "follower":
+        return ", ".join(parts) if parts else "New follower"
+    return ", ".join(parts) or group.get("title", "Activity")
+
+
+@router.get("/alerts/activity")
+async def get_activity_feed(
+    limit: int = Query(default=20, ge=1, le=50),
+    cursor: Optional[str] = Query(default=None),
+    category: Optional[str] = Query(default=None),
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    """Get grouped activity feed for the current user."""
+    user_sub = ctx["user_sub"]
+
+    # Query alerts
+    query_kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("user_sub").eq(user_sub),
+        "ScanIndexForward": False,
+        "Limit": limit * 5,  # Over-fetch to allow grouping
+    }
+    eks = decode_cursor(cursor)
+    if eks:
+        query_kwargs["ExclusiveStartKey"] = eks
+    if category:
+        query_kwargs["FilterExpression"] = Attr("category").eq(category)
+
+    resp = T.alerts.query(**query_kwargs)
+    raw_items = resp.get("Items", [])
+
+    # Filter out internal records (UNREAD_COUNT sentinel, legacy BATCH# items without ts)
+    items = []
+    for it in raw_items:
+        aid = it.get("alert_id", "")
+        # Skip internal sentinel records
+        if aid == "UNREAD_COUNT":
+            continue
+        # Skip legacy batch records that lack ts (they have updated_at as string)
+        if aid.startswith("BATCH#") and not it.get("ts"):
+            continue
+        items.append(it)
+
+    # Group by source entity
+    groups: Dict[str, Dict[str, Any]] = {}
+    group_order: List[str] = []
+
+    for item in items:
+        source_type = item.get("source_type")
+        source_id = item.get("source_id")
+
+        if not source_type or not source_id:
+            # Non-groupable: treat as standalone
+            key = f"standalone:{item['alert_id']}"
+            groups[key] = {
+                "source_type": item.get("event", "unknown"),
+                "source_id": item.get("alert_id"),
+                "action_url": item.get("action_url"),
+                "aggregations": {},
+                "latest_ts": int(item.get("ts", 0)),
+                "title": item.get("title", ""),
+                "unread": not item.get("read", False),
+                "alert_ids": [item["alert_id"]],
+            }
+            group_order.append(key)
+            continue
+
+        key = f"{source_type}:{source_id}"
+        if key not in groups:
+            groups[key] = {
+                "source_type": source_type,
+                "source_id": source_id,
+                "action_url": item.get("action_url"),
+                "aggregations": {},
+                "latest_ts": int(item.get("ts", 0)),
+                "title": "",
+                "unread": False,
+                "alert_ids": [],
+            }
+            group_order.append(key)
+
+        group = groups[key]
+        event = item.get("event", "")
+        if event not in group["aggregations"]:
+            group["aggregations"][event] = {
+                "count": 0,
+                "latest_actor": None,
+                "total_cents": 0,
+            }
+        agg = group["aggregations"][event]
+        agg["count"] += 1
+        if not agg["latest_actor"]:
+            actor_name = (item.get("details") or {}).get("actor_display_name")
+            if actor_name:
+                agg["latest_actor"] = str(actor_name)
+        if "amount_cents" in (item.get("details") or {}):
+            agg["total_cents"] += int(item["details"]["amount_cents"])
+
+        if not item.get("read", False):
+            group["unread"] = True
+        group["alert_ids"].append(item["alert_id"])
+
+    # Build response with formatted titles
+    result_items = []
+    for key in group_order[:limit]:
+        group = groups[key]
+        # Only format title for grouped items (not standalone)
+        if not key.startswith("standalone:"):
+            group["title"] = _format_activity_title(group)
+        result_items.append(group)
+
+    next_cursor = None
+    if resp.get("LastEvaluatedKey"):
+        next_cursor = encode_cursor(resp["LastEvaluatedKey"])
+
+    return {"items": result_items, "next_cursor": next_cursor}
+
+
+@router.get("/alerts/tips-summary")
+async def get_tips_summary(
+    period: str = Query(default="30d"),
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    """Get tip earnings summary for the current user."""
+    user_sub = ctx["user_sub"]
+    ts = now_ts()
+
+    if period not in ("7d", "30d", "all"):
+        period = "30d"
+
+    period_seconds = {"7d": 7 * 86400, "30d": 30 * 86400, "all": 10 * 365 * 86400}
+    cutoff_ts = ts - period_seconds.get(period, 30 * 86400)
+
+    tip_types = {"post_tip", "message_tip"}
+
+    # Query all alerts; filter for tips client-side
+    resp = T.alerts.query(
+        KeyConditionExpression=Key("user_sub").eq(user_sub),
+        ScanIndexForward=False,
+        Limit=1000,
+    )
+
+    total_tips_cents = 0
+    tip_count = 0
+    tipper_totals: Dict[str, Dict[str, Any]] = {}
+    by_type: Dict[str, Dict[str, int]] = {
+        "post_tip": {"count": 0, "total_cents": 0},
+        "message_tip": {"count": 0, "total_cents": 0},
+    }
+
+    for item in resp.get("Items", []):
+        event = item.get("event", "")
+        if event not in tip_types:
+            continue
+        item_ts = int(item.get("ts", 0))
+        if item_ts < cutoff_ts:
+            continue
+
+        details = item.get("details", {})
+        amount = int(details.get("amount_cents", 0))
+        actor_id = str(details.get("actor_user_id", ""))
+        actor_name = str(details.get("actor_display_name", "Unknown"))
+
+        total_tips_cents += amount
+        tip_count += 1
+
+        if event in by_type:
+            by_type[event]["count"] += 1
+            by_type[event]["total_cents"] += amount
+
+        if actor_id:
+            if actor_id not in tipper_totals:
+                tipper_totals[actor_id] = {"display_name": actor_name, "total_cents": 0}
+            tipper_totals[actor_id]["total_cents"] += amount
+
+    top_tippers = sorted(
+        [{"user_id": uid, **data} for uid, data in tipper_totals.items()],
+        key=lambda x: x["total_cents"],
+        reverse=True,
+    )[:10]
+
+    return {
+        "total_tips_cents": total_tips_cents,
+        "tip_count": tip_count,
+        "top_tippers": top_tippers,
+        "by_type": by_type,
+    }
+
+
+@router.post("/alerts/mark-group-read")
+async def mark_group_read(
+    body: Dict[str, Any],
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    """Mark all alerts in a group as read."""
+    alert_ids = body.get("alert_ids", [])
+    if not isinstance(alert_ids, list):
+        raise HTTPException(400, "alert_ids must be a list")
+    alert_ids = alert_ids[:50]
+
+    ts = now_ts()
+    marked = 0
+    for aid in alert_ids:
+        try:
+            T.alerts.update_item(
+                Key={"user_sub": ctx["user_sub"], "alert_id": aid},
+                UpdateExpression="SET #r=:t, read_at=:ts",
+                ConditionExpression="#r = :f",
+                ExpressionAttributeNames={"#r": "read"},
+                ExpressionAttributeValues={":t": True, ":ts": ts, ":f": False},
+            )
+            marked += 1
+        except Exception:
+            pass
+
+    if marked > 0 and S.notification_unread_count_enabled:
+        try:
+            from app.services.notification_unread import decrement_unread_count
+            decrement_unread_count(ctx["user_sub"], marked)
+        except Exception:
+            pass
+
+    return {"ok": True, "marked_count": marked}
 
 
 @router.get("/alerts/stream")

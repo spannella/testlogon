@@ -37,6 +37,18 @@ from app.services.broadcast_orchestrator import (
 from app.services.broadcast_cloudfront import validate_cloudfront_token
 from app.services.broadcast_playback import mint_local_playback_url
 from app.services.broadcast_sse import broadcast_sse_subscribe, broadcast_sse_unsubscribe, broadcast_sse_publish
+from app.services.broadcast_qa import (
+    submit_question as _qa_submit_question,
+    feature_question as _qa_feature_question,
+    answer_question as _qa_answer_question,
+    dismiss_question as _qa_dismiss_question,
+    remove_question as _qa_remove_question,
+    upvote_question as _qa_upvote_question,
+    remove_upvote as _qa_remove_upvote,
+    list_questions as _qa_list_questions,
+    get_featured_question as _qa_get_featured_question,
+    get_qa_stats as _qa_get_qa_stats,
+)
 from app.services.broadcast_chat_store import (
     send_chat_message as _store_send_chat,
     get_chat_history as _store_get_history,
@@ -135,6 +147,8 @@ class BroadcastSessionOut(BaseModel):
     tip_enabled: bool = True
     tip_min_cents: int = 100
     tip_max_cents: int = 100000
+    # Viewer Clip Creation (ENGAGE-005)
+    clips_enabled: bool = True
 
 
 class BroadcastScheduleIn(BaseModel):
@@ -3780,3 +3794,176 @@ def webrtc_offer_route(session_id: str, input_id: str, body: BroadcastWebRTCOffe
         session_id=session_id,
         input_id=input_id,
     )
+
+
+# ─── Live Q&A Mode Endpoints (ENGAGE-003) ────────────────────────
+
+
+class QAModeToggleIn(BaseModel):
+    enabled: bool
+
+
+class QAQuestionSubmitIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+
+
+def _is_session_owner_or_moderator(session, user_sub: str) -> bool:
+    """Check if user is the session owner or a moderator."""
+    created_by = session.created_by if hasattr(session, "created_by") else session.get("created_by")
+    if created_by == user_sub:
+        return True
+    moderators = session.moderators if hasattr(session, "moderators") else session.get("moderators")
+    if moderators and user_sub in moderators:
+        return True
+    return False
+
+
+@router.post("/sessions/{session_id}/qa-mode")
+def toggle_qa_mode(
+    session_id: str,
+    body: QAModeToggleIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Toggle Q&A mode on a broadcast session. Owner only."""
+    session = get_session(session_id)
+    if session.created_by != ctx["user_sub"]:
+        raise HTTPException(403, "Only the session owner can toggle Q&A mode")
+
+    update_session_fields(session_id, {"qa_mode_enabled": body.enabled})
+    broadcast_sse_publish(session_id, {
+        "_type": "qa:mode_toggle",
+        "enabled": body.enabled,
+    })
+    return {"ok": True, "qa_mode_enabled": body.enabled}
+
+
+@router.post("/sessions/{session_id}/qa/questions")
+def submit_qa_question(
+    session_id: str,
+    body: QAQuestionSubmitIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Submit a question to the Q&A queue."""
+    display_name = ctx.get("display_name", ctx["user_sub"])
+    return _qa_submit_question(
+        session_id=session_id,
+        user_id=ctx["user_sub"],
+        display_name=display_name,
+        text=body.text,
+    )
+
+
+@router.get("/sessions/{session_id}/qa/questions")
+def list_qa_questions(
+    session_id: str,
+    status_filter: str = Query(default="pending", alias="status"),
+    limit: int = Query(default=50, ge=1, le=200),
+    ctx: dict = Depends(_ctx),
+):
+    """List questions in the Q&A queue."""
+    session = get_session(session_id)
+    is_owner_or_mod = _is_session_owner_or_moderator(session, ctx["user_sub"])
+
+    # Regular viewers can only see featured and answered
+    if not is_owner_or_mod and status_filter == "pending":
+        raise HTTPException(403, "Only the broadcaster can view pending questions")
+
+    questions = _qa_list_questions(session_id, status=status_filter, limit=limit)
+    return {"questions": questions, "has_more": len(questions) >= limit}
+
+
+@router.post("/sessions/{session_id}/qa/questions/{question_id}/feature")
+def feature_qa_question(
+    session_id: str,
+    question_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Feature a question (broadcaster/moderator only)."""
+    session = get_session(session_id)
+    if not _is_session_owner_or_moderator(session, ctx["user_sub"]):
+        raise HTTPException(403, "Only broadcaster/moderator can feature questions")
+    return _qa_feature_question(session_id, question_id, ctx["user_sub"])
+
+
+@router.post("/sessions/{session_id}/qa/questions/{question_id}/answer")
+def answer_qa_question(
+    session_id: str,
+    question_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Mark a featured question as answered."""
+    session = get_session(session_id)
+    if not _is_session_owner_or_moderator(session, ctx["user_sub"]):
+        raise HTTPException(403, "Only broadcaster/moderator can answer questions")
+    return _qa_answer_question(session_id, question_id, ctx["user_sub"])
+
+
+@router.post("/sessions/{session_id}/qa/questions/{question_id}/dismiss")
+def dismiss_qa_question(
+    session_id: str,
+    question_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Dismiss a question."""
+    session = get_session(session_id)
+    if not _is_session_owner_or_moderator(session, ctx["user_sub"]):
+        raise HTTPException(403, "Only broadcaster/moderator can dismiss questions")
+    return _qa_dismiss_question(session_id, question_id, ctx["user_sub"])
+
+
+@router.post("/sessions/{session_id}/qa/questions/{question_id}/remove")
+def remove_qa_question(
+    session_id: str,
+    question_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Remove a question (moderator action)."""
+    session = get_session(session_id)
+    if not _is_session_owner_or_moderator(session, ctx["user_sub"]):
+        raise HTTPException(403, "Only broadcaster/moderator can remove questions")
+    return _qa_remove_question(session_id, question_id, ctx["user_sub"])
+
+
+@router.post("/sessions/{session_id}/qa/questions/{question_id}/upvote")
+def upvote_qa_question(
+    session_id: str,
+    question_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Upvote a question."""
+    return _qa_upvote_question(session_id, question_id, ctx["user_sub"])
+
+
+@router.delete("/sessions/{session_id}/qa/questions/{question_id}/upvote")
+def remove_upvote_qa_question(
+    session_id: str,
+    question_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Remove upvote from a question."""
+    return _qa_remove_upvote(session_id, question_id, ctx["user_sub"])
+
+
+@router.get("/sessions/{session_id}/qa/featured")
+def get_featured_qa_question(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Get the currently featured question, or 204 if none."""
+    from fastapi.responses import Response
+    featured = _qa_get_featured_question(session_id)
+    if not featured:
+        return Response(status_code=204)
+    return featured
+
+
+@router.get("/sessions/{session_id}/qa/stats")
+def get_qa_stats_endpoint(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Get Q&A engagement statistics for a session."""
+    session = get_session(session_id)
+    if not _is_session_owner_or_moderator(session, ctx["user_sub"]):
+        raise HTTPException(403, "Only broadcaster/moderator can view stats")
+    return _qa_get_qa_stats(session_id)

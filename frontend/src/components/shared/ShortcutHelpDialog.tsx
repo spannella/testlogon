@@ -1,14 +1,23 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { Shortcut } from "@/hooks/useGlobalShortcuts";
+import type { Shortcut, ChordMapping } from "@/hooks/useGlobalShortcuts";
 import { getGroupedShortcuts } from "@/hooks/useGlobalShortcuts";
 
 interface ShortcutHelpDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   shortcuts: Shortcut[];
+  chords?: ChordMapping[];
 }
 
 function formatKey(key: string): string {
+  // Handle chord notation: "g,m" -> "G then M"
+  if (key.includes(",")) {
+    return key
+      .split(",")
+      .map((k) => k.trim().toUpperCase())
+      .join(" then ");
+  }
+
   return key
     .split("+")
     .map((k) => {
@@ -26,12 +35,25 @@ function formatKey(key: string): string {
     .join(" + ");
 }
 
+/** Convert ChordMapping[] into Shortcut[] for display in the grouped list */
+function chordMappingsToShortcuts(chords: ChordMapping[]): Shortcut[] {
+  return chords.map((c) => ({
+    key: `${c.first},${c.second}`,
+    label: c.label,
+    group: c.group,
+    action: c.action,
+  }));
+}
+
 export default function ShortcutHelpDialog({
   open,
   onOpenChange,
   shortcuts,
+  chords,
 }: ShortcutHelpDialogProps) {
-  const grouped = getGroupedShortcuts(shortcuts);
+  const chordShortcuts = chords ? chordMappingsToShortcuts(chords) : [];
+  const allShortcuts = [...shortcuts, ...chordShortcuts];
+  const grouped = getGroupedShortcuts(allShortcuts);
   const groupOrder = ["General", "Navigation", "Actions", "Messaging"];
 
   return (

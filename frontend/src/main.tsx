@@ -21,15 +21,21 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import App from "./App";
 import "./globals.css";
+import "./styles/density.css";
 
 // Initialize i18n before rendering
 import "./i18n";
 import { RTLProvider } from "@/components/layout/RTLProvider";
-import { registerServiceWorker } from "@/lib/pushSetup";
+import { registerServiceWorker, listenForSwUpdate } from "@/lib/pushSetup";
+import { listenForSyncMessages } from "@/lib/swMessageHandler";
 
-// Register service worker for push notifications (PLATFORM-010)
+// Register service worker for push notifications (PLATFORM-010) + caching (PWA-002)
 if ("serviceWorker" in navigator) {
-  registerServiceWorker();
+  registerServiceWorker().then((registration) => {
+    if (registration) {
+      listenForSwUpdate(registration);
+    }
+  });
 }
 
 // ── Referral attribution cookie (AFFILIATE-001) ────────────────
@@ -56,6 +62,9 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Listen for Background Sync messages from the service worker (PWA-004)
+listenForSyncMessages(queryClient);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

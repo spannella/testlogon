@@ -5,6 +5,7 @@ import { Separator } from "@/components/ui/separator";
 import { LanguageSwitcher } from "@/components/shared/LanguageSwitcher";
 import { Account } from "./Account";
 import { Appearance } from "./Appearance";
+import { AppearanceSection } from "./AppearanceSection";
 import { JiraIntegrationSettings } from "./JiraIntegrationSettings";
 
 export default function SettingsPage() {
@@ -34,6 +35,16 @@ export default function SettingsPage() {
         <Separator />
         <CardContent className="pt-4">
           <Appearance />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Customization</CardTitle>
+        </CardHeader>
+        <Separator />
+        <CardContent className="pt-4">
+          <AppearanceSection />
         </CardContent>
       </Card>
 

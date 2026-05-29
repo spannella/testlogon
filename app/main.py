@@ -72,6 +72,7 @@ from app.routers.social import router as social_router
 from app.routers.discovery import router as discovery_router
 from app.routers.search import router as search_router
 from app.routers.broadcast import router as broadcast_router
+from app.routers.broadcast_clips import router as broadcast_clips_router
 from app.routers.broadcast_devtools import router as broadcast_devtools_router
 from app.routers.entitlements import router as entitlements_router
 from app.routers.commercial_checkout import router as commercial_checkout_router
@@ -106,14 +107,20 @@ from app.routers.creator_earnings import router as creator_earnings_router
 from app.routers.tip_leaderboard import router as tip_leaderboard_router
 from app.routers.tip_leaderboard import internal_router as tip_leaderboard_internal_router
 from app.routers.creator_analytics import router as creator_analytics_router
+from app.routers.creator_dashboard import router as creator_dashboard_router
 from app.routers.creator_payouts import router as creator_payouts_router
 from app.routers.admin_payouts import router as admin_payouts_router
 from app.routers.admin_rate_limits import router as admin_rate_limits_router
 from app.routers.privacy import router as privacy_router, admin_router as admin_privacy_router
 from app.routers.referrals import router as referrals_router, internal_router as referrals_internal_router
 from app.routers.promo_codes import router as promo_codes_router
+from app.routers.affiliate_links import router as affiliate_links_router
+from app.routers.collaborations import router as collaborations_router
+from app.routers.orgs import router as orgs_router
+from app.routers.fan_club import router as fan_club_router, public_router as fan_club_public_router
 from app.routers.stories import router as stories_router
 from app.routers.watermark import router as watermark_router, internal_router as watermark_internal_router
+from app.routers.watch_party import router as watch_party_router
 from app.middleware.rate_limit import rate_limit_middleware_factory
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
@@ -147,7 +154,9 @@ from app.routers.scheduler import router as scheduler_router
 from app.routers.i18n import router as i18n_router
 from app.services.unified_scheduler import start_unified_scheduler_task
 from app.routers.csv_export import router as csv_export_router
+from app.routers.audit_export import router as audit_export_router
 from app.routers.refund_requests import router as refund_requests_router
+from app.routers.achievements import router as achievements_router
 from app.routers.admin_jobs import router as admin_jobs_router
 from app.routers.admin_sms import router as admin_sms_router
 from app.routers.admin_email import router as admin_email_router
@@ -159,6 +168,9 @@ from app.routers.recommendations import (
     engagement_router as reco_engagement_router,
     internal_router as reco_internal_router,
 )
+from app.routers.content_calendar import router as content_calendar_router
+from app.routers.tenant_admin import router as tenant_admin_router, public_router as tenant_public_router
+from app.routers.sso_saml import router as sso_saml_router
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +283,9 @@ def create_app() -> FastAPI:
         return FileResponse(static_dir / "broadcast-devtools.html")
 
     app.add_middleware(CORSMiddleware, **_build_cors_options())
+    if _S.multi_tenancy_enabled:
+        from app.middleware.tenant import TenantMiddleware
+        app.add_middleware(TenantMiddleware)
     app.middleware("http")(rate_limit_middleware_factory())
     app.middleware("http")(_api_usage_metering_middleware())
     app.middleware("http")(_playback_entitlement_middleware())
@@ -379,6 +394,7 @@ def create_app() -> FastAPI:
     app.include_router(discovery_router)
     app.include_router(search_router)
     app.include_router(broadcast_router)
+    app.include_router(broadcast_clips_router)
     app.include_router(broadcast_devtools_router)
     app.include_router(tickets_router)
     app.include_router(ticket_spaces_router)
@@ -414,6 +430,7 @@ def create_app() -> FastAPI:
     app.include_router(tip_leaderboard_router)
     app.include_router(tip_leaderboard_internal_router)
     app.include_router(creator_analytics_router)
+    app.include_router(creator_dashboard_router)
     app.include_router(creator_payouts_router)
     app.include_router(admin_payouts_router)
     app.include_router(admin_rate_limits_router)
@@ -428,12 +445,24 @@ def create_app() -> FastAPI:
     app.include_router(referrals_internal_router)
     app.include_router(webhooks_router)
     app.include_router(csv_export_router)
+    app.include_router(audit_export_router)
     app.include_router(refund_requests_router)
+    app.include_router(achievements_router)
     app.include_router(promo_codes_router)
+    app.include_router(affiliate_links_router)
+    app.include_router(collaborations_router)
+    app.include_router(orgs_router)
+    app.include_router(fan_club_router)
+    app.include_router(fan_club_public_router)
     app.include_router(geo_rules_router)
     app.include_router(scheduler_router)
     app.include_router(i18n_router)
     app.include_router(watermark_internal_router)
+    app.include_router(watch_party_router)
+    app.include_router(content_calendar_router)
+    app.include_router(tenant_admin_router)
+    app.include_router(tenant_public_router)
+    app.include_router(sso_saml_router)
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)

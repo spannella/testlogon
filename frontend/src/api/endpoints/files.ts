@@ -125,6 +125,19 @@ export const uploadFile = (
   return api.upload<{ ok: boolean; path: string; size: number }>("/v1/fs/upload", formData, params);
 };
 
+export interface BatchUploadResult {
+  uploaded: Array<{ path: string; name: string; size: number }>;
+  failed: Array<{ name: string; error: string }>;
+}
+
+export const batchUpload = (files: File[], targetPath: string) => {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append("files", file);
+  }
+  return api.upload<BatchUploadResult>(`/v1/fs/batch-upload?target_path=${encodeURIComponent(targetPath)}`, formData);
+};
+
 export const deleteFile = (path: string) =>
   api.del<OkResp>("/v1/fs/file", { path });
 

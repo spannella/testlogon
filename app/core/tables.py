@@ -99,6 +99,7 @@ class Tables:
     data_request_audit: Any
     webhook_endpoints: Any
     webhook_deliveries: Any
+    webhook_stats: Any
     promo_codes: Any
     scheduled_actions: Any
     watermark_jobs: Any
@@ -108,6 +109,27 @@ class Tables:
     group_call_sessions: Any
     sms_delivery: Any
     email_delivery: Any
+    affiliate_links: Any
+    affiliate_clicks: Any
+    audit_exports: Any
+    achievements: Any
+    user_achievements: Any
+    user_achievement_progress: Any
+    achievement_leaderboard: Any
+    broadcast_qa_questions: Any
+    collaboration_agreements: Any
+    fan_club_channels: Any
+    fan_club_messages: Any
+    organizations: Any
+    watch_parties: Any
+    watch_party_participants: Any
+    tenants: Any
+    tenant_domains: Any
+    tenant_members: Any
+    sso_providers: Any
+    sso_sessions: Any
+    sso_assertion_cache: Any
+    broadcast_clips: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -201,6 +223,7 @@ T = Tables(
     data_request_audit=ddb.Table(S.data_request_audit_table_name),
     webhook_endpoints=ddb.Table(S.webhook_endpoints_table_name),
     webhook_deliveries=ddb.Table(S.webhook_deliveries_table_name),
+    webhook_stats=ddb.Table(S.webhooks_stats_table_name),
     promo_codes=ddb.Table(S.promo_codes_table_name),
     scheduled_actions=ddb.Table(S.scheduled_actions_table_name),
     watermark_jobs=ddb.Table(S.watermark_jobs_table_name),
@@ -210,4 +233,25 @@ T = Tables(
     group_call_sessions=ddb.Table(S.group_call_sessions_table_name),
     sms_delivery=ddb.Table(S.sms_delivery_table_name),
     email_delivery=ddb.Table(S.email_delivery_table_name),
+    affiliate_links=ddb.Table(S.affiliate_links_table_name),
+    affiliate_clicks=ddb.Table(S.affiliate_clicks_table_name),
+    audit_exports=ddb.Table(S.audit_export_table_name),
+    achievements=ddb.Table(S.achievements_table_name),
+    user_achievements=ddb.Table(S.user_achievements_table_name),
+    user_achievement_progress=ddb.Table(S.user_achievement_progress_table_name),
+    achievement_leaderboard=ddb.Table(S.achievement_leaderboard_table_name),
+    broadcast_qa_questions=ddb.Table(S.broadcast_qa_questions_table_name),
+    collaboration_agreements=ddb.Table(S.collaboration_agreements_table_name),
+    fan_club_channels=ddb.Table(S.fan_club_channels_table_name),
+    fan_club_messages=ddb.Table(S.fan_club_messages_table_name),
+    organizations=ddb.Table(S.organizations_table_name),
+    watch_parties=ddb.Table(S.watch_parties_table_name),
+    watch_party_participants=ddb.Table(S.watch_party_participants_table_name),
+    tenants=ddb.Table(S.tenants_table_name),
+    tenant_domains=ddb.Table(S.tenant_domains_table_name),
+    tenant_members=ddb.Table(S.tenant_members_table_name),
+    sso_providers=ddb.Table(S.sso_providers_table_name),
+    sso_sessions=ddb.Table(S.sso_sessions_table_name),
+    sso_assertion_cache=ddb.Table(S.sso_assertion_cache_table_name),
+    broadcast_clips=ddb.Table(S.broadcast_clips_table_name),
 )

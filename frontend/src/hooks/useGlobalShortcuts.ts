@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useRef, useState } from "react";
 
 export interface Shortcut {
   /** Key combination, e.g., "ctrl+k", "escape", "?", "ctrl+1" */
@@ -32,7 +32,7 @@ function normalizeKeyEvent(e: KeyboardEvent): string {
  * Check if the currently focused element is an input, textarea, or
  * contenteditable element.
  */
-function isInputFocused(): boolean {
+export function isInputFocused(): boolean {
   const el = document.activeElement;
   if (!el) return false;
   const tag = el.tagName.toLowerCase();
@@ -76,4 +76,112 @@ export function getGroupedShortcuts(shortcuts: Shortcut[]): Record<string, Short
     groups[s.group]!.push(s);
   }
   return groups;
+}
+
+// ─── Chord sequence support ──────────────────────────────────────────────────
+
+export interface ChordMapping {
+  /** First key in the chord, e.g. "g" */
+  first: string;
+  /** Second key in the chord, e.g. "m" */
+  second: string;
+  /** Human-readable label for the help overlay */
+  label: string;
+  /** Category grouping */
+  group: "Navigation" | "Messaging" | "Actions" | "General";
+  /** The action to execute when the chord completes */
+  action: () => void;
+}
+
+/**
+ * Custom hook that handles two-key chord sequences (e.g., g then m).
+ *
+ * The hook listens for bare key presses (no modifiers). When a key matching
+ * the first element of any chord is pressed, it enters "pending" state and
+ * waits up to 1 second for the second key. If the second key matches, the
+ * chord action fires. Otherwise the chord is cancelled.
+ *
+ * @param chords - Array of chord mappings
+ * @param onChordStart - Called with the first key when a chord begins
+ * @param onChordEnd - Called when a chord completes or times out
+ */
+export function useChordShortcuts(
+  chords: ChordMapping[],
+  onChordStart?: (firstKey: string) => void,
+  onChordEnd?: () => void,
+) {
+  const pendingFirst = useRef<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      // Never activate chords in inputs or during IME composition
+      if (isInputFocused()) return;
+      if (e.isComposing) return;
+
+      // Never activate when modifier keys are held
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+
+      const key = e.key.toLowerCase();
+
+      if (pendingFirst.current) {
+        // We are waiting for the second key of a chord
+        const match = chords.find(
+          (c) => c.first === pendingFirst.current && c.second === key,
+        );
+
+        // Clear pending state regardless of match
+        if (timerRef.current) clearTimeout(timerRef.current);
+        pendingFirst.current = null;
+        onChordEnd?.();
+
+        if (match) {
+          e.preventDefault();
+          match.action();
+        }
+        // If no match, chord is cancelled — fall through (key types normally)
+        return;
+      }
+
+      // Check if this key starts any chord
+      const isChordStart = chords.some((c) => c.first === key);
+      if (isChordStart) {
+        e.preventDefault();
+        pendingFirst.current = key;
+        onChordStart?.(key);
+
+        timerRef.current = setTimeout(() => {
+          pendingFirst.current = null;
+          onChordEnd?.();
+        }, 1000);
+      }
+    },
+    [chords, onChordStart, onChordEnd],
+  );
+
+  useEffect(() => {
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [handleKeyDown]);
+}
+
+/**
+ * Hook that manages the chord indicator UI state.
+ * Returns the pending first key (or null) for display in a floating indicator.
+ */
+export function useChordIndicator() {
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
+
+  const onChordStart = useCallback((key: string) => {
+    setPendingKey(key);
+  }, []);
+
+  const onChordEnd = useCallback(() => {
+    setPendingKey(null);
+  }, []);
+
+  return { pendingKey, onChordStart, onChordEnd };
 }

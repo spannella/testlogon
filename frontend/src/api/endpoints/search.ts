@@ -4,8 +4,19 @@ import { api } from "../client";
 // Types
 // ---------------------------------------------------------------------------
 
+export type SearchResultType =
+  | "user"
+  | "post"
+  | "catalog"
+  | "file"
+  | "message"
+  | "ticket"
+  | "contact"
+  | "video"
+  | "calendar";
+
 export interface SearchResultItem {
-  type: "user" | "post" | "catalog" | "file";
+  type: SearchResultType;
   id: string;
   title: string;
   snippet: string;
@@ -27,8 +38,20 @@ export interface GlobalSearchResponse {
     posts: SearchResultSection;
     catalog: SearchResultSection;
     files: SearchResultSection;
+    messages?: SearchResultSection;
+    tickets?: SearchResultSection;
+    contacts?: SearchResultSection;
+    videos?: SearchResultSection;
+    calendar?: SearchResultSection;
   };
   partial?: boolean;
+}
+
+export interface SearchHistoryItem {
+  id: string;
+  query: string;
+  ts: number;
+  result_count: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -40,3 +63,20 @@ export const globalSearch = (q: string, types?: string, limit = 5) => {
   if (types) params.types = types;
   return api.get<GlobalSearchResponse>("/ui/search", params);
 };
+
+export const recordSearchHistory = (query: string, resultCount?: number) =>
+  api.post<{ ok: boolean; id: string }>("/ui/search/history", {
+    query,
+    result_count: resultCount ?? 0,
+  });
+
+export const getSearchHistory = (limit = 20) =>
+  api.get<{ items: SearchHistoryItem[] }>("/ui/search/history", {
+    limit: String(limit),
+  });
+
+export const deleteSearchHistoryItem = (id: string) =>
+  api.del<{ ok: boolean }>(`/ui/search/history/${encodeURIComponent(id)}`);
+
+export const clearSearchHistory = () =>
+  api.del<{ ok: boolean; deleted_count: number }>("/ui/search/history");

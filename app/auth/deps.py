@@ -270,6 +270,14 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     return AuthenticatedUser(sub=sub, role=role, admin_profile=admin_profile)
 
 
+async def require_root_session(request: Request) -> AuthenticatedUser:
+    """Require that the caller has ROOT role. Raises 403 otherwise."""
+    user = await get_authenticated_user(request)
+    if user.role != Role.ROOT:
+        raise HTTPException(403, "Root access required")
+    return user
+
+
 async def get_authenticated_user_sub(request: Request) -> str:
     user = await get_authenticated_user(request)
     return user.sub

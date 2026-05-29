@@ -25,7 +25,7 @@ export interface FeedQueryParams {
   has_media?: boolean;
 }
 
-export const getFeed = (params?: FeedQueryParams) => {
+export const getFeed = async (params?: FeedQueryParams) => {
   const query: Record<string, string> = {};
   if (params?.cursor) query.cursor = params.cursor;
   if (params?.author_id) query.author_id = params.author_id;
@@ -33,10 +33,23 @@ export const getFeed = (params?: FeedQueryParams) => {
   if (params?.from) query.from = params.from;
   if (params?.to) query.to = params.to;
   if (typeof params?.has_media === "boolean") query.has_media = String(params.has_media);
-  return api.get<{ items: FeedPost[]; next_cursor?: string }>(
-    "/feed",
-    Object.keys(query).length ? query : undefined,
-  );
+
+  const networkFn = () =>
+    api.get<{ items: FeedPost[]; next_cursor?: string }>(
+      "/feed",
+      Object.keys(query).length ? query : undefined,
+    );
+
+  // Wrap with offline cache (PWA-003)
+  const { useAuthStore } = await import("@/stores/authStore");
+  const userId = useAuthStore.getState().userId ?? "";
+  const { withOfflineCache } = await import("@/lib/withOfflineCache");
+  const queryString = Object.entries(query)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}=${v}`)
+    .join("&");
+  const cacheKey = `/feed${queryString ? `?${queryString}` : ""}`;
+  return withOfflineCache(networkFn, { endpoint: "feed", cacheKey }, userId)();
 };
 
 export const getFeedCapabilities = () =>

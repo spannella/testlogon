@@ -2,7 +2,7 @@ import * as React from "react";
 import { Mic, Video, Square, Play, RotateCcw, Send, X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { sendVoicemail } from "@/api/endpoints/messaging";
-import { useToast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 
 type Phase = "idle" | "recording" | "previewing" | "uploading" | "sent";
 
@@ -34,7 +34,7 @@ function detectVideoMimeType(): string {
 const MAX_DURATION = 60; // seconds
 
 export function VoicemailRecorder({ conversationId, callId, onSent, onSkip }: VoicemailRecorderProps) {
-  const { toast } = useToast();
+  // toast from sonner
   const [phase, setPhase] = React.useState<Phase>("idle");
   const [mode, setMode] = React.useState<"audio" | "video">("audio");
   const [elapsed, setElapsed] = React.useState(0);
@@ -172,7 +172,7 @@ export function VoicemailRecorder({ conversationId, callId, onSent, onSkip }: Vo
         mode,
       });
       setPhase("sent");
-      toast({ title: "Voicemail sent" });
+      toast.success("Voicemail sent");
       onSent();
     } catch {
       setError("Could not send voicemail. Try again.");

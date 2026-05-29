@@ -21,6 +21,7 @@ import { PresenceDot } from "./PresenceDot";
 import { UserSearch } from "./UserSearch";
 import { useAuthStore } from "@/stores/authStore";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
+import { StalenessIndicator } from "@/components/shared/StalenessIndicator";
 
 interface ConversationListProps {
   activeId?: string;
@@ -45,6 +46,10 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
     refetchOnMount: true,
     staleTime: 0,
   });
+
+  // Check if data came from offline cache
+  const isFromCache = (data as any)?.__fromOfflineCache === true;
+  const cachedAt = (data as any)?.__cachedAt as number | undefined;
 
   const addConvoToCache = (convo: Conversation) => {
     queryClient.setQueryData(
@@ -96,6 +101,13 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
 
   return (
     <div className="flex h-full flex-col">
+      {/* Staleness indicator for cached data */}
+      {isFromCache && (
+        <div className="border-b border-border px-3 py-1.5">
+          <StalenessIndicator cachedAt={cachedAt} />
+        </div>
+      )}
+
       {/* Search */}
       <div className="border-b border-border p-3">
         <div className="relative">

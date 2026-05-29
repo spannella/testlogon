@@ -3,6 +3,9 @@ import { PageHeader } from "@/components/shared/PageHeader";
 import { AlertCenter } from "./AlertCenter";
 import { AlertPrefs } from "./AlertPrefs";
 import { PushDevices } from "./PushDevices";
+import { ActivityFeed } from "./ActivityFeed";
+import { MentionsFeed } from "./MentionsFeed";
+import { TipsFeed } from "./TipsFeed";
 
 export default function AlertsPage() {
   return (
@@ -12,13 +15,29 @@ export default function AlertsPage() {
         description="View notifications and manage alert preferences"
       />
 
-      <Tabs defaultValue="alerts">
-        <TabsList>
-          <TabsTrigger value="alerts">Notifications</TabsTrigger>
+      <Tabs defaultValue="activity">
+        <TabsList className="flex-wrap">
+          <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="mentions">Mentions</TabsTrigger>
+          <TabsTrigger value="tips">Tips & Earnings</TabsTrigger>
+          <TabsTrigger value="security">Security</TabsTrigger>
+          <TabsTrigger value="all">All</TabsTrigger>
           <TabsTrigger value="preferences">Preferences</TabsTrigger>
           <TabsTrigger value="push">Push Devices</TabsTrigger>
         </TabsList>
-        <TabsContent value="alerts">
+        <TabsContent value="activity">
+          <ActivityFeed />
+        </TabsContent>
+        <TabsContent value="mentions">
+          <MentionsFeed />
+        </TabsContent>
+        <TabsContent value="tips">
+          <TipsFeed />
+        </TabsContent>
+        <TabsContent value="security">
+          <AlertCenter />
+        </TabsContent>
+        <TabsContent value="all">
           <AlertCenter />
         </TabsContent>
         <TabsContent value="preferences">

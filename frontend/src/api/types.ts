@@ -369,6 +369,10 @@ export interface Alert {
   ts: number;
   ttl_epoch?: number;
   priority?: "urgent" | "normal" | "low";
+  action_url?: string | null;
+  category?: string;
+  source_type?: string;
+  source_id?: string;
 }
 
 export interface AlertsResp {
@@ -378,6 +382,42 @@ export interface AlertsResp {
 
 export interface MarkReadReq {
   alert_ids: string[];
+}
+
+// ─── Activity Feed ───────────────────────────────────────────────
+
+export interface ActivityGroupItem {
+  source_type: string;
+  source_id: string;
+  action_url: string | null;
+  aggregations: Record<string, {
+    count: number;
+    latest_actor: string | null;
+    total_cents: number;
+  }>;
+  latest_ts: number;
+  title: string;
+  unread: boolean;
+  alert_ids: string[];
+}
+
+export interface ActivityFeedResp {
+  items: ActivityGroupItem[];
+  next_cursor: string | null;
+}
+
+export interface TipsSummary {
+  total_tips_cents: number;
+  tip_count: number;
+  top_tippers: Array<{
+    user_id: string;
+    display_name: string;
+    total_cents: number;
+  }>;
+  by_type: {
+    post_tip: { count: number; total_cents: number };
+    message_tip: { count: number; total_cents: number };
+  };
 }
 
 export interface AlertPreferences {
@@ -984,6 +1024,14 @@ export interface Message {
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
+
+  /** PWA-005: Offline queue metadata — only present for locally-queued messages */
+  __offline?: {
+    queueId: string;
+    status: "pending" | "sending" | "failed";
+    error?: string;
+    enqueuedAt: number;
+  };
 }
 
 export interface ThreadMessagesPage {
@@ -1930,6 +1978,76 @@ export interface FeedPost {
   repost_quote?: string;
   /** SOCIAL-006: hashtags/topics on this post */
   tags?: string[];
+  /** ENGAGE-002: poll data when post_type is "poll" or "survey" */
+  poll_data?: PollData | null;
+  /** ENGAGE-002: vote counts per question per option */
+  poll_vote_counts?: PollVoteCounts | null;
+  /** ENGAGE-002: viewer's own votes per question */
+  poll_my_votes?: PollMyVotes | null;
+
+  /** PWA-005: Offline queue metadata — only present for locally-queued posts */
+  __offline?: {
+    queueId: string;
+    status: "pending" | "sending" | "failed";
+    error?: string;
+    enqueuedAt: number;
+  };
+}
+
+// ENGAGE-002: Poll types
+export interface PollOption {
+  option_id: string;
+  text: string;
+}
+
+export interface PollQuestion {
+  question_id: string;
+  text: string;
+  choice_mode: "single" | "multi";
+  options: PollOption[];
+  max_selections?: number;
+}
+
+export interface PollData {
+  questions: PollQuestion[];
+  closes_at?: number;
+  closed: boolean;
+  anonymous: boolean;
+  allow_vote_change: boolean;
+  total_votes: number;
+}
+
+export interface PollVoteCounts {
+  [questionId: string]: { [optionId: string]: number };
+}
+
+export interface PollMyVotes {
+  [questionId: string]: string[];
+}
+
+export interface VoteResponse {
+  ok: boolean;
+  question_id: string;
+  option_id: string;
+  vote_counts: { [optionId: string]: number };
+  total_votes: number;
+  my_vote?: string;
+  my_votes?: string[];
+}
+
+export interface PollResultsResponse {
+  question_id: string;
+  options: Array<{
+    option_id: string;
+    text: string;
+    count: number;
+    percentage: number;
+    voters: string[];
+  }>;
+  total_votes: number;
+  closed: boolean;
+  closes_at?: number;
+  my_vote?: string;
 }
 
 export interface FeedComment {
@@ -1982,6 +2100,20 @@ export interface CreatePostReq {
   video_id?: string;
   /** SOCIAL-006: explicit tags for the post */
   tags?: string[];
+  /** ENGAGE-002: post type for poll/survey */
+  post_type?: "standard" | "poll" | "survey";
+  /** ENGAGE-002: poll data for creating poll/survey posts */
+  poll_data?: {
+    questions: Array<{
+      text: string;
+      choice_mode: "single" | "multi";
+      options: Array<{ text: string }>;
+      max_selections?: number;
+    }>;
+    closes_at?: number;
+    anonymous: boolean;
+    allow_vote_change: boolean;
+  };
 }
 
 export interface CreateCommentReq {
@@ -3210,7 +3342,17 @@ export interface ReferralItem {
   attributed_at: string;
 }
 
-// ─── Webhooks (PLATFORM-002) ────────────────────────────────────
+// ─── Webhooks (PLATFORM-002 + ENTERPRISE-005) ──────────────────
+
+export interface WebhookRetryPolicy {
+  strategy: "linear" | "exponential" | "fibonacci" | "fixed";
+  max_attempts: number;
+  initial_delay_seconds: number;
+  max_delay_seconds: number;
+  jitter_enabled: boolean;
+  jitter_max_seconds: number;
+  retry_window_seconds: number;
+}
 
 export interface WebhookEndpointOut {
   endpoint_id: string;
@@ -3224,12 +3366,22 @@ export interface WebhookEndpointOut {
   last_delivery_at: number | null;
   failure_count: number;
   disabled_reason: string | null;
+  retry_policy: WebhookRetryPolicy | null;
+  signature_version: string;
+  circuit_state: string | null;
+  circuit_consecutive_failures: number;
+  circuit_failure_threshold: number;
+  circuit_cooldown_seconds: number | null;
+  circuit_test_at: number | null;
 }
 
 export interface WebhookEndpointCreateReq {
   url: string;
   description: string;
   event_types: string[];
+  retry_policy?: Partial<WebhookRetryPolicy>;
+  signature_version?: string;
+  circuit_failure_threshold?: number;
 }
 
 export interface WebhookEndpointUpdateReq {
@@ -3237,6 +3389,8 @@ export interface WebhookEndpointUpdateReq {
   description?: string;
   event_types?: string[];
   enabled?: boolean;
+  retry_policy?: Partial<WebhookRetryPolicy>;
+  signature_version?: string;
 }
 
 export interface WebhookDeliveryOut {
@@ -3278,6 +3432,35 @@ export interface WebhookHealthSummary {
 export interface WebhookEventType {
   type: string;
   description: string;
+}
+
+export interface WebhookDeadLetterOut {
+  delivery_id: string;
+  endpoint_id: string;
+  event_type: string;
+  event_id: string;
+  payload_preview: string;
+  created_at: number;
+  failed_at: number;
+  failure_reason: string;
+  attempt_count: number;
+  last_http_status: number | null;
+  last_error_message: string | null;
+}
+
+export interface WebhookDeliveryStatsOut {
+  endpoint_id: string;
+  period: string;
+  buckets: Array<{
+    bucket: string;
+    total: number;
+    success: number;
+    failed: number;
+    avg_latency_ms: number;
+  }>;
+  total_deliveries: number;
+  success_rate: number;
+  avg_latency_ms: number;
 }
 
 
@@ -3778,4 +3961,534 @@ export interface BroadcastWebRTCAnswer {
   sdp_answer: string;
   session_id: string;
   input_id: string;
+}
+
+// ─── Achievements & Gamification (ENGAGE-001) ──────────────────
+
+export interface AchievementDefinition {
+  achievement_id: string;
+  category: "creator" | "viewer" | "general";
+  subcategory: string;
+  label: string;
+  description: string;
+  icon_url: string;
+  rarity: "common" | "uncommon" | "rare" | "epic" | "legendary";
+  threshold: number;
+  points: number;
+  metric_key: string;
+  active: boolean;
+  sort_order: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface UserAchievement {
+  achievement_id: string;
+  label: string;
+  description: string;
+  icon_url: string;
+  rarity: string;
+  points: number;
+  unlocked_at: number;
+  trigger_event: string;
+  displayed: boolean;
+}
+
+export interface AchievementProgress {
+  metric_key: string;
+  current_value: number;
+  last_updated_at: number;
+  last_updated_date: string;
+  highest_value: number;
+  streak_anchor_date?: string;
+  next_threshold?: number | null;
+  next_achievement?: {
+    achievement_id: string;
+    label: string;
+    rarity: string;
+    points: number;
+  } | null;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  user_sub: string;
+  display_name: string;
+  total_points: number;
+  achievement_count: number;
+  display_badges: BadgeSummary[];
+}
+
+export interface BadgeSummary {
+  achievement_id: string;
+  label: string;
+  icon_url: string;
+  rarity: string;
+}
+
+// ─── Collaboration Requests (CREATOR-001) ──────────────────────────
+
+export interface CollaborationCreateIn {
+  recipient_id: string;
+  content_types: string[];
+  split_pct: number;
+  title: string;
+  description?: string;
+  terms_text?: string;
+  valid_from?: number;
+  valid_until?: number;
+  max_content_items?: number;
+}
+
+export interface CollaborationCounterIn {
+  counter_split_pct: number;
+  counter_terms_text?: string;
+  counter_valid_until?: number;
+  reason?: string;
+}
+
+export interface CollaborationOut {
+  collaboration_id: string;
+  initiator_id: string;
+  recipient_id: string;
+  status: string;
+  content_types: string[];
+  split: Record<string, number>;
+  title: string;
+  description?: string;
+  terms_text?: string;
+  valid_from?: number;
+  valid_until?: number;
+  max_content_items?: number;
+  content_count: number;
+  total_revenue_cents: number;
+  revision: number;
+  created_at: number;
+  updated_at: number;
+  accepted_at?: number;
+  terminated_at?: number;
+  terminated_by?: string;
+  termination_reason?: string;
+  last_proposed_by?: string;
+}
+
+export interface CollaborationListOut {
+  items: CollaborationOut[];
+  next_cursor?: string;
+}
+
+export interface CollaborationRevisionOut {
+  revision: number;
+  split: Record<string, number>;
+  terms_text?: string;
+  proposed_by: string;
+  proposed_at: number;
+  status: string;
+}
+
+export interface CollaborationSettingsOut {
+  accepting_requests: boolean;
+  min_split_pct: number;
+  allowed_content_types: string[];
+  auto_expire_days: number;
+  updated_at: number;
+}
+
+export interface CollaborationSettingsIn {
+  accepting_requests?: boolean;
+  min_split_pct?: number;
+  allowed_content_types?: string[];
+  auto_expire_days?: number;
+}
+
+// ENGAGE-003: Live Q&A Mode
+export interface QAQuestion {
+  question_id: string;
+  session_id: string;
+  submitter_id: string;
+  submitter_display_name: string;
+  text: string;
+  status: "pending" | "featured" | "answered" | "dismissed" | "removed";
+  upvote_count: number;
+  featured_at?: number;
+  answered_at?: number;
+  created_at: number;
+  featured_by?: string;
+}
+
+export interface QAQueueResponse {
+  questions: QAQuestion[];
+  has_more: boolean;
+}
+
+export interface QAStats {
+  total_questions: number;
+  answered: number;
+  dismissed: number;
+  pending: number;
+  total_upvotes: number;
+  avg_upvotes: number;
+  answer_rate: number;
+}
+
+// ─── Fan Club / Membership Tiers (CREATOR-002) ──────────────────
+
+export interface TierBenefit {
+  type: string;
+  label?: string;
+  delay_hours?: number;
+  channel_id?: string;
+  emoji_pack_id?: string;
+  display?: boolean;
+  percent_off?: number;
+  applies_to?: string[];
+}
+
+export interface TierCreateIn {
+  plan_id: string;
+  name: string;
+  level: number;
+  color: string;
+  badge_emoji?: string;
+  description?: string;
+  benefits: TierBenefit[];
+  welcome_message?: string;
+  sort_order?: number;
+}
+
+export interface TierOut {
+  tier_id: string;
+  creator_id: string;
+  plan_id: string;
+  name: string;
+  level: number;
+  color: string;
+  badge_emoji?: string;
+  badge_image_url?: string;
+  description?: string;
+  benefits: TierBenefit[];
+  welcome_message?: string;
+  member_count: number;
+  sort_order: number;
+  active: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ChannelOut {
+  channel_id: string;
+  creator_id: string;
+  name: string;
+  description?: string;
+  min_tier_level: number;
+  message_count: number;
+  last_message_at: number;
+  last_message_preview?: string;
+  pinned_message_id?: string;
+  slowmode_seconds: number;
+  max_message_length: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ChannelMessageOut {
+  message_id: string;
+  channel_id: string;
+  sender_id: string;
+  sender_display_name: string;
+  sender_badge?: MemberBadgeData;
+  text: string;
+  kind: string;
+  reply_to_message_id?: string;
+  reactions: Record<string, Record<string, boolean>>;
+  created_at: number;
+  deleted: boolean;
+}
+
+export interface MemberBadgeData {
+  tier_name: string;
+  tier_level: number;
+  badge_emoji?: string;
+  badge_color?: string;
+  badge_image_url?: string;
+}
+
+// -- Creator Dashboard (CREATOR-003) --
+
+export interface DashboardTopContentItem {
+  content_id: string;
+  content_type: string;
+  title: string;
+  views: number;
+  revenue_cents: number;
+}
+
+export interface DashboardActiveBroadcast {
+  session_id: string;
+  status: string;
+  name?: string;
+  started_at?: string;
+}
+
+export interface DashboardMilestone {
+  milestone_id: string;
+  user_id: string;
+  metric: string;
+  threshold: number;
+  current_value: number;
+  formatted: string;
+  achieved_at: number;
+  acknowledged: boolean;
+}
+
+export interface DashboardEarningsBreakdown {
+  subscriptions: number;
+  tips: number;
+  unlocks: number;
+  vod_purchases: number;
+  other: number;
+}
+
+export interface DashboardSummary {
+  today_earnings_cents: number;
+  earnings_breakdown: DashboardEarningsBreakdown;
+  period_views: number;
+  period_revenue_cents: number;
+  total_subscribers: number;
+  top_content: DashboardTopContentItem[];
+  active_broadcasts: DashboardActiveBroadcast[];
+  recent_milestones: DashboardMilestone[];
+  currency: string;
+  generated_at: number;
+  warnings: string[];
+}
+
+export interface MilestoneSettings {
+  push_enabled: boolean;
+  email_enabled: boolean;
+  celebration_enabled: boolean;
+}
+
+// ─── Multi-Tenancy (ENTERPRISE-001) ──────────────────────────────
+
+export interface TenantOut {
+  tenant_id: string;
+  slug: string;
+  display_name: string;
+  status: string;
+  plan: string;
+  custom_domains: string[];
+  primary_domain?: string | null;
+  branding?: Record<string, unknown> | null;
+  limits?: Record<string, unknown> | null;
+  member_count: number;
+  storage_used_bytes: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TenantCreateReq {
+  slug: string;
+  display_name: string;
+  plan?: string;
+  primary_domain?: string | null;
+}
+
+export interface TenantUpdateReq {
+  display_name?: string | null;
+  plan?: string | null;
+  status?: string | null;
+  branding?: Record<string, unknown> | null;
+  settings_overrides?: Record<string, unknown> | null;
+}
+
+export interface TenantBranding {
+  tenant_id: string;
+  display_name: string;
+  logo_url?: string | null;
+  favicon_url?: string | null;
+  primary_color: string;
+  accent_color: string;
+}
+
+// ─── Watch Parties (ENGAGE-004) ─────────────────────────────────
+
+export interface WatchParty {
+  party_id: string;
+  host_user_sub: string;
+  video_id: string;
+  video_title: string;
+  video_duration_seconds: number;
+  title: string;
+  invite_code: string;
+  status: "waiting" | "playing" | "paused" | "ended";
+  max_participants: number;
+  participant_count: number;
+  position: number;
+  position_updated_at: number;
+  created_at: number;
+  updated_at: number;
+  ended_at?: number | null;
+}
+
+export interface WatchPartyParticipant {
+  party_id: string;
+  user_sub: string;
+  role: "host" | "co-host" | "member";
+  status: "active" | "left" | "kicked";
+  joined_at: number;
+  last_seen?: number | null;
+}
+
+export interface CreatePartyReq {
+  video_id: string;
+  title?: string;
+  max_participants?: number;
+}
+
+export interface PlaybackControlReq {
+  action: "play" | "pause" | "seek";
+  position?: number;
+}
+
+export interface InviteResolveResp {
+  party_id: string;
+  title: string;
+  host_user_sub: string;
+  video_title: string;
+  status: string;
+  participant_count: number;
+  max_participants: number;
+}
+
+// ─── Content Calendar (CREATOR-005) ─────────────────────────────
+
+export type ContentItemType = "post" | "broadcast" | "vod";
+
+export interface ContentCalendarItem {
+  id: string;
+  type: ContentItemType;
+  title: string;
+  scheduled_at: number;
+  timezone: string | null;
+  local_time: string | null;
+  status: "scheduled" | "overdue" | "cancelled";
+  color: string;
+  icon: string;
+
+  // Post-specific
+  has_images?: boolean;
+  has_video?: boolean;
+  visibility?: string;
+  locked?: boolean;
+  unlock_price_cents?: number;
+
+  // Broadcast-specific
+  description?: string;
+  profile_id?: string;
+  has_announcement?: boolean;
+
+  // VOD-specific
+  duration_seconds?: number;
+  thumbnail_url?: string;
+}
+
+export interface ContentCalendarConflict {
+  item_a_id: string;
+  item_a_type: ContentItemType;
+  item_b_id: string;
+  item_b_type: ContentItemType;
+  gap_seconds: number;
+  gap_minutes: number;
+}
+
+export interface ContentCalendarResponse {
+  items: ContentCalendarItem[];
+  from_ts: number;
+  to_ts: number;
+  count: number;
+  conflicts: ContentCalendarConflict[];
+}
+
+export interface TodayAgendaResponse {
+  today: ContentCalendarItem[];
+  tomorrow: ContentCalendarItem[];
+  today_count: number;
+  tomorrow_count: number;
+  conflicts: ContentCalendarConflict[];
+}
+
+export interface ConflictsResponse {
+  conflicts: ContentCalendarConflict[];
+  count: number;
+}
+
+// --- Broadcast Clips (ENGAGE-005) ---
+
+export interface BroadcastClip {
+  clip_id: string;
+  session_id: string;
+  broadcaster_user_id: string;
+  creator_user_id: string;
+  creator_display_name: string;
+  video_id: string;
+  title: string;
+  start_seconds: number;
+  end_seconds: number;
+  duration_seconds: number;
+  status: "processing" | "ready" | "failed" | "deleted";
+  view_count: number;
+  share_count: number;
+  thumbnail_url: string;
+  created_at: number;
+}
+
+export interface ClipListResponse {
+  clips: BroadcastClip[];
+  next_cursor?: string;
+}
+
+// ─── SSO / SAML (ENTERPRISE-002) ────────────────────────────────
+
+export interface SsoInfoOut {
+  sso_available: boolean;
+  sso_only: boolean;
+  sso_login_url?: string;
+  provider_display_name?: string;
+  provider_protocol?: string;
+}
+
+export interface SsoProviderOut {
+  provider_id: string;
+  tenant_id: string;
+  protocol: string;
+  display_name: string;
+  status: string;
+  sso_only: boolean;
+  idp_entity_id?: string;
+  idp_sso_url?: string;
+  sp_entity_id: string;
+  sp_acs_url: string;
+  attribute_mappings: Record<string, string>;
+  role_mappings: Array<{
+    idp_group: string;
+    platform_role: string;
+    admin_profile?: Record<string, unknown>;
+  }>;
+  jit_provisioning_enabled: boolean;
+  auto_update_profile: boolean;
+  auto_update_role: boolean;
+  default_role: string;
+  allowed_email_domains?: string[];
+  login_count: number;
+  last_login_at?: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SsoProviderStatsOut {
+  provider_id: string;
+  login_count: number;
+  last_login_at?: number;
+  status: string;
 }

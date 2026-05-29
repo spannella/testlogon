@@ -55,6 +55,107 @@ WEBHOOK_EVENT_TYPES: Dict[str, str] = {
     "webhook.test": "Test event for verifying webhook configuration",
 }
 
+# ─── v2 expanded event types (ENTERPRISE-005) ───────────────────────────────
+
+WEBHOOK_EVENT_TYPES_V2: Dict[str, str] = {
+    **WEBHOOK_EVENT_TYPES,
+
+    # Messaging (expanded)
+    "message.deleted": "A message was deleted",
+    "message.reaction_added": "A reaction was added to a message",
+    "message.tip_received": "A tip was received on a message",
+    "message.unlocked": "A locked message was unlocked",
+    "message.expired": "A message expired (TTL)",
+    "conversation.member_added": "A member was added to a group conversation",
+    "conversation.member_removed": "A member was removed from a group conversation",
+
+    # Billing (expanded)
+    "payment.refunded": "A payment was refunded",
+    "payment.disputed": "A payment dispute was opened",
+    "wallet.withdrawal": "A wallet withdrawal was processed",
+    "invoice.generated": "A monthly invoice was generated",
+    "payment_method.added": "A payment method was added",
+    "payment_method.removed": "A payment method was removed",
+
+    # Subscriptions (expanded)
+    "subscription.payment_failed": "A subscription payment failed",
+    "subscription.downgraded": "A subscription was downgraded",
+    "subscription.upgraded": "A subscription was upgraded",
+    "subscription.trial_ending": "A subscription trial is ending soon",
+
+    # Tickets
+    "ticket.created": "A support ticket was created",
+    "ticket.resolved": "A support ticket was resolved",
+    "ticket.assigned": "A ticket was assigned to an agent",
+    "ticket.commented": "A comment was added to a ticket",
+
+    # Calendar
+    "calendar.event.created": "A calendar event was created",
+    "calendar.event.updated": "A calendar event was updated",
+    "calendar.event.cancelled": "A calendar event was cancelled",
+    "calendar.booking.requested": "A booking was requested",
+    "calendar.booking.confirmed": "A booking was confirmed",
+
+    # VOD / Video
+    "video.uploaded": "A video was uploaded",
+    "video.published": "A video was published",
+    "video.transcoded": "A video transcode completed",
+    "video.deleted": "A video was deleted",
+    "video.view": "A video was viewed (batched, delayed)",
+
+    # Calls
+    "call.started": "A call was started",
+    "call.ended": "A call ended",
+    "call.recording_available": "A call recording is ready",
+    "call.missed": "A call was missed",
+
+    # Stories
+    "story.created": "A story was published",
+    "story.expired": "A story expired",
+    "story.viewed": "A story was viewed",
+
+    # Moderation (expanded)
+    "moderation.content_removed": "Content was removed by moderators",
+    "moderation.warning_issued": "A warning was issued to a user",
+    "moderation.ban_applied": "A user was banned",
+    "moderation.appeal_submitted": "An appeal was submitted",
+    "moderation.appeal_resolved": "An appeal was resolved",
+
+    # Files (expanded)
+    "file.deleted": "A file was deleted",
+    "file.moved": "A file was moved",
+    "file.downloaded": "A file was downloaded",
+
+    # Account (expanded)
+    "account.created": "A new account was created",
+    "account.deleted": "An account was deleted",
+    "account.password_changed": "Account password was changed",
+    "account.email_verified": "Account email was verified",
+    "account.api_key_created": "An API key was created",
+    "account.api_key_revoked": "An API key was revoked",
+
+    # Referrals
+    "referral.signup": "A referred user signed up",
+    "referral.commission": "A referral commission was earned",
+
+    # Organizations
+    "org.member_joined": "A member joined an organization",
+    "org.member_removed": "A member was removed from an organization",
+}
+
+
+def get_event_types() -> Dict[str, str]:
+    """Return the active event type registry."""
+    if S.webhooks_v2_enabled:
+        return WEBHOOK_EVENT_TYPES_V2
+    return WEBHOOK_EVENT_TYPES
+
+
+def is_valid_event_type(event_type: str) -> bool:
+    """Check whether an event type is valid in the current mode."""
+    return event_type in get_event_types()
+
+
 # ─── Retry schedule ─────────────────────────────────────────────────────────
 
 RETRY_DELAYS_SECONDS = [0, 60, 300, 1800, 7200]
@@ -83,13 +184,25 @@ def register_endpoint(
     url: str,
     event_types: List[str],
     description: str = "",
+    retry_policy: Optional[Dict[str, Any]] = None,
+    signature_version: str = "v2",
+    circuit_failure_threshold: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Create a new webhook endpoint. Returns the endpoint dict with plaintext secret."""
     if not url.startswith("https://"):
         raise ValueError("URL must use HTTPS")
 
+    # SSRF validation (skip DNS in dev mode for test URLs)
+    if S.webhooks_v2_enabled:
+        from app.services.webhook_ssrf import validate_webhook_url
+        try:
+            validate_webhook_url(url, skip_dns=S.dev_mode)
+        except ValueError:
+            if not S.dev_mode:
+                raise
+
     for et in event_types:
-        if et not in WEBHOOK_EVENT_TYPES:
+        if not is_valid_event_type(et):
             raise ValueError(f"Unknown event type: {et}")
 
     # Check max endpoints limit
@@ -108,6 +221,12 @@ def register_endpoint(
         encrypted_secret = f"PLAIN:{plaintext_secret}"
 
     now = now_ts()
+
+    # Normalize v2 retry policy
+    from app.services.webhook_retry import normalize_retry_policy
+    normalized_policy = normalize_retry_policy(retry_policy)
+    cb_threshold = circuit_failure_threshold or S.webhooks_default_circuit_failure_threshold
+
     item = {
         "pk": f"USER#{user_sub}",
         "sk": f"ENDPOINT#{endpoint_id}",
@@ -121,6 +240,13 @@ def register_endpoint(
         "created_at": now,
         "updated_at": now,
         "failure_count": 0,
+        # v2 fields
+        "retry_policy": normalized_policy,
+        "signature_version": signature_version,
+        "circuit_state": "closed",
+        "circuit_consecutive_failures": 0,
+        "circuit_failure_threshold": cb_threshold,
+        "circuit_cooldown_seconds": S.webhooks_circuit_initial_cooldown_seconds,
     }
     T.webhook_endpoints.put_item(Item=item)
 
@@ -145,44 +271,22 @@ def register_endpoint(
         "created_at": now,
         "updated_at": now,
         "failure_count": 0,
+        "retry_policy": normalized_policy,
+        "signature_version": signature_version,
+        "circuit_state": "closed",
+        "circuit_consecutive_failures": 0,
+        "circuit_failure_threshold": cb_threshold,
+        "circuit_cooldown_seconds": S.webhooks_circuit_initial_cooldown_seconds,
     }
 
 
-def list_endpoints(user_sub: str) -> List[Dict[str, Any]]:
-    """List all webhook endpoints for a user."""
-    resp = T.webhook_endpoints.query(
-        KeyConditionExpression=Key("pk").eq(f"USER#{user_sub}")
-        & Key("sk").begins_with("ENDPOINT#"),
-    )
-    items = resp.get("Items", [])
-    result = []
-    for item in items:
-        et = item.get("event_types", set())
-        result.append({
-            "endpoint_id": item["endpoint_id"],
-            "url": item["url"],
-            "description": item.get("description", ""),
-            "event_types": sorted(et) if et else [],
-            "enabled": item.get("enabled", True),
-            "secret": None,  # Never return secret on list
-            "created_at": int(item.get("created_at", 0)),
-            "updated_at": int(item.get("updated_at", 0)),
-            "last_delivery_at": int(item["last_delivery_at"]) if item.get("last_delivery_at") else None,
-            "failure_count": int(item.get("failure_count", 0)),
-            "disabled_reason": item.get("disabled_reason"),
-        })
-    return result
-
-
-def get_endpoint(user_sub: str, endpoint_id: str) -> Optional[Dict[str, Any]]:
-    """Get a single endpoint by ID."""
-    resp = T.webhook_endpoints.get_item(
-        Key={"pk": f"USER#{user_sub}", "sk": f"ENDPOINT#{endpoint_id}"},
-    )
-    item = resp.get("Item")
-    if not item:
-        return None
+def _endpoint_out(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a public-facing endpoint dict from a DDB item."""
     et = item.get("event_types", set())
+    rp = item.get("retry_policy")
+    # Convert Decimal values in retry_policy to int
+    if rp and isinstance(rp, dict):
+        rp = {k: int(v) if hasattr(v, 'as_integer_ratio') else v for k, v in rp.items()}
     return {
         "endpoint_id": item["endpoint_id"],
         "url": item["url"],
@@ -195,7 +299,36 @@ def get_endpoint(user_sub: str, endpoint_id: str) -> Optional[Dict[str, Any]]:
         "last_delivery_at": int(item["last_delivery_at"]) if item.get("last_delivery_at") else None,
         "failure_count": int(item.get("failure_count", 0)),
         "disabled_reason": item.get("disabled_reason"),
+        # v2 fields
+        "retry_policy": rp,
+        "signature_version": item.get("signature_version", "v2"),
+        "circuit_state": item.get("circuit_state", "closed"),
+        "circuit_consecutive_failures": int(item.get("circuit_consecutive_failures", 0)),
+        "circuit_failure_threshold": int(item.get("circuit_failure_threshold", S.webhooks_default_circuit_failure_threshold)),
+        "circuit_cooldown_seconds": int(item.get("circuit_cooldown_seconds", S.webhooks_circuit_initial_cooldown_seconds)) if item.get("circuit_cooldown_seconds") is not None else None,
+        "circuit_test_at": int(item["circuit_test_at"]) if item.get("circuit_test_at") else None,
     }
+
+
+def list_endpoints(user_sub: str) -> List[Dict[str, Any]]:
+    """List all webhook endpoints for a user."""
+    resp = T.webhook_endpoints.query(
+        KeyConditionExpression=Key("pk").eq(f"USER#{user_sub}")
+        & Key("sk").begins_with("ENDPOINT#"),
+    )
+    items = resp.get("Items", [])
+    return [_endpoint_out(item) for item in items]
+
+
+def get_endpoint(user_sub: str, endpoint_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single endpoint by ID."""
+    resp = T.webhook_endpoints.get_item(
+        Key={"pk": f"USER#{user_sub}", "sk": f"ENDPOINT#{endpoint_id}"},
+    )
+    item = resp.get("Item")
+    if not item:
+        return None
+    return _endpoint_out(item)
 
 
 def _get_endpoint_raw(user_sub: str, endpoint_id: str) -> Optional[Dict[str, Any]]:
@@ -213,6 +346,8 @@ def update_endpoint(
     description: Optional[str] = None,
     event_types: Optional[List[str]] = None,
     enabled: Optional[bool] = None,
+    retry_policy: Optional[Dict[str, Any]] = None,
+    signature_version: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Update an existing endpoint."""
     item = _get_endpoint_raw(user_sub, endpoint_id)
@@ -229,9 +364,18 @@ def update_endpoint(
 
     old_event_types = set(item.get("event_types", set()))
 
+    if retry_policy is not None:
+        from app.services.webhook_retry import normalize_retry_policy
+        item["retry_policy"] = normalize_retry_policy(retry_policy)
+
+    if signature_version is not None:
+        if signature_version not in ("v1", "v2", "both"):
+            raise ValueError("signature_version must be v1, v2, or both")
+        item["signature_version"] = signature_version
+
     if event_types is not None:
         for et in event_types:
-            if et not in WEBHOOK_EVENT_TYPES:
+            if not is_valid_event_type(et):
                 raise ValueError(f"Unknown event type: {et}")
         new_et = set(event_types)
         item["event_types"] = new_et
@@ -286,20 +430,7 @@ def update_endpoint(
     item["updated_at"] = now_ts()
     T.webhook_endpoints.put_item(Item=item)
 
-    et = item.get("event_types", set())
-    return {
-        "endpoint_id": item["endpoint_id"],
-        "url": item["url"],
-        "description": item.get("description", ""),
-        "event_types": sorted(et) if et else [],
-        "enabled": item.get("enabled", True),
-        "secret": None,
-        "created_at": int(item.get("created_at", 0)),
-        "updated_at": int(item.get("updated_at", 0)),
-        "last_delivery_at": int(item["last_delivery_at"]) if item.get("last_delivery_at") else None,
-        "failure_count": int(item.get("failure_count", 0)),
-        "disabled_reason": item.get("disabled_reason"),
-    }
+    return _endpoint_out(item)
 
 
 def delete_endpoint(user_sub: str, endpoint_id: str) -> bool:
@@ -356,6 +487,15 @@ def compute_signature(secret: str, timestamp: int, payload: str) -> str:
     """Compute HMAC-SHA256 signature for webhook delivery."""
     message = f"{timestamp}.{payload}"
     return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+
+def _extract_event_id(payload: str) -> str:
+    """Extract event_id from a JSON payload string."""
+    try:
+        data = json.loads(payload)
+        return data.get("id", "")
+    except Exception:
+        return ""
 
 
 # ─── Event Dispatch ─────────────────────────────────────────────────────────
@@ -425,20 +565,31 @@ async def deliver_webhook(
     secret: str,
     delivery_id: str,
     event_type: str,
+    signature_version: str = "v2",
 ) -> Dict[str, Any]:
-    """HTTP POST webhook delivery. Returns result dict."""
+    """HTTP POST webhook delivery with v1/v2 signature support. Returns result dict."""
     import httpx
 
     timestamp = int(time.time())
-    signature = compute_signature(secret, timestamp, payload)
+    v2_signature = compute_signature(secret, timestamp, payload)
 
     headers = {
         "Content-Type": "application/json",
-        "X-Webhook-Signature": f"sha256={signature}",
+        "User-Agent": "Platform-Webhooks/2.0",
         "X-Webhook-Timestamp": str(timestamp),
         "X-Webhook-Event": event_type,
+        "X-Webhook-Event-Id": _extract_event_id(payload),
         "X-Webhook-Delivery-Id": delivery_id,
     }
+
+    # Signature headers based on version preference
+    if signature_version in ("v2", "both"):
+        headers["X-Webhook-Signature"] = f"v2={v2_signature}"
+    if signature_version in ("v1", "both"):
+        v1_sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        headers["X-Webhook-Signature-v1"] = f"sha256={v1_sig}"
+    if signature_version not in ("v1", "v2", "both"):
+        headers["X-Webhook-Signature"] = f"v2={v2_signature}"
 
     start = time.monotonic()
     try:
@@ -615,9 +766,15 @@ def handle_delivery_failure(
     result: Dict[str, Any],
 ) -> None:
     """Handle a failed delivery: schedule retry or mark as dead letter."""
+    from app.services.webhook_retry import compute_retry_delay, normalize_retry_policy, should_retry
+
     attempt = int(delivery.get("attempt_count", 0)) + 1
-    max_attempts = int(delivery.get("max_attempts", S.webhooks_max_retries))
     now = now_ts()
+    created_at = int(delivery.get("created_at", now))
+
+    # Get endpoint's retry policy (v2) or fall back to v1 behavior
+    raw_policy = endpoint.get("retry_policy")
+    policy = normalize_retry_policy(raw_policy)
 
     update_expr = "SET #st = :st, last_attempt_at = :la, attempt_count = :ac, last_error = :le"
     expr_vals: Dict[str, Any] = {
@@ -634,17 +791,17 @@ def handle_delivery_failure(
         update_expr += ", last_response_body = :rb"
         expr_vals[":rb"] = result["response_body"][:500]
 
-    if attempt >= max_attempts:
+    if should_retry(policy, attempt, created_at, now):
+        # Schedule retry with computed delay
+        expr_vals[":st"] = "failed"
+        delay = compute_retry_delay(policy, attempt)
+        expr_vals[":nra"] = now + delay
+        update_expr += ", next_retry_at = :nra"
+    else:
         # Dead letter
         expr_vals[":st"] = "dead_letter"
         update_expr += ", next_retry_at = :nra"
         expr_vals[":nra"] = now
-    else:
-        # Schedule retry
-        expr_vals[":st"] = "failed"
-        delay = RETRY_DELAYS_SECONDS[min(attempt, len(RETRY_DELAYS_SECONDS) - 1)]
-        expr_vals[":nra"] = now + delay
-        update_expr += ", next_retry_at = :nra"
 
     T.webhook_deliveries.update_item(
         Key={"pk": delivery["pk"], "sk": delivery["sk"]},

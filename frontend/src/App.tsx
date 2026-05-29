@@ -55,6 +55,8 @@ const SearchPage = lazy(() => import("@/pages/search/SearchPage"));
 const VideoPlayerPage = lazy(() => import("@/pages/videos/VideoPlayerPage"));
 const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
 const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
+const ClipGalleryPage = lazy(() => import("@/pages/clips/ClipGalleryPage"));
+const ClipPlayerPage = lazy(() => import("@/pages/clips/ClipPlayerPage"));
 const DmcaClaimForm = lazy(() => import("@/pages/dmca/DmcaClaimForm"));
 const DmcaDashboardPage = lazy(() => import("@/pages/admin/DmcaDashboardPage"));
 const RateLimitDashboard = lazy(() => import("@/pages/admin/RateLimitDashboard"));
@@ -73,6 +75,21 @@ const SchedulerPage = lazy(() => import("@/pages/scheduler/SchedulerPage"));
 const RefundRequestsPage = lazy(() => import("@/pages/billing/RefundRequestsPage"));
 const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePage"));
 const SavedPage = lazy(() => import("@/pages/saved/SavedPage"));
+const AffiliateDashboard = lazy(() => import("@/pages/affiliates/AffiliateDashboard"));
+const CollaborationsPage = lazy(() => import("@/pages/collaborations/CollaborationsPage"));
+const FanClubPage = lazy(() => import("@/pages/fan-club/FanClubPage"));
+const AchievementsPage = lazy(() => import("@/pages/achievements/AchievementsPage"));
+const AuditExportPage = lazy(() => import("@/pages/admin/AuditExportPage"));
+const TenantAdmin = lazy(() => import("@/pages/admin/TenantAdmin"));
+const SsoProvidersPage = lazy(() => import("@/pages/admin/SsoProvidersPage"));
+const CreatorDashboard = lazy(() => import("@/pages/dashboard/CreatorDashboard"));
+const OrgsPage = lazy(() => import("@/pages/orgs/OrgsPage"));
+const OrgDashboard = lazy(() => import("@/pages/orgs/OrgDashboard"));
+const WebhookDashboard = lazy(() => import("@/pages/webhooks/WebhookDashboard"));
+const WebhookEndpointDetail = lazy(() => import("@/pages/webhooks/WebhookEndpointDetail"));
+const PartyListPage = lazy(() => import("@/pages/watch-parties/PartyListPage"));
+const WatchPartyPage = lazy(() => import("@/pages/watch-parties/WatchPartyPage"));
+const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
 
 function PageSpinner() {
   return (
@@ -108,6 +125,7 @@ export default function App() {
         <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
         <Route path="/questionnaires/published/:publishedSlug/respond" element={<QuestionnaireRespondentPage />} />
         <Route path="live/:sessionId" element={<LivePlayer />} />
+        <Route path="party/:inviteCode" element={<PartyListPage />} />
 
         {/* Protected routes inside AppShell layout */}
         <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
@@ -123,6 +141,7 @@ export default function App() {
           <Route path="billing" element={<BillingPage />} />
           <Route path="billing/refunds" element={<RefundRequestsPage />} />
           <Route path="calendar" element={<CalendarPage />} />
+          <Route path="content-calendar" element={<ContentCalendarPage />} />
           <Route path="scheduler" element={<SchedulerPage />} />
           <Route path="shop" element={<CatalogPage />} />
           <Route path="shop/:categoryId/:itemId" element={<ProductDetail />} />
@@ -138,11 +157,15 @@ export default function App() {
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />
           <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
+          <Route path="watch-parties" element={<PartyListPage />} />
+          <Route path="watch-parties/:partyId" element={<WatchPartyPage />} />
           <Route path="gallery" element={<GalleryPage />} />
           <Route path="gallery/:videoId" element={<GalleryVideoDetailPage />} />
           <Route path="videos" element={<VideosPage />} />
           <Route path="videos/:videoId" element={<VideoPlayerPage />} />
           {showBroadcastNavigation && <Route path="broadcast" element={<BroadcastPage />} />}
+          <Route path="clips" element={<ClipGalleryPage />} />
+          <Route path="clips/:clipId" element={<ClipPlayerPage />} />
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
@@ -151,15 +174,24 @@ export default function App() {
           <Route path="settings/blocked" element={<BlockedUsersPage />} />
           <Route path="settings/webhooks" element={<WebhooksPage />} />
           <Route path="settings/geo" element={<GeoRulesPage />} />
+          <Route path="webhooks" element={<WebhookDashboard />} />
+          <Route path="webhooks/:endpointId" element={<WebhookEndpointDetail />} />
           <Route path="purchases" element={<PurchasesPage />} />
           <Route path="purchases/:txnId" element={<PurchasesPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
           <Route path="subscriptions/manage" element={<TierManager />} />
+          <Route path="creator-dashboard" element={<CreatorDashboard />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="analytics/content/:contentId" element={<ContentDetailPage />} />
           <Route path="payouts" element={<PayoutDashboard />} />
           <Route path="referrals" element={<ReferralDashboard />} />
           <Route path="promo" element={<PromoCodesPage />} />
+          <Route path="affiliates" element={<AffiliateDashboard />} />
+          <Route path="achievements" element={<AchievementsPage />} />
+          <Route path="collaborations" element={<CollaborationsPage />} />
+          <Route path="fan-club" element={<FanClubPage />} />
+          <Route path="orgs" element={<OrgsPage />} />
+          <Route path="orgs/:orgId" element={<OrgDashboard />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />
@@ -168,6 +200,9 @@ export default function App() {
           <Route path="admin/dmca" element={<DmcaDashboardPage />} />
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
+          <Route path="admin/audit-exports" element={<AuditExportPage />} />
+          <Route path="admin/tenants" element={<TenantAdmin />} />
+          <Route path="admin/sso" element={<SsoProvidersPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

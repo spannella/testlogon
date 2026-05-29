@@ -1,5 +1,5 @@
 import { api } from "@/api/client";
-import type { AlertsResp, AlertPreferences, MarkReadReq } from "@/api/types";
+import type { AlertsResp, AlertPreferences, MarkReadReq, ActivityFeedResp, TipsSummary } from "@/api/types";
 
 export const getAlerts = (opts?: { limit?: number; cursor?: string; unread_only?: boolean }) => {
   const params: Record<string, string> = {};
@@ -74,6 +74,24 @@ export const getUnreadCount = () =>
 
 export const markAllAlertRead = () =>
   api.post<{ ok: boolean; count: number; marked_count: number }>("/ui/alerts/mark-all-read", {});
+
+// ─── Activity Feed (PLATFORM-012) ───────────────────────────────
+
+export const getActivityFeed = (params?: { limit?: number; cursor?: string; category?: string }) => {
+  const p: Record<string, string> = {};
+  if (params?.limit) p["limit"] = String(params.limit);
+  if (params?.cursor) p["cursor"] = params.cursor;
+  if (params?.category) p["category"] = params.category;
+  return api.get<ActivityFeedResp>("/ui/alerts/activity", p);
+};
+
+export const getTipsSummary = (period: "7d" | "30d" | "all" = "30d") =>
+  api.get<TipsSummary>("/ui/alerts/tips-summary", { period });
+
+export const markGroupRead = (alertIds: string[]) =>
+  api.post<{ ok: boolean; marked_count: number }>("/ui/alerts/mark-group-read", {
+    alert_ids: alertIds,
+  });
 
 // ─── SSE stream URL ──────────────────────────────────────────────
 

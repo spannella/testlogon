@@ -22,6 +22,7 @@ export default defineConfig({
       clientPort: 3000,
     },
     proxy: {
+      "/saml": "http://localhost:8000",
       "/ui": "http://localhost:8000",
       "/api": "http://localhost:8000",
       "/v1": "http://localhost:8000",
@@ -38,6 +39,7 @@ export default defineConfig({
           return null;
         },
       },
+      "/r": "http://localhost:8000",
       "/posts": "http://localhost:8000",
       "/social": "http://localhost:8000",
       "/uploads": "http://localhost:8000",

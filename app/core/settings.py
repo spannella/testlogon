@@ -510,6 +510,9 @@ class Settings:
     broadcast_tip_rate_limit_ms: int = int(os.environ.get("BROADCAST_TIP_RATE_LIMIT_MS", "3000"))
     broadcast_tip_goals_table_name: str = os.environ.get("DDB_BROADCAST_TIP_GOALS", "BroadcastTipGoals")
     broadcast_max_goals_per_session: int = int(os.environ.get("BROADCAST_TIP_GOALS_MAX", "5"))
+    # Broadcast Q&A (ENGAGE-003)
+    broadcast_qa_enabled: bool = os.environ.get("BROADCAST_QA_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    broadcast_qa_questions_table_name: str = os.environ.get("DDB_BROADCAST_QA_QUESTIONS", "broadcast_qa_questions")
     # Broadcast lottery (BCAST-014)
     broadcast_lottery_enabled: bool = os.environ.get("BROADCAST_LOTTERY_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     broadcast_lottery_max_outcomes: int = int(os.environ.get("BROADCAST_LOTTERY_MAX_OUTCOMES", "10"))
@@ -1002,6 +1005,11 @@ class Settings:
     newsfeed_unlock_throttle_max_attempts: int = int(os.environ.get("NEWSFEED_UNLOCK_THROTTLE_MAX_ATTEMPTS", "6"))
     newsfeed_tip_lottery_enabled: bool = os.environ.get("NEWSFEED_TIP_LOTTERY_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
+    # Newsfeed polls (ENGAGE-002)
+    newsfeed_polls_enabled: bool = os.environ.get("NEWSFEED_POLLS_ENABLED", "1") not in ("0", "false", "False")
+    newsfeed_poll_max_options: int = int(os.environ.get("NEWSFEED_POLL_MAX_OPTIONS", "10"))
+    newsfeed_poll_max_duration_hours: int = int(os.environ.get("NEWSFEED_POLL_MAX_DURATION_HOURS", "168"))
+
     # Image optimization (PLATFORM-004)
     image_optimization_enabled: bool = os.environ.get("IMAGE_OPTIMIZATION_ENABLED", "1") not in ("0", "false", "False")
 
@@ -1301,6 +1309,18 @@ class Settings:
     webhooks_dispatcher_poll_interval: int = int(os.environ.get("WEBHOOKS_DISPATCHER_POLL_INTERVAL", "10"))
     webhooks_delivery_ttl_days: int = int(os.environ.get("WEBHOOKS_DELIVERY_TTL_DAYS", "30"))
 
+    # Webhooks v2 (ENTERPRISE-005)
+    webhooks_v2_enabled: bool = os.environ.get("WEBHOOKS_V2_ENABLED", "1") not in ("0", "false", "False")
+    webhooks_circuit_breaker_enabled: bool = os.environ.get("WEBHOOKS_CIRCUIT_BREAKER_ENABLED", "1") not in ("0", "false", "False")
+    webhooks_default_circuit_failure_threshold: int = int(os.environ.get("WEBHOOKS_DEFAULT_CIRCUIT_FAILURE_THRESHOLD", "10"))
+    webhooks_circuit_initial_cooldown_seconds: int = int(os.environ.get("WEBHOOKS_CIRCUIT_INITIAL_COOLDOWN_SECONDS", "300"))
+    webhooks_circuit_max_cooldown_seconds: int = int(os.environ.get("WEBHOOKS_CIRCUIT_MAX_COOLDOWN_SECONDS", "86400"))
+    webhooks_stats_table_name: str = os.environ.get("WEBHOOKS_STATS_TABLE_NAME", "webhook_stats")
+    webhooks_stats_retention_days: int = int(os.environ.get("WEBHOOKS_STATS_RETENTION_DAYS", "90"))
+    webhooks_replay_rate_limit_per_hour: int = int(os.environ.get("WEBHOOKS_REPLAY_RATE_LIMIT_PER_HOUR", "100"))
+    webhooks_signature_replay_window_seconds: int = int(os.environ.get("WEBHOOKS_SIGNATURE_REPLAY_WINDOW_SECONDS", "300"))
+    webhooks_max_payload_size_bytes: int = int(os.environ.get("WEBHOOKS_MAX_PAYLOAD_SIZE_BYTES", "65536"))
+
     # Unified Content Scheduling (SCHED-001)
     scheduled_actions_table_name: str = os.environ.get("SCHEDULED_ACTIONS_TABLE_NAME", "scheduled_actions")
     unified_scheduler_enabled: bool = os.environ.get("UNIFIED_SCHEDULER_ENABLED", "1") not in ("0", "false", "False")
@@ -1395,6 +1415,80 @@ class Settings:
     group_call_max_duration_seconds: int = int(os.environ.get("GROUP_CALL_MAX_DURATION_SECONDS", "14400"))
     group_call_sfu_endpoint: str = os.environ.get("GROUP_CALL_SFU_ENDPOINT", "")
     group_call_dev_mesh_max_participants: int = int(os.environ.get("GROUP_CALL_DEV_MESH_MAX_PARTICIPANTS", "4"))
+
+    # Collaboration Requests (CREATOR-001)
+    collaborations_enabled: bool = os.environ.get("COLLABORATIONS_ENABLED", "1") not in ("0", "false", "False")
+    collaboration_agreements_table_name: str = os.environ.get("DDB_COLLABORATION_AGREEMENTS", "collaboration_agreements")
+
+    # Organizations / Workspaces (ENTERPRISE-003)
+    orgs_enabled: bool = os.environ.get("ORGS_ENABLED", "0") not in ("0", "false", "False")
+    organizations_table_name: str = os.environ.get("ORGANIZATIONS_TABLE_NAME", "organizations")
+    org_max_members: int = int(os.environ.get("ORG_MAX_MEMBERS", "100"))
+    org_max_per_user: int = int(os.environ.get("ORG_MAX_PER_USER", "50"))
+    org_invite_ttl_seconds: int = int(os.environ.get("ORG_INVITE_TTL_SECONDS", str(7 * 24 * 3600)))
+
+    # Fan Clubs / Membership Tiers (CREATOR-002)
+    fan_clubs_enabled: bool = os.environ.get("FAN_CLUBS_ENABLED", "1") not in ("0", "false", "False")
+    fan_club_channels_table_name: str = os.environ.get("FAN_CLUB_CHANNELS_TABLE_NAME", "fan_club_channels")
+    fan_club_messages_table_name: str = os.environ.get("FAN_CLUB_MESSAGES_TABLE_NAME", "fan_club_messages")
+
+    # Affiliate Links (CREATOR-004)
+    affiliate_links_enabled: bool = os.environ.get("AFFILIATE_LINKS_ENABLED", "1") not in ("0", "false", "False")
+    affiliate_default_commission_percent: int = int(os.environ.get("AFFILIATE_DEFAULT_COMMISSION_PERCENT", "10"))
+    affiliate_max_commission_percent: int = int(os.environ.get("AFFILIATE_MAX_COMMISSION_PERCENT", "50"))
+    affiliate_cookie_duration_days: int = int(os.environ.get("AFFILIATE_COOKIE_DURATION_DAYS", "30"))
+    affiliate_links_table_name: str = os.environ.get("DDB_AFFILIATE_LINKS", "AffiliateLinks")
+    affiliate_clicks_table_name: str = os.environ.get("DDB_AFFILIATE_CLICKS", "AffiliateClicks")
+
+    # Achievements & Gamification (ENGAGE-001)
+    achievements_enabled: bool = os.environ.get("ACHIEVEMENTS_ENABLED", "0") not in ("0", "false", "False")
+    achievements_table_name: str = os.environ.get("ACHIEVEMENTS_TABLE_NAME", "achievements")
+    user_achievements_table_name: str = os.environ.get("USER_ACHIEVEMENTS_TABLE_NAME", "user_achievements")
+    user_achievement_progress_table_name: str = os.environ.get("USER_ACHIEVEMENT_PROGRESS_TABLE_NAME", "user_achievement_progress")
+    achievement_leaderboard_table_name: str = os.environ.get("ACHIEVEMENT_LEADERBOARD_TABLE_NAME", "achievement_leaderboard")
+
+    # Audit Log Export (ENTERPRISE-004)
+    audit_export_enabled: bool = os.environ.get("AUDIT_EXPORT_ENABLED", "1") not in ("0", "false", "False")
+    audit_export_table_name: str = os.environ.get("DDB_AUDIT_EXPORTS", "AuditExports")
+    audit_export_max_date_range_days: int = int(os.environ.get("AUDIT_EXPORT_MAX_DATE_RANGE_DAYS", "90"))
+    audit_export_max_events: int = int(os.environ.get("AUDIT_EXPORT_MAX_EVENTS", "10000000"))
+    audit_export_s3_bucket: str = os.environ.get("AUDIT_EXPORT_S3_BUCKET", "data-exports")
+    audit_export_url_ttl_seconds: int = int(os.environ.get("AUDIT_EXPORT_URL_TTL_SECONDS", "86400"))
+    audit_export_signing_key: str = os.environ.get(
+        "AUDIT_EXPORT_SIGNING_KEY",
+        os.environ.get("MESSAGING_COMPLIANCE_EXPORT_MANIFEST_SIGNING_KEY", "dev-export-signing-key"),
+    )
+    audit_export_signing_key_id: str = os.environ.get(
+        "AUDIT_EXPORT_SIGNING_KEY_ID",
+        os.environ.get("MESSAGING_COMPLIANCE_EXPORT_MANIFEST_SIGNING_KEY_ID", "dev-key-v1"),
+    )
+    audit_export_worker_enabled: bool = os.environ.get("AUDIT_EXPORT_WORKER_ENABLED", "1") not in ("0", "false", "False")
+    audit_export_worker_poll_interval_seconds: int = int(os.environ.get("AUDIT_EXPORT_WORKER_POLL_INTERVAL_SECONDS", "10"))
+    audit_export_worker_max_concurrent: int = int(os.environ.get("AUDIT_EXPORT_WORKER_MAX_CONCURRENT", "3"))
+
+    # Broadcast Clips (ENGAGE-005)
+    broadcast_clips_table_name: str = os.environ.get("BROADCAST_CLIPS_TABLE_NAME", "broadcast_clips")
+
+    # Watch Parties (ENGAGE-004)
+    watch_parties_table_name: str = os.environ.get("WATCH_PARTIES_TABLE_NAME", "watch_parties")
+    watch_party_participants_table_name: str = os.environ.get("WATCH_PARTY_PARTICIPANTS_TABLE_NAME", "watch_party_participants")
+
+    # SSO / SAML (ENTERPRISE-002)
+    sso_saml_enabled: bool = os.environ.get("SSO_SAML_ENABLED", "1") not in ("0", "false", "False")
+    sso_providers_table_name: str = os.environ.get("SSO_PROVIDERS_TABLE_NAME", "sso_providers")
+    sso_sessions_table_name: str = os.environ.get("SSO_SESSIONS_TABLE_NAME", "sso_sessions")
+    sso_assertion_cache_table_name: str = os.environ.get("SSO_ASSERTION_CACHE_TABLE_NAME", "sso_assertion_cache")
+    sso_assertion_max_age_seconds: int = int(os.environ.get("SSO_ASSERTION_MAX_AGE_SECONDS", "300"))
+    sso_assertion_max_clock_skew_seconds: int = int(os.environ.get("SSO_ASSERTION_MAX_CLOCK_SKEW_SECONDS", "180"))
+    sso_session_link_ttl_seconds: int = int(os.environ.get("SSO_SESSION_LINK_TTL_SECONDS", "86400"))
+
+    # Multi-Tenancy (ENTERPRISE-001)
+    multi_tenancy_enabled: bool = os.environ.get("MULTI_TENANCY_ENABLED", "0") not in ("0", "false", "False")
+    tenants_table_name: str = os.environ.get("TENANTS_TABLE_NAME", "tenants")
+    tenant_domains_table_name: str = os.environ.get("TENANT_DOMAINS_TABLE_NAME", "tenant_domains")
+    tenant_members_table_name: str = os.environ.get("TENANT_MEMBERS_TABLE_NAME", "tenant_members")
+    tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
+    default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
 
 S = Settings()

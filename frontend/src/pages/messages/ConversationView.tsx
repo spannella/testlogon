@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin, Phone, Video } from "lucide-react";
+import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin, Phone, Video, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -68,7 +68,7 @@ interface ConversationViewProps {
 export function ConversationView({ conversation, onBack, onClaimSuccess }: ConversationViewProps) {
   const userId = useAuthStore((s) => s.userId);
   const queryClient = useQueryClient();
-  const addToQueue = useOfflineStore((s) => s.addToQueue);
+  const addToQueueWithId = useOfflineStore((s) => s.addToQueueWithId);
   const isOnline = useOfflineStore((s) => s.isOnline);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [hasAutoScrolled, setHasAutoScrolled] = React.useState(false);
@@ -97,6 +97,99 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const handleViewOnce = React.useCallback((id: string) => {
     setViewedOnceIds((prev) => new Set([...prev, id]));
   }, []);
+
+  // ── Drag-and-drop file handling ────────────────────────────────
+  const [dragOverChat, setDragOverChat] = React.useState(false);
+  const chatDragCount = React.useRef(0);
+  const [pendingDropFile, setPendingDropFile] = React.useState<{
+    file: File;
+    previewUrl: string;
+    kind: "image" | "video" | "audio";
+  } | null>(null);
+
+  const classifyDroppedFile = React.useCallback((file: File): { kind: "image" | "video" | "audio" | null } => {
+    if (file.type.startsWith("image/") || file.type === "application/pdf") return { kind: "image" };
+    if (file.type.startsWith("video/")) return { kind: "video" };
+    if (file.type.startsWith("audio/")) return { kind: "audio" };
+    return { kind: null };
+  }, []);
+
+  const handleChatDragEnter = React.useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    chatDragCount.current++;
+    if (chatDragCount.current === 1) setDragOverChat(true);
+  }, []);
+
+  const handleChatDragLeave = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    chatDragCount.current = Math.max(0, chatDragCount.current - 1);
+    if (chatDragCount.current === 0) setDragOverChat(false);
+  }, []);
+
+  const handleChatDragOver = React.useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const handleChatDrop = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chatDragCount.current = 0;
+    setDragOverChat(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const file = files[0];
+    if (!file) return;
+
+    const { kind } = classifyDroppedFile(file);
+    if (kind) {
+      const previewUrl = URL.createObjectURL(file);
+      setPendingDropFile({ file, previewUrl, kind });
+    } else {
+      toast.error(`Unsupported file type: ${file.type || "unknown"}`);
+    }
+  }, [classifyDroppedFile]);
+
+  // Listen for global app-file-drop events for the messages page
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const custom = e as CustomEvent<{ files: File[]; context: string }>;
+      if (custom.detail.context !== "message") return;
+      const file = custom.detail.files[0];
+      if (!file) return;
+
+      const cls = classifyDroppedFile(file);
+      if (cls.kind) {
+        const previewUrl = URL.createObjectURL(file);
+        setPendingDropFile({ file, previewUrl, kind: cls.kind });
+      } else {
+        toast.error(`Unsupported file type: ${file.type || "unknown"}`);
+      }
+    };
+    window.addEventListener("app-file-drop", handler as EventListener);
+    return () => window.removeEventListener("app-file-drop", handler as EventListener);
+  }, [classifyDroppedFile]);
+
+  // When a dropped file is set, send it via the image mutation
+  React.useEffect(() => {
+    if (!pendingDropFile) return;
+    const { file, previewUrl, kind } = pendingDropFile;
+    setPendingDropFile(null);
+
+    if (kind === "image") {
+      sendImage.mutate({ file });
+    } else if (kind === "video") {
+      // Create a form approach for video - use the image path for now since it handles multipart
+      sendImage.mutate({ file });
+    } else {
+      sendImage.mutate({ file });
+    }
+    URL.revokeObjectURL(previewUrl);
+  }, [pendingDropFile]);
 
   // ── Messages query ──────────────────────────────────────────────
 
@@ -799,7 +892,22 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   // ── Render ──────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="relative flex h-full flex-col"
+      onDragEnter={handleChatDragEnter}
+      onDragLeave={handleChatDragLeave}
+      onDragOver={handleChatDragOver}
+      onDrop={handleChatDrop}
+      data-testid="conversation-drop-zone"
+    >
+      {dragOverChat && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/60 backdrop-blur-sm rounded-lg border-2 border-dashed border-primary" data-testid="chat-drop-overlay">
+          <div className="flex flex-col items-center gap-2 text-primary">
+            <Upload className="h-10 w-10" />
+            <p className="text-sm font-medium">Drop file to attach</p>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         {onBack && (
@@ -1026,8 +1134,61 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           // Only queue non-scheduled messages — scheduled messages need server-side
           // delivery at the chosen time and should not be silently deferred.
           if (!isOnline && !fullPayload.send_at) {
-            addToQueue({ type: "send_message", payload: { conversationId: convoId, req: fullPayload } });
-            toast.info("You're offline — message queued and will send when reconnected");
+            const queueId = `offline-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+            // 1. Add to persistent queue with known ID
+            addToQueueWithId(queueId, { type: "send_message", payload: { conversationId: convoId, req: fullPayload } });
+
+            // 2. Inject optimistic message into React Query cache
+            const optimisticOffline: Message = {
+              message_id: `optimistic-offline-${queueId}`,
+              conversation_id: convoId,
+              sender_id: userId ?? "",
+              kind: "text",
+              text: fullPayload.encryption ? "" : (fullPayload.text ?? ""),
+              is_encrypted: !!fullPayload.encryption,
+              encryption: fullPayload.encryption,
+              created_at: Date.now() / 1000,
+              reactions_counts: {},
+              reply_to_message_id: fullPayload.reply_to_message_id,
+              __offline: {
+                queueId,
+                status: "pending",
+                enqueuedAt: Date.now(),
+              },
+            };
+
+            queryClient.setQueryData<InfiniteData<MessagesPage>>(
+              ["messages", convoId],
+              (old) => {
+                if (!old?.pages.length) return old;
+                const pages = old.pages.map((p, i) =>
+                  i === 0 ? { ...p, messages: [optimisticOffline, ...(p.messages ?? [])] } : p,
+                );
+                return { ...old, pages };
+              },
+            );
+
+            // 3. Update sidebar preview
+            queryClient.setQueriesData<InfiniteData<{ conversations: Conversation[]; next_cursor?: string }>>(
+              { queryKey: ["conversations"] },
+              (old) => {
+                if (!old?.pages) return old;
+                return {
+                  ...old,
+                  pages: old.pages.map((page) => ({
+                    ...page,
+                    conversations: (page.conversations ?? []).map((c: Conversation) =>
+                      c.conversation_id === convoId
+                        ? { ...c, last_message: optimisticOffline, last_message_at: optimisticOffline.created_at }
+                        : c,
+                    ),
+                  })),
+                };
+              },
+            );
+
+            toast.info("You're offline — message queued");
             setReplyingTo(null);
             return;
           }

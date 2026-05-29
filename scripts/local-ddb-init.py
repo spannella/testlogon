@@ -891,6 +891,12 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"next_retry_at": "N", "created_at": "N"},
         ),
+        # Webhook Stats (ENTERPRISE-005)
+        TableDef(
+            _resolve_table_name(S.webhooks_stats_table_name, "webhook_stats"),
+            "pk",
+            "sk",
+        ),
         # Promo Codes & Coupons (PROMO-001)
         TableDef(
             _resolve_table_name(S.promo_codes_table_name, "PromoCodes"),
@@ -979,6 +985,180 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
+        ),
+        # Affiliate Links (CREATOR-004)
+        TableDef(
+            _resolve_table_name(S.affiliate_links_table_name, "AffiliateLinks"),
+            "link_id",
+            gsi=[
+                {"index_name": "ByAffiliate", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByCode", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "ByProduct", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI3SK": "N"},
+        ),
+        # Affiliate Clicks (CREATOR-004)
+        TableDef(
+            _resolve_table_name(S.affiliate_clicks_table_name, "AffiliateClicks"),
+            "link_id",
+            "click_id",
+            gsi=[
+                {"index_name": "ByVisitor", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        # Achievements & Gamification (ENGAGE-001)
+        TableDef(
+            _resolve_table_name(S.achievements_table_name, "achievements"),
+            "achievement_id",
+            gsi=[
+                {"index_name": "ByMetric", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.user_achievements_table_name, "user_achievements"),
+            "user_sub",
+            "achievement_id",
+            gsi=[
+                {"index_name": "ByLeaderboard", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByDisplay", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI2SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.user_achievement_progress_table_name, "user_achievement_progress"),
+            "user_sub",
+            "metric_key",
+        ),
+        TableDef(
+            _resolve_table_name(S.achievement_leaderboard_table_name, "achievement_leaderboard"),
+            "period_key",
+            "user_sub",
+            gsi=[
+                {"index_name": "ByPoints", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        # Audit Log Export (ENTERPRISE-004)
+        TableDef(
+            _resolve_table_name(S.audit_export_table_name, "AuditExports"),
+            "export_id",
+            "sk",
+            gsi=[
+                {"index_name": "status-created-index", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "user-created-index", "partition_key": "created_by", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Broadcast Q&A Questions (ENGAGE-003)
+        TableDef(
+            _resolve_table_name(S.broadcast_qa_questions_table_name, "broadcast_qa_questions"),
+            "session_id",
+            "question_id",
+            gsi=[
+                {"index_name": "BySessionStatus", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
+        # Collaboration Requests (CREATOR-001)
+        TableDef(
+            _resolve_table_name(S.collaboration_agreements_table_name, "collaboration_agreements"),
+            "collaboration_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByInitiator", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByRecipient", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "ByStatus", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
+        ),
+        # Fan Club Channels (CREATOR-002)
+        TableDef(
+            _resolve_table_name(S.fan_club_channels_table_name, "fan_club_channels"),
+            "channel_id",
+            gsi=[
+                {"index_name": "ByCreator", "partition_key": "creator_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Fan Club Messages (CREATOR-002)
+        TableDef(
+            _resolve_table_name(S.fan_club_messages_table_name, "fan_club_messages"),
+            "channel_id",
+            "sort_key",
+        ),
+        # Organizations / Workspaces (ENTERPRISE-003)
+        TableDef(
+            _resolve_table_name(S.organizations_table_name, "organizations"),
+            "org_id",
+            "sk",
+            gsi=[
+                {"index_name": "user-orgs-index", "partition_key": "user_sub", "sort_key": "org_id"},
+                {"index_name": "invite-email-index", "partition_key": "email", "sort_key": "org_id"},
+                {"index_name": "slug-index", "partition_key": "slug", "sort_key": "org_id"},
+            ],
+        ),
+        # Watch Parties (ENGAGE-004)
+        TableDef(
+            _resolve_table_name(S.watch_parties_table_name, "watch_parties"),
+            "party_id",
+            gsi=[
+                {"index_name": "ByHost", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByInvite", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.watch_party_participants_table_name, "watch_party_participants"),
+            "party_id",
+            "user_sub",
+        ),
+        # Broadcast Clips (ENGAGE-005)
+        TableDef(
+            _resolve_table_name(S.broadcast_clips_table_name, "broadcast_clips"),
+            "clip_id",
+            gsi=[
+                {"index_name": "BySession", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByCreator", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "ByGallery", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # Multi-Tenancy (ENTERPRISE-001)
+        TableDef(
+            _resolve_table_name(S.tenants_table_name, "tenants"),
+            "tenant_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.tenant_domains_table_name, "tenant_domains"),
+            "domain",
+            "sk",
+        ),
+        TableDef(
+            _resolve_table_name(S.tenant_members_table_name, "tenant_members"),
+            "tenant_id",
+            "user_sub",
+            gsi=[
+                {"index_name": "user-tenant-index", "partition_key": "user_sub", "sort_key": "tenant_id"},
+            ],
+        ),
+        # SSO / SAML (ENTERPRISE-002)
+        TableDef(
+            _resolve_table_name(S.sso_providers_table_name, "sso_providers"),
+            "tenant_id",
+            "sk",
+            gsi=[
+                {"index_name": "provider-id-index", "partition_key": "provider_id", "sort_key": "tenant_id"},
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.sso_sessions_table_name, "sso_sessions"),
+            "session_id",
+            "sk",
+        ),
+        TableDef(
+            _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
+            "assertion_id",
         ),
     ]
 

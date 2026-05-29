@@ -6,8 +6,15 @@ import MobileNav from "./MobileNav";
 import ImpersonationBanner from "@/components/shared/ImpersonationBanner";
 import { PageTransition } from "@/components/shared/PageTransition";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
+import { UpdateBanner } from "@/components/shared/UpdateBanner";
+import { AppDropZone } from "@/components/shared/AppDropZone";
+import { InstallPrompt } from "@/components/shared/InstallPrompt";
 import { SessionExpiryWarning } from "@/components/shared/SessionExpiryWarning";
 import { useOfflineQueue } from "@/hooks/useOfflineQueue";
+import { useOfflineOptimisticRestore } from "@/hooks/useOfflineOptimisticRestore";
+import { useServiceWorkerSync } from "@/hooks/useServiceWorkerSync";
+import { useQueryClient } from "@tanstack/react-query";
+import { DeadLetterPanel } from "@/components/shared/DeadLetterPanel";
 import { useUiStore } from "@/stores/uiStore";
 import {
   Sheet,
@@ -19,6 +26,19 @@ import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 /** Mounts the offline queue flush side-effect — renders nothing. */
 function OfflineQueueFlusher() {
   useOfflineQueue();
+  return null;
+}
+
+/** PWA-005: Restores offline optimistic messages into React Query cache after reload. */
+function OfflineOptimisticRestorer() {
+  const queryClient = useQueryClient();
+  useOfflineOptimisticRestore(queryClient);
+  return null;
+}
+
+/** PWA-005: Listens for service worker sync messages. */
+function ServiceWorkerSyncListener() {
+  useServiceWorkerSync();
   return null;
 }
 
@@ -34,46 +54,53 @@ export default function AppShell() {
   }, [prefsLoaded, loadServerPreferences]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      {/* Skip to content link for keyboard/screen reader users */}
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:outline-none"
-      >
-        Skip to content
-      </a>
+    <AppDropZone>
+      <div className="flex h-screen overflow-hidden bg-background">
+        {/* Skip to content link for keyboard/screen reader users */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:outline-none"
+        >
+          Skip to content
+        </a>
 
-      {/* Desktop sidebar */}
-      <Sidebar />
+        {/* Desktop sidebar */}
+        <Sidebar />
 
-      {/* Mobile sidebar (drawer) */}
-      <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-        <SheetContent side="left" className="w-60 p-0">
-          <VisuallyHidden>
-            <SheetTitle>Navigation</SheetTitle>
-          </VisuallyHidden>
-          <MobileSidebar onNavigate={() => setMobileMenuOpen(false)} />
-        </SheetContent>
-      </Sheet>
+        {/* Mobile sidebar (drawer) */}
+        <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+          <SheetContent side="left" className="w-60 p-0">
+            <VisuallyHidden>
+              <SheetTitle>Navigation</SheetTitle>
+            </VisuallyHidden>
+            <MobileSidebar onNavigate={() => setMobileMenuOpen(false)} />
+          </SheetContent>
+        </Sheet>
 
-      {/* Main area */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <OfflineBanner />
-        <OfflineQueueFlusher />
-        <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
-        <ImpersonationBanner />
-        <SessionExpiryWarning />
+        {/* Main area */}
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <OfflineBanner />
+          <UpdateBanner />
+          <InstallPrompt />
+          <DeadLetterPanel />
+          <OfflineQueueFlusher />
+          <OfflineOptimisticRestorer />
+          <ServiceWorkerSyncListener />
+          <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
+          <ImpersonationBanner />
+          <SessionExpiryWarning />
 
-        <main id="main-content" className="flex flex-col flex-1 overflow-y-auto pb-16 md:pb-0">
-          <PageTransition>
-            <Outlet />
-          </PageTransition>
-        </main>
+          <main id="main-content" tabIndex={-1} className="flex flex-col flex-1 overflow-y-auto pb-16 md:pb-0 outline-none">
+            <PageTransition>
+              <Outlet />
+            </PageTransition>
+          </main>
+        </div>
+
+        {/* Mobile bottom tab bar */}
+        <MobileNav />
       </div>
-
-      {/* Mobile bottom tab bar */}
-      <MobileNav />
-    </div>
+    </AppDropZone>
   );
 }
 
@@ -112,6 +139,9 @@ import {
   Bookmark,
   Wallet,
   Layers,
+  Trophy,
+  Building2,
+  Scissors,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -127,6 +157,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Messages", path: "/messages", icon: MessageSquare },
       { label: "Feed", path: "/feed", icon: Rss },
       { label: "Saved", path: "/saved", icon: Bookmark },
+      { label: "Achievements", path: "/achievements", icon: Trophy },
     ],
   },
   {
@@ -142,6 +173,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Payouts", path: "/payouts", icon: Wallet },
       { label: "Referrals", path: "/referrals", icon: Share2 },
       { label: "Promo Codes", path: "/promo", icon: Tag },
+      { label: "Fan Club", path: "/fan-club", icon: UsersRound },
     ],
   },
   {
@@ -149,8 +181,10 @@ const MOBILE_NAV_GROUPS = [
     items: [
       { label: "Files", path: "/files", icon: FolderOpen },
       { label: "Calendar", path: "/calendar", icon: CalendarDays },
+      { label: "Content Calendar", path: "/content-calendar", icon: CalendarClock },
       { label: "Scheduled", path: "/scheduler", icon: CalendarClock },
       { label: "Signing", path: "/signing", icon: FilePen },
+      { label: "Organizations", path: "/orgs", icon: Building2 },
     ],
   },
   {
@@ -159,6 +193,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Gallery", path: "/gallery", icon: PlaySquare },
       { label: "Videos", path: "/videos", icon: Video },
       { label: "Broadcast", path: "/broadcast", icon: Radio },
+      { label: "Clips", path: "/clips", icon: Scissors },
     ],
   },
   {

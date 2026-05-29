@@ -1878,6 +1878,46 @@ def upload_fs_file(
     return {"ok": True, **result}
 
 
+@router.post("/batch-upload")
+def batch_upload(
+    files: List[UploadFile] = File(...),
+    target_path: str = Query(..., description="Target folder path, e.g. /docs/"),
+    user: str = Depends(_current_user),
+):
+    """Upload multiple files in a single request (up to 20)."""
+    if len(files) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 files per batch")
+
+    total_size = 0
+    for f in files:
+        if f.size is not None:
+            total_size += f.size
+
+    if total_size > 500 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Total upload size exceeds 500MB")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    uploaded: list[dict] = []
+    failed: list[dict] = []
+
+    for f in files:
+        try:
+            dest = target_path.rstrip("/") + "/" + (f.filename or "unnamed")
+            from app.services.filemanager import upload_file as svc_upload_file
+            result = svc_upload_file(
+                user=user,
+                path=dest,
+                file=f,
+            )
+            uploaded.append({"path": dest, "name": f.filename or "unnamed", "size": result.get("size", 0)})
+        except Exception as exc:
+            failed.append({"name": f.filename or "unnamed", "error": str(exc)})
+
+    return {"uploaded": uploaded, "failed": failed}
+
+
 @router.post("/presign-upload", response_model=PresignUploadOut)
 def presign_fs_upload(inp: PresignUploadIn, user: str = Depends(_current_user)):
     _enforce_sftp_mount_flags_for_path(inp.path, operation="write")

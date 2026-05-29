@@ -16,6 +16,15 @@ import {
   MessageSquare,
   PenLine,
   Keyboard,
+  Clock,
+  X,
+  FileText,
+  ShoppingBag,
+  FolderOpen,
+  Ticket,
+  Users,
+  Play,
+  Calendar as CalendarIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -38,7 +47,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import ShortcutHelpDialog from "@/components/shared/ShortcutHelpDialog";
-import { useGlobalShortcuts, type Shortcut } from "@/hooks/useGlobalShortcuts";
+import { useGlobalShortcuts, useChordShortcuts, useChordIndicator, type Shortcut, type ChordMapping } from "@/hooks/useGlobalShortcuts";
 import {
   Popover,
   PopoverContent,
@@ -49,7 +58,7 @@ import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/authStore";
 import { useUiStore, type Theme } from "@/stores/uiStore";
 import { logout as apiLogout } from "@/api/endpoints/auth";
-import { getAlerts, markAllAlertRead } from "@/api/endpoints/alerts";
+import { getAlerts, markAllAlertRead, getActivityFeed } from "@/api/endpoints/alerts";
 import { getProfile } from "@/api/endpoints/profile";
 import { useAlertStream } from "@/hooks/useAlertStream";
 import { globalSearch } from "@/api/endpoints/search";
@@ -128,6 +137,9 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
 
   const recentCommands = useUiStore((s) => s.recentCommands);
   const trackRecentCommand = useUiStore((s) => s.trackRecentCommand);
+  const recentSearches = useUiStore((s) => s.recentSearches);
+  const trackRecentSearch = useUiStore((s) => s.trackRecentSearch);
+  const removeRecentSearch = useUiStore((s) => s.removeRecentSearch);
 
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -233,6 +245,24 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
 
   useGlobalShortcuts(shortcuts);
 
+  // ─── Navigation chord shortcuts (g + key) ────────────────────
+  const navigationChords = React.useMemo<ChordMapping[]>(
+    () => [
+      { first: "g", second: "m", label: "Go to Messages", group: "Navigation", action: () => navigate("/messages") },
+      { first: "g", second: "f", label: "Go to Feed", group: "Navigation", action: () => navigate("/feed") },
+      { first: "g", second: "c", label: "Go to Calendar", group: "Navigation", action: () => navigate("/calendar") },
+      { first: "g", second: "s", label: "Go to Settings", group: "Navigation", action: () => navigate("/settings") },
+      { first: "g", second: "t", label: "Go to Tickets", group: "Navigation", action: () => navigate("/tickets") },
+      { first: "g", second: "i", label: "Go to Files", group: "Navigation", action: () => navigate("/files") },
+      { first: "n", second: "m", label: "New message", group: "Actions", action: () => navigate("/messages?new=1") },
+      { first: "n", second: "p", label: "New post", group: "Actions", action: () => navigate("/feed?compose=1") },
+    ],
+    [navigate],
+  );
+
+  const { pendingKey, onChordStart, onChordEnd } = useChordIndicator();
+  useChordShortcuts(navigationChords, onChordStart, onChordEnd);
+
   const handleLogout = async () => {
     try {
       await apiLogout();
@@ -258,6 +288,17 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
   const initials = getInitials(profileQuery.data?.profile, userId);
 
   const alerts = recentAlerts.data?.alerts ?? [];
+
+  // Bell popover tab state (PLATFORM-012)
+  const [bellTab, setBellTab] = React.useState<"activity" | "system">("activity");
+
+  // Activity feed for bell popover
+  const bellActivityQuery = useQuery({
+    queryKey: ["alerts", "activity-feed-bell"],
+    queryFn: () => getActivityFeed({ limit: 10 }),
+    enabled: alertsOpen && bellTab === "activity",
+  });
+  const bellActivityItems = bellActivityQuery.data?.items ?? [];
 
   return (
     <>
@@ -338,9 +379,9 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
               )}
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="end" className="w-80 p-0">
-            {/* Header */}
-            <div className="flex items-center justify-between border-b px-4 py-3">
+          <PopoverContent align="end" className="w-96 p-0">
+            {/* Header with tabs */}
+            <div className="flex items-center justify-between border-b px-4 py-2">
               <span className="text-sm font-semibold">Notifications</span>
               {alerts.some((a) => !a.read_at) && (
                 <Button
@@ -356,9 +397,64 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
               )}
             </div>
 
-            {/* Alert list */}
+            {/* Tab bar */}
+            <div className="flex border-b">
+              <button
+                className={cn("flex-1 px-4 py-2 text-sm font-medium",
+                  bellTab === "activity" && "border-b-2 border-primary text-primary"
+                )}
+                onClick={() => setBellTab("activity")}
+              >
+                Activity
+              </button>
+              <button
+                className={cn("flex-1 px-4 py-2 text-sm font-medium",
+                  bellTab === "system" && "border-b-2 border-primary text-primary"
+                )}
+                onClick={() => setBellTab("system")}
+              >
+                Security
+              </button>
+            </div>
+
+            {/* Content */}
             <ScrollArea className="max-h-80">
-              {alerts.length === 0 ? (
+              {bellTab === "activity" ? (
+                bellActivityItems.length === 0 ? (
+                  <div className="flex flex-col items-center gap-1 py-8 text-center">
+                    <Bell className="h-6 w-6 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">No activity</p>
+                  </div>
+                ) : (
+                  <div className="divide-y">
+                    {bellActivityItems.map((item) => (
+                      <button
+                        key={`${item.source_type}:${item.source_id}`}
+                        className={cn(
+                          "w-full text-left px-4 py-3 hover:bg-accent transition-colors",
+                          item.unread && "bg-primary/5"
+                        )}
+                        onClick={() => {
+                          if (item.action_url) {
+                            navigate(item.action_url);
+                            setAlertsOpen(false);
+                          }
+                        }}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{item.title}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {formatAlertTime(item.latest_ts)}
+                            </p>
+                          </div>
+                          {item.unread && <div className="w-2 h-2 rounded-full bg-primary shrink-0" />}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )
+              ) : alerts.length === 0 ? (
                 <div className="flex flex-col items-center gap-1 py-8 text-center">
                   <Bell className="h-6 w-6 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">No notifications</p>
@@ -366,9 +462,17 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
               ) : (
                 <div className="divide-y">
                   {alerts.map((alert) => (
-                    <div
+                    <button
                       key={alert.alert_id}
-                      className="flex gap-3 px-4 py-3 transition-colors hover:bg-accent/50"
+                      className={cn(
+                        "w-full text-left flex gap-3 px-4 py-3 transition-colors hover:bg-accent/50",
+                      )}
+                      onClick={() => {
+                        if (alert.action_url) {
+                          navigate(alert.action_url);
+                          setAlertsOpen(false);
+                        }
+                      }}
                     >
                       {/* Unread indicator */}
                       <div className="mt-1.5 shrink-0">
@@ -382,16 +486,11 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
                         <p className={cn("text-sm", !alert.read_at && "font-medium")}>
                           {alert.title}
                         </p>
-                        {alert.details && (
-                          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                            {JSON.stringify(alert.details)}
-                          </p>
-                        )}
                         <p className="mt-1 text-[10px] text-muted-foreground">
                           {formatAlertTime(alert.ts)}
                         </p>
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}
@@ -524,6 +623,31 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
             ))}
           </CommandGroup>
 
+          {/* Recent searches (shown when query is empty) */}
+          {!searchQuery && recentSearches.length > 0 && (
+            <CommandGroup heading="Recent Searches">
+              {recentSearches.map((query) => (
+                <CommandItem
+                  key={`recent-search-${query}`}
+                  value={`recent-search-${query}`}
+                  onSelect={() => {
+                    setSearchQuery(query);
+                    trackRecentSearch(query);
+                  }}
+                >
+                  <Clock className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <span className="flex-1">{query}</span>
+                  <button
+                    className="ml-auto text-muted-foreground hover:text-foreground"
+                    onClick={(e) => { e.stopPropagation(); removeRecentSearch(query); }}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
           {/* Content search results */}
           {(searchResults?.results?.users?.items?.length ?? 0) > 0 && (
             <CommandGroup heading="Users">
@@ -533,10 +657,11 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
                   value={`user-${item.id}-${item.title}`}
                   onSelect={() => {
                     navigate(item.url);
+                    trackRecentSearch(searchQuery);
                     setSearchOpen(false);
                   }}
                 >
-                  <User className="mr-2 h-4 w-4" />
+                  <User className="mr-2 h-4 w-4 text-muted-foreground" />
                   {item.title}
                 </CommandItem>
               ))}
@@ -551,9 +676,11 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
                   value={`post-${item.id}-${item.snippet}`}
                   onSelect={() => {
                     navigate(item.url);
+                    trackRecentSearch(searchQuery);
                     setSearchOpen(false);
                   }}
                 >
+                  <FileText className="mr-2 h-4 w-4 text-muted-foreground" />
                   {item.snippet}
                 </CommandItem>
               ))}
@@ -568,9 +695,134 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
                   value={`catalog-${item.id}-${item.title}`}
                   onSelect={() => {
                     navigate(item.url);
+                    trackRecentSearch(searchQuery);
                     setSearchOpen(false);
                   }}
                 >
+                  <ShoppingBag className="mr-2 h-4 w-4 text-muted-foreground" />
+                  {item.title}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {(searchResults?.results?.files?.items?.length ?? 0) > 0 && (
+            <CommandGroup heading="Files">
+              {searchResults!.results.files.items.map((item) => (
+                <CommandItem
+                  key={`file-${item.id}`}
+                  value={`file-${item.id}-${item.title}`}
+                  onSelect={() => {
+                    navigate(item.url);
+                    trackRecentSearch(searchQuery);
+                    setSearchOpen(false);
+                  }}
+                >
+                  <FolderOpen className="mr-2 h-4 w-4 text-muted-foreground" />
+                  {item.title}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {(searchResults?.results?.messages?.items?.length ?? 0) > 0 && (
+            <CommandGroup heading="Messages">
+              {searchResults!.results.messages!.items.map((item) => (
+                <CommandItem
+                  key={`message-${item.id}`}
+                  value={`message-${item.id}-${item.snippet}`}
+                  onSelect={() => {
+                    navigate(item.url);
+                    trackRecentSearch(searchQuery);
+                    setSearchOpen(false);
+                  }}
+                >
+                  <MessageSquare className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-sm truncate">{item.title}</span>
+                    <span className="text-xs text-muted-foreground truncate">{item.snippet}</span>
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {(searchResults?.results?.tickets?.items?.length ?? 0) > 0 && (
+            <CommandGroup heading="Tickets">
+              {searchResults!.results.tickets!.items.map((item) => (
+                <CommandItem
+                  key={`ticket-${item.id}`}
+                  value={`ticket-${item.id}-${item.title}`}
+                  onSelect={() => {
+                    navigate(item.url);
+                    trackRecentSearch(searchQuery);
+                    setSearchOpen(false);
+                  }}
+                >
+                  <Ticket className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span className="text-sm truncate">{item.title}</span>
+                    <span className="text-xs text-muted-foreground truncate">{item.snippet}</span>
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {(searchResults?.results?.contacts?.items?.length ?? 0) > 0 && (
+            <CommandGroup heading="Contacts">
+              {searchResults!.results.contacts!.items.map((item) => (
+                <CommandItem
+                  key={`contact-${item.id}`}
+                  value={`contact-${item.id}-${item.title}`}
+                  onSelect={() => {
+                    navigate(item.url);
+                    trackRecentSearch(searchQuery);
+                    setSearchOpen(false);
+                  }}
+                >
+                  <Users className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-sm truncate">{item.title}</span>
+                    <span className="text-xs text-muted-foreground truncate">{item.snippet}</span>
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {(searchResults?.results?.videos?.items?.length ?? 0) > 0 && (
+            <CommandGroup heading="Videos">
+              {searchResults!.results.videos!.items.map((item) => (
+                <CommandItem
+                  key={`video-${item.id}`}
+                  value={`video-${item.id}-${item.title}`}
+                  onSelect={() => {
+                    navigate(item.url);
+                    trackRecentSearch(searchQuery);
+                    setSearchOpen(false);
+                  }}
+                >
+                  <Play className="mr-2 h-4 w-4 text-muted-foreground" />
+                  {item.title}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {(searchResults?.results?.calendar?.items?.length ?? 0) > 0 && (
+            <CommandGroup heading="Calendar">
+              {searchResults!.results.calendar!.items.map((item) => (
+                <CommandItem
+                  key={`calendar-${item.id}`}
+                  value={`calendar-${item.id}-${item.title}`}
+                  onSelect={() => {
+                    navigate(item.url);
+                    trackRecentSearch(searchQuery);
+                    setSearchOpen(false);
+                  }}
+                >
+                  <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
                   {item.title}
                 </CommandItem>
               ))}
@@ -600,7 +852,28 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
         open={shortcutHelpOpen}
         onOpenChange={setShortcutHelpOpen}
         shortcuts={shortcuts}
+        chords={navigationChords}
       />
+
+      {/* Chord indicator — shows pending first key */}
+      {pendingKey && (
+        <div
+          data-testid="chord-indicator"
+          className="fixed bottom-4 right-4 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150"
+        >
+          <div className="rounded-lg border border-border bg-card p-3 shadow-lg">
+            <div className="flex items-center gap-2">
+              <kbd className="rounded bg-primary/10 px-2 py-0.5 font-mono text-sm font-bold text-primary">
+                {pendingKey.toUpperCase()}
+              </kbd>
+              <span className="text-sm text-muted-foreground">+ ...</span>
+            </div>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Press a key within 1s
+            </p>
+          </div>
+        </div>
+      )}
     </>
   );
 

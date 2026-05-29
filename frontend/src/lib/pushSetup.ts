@@ -69,6 +69,46 @@ export async function subscribeToPush(
 }
 
 /**
+ * Listen for service worker update events.
+ * When a new SW version activates, it sends a "sw-updated" message.
+ * This function dispatches a custom event so the UpdateBanner can react.
+ *
+ * Also listens for the standard `updatefound` event on the registration
+ * to provide early notification that an update is downloading.
+ */
+export function listenForSwUpdate(registration: ServiceWorkerRegistration): void {
+  // Listen for the SW's postMessage
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "sw-updated") {
+        window.dispatchEvent(
+          new CustomEvent("sw-updated", {
+            detail: { version: event.data.version },
+          }),
+        );
+      }
+    });
+  }
+
+  // Also listen for the standard updatefound event
+  registration.addEventListener("updatefound", () => {
+    const newWorker = registration.installing;
+    if (!newWorker) return;
+
+    newWorker.addEventListener("statechange", () => {
+      if (
+        newWorker.state === "activated" &&
+        navigator.serviceWorker.controller
+      ) {
+        // New SW has taken over -- the postMessage above will also fire,
+        // but this provides a backup notification path.
+        window.dispatchEvent(new CustomEvent("sw-updated"));
+      }
+    });
+  });
+}
+
+/**
  * Unsubscribe from push notifications (called on device revoke).
  */
 export async function unsubscribeFromPush(): Promise<boolean> {

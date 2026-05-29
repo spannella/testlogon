@@ -139,6 +139,7 @@ class VideoUpdateIn(BaseModel):
     description: Optional[str] = Field(default=None, max_length=2000)
     visibility: Optional[VideoVisibility] = None
     allow_download: Optional[bool] = None
+    scheduled_publish_at: Optional[int] = Field(default=None, description="Unix timestamp for scheduled VOD release")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -731,6 +732,23 @@ def update_video_endpoint(
     )
 
     updated = update_video(video_id, update_data)
+
+    # Handle scheduled_publish_at update (content calendar integration)
+    if body.scheduled_publish_at is not None:
+        from app.core.tables import T as _T
+        _T.video_metadata.update_item(
+            Key={"video_id": video_id},
+            UpdateExpression="SET scheduled_publish_at = :spa, updated_at = :now",
+            ExpressionAttributeValues={
+                ":spa": body.scheduled_publish_at,
+                ":now": now_ts(),
+            },
+        )
+        updated_data = updated.model_dump()
+        updated_data["scheduled_publish_at"] = body.scheduled_publish_at
+        updated_data["updated_at"] = now_ts()
+        from app.models_video import VideoMetadataModel as VMM2
+        updated = VMM2(**updated_data)
 
     # VOD-012: Trigger MP4 generation when allow_download is toggled on
     if body.allow_download is True and updated.download_mp4_status != "ready":

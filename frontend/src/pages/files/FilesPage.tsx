@@ -899,6 +899,21 @@ export default function FilesPage() {
     }
   };
 
+  const handleDragMoveFile = async (sourcePath: string, targetFolderPath: string) => {
+    const fileName = sourcePath.split("/").pop() || "";
+    const newPath = targetFolderPath.endsWith("/")
+      ? targetFolderPath + fileName
+      : targetFolderPath + "/" + fileName;
+
+    try {
+      await moveFile(sourcePath, newPath);
+      toast.success(`Moved "${fileName}" to ${targetFolderPath}`);
+      queryClient.invalidateQueries({ queryKey: ["files"] });
+    } catch {
+      toast.error(`Failed to move "${fileName}"`);
+    }
+  };
+
   const usageSummary = usageSummaryQuery.data;
   const usageWarnings = [
     usageSummary ? { label: "Upload", percent: usageSummary.upload.percent_used } : null,
@@ -1191,6 +1206,7 @@ export default function FilesPage() {
                 onMove={handleMoveOpen}
                 onDelete={(f) => setDeleteTarget(f)}
                 pathProvider={providerForPath}
+                onMoveFile={handleDragMoveFile}
                 emptyState={
                   <EmptyState
                     icon={<FolderOpen className="h-6 w-6" />}

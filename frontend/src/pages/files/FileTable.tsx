@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { File, Folder, MoreHorizontal, Download, Share2, Pencil, Move, Trash2, Eye, Image, Cloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -88,6 +88,7 @@ interface FileTableProps {
   loadingMore?: boolean;
   emptyState?: React.ReactNode;
   pathProvider?: (path: string) => string | null;
+  onMoveFile?: (sourcePath: string, targetFolderPath: string) => void;
 }
 
 // ─── FileTable Component ────────────────────────────────────────
@@ -111,7 +112,39 @@ export function FileTable({
   loadingMore,
   emptyState,
   pathProvider,
+  onMoveFile,
 }: FileTableProps) {
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
+
+  const handleRowDragStart = useCallback((e: React.DragEvent, row: FileEntry) => {
+    if (row.type === "folder") {
+      e.preventDefault();
+      return;
+    }
+    e.dataTransfer.setData("application/x-file-path", row.path);
+    e.dataTransfer.effectAllowed = "move";
+  }, []);
+
+  const handleRowDragOver = useCallback((e: React.DragEvent, row: FileEntry) => {
+    if (row.type !== "folder") return;
+    if (!e.dataTransfer.types.includes("application/x-file-path")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverPath(row.path);
+  }, []);
+
+  const handleRowDragLeave = useCallback(() => {
+    setDragOverPath(null);
+  }, []);
+
+  const handleRowDrop = useCallback((e: React.DragEvent, row: FileEntry) => {
+    e.preventDefault();
+    setDragOverPath(null);
+    if (row.type !== "folder") return;
+    const sourcePath = e.dataTransfer.getData("application/x-file-path");
+    if (!sourcePath || sourcePath === row.path) return;
+    onMoveFile?.(sourcePath, row.path);
+  }, [onMoveFile]);
   const columns: ColumnDef<FileEntry>[] = [
     {
       id: "name",
@@ -241,6 +274,30 @@ export function FileTable({
     },
   ];
 
+  const getRowProps = useCallback((row: FileEntry): React.HTMLAttributes<HTMLTableRowElement> => {
+    if (!onMoveFile) return {};
+    const props: React.HTMLAttributes<HTMLTableRowElement> & { draggable?: boolean } = {};
+
+    // Files are draggable, folders are not
+    if (row.type !== "folder") {
+      props.draggable = true;
+      props.onDragStart = (e: React.DragEvent<HTMLTableRowElement>) => handleRowDragStart(e, row);
+      props.className = "cursor-grab active:cursor-grabbing";
+    }
+
+    // Folders are drop targets
+    if (row.type === "folder") {
+      props.onDragOver = (e: React.DragEvent<HTMLTableRowElement>) => handleRowDragOver(e, row);
+      props.onDragLeave = handleRowDragLeave;
+      props.onDrop = (e: React.DragEvent<HTMLTableRowElement>) => handleRowDrop(e, row);
+      if (dragOverPath === row.path) {
+        props.className = "bg-primary/10 ring-2 ring-primary";
+      }
+    }
+
+    return props;
+  }, [onMoveFile, dragOverPath, handleRowDragStart, handleRowDragOver, handleRowDragLeave, handleRowDrop]);
+
   return (
     <DataTable
       columns={columns}
@@ -264,6 +321,7 @@ export function FileTable({
       onLoadMore={onLoadMore}
       loadingMore={loadingMore}
       emptyState={emptyState}
+      rowProps={onMoveFile ? getRowProps : undefined}
     />
   );
 }

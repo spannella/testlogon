@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText, Flag, Bookmark, BookmarkCheck, Hash } from "lucide-react";
+import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText, Flag, Bookmark, BookmarkCheck, Hash, Clock, AlertCircle, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +38,8 @@ import { ResponsiveImage } from "@/components/shared/ResponsiveImage";
 import { BroadcastPostCard } from "@/components/newsfeed/BroadcastPostCard";
 import type { FileEntry } from "@/api/types";
 import { isTipLotteryEnabled } from "@/config/featureFlags";
+import { PollCard } from "./PollCard";
+import { useOfflineStore } from "@/stores/offlineStore";
 
 function formatBytes(bytes?: number): string {
   if (bytes == null) return "";
@@ -377,8 +379,13 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [lightboxIdx, imageUrls.length]);
 
+  const isOfflinePost = !!post.__offline;
+
   return (
-    <Card>
+    <Card className={cn(
+      isOfflinePost && "opacity-70",
+      post.__offline?.status === "failed" && "ring-1 ring-destructive/30 opacity-90",
+    )}>
       <CardContent className="p-4">
         {/* Author header */}
         <div className="flex items-center gap-3">
@@ -519,6 +526,17 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
           </div>
         )}
 
+        {/* ENGAGE-002: Poll/Survey card */}
+        {post.poll_data && !isLocked && (post.post_type === "poll" || post.post_type === "survey") && (
+          <PollCard
+            postId={post.post_id}
+            pollData={post.poll_data}
+            voteCounts={post.poll_vote_counts ?? {}}
+            myVotes={post.poll_my_votes}
+            authorId={post.author_id}
+          />
+        )}
+
         {/* Video embed */}
         {post.video && !isLocked && (
           <VideoPostPlayer postId={post.post_id} video={post.video} className="mt-3" />
@@ -574,7 +592,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
                 : "text-muted-foreground hover:text-red-500",
             )}
             onClick={() => likeMutation.mutate()}
-            disabled={likeMutation.isPending}
+            disabled={isOfflinePost || likeMutation.isPending}
           >
             <Heart
               className={cn(
@@ -587,6 +605,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
           <button
             className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => setShowComments((o) => !o)}
+            disabled={isOfflinePost}
           >
             <MessageCircle className="h-4 w-4" />
             <span>{post.comment_count}</span>
@@ -665,11 +684,59 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         </div>
 
         {/* Comments thread */}
-        {showComments && (
+        {showComments && !isOfflinePost && (
           <>
             <Separator className="my-3" />
             <CommentsThread postId={post.post_id} />
           </>
+        )}
+
+        {/* PWA-005: Offline status indicator */}
+        {post.__offline && (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground border-t pt-2 mt-2">
+            {post.__offline.status === "pending" && (
+              <>
+                <Clock className="h-3 w-3 animate-pulse" />
+                <span>Waiting to publish...</span>
+              </>
+            )}
+            {post.__offline.status === "sending" && (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span>Publishing...</span>
+              </>
+            )}
+            {post.__offline.status === "failed" && (
+              <>
+                <AlertCircle className="h-3 w-3 text-destructive" />
+                <span className="text-destructive">{post.__offline.error ?? "Failed to publish"}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-5 px-1.5 text-xs"
+                  onClick={() => {
+                    useOfflineStore.getState().retryAction(post.__offline!.queueId);
+                    toast.info("Post re-queued");
+                  }}
+                >
+                  <RotateCcw className="h-3 w-3 mr-0.5" />
+                  Retry
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-5 px-1.5 text-xs text-muted-foreground hover:text-destructive"
+                  onClick={() => {
+                    useOfflineStore.getState().removeFromQueue(post.__offline!.queueId);
+                    toast.info("Queued post discarded");
+                  }}
+                >
+                  <Trash2 className="h-3 w-3 mr-0.5" />
+                  Discard
+                </Button>
+              </>
+            )}
+          </div>
         )}
       </CardContent>
 

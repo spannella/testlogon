@@ -1,0 +1,102 @@
+/*
+ * Density & high-contrast CSS overrides (PLATFORM-013)
+ *
+ * Applied via class toggles on <html>:
+ *   .density-compact   — tighter spacing
+ *   .density-comfortable — default (no overrides needed)
+ *   .density-spacious  — more generous spacing
+ *   .high-contrast     — stronger borders, opaque muted text, bold focus rings
+ *
+ * Accent color overrides:
+ *   When [data-accent] is set on <html>, it overrides Tailwind v4's
+ *   @theme-inline-compiled utility values for primary colors.
+ */
+
+:root {
+  --spacing-unit: 1rem;
+  --sidebar-item-py: 0.5rem;
+  --table-row-py: 0.75rem;
+  --card-padding: 1.5rem;
+  --input-height: 2.5rem;
+}
+
+/* ── Compact density ─────────────────────────────────────────────── */
+.density-compact {
+  --spacing-unit: 0.75rem;
+  --sidebar-item-py: 0.25rem;
+  --table-row-py: 0.375rem;
+  --card-padding: 1rem;
+  --input-height: 2rem;
+}
+
+/* ── Spacious density ────────────────────────────────────────────── */
+.density-spacious {
+  --spacing-unit: 1.25rem;
+  --sidebar-item-py: 0.75rem;
+  --table-row-py: 1rem;
+  --card-padding: 2rem;
+  --input-height: 3rem;
+}
+
+/* ── Accent color runtime overrides ──────────────────────────────── */
+/*
+ * Tailwind v4 @theme inline compiles utilities to static values.
+ * To support runtime accent color changes, we override the key
+ * utility classes when [data-accent] is present on <html>.
+ * The ThemeProvider sets --accent-primary and --accent-primary-fg
+ * as custom properties, and these rules force their usage.
+ */
+[data-accent] .bg-primary {
+  background-color: var(--accent-primary) !important;
+}
+
+[data-accent] .text-primary {
+  color: var(--accent-primary) !important;
+}
+
+[data-accent] .text-primary-foreground {
+  color: var(--accent-primary-fg) !important;
+}
+
+[data-accent] .bg-primary-foreground {
+  background-color: var(--accent-primary-fg) !important;
+}
+
+[data-accent] .border-primary {
+  border-color: var(--accent-primary) !important;
+}
+
+[data-accent] .ring-ring {
+  --tw-ring-color: var(--accent-primary) !important;
+}
+
+[data-accent] .border-primary\/50 {
+  border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent) !important;
+}
+
+/* shadcn Switch checked state */
+[data-accent] [data-state="checked"].bg-primary,
+[data-accent] [data-state="checked"][class*="bg-primary"] {
+  background-color: var(--accent-primary) !important;
+}
+
+/* Focus ring override */
+[data-accent] .focus-visible\:ring-ring:focus-visible {
+  --tw-ring-color: var(--accent-primary) !important;
+}
+
+/* ── High contrast overrides ─────────────────────────────────────── */
+.high-contrast .text-muted-foreground {
+  opacity: 1 !important;
+  color: var(--color-foreground) !important;
+}
+
+/* Target elements that have any border class (from Tailwind border utilities) */
+.high-contrast [class*="border"] {
+  border-width: 2px !important;
+}
+
+.high-contrast *:focus-visible {
+  outline: 3px solid var(--accent-primary, var(--color-primary, hsl(221 83% 53%))) !important;
+  outline-offset: 2px !important;
+}

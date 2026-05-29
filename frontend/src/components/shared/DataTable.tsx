@@ -61,6 +61,8 @@ export interface DataTableProps<T> {
   emptyState?: React.ReactNode;
   /** Additional className for the wrapper */
   className?: string;
+  /** Optional callback to get additional props for each table row (drag-and-drop, etc.) */
+  rowProps?: (row: T) => React.HTMLAttributes<HTMLTableRowElement>;
 }
 
 // ─── DataTable Component ────────────────────────────────────────
@@ -80,6 +82,7 @@ export function DataTable<T>({
   loadingMore,
   emptyState,
   className,
+  rowProps,
 }: DataTableProps<T>) {
   const allKeys = React.useMemo(() => data.map(rowKey), [data, rowKey]);
   const allSelected = selectedKeys != null && allKeys.length > 0 && allKeys.every((k) => selectedKeys.has(k));
@@ -167,12 +170,14 @@ export function DataTable<T>({
             data.map((row) => {
               const key = rowKey(row);
               const selected = selectedKeys?.has(key) ?? false;
+              const extraProps = rowProps?.(row) ?? {};
               return (
                 <TableRow
                   key={key}
                   data-state={selected ? "selected" : undefined}
-                  className={cn(onRowClick && "cursor-pointer")}
+                  className={cn(onRowClick && "cursor-pointer", extraProps.className)}
                   onClick={() => onRowClick?.(row)}
+                  {...extraProps}
                 >
                   {selectable && (
                     <TableCell>

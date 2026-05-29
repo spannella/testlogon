@@ -60,6 +60,8 @@ export interface BroadcastSession {
   tip_enabled?: boolean;
   tip_min_cents?: number;
   tip_max_cents?: number;
+  // Viewer Clip Creation (ENGAGE-005)
+  clips_enabled?: boolean;
 }
 
 export interface BroadcastTipGoal {

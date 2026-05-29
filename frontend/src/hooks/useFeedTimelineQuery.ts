@@ -46,8 +46,10 @@ export function useFeedTimelineQuery(params: FeedScopeParams = {}) {
     queryKey: feedQueryKeys.timeline(params),
     queryFn: async ({ pageParam }) => {
       const cursor = pageParam as string | undefined;
+      const requestParams = buildFeedRequestParams(params, cursor);
+
       try {
-        return await getFeed(buildFeedRequestParams(params, cursor));
+        return await getFeed(requestParams);
       } catch (error) {
         if (cursor && params.cursor === cursor && isInvalidCursorError(error)) {
           return getFeed(buildFeedRequestParams(params, undefined));

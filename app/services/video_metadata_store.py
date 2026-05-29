@@ -93,6 +93,8 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
         # Clipping provenance (VOD-015)
         "clip_start_seconds",
         "clip_end_seconds",
+        # Scheduled Publishing (CREATOR-005)
+        "scheduled_publish_at",
         # Gallery (VOD-017)
         "view_count",
         "like_count",
@@ -235,6 +237,8 @@ def video_from_item(item: Dict[str, Any]) -> VideoMetadataModel:
         visibility=item.get("visibility") or "private",
         published_at=_int_or_none(item.get("published_at")),
         deleted_at=_int_or_none(item.get("deleted_at")),
+        # Scheduled Publishing (CREATOR-005)
+        scheduled_publish_at=_int_or_none(item.get("scheduled_publish_at")),
         # Download (VOD-012)
         allow_download=bool(item.get("allow_download", False)),
         download_mp4_key=item.get("download_mp4_key") or "",

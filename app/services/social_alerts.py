@@ -173,6 +173,7 @@ def emit_social_alert(
     batch_key: Optional[str] = None,
     title: str,
     details: Dict[str, Any],
+    action_url: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Emit a social notification with optional batching.
 
@@ -202,6 +203,7 @@ def emit_social_alert(
             actor_user_id=actor_user_id,
             actor_display_name=actor_display_name,
             details=details,
+            action_url=action_url,
         )
     else:
         # 4. Non-batched: write individual alert via existing write_alert
@@ -211,6 +213,7 @@ def emit_social_alert(
             outcome="success",
             title=title,
             details=details,
+            action_url=action_url,
         )
 
     if not alert_obj:
@@ -312,6 +315,7 @@ def _batch_alert(
     actor_user_id: str,
     actor_display_name: str,
     details: Dict[str, Any],
+    action_url: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Add actor to existing batch or create new batch.
 
@@ -335,33 +339,60 @@ def _batch_alert(
         "timestamp": now_str,
     }
 
+    # Compute category and source entity for activity feed grouping
+    from app.services.alerts import get_alert_category, _determine_source, _validate_action_url
+    category = get_alert_category(alert_type)
+    source_type, source_id = _determine_source(alert_type, details)
+    action_url = _validate_action_url(action_url)
+    if not action_url:
+        from app.services.alerts import _build_action_url
+        action_url = _validate_action_url(_build_action_url(alert_type, details))
+
+    update_expr = (
+        "SET actors = list_append(if_not_exists(actors, :empty_list), :new_actor), "
+        "actor_count = if_not_exists(actor_count, :zero) + :one, "
+        "updated_at = :now, "
+        "#read = :false, "
+        "alert_type = :alert_type, "
+        "batch_key = :batch_key, "
+        "details = :details, "
+        "created_at = if_not_exists(created_at, :now), "
+        "category = :category, "
+        "ts = :ts_int, "
+        "#evt = :alert_type, "
+        "ttl = :ttl"
+    )
+    expr_names: Dict[str, str] = {"#read": "read", "#evt": "event"}
+    expr_values: Dict[str, Any] = {
+        ":new_actor": [actor_entry],
+        ":empty_list": [],
+        ":zero": 0,
+        ":one": 1,
+        ":now": now_str,
+        ":false": False,
+        ":alert_type": alert_type,
+        ":batch_key": batch_key,
+        ":details": details,
+        ":category": category,
+        ":ts_int": now,
+        ":ttl": now + _BATCH_TTL_SECONDS,
+    }
+    if action_url:
+        update_expr += ", action_url = :action_url"
+        expr_values[":action_url"] = action_url
+    if source_type:
+        update_expr += ", source_type = :source_type"
+        expr_values[":source_type"] = source_type
+    if source_id:
+        update_expr += ", source_id = :source_id"
+        expr_values[":source_id"] = source_id
+
     try:
         resp = T.alerts.update_item(
             Key={"user_sub": recipient_user_id, "alert_id": batch_id},
-            UpdateExpression=(
-                "SET actors = list_append(if_not_exists(actors, :empty_list), :new_actor), "
-                "actor_count = if_not_exists(actor_count, :zero) + :one, "
-                "updated_at = :now, "
-                "#read = :false, "
-                "alert_type = :alert_type, "
-                "batch_key = :batch_key, "
-                "details = :details, "
-                "created_at = if_not_exists(created_at, :now), "
-                "ttl = :ttl"
-            ),
-            ExpressionAttributeNames={"#read": "read"},
-            ExpressionAttributeValues={
-                ":new_actor": [actor_entry],
-                ":empty_list": [],
-                ":zero": 0,
-                ":one": 1,
-                ":now": now_str,
-                ":false": False,
-                ":alert_type": alert_type,
-                ":batch_key": batch_key,
-                ":details": details,
-                ":ttl": now + _BATCH_TTL_SECONDS,
-            },
+            UpdateExpression=update_expr,
+            ExpressionAttributeNames=expr_names,
+            ExpressionAttributeValues=expr_values,
             ReturnValues="ALL_NEW",
         )
         item = resp.get("Attributes", {})

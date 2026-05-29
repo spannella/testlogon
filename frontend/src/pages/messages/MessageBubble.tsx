@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag, Dices, Mic } from "lucide-react";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag, Dices, Mic, Clock, AlertCircle, RotateCcw } from "lucide-react";
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -70,6 +70,11 @@ import { FilePreview } from "@/pages/files/FilePreview";
 import { downloadUrl, sharedPreviewUrl } from "@/api/endpoints/files";
 import type { FileEntry } from "@/api/types";
 import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
+import { useOfflineStore } from "@/stores/offlineStore";
+import {
+  updateOfflineMessageStatus,
+  removeOptimisticMessage,
+} from "@/lib/offlineMessageHelpers";
 
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
@@ -310,6 +315,81 @@ function MeetingPollCard({ pollStub, conversationId, isOwn }: MeetingPollCardPro
       )}
     </div>
   );
+}
+
+// ─── PWA-005: Offline Status Badge ───────────────────────────────
+
+interface OfflineStatusBadgeProps {
+  offline: NonNullable<Message["__offline"]>;
+  onRetry?: () => void;
+  onDiscard?: () => void;
+}
+
+function OfflineStatusBadge({ offline, onRetry, onDiscard }: OfflineStatusBadgeProps) {
+  if (offline.status === "pending") {
+    return (
+      <div
+        className="flex items-center gap-1 text-xs text-muted-foreground mt-1 animate-pulse"
+        role="status"
+        aria-label="Message queued, will send when online"
+      >
+        <Clock className="h-3 w-3" />
+        <span>Sending when online...</span>
+      </div>
+    );
+  }
+
+  if (offline.status === "sending") {
+    return (
+      <div
+        className="flex items-center gap-1 text-xs text-blue-500 mt-1"
+        role="status"
+        aria-label="Sending message"
+      >
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span>Sending...</span>
+      </div>
+    );
+  }
+
+  if (offline.status === "failed") {
+    return (
+      <div
+        className="flex items-center gap-1 text-xs text-destructive mt-1 flex-wrap"
+        role="alert"
+        aria-label={`Message failed to send: ${offline.error ?? "Unknown error"}`}
+      >
+        <AlertCircle className="h-3 w-3 shrink-0" />
+        <span>{offline.error ?? "Failed to send"}</span>
+        {onRetry && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5 px-1.5 text-xs text-destructive hover:text-destructive"
+            onClick={(e) => { e.stopPropagation(); onRetry(); }}
+            aria-label="Retry sending message"
+          >
+            <RotateCcw className="h-3 w-3 mr-0.5" />
+            Retry
+          </Button>
+        )}
+        {onDiscard && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5 px-1.5 text-xs text-muted-foreground hover:text-destructive"
+            onClick={(e) => { e.stopPropagation(); onDiscard(); }}
+            aria-label="Discard queued message"
+          >
+            <Trash2 className="h-3 w-3 mr-0.5" />
+            Discard
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  return null;
 }
 
 export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, onViewThread, replyToMessage, viewedOnceIds, onViewOnce }: MessageBubbleProps) {
@@ -693,13 +773,16 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
       <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
         <div
           className={cn(
-            "group relative max-w-[75%] rounded-2xl px-4 py-2",
+            "group relative max-w-[75%] rounded-2xl px-4 py-2 transition-opacity",
             isOwn
               ? "bg-primary text-primary-foreground"
               : "bg-muted text-foreground",
+            message.__offline?.status === "pending" && "opacity-70",
+            message.__offline?.status === "sending" && "opacity-85",
+            message.__offline?.status === "failed" && "opacity-90 ring-1 ring-destructive/30",
           )}
         >
-          <div className={cn(
+          {!message.__offline && (<div className={cn(
             "absolute -top-2 opacity-0 transition-opacity group-hover:opacity-100 flex items-center gap-0.5",
             isOwn ? "left-0 -translate-x-full pr-1" : "right-0 translate-x-full pl-1",
           )}>
@@ -819,6 +902,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+          )}
 
           {replyToMessage && (
             <div className={cn(
@@ -1666,6 +1750,27 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             <span>{time}</span>
             <DeliveryStatus message={message} isOwn={isOwn} />
           </div>
+
+          {/* PWA-005: Offline status badge */}
+          {message.__offline && (
+            <OfflineStatusBadge
+              offline={message.__offline}
+              onRetry={() => {
+                if (!message.__offline) return;
+                const { retryAction } = useOfflineStore.getState();
+                retryAction(message.__offline.queueId);
+                updateOfflineMessageStatus(queryClient, message.__offline.queueId, "pending");
+                toast.info("Message re-queued");
+              }}
+              onDiscard={() => {
+                if (!message.__offline) return;
+                const { removeFromQueue } = useOfflineStore.getState();
+                removeFromQueue(message.__offline.queueId);
+                removeOptimisticMessage(queryClient, conversationId, message.message_id);
+                toast.info("Queued message discarded");
+              }}
+            />
+          )}
         </div>
       </div>
 

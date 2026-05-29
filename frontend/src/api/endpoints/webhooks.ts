@@ -60,3 +60,34 @@ export const adminListDeadLetters = () =>
 
 export const adminDisableWebhookEndpoint = (endpointId: string, reason: string) =>
   api.post<{ ok: boolean }>(`/ui/admin/webhooks/endpoints/${endpointId}/disable`, { reason });
+
+// ─── v2 User endpoints (ENTERPRISE-005) ────────────────────────
+
+export const getWebhookStats = (endpointId: string, hours = 24) =>
+  api.get(`/ui/webhooks/${endpointId}/stats`, { hours: String(hours) });
+
+export const listEndpointDeadLetters = (endpointId: string, limit = 50) =>
+  api.get(`/ui/webhooks/${endpointId}/dead-letters`, { limit: String(limit) });
+
+export const replayDeadLetter = (endpointId: string, deliveryId: string) =>
+  api.post(`/ui/webhooks/${endpointId}/dead-letters/${deliveryId}/replay`, {});
+
+export const replayAllDeadLetters = (endpointId: string) =>
+  api.post(`/ui/webhooks/${endpointId}/dead-letters/replay-all`, {});
+
+export const acknowledgeDeadLetter = (endpointId: string, deliveryId: string) =>
+  api.post(`/ui/webhooks/${endpointId}/dead-letters/${deliveryId}/acknowledge`, {});
+
+export const purgeDeadLetters = (endpointId: string) =>
+  api.del(`/ui/webhooks/${endpointId}/dead-letters`);
+
+export const resetCircuitBreaker = (endpointId: string) =>
+  api.post(`/ui/webhooks/${endpointId}/reset-circuit`, {});
+
+// ─── v2 Admin endpoints (ENTERPRISE-005) ───────────────────────
+
+export const getGlobalWebhookStats = (hours = 24) =>
+  api.get(`/ui/admin/webhooks/stats`, { hours: String(hours) });
+
+export const adminEnableWebhookEndpoint = (endpointId: string) =>
+  api.post<{ ok: boolean }>(`/ui/admin/webhooks/endpoints/${endpointId}/enable`, {});

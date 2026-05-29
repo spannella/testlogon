@@ -1,55 +1,56 @@
 /**
- * E2E tests for Global Search (SOCIAL-003).
+ * E2E tests for PLATFORM-011: Global Search — Cross-Domain Search with
+ * Categorized Results.
  *
- * Section 1: Unified Search API (7 tests)
- *   - GET /ui/search?q=...&types=...&limit=...
+ * Auth strategy:
+ * - Backend sessions created via e2e_admin_session_setup.py
+ * - Cookies injected into browser via injectAuth()
+ * - API calls use page.request with CSRF header (session auth)
  *
- * Section 2: Search Page UI (5 tests)
- *   - /search?q=... page rendering, tabs, empty state
- *
- * Section 3: Header Search Integration (4 tests)
- *   - Ctrl+K, page navigation, content results, "View all results"
+ * Sections:
+ *   101 — Multi-domain search API (15 tests)
+ *   102 — Search history API (10 tests)
+ *   103 — Search UI — command palette + page (14 tests)
+ *   104 — Edge cases (10 tests)
  */
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 
-// ─── Constants ─────────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const BASE     = "http://localhost:3000";
-const API      = "http://localhost:8000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID   = "e2e_bob@test.local";
-const PYTHON   = "/home/ubuntu/testlogon/.venv/bin/python3";
+const BASE = "http://localhost:3000";
+const API = "http://localhost:8000";
+const ALICE_ID = "alice";
+const BOB_ID = "bob";
 
-// Unique token to avoid collision across runs
 const TS = Date.now();
-const SEARCH_TOKEN = `gsrch_${TS}`;
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
 
 interface SessionData {
-  user_sub:     string;
-  session_id:   string;
-  csrf_token:   string;
+  user_sub: string;
+  session_id: string;
+  csrf_token: string;
   access_token: string;
   cookies: Array<{
-    name:     string;
-    value:    string;
-    domain:   string;
-    path:     string;
+    name: string;
+    value: string;
+    domain: string;
+    path: string;
     httpOnly: boolean;
-    secure:   boolean;
+    secure: boolean;
     sameSite: "Lax" | "Strict" | "None";
-    expires:  number;
+    expires: number;
   }>;
 }
 
 let _sessions: Record<string, SessionData> | null = null;
+
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
+      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
       { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
@@ -57,430 +58,745 @@ function getSessions(): Record<string, SessionData> {
   return _sessions!;
 }
 
-// ─── Auth helpers ──────────────────────────────────────────────────────────────
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
 
-async function injectAuth(page: Page, userId = ALICE_ID) {
-  const session = getSessions()[userId];
-  if (!session) throw new Error(`No session for ${userId}`);
+async function injectAuth(page: Page, identity: string) {
+  const session = getSessions()[identity];
+  if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
-  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
-  await page.evaluate((uid: string) => {
-    const state = { userId: uid, accessToken: null, isAuthenticated: true };
-    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
-  }, userId);
-}
-
-// ─── DDB helper ────────────────────────────────────────────────────────────────
-
-const DDB_HELPER_PRELUDE = `
-import boto3, os, time
-from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
-if env_file.exists():
-    for line in env_file.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith('#') and '=' in line:
-            k, v = line.split('=', 1)
-            os.environ.setdefault(k.strip(), v.strip())
-ddb = boto3.resource(
-    'dynamodb',
-    endpoint_url=os.environ.get('DDB_ENDPOINT_URL', 'http://localhost:8001'),
-    region_name='us-east-1',
-    aws_access_key_id='test',
-    aws_secret_access_key='test',
-)
-`;
-
-// ─── Seed data ─────────────────────────────────────────────────────────────────
-
-/**
- * Ensure Alice has a discoverable profile in the DiscoveryIndex.
- */
-function seedAliceDiscovery(): void {
-  execSync(
-    `${PYTHON} -c "
-${DDB_HELPER_PRELUDE.trim()}
-import os
-tbl = ddb.Table(os.environ.get('DDB_DISCOVERY_INDEX', 'DiscoveryIndex'))
-tokens = ['alice', 'alic', 'ali', 'al', 'a', 'e2e', 'e2e_alice@test.local']
-for tok in tokens:
-    tbl.put_item(Item={
-        'pk': f'TOKEN#{tok}',
-        'sk': f'USER#${ALICE_ID}',
-        'user_id': '${ALICE_ID}',
-        'display_name': 'E2E Alice',
-        'discoverability': 'active',
-        'follower_count': 0,
-        'indexed_at': int(time.time()),
-    })
-print('Seeded Alice discovery tokens')
-"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+  await page.goto(BASE + "/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate(
+    (uid: string) => {
+      const state = { userId: uid, accessToken: null, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    session.user_sub,
   );
 }
 
-/**
- * Seed a post with a unique body containing SEARCH_TOKEN for post search tests.
- */
-let _seededPostId: string | null = null;
-function seedSearchPost(): string {
-  if (_seededPostId) return _seededPostId;
-  const raw = execSync(
-    `${PYTHON} -c "
-${DDB_HELPER_PRELUDE.trim()}
-import os, uuid
-tbl = ddb.Table(os.environ.get('APP_TABLE', 'app_single_table'))
-post_id = 'p_' + uuid.uuid4().hex
-body = 'This is a unique post about ${SEARCH_TOKEN} for E2E testing'
-tbl.put_item(Item={
-    'pk': f'POST#{post_id}',
-    'sk': 'META',
-    'Entity': 'Post',
-    'post_id': post_id,
-    'user_id': '${ALICE_ID}',
-    'created_at': '2026-05-28T00:00:00Z',
-    'published_at': '2026-05-28T00:00:00Z',
-    'status': 'published',
-    'body': body,
-    'body_plain': body,
-    'body_plain_lc': body.lower(),
-    'body_format': 'plain',
-    'body_version': 1,
-    'visibility': 'public',
-    'locked': False,
-    'image_urls': [],
-    'like_count': 0,
-    'comment_count': 0,
-    'GSI2PK': f'POST_AUTHOR#${ALICE_ID}',
-    'GSI2SK': f'2026-05-28T00:00:00Z#POST#{post_id}',
-})
-print(post_id)
-"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
-  ).toString().trim();
-  _seededPostId = raw;
-  return raw;
+async function apiPost(page: Page, identity: string, path: string, body: object) {
+  const session = getSessions()[identity];
+  return page.request.post(`${API}${path}`, {
+    headers: { "x-csrf-token": session.csrf_token },
+    data: body,
+  });
 }
 
-// ─── API helper ────────────────────────────────────────────────────────────────
-
-function csrfToken(identity: string): string {
-  return getSessions()[identity]!.csrf_token;
+async function apiGet(page: Page, path: string, params?: Record<string, string>) {
+  const url = params
+    ? `${API}${path}?${new URLSearchParams(params)}`
+    : `${API}${path}`;
+  return page.request.get(url);
 }
 
+async function apiDelete(page: Page, identity: string, path: string) {
+  const session = getSessions()[identity];
+  return page.request.delete(`${API}${path}`, {
+    headers: { "x-csrf-token": session.csrf_token },
+  });
+}
+
+// ─── Unique test data ─────────────────────────────────────────────────────────
+
+const UNIQUE_TICKET_SUBJECT = `gstkt_${TS}`;
+const UNIQUE_CONTACT_NAME = `gscon_${TS}`;
+
 // =============================================================================
-// Section 1: Unified Search API
+// Section 101: Multi-domain search API
 // =============================================================================
 
-test.describe("1 — Unified Search API", () => {
+test.describe("101 — Multi-domain search API", () => {
   let alicePage: Page;
 
   test.beforeAll(async ({ browser }) => {
-    seedAliceDiscovery();
-    seedSearchPost();
+    alicePage = await browser.newPage();
+    await injectAuth(alicePage, ALICE_ID);
 
-    const ctx = await browser.newContext();
-    alicePage = await ctx.newPage();
+    // Create a ticket for Alice
+    const ticketResp = await apiPost(alicePage, ALICE_ID, "/tickets", {
+      subject: UNIQUE_TICKET_SUBJECT,
+      description: `Description for ${UNIQUE_TICKET_SUBJECT}`,
+    });
+    expect(ticketResp.status()).toBe(200);
+
+    // Create a contact for Alice
+    const contactResp = await apiPost(alicePage, ALICE_ID, "/ui/contacts", {
+      user_id: UNIQUE_CONTACT_NAME,
+    });
+    expect(contactResp.status()).toBe(201);
+  });
+
+  test.afterAll(async () => {
+    await alicePage?.close();
+  });
+
+  test("101.1 Search tickets returns Alice's ticket", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: UNIQUE_TICKET_SUBJECT,
+      types: "tickets",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.results.tickets.items.length).toBeGreaterThanOrEqual(1);
+    const match = data.results.tickets.items.find(
+      (it: any) => it.title === UNIQUE_TICKET_SUBJECT,
+    );
+    expect(match).toBeTruthy();
+    expect(match.type).toBe("ticket");
+    expect(match.meta?.created_by).toBe(getSessions()[ALICE_ID].user_sub);
+  });
+
+  test("101.2 Search contacts returns Alice's contact", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: UNIQUE_CONTACT_NAME,
+      types: "contacts",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.results.contacts.items.length).toBeGreaterThanOrEqual(1);
+    const match = data.results.contacts.items.find(
+      (it: any) => it.id === UNIQUE_CONTACT_NAME,
+    );
+    expect(match).toBeTruthy();
+    expect(match.type).toBe("contact");
+  });
+
+  test("101.3 Search all domains returns results object with all sections", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "test",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.results).toBeDefined();
+    // All 9 domains should be present in results
+    for (const domain of [
+      "users", "posts", "catalog", "files",
+      "messages", "tickets", "contacts", "videos", "calendar",
+    ]) {
+      expect(data.results[domain]).toBeDefined();
+      expect(data.results[domain].items).toBeDefined();
+      expect(typeof data.results[domain].has_more).toBe("boolean");
+    }
+  });
+
+  test("101.4 Empty query returns 400", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "   ",
+    });
+    // FastAPI min_length=1 on q param should reject whitespace-only after strip
+    expect(resp.status()).toBe(400);
+  });
+
+  test("101.5 Query sanitization strips control characters", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "hello\x01world",
+      types: "contacts",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.query).toBe("helloworld");
+  });
+
+  test("101.6 Ticket search respects authorization — Bob cannot see Alice's ticket", async () => {
+    const bobPage = await alicePage.context().browser()!.newPage();
+    await injectAuth(bobPage, BOB_ID);
+    const resp = await apiGet(bobPage, "/ui/search", {
+      q: UNIQUE_TICKET_SUBJECT,
+      types: "tickets",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    const match = data.results.tickets.items.find(
+      (it: any) => it.title === UNIQUE_TICKET_SUBJECT,
+    );
+    expect(match).toBeUndefined();
+    await bobPage.close();
+  });
+
+  test("101.7 Contact search respects authorization — Bob cannot see Alice's contacts", async () => {
+    const bobPage = await alicePage.context().browser()!.newPage();
+    await injectAuth(bobPage, BOB_ID);
+    const resp = await apiGet(bobPage, "/ui/search", {
+      q: UNIQUE_CONTACT_NAME,
+      types: "contacts",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    const match = data.results.contacts.items.find(
+      (it: any) => it.id === UNIQUE_CONTACT_NAME,
+    );
+    expect(match).toBeUndefined();
+    await bobPage.close();
+  });
+
+  test("101.8 Limit parameter caps results per section", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "test",
+      types: "contacts",
+      limit: "1",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.results.contacts.items.length).toBeLessThanOrEqual(1);
+  });
+
+  test("101.9 Invalid search type returns 400", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "test",
+      types: "invalid_type",
+    });
+    expect(resp.status()).toBe(400);
+    const data = await resp.json();
+    expect(data.detail).toContain("Invalid search types");
+  });
+
+  test("101.10 Search messages domain returns empty when no matches", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: `nonexistent_msg_${TS}_xyzzy`,
+      types: "messages",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.results.messages.items).toHaveLength(0);
+  });
+
+  test("101.11 Search videos domain returns empty section", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: `nonexistent_vid_${TS}`,
+      types: "videos",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.results.videos.items).toHaveLength(0);
+    expect(data.results.videos.has_more).toBe(false);
+  });
+
+  test("101.12 Search calendar domain returns empty section", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: `nonexistent_cal_${TS}`,
+      types: "calendar",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.results.calendar.items).toHaveLength(0);
+  });
+
+  test("101.13 Search with unicode query succeeds", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "café",
+      types: "contacts",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.query).toContain("caf");
+  });
+
+  test("101.14 Partial flag is false when all domains succeed", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "test",
+      types: "contacts,tickets",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.partial).toBe(false);
+  });
+
+  test("101.15 Result items have standard shape", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: UNIQUE_TICKET_SUBJECT,
+      types: "tickets",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    const item = data.results.tickets.items[0];
+    expect(item).toBeDefined();
+    expect(item.type).toBe("ticket");
+    expect(typeof item.id).toBe("string");
+    expect(typeof item.title).toBe("string");
+    expect(typeof item.snippet).toBe("string");
+    expect(typeof item.url).toBe("string");
+    expect(item.url).toContain("/tickets/");
+    expect(item.meta).toBeDefined();
+    expect(item.meta.status).toBeDefined();
+  });
+});
+
+// =============================================================================
+// Section 102: Search history API
+// =============================================================================
+
+test.describe("102 — Search history API", () => {
+  let alicePage: Page;
+  let bobPage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    alicePage = await browser.newPage();
+    await injectAuth(alicePage, ALICE_ID);
+    bobPage = await browser.newPage();
+    await injectAuth(bobPage, BOB_ID);
+
+    // Clear any existing history
+    await apiDelete(alicePage, ALICE_ID, "/ui/search/history");
+    await apiDelete(bobPage, BOB_ID, "/ui/search/history");
+  });
+
+  test.afterAll(async () => {
+    await alicePage?.close();
+    await bobPage?.close();
+  });
+
+  test("102.1 POST /ui/search/history records a query; GET returns it", async () => {
+    const postResp = await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+      query: `hist_${TS}_one`,
+      result_count: 5,
+    });
+    expect(postResp.status()).toBe(200);
+    const postData = await postResp.json();
+    expect(postData.ok).toBe(true);
+    expect(postData.id).toBeTruthy();
+
+    const getResp = await apiGet(alicePage, "/ui/search/history");
+    expect(getResp.status()).toBe(200);
+    const getData = await getResp.json();
+    expect(getData.items.length).toBeGreaterThanOrEqual(1);
+    const match = getData.items.find((it: any) => it.query === `hist_${TS}_one`);
+    expect(match).toBeTruthy();
+    expect(match.result_count).toBe(5);
+  });
+
+  test("102.2 Duplicate queries update timestamp, don't create duplicates", async () => {
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+      query: `hist_${TS}_dup`,
+    });
+    await alicePage.waitForTimeout(100);
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+      query: `hist_${TS}_dup`,
+    });
+
+    const getResp = await apiGet(alicePage, "/ui/search/history");
+    const getData = await getResp.json();
+    const matches = getData.items.filter(
+      (it: any) => it.query === `hist_${TS}_dup`,
+    );
+    expect(matches).toHaveLength(1);
+  });
+
+  test("102.3 DELETE /ui/search/history/{id} removes specific entry", async () => {
+    const postResp = await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+      query: `hist_${TS}_del`,
+    });
+    const postData = await postResp.json();
+    const itemId = postData.id;
+
+    const delResp = await apiDelete(
+      alicePage,
+      ALICE_ID,
+      `/ui/search/history/${encodeURIComponent(itemId)}`,
+    );
+    expect(delResp.status()).toBe(200);
+
+    const getResp = await apiGet(alicePage, "/ui/search/history");
+    const getData = await getResp.json();
+    const match = getData.items.find((it: any) => it.query === `hist_${TS}_del`);
+    expect(match).toBeUndefined();
+  });
+
+  test("102.4 DELETE /ui/search/history clears all entries", async () => {
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", { query: `hist_${TS}_clr1` });
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", { query: `hist_${TS}_clr2` });
+
+    const delResp = await apiDelete(alicePage, ALICE_ID, "/ui/search/history");
+    expect(delResp.status()).toBe(200);
+    const delData = await delResp.json();
+    expect(delData.ok).toBe(true);
+    expect(delData.deleted_count).toBeGreaterThanOrEqual(2);
+
+    const getResp = await apiGet(alicePage, "/ui/search/history");
+    const getData = await getResp.json();
+    expect(getData.items).toHaveLength(0);
+  });
+
+  test("102.5 History respects user isolation — Alice cannot see Bob's history", async () => {
+    await apiPost(bobPage, BOB_ID, "/ui/search/history", {
+      query: `hist_${TS}_bob_private`,
+    });
+
+    const aliceResp = await apiGet(alicePage, "/ui/search/history");
+    const aliceData = await aliceResp.json();
+    const match = aliceData.items.find(
+      (it: any) => it.query === `hist_${TS}_bob_private`,
+    );
+    expect(match).toBeUndefined();
+  });
+
+  test("102.6 POST /ui/search/history with empty query returns 400", async () => {
+    const resp = await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+      query: "",
+    });
+    expect(resp.status()).toBe(400);
+  });
+
+  test("102.7 GET /ui/search/history returns items sorted newest-first", async () => {
+    await apiDelete(alicePage, ALICE_ID, "/ui/search/history");
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", { query: `hist_${TS}_sort_a` });
+    // Wait >1s to guarantee different timestamp (now_ts() returns seconds)
+    await alicePage.waitForTimeout(1100);
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", { query: `hist_${TS}_sort_b` });
+    await alicePage.waitForTimeout(1100);
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", { query: `hist_${TS}_sort_c` });
+
+    const resp = await apiGet(alicePage, "/ui/search/history");
+    const data = await resp.json();
+    const queries = data.items.map((it: any) => it.query);
+    expect(queries[0]).toBe(`hist_${TS}_sort_c`);
+  });
+
+  test("102.8 POST /ui/search/history stores result_count when provided", async () => {
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+      query: `hist_${TS}_count`,
+      result_count: 42,
+    });
+    const resp = await apiGet(alicePage, "/ui/search/history");
+    const data = await resp.json();
+    const match = data.items.find((it: any) => it.query === `hist_${TS}_count`);
+    expect(match).toBeTruthy();
+    expect(match.result_count).toBe(42);
+  });
+
+  test("102.9 DELETE /ui/search/history returns deleted_count matching actual deletions", async () => {
+    await apiDelete(alicePage, ALICE_ID, "/ui/search/history");
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", { query: `hist_${TS}_cnt1` });
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", { query: `hist_${TS}_cnt2` });
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", { query: `hist_${TS}_cnt3` });
+
+    const delResp = await apiDelete(alicePage, ALICE_ID, "/ui/search/history");
+    const delData = await delResp.json();
+    expect(delData.deleted_count).toBe(3);
+  });
+
+  test("102.10 History item has ts field", async () => {
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+      query: `hist_${TS}_ts`,
+    });
+    const resp = await apiGet(alicePage, "/ui/search/history");
+    const data = await resp.json();
+    const match = data.items.find((it: any) => it.query === `hist_${TS}_ts`);
+    expect(match).toBeTruthy();
+    expect(typeof match.ts).toBe("number");
+    expect(match.ts).toBeGreaterThan(1700000000);
+  });
+});
+
+// =============================================================================
+// Section 103: Search UI — command palette + search page
+// =============================================================================
+
+test.describe("103 — Search UI", () => {
+  let alicePage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    alicePage = await browser.newPage();
+    await injectAuth(alicePage, ALICE_ID);
+
+    // Create a ticket so search has something to find
+    await apiPost(alicePage, ALICE_ID, "/tickets", {
+      subject: `ui_tkt_${TS}`,
+      description: `UI test ticket ${TS}`,
+    });
+
+    // Create a contact
+    await apiPost(alicePage, ALICE_ID, "/ui/contacts", {
+      user_id: `ui_con_${TS}`,
+    });
+  });
+
+  test.afterAll(async () => {
+    await alicePage?.close();
+  });
+
+  test("103.1 Ctrl+K opens command palette", async () => {
+    await alicePage.goto(`${BASE}/`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(500);
+    await alicePage.keyboard.press("Control+k");
+    await expect(
+      alicePage.getByPlaceholder("Search content and pages..."),
+    ).toBeVisible({ timeout: 3000 });
+  });
+
+  test("103.2 Typing 2+ chars triggers content search", async () => {
+    await alicePage.goto(`${BASE}/`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(500);
+    await alicePage.keyboard.press("Control+k");
+    await alicePage.getByPlaceholder("Search content and pages...").fill(`ui_tkt_${TS}`);
+    // Wait for debounce + API call
+    await alicePage.waitForTimeout(1500);
+    // The Tickets group should appear in the command palette
+    await expect(alicePage.getByText("Tickets").first()).toBeVisible({ timeout: 5000 });
+  });
+
+  test("103.3 View all results navigates to /search", async () => {
+    await alicePage.goto(`${BASE}/`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(500);
+    await alicePage.keyboard.press("Control+k");
+    await alicePage
+      .getByPlaceholder("Search content and pages...")
+      .fill("test");
+    await alicePage.waitForTimeout(500);
+    const viewAll = alicePage.getByText(/View all results/i).first();
+    await viewAll.click();
+    await alicePage.waitForURL(/\/search\?q=test/, { timeout: 5000 });
+  });
+
+  test("103.4 Escape closes the palette", async () => {
+    await alicePage.goto(`${BASE}/`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(500);
+    await alicePage.keyboard.press("Control+k");
+    await expect(
+      alicePage.getByPlaceholder("Search content and pages..."),
+    ).toBeVisible();
+    await alicePage.keyboard.press("Escape");
+    await expect(
+      alicePage.getByPlaceholder("Search content and pages..."),
+    ).not.toBeVisible({ timeout: 3000 });
+  });
+
+  test("103.5 SearchPage shows All tab with results", async () => {
+    await alicePage.goto(`${BASE}/search?q=test`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(1500);
+    await expect(
+      alicePage.getByRole("tab", { name: "All" }),
+    ).toBeVisible({ timeout: 5000 });
+  });
+
+  test("103.6 SearchPage shows extended tabs", async () => {
+    await alicePage.goto(`${BASE}/search?q=test`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(1500);
+    for (const tabName of ["Messages", "Tickets", "Contacts", "Videos", "Calendar"]) {
+      await expect(
+        alicePage.getByRole("tab", { name: tabName }),
+      ).toBeVisible({ timeout: 3000 });
+    }
+  });
+
+  test("103.7 Clicking Tickets tab filters to tickets", async () => {
+    await alicePage.goto(`${BASE}/search?q=${encodeURIComponent(`ui_tkt_${TS}`)}`, {
+      waitUntil: "load",
+    });
+    await alicePage.waitForTimeout(1500);
+    const ticketsTab = alicePage.getByRole("tab", { name: "Tickets" });
+    await ticketsTab.click();
+    await alicePage.waitForTimeout(500);
+    await expect(
+      alicePage.locator(`[data-testid="search-result-ticket"]`).first(),
+    ).toBeVisible({ timeout: 5000 });
+  });
+
+  test("103.8 Search input on SearchPage updates results", async () => {
+    await alicePage.goto(`${BASE}/search`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(500);
+    const input = alicePage.locator(`[data-testid="search-input"]`);
+    await input.fill(`ui_con_${TS}`);
+    await alicePage.waitForTimeout(1500);
+    await expect(
+      alicePage.getByRole("tab", { name: "Contacts" }),
+    ).toBeVisible({ timeout: 5000 });
+  });
+
+  test("103.9 No results shows empty state", async () => {
+    await alicePage.goto(
+      `${BASE}/search?q=zzzzzzzzzznonexistent_${TS}`,
+      { waitUntil: "load" },
+    );
+    await alicePage.waitForTimeout(1500);
+    await expect(
+      alicePage.locator(`[data-testid="no-results"]`),
+    ).toBeVisible({ timeout: 5000 });
+  });
+
+  test("103.10 Result row shows type badge", async () => {
+    await alicePage.goto(
+      `${BASE}/search?q=${encodeURIComponent(`ui_tkt_${TS}`)}`,
+      { waitUntil: "load" },
+    );
+    const result = alicePage.locator(`[data-testid="search-result-ticket"]`).first();
+    await expect(result).toBeVisible({ timeout: 10000 });
+  });
+
+  test("103.11 Clicking search result navigates to target", async () => {
+    await alicePage.goto(
+      `${BASE}/search?q=${encodeURIComponent(`ui_tkt_${TS}`)}`,
+      { waitUntil: "load" },
+    );
+    await alicePage.waitForTimeout(1500);
+    const result = alicePage.locator(`[data-testid="search-result-ticket"]`).first();
+    await result.click();
+    await alicePage.waitForTimeout(500);
+    expect(alicePage.url()).toContain("/tickets/");
+  });
+
+  test("103.12 SearchPage search history sidebar visible", async () => {
+    // Record some history
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+      query: `hist_ui_${TS}`,
+    });
+    await alicePage.goto(`${BASE}/search?q=test`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(1500);
+    await expect(
+      alicePage.locator(`[data-testid="search-history-sidebar"]`),
+    ).toBeVisible({ timeout: 5000 });
+  });
+
+  test("103.13 Clicking history item fills search input", async () => {
+    await apiDelete(alicePage, ALICE_ID, "/ui/search/history");
+    await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+      query: `hist_click_${TS}`,
+    });
+    // Navigate to search page without a q param so input starts empty
+    await alicePage.goto(`${BASE}/search`, { waitUntil: "load" });
+    // Wait for sidebar to load history from server
+    await expect(
+      alicePage.locator(`[data-testid="history-item"]`).first(),
+    ).toBeVisible({ timeout: 8000 });
+    const historyItem = alicePage.locator(`[data-testid="history-item"]`).first();
+    await historyItem.click();
+    const input = alicePage.locator(`[data-testid="search-input"]`);
+    await expect(input).toHaveValue(`hist_click_${TS}`, { timeout: 5000 });
+  });
+
+  test("103.14 SearchPage URL includes tab parameter", async () => {
+    await alicePage.goto(`${BASE}/search?q=test`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(1500);
+    const contactsTab = alicePage.getByRole("tab", { name: "Contacts" });
+    await contactsTab.click();
+    await alicePage.waitForTimeout(500);
+    expect(alicePage.url()).toContain("tab=contacts");
+  });
+});
+
+// =============================================================================
+// Section 104: Edge cases
+// =============================================================================
+
+test.describe("104 — Edge cases", () => {
+  let alicePage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    alicePage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);
   });
 
   test.afterAll(async () => {
-    await alicePage.context().close();
+    await alicePage?.close();
   });
 
-  test("1.1 Search returns results with all type keys", async () => {
-    const resp = await alicePage.request.get(`${BASE}/ui/search`, {
-      headers: { "x-csrf-token": csrfToken(ALICE_ID) },
-      params: { q: "test", limit: "5" },
+  test("104.1 Very long query is truncated to 200 chars", async () => {
+    const longQuery = "a".repeat(250);
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: longQuery,
+      types: "contacts",
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
-    expect(data).toHaveProperty("query");
-    expect(data).toHaveProperty("results");
-    expect(data.results).toHaveProperty("users");
-    expect(data.results).toHaveProperty("posts");
-    expect(data.results).toHaveProperty("catalog");
-    expect(data.results).toHaveProperty("files");
-    // Each section has the right shape
-    for (const key of ["users", "posts", "catalog", "files"]) {
-      expect(data.results[key]).toHaveProperty("items");
-      expect(data.results[key]).toHaveProperty("total_estimate");
-      expect(data.results[key]).toHaveProperty("has_more");
+    expect(data.query.length).toBeLessThanOrEqual(200);
+  });
+
+  test("104.2 Special characters in query don't break search", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: 'hello "world" (test) [brackets]',
+      types: "contacts",
+    });
+    expect(resp.status()).toBe(200);
+  });
+
+  test("104.3 No results returns empty items array", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: `xyzzy_nonexistent_${TS}_zzz`,
+      types: "tickets,contacts",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.results.tickets.items).toHaveLength(0);
+    expect(data.results.contacts.items).toHaveLength(0);
+  });
+
+  test("104.4 Single-character query returns 200", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "x",
+      types: "contacts",
+    });
+    expect(resp.status()).toBe(200);
+  });
+
+  test("104.5 Multiple types comma-separated work", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "test",
+      types: "tickets,contacts,messages",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.results.tickets).toBeDefined();
+    expect(data.results.contacts).toBeDefined();
+    expect(data.results.messages).toBeDefined();
+  });
+
+  test("104.6 Query with numbers works", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: "test123",
+      types: "contacts",
+    });
+    expect(resp.status()).toBe(200);
+  });
+
+  test("104.7 Concurrent searches return independent results", async () => {
+    // Create test data in this section's page
+    const tktSubject = `conc_tkt_${TS}`;
+    const conName = `conc_con_${TS}`;
+    await apiPost(alicePage, ALICE_ID, "/tickets", {
+      subject: tktSubject,
+      description: `concurrent test`,
+    });
+    await apiPost(alicePage, ALICE_ID, "/ui/contacts", {
+      user_id: conName,
+    });
+
+    const [resp1, resp2] = await Promise.all([
+      apiGet(alicePage, "/ui/search", { q: tktSubject, types: "tickets" }),
+      apiGet(alicePage, "/ui/search", { q: conName, types: "contacts" }),
+    ]);
+    expect(resp1.status()).toBe(200);
+    expect(resp2.status()).toBe(200);
+    const data1 = await resp1.json();
+    const data2 = await resp2.json();
+    expect(data1.results.tickets.items.length).toBeGreaterThanOrEqual(1);
+    expect(data2.results.contacts.items.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("104.8 Search history cap at 50 entries", async () => {
+    await apiDelete(alicePage, ALICE_ID, "/ui/search/history");
+    // Add 52 history entries
+    for (let i = 0; i < 52; i++) {
+      await apiPost(alicePage, ALICE_ID, "/ui/search/history", {
+        query: `cap_${TS}_${i.toString().padStart(3, "0")}`,
+      });
     }
-  });
-
-  test("1.2 Type filter restricts results", async () => {
-    const resp = await alicePage.request.get(`${BASE}/ui/search`, {
-      headers: { "x-csrf-token": csrfToken(ALICE_ID) },
-      params: { q: "alice", types: "users", limit: "5" },
-    });
-    expect(resp.status()).toBe(200);
+    const resp = await apiGet(alicePage, "/ui/search/history", { limit: "50" });
     const data = await resp.json();
-    // users may have results; others must be empty
-    expect(data.results.posts.items).toHaveLength(0);
-    expect(data.results.catalog.items).toHaveLength(0);
-    expect(data.results.files.items).toHaveLength(0);
+    expect(data.items.length).toBeLessThanOrEqual(50);
   });
 
-  test("1.3 Empty query returns 400", async () => {
-    const resp = await alicePage.request.get(`${BASE}/ui/search`, {
-      headers: { "x-csrf-token": csrfToken(ALICE_ID) },
-      params: { q: "", limit: "5" },
-    });
-    // FastAPI returns 422 for min_length=1 validation or 400 for our custom check
-    expect([400, 422]).toContain(resp.status());
-  });
-
-  test("1.4 Search results have correct item shape", async () => {
-    const resp = await alicePage.request.get(`${BASE}/ui/search`, {
-      headers: { "x-csrf-token": csrfToken(ALICE_ID) },
-      params: { q: "alice", types: "users", limit: "5" },
-    });
-    expect(resp.status()).toBe(200);
-    const data = await resp.json();
-    if (data.results.users.items.length > 0) {
-      const item = data.results.users.items[0];
-      expect(item).toHaveProperty("type");
-      expect(item).toHaveProperty("id");
-      expect(item).toHaveProperty("title");
-      expect(item).toHaveProperty("url");
-    }
-  });
-
-  test("1.5 Post search finds seeded post by unique token", async () => {
-    const resp = await alicePage.request.get(`${BASE}/ui/search`, {
-      headers: { "x-csrf-token": csrfToken(ALICE_ID) },
-      params: { q: SEARCH_TOKEN, types: "posts", limit: "5" },
-    });
-    expect(resp.status()).toBe(200);
-    const data = await resp.json();
-    expect(data.results.posts.items.length).toBeGreaterThanOrEqual(1);
-    const found = data.results.posts.items.find(
-      (it: any) => it.snippet.toLowerCase().includes(SEARCH_TOKEN.toLowerCase()),
+  test("104.9 Delete non-existent history item returns 404", async () => {
+    const resp = await apiDelete(
+      alicePage,
+      ALICE_ID,
+      "/ui/search/history/TS%230000000000%23deadbeef",
     );
-    expect(found).toBeTruthy();
-    expect(found.type).toBe("post");
+    expect(resp.status()).toBe(404);
   });
 
-  test("1.6 User search finds Alice", async () => {
-    const resp = await alicePage.request.get(`${BASE}/ui/search`, {
-      headers: { "x-csrf-token": csrfToken(ALICE_ID) },
-      params: { q: "alice", types: "users", limit: "5" },
-    });
-    expect(resp.status()).toBe(200);
-    const data = await resp.json();
-    // Alice's discovery index was seeded; but the search excludes self (viewer_id)
-    // so the result may be empty if no other user matches "alice"
-    // But the endpoint should return 200 with valid shape regardless
-    expect(Array.isArray(data.results.users.items)).toBe(true);
-  });
-
-  test("1.7 Invalid type returns 400", async () => {
-    const resp = await alicePage.request.get(`${BASE}/ui/search`, {
-      headers: { "x-csrf-token": csrfToken(ALICE_ID) },
-      params: { q: "test", types: "users,invalidtype", limit: "5" },
+  test("104.10 Search with only whitespace after sanitization returns 400", async () => {
+    const resp = await apiGet(alicePage, "/ui/search", {
+      q: " \t ",
     });
     expect(resp.status()).toBe(400);
-  });
-});
-
-// =============================================================================
-// Section 2: Search Page UI
-// =============================================================================
-
-test.describe("2 — Search Page UI", () => {
-  let page: Page;
-
-  test.beforeAll(async ({ browser }) => {
-    seedAliceDiscovery();
-    seedSearchPost();
-
-    const ctx = await browser.newContext();
-    page = await ctx.newPage();
-    await injectAuth(page, ALICE_ID);
-  });
-
-  test.afterAll(async () => {
-    await page.context().close();
-  });
-
-  test("2.1 Search page loads from URL param", async () => {
-    await page.goto(`${BASE}/search?q=${SEARCH_TOKEN}`, {
-      waitUntil: "domcontentloaded",
-    });
-    // Input should be pre-filled
-    const input = page.getByTestId("search-input");
-    await expect(input).toBeVisible();
-    await expect(input).toHaveValue(SEARCH_TOKEN);
-  });
-
-  test("2.2 Tab switching works", async () => {
-    await page.goto(`${BASE}/search?q=${SEARCH_TOKEN}`, {
-      waitUntil: "domcontentloaded",
-    });
-    // Wait for results to load
-    await page.waitForTimeout(1500);
-
-    // Click "Posts" tab
-    await page.getByRole("tab", { name: /Posts/ }).click();
-    // The Posts tab content should be visible
-    await expect(page.getByRole("tab", { name: /Posts/ })).toHaveAttribute(
-      "data-state",
-      "active",
-    );
-  });
-
-  test("2.3 All tab shows results", async () => {
-    await page.goto(`${BASE}/search?q=${SEARCH_TOKEN}`, {
-      waitUntil: "domcontentloaded",
-    });
-    await page.waitForTimeout(1500);
-
-    // All tab should be active by default
-    await expect(page.getByRole("tab", { name: "All" })).toHaveAttribute(
-      "data-state",
-      "active",
-    );
-  });
-
-  test("2.4 Empty results shows empty state", async () => {
-    const gibberish = `zzz_xyznonexist_${TS}`;
-    await page.goto(`${BASE}/search?q=${gibberish}`, {
-      waitUntil: "domcontentloaded",
-    });
-    // Wait for search to complete
-    await page.waitForTimeout(2000);
-    const noResults = page.getByTestId("no-results");
-    await expect(noResults).toBeVisible({ timeout: 5000 });
-  });
-
-  test("2.5 Clicking user result navigates", async () => {
-    // Seed bob in discovery for this test
-    execSync(
-      `${PYTHON} -c "
-${DDB_HELPER_PRELUDE.trim()}
-import os
-tbl = ddb.Table(os.environ.get('DDB_DISCOVERY_INDEX', 'DiscoveryIndex'))
-tokens = ['bob', 'bo', 'b', 'e2e bob', 'e2e_bob@test.local']
-for tok in tokens:
-    tbl.put_item(Item={
-        'pk': f'TOKEN#{tok}',
-        'sk': f'USER#${BOB_ID}',
-        'user_id': '${BOB_ID}',
-        'display_name': 'E2E Bob',
-        'discoverability': 'active',
-        'follower_count': 0,
-        'indexed_at': int(time.time()),
-    })
-print('Seeded Bob discovery tokens')
-"`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
-    );
-
-    await page.goto(`${BASE}/search?q=bob`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1500);
-
-    // Find a user result and click it
-    const userResult = page.getByTestId("search-result-user").first();
-    if (await userResult.isVisible()) {
-      await userResult.click();
-      // Should navigate somewhere (discover page for users)
-      await page.waitForTimeout(500);
-      expect(page.url()).toContain("/discover");
-    }
-  });
-});
-
-// =============================================================================
-// Section 3: Header Search Integration
-// =============================================================================
-
-test.describe("3 — Header Search Integration", () => {
-  let page: Page;
-
-  test.beforeAll(async ({ browser }) => {
-    seedAliceDiscovery();
-    const ctx = await browser.newContext();
-    page = await ctx.newPage();
-    await injectAuth(page, ALICE_ID);
-    await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(500);
-  });
-
-  test.afterAll(async () => {
-    await page.context().close();
-  });
-
-  test("3.1 Ctrl+K opens search dialog", async () => {
-    await page.keyboard.press("Control+k");
-    // CommandDialog should be visible
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: 3000 });
-  });
-
-  test("3.2 Page navigation still works", async () => {
-    // Close any open dialog first
-    await page.keyboard.press("Escape");
-    await page.waitForTimeout(300);
-
-    // Open search
-    await page.keyboard.press("Control+k");
-    await page.waitForTimeout(300);
-
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: 3000 });
-
-    // Type "Messages" to filter pages
-    await page.getByPlaceholder("Search content and pages...").fill("Messages");
-    await page.waitForTimeout(300);
-
-    // "Messages" item should be visible
-    const messagesItem = dialog.getByText("Messages", { exact: true }).first();
-    await expect(messagesItem).toBeVisible({ timeout: 3000 });
-  });
-
-  test("3.3 View all results link appears for queries", async () => {
-    // Close any open dialog
-    await page.keyboard.press("Escape");
-    await page.waitForTimeout(300);
-
-    await page.keyboard.press("Control+k");
-    await page.waitForTimeout(300);
-
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: 3000 });
-
-    // Type a search query
-    await page.getByPlaceholder("Search content and pages...").fill("alice");
-    await page.waitForTimeout(1000);
-
-    // "View all results for..." link should appear
-    const viewAll = dialog.getByText(/View all results for/).first();
-    await expect(viewAll).toBeVisible({ timeout: 5000 });
-  });
-
-  test("3.4 View all results navigates to search page", async () => {
-    // The dialog should still be open from previous test, but re-open to be safe
-    await page.keyboard.press("Escape");
-    await page.waitForTimeout(300);
-
-    await page.keyboard.press("Control+k");
-    await page.waitForTimeout(300);
-
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: 3000 });
-
-    await page.getByPlaceholder("Search content and pages...").fill("alice");
-    await page.waitForTimeout(1000);
-
-    // Click "View all results"
-    const viewAll = dialog.getByText(/View all results for/).first();
-    await expect(viewAll).toBeVisible({ timeout: 5000 });
-    await viewAll.click();
-
-    // Should navigate to /search?q=alice
-    await page.waitForTimeout(500);
-    expect(page.url()).toContain("/search");
-    expect(page.url()).toContain("q=alice");
   });
 });

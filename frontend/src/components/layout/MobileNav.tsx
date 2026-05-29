@@ -32,6 +32,11 @@ import {
   Bookmark,
   Wallet,
   Layers,
+  Link2,
+  Handshake,
+  Trophy,
+  CalendarClock,
+  Scissors,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -64,10 +69,12 @@ const MORE_LINKS = [
   { label: "Billing", i18nKey: "nav.billing", path: "/billing", icon: CreditCard },
   { label: "Tier Manager", i18nKey: "nav.tierManager", path: "/subscriptions/manage", icon: Layers },
   { label: "Calendar", i18nKey: "nav.calendar", path: "/calendar", icon: CalendarDays },
+  { label: "Content Calendar", i18nKey: "nav.contentCalendar", path: "/content-calendar", icon: CalendarClock },
   { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: FilePen },
   { label: "Gallery", i18nKey: "nav.gallery", path: "/gallery", icon: PlaySquare },
   { label: "Videos", i18nKey: "nav.videos", path: "/videos", icon: Video },
   { label: "Broadcast", i18nKey: "nav.broadcast", path: "/broadcast", icon: Radio },
+  { label: "Clips", i18nKey: "nav.clips", path: "/clips", icon: Scissors },
   { label: "Profile", i18nKey: "nav.profile", path: "/profile", icon: User },
   { label: "Security", i18nKey: "nav.security", path: "/security", icon: Shield },
   { label: "Alerts", i18nKey: "nav.alerts", path: "/alerts", icon: Bell },
@@ -82,10 +89,15 @@ const MORE_LINKS = [
   { label: "Moderation Board", i18nKey: "nav.moderationBoard", path: "/admin/moderation", icon: Scale },
   { label: "Video Review", i18nKey: "nav.videoReview", path: "/admin/video-review", icon: Video },
   { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: Scale },
+  { label: "Creator Dashboard", i18nKey: "nav.creatorDashboard", path: "/creator-dashboard", icon: BarChart3 },
   { label: "Analytics", i18nKey: "nav.analytics", path: "/analytics", icon: BarChart3 },
   { label: "Payouts", i18nKey: "nav.payouts", path: "/payouts", icon: Wallet },
   { label: "Referrals", i18nKey: "nav.referrals", path: "/referrals", icon: Share2 },
   { label: "Promo Codes", i18nKey: "nav.promoCodes", path: "/promo", icon: Tag },
+  { label: "Affiliates", i18nKey: "nav.affiliates", path: "/affiliates", icon: Link2 },
+  { label: "Collaborations", i18nKey: "nav.collaborations", path: "/collaborations", icon: Handshake },
+  { label: "Fan Club", i18nKey: "nav.fanClub", path: "/fan-club", icon: UsersRound },
+  { label: "Achievements", i18nKey: "nav.achievements", path: "/achievements", icon: Trophy },
 ];
 
 // ─── MobileNav Component ────────────────────────────────────────

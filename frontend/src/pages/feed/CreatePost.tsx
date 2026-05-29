@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOfflineStore } from "@/stores/offlineStore";
-import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video, Hash } from "lucide-react";
+import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video, Hash, BarChart3 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ import { isNewsfeedDraftsEnabled } from "@/lib/featureFlags";
 import { invalidateFeedCaches } from "@/lib/feedCacheInvalidation";
 import { FeedVideoPickerDialog } from "./VideoPickerDialog";
 import type { VideoListItem } from "@/api/endpoints/videos";
+import { PollComposer, type PollDataInput } from "./PollComposer";
 
 const MAX_IMAGES = 10;
 const MAX_FILES = 5;
@@ -143,6 +144,8 @@ export function CreatePost() {
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
+  const [pollMode, setPollMode] = useState(false);
+  const [pendingPollData, setPendingPollData] = useState<PollDataInput | null>(null);
   const { data: capabilities } = useQuery({
     queryKey: ["feed", "capabilities"],
     queryFn: getFeedCapabilities,
@@ -294,6 +297,8 @@ export function CreatePost() {
     setUnlockLimitError(null);
     setTags([]);
     setTagInput("");
+    setPollMode(false);
+    setPendingPollData(null);
   };
 
   const draftsQuery = useQuery({
@@ -324,6 +329,7 @@ export function CreatePost() {
         ...(parsedUnlockLimit ? { unlock_limit: parsedUnlockLimit } : {}),
         ...(pendingVideo ? { video_id: pendingVideo.video_id } : {}),
         ...(tags.length > 0 ? { tags } : {}),
+        ...(pollMode && pendingPollData ? { post_type: "poll" as const, poll_data: pendingPollData } : {}),
       });
     },
     onSuccess: async (resp, target) => {
@@ -761,10 +767,107 @@ export function CreatePost() {
 
   const drafts = draftsQuery.data?.items ?? [];
 
+  // ── Drag-and-drop image handling ─────────────────────────────
+  const [dragOverPost, setDragOverPost] = useState(false);
+
+  const handlePostDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    setDragOverPost(true);
+  };
+
+  const handlePostDragLeave = () => setDragOverPost(false);
+
+  const handlePostDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverPost(false);
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    if (file.type.startsWith("image/")) {
+      if (file.size > 10 * 1024 * 1024) {
+        toast.error("Image must be under 10 MB");
+        return;
+      }
+      if (imageUrls.length >= MAX_IMAGES) {
+        toast.error(`Maximum ${MAX_IMAGES} images per post`);
+        return;
+      }
+      setUploading(true);
+      setUploadProgress(50);
+      try {
+        const result = await uploadPostImage(file);
+        setUploadProgress(100);
+        setImageUrls((prev) => [...prev, result.url]);
+        toast.success("Image uploaded");
+      } catch {
+        toast.error("Failed to upload image");
+      } finally {
+        setUploading(false);
+        setUploadProgress(0);
+      }
+    } else {
+      toast.error("Only images can be attached to posts");
+    }
+  };
+
+  // Listen for global app-file-drop events for the feed page
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const custom = e as CustomEvent<{ files: File[]; context: string }>;
+      if (custom.detail.context !== "feed") return;
+      const file = custom.detail.files[0];
+      if (!file) return;
+
+      if (file.type.startsWith("image/")) {
+        if (file.size > 10 * 1024 * 1024) {
+          toast.error("Image must be under 10 MB");
+          return;
+        }
+        if (imageUrls.length >= MAX_IMAGES) {
+          toast.error(`Maximum ${MAX_IMAGES} images per post`);
+          return;
+        }
+        setUploading(true);
+        setUploadProgress(50);
+        try {
+          const result = await uploadPostImage(file);
+          setUploadProgress(100);
+          setImageUrls((prev) => [...prev, result.url]);
+          toast.success("Image uploaded");
+        } catch {
+          toast.error("Failed to upload image");
+        } finally {
+          setUploading(false);
+          setUploadProgress(0);
+        }
+      } else {
+        toast.error("Only images can be attached to posts");
+      }
+    };
+    window.addEventListener("app-file-drop", handler as EventListener);
+    return () => window.removeEventListener("app-file-drop", handler as EventListener);
+  }, [imageUrls.length]);
+
   return (
     <Card>
       <CardContent className="p-4">
-        <form onSubmit={handleSubmit} className="space-y-3">
+        <form
+          onSubmit={handleSubmit}
+          className="relative space-y-3"
+          onDragOver={handlePostDragOver}
+          onDragLeave={handlePostDragLeave}
+          onDrop={handlePostDrop}
+          data-testid="post-composer-drop-zone"
+        >
+          {dragOverPost && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-primary/5 backdrop-blur-sm" data-testid="post-drop-overlay">
+              <div className="flex flex-col items-center gap-2 text-primary">
+                <ImagePlus className="h-10 w-10" />
+                <p className="text-sm font-medium">Drop image to attach</p>
+              </div>
+            </div>
+          )}
           <MarkdownComposer
             mode={editorMode}
             onModeChange={setEditorMode}
@@ -944,6 +1047,11 @@ export function CreatePost() {
             </div>
           )}
 
+          {/* ENGAGE-002: Poll composer */}
+          {pollMode && (
+            <PollComposer onPollDataChange={setPendingPollData} />
+          )}
+
           {lockEnabled && (
             <div className="rounded-md border border-border bg-muted/30 p-2 text-xs space-y-1.5">
               <div className="flex items-center gap-2">
@@ -1055,6 +1163,24 @@ export function CreatePost() {
                 title={imageUrls.length > 0 ? "Remove images first to attach a video" : "Attach video"}
               >
                 <Video className="h-4 w-4" />
+              </Button>
+
+              {/* Poll toggle (ENGAGE-002) */}
+              <Button
+                type="button"
+                variant={pollMode ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => {
+                  setPollMode((v) => {
+                    if (v) setPendingPollData(null);
+                    return !v;
+                  });
+                }}
+                disabled={mutation.isPending}
+                data-testid="poll-toggle-btn"
+              >
+                <BarChart3 className="mr-1 h-3.5 w-3.5" />
+                Poll
               </Button>
 
               {/* Lock toggle */}

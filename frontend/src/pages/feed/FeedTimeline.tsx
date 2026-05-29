@@ -6,6 +6,9 @@ import { PostCard } from "./PostCard";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { useFeedTimelineQuery } from "@/hooks/useFeedTimelineQuery";
 import { mergeFeedPages } from "@/lib/feedPagination";
+import { useOfflineStore } from "@/stores/offlineStore";
+import { useAuthStore } from "@/stores/authStore";
+import type { FeedPost, CreatePostReq } from "@/api/types";
 
 interface FeedTimelineProps {
   authorId?: string;
@@ -33,8 +36,44 @@ export function FeedTimeline({
   emptyDescription = "Be the first to share something with the community.",
 }: FeedTimelineProps) {
   const feedQuery = useFeedTimelineQuery({ authorId, q, from, to, hasMedia, cursor });
+  const userId = useAuthStore((s) => s.userId);
+  const offlineQueue = useOfflineStore((s) => s.queue);
 
-  const allPosts = useMemo(() => mergeFeedPages((feedQuery.data?.pages ?? []) as any), [feedQuery.data?.pages]);
+  // PWA-005: Build optimistic posts from offline queue
+  const offlinePosts = useMemo((): FeedPost[] => {
+    return offlineQueue
+      .filter((a) => a.type === "create_post")
+      .map((a) => {
+        const payload = a.payload as CreatePostReq;
+        return {
+          post_id: `optimistic-post-${a.id}`,
+          author_id: userId ?? "",
+          body: payload.body_plain ?? (payload as Record<string, unknown>).body as string ?? "",
+          body_plain: payload.body_plain,
+          body_markdown: payload.body_markdown,
+          body_rich: payload.body_rich,
+          body_format: payload.body_format ?? "plain",
+          image_urls: payload.image_urls ?? [],
+          file_attachments: [],
+          like_count: 0,
+          comment_count: 0,
+          tip_total_cents: 0,
+          reactions_counts: {},
+          my_reactions: [],
+          created_at: new Date(a.enqueuedAt).toISOString(),
+          status: "published" as const,
+          __offline: {
+            queueId: a.id,
+            status: (a.__status ?? "pending") as "pending" | "sending" | "failed",
+            error: a.__error,
+            enqueuedAt: a.enqueuedAt,
+          },
+        };
+      });
+  }, [offlineQueue, userId]);
+
+  const serverPosts = useMemo(() => mergeFeedPages((feedQuery.data?.pages ?? []) as any), [feedQuery.data?.pages]);
+  const allPosts = useMemo(() => [...offlinePosts, ...serverPosts], [offlinePosts, serverPosts]);
 
   useEffect(() => {
     if (!onCursorChange) return;

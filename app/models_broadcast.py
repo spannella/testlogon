@@ -75,12 +75,19 @@ class BroadcastSessionModel(BaseModel):
     tip_min_cents: int = 100
     tip_max_cents: int = 100000
 
+    # Live Q&A Mode (ENGAGE-003)
+    qa_mode_enabled: bool = False
+    moderators: Optional[list] = None  # List of user_sub values
+
     # Multi-input / Co-streaming (BCAST-016)
     max_inputs: int = Field(default=4, ge=1, le=8)
     active_layout: Optional[str] = None       # "single" | "side_by_side" | "pip" | "grid"
     active_input_ids: Optional[list] = None   # List of input_ids currently on-screen
     primary_input_id: Optional[str] = None    # Main input in PiP mode
     guest_invite_enabled: bool = False
+
+    # Viewer Clip Creation (ENGAGE-005)
+    clips_enabled: bool = True
 
 
 class BroadcastOutputModel(BaseModel):

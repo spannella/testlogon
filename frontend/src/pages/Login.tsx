@@ -1,10 +1,12 @@
 import * as React from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { useQuery } from "@tanstack/react-query";
 import { PageMeta } from "@/components/shared/PageMeta";
-import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send, HelpCircle, Eye, EyeOff, Timer } from "lucide-react";
+import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send, HelpCircle, Eye, EyeOff, Timer, LogIn } from "lucide-react";
+import { getSsoInfo } from "@/api/endpoints/sso";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,7 +76,18 @@ const MFA_METHODS: Record<MfaMethod, { label: string; icon: React.ReactNode; des
 
 export default function Login() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { login, isAuthenticated, logoutReason, clearLogoutReason } = useAuthStore();
+
+  // SSO info query
+  const { data: ssoInfo } = useQuery({
+    queryKey: ["sso-info"],
+    queryFn: () => getSsoInfo(),
+    staleTime: 60_000,
+  });
+
+  // SSO error from URL params (set by ACS redirect)
+  const ssoError = searchParams.get("error");
 
   // Redirect if already authenticated
   React.useEffect(() => {
@@ -437,8 +450,46 @@ export default function Login() {
           </div>
         )}
 
+        {ssoError && (
+          <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive" data-testid="sso-error">
+            {ssoError === "sso_validation_failed" && "SSO authentication failed. Please try again or contact your IT admin."}
+            {ssoError === "sso_not_authenticated" && "SSO authentication was not completed."}
+            {ssoError === "sso_replay_detected" && "This SSO login has already been used. Please try again."}
+            {ssoError === "sso_no_email" && "No email address was provided by your identity provider."}
+            {ssoError === "sso_domain_not_allowed" && "Your email domain is not allowed for this organization."}
+            {ssoError === "sso_user_not_found" && "No account found for your SSO identity. Contact your administrator."}
+            {ssoError === "account_banned" && "Your account has been suspended."}
+            {!["sso_validation_failed", "sso_not_authenticated", "sso_replay_detected", "sso_no_email", "sso_domain_not_allowed", "sso_user_not_found", "account_banned"].includes(ssoError) && `SSO error: ${ssoError}`}
+          </div>
+        )}
+
         <Card className="shadow-xl">
-          {step === "credentials" ? (
+          {ssoInfo?.sso_only ? (
+            /* ── SSO-only mode: hide password form ──────────────── */
+            <>
+              <CardHeader className="space-y-1">
+                <CardTitle className="text-xl">Sign in</CardTitle>
+                <CardDescription>
+                  Your organization requires SSO login
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Button
+                  type="button"
+                  className="w-full"
+                  size="lg"
+                  onClick={() => { window.location.href = ssoInfo.sso_login_url || "/saml/login"; }}
+                  data-testid="sso-login-button"
+                >
+                  <LogIn className="mr-2 h-4 w-4" />
+                  Sign in with {ssoInfo.provider_display_name || "SSO"}
+                </Button>
+                <p className="text-sm text-muted-foreground text-center">
+                  Your organization requires SSO login. Contact your IT admin for access.
+                </p>
+              </CardContent>
+            </>
+          ) : step === "credentials" ? (
             <form onSubmit={form.handleSubmit(handleCredentials)}>
               <CardHeader className="space-y-1">
                 <CardTitle className="text-xl">Sign in</CardTitle>
@@ -584,6 +635,19 @@ export default function Login() {
                     Security key
                   </Button>
                 </div>
+                {ssoInfo?.sso_available && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    size="sm"
+                    onClick={() => { window.location.href = ssoInfo.sso_login_url || "/saml/login"; }}
+                    data-testid="sso-login-button"
+                  >
+                    <LogIn className="mr-1 h-3.5 w-3.5" />
+                    Sign in with {ssoInfo.provider_display_name || "SSO"}
+                  </Button>
+                )}
                 <div className="text-center text-xs text-muted-foreground">
                   Don&apos;t have an account?{" "}
                   <Link to="/register" className="text-primary hover:underline">

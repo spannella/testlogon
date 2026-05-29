@@ -24,6 +24,93 @@ from app.services.profile import get_profile_identity
 from app.services.push import send_push_for_alert
 from app.services.ttl import with_ttl
 
+# --------------------------------------------------------------------------- #
+#  Alert categories & source entity helpers                                     #
+# --------------------------------------------------------------------------- #
+
+ALERT_CATEGORIES: Dict[str, set] = {
+    "activity": {"new_follower", "post_liked", "post_reaction", "post_comment",
+                 "comment_reply", "mention", "subscription_started", "post_shared",
+                 "post_tip", "message_tip"},
+    "security": {"login_success", "login_failure", "mfa_success", "mfa_failure",
+                 "api_key_created", "api_key_revoked", "session_revoked",
+                 "totp_device_added", "totp_device_removed", "device_new",
+                 "rate_limited", "access_denied", "security_event"},
+    "updates":  {"calendar_event_created", "calendar_event_updated",
+                 "ticket_created", "ticket_assigned", "ticket_replied",
+                 "ticket_status_changed", "ticket_reopened"},
+    "commerce": {"cart.abandoned"},
+}
+
+# Reverse lookup: event -> category
+_EVENT_TO_CATEGORY: Dict[str, str] = {}
+for _cat, _events in ALERT_CATEGORIES.items():
+    for _ev in _events:
+        _EVENT_TO_CATEGORY[_ev] = _cat
+
+
+def get_alert_category(event: str) -> str:
+    """Get the category for an alert event type."""
+    return _EVENT_TO_CATEGORY.get(event, "security")
+
+
+def _build_action_url(alert_type: str, details: Dict[str, Any]) -> Optional[str]:
+    """Construct action_url from alert type and details."""
+    post_id = details.get("post_id")
+    conv_id = details.get("conversation_id")
+    ticket_id = details.get("ticket_id")
+    actor_id = details.get("actor_user_id")
+
+    url_map: Dict[str, Optional[str]] = {
+        "post_liked":       f"/feed?post={post_id}" if post_id else None,
+        "post_reaction":    f"/feed?post={post_id}" if post_id else None,
+        "post_comment":     f"/feed?post={post_id}" if post_id else None,
+        "comment_reply":    f"/feed?post={post_id}" if post_id else None,
+        "mention":          f"/feed?post={post_id}" if post_id else (f"/messages/{conv_id}" if conv_id else None),
+        "new_follower":     f"/discover?user={actor_id}" if actor_id else None,
+        "subscription_started": "/subscriptions",
+        "post_shared":      f"/feed?post={post_id}" if post_id else None,
+        "post_tip":         f"/feed?post={post_id}" if post_id else None,
+        "message_tip":      f"/messages/{conv_id}" if conv_id else None,
+        "login_success":    "/security/sessions",
+        "login_failure":    "/security/sessions",
+        "mfa_success":      "/security",
+        "mfa_failure":      "/security",
+        "api_key_created":  "/security/api-keys",
+        "api_key_revoked":  "/security/api-keys",
+        "session_revoked":  "/security/sessions",
+        "ticket_created":   f"/tickets/{ticket_id}" if ticket_id else "/tickets",
+        "ticket_assigned":  f"/tickets/{ticket_id}" if ticket_id else "/tickets",
+        "ticket_replied":   f"/tickets/{ticket_id}" if ticket_id else "/tickets",
+        "ticket_status_changed": f"/tickets/{ticket_id}" if ticket_id else "/tickets",
+    }
+    return url_map.get(alert_type)
+
+
+def _determine_source(alert_type: str, details: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """Determine the source entity type and ID for grouping."""
+    if alert_type in ("post_liked", "post_reaction", "post_comment", "comment_reply",
+                      "post_shared", "post_tip"):
+        return "post", details.get("post_id")
+    if alert_type in ("message_tip",):
+        return "message", details.get("message_id")
+    if alert_type in ("new_follower",):
+        return "follower", details.get("actor_user_id")
+    if alert_type in ("ticket_assigned", "ticket_replied", "ticket_status_changed"):
+        return "ticket", details.get("ticket_id")
+    return None, None
+
+
+def _validate_action_url(url: Optional[str]) -> Optional[str]:
+    """Validate action_url is relative (prevent open redirect)."""
+    if not url:
+        return None
+    if not url.startswith("/") or "://" in url:
+        logger.warning("Invalid action_url rejected: %s", url)
+        return None
+    return url
+
+
 # Events that are too high-frequency or low-importance to persist as user-visible alerts.
 # They still flow through metrics and SIEM; they just never appear in the alert centre.
 _NO_ALERT_EVENTS: frozenset = frozenset({
@@ -55,6 +142,8 @@ ALERT_EVENT_TYPES: List[str] = [
     "comment_reply","mention","subscription_started","post_shared",
     "post_tip","message_tip",
     "cart.abandoned",
+    # Achievements (ENGAGE-001)
+    "achievement_unlocked",
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
@@ -263,7 +352,17 @@ def set_alert_prefs(
     })
     return get_alert_prefs(user_sub)
 
-def write_alert(user_sub: str, *, event: str, outcome: str, title: str, details: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def write_alert(
+    user_sub: str,
+    *,
+    event: str,
+    outcome: str,
+    title: str,
+    details: Dict[str, Any],
+    action_url: Optional[str] = None,
+    source_type: Optional[str] = None,
+    source_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     if not S.alerts_enabled:
         return None
     ts = now_ts()
@@ -284,7 +383,25 @@ def write_alert(user_sub: str, *, event: str, outcome: str, title: str, details:
     alert_type = safe_details.get("alert_type") or event
     priority = get_alert_priority(str(alert_type))
 
-    item = {
+    # Compute category from event type
+    category = get_alert_category(event)
+
+    # Auto-derive action_url if not provided
+    if not action_url:
+        action_url = _build_action_url(event, safe_details)
+
+    # Auto-derive source entity if not provided
+    if not source_type or not source_id:
+        auto_source_type, auto_source_id = _determine_source(event, safe_details)
+        if not source_type:
+            source_type = auto_source_type
+        if not source_id:
+            source_id = auto_source_id
+
+    # Validate action_url is relative (prevent open redirect)
+    action_url = _validate_action_url(action_url)
+
+    item: Dict[str, Any] = {
         "user_sub": user_sub,
         "alert_id": alert_id,
         "ts": ts,
@@ -295,7 +412,15 @@ def write_alert(user_sub: str, *, event: str, outcome: str, title: str, details:
         "read": False,
         "read_at": 0,
         "priority": priority,
+        "category": category,
     }
+    if action_url:
+        item["action_url"] = action_url
+    if source_type:
+        item["source_type"] = source_type
+    if source_id:
+        item["source_id"] = source_id
+
     try:
         T.alerts.put_item(Item=with_ttl(item, ttl_epoch=ttl))
     except Exception:

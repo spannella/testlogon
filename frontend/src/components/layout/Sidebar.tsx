@@ -40,6 +40,12 @@ import {
   Ban,
   Wallet,
   Layers,
+  Link2,
+  Handshake,
+  Trophy,
+  Building2,
+  Tv,
+  Scissors,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -81,6 +87,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Feed", i18nKey: "nav.feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },
       { label: "Discover", i18nKey: "nav.discover", path: "/discover", icon: <Compass className="h-5 w-5" /> },
       { label: "Saved", i18nKey: "nav.saved", path: "/saved", icon: <Bookmark className="h-5 w-5" /> },
+      { label: "Achievements", i18nKey: "nav.achievements", path: "/achievements", icon: <Trophy className="h-5 w-5" /> },
     ],
   },
   {
@@ -93,10 +100,14 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Orders", i18nKey: "nav.orders", path: "/purchases", icon: <ClipboardList className="h-5 w-5" /> },
       { label: "Subscriptions", i18nKey: "nav.subscriptions", path: "/subscriptions", icon: <Repeat className="h-5 w-5" /> },
       { label: "Tier Manager", i18nKey: "nav.tierManager", path: "/subscriptions/manage", icon: <Layers className="h-5 w-5" /> },
+      { label: "Creator Dashboard", i18nKey: "nav.creatorDashboard", path: "/creator-dashboard", icon: <BarChart3 className="h-5 w-5" /> },
       { label: "Analytics", i18nKey: "nav.analytics", path: "/analytics", icon: <BarChart3 className="h-5 w-5" /> },
       { label: "Payouts", i18nKey: "nav.payouts", path: "/payouts", icon: <Wallet className="h-5 w-5" /> },
       { label: "Referrals", i18nKey: "nav.referrals", path: "/referrals", icon: <Share2 className="h-5 w-5" /> },
       { label: "Promo Codes", i18nKey: "nav.promoCodes", path: "/promo", icon: <Tag className="h-5 w-5" /> },
+      { label: "Affiliates", i18nKey: "nav.affiliates", path: "/affiliates", icon: <Link2 className="h-5 w-5" /> },
+      { label: "Collaborations", i18nKey: "nav.collaborations", path: "/collaborations", icon: <Handshake className="h-5 w-5" /> },
+      { label: "Fan Club", i18nKey: "nav.fanClub", path: "/fan-club", icon: <UsersRound className="h-5 w-5" /> },
     ],
   },
   {
@@ -106,8 +117,10 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Files", i18nKey: "nav.files", path: "/files", icon: <FolderOpen className="h-5 w-5" /> },
       { label: "Projects", i18nKey: "nav.projects", path: "/projects", icon: <FolderKanban className="h-5 w-5" /> },
       { label: "Calendar", i18nKey: "nav.calendar", path: "/calendar", icon: <CalendarDays className="h-5 w-5" /> },
+      { label: "Content Calendar", i18nKey: "nav.contentCalendar", path: "/content-calendar", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Scheduled", i18nKey: "nav.scheduled", path: "/scheduler", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: <FilePen className="h-5 w-5" /> },
+      { label: "Organizations", i18nKey: "nav.organizations", path: "/orgs", icon: <Building2 className="h-5 w-5" /> },
     ],
   },
   {
@@ -117,6 +130,8 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Gallery", i18nKey: "nav.gallery", path: "/gallery", icon: <PlaySquare className="h-5 w-5" /> },
       { label: "Videos", i18nKey: "nav.videos", path: "/videos", icon: <Video className="h-5 w-5" /> },
       { label: "Broadcast", i18nKey: "nav.broadcast", path: "/broadcast", icon: <Radio className="h-5 w-5" /> },
+      { label: "Clips", i18nKey: "nav.clips", path: "/clips", icon: <Scissors className="h-5 w-5" /> },
+      { label: "Watch Parties", i18nKey: "nav.watchParties", path: "/watch-parties", icon: <Tv className="h-5 w-5" /> },
     ],
   },
   {

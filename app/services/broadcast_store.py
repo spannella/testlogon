@@ -146,12 +146,17 @@ def session_to_item(session: BroadcastSessionModel) -> Dict[str, Any]:
         "tip_enabled": session.tip_enabled,
         "tip_min_cents": session.tip_min_cents,
         "tip_max_cents": session.tip_max_cents,
+        # Live Q&A Mode (ENGAGE-003)
+        "qa_mode_enabled": session.qa_mode_enabled,
+        "moderators": session.moderators,
         # Multi-input / Co-streaming (BCAST-016)
         "max_inputs": session.max_inputs,
         "active_layout": session.active_layout,
         "active_input_ids": session.active_input_ids,
         "primary_input_id": session.primary_input_id,
         "guest_invite_enabled": session.guest_invite_enabled,
+        # Viewer Clip Creation (ENGAGE-005)
+        "clips_enabled": session.clips_enabled,
     }
     # Remove None values to avoid DynamoDB issues with GSI sort keys
     return {k: v for k, v in item.items() if v is not None}
@@ -194,12 +199,17 @@ def session_from_item(item: Dict[str, Any]) -> BroadcastSessionModel:
         tip_enabled=bool(item.get("tip_enabled", True)),
         tip_min_cents=int(item.get("tip_min_cents", 100) or 100),
         tip_max_cents=int(item.get("tip_max_cents", 100000) or 100000),
+        # Live Q&A Mode (ENGAGE-003)
+        qa_mode_enabled=bool(item.get("qa_mode_enabled", False)),
+        moderators=item.get("moderators"),
         # Multi-input / Co-streaming (BCAST-016)
         max_inputs=int(item.get("max_inputs", 4) or 4),
         active_layout=item.get("active_layout"),
         active_input_ids=item.get("active_input_ids"),
         primary_input_id=item.get("primary_input_id"),
         guest_invite_enabled=bool(item.get("guest_invite_enabled", False)),
+        # Viewer Clip Creation (ENGAGE-005)
+        clips_enabled=bool(item.get("clips_enabled", True)),
     )
 
 

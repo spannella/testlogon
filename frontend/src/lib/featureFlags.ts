@@ -129,3 +129,9 @@ export const isCallRecordingEnabled = () => callRecordingEnabled;
 export const groupCallsEnabled = toBool(env.VITE_GROUP_CALLS_ENABLED, true);
 export const groupCallsKillSwitch = toBool(env.VITE_GROUP_CALLS_KILL_SWITCH, false);
 export const isGroupCallsEnabled = () => groupCallsEnabled && !groupCallsKillSwitch;
+
+// PWA Install Prompt
+export const pwaInstallPromptEnabled = toBool(env.VITE_PWA_INSTALL_PROMPT_ENABLED, true);
+export const pwaInstallPromptKillSwitch = toBool(env.VITE_PWA_INSTALL_PROMPT_KILL_SWITCH, false);
+export const isPwaInstallPromptEnabled = () =>
+  pwaInstallPromptEnabled && !pwaInstallPromptKillSwitch;

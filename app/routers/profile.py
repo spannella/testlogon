@@ -619,3 +619,73 @@ async def ui_update_preferences(
 
     update_user_preferences(user_sub, updates)
     return {"ok": True}
+
+
+# ─── Validate Color Endpoint (PLATFORM-013) ──────────────────────────────────
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Convert hex color string to (R, G, B) tuple."""
+    raw = hex_color.strip().lstrip("#")
+    if len(raw) != 6:
+        raise ValueError("Invalid hex color")
+    return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+
+
+def _relative_luminance(r: int, g: int, b: int) -> float:
+    """Calculate relative luminance per WCAG 2.1 spec."""
+    def _linearize(c: int) -> float:
+        s = c / 255.0
+        return s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * _linearize(r) + 0.7152 * _linearize(g) + 0.0722 * _linearize(b)
+
+
+def _contrast_ratio(l1: float, l2: float) -> float:
+    """Calculate WCAG contrast ratio between two luminances."""
+    lighter = max(l1, l2)
+    darker = min(l1, l2)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@router.post("/settings/validate-color")
+async def validate_custom_color(body: dict, ctx=Depends(require_ui_session)):
+    """Validate a custom accent color hex and return contrast information.
+
+    Returns contrast ratios against white and dark backgrounds,
+    along with WCAG AA / AAA compliance flags.
+    """
+    hex_color = body.get("hex", "")
+    raw = hex_color.strip().lstrip("#")
+    if not re.match(r"^[0-9A-Fa-f]{6}$", raw):
+        return {"valid": False, "contrast_light": 0, "contrast_dark": 0,
+                "wcag_aa": False, "wcag_aaa": False, "suggestion": None}
+
+    normalized = f"#{raw.upper()}"
+    try:
+        r, g, b = _hex_to_rgb(normalized)
+    except ValueError:
+        return {"valid": False, "contrast_light": 0, "contrast_dark": 0,
+                "wcag_aa": False, "wcag_aaa": False, "suggestion": None}
+
+    lum = _relative_luminance(r, g, b)
+    # White background luminance = 1.0
+    contrast_light = round(_contrast_ratio(lum, 1.0), 2)
+    # Dark background luminance ~ 0.005
+    contrast_dark = round(_contrast_ratio(lum, 0.005), 2)
+
+    wcag_aa = contrast_light >= 4.5 or contrast_dark >= 4.5
+    wcag_aaa = contrast_light >= 7.0 or contrast_dark >= 7.0
+
+    suggestion = None
+    if not wcag_aa:
+        suggestion = "#1D4ED8"  # A safe blue with good contrast
+
+    return {
+        "valid": True,
+        "contrast_light": contrast_light,
+        "contrast_dark": contrast_dark,
+        "wcag_aa": wcag_aa,
+        "wcag_aaa": wcag_aaa,
+        "suggestion": suggestion,
+    }

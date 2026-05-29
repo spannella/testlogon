@@ -48,17 +48,29 @@ import { isMessagingDmLotteryEnabled, isMessagingEncryptionEnabled } from "@/lib
 import { encryptBytes } from "@/lib/messageEncryption";
 
 export const getConversations = async (cursor?: string) => {
-  const res = await api.get<{ conversations: Conversation[]; next_cursor?: string } | Conversation[]>(
-    "/messaging/conversations",
-    cursor ? { cursor } : undefined,
-  );
-  // Backend returns a plain array; handle both array and object shapes
-  const rawConversations = Array.isArray(res) ? res : (res.conversations ?? []);
-  const next_cursor = Array.isArray(res) ? undefined : res.next_cursor;
-  return {
-    conversations: rawConversations.map(adaptConversation),
-    next_cursor,
+  const networkFn = async () => {
+    const res = await api.get<{ conversations: Conversation[]; next_cursor?: string } | Conversation[]>(
+      "/messaging/conversations",
+      cursor ? { cursor } : undefined,
+    );
+    // Backend returns a plain array; handle both array and object shapes
+    const rawConversations = Array.isArray(res) ? res : (res.conversations ?? []);
+    const next_cursor = Array.isArray(res) ? undefined : res.next_cursor;
+    return {
+      conversations: rawConversations.map(adaptConversation),
+      next_cursor,
+    };
   };
+
+  // Wrap with offline cache (PWA-003)
+  const { useAuthStore } = await import("@/stores/authStore");
+  const userId = useAuthStore.getState().userId ?? "";
+  const { withOfflineCache } = await import("@/lib/withOfflineCache");
+  return withOfflineCache(
+    networkFn,
+    { endpoint: "conversations", cacheKey: `/messaging/conversations${cursor ? `?cursor=${cursor}` : ""}` },
+    userId,
+  )();
 };
 
 export const getConversation = async (id: string) => {
@@ -84,17 +96,32 @@ export const findOrCreateDm = async (userId: string): Promise<Conversation> => {
 };
 
 export const getMessages = async (conversationId: string, cursor?: string) => {
-  const res = await api.get<{ messages: Message[]; next_cursor?: string } | Message[]>(
-    `/messaging/conversations/${conversationId}/messages`,
-    cursor ? { before: cursor } : undefined,
-  );
-  // Backend returns a plain array; handle both array and object shapes
-  const rawMessages = Array.isArray(res) ? res : (res.messages ?? []);
-  const next_cursor = Array.isArray(res) ? undefined : res.next_cursor;
-  return {
-    messages: rawMessages.map(adaptMessage),
-    next_cursor,
+  const networkFn = async () => {
+    const res = await api.get<{ messages: Message[]; next_cursor?: string } | Message[]>(
+      `/messaging/conversations/${conversationId}/messages`,
+      cursor ? { before: cursor } : undefined,
+    );
+    // Backend returns a plain array; handle both array and object shapes
+    const rawMessages = Array.isArray(res) ? res : (res.messages ?? []);
+    const next_cursor = Array.isArray(res) ? undefined : res.next_cursor;
+    return {
+      messages: rawMessages.map(adaptMessage),
+      next_cursor,
+    };
   };
+
+  // Wrap with offline cache (PWA-003)
+  const { useAuthStore } = await import("@/stores/authStore");
+  const userId = useAuthStore.getState().userId ?? "";
+  const { withOfflineCache } = await import("@/lib/withOfflineCache");
+  return withOfflineCache(
+    networkFn,
+    {
+      endpoint: "messages",
+      cacheKey: `/messaging/conversations/${conversationId}/messages${cursor ? `?cursor=${cursor}` : ""}`,
+    },
+    userId,
+  )();
 };
 
 export const getThreadMessages = async (threadId: string, cursor?: string, limit = 50): Promise<ThreadMessagesPage> => {

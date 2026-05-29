@@ -1386,6 +1386,21 @@ class PreferencesPatchReq(BaseModel):
     """
     theme: Optional[Literal["system", "light", "dark"]] = None
     sidebar_collapsed: Optional[bool] = None
+    accent_color: Optional[Literal["blue", "purple", "green", "orange", "pink", "red", "teal", "custom"]] = None
+    custom_accent_hex: Optional[str] = Field(None, max_length=7)
+    font_size: Optional[Literal["small", "default", "large", "xlarge"]] = None
+    density: Optional[Literal["compact", "comfortable", "spacious"]] = None
+    high_contrast: Optional[bool] = None
+
+    @field_validator("custom_accent_hex")
+    @classmethod
+    def validate_custom_accent_hex(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        raw = v.strip().lstrip("#")
+        if not re.match(r"^[0-9A-Fa-f]{6}$", raw):
+            raise ValueError("custom_accent_hex must be a 6-digit hex color (e.g. #FF5722)")
+        return f"#{raw.upper()}"
 
 
 class PayBalanceIn(BaseModel):
@@ -2435,6 +2450,53 @@ class BroadcastPriceOut(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+#  ENGAGE-003: Live Q&A Mode                                                    #
+# --------------------------------------------------------------------------- #
+
+
+class QAModeToggleIn(BaseModel):
+    enabled: bool
+
+
+class QAModeToggleOut(BaseModel):
+    ok: bool = True
+    qa_mode_enabled: bool
+
+
+class QAQuestionSubmitIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+
+
+class QAQuestionOut(BaseModel):
+    question_id: str
+    session_id: str
+    submitter_id: str
+    submitter_display_name: str
+    text: str
+    status: str  # "pending", "featured", "answered", "dismissed", "removed"
+    upvote_count: int
+    featured_at: Optional[int] = None
+    answered_at: Optional[int] = None
+    created_at: int
+    featured_by: Optional[str] = None
+
+
+class QAQueueOut(BaseModel):
+    questions: List[QAQuestionOut]
+    has_more: bool = False
+
+
+class QAStatsOut(BaseModel):
+    total_questions: int
+    answered: int
+    dismissed: int
+    pending: int
+    total_upvotes: int
+    avg_upvotes: float
+    answer_rate: float
+
+
+# --------------------------------------------------------------------------- #
 #  SOC-004: Social alert type preferences                                       #
 # --------------------------------------------------------------------------- #
 
@@ -2801,16 +2863,30 @@ class RateLimitAllowlistAddReq(BaseModel):
 
 # ─── Webhooks (PLATFORM-002) ──────────────────────────────────────
 
+class WebhookRetryPolicyReq(BaseModel):
+    strategy: str = Field(default="exponential", pattern=r"^(linear|exponential|fibonacci|fixed)$")
+    max_attempts: int = Field(default=5, ge=1, le=20)
+    initial_delay_seconds: int = Field(default=60, ge=10, le=3600)
+    max_delay_seconds: int = Field(default=7200, ge=60, le=86400)
+    jitter_enabled: bool = True
+    jitter_max_seconds: int = Field(default=30, ge=0, le=300)
+    retry_window_seconds: int = Field(default=86400, ge=3600, le=604800)
+
 class WebhookEndpointCreateReq(BaseModel):
     url: str
     description: str = ""
     event_types: List[str]
+    retry_policy: Optional[dict] = None
+    signature_version: str = Field(default="v2", pattern=r"^(v1|v2|both)$")
+    circuit_failure_threshold: Optional[int] = Field(default=None, ge=3, le=100)
 
 class WebhookEndpointUpdateReq(BaseModel):
     url: Optional[str] = None
     description: Optional[str] = None
     event_types: Optional[List[str]] = None
     enabled: Optional[bool] = None
+    retry_policy: Optional[dict] = None
+    signature_version: Optional[str] = Field(default=None, pattern=r"^(v1|v2|both)$")
 
 class WebhookEndpointOut(BaseModel):
     endpoint_id: str
@@ -2824,6 +2900,43 @@ class WebhookEndpointOut(BaseModel):
     last_delivery_at: Optional[int] = None
     failure_count: int = 0
     disabled_reason: Optional[str] = None
+    # v2 fields
+    retry_policy: Optional[dict] = None
+    signature_version: str = "v2"
+    circuit_state: Optional[str] = None
+    circuit_consecutive_failures: int = 0
+    circuit_failure_threshold: int = 10
+    circuit_cooldown_seconds: Optional[int] = None
+    circuit_test_at: Optional[int] = None
+
+class WebhookDeliveryStatsOut(BaseModel):
+    endpoint_id: str
+    period: str
+    buckets: list = Field(default_factory=list)
+    total_deliveries: int = 0
+    success_rate: float = 1.0
+    avg_latency_ms: float = 0.0
+
+class WebhookDeadLetterOut(BaseModel):
+    delivery_id: str
+    endpoint_id: str
+    event_type: str = ""
+    event_id: str = ""
+    payload_preview: str = ""
+    created_at: int = 0
+    failed_at: int = 0
+    failure_reason: str = ""
+    attempt_count: int = 0
+    last_http_status: Optional[int] = None
+    last_error_message: Optional[str] = None
+
+class WebhookCircuitStateOut(BaseModel):
+    state: str = "closed"
+    consecutive_failures: int = 0
+    failure_threshold: int = 10
+    cooldown_seconds: int = 300
+    opened_at: Optional[int] = None
+    next_test_at: Optional[int] = None
 
 class WebhookDeliveryOut(BaseModel):
     delivery_id: str
@@ -3195,3 +3308,573 @@ class GroupCallMediaUpdateIn(BaseModel):
 class GroupCallMediaUpdateOut(BaseModel):
     ok: bool = True
     media_status: GroupCallMediaStatus = GroupCallMediaStatus()
+
+
+# ─── Collaboration Requests (CREATOR-001) ──────────────────────────
+
+class CollaborationCreateIn(BaseModel):
+    recipient_id: str = Field(..., min_length=1, max_length=128)
+    content_types: List[str] = Field(..., min_length=1)
+    split_pct: int = Field(..., ge=1, le=99)
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    terms_text: Optional[str] = Field(default=None, max_length=5000)
+    valid_from: Optional[int] = None
+    valid_until: Optional[int] = None
+    max_content_items: Optional[int] = Field(default=None, ge=1, le=10000)
+
+    @model_validator(mode="after")
+    def validate_collab_create(self):
+        if self.valid_from and self.valid_until and self.valid_from >= self.valid_until:
+            raise ValueError("valid_from must be before valid_until")
+        for ct in self.content_types:
+            if ct not in ("broadcast", "post", "vod"):
+                raise ValueError(f"Invalid content_type: {ct}. Must be one of: broadcast, post, vod")
+        return self
+
+
+class CollaborationCounterIn(BaseModel):
+    counter_split_pct: int = Field(..., ge=1, le=99)
+    counter_terms_text: Optional[str] = Field(default=None, max_length=5000)
+    counter_valid_until: Optional[int] = None
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class CollaborationTerminateIn(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class CollaborationOut(BaseModel):
+    collaboration_id: str
+    initiator_id: str
+    recipient_id: str
+    status: str
+    content_types: List[str] = Field(default_factory=list)
+    split: Dict[str, int] = Field(default_factory=dict)
+    title: str = ""
+    description: Optional[str] = None
+    terms_text: Optional[str] = None
+    valid_from: Optional[int] = None
+    valid_until: Optional[int] = None
+    max_content_items: Optional[int] = None
+    content_count: int = 0
+    total_revenue_cents: int = 0
+    revision: int = 1
+    created_at: int = 0
+    updated_at: int = 0
+    accepted_at: Optional[int] = None
+    terminated_at: Optional[int] = None
+    terminated_by: Optional[str] = None
+    termination_reason: Optional[str] = None
+    last_proposed_by: Optional[str] = None
+
+    @field_validator(
+        "content_count", "total_revenue_cents", "revision", "created_at", "updated_at",
+        mode="before",
+    )
+    @classmethod
+    def coerce_decimal_to_int(cls, v: Any) -> int:
+        if v is None:
+            return 0
+        return int(v)
+
+
+class CollaborationListOut(BaseModel):
+    items: List[CollaborationOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class CollaborationRevisionOut(BaseModel):
+    revision: int
+    split: Dict[str, int] = Field(default_factory=dict)
+    terms_text: Optional[str] = None
+    proposed_by: str = ""
+    proposed_at: int = 0
+    status: str = "superseded"
+
+
+class CollaborationSettingsIn(BaseModel):
+    accepting_requests: Optional[bool] = None
+    min_split_pct: Optional[int] = Field(default=None, ge=1, le=99)
+    allowed_content_types: Optional[List[str]] = None
+    auto_expire_days: Optional[int] = Field(default=None, ge=1, le=365)
+
+
+class CollaborationSettingsOut(BaseModel):
+    accepting_requests: bool = True
+    min_split_pct: int = 1
+    allowed_content_types: List[str] = Field(default_factory=lambda: ["broadcast", "post", "vod"])
+    auto_expire_days: int = 7
+    updated_at: int = 0
+
+
+class CollaborationSplitIn(BaseModel):
+    collaboration_id: str
+    amount_cents: int = Field(..., gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    content_type: str = "collaboration"
+    content_id: str = ""
+
+
+# ─── Fan Clubs / Membership Tiers (CREATOR-002) ──────────────────
+
+class TierBenefit(BaseModel):
+    type: str = Field(..., description="Benefit type: early_access, exclusive_chat, custom_emoji, badge, text, discount, priority_dm")
+    label: Optional[str] = Field(default=None, max_length=200)
+    delay_hours: Optional[int] = Field(default=None, ge=0, le=720)
+    channel_id: Optional[str] = Field(default=None)
+    emoji_pack_id: Optional[str] = Field(default=None)
+    display: Optional[bool] = Field(default=None)
+    percent_off: Optional[int] = Field(default=None, ge=1, le=100)
+    applies_to: Optional[List[str]] = Field(default=None)
+
+
+class TierCreateIn(BaseModel):
+    plan_id: str = Field(..., min_length=1, max_length=128)
+    name: str = Field(..., min_length=1, max_length=50)
+    level: int = Field(..., ge=1, le=6)
+    color: str = Field(..., pattern=r"^#[0-9a-fA-F]{6}$")
+    badge_emoji: Optional[str] = Field(default=None, max_length=32)
+    description: Optional[str] = Field(default=None, max_length=500)
+    benefits: List[TierBenefit] = Field(default_factory=list)
+    welcome_message: Optional[str] = Field(default=None, max_length=1000)
+    sort_order: int = Field(default=0, ge=0, le=10)
+
+
+class TierUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    color: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    badge_emoji: Optional[str] = Field(default=None, max_length=32)
+    description: Optional[str] = Field(default=None, max_length=500)
+    benefits: Optional[List[TierBenefit]] = Field(default=None)
+    welcome_message: Optional[str] = Field(default=None, max_length=1000)
+    sort_order: Optional[int] = Field(default=None, ge=0, le=10)
+    active: Optional[bool] = None
+
+
+class TierOut(BaseModel):
+    tier_id: str
+    creator_id: str
+    plan_id: str
+    name: str
+    level: int
+    color: str
+    badge_emoji: Optional[str] = None
+    badge_image_url: Optional[str] = None
+    description: Optional[str] = None
+    benefits: List[Dict[str, Any]] = Field(default_factory=list)
+    welcome_message: Optional[str] = None
+    member_count: int = 0
+    sort_order: int = 0
+    active: bool = True
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class TierReorderIn(BaseModel):
+    tier_ids: List[str] = Field(..., min_length=1, max_length=6)
+
+
+class ChannelCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=500)
+    min_tier_level: int = Field(..., ge=1, le=6)
+    slowmode_seconds: int = Field(default=0, ge=0, le=3600)
+    max_message_length: int = Field(default=500, ge=1, le=2000)
+
+
+class ChannelOut(BaseModel):
+    channel_id: str
+    creator_id: str
+    name: str
+    description: Optional[str] = None
+    min_tier_level: int = 1
+    message_count: int = 0
+    last_message_at: int = 0
+    last_message_preview: Optional[str] = None
+    pinned_message_id: Optional[str] = None
+    slowmode_seconds: int = 0
+    max_message_length: int = 500
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class ChannelMessageIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+    reply_to_message_id: Optional[str] = None
+
+
+class ChannelMessageOut(BaseModel):
+    message_id: str
+    channel_id: str
+    sender_id: str
+    sender_display_name: str
+    sender_badge: Optional[Dict[str, Any]] = None
+    text: str
+    kind: str = "text"
+    reply_to_message_id: Optional[str] = None
+    reactions: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int = 0
+    deleted: bool = False
+
+
+class MemberBadgeOut(BaseModel):
+    tier_name: str
+    tier_level: int
+    badge_emoji: Optional[str] = None
+    badge_color: Optional[str] = None
+    badge_image_url: Optional[str] = None
+
+
+# ─── Organizations / Workspaces (ENTERPRISE-003) ─────────────────
+
+class OrgCreateReq(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=1024)
+    billing_mode: str = Field(default="individual", pattern=r"^(org|individual)$")
+
+
+class OrgUpdateReq(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=1024)
+    billing_mode: Optional[str] = Field(default=None, pattern=r"^(org|individual)$")
+    default_file_permission: Optional[str] = Field(default=None, pattern=r"^(viewer|editor|admin)$")
+
+
+class OrgMemberInviteReq(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    org_role: str = Field(default="member", pattern=r"^(admin|member|viewer)$")
+
+
+class OrgMemberRoleUpdateReq(BaseModel):
+    org_role: str = Field(pattern=r"^(admin|member|viewer)$")
+
+
+class OrgTransferOwnershipReq(BaseModel):
+    new_owner_user_sub: str = Field(min_length=1)
+
+
+class OrgInviteAcceptReq(BaseModel):
+    token: str = Field(min_length=1)
+
+
+class OrgOut(BaseModel):
+    org_id: str
+    name: str
+    description: Optional[str] = None
+    slug: str = ""
+    owner_user_sub: str = ""
+    status: str = "active"
+    plan: str = "free"
+    member_count: int = 0
+    storage_used_bytes: int = 0
+    storage_limit_bytes: int = 0
+    billing_mode: str = "individual"
+    created_at: int = 0
+    updated_at: int = 0
+    org_role: Optional[str] = None
+    team_calendar_id: Optional[str] = None
+
+
+class OrgMemberOut(BaseModel):
+    user_sub: str
+    org_role: str
+    status: str
+    joined_at: int = 0
+    storage_used_bytes: int = 0
+    last_active_at: Optional[int] = None
+
+
+class OrgInviteOut(BaseModel):
+    invite_id: str
+    org_id: str
+    org_name: str = ""
+    email: str = ""
+    org_role: str = "member"
+    status: str = "pending"
+    invited_by: str = ""
+    created_at: int = 0
+    expires_at: int = 0
+    token: Optional[str] = None
+
+
+class OrgEventCreateReq(BaseModel):
+    title: str = Field(min_length=1, max_length=256)
+    description: Optional[str] = Field(default=None, max_length=4096)
+    start_time: str = Field(description="ISO 8601 datetime")
+    end_time: str = Field(description="ISO 8601 datetime")
+    all_day: bool = False
+    attendees: Optional[list] = None
+
+
+class OrgEventUpdateReq(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    description: Optional[str] = Field(default=None, max_length=4096)
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+
+
+class OrgEventOut(BaseModel):
+    event_id: str
+    title: str
+    description: Optional[str] = None
+    start_time: str
+    end_time: str
+    all_day: bool = False
+    created_by: str = ""
+    org_id: str = ""
+    attendees: list = Field(default_factory=list)
+    created_at: int = 0
+    updated_at: int = 0
+
+
+# ─── Watch Parties (ENGAGE-004) ──────────────────────────────────────────────
+
+class CreatePartyIn(BaseModel):
+    video_id: str = Field(..., min_length=1)
+    title: Optional[str] = Field(default=None, max_length=256)
+    max_participants: int = Field(default=50, ge=2, le=500)
+
+
+class PlaybackControlIn(BaseModel):
+    action: str = Field(..., pattern="^(play|pause|seek)$")
+    position: Optional[float] = None
+
+
+class GrantCoHostIn(BaseModel):
+    user_sub: str = Field(..., min_length=1)
+
+
+class ParticipantOut(BaseModel):
+    party_id: str
+    user_sub: str
+    role: str = "member"
+    status: str = "active"
+    joined_at: int = 0
+    last_seen: Optional[int] = None
+
+
+class PartyOut(BaseModel):
+    party_id: str
+    host_user_sub: str
+    video_id: str
+    video_title: str
+    video_duration_seconds: int = 0
+    title: str = ""
+    invite_code: str = ""
+    status: str = "waiting"
+    max_participants: int = 50
+    participant_count: int = 0
+    position: float = 0
+    position_updated_at: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+    ended_at: Optional[int] = None
+
+
+class InviteResolveOut(BaseModel):
+    party_id: str
+    title: str
+    host_user_sub: str
+    video_title: str
+    status: str
+    participant_count: int = 0
+    max_participants: int = 50
+
+
+# ── Multi-Tenancy (ENTERPRISE-001) ──────────────────────────────────────────
+
+class TenantCreateReq(BaseModel):
+    slug: str = Field(min_length=2, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
+    display_name: str = Field(min_length=1, max_length=256)
+    plan: str = Field(default="starter", pattern=r"^(free|starter|enterprise)$")
+    primary_domain: Optional[str] = None
+
+
+class TenantUpdateReq(BaseModel):
+    display_name: Optional[str] = None
+    plan: Optional[str] = None
+    status: Optional[str] = None
+    branding: Optional[dict] = None
+    settings_overrides: Optional[dict] = None
+
+
+class TenantDomainAddReq(BaseModel):
+    domain: str = Field(min_length=3, max_length=253)
+
+
+class TenantOut(BaseModel):
+    tenant_id: str
+    slug: str
+    display_name: str
+    status: str
+    plan: str
+    custom_domains: list = Field(default_factory=list)
+    primary_domain: Optional[str] = None
+    branding: Optional[dict] = None
+    settings_overrides: Optional[dict] = None
+    limits: Optional[dict] = None
+    member_count: int = 0
+    storage_used_bytes: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class TenantBrandingOut(BaseModel):
+    tenant_id: str
+    display_name: str
+    logo_url: Optional[str] = None
+    favicon_url: Optional[str] = None
+    primary_color: str = "#2563EB"
+    accent_color: str = "#7C3AED"
+
+
+class TenantInfoOut(BaseModel):
+    tenant_id: str
+    slug: str
+    display_name: str
+    status: str
+    plan: str
+
+
+# ─── Content Calendar (CREATOR-005) ──────────────────────────────────────
+
+class ContentCalendarItem(BaseModel):
+    """A single scheduled content item in the calendar."""
+    id: str
+    type: Literal["post", "broadcast", "vod"]
+    title: str = Field(max_length=60)
+    scheduled_at: int = Field(description="Unix timestamp of the scheduled publish time")
+    timezone: Optional[str] = Field(default=None)
+    local_time: Optional[str] = Field(default=None)
+    status: str = Field(description="scheduled | overdue | cancelled")
+    color: str = Field(description="Hex color code for display")
+    icon: str = Field(description="Lucide icon name for display")
+
+    # Post-specific fields
+    has_images: bool = False
+    has_video: bool = False
+    visibility: Optional[str] = None
+    locked: bool = False
+    unlock_price_cents: int = 0
+
+    # Broadcast-specific fields
+    description: Optional[str] = None
+    profile_id: Optional[str] = None
+    has_announcement: bool = False
+
+    # VOD-specific fields
+    duration_seconds: Optional[float] = None
+    thumbnail_url: Optional[str] = None
+
+
+class ContentCalendarConflict(BaseModel):
+    """A pair of items scheduled too close together."""
+    item_a_id: str
+    item_a_type: Literal["post", "broadcast", "vod"]
+    item_b_id: str
+    item_b_type: Literal["post", "broadcast", "vod"]
+    gap_seconds: int
+    gap_minutes: float
+
+
+class ContentCalendarOut(BaseModel):
+    """Response for the content calendar endpoint."""
+    items: List[ContentCalendarItem] = Field(default_factory=list)
+    from_ts: int
+    to_ts: int
+    count: int = 0
+    conflicts: List[ContentCalendarConflict] = Field(default_factory=list)
+
+
+class TodayAgendaOut(BaseModel):
+    """Response for the today endpoint."""
+    today: List[ContentCalendarItem] = Field(default_factory=list)
+    tomorrow: List[ContentCalendarItem] = Field(default_factory=list)
+    today_count: int = 0
+    tomorrow_count: int = 0
+    conflicts: List[ContentCalendarConflict] = Field(default_factory=list)
+
+
+class ConflictsOut(BaseModel):
+    """Response for the conflicts endpoint."""
+    conflicts: List[ContentCalendarConflict] = Field(default_factory=list)
+    count: int = 0
+
+
+# --- Broadcast Clip Models (ENGAGE-005) ---
+
+class CreateClipIn(BaseModel):
+    start_seconds: float = Field(..., ge=0)
+    end_seconds: float = Field(..., ge=0)
+    title: Optional[str] = Field(default=None, max_length=100)
+
+
+class ClipOut(BaseModel):
+    clip_id: str
+    session_id: str
+    broadcaster_user_id: str
+    creator_user_id: str
+    creator_display_name: str
+    video_id: str
+    title: str
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+    status: Literal["processing", "ready", "failed", "deleted"]
+    view_count: int
+    share_count: int
+    thumbnail_url: str
+    created_at: int
+
+
+class ClipListOut(BaseModel):
+    clips: List[ClipOut]
+    next_cursor: Optional[str] = None
+
+
+# --- SSO / SAML Models (ENTERPRISE-002) ---
+
+class SsoProviderCreateReq(BaseModel):
+    display_name: str = Field(min_length=1, max_length=256)
+    protocol: str = Field(default="saml", pattern=r"^(saml|oidc)$")
+    tenant_id: str = Field(default="default")
+    metadata_xml: Optional[str] = None
+    sso_only: bool = False
+    jit_provisioning_enabled: bool = True
+    auto_update_profile: bool = True
+    auto_update_role: bool = False
+    default_role: str = Field(default="user", pattern=r"^(user|admin)$")
+    allowed_email_domains: Optional[List[str]] = None
+
+
+class SsoProviderOut(BaseModel):
+    provider_id: str
+    tenant_id: str
+    protocol: str
+    display_name: str
+    status: str
+    sso_only: bool
+    idp_entity_id: Optional[str] = None
+    idp_sso_url: Optional[str] = None
+    sp_entity_id: str = ""
+    sp_acs_url: str = ""
+    attribute_mappings: dict = {}
+    role_mappings: list = []
+    jit_provisioning_enabled: bool = True
+    auto_update_profile: bool = True
+    auto_update_role: bool = False
+    default_role: str = "user"
+    allowed_email_domains: Optional[List[str]] = None
+    login_count: int = 0
+    last_login_at: Optional[int] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class SsoInfoOut(BaseModel):
+    sso_available: bool
+    sso_only: bool
+    sso_login_url: Optional[str] = None
+    provider_display_name: Optional[str] = None
+    provider_protocol: Optional[str] = None
