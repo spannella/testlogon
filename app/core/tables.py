@@ -135,6 +135,8 @@ class Tables:
     llm_provider_keys: Any
     delegates: Any
     syndicates: Any
+    chat_bots: Any
+    bot_assignments: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -264,4 +266,6 @@ T = Tables(
     llm_provider_keys=ddb.Table(S.llm_provider_keys_table_name),
     delegates=ddb.Table(S.delegates_table_name),
     syndicates=ddb.Table(S.syndicates_table_name),
+    chat_bots=ddb.Table(S.chat_bots_table_name),
+    bot_assignments=ddb.Table(S.bot_assignments_table_name),
 )

@@ -1021,6 +1021,12 @@ export interface Message {
   expired?: boolean;
   scheduled?: boolean;
   deliver_at?: number;
+  // Bot identity fields (BOT-001)
+  sender_type?: "user" | "bot" | "system";
+  bot_id?: string;
+  bot_name?: string;
+  bot_avatar_url?: string;
+
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -4756,4 +4762,48 @@ export interface SyndicateUserEntry {
   syndicate_name: string;
   role: string;
   joined_at: number;
+// ---------------------------------------------------------------------------
+// Bot Framework (BOT-001)
+// ---------------------------------------------------------------------------
+
+export interface ChatBot {
+  bot_id: string;
+  creator_id: string;
+  name: string;
+  avatar_url?: string;
+  description?: string;
+  personality: "friendly" | "professional" | "casual" | "custom";
+  custom_personality?: string;
+  status: "active" | "paused" | "disabled";
+  trigger_config?: BotTriggerConfig;
+  created_at: number;
+  updated_at: number;
+  message_count: number;
+}
+
+export interface BotTriggerConfig {
+  triggers: BotTrigger[];
+  priority_order: string[];
+}
+
+export interface BotTrigger {
+  type: "keyword" | "first_message" | "mention" | "all_messages" | "idle" | "scheduled";
+  keywords?: string[];
+  response_template_id?: string;
+  idle_minutes?: number;
+  cron?: string;
+}
+
+export interface BotAssignment {
+  bot_id: string;
+  target_type: "conversation" | "broadcast" | "all_dms" | "all_groups" | "all_broadcasts";
+  target_id?: string;
+  created_at: number;
+  sk: string;
+}
+
+export interface BotStats {
+  message_count: number;
+  last_active_at?: number;
+  assignment_count: number;
 }

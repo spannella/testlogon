@@ -41,6 +41,7 @@ import {
   Megaphone,
   UserCog,
   Users,
+  Bot,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -75,6 +76,7 @@ const MORE_LINKS = [
   { label: "Calendar", i18nKey: "nav.calendar", path: "/calendar", icon: CalendarDays },
   { label: "Content Calendar", i18nKey: "nav.contentCalendar", path: "/content-calendar", icon: CalendarClock },
   { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: FilePen },
+  { label: "Bots", i18nKey: "nav.bots", path: "/bots", icon: Bot },
   { label: "Gallery", i18nKey: "nav.gallery", path: "/gallery", icon: PlaySquare },
   { label: "Videos", i18nKey: "nav.videos", path: "/videos", icon: Video },
   { label: "Broadcast", i18nKey: "nav.broadcast", path: "/broadcast", icon: Radio },

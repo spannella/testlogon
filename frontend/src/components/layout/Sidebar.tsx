@@ -127,6 +127,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Content Calendar", i18nKey: "nav.contentCalendar", path: "/content-calendar", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Scheduled", i18nKey: "nav.scheduled", path: "/scheduler", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: <FilePen className="h-5 w-5" /> },
+      { label: "Bots", i18nKey: "nav.bots", path: "/bots", icon: <Bot className="h-5 w-5" /> },
       { label: "Organizations", i18nKey: "nav.organizations", path: "/orgs", icon: <Building2 className="h-5 w-5" /> },
     ],
   },
