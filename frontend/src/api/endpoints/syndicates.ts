@@ -20,7 +20,7 @@ export const getSyndicate = (syndicateId: string) =>
   api.get<SyndicateOut>(`/ui/syndicates/${syndicateId}`);
 
 export const discoverSyndicates = (limit = 50) =>
-  api.get<SyndicateOut[]>(`/ui/syndicates/discover`, { params: { limit } });
+  api.get<SyndicateOut[]>(`/ui/syndicates/discover`, { limit: String(limit) });
 
 // -- Membership management --
 

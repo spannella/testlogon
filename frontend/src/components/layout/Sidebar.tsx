@@ -148,6 +148,9 @@ const NAV_GROUPS: NavGroup[] = [
     i18nKey: "nav.aiAgents",
     items: [
       { label: "LLM Keys", i18nKey: "nav.llmKeys", path: "/agents/llm-keys", icon: <KeyRound className="h-5 w-5" /> },
+    ],
+  },
+  {
     title: "Licenses",
     i18nKey: "nav.licenses",
     items: [

@@ -38,7 +38,7 @@ export const updateGroup = (
 ) => api.patch<UserGroup>(`/ui/groups/${groupId}`, body);
 
 export const deleteGroup = (groupId: string) =>
-  api.delete<{ ok: boolean; status: string }>(`/ui/groups/${groupId}`);
+  api.del<{ ok: boolean; status: string }>(`/ui/groups/${groupId}`);
 
 // -- Membership --
 
@@ -84,7 +84,7 @@ export const updateMemberRole = (
   });
 
 export const removeMember = (groupId: string, userId: string) =>
-  api.delete<{ ok: boolean }>(`/ui/groups/${groupId}/members/${userId}`);
+  api.del<{ ok: boolean }>(`/ui/groups/${groupId}/members/${userId}`);
 
 export const listPendingMembers = (groupId: string) =>
   api.get<GroupMember[]>(`/ui/groups/${groupId}/pending`);

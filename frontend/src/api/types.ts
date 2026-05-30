@@ -4919,6 +4919,8 @@ export interface AdCreative {
   affiliate_link_id?: string | null;
   created_at: number;
   updated_at: number;
+}
+
 // --- Issued Licenses (LICENSE-002) ---
 
 export interface IssuedLicenseOut {
