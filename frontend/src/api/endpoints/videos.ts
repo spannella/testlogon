@@ -5,19 +5,40 @@ import { api } from "../client";
 export interface VideoPresignRequest {
   filename: string;
   content_type: string;
-  size_bytes: number;
+  file_size_bytes: number;
+  title?: string;
+  description?: string;
+  folder_path?: string;
 }
 
 export interface VideoPresignResponse {
+  upload_url: string;
+  bucket: string;
+  key: string;
+  ticket_id: string;
   video_id: string;
-  presigned_url: string;
-  s3_key: string;
-  expires_in_seconds: number;
+  content_type: string;
+  expires_at: string;
+  max_size_bytes: number;
+}
+
+export interface VideoCompleteRequest {
+  ticket_id: string;
+  key: string;
+  content_type?: string;
+  client_checksum?: string;
 }
 
 export interface VideoCompleteResponse {
+  ok: boolean;
   video_id: string;
+  s3_key: string;
+  size_bytes: number;
+  content_type: string;
+  duration_seconds: number | null;
+  thumbnail_url: string | null;
   status: string;
+  created_at: number;
 }
 
 export interface VideoListItem {
@@ -95,8 +116,12 @@ export interface VideoUpdateRequest {
 export const presignVideoUpload = (body: VideoPresignRequest) =>
   api.post<VideoPresignResponse>("/ui/videos/upload/presign", body);
 
-export const completeVideoUpload = (videoId: string) =>
-  api.post<VideoCompleteResponse>(`/ui/videos/${videoId}/upload/complete`);
+export const completeVideoUpload = (body: VideoCompleteRequest) =>
+  api.post<VideoCompleteResponse>("/ui/videos/upload/complete", body);
+
+/** @deprecated Use completeVideoUpload with ticket_id + key instead */
+export const completeVideoUploadLegacy = (videoId: string) =>
+  api.post<{ video_id: string; status: string }>(`/ui/videos/${videoId}/upload/complete`);
 
 export const listMyVideos = (params?: { limit?: number; cursor?: string; status?: string }) => {
   const p: Record<string, string> = {};

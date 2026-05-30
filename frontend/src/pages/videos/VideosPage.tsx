@@ -50,6 +50,7 @@ import CombineVideosDialog from "@/components/shared/CombineVideosDialog";
 import {
   presignVideoUpload,
   completeVideoUpload,
+  completeVideoUploadLegacy,
   listMyVideos,
   updateVideo,
   deleteVideo,
@@ -201,10 +202,15 @@ function getStatusBadge(status: string) {
 
 const ALLOWED_TYPES = [
   "video/mp4",
-  "video/webm",
   "video/quicktime",
   "video/x-msvideo",
   "video/x-matroska",
+  "video/webm",
+  "video/mpeg",
+  "video/ogg",
+  "video/x-flv",
+  "video/3gpp",
+  "video/3gpp2",
 ];
 
 const ACCEPT_STRING = ALLOWED_TYPES.join(",");
@@ -268,7 +274,9 @@ export default function VideosPage() {
         const presign = await presignVideoUpload({
           filename: file.name,
           content_type: file.type || "video/mp4",
-          size_bytes: file.size,
+          file_size_bytes: file.size,
+          title: item.title || undefined,
+          description: item.description || undefined,
         });
         dispatch({ type: "SET_VIDEO_ID", id, videoId: presign.video_id });
 
@@ -300,14 +308,17 @@ export default function VideosPage() {
           xhr.onerror = () => reject(new Error("Network error during upload"));
           xhr.onabort = () => reject(new Error("Upload cancelled"));
 
-          xhr.open("PUT", presign.presigned_url);
+          xhr.open("PUT", presign.upload_url);
           xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
           xhr.send(file);
         });
 
         // 3. Complete upload
         dispatch({ type: "SET_STATUS", id, status: "confirming" });
-        await completeVideoUpload(presign.video_id);
+        await completeVideoUpload({
+          ticket_id: presign.ticket_id,
+          key: presign.key,
+        });
 
         // 4. Processing state (backend handles transcoding)
         dispatch({ type: "SET_STATUS", id, status: "processing" });
