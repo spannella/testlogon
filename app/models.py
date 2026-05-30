@@ -2320,11 +2320,22 @@ class EarningsBreakdown(BaseModel):
     other: int = 0
 
 
+class TimeSeriesPoint(BaseModel):
+    date: str
+    total: int = 0
+    tips: int = 0
+    subscriptions: int = 0
+    unlocks: int = 0
+    vod_purchases: int = 0
+    other: int = 0
+
+
 class EarningsSummaryOut(BaseModel):
     total_cents: int = 0
     breakdown: EarningsBreakdown = Field(default_factory=EarningsBreakdown)
     transaction_count: int = 0
     currency: str = "USD"
+    time_series: List[TimeSeriesPoint] = Field(default_factory=list)
 
 
 class EarningsTransactionOut(BaseModel):
@@ -2340,6 +2351,15 @@ class EarningsTransactionOut(BaseModel):
 class EarningsTransactionsOut(BaseModel):
     items: List[EarningsTransactionOut]
     next_cursor: Optional[str] = None
+
+
+class EarningsQuickStatsOut(BaseModel):
+    today_cents: int = 0
+    this_week_cents: int = 0
+    this_month_cents: int = 0
+    all_time_cents: int = 0
+    currency: str = "USD"
+    pending_payout_cents: int = 0
 
 
 # -- Creator Payouts (MON-004) --

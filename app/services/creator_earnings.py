@@ -1,12 +1,22 @@
 """Creator Earnings Dashboard service (MON-003).
 
 Aggregates billing ledger credit entries for a creator and returns
-earnings summaries and paginated transaction lists.
+earnings summaries, time-series breakdowns, quick stats, and
+paginated transaction lists.
+
+Revenue categories:
+  - tips: Tip entries (reason contains "tip" or meta.content_type in message/post/comment)
+  - subscriptions: Subscription payments (reason contains "subscription")
+  - unlocks: Locked-content unlocks (reason contains "unlock")
+  - vod_purchases: VOD sales (reason contains "vod")
+  - other: Anything else
 """
 
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -19,19 +29,46 @@ from app.core.time import now_ts
 logger = logging.getLogger(__name__)
 
 
-def _reason_to_category(reason: str) -> str:
-    """Map a ledger credit reason to an earnings category."""
-    reason_lower = reason.lower() if reason else ""
-    if "subscription" in reason_lower:
-        return "subscriptions"
-    if reason_lower.startswith("tip"):
+# ---------------------------------------------------------------------------
+# Classification
+# ---------------------------------------------------------------------------
+
+def classify_entry(entry: Dict[str, Any]) -> str:
+    """Classify a ledger entry into a revenue category.
+
+    Supports both old format (reason="Tip sent") and new format
+    (reason="Tip: message", meta.content_type="message").
+
+    Returns one of: "tips", "subscriptions", "unlocks", "vod_purchases", "other".
+    """
+    reason = (entry.get("reason") or "").lower()
+    meta = entry.get("meta") or {}
+
+    # New-format entries with content_type in meta
+    content_type = meta.get("content_type", "")
+    if content_type in ("message", "post", "comment"):
         return "tips"
-    if "unlock" in reason_lower:
+
+    # Reason-based classification
+    if "tip" in reason:
+        return "tips"
+    if "subscription" in reason:
+        return "subscriptions"
+    if "unlock" in reason:
         return "unlocks"
-    if "vod" in reason_lower:
+    if "vod" in reason:
         return "vod_purchases"
+
     return "other"
 
+
+# Backward compat alias
+_reason_to_category = classify_entry
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _to_int(val: Any) -> int:
     """Coerce DynamoDB Decimal or string to int."""
@@ -44,75 +81,211 @@ def _to_int(val: Any) -> int:
     return 0
 
 
-def get_earnings_summary(user_id: str, *, from_ts: int = 0, to_ts: int = 0) -> dict:
-    """Aggregate all credit ledger entries for a creator in a time range.
+def _ts_to_date_key(ts: int, granularity: str) -> str:
+    """Convert Unix timestamp to a date key for time-series aggregation.
 
-    Returns dict with:
-    - total_cents: int (sum of all credits)
-    - breakdown: dict mapping category to cents
-    - transaction_count: int
-    - currency: "USD"
+    Args:
+        ts: Unix timestamp (seconds).
+        granularity: "day", "week", or "month".
+
+    Returns:
+        "2026-05-25" (day), "2026-W21" (week), "2026-05" (month).
     """
-    pk = f"USER#{user_id}"
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    if granularity == "week":
+        return dt.strftime("%Y-W%W")
+    if granularity == "month":
+        return dt.strftime("%Y-%m")
+    return dt.strftime("%Y-%m-%d")
 
-    # Build key condition
+
+def _start_of_day_utc(ts: int) -> int:
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return int(dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+
+
+def _start_of_month_utc(ts: int) -> int:
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return int(dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
+
+
+# ---------------------------------------------------------------------------
+# DynamoDB query
+# ---------------------------------------------------------------------------
+
+def _build_key_condition(pk: str, from_ts: int = 0, to_ts: int = 0):
+    """Build a DDB KeyConditionExpression for ledger entries in a time range."""
     if from_ts and to_ts:
-        key_cond = Key("pk").eq(pk) & Key("sk").between(
+        return Key("pk").eq(pk) & Key("sk").between(
             f"LEDGER#{from_ts}", f"LEDGER#{to_ts}z"
         )
-    elif from_ts:
-        key_cond = Key("pk").eq(pk) & Key("sk").between(
+    if from_ts:
+        return Key("pk").eq(pk) & Key("sk").between(
             f"LEDGER#{from_ts}", "LEDGER#9999999999z"
         )
-    elif to_ts:
-        key_cond = Key("pk").eq(pk) & Key("sk").between(
+    if to_ts:
+        return Key("pk").eq(pk) & Key("sk").between(
             "LEDGER#0", f"LEDGER#{to_ts}z"
         )
-    else:
-        key_cond = Key("pk").eq(pk) & Key("sk").begins_with("LEDGER#")
+    return Key("pk").eq(pk) & Key("sk").begins_with("LEDGER#")
 
+
+def _query_credit_entries(
+    *,
+    user_id: str,
+    from_ts: int = 0,
+    to_ts: int = 0,
+    limit: int = 5000,
+) -> List[Dict[str, Any]]:
+    """Query all credit LEDGER entries for a user within a time range.
+
+    Paginates via LastEvaluatedKey.  Caps at ``limit`` entries.
+    """
+    pk = f"USER#{user_id}"
+    key_cond = _build_key_condition(pk, from_ts, to_ts)
     filter_expr = Attr("type").eq("credit")
 
-    total_cents = 0
-    breakdown: Dict[str, int] = {
-        "subscriptions": 0,
-        "tips": 0,
-        "unlocks": 0,
-        "vod_purchases": 0,
-        "other": 0,
-    }
-    transaction_count = 0
-
-    # Loop through all pages
+    collected: List[Dict[str, Any]] = []
     query_kwargs: Dict[str, Any] = {
         "KeyConditionExpression": key_cond,
         "FilterExpression": filter_expr,
+        "Limit": 500,
     }
 
-    while True:
+    for _ in range(20):  # safety cap
         resp = T.billing.query(**query_kwargs)
         items = resp.get("Items", [])
+        collected.extend(items)
 
-        for item in items:
-            amount = _to_int(item.get("amount_cents", 0))
-            reason = item.get("reason", "")
-            category = _reason_to_category(reason)
-            total_cents += amount
-            breakdown[category] = breakdown.get(category, 0) + amount
-            transaction_count += 1
+        if len(collected) >= limit:
+            collected = collected[:limit]
+            break
 
         last_key = resp.get("LastEvaluatedKey")
         if not last_key:
             break
         query_kwargs["ExclusiveStartKey"] = last_key
 
+    return collected
+
+
+# ---------------------------------------------------------------------------
+# Earnings Summary (with time-series + granularity)
+# ---------------------------------------------------------------------------
+
+class EarningsSummary:
+    """Accumulates credit entries into totals, breakdown, and time-series."""
+
+    def __init__(self) -> None:
+        self.total_cents: int = 0
+        self.currency: str = "USD"
+        self.breakdown: Dict[str, int] = defaultdict(int)
+        self.time_series: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self.transaction_count: int = 0
+
+    def add_entry(self, entry: Dict[str, Any], granularity: str = "day") -> None:
+        amount = _to_int(entry.get("amount_cents", 0))
+        ts = _to_int(entry.get("ts", 0))
+        category = classify_entry(entry)
+
+        self.total_cents += amount
+        self.breakdown[category] += amount
+        self.transaction_count += 1
+
+        date_key = _ts_to_date_key(ts, granularity)
+        self.time_series[date_key]["total"] += amount
+        self.time_series[date_key][category] += amount
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "total_cents": self.total_cents,
+            "currency": self.currency,
+            "breakdown": dict(self.breakdown),
+            "time_series": [
+                {"date": k, **v}
+                for k, v in sorted(self.time_series.items())
+            ],
+            "transaction_count": self.transaction_count,
+        }
+
+
+def get_earnings_summary(
+    user_id: str,
+    *,
+    from_ts: int = 0,
+    to_ts: int = 0,
+    granularity: str = "day",
+) -> Dict[str, Any]:
+    """Compute aggregated earnings summary for a creator.
+
+    Returns dict with total_cents, breakdown, time_series, transaction_count.
+    """
+    entries = _query_credit_entries(user_id=user_id, from_ts=from_ts, to_ts=to_ts)
+    summary = EarningsSummary()
+    for entry in entries:
+        summary.add_entry(entry, granularity=granularity)
+
+    result = summary.to_dict()
+
+    # Ensure all canonical categories are present in breakdown
+    for cat in ("subscriptions", "tips", "unlocks", "vod_purchases", "other"):
+        result["breakdown"].setdefault(cat, 0)
+
+    logger.info(
+        "earnings_summary_computed",
+        extra={
+            "user_id": user_id,
+            "total_cents": result["total_cents"],
+            "entries": result["transaction_count"],
+        },
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Quick Stats
+# ---------------------------------------------------------------------------
+
+def get_quick_stats(*, user_id: str) -> Dict[str, Any]:
+    """Pre-aggregated totals for today, this week, this month, all time.
+
+    Computes all four windows in a single ledger scan.
+    """
+    now = now_ts()
+    today_start = _start_of_day_utc(now)
+    week_start = today_start - (datetime.fromtimestamp(now, tz=timezone.utc).weekday() * 86400)
+    month_start = _start_of_month_utc(now)
+
+    entries = _query_credit_entries(user_id=user_id)
+    today_cents = 0
+    week_cents = 0
+    month_cents = 0
+    all_time_cents = 0
+
+    for entry in entries:
+        amount = _to_int(entry.get("amount_cents", 0))
+        ts = _to_int(entry.get("ts", 0))
+        all_time_cents += amount
+        if ts >= month_start:
+            month_cents += amount
+        if ts >= week_start:
+            week_cents += amount
+        if ts >= today_start:
+            today_cents += amount
+
     return {
-        "total_cents": total_cents,
-        "breakdown": breakdown,
-        "transaction_count": transaction_count,
+        "today_cents": today_cents,
+        "this_week_cents": week_cents,
+        "this_month_cents": month_cents,
+        "all_time_cents": all_time_cents,
         "currency": "USD",
+        "pending_payout_cents": 0,  # populated after MON-004
     }
 
+
+# ---------------------------------------------------------------------------
+# Paginated Transactions
+# ---------------------------------------------------------------------------
 
 def get_earnings_transactions(
     user_id: str,
@@ -121,31 +294,13 @@ def get_earnings_transactions(
     cursor: Optional[str] = None,
     from_ts: int = 0,
     to_ts: int = 0,
-) -> dict:
-    """Paginated list of individual credit ledger entries.
+) -> Dict[str, Any]:
+    """Paginated list of individual credit ledger entries (newest first).
 
-    Returns dict with:
-    - items: list of transaction dicts
-    - next_cursor: optional str
+    Returns dict with items (list) and next_cursor (optional str).
     """
     pk = f"USER#{user_id}"
-
-    # Build key condition
-    if from_ts and to_ts:
-        key_cond = Key("pk").eq(pk) & Key("sk").between(
-            f"LEDGER#{from_ts}", f"LEDGER#{to_ts}z"
-        )
-    elif from_ts:
-        key_cond = Key("pk").eq(pk) & Key("sk").between(
-            f"LEDGER#{from_ts}", "LEDGER#9999999999z"
-        )
-    elif to_ts:
-        key_cond = Key("pk").eq(pk) & Key("sk").between(
-            "LEDGER#0", f"LEDGER#{to_ts}z"
-        )
-    else:
-        key_cond = Key("pk").eq(pk) & Key("sk").begins_with("LEDGER#")
-
+    key_cond = _build_key_condition(pk, from_ts, to_ts)
     filter_expr = Attr("type").eq("credit")
 
     query_kwargs: Dict[str, Any] = {
@@ -160,7 +315,6 @@ def get_earnings_transactions(
         query_kwargs["ExclusiveStartKey"] = start_key
 
     # Because FilterExpression is applied AFTER fetching, we may need to loop
-    # to collect enough items.
     items: List[Dict[str, Any]] = []
     last_key = None
 
@@ -169,9 +323,8 @@ def get_earnings_transactions(
         for item in resp.get("Items", []):
             amount = _to_int(item.get("amount_cents", 0))
             reason = item.get("reason", "")
-            category = _reason_to_category(reason)
+            category = classify_entry(item)
             meta = item.get("meta", {})
-            # Convert any Decimal values in meta to int/float
             if isinstance(meta, dict):
                 meta = {k: (int(v) if isinstance(v, Decimal) else v) for k, v in meta.items()}
             items.append({
@@ -189,15 +342,14 @@ def get_earnings_transactions(
             break
         query_kwargs["ExclusiveStartKey"] = last_key
 
-    # Trim to limit
     next_cursor: Optional[str] = None
     if len(items) > limit:
         items = items[:limit]
-        # We need to reconstruct the start key for the next page
-        # Use the last item's pk/sk as the exclusive start key
-        last_item_resp = items[-1]
-        # Reconstruct DDB key from the last returned item
-        next_cursor = encode_cursor({"pk": pk, "sk": f"LEDGER#{last_item_resp['ts']}#{last_item_resp['entry_id']}"})
+        last_item = items[-1]
+        next_cursor = encode_cursor({
+            "pk": pk,
+            "sk": f"LEDGER#{last_item['ts']}#{last_item['entry_id']}",
+        })
     elif last_key:
         next_cursor = encode_cursor(last_key)
 
