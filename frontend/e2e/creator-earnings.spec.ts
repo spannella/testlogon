@@ -3,6 +3,8 @@
  *
  * Section 105: Earnings Summary API (5 tests)
  * Section 106: Earnings Transactions API (4 tests)
+ * Section 107: Earnings Quick Stats + Edge Cases (6 tests)
+ * Section 108: Earnings UI (6 tests)
  *
  * Auth: uses e2e_admin_session_setup.py to get cookie-based sessions.
  * Seeds billing ledger credit entries directly into DynamoDB for Alice.
@@ -334,5 +336,264 @@ test.describe("106 · Earnings Transactions API", () => {
         i.reason.includes("unlock") && i.category === "unlocks",
     );
     expect(unlockItems.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// =============================================================================
+// Section 107: Quick Stats + Time Series + Edge Cases
+// =============================================================================
+
+test.describe("107 · Quick Stats + Time Series + Edge Cases", () => {
+  let alicePage: Page;
+  const debitEntryId = `e107_debit_${TS}`;
+  const debitTs = Math.floor(Date.now() / 1000) - 50;
+
+  test.beforeAll(async ({ browser }) => {
+    // Seed credit entries
+    seedLedgerCredits(ALICE_ID, [
+      { reason: "Tip: message", amount_cents: 750 },
+      { reason: "Subscription payment", amount_cents: 1999 },
+      { reason: "VOD sale", amount_cents: 600 },
+    ]);
+
+    // Seed a DEBIT entry (should be filtered out)
+    const debitB64 = Buffer.from(JSON.stringify([{ reason: "Wallet withdrawal", amount_cents: 300 }])).toString("base64");
+    execSync(
+      `${PYTHON} -c "
+import boto3, os, json, base64, time
+from pathlib import Path
+
+env_file = Path('/home/ubuntu/testlogon/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+ddb = boto3.resource(
+    'dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL', 'http://localhost:8001'),
+    region_name='us-east-1',
+    aws_access_key_id='test',
+    aws_secret_access_key='test',
+)
+tbl = ddb.Table('billing')
+ts = ${debitTs}
+tbl.put_item(Item={
+    'pk': 'USER#${ALICE_ID}',
+    'sk': f'LEDGER#{ts}#${debitEntryId}',
+    'entry_id': '${debitEntryId}',
+    'ts': ts,
+    'type': 'debit',
+    'amount_cents': 300,
+    'currency': 'USD',
+    'state': 'settled',
+    'reason': 'Wallet withdrawal',
+    'meta': {'test_run': '${TS}'},
+})
+print('debit seeded')
+"`,
+      { timeout: 10_000 },
+    );
+
+    alicePage = await newIdentityPage(browser, ALICE_KEY);
+  });
+
+  test.afterAll(async () => {
+    cleanupLedgerCredits(ALICE_ID);
+    // Clean debit entry
+    try {
+      execSync(
+        `${PYTHON} -c "
+import boto3, os
+from pathlib import Path
+
+env_file = Path('/home/ubuntu/testlogon/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+ddb = boto3.resource(
+    'dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL', 'http://localhost:8001'),
+    region_name='us-east-1',
+    aws_access_key_id='test',
+    aws_secret_access_key='test',
+)
+tbl = ddb.Table('billing')
+tbl.delete_item(Key={'pk': 'USER#${ALICE_ID}', 'sk': 'LEDGER#${debitTs}#${debitEntryId}'})
+print('debit cleaned')
+"`,
+        { timeout: 10_000 },
+      );
+    } catch { /* best-effort */ }
+    await alicePage?.close();
+  });
+
+  test("107.1 quick-stats returns all time windows", async () => {
+    const resp = await apiGet(alicePage, "/ui/earnings/quick-stats");
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(typeof data.today_cents).toBe("number");
+    expect(typeof data.this_week_cents).toBe("number");
+    expect(typeof data.this_month_cents).toBe("number");
+    expect(typeof data.all_time_cents).toBe("number");
+    expect(data.currency).toBe("USD");
+    expect(typeof data.pending_payout_cents).toBe("number");
+  });
+
+  test("107.2 quick-stats windows are monotonically non-decreasing", async () => {
+    const resp = await apiGet(alicePage, "/ui/earnings/quick-stats");
+    const data = await resp.json();
+    expect(data.all_time_cents).toBeGreaterThanOrEqual(data.this_month_cents);
+    expect(data.this_month_cents).toBeGreaterThanOrEqual(data.this_week_cents);
+    expect(data.this_week_cents).toBeGreaterThanOrEqual(data.today_cents);
+  });
+
+  test("107.3 summary time_series with day granularity", async () => {
+    const resp = await apiGet(alicePage, "/ui/earnings/summary", {
+      granularity: "day",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(Array.isArray(data.time_series)).toBe(true);
+    if (data.time_series.length > 0) {
+      // Day format: YYYY-MM-DD
+      expect(data.time_series[0].date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(typeof data.time_series[0].total).toBe("number");
+    }
+  });
+
+  test("107.4 summary time_series with month granularity", async () => {
+    const resp = await apiGet(alicePage, "/ui/earnings/summary", {
+      granularity: "month",
+    });
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(Array.isArray(data.time_series)).toBe(true);
+    if (data.time_series.length > 0) {
+      // Month format: YYYY-MM
+      expect(data.time_series[0].date).toMatch(/^\d{4}-\d{2}$/);
+    }
+  });
+
+  test("107.5 only credit entries included (debits filtered)", async () => {
+    // The debit entry (300 cents) should NOT appear in summary
+    const resp = await apiGet(alicePage, "/ui/earnings/summary");
+    const data = await resp.json();
+    // Verify no negative / debit amounts snuck through the transaction list
+    const txResp = await apiGet(alicePage, "/ui/earnings/transactions");
+    const txData = await txResp.json();
+    for (const item of txData.items) {
+      expect(item.category).not.toBe("debit");
+      // All returned entries should be credits (positive amounts)
+      expect(item.amount_cents).toBeGreaterThan(0);
+    }
+  });
+
+  test("107.6 invalid date format returns 400", async () => {
+    const resp = await apiGet(alicePage, "/ui/earnings/summary", {
+      from_date: "not-a-date",
+    });
+    expect(resp.status()).toBe(400);
+  });
+});
+
+// =============================================================================
+// Section 108: Earnings UI
+// =============================================================================
+
+test.describe("108 · Earnings UI", () => {
+  let alicePage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    // Seed some entries for UI rendering
+    seedLedgerCredits(ALICE_ID, [
+      { reason: "Tip: message", amount_cents: 1200 },
+      { reason: "Subscription payment", amount_cents: 4999 },
+      { reason: "Post unlock", amount_cents: 800 },
+    ]);
+
+    alicePage = await newIdentityPage(browser, ALICE_KEY);
+  });
+
+  test.afterAll(async () => {
+    cleanupLedgerCredits(ALICE_ID);
+    await alicePage?.close();
+  });
+
+  test("108.1 Earnings page loads with quick stat cards", async () => {
+    await alicePage.goto(`${BASE}/earnings`);
+    await alicePage.waitForLoadState("domcontentloaded");
+
+    await expect(alicePage.getByText("Today")).toBeVisible({ timeout: 10_000 });
+    await expect(alicePage.getByText("This Week")).toBeVisible();
+    await expect(alicePage.getByText("This Month")).toBeVisible();
+    await expect(alicePage.getByText("All Time")).toBeVisible();
+  });
+
+  test("108.2 Quick stats show dollar amounts", async () => {
+    await alicePage.goto(`${BASE}/earnings`);
+    await alicePage.waitForLoadState("domcontentloaded");
+
+    // Wait for stat cards to render values
+    await expect(
+      alicePage.locator("[role='status']").first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // At least one stat card should show a dollar amount
+    const statTexts = await alicePage.locator("[role='status']").allTextContents();
+    const hasDollarAmount = statTexts.some((t) => /\$\d/.test(t));
+    expect(hasDollarAmount).toBe(true);
+  });
+
+  test("108.3 Revenue Over Time chart section visible", async () => {
+    await alicePage.goto(`${BASE}/earnings`);
+    await alicePage.waitForLoadState("domcontentloaded");
+
+    await expect(
+      alicePage.getByText("Revenue Over Time"),
+    ).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("108.4 Revenue Breakdown section visible", async () => {
+    await alicePage.goto(`${BASE}/earnings`);
+    await alicePage.waitForLoadState("domcontentloaded");
+
+    await expect(
+      alicePage.getByText("Revenue Breakdown"),
+    ).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("108.5 Date range preset buttons exist", async () => {
+    await alicePage.goto(`${BASE}/earnings`);
+    await alicePage.waitForLoadState("domcontentloaded");
+
+    await expect(alicePage.getByRole("button", { name: "7d" })).toBeVisible();
+    await expect(alicePage.getByRole("button", { name: "30d" })).toBeVisible();
+    await expect(alicePage.getByRole("button", { name: "90d" })).toBeVisible();
+    await expect(alicePage.getByRole("button", { name: "1y" })).toBeVisible();
+    await expect(alicePage.getByRole("button", { name: "All" })).toBeVisible();
+  });
+
+  test("108.6 Transaction table shows entries", async () => {
+    await alicePage.goto(`${BASE}/earnings`);
+    await alicePage.waitForLoadState("domcontentloaded");
+
+    await expect(
+      alicePage.getByText("Recent Transactions"),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // Wait for table rows
+    await expect(
+      alicePage.locator("table tbody tr").first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    const rowCount = await alicePage.locator("table tbody tr").count();
+    expect(rowCount).toBeGreaterThanOrEqual(1);
   });
 });

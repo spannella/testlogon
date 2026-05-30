@@ -3742,11 +3742,22 @@ export interface EarningsBreakdown {
   other: number;
 }
 
+export interface TimeSeriesPoint {
+  date: string;
+  total: number;
+  tips?: number;
+  subscriptions?: number;
+  unlocks?: number;
+  vod_purchases?: number;
+  other?: number;
+}
+
 export interface EarningsSummary {
   total_cents: number;
   breakdown: EarningsBreakdown;
   transaction_count: number;
   currency: string;
+  time_series: TimeSeriesPoint[];
 }
 
 export interface EarningsTransaction {
@@ -3762,6 +3773,15 @@ export interface EarningsTransaction {
 export interface EarningsTransactionsResp {
   items: EarningsTransaction[];
   next_cursor: string | null;
+}
+
+export interface EarningsQuickStats {
+  today_cents: number;
+  this_week_cents: number;
+  this_month_cents: number;
+  all_time_cents: number;
+  currency: string;
+  pending_payout_cents: number;
 }
 
 // ─── Video Subtitles (VOD-021) ─────────────────────────────────────

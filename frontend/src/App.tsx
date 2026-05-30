@@ -64,6 +64,7 @@ const GalleryPage = lazy(() => import("@/pages/gallery/GalleryPage"));
 const GalleryVideoDetailPage = lazy(() => import("@/pages/gallery/VideoDetailPage"));
 const AnalyticsPage = lazy(() => import("@/pages/analytics/AnalyticsPage"));
 const ContentDetailPage = lazy(() => import("@/pages/analytics/ContentDetailPage"));
+const EarningsPage = lazy(() => import("@/pages/earnings/EarningsPage"));
 const PayoutDashboard = lazy(() => import("@/pages/payouts/PayoutDashboard"));
 const PrivacyPage = lazy(() => import("@/pages/settings/PrivacyPage"));
 const BlockedUsersPage = lazy(() => import("@/pages/settings/BlockedUsersPage"));
@@ -183,6 +184,7 @@ export default function App() {
           <Route path="creator-dashboard" element={<CreatorDashboard />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="analytics/content/:contentId" element={<ContentDetailPage />} />
+          <Route path="earnings" element={<EarningsPage />} />
           <Route path="payouts" element={<PayoutDashboard />} />
           <Route path="referrals" element={<ReferralDashboard />} />
           <Route path="promo" element={<PromoCodesPage />} />
