@@ -135,6 +135,15 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    title: "Licenses",
+    i18nKey: "nav.licenses",
+    items: [
+      { label: "Issued", i18nKey: "nav.licensesIssued", path: "/licenses/issued", icon: <Scale className="h-5 w-5" /> },
+      { label: "Held", i18nKey: "nav.licensesHeld", path: "/licenses/held", icon: <Scale className="h-5 w-5" /> },
+      { label: "Library", i18nKey: "nav.licensedLibrary", path: "/licenses/library", icon: <Scale className="h-5 w-5" /> },
+    ],
+  },
+  {
     title: "Account",
     i18nKey: "nav.account",
     items: [

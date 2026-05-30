@@ -3878,3 +3878,79 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# -- Issued Licenses (LICENSE-002) --
+
+class IssueLicenseIn(BaseModel):
+    content_id: str
+    content_type: str = Field(description="One of: video, music, image, post, broadcast, clip")
+    license_mode: str = Field(description="One of: per_user, blanket")
+    licensee_id: Optional[str] = Field(default=None, description="Required for per_user mode")
+    profit_share_pct: int = Field(default=0, ge=0, le=100)
+    fixed_cost_cents: int = Field(default=0, ge=0)
+    revenue_share_pct: int = Field(default=0, ge=0, le=100)
+    currency: str = Field(default="usd", max_length=3)
+    title: str = Field(default="", max_length=200)
+    thumbnail_url: str = Field(default="", max_length=500)
+    expires_at: Optional[int] = None
+
+
+class UpdateLicenseTermsIn(BaseModel):
+    profit_share_pct: Optional[int] = Field(default=None, ge=0, le=100)
+    fixed_cost_cents: Optional[int] = Field(default=None, ge=0)
+    revenue_share_pct: Optional[int] = Field(default=None, ge=0, le=100)
+    expires_at: Optional[int] = None
+
+
+class RevokeLicenseIn(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+class IssuedLicenseOut(BaseModel):
+    issued_license_id: str
+    content_id: str
+    content_type: str
+    licensor_id: str
+    licensor_display_name: str = ""
+    licensee_id: Optional[str] = None
+    license_mode: str
+    status: str
+    profit_share_pct: int = 0
+    fixed_cost_cents: int = 0
+    revenue_share_pct: int = 0
+    currency: str = "usd"
+    title: str = ""
+    thumbnail_url: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+    expires_at: Optional[int] = None
+
+
+class HeldLicenseOut(BaseModel):
+    issued_license_id: str
+    content_id: str
+    content_type: str
+    licensor_id: str
+    licensor_display_name: str = ""
+    status: str
+    terms_snapshot: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LibraryItemOut(BaseModel):
+    content_id: str
+    content_type: str
+    licensor_id: str
+    licensor_display_name: str = ""
+    title: str = ""
+    thumbnail_url: str = ""
+    profit_share_pct: int = 0
+    fixed_cost_cents: int = 0
+    created_at: int = 0
+
+
+class LicenseCheckOut(BaseModel):
+    has_license: bool
+    issued_license_id: Optional[str] = None
+    license_mode: Optional[str] = None
+    terms: Optional[Dict[str, Any]] = None

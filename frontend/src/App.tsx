@@ -45,6 +45,9 @@ const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
 const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
 const RemoteDesktopPage = lazy(() => import("@/pages/remote/RemoteDesktopPage"));
 const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
+const IssuedLicensesPage = lazy(() => import("@/pages/licenses/IssuedLicensesPage"));
+const HeldLicensesPage = lazy(() => import("@/pages/licenses/HeldLicensesPage"));
+const LicensedLibraryPage = lazy(() => import("@/pages/licenses/LicensedLibraryPage"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
@@ -135,6 +138,9 @@ export default function App() {
           <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />
           <Route path="signing" element={<SigningPage />} />
+          <Route path="licenses/issued" element={<IssuedLicensesPage />} />
+          <Route path="licenses/held" element={<HeldLicensesPage />} />
+          <Route path="licenses/library" element={<LicensedLibraryPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
