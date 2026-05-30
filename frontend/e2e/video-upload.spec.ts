@@ -2,9 +2,9 @@
  * E2E tests for Video Upload & Library page.
  *
  * Sections:
- *   105 — Video Upload API Flow  (4 tests)
- *   106 — Video Library UI       (5 tests)
- *   107 — Upload Progress         (3 tests)
+ *   105 — Video Upload API Flow         (8 tests)
+ *   106 — Video Library UI              (5 tests)
+ *   107 — Upload Progress               (3 tests)
  *
  * Auth: Alice session cookies (from e2e_session_setup.py).
  */
@@ -95,13 +95,58 @@ async function apiPatch(page: Page, path: string, body: unknown) {
   return resp;
 }
 
+/**
+ * Helper: presign + upload bytes + complete via ticket-based endpoint.
+ * Returns the presign response and the complete response.
+ */
+async function fullUploadFlow(
+  page: Page,
+  opts: {
+    filename: string;
+    content_type?: string;
+    sizeBytes?: number;
+    title?: string;
+  },
+) {
+  const size = opts.sizeBytes ?? 256;
+  const ct = opts.content_type ?? "video/mp4";
+
+  // 1. Presign
+  const presignResp = await apiPost(page, "/ui/videos/upload/presign", {
+    filename: opts.filename,
+    content_type: ct,
+    file_size_bytes: size,
+    title: opts.title,
+  });
+  expect(presignResp.status()).toBe(200);
+  const presign = await presignResp.json();
+
+  // 2. Upload bytes to mock S3
+  const fakeContent = Buffer.alloc(size, 0x42);
+  const putResp = await page.request.put(presign.upload_url, {
+    headers: { "Content-Type": ct },
+    data: fakeContent,
+  });
+  expect(putResp.status()).toBeLessThan(400);
+
+  // 3. Complete via ticket
+  const completeResp = await apiPost(page, "/ui/videos/upload/complete", {
+    ticket_id: presign.ticket_id,
+    key: presign.key,
+  });
+  expect(completeResp.status()).toBe(200);
+  const asset = await completeResp.json();
+
+  return { presign, asset };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Section 105 — Video Upload API Flow
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test.describe("105 · Video Upload API Flow", () => {
   let page: Page;
-  let videoId: string;
+  const createdVideoIds: string[] = [];
 
   test.beforeAll(async ({ browser }) => {
     page = await browser.newPage();
@@ -109,67 +154,126 @@ test.describe("105 · Video Upload API Flow", () => {
   });
 
   test.afterAll(async () => {
-    // Clean up: delete the created video
-    if (videoId) {
-      await apiDelete(page, `/ui/videos/${videoId}`).catch(() => {});
+    for (const vid of createdVideoIds) {
+      await apiDelete(page, `/ui/videos/${vid}`).catch(() => {});
     }
     await page.close();
   });
 
-  test("105.1 Presign returns valid upload URL and video_id", async () => {
+  test("105.1 Presign returns upload_url, ticket_id, key, and video_id", async () => {
     const resp = await apiPost(page, "/ui/videos/upload/presign", {
       filename: `test_video_${TS}.mp4`,
       content_type: "video/mp4",
-      size_bytes: 1024 * 1024, // 1 MB
+      file_size_bytes: 1024 * 1024,
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
+
+    // New response fields
     expect(data.video_id).toBeTruthy();
-    expect(data.presigned_url).toBeTruthy();
-    expect(data.s3_key).toContain(`test_video_${TS}.mp4`);
-    expect(data.expires_in_seconds).toBeGreaterThan(0);
-    videoId = data.video_id;
+    expect(data.upload_url).toBeTruthy();
+    expect(data.key).toContain("vod/");
+    expect(data.key).toContain(`test_video_${TS}.mp4`);
+    expect(data.ticket_id).toBeTruthy();
+    expect(data.bucket).toBeTruthy();
+    expect(data.content_type).toBe("video/mp4");
+    expect(data.expires_at).toBeTruthy();
+    expect(data.max_size_bytes).toBe(10 * 1024 * 1024 * 1024);
+
+    createdVideoIds.push(data.video_id);
   });
 
-  test("105.2 Upload to presigned URL succeeds", async () => {
-    // Get a fresh presign for a small upload
-    const presignResp = await apiPost(page, "/ui/videos/upload/presign", {
-      filename: `upload_test_${TS}.mp4`,
+  test("105.2 Presign rejects non-video content type", async () => {
+    const resp = await apiPost(page, "/ui/videos/upload/presign", {
+      filename: "document.pdf",
+      content_type: "application/pdf",
+      file_size_bytes: 1024,
+    });
+    // Pydantic pattern validation returns 422
+    expect(resp.status()).toBe(422);
+  });
+
+  test("105.3 Presign rejects file exceeding size limit", async () => {
+    const resp = await apiPost(page, "/ui/videos/upload/presign", {
+      filename: "huge.mp4",
       content_type: "video/mp4",
-      size_bytes: 256,
+      file_size_bytes: 20_000_000_000, // 20 GB > 10 GB limit
     });
-    expect(presignResp.status()).toBe(200);
+    // Pydantic le= validation returns 422
+    expect(resp.status()).toBe(422);
+  });
+
+  test("105.4 Full presign -> PUT -> complete flow", async () => {
+    const { presign, asset } = await fullUploadFlow(page, {
+      filename: `full_flow_${TS}.mp4`,
+      sizeBytes: 256,
+      title: "E2E Full Flow Video",
+    });
+
+    expect(asset.ok).toBe(true);
+    expect(asset.video_id).toBe(presign.video_id);
+    expect(asset.s3_key).toBe(presign.key);
+    expect(asset.size_bytes).toBe(256);
+    expect(asset.content_type).toBe("video/mp4");
+    expect(asset.status).toBe("uploaded");
+    expect(asset.created_at).toBeGreaterThan(0);
+
+    createdVideoIds.push(asset.video_id);
+  });
+
+  test("105.5 Complete rejects mismatched S3 key", async () => {
+    // Presign a video
+    const presignResp = await apiPost(page, "/ui/videos/upload/presign", {
+      filename: `mismatch_${TS}.mp4`,
+      content_type: "video/mp4",
+      file_size_bytes: 100,
+    });
     const presign = await presignResp.json();
-    videoId = presign.video_id;
+    createdVideoIds.push(presign.video_id);
 
-    // Upload a small fake video file (just bytes for testing)
-    const fakeContent = Buffer.alloc(256, 0x42);
-    const uploadResp = await page.request.put(presign.presigned_url, {
-      headers: { "Content-Type": "video/mp4" },
-      data: fakeContent,
+    // Try to complete with a wrong key
+    const completeResp = await apiPost(page, "/ui/videos/upload/complete", {
+      ticket_id: presign.ticket_id,
+      key: "wrong/key/path.mp4",
     });
-    // moto S3 mock accepts any PUT to the presigned URL
-    expect(uploadResp.status()).toBeLessThan(400);
+    expect(completeResp.status()).toBe(403);
   });
 
-  test("105.3 Complete upload transitions video status", async () => {
-    const resp = await apiPost(page, `/ui/videos/${videoId}/upload/complete`);
-    expect(resp.status()).toBe(200);
-    const data = await resp.json();
-    expect(data.video_id).toBe(videoId);
-    expect(data.status).toBe("upload_complete");
+  test("105.6 Complete rejects nonexistent ticket", async () => {
+    const resp = await apiPost(page, "/ui/videos/upload/complete", {
+      ticket_id: "nonexistent_ticket_id_12345",
+      key: "some/key.mp4",
+    });
+    expect(resp.status()).toBe(403);
   });
 
-  test("105.4 Video appears in listing after upload", async () => {
+  test("105.7 Full upload creates video record with correct size_bytes", async () => {
+    const fileSize = 512;
+    const { asset } = await fullUploadFlow(page, {
+      filename: `sized_${TS}.mp4`,
+      sizeBytes: fileSize,
+    });
+    expect(asset.size_bytes).toBe(fileSize);
+    createdVideoIds.push(asset.video_id);
+  });
+
+  test("105.8 Video appears in listing after upload", async () => {
+    const { asset } = await fullUploadFlow(page, {
+      filename: `listing_${TS}.mp4`,
+      sizeBytes: 128,
+      title: `listing_${TS}`,
+    });
+    createdVideoIds.push(asset.video_id);
+
     const resp = await apiGet(page, "/ui/videos");
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     expect(data.items).toBeInstanceOf(Array);
     const found = data.items.find(
-      (v: { video_id: string }) => v.video_id === videoId,
+      (v: { video_id: string }) => v.video_id === asset.video_id,
     );
     expect(found).toBeTruthy();
-    expect(found.title).toContain(`upload_test_${TS}`);
+    expect(found.title).toContain(`listing_${TS}`);
   });
 });
 
@@ -185,23 +289,23 @@ test.describe("106 · Video Library UI", () => {
     page = await browser.newPage();
     await injectAuth(page);
 
-    // Create a test video via API so the library has content
+    // Create a test video via the full upload flow
     const presignResp = await apiPost(page, "/ui/videos/upload/presign", {
       filename: `ui_test_${TS}.mp4`,
       content_type: "video/mp4",
-      size_bytes: 128,
+      file_size_bytes: 128,
     });
     const presign = await presignResp.json();
     testVideoId = presign.video_id;
 
     // Upload content
     const fakeContent = Buffer.alloc(128, 0x43);
-    await page.request.put(presign.presigned_url, {
+    await page.request.put(presign.upload_url, {
       headers: { "Content-Type": "video/mp4" },
       data: fakeContent,
     });
 
-    // Complete upload
+    // Complete upload via legacy endpoint (backward compat)
     await apiPost(page, `/ui/videos/${testVideoId}/upload/complete`);
   });
 
@@ -245,11 +349,11 @@ test.describe("106 · Video Library UI", () => {
     const presignResp = await apiPost(page, "/ui/videos/upload/presign", {
       filename: `delete_me_${TS}.mp4`,
       content_type: "video/mp4",
-      size_bytes: 64,
+      file_size_bytes: 64,
     });
     const presign = await presignResp.json();
     const delVideoId = presign.video_id;
-    await page.request.put(presign.presigned_url, {
+    await page.request.put(presign.upload_url, {
       headers: { "Content-Type": "video/mp4" },
       data: Buffer.alloc(64, 0x44),
     });
@@ -320,17 +424,42 @@ test.describe("107 · Upload Progress", () => {
   });
 
   test("107.1 Upload panel shows progress indicators", async () => {
-    // Mock presign endpoint to return a slow upload URL
+    // Mock presign endpoint to return a mock upload URL
     await page.route("**/ui/videos/upload/presign", async (route) => {
       if (route.request().method() === "POST") {
         route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
+            upload_url: `${BASE}/mock/s3/local-uploads/vod/test/raw/2026/05/mock_vid/progress_test.mp4`,
+            bucket: "local-uploads",
+            key: `vod/test/raw/2026/05/mock_vid/progress_test.mp4`,
+            ticket_id: `ticket_${TS}`,
             video_id: `mock_vid_${TS}`,
-            presigned_url: `${BASE}/mock/s3/local-uploads/videos/test/${TS}/progress_test.mp4`,
-            s3_key: `videos/test/${TS}/progress_test.mp4`,
-            expires_in_seconds: 3600,
+            content_type: "video/mp4",
+            expires_at: new Date(Date.now() + 900_000).toISOString(),
+            max_size_bytes: 10 * 1024 * 1024 * 1024,
+          }),
+        });
+      } else {
+        route.continue();
+      }
+    });
+
+    // Mock the complete endpoint to accept the new shape
+    await page.route("**/ui/videos/upload/complete", async (route) => {
+      if (route.request().method() === "POST") {
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            video_id: `mock_vid_${TS}`,
+            s3_key: `vod/test/raw/2026/05/mock_vid/progress_test.mp4`,
+            size_bytes: 1024,
+            content_type: "video/mp4",
+            status: "uploaded",
+            created_at: Math.floor(Date.now() / 1000),
           }),
         });
       } else {
@@ -360,6 +489,7 @@ test.describe("107 · Upload Progress", () => {
     ).toBeVisible({ timeout: 15_000 });
 
     await page.unroute("**/ui/videos/upload/presign");
+    await page.unroute("**/ui/videos/upload/complete");
   });
 
   test("107.2 Cancel button aborts upload", async () => {
@@ -380,10 +510,14 @@ test.describe("107 · Upload Progress", () => {
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
+            upload_url: `${BASE}/mock/s3/local-uploads/vod/test/raw/2026/05/cancel_vid/cancel_test.mp4`,
+            bucket: "local-uploads",
+            key: `vod/test/raw/2026/05/cancel_vid/cancel_test.mp4`,
+            ticket_id: `cancel_ticket_${TS}`,
             video_id: `cancel_vid_${TS}`,
-            presigned_url: `${BASE}/mock/s3/local-uploads/videos/test/${TS}/cancel_test.mp4`,
-            s3_key: `videos/test/${TS}/cancel_test.mp4`,
-            expires_in_seconds: 3600,
+            content_type: "video/mp4",
+            expires_at: new Date(Date.now() + 900_000).toISOString(),
+            max_size_bytes: 10 * 1024 * 1024 * 1024,
           }),
         });
       } else {
@@ -425,14 +559,19 @@ test.describe("107 · Upload Progress", () => {
     await page.route("**/ui/videos/upload/presign", async (route) => {
       if (route.request().method() === "POST") {
         presignCount++;
+        const vid = `multi_vid_${TS}_${presignCount}`;
         route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
-            video_id: `multi_vid_${TS}_${presignCount}`,
-            presigned_url: `${BASE}/mock/s3/local-uploads/videos/test/${TS}/multi_${presignCount}.mp4`,
-            s3_key: `videos/test/${TS}/multi_${presignCount}.mp4`,
-            expires_in_seconds: 3600,
+            upload_url: `${BASE}/mock/s3/local-uploads/vod/test/raw/2026/05/${vid}/multi_${presignCount}.mp4`,
+            bucket: "local-uploads",
+            key: `vod/test/raw/2026/05/${vid}/multi_${presignCount}.mp4`,
+            ticket_id: `multi_ticket_${TS}_${presignCount}`,
+            video_id: vid,
+            content_type: "video/mp4",
+            expires_at: new Date(Date.now() + 900_000).toISOString(),
+            max_size_bytes: 10 * 1024 * 1024 * 1024,
           }),
         });
       } else {
@@ -449,15 +588,22 @@ test.describe("107 · Upload Progress", () => {
       }
     });
 
-    // Mock complete endpoint
-    await page.route("**/ui/videos/*/upload/complete", async (route) => {
+    // Mock complete endpoint (new ticket-based shape)
+    await page.route("**/ui/videos/upload/complete", async (route) => {
       if (route.request().method() === "POST") {
-        const url = route.request().url();
-        const videoId = url.split("/ui/videos/")[1].split("/upload")[0];
+        const body = route.request().postDataJSON();
         route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ video_id: videoId, status: "upload_complete" }),
+          body: JSON.stringify({
+            ok: true,
+            video_id: `multi_vid_completed`,
+            s3_key: body?.key || "unknown",
+            size_bytes: 512,
+            content_type: "video/mp4",
+            status: "uploaded",
+            created_at: Math.floor(Date.now() / 1000),
+          }),
         });
       } else {
         route.continue();
@@ -487,6 +633,6 @@ test.describe("107 · Upload Progress", () => {
 
     await page.unroute("**/ui/videos/upload/presign");
     await page.unroute("**/mock/s3/**");
-    await page.unroute("**/ui/videos/*/upload/complete");
+    await page.unroute("**/ui/videos/upload/complete");
   });
 });
