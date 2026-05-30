@@ -1196,6 +1196,27 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Bot Templates (BOT-002)
+        TableDef(
+            _resolve_table_name(S.bot_templates_table_name, "bot_templates"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"created_at": "N", "updated_at": "N", "ab_weight": "N",
+                        "impression_count": "N", "response_count": "N", "GSI1SK": "N"},
+        ),
+        # Bot Scheduled Sends (BOT-002)
+        TableDef(
+            _resolve_table_name(S.bot_scheduled_sends_table_name, "bot_scheduled_sends"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"next_run_at": "N", "last_run_at": "N", "created_at": "N", "GSI1SK": "N"},
+        ),
         # SSO / SAML (ENTERPRISE-002)
         TableDef(
             _resolve_table_name(S.sso_providers_table_name, "sso_providers"),

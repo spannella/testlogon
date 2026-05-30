@@ -1021,6 +1021,12 @@ export interface Message {
   expired?: boolean;
   scheduled?: boolean;
   deliver_at?: number;
+  // Bot identity fields (BOT-001)
+  sender_type?: "user" | "bot" | "system";
+  bot_id?: string;
+  bot_name?: string;
+  bot_avatar_url?: string;
+
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -4917,6 +4923,26 @@ export interface AdCreative {
   reviewed_by?: string | null;
   promo_code_id?: string | null;
   affiliate_link_id?: string | null;
+// -- Bot Templates & Scheduled Messages (BOT-002) --
+
+export interface QuickReply {
+  label: string;
+  value: string;
+}
+
+export interface BotTemplate {
+  template_id: string;
+  bot_id: string;
+  name: string;
+  text: string;
+  category: "greeting" | "support" | "promotion" | "farewell" | "away" | "custom";
+  body_format: "plain" | "markdown";
+  quick_replies?: QuickReply[];
+  variables_used?: string[];
+  ab_group?: string;
+  ab_weight: number;
+  impression_count: number;
+  response_count: number;
   created_at: number;
   updated_at: number;
 }
@@ -4979,4 +5005,23 @@ export interface IssuedLicenseIndexItem {
   license_mode: string;
   status: string;
   created_at: number;
+export interface BotScheduledSend {
+  schedule_id: string;
+  bot_id: string;
+  template_id: string;
+  target_type: string;
+  target_id?: string;
+  cron_expression: string;
+  timezone: string;
+  next_run_at: number;
+  last_run_at?: number;
+  enabled: boolean;
+  created_at: number;
+}
+
+export interface TemplatePreviewOut {
+  rendered_text: string;
+  resolved_variables: Record<string, string>;
+  unresolved_variables: string[];
+  quick_replies?: QuickReply[];
 }

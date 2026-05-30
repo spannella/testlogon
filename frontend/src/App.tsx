@@ -108,6 +108,8 @@ const GroupsListPage = lazy(() => import("@/pages/groups/GroupsListPage"));
 const GroupSettingsPage = lazy(() => import("@/pages/groups/GroupSettingsPage"));
 const CreativeListPage = lazy(() => import("@/pages/ads/CreativeListPage"));
 const AdminCreativeReviewPage = lazy(() => import("@/pages/ads/AdminCreativeReviewPage"));
+const BotManagerPage = lazy(() => import("@/pages/bots/BotManagerPage"));
+const TemplateEditorPage = lazy(() => import("@/pages/bots/TemplateEditorPage"));
 
 function PageSpinner() {
   return (
@@ -216,6 +218,8 @@ export default function App() {
           <Route path="syndicates" element={<SyndicatesPage />} />
           <Route path="syndicates/:syndicateId" element={<SyndicateDetailPage />} />
           <Route path="bots" element={<BotManagerPage />} />
+          <Route path="bots" element={<BotManagerPage />} />
+          <Route path="bots/:botId/templates" element={<TemplateEditorPage />} />
           <Route path="orgs" element={<OrgsPage />} />
           <Route path="orgs/:orgId" element={<OrgDashboard />} />
           <Route path="groups" element={<GroupsListPage />} />

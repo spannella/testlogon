@@ -1492,6 +1492,11 @@ class Settings:
     chat_bots_table_name: str = os.environ.get("CHAT_BOTS_TABLE_NAME", "chat_bots")
     bot_assignments_table_name: str = os.environ.get("BOT_ASSIGNMENTS_TABLE_NAME", "bot_assignments")
     bot_max_per_creator: int = int(os.environ.get("BOT_MAX_PER_CREATOR", "10"))
+    # Bot Templates & Scheduled Messages (BOT-002)
+    bot_templates_enabled: bool = os.environ.get("BOT_TEMPLATES_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    bot_scheduled_messages_enabled: bool = os.environ.get("BOT_SCHEDULED_MESSAGES_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    bot_templates_table_name: str = os.environ.get("BOT_TEMPLATES_TABLE_NAME", "bot_templates")
+    bot_scheduled_sends_table_name: str = os.environ.get("BOT_SCHEDULED_SENDS_TABLE_NAME", "bot_scheduled_sends")
 
     # Multi-Tenancy (ENTERPRISE-001)
     multi_tenancy_enabled: bool = os.environ.get("MULTI_TENANCY_ENABLED", "0") not in ("0", "false", "False")
