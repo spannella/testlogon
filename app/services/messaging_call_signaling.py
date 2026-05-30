@@ -76,15 +76,19 @@ class SignalingAck:
 def _events_table():
     from app.core.aws import ddb
 
-    return ddb.Table(os.getenv("DDB_EVENTS", "Events"))
+    return ddb.Table(os.getenv("DDB_USER_EVENTS", "UserEvents"))
 
 
 def _load_conversation_participants(conversation_id: str) -> set[str]:
     from app.core.aws import ddb
+    from boto3.dynamodb.conditions import Key
 
-    row = ddb.Table(os.getenv("DDB_CONVERSATIONS", "Conversations")).get_item(Key={"conversation_id": conversation_id}).get("Item") or {}
-    participants = row.get("participant_ids") or []
-    return {str(p).strip() for p in participants if str(p).strip()}
+    table_name = os.getenv("DDB_PARTICIPANTS", "Participants")
+    items = ddb.Table(table_name).query(
+        IndexName="GSI1",
+        KeyConditionExpression=Key("GSI1PK").eq(conversation_id),
+    ).get("Items", [])
+    return {str(item["user_id"]).strip() for item in items if item.get("user_id")}
 
 
 def _load_call_session(call_id: str):
