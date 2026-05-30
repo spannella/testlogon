@@ -4919,4 +4919,62 @@ export interface AdCreative {
   affiliate_link_id?: string | null;
   created_at: number;
   updated_at: number;
+// --- Issued Licenses (LICENSE-002) ---
+
+export interface IssuedLicenseOut {
+  issued_license_id: string;
+  content_id: string;
+  content_type: string;
+  licensor_id: string;
+  licensor_display_name: string;
+  licensee_id?: string | null;
+  license_mode: string;
+  status: string;
+  profit_share_pct: number;
+  fixed_cost_cents: number;
+  revenue_share_pct: number;
+  currency: string;
+  title: string;
+  thumbnail_url: string;
+  created_at: number;
+  updated_at: number;
+  expires_at?: number | null;
+}
+
+export interface HeldLicenseOut {
+  issued_license_id: string;
+  content_id: string;
+  content_type: string;
+  licensor_id: string;
+  licensor_display_name: string;
+  status: string;
+  terms_snapshot: Record<string, number>;
+}
+
+export interface LibraryItemOut {
+  content_id: string;
+  content_type: string;
+  licensor_id: string;
+  licensor_display_name: string;
+  title: string;
+  thumbnail_url: string;
+  profit_share_pct: number;
+  fixed_cost_cents: number;
+  created_at: number;
+}
+
+export interface LicenseCheckOut {
+  has_license: boolean;
+  issued_license_id?: string | null;
+  license_mode?: string | null;
+  terms?: Record<string, number> | null;
+}
+
+export interface IssuedLicenseIndexItem {
+  issued_license_id: string;
+  content_id: string;
+  licensee_id?: string | null;
+  license_mode: string;
+  status: string;
+  created_at: number;
 }

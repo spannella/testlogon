@@ -140,6 +140,7 @@ class Tables:
     bot_assignments: Any
     user_groups: Any
     ssh_keys: Any
+    issued_licenses: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -274,4 +275,5 @@ T = Tables(
     bot_assignments=ddb.Table(S.bot_assignments_table_name),
     user_groups=ddb.Table(S.ddb_user_groups_table),
     ssh_keys=ddb.Table(S.ssh_keys_table_name),
+    issued_licenses=ddb.Table(S.issued_licenses_table_name),
 )

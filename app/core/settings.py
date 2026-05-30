@@ -1515,6 +1515,8 @@ class Settings:
     # SSH Key Manager (INFRA-002)
     ssh_keys_table_name: str = os.environ.get("SSH_KEYS_TABLE_NAME", "ssh_keys")
     ssh_key_max_per_user: int = int(os.environ.get("SSH_KEY_MAX_PER_USER", "20"))
+    # Issued Licenses (LICENSE-002)
+    issued_licenses_table_name: str = os.environ.get("ISSUED_LICENSES_TABLE_NAME", "issued_licenses")
 
 
 S = Settings()

@@ -1233,6 +1233,9 @@ def _table_defs() -> List[TableDef]:
         # User Groups (GROUP-001)
         TableDef(
             _resolve_table_name(S.ddb_user_groups_table, "user_groups"),
+        # Issued Licenses (LICENSE-002)
+        TableDef(
+            _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),
             "pk",
             "sk",
             gsi=[
@@ -1249,6 +1252,9 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
         ),
     ]
 
