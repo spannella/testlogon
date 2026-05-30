@@ -130,6 +130,10 @@ class Tables:
     sso_sessions: Any
     sso_assertion_cache: Any
     broadcast_clips: Any
+    chat_bots: Any
+    bot_assignments: Any
+    bot_templates: Any
+    bot_scheduled_sends: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -254,4 +258,8 @@ T = Tables(
     sso_sessions=ddb.Table(S.sso_sessions_table_name),
     sso_assertion_cache=ddb.Table(S.sso_assertion_cache_table_name),
     broadcast_clips=ddb.Table(S.broadcast_clips_table_name),
+    chat_bots=ddb.Table(S.chat_bots_table_name),
+    bot_assignments=ddb.Table(S.bot_assignments_table_name),
+    bot_templates=ddb.Table(S.bot_templates_table_name),
+    bot_scheduled_sends=ddb.Table(S.bot_scheduled_sends_table_name),
 )

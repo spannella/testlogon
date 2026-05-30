@@ -1021,6 +1021,12 @@ export interface Message {
   expired?: boolean;
   scheduled?: boolean;
   deliver_at?: number;
+  // Bot identity fields (BOT-001)
+  sender_type?: "user" | "bot" | "system";
+  bot_id?: string;
+  bot_name?: string;
+  bot_avatar_url?: string;
+
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -4491,4 +4497,95 @@ export interface SsoProviderStatsOut {
   login_count: number;
   last_login_at?: number;
   status: string;
+}
+
+// ---------------------------------------------------------------------------
+// Bot Framework (BOT-001)
+// ---------------------------------------------------------------------------
+
+export interface ChatBot {
+  bot_id: string;
+  creator_id: string;
+  name: string;
+  avatar_url?: string;
+  description?: string;
+  personality: "friendly" | "professional" | "casual" | "custom";
+  custom_personality?: string;
+  status: "active" | "paused" | "disabled";
+  trigger_config?: BotTriggerConfig;
+  created_at: number;
+  updated_at: number;
+  message_count: number;
+}
+
+export interface BotTriggerConfig {
+  triggers: BotTrigger[];
+  priority_order: string[];
+}
+
+export interface BotTrigger {
+  type: "keyword" | "first_message" | "mention" | "all_messages" | "idle" | "scheduled";
+  keywords?: string[];
+  response_template_id?: string;
+  idle_minutes?: number;
+  cron?: string;
+}
+
+export interface BotAssignment {
+  bot_id: string;
+  target_type: "conversation" | "broadcast" | "all_dms" | "all_groups" | "all_broadcasts";
+  target_id?: string;
+  created_at: number;
+  sk: string;
+}
+
+export interface BotStats {
+  message_count: number;
+  last_active_at?: number;
+  assignment_count: number;
+}
+
+// -- Bot Templates & Scheduled Messages (BOT-002) --
+
+export interface QuickReply {
+  label: string;
+  value: string;
+}
+
+export interface BotTemplate {
+  template_id: string;
+  bot_id: string;
+  name: string;
+  text: string;
+  category: "greeting" | "support" | "promotion" | "farewell" | "away" | "custom";
+  body_format: "plain" | "markdown";
+  quick_replies?: QuickReply[];
+  variables_used?: string[];
+  ab_group?: string;
+  ab_weight: number;
+  impression_count: number;
+  response_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface BotScheduledSend {
+  schedule_id: string;
+  bot_id: string;
+  template_id: string;
+  target_type: string;
+  target_id?: string;
+  cron_expression: string;
+  timezone: string;
+  next_run_at: number;
+  last_run_at?: number;
+  enabled: boolean;
+  created_at: number;
+}
+
+export interface TemplatePreviewOut {
+  rendered_text: string;
+  resolved_variables: Record<string, string>;
+  unresolved_variables: string[];
+  quick_replies?: QuickReply[];
 }
