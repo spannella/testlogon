@@ -207,6 +207,8 @@ from app.routers.issued_licenses import router as issued_licenses_router
 from app.routers.license_requests import router as license_requests_router
 from app.routers.k8s_launcher import router as k8s_launcher_router
 from app.services.k8s_launcher import start_k8s_ttl_checker_task
+from app.routers.ads import router as ads_router, admin_router as ads_admin_router
+from app.routers.ads_targeting import router as ads_targeting_router
 
 logger = logging.getLogger(__name__)
 
@@ -541,6 +543,9 @@ def create_app() -> FastAPI:
     app.include_router(license_requests_router)
     app.include_router(k8s_launcher_router)
     app.add_event_handler("startup", start_k8s_ttl_checker_task)
+    app.include_router(ads_router)
+    app.include_router(ads_admin_router)
+    app.include_router(ads_targeting_router)
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)

@@ -289,3 +289,18 @@ export const trackAdEvent = (data: AdTrackRequest): Promise<AdTrackResponse> =>
 /** Get serving stats for a campaign (owner only) */
 export const getServingStats = (campaignId: string): Promise<AdServingStats> =>
   api.get<AdServingStats>(`/ui/ads/stats/${campaignId}`);
+// ─── Ad Feedback & Sponsored Posts (ADS-005) ───────────────────────────────
+
+import type { AdFeedbackRequest, WhyThisAdResponse } from "../types";
+
+/** Submit feedback on a sponsored post (hide, not_relevant, etc.) */
+export const submitAdFeedback = (
+  body: AdFeedbackRequest,
+): Promise<{ ok: boolean }> =>
+  api.post<{ ok: boolean }>("/ui/ads/feedback", body);
+
+/** Get the reason why a sponsored ad is shown */
+export const whyThisAd = (
+  creativeId: string,
+): Promise<WhyThisAdResponse> =>
+  api.get<WhyThisAdResponse>(`/ui/ads/why/${creativeId}`);

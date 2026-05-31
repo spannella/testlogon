@@ -9,6 +9,7 @@ from app.services.sessions import require_ui_session
 from app.models import (
     AdAccountCreateIn,
     AdAccountReviewIn,
+    AdFeedbackIn,
     AdServeRequestIn,
     AdTrackEventIn,
     CampaignCreateIn,
@@ -357,3 +358,32 @@ async def track_ad_event_endpoint(body: AdTrackEventIn, ctx=Depends(require_ui_s
 async def serving_stats_endpoint(campaign_id: str, ctx=Depends(require_ui_session)):
     _require_campaign_owner(campaign_id, ctx["user_sub"])
     return get_serving_stats(campaign_id)
+
+
+# ── Ad Feedback & Sponsored Posts (ADS-005) ──────────────────────────────
+
+
+@router.post("/feedback")
+async def ad_feedback_endpoint(body: AdFeedbackIn, ctx=Depends(require_ui_session)):
+    """Record user feedback on a sponsored post (hide, not_relevant, repetitive, offensive)."""
+    from app.services.ad_feedback import record_ad_feedback
+    try:
+        return record_ad_feedback(
+            user_id=ctx["user_sub"],
+            creative_id=body.creative_id,
+            campaign_id=body.campaign_id,
+            feedback_type=body.feedback_type,
+            reason=body.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/why/{creative_id}")
+async def why_this_ad(creative_id: str, ctx=Depends(require_ui_session)):
+    """Return a vague targeting category for the ad (never exposes specific targeting)."""
+    return {
+        "reason": "Based on your activity on the platform",
+        "categories": ["general"],
+        "note": "Ads are selected based on the content you view and your platform activity.",
+    }

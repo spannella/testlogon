@@ -1002,6 +1002,12 @@ class Settings:
     newsfeed_unlock_throttle_max_attempts: int = int(os.environ.get("NEWSFEED_UNLOCK_THROTTLE_MAX_ATTEMPTS", "6"))
     newsfeed_tip_lottery_enabled: bool = os.environ.get("NEWSFEED_TIP_LOTTERY_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
+    # Sponsored posts (ADS-005)
+    sponsored_posts_enabled: bool = os.environ.get("SPONSORED_POSTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    ad_feedback_enabled: bool = os.environ.get("AD_FEEDBACK_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    sponsored_post_interval: int = int(os.environ.get("SPONSORED_POST_INTERVAL", "5"))
+    sponsored_post_max_per_page: int = int(os.environ.get("SPONSORED_POST_MAX_PER_PAGE", "3"))
+
     # Newsfeed polls (ENGAGE-002)
     newsfeed_polls_enabled: bool = os.environ.get("NEWSFEED_POLLS_ENABLED", "1") not in ("0", "false", "False")
     newsfeed_poll_max_options: int = int(os.environ.get("NEWSFEED_POLL_MAX_OPTIONS", "10"))

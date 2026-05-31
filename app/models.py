@@ -4063,6 +4063,7 @@ class AdAccountReviewIn(BaseModel):
     decision: str = Field(..., pattern=r"^(approve|reject|suspend)$")
     notes: Optional[str] = Field(default=None, max_length=1000)
 # ── Advertiser Accounts & Campaigns (ADS-001) ──────────────────────
+# ── Ad Accounts & Campaigns (ADS-001) ─────────────────────────────────────
 
 
 class AdAccountCreateIn(BaseModel):
@@ -4436,6 +4437,8 @@ class CreativeCreateIn(BaseModel):
     objective: str = Field(default="awareness")
     budget_cents: int = Field(..., ge=100)
     budget_type: str = Field(default="lifetime", pattern="^(lifetime|daily)$")
+    budget_cents: int = Field(..., ge=100)
+    budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
     start_date: Optional[int] = None
     end_date: Optional[int] = None
 
@@ -4455,6 +4458,7 @@ class CampaignReviewIn(BaseModel):
 
 
 # ── Ad Creatives (ADS-002) ──────────────────────────────────────────
+# ── Ad Creatives (ADS-002) ─────────────────────────────────────────────
 
 
 class CreativeCreateIn(BaseModel):
@@ -4615,6 +4619,57 @@ class AdServeResponseOut(BaseModel):
     promo_code_id: Optional[str] = None
     affiliate_link_id: Optional[str] = None
 # ── Ad Targeting (ADS-003) ──────────────────────────────────────────────────
+# ── Ad Serving (ADS-004) ─────────────────────────────────────────────
+
+
+class AdServeRequestIn(BaseModel):
+    surface: str = Field(..., pattern="^(newsfeed|broadcast|vod)$")
+    content_type: str = Field(default="")
+    creator_id: str = Field(..., min_length=1)
+    content_id: str = Field(..., min_length=1)
+    slot_type: str = Field(default="sponsored_post",
+                           pattern="^(pre_roll|mid_roll|overlay|sponsored_post|broadcast_preroll|broadcast_midroll)$")
+    user_context: Optional[Dict[str, Any]] = None
+
+
+class AdTrackEventIn(BaseModel):
+    event: str = Field(..., pattern="^(impression|click|skip|complete)$")
+    creative_id: str = Field(..., min_length=1)
+    campaign_id: str = Field(..., min_length=1)
+    account_id: str = Field(..., min_length=1)
+    surface: str = Field(..., min_length=1)
+    slot_type: str = Field(..., min_length=1)
+    content_id: str = Field(..., min_length=1)
+    creator_id: str = Field(..., min_length=1)
+
+
+# ── Ad Feedback / Sponsored Posts (ADS-005) ──────────────────────────────
+
+
+VALID_AD_FEEDBACK_TYPES = {"hide", "not_relevant", "repetitive", "offensive"}
+
+
+class AdFeedbackIn(BaseModel):
+    creative_id: str = Field(..., min_length=1, max_length=100)
+    campaign_id: str = Field(default="", max_length=100)
+    feedback_type: str = Field(..., min_length=1)
+    reason: str = Field(default="", max_length=500)
+
+    @field_validator("feedback_type")
+    @classmethod
+    def validate_feedback_type(cls, v: str) -> str:
+        if v not in VALID_AD_FEEDBACK_TYPES:
+            raise ValueError(f"Invalid feedback type: {v}. Must be one of {VALID_AD_FEEDBACK_TYPES}")
+        return v
+
+
+class WhyThisAdOut(BaseModel):
+    reason: str
+    categories: List[str]
+    note: str
+
+
+# ── Ad Targeting (ADS-003) ─────────────────────────────────────────────
 
 VALID_AGE_RANGES = {"18-24", "25-34", "35-44", "45-54", "55+"}
 VALID_GENDERS = {"male", "female", "other"}
@@ -5535,3 +5590,6 @@ class K8sPresetInfo(BaseModel):
 
 class K8sPresetListOut(BaseModel):
     presets: List[K8sPresetInfo]
+class AdBlockIn(BaseModel):
+    account_id: str
+    reason: str = ""

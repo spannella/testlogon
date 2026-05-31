@@ -2008,6 +2008,20 @@ export interface FeedPost {
   /** ENGAGE-002: viewer's own votes per question */
   poll_my_votes?: PollMyVotes | null;
 
+  /** ADS-005: Sponsored post fields */
+  is_sponsored?: boolean;
+  sponsor_account_id?: string;
+  sponsor_label?: string;
+  headline?: string | null;
+  cta_text?: string | null;
+  cta_url?: string | null;
+  impression_url?: string;
+  click_url?: string;
+  creative_id?: string;
+  campaign_id?: string;
+  comments_enabled?: boolean;
+  allow_ads_near?: boolean;
+
   /** PWA-005: Offline queue metadata — only present for locally-queued posts */
   __offline?: {
     queueId: string;
@@ -2055,6 +2069,19 @@ export interface GroupFeedResponse {
   posts: GroupFeedPost[];
   cursor?: string;
   has_more: boolean;
+/** ADS-005: Ad feedback request */
+export interface AdFeedbackRequest {
+  creative_id: string;
+  campaign_id?: string;
+  feedback_type: "hide" | "not_relevant" | "repetitive" | "offensive";
+  reason?: string;
+}
+
+/** ADS-005: Why this ad response */
+export interface WhyThisAdResponse {
+  reason: string;
+  categories: string[];
+  note: string;
 }
 
 // ENGAGE-002: Poll types
