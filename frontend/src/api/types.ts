@@ -7831,6 +7831,62 @@ export interface KycDocumentReviewRequest {
   note?: string | null;
 }
 
+// KYC-004: Proof of Residency Verification
+export type KycResidencyDocumentType =
+  | "utility_bill"
+  | "bank_statement"
+  | "government_letter"
+  | "tax_document"
+  | "lease_agreement";
+export type KycResidencyStatus = "pending" | "verified" | "rejected" | "expired";
+export type KycResidencyMatchStatus = "match" | "partial" | "mismatch" | "not_available";
+
+export interface KycResidencyAddressMatch {
+  status: KycResidencyMatchStatus;
+  profile_address: Record<string, string>;
+  field_matches: Record<string, "match" | "partial" | "mismatch">;
+}
+
+export interface KycResidencyDocumentOut {
+  document_id: string;
+  case_id?: string | null;
+  user_sub?: string | null;
+  document_type: KycResidencyDocumentType;
+  issuing_entity?: string | null;
+  document_date?: string | null;
+  file_name: string;
+  status: KycResidencyStatus;
+  provider?: string | null;
+  document_url?: string | null;
+  extraction_id?: string | null;
+  recency_valid: boolean;
+  recency_days: number;
+  extracted_address?: Record<string, string> | null;
+  address_match?: KycResidencyAddressMatch | null;
+  review_decision?: string | null;
+  review_note?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface KycResidencyListResponse {
+  documents: KycResidencyDocumentOut[];
+}
+
+export interface KycResidencyUploadRequest {
+  document_type: KycResidencyDocumentType;
+  issuing_entity: string;
+  document_date: string;
+  file_name: string;
+  case_id?: string | null;
+  content_b64?: string | null;
+}
+
+export interface KycResidencyReviewRequest {
+  decision: "approve" | "reject";
+  note?: string | null;
+}
+
 // FIN-001: Invoice / Receipt PDF
 export interface InvoiceLineItem {
   description: string;
