@@ -65,6 +65,7 @@ const ClipPlayerPage = lazy(() => import("@/pages/clips/ClipPlayerPage"));
 const DmcaClaimForm = lazy(() => import("@/pages/dmca/DmcaClaimForm"));
 const DmcaDashboardPage = lazy(() => import("@/pages/admin/DmcaDashboardPage"));
 const RateLimitDashboard = lazy(() => import("@/pages/admin/RateLimitDashboard"));
+const AdminComputeDashboard = lazy(() => import("@/pages/admin/AdminComputeDashboard"));
 const GalleryPage = lazy(() => import("@/pages/gallery/GalleryPage"));
 const GalleryVideoDetailPage = lazy(() => import("@/pages/gallery/VideoDetailPage"));
 const AnalyticsPage = lazy(() => import("@/pages/analytics/AnalyticsPage"));
@@ -233,6 +234,7 @@ export default function App() {
           <Route path="admin/dmca" element={<DmcaDashboardPage />} />
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
+          <Route path="admin/compute" element={<AdminComputeDashboard />} />
           <Route path="admin/audit-exports" element={<AuditExportPage />} />
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />

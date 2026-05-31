@@ -6208,3 +6208,105 @@ class PatternTestIn(BaseModel):
 class PatternTestOut(BaseModel):
     matches: List[Dict[str, str]]
     match_count: int
+
+
+# ---------------------------------------------------------------------------
+# Admin Compute Dashboard (INFRA-012)
+# ---------------------------------------------------------------------------
+
+class AdminInstanceOut(BaseModel):
+    instance_id: str
+    user_sub: str
+    label: str
+    instance_type: str
+    ami_name: str
+    status: str
+    public_ip: str
+    created_at: int
+    last_activity_at: int
+    auto_terminate_after: int
+
+
+class AdminInstanceListOut(BaseModel):
+    instances: List[AdminInstanceOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+class AdminPodOut(BaseModel):
+    pod_id: str
+    user_sub: str
+    label: str
+    image: str
+    preset: str
+    status: str
+    pod_ip: str
+    created_at: int
+    ttl_seconds: int
+    expires_at: int
+
+
+class AdminPodListOut(BaseModel):
+    pods: List[AdminPodOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+class ForceTerminateIn(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+class PlatformSpendingOut(BaseModel):
+    month: str
+    total_cents: int
+    ec2_total_cents: int
+    k8s_total_cents: int
+    active_user_count: int
+    active_instance_count: int
+    active_pod_count: int
+
+
+class PerUserSpendingEntry(BaseModel):
+    user_sub: str
+    total_cents: int
+    ec2_cents: int
+    k8s_cents: int
+    instance_count: int
+    pod_count: int
+
+
+class PerUserSpendingOut(BaseModel):
+    users: List[PerUserSpendingEntry]
+    month: str
+
+
+class InstanceTypeStatEntry(BaseModel):
+    instance_type: str
+    running_count: int
+    total_launched: int
+
+
+class InstanceTypeStatsOut(BaseModel):
+    stats: List[InstanceTypeStatEntry]
+
+
+class QuotaOut(BaseModel):
+    user_sub: str
+    max_ec2_instances: int
+    max_k8s_pods: int
+    max_monthly_spend_cents: int
+    allowed_instance_types: List[str]
+    allowed_k8s_presets: List[str]
+    is_custom: bool
+    updated_at: int = 0
+    updated_by: str = ""
+    notes: str = ""
+
+
+class SetQuotaIn(BaseModel):
+    max_ec2_instances: int = Field(default=3, ge=0, le=100)
+    max_k8s_pods: int = Field(default=5, ge=0, le=100)
+    max_monthly_spend_cents: int = Field(default=5000, ge=0, le=1_000_000)
+    allowed_instance_types: List[str] = Field(default_factory=list)
+    allowed_k8s_presets: List[str] = Field(default_factory=list)
+    notes: str = Field(default="", max_length=500)
