@@ -16,3 +16,4 @@ logs/
 .logs/
 .venv/
 .claude/worktrees/
+wt/
