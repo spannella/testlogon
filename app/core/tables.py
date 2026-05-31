@@ -178,6 +178,7 @@ class Tables:
     marketing_engagement: Any
     compliance_findings: Any
     compliance_audits: Any
+    admin_subscription_tiers: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -350,4 +351,5 @@ T = Tables(
     marketing_engagement=ddb.Table(S.marketing_engagement_table_name),
     compliance_findings=ddb.Table(S.compliance_security_findings_table_name),
     compliance_audits=ddb.Table(S.compliance_security_audits_table_name),
+    admin_subscription_tiers=ddb.Table(S.admin_subscription_tiers_table_name),
 )

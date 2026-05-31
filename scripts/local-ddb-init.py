@@ -1632,6 +1632,15 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # Admin Subscription Tier Manager (ADMIN-001).
+        # pk=CREATOR#{creator_id}, sk=TIER#{tier_id}.
+        TableDef(
+            _resolve_table_name(
+                S.admin_subscription_tiers_table_name, "admin_subscription_tiers"
+            ),
+            "pk",
+            "sk",
+        ),
     ]
 
 
