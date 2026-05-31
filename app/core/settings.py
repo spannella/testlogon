@@ -1656,6 +1656,13 @@ class Settings:
     ec2_max_instances_per_user: int = int(os.environ.get("EC2_MAX_INSTANCES_PER_USER", "5"))
     ec2_auto_terminate_enabled: bool = os.environ.get("EC2_AUTO_TERMINATE_ENABLED", "1") not in ("0", "false", "False")
 
+    # Security Groups & Network Rules (INFRA-009)
+    security_groups_table_name: str = os.environ.get("SECURITY_GROUPS_TABLE_NAME", "security_groups")
+    security_groups_enabled: bool = os.environ.get("SECURITY_GROUPS_ENABLED", "true").lower() not in ("0", "false", "no")
+    security_groups_block_dangerous_rules: bool = os.environ.get("SG_BLOCK_DANGEROUS_RULES", "true").lower() not in ("0", "false", "no")
+    security_groups_max_rules: int = int(os.environ.get("SG_MAX_RULES", "50"))
+    security_groups_platform_egress_cidrs: str = os.environ.get("SECURITY_GROUPS_PLATFORM_EGRESS_CIDRS", "127.0.0.1/32,10.0.0.0/8")
+
     # License Revenue (LICENSE-003)
     license_revenue_table_name: str = os.environ.get("LICENSE_REVENUE_TABLE_NAME", "license_revenue")
     license_revenue_platform_fee_pct: int = int(os.environ.get("LICENSE_REVENUE_PLATFORM_FEE_PCT", "20"))

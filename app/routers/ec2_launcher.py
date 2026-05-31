@@ -106,6 +106,7 @@ async def launch_ec2_instance(
             auto_terminate_after=body.auto_terminate_after,
             startup_script=body.startup_script,
             template_id=body.template_id,
+            security_group_id=body.security_group_id,
         )
     except InstanceLimitExceeded as exc:
         raise HTTPException(status_code=409, detail=str(exc))

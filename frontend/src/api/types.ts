@@ -8177,3 +8177,80 @@ export interface PlatformFinancialRollupOut {
   unique_payers: number;
   computed_at: number;
 }
+
+// ─── Security Groups & Network Rules (INFRA-009) ────────────────────────────
+
+export type SgProtocol = "tcp" | "udp" | "icmp" | "all";
+export type SgDirection = "inbound" | "outbound";
+
+export interface SecurityRuleIn {
+  protocol: SgProtocol;
+  port_from?: number;
+  port_to?: number;
+  source: string;
+  direction?: SgDirection;
+  description?: string;
+}
+
+export interface SecurityRuleOut {
+  rule_id: string;
+  protocol: string;
+  port_from: number;
+  port_to: number;
+  source: string;
+  direction: string;
+  description: string;
+}
+
+export interface CreateSgIn {
+  name: string;
+  description?: string;
+  rules?: SecurityRuleIn[];
+}
+
+export interface UpdateSgIn {
+  name?: string;
+  description?: string;
+}
+
+export interface UpdateRuleIn {
+  protocol?: SgProtocol;
+  port_from?: number;
+  port_to?: number;
+  source?: string;
+  direction?: SgDirection;
+  description?: string;
+}
+
+export interface SecurityGroupOut {
+  sg_id: string;
+  name: string;
+  description: string;
+  rules: SecurityRuleOut[];
+  is_default: boolean;
+  created_at: number;
+  updated_at: number;
+  associated_instances: string[];
+}
+
+export interface SgListOut {
+  security_groups: SecurityGroupOut[];
+  count: number;
+}
+
+export interface EffectiveRuleOut {
+  rule_id: string;
+  protocol: string;
+  port_from: number;
+  port_to: number;
+  source: string;
+  resolved_sources: string[];
+  direction: string;
+  description: string;
+}
+
+export interface EffectiveRulesOut {
+  sg_id: string;
+  rules: EffectiveRuleOut[];
+  count: number;
+}

@@ -1462,6 +1462,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Security Groups & Network Rules (INFRA-009)
+        TableDef(
+            _resolve_table_name(S.security_groups_table_name, "security_groups"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Kubernetes Container Launcher (INFRA-004)
         TableDef(
             _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),

@@ -123,6 +123,7 @@ def launch_instance(
     auto_terminate_after: int = DEFAULT_AUTO_TERMINATE_SECONDS,
     startup_script: str = "",
     template_id: str | None = None,
+    security_group_id: str | None = None,
 ) -> Dict[str, Any]:
     """Launch a new EC2 instance (mock in dev mode)."""
 
@@ -133,6 +134,20 @@ def launch_instance(
     # 2. Validate AMI
     if ami_id not in AMIS:
         raise ValueError(f"AMI {ami_id} not available")
+
+    # 2b. Resolve security group (INFRA-009). If none provided, auto-create/use
+    #     the user's default SG. A provided SG must belong to the user.
+    resolved_sg_id = ""
+    if S.security_groups_enabled:
+        from app.services.security_groups import (
+            resolve_for_launch,
+            SecurityGroupNotFound,
+        )
+        try:
+            sg = resolve_for_launch(user_sub, security_group_id)
+        except SecurityGroupNotFound as exc:
+            raise ValueError(str(exc))
+        resolved_sg_id = sg["sg_id"]
 
     # 3. Check instance limit (active = running + stopped + launching)
     active = [
@@ -194,8 +209,17 @@ def launch_instance(
         "startup_script": startup_script,
         "template_id": template_id or "",
         "source": "template" if template_id else "manual",
+        "security_group_id": resolved_sg_id,
     }
     T.ec2_instances.put_item(Item=item)
+
+    # Record the SG association (INFRA-009)
+    if resolved_sg_id:
+        try:
+            from app.services.security_groups import associate_instance
+            associate_instance(user_sub, resolved_sg_id, instance_id)
+        except Exception:
+            logger.exception("sg_associate_failed instance_id=%s sg_id=%s", instance_id, resolved_sg_id)
 
     logger.info(
         "ec2_launched user_sub=%s instance_id=%s type=%s ami=%s",
@@ -315,6 +339,15 @@ def terminate_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
         ExpressionAttributeNames={"#st": "status"},
         ExpressionAttributeValues={":st": "terminated", ":ta": now},
     )
+
+    # Disassociate from its security group so the SG can be deleted (INFRA-009)
+    sg_id = item.get("security_group_id")
+    if sg_id:
+        try:
+            from app.services.security_groups import disassociate_instance
+            disassociate_instance(user_sub, sg_id, instance_id)
+        except Exception:
+            logger.exception("sg_disassociate_failed instance_id=%s sg_id=%s", instance_id, sg_id)
 
     item["status"] = "terminated"
     item["terminated_at"] = now
