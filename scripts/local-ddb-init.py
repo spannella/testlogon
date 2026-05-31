@@ -1160,6 +1160,19 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Issued Licenses (LICENSE-002) + License Requests (LICENSE-004)
+        TableDef(
+            _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+                {"index_name": "GSI4", "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N", "GSI4SK": "N"},
+        ),
     ]
 
 

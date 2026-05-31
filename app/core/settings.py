@@ -1490,5 +1490,8 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Licensing (LICENSE-002 / LICENSE-004)
+    issued_licenses_table_name: str = os.environ.get("ISSUED_LICENSES_TABLE_NAME", "issued_licenses")
+
 
 S = Settings()
