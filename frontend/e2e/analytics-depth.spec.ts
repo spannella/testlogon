@@ -7,6 +7,7 @@
  *   3 (tests 8-12) — Per-Content Drill-down
  *   4 (tests 13-15) — Empty/Edge States
  *   5 (tests 16-18) — API Contract
+ *   6 (tests 19-20) — Sortable Engagement Column
  *
  * Auth: Cookie-based session for Alice via e2e_admin_session_setup.py
  */
@@ -708,5 +709,85 @@ test.describe("Section 5: API Contract", () => {
     expect(resp.status()).toBe(404);
     const body = await resp.json();
     expect(body.detail).toContain("Content not found");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Section 6: Sortable Engagement Column (Top Content table)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const VID_SORT_HI = `vid_sorthi_${TS}`;
+const VID_SORT_LO = `vid_sortlo_${TS}`;
+
+test.describe("Section 6: Sortable Engagement Column", () => {
+  let alicePage: Page;
+  let aliceSub: string;
+
+  test.beforeAll(async ({ browser }) => {
+    const sessions = getSessions();
+    aliceSub = sessions[ALICE_ID].user_sub;
+    alicePage = await newIdentityPage(browser, ALICE_ID);
+    cleanupRollups(aliceSub);
+
+    // High-engagement video: (50 + 50) / 200 = 0.50
+    seedVideoMetadata(VID_SORT_HI, aliceSub, {
+      title: "High Engagement Clip",
+      view_count: 200,
+      like_count: 50,
+      comment_count: 50,
+    });
+    // Low-engagement video: (2 + 0) / 200 = 0.01
+    seedVideoMetadata(VID_SORT_LO, aliceSub, {
+      title: "Low Engagement Clip",
+      view_count: 200,
+      like_count: 2,
+      comment_count: 0,
+    });
+
+    seedRollupRow(aliceSub, "2026-05-05", {
+      total_views: 400,
+      revenue_cents: 1000,
+      top_content_ids: [VID_SORT_HI, VID_SORT_LO],
+    });
+  });
+
+  test.afterAll(async () => {
+    await alicePage.context().close();
+  });
+
+  test("19. Engagement column header is clickable and toggles sort", async () => {
+    await alicePage.goto(`${BASE}/analytics?from_date=2026-05-01&to_date=2026-05-31`, {
+      waitUntil: "domcontentloaded",
+    });
+    await alicePage.waitForSelector("table");
+
+    const sortBtn = alicePage.getByRole("button", { name: "Sort by engagement" });
+    await expect(sortBtn).toBeVisible();
+
+    // Make sure our seeded rows are present before sorting.
+    await expect(
+      alicePage.locator("tr").filter({ hasText: "High Engagement Clip" }),
+    ).toHaveCount(1);
+
+    // First click → descending: highest engagement row first.
+    await sortBtn.click();
+    const firstRowDesc = alicePage.locator("tbody tr").first();
+    await expect(firstRowDesc).toContainText("High Engagement Clip");
+
+    // Second click → ascending: lowest engagement row first.
+    await sortBtn.click();
+    const firstRowAsc = alicePage.locator("tbody tr").first();
+    await expect(firstRowAsc).toContainText("Low Engagement Clip");
+  });
+
+  test("20. Engagement column renders percentage values", async () => {
+    await alicePage.goto(`${BASE}/analytics?from_date=2026-05-01&to_date=2026-05-31`, {
+      waitUntil: "domcontentloaded",
+    });
+    await alicePage.waitForSelector("table");
+    const hiRow = alicePage.locator("tr").filter({ hasText: "High Engagement Clip" });
+    await expect(hiRow).toContainText("%");
+    // 0.50 engagement → "50.0%"
+    await expect(hiRow).toContainText("50.0%");
   });
 });
