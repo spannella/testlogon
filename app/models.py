@@ -9029,3 +9029,53 @@ class AccountDeletionProcessDueOut(BaseModel):
     processed: int = 0
     skipped: int = 0
     request_ids: List[str] = Field(default_factory=list)
+# ── Live Q&A Mode (ENGAGE-003) ──────────────────────────────────────────────
+
+
+class LiveQaModeToggleIn(BaseModel):
+    enabled: bool
+
+
+class LiveQaModeOut(BaseModel):
+    ok: bool = True
+    session_id: str
+    qa_mode_enabled: bool
+
+
+class LiveQaQuestionSubmitIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+
+
+class LiveQaPinIn(BaseModel):
+    pinned: bool = True
+
+
+class LiveQaQuestionOut(BaseModel):
+    question_id: str
+    session_id: str
+    submitter_id: str
+    submitter_display_name: str
+    text: str
+    status: Literal["pending", "featured", "answered", "dismissed", "removed"]
+    vote_count: int
+    pinned: bool = False
+    featured_at: Optional[int] = None
+    answered_at: Optional[int] = None
+    created_at: int
+    featured_by: Optional[str] = None
+
+
+class LiveQaQueueOut(BaseModel):
+    questions: List[LiveQaQuestionOut] = Field(default_factory=list)
+    has_more: bool = False
+
+
+class LiveQaStatsOut(BaseModel):
+    total_questions: int
+    answered: int
+    dismissed: int
+    featured: int
+    pending: int
+    total_upvotes: int
+    avg_upvotes: float
+    answer_rate: float

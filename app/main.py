@@ -78,6 +78,7 @@ from app.routers.delegates import router as delegates_router
 from app.routers.delegate_broadcast import router as delegate_broadcast_router
 from app.routers.broadcast_clips import router as broadcast_clips_router
 from app.routers.broadcast_devtools import router as broadcast_devtools_router
+from app.routers.live_qa import live_qa_router
 from app.routers.entitlements import router as entitlements_router
 from app.routers.commercial_checkout import router as commercial_checkout_router
 from app.routers.tickets import router as tickets_router
@@ -466,6 +467,7 @@ def create_app() -> FastAPI:
     app.include_router(search_router)
     app.include_router(broadcast_router)
     app.include_router(broadcast_clips_router)
+    app.include_router(live_qa_router)
     app.include_router(broadcast_devtools_router)
     app.include_router(tickets_router)
     app.include_router(ticket_spaces_router)

@@ -1205,6 +1205,15 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "BySessionStatus", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
             ],
         ),
+        # Live Q&A Mode questions (ENGAGE-003 — distinct implementation)
+        TableDef(
+            _resolve_table_name(S.live_qa_questions_table_name, "live_qa_questions"),
+            "session_id",
+            "question_id",
+            gsi=[
+                {"index_name": "ByStatusVotes", "partition_key": "gsi_status_pk", "sort_key": "gsi_votes_sk"},
+            ],
+        ),
         # Collaboration Requests (CREATOR-001)
         TableDef(
             _resolve_table_name(S.collaboration_agreements_table_name, "collaboration_agreements"),
