@@ -98,6 +98,7 @@ from app.routers.playback_entitlements import router as playback_entitlements_ro
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
 from app.routers.admin_video_review import router as admin_video_review_router
+from app.routers.moderation_video_queue import moderation_video_queue_router
 from app.routers.dmca import router as dmca_router
 from app.routers.admin_dmca import router as admin_dmca_router
 from app.routers.appeals import router as appeals_router
@@ -392,6 +393,7 @@ def create_app() -> FastAPI:
     app.include_router(moderation_compat_router)
     app.include_router(admin_moderation_router)
     app.include_router(admin_video_review_router)
+    app.include_router(moderation_video_queue_router)
     app.include_router(dmca_router)
     app.include_router(admin_dmca_router)
     app.include_router(appeals_router)

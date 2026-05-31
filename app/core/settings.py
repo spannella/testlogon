@@ -581,6 +581,14 @@ class Settings:
         "DDB_MODERATION_AUDIT_LOG",
         "ModerationAuditLog",
     )
+    moderation_video_queue_table_name: str = os.environ.get(
+        "DDB_MODERATION_VIDEO_QUEUE",
+        "ModerationVideoQueue",
+    )
+    moderation_video_queue_enabled: bool = os.environ.get(
+        "MODERATION_VIDEO_QUEUE_ENABLED",
+        "1",
+    ) not in ("0", "false", "False")
     user_enforcement_history_table_name: str = os.environ.get(
         "DDB_USER_ENFORCEMENT_HISTORY",
         "UserEnforcementHistory",
