@@ -7356,3 +7356,88 @@ export interface CreateSecurityFindingIn {
   code_snippet?: string;
   remediation?: string;
 }
+
+// ─── Admin Subscription Tier Manager (ADMIN-001) ─────────────────────────────
+
+export type SubscriptionTierBillingCycle = "monthly" | "quarterly" | "yearly";
+export type SubscriptionTierAccessLevel = "basic" | "premium" | "vip";
+export type SubscriptionTierStatus = "active" | "archived";
+
+export interface SubscriptionTierCreate {
+  name: string;
+  price_cents: number;
+  billing_cycle?: SubscriptionTierBillingCycle;
+  description?: string;
+  benefits?: string[];
+  access_level?: SubscriptionTierAccessLevel;
+  plan_id?: string | null;
+}
+
+export interface SubscriptionTierUpdate {
+  name?: string;
+  price_cents?: number;
+  billing_cycle?: SubscriptionTierBillingCycle;
+  description?: string;
+  benefits?: string[];
+  access_level?: SubscriptionTierAccessLevel;
+  plan_id?: string | null;
+}
+
+export interface SubscriptionTierOut {
+  tier_id: string;
+  name: string;
+  price_cents: number;
+  billing_cycle: string;
+  description: string;
+  benefits: string[];
+  access_level: string;
+  display_order: number;
+  status: SubscriptionTierStatus;
+  subscriber_count: number;
+  plan_id?: string | null;
+  created_at: number;
+  updated_at: number;
+  archived_at?: number | null;
+}
+
+export interface SubscriptionTierReorderResult {
+  tier_id: string;
+  display_order: number;
+}
+
+export interface SubscriptionTierAnalyticsRow {
+  tier_id: string;
+  name: string;
+  subscriber_count: number;
+  revenue_cents: number;
+  churn_rate: number;
+}
+
+export interface SubscriptionTierAnalytics {
+  tiers: SubscriptionTierAnalyticsRow[];
+  total_subscribers: number;
+  total_revenue_cents: number;
+  growth_series: Array<{ date: string; count: number }>;
+}
+
+export interface SubscriptionTierPreviewItem {
+  tier_id: string;
+  name: string;
+  price_cents: number;
+  billing_cycle: string;
+  description: string;
+  benefits: string[];
+  access_level: string;
+  display_order: number;
+}
+
+export interface SubscriptionTierPreviewOut {
+  tiers: SubscriptionTierPreviewItem[];
+  creator_id: string;
+}
+
+export interface SubscriptionTierDeleteResult {
+  ok: boolean;
+  tier_id: string;
+  deleted: boolean;
+}

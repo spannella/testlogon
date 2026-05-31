@@ -8145,3 +8145,88 @@ class SecurityAgentConfigOut(BaseModel):
     auto_create_remediation_tickets: bool = True
     remediation_ticket_min_severity: str = "high"
     updated_at: Optional[int] = None
+
+
+# ─── Admin Subscription Tier Manager (ADMIN-001) ─────────────────────────────
+
+
+class AdminSubscriptionTierCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    price_cents: int = Field(ge=100, le=100000)
+    billing_cycle: str = Field(default="monthly", pattern=r"^(monthly|quarterly|yearly)$")
+    description: str = Field(default="", max_length=500)
+    benefits: List[str] = Field(default_factory=list, max_length=20)
+    access_level: str = Field(default="basic", pattern=r"^(basic|premium|vip)$")
+    plan_id: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("benefits")
+    @classmethod
+    def _validate_benefits(cls, v: List[str]) -> List[str]:
+        for b in v:
+            if len(b) > 200:
+                raise ValueError("Each benefit must be 200 characters or fewer")
+            if not b.strip():
+                raise ValueError("Benefits must not be empty strings")
+        return v
+
+
+class AdminSubscriptionTierUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    price_cents: Optional[int] = Field(default=None, ge=100, le=100000)
+    billing_cycle: Optional[str] = Field(default=None, pattern=r"^(monthly|quarterly|yearly)$")
+    description: Optional[str] = Field(default=None, max_length=500)
+    benefits: Optional[List[str]] = Field(default=None, max_length=20)
+    access_level: Optional[str] = Field(default=None, pattern=r"^(basic|premium|vip)$")
+    plan_id: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("benefits")
+    @classmethod
+    def _validate_benefits(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        for b in v:
+            if len(b) > 200:
+                raise ValueError("Each benefit must be 200 characters or fewer")
+            if not b.strip():
+                raise ValueError("Benefits must not be empty strings")
+        return v
+
+
+class AdminSubscriptionTierOut(BaseModel):
+    tier_id: str
+    name: str
+    price_cents: int
+    billing_cycle: str
+    description: str
+    benefits: List[str]
+    access_level: str
+    display_order: int
+    status: str
+    subscriber_count: int
+    plan_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+    archived_at: Optional[int] = None
+
+
+class AdminSubscriptionTierReorder(BaseModel):
+    tier_ids: List[str] = Field(min_length=1)
+
+    @field_validator("tier_ids")
+    @classmethod
+    def _validate_unique(cls, v: List[str]) -> List[str]:
+        if len(v) != len(set(v)):
+            raise ValueError("tier_ids must contain unique values")
+        return v
+
+
+class AdminSubscriptionTierAnalytics(BaseModel):
+    tiers: List[Dict[str, Any]]
+    total_subscribers: int
+    total_revenue_cents: int
+    growth_series: List[Dict[str, Any]]
+
+
+class AdminSubscriptionTierPreviewOut(BaseModel):
+    tiers: List[Dict[str, Any]]
+    creator_id: str

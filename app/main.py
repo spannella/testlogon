@@ -63,6 +63,7 @@ from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.routers.admin_usage import router as admin_usage_router
 from app.routers.admin_entitlements import router as admin_entitlements_router
+from app.routers.admin_subscription_tiers import admin_subscription_tiers_router
 from app.routers.admin_tenant_watermark_assets import router as admin_tenant_watermark_assets_router
 from app.routers.ups import router as ups_router
 from app.routers.carrier_tracking_mock import router as carrier_tracking_mock_router
@@ -432,6 +433,7 @@ def create_app() -> FastAPI:
     app.include_router(subscription_server_router)
     app.include_router(admin_usage_router)
     app.include_router(admin_entitlements_router)
+    app.include_router(admin_subscription_tiers_router)
     app.include_router(admin_tenant_watermark_assets_router)
     app.include_router(ups_router)
     app.include_router(carrier_tracking_mock_router)

@@ -1743,5 +1743,13 @@ class Settings:
         "COMPLIANCE_AGENT_EXECUTE_COMMANDS", "0"
     ) not in ("0", "false", "False")
 
+    # Admin Subscription Tier Manager (ADMIN-001).
+    admin_subscription_tiers_table_name: str = os.environ.get(
+        "ADMIN_SUBSCRIPTION_TIERS_TABLE_NAME", "admin_subscription_tiers"
+    )
+    admin_subscription_tiers_enabled: bool = os.environ.get(
+        "ADMIN_SUBSCRIPTION_TIERS_ENABLED", "1"
+    ) not in ("0", "false", "False")
+
 
 S = Settings()
