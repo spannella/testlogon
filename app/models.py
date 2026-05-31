@@ -8702,6 +8702,77 @@ class KycDocumentReviewRequest(BaseModel):
 
     decision: Literal["approve", "reject"]
     note: Optional[str] = Field(default=None, max_length=2000)
+
+
+# ---------------------------------------------------------------------------
+# KYC-004: Proof of Residency Verification models
+# ---------------------------------------------------------------------------
+
+
+class KycResidencyUploadRequest(BaseModel):
+    """Request to upload a proof-of-residency document for verification."""
+
+    document_type: Literal[
+        "utility_bill", "bank_statement", "government_letter", "tax_document", "lease_agreement"
+    ]
+    issuing_entity: str = Field(min_length=1, max_length=200)
+    document_date: str = Field(
+        pattern=r"^\d{4}-\d{2}-\d{2}$", description="ISO date, e.g. 2026-04-15"
+    )
+    file_name: str = Field(min_length=1, max_length=255)
+    case_id: Optional[str] = None
+    # Base64-encoded file bytes. Optional in dev/E2E (mock provider keys off the
+    # filename, not the bytes).
+    content_b64: Optional[str] = None
+
+
+class KycResidencyAddressMatch(BaseModel):
+    """Result of comparing the extracted address against the profile address."""
+
+    status: Literal["match", "partial", "mismatch", "not_available"]
+    profile_address: Dict[str, str] = Field(default_factory=dict)
+    field_matches: Dict[str, Literal["match", "partial", "mismatch"]] = Field(default_factory=dict)
+
+
+class KycResidencyDocumentOut(BaseModel):
+    """A KYC proof-of-residency document with its extraction/verification state."""
+
+    document_id: str
+    case_id: Optional[str] = None
+    user_sub: Optional[str] = None
+    document_type: Literal[
+        "utility_bill", "bank_statement", "government_letter", "tax_document", "lease_agreement"
+    ]
+    issuing_entity: Optional[str] = None
+    document_date: Optional[str] = None
+    file_name: str
+    status: Literal["pending", "verified", "rejected", "expired"]
+    provider: Optional[str] = None
+    document_url: Optional[str] = None
+    extraction_id: Optional[str] = None
+    recency_valid: bool = False
+    recency_days: int = 0
+    extracted_address: Optional[Dict[str, str]] = None
+    address_match: Optional[KycResidencyAddressMatch] = None
+    review_decision: Optional[str] = None
+    review_note: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class KycResidencyListResponse(BaseModel):
+    """List of KYC proof-of-residency documents."""
+
+    documents: List[KycResidencyDocumentOut] = Field(default_factory=list)
+
+
+class KycResidencyReviewRequest(BaseModel):
+    """Reviewer approve/reject decision for a residency document."""
+
+    decision: Literal["approve", "reject"]
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
 # FIN-001: Invoice / Receipt PDF models
 # ---------------------------------------------------------------------------
 

@@ -1136,6 +1136,29 @@ class Settings:
         os.environ.get("KYC_DOCUMENTS_NAME_MATCH_THRESHOLD", "0.85")
     )
 
+    # KYC Proof of Residency Verification (KYC-004)
+    kyc_residency_documents_table_name: str = os.environ.get(
+        "KYC_RESIDENCY_DOCUMENTS_TABLE_NAME", "kyc_residency_documents"
+    )
+    kyc_residency_documents_status_index_name: str = os.environ.get(
+        "KYC_RESIDENCY_DOCUMENTS_STATUS_INDEX_NAME", "ByStatus"
+    )
+    kyc_residency_bucket: str = os.environ.get("KYC_RESIDENCY_BUCKET", "local-uploads")
+    kyc_residency_s3_prefix: str = os.environ.get("KYC_RESIDENCY_S3_PREFIX", "kyc-residency/")
+    kyc_residency_enabled: bool = os.environ.get(
+        "KYC_RESIDENCY_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    # When False (default) a deterministic mock provider is used; when True a
+    # "real" extraction provider would be invoked (not wired in dev / E2E).
+    kyc_residency_real_extraction_enabled: bool = os.environ.get(
+        "KYC_RESIDENCY_REAL_EXTRACTION_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_residency_provider: str = os.environ.get("KYC_RESIDENCY_PROVIDER", "mock_extract")
+    # Recency window in days; documents dated older than this are not recent.
+    kyc_residency_recency_days: int = int(
+        os.environ.get("KYC_RESIDENCY_RECENCY_DAYS", "90")
+    )
+
     # Video metadata (VOD-001)
     video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")
     vod_entitlements_table_name: str = os.environ.get("DDB_VOD_ENTITLEMENTS", "VodEntitlements")
