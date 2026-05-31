@@ -1081,6 +1081,8 @@ class Settings:
     kyc_risk_auto_escalate_min_score: int = int(os.environ.get("KYC_RISK_AUTO_ESCALATE_MIN_SCORE", "81"))
     kyc_risk_scoring_model_version: str = os.environ.get("KYC_RISK_SCORING_MODEL_VERSION", "v1.0")
     risk_high_threshold: int = int(os.environ.get("RISK_HIGH_THRESHOLD", "70"))
+    # KYC tiered verification levels (KYC-009)
+    kyc_tier_gating_enabled: bool = os.environ.get("KYC_TIER_GATING_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
     # Video metadata (VOD-001)
     video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")

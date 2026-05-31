@@ -5155,4 +5155,29 @@ export interface K8sPresetInfo {
 
 export interface K8sPresetListOut {
   presets: K8sPresetInfo[];
+// ── KYC Tiered Verification (KYC-009) ─────────────────────────────
+
+export interface TierHistoryEntry {
+  from_tier: number;
+  to_tier: number;
+  changed_at: number;
+  reason: string;
+  actor_sub: string;
+  case_id: string | null;
+}
+
+export interface TierDetails {
+  user_sub: string;
+  current_tier: number;
+  tier_name: string;
+  updated_at: number | null;
+  history: TierHistoryEntry[];
+}
+
+export interface TierRequirements {
+  target_tier: number;
+  current_tier: number;
+  met: string[];
+  unmet: string[];
+  eligible: boolean;
 }

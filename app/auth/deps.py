@@ -306,3 +306,28 @@ async def resolve_dev_or_authenticated_user_sub(
                 return user_sub
             raise HTTPException(401, "Invalid credentials")
     return await get_authenticated_user_sub(request)
+
+
+def require_kyc_tier(minimum_tier: int):
+    """FastAPI dependency factory that enforces a minimum KYC tier."""
+
+    async def _check(request: Request):
+        if not S.kyc_tier_gating_enabled:
+            return  # Feature flag: skip tier check when disabled
+        from app.services.kyc_tiers import get_user_kyc_tier, KYC_TIER_NAMES
+        user = await get_authenticated_user(request)
+        tier = get_user_kyc_tier(user.sub)
+        if tier < minimum_tier:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "kyc_tier_insufficient",
+                    "message": f"This action requires {KYC_TIER_NAMES.get(minimum_tier, f'Tier {minimum_tier}')} verification",
+                    "current_tier": tier,
+                    "required_tier": minimum_tier,
+                    "upgrade_url": "/kyc",
+                },
+            )
+        return user
+
+    return _check

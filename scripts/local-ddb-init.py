@@ -46,7 +46,12 @@ def _table_defs() -> List[TableDef]:
         TableDef(_resolve_table_name(S.ddb_sms_table, "sms_devices"), "user_sub", "sms_device_id"),
         TableDef(_resolve_table_name(S.ddb_email_table, "email_devices"), "user_sub", "email_device_id"),
         TableDef(_resolve_table_name(S.ddb_recovery_table, "recovery_codes"), "user_sub", "code_hash"),
-        TableDef(_resolve_table_name(S.users_table_name, "users"), "user_sub"),
+        TableDef(
+            _resolve_table_name(S.users_table_name, "users"),
+            "user_sub",
+            gsi=[{"index_name": "ByKycTier", "partition_key": "kyc_tier", "sort_key": "kyc_tier_updated_at"}],
+            attr_types={"kyc_tier": "N", "kyc_tier_updated_at": "N"},
+        ),
         TableDef(_resolve_table_name(S.role_audit_table_name, "role_audit"), "pk", "sk"),
         TableDef(
             _resolve_table_name(S.api_keys_table_name, "api_keys"),

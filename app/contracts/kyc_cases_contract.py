@@ -296,3 +296,27 @@ def kyc_validation_error_envelope(exc: ValidationError) -> dict[str, Any]:
         "kyc_invalid_request",
         details={"errors": exc.errors()},
     )
+
+
+# ── KYC Tier models (KYC-009) ──────────────────────────────────────
+
+
+class TierOverrideRequest(BaseModel):
+    tier: int = Field(ge=0, le=4)
+    reason: str = Field(min_length=5, max_length=500)
+
+
+class TierDetailsOut(BaseModel):
+    user_sub: str
+    current_tier: int
+    tier_name: str
+    updated_at: int | None = None
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TierRequirementsOut(BaseModel):
+    target_tier: int
+    current_tier: int
+    met: list[str]
+    unmet: list[str]
+    eligible: bool
