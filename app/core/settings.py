@@ -299,8 +299,6 @@ class Settings:
     # Billing / PayPal
     billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", os.environ.get("DDB_TABLE", ""))
     public_base_url: str = os.environ.get("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
-    default_monthly_price_cents: int = int(os.environ.get("DEFAULT_MONTHLY_PRICE_CENTS", "999"))
-    default_currency: str = os.environ.get("DEFAULT_CURRENCY", "usd").lower()
 
     paypal_env: str = os.environ.get("PAYPAL_ENV", "sandbox").lower()
     paypal_client_id: str = os.environ.get("PAYPAL_CLIENT_ID", "")
@@ -318,7 +316,6 @@ class Settings:
     stripe_default_currency: str = os.environ.get("STRIPE_DEFAULT_CURRENCY", "usd")
     stripe_success_url: str = os.environ.get("STRIPE_SUCCESS_URL", "")
     stripe_cancel_url: str = os.environ.get("STRIPE_CANCEL_URL", "")
-    billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", "billing")
     payment_incidents_table_name: str = os.environ.get("PAYMENT_INCIDENTS_TABLE_NAME", "payment_incidents")
     payment_incident_events_table_name: str = os.environ.get("PAYMENT_INCIDENT_EVENTS_TABLE_NAME", "payment_incident_events")
     payment_dispute_evidence_table_name: str = os.environ.get("PAYMENT_DISPUTE_EVIDENCE_TABLE_NAME", "payment_dispute_evidence")
@@ -1243,8 +1240,13 @@ class Settings:
     ad_accounts_table_name: str = os.environ.get("DDB_AD_ACCOUNTS", "AdAccounts")
     ad_campaigns_table_name: str = os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns")
     ad_creatives_table_name: str = os.environ.get("DDB_AD_CREATIVES", "AdCreatives")
-    ad_campaigns_table_name: str = os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns")  # ADS-001
     ad_targeting_table_name: str = os.environ.get("DDB_AD_TARGETING", "AdTargeting")  # ADS-003
+
+    # Ad Serving Engine (ADS-004)
+    ad_serving_enabled: bool = os.environ.get("AD_SERVING_ENABLED", "1") not in ("0", "false", "False")
+    ad_frequency_cap_hourly: int = int(os.environ.get("AD_FREQUENCY_CAP_HOURLY", "3"))
+    ad_frequency_cap_daily: int = int(os.environ.get("AD_FREQUENCY_CAP_DAILY", "10"))
+    ad_frequency_caps_table_name: str = os.environ.get("DDB_AD_FREQUENCY_CAPS", "AdFrequencyCaps")
 
     # View-Once / Rental Access (VOD-019)
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")
@@ -1525,7 +1527,6 @@ class Settings:
     # Issued Licenses (LICENSE-002)
     issued_licenses_table_name: str = os.environ.get("ISSUED_LICENSES_TABLE_NAME", "issued_licenses")
     # Syndicates (SYND-001)
-    syndicates_table_name: str = os.environ.get("SYNDICATES_TABLE_NAME", "syndicates")
     # Media Preferences (CALL-003)
     media_preferences_table_name: str = os.environ.get("MEDIA_PREFERENCES_TABLE_NAME", "media_preferences")
 

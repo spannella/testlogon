@@ -1,4 +1,4 @@
-"""Advertiser account + campaign + creative endpoints, plus admin review (ADS-001/002)."""
+"""Advertiser account + campaign + creative endpoints, ad serving, plus admin review (ADS-001/002/004)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
@@ -9,6 +9,8 @@ from app.services.sessions import require_ui_session
 from app.models import (
     AdAccountCreateIn,
     AdAccountReviewIn,
+    AdServeRequestIn,
+    AdTrackEventIn,
     CampaignCreateIn,
     CampaignReviewIn,
     CampaignUpdateIn,
@@ -16,6 +18,7 @@ from app.models import (
     CreativeReviewIn,
     CreativeUpdateIn,
 )
+from app.services.ad_serving import serve_ad, track_ad_event, get_serving_stats
 from app.services.ad_accounts import (
     create_ad_account,
     get_ad_account,
@@ -317,3 +320,40 @@ async def review_creative_endpoint(
     if not result:
         raise HTTPException(status_code=404, detail="Creative not found")
     return result
+
+
+# ── Ad Serving (ADS-004) ──────────────────────────────────────────────
+
+@router.post("/serve")
+async def serve_ad_endpoint(body: AdServeRequestIn, ctx=Depends(require_ui_session)):
+    result = serve_ad(
+        surface=body.surface,
+        content_type=getattr(body, "content_type", None) or body.surface,
+        creator_id=body.creator_id,
+        content_id=body.content_id,
+        slot_type=body.slot_type,
+        user_id=ctx["user_sub"],
+        user_context=getattr(body, "user_context", None),
+    )
+    return result
+
+
+@router.post("/track")
+async def track_ad_event_endpoint(body: AdTrackEventIn, ctx=Depends(require_ui_session)):
+    return track_ad_event(
+        event=body.event,
+        creative_id=body.creative_id,
+        campaign_id=body.campaign_id,
+        account_id=body.account_id,
+        surface=body.surface,
+        slot_type=getattr(body, "slot_type", ""),
+        content_id=getattr(body, "content_id", ""),
+        creator_id=getattr(body, "creator_id", ""),
+        user_id=ctx["user_sub"],
+    )
+
+
+@router.get("/stats/{campaign_id}")
+async def serving_stats_endpoint(campaign_id: str, ctx=Depends(require_ui_session)):
+    _require_campaign_owner(campaign_id, ctx["user_sub"])
+    return get_serving_stats(campaign_id)

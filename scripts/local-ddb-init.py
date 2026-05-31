@@ -841,6 +841,7 @@ def _table_defs() -> List[TableDef]:
         # Advertiser Accounts (ADS-001)
         TableDef(
             _resolve_table_name(S.ad_accounts_table_name, "AdAccounts"),
+            os.environ.get("DDB_AD_ACCOUNTS", "AdAccounts"),
             "pk",
             "sk",
             gsi=[
@@ -852,6 +853,7 @@ def _table_defs() -> List[TableDef]:
         # Ad Campaigns (ADS-001)
         TableDef(
             _resolve_table_name(S.ad_campaigns_table_name, "AdCampaigns"),
+            os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns"),
             "pk",
             "sk",
             gsi=[
@@ -863,6 +865,7 @@ def _table_defs() -> List[TableDef]:
         # Ad Creatives (ADS-002)
         TableDef(
             _resolve_table_name(S.ad_creatives_table_name, "AdCreatives"),
+            os.environ.get("DDB_AD_CREATIVES", "AdCreatives"),
             "pk",
             "sk",
             gsi=[
@@ -871,6 +874,23 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByCreativeId", "partition_key": "creative_id", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
+        ),
+        # Ad Targeting (ADS-003)
+        TableDef(
+            os.environ.get("DDB_AD_TARGETING", "AdTargeting"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Ad Frequency Caps (ADS-004)
+        TableDef(
+            os.environ.get("DDB_AD_FREQUENCY_CAPS", "AdFrequencyCaps"),
+            "pk",
+            "sk",
+            ttl_attribute="expires_at",
         ),
         # Rate limiting (PLATFORM-001)
         TableDef(
