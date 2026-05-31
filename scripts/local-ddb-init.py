@@ -1344,6 +1344,9 @@ def _table_defs() -> List[TableDef]:
         # Activity Feed (SOC-003)
         TableDef(
             _resolve_table_name(S.activity_feed_table_name, "activity_feed"),
+        # Notification Engine (SOC-004)
+        TableDef(
+            _resolve_table_name(S.notifications_engine_table_name, "notifications_engine"),
             "user_id",
             "sk",
         ),

@@ -29,6 +29,7 @@ const PostDetailPage = lazy(() => import("@/pages/feed/PostDetailPage"));
 const DelegateFeedPage = lazy(() => import("@/pages/feed/DelegateFeedPage"));
 const AlertsPage = lazy(() => import("@/pages/alerts/AlertsPage"));
 const ActivityFeedPage = lazy(() => import("@/pages/activity/ActivityFeedPage"));
+const NotificationsPage = lazy(() => import("@/pages/notifications/NotificationsPage"));
 const SecurityPage = lazy(() => import("@/pages/security/SecurityPage"));
 const ProfilePage = lazy(() => import("@/pages/settings/ProfilePage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
@@ -161,6 +162,7 @@ export default function App() {
           <Route path="feed/delegate/:creatorId" element={<DelegateFeedPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="activity" element={<ActivityFeedPage />} />
+          <Route path="notifications" element={<NotificationsPage />} />
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />
           <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />

@@ -149,6 +149,7 @@ class Tables:
     ec2_instances: Any
     license_revenue: Any
     activity_feed: Any
+    notifications_engine: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -292,4 +293,5 @@ T = Tables(
     ec2_instances=ddb.Table(S.ec2_instances_table_name),
     license_revenue=ddb.Table(S.license_revenue_table_name),
     activity_feed=ddb.Table(S.activity_feed_table_name),
+    notifications_engine=ddb.Table(S.notifications_engine_table_name),
 )
