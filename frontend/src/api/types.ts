@@ -4492,3 +4492,71 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ─── Kubernetes Container Launcher (INFRA-004) ──────────────────────
+
+export interface K8sLaunchPodIn {
+  label: string;
+  image: string;
+  preset?: "small" | "medium" | "large" | "xlarge";
+  ssh_key_id?: string;
+  ttl_seconds?: number;
+  env_vars?: Record<string, string>;
+  template_id?: string;
+}
+
+export interface K8sPodOut {
+  pod_id: string;
+  k8s_pod_name: string;
+  namespace: string;
+  label: string;
+  image: string;
+  image_display_name: string;
+  preset: string;
+  cpu_millicores: number;
+  memory_mb: number;
+  status: string;
+  pod_ip: string;
+  service_hostname: string;
+  ssh_port: number;
+  ssh_key_id: string;
+  host_id: string;
+  created_at: number;
+  started_at: number;
+  terminated_at: number;
+  ttl_seconds: number;
+  expires_at: number;
+  last_activity_at: number;
+}
+
+export interface K8sPodListOut {
+  pods: K8sPodOut[];
+  count: number;
+}
+
+export interface K8sPodLogsOut {
+  pod_id: string;
+  lines: string[];
+}
+
+export interface K8sImageInfo {
+  image: string;
+  display_name: string;
+  os_type: string;
+  username: string;
+}
+
+export interface K8sImageListOut {
+  images: K8sImageInfo[];
+}
+
+export interface K8sPresetInfo {
+  preset: string;
+  cpu_millicores: number;
+  memory_mb: number;
+  cost_cents_per_min: number;
+}
+
+export interface K8sPresetListOut {
+  presets: K8sPresetInfo[];
+}

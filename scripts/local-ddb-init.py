@@ -1160,6 +1160,18 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Kubernetes Container Launcher (INFRA-004)
+        TableDef(
+            _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByNamespace", "partition_key": "namespace", "sort_key": "created_at"},
+                {"index_name": "ByStatus", "partition_key": "user_sub", "sort_key": "status"},
+                {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

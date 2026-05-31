@@ -1490,5 +1490,11 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Kubernetes Container Launcher (INFRA-004)
+    k8s_pods_table_name: str = os.environ.get("K8S_PODS_TABLE_NAME", "k8s_pods")
+    k8s_mock_enabled: bool = os.environ.get("K8S_MOCK_ENABLED", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")
+    k8s_max_pods_per_user: int = int(os.environ.get("K8S_MAX_PODS_PER_USER", "5"))
+    k8s_ttl_checker_enabled: bool = os.environ.get("K8S_TTL_CHECKER_ENABLED", "1") not in ("0", "false", "False")
+
 
 S = Settings()

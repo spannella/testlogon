@@ -130,6 +130,7 @@ class Tables:
     sso_sessions: Any
     sso_assertion_cache: Any
     broadcast_clips: Any
+    k8s_pods: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -254,4 +255,5 @@ T = Tables(
     sso_sessions=ddb.Table(S.sso_sessions_table_name),
     sso_assertion_cache=ddb.Table(S.sso_assertion_cache_table_name),
     broadcast_clips=ddb.Table(S.broadcast_clips_table_name),
+    k8s_pods=ddb.Table(S.k8s_pods_table_name),
 )
