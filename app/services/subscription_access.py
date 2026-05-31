@@ -74,7 +74,16 @@ def can_access_creator(subscriber_id: str, creator_id: str) -> bool:
         return True
     if not creator_requires_subscription(creator_id):
         return True
-    return has_active_subscription(subscriber_id, creator_id)
+    if has_active_subscription(subscriber_id, creator_id):
+        return True
+    # Check syndicate bundle access (SYND-002)
+    try:
+        from app.services.syndicate_subscriptions import has_bundle_access
+        if has_bundle_access(subscriber_id, creator_id):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def require_subscription_access(subscriber_id: str, creator_id: str) -> None:

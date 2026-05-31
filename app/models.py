@@ -3878,3 +3878,120 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# -- Syndicates (SYND-001) --
+
+class SyndicateCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    description: str = Field(default="", max_length=500)
+
+class SyndicateUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=500)
+
+class SyndicateInviteIn(BaseModel):
+    user_id: str
+
+class SyndicateInviteRespondIn(BaseModel):
+    accept: bool
+
+class SyndicateJoinRequestIn(BaseModel):
+    message: str = Field(default="", max_length=500)
+
+class SyndicateTransferAdminIn(BaseModel):
+    new_admin_user_id: str
+
+class SyndicateMemberOut(BaseModel):
+    user_id: str
+    display_name: str = ""
+    role: str = "member"
+    joined_at: int = 0
+
+class SyndicateOut(BaseModel):
+    syndicate_id: str
+    name: str
+    description: str = ""
+    admin_user_id: str
+    status: str = "active"
+    member_count: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+    members: List[SyndicateMemberOut] = Field(default_factory=list)
+
+class SyndicateInviteOut(BaseModel):
+    syndicate_id: str
+    syndicate_name: str = ""
+    user_id: str
+    invited_by: str
+    invited_at: int = 0
+    status: str
+
+class SyndicateRequestOut(BaseModel):
+    syndicate_id: str
+    user_id: str
+    display_name: str = ""
+    requested_at: int = 0
+    message: str = ""
+    status: str
+
+class SyndicateAuditOut(BaseModel):
+    event_id: str
+    actor_id: str
+    action: str
+    target_id: str = ""
+    details: Optional[Dict[str, Any]] = None
+    ts: int = 0
+
+# -- Syndicate Bundled Subscriptions (SYND-002) --
+
+class BundlePlanCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    price_cents: int = Field(ge=100, le=100000)
+    interval: str = Field(default="month", pattern="^(month|year)$")
+
+class BundlePlanUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    price_cents: Optional[int] = Field(default=None, ge=100, le=100000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def at_least_one_field(cls, values):
+        if isinstance(values, dict):
+            non_none = {k: v for k, v in values.items() if v is not None}
+            if not non_none:
+                raise ValueError("At least one field must be provided")
+        return values
+
+class BundlePlanOut(BaseModel):
+    plan_id: str
+    plan_type: str = "syndicate_bundle"
+    syndicate_id: str
+    name: str
+    description: str = ""
+    price_cents: int = 0
+    interval: str = "month"
+    status: str = "active"
+    included_creator_ids: List[str] = Field(default_factory=list)
+    current_members: List[SyndicateMemberOut] = Field(default_factory=list)
+    created_at: int = 0
+
+class BundleSubscribeIn(BaseModel):
+    payment_method_id: Optional[str] = None
+
+class BundleSubscriptionOut(BaseModel):
+    subscription_id: str
+    plan_id: str
+    plan_type: str = "syndicate_bundle"
+    syndicate_id: str
+    syndicate_name: str = ""
+    status: str
+    price_cents: int = 0
+    interval: str = "month"
+    current_period_start: int = 0
+    current_period_end: int = 0
+    created_at: int = 0
+    cancelled_at: Optional[int] = None
+    included_creators: List[SyndicateMemberOut] = Field(default_factory=list)
