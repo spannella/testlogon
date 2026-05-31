@@ -9152,3 +9152,88 @@ class PlatformFinancialRollupOut(BaseModel):
     tx_count: int = 0
     unique_payers: int = 0
     computed_at: int = 0
+
+
+# ── License Agreements (LICENSE-001) ─────────────────────────────────────────
+
+class LicenseAgreementCreateIn(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    licensor_name: str = Field(min_length=1, max_length=200)
+    license_type: str = Field(description="royalty_free|creative_commons|commercial|custom|editorial|public_domain")
+    territory: str = Field(default="worldwide", max_length=100)
+    expires_at: Optional[int] = Field(default=None, description="Unix timestamp of expiration date")
+    notes: str = Field(default="", max_length=1000)
+
+
+class LicenseAgreementUpdateIn(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=2, max_length=200)
+    licensor_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    license_type: Optional[str] = None
+    territory: Optional[str] = Field(default=None, max_length=100)
+    expires_at: Optional[int] = None
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class LicenseAgreementStatusIn(BaseModel):
+    status: str = Field(description="active|archived")
+
+
+class LicenseAgreementContentLinkIn(BaseModel):
+    content_id: str = Field(min_length=1, max_length=200)
+    content_type: str = Field(description="video|post|broadcast")
+
+
+class LicenseAgreementAdminReviewIn(BaseModel):
+    verified: bool
+    rejection_reason: str = Field(default="", max_length=500)
+
+
+class LicenseAgreementOut(BaseModel):
+    license_id: str
+    title: str
+    licensor_name: str = ""
+    license_type: str
+    file_name: str = ""
+    file_size: int = 0
+    mime_type: str = ""
+    status: str
+    version: int = 1
+    territory: str = "worldwide"
+    expires_at: Optional[int] = None
+    notes: str = ""
+    rejection_reason: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+    content_count: int = 0
+    expiring_soon: bool = False
+
+
+class LicenseAgreementListOut(BaseModel):
+    items: List[LicenseAgreementOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class LicenseAgreementContentLinkOut(BaseModel):
+    content_id: str
+    content_type: str
+    license_id: str
+    linked_at: int = 0
+
+
+class LicenseAgreementDownloadOut(BaseModel):
+    download_url: str
+
+
+class LicenseAgreementReviewItemOut(BaseModel):
+    license_id: str
+    creator_id: str
+    creator_display_name: str = ""
+    title: str
+    licensor_name: str = ""
+    license_type: str = ""
+    submitted_at: int = 0
+
+
+class LicenseAgreementReviewQueueOut(BaseModel):
+    items: List[LicenseAgreementReviewItemOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
