@@ -56,6 +56,7 @@ const RemoteDesktopPage = lazy(() => import("@/pages/remote/RemoteDesktopPage"))
 const K8sLauncherPage = lazy(() => import("@/pages/remote/K8sLauncherPage"));
 const ComputeSpendingPage = lazy(() => import("@/pages/remote/ComputeSpendingPage"));
 const SecurityGroupsPage = lazy(() => import("@/pages/remote/SecurityGroupsPage"));
+const SshRecordingsPage = lazy(() => import("@/pages/remote/SshRecordingsPage"));
 const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
@@ -249,6 +250,7 @@ export default function App() {
           <Route path="remote/k8s" element={<K8sLauncherPage />} />
           <Route path="remote/billing" element={<ComputeSpendingPage />} />
           <Route path="remote/security-groups" element={<SecurityGroupsPage />} />
+          <Route path="remote/recordings" element={<SshRecordingsPage />} />
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
