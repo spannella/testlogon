@@ -178,6 +178,10 @@ class Tables:
     marketing_engagement: Any
     compliance_findings: Any
     compliance_audits: Any
+    agent_costs: Any
+    agent_ticket_costs: Any
+    agent_cost_budgets: Any
+    agent_cost_alerts: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -350,4 +354,8 @@ T = Tables(
     marketing_engagement=ddb.Table(S.marketing_engagement_table_name),
     compliance_findings=ddb.Table(S.compliance_security_findings_table_name),
     compliance_audits=ddb.Table(S.compliance_security_audits_table_name),
+    agent_costs=ddb.Table(S.agent_costs_table_name),
+    agent_ticket_costs=ddb.Table(S.agent_ticket_costs_table_name),
+    agent_cost_budgets=ddb.Table(S.agent_cost_budgets_table_name),
+    agent_cost_alerts=ddb.Table(S.agent_cost_alerts_table_name),
 )

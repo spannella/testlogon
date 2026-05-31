@@ -130,6 +130,10 @@ const MarketingContentEditorPage = lazy(() => import("@/pages/agents/MarketingCo
 const MarketingContentCalendarPage = lazy(() => import("@/pages/agents/MarketingContentCalendarPage"));
 const MarketingEngagementDashboardPage = lazy(() => import("@/pages/agents/MarketingEngagementDashboardPage"));
 const ComplianceAgentConfigPage = lazy(() => import("@/pages/agents/ComplianceAgentConfigPage"));
+const CostOverviewPage = lazy(() => import("@/pages/agents/CostOverviewPage"));
+const CostBreakdownPage = lazy(() => import("@/pages/agents/CostBreakdownPage"));
+const BudgetManagerPage = lazy(() => import("@/pages/agents/BudgetManagerPage"));
+const CostAlertsPage = lazy(() => import("@/pages/agents/CostAlertsPage"));
 
 function PageSpinner() {
   return (
@@ -285,6 +289,10 @@ export default function App() {
           <Route path="agents/security" element={<ComplianceAgentConfigPage />} />
           <Route path="agents/security/findings" element={<ComplianceAgentConfigPage />} />
           <Route path="agents/security/audits" element={<ComplianceAgentConfigPage />} />
+          <Route path="agents/costs" element={<CostOverviewPage />} />
+          <Route path="agents/costs/breakdown" element={<CostBreakdownPage />} />
+          <Route path="agents/costs/budgets" element={<BudgetManagerPage />} />
+          <Route path="agents/costs/alerts" element={<CostAlertsPage />} />
           <Route path="ideas/submit" element={<IdeaSubmissionPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>

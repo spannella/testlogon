@@ -7356,3 +7356,184 @@ export interface CreateSecurityFindingIn {
   code_snippet?: string;
   remediation?: string;
 }
+
+// ─── Accountant / Cost Tracking Agent (AGENT-018) ───────────────────────────
+
+export interface AgentCostEntry {
+  worker_id: string;
+  agent_type: string;
+  agent_id: string;
+  date: string;
+  llm_input_tokens: number;
+  llm_output_tokens: number;
+  llm_cached_tokens: number;
+  llm_cost_cents: number;
+  llm_provider: string;
+  llm_model: string;
+  compute_hours: number;
+  compute_cost_cents: number;
+  total_cost_cents: number;
+  tickets_worked: number;
+  tickets_completed: number;
+}
+
+export interface CostDailySummary {
+  date: string;
+  total_cents: number;
+  llm_cents: number;
+  compute_cents: number;
+  by_agent_type: Record<string, number>;
+  by_worker: AgentCostEntry[];
+}
+
+export interface BudgetUtilization {
+  budget_id: string;
+  name: string;
+  scope: string;
+  scope_ref?: string | null;
+  period: string;
+  limit_cents: number;
+  spent_cents: number;
+  utilization_pct: number;
+}
+
+export interface CostPeriodSummary {
+  period: string;
+  start_date: string;
+  end_date: string;
+  total_cents: number;
+  llm_cents: number;
+  compute_cents: number;
+  by_agent_type: Record<string, number>;
+  budget_utilization: BudgetUtilization[];
+}
+
+export interface AgentTypeCosts {
+  agent_type: string;
+  days: number;
+  total_cents: number;
+  llm_cents: number;
+  compute_cents: number;
+  daily_costs: Array<{ date: string; cost_cents: number }>;
+  entries: AgentCostEntry[];
+}
+
+export interface TicketCost {
+  ticket_id: string;
+  agent_type: string;
+  total_llm_tokens: number;
+  total_llm_cost_cents: number;
+  total_compute_hours: number;
+  total_compute_cost_cents: number;
+  total_cost_cents: number;
+  worker_sessions: number;
+  status: string;
+  started_at?: number | null;
+  completed_at?: number | null;
+}
+
+export interface TicketCostList {
+  ticket_costs: TicketCost[];
+  next_cursor?: string | null;
+}
+
+export interface CostBudget {
+  budget_id: string;
+  name: string;
+  scope: "overall" | "agent_type" | "agent_instance";
+  scope_ref?: string | null;
+  period: "daily" | "weekly" | "monthly";
+  limit_cents: number;
+  alert_threshold_pct: number;
+  auto_pause_on_exceed: boolean;
+  enabled: boolean;
+  created_at: number;
+}
+
+export interface CostBudgetIn {
+  name: string;
+  scope: "overall" | "agent_type" | "agent_instance";
+  scope_ref?: string | null;
+  period: "daily" | "weekly" | "monthly";
+  limit_cents: number;
+  alert_threshold_pct?: number;
+  auto_pause_on_exceed?: boolean;
+}
+
+export interface CostBudgetUpdateIn {
+  name?: string;
+  limit_cents?: number;
+  alert_threshold_pct?: number;
+  auto_pause_on_exceed?: boolean;
+  enabled?: boolean;
+}
+
+export interface CostAlert {
+  alert_id: string;
+  budget_id?: string | null;
+  alert_type: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  message: string;
+  current_spend_cents: number;
+  budget_limit_cents?: number | null;
+  acknowledged: boolean;
+  auto_action_taken?: string | null;
+  created_at: number;
+}
+
+export interface CostAlertList {
+  alerts: CostAlert[];
+  next_cursor?: string | null;
+}
+
+export interface CostTrendWeek {
+  week_start: string;
+  total_cents: number;
+  llm_cents: number;
+  compute_cents: number;
+  by_agent_type: Record<string, number>;
+}
+
+export interface CostTrends {
+  weeks: CostTrendWeek[];
+}
+
+export interface OptimizationRecommendation {
+  type: "idle_worker" | "model_downgrade" | "high_cost_ticket" | "underutilized_agent";
+  title: string;
+  description: string;
+  potential_savings_cents: number;
+  action: string;
+}
+
+export interface AccountantConfig {
+  collection_frequency: string;
+  report_frequency: string;
+  report_hour_utc: number;
+  compute_pricing: Record<string, number>;
+  anomaly_detection_enabled: boolean;
+  anomaly_threshold_pct: number;
+  idle_worker_threshold_minutes: number;
+  optimization_suggestions_enabled: boolean;
+  updated_at?: number | null;
+}
+
+export interface AccountantConfigIn {
+  collection_frequency?: "hourly" | "every_6h" | "daily";
+  report_frequency?: "daily" | "weekly" | "monthly";
+  report_hour_utc?: number;
+  compute_pricing?: Record<string, number>;
+  anomaly_detection_enabled?: boolean;
+  anomaly_threshold_pct?: number;
+  idle_worker_threshold_minutes?: number;
+  optimization_suggestions_enabled?: boolean;
+}
+
+export interface CostCollectResult {
+  ok: boolean;
+  executed: boolean;
+  alerts_created: number;
+  alerts: CostAlert[];
+  collected_at: number;
+}
