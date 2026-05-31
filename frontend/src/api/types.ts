@@ -8177,3 +8177,64 @@ export interface PlatformFinancialRollupOut {
   unique_payers: number;
   computed_at: number;
 }
+
+// ── License Agreements (LICENSE-001) ─────────────────────────────────────────
+
+export type LicenseAgreementStatus =
+  | "pending_review"
+  | "active"
+  | "rejected"
+  | "expired"
+  | "archived"
+  | "deleted";
+
+export interface LicenseAgreementOut {
+  license_id: string;
+  title: string;
+  licensor_name: string;
+  license_type: string;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  status: LicenseAgreementStatus | string;
+  version: number;
+  territory: string;
+  expires_at: number | null;
+  notes: string;
+  rejection_reason: string;
+  created_at: number;
+  updated_at: number;
+  content_count: number;
+  expiring_soon: boolean;
+}
+
+export interface LicenseAgreementListOut {
+  items: LicenseAgreementOut[];
+  next_cursor?: string | null;
+}
+
+export interface LicenseAgreementContentLinkOut {
+  content_id: string;
+  content_type: string;
+  license_id: string;
+  linked_at: number;
+}
+
+export interface LicenseAgreementDownloadOut {
+  download_url: string;
+}
+
+export interface LicenseAgreementReviewItemOut {
+  license_id: string;
+  creator_id: string;
+  creator_display_name: string;
+  title: string;
+  licensor_name: string;
+  license_type: string;
+  submitted_at: number;
+}
+
+export interface LicenseAgreementReviewQueueOut {
+  items: LicenseAgreementReviewItemOut[];
+  next_cursor?: string | null;
+}

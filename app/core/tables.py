@@ -152,6 +152,7 @@ class Tables:
     bot_assignments: Any
     ssh_keys: Any
     issued_licenses: Any
+    license_agreements: Any
     bot_templates: Any
     bot_scheduled_sends: Any
     media_preferences: Any
@@ -338,6 +339,7 @@ T = Tables(
     bot_assignments=ddb.Table(S.bot_assignments_table_name),
     ssh_keys=ddb.Table(S.ssh_keys_table_name),
     issued_licenses=ddb.Table(S.issued_licenses_table_name),
+    license_agreements=ddb.Table(S.license_agreements_table_name),
     bot_templates=ddb.Table(S.bot_templates_table_name),
     bot_scheduled_sends=ddb.Table(S.bot_scheduled_sends_table_name),
     media_preferences=ddb.Table(S.media_preferences_table_name),
