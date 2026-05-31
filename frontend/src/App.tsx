@@ -17,6 +17,12 @@ const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const MessagesPage = lazy(() => import("@/pages/messages/MessagesPage"));
 const LicensesPage = lazy(() => import("@/pages/licenses/LicensesPage"));
 const AdminReviewPage = lazy(() => import("@/pages/licenses/AdminReviewPage"));
+const LicenseCompliancePage = lazy(
+  () => import("@/pages/licenses/LicenseCompliancePage"),
+);
+const AdminLicenseCompliancePage = lazy(
+  () => import("@/pages/licenses/AdminLicenseCompliancePage"),
+);
 const FilesPage = lazy(() => import("@/pages/files/FilesPage"));
 const ProjectsPage = lazy(() => import("@/pages/projects/ProjectsPage"));
 const ProjectDetailPage = lazy(() => import("@/pages/projects/ProjectDetailPage"));
@@ -347,6 +353,11 @@ export default function App() {
           <Route path="agents/costs/alerts" element={<CostAlertsPage />} />
           <Route path="ideas/submit" element={<IdeaSubmissionPage />} />
           <Route path="licenses" element={<LicensesPage />} />
+          <Route path="licenses/compliance" element={<LicenseCompliancePage />} />
+          <Route
+            path="admin/license-compliance"
+            element={<AdminLicenseCompliancePage />}
+          />
           <Route path="admin/license-review" element={<AdminReviewPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>

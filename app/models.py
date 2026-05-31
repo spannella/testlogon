@@ -10032,3 +10032,118 @@ class SshBastionResolvedOut(BaseModel):
     proxy_jump: str = ""
     ssh_command: str = ""
     ssh_config: str = ""
+# ─── License Compliance (LICENSE-006) ──────────────────────────────────────
+
+class ComplianceFlagIn(BaseModel):
+    content_id: str
+    reason: str = Field(
+        description="One of: unlicensed_music, unlicensed_video, unlicensed_image, "
+        "expired_license, copyright_claim, other"
+    )
+    evidence: str = Field(default="", max_length=2000)
+    reporter_type: str = Field(default="viewer", description="viewer or creator")
+
+
+class ComplianceFlagResolveIn(BaseModel):
+    content_id: str = ""
+    resolution: str = Field(description="One of: resolved, dismissed, action_required")
+    notes: str = Field(default="", max_length=1000)
+
+
+class ComplianceStatusUpdateIn(BaseModel):
+    new_status: str = Field(
+        description="One of: compliant, under_review, action_required, removed, resolved"
+    )
+    notes: str = Field(default="", max_length=1000)
+
+
+class ComplianceStatusOut(BaseModel):
+    content_id: str
+    content_type: str = ""
+    creator_id: str = ""
+    compliance_status: str
+    issues: List[Dict[str, Any]] = Field(default_factory=list)
+    last_checked_at: Optional[int] = None
+    resolved_at: Optional[int] = None
+    resolved_by: Optional[str] = None
+
+
+class LicenseRefOut(BaseModel):
+    license_id: str
+    license_type: str
+    license_status: str = ""
+    expires_at: Optional[int] = None
+    verified_at: Optional[int] = None
+
+
+class LicenseRefListOut(BaseModel):
+    items: List[LicenseRefOut] = Field(default_factory=list)
+
+
+class ComplianceFlagOut(BaseModel):
+    flag_id: str
+    content_id: str = ""
+    reporter_id: str = ""
+    reporter_type: str = "viewer"
+    reason: str = ""
+    evidence: str = ""
+    status: str = "open"
+    created_at: int = 0
+    resolved_at: Optional[int] = None
+    resolved_by: Optional[str] = None
+    resolution_notes: str = ""
+
+
+class ComplianceFlagListOut(BaseModel):
+    items: List[ComplianceFlagOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class ComplianceCheckResultOut(BaseModel):
+    content_id: str
+    compliance_status: str
+    issues: List[Dict[str, Any]] = Field(default_factory=list)
+    checked_at: int = 0
+
+
+class CreatorComplianceItemOut(BaseModel):
+    content_id: str
+    content_type: str = ""
+    compliance_status: str
+    issue_count: int = 0
+    last_checked_at: Optional[int] = None
+
+
+class ComplianceSummaryOut(BaseModel):
+    total: int = 0
+    compliant: int = 0
+    expiring_soon: int = 0
+    issues: int = 0
+    flagged: int = 0
+
+
+class CreatorComplianceListOut(BaseModel):
+    items: List[CreatorComplianceItemOut] = Field(default_factory=list)
+    summary: ComplianceSummaryOut = Field(default_factory=ComplianceSummaryOut)
+    next_cursor: Optional[str] = None
+
+
+class AdminComplianceIssueOut(BaseModel):
+    content_id: str
+    creator_id: str = ""
+    creator_display_name: str = ""
+    compliance_status: str = ""
+    issue_type: str = ""
+    severity: str = ""
+    created_at: int = 0
+
+
+class AdminComplianceIssueListOut(BaseModel):
+    items: List[AdminComplianceIssueOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class ComplianceScanResultOut(BaseModel):
+    checked: int = 0
+    issues_found: int = 0
+    alerts_sent: int = 0
