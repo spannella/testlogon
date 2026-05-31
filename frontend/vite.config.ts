@@ -57,6 +57,7 @@ export default defineConfig({
       "/mock": "http://localhost:8000",
       "/calendar/public": "http://localhost:8000",
       "/public/groups": "http://localhost:8000",
+      "/public/fundraisers": "http://localhost:8000",
       "/internal": "http://localhost:8000",
       "/tickets": {
         target: "http://localhost:8000",

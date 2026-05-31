@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
+import FundraisingWidget from "./FundraisingWidget";
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -120,8 +121,26 @@ export default function GroupPage() {
               Your role: {group.my_role}
             </Badge>
           )}
+          {isMember && (
+            <div className="flex flex-wrap gap-2 mt-3" data-testid="group-nav-links">
+              <Button asChild variant="outline" size="sm">
+                <Link to={`/groups/${groupId}/treasury`}>Treasury</Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link to={`/groups/${groupId}/fundraising`}>Fundraising</Link>
+              </Button>
+              {isAdminOrMod && (
+                <Button asChild variant="outline" size="sm">
+                  <Link to={`/groups/${groupId}/ads`}>Advertising</Link>
+                </Button>
+              )}
+            </div>
+          )}
         </CardHeader>
       </Card>
+
+      {/* Active fundraiser progress widget */}
+      {isMember && <FundraisingWidget groupId={groupId!} />}
 
       {/* Post Composer (members only) */}
       {isMember && (

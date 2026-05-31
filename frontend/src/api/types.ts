@@ -9092,3 +9092,86 @@ export interface ComplianceScanResultOut {
   issues_found: number;
   alerts_sent: number;
 }
+
+
+// GROUP-003: Group Advertising & Fundraising
+export interface GroupFundraiser {
+  fundraiser_id: string;
+  group_id: string;
+  title: string;
+  description: string;
+  goal_cents?: number | null;
+  raised_cents: number;
+  donation_count: number;
+  currency: string;
+  status: "active" | "paused" | "completed" | "cancelled";
+  cover_image_url?: string | null;
+  created_at: number;
+  ends_at?: number | null;
+}
+
+export interface GroupFundraiserListResponse {
+  fundraisers: GroupFundraiser[];
+}
+
+export interface GroupPublicFundraiser extends GroupFundraiser {
+  group_name: string;
+}
+
+export interface GroupDonation {
+  donation_id: string;
+  amount_cents: number;
+  donor_name?: string | null;
+  status: "pending" | "completed" | "failed" | "refunded";
+  created_at: number;
+  is_external: boolean;
+  checkout_url?: string | null;
+}
+
+export interface GroupDonationListResponse {
+  donations: GroupDonation[];
+  cursor?: string | null;
+  has_more: boolean;
+}
+
+export interface GroupDonationReceipt {
+  donation_id: string;
+  amount_cents: number;
+  currency: string;
+  donor_name?: string | null;
+  group_name: string;
+  fundraiser_title: string;
+  created_at: number;
+  status: string;
+}
+
+export interface GroupCampaign {
+  campaign_id: string;
+  group_id: string;
+  name: string;
+  status: "active" | "paused" | "completed" | "draft";
+  daily_budget_cents: number;
+  lifetime_budget_cents: number;
+  spent_cents: number;
+  impressions: number;
+  clicks: number;
+  creative_text?: string | null;
+  creative_image_url?: string | null;
+  created_at: number;
+}
+
+export interface GroupCampaignListResponse {
+  campaigns: GroupCampaign[];
+}
+
+export interface GroupCampaignStats {
+  campaign_id: string;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  spent_cents: number;
+  remaining_cents: number;
+  daily_spent_cents: number;
+  daily_budget_cents: number;
+  status: string;
+}
