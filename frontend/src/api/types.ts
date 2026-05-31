@@ -4532,3 +4532,56 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ─── License Revenue (LICENSE-003) ───────────────────────────────
+
+export interface RevenueSummaryOut {
+  total_cents: number;
+  total_transactions: number;
+  last_transaction_at?: number;
+  currency: string;
+}
+
+export interface RevenueTransactionOut {
+  txn_id: string;
+  issued_license_id: string;
+  content_id: string;
+  counterparty_id: string;
+  source_type: string;
+  source_amount_cents: number;
+  split_amount_cents: number;
+  split_type: string;
+  currency: string;
+  created_at: number;
+}
+
+export interface RevenueListOut {
+  summary: RevenueSummaryOut;
+  transactions: RevenueTransactionOut[];
+  next_cursor?: string;
+}
+
+export interface RevenueSplitPreviewOut {
+  source_amount_cents: number;
+  platform_fee_cents: number;
+  revenue_share_cents: number;
+  profit_share_cents: number;
+  total_licensor_share_cents: number;
+  licensee_net_cents: number;
+}
+
+export interface AdminRevenueEntryOut {
+  txn_id: string;
+  licensor_id: string;
+  licensee_id: string;
+  content_id: string;
+  source_type: string;
+  source_amount_cents: number;
+  split_amount_cents: number;
+  created_at: number;
+}
+
+export interface AdminRevenueListOut {
+  transactions: AdminRevenueEntryOut[];
+  next_cursor?: string;
+}
