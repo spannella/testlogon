@@ -105,6 +105,7 @@ from app.routers.admin_dmca import router as admin_dmca_router
 from app.routers.appeals import router as appeals_router
 from app.routers.admin_appeals import router as admin_appeals_router
 from app.routers.vod import router as vod_router
+from app.routers.vod_rental import vod_rental_router
 from app.routers.vod_drm import router as vod_drm_router
 from app.routers.video_listing import router as video_listing_router
 from app.routers.video_subtitles import router as video_subtitles_router
@@ -507,6 +508,7 @@ def create_app() -> FastAPI:
     app.include_router(video_listing_router)
     app.include_router(video_subtitles_router)
     app.include_router(vod_router)
+    app.include_router(vod_rental_router)
     app.include_router(vod_drm_router)
     app.include_router(transcode_jobs_router)
     app.include_router(transcode_video_router)

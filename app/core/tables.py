@@ -84,6 +84,7 @@ class Tables:
     broadcast_recordings: Any
     broadcast_product_shelf: Any
     vod_entitlements: Any
+    vod_rentals: Any
     appeals: Any
     creator_payouts: Any
     broadcast_reminders: Any
@@ -276,6 +277,7 @@ T = Tables(
     broadcast_recordings=ddb.Table(S.broadcast_recordings_table_name),
     broadcast_product_shelf=ddb.Table(S.broadcast_product_shelf_table_name),
     vod_entitlements=ddb.Table(S.vod_entitlements_table_name),
+    vod_rentals=ddb.Table(S.vod_rentals_table_name),
     appeals=ddb.Table(S.appeals_table_name),
     creator_payouts=ddb.Table(S.creator_payouts_table_name),
     broadcast_reminders=ddb.Table(S.broadcast_reminders_table_name),

@@ -8599,3 +8599,64 @@ export interface SshRecordingPlaybackOut {
   events: SshRecordingEvent[];
   event_count: number;
 }
+
+// ─── VOD-019: Rental / View-Once Access ───────────────────────────────────────
+
+export interface VodRentalStartRequest {
+  tier: "rental" | "view_once";
+  payment_method_id?: string;
+  rental_duration_hours?: number;
+}
+
+export interface VodRentalStartResponse {
+  video_id: string;
+  rental_id: string;
+  tier: string;
+  already_active: boolean;
+  started: boolean;
+  expires_at?: number | null;
+  views_remaining: number;
+  amount_cents: number;
+  duration_hours?: number | null;
+}
+
+export interface VodRentalAccess {
+  active: boolean;
+  tier: string;
+  reason: string;
+  expires_at?: number | null;
+  remaining_seconds: number;
+  views_remaining: number;
+  rental_id: string;
+  started: boolean;
+}
+
+export interface VodRentalPlayback {
+  video_id: string;
+  playback_url: string;
+  manifest_key: string;
+  mode: string;
+  thumbnail_url?: string | null;
+  token_expires_at: number;
+  access: VodRentalAccess;
+}
+
+export interface VodRentalStatus {
+  video_id: string;
+  rental_id: string;
+  tier: string;
+  amount_cents: number;
+  created_at: number;
+  started_at: number;
+  duration_hours: number;
+  active: boolean;
+  reason: string;
+  expires_at?: number | null;
+  remaining_seconds: number;
+  views_remaining: number;
+  started: boolean;
+}
+
+export interface VodRentalList {
+  items: VodRentalStatus[];
+}
