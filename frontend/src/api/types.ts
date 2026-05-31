@@ -7994,3 +7994,72 @@ export interface MemberEarnings {
   split_count: number;
   entries: MemberEarningEntry[];
 }
+
+// ─── Platform Financial Dashboard (FIN-013) ──────────────────────
+
+export interface PlatformFinancialKpis {
+  gmv_cents: number;
+  net_revenue_cents: number;
+  refunds_cents: number;
+  take_rate_bps: number;
+  tx_count: number;
+  unique_payers: number;
+  avg_tx_cents: number;
+  period: Record<string, string>;
+}
+
+export interface PlatformFinancialTrendPoint {
+  date: string;
+  gmv_cents: number;
+  net_revenue_cents: number;
+  tx_count: number;
+}
+
+export interface PlatformFinancialTrendsResponse {
+  data: PlatformFinancialTrendPoint[];
+  granularity: string;
+}
+
+export interface PlatformFinancialProviderEntry {
+  provider: string;
+  total_cents: number;
+  tx_count: number;
+  avg_cents: number;
+  pct: number;
+  success_rate: number;
+}
+
+export interface PlatformFinancialProviderResponse {
+  data: PlatformFinancialProviderEntry[];
+}
+
+export interface PlatformFinancialTypeEntry {
+  entry_type: string;
+  total_cents: number;
+  tx_count: number;
+  avg_cents: number;
+}
+
+export interface PlatformFinancialTypeResponse {
+  data: PlatformFinancialTypeEntry[];
+}
+
+export interface PlatformFinancialTopCreatorEntry {
+  user_id: string;
+  revenue_cents: number;
+  tx_count: number;
+  avg_cents: number;
+}
+
+export interface PlatformFinancialTopCreatorsResponse {
+  data: PlatformFinancialTopCreatorEntry[];
+}
+
+export interface PlatformFinancialRollupOut {
+  date: string;
+  gmv_cents: number;
+  net_revenue_cents: number;
+  tx_count: number;
+  unique_payers: number;
+  computed_at: number;
+}

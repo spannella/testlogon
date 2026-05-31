@@ -1675,6 +1675,9 @@ class Settings:
     compute_quota_default_max_ec2: int = int(os.environ.get("COMPUTE_QUOTA_DEFAULT_MAX_EC2", "3"))
     compute_quota_default_max_k8s: int = int(os.environ.get("COMPUTE_QUOTA_DEFAULT_MAX_K8S", "5"))
     compute_quota_default_max_spend_cents: int = int(os.environ.get("COMPUTE_QUOTA_DEFAULT_MAX_SPEND_CENTS", "5000"))
+    # Platform Financial Dashboard (FIN-013)
+    platform_financial_dashboard_rollups_table_name: str = os.environ.get("PLATFORM_FINANCIAL_DASHBOARD_ROLLUPS_TABLE_NAME", "financial_rollups")
+    platform_financial_dashboard_enabled: bool = os.environ.get("PLATFORM_FINANCIAL_DASHBOARD_ENABLED", "true").lower() not in ("0", "false", "no")
     # Agent Platform (AGENT-001 .. AGENT-004)
     # LLM Provider Keys (AGENT-001)
 

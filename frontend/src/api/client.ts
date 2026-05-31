@@ -6,7 +6,7 @@ import { useImpersonationStore } from "@/stores/impersonationStore";
 
 const API_BASE_URL = ((import.meta as any).env?.VITE_API_BASE_URL ?? "").toString().replace(/\/$/, "");
 
-function withApiBase(path: string): string {
+export function withApiBase(path: string): string {
   if (!API_BASE_URL || /^https?:\/\//.test(path)) {
     return path;
   }
