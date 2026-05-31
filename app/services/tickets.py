@@ -12,7 +12,7 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
-_TICKET_STATUSES = ("open", "in_progress", "waiting_on_user", "done", "code_complete", "blocked")
+_TICKET_STATUSES = ("open", "in_progress", "waiting_on_user", "done", "code_complete", "blocked", "deploying", "deployed", "investigating")
 _STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "open": ("in_progress", "done", "blocked"),
     "in_progress": ("waiting_on_user", "done", "open", "code_complete", "blocked"),

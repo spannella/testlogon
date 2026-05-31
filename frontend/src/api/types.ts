@@ -6101,3 +6101,184 @@ export interface CoderWorkflowPreview {
   branch_name: string;
   total_timeout_seconds: number;
 }
+
+// ─── DevOps/SRE Agent (AGENT-010) ───────────────────────────────────
+
+export interface EnvironmentConfig {
+  name: string;
+  requires_approval: boolean;
+  deploy_commands: string[];
+  rollback_commands: string[];
+  health_check_urls: string[];
+  health_check_timeout_seconds: number;
+  smoke_test_command?: string | null;
+  rollback_window_seconds: number;
+  env_vars?: Record<string, string> | null;
+}
+
+export interface DevOpsMonitoringEndpoint {
+  name: string;
+  url: string;
+  metric_type: string;
+  threshold: number;
+}
+
+export interface DevOpsRunbook {
+  trigger_label: string;
+  name: string;
+  steps: string[];
+}
+
+export interface DevOpsConfig {
+  environments: EnvironmentConfig[];
+  deploy_ticket_labels: string[];
+  infra_ticket_labels: string[];
+  incident_ticket_labels: string[];
+  auto_deploy_on_qa_approved: boolean;
+  coding_tool: "claude_code" | "codex";
+  max_operation_time_seconds: number;
+  incident_space_id?: string | null;
+  monitoring_endpoints?: DevOpsMonitoringEndpoint[] | null;
+  runbooks?: DevOpsRunbook[] | null;
+}
+
+export interface DevOpsConfigIn {
+  environments: EnvironmentConfig[];
+  deploy_ticket_labels?: string[];
+  infra_ticket_labels?: string[];
+  incident_ticket_labels?: string[];
+  auto_deploy_on_qa_approved?: boolean;
+  coding_tool?: "claude_code" | "codex";
+  max_operation_time_seconds?: number;
+  incident_space_id?: string | null;
+  monitoring_endpoints?: DevOpsMonitoringEndpoint[] | null;
+  runbooks?: DevOpsRunbook[] | null;
+}
+
+export interface DevOpsConfigResult {
+  type_id: string;
+  devops_config: DevOpsConfig;
+  updated_at: number;
+}
+
+export interface DevOpsConfigValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+export interface DevOpsHealthCheckResult {
+  url: string;
+  status_code: number;
+  response_time_ms: number;
+  healthy: boolean;
+}
+
+export interface DevOpsSmokeTestResult {
+  command: string;
+  exit_code: number;
+  passed: boolean;
+}
+
+export interface DevOpsOutput {
+  deployment_id: string;
+  ticket_id: string;
+  environment: string;
+  operation_type: "deployment" | "infrastructure" | "incident_response" | "runbook";
+  status: "success" | "failed" | "rolled_back" | "awaiting_approval" | "rejected" | "executing";
+  version_deployed?: string | null;
+  steps_total: number;
+  steps_completed: number;
+  health_check_results: DevOpsHealthCheckResult[];
+  smoke_test_result?: DevOpsSmokeTestResult | null;
+  rollback_executed: boolean;
+  rollback_success?: boolean | null;
+  incident_ticket_id?: string | null;
+  total_duration_seconds: number;
+  approval_received_at?: number | null;
+  monitoring_snapshot?: Record<string, unknown> | null;
+}
+
+export interface DeploymentLogStep {
+  step_number: number;
+  step_type: string;
+  command: string;
+  exit_code?: number | null;
+  stdout_tail: string;
+  stderr_tail: string;
+  started_at: number;
+  completed_at: number;
+  duration_seconds: number;
+  status: "pending" | "running" | "success" | "failed" | "skipped" | "rolled_back";
+}
+
+export interface DeploymentLog {
+  deployment_id: string;
+  environment: string;
+  steps: DeploymentLogStep[];
+}
+
+export interface DevOpsMetrics {
+  deployment_frequency: number;
+  success_rate: number;
+  mttr_seconds: number;
+  rollback_rate: number;
+  incidents_count: number;
+  period_start: number;
+  period_end: number;
+}
+
+export interface DevOpsEligibleTicket {
+  ticket_id: string;
+  subject: string;
+  labels: string[];
+  operation_type: string;
+  status: string;
+  created_at: number;
+}
+
+export interface DevOpsEligibleTicketsResult {
+  tickets: DevOpsEligibleTicket[];
+  count: number;
+}
+
+export interface DevOpsDeploymentRow {
+  run_id: string;
+  agent_type_id: string;
+  deployment_id: string;
+  ticket_id: string;
+  environment: string;
+  status: string;
+  version_deployed?: string | null;
+  total_duration_seconds: number;
+  created_at: number;
+}
+
+export interface DevOpsDeploymentsResult {
+  deployments: DevOpsDeploymentRow[];
+  count: number;
+}
+
+export interface DevOpsWorkflowStep {
+  step_id: number;
+  type: string;
+  command?: string | null;
+  timeout_seconds: number;
+  on_failure: string;
+}
+
+export interface DevOpsWorkflowPreview {
+  steps: DevOpsWorkflowStep[];
+  environment: string;
+  operation_type: string;
+  requires_approval: boolean;
+  total_timeout_seconds: number;
+}
+
+export interface DeploymentApproval {
+  run_id: string;
+  deployment_id: string;
+  approval_status: "approved" | "rejected";
+  approved_by: string;
+  approved_at: number;
+  notes?: string | null;
+}
