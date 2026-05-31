@@ -717,6 +717,44 @@ export interface AdminRefundDenyIn {
   notes: string;
 }
 
+// ── Billing Disputes (BILLING-001) ──────────────────────────────────────────
+export interface DisputeFileIn {
+  transaction_entry_id?: string | null;
+  amount_cents: number;
+  currency?: string;
+  reason: string;
+  provider?: string;
+}
+
+export interface DisputeOut {
+  dispute_id: string;
+  provider: string;
+  provider_dispute_id?: string | null;
+  user_id?: string | null;
+  amount_cents: number;
+  currency: string;
+  reason: string;
+  status: string;
+  evidence_submitted: boolean;
+  evidence_text?: string | null;
+  resolution?: string | null;
+  admin_notes?: string | null;
+  transaction_entry_id?: string | null;
+  created_at: number;
+  updated_at?: number | null;
+  deadline_at?: number | null;
+}
+
+export interface DisputeRespondIn {
+  evidence_text: string;
+  evidence_files?: string[];
+}
+
+export interface DisputeResolveIn {
+  resolution: "won" | "lost" | "accepted";
+  notes?: string;
+}
+
 export interface SetPriorityReq {
   payment_method_id: string;
   priority: number;

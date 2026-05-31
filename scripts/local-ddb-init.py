@@ -1041,6 +1041,18 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Billing Disputes / Chargebacks (BILLING-001)
+        TableDef(
+            _resolve_table_name(S.billing_disputes_table_name, "BillingDisputes"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status_scope", "sort_key": "created_at"},
+                {"index_name": "ByProviderCreatedAt", "partition_key": "provider_scope", "sort_key": "created_at"},
+                {"index_name": "ByUserCreatedAt", "partition_key": "user_scope", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # GroupCallSessions: pk=pk, sk=sk, GSIs ByConversationCreatedAt + ByStateCreatedAt (CALL-012)
         TableDef(
             _resolve_table_name(S.group_call_sessions_table_name, "GroupCallSessions"),

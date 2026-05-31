@@ -81,6 +81,8 @@ const PromoCodesPage = lazy(() => import("@/pages/promo/PromoCodesPage"));
 const SchedulerPage = lazy(() => import("@/pages/scheduler/SchedulerPage"));
 const RefundRequestsPage = lazy(() => import("@/pages/billing/RefundRequestsPage"));
 const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePage"));
+const DisputesPage = lazy(() => import("@/pages/billing/DisputesPage"));
+const AdminDisputeQueuePage = lazy(() => import("@/pages/admin/AdminDisputeQueuePage"));
 const SavedPage = lazy(() => import("@/pages/saved/SavedPage"));
 const AffiliateDashboard = lazy(() => import("@/pages/affiliates/AffiliateDashboard"));
 const CollaborationsPage = lazy(() => import("@/pages/collaborations/CollaborationsPage"));
@@ -187,6 +189,7 @@ export default function App() {
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />
           <Route path="billing/refunds" element={<RefundRequestsPage />} />
+          <Route path="billing/disputes" element={<DisputesPage />} />
           <Route path="ads/billing" element={<AdBillingPage />} />
           <Route path="ads/analytics" element={<AdAnalyticsDashboard />} />
           <Route path="calendar" element={<CalendarPage />} />
@@ -258,6 +261,7 @@ export default function App() {
           <Route path="dmca/submit" element={<DmcaClaimForm />} />
           <Route path="admin/dmca" element={<DmcaDashboardPage />} />
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
+          <Route path="admin/disputes" element={<AdminDisputeQueuePage />} />
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
           <Route path="admin/communications" element={<EmailSmsDashboardPage />} />
           <Route path="admin/compute" element={<AdminComputeDashboard />} />

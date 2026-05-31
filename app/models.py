@@ -1511,6 +1511,46 @@ class AdminRefundDenyIn(BaseModel):
     notes: str = Field(min_length=1, max_length=2000)
 
 
+# ── Billing Disputes / Chargebacks (BILLING-001) ─────────────────────────────
+
+class DisputeFileIn(BaseModel):
+    """Customer-initiated dispute (e.g. a chargeback claim) for a transaction."""
+    transaction_entry_id: Optional[str] = Field(default=None, max_length=200)
+    amount_cents: int = Field(ge=1)
+    currency: str = "USD"
+    reason: str = Field(min_length=10, max_length=2000)
+    provider: str = Field(default="manual", max_length=40)
+
+
+class DisputeOut(BaseModel):
+    dispute_id: str
+    provider: str
+    provider_dispute_id: Optional[str] = None
+    user_id: Optional[str] = None
+    amount_cents: int
+    currency: str = "USD"
+    reason: str
+    status: str
+    evidence_submitted: bool = False
+    evidence_text: Optional[str] = None
+    resolution: Optional[str] = None
+    admin_notes: Optional[str] = None
+    transaction_entry_id: Optional[str] = None
+    created_at: int
+    updated_at: Optional[int] = None
+    deadline_at: Optional[int] = None
+
+
+class DisputeRespondIn(BaseModel):
+    evidence_text: str = Field(min_length=1, max_length=5000)
+    evidence_files: Optional[List[str]] = None
+
+
+class DisputeResolveIn(BaseModel):
+    resolution: str = Field(pattern="^(won|lost|accepted)$")
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
 class VerifyMicrodepositsReq(BaseModel):
     setup_intent_id: str
     amounts: Optional[List[int]] = None
