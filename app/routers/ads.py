@@ -473,3 +473,69 @@ async def internal_charge_conversion(body: dict, ctx=Depends(require_ui_session)
         content_id=body.get("content_id", ""),
         bid_cpa_cents=body.get("bid_cpa_cents", 500),
     )
+
+
+# ── Ad Analytics (ADS-008) ──────────────────────────────────────────
+
+_VALID_GRANULARITIES = {"hourly", "daily", "weekly", "monthly"}
+_VALID_DIMENSIONS = {"creative", "surface", "targeting"}
+
+
+@router.get("/analytics/summary")
+async def analytics_summary_endpoint(
+    account_id: str = Query(...),
+    campaign_id: str | None = Query(default=None),
+    days: int = Query(default=30, ge=1, le=365),
+    ctx=Depends(require_ui_session),
+):
+    from app.services.ad_analytics import get_summary
+    _require_account_owner(account_id, ctx["user_sub"])
+    return get_summary(account_id, campaign_id, days)
+
+
+@router.get("/analytics/timeseries")
+async def analytics_timeseries_endpoint(
+    account_id: str = Query(...),
+    campaign_id: str | None = Query(default=None),
+    days: int = Query(default=30, ge=1, le=365),
+    granularity: str = Query(default="daily"),
+    ctx=Depends(require_ui_session),
+):
+    from app.services.ad_analytics import get_timeseries
+    _require_account_owner(account_id, ctx["user_sub"])
+    if granularity not in _VALID_GRANULARITIES:
+        raise HTTPException(400, "Granularity must be hourly, daily, weekly, or monthly")
+    return get_timeseries(account_id, campaign_id, days, granularity)
+
+
+@router.get("/analytics/breakdown")
+async def analytics_breakdown_endpoint(
+    account_id: str = Query(...),
+    campaign_id: str | None = Query(default=None),
+    dimension: str = Query(default="creative"),
+    days: int = Query(default=30, ge=1, le=365),
+    ctx=Depends(require_ui_session),
+):
+    from app.services.ad_analytics import get_breakdown
+    _require_account_owner(account_id, ctx["user_sub"])
+    if dimension not in _VALID_DIMENSIONS:
+        raise HTTPException(400, "Dimension must be creative, surface, or targeting")
+    return get_breakdown(account_id, campaign_id, dimension, days)
+
+
+@router.get("/analytics/export")
+async def analytics_export_endpoint(
+    account_id: str = Query(...),
+    campaign_id: str | None = Query(default=None),
+    days: int = Query(default=30, ge=1, le=365),
+    ctx=Depends(require_ui_session),
+):
+    from app.services.ad_analytics import export_csv
+    from fastapi.responses import Response as FastAPIResponse
+    _require_account_owner(account_id, ctx["user_sub"])
+    csv_data = export_csv(account_id, campaign_id, days)
+    return FastAPIResponse(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=ad_analytics.csv"},
+    )

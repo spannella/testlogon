@@ -333,3 +333,56 @@ export const getCampaignSpending = (accountId: string, campaignId: string, limit
 /** Get monthly invoice */
 export const getAdInvoice = (accountId: string, month: string) =>
   api.get<AdInvoice>(`/ui/ads/accounts/${accountId}/invoices/${month}`);
+// ─── Ad Analytics (ADS-008) ─────────────────────────────────────────────────
+
+import type {
+  AdAnalyticsSummary,
+  AdTimeSeriesPoint,
+  AdBreakdownEntry,
+} from "../types";
+
+/** Get analytics summary (KPIs with period comparison) */
+export const getAnalyticsSummary = (
+  accountId: string,
+  params?: { campaign_id?: string; days?: number },
+): Promise<AdAnalyticsSummary> => {
+  const qp = new URLSearchParams({ account_id: accountId });
+  if (params?.campaign_id) qp.set("campaign_id", params.campaign_id);
+  if (params?.days) qp.set("days", String(params.days));
+  return api.get<AdAnalyticsSummary>(`/ui/ads/analytics/summary?${qp}`);
+};
+
+/** Get time series data points for charts */
+export const getAnalyticsTimeseries = (
+  accountId: string,
+  params?: { campaign_id?: string; days?: number; granularity?: string },
+): Promise<AdTimeSeriesPoint[]> => {
+  const qp = new URLSearchParams({ account_id: accountId });
+  if (params?.campaign_id) qp.set("campaign_id", params.campaign_id);
+  if (params?.days) qp.set("days", String(params.days));
+  if (params?.granularity) qp.set("granularity", params.granularity);
+  return api.get<AdTimeSeriesPoint[]>(`/ui/ads/analytics/timeseries?${qp}`);
+};
+
+/** Get breakdown by dimension (creative/surface/targeting) */
+export const getAnalyticsBreakdown = (
+  accountId: string,
+  params?: { campaign_id?: string; dimension?: string; days?: number },
+): Promise<AdBreakdownEntry[]> => {
+  const qp = new URLSearchParams({ account_id: accountId });
+  if (params?.campaign_id) qp.set("campaign_id", params.campaign_id);
+  if (params?.dimension) qp.set("dimension", params.dimension);
+  if (params?.days) qp.set("days", String(params.days));
+  return api.get<AdBreakdownEntry[]>(`/ui/ads/analytics/breakdown?${qp}`);
+};
+
+/** Export analytics as CSV */
+export const exportAnalyticsCsv = (
+  accountId: string,
+  params?: { campaign_id?: string; days?: number },
+): string => {
+  const qp = new URLSearchParams({ account_id: accountId });
+  if (params?.campaign_id) qp.set("campaign_id", params.campaign_id);
+  if (params?.days) qp.set("days", String(params.days));
+  return `/ui/ads/analytics/export?${qp}`;
+};

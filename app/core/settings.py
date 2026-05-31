@@ -1271,6 +1271,11 @@ class Settings:
     vod_subscription_gating_enabled: bool = os.environ.get("VOD_SUBSCRIPTION_GATING_ENABLED", "1") not in ("0", "false", "False")
     ad_billing_table_name: str = os.environ.get("DDB_AD_BILLING", "AdBilling")
 
+    # Advertiser Accounts & Campaigns (ADS-001)
+
+    # Ad Analytics Rollups (ADS-008)
+    ad_analytics_rollups_table_name: str = os.environ.get("DDB_AD_ANALYTICS_ROLLUPS", "AdAnalyticsRollups")
+
     # View-Once / Rental Access (VOD-019)
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")
     vod_rental_default_duration_hours: int = int(os.environ.get("VOD_RENTAL_DEFAULT_DURATION_HOURS", "48"))

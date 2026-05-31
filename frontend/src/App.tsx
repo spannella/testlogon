@@ -105,6 +105,7 @@ const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
 const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
 const AgentDashboard = lazy(() => import("@/pages/agents/AgentDashboard"));
+const AdAnalyticsDashboard = lazy(() => import("@/pages/ads/AdAnalyticsDashboard"));
 
 function PageSpinner() {
   return (
@@ -157,6 +158,7 @@ export default function App() {
           <Route path="billing" element={<BillingPage />} />
           <Route path="billing/refunds" element={<RefundRequestsPage />} />
           <Route path="ads/billing" element={<AdBillingPage />} />
+          <Route path="ads/analytics" element={<AdAnalyticsDashboard />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="content-calendar" element={<ContentCalendarPage />} />
           <Route path="scheduler" element={<SchedulerPage />} />

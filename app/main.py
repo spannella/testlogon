@@ -213,6 +213,7 @@ from app.routers.ads_targeting import router as ads_targeting_router
 from app.routers.agent_workers import router as agent_workers_router
 from app.routers.ads import router as ads_router
 from app.routers.agent_orchestrator import router as agent_orchestrator_router
+from app.routers.ads import router as ads_router
 
 logger = logging.getLogger(__name__)
 
@@ -558,6 +559,7 @@ def create_app() -> FastAPI:
     app.include_router(group_treasury_router)
 
     app.include_router(agent_orchestrator_router)
+    app.include_router(ads_router)
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)

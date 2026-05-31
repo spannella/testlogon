@@ -5464,3 +5464,40 @@ export interface CheckpointData {
   checkpoint: Record<string, unknown>;
   claimed_at: number;
 }
+
+// ── Ad Analytics (ADS-008) ────────────────────────────────────────────────
+
+export interface AdAnalyticsSummary {
+  impressions: number;
+  clicks: number;
+  ctr_pct: number;
+  spend_cents: number;
+  cpa_cents: number;
+  effective_cpm_cents: number;
+  completes: number;
+  skips: number;
+  completion_rate_pct: number;
+  previous_period: { impressions: number; clicks: number; spend_cents: number };
+  impressions_change_pct: number;
+  clicks_change_pct: number;
+  spend_change_pct: number;
+  days: number;
+}
+
+export interface AdTimeSeriesPoint {
+  date: string;
+  impressions: number;
+  clicks: number;
+  spend_cents: number;
+  completes: number;
+  ctr_pct: number;
+}
+
+export interface AdBreakdownEntry {
+  dimension_key: string;
+  dimension: string;
+  impressions: number;
+  clicks: number;
+  spend_cents: number;
+  ctr_pct: number;
+}

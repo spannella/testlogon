@@ -5855,3 +5855,44 @@ class CheckpointOut(BaseModel):
     ticket_id: str = ""
     checkpoint: Dict[str, Any] = Field(default_factory=dict)
     claimed_at: int = 0
+# ── Ad Analytics (ADS-008) ─────────────────────────────────────────────────
+
+
+class AdAnalyticsSummaryOut(BaseModel):
+    impressions: int = 0
+    clicks: int = 0
+    ctr_pct: float = 0.0
+    spend_cents: int = 0
+    cpa_cents: float = 0
+    effective_cpm_cents: float = 0.0
+    completes: int = 0
+    skips: int = 0
+    completion_rate_pct: float = 0.0
+    previous_period: Dict[str, int] = Field(default_factory=dict)
+    impressions_change_pct: float = 0.0
+    clicks_change_pct: float = 0.0
+    spend_change_pct: float = 0.0
+    days: int = 30
+
+
+class AdTimeSeriesPointOut(BaseModel):
+    date: str = ""
+    impressions: int = 0
+    clicks: int = 0
+    spend_cents: int = 0
+    completes: int = 0
+    ctr_pct: float = 0.0
+
+
+class AdBreakdownEntryOut(BaseModel):
+    dimension_key: str = ""
+    dimension: str = ""
+    impressions: int = 0
+    clicks: int = 0
+    spend_cents: int = 0
+    ctr_pct: float = 0.0
+
+
+class AdAccountCreateIn(BaseModel):
+    company_name: str = Field(..., min_length=1, max_length=200)
+    billing_email: str = Field(..., min_length=3, max_length=320)

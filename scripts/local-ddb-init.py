@@ -911,6 +911,9 @@ def _table_defs() -> List[TableDef]:
         # Ad Billing (ADS-007)
         TableDef(
             _resolve_table_name(S.ad_billing_table_name, "AdBilling"),
+        # Ad Billing (ADS-007)
+        TableDef(
+            os.environ.get("DDB_AD_BILLING", "AdBilling"),
             "pk",
             "sk",
             gsi=[
@@ -918,6 +921,15 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByMonth", "partition_key": "month_key", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
+        ),
+        # Ad Analytics Rollups (ADS-008)
+        TableDef(
+            os.environ.get("DDB_AD_ANALYTICS_ROLLUPS", "AdAnalyticsRollups"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByAccountDate", "partition_key": "account_id", "sort_key": "date"},
+            ],
         ),
         # Rate limiting (PLATFORM-001)
         TableDef(
