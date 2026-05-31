@@ -13,6 +13,53 @@ from app.services.job_registry import register_task, report_error, report_poll
 logger = logging.getLogger(__name__)
 
 
+def promote_due_sessions(*, now: int | None = None, limit: int = 10) -> dict:
+    """Promote all scheduled broadcasts whose scheduled_at has passed.
+
+    Shared by the background loop and the manual ``POST /broadcast/scheduler/run-due``
+    trigger so promotion is deterministically testable. For each due session it
+    re-reads with a consistent read (race guard), verifies it is still
+    ``schedule_status='scheduled'``, then calls ``start_session_with_provider()``.
+    Returns ``{"processed": int, "failed": int, "session_ids": [...]}``.
+    """
+    from app.services.broadcast_store import list_due_scheduled_sessions, get_session
+    from app.services.broadcast_orchestrator import start_session_with_provider
+
+    if now is None:
+        now = now_ts()
+
+    processed = 0
+    failed = 0
+    started: list[str] = []
+    for session in list_due_scheduled_sessions(now=now, limit=limit):
+        try:
+            fresh = get_session(session.id)
+            if fresh.schedule_status != "scheduled":
+                logger.info(
+                    "Session %s schedule_status=%s (not 'scheduled'), skipping",
+                    session.id, fresh.schedule_status,
+                )
+                continue
+            logger.info(
+                "Auto-starting scheduled broadcast %s (scheduled_at=%s, now=%d)",
+                session.id, session.scheduled_at, now,
+            )
+            start_session_with_provider(
+                session_id=session.id,
+                actor="system:broadcast-scheduler",
+                reason="scheduled-auto-start",
+                correlation_id=f"sched-{session.id}-{now}",
+            )
+            logger.info("Auto-start succeeded for session %s", session.id)
+            processed += 1
+            started.append(session.id)
+        except Exception:
+            failed += 1
+            logger.exception("Auto-start failed for session %s", session.id)
+
+    return {"processed": processed, "failed": failed, "session_ids": started}
+
+
 async def run_broadcast_scheduler_loop() -> None:
     """Poll ByScheduledAt GSI for due scheduled broadcasts and auto-start them.
 
@@ -35,44 +82,11 @@ async def run_broadcast_scheduler_loop() -> None:
 
     while True:
         _start = _time.perf_counter()
-        _processed = 0
-        _failed = 0
         try:
-            now = now_ts()
-            from app.services.broadcast_store import list_due_scheduled_sessions, get_session
-            due_sessions = list_due_scheduled_sessions(now=now, limit=10)
-
-            for session in due_sessions:
-                try:
-                    # Consistent re-read to guard against concurrent processing
-                    fresh = get_session(session.id)
-                    if fresh.schedule_status != "scheduled":
-                        logger.info(
-                            "Session %s schedule_status=%s (not 'scheduled'), skipping",
-                            session.id, fresh.schedule_status,
-                        )
-                        continue
-
-                    logger.info(
-                        "Auto-starting scheduled broadcast %s (scheduled_at=%s, now=%d)",
-                        session.id, session.scheduled_at, now,
-                    )
-                    from app.services.broadcast_orchestrator import start_session_with_provider
-                    start_session_with_provider(
-                        session_id=session.id,
-                        actor="system:broadcast-scheduler",
-                        reason="scheduled-auto-start",
-                        correlation_id=f"sched-{session.id}-{now}",
-                    )
-                    logger.info("Auto-start succeeded for session %s", session.id)
-                    _processed += 1
-                except Exception:
-                    _failed += 1
-                    logger.exception("Auto-start failed for session %s", session.id)
-
+            summary = promote_due_sessions(now=now_ts(), limit=10)
             _dur = (_time.perf_counter() - _start) * 1000
-            report_poll("broadcast_scheduler", items_processed=_processed,
-                        items_failed=_failed, duration_ms=_dur)
+            report_poll("broadcast_scheduler", items_processed=summary["processed"],
+                        items_failed=summary["failed"], duration_ms=_dur)
 
         except Exception as exc:
             report_error("broadcast_scheduler", str(exc))

@@ -449,6 +449,21 @@ def list_due_scheduled_sessions(*, now: int, limit: int = 10) -> List[BroadcastS
     return [session_from_item(i) for i in resp.get("Items", [])]
 
 
+def list_upcoming_sessions(*, now: int, limit: int = 50) -> List[BroadcastSessionModel]:
+    """List all scheduled sessions whose scheduled_at is still in the future.
+
+    Global viewer-discovery query across all creators. Uses the ByScheduledAt GSI
+    (schedule_status='scheduled', scheduled_at > now), ordered soonest-first.
+    """
+    resp = T.broadcast_sessions.query(
+        IndexName="ByScheduledAt",
+        KeyConditionExpression=Key("schedule_status").eq("scheduled") & Key("scheduled_at").gt(now),
+        ScanIndexForward=True,
+        Limit=limit,
+    )
+    return [session_from_item(i) for i in resp.get("Items", [])]
+
+
 def list_scheduled_sessions_by_creator(created_by: str, *, limit: int = 50) -> List[BroadcastSessionModel]:
     """List sessions with schedule_status='scheduled' for a specific creator.
 

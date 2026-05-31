@@ -43,5 +43,20 @@ export const cancelReminder = (sessionId: string) =>
 export const listScheduledSessions = (params?: { limit?: number }) =>
   api.get<ScheduledListResponse>("/broadcast/sessions/scheduled", params as Record<string, string>);
 
+export const listUpcomingSessions = (params?: { limit?: number }) =>
+  api.get<ScheduledListResponse>("/broadcast/sessions/upcoming", params as Record<string, string>);
+
+export interface PromoteDueResponse {
+  processed: number;
+  failed: number;
+  session_ids: string[];
+}
+
+/** Manually promote all due scheduled broadcasts to live (operator-only). */
+export const runDueScheduler = (now?: number) =>
+  api.post<PromoteDueResponse>(
+    `/broadcast/scheduler/run-due${now != null ? `?now=${now}` : ""}`,
+  );
+
 export const downloadIcal = (sessionId: string) =>
   window.open(`/broadcast/sessions/${sessionId}/ical`, "_blank");

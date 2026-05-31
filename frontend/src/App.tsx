@@ -59,6 +59,7 @@ const TagPage = lazy(() => import("@/pages/discover/TagPage"));
 const SearchPage = lazy(() => import("@/pages/search/SearchPage"));
 const VideoPlayerPage = lazy(() => import("@/pages/videos/VideoPlayerPage"));
 const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
+const BroadcastSchedulePage = lazy(() => import("@/pages/broadcast/BroadcastSchedulePage"));
 const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
 const ClipGalleryPage = lazy(() => import("@/pages/clips/ClipGalleryPage"));
 const ClipPlayerPage = lazy(() => import("@/pages/clips/ClipPlayerPage"));
@@ -221,6 +222,7 @@ export default function App() {
           <Route path="videos" element={<VideosPage />} />
           <Route path="videos/:videoId" element={<VideoPlayerPage />} />
           {showBroadcastNavigation && <Route path="broadcast" element={<BroadcastPage />} />}
+          {showBroadcastNavigation && <Route path="broadcast/schedule" element={<BroadcastSchedulePage />} />}
           <Route path="clips" element={<ClipGalleryPage />} />
           <Route path="clips/:clipId" element={<ClipPlayerPage />} />
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
