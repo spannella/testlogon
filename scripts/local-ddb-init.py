@@ -1428,6 +1428,8 @@ def _table_defs() -> List[TableDef]:
             "sk",
         ),
         # Kubernetes Container Launcher (INFRA-004)
+        ),
+        # Kubernetes Pods (INFRA-006)
         TableDef(
             _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),
             "pk",
@@ -1436,6 +1438,7 @@ def _table_defs() -> List[TableDef]:
         # Agent Worker Provisioning (AGENT-002)
         # Agent Workers (AGENT-002/003)
         ),
+        # Agent Workers (AGENT-002/003)
         TableDef(
             _resolve_table_name(S.agent_workers_table_name, "agent_workers"),
             "pk",
@@ -1448,6 +1451,7 @@ def _table_defs() -> List[TableDef]:
             attr_types={"created_at": "N"},
                 {"index_name": "ByAgentType", "partition_key": "pk", "sort_key": "agent_type"},
             ],
+        ),
         # Compute Cost Tracking (INFRA-005)
         TableDef(
             _resolve_table_name(S.compute_billing_table_name, "compute_billing"),
@@ -1456,6 +1460,17 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "ByResourceId", "partition_key": "resource_id", "sort_key": "created_at"},
                 {"index_name": "ByMonth", "partition_key": "month_key", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Agent Memory (AGENT-005)
+        TableDef(
+            _resolve_table_name(S.agent_memory_table_name, "agent_memory"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
+                {"index_name": "ByCategory", "partition_key": "pk", "sort_key": "category"},
             ],
             attr_types={"created_at": "N"},
         ),

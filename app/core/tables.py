@@ -158,6 +158,7 @@ class Tables:
     k8s_pods: Any
     agent_workers: Any
     compute_billing: Any
+    agent_memory: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -310,4 +311,5 @@ T = Tables(
     k8s_pods=ddb.Table(S.k8s_pods_table_name),
     agent_workers=ddb.Table(S.agent_workers_table_name),
     compute_billing=ddb.Table(S.compute_billing_table_name),
+    agent_memory=ddb.Table(S.agent_memory_table_name),
 )

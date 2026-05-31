@@ -1614,6 +1614,18 @@ class Settings:
     compute_billing_poll_interval: int = int(os.environ.get("COMPUTE_BILLING_POLL_INTERVAL", "300"))
     compute_billing_default_budget_cents: int = int(os.environ.get("COMPUTE_BILLING_DEFAULT_BUDGET_CENTS", "5000"))
     # Agent Platform (AGENT-001 .. AGENT-004)
+    # LLM Provider Keys (AGENT-001)
+
+    # Kubernetes pods (INFRA-006)
+
+    # Agent Workers (AGENT-002)
+
+    # Compute Billing (INFRA-005)
+
+    # Agent Memory (AGENT-005)
+    agent_memory_table_name: str = os.environ.get("AGENT_MEMORY_TABLE_NAME", "agent_memory")
+    agent_memory_max_entries: int = int(os.environ.get("AGENT_MEMORY_MAX_ENTRIES", "200"))
+    agent_memory_max_token_count: int = int(os.environ.get("AGENT_MEMORY_MAX_TOKEN_COUNT", "100000"))
 
 
 S = Settings()
