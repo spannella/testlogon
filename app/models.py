@@ -9521,3 +9521,49 @@ class PaymentHealthUptimeReport(BaseModel):
     uptime_pct: float
     total_incidents: int = 0
     total_downtime_minutes: int = 0
+# ---------------------------------------------------------------------------
+# Delegation API (DELEGATE-005)
+# ---------------------------------------------------------------------------
+
+
+class DelegationApiKeyCreateIn(BaseModel):
+    """Request to issue a delegation-scoped API key."""
+    label: str = Field(min_length=1, max_length=200)
+    creator_id: str = Field(min_length=1)
+    permissions: List[str] = Field(min_length=1)
+    expires_in_days: Optional[int] = Field(default=None, ge=1, le=365)
+
+
+class DelegationApiKeyOut(BaseModel):
+    """A delegation API key (key_secret only present at creation)."""
+    key_id: str
+    label: str = ""
+    owner_sub: str = ""
+    creator_id: str = ""
+    permissions: List[str] = Field(default_factory=list)
+    preset: Optional[str] = None
+    status: str = "active"
+    prefix: str = ""
+    rate_limit_rpm: int = 60
+    total_calls: int = 0
+    last_used_at: int = 0
+    created_at: int = 0
+    expires_at: int = 0
+    key_secret: Optional[str] = None
+
+
+class DelegationApiKeyScopeOut(BaseModel):
+    """Scope discovery for a delegation API key."""
+    key_id: str
+    creator_id: str = ""
+    permissions: List[str] = Field(default_factory=list)
+    preset: Optional[str] = None
+    available_actions: List[Dict[str, str]] = Field(default_factory=list)
+    rate_limit_rpm: int = 60
+    total_calls: int = 0
+
+
+class DelegationApiSendMessageIn(BaseModel):
+    """Send a message as the creator via a delegation API key."""
+    text: str = Field(min_length=1, max_length=10000)
+    reply_to_message_id: Optional[str] = None

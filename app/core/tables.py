@@ -147,6 +147,7 @@ class Tables:
     broadcast_clips: Any
     llm_provider_keys: Any
     delegates: Any
+    delegation_api_keys: Any
     syndicates: Any
     syndicate_revenue_split: Any
     chat_bots: Any
@@ -337,6 +338,7 @@ T = Tables(
     broadcast_clips=ddb.Table(S.broadcast_clips_table_name),
     llm_provider_keys=ddb.Table(S.llm_provider_keys_table_name),
     delegates=ddb.Table(S.delegates_table_name),
+    delegation_api_keys=ddb.Table(S.delegation_api_keys_table_name),
     syndicates=ddb.Table(S.syndicates_table_name),
     syndicate_revenue_split=ddb.Table(S.syndicate_revenue_split_table_name),
     chat_bots=ddb.Table(S.chat_bots_table_name),

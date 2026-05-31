@@ -8500,3 +8500,45 @@ export interface PaymentHealthUptimeReport {
   total_incidents: number;
   total_downtime_minutes: number;
 }
+
+// --- Delegation API (DELEGATE-005) ---
+
+export interface DelegationApiKeyCreateReq {
+  label: string;
+  creator_id: string;
+  permissions: string[];
+  expires_in_days?: number | null;
+}
+
+export interface DelegationApiKeyOut {
+  key_id: string;
+  label: string;
+  owner_sub: string;
+  creator_id: string;
+  permissions: string[];
+  preset?: string | null;
+  status: string;
+  prefix: string;
+  rate_limit_rpm: number;
+  total_calls: number;
+  last_used_at: number;
+  created_at: number;
+  expires_at: number;
+  key_secret?: string | null;
+}
+
+export interface DelegationApiKeyAction {
+  method: string;
+  path: string;
+  description: string;
+}
+
+export interface DelegationApiKeyScopeOut {
+  key_id: string;
+  creator_id: string;
+  permissions: string[];
+  preset?: string | null;
+  available_actions: DelegationApiKeyAction[];
+  rate_limit_rpm: number;
+  total_calls: number;
+}
