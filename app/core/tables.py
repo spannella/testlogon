@@ -163,6 +163,8 @@ class Tables:
     agent_feedback: Any
     agent_types: Any
     agent_runs: Any
+    agent_doc_coverage: Any
+    agent_doc_templates: Any
     deployment_log: Any
     feature_decompositions: Any
 
@@ -322,6 +324,8 @@ T = Tables(
     agent_feedback=ddb.Table(S.agent_feedback_table_name),
     agent_types=ddb.Table(S.agent_types_table_name),
     agent_runs=ddb.Table(S.agent_runs_table_name),
+    agent_doc_coverage=ddb.Table(S.agent_doc_coverage_table_name),
+    agent_doc_templates=ddb.Table(S.agent_doc_templates_table_name),
     deployment_log=ddb.Table(S.deployment_log_table_name),
     feature_decompositions=ddb.Table(S.feature_decompositions_table_name),
 )

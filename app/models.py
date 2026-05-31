@@ -7093,3 +7093,129 @@ class TicketCreateFeatureIn(BaseModel):
     description: str = Field(default="", max_length=10000)
     labels: List[str] = Field(default_factory=lambda: ["type:feature_request"], max_length=20)
     space_id: Optional[str] = Field(default=None, max_length=100)
+
+
+# ---------------------------------------------------------------------------
+# Documentation Agent (AGENT-014)
+# ---------------------------------------------------------------------------
+
+
+class RegisterDocIn(BaseModel):
+    doc_path: str = Field(..., min_length=1, max_length=500)
+    doc_type: Literal["api", "architecture", "user_guide", "adr", "readme", "inline"]
+    source_refs: List[str] = Field(default_factory=list, max_length=50)
+    coverage_score: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class UpdateDocIn(BaseModel):
+    source_refs: Optional[List[str]] = Field(default=None, max_length=50)
+    coverage_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class AssessPrIn(BaseModel):
+    changed_files: List[str] = Field(..., min_length=1, max_length=200)
+
+
+class DocCoverageOut(BaseModel):
+    doc_path: str
+    doc_type: str
+    source_refs: List[str]
+    coverage_score: float
+    is_stale: bool
+    stale_since: Optional[int] = None
+    last_verified: int
+    last_updated: int
+    created_at: int
+
+
+class DocCoverageDetailsOut(BaseModel):
+    docs: List[DocCoverageOut]
+    count: int
+
+
+class DocCoverageSummaryOut(BaseModel):
+    overall_coverage: float = Field(ge=0.0, le=1.0)
+    total_docs: int = Field(ge=0)
+    stale_docs: int = Field(ge=0)
+    by_type: Dict[str, dict]
+
+
+class StaleDocOut(BaseModel):
+    doc_path: str
+    doc_type: str
+    changed_sources: List[str]
+    stale_since: int
+
+
+class FreshnessCheckOut(BaseModel):
+    total: int
+    stale: int
+    fresh: int
+    stale_docs: List[StaleDocOut]
+    checked_at: int
+
+
+class StaleDocsListOut(BaseModel):
+    docs: List[DocCoverageOut]
+    count: int
+
+
+class PrImpactOut(BaseModel):
+    docs_to_update: List[DocCoverageOut]
+    uncovered_files: List[str]
+    impact_level: Literal["none", "low", "medium", "high"]
+
+
+class CreateDocTemplateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    doc_type: Literal["api", "architecture", "user_guide", "adr", "readme"]
+    template_body: str = Field(..., min_length=1, max_length=10000)
+    required_sections: List[str] = Field(default_factory=list, max_length=20)
+
+
+class UpdateDocTemplateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    doc_type: Optional[Literal["api", "architecture", "user_guide", "adr", "readme"]] = None
+    template_body: Optional[str] = Field(default=None, min_length=1, max_length=10000)
+    required_sections: Optional[List[str]] = Field(default=None, max_length=20)
+
+
+class DocTemplateOut(BaseModel):
+    template_id: str
+    name: str
+    doc_type: str
+    template_body: str
+    required_sections: List[str]
+    created_at: int
+
+
+class DocTemplatesListOut(BaseModel):
+    templates: List[DocTemplateOut]
+    count: int
+
+
+class DocAgentConfigOut(BaseModel):
+    trigger_on_pr_merge: bool
+    freshness_check_frequency: str
+    freshness_check_hour_utc: int
+    doc_format: str
+    doc_root: str
+    min_coverage_threshold: float
+    create_tickets_for_inline_docs: bool
+    inline_doc_target_agent_type: str
+    ignored_paths: List[str]
+    model_config = ConfigDict(extra="allow")
+
+
+class UpdateDocConfigIn(BaseModel):
+    trigger_on_pr_merge: Optional[bool] = None
+    freshness_check_frequency: Optional[Literal["hourly", "daily", "weekly"]] = None
+    freshness_check_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
+    min_coverage_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    create_tickets_for_inline_docs: Optional[bool] = None
+    ignored_paths: Optional[List[str]] = Field(default=None, max_length=50)
+
+
+class CreateInlineDocTicketIn(BaseModel):
+    source_file: str = Field(..., min_length=1, max_length=500)
+    description: str = Field(default="", max_length=5000)
