@@ -6552,3 +6552,198 @@ class WorkflowPreviewOut(BaseModel):
     steps: List[WorkflowStepOut] = Field(default_factory=list)
     branch_name: str = ""
     total_timeout_seconds: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Solution Architect Agent (AGENT-011)
+# ---------------------------------------------------------------------------
+
+
+class ArchitectConfigIn(BaseModel):
+    repo_url: str = Field(..., min_length=5, max_length=500)
+    repo_branch: str = Field(default="main", max_length=100)
+    reference_docs: List[str] = Field(default=["CLAUDE.md"], max_length=20)
+    scan_paths: List[str] = Field(
+        default=["app/services/", "app/routers/", "frontend/src/"], max_length=20
+    )
+    ticket_template: str = Field(default="", max_length=20000)
+    architecture_guidelines: str = Field(default="", max_length=10000)
+    tech_stack_constraints: Optional[Dict[str, str]] = None
+    naming_conventions: Optional[Dict[str, str]] = None
+    max_tickets_per_feature: int = Field(default=8, ge=1, le=20)
+    target_ticket_space_id: Optional[str] = Field(default=None, max_length=100)
+    complexity_estimation: Optional[Dict[str, float]] = None
+    coding_tool: Literal["claude_code", "codex"] = "claude_code"
+    coding_tool_model: Optional[str] = Field(default=None, max_length=100)
+    max_analysis_time_seconds: int = Field(default=900, ge=120, le=3600)
+    require_design_review: bool = False
+    ticket_spec_style: Literal["full", "compact"] = "compact"
+
+    @field_validator("repo_url")
+    @classmethod
+    def _validate_repo_url(cls, v: str) -> str:
+        if not (v.startswith("https://") or v.startswith("git@")):
+            raise ValueError("Repository URL must start with https:// or git@")
+        if " " in v:
+            raise ValueError("Repository URL must not contain spaces")
+        return v
+
+    @field_validator("reference_docs")
+    @classmethod
+    def _validate_reference_docs(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError("At least one reference document path is required")
+        for p in v:
+            if ".." in p:
+                raise ValueError("Reference doc path must not traverse outside the repository")
+        return v
+
+    @field_validator("scan_paths")
+    @classmethod
+    def _validate_scan_paths(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError("At least one scan path is required")
+        for p in v:
+            if ".." in p:
+                raise ValueError("Scan path must not traverse outside the repository")
+        return v
+
+    @field_validator("ticket_template")
+    @classmethod
+    def _validate_ticket_template(cls, v: str) -> str:
+        if v:
+            for placeholder in ("{subject}", "{overview}"):
+                if placeholder not in v:
+                    raise ValueError(f"Ticket template missing required placeholder: {placeholder}")
+        return v
+
+
+class ArchitectConfigOut(BaseModel):
+    repo_url: str = ""
+    repo_branch: str = "main"
+    reference_docs: List[str] = Field(default_factory=list)
+    scan_paths: List[str] = Field(default_factory=list)
+    ticket_template: str = ""
+    architecture_guidelines: str = ""
+    tech_stack_constraints: Optional[Dict[str, str]] = None
+    naming_conventions: Optional[Dict[str, str]] = None
+    max_tickets_per_feature: int = 8
+    target_ticket_space_id: Optional[str] = None
+    complexity_estimation: Optional[Dict[str, float]] = None
+    coding_tool: str = "claude_code"
+    coding_tool_model: Optional[str] = None
+    max_analysis_time_seconds: int = 900
+    require_design_review: bool = False
+    ticket_spec_style: str = "compact"
+    updated_at: Optional[int] = None
+
+
+class ArchitectConfigValidationOut(BaseModel):
+    valid: bool
+    errors: List[str] = Field(default_factory=list)
+
+
+class ArchitectEligibleTicketOut(BaseModel):
+    ticket_id: str
+    subject: str = ""
+    labels: List[str] = Field(default_factory=list)
+    status: str = "open"
+    created_at: int = 0
+
+
+class ArchitectEligibleTicketsOut(BaseModel):
+    tickets: List[ArchitectEligibleTicketOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class TestArchitectWorkflowIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=100)
+
+
+class ArchitectWorkflowStepOut(BaseModel):
+    step_id: int
+    type: str
+    command: Optional[str] = None
+    timeout_seconds: int = 0
+    on_failure: str = "next"
+
+
+class ArchitectWorkflowPreviewOut(BaseModel):
+    steps: List[ArchitectWorkflowStepOut] = Field(default_factory=list)
+    feature_ticket_id: str = ""
+    require_design_review: bool = False
+    total_timeout_seconds: int = 0
+
+
+class DevTicketSummaryOut(BaseModel):
+    ticket_id: str
+    subject: str = ""
+    complexity: str = "medium"
+    estimated_hours: float = 0
+    order: int = 0
+    depends_on: List[str] = Field(default_factory=list)
+    ticket_type: str = "development"
+
+
+class DecompositionOut(BaseModel):
+    feature_ticket_id: str
+    decomposition_summary: str = ""
+    total_tickets_created: int = 0
+    total_estimated_hours: float = 0
+    dependency_graph: Dict[str, List[str]] = Field(default_factory=dict)
+    tickets: List[DevTicketSummaryOut] = Field(default_factory=list)
+
+
+class DevTicketListOut(BaseModel):
+    tickets: List[DevTicketSummaryOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class DependencyGraphNodeOut(BaseModel):
+    id: str
+    subject: str = ""
+    complexity: str = "medium"
+    order: int = 0
+    status: Optional[str] = "open"
+
+
+class DependencyGraphEdgeOut(BaseModel):
+    from_: str = Field(..., alias="from")
+    to: str
+
+    model_config = {"populate_by_name": True}
+
+
+class DependencyGraphOut(BaseModel):
+    nodes: List[DependencyGraphNodeOut] = Field(default_factory=list)
+    edges: List[DependencyGraphEdgeOut] = Field(default_factory=list)
+
+
+class ArchitectOutputOut(BaseModel):
+    feature_ticket_id: str = ""
+    decomposition_summary: str = ""
+    tickets_created: List[DevTicketSummaryOut] = Field(default_factory=list)
+    total_tickets: int = 0
+    total_estimated_hours: float = 0
+    dependency_graph: Dict[str, List[str]] = Field(default_factory=dict)
+    codebase_analysis: Dict[str, Any] = Field(default_factory=dict)
+    design_decisions: List[Dict[str, Any]] = Field(default_factory=list)
+    feedback_requested: bool = False
+    feedback_response: Optional[str] = None
+    total_duration_seconds: int = 0
+
+
+class ArchitectMetricsOut(BaseModel):
+    features_decomposed: int = 0
+    avg_tickets_per_feature: float = 0
+    avg_hours_per_feature: float = 0
+    decomposition_rate: float = 0
+    period_start: int = 0
+    period_end: int = 0
+
+
+class TicketCreateFeatureIn(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=300)
+    description: str = Field(default="", max_length=10000)
+    labels: List[str] = Field(default_factory=lambda: ["type:feature_request"], max_length=20)
+    space_id: Optional[str] = Field(default=None, max_length=100)

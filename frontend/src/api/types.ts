@@ -6101,3 +6101,150 @@ export interface CoderWorkflowPreview {
   branch_name: string;
   total_timeout_seconds: number;
 }
+
+// --- Solution Architect Agent (AGENT-011) ---
+
+export interface ArchitectConfig {
+  repo_url: string;
+  repo_branch: string;
+  reference_docs: string[];
+  scan_paths: string[];
+  ticket_template: string;
+  architecture_guidelines: string;
+  tech_stack_constraints?: Record<string, string> | null;
+  naming_conventions?: Record<string, string> | null;
+  max_tickets_per_feature: number;
+  target_ticket_space_id?: string | null;
+  complexity_estimation?: Record<string, number> | null;
+  coding_tool: "claude_code" | "codex";
+  coding_tool_model?: string | null;
+  max_analysis_time_seconds: number;
+  require_design_review: boolean;
+  ticket_spec_style: "full" | "compact";
+  updated_at?: number | null;
+}
+
+export interface ArchitectConfigIn {
+  repo_url: string;
+  repo_branch?: string;
+  reference_docs: string[];
+  scan_paths: string[];
+  ticket_template?: string;
+  architecture_guidelines?: string;
+  tech_stack_constraints?: Record<string, string> | null;
+  naming_conventions?: Record<string, string> | null;
+  max_tickets_per_feature?: number;
+  target_ticket_space_id?: string | null;
+  complexity_estimation?: Record<string, number> | null;
+  coding_tool?: "claude_code" | "codex";
+  coding_tool_model?: string | null;
+  max_analysis_time_seconds?: number;
+  require_design_review?: boolean;
+  ticket_spec_style?: "full" | "compact";
+}
+
+export interface ArchitectConfigValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+export interface ArchitectEligibleTicket {
+  ticket_id: string;
+  subject: string;
+  labels: string[];
+  status: string;
+  created_at: number;
+}
+
+export interface ArchitectEligibleTicketsResult {
+  tickets: ArchitectEligibleTicket[];
+  count: number;
+}
+
+export interface DevTicketSummary {
+  ticket_id: string;
+  subject: string;
+  complexity: string;
+  estimated_hours: number;
+  order: number;
+  depends_on: string[];
+  ticket_type?: string;
+}
+
+export interface Decomposition {
+  feature_ticket_id: string;
+  decomposition_summary: string;
+  total_tickets_created: number;
+  total_estimated_hours: number;
+  dependency_graph: Record<string, string[]>;
+  tickets: DevTicketSummary[];
+}
+
+export interface DevTicketListResult {
+  tickets: DevTicketSummary[];
+  count: number;
+}
+
+export interface DependencyGraphNode {
+  id: string;
+  subject: string;
+  complexity: string;
+  order: number;
+  status?: string;
+}
+
+export interface DependencyGraphEdge {
+  from: string;
+  to: string;
+}
+
+export interface DependencyGraph {
+  nodes: DependencyGraphNode[];
+  edges: DependencyGraphEdge[];
+}
+
+export interface ArchitectOutput {
+  feature_ticket_id: string;
+  decomposition_summary: string;
+  tickets_created: DevTicketSummary[];
+  total_tickets: number;
+  total_estimated_hours: number;
+  dependency_graph: Record<string, string[]>;
+  codebase_analysis: {
+    files_scanned: number;
+    patterns_found: string[];
+    existing_related_files: string[];
+  };
+  design_decisions: Array<{
+    decision: string;
+    rationale: string;
+    alternatives_considered: string[];
+  }>;
+  feedback_requested: boolean;
+  feedback_response?: string | null;
+  total_duration_seconds: number;
+}
+
+export interface ArchitectWorkflowStep {
+  step_id: number;
+  type: string;
+  command?: string | null;
+  timeout_seconds: number;
+  on_failure: string;
+}
+
+export interface ArchitectWorkflowPreview {
+  steps: ArchitectWorkflowStep[];
+  feature_ticket_id: string;
+  require_design_review: boolean;
+  total_timeout_seconds: number;
+}
+
+export interface ArchitectMetrics {
+  features_decomposed: number;
+  avg_tickets_per_feature: number;
+  avg_hours_per_feature: number;
+  decomposition_rate: number;
+  period_start: number;
+  period_end: number;
+}

@@ -1490,6 +1490,16 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByTypeDate", "partition_key": "gsi_type_date_pk", "sort_key": "gsi_type_date_sk"},
             ],
         ),
+        # Solution Architect Agent (AGENT-011) — feature -> dev ticket decompositions
+        TableDef(
+            _resolve_table_name(S.feature_decompositions_table_name, "feature_decompositions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
     ]
 
 

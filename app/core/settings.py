@@ -1647,5 +1647,18 @@ class Settings:
     agent_coder_enabled: bool = os.environ.get("AGENT_CODER_ENABLED", "1") not in ("0", "false", "False")
     agent_coder_execute_commands: bool = os.environ.get("AGENT_CODER_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
 
+    # Solution Architect Agent (AGENT-011)
+    feature_decompositions_table_name: str = os.environ.get(
+        "FEATURE_DECOMPOSITIONS_TABLE_NAME", "feature_decompositions"
+    )
+    architect_agent_enabled: bool = os.environ.get("ARCHITECT_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    # Force human review before ticket creation (mirrors ARCHITECT_DESIGN_REVIEW_REQUIRED flag).
+    architect_design_review_required: bool = os.environ.get(
+        "ARCHITECT_DESIGN_REVIEW_REQUIRED", "0"
+    ) not in ("0", "false", "False")
+    # When false (default, and always in E2E), the architect lifecycle never runs real
+    # shell/git/coding-tool commands — the workflow is generated and driven in mock mode.
+    architect_execute_commands: bool = os.environ.get("ARCHITECT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
+
 
 S = Settings()
