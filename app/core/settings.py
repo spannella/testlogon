@@ -1626,6 +1626,9 @@ class Settings:
     agent_memory_table_name: str = os.environ.get("AGENT_MEMORY_TABLE_NAME", "agent_memory")
     agent_memory_max_entries: int = int(os.environ.get("AGENT_MEMORY_MAX_ENTRIES", "200"))
     agent_memory_max_token_count: int = int(os.environ.get("AGENT_MEMORY_MAX_TOKEN_COUNT", "100000"))
+    # Agent Feedback & Terminal Monitoring (AGENT-006)
+    agent_feedback_table_name: str = os.environ.get("AGENT_FEEDBACK_TABLE_NAME", "agent_feedback")
+    agent_feedback_timeout_seconds: int = int(os.environ.get("AGENT_FEEDBACK_TIMEOUT_SECONDS", "14400"))
 
 
 S = Settings()

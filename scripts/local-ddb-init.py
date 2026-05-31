@@ -1471,6 +1471,15 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
                 {"index_name": "ByCategory", "partition_key": "pk", "sort_key": "category"},
+        # Agent Feedback & Terminal Monitoring (AGENT-006)
+        TableDef(
+            _resolve_table_name(S.agent_feedback_table_name, "agent_feedback"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "pk", "sort_key": "feedback_status"},
+                {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
+                {"index_name": "ByUser", "partition_key": "user_id", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
         ),

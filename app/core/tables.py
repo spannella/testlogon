@@ -159,6 +159,7 @@ class Tables:
     agent_workers: Any
     compute_billing: Any
     agent_memory: Any
+    agent_feedback: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -312,4 +313,5 @@ T = Tables(
     agent_workers=ddb.Table(S.agent_workers_table_name),
     compute_billing=ddb.Table(S.compute_billing_table_name),
     agent_memory=ddb.Table(S.agent_memory_table_name),
+    agent_feedback=ddb.Table(S.agent_feedback_table_name),
 )
