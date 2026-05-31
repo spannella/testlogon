@@ -46,6 +46,7 @@ import {
   Building2,
   Tv,
   Scissors,
+  ShieldAlert,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -155,6 +156,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Video Review", i18nKey: "nav.videoReview", path: "/admin/video-review", icon: <Video className="h-5 w-5" /> },
       { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: <Scale className="h-5 w-5" /> },
       { label: "Refund Queue", i18nKey: "nav.refundQueue", path: "/admin/refunds", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "Risk Scoring", i18nKey: "nav.riskScoring", path: "/admin/risk", icon: <ShieldAlert className="h-5 w-5" /> },
     ],
   },
 ];

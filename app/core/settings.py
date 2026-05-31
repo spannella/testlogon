@@ -1071,6 +1071,14 @@ class Settings:
     kyc_review_ticket_space_id: str = os.environ.get("KYC_REVIEW_TICKET_SPACE_ID", "kyc-ops")
     kyc_review_ticket_category: str = os.environ.get("KYC_REVIEW_TICKET_CATEGORY", "kyc_review")
 
+    # KYC Risk Scoring (KYC-008)
+    kyc_risk_scores_table_name: str = os.environ.get("KYC_RISK_SCORES_TABLE_NAME", "kyc_risk_scores")
+    kyc_risk_auto_approve_enabled: bool = os.environ.get("KYC_RISK_AUTO_APPROVE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    kyc_risk_auto_approve_max_score: int = int(os.environ.get("KYC_RISK_AUTO_APPROVE_MAX_SCORE", "20"))
+    kyc_risk_auto_escalate_min_score: int = int(os.environ.get("KYC_RISK_AUTO_ESCALATE_MIN_SCORE", "81"))
+    kyc_risk_scoring_model_version: str = os.environ.get("KYC_RISK_SCORING_MODEL_VERSION", "v1.0")
+    risk_high_threshold: int = int(os.environ.get("RISK_HIGH_THRESHOLD", "70"))
+
     # Video metadata (VOD-001)
     video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")
     vod_entitlements_table_name: str = os.environ.get("DDB_VOD_ENTITLEMENTS", "VodEntitlements")

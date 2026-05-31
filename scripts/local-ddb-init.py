@@ -97,6 +97,16 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.kyc_risk_scores_table_name, "kyc_risk_scores"),
+            "user_sub",
+            "timestamp",
+            gsi=[
+                {"index_name": "case-timestamp-index", "partition_key": "case_id", "sort_key": "timestamp"},
+                {"index_name": "tier-timestamp-index", "partition_key": "risk_tier", "sort_key": "timestamp"},
+            ],
+            attr_types={"timestamp": "N"},
+        ),
+        TableDef(
             _resolve_table_name(S.projects_table_name, "projects"),
             "PK",
             "SK",

@@ -3878,3 +3878,40 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ─── Risk Scoring (KYC-008) ─────────────────────────────────────────
+
+class RiskScoreOut(BaseModel):
+    score_id: str
+    case_id: str
+    user_sub: str
+    total_score: int = Field(ge=0, le=100)
+    risk_tier: str
+    factors: dict
+    trigger: str
+    auto_action_taken: str = "none"
+    model_version: str
+    created_at: int
+    previous_score: Optional[int] = None
+    previous_tier: Optional[str] = None
+
+
+class RiskFactorOut(BaseModel):
+    factor_name: str
+    score: int = Field(ge=0, le=100)
+    weight: float
+    weighted_score: float
+    raw_value: str
+    description: str
+
+
+class RiskProfileOut(BaseModel):
+    user_sub: str
+    latest_score: Optional[RiskScoreOut] = None
+    history: list = Field(default_factory=list)
+
+
+class RiskOverrideIn(BaseModel):
+    score: int = Field(ge=0, le=100)
+    reason: str = Field(min_length=1, max_length=500)
