@@ -5341,6 +5341,8 @@ export interface AdInvoice {
   total_charges_cents: number;
   total_deposits_cents: number;
   entry_count: number;
+}
+
 // ---------------------------------------------------------------------------
 // Group Treasury (GROUP-004)
 // ---------------------------------------------------------------------------
@@ -5400,4 +5402,65 @@ export interface SpendResponse {
   balance_cents: number;
   total_spent_cents: number;
   ledger_entry_id: string;
+}
+
+// -- Agent Orchestrator (AGENT-003) --
+
+export interface TicketFilterConfig {
+  types: string[];
+  tags: string[];
+  space_ids: string[];
+  priorities: string[];
+}
+
+export type AgentState =
+  | "idle"
+  | "claiming"
+  | "working"
+  | "awaiting_feedback"
+  | "completing"
+  | "paused"
+  | "error";
+
+export interface AgentStatus {
+  worker_id: string;
+  agent_state: AgentState;
+  current_ticket_id: string;
+  current_ticket_title: string;
+  tickets_completed: number;
+  tickets_failed: number;
+  heartbeat_at: number;
+  last_activity_at: number;
+  ticket_filter: TicketFilterConfig | null;
+  loop_running: boolean;
+}
+
+export interface AgentClaim {
+  ticket_id: string;
+  worker_id: string;
+  claimed_at: number;
+  status: "active" | "released" | "completed" | "failed";
+  checkpoint: string;
+}
+
+export interface EligibleTicket {
+  ticket_id: string;
+  title: string;
+  priority: string;
+  type: string;
+  tags: string[];
+  space_id: string;
+  created_at: number;
+}
+
+export interface EligibleTicketsResponse {
+  tickets: EligibleTicket[];
+  count: number;
+  filter_applied: TicketFilterConfig | null;
+}
+
+export interface CheckpointData {
+  ticket_id: string;
+  checkpoint: Record<string, unknown>;
+  claimed_at: number;
 }

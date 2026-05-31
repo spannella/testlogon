@@ -1421,6 +1421,7 @@ def _table_defs() -> List[TableDef]:
             "sk",
         ),
         # Agent Worker Provisioning (AGENT-002)
+        # Agent Workers (AGENT-002/003)
         TableDef(
             _resolve_table_name(S.agent_workers_table_name, "agent_workers"),
             "pk",
@@ -1431,6 +1432,8 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByAgentType", "partition_key": "pk", "sort_key": "agent_type"},
             ],
             attr_types={"created_at": "N"},
+                {"index_name": "ByAgentType", "partition_key": "pk", "sort_key": "agent_type"},
+            ],
         ),
     ]
 

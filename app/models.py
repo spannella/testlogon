@@ -5810,3 +5810,48 @@ class SpendResponse(BaseModel):
     balance_cents: int
     total_spent_cents: int
     ledger_entry_id: str
+# -- Agent Orchestrator (AGENT-003) --
+
+class TicketFilterConfig(BaseModel):
+    types: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+    space_ids: List[str] = Field(default_factory=list)
+    priorities: List[str] = Field(default_factory=list)
+
+class AgentStatusOut(BaseModel):
+    worker_id: str
+    agent_state: str = "idle"
+    current_ticket_id: str = ""
+    current_ticket_title: str = ""
+    tickets_completed: int = 0
+    tickets_failed: int = 0
+    heartbeat_at: int = 0
+    last_activity_at: int = 0
+    ticket_filter: Optional[TicketFilterConfig] = None
+    loop_running: bool = False
+
+class AgentClaimOut(BaseModel):
+    ticket_id: str
+    worker_id: str
+    claimed_at: int
+    status: str
+    checkpoint: str = ""
+
+class EligibleTicketOut(BaseModel):
+    ticket_id: str
+    title: str = ""
+    priority: str = ""
+    type: str = ""
+    tags: List[str] = Field(default_factory=list)
+    space_id: str = ""
+    created_at: int = 0
+
+class EligibleTicketsOut(BaseModel):
+    tickets: List[Dict[str, Any]]
+    count: int
+    filter_applied: Optional[TicketFilterConfig] = None
+
+class CheckpointOut(BaseModel):
+    ticket_id: str = ""
+    checkpoint: Dict[str, Any] = Field(default_factory=dict)
+    claimed_at: int = 0

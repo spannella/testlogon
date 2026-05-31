@@ -1602,6 +1602,7 @@ class Settings:
 
     # Group Treasury (GROUP-004)
     group_treasury_enabled: bool = os.environ.get("GROUP_TREASURY_ENABLED", "1") not in ("0", "false", "False")
+    # Agent Orchestration (AGENT-002 / AGENT-003)
 
 
 S = Settings()
