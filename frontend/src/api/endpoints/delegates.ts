@@ -9,6 +9,10 @@ import type {
   DelegateUpdatePermissionsReq,
   ManagedCreatorOut,
   PermissionPresetOut,
+  DelegatedConversation,
+  DelegatedMessage,
+  DelegatedSendMessageReq,
+  ChatDelegateAuditEntry,
 } from "@/api/types";
 
 const BASE = "/ui/delegates";
@@ -70,4 +74,48 @@ export async function getDelegateAudit(): Promise<DelegateAuditOut[]> {
 
 export async function listPresets(): Promise<PermissionPresetOut[]> {
   return api.get<PermissionPresetOut[]>(`${BASE}/presets`);
+}
+
+// ─── Chat Delegation (DELEGATE-002) ─────────────────────────────────
+
+const MSG_BASE = "/messaging/delegate";
+
+export async function listDelegatedConversations(
+  creatorId: string,
+): Promise<DelegatedConversation[]> {
+  return api.get<DelegatedConversation[]>(
+    `${MSG_BASE}/${creatorId}/conversations`,
+  );
+}
+
+export async function listDelegatedMessages(
+  creatorId: string,
+  conversationId: string,
+  params?: { limit?: number; before?: string },
+): Promise<DelegatedMessage[]> {
+  return api.get<DelegatedMessage[]>(
+    `${MSG_BASE}/${creatorId}/conversations/${conversationId}/messages`,
+    params,
+  );
+}
+
+export async function sendDelegatedMessage(
+  creatorId: string,
+  conversationId: string,
+  req: DelegatedSendMessageReq,
+): Promise<DelegatedMessage> {
+  return api.post<DelegatedMessage>(
+    `${MSG_BASE}/${creatorId}/conversations/${conversationId}/messages`,
+    req,
+  );
+}
+
+export async function listChatDelegateAudit(
+  creatorId: string,
+  params?: { conversation_id?: string; limit?: number },
+): Promise<ChatDelegateAuditEntry[]> {
+  return api.get<ChatDelegateAuditEntry[]>(
+    `${MSG_BASE}/${creatorId}/audit`,
+    params,
+  );
 }

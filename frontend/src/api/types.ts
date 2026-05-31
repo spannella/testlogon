@@ -4734,6 +4734,51 @@ export interface DelegateAuditOut {
   actor_type: string;
 }
 
+// ─── Chat Delegation (DELEGATE-002) ───────────────────────────────
+
+export interface DelegatedConversation {
+  conversation_id: string;
+  type: string;
+  title?: string;
+  created_at: number;
+  last_message_at: number;
+  last_message_preview?: string;
+  participant_count: number;
+  status: string;
+  unread_count: number;
+  participants: Array<{ user_id: string; status: string; role: string }>;
+}
+
+export interface DelegatedMessage {
+  conversation_id: string;
+  message_id: string;
+  sender_id: string;
+  created_at: number;
+  kind: string;
+  text?: string | null;
+  is_encrypted: boolean;
+  sent_by_delegate?: string | null;
+  delegate_display_name?: string | null;
+  delegate_tag?: string | null;
+  delegate_cannot_decrypt: boolean;
+  reply_to_message_id?: string | null;
+}
+
+export interface DelegatedSendMessageReq {
+  text: string;
+  reply_to_message_id?: string;
+}
+
+export interface ChatDelegateAuditEntry {
+  event_id: string;
+  delegate_id: string;
+  conversation_id: string;
+  message_id: string;
+  text_preview: string;
+  delegate_display_name: string;
+  created_at: number;
+}
+
 // -- Syndicates (SYND-001) --
 
 export interface SyndicateOut {

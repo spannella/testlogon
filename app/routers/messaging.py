@@ -13285,3 +13285,97 @@ async def send_signaling_event(
         delivered_to=ack.delivered_to,
         status=ack.status,
     )
+
+
+# ---------------------------------------------------------------------------
+# Chat Delegation endpoints (DELEGATE-002)
+# ---------------------------------------------------------------------------
+
+from app.models import (
+    DelegatedConversationOut,
+    DelegatedMessageOut,
+    DelegatedSendMessageIn,
+    ChatDelegateAuditEntry,
+)
+from app.services.delegate_chat import (
+    list_creator_conversations as _dc_list_convos,
+    get_creator_conversation_messages as _dc_list_msgs,
+    send_message_as_creator as _dc_send_msg,
+    get_delegated_messages_audit as _dc_audit,
+)
+
+
+@router.get(
+    "/delegate/{creator_id}/conversations",
+    response_model=List[DelegatedConversationOut],
+)
+def list_delegated_conversations(
+    creator_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """List creator's conversations as a delegate (requires chat_read)."""
+    items = _dc_list_convos(creator_id=creator_id, delegate_id=user_id)
+    return [DelegatedConversationOut(**item) for item in items]
+
+
+@router.get(
+    "/delegate/{creator_id}/conversations/{conversation_id}/messages",
+    response_model=List[DelegatedMessageOut],
+)
+def list_delegated_messages(
+    creator_id: str,
+    conversation_id: str,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    before: Optional[str] = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """List messages in creator's conversation as a delegate (requires chat_read)."""
+    items = _dc_list_msgs(
+        creator_id=creator_id,
+        delegate_id=user_id,
+        conversation_id=conversation_id,
+        limit=limit,
+        before=before,
+    )
+    return [DelegatedMessageOut(**item) for item in items]
+
+
+@router.post(
+    "/delegate/{creator_id}/conversations/{conversation_id}/messages",
+    response_model=DelegatedMessageOut,
+)
+def send_delegated_message(
+    creator_id: str,
+    conversation_id: str,
+    body: DelegatedSendMessageIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Send a message as the creator via delegation (requires chat_respond)."""
+    result = _dc_send_msg(
+        creator_id=creator_id,
+        delegate_id=user_id,
+        conversation_id=conversation_id,
+        text=body.text,
+        reply_to_message_id=body.reply_to_message_id,
+    )
+    return DelegatedMessageOut(**result)
+
+
+@router.get(
+    "/delegate/{creator_id}/audit",
+    response_model=List[ChatDelegateAuditEntry],
+)
+def list_delegated_chat_audit(
+    creator_id: str,
+    conversation_id: Optional[str] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """List messages sent by delegates in creator's conversations (creator only)."""
+    items = _dc_audit(
+        creator_id=creator_id,
+        requester_id=user_id,
+        conversation_id=conversation_id,
+        limit=limit,
+    )
+    return [ChatDelegateAuditEntry(**item) for item in items]
