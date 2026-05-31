@@ -144,7 +144,6 @@ class Tables:
     issued_licenses: Any
     bot_templates: Any
     bot_scheduled_sends: Any
-    syndicates: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -283,5 +282,4 @@ T = Tables(
     issued_licenses=ddb.Table(S.issued_licenses_table_name),
     bot_templates=ddb.Table(S.bot_templates_table_name),
     bot_scheduled_sends=ddb.Table(S.bot_scheduled_sends_table_name),
-    syndicates=ddb.Table(S.syndicates_table_name),
 )

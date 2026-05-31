@@ -1,4 +1,3 @@
-"""Syndicate management router (SYND-001)."""
 """Syndicate management router (SYND-001 + SYND-002)."""
 
 from __future__ import annotations
