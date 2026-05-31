@@ -197,6 +197,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Session Recordings", i18nKey: "nav.sshRecordings", path: "/remote/recordings", icon: <Video className="h-5 w-5" /> },
       { label: "Bastion Paths", i18nKey: "nav.sshBastion", path: "/remote/bastion", icon: <Network className="h-5 w-5" /> },
       { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
+      { label: "Theme", i18nKey: "nav.theme", path: "/settings/theme", icon: <Palette className="h-5 w-5" /> },
       { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "Account Deletion", i18nKey: "nav.accountDeletion", path: "/settings/account-deletion", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "Blocked Users", i18nKey: "nav.blockedUsers", path: "/settings/blocked", icon: <Ban className="h-5 w-5" /> },

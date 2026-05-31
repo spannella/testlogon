@@ -213,6 +213,7 @@ class Tables:
     connection_profiles: Any
     job_runs: Any
     group_fundraising_campaigns: Any
+    user_themes: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -420,4 +421,5 @@ T = Tables(
     connection_profiles=ddb.Table(S.connection_profiles_table_name),
     job_runs=ddb.Table(S.job_runs_table_name),
     group_fundraising_campaigns=ddb.Table(S.group_fundraising_campaigns_table_name),
+    user_themes=ddb.Table(S.user_themes_table_name),
 )

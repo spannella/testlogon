@@ -10645,3 +10645,50 @@ class ContentBoostCancelOut(BaseModel):
     boost_id: str
     status: str
     refunded_cents: int
+# ── PLATFORM-013: Theme Customization ────────────────────────────────────────
+# Per-user theme configuration persisted in the `user_themes` table via
+# app.services.theme_customization. Distinct from the legacy UX-001
+# ui_preferences attribute.
+
+class ThemeConfigOut(BaseModel):
+    """Full per-user theme configuration (always fully populated)."""
+
+    mode: Literal["light", "dark", "system"] = "system"
+    accent_color: Literal[
+        "blue", "purple", "green", "orange", "pink", "red", "teal", "custom"
+    ] = "blue"
+    custom_accent_hex: Optional[str] = None
+    font_scale: Literal["small", "default", "large", "xlarge"] = "default"
+    density: Literal["compact", "comfortable", "spacious"] = "comfortable"
+    preset: Literal["default", "midnight", "sunrise", "forest", "ocean"] = "default"
+    high_contrast: bool = False
+
+
+class ThemeConfigResponse(BaseModel):
+    """Envelope returned by GET/PATCH /ui/theme."""
+
+    theme: ThemeConfigOut
+
+
+class ThemeConfigPatchReq(BaseModel):
+    """Partial theme update. All fields optional; only provided keys change."""
+
+    mode: Optional[Literal["light", "dark", "system"]] = None
+    accent_color: Optional[
+        Literal["blue", "purple", "green", "orange", "pink", "red", "teal", "custom"]
+    ] = None
+    custom_accent_hex: Optional[str] = Field(default=None, max_length=7)
+    font_scale: Optional[Literal["small", "default", "large", "xlarge"]] = None
+    density: Optional[Literal["compact", "comfortable", "spacious"]] = None
+    preset: Optional[Literal["default", "midnight", "sunrise", "forest", "ocean"]] = None
+    high_contrast: Optional[bool] = None
+
+    @field_validator("custom_accent_hex")
+    @classmethod
+    def _validate_hex(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        raw = v.lstrip("#")
+        if not re.fullmatch(r"[0-9A-Fa-f]{6}", raw):
+            raise ValueError("custom_accent_hex must be a 6-character hex color")
+        return "#" + raw.upper()

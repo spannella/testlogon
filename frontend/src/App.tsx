@@ -44,6 +44,7 @@ const NotificationsPage = lazy(() => import("@/pages/notifications/Notifications
 const SecurityPage = lazy(() => import("@/pages/security/SecurityPage"));
 const ProfilePage = lazy(() => import("@/pages/settings/ProfilePage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
+const ThemeCustomizationPage = lazy(() => import("@/pages/settings/ThemeCustomizationPage"));
 const PurchasesPage = lazy(() => import("@/pages/purchases/PurchasesPage"));
 const SubscriptionsPage = lazy(() => import("@/pages/subscriptions/SubscriptionsPage"));
 const TierManager = lazy(() => import("@/pages/subscriptions/TierManager"));
@@ -286,6 +287,7 @@ export default function App() {
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="settings/privacy" element={<PrivacyPage />} />
+          <Route path="settings/theme" element={<ThemeCustomizationPage />} />
           <Route path="settings/account-deletion" element={<AccountDeletionPage />} />
           <Route path="settings/blocked" element={<BlockedUsersPage />} />
           <Route path="settings/webhooks" element={<WebhooksPage />} />
