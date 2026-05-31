@@ -9531,6 +9531,7 @@ export interface SeoMetadata {
   twitter: SeoTwitterTags;
   image: string | null;
   json_ld: Record<string, unknown> | null;
+}
 
 // VOD-018: Ad-Supported Viewing Tier
 export interface VodAdBreak {
