@@ -10528,3 +10528,34 @@ class QuickConnectOut(BaseModel):
     auto_connect: bool = False
     connected_at: int = 0
 
+
+
+# ─── BCAST-010: Broadcast Newsfeed Promotion ───────────────────────
+
+class BroadcastPromoLink(BaseModel):
+    broadcast_id: str
+    post_id: str
+    owner_user_id: str
+    promoted_at: int
+    last_synced_status: str
+    removed: bool = False
+
+
+class BroadcastPromoLiveItem(BaseModel):
+    broadcast_id: str
+    post_id: str
+    title: str
+    owner_user_id: str
+    promoted_at: int
+
+
+class BroadcastPromoLinkResponse(BaseModel):
+    link: BroadcastPromoLink
+
+
+class BroadcastPromoLiveResponse(BaseModel):
+    items: List[BroadcastPromoLiveItem] = Field(default_factory=list)
+
+
+class BroadcastPromoDeleteResponse(BaseModel):
+    ok: bool = True

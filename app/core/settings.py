@@ -464,6 +464,7 @@ class Settings:
 
     # Messaging
     broadcast_profiles_table_name: str = os.environ.get("DDB_BROADCAST_PROFILES", "BroadcastProfiles")
+    broadcast_promo_posts_table_name: str = os.environ.get("DDB_BROADCAST_PROMO_POSTS", "BroadcastPromoPosts")
     broadcast_sessions_table_name: str = os.environ.get("DDB_BROADCAST_SESSIONS", "BroadcastSessions")
     broadcast_outputs_table_name: str = os.environ.get("DDB_BROADCAST_OUTPUTS", "BroadcastOutputs")
     broadcast_session_transitions_table_name: str = os.environ.get(

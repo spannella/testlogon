@@ -581,6 +581,10 @@ def _table_defs() -> List[TableDef]:
             "profile_id",
         ),
         TableDef(
+            _resolve_table_name(S.broadcast_promo_posts_table_name, "BroadcastPromoPosts"),
+            "broadcast_id",
+        ),
+        TableDef(
             _resolve_table_name(S.broadcast_sessions_table_name, "BroadcastSessions"),
             "session_id",
             gsi=[
