@@ -9429,3 +9429,95 @@ class CampaignScheduleOut(BaseModel):
     flights: Optional[List[Dict[str, Any]]] = None
     start_date: Optional[Any] = None
     end_date: Optional[Any] = None
+# ---------------------------------------------------------------------------
+# FIN-014: Payment Provider Health
+# ---------------------------------------------------------------------------
+
+class PaymentHealthProviderStatus(BaseModel):
+    """Current health status for a single payment provider."""
+    provider: str
+    status: str  # "healthy" | "degraded" | "down"
+    enabled: bool = True
+    success_rate: float = 100.0
+    error_rate_bps: int = 0
+    avg_latency_ms: int = 0
+    p50_latency_ms: int = 0
+    p95_latency_ms: int = 0
+    p99_latency_ms: int = 0
+    total_success: int = 0
+    total_failure: int = 0
+    last_check_at: int = 0
+
+
+class PaymentHealthTimeline(BaseModel):
+    """Hourly health snapshots for the timeline chart."""
+    provider: str
+    hours: int
+    data: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class PaymentHealthErrorDrilldown(BaseModel):
+    """Error type breakdown and recent failures for a provider."""
+    provider: str
+    error_types: Dict[str, int] = Field(default_factory=dict)
+    recent_failures: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class PaymentHealthProviderConfig(BaseModel):
+    """Provider configuration (enabled state + alert thresholds)."""
+    provider: str
+    enabled: bool = True
+    alert_error_rate_threshold: int = 500  # bps
+    alert_latency_threshold_ms: int = 500
+    alert_email: str = ""
+    disabled_at: Optional[int] = None
+    disabled_by: str = ""
+    disable_reason: str = ""
+
+
+class PaymentHealthConfigUpdate(BaseModel):
+    """Root-only update to a provider's alert thresholds."""
+    alert_error_rate_threshold: Optional[int] = Field(default=None, ge=1, le=10000)
+    alert_latency_threshold_ms: Optional[int] = Field(default=None, ge=50, le=10000)
+    alert_email: Optional[str] = Field(default=None, max_length=320)
+
+
+class PaymentHealthToggleIn(BaseModel):
+    """Root-only enable/disable of a payment provider."""
+    enabled: bool
+    reason: str = Field(default="", max_length=500)
+
+
+class PaymentHealthToggleOut(BaseModel):
+    """Result of a provider enable/disable toggle."""
+    provider: str
+    enabled: bool
+    toggled_at: int
+    reason: str = ""
+
+
+class PaymentHealthIncident(BaseModel):
+    """A historical provider outage/degradation incident."""
+    incident_id: str
+    provider: str
+    started_at: int
+    ended_at: Optional[int] = None
+    status: str
+    peak_error_rate: int = 0
+    affected_webhooks: int = 0
+
+
+class PaymentHealthIncidentCreate(BaseModel):
+    """Manually open an incident for a provider."""
+    status: str = Field(default="degraded", pattern="^(degraded|down)$")
+    peak_error_rate: int = Field(default=0, ge=0, le=10000)
+    affected_webhooks: int = Field(default=0, ge=0)
+
+
+class PaymentHealthUptimeReport(BaseModel):
+    """Availability percentage for a provider over a date range."""
+    provider: str
+    days: int
+    uptime_pct: float
+    total_incidents: int = 0
+    total_downtime_minutes: int = 0
