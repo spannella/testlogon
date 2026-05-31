@@ -1288,6 +1288,11 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
+        # Media Preferences (CALL-003)
+        TableDef(
+            _resolve_table_name(S.media_preferences_table_name, "media_preferences"),
+            "user_sub",
+            "sk",
         ),
     ]
 

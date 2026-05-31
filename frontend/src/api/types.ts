@@ -5159,3 +5159,24 @@ export interface BundleSubscriptionOut {
   cancelled_at?: number;
   included_creators: SyndicateMemberOut[];
 }
+// ─── Media Preferences (CALL-003) ──────────────────────────────
+
+export interface MediaPreferencesIn {
+  preferred_audio_input_id?: string | null;
+  preferred_video_input_id?: string | null;
+  preferred_audio_output_id?: string | null;
+  default_audio_muted?: boolean;
+  default_video_off?: boolean;
+  video_resolution?: "360" | "480" | "720" | "1080";
+}
+
+export interface MediaPreferencesOut {
+  user_sub: string;
+  preferred_audio_input_id?: string | null;
+  preferred_video_input_id?: string | null;
+  preferred_audio_output_id?: string | null;
+  default_audio_muted: boolean;
+  default_video_off: boolean;
+  video_resolution: string;
+  updated_at: number;
+}

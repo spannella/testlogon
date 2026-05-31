@@ -1526,6 +1526,8 @@ class Settings:
     issued_licenses_table_name: str = os.environ.get("ISSUED_LICENSES_TABLE_NAME", "issued_licenses")
     # Syndicates (SYND-001)
     syndicates_table_name: str = os.environ.get("SYNDICATES_TABLE_NAME", "syndicates")
+    # Media Preferences (CALL-003)
+    media_preferences_table_name: str = os.environ.get("MEDIA_PREFERENCES_TABLE_NAME", "media_preferences")
 
 
 S = Settings()

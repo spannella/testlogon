@@ -122,6 +122,7 @@ from app.routers.fan_club import router as fan_club_router, public_router as fan
 from app.routers.stories import router as stories_router
 from app.routers.watermark import router as watermark_router, internal_router as watermark_internal_router
 from app.routers.watch_party import router as watch_party_router
+from app.routers.media_preferences import router as media_preferences_router
 from app.middleware.rate_limit import rate_limit_middleware_factory
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
@@ -474,6 +475,7 @@ def create_app() -> FastAPI:
     app.include_router(i18n_router)
     app.include_router(watermark_internal_router)
     app.include_router(watch_party_router)
+    app.include_router(media_preferences_router)
     app.include_router(content_calendar_router)
     app.include_router(tenant_admin_router)
     app.include_router(tenant_public_router)

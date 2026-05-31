@@ -115,6 +115,7 @@ const TemplateEditorPage = lazy(() => import("@/pages/bots/TemplateEditorPage"))
 const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
 const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetailPage"));
 const MyBundlesPage = lazy(() => import("@/pages/syndicates/MyBundlesPage"));
+const MediaSettingsPage = lazy(() => import("@/pages/calls/MediaSettingsPage"));
 
 function PageSpinner() {
   return (
@@ -204,6 +205,7 @@ export default function App() {
           <Route path="settings/blocked" element={<BlockedUsersPage />} />
           <Route path="settings/webhooks" element={<WebhooksPage />} />
           <Route path="settings/geo" element={<GeoRulesPage />} />
+          <Route path="calls/settings" element={<MediaSettingsPage />} />
           <Route path="webhooks" element={<WebhookDashboard />} />
           <Route path="webhooks/:endpointId" element={<WebhookEndpointDetail />} />
           <Route path="purchases" element={<PurchasesPage />} />
