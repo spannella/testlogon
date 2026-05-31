@@ -1701,6 +1701,14 @@ class Settings:
     security_groups_max_rules: int = int(os.environ.get("SG_MAX_RULES", "50"))
     security_groups_platform_egress_cidrs: str = os.environ.get("SECURITY_GROUPS_PLATFORM_EGRESS_CIDRS", "127.0.0.1/32,10.0.0.0/8")
 
+    # SSH Session Recording & Playback (INFRA-010)
+    ssh_session_recordings_table_name: str = os.environ.get("SSH_SESSION_RECORDINGS_TABLE_NAME", "ssh_session_recordings")
+    ssh_session_recording_enabled: bool = os.environ.get("SSH_SESSION_RECORDING_ENABLED", "true").lower() not in ("0", "false", "no")
+    ssh_session_recording_default_enabled: bool = os.environ.get("SSH_SESSION_RECORDING_DEFAULT_ENABLED", "true").lower() not in ("0", "false", "no")
+    ssh_session_recording_retention_days: int = int(os.environ.get("SSH_SESSION_RECORDING_RETENTION_DAYS", "90"))
+    ssh_session_recording_max_events: int = int(os.environ.get("SSH_SESSION_RECORDING_MAX_EVENTS", "50000"))
+    ssh_session_recording_max_bytes: int = int(os.environ.get("SSH_SESSION_RECORDING_MAX_BYTES", "5242880"))
+
     # License Revenue (LICENSE-003)
     license_revenue_table_name: str = os.environ.get("LICENSE_REVENUE_TABLE_NAME", "license_revenue")
     license_revenue_platform_fee_pct: int = int(os.environ.get("LICENSE_REVENUE_PLATFORM_FEE_PCT", "20"))

@@ -8542,3 +8542,60 @@ export interface DelegationApiKeyScopeOut {
   rate_limit_rpm: number;
   total_calls: number;
 }
+
+// ── SSH Session Recording & Playback (INFRA-010) ──────────────────
+export interface StartSshRecordingIn {
+  hostname: string;
+  port?: number;
+  username?: string;
+  terminal_cols?: number;
+  terminal_rows?: number;
+  host_id?: string;
+  session_id?: string;
+}
+
+export interface SshRecordingEventIn {
+  offset?: number;
+  type?: "o" | "i";
+  data?: string;
+}
+
+export interface AppendSshRecordingEventsIn {
+  events: SshRecordingEventIn[];
+}
+
+export interface SshRecordingOut {
+  recording_id: string;
+  session_id: string;
+  host_id: string;
+  hostname: string;
+  port: number;
+  username: string;
+  host_key: string;
+  status: string;
+  start_time: number;
+  end_time: number;
+  duration_seconds: number;
+  file_size_bytes: number;
+  terminal_cols: number;
+  terminal_rows: number;
+  event_count: number;
+  created_at: number;
+  retention_days: number;
+  expires_at: number;
+}
+
+export interface SshRecordingListOut {
+  recordings: SshRecordingOut[];
+  count: number;
+}
+
+export type SshRecordingEvent = [number, string, string];
+
+export interface SshRecordingPlaybackOut {
+  recording_id: string;
+  content_type: string;
+  header: Record<string, unknown>;
+  events: SshRecordingEvent[];
+  event_count: number;
+}

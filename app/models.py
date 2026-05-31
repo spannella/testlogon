@@ -9567,3 +9567,64 @@ class DelegationApiSendMessageIn(BaseModel):
     """Send a message as the creator via a delegation API key."""
     text: str = Field(min_length=1, max_length=10000)
     reply_to_message_id: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# SSH Session Recording & Playback (INFRA-010)
+# ---------------------------------------------------------------------------
+
+class StartSshRecordingIn(BaseModel):
+    """Start a new SSH session recording."""
+    hostname: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = Field(default="", max_length=255)
+    terminal_cols: int = Field(default=80, ge=1, le=1000)
+    terminal_rows: int = Field(default=24, ge=1, le=1000)
+    host_id: str = Field(default="", max_length=128)
+    session_id: str = Field(default="", max_length=128)
+
+
+class SshRecordingEventIn(BaseModel):
+    """A single asciicast event: offset (seconds), type, and terminal data."""
+    offset: float = Field(default=0.0, ge=0)
+    type: Literal["o", "i"] = "o"
+    data: str = Field(default="", max_length=131072)
+
+
+class AppendSshRecordingEventsIn(BaseModel):
+    """Append a batch of output/input events to an in-progress recording."""
+    events: List[SshRecordingEventIn] = Field(default_factory=list, max_length=2000)
+
+
+class SshRecordingOut(BaseModel):
+    recording_id: str
+    session_id: str = ""
+    host_id: str = ""
+    hostname: str
+    port: int = 22
+    username: str = ""
+    host_key: str = ""
+    status: str = "recording"
+    start_time: int = 0
+    end_time: int = 0
+    duration_seconds: int = 0
+    file_size_bytes: int = 0
+    terminal_cols: int = 80
+    terminal_rows: int = 24
+    event_count: int = 0
+    created_at: int = 0
+    retention_days: int = 0
+    expires_at: int = 0
+
+
+class SshRecordingListOut(BaseModel):
+    recordings: List[SshRecordingOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class SshRecordingPlaybackOut(BaseModel):
+    recording_id: str
+    content_type: str = "application/x-asciicast"
+    header: Dict[str, Any] = Field(default_factory=dict)
+    events: List[List[Any]] = Field(default_factory=list)
+    event_count: int = 0

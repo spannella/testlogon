@@ -188,6 +188,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
       { label: "Containers", i18nKey: "nav.containers", path: "/remote/k8s", icon: <Container className="h-5 w-5" /> },
       { label: "Security Groups", i18nKey: "nav.securityGroups", path: "/remote/security-groups", icon: <Shield className="h-5 w-5" /> },
+      { label: "Session Recordings", i18nKey: "nav.sshRecordings", path: "/remote/recordings", icon: <Video className="h-5 w-5" /> },
       { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
       { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "Account Deletion", i18nKey: "nav.accountDeletion", path: "/settings/account-deletion", icon: <ShieldCheck className="h-5 w-5" /> },

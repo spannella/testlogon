@@ -197,6 +197,7 @@ class Tables:
     invoices: Any
     financial_rollups: Any
     payment_provider_health: Any
+    ssh_session_recordings: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -388,4 +389,5 @@ T = Tables(
     invoices=ddb.Table(S.invoices_table_name),
     financial_rollups=ddb.Table(S.platform_financial_dashboard_rollups_table_name),
     payment_provider_health=ddb.Table(S.payment_provider_health_table_name),
+    ssh_session_recordings=ddb.Table(S.ssh_session_recordings_table_name),
 )
