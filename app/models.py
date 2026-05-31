@@ -3878,3 +3878,80 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Group Treasury (GROUP-004)
+# ---------------------------------------------------------------------------
+
+
+class ContributeIn(BaseModel):
+    amount_cents: int = Field(..., ge=100, le=10000000)
+
+
+class SpendIn(BaseModel):
+    amount_cents: int = Field(..., ge=1)
+    reason: str = Field(..., min_length=3, max_length=500)
+    category: Literal["ad_spend", "event", "premium_feature", "other"] = "ad_spend"
+    reference_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class SetGoalIn(BaseModel):
+    goal_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class TreasuryBalanceOut(BaseModel):
+    balance_cents: int
+    currency: str = "usd"
+    total_contributed_cents: int
+    total_donated_cents: int
+    total_spent_cents: int
+    fundraising_goal_cents: Optional[int] = None
+
+
+class TreasuryLedgerEntry(BaseModel):
+    entry_id: str
+    amount_cents: int
+    currency: str = "usd"
+    direction: Literal["credit", "debit"]
+    reason: str
+    category: str
+    actor_user_id: Optional[str] = None
+    actor_display_name: Optional[str] = None
+    reference_id: Optional[str] = None
+    created_at: int
+
+
+class TreasuryLedgerResponse(BaseModel):
+    entries: List[TreasuryLedgerEntry]
+    cursor: Optional[str] = None
+    has_more: bool = False
+
+
+class ContributorOut(BaseModel):
+    user_id: str
+    display_name: str
+    total_contributed_cents: int
+    contribution_count: int
+    first_contributed_at: int
+    last_contributed_at: int
+
+
+class ContributorListResponse(BaseModel):
+    contributors: List[ContributorOut]
+    count: int
+
+
+class ContributeResponse(BaseModel):
+    ok: bool = True
+    balance_cents: int
+    personal_balance_cents: int
+    contribution_total_cents: int
+    ledger_entry_id: str
+
+
+class SpendResponse(BaseModel):
+    ok: bool = True
+    balance_cents: int
+    total_spent_cents: int
+    ledger_entry_id: str

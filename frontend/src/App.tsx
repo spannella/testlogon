@@ -90,6 +90,7 @@ const WebhookEndpointDetail = lazy(() => import("@/pages/webhooks/WebhookEndpoin
 const PartyListPage = lazy(() => import("@/pages/watch-parties/PartyListPage"));
 const WatchPartyPage = lazy(() => import("@/pages/watch-parties/WatchPartyPage"));
 const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
+const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
 
 function PageSpinner() {
   return (
@@ -192,6 +193,7 @@ export default function App() {
           <Route path="fan-club" element={<FanClubPage />} />
           <Route path="orgs" element={<OrgsPage />} />
           <Route path="orgs/:orgId" element={<OrgDashboard />} />
+          <Route path="groups/:groupId/treasury" element={<GroupTreasuryPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />

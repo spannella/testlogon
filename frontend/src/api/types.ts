@@ -4492,3 +4492,64 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ---------------------------------------------------------------------------
+// Group Treasury (GROUP-004)
+// ---------------------------------------------------------------------------
+
+export interface TreasuryBalance {
+  balance_cents: number;
+  currency: string;
+  total_contributed_cents: number;
+  total_donated_cents: number;
+  total_spent_cents: number;
+  fundraising_goal_cents?: number | null;
+}
+
+export interface TreasuryLedgerEntry {
+  entry_id: string;
+  amount_cents: number;
+  currency: string;
+  direction: "credit" | "debit";
+  reason: string;
+  category: string;
+  actor_user_id?: string;
+  actor_display_name?: string;
+  reference_id?: string;
+  created_at: number;
+}
+
+export interface TreasuryLedgerResponse {
+  entries: TreasuryLedgerEntry[];
+  cursor?: string | null;
+  has_more: boolean;
+}
+
+export interface Contributor {
+  user_id: string;
+  display_name: string;
+  total_contributed_cents: number;
+  contribution_count: number;
+  first_contributed_at: number;
+  last_contributed_at: number;
+}
+
+export interface ContributorListResponse {
+  contributors: Contributor[];
+  count: number;
+}
+
+export interface ContributeResponse {
+  ok: boolean;
+  balance_cents: number;
+  personal_balance_cents: number;
+  contribution_total_cents: number;
+  ledger_entry_id: string;
+}
+
+export interface SpendResponse {
+  ok: boolean;
+  balance_cents: number;
+  total_spent_cents: number;
+  ledger_entry_id: string;
+}

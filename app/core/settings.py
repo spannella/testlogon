@@ -1490,5 +1490,12 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # User Groups (GROUP-001)
+    ddb_user_groups_table: str = os.environ.get("DDB_USER_GROUPS_TABLE", "user_groups")
+    user_group_max_per_user: int = int(os.environ.get("USER_GROUP_MAX_PER_USER", "50"))
+
+    # Group Treasury (GROUP-004)
+    group_treasury_enabled: bool = os.environ.get("GROUP_TREASURY_ENABLED", "1") not in ("0", "false", "False")
+
 
 S = Settings()
