@@ -7665,3 +7665,173 @@ class TriggerPmOperationIn(BaseModel):
         "idea_triage", "backlog_prioritize", "report_generate", "blocker_detect"
     ]
     report_type: Literal["daily", "weekly"] = "daily"
+
+
+# ---------------------------------------------------------------------------
+# Marketing Agent (AGENT-017)
+# ---------------------------------------------------------------------------
+
+
+_MARKETING_CONTENT_TYPES = (
+    "blog_post",
+    "social_twitter",
+    "social_linkedin",
+    "social_instagram",
+    "newsletter",
+    "release_notes",
+    "changelog",
+    "landing_page",
+    "meta_seo",
+)
+
+
+class CreateMarketingContentIn(BaseModel):
+    """Request model for creating marketing content."""
+    content_type: Literal[
+        "blog_post", "social_twitter", "social_linkedin",
+        "social_instagram", "newsletter", "release_notes",
+        "changelog", "landing_page", "meta_seo",
+    ]
+    title: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1, max_length=20000)
+    summary: Optional[str] = Field(default=None, max_length=500)
+    feature_refs: Optional[List[str]] = Field(default=None, max_length=10)
+    tags: Optional[List[str]] = Field(default=None, max_length=20)
+    seo_meta: Optional[Dict[str, Any]] = None
+    variations: Optional[List[Dict[str, str]]] = Field(default=None, max_length=5)
+    target_platform: Optional[str] = Field(default=None, max_length=50)
+
+
+class UpdateMarketingContentIn(BaseModel):
+    """Request model for updating marketing content."""
+    content_type: Optional[Literal[
+        "blog_post", "social_twitter", "social_linkedin",
+        "social_instagram", "newsletter", "release_notes",
+        "changelog", "landing_page", "meta_seo",
+    ]] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    body: Optional[str] = Field(default=None, min_length=1, max_length=20000)
+    summary: Optional[str] = Field(default=None, max_length=500)
+    feature_refs: Optional[List[str]] = Field(default=None, max_length=10)
+    tags: Optional[List[str]] = Field(default=None, max_length=20)
+    seo_meta: Optional[Dict[str, Any]] = None
+    variations: Optional[List[Dict[str, str]]] = Field(default=None, max_length=5)
+    target_platform: Optional[str] = Field(default=None, max_length=50)
+
+
+class ScheduleMarketingContentIn(BaseModel):
+    """Request model for scheduling marketing content."""
+    publish_at: int = Field(..., gt=0)
+
+
+class GenerateMarketingContentIn(BaseModel):
+    """Request model for triggering content generation."""
+    feature_ticket_ids: List[str] = Field(..., min_length=1, max_length=10)
+    content_types: List[str] = Field(
+        default_factory=lambda: ["blog_post", "changelog"]
+    )
+    tone_override: Optional[str] = Field(default=None, max_length=100)
+    target_audience_override: Optional[str] = Field(default=None, max_length=200)
+
+
+class MarketingContentOut(BaseModel):
+    """Response model for marketing content."""
+    content_id: str
+    user_id: str
+    agent_id: Optional[str] = None
+    content_type: str
+    title: str
+    body: str
+    summary: Optional[str] = None
+    feature_refs: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    seo_meta: Optional[Dict[str, Any]] = None
+    variations: Optional[List[Dict[str, Any]]] = None
+    status: str
+    scheduled_publish_at: Optional[int] = None
+    published_at: Optional[int] = None
+    target_platform: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class MarketingContentListOut(BaseModel):
+    """Paginated list of marketing content."""
+    items: List[MarketingContentOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    count: int = 0
+
+
+class EngagementStatsOut(BaseModel):
+    """Response model for content engagement statistics."""
+    content_id: str
+    total_views: int = 0
+    total_clicks: int = 0
+    total_signups: int = 0
+    total_shares: int = 0
+    click_rate: float = 0.0
+    signup_rate: float = 0.0
+    by_day: List[Dict[str, Any]] = Field(default_factory=list)
+    by_variant: Optional[List[Dict[str, Any]]] = None
+
+
+class CalendarEntryOut(BaseModel):
+    """Response model for content calendar entry."""
+    content_id: str
+    title: str
+    content_type: str
+    status: str
+    date: int
+
+
+class EngagementSummaryOut(BaseModel):
+    """Response model for aggregate engagement summary."""
+    total_content: int = 0
+    total_views: int = 0
+    total_clicks: int = 0
+    total_signups: int = 0
+    avg_click_rate: float = 0.0
+    avg_signup_rate: float = 0.0
+    top_performing: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class UpdateMarketingConfigIn(BaseModel):
+    """Request model for updating marketing agent configuration."""
+    trigger_on_feature_completion: Optional[bool] = None
+    auto_generate_content_types: Optional[List[str]] = None
+    brand_voice: Optional[Dict[str, Any]] = None
+    target_audience: Optional[Dict[str, Any]] = None
+    social_platforms: Optional[List[str]] = None
+    content_calendar_enabled: Optional[bool] = None
+    newsletter_frequency: Optional[Literal["daily", "weekly", "biweekly", "monthly"]] = None
+    newsletter_day: Optional[str] = None
+    ab_test_variations: Optional[int] = Field(default=None, ge=0, le=5)
+    seo_keywords: Optional[List[str]] = None
+    max_content_per_feature: Optional[int] = Field(default=None, ge=1, le=10)
+
+
+class MarketingConfigOut(BaseModel):
+    """Response model for marketing agent configuration."""
+    trigger_on_feature_completion: bool = True
+    auto_generate_content_types: List[str] = Field(default_factory=list)
+    brand_voice: Dict[str, Any] = Field(default_factory=dict)
+    target_audience: Dict[str, Any] = Field(default_factory=dict)
+    social_platforms: List[str] = Field(default_factory=list)
+    content_calendar_enabled: bool = True
+    newsletter_frequency: Optional[str] = None
+    newsletter_day: Optional[str] = None
+    ab_test_variations: int = 0
+    seo_keywords: List[str] = Field(default_factory=list)
+    max_content_per_feature: int = 3
+    updated_at: Optional[int] = None
+
+
+class MarketingGenerateResultOut(BaseModel):
+    """Response model for content generation."""
+    status: str
+    executed: bool = False
+    content_types_requested: List[str] = Field(default_factory=list)
+    feature_ticket_ids: List[str] = Field(default_factory=list)
+    missing_ticket_ids: List[str] = Field(default_factory=list)
+    contents: List[MarketingContentOut] = Field(default_factory=list)
+    count: int = 0

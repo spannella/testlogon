@@ -122,6 +122,10 @@ const FeatureIdeasPage = lazy(() => import("@/pages/agents/FeatureIdeasPage"));
 const PmAgentConfigPage = lazy(() => import("@/pages/agents/PmAgentConfigPage"));
 const ProjectDashboardPage = lazy(() => import("@/pages/agents/ProjectDashboardPage"));
 const IdeaSubmissionPage = lazy(() => import("@/pages/agents/IdeaSubmissionPage"));
+const MarketingContentDashboardPage = lazy(() => import("@/pages/agents/MarketingContentDashboardPage"));
+const MarketingContentEditorPage = lazy(() => import("@/pages/agents/MarketingContentEditorPage"));
+const MarketingContentCalendarPage = lazy(() => import("@/pages/agents/MarketingContentCalendarPage"));
+const MarketingEngagementDashboardPage = lazy(() => import("@/pages/agents/MarketingEngagementDashboardPage"));
 
 function PageSpinner() {
   return (
@@ -266,6 +270,10 @@ export default function App() {
           <Route path="agents/pm/ideas" element={<FeatureIdeasPage />} />
           <Route path="agents/types/:typeId/pm" element={<PmAgentConfigPage />} />
           <Route path="agents/project-dashboard" element={<ProjectDashboardPage />} />
+          <Route path="agents/marketing" element={<MarketingContentDashboardPage />} />
+          <Route path="agents/marketing/content/:contentId" element={<MarketingContentEditorPage />} />
+          <Route path="agents/marketing/calendar" element={<MarketingContentCalendarPage />} />
+          <Route path="agents/marketing/engagement" element={<MarketingEngagementDashboardPage />} />
           <Route path="ideas/submit" element={<IdeaSubmissionPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>

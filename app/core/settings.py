@@ -1708,5 +1708,14 @@ class Settings:
     # real coding tool / LLM — triage uses a deterministic formula scorer so tests are reproducible.
     pm_execute_commands: bool = os.environ.get("PM_AGENT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
 
+    # Marketing Agent (AGENT-017). Reuses the agent_types table for marketing_config.
+    marketing_agent_enabled: bool = os.environ.get("MARKETING_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    marketing_content_table_name: str = os.environ.get("MARKETING_CONTENT_TABLE_NAME", "marketing_content")
+    marketing_engagement_table_name: str = os.environ.get("MARKETING_ENGAGEMENT_TABLE_NAME", "marketing_engagement")
+    # When false (default, and always in E2E), content generation never invokes a real LLM —
+    # generation uses a deterministic template producer so tests are reproducible.
+    marketing_agent_execute_commands: bool = os.environ.get("MARKETING_AGENT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
+    marketing_agent_auto_publish: bool = os.environ.get("MARKETING_AGENT_AUTO_PUBLISH", "0") not in ("0", "false", "False")
+
 
 S = Settings()

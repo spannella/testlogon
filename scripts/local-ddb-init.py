@@ -1568,6 +1568,25 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # Marketing Agent (AGENT-017) — content drafts/lifecycle (pk=USER#id, sk=CONTENT#id)
+        # GSI1 = by content_type, GSI2 = by status, GSI3 = scheduled-publish calendar.
+        TableDef(
+            _resolve_table_name(S.marketing_content_table_name, "marketing_content"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
+        ),
+        # Marketing Agent (AGENT-017) — daily engagement counters (pk=CONTENT#id, sk=DAY#date)
+        TableDef(
+            _resolve_table_name(S.marketing_engagement_table_name, "marketing_engagement"),
+            "pk",
+            "sk",
+        ),
     ]
 
 

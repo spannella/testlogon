@@ -6971,3 +6971,149 @@ export interface ProjectDashboard {
   blockers: Blocker[];
   recent_completions: Array<{ ticket_id: string; subject: string; completed_at: number }>;
 }
+
+// ─── Marketing Agent (AGENT-017) ─────────────────────────────────────────
+
+export type MarketingContentType =
+  | "blog_post"
+  | "social_twitter"
+  | "social_linkedin"
+  | "social_instagram"
+  | "newsletter"
+  | "release_notes"
+  | "changelog"
+  | "landing_page"
+  | "meta_seo";
+
+export type MarketingContentStatus =
+  | "draft"
+  | "review"
+  | "approved"
+  | "scheduled"
+  | "published"
+  | "archived";
+
+export interface MarketingContent {
+  content_id: string;
+  user_id: string;
+  agent_id?: string | null;
+  content_type: MarketingContentType;
+  title: string;
+  body: string;
+  summary?: string | null;
+  feature_refs?: string[] | null;
+  tags?: string[] | null;
+  seo_meta?: { title?: string; description?: string; keywords?: string[] } | null;
+  variations?: Array<{ variant_id: string; title: string; body: string }> | null;
+  status: MarketingContentStatus;
+  scheduled_publish_at?: number | null;
+  published_at?: number | null;
+  target_platform?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MarketingContentList {
+  items: MarketingContent[];
+  cursor?: string | null;
+  count: number;
+}
+
+export interface CreateMarketingContentIn {
+  content_type: MarketingContentType;
+  title: string;
+  body: string;
+  summary?: string;
+  feature_refs?: string[];
+  tags?: string[];
+  seo_meta?: Record<string, unknown>;
+  variations?: Array<{ variant_id: string; title: string; body: string }>;
+  target_platform?: string;
+}
+
+export interface UpdateMarketingContentIn {
+  content_type?: MarketingContentType;
+  title?: string;
+  body?: string;
+  summary?: string;
+  feature_refs?: string[];
+  tags?: string[];
+  seo_meta?: Record<string, unknown>;
+  variations?: Array<{ variant_id: string; title: string; body: string }>;
+  target_platform?: string;
+}
+
+export interface ContentEngagementStats {
+  content_id: string;
+  total_views: number;
+  total_clicks: number;
+  total_signups: number;
+  total_shares: number;
+  click_rate: number;
+  signup_rate: number;
+  by_day: Array<{ date: string; views: number; clicks: number; signups: number }>;
+  by_variant?: Array<{ variant_id: string; views: number; clicks: number; signups: number }>;
+}
+
+export interface ContentCalendarEntry {
+  content_id: string;
+  title: string;
+  content_type: string;
+  status: string;
+  date: number;
+}
+
+export interface MarketingEngagementSummary {
+  total_content: number;
+  total_views: number;
+  total_clicks: number;
+  total_signups: number;
+  avg_click_rate: number;
+  avg_signup_rate: number;
+  top_performing: Array<{ content_id: string; title: string; clicks: number }>;
+}
+
+export interface MarketingConfig {
+  trigger_on_feature_completion: boolean;
+  auto_generate_content_types: string[];
+  brand_voice: {
+    tone?: string;
+    vocabulary_level?: string;
+    personality_traits?: string[];
+    words_to_avoid?: string[];
+    tagline?: string;
+  };
+  target_audience: { primary?: string; secondary?: string; demographics?: string };
+  social_platforms: string[];
+  content_calendar_enabled: boolean;
+  newsletter_frequency?: string | null;
+  newsletter_day?: string | null;
+  ab_test_variations: number;
+  seo_keywords: string[];
+  max_content_per_feature: number;
+  updated_at?: number | null;
+}
+
+export interface UpdateMarketingConfigIn {
+  trigger_on_feature_completion?: boolean;
+  auto_generate_content_types?: string[];
+  brand_voice?: Record<string, unknown>;
+  target_audience?: Record<string, unknown>;
+  social_platforms?: string[];
+  content_calendar_enabled?: boolean;
+  newsletter_frequency?: "daily" | "weekly" | "biweekly" | "monthly";
+  newsletter_day?: string;
+  ab_test_variations?: number;
+  seo_keywords?: string[];
+  max_content_per_feature?: number;
+}
+
+export interface MarketingGenerateResult {
+  status: string;
+  executed: boolean;
+  content_types_requested: string[];
+  feature_ticket_ids: string[];
+  missing_ticket_ids: string[];
+  contents: MarketingContent[];
+  count: number;
+}
