@@ -3878,3 +3878,77 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# -- Agent Feedback & Terminal Monitoring (AGENT-006) --
+
+
+class FeedbackRequestOut(BaseModel):
+    request_id: str
+    worker_id: str
+    ticket_id: str
+    feedback_status: str  # pending, responded, timed_out, skipped
+    question: str
+    terminal_context: str = ""
+    detected_pattern: str = ""
+    response_text: str = ""
+    responded_at: int = 0
+    timeout_at: int = 0
+    timeout_action: str = "skip"
+    created_at: int = 0
+    user_id: str = ""
+
+
+class FeedbackListOut(BaseModel):
+    requests: List[FeedbackRequestOut]
+    count: int
+    pending_count: int
+
+
+class CreateFeedbackRequestIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=200)
+    question: str = Field(..., min_length=1, max_length=5000)
+    terminal_context: str = Field(default="", max_length=5000)
+    detected_pattern: str = Field(default="", max_length=500)
+    timeout_seconds: int = Field(default=14400, ge=60, le=86400)
+    timeout_action: str = Field(default="skip")
+
+
+class FeedbackRespondIn(BaseModel):
+    response_text: str = Field(..., min_length=1, max_length=5000)
+
+
+class TerminalOutputOut(BaseModel):
+    worker_id: str
+    output: str
+    char_count: int
+
+
+class TerminalSearchOut(BaseModel):
+    worker_id: str
+    keyword: str
+    matches: List[str]
+    match_count: int
+
+
+class PatternConfigOut(BaseModel):
+    agent_type: str
+    completion: List[str]
+    feedback_needed: List[str]
+    error: List[str]
+
+
+class PatternUpdateIn(BaseModel):
+    completion: Optional[List[str]] = None
+    feedback_needed: Optional[List[str]] = None
+    error: Optional[List[str]] = None
+
+
+class PatternTestIn(BaseModel):
+    patterns: Dict[str, List[str]]
+    sample_text: str = Field(..., min_length=1, max_length=10000)
+
+
+class PatternTestOut(BaseModel):
+    matches: List[Dict[str, str]]
+    match_count: int

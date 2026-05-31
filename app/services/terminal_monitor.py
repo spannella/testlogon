@@ -1,0 +1,475 @@
+"""Terminal Monitoring & Feedback Loop service (AGENT-006).
+
+Captures terminal output, matches patterns for completion/feedback/error
+signals, creates feedback requests, and injects user responses.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from collections import deque
+from typing import Any, Callable, Dict, List, Optional
+from uuid import uuid4
+
+from app.core.tables import T
+from app.core.time import now_ts
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_FEEDBACK_TIMEOUT_SECONDS = 14400  # 4 hours
+
+# ─── Default patterns ───────────────────────────────────────────────────────
+
+DEFAULT_PATTERNS: List[Dict[str, str]] = [
+    {"name": "feedback_needed", "regex": r"\[AGENT_FEEDBACK_NEEDED\]", "action": "create_feedback"},
+    {"name": "complete", "regex": r"\[AGENT_COMPLETE\]", "action": "complete_ticket"},
+    {"name": "error", "regex": r"\[AGENT_ERROR\]", "action": "mark_error"},
+]
+
+DEFAULT_FEEDBACK_PATTERNS: Dict[str, List[str]] = {
+    "completion": [
+        r"\[AGENT_COMPLETE\]",
+        r"\[TASK_DONE\]",
+        r"All tests passed",
+    ],
+    "feedback_needed": [
+        r"\[AGENT_FEEDBACK_NEEDED\]",
+        r"\[NEEDS_INPUT\]",
+        r"(?i)waiting for (?:user |human )?input",
+        r"(?i)please confirm",
+        r"(?i)which option (?:should|do)",
+        r"(?i)need(?:s)? clarification",
+        r"(?i)cannot proceed without",
+        r"(?i)ambiguous requirement",
+    ],
+    "error": [
+        r"\[AGENT_ERROR\]",
+        r"(?i)fatal error",
+        r"(?i)unrecoverable",
+        r"Traceback \(most recent call last\)",
+        r"(?i)permission denied.*(?:key|auth|access)",
+    ],
+}
+
+AGENT_TYPE_PATTERNS: Dict[str, Dict[str, List[str]]] = {
+    "coder": {
+        "completion": DEFAULT_FEEDBACK_PATTERNS["completion"] + [
+            r"(?i)pull request created",
+            r"(?i)branch pushed",
+        ],
+        "feedback_needed": DEFAULT_FEEDBACK_PATTERNS["feedback_needed"] + [
+            r"(?i)should I (?:refactor|rewrite|delete)",
+            r"(?i)multiple approaches? (?:possible|available)",
+            r"(?i)breaking change detected",
+        ],
+        "error": DEFAULT_FEEDBACK_PATTERNS["error"],
+    },
+    "qa": {
+        "completion": DEFAULT_FEEDBACK_PATTERNS["completion"] + [
+            r"(?i)test suite (?:passed|complete)",
+            r"(?i)\d+ tests? passed, 0 failed",
+        ],
+        "feedback_needed": DEFAULT_FEEDBACK_PATTERNS["feedback_needed"] + [
+            r"(?i)is this expected behavior",
+            r"(?i)bug or feature",
+            r"(?i)flaky test detected",
+        ],
+        "error": DEFAULT_FEEDBACK_PATTERNS["error"],
+    },
+    "reviewer": {
+        "completion": DEFAULT_FEEDBACK_PATTERNS["completion"] + [
+            r"(?i)review (?:posted|submitted)",
+            r"(?i)approved with",
+        ],
+        "feedback_needed": DEFAULT_FEEDBACK_PATTERNS["feedback_needed"],
+        "error": DEFAULT_FEEDBACK_PATTERNS["error"],
+    },
+    "devops": {
+        "completion": DEFAULT_FEEDBACK_PATTERNS["completion"] + [
+            r"(?i)deployment (?:complete|successful)",
+            r"(?i)pipeline (?:passed|green)",
+        ],
+        "feedback_needed": DEFAULT_FEEDBACK_PATTERNS["feedback_needed"] + [
+            r"(?i)destructive operation",
+            r"(?i)production (?:change|deployment)",
+        ],
+        "error": DEFAULT_FEEDBACK_PATTERNS["error"],
+    },
+}
+
+
+# ─── Terminal Output Buffer ─────────────────────────────────────────────────
+
+class TerminalOutputBuffer:
+    """Ring buffer for capturing terminal output."""
+
+    def __init__(self, max_chars: int = 50_000, max_lines: int = 1000):
+        self._buffer: str = ""
+        self._lines: deque = deque(maxlen=max_lines)
+        self._max_chars = max_chars
+        self._listeners: List[Callable] = []
+
+    def append(self, data: str) -> None:
+        """Append new terminal output data."""
+        self._buffer += data
+        if len(self._buffer) > self._max_chars:
+            self._buffer = self._buffer[-self._max_chars:]
+        for line in data.split("\n"):
+            if line.strip():
+                self._lines.append(line)
+        for listener in self._listeners:
+            listener(data)
+
+    def get_recent(self, chars: int = 2000) -> str:
+        """Get the most recent N characters."""
+        return self._buffer[-chars:]
+
+    def get_recent_lines(self, count: int = 50) -> List[str]:
+        """Get the most recent N lines."""
+        return list(self._lines)[-count:]
+
+    def search(self, keyword: str) -> List[str]:
+        """Search buffer for lines containing keyword."""
+        return [line for line in self._lines if keyword.lower() in line.lower()]
+
+    def add_listener(self, callback: Callable[[str], None]) -> None:
+        self._listeners.append(callback)
+
+    def remove_listener(self, callback: Callable) -> None:
+        self._listeners.remove(callback)
+
+
+# In-memory buffers per worker
+_worker_buffers: Dict[str, TerminalOutputBuffer] = {}
+
+
+def get_or_create_buffer(worker_id: str) -> TerminalOutputBuffer:
+    """Get or create a terminal output buffer for a worker."""
+    if worker_id not in _worker_buffers:
+        _worker_buffers[worker_id] = TerminalOutputBuffer()
+    return _worker_buffers[worker_id]
+
+
+# ─── Pattern Matching ───────────────────────────────────────────────────────
+
+
+class PatternMatcher:
+    """Configurable regex pattern matcher for terminal output."""
+
+    def __init__(self, patterns: Optional[Dict[str, List[str]]] = None):
+        self._patterns = patterns or DEFAULT_FEEDBACK_PATTERNS
+        self._compiled: Dict[str, List[re.Pattern]] = {}
+        self._compile_all()
+
+    def _compile_all(self) -> None:
+        for category, pattern_list in self._patterns.items():
+            self._compiled[category] = []
+            for p in pattern_list:
+                try:
+                    self._compiled[category].append(re.compile(p))
+                except re.error:
+                    logger.warning("Invalid regex pattern: %s", p)
+
+    def match(self, text: str) -> Optional[Dict[str, str]]:
+        """Check text against all patterns. Returns first match or None."""
+        for category, compiled_list in self._compiled.items():
+            for pattern in compiled_list:
+                m = pattern.search(text)
+                if m:
+                    return {
+                        "signal": category,
+                        "pattern": pattern.pattern,
+                        "match": m.group(0),
+                    }
+        return None
+
+
+# ─── Feedback CRUD ───────────────────────────────────────────────────────────
+
+
+def create_feedback_request(
+    user_id: str,
+    worker_id: str,
+    ticket_id: str,
+    *,
+    question: str,
+    terminal_context: str = "",
+    detected_pattern: str = "",
+    timeout_seconds: int = DEFAULT_FEEDBACK_TIMEOUT_SECONDS,
+    timeout_action: str = "skip",
+) -> Dict[str, Any]:
+    """Create a feedback request when the agent needs human input."""
+    request_id = uuid4().hex
+    ts = now_ts()
+
+    item = {
+        "pk": f"WORKER#{worker_id}",
+        "sk": f"FEEDBACK#{request_id}",
+        "request_id": request_id,
+        "user_id": user_id,
+        "worker_id": worker_id,
+        "ticket_id": ticket_id,
+        "feedback_status": "pending",
+        "question": question,
+        "terminal_context": terminal_context[-2000:] if terminal_context else "",
+        "detected_pattern": detected_pattern,
+        "response_text": "",
+        "responded_at": 0,
+        "timeout_at": ts + timeout_seconds,
+        "timeout_action": timeout_action,
+        "created_at": ts,
+        "notified": False,
+    }
+    T.agent_feedback.put_item(Item=item)
+
+    logger.info(
+        "Created feedback request %s for worker %s (ticket %s)",
+        request_id, worker_id, ticket_id,
+    )
+    return item
+
+
+def respond_to_feedback(
+    user_id: str,
+    worker_id: str,
+    request_id: str,
+    response_text: str,
+) -> Dict[str, Any]:
+    """Submit a user's response to a feedback request."""
+    ts = now_ts()
+
+    # Verify the request exists and is pending
+    existing = get_feedback_request(worker_id, request_id)
+    if not existing:
+        raise LookupError("Feedback request not found")
+    if existing.get("feedback_status") != "pending":
+        raise ValueError(
+            f"Cannot respond to feedback in status '{existing.get('feedback_status')}'"
+        )
+
+    T.agent_feedback.update_item(
+        Key={"pk": f"WORKER#{worker_id}", "sk": f"FEEDBACK#{request_id}"},
+        UpdateExpression="SET feedback_status = :st, response_text = :rt, responded_at = :ra",
+        ExpressionAttributeValues={
+            ":st": "responded",
+            ":rt": response_text,
+            ":ra": ts,
+        },
+    )
+
+    logger.info(
+        "Responded to feedback %s for worker %s",
+        request_id, worker_id,
+    )
+    return get_feedback_request(worker_id, request_id)
+
+
+def get_feedback_request(
+    worker_id: str, request_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Get a single feedback request."""
+    resp = T.agent_feedback.get_item(
+        Key={"pk": f"WORKER#{worker_id}", "sk": f"FEEDBACK#{request_id}"}
+    )
+    return resp.get("Item")
+
+
+def list_feedback_requests(
+    worker_id: str,
+    *,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """List feedback requests for a worker, optionally filtered by status."""
+    if status:
+        resp = T.agent_feedback.query(
+            IndexName="ByStatus",
+            KeyConditionExpression="pk = :pk AND feedback_status = :st",
+            ExpressionAttributeValues={
+                ":pk": f"WORKER#{worker_id}",
+                ":st": status,
+            },
+            Limit=limit,
+        )
+    else:
+        resp = T.agent_feedback.query(
+            KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
+            ExpressionAttributeValues={
+                ":pk": f"WORKER#{worker_id}",
+                ":prefix": "FEEDBACK#",
+            },
+            Limit=limit,
+            ScanIndexForward=False,
+        )
+    return resp.get("Items", [])
+
+
+def list_pending_feedback_for_user(
+    user_id: str,
+    *,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """List all pending feedback requests across all workers for a user."""
+    resp = T.agent_feedback.query(
+        IndexName="ByUser",
+        KeyConditionExpression="user_id = :uid",
+        FilterExpression="feedback_status = :pending",
+        ExpressionAttributeValues={":uid": user_id, ":pending": "pending"},
+        Limit=limit,
+        ScanIndexForward=False,
+    )
+    return resp.get("Items", [])
+
+
+def skip_feedback(
+    user_id: str,
+    worker_id: str,
+    request_id: str,
+) -> Dict[str, Any]:
+    """Skip a feedback request. Agent resumes without input."""
+    existing = get_feedback_request(worker_id, request_id)
+    if not existing:
+        raise LookupError("Feedback request not found")
+    if existing.get("feedback_status") != "pending":
+        raise ValueError(
+            f"Cannot skip feedback in status '{existing.get('feedback_status')}'"
+        )
+
+    T.agent_feedback.update_item(
+        Key={"pk": f"WORKER#{worker_id}", "sk": f"FEEDBACK#{request_id}"},
+        UpdateExpression="SET feedback_status = :st",
+        ExpressionAttributeValues={":st": "skipped"},
+    )
+
+    logger.info("Skipped feedback %s for worker %s", request_id, worker_id)
+    return get_feedback_request(worker_id, request_id)
+
+
+def check_feedback_timeouts() -> int:
+    """Background task: find and handle timed-out feedback requests.
+
+    Scans for pending requests where now > timeout_at.
+    Returns count of timed-out requests handled.
+    """
+    handled = 0
+    ts = now_ts()
+    # Scan is acceptable here as this runs on a background interval
+    resp = T.agent_feedback.scan(
+        FilterExpression="feedback_status = :pending AND timeout_at < :now",
+        ExpressionAttributeValues={":pending": "pending", ":now": ts},
+        Limit=100,
+    )
+    for item in resp.get("Items", []):
+        worker_id = item["worker_id"]
+        request_id = item["request_id"]
+        T.agent_feedback.update_item(
+            Key={"pk": f"WORKER#{worker_id}", "sk": f"FEEDBACK#{request_id}"},
+            UpdateExpression="SET feedback_status = :st",
+            ExpressionAttributeValues={":st": "timed_out"},
+        )
+        handled += 1
+        logger.info("Timed out feedback %s for worker %s", request_id, worker_id)
+    return handled
+
+
+# ─── Terminal Output ─────────────────────────────────────────────────────────
+
+
+def get_terminal_output(
+    worker_id: str,
+    *,
+    chars: int = 5000,
+) -> str:
+    """Get recent terminal output from the buffer."""
+    buf = _worker_buffers.get(worker_id)
+    if not buf:
+        return ""
+    return buf.get_recent(chars)
+
+
+def search_terminal_output(
+    worker_id: str,
+    keyword: str,
+) -> List[str]:
+    """Search terminal output buffer for keyword matches."""
+    buf = _worker_buffers.get(worker_id)
+    if not buf:
+        return []
+    return buf.search(keyword)
+
+
+# ─── Pattern Config ──────────────────────────────────────────────────────────
+
+
+def get_pattern_config(agent_type: str) -> Dict[str, List[str]]:
+    """Get the current pattern configuration for an agent type."""
+    return AGENT_TYPE_PATTERNS.get(agent_type, DEFAULT_FEEDBACK_PATTERNS)
+
+
+def update_pattern_config(
+    user_id: str,
+    worker_id: str,
+    patterns: Dict[str, List[str]],
+) -> Dict[str, List[str]]:
+    """Update custom pattern configuration for a worker.
+
+    Validates each regex pattern before storing.
+    """
+    # Validate all patterns compile
+    for category, pattern_list in patterns.items():
+        if category not in ("completion", "feedback_needed", "error"):
+            raise ValueError(f"Invalid pattern category: {category}")
+        if len(pattern_list) > 50:
+            raise ValueError(f"Too many patterns in category {category} (max 50)")
+        for p in pattern_list:
+            try:
+                re.compile(p)
+            except re.error as exc:
+                raise ValueError(f"Invalid regex pattern '{p}': {exc}")
+
+    # Store in feedback table as a config record
+    T.agent_feedback.put_item(
+        Item={
+            "pk": f"WORKER#{worker_id}",
+            "sk": "CONFIG#patterns",
+            "user_id": user_id,
+            "worker_id": worker_id,
+            "patterns": patterns,
+            "updated_at": now_ts(),
+        }
+    )
+    return patterns
+
+
+def get_worker_pattern_config(worker_id: str) -> Optional[Dict[str, List[str]]]:
+    """Get custom pattern config for a worker, if any."""
+    resp = T.agent_feedback.get_item(
+        Key={"pk": f"WORKER#{worker_id}", "sk": "CONFIG#patterns"}
+    )
+    item = resp.get("Item")
+    if item:
+        return item.get("patterns")
+    return None
+
+
+def test_patterns(
+    patterns: Dict[str, List[str]],
+    sample_text: str,
+) -> List[Dict[str, str]]:
+    """Test patterns against sample text. Returns list of matches."""
+    matches = []
+    for category, pattern_list in patterns.items():
+        for p in pattern_list:
+            try:
+                compiled = re.compile(p)
+                m = compiled.search(sample_text)
+                if m:
+                    matches.append({
+                        "signal": category,
+                        "pattern": p,
+                        "match": m.group(0),
+                    })
+            except re.error:
+                continue
+    return matches

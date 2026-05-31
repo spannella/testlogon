@@ -4492,3 +4492,76 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// -- Agent Feedback & Terminal Monitoring (AGENT-006) --
+
+export interface FeedbackRequest {
+  request_id: string;
+  worker_id: string;
+  ticket_id: string;
+  feedback_status: string;
+  question: string;
+  terminal_context: string;
+  detected_pattern: string;
+  response_text: string;
+  responded_at: number;
+  timeout_at: number;
+  timeout_action: string;
+  created_at: number;
+  user_id: string;
+}
+
+export interface FeedbackListOut {
+  requests: FeedbackRequest[];
+  count: number;
+  pending_count: number;
+}
+
+export interface CreateFeedbackRequestIn {
+  ticket_id: string;
+  question: string;
+  terminal_context?: string;
+  detected_pattern?: string;
+  timeout_seconds?: number;
+  timeout_action?: string;
+}
+
+export interface FeedbackRespondIn {
+  response_text: string;
+}
+
+export interface TerminalOutputOut {
+  worker_id: string;
+  output: string;
+  char_count: number;
+}
+
+export interface TerminalSearchOut {
+  worker_id: string;
+  keyword: string;
+  matches: string[];
+  match_count: number;
+}
+
+export interface PatternConfigOut {
+  agent_type: string;
+  completion: string[];
+  feedback_needed: string[];
+  error: string[];
+}
+
+export interface PatternUpdateIn {
+  completion?: string[];
+  feedback_needed?: string[];
+  error?: string[];
+}
+
+export interface PatternTestIn {
+  patterns: Record<string, string[]>;
+  sample_text: string;
+}
+
+export interface PatternTestOut {
+  matches: Array<{ signal: string; pattern: string; match: string }>;
+  match_count: number;
+}

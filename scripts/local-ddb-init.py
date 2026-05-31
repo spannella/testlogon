@@ -1160,6 +1160,18 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Agent Feedback & Terminal Monitoring (AGENT-006)
+        TableDef(
+            _resolve_table_name(S.agent_feedback_table_name, "agent_feedback"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "pk", "sort_key": "feedback_status"},
+                {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
+                {"index_name": "ByUser", "partition_key": "user_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 
