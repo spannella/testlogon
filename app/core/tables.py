@@ -121,6 +121,7 @@ class Tables:
     fan_club_channels: Any
     fan_club_messages: Any
     organizations: Any
+    user_groups: Any
     watch_parties: Any
     watch_party_participants: Any
     tenants: Any
@@ -245,6 +246,7 @@ T = Tables(
     fan_club_channels=ddb.Table(S.fan_club_channels_table_name),
     fan_club_messages=ddb.Table(S.fan_club_messages_table_name),
     organizations=ddb.Table(S.organizations_table_name),
+    user_groups=ddb.Table(S.ddb_user_groups_table),
     watch_parties=ddb.Table(S.watch_parties_table_name),
     watch_party_participants=ddb.Table(S.watch_party_participants_table_name),
     tenants=ddb.Table(S.tenants_table_name),

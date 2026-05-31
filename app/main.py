@@ -117,6 +117,8 @@ from app.routers.promo_codes import router as promo_codes_router
 from app.routers.affiliate_links import router as affiliate_links_router
 from app.routers.collaborations import router as collaborations_router
 from app.routers.orgs import router as orgs_router
+from app.routers.user_groups import router as user_groups_router
+from app.routers.group_feed import router as group_feed_router, public_group_feed_router
 from app.routers.fan_club import router as fan_club_router, public_router as fan_club_public_router
 from app.routers.stories import router as stories_router
 from app.routers.watermark import router as watermark_router, internal_router as watermark_internal_router
@@ -452,6 +454,9 @@ def create_app() -> FastAPI:
     app.include_router(affiliate_links_router)
     app.include_router(collaborations_router)
     app.include_router(orgs_router)
+    app.include_router(user_groups_router)
+    app.include_router(group_feed_router)
+    app.include_router(public_group_feed_router)
     app.include_router(fan_club_router)
     app.include_router(fan_club_public_router)
     app.include_router(geo_rules_router)

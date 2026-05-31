@@ -1994,6 +1994,46 @@ export interface FeedPost {
   };
 }
 
+// GROUP-001: User Groups
+export interface UserGroup {
+  group_id: string;
+  name: string;
+  description: string;
+  topic?: string;
+  visibility: "public" | "private";
+  status: "active" | "dissolved";
+  admin_user_id: string;
+  cover_image_url?: string;
+  member_count: number;
+  created_at: number;
+  updated_at: number;
+  my_role?: "admin" | "moderator" | "member";
+}
+
+export interface GroupMember {
+  user_id: string;
+  role: "admin" | "moderator" | "member";
+  status: "active" | "invited" | "pending_approval";
+  display_name: string;
+  joined_at?: number;
+  promoted_at?: number;
+}
+
+// GROUP-002: Group Feed
+export interface GroupFeedPost extends FeedPost {
+  group_id: string;
+  audience: "public" | "members_only";
+  pinned: boolean;
+  pinned_at?: number;
+  pinned_by?: string;
+}
+
+export interface GroupFeedResponse {
+  posts: GroupFeedPost[];
+  cursor?: string;
+  has_more: boolean;
+}
+
 // ENGAGE-002: Poll types
 export interface PollOption {
   option_id: string;

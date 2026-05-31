@@ -1427,6 +1427,13 @@ class Settings:
     org_max_per_user: int = int(os.environ.get("ORG_MAX_PER_USER", "50"))
     org_invite_ttl_seconds: int = int(os.environ.get("ORG_INVITE_TTL_SECONDS", str(7 * 24 * 3600)))
 
+    # User Groups (GROUP-001 / GROUP-002)
+    user_groups_enabled: bool = os.environ.get("USER_GROUPS_ENABLED", "1") not in ("0", "false", "False")
+    ddb_user_groups_table: str = os.environ.get("DDB_USER_GROUPS_TABLE", "user_groups")
+    user_group_max_members: int = int(os.environ.get("USER_GROUP_MAX_MEMBERS", "10000"))
+    user_group_max_per_user: int = int(os.environ.get("USER_GROUP_MAX_PER_USER", "50"))
+    group_feed_enabled: bool = os.environ.get("GROUP_FEED_ENABLED", "1") not in ("0", "false", "False")
+
     # Fan Clubs / Membership Tiers (CREATOR-002)
     fan_clubs_enabled: bool = os.environ.get("FAN_CLUBS_ENABLED", "1") not in ("0", "false", "False")
     fan_club_channels_table_name: str = os.environ.get("FAN_CLUB_CHANNELS_TABLE_NAME", "fan_club_channels")

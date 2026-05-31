@@ -85,6 +85,8 @@ const SsoProvidersPage = lazy(() => import("@/pages/admin/SsoProvidersPage"));
 const CreatorDashboard = lazy(() => import("@/pages/dashboard/CreatorDashboard"));
 const OrgsPage = lazy(() => import("@/pages/orgs/OrgsPage"));
 const OrgDashboard = lazy(() => import("@/pages/orgs/OrgDashboard"));
+const GroupsListPage = lazy(() => import("@/pages/groups/GroupsListPage"));
+const GroupPage = lazy(() => import("@/pages/groups/GroupPage"));
 const WebhookDashboard = lazy(() => import("@/pages/webhooks/WebhookDashboard"));
 const WebhookEndpointDetail = lazy(() => import("@/pages/webhooks/WebhookEndpointDetail"));
 const PartyListPage = lazy(() => import("@/pages/watch-parties/PartyListPage"));
@@ -192,6 +194,8 @@ export default function App() {
           <Route path="fan-club" element={<FanClubPage />} />
           <Route path="orgs" element={<OrgsPage />} />
           <Route path="orgs/:orgId" element={<OrgDashboard />} />
+          <Route path="groups" element={<GroupsListPage />} />
+          <Route path="groups/:groupId" element={<GroupPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />
