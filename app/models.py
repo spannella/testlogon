@@ -10692,3 +10692,96 @@ class ThemeConfigPatchReq(BaseModel):
         if not re.fullmatch(r"[0-9A-Fa-f]{6}", raw):
             raise ValueError("custom_accent_hex must be a 6-character hex color")
         return "#" + raw.upper()
+
+
+# ─── VOD-018: Ad-Supported Viewing Tier ──────────────────────────────────────
+
+
+class VodAdSupportedStartIn(BaseModel):
+    """Request to start an ad-supported viewing session for a video.
+
+    No payment is required — the viewer agrees to watch ad breaks in
+    exchange for free playback. The viewer identity comes from the session.
+    """
+
+    resume_position_seconds: int = Field(default=0, ge=0)
+
+
+class VodAdBreak(BaseModel):
+    """A single ad break in an ad-supported viewing session's schedule."""
+
+    break_id: str
+    slot_type: str  # "pre_roll" | "mid_roll" | "overlay"
+    position_seconds: int
+    duration_seconds: int
+    creative_id: str
+    creative_url: str
+    creative_type: str  # "video" | "image"
+    skip_after_seconds: int
+    slot_index: int
+    completed: bool = False
+
+
+class VodAdSupportedSessionOut(BaseModel):
+    """State of an ad-supported viewing session."""
+
+    session_id: str
+    video_id: str
+    status: str  # "active" | "completed" | "abandoned"
+    ad_schedule: List[VodAdBreak]
+    breaks_total: int
+    breaks_completed: int
+    next_required_break_id: Optional[str] = None
+    playback_unlocked: bool
+    ads_free: bool = False
+    created_at: int
+    updated_at: int
+
+
+class VodAdSupportedStartOut(BaseModel):
+    """Response when an ad-supported viewing session is started.
+
+    Includes the free playback grant plus the ad schedule the viewer must
+    watch. Continued playback past a mid-roll position is gated on the
+    corresponding ad break being reported complete.
+    """
+
+    session_id: str
+    video_id: str
+    status: str
+    ad_schedule: List[VodAdBreak]
+    breaks_total: int
+    breaks_completed: int
+    next_required_break_id: Optional[str] = None
+    playback_unlocked: bool
+    ads_free: bool = False
+    playback_url: str
+    manifest_key: str
+    mode: str
+    thumbnail_url: Optional[str] = None
+    token_expires_at: int
+    created_at: int
+    updated_at: int
+
+
+class VodAdBreakReportIn(BaseModel):
+    """Report that an ad break was viewed/completed (or skipped)."""
+
+    break_id: str
+    event_type: str = Field(default="complete", pattern=r"^(impression|complete|skip)$")
+
+
+class VodAdBreakReportOut(BaseModel):
+    """Result of reporting an ad break event."""
+
+    ok: bool
+    session_id: str
+    video_id: str
+    break_id: str
+    event_type: str
+    completed: bool
+    breaks_completed: int
+    breaks_total: int
+    next_required_break_id: Optional[str] = None
+    playback_unlocked: bool
+    status: str

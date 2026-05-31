@@ -9497,3 +9497,63 @@ export interface ThemeConfigResponse {
 }
 
 export type ThemeConfigPatch = Partial<ThemeConfig>;
+
+
+// VOD-018: Ad-Supported Viewing Tier
+export interface VodAdBreak {
+  break_id: string;
+  slot_type: "pre_roll" | "mid_roll" | "overlay";
+  position_seconds: number;
+  duration_seconds: number;
+  creative_id: string;
+  creative_url: string;
+  creative_type: "video" | "image";
+  skip_after_seconds: number;
+  slot_index: number;
+  completed: boolean;
+}
+
+export interface VodAdSupportedSession {
+  session_id: string;
+  video_id: string;
+  status: "active" | "completed" | "abandoned";
+  ad_schedule: VodAdBreak[];
+  breaks_total: number;
+  breaks_completed: number;
+  next_required_break_id: string | null;
+  playback_unlocked: boolean;
+  ads_free: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface VodAdSupportedStartResponse extends VodAdSupportedSession {
+  playback_url: string;
+  manifest_key: string;
+  mode: string;
+  thumbnail_url: string | null;
+  token_expires_at: number;
+}
+
+export interface VodAdSupportedStartRequest {
+  resume_position_seconds?: number;
+}
+
+export interface VodAdBreakReportRequest {
+  break_id: string;
+  event_type?: "impression" | "complete" | "skip";
+}
+
+export interface VodAdBreakReportResponse {
+  ok: boolean;
+  session_id: string;
+  video_id: string;
+  break_id: string;
+  event_type: string;
+  completed: boolean;
+  breaks_completed: number;
+  breaks_total: number;
+  next_required_break_id: string | null;
+  playback_unlocked: boolean;
+  status: string;
+}
