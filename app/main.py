@@ -171,6 +171,8 @@ from app.routers.recommendations import (
 from app.routers.content_calendar import router as content_calendar_router
 from app.routers.tenant_admin import router as tenant_admin_router, public_router as tenant_public_router
 from app.routers.sso_saml import router as sso_saml_router
+from app.routers.ec2_launcher import router as ec2_launcher_router
+from app.services.ec2_launcher import start_ec2_idle_checker_task
 
 logger = logging.getLogger(__name__)
 
@@ -463,6 +465,8 @@ def create_app() -> FastAPI:
     app.include_router(tenant_admin_router)
     app.include_router(tenant_public_router)
     app.include_router(sso_saml_router)
+    app.include_router(ec2_launcher_router)
+    app.add_event_handler("startup", start_ec2_idle_checker_task)
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)

@@ -1160,6 +1160,17 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # EC2 Instance Launcher (INFRA-003)
+        TableDef(
+            _resolve_table_name(S.ec2_instances_table_name, "ec2_instances"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "user_sub", "sort_key": "status"},
+                {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

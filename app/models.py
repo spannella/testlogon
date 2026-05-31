@@ -3878,3 +3878,62 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ─── EC2 Instance Launcher (INFRA-003) ────────────────────────────────────────
+
+class Ec2LaunchIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=100)
+    instance_type: str = Field(..., min_length=1)
+    ami_id: str = Field(..., min_length=1)
+    ssh_key_id: Optional[str] = None
+    auto_terminate_after: int = Field(default=7200, ge=600, le=86400)
+    startup_script: str = Field(default="", max_length=16_384)
+    template_id: Optional[str] = None
+
+
+class Ec2InstanceOut(BaseModel):
+    instance_id: str
+    ec2_instance_id: str
+    label: str
+    instance_type: str
+    ami_id: str
+    ami_name: str
+    status: str
+    public_ip: str
+    private_ip: str
+    ssh_key_id: str = ""
+    host_id: str = ""
+    created_at: int
+    started_at: int = 0
+    stopped_at: int = 0
+    terminated_at: int = 0
+    last_activity_at: int = 0
+    auto_terminate_after: int = 7200
+
+
+class Ec2InstanceListOut(BaseModel):
+    instances: List[Ec2InstanceOut]
+    count: int
+
+
+class Ec2InstanceTypeInfo(BaseModel):
+    instance_type: str
+    vcpu: int
+    memory_gb: float
+    cost_cents_per_min: float
+
+
+class Ec2InstanceTypeListOut(BaseModel):
+    types: List[Ec2InstanceTypeInfo]
+
+
+class Ec2AmiInfo(BaseModel):
+    ami_id: str
+    name: str
+    os_type: str
+    username: str
+
+
+class Ec2AmiListOut(BaseModel):
+    amis: List[Ec2AmiInfo]
