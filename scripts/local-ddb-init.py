@@ -857,7 +857,6 @@ def _table_defs() -> List[TableDef]:
         # Advertiser Accounts (ADS-001)
         TableDef(
             _resolve_table_name(S.ad_accounts_table_name, "AdAccounts"),
-            os.environ.get("DDB_AD_ACCOUNTS", "AdAccounts"),
             "pk",
             "sk",
             gsi=[
@@ -869,7 +868,6 @@ def _table_defs() -> List[TableDef]:
         # Ad Campaigns (ADS-001)
         TableDef(
             _resolve_table_name(S.ad_campaigns_table_name, "AdCampaigns"),
-            os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns"),
             "pk",
             "sk",
             gsi=[
@@ -881,7 +879,6 @@ def _table_defs() -> List[TableDef]:
         # Ad Creatives (ADS-002)
         TableDef(
             _resolve_table_name(S.ad_creatives_table_name, "AdCreatives"),
-            os.environ.get("DDB_AD_CREATIVES", "AdCreatives"),
             "pk",
             "sk",
             gsi=[
@@ -906,14 +903,10 @@ def _table_defs() -> List[TableDef]:
             os.environ.get("DDB_AD_FREQUENCY_CAPS", "AdFrequencyCaps"),
             "pk",
             "sk",
-            ttl_attribute="expires_at",
         ),
         # Ad Billing (ADS-007)
         TableDef(
             _resolve_table_name(S.ad_billing_table_name, "AdBilling"),
-        # Ad Billing (ADS-007)
-        TableDef(
-            os.environ.get("DDB_AD_BILLING", "AdBilling"),
             "pk",
             "sk",
             gsi=[
@@ -1306,8 +1299,6 @@ def _table_defs() -> List[TableDef]:
             "assertion_id",
         ),
         # LLM Provider Keys (AGENT-001)
-        # Agent LLM Key Management (AGENT-001)
-        # Agent Platform (AGENT-001 .. AGENT-004)
         TableDef(
             _resolve_table_name(S.llm_provider_keys_table_name, "llm_provider_keys"),
             "pk",
@@ -1317,44 +1308,53 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
-        # Delegates (DELEGATE-001)
-        TableDef(
-            _resolve_table_name(S.delegates_table_name, "delegates"),
-        # Syndicates (SYND-001)
-        TableDef(
-            _resolve_table_name(S.syndicates_table_name, "syndicates"),
-        # User Groups (GROUP-001)
-        TableDef(
-            _resolve_table_name(S.ddb_user_groups_table, "user_groups"),
-        # Issued Licenses (LICENSE-002)
-        TableDef(
-            _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),
-        # Syndicates (SYND-001 + SYND-002)
-        TableDef(
-            _resolve_table_name(S.syndicates_table_name, "syndicates"),
-        # License Revenue (LICENSE-003)
-        TableDef(
-            _resolve_table_name(S.license_revenue_table_name, "license_revenue"),
-        # Delegates (DELEGATE-001..003)
-        TableDef(
-            _resolve_table_name(S.delegates_table_name, "delegates"),
-        # Issued Licenses (LICENSE-002) + License Requests (LICENSE-004)
-        TableDef(
-            _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),
-        # Delegates (DELEGATE-001)
+        ),
+        # Delegates (DELEGATE-001 .. DELEGATE-003)
         TableDef(
             _resolve_table_name(S.delegates_table_name, "delegates"),
             "pk",
             "sk",
-        # User Groups (GROUP-001)
-        TableDef(
-            _resolve_table_name(S.ddb_user_groups_table, "user_groups"),
-            "pk", "sk",
             gsi=[
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # Syndicates (SYND-001 / SYND-002)
+        TableDef(
+            _resolve_table_name(S.syndicates_table_name, "syndicates"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # Issued Licenses (LICENSE-002) + License Requests (LICENSE-004)
+        TableDef(
+            _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+                {"index_name": "GSI4", "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N", "GSI4SK": "N"},
+        ),
+        # License Revenue (LICENSE-003)
+        TableDef(
+            _resolve_table_name(S.license_revenue_table_name, "license_revenue"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
         # SSH Key Manager (INFRA-002)
         TableDef(
             _resolve_table_name(S.ssh_keys_table_name, "ssh_keys"),
@@ -1364,29 +1364,24 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
-                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
-            ],
-            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
-        # Ad Targeting (ADS-003)
-        TableDef(
-            os.environ.get("DDB_AD_TARGETING", "AdTargeting"),
-            "pk",
-            "sk",
-            gsi=[
-                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
-            ],
-            attr_types={"created_at": "N"},
+        ),
         # Media Preferences (CALL-003)
         TableDef(
             _resolve_table_name(S.media_preferences_table_name, "media_preferences"),
             "user_sub",
             "sk",
+        ),
         # EC2 Instance Launcher (INFRA-003)
         TableDef(
             _resolve_table_name(S.ec2_instances_table_name, "ec2_instances"),
             "user_sub",
             "sk",
             gsi=[
+                {"index_name": "ByStatus", "partition_key": "user_sub", "sort_key": "status"},
+                {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Kubernetes Container Launcher (INFRA-004)
         TableDef(
             _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),
@@ -1398,21 +1393,24 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
+        ),
         # Activity Feed (SOC-003)
         TableDef(
             _resolve_table_name(S.activity_feed_table_name, "activity_feed"),
+            "user_id",
+            "sk",
+        ),
         # Notification Engine (SOC-004)
         TableDef(
             _resolve_table_name(S.notifications_engine_table_name, "notifications_engine"),
-        # Call History (CALL-004): pk=user_id, sk=CALL#{inverted_ts}#{call_id}
+            "user_id",
+            "sk",
+        ),
+        # Call History (CALL-004)
         TableDef(
             _resolve_table_name(S.call_history_table_name, "call_history"),
             "user_id",
             "sk",
-                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
-                {"index_name": "GSI4", "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
-            ],
-            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N", "GSI4SK": "N"},
         ),
         # Broadcast Moderation (DELEGATE-004)
         TableDef(
@@ -1420,25 +1418,7 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
-        ),
-        # EC2 Instance Launcher (INFRA-003)
-        TableDef(
-            _resolve_table_name(S.ec2_instances_table_name, "ec2_instances"),
-            "pk",
-            "sk",
-        ),
-        # Kubernetes Container Launcher (INFRA-004)
-        ),
-        # Kubernetes Pods (INFRA-006)
-        TableDef(
-            _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),
-            "pk",
-            "sk",
-        ),
-        # Agent Worker Provisioning (AGENT-002)
-        # Agent Workers (AGENT-002/003)
-        ),
-        # Agent Workers (AGENT-002/003)
+        # Agent Workers (AGENT-002 / AGENT-003)
         TableDef(
             _resolve_table_name(S.agent_workers_table_name, "agent_workers"),
             "pk",
@@ -1449,8 +1429,6 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByAgentType", "partition_key": "pk", "sort_key": "agent_type"},
             ],
             attr_types={"created_at": "N"},
-                {"index_name": "ByAgentType", "partition_key": "pk", "sort_key": "agent_type"},
-            ],
         ),
         # Compute Cost Tracking (INFRA-005)
         TableDef(
@@ -1471,6 +1449,9 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
                 {"index_name": "ByCategory", "partition_key": "pk", "sort_key": "category"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Agent Feedback & Terminal Monitoring (AGENT-006)
         TableDef(
             _resolve_table_name(S.agent_feedback_table_name, "agent_feedback"),
