@@ -8230,3 +8230,212 @@ class AdminSubscriptionTierAnalytics(BaseModel):
 class AdminSubscriptionTierPreviewOut(BaseModel):
     tiers: List[Dict[str, Any]]
     creator_id: str
+# ---------------------------------------------------------------------------
+# Accountant / Cost Tracking Agent (AGENT-018)
+# ---------------------------------------------------------------------------
+
+
+class RecordCostEntryIn(BaseModel):
+    """Request model for recording a cost entry (internal/ingestion worker)."""
+
+    worker_id: str = Field(..., min_length=1, max_length=100)
+    agent_type: str = Field(..., min_length=1, max_length=50)
+    agent_id: str = Field(..., min_length=1, max_length=100)
+    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    llm_input_tokens: int = Field(default=0, ge=0)
+    llm_output_tokens: int = Field(default=0, ge=0)
+    llm_cached_tokens: int = Field(default=0, ge=0)
+    llm_cost_cents: int = Field(default=0, ge=0)
+    llm_provider: str = Field(default="anthropic", max_length=50)
+    llm_model: str = Field(default="unknown", max_length=100)
+    compute_hours: float = Field(default=0.0, ge=0.0)
+    compute_cost_cents: int = Field(default=0, ge=0)
+    tickets_worked: int = Field(default=0, ge=0)
+    tickets_completed: int = Field(default=0, ge=0)
+
+
+class AttributeTicketCostIn(BaseModel):
+    """Request model for attributing cost to a ticket."""
+
+    ticket_id: str = Field(..., min_length=1, max_length=100)
+    agent_type: str = Field(..., min_length=1, max_length=50)
+    llm_tokens: int = Field(default=0, ge=0)
+    llm_cost_cents: int = Field(default=0, ge=0)
+    compute_hours: float = Field(default=0.0, ge=0.0)
+    compute_cost_cents: int = Field(default=0, ge=0)
+
+
+class CreateCostBudgetIn(BaseModel):
+    """Request model for creating a cost budget."""
+
+    name: str = Field(..., min_length=1, max_length=200)
+    scope: Literal["overall", "agent_type", "agent_instance"]
+    scope_ref: Optional[str] = Field(default=None, max_length=100)
+    period: Literal["daily", "weekly", "monthly"]
+    limit_cents: int = Field(..., ge=100)
+    alert_threshold_pct: int = Field(default=80, ge=10, le=100)
+    auto_pause_on_exceed: bool = False
+
+    @model_validator(mode="after")
+    def _validate_scope_ref(self) -> "CreateCostBudgetIn":
+        if self.scope in ("agent_type", "agent_instance") and not self.scope_ref:
+            raise ValueError("scope_ref is required when scope is agent_type or agent_instance")
+        return self
+
+
+class UpdateCostBudgetIn(BaseModel):
+    """Request model for updating a cost budget."""
+
+    name: Optional[str] = Field(default=None, max_length=200)
+    limit_cents: Optional[int] = Field(default=None, ge=100)
+    alert_threshold_pct: Optional[int] = Field(default=None, ge=10, le=100)
+    auto_pause_on_exceed: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+class UpdateAccountantConfigIn(BaseModel):
+    """Request model for updating accountant agent configuration."""
+
+    collection_frequency: Optional[Literal["hourly", "every_6h", "daily"]] = None
+    report_frequency: Optional[Literal["daily", "weekly", "monthly"]] = None
+    report_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
+    compute_pricing: Optional[Dict[str, int]] = None
+    anomaly_detection_enabled: Optional[bool] = None
+    anomaly_threshold_pct: Optional[int] = Field(default=None, ge=100, le=1000)
+    idle_worker_threshold_minutes: Optional[int] = Field(default=None, ge=10, le=1440)
+    optimization_suggestions_enabled: Optional[bool] = None
+
+
+class CostEntryOut(BaseModel):
+    """Response model for a cost entry."""
+
+    worker_id: str
+    agent_type: str
+    agent_id: str
+    date: str
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    llm_cached_tokens: int = 0
+    llm_cost_cents: int = 0
+    llm_provider: str = ""
+    llm_model: str = ""
+    compute_hours: float = 0.0
+    compute_cost_cents: int = 0
+    total_cost_cents: int = 0
+    tickets_worked: int = 0
+    tickets_completed: int = 0
+
+
+class CostDailySummaryOut(BaseModel):
+    """Response model for daily cost summary."""
+
+    date: str
+    total_cents: int = 0
+    llm_cents: int = 0
+    compute_cents: int = 0
+    by_agent_type: Dict[str, int] = Field(default_factory=dict)
+    by_worker: List[CostEntryOut] = Field(default_factory=list)
+
+
+class CostPeriodSummaryOut(BaseModel):
+    """Response model for period cost summary."""
+
+    period: str
+    start_date: str
+    end_date: str
+    total_cents: int = 0
+    llm_cents: int = 0
+    compute_cents: int = 0
+    by_agent_type: Dict[str, int] = Field(default_factory=dict)
+    budget_utilization: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class TicketCostOut(BaseModel):
+    """Response model for ticket cost data."""
+
+    ticket_id: str
+    agent_type: str = ""
+    total_llm_tokens: int = 0
+    total_llm_cost_cents: int = 0
+    total_compute_hours: float = 0.0
+    total_compute_cost_cents: int = 0
+    total_cost_cents: int = 0
+    worker_sessions: int = 0
+    status: str = "in_progress"
+    started_at: Optional[int] = None
+    completed_at: Optional[int] = None
+
+
+class TicketCostListOut(BaseModel):
+    """Response model for a list of ticket costs."""
+
+    ticket_costs: List[TicketCostOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class CostBudgetOut(BaseModel):
+    """Response model for a cost budget."""
+
+    budget_id: str
+    name: str
+    scope: str
+    scope_ref: Optional[str] = None
+    period: str
+    limit_cents: int
+    alert_threshold_pct: int = 80
+    auto_pause_on_exceed: bool = False
+    enabled: bool = True
+    created_at: int = 0
+
+
+class CostAlertOut(BaseModel):
+    """Response model for a cost alert."""
+
+    alert_id: str
+    budget_id: Optional[str] = None
+    alert_type: str
+    severity: str
+    title: str
+    message: str
+    current_spend_cents: int = 0
+    budget_limit_cents: Optional[int] = None
+    acknowledged: bool = False
+    auto_action_taken: Optional[str] = None
+    created_at: int = 0
+
+
+class CostAlertListOut(BaseModel):
+    """Response model for a list of cost alerts."""
+
+    alerts: List[CostAlertOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class CostTrendsOut(BaseModel):
+    """Response model for cost trends data."""
+
+    weeks: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class OptimizationRecommendationOut(BaseModel):
+    """Response model for a cost optimization recommendation."""
+
+    type: Literal["idle_worker", "model_downgrade", "high_cost_ticket", "underutilized_agent"]
+    title: str
+    description: str
+    potential_savings_cents: int = 0
+    action: str
+
+
+class AccountantConfigOut(BaseModel):
+    """Response model for accountant agent configuration."""
+
+    collection_frequency: str = "hourly"
+    report_frequency: str = "daily"
+    report_hour_utc: int = 8
+    compute_pricing: Dict[str, int] = Field(default_factory=dict)
+    anomaly_detection_enabled: bool = True
+    anomaly_threshold_pct: int = 200
+    idle_worker_threshold_minutes: int = 60
+    optimization_suggestions_enabled: bool = True
+    updated_at: Optional[int] = None

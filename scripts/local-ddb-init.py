@@ -1641,6 +1641,46 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # Accountant / Cost Tracking Agent (AGENT-018) — daily cost entries.
+        # pk=USER#{id}, sk=COST#{date}#{worker}. GSI1=by date, GSI2=by agent_type.
+        TableDef(
+            _resolve_table_name(S.agent_costs_table_name, "accountant_costs"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+        ),
+        # Accountant / Cost Tracking Agent (AGENT-018) — per-ticket cost attribution.
+        # pk=USER#{id}, sk=TCOST#{ticket}. GSI1=tickets sorted by total_cost_cents.
+        TableDef(
+            _resolve_table_name(S.agent_ticket_costs_table_name, "accountant_ticket_costs"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        # Accountant / Cost Tracking Agent (AGENT-018) — budget caps.
+        # pk=USER#{id}, sk=BUDGET#{id}. No GSI.
+        TableDef(
+            _resolve_table_name(S.agent_cost_budgets_table_name, "accountant_cost_budgets"),
+            "pk",
+            "sk",
+        ),
+        # Accountant / Cost Tracking Agent (AGENT-018) — budget/anomaly alerts.
+        # pk=USER#{id}, sk=ALERT#{id}. GSI1=alerts by created_at.
+        TableDef(
+            _resolve_table_name(S.agent_cost_alerts_table_name, "accountant_cost_alerts"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
     ]
 
 

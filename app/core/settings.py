@@ -1750,6 +1750,27 @@ class Settings:
     admin_subscription_tiers_enabled: bool = os.environ.get(
         "ADMIN_SUBSCRIPTION_TIERS_ENABLED", "1"
     ) not in ("0", "false", "False")
+    # Accountant / Cost Tracking Agent (AGENT-018). Reuses the agent_types table
+    # for accountant_config; cost data lives in dedicated accountant_* tables.
+    agent_costs_table_name: str = os.environ.get("AGENT_COSTS_TABLE_NAME", "accountant_costs")
+    agent_ticket_costs_table_name: str = os.environ.get(
+        "AGENT_TICKET_COSTS_TABLE_NAME", "accountant_ticket_costs"
+    )
+    agent_cost_budgets_table_name: str = os.environ.get(
+        "AGENT_COST_BUDGETS_TABLE_NAME", "accountant_cost_budgets"
+    )
+    agent_cost_alerts_table_name: str = os.environ.get(
+        "AGENT_COST_ALERTS_TABLE_NAME", "accountant_cost_alerts"
+    )
+    # Master kill switch + execution gate for the accountant agent. When
+    # execute-commands is false (default, and always in E2E) the agent never
+    # polls real provider/AWS billing APIs and never auto-pauses workers —
+    # budgets/alerts are evaluated deterministically over recorded cost data.
+    accountant_agent_enabled: bool = os.environ.get("ACCOUNTANT_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    accountant_agent_auto_alert: bool = os.environ.get("ACCOUNTANT_AGENT_AUTO_ALERT", "0") not in ("0", "false", "False")
+    accountant_agent_execute_commands: bool = os.environ.get(
+        "ACCOUNTANT_AGENT_EXECUTE_COMMANDS", "0"
+    ) not in ("0", "false", "False")
 
 
 S = Settings()
