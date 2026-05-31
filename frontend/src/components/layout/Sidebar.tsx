@@ -46,6 +46,7 @@ import {
   Building2,
   Tv,
   Scissors,
+  Phone,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -145,6 +146,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
       { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
+      { label: "Media Settings", i18nKey: "nav.mediaSettings", path: "/calls/settings", icon: <Phone className="h-5 w-5" /> },
       { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "Blocked Users", i18nKey: "nav.blockedUsers", path: "/settings/blocked", icon: <Ban className="h-5 w-5" /> },
       { label: "Webhooks", i18nKey: "nav.webhooks", path: "/settings/webhooks", icon: <Webhook className="h-5 w-5" /> },

@@ -1490,5 +1490,8 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Media Preferences (CALL-003)
+    media_preferences_table_name: str = os.environ.get("MEDIA_PREFERENCES_TABLE_NAME", "media_preferences")
+
 
 S = Settings()

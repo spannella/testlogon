@@ -3878,3 +3878,24 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ─── Media Preferences (CALL-003) ────────────────────────────────
+
+class MediaPreferencesIn(BaseModel):
+    preferred_audio_input_id: Optional[str] = None
+    preferred_video_input_id: Optional[str] = None
+    preferred_audio_output_id: Optional[str] = None
+    default_audio_muted: bool = False
+    default_video_off: bool = False
+    video_resolution: Literal["360", "480", "720", "1080"] = "720"
+
+class MediaPreferencesOut(BaseModel):
+    user_sub: str
+    preferred_audio_input_id: Optional[str] = None
+    preferred_video_input_id: Optional[str] = None
+    preferred_audio_output_id: Optional[str] = None
+    default_audio_muted: bool = False
+    default_video_off: bool = False
+    video_resolution: str = "720"
+    updated_at: int = 0

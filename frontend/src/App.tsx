@@ -90,6 +90,7 @@ const WebhookEndpointDetail = lazy(() => import("@/pages/webhooks/WebhookEndpoin
 const PartyListPage = lazy(() => import("@/pages/watch-parties/PartyListPage"));
 const WatchPartyPage = lazy(() => import("@/pages/watch-parties/WatchPartyPage"));
 const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
+const MediaSettingsPage = lazy(() => import("@/pages/calls/MediaSettingsPage"));
 
 function PageSpinner() {
   return (
@@ -174,6 +175,7 @@ export default function App() {
           <Route path="settings/blocked" element={<BlockedUsersPage />} />
           <Route path="settings/webhooks" element={<WebhooksPage />} />
           <Route path="settings/geo" element={<GeoRulesPage />} />
+          <Route path="calls/settings" element={<MediaSettingsPage />} />
           <Route path="webhooks" element={<WebhookDashboard />} />
           <Route path="webhooks/:endpointId" element={<WebhookEndpointDetail />} />
           <Route path="purchases" element={<PurchasesPage />} />

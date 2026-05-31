@@ -1160,6 +1160,12 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Media Preferences (CALL-003)
+        TableDef(
+            _resolve_table_name(S.media_preferences_table_name, "media_preferences"),
+            "user_sub",
+            "sk",
+        ),
     ]
 
 
