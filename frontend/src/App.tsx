@@ -115,6 +115,7 @@ const AgentPrList = lazy(() => import("@/pages/agents/AgentPrList"));
 const CoderAgentConfigPage = lazy(() => import("@/pages/agents/CoderAgentConfigPage"));
 const QaAgentConfigPage = lazy(() => import("@/pages/agents/QaAgentConfigPage"));
 const DevOpsAgentConfigPage = lazy(() => import("@/pages/agents/DevOpsAgentConfigPage"));
+const ArchitectAgentConfigPage = lazy(() => import("@/pages/agents/ArchitectAgentConfigPage"));
 
 function PageSpinner() {
   return (
@@ -253,6 +254,7 @@ export default function App() {
           <Route path="agents/types/:typeId/coder" element={<CoderAgentConfigPage />} />
           <Route path="agents/types/:typeId/qa" element={<QaAgentConfigPage />} />
           <Route path="agents/types/:typeId/devops" element={<DevOpsAgentConfigPage />} />
+          <Route path="agents/types/:typeId/architect" element={<ArchitectAgentConfigPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

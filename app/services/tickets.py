@@ -24,6 +24,8 @@ _TICKET_STATUSES = (
     "deploying",
     "deployed",
     "investigating",
+    "analyzing",
+    "tickets_created",
 )
 _STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "open": ("in_progress", "done", "blocked"),
