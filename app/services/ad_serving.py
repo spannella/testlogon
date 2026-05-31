@@ -95,6 +95,12 @@ def serve_ad(
         if not _has_budget(campaign):
             continue
 
+        # Dayparting / flight check (ADS-016): skip campaigns outside their
+        # active dayparts, and skip when flights are configured but none is
+        # active right now (gap between flights).
+        if not _is_dayparting_eligible(campaign):
+            continue
+
         # Targeting check
         targeting_sets = list_targeting_sets(campaign["campaign_id"])
         if targeting_sets and not any(evaluate_targeting(ts, ctx) for ts in targeting_sets):
@@ -312,6 +318,43 @@ def _has_budget(campaign: dict) -> bool:
         if daily_spent >= daily_budget:
             return False
     return True
+
+
+def _is_dayparting_eligible(campaign: dict) -> bool:
+    """Return True if the campaign may serve now per its dayparting / flights.
+
+    A campaign with no dayparting and no flights is always eligible. With
+    dayparting, the current local day/hour must be in the schedule. With
+    flights configured, at least one flight must be active for the current
+    date. Failures fail open (eligible) to avoid silently dropping ads.
+    """
+    dayparting = campaign.get("dayparting")
+    flights = campaign.get("flights")
+    if not dayparting and not flights:
+        return True
+    try:
+        from app.services.ad_dayparting import (
+            get_active_flight,
+            is_campaign_eligible_now,
+        )
+
+        if dayparting:
+            eligible, _ = is_campaign_eligible_now(
+                dayparting=dayparting,
+                campaign_timezone=campaign.get("campaign_timezone", "UTC"),
+            )
+            if not eligible:
+                return False
+        if flights:
+            if get_active_flight(flights=flights) is None:
+                return False
+        return True
+    except Exception:
+        logger.warning(
+            "ad_dayparting_check_failed campaign_id=%s",
+            campaign.get("campaign_id"),
+        )
+        return True
 
 
 def _is_frequency_capped(user_id: str, campaign_id: str) -> bool:

@@ -8355,3 +8355,57 @@ export interface AdFraudSummary {
   tracked_accounts: number;
   top_fraud_rules: Record<string, number>;
 }
+
+// ─── Ad Scheduling & Dayparting (ADS-016) ───────────────────────────────────
+
+export interface DaypartingSchedule {
+  timezone: string;
+  schedule: Record<string, number[]>;
+}
+
+export interface CampaignFlight {
+  flight_id?: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  daily_budget_cents: number;
+  creative_ids: string[];
+  status?: string;
+}
+
+export interface CampaignScheduleUpdate {
+  dayparting?: DaypartingSchedule | null;
+  flights?: CampaignFlight[] | null;
+  campaign_timezone?: string | null;
+}
+
+export interface CampaignScheduleOut {
+  campaign_id?: string;
+  campaign_timezone: string;
+  dayparting?: DaypartingSchedule | null;
+  flights?: CampaignFlight[] | null;
+  start_date?: number | string | null;
+  end_date?: number | string | null;
+}
+
+export interface ScheduleEligibility {
+  eligible: boolean;
+  timezone?: string;
+  local_time?: string;
+  day?: string;
+  hour?: number;
+  active_hours?: number[];
+  reason?: string;
+  active_flight?: CampaignFlight | null;
+}
+
+export interface BudgetPacing {
+  active_hours_today: number;
+  hours_remaining: number;
+  hourly_budget_cents: number;
+  remaining_budget_cents: number;
+}
+
+export interface ScheduleTemplatesResponse {
+  templates: Record<string, Record<string, number[]>>;
+}
