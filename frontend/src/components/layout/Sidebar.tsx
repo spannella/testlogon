@@ -7,6 +7,7 @@ import {
   ShoppingCart,
   CreditCard,
   ClipboardList,
+  Megaphone,
   Repeat,
   FolderOpen,
   FolderKanban,
@@ -161,6 +162,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Feature Ideas", i18nKey: "nav.featureIdeas", path: "/agents/pm/ideas", icon: <Lightbulb className="h-5 w-5" /> },
       { label: "Design Review", i18nKey: "nav.designReview", path: "/agents/stylist", icon: <Palette className="h-5 w-5" /> },
       { label: "Submit Idea", i18nKey: "nav.submitIdea", path: "/ideas/submit", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "Marketing", i18nKey: "nav.marketing", path: "/agents/marketing", icon: <Megaphone className="h-5 w-5" /> },
     ],
   },
   {

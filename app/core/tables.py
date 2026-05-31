@@ -174,6 +174,8 @@ class Tables:
     product_ideas: Any
     project_sprints: Any
     project_reports: Any
+    marketing_content: Any
+    marketing_engagement: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -342,4 +344,6 @@ T = Tables(
     product_ideas=ddb.Table(S.product_ideas_table_name),
     project_sprints=ddb.Table(S.project_sprints_table_name),
     project_reports=ddb.Table(S.project_reports_table_name),
+    marketing_content=ddb.Table(S.marketing_content_table_name),
+    marketing_engagement=ddb.Table(S.marketing_engagement_table_name),
 )
