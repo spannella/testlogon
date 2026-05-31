@@ -8145,3 +8145,141 @@ class SecurityAgentConfigOut(BaseModel):
     auto_create_remediation_tickets: bool = True
     remediation_ticket_min_severity: str = "high"
     updated_at: Optional[int] = None
+
+
+# ──────────────────────────────────────────────────────────────────────
+# ADMIN-002: Admin Email/SMS Dashboards
+# ──────────────────────────────────────────────────────────────────────
+
+
+class EmailDashboardStatsOut(BaseModel):
+    sent: int = 0
+    delivered: int = 0
+    bounced: int = 0
+    complained: int = 0
+    failed: int = 0
+    suppressed: int = 0
+    total: int = 0
+    delivery_rate: float = Field(default=0.0, ge=0.0, le=100.0)
+    bounce_rate: float = Field(default=0.0, ge=0.0, le=100.0)
+    complaint_rate: float = Field(default=0.0, ge=0.0, le=100.0)
+    period_days: int = Field(default=7, ge=1, le=365)
+
+    @field_validator("delivery_rate", "bounce_rate", "complaint_rate", mode="before")
+    @classmethod
+    def _round_email_rates(cls, v):
+        if isinstance(v, (int, float)):
+            return round(float(v), 2)
+        return v
+
+
+class SmsDashboardStatsOut(BaseModel):
+    sent: int = 0
+    delivered: int = 0
+    failed: int = 0
+    total: int = 0
+    total_segments: int = 0
+    estimated_cost_usd: float = 0.0
+    suppressed_numbers: int = 0
+    delivery_rate: float = Field(default=0.0, ge=0.0, le=100.0)
+    failure_rate: float = Field(default=0.0, ge=0.0, le=100.0)
+    period_days: int = Field(default=7, ge=1, le=365)
+
+    @field_validator("delivery_rate", "failure_rate", mode="before")
+    @classmethod
+    def _round_sms_rates(cls, v):
+        if isinstance(v, (int, float)):
+            return round(float(v), 2)
+        return v
+
+
+class DashboardTimeseriesPoint(BaseModel):
+    date: str
+    sent: int = 0
+    delivered: int = 0
+    bounced: int = 0
+    complained: int = 0
+    failed: int = 0
+    segments: int = 0
+
+
+class DashboardTimeseriesOut(BaseModel):
+    channel: str
+    period_days: int = Field(default=7, ge=1, le=365)
+    points: List[DashboardTimeseriesPoint] = Field(default_factory=list)
+
+
+class DashboardBreakdownItem(BaseModel):
+    key: str
+    label: str
+    count: int = 0
+
+
+class DashboardBreakdownOut(BaseModel):
+    channel: str
+    dimension: str
+    items: List[DashboardBreakdownItem] = Field(default_factory=list)
+
+
+class DashboardSuppressionAdd(BaseModel):
+    address: str = Field(min_length=1, max_length=320)
+    reason: str = Field(default="manual", max_length=200)
+
+    @field_validator("address", mode="before")
+    @classmethod
+    def _normalize_suppress_address(cls, v):
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
+
+class NotificationTemplateOut(BaseModel):
+    template_id: str
+    channel: str
+    name: str
+    subject: Optional[str] = None
+    body: str = ""
+    variables: List[str] = Field(default_factory=list)
+    active: bool = True
+    updated_at: Optional[int] = None
+    updated_by: Optional[str] = None
+
+
+class NotificationTemplateUpdate(BaseModel):
+    subject: Optional[str] = Field(default=None, max_length=200)
+    body: Optional[str] = Field(default=None, max_length=10000)
+    active: Optional[bool] = None
+
+    @field_validator("body", mode="before")
+    @classmethod
+    def _strip_script_tags(cls, v):
+        """Prevent executable scripts in template body."""
+        if isinstance(v, str):
+            return re.sub(
+                r"<script[^>]*>.*?</script>", "", v, flags=re.DOTALL | re.IGNORECASE
+            )
+        return v
+
+
+class NotificationTemplatePreviewRequest(BaseModel):
+    sample_vars: Dict[str, str] = Field(default_factory=dict)
+
+
+class NotificationTemplatePreviewOut(BaseModel):
+    template_id: str
+    channel: str
+    rendered_subject: Optional[str] = None
+    rendered_body: str = ""
+    missing_vars: List[str] = Field(default_factory=list)
+
+
+class NotificationTemplateTestSend(BaseModel):
+    recipient: str = Field(min_length=1, max_length=320)
+    sample_vars: Dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("recipient", mode="before")
+    @classmethod
+    def _normalize_recipient(cls, v):
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v

@@ -341,6 +341,102 @@ def get_suppression_list(limit: int = 50) -> Dict[str, Any]:
         return {"items": [], "count": 0}
 
 
+def get_sms_delivery_timeseries(days: int = 7) -> List[Dict[str, Any]]:
+    """Daily counts of sent/failed plus segments for the last N days (oldest first)."""
+    import datetime as _dt
+
+    cutoff = now_ts() - days * 86400
+    buckets: Dict[str, Dict[str, int]] = {}
+
+    def _bucket(day_ts: int) -> Dict[str, int]:
+        key = _dt.datetime.utcfromtimestamp(day_ts).strftime("%Y-%m-%d")
+        return buckets.setdefault(
+            key,
+            {"sent": 0, "delivered": 0, "bounced": 0, "complained": 0, "failed": 0, "segments": 0},
+        )
+
+    for status in ("sent", "dev_logged", "failed"):
+        field_name = "failed" if status == "failed" else "sent"
+        try:
+            kwargs: Dict[str, Any] = {
+                "IndexName": "ByStatus",
+                "KeyConditionExpression": (
+                    Key("status").eq(status) & Key("created_at").gte(cutoff)
+                ),
+                "Select": "ALL_ATTRIBUTES",
+                "Limit": 2000,
+            }
+            resp = T.sms_delivery.query(**kwargs)
+            while True:
+                for it in resp.get("Items", []):
+                    created = int(it.get("created_at", 0))
+                    b = _bucket(created)
+                    b[field_name] += 1
+                    if field_name == "sent":
+                        b["delivered"] += 1
+                        b["segments"] += int(it.get("segments", 1) or 1)
+                if not resp.get("LastEvaluatedKey"):
+                    break
+                kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+                resp = T.sms_delivery.query(**kwargs)
+        except Exception:
+            logger.exception("Failed SMS timeseries query for status=%s", status)
+
+    points: List[Dict[str, Any]] = []
+    today = now_ts()
+    for offset in range(days - 1, -1, -1):
+        day_ts = today - offset * 86400
+        key = _dt.datetime.utcfromtimestamp(day_ts).strftime("%Y-%m-%d")
+        c = buckets.get(
+            key,
+            {"sent": 0, "delivered": 0, "bounced": 0, "complained": 0, "failed": 0, "segments": 0},
+        )
+        points.append({
+            "date": key,
+            "sent": c["sent"],
+            "delivered": c["delivered"],
+            "bounced": 0,
+            "complained": 0,
+            "failed": c["failed"],
+            "segments": c["segments"],
+        })
+    return points
+
+
+def get_sms_failure_breakdown(days: int = 7, limit: int = 10) -> List[Dict[str, Any]]:
+    """Top SMS failure error types for the last N days."""
+    cutoff = now_ts() - days * 86400
+    error_counts: Dict[str, int] = {}
+    try:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByStatus",
+            "KeyConditionExpression": (
+                Key("status").eq("failed") & Key("created_at").gte(cutoff)
+            ),
+            "Select": "ALL_ATTRIBUTES",
+            "Limit": 2000,
+        }
+        resp = T.sms_delivery.query(**kwargs)
+        while True:
+            for it in resp.get("Items", []):
+                err = str(it.get("error", "") or "unknown")
+                # Use first 60 chars as a coarse error-type label
+                label = err[:60] if err else "unknown"
+                error_counts[label] = error_counts.get(label, 0) + 1
+            if not resp.get("LastEvaluatedKey"):
+                break
+            kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+            resp = T.sms_delivery.query(**kwargs)
+    except Exception:
+        logger.exception("Failed SMS failure breakdown query")
+
+    ranked = sorted(error_counts.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    return [
+        {"key": label, "label": label, "count": count}
+        for label, count in ranked
+    ]
+
+
 def get_dev_sms_log() -> List[Dict[str, str]]:
     """Read dev SMS log file and return parsed entries."""
     import os

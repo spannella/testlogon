@@ -116,6 +116,7 @@ class Tables:
     group_call_sessions: Any
     sms_delivery: Any
     email_delivery: Any
+    admin_messaging_templates: Any
     affiliate_links: Any
     affiliate_clicks: Any
     audit_exports: Any
@@ -288,6 +289,7 @@ T = Tables(
     group_call_sessions=ddb.Table(S.group_call_sessions_table_name),
     sms_delivery=ddb.Table(S.sms_delivery_table_name),
     email_delivery=ddb.Table(S.email_delivery_table_name),
+    admin_messaging_templates=ddb.Table(S.admin_messaging_templates_table_name),
     affiliate_links=ddb.Table(S.affiliate_links_table_name),
     affiliate_clicks=ddb.Table(S.affiliate_clicks_table_name),
     audit_exports=ddb.Table(S.audit_export_table_name),

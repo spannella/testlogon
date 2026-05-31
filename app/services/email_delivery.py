@@ -370,6 +370,110 @@ def get_suppression_list(
         return {"items": [], "count": 0}
 
 
+def get_delivery_timeseries(days: int = 7) -> List[Dict[str, Any]]:
+    """Daily counts of sent/delivered/bounced/complained/failed for the last N days.
+
+    Returns a list of dicts ordered oldest-first, one per UTC day in the window.
+    """
+    import datetime as _dt
+
+    cutoff = now_ts() - days * 86400
+    # date_key -> counts
+    buckets: Dict[str, Dict[str, int]] = {}
+
+    def _bucket(day_ts: int) -> Dict[str, int]:
+        key = _dt.datetime.utcfromtimestamp(day_ts).strftime("%Y-%m-%d")
+        return buckets.setdefault(
+            key,
+            {"sent": 0, "delivered": 0, "bounced": 0, "complained": 0, "failed": 0},
+        )
+
+    status_to_field = {
+        "sent": "sent",
+        "dev_logged": "sent",
+        "bounced": "bounced",
+        "complained": "complained",
+        "failed": "failed",
+    }
+    for status, field_name in status_to_field.items():
+        try:
+            kwargs: Dict[str, Any] = {
+                "IndexName": "ByStatus",
+                "KeyConditionExpression": (
+                    Key("status").eq(status) & Key("created_at").gte(cutoff)
+                ),
+                "Select": "ALL_ATTRIBUTES",
+                "Limit": 2000,
+            }
+            resp = T.email_delivery.query(**kwargs)
+            while True:
+                for it in resp.get("Items", []):
+                    created = int(it.get("created_at", 0))
+                    b = _bucket(created)
+                    b[field_name] += 1
+                    if field_name == "sent":
+                        b["delivered"] += 1
+                if not resp.get("LastEvaluatedKey"):
+                    break
+                kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+                resp = T.email_delivery.query(**kwargs)
+        except Exception:
+            logger.exception("Failed timeseries query for status=%s", status)
+
+    # Build a continuous day series (oldest -> newest)
+    points: List[Dict[str, Any]] = []
+    today = now_ts()
+    for offset in range(days - 1, -1, -1):
+        day_ts = today - offset * 86400
+        key = _dt.datetime.utcfromtimestamp(day_ts).strftime("%Y-%m-%d")
+        c = buckets.get(
+            key, {"sent": 0, "delivered": 0, "bounced": 0, "complained": 0, "failed": 0}
+        )
+        points.append({
+            "date": key,
+            "sent": c["sent"],
+            "delivered": c["delivered"],
+            "bounced": c["bounced"],
+            "complained": c["complained"],
+            "failed": c["failed"],
+            "segments": 0,
+        })
+    return points
+
+
+def get_recipient_domain_breakdown(days: int = 7, limit: int = 10) -> List[Dict[str, Any]]:
+    """Top recipient domains by bounce count for the last N days."""
+    cutoff = now_ts() - days * 86400
+    domain_counts: Dict[str, int] = {}
+    try:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByStatus",
+            "KeyConditionExpression": (
+                Key("status").eq("bounced") & Key("created_at").gte(cutoff)
+            ),
+            "Select": "ALL_ATTRIBUTES",
+            "Limit": 2000,
+        }
+        resp = T.email_delivery.query(**kwargs)
+        while True:
+            for it in resp.get("Items", []):
+                addr = str(it.get("to_email", ""))
+                domain = addr.split("@", 1)[1] if "@" in addr else "(unknown)"
+                domain_counts[domain] = domain_counts.get(domain, 0) + 1
+            if not resp.get("LastEvaluatedKey"):
+                break
+            kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+            resp = T.email_delivery.query(**kwargs)
+    except Exception:
+        logger.exception("Failed bounce domain breakdown query")
+
+    ranked = sorted(domain_counts.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    return [
+        {"key": domain, "label": domain, "count": count}
+        for domain, count in ranked
+    ]
+
+
 def read_dev_email_log(max_entries: int = 100) -> List[Dict[str, str]]:
     """Read the dev email log file and return parsed entries."""
     import os

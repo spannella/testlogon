@@ -1072,6 +1072,12 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # AdminMessagingTemplates (ADMIN-002): notification templates, pk=pk, sk=sk
+        TableDef(
+            _resolve_table_name(S.admin_messaging_templates_table_name, "admin_messaging_templates"),
+            "pk",
+            "sk",
+        ),
         # Affiliate Links (CREATOR-004)
         TableDef(
             _resolve_table_name(S.affiliate_links_table_name, "AffiliateLinks"),

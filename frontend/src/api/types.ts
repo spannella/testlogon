@@ -7356,3 +7356,125 @@ export interface CreateSecurityFindingIn {
   code_snippet?: string;
   remediation?: string;
 }
+
+// ── ADMIN-002: Admin Email/SMS Dashboards ──────────────────────────────
+export interface EmailDashboardStats {
+  sent: number;
+  delivered: number;
+  bounced: number;
+  complained: number;
+  failed: number;
+  suppressed: number;
+  total: number;
+  delivery_rate: number;
+  bounce_rate: number;
+  complaint_rate: number;
+  period_days: number;
+}
+
+export interface SmsDashboardStats {
+  sent: number;
+  delivered: number;
+  failed: number;
+  total: number;
+  total_segments: number;
+  estimated_cost_usd: number;
+  suppressed_numbers: number;
+  delivery_rate: number;
+  failure_rate: number;
+  period_days: number;
+}
+
+export interface DashboardTimeseriesPoint {
+  date: string;
+  sent: number;
+  delivered: number;
+  bounced: number;
+  complained: number;
+  failed: number;
+  segments: number;
+}
+
+export interface DashboardTimeseries {
+  channel: string;
+  period_days: number;
+  points: DashboardTimeseriesPoint[];
+}
+
+export interface DashboardBreakdownItem {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface DashboardBreakdown {
+  channel: string;
+  dimension: string;
+  items: DashboardBreakdownItem[];
+}
+
+export interface MessagingDeliveryItem {
+  [key: string]: unknown;
+  to_email?: string;
+  phone?: string;
+  subject?: string;
+  status?: string;
+  created_at?: number;
+  bounce_type?: string;
+  diagnostic_code?: string;
+  complaint_feedback_type?: string;
+  error?: string;
+  segments?: number;
+}
+
+export interface MessagingDeliveryList {
+  items: MessagingDeliveryItem[];
+  next_cursor: string | null;
+}
+
+export interface MessagingSuppressionItem {
+  [key: string]: unknown;
+  email?: string;
+  phone?: string;
+  reason?: string;
+  suppressed_at?: number;
+}
+
+export interface MessagingSuppressionList {
+  items: MessagingSuppressionItem[];
+  count: number;
+}
+
+export interface NotificationTemplate {
+  template_id: string;
+  channel: string;
+  name: string;
+  subject?: string | null;
+  body: string;
+  variables: string[];
+  active: boolean;
+  updated_at?: number | null;
+  updated_by?: string | null;
+}
+
+export interface NotificationTemplateUpdate {
+  subject?: string | null;
+  body?: string;
+  active?: boolean;
+}
+
+export interface NotificationTemplatePreview {
+  template_id: string;
+  channel: string;
+  rendered_subject?: string | null;
+  rendered_body: string;
+  missing_vars: string[];
+}
+
+export interface NotificationTemplateTestSendResult {
+  ok: boolean;
+  template_id: string;
+  channel: string;
+  recipient: string;
+  sent_at: number;
+}

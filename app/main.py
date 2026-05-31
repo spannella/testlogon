@@ -170,6 +170,7 @@ from app.routers.achievements import router as achievements_router
 from app.routers.admin_jobs import router as admin_jobs_router
 from app.routers.admin_sms import router as admin_sms_router
 from app.routers.admin_email import router as admin_email_router
+from app.routers.admin_notifications import router as admin_notifications_router
 from app.routers.ses_notifications import router as ses_notifications_router
 from app.routers.recommendations import (
     gallery_for_you_router as reco_gallery_router,
@@ -403,6 +404,13 @@ def create_app() -> FastAPI:
             logger.info("FFmpeg ready: %s at %s", result["version"], result["path"])
 
     app.add_event_handler("startup", _validate_ffmpeg_on_startup)
+
+    def _seed_notification_templates_on_startup():
+        try:
+            from app.services.notification_templates import seed_default_templates
+            seed_default_templates()
+        except Exception:
+            logger.warning("Failed to seed notification templates", exc_info=True)
     app.add_event_handler("startup", validate_startup_root_invariant)
     app.add_event_handler("startup", validate_google_drive_mount_oauth_configuration)
     app.add_event_handler("startup", lambda: setattr(app.state, "calendar_integration_registry", initialize_calendar_integration_registry()))
@@ -424,6 +432,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_scheduled_messages_task)
     app.add_event_handler("startup", start_broadcast_scheduler_task)
     app.add_event_handler("startup", start_broadcast_reminder_task)
+    app.add_event_handler("startup", _seed_notification_templates_on_startup)
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
@@ -490,6 +499,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_jobs_router)
     app.include_router(admin_sms_router)
     app.include_router(admin_email_router)
+    app.include_router(admin_notifications_router)
     app.include_router(ses_notifications_router)
     app.include_router(privacy_router)
     app.include_router(admin_privacy_router)
