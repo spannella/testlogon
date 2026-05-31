@@ -1793,6 +1793,10 @@ class Settings:
     accountant_agent_execute_commands: bool = os.environ.get(
         "ACCOUNTANT_AGENT_EXECUTE_COMMANDS", "0"
     ) not in ("0", "false", "False")
+    # FIN-001: Invoices / Receipt PDF
+    invoices_table_name: str = os.environ.get("INVOICES_TABLE_NAME", "invoices")
+    invoices_enabled: bool = os.environ.get("INVOICES_ENABLED", "true").lower() not in ("0", "false")
+    invoices_tax_bps: int = int(os.environ.get("INVOICES_TAX_BPS", "0"))
 
 
 S = Settings()

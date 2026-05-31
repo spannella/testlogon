@@ -185,6 +185,7 @@ class Tables:
     agent_ticket_costs: Any
     agent_cost_budgets: Any
     agent_cost_alerts: Any
+    invoices: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -364,4 +365,5 @@ T = Tables(
     agent_ticket_costs=ddb.Table(S.agent_ticket_costs_table_name),
     agent_cost_budgets=ddb.Table(S.agent_cost_budgets_table_name),
     agent_cost_alerts=ddb.Table(S.agent_cost_alerts_table_name),
+    invoices=ddb.Table(S.invoices_table_name),
 )
