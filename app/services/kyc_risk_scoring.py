@@ -370,6 +370,10 @@ class KycRiskScoringService:
             case = resp.get("Item", {})
             sof = case.get("source_of_funds", {})
             if not sof:
+                # KYC-005: fall back to standalone proof-of-funds submissions.
+                pof = self._proof_of_funds_factor(user_sub)
+                if pof is not None:
+                    return pof
                 return {"score": 30, "raw_value": "not_provided", "description": "Source of funds not provided"}
             risk_flags = sof.get("risk_flags", [])
             if not risk_flags:
@@ -459,6 +463,38 @@ class KycRiskScoringService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _proof_of_funds_factor(user_sub: str) -> dict | None:
+        """KYC-005 integration: derive a source-of-funds factor from standalone
+        proof-of-funds submissions when the case has no embedded SOF data.
+
+        Returns None when no proof-of-funds submissions exist (so the caller can
+        fall back to its default), otherwise a factor dict {score, raw_value,
+        description}.
+        """
+        try:
+            from app.services.kyc_proof_of_funds import summarize_proof_of_funds
+
+            summary = summarize_proof_of_funds(user_sub)
+        except Exception:
+            return None
+        if not summary or int(summary.get("count") or 0) == 0:
+            return None
+        verified = int(summary.get("verified_count") or 0)
+        contribution = int(summary.get("active_risk_contribution") or 0)
+        if verified > 0:
+            return {
+                "score": max(0, min(100, contribution)),
+                "raw_value": f"{verified}_verified",
+                "description": f"{verified} verified proof-of-funds submission(s)",
+            }
+        # Submissions exist but none verified -> elevated risk from contribution.
+        return {
+            "score": max(0, min(100, 30 + contribution)),
+            "raw_value": "unverified_proof_of_funds",
+            "description": "Proof-of-funds submitted but not yet verified",
+        }
 
     @staticmethod
     def _all_checks_passed(factors: dict[str, dict]) -> bool:

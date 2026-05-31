@@ -10527,3 +10527,4 @@ class QuickConnectOut(BaseModel):
     terminal_color_scheme: str = "dark"
     auto_connect: bool = False
     connected_at: int = 0
+

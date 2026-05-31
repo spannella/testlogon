@@ -140,6 +140,7 @@ const KycDocumentVerificationPage = lazy(() => import("@/pages/kyc/KycDocumentVe
 const KycDocumentReviewQueuePage = lazy(() => import("@/pages/kyc/KycDocumentReviewQueuePage"));
 const KycResidencyVerificationPage = lazy(() => import("@/pages/kyc/KycResidencyVerificationPage"));
 const KycResidencyReviewQueuePage = lazy(() => import("@/pages/kyc/KycResidencyReviewQueuePage"));
+const KycProofOfFunds = lazy(() => import("@/pages/kyc/KycProofOfFunds"));
 const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
 const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
@@ -337,6 +338,7 @@ export default function App() {
           <Route path="admin/kyc/documents" element={<KycDocumentReviewQueuePage />} />
           <Route path="kyc/residency" element={<KycResidencyVerificationPage />} />
           <Route path="admin/kyc/residency" element={<KycResidencyReviewQueuePage />} />
+          <Route path="kyc/proof-of-funds" element={<KycProofOfFunds />} />
           <Route path="agents/workers" element={<WorkersPage />} />
           <Route path="agents/dashboard" element={<AgentDashboard />} />
           <Route path="agents/fleet" element={<FleetDashboard />} />
