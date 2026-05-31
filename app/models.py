@@ -9370,3 +9370,62 @@ class AdFraudReviewIn(BaseModel):
 class AdFraudSuspendIn(BaseModel):
     """Admin manual account suspension reason."""
     reason: str = ""
+
+
+# ── Ad Scheduling & Dayparting (ADS-016) ──────────────────────────────
+
+
+class DaypartingSchedule(BaseModel):
+    """Per-campaign dayparting schedule: day-of-week → active hours (0-23)."""
+    timezone: str = "UTC"
+    schedule: Dict[str, List[int]] = Field(default_factory=dict)
+
+
+class CampaignFlight(BaseModel):
+    """A single phase ("flight") within a campaign."""
+    flight_id: Optional[str] = None
+    name: str = Field(default="Flight", max_length=100)
+    start_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    end_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    daily_budget_cents: int = Field(ge=100)
+    creative_ids: List[str] = Field(min_length=1)
+    status: Optional[str] = None
+
+
+class CampaignScheduleUpdate(BaseModel):
+    """Update dayparting and/or flight schedule on a campaign."""
+    dayparting: Optional[DaypartingSchedule] = None
+    flights: Optional[List[CampaignFlight]] = None
+    campaign_timezone: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class DaypartingEligibility(BaseModel):
+    """Result of an "is active now" dayparting check."""
+    eligible: bool
+    timezone: str = "UTC"
+    local_time: Optional[str] = None
+    day: Optional[str] = None
+    hour: Optional[int] = None
+    active_hours: List[int] = Field(default_factory=list)
+    reason: Optional[str] = None
+    active_flight: Optional[Dict[str, Any]] = None
+
+
+class BudgetPacing(BaseModel):
+    """Dayparting-aware budget pacing for a campaign."""
+    active_hours_today: int = 0
+    hours_remaining: int = 0
+    hourly_budget_cents: int = 0
+    remaining_budget_cents: int = 0
+
+
+class CampaignScheduleOut(BaseModel):
+    """Current schedule configuration for a campaign."""
+    campaign_id: Optional[str] = None
+    campaign_timezone: str = "UTC"
+    dayparting: Optional[Dict[str, Any]] = None
+    flights: Optional[List[Dict[str, Any]]] = None
+    start_date: Optional[Any] = None
+    end_date: Optional[Any] = None

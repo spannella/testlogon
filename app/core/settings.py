@@ -1336,6 +1336,16 @@ class Settings:
     ad_fraud_score_threshold: int = int(os.environ.get("AD_FRAUD_SCORE_THRESHOLD", "70"))
     ad_fraud_auto_suspend_rate_bps: int = int(os.environ.get("AD_FRAUD_AUTO_SUSPEND_RATE_BPS", "2000"))
 
+    # Ad Scheduling & Dayparting (ADS-016)
+    # Schedule (dayparting + flights) is stored on the existing campaign
+    # record; no separate table is required.
+    ad_dayparting_enabled: bool = os.environ.get(
+        "AD_DAYPARTING_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    ad_dayparting_default_timezone: str = os.environ.get(
+        "AD_DAYPARTING_DEFAULT_TIMEZONE", "UTC"
+    )
+
     # View-Once / Rental Access (VOD-019)
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")
     vod_rental_default_duration_hours: int = int(os.environ.get("VOD_RENTAL_DEFAULT_DURATION_HOURS", "48"))
