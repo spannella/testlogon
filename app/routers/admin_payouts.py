@@ -1,7 +1,7 @@
 """Admin Payout router (MON-004).
 
 Admin/root endpoints for managing payout requests: listing, approving,
-rejecting, completing, and viewing queue stats.
+rejecting, completing (mark-paid), and viewing queue stats.
 """
 
 from __future__ import annotations
@@ -16,7 +16,9 @@ from app.auth.policy import require_admin_or_root
 from app.models import (
     PayoutActionOut,
     PayoutListOut,
+    PayoutMarkPaidIn,
     PayoutOut,
+    PayoutRejectIn,
     PayoutStatsOut,
 )
 from app.services.creator_payouts import (
@@ -73,12 +75,17 @@ def approve_payout_request(
 @router.post("/{payout_id}/reject", response_model=PayoutActionOut)
 def reject_payout_request(
     payout_id: str,
+    body: Optional[PayoutRejectIn] = None,
     reason: str = "",
     admin: AuthenticatedUser = Depends(require_admin_or_root),
 ):
-    """Reject a payout request."""
+    """Reject a payout request.
+
+    Accepts reason either as a JSON body field or as a query parameter.
+    """
+    reject_reason = (body.reason if body and body.reason else reason) or ""
     try:
-        result = reject_payout(payout_id, admin.sub, reason=reason)
+        result = reject_payout(payout_id, admin.sub, reason=reject_reason)
     except LookupError:
         raise HTTPException(status_code=404, detail="Payout not found")
     except ValueError as exc:
@@ -92,7 +99,24 @@ def complete_payout_request(
     payout_id: str,
     admin: AuthenticatedUser = Depends(require_admin_or_root),
 ):
-    """Mark a payout as completed."""
+    """Mark a payout as completed (paid out)."""
+    try:
+        result = complete_payout(payout_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return PayoutActionOut(ok=True, payout_id=result["payout_id"], status=result["status"])
+
+
+@router.post("/{payout_id}/mark-paid", response_model=PayoutActionOut)
+def mark_payout_paid(
+    payout_id: str,
+    body: Optional[PayoutMarkPaidIn] = None,
+    admin: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """Mark a payout as paid (alias for /complete with optional reference)."""
     try:
         result = complete_payout(payout_id)
     except LookupError:

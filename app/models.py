@@ -2418,6 +2418,14 @@ class PayoutStatsOut(BaseModel):
     total_processing: int = 0
 
 
+class PayoutRejectIn(BaseModel):
+    reason: str = Field(default="", max_length=1000)
+
+
+class PayoutMarkPaidIn(BaseModel):
+    reference: str = Field(default="", max_length=500)
+
+
 # ─── Tip Leaderboards (SOCIAL-005) ──────────────────────────────────
 
 
