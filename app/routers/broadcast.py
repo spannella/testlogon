@@ -457,9 +457,21 @@ def get_session_route(session_id: str, request: Request, ctx: dict = Depends(_ct
 
 
 @router.post("/sessions/{session_id}/playback-url", response_model=BroadcastPlaybackUrlOut)
-def mint_playback_url_route(session_id: str, ctx: dict = Depends(_ctx)):
-    _ = ctx
+def mint_playback_url_route(
+    session_id: str,
+    invite_token: Optional[str] = Query(default=None),
+    ctx: dict = Depends(_ctx),
+):
     session = get_session(session_id)
+    # Go-Private playback gating (BCAST-011)
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+        invite_token=invite_token,
+    )
     existing = get_output(session_id)
     try:
         minted = mint_local_playback_url(session.id)
@@ -521,14 +533,29 @@ class ViewerCountOut(BaseModel):
 
 
 @router.post("/sessions/{session_id}/viewers/join", response_model=ViewerJoinOut)
-def viewer_join_route(session_id: str, request: Request, ctx: dict = Depends(_ctx)):
+def viewer_join_route(
+    session_id: str,
+    request: Request,
+    invite_token: Optional[str] = Query(default=None),
+    ctx: dict = Depends(_ctx),
+):
     """Register as a viewer. Called when playback begins."""
+    from app.core.tables import T as _T
     session = get_session(session_id)  # 404 if session doesn't exist
     # Geo-check for viewers
     if session.created_by != ctx["user_sub"]:
         from app.services.geo_check import check_geo_access
-        raw = T.broadcast_sessions.get_item(Key={"session_id": session_id}).get("Item", {})
+        raw = _T.broadcast_sessions.get_item(Key={"session_id": session_id}).get("Item", {})
         check_geo_access(request, raw.get("geo_mode"), raw.get("geo_countries"))
+    # Go-Private access gating (BCAST-011)
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+        invite_token=invite_token,
+    )
     result = register_viewer(session_id, ctx["user_sub"])
     return ViewerJoinOut(**result)
 
@@ -1227,6 +1254,180 @@ def resume_broadcast_route(
     })
 
     return _to_session_out(updated)
+
+
+# ─── Go-Private Visibility + Allowlist Endpoints (BCAST-011) ─────────
+
+
+class BroadcastPrivacyVisibilityIn(BaseModel):
+    visibility: str = Field(..., pattern="^(public|unlisted|private)$")
+
+
+class BroadcastPrivacyStateOut(BaseModel):
+    session_id: str
+    visibility: str
+    updated_at: Optional[str] = None
+    allowlist_count: int = 0
+
+
+class BroadcastPrivacyAllowlistEntryIn(BaseModel):
+    viewer_id: str = Field(..., min_length=1, max_length=256)
+
+
+class BroadcastPrivacyAllowlistEntryOut(BaseModel):
+    viewer_id: str
+    added_by: str = ""
+    created_at: int = 0
+
+
+class BroadcastPrivacyAllowlistOut(BaseModel):
+    session_id: str
+    entries: List[BroadcastPrivacyAllowlistEntryOut] = Field(default_factory=list)
+
+
+class BroadcastPrivacyInviteTokenIn(BaseModel):
+    max_uses: int = Field(default=1, ge=1, le=10000)
+
+
+class BroadcastPrivacyInviteTokenOut(BaseModel):
+    token: str
+    session_id: str
+    max_uses: int
+    use_count: int = 0
+    created_at: int = 0
+
+
+class BroadcastPrivacyInviteTokenListOut(BaseModel):
+    session_id: str
+    tokens: List[BroadcastPrivacyInviteTokenOut] = Field(default_factory=list)
+
+
+def _require_session_owner(session_id: str, ctx: dict):
+    """Return the session; raise 403 unless caller is the broadcaster (or operator)."""
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by and ctx.get("role") not in {"admin", "root"}:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "BROADCAST_PRIVACY_FORBIDDEN", "detail": "Only the broadcaster can manage privacy."},
+        )
+    return session
+
+
+@router.get("/sessions/{session_id}/privacy", response_model=BroadcastPrivacyStateOut)
+def get_privacy_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """Get current visibility + allowlist size for a session (any authenticated user)."""
+    _ = ctx
+    from app.services.broadcast_privacy import get_privacy_state
+    return BroadcastPrivacyStateOut(**get_privacy_state(session_id))
+
+
+@router.put("/sessions/{session_id}/privacy", response_model=BroadcastPrivacyStateOut)
+def set_privacy_route(
+    session_id: str,
+    body: BroadcastPrivacyVisibilityIn,
+    request: Request,
+    ctx: dict = Depends(_ctx),
+):
+    """Toggle session visibility public/unlisted/private (broadcaster only)."""
+    _require_session_owner(session_id, ctx)
+    from app.services.broadcast_privacy import set_visibility
+    state = set_visibility(session_id, body.visibility)
+    record_broadcast_action(
+        action="set_visibility",
+        actor=ctx["user_sub"],
+        correlation_id=_correlation_id(request),
+        resource_type="session",
+        resource_id=session_id,
+        metadata={"visibility": body.visibility},
+    )
+    broadcast_sse_publish(session_id, {
+        "_type": "privacy:visibility_changed",
+        "session_id": session_id,
+        "visibility": body.visibility,
+    })
+    return BroadcastPrivacyStateOut(**state)
+
+
+@router.get("/sessions/{session_id}/privacy/allowlist", response_model=BroadcastPrivacyAllowlistOut)
+def list_allowlist_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """List allowlisted viewers (broadcaster only)."""
+    _require_session_owner(session_id, ctx)
+    from app.services.broadcast_privacy import list_allowlist
+    entries = list_allowlist(session_id)
+    return BroadcastPrivacyAllowlistOut(
+        session_id=session_id,
+        entries=[BroadcastPrivacyAllowlistEntryOut(**e) for e in entries],
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/privacy/allowlist",
+    response_model=BroadcastPrivacyAllowlistEntryOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_allowlist_route(
+    session_id: str,
+    body: BroadcastPrivacyAllowlistEntryIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Add a viewer to the allowlist (broadcaster only)."""
+    _require_session_owner(session_id, ctx)
+    from app.services.broadcast_privacy import add_to_allowlist
+    result = add_to_allowlist(session_id, body.viewer_id, added_by=ctx["user_sub"])
+    return BroadcastPrivacyAllowlistEntryOut(
+        viewer_id=result["viewer_id"], added_by=ctx["user_sub"], created_at=result["created_at"]
+    )
+
+
+@router.delete("/sessions/{session_id}/privacy/allowlist/{viewer_id}")
+def remove_allowlist_route(session_id: str, viewer_id: str, ctx: dict = Depends(_ctx)):
+    """Remove a viewer from the allowlist (broadcaster only)."""
+    _require_session_owner(session_id, ctx)
+    from app.services.broadcast_privacy import remove_from_allowlist
+    removed = remove_from_allowlist(session_id, viewer_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Viewer not on allowlist.")
+    return {"ok": True, "viewer_id": viewer_id}
+
+
+@router.get("/sessions/{session_id}/privacy/tokens", response_model=BroadcastPrivacyInviteTokenListOut)
+def list_invite_tokens_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """List invite tokens (broadcaster only)."""
+    _require_session_owner(session_id, ctx)
+    from app.services.broadcast_privacy import list_invite_tokens
+    tokens = list_invite_tokens(session_id)
+    return BroadcastPrivacyInviteTokenListOut(
+        session_id=session_id,
+        tokens=[BroadcastPrivacyInviteTokenOut(session_id=session_id, **t) for t in tokens],
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/privacy/tokens",
+    response_model=BroadcastPrivacyInviteTokenOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_invite_token_route(
+    session_id: str,
+    body: BroadcastPrivacyInviteTokenIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Mint an invite token granting private access (broadcaster only)."""
+    _require_session_owner(session_id, ctx)
+    from app.services.broadcast_privacy import create_invite_token
+    result = create_invite_token(session_id, created_by=ctx["user_sub"], max_uses=body.max_uses)
+    return BroadcastPrivacyInviteTokenOut(**result)
+
+
+@router.delete("/sessions/{session_id}/privacy/tokens/{token}")
+def revoke_invite_token_route(session_id: str, token: str, ctx: dict = Depends(_ctx)):
+    """Revoke an invite token (broadcaster only)."""
+    _require_session_owner(session_id, ctx)
+    from app.services.broadcast_privacy import revoke_invite_token
+    revoked = revoke_invite_token(session_id, token)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="Invite token not found.")
+    return {"ok": True, "token": token}
 
 
 # ─── Live Chat Endpoints (BCAST-005) ─────────────────────────────

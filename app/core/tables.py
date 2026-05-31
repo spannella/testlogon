@@ -89,6 +89,7 @@ class Tables:
     creator_payouts: Any
     broadcast_reminders: Any
     broadcast_private_sessions: Any
+    broadcast_allowlist: Any
     broadcast_inputs: Any
     broadcast_tip_goals: Any
     video_views: Any
@@ -285,6 +286,7 @@ T = Tables(
     creator_payouts=ddb.Table(S.creator_payouts_table_name),
     broadcast_reminders=ddb.Table(S.broadcast_reminders_table_name),
     broadcast_private_sessions=ddb.Table(S.broadcast_private_sessions_table_name),
+    broadcast_allowlist=ddb.Table(S.broadcast_allowlist_table_name),
     broadcast_inputs=ddb.Table(S.broadcast_inputs_table_name),
     broadcast_tip_goals=ddb.Table(S.broadcast_tip_goals_table_name),
     video_views=ddb.Table(S.video_views_table_name),
