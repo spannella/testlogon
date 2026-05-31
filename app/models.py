@@ -1551,6 +1551,49 @@ class DisputeResolveIn(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=2000)
 
 
+# ---- FIN-017: Bulk Payout & Refund Tools ----
+
+class BulkEligibleItem(BaseModel):
+    ref_id: str
+    amount_cents: int
+    recipient: str
+    currency: str = "usd"
+    status: str = "pending"
+    created_at: int = 0
+
+
+class BulkPreviewIn(BaseModel):
+    kind: str
+    ref_ids: List[str] = Field(default_factory=list)
+
+
+class BulkExecuteIn(BaseModel):
+    kind: Optional[str] = None
+    ref_ids: Optional[List[str]] = None
+    batch_id: Optional[str] = None
+
+
+class BulkBatchItem(BaseModel):
+    ref_id: str
+    amount_cents: int
+    recipient: str = ""
+    status: str
+    reason: str = ""
+
+
+class BulkBatchOut(BaseModel):
+    batch_id: str
+    created_at: int
+    created_by: Optional[str] = None
+    kind: str
+    status: str
+    item_count: int
+    success_count: int = 0
+    failure_count: int = 0
+    total_cents: int
+    items: List[BulkBatchItem] = Field(default_factory=list)
+
+
 class VerifyMicrodepositsReq(BaseModel):
     setup_intent_id: str
     amounts: Optional[List[int]] = None

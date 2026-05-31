@@ -110,6 +110,7 @@ const RefundRequestsPage = lazy(() => import("@/pages/billing/RefundRequestsPage
 const InvoicesPage = lazy(() => import("@/pages/billing/InvoicesPage"));
 const TaxDocumentsPage = lazy(() => import("@/pages/billing/TaxDocumentsPage"));
 const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePage"));
+const BulkPayoutConsole = lazy(() => import("@/pages/admin/BulkPayoutConsole"));
 const DisputesPage = lazy(() => import("@/pages/billing/DisputesPage"));
 const AdminDisputeQueuePage = lazy(() => import("@/pages/admin/AdminDisputeQueuePage"));
 const SavedPage = lazy(() => import("@/pages/saved/SavedPage"));
@@ -317,6 +318,7 @@ export default function App() {
           <Route path="dmca/submit" element={<DmcaClaimForm />} />
           <Route path="admin/dmca" element={<DmcaDashboardPage />} />
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
+          <Route path="admin/bulk-payouts" element={<BulkPayoutConsole />} />
           <Route path="admin/disputes" element={<AdminDisputeQueuePage />} />
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
           <Route path="admin/communications" element={<EmailSmsDashboardPage />} />
