@@ -12,13 +12,35 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
-_TICKET_STATUSES = ("open", "in_progress", "waiting_on_user", "done")
+_TICKET_STATUSES = ("open", "in_progress", "waiting_on_user", "done", "code_complete", "blocked")
 _STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
-    "open": ("in_progress", "done"),
-    "in_progress": ("waiting_on_user", "done", "open"),
+    "open": ("in_progress", "done", "blocked"),
+    "in_progress": ("waiting_on_user", "done", "open", "code_complete", "blocked"),
     "waiting_on_user": ("in_progress", "done", "open"),
     "done": ("open",),
+    "code_complete": ("done", "in_progress", "open"),
+    "blocked": ("open", "in_progress"),
 }
+
+# AGENT-008: label index partition prefix. Label fan-out rows live in the base
+# tickets table under pk="LABELIDX#{label}" so the coder agent can query eligible
+# tickets by label without a new GSI (queryable on the base table partition key).
+_LABEL_INDEX_PREFIX = "LABELIDX#"
+
+
+def label_index_pk(label: str) -> str:
+    return f"{_LABEL_INDEX_PREFIX}{label}"
+
+
+def _label_index_sk(created_at: int, ticket_id: str) -> str:
+    return f"{created_at:013d}#{ticket_id}"
+
+
+def _complexity_from_labels(labels: list[str]) -> str | None:
+    for level in ("critical", "high", "medium", "low"):
+        if f"complexity:{level}" in labels:
+            return level
+    return None
 
 
 class TicketStateError(Exception):
@@ -222,6 +244,8 @@ class TicketStore:
         ticket_id: str | None = None,
         category: str | None = None,
         metadata: dict[str, Any] | None = None,
+        labels: list[str] | None = None,
+        estimated_effort_hours: int | None = None,
     ) -> dict[str, Any]:
         ts = now_ts()
         resolved_ticket_id = ticket_id or f"tkt_{uuid.uuid4().hex[:12]}"
@@ -230,6 +254,9 @@ class TicketStore:
             return existing
         message_id = f"msg_{uuid.uuid4().hex[:12]}"
         activity_id = f"act_{uuid.uuid4().hex[:12]}"
+
+        norm_labels = sorted({str(l).strip() for l in (labels or []) if str(l).strip()})
+        complexity = _complexity_from_labels(norm_labels)
 
         header = {
             "pk": _ticket_pk(resolved_ticket_id),
@@ -240,6 +267,9 @@ class TicketStore:
             "owner_sub": owner_sub,
             "category": category,
             "metadata": metadata or {},
+            "labels": norm_labels,
+            "complexity": complexity,
+            "estimated_effort_hours": estimated_effort_hours,
             "status": "open",
             "space_id": space_id,
             "assigned_admin_sub": None,
@@ -265,6 +295,19 @@ class TicketStore:
             "gsi_space_assignee_sk": _updated_index_sk(ts, resolved_ticket_id) if space_id else None,
         }
         self._table.put_item(Item={k: v for k, v in header.items() if v is not None})
+        # AGENT-008: fan-out one label index row per label for agent eligibility queries.
+        for label in norm_labels:
+            self._table.put_item(Item={
+                "pk": label_index_pk(label),
+                "sk": _label_index_sk(ts, resolved_ticket_id),
+                "entity_type": "ticket_label_index",
+                "ticket_id": resolved_ticket_id,
+                "label": label,
+                "space_id": space_id,
+                "subject": subject,
+                "complexity": complexity,
+                "created_at": ts,
+            })
         self._table.put_item(Item={
             "pk": _ticket_pk(resolved_ticket_id),
             "sk": _msg_sk(ts, message_id),
@@ -309,6 +352,13 @@ class TicketStore:
             "owner_sub": header.get("owner_sub", ""),
             "category": header.get("category"),
             "metadata": header.get("metadata", {}),
+            "labels": list(header.get("labels", []) or []),
+            "complexity": header.get("complexity"),
+            "estimated_effort_hours": (
+                int(header["estimated_effort_hours"])
+                if header.get("estimated_effort_hours") is not None
+                else None
+            ),
             "status": header.get("status", "open"),
             "space_id": header.get("space_id"),
             "assigned_admin_sub": header.get("assigned_admin_sub"),

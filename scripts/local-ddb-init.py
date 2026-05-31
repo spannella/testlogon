@@ -1469,6 +1469,25 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Coder Agent (AGENT-008) — agent type configs (pk=TYPE#{id}, sk=CONFIG|META)
+        TableDef(
+            _resolve_table_name(S.agent_types_table_name, "agent_types"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByKind", "partition_key": "agent_type", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Coder Agent (AGENT-008) — agent run output (pk=RUN#{id}, sk=OUTPUT)
+        TableDef(
+            _resolve_table_name(S.agent_runs_table_name, "agent_runs"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByTypeDate", "partition_key": "gsi_type_date_pk", "sort_key": "gsi_type_date_sk"},
+            ],
+        ),
     ]
 
 

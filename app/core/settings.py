@@ -1638,5 +1638,14 @@ class Settings:
     agent_feedback_table_name: str = os.environ.get("AGENT_FEEDBACK_TABLE_NAME", "agent_feedback")
     agent_feedback_timeout_seconds: int = int(os.environ.get("AGENT_FEEDBACK_TIMEOUT_SECONDS", "14400"))
 
+    # Coder Agent (AGENT-008)
+    agent_types_table_name: str = os.environ.get("AGENT_TYPES_TABLE_NAME", "agent_types")
+    agent_runs_table_name: str = os.environ.get("AGENT_RUNS_TABLE_NAME", "agent_runs")
+    tickets_label_index_name: str = os.environ.get("TICKETS_LABEL_INDEX_NAME", "gsi_label")
+    # When false (default), the coder lifecycle never runs real shell/git/PR commands —
+    # the workflow is generated and executed in mock/dry-run mode so E2E tests are deterministic.
+    agent_coder_enabled: bool = os.environ.get("AGENT_CODER_ENABLED", "1") not in ("0", "false", "False")
+    agent_coder_execute_commands: bool = os.environ.get("AGENT_CODER_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
+
 
 S = Settings()

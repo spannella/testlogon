@@ -5995,3 +5995,109 @@ export interface SetQuotaReq {
   allowed_k8s_presets: string[];
   notes?: string;
 }
+
+// ─── Coder Agent (AGENT-008) ───────────────────────────────────
+
+export interface CoderConfig {
+  repo_url: string;
+  repo_branch_base: string;
+  branch_pattern: string;
+  test_commands: string[];
+  test_timeout_seconds: number;
+  test_retry_limit: number;
+  pr_template: string;
+  pr_base_branch: string;
+  skill_level: "junior" | "mid" | "senior";
+  max_ticket_time_seconds: number;
+  complexity_labels?: Record<string, string[]>;
+  coding_tool: "claude_code" | "codex";
+  coding_tool_model?: string | null;
+  pre_commands?: string[] | null;
+  post_commands?: string[] | null;
+  file_exclude_patterns?: string[] | null;
+  updated_at?: number | null;
+}
+
+export interface CoderConfigIn {
+  repo_url: string;
+  repo_branch_base?: string;
+  branch_pattern?: string;
+  test_commands: string[];
+  test_timeout_seconds?: number;
+  test_retry_limit?: number;
+  pr_template?: string;
+  pr_base_branch?: string;
+  skill_level?: "junior" | "mid" | "senior";
+  max_ticket_time_seconds?: number;
+  complexity_labels?: Record<string, string[]>;
+  coding_tool?: "claude_code" | "codex";
+  coding_tool_model?: string | null;
+  pre_commands?: string[] | null;
+  post_commands?: string[] | null;
+  file_exclude_patterns?: string[] | null;
+}
+
+export interface CoderConfigValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+export interface CoderOutput {
+  branch_name: string;
+  pr_url: string;
+  pr_number: number;
+  files_changed: string[];
+  files_added: string[];
+  files_deleted: string[];
+  insertions: number;
+  deletions: number;
+  test_results: Array<{
+    command: string;
+    exit_code: number;
+    duration_seconds: number;
+    stdout_tail?: string;
+    stderr_tail?: string;
+  }>;
+  test_retry_count: number;
+  total_duration_seconds: number;
+  escalated: boolean;
+  escalation_reason?: string | null;
+}
+
+export interface CoderMetrics {
+  completed_count: number;
+  avg_duration_seconds: number;
+  failure_rate: number;
+  escalation_rate: number;
+  tickets_by_skill_level: Record<string, number>;
+  period_start: number;
+  period_end: number;
+}
+
+export interface EligibleTicket {
+  ticket_id: string;
+  subject: string;
+  labels: string[];
+  complexity?: string | null;
+  estimated_effort_hours?: number | null;
+  created_at: number;
+}
+
+export interface EligibleTicketsResult {
+  tickets: EligibleTicket[];
+  count: number;
+}
+
+export interface CoderWorkflowStep {
+  step_id: number;
+  type: string;
+  command?: string | null;
+  timeout_seconds: number;
+  on_failure: string;
+}
+
+export interface CoderWorkflowPreview {
+  steps: CoderWorkflowStep[];
+  branch_name: string;
+  total_timeout_seconds: number;
+}

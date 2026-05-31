@@ -161,6 +161,8 @@ class Tables:
     compute_quotas: Any
     agent_memory: Any
     agent_feedback: Any
+    agent_types: Any
+    agent_runs: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -316,4 +318,6 @@ T = Tables(
     compute_quotas=ddb.Table(S.compute_quotas_table_name),
     agent_memory=ddb.Table(S.agent_memory_table_name),
     agent_feedback=ddb.Table(S.agent_feedback_table_name),
+    agent_types=ddb.Table(S.agent_types_table_name),
+    agent_runs=ddb.Table(S.agent_runs_table_name),
 )
