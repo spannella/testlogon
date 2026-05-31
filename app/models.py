@@ -8695,3 +8695,41 @@ class KycDocumentReviewRequest(BaseModel):
 
     decision: Literal["approve", "reject"]
     note: Optional[str] = Field(default=None, max_length=2000)
+# FIN-001: Invoice / Receipt PDF models
+# ---------------------------------------------------------------------------
+
+class InvoiceLineItemOut(BaseModel):
+    description: str
+    quantity: int = 1
+    amount_cents: int
+
+
+class InvoiceOut(BaseModel):
+    invoice_id: str
+    invoice_number: str
+    invoice_type: str  # tip, unlock, subscription, shop, deposit
+    user_sub: str
+    amount_cents: int
+    tax_cents: int = 0
+    total_cents: int
+    currency: str = "usd"
+    status: str = "generated"  # generated, emailed
+    seller_id: str = ""
+    seller_name: str = ""
+    buyer_name: str = ""
+    buyer_email: str = ""
+    line_items: List[InvoiceLineItemOut] = Field(default_factory=list)
+    payment_method_summary: str = ""
+    ledger_entry_id: str = ""
+    created_at: int = 0
+
+
+class InvoiceListOut(BaseModel):
+    invoices: List[InvoiceOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class InvoiceEmailOut(BaseModel):
+    ok: bool = True
+    emailed_to: str = ""
+    message: str = ""

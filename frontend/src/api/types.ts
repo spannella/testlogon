@@ -7830,3 +7830,41 @@ export interface KycDocumentReviewRequest {
   decision: "approve" | "reject";
   note?: string | null;
 }
+
+// FIN-001: Invoice / Receipt PDF
+export interface InvoiceLineItem {
+  description: string;
+  quantity: number;
+  amount_cents: number;
+}
+
+export interface Invoice {
+  invoice_id: string;
+  invoice_number: string;
+  invoice_type: string;
+  user_sub: string;
+  amount_cents: number;
+  tax_cents: number;
+  total_cents: number;
+  currency: string;
+  status: string;
+  seller_id: string;
+  seller_name: string;
+  buyer_name: string;
+  buyer_email: string;
+  line_items: InvoiceLineItem[];
+  payment_method_summary: string;
+  ledger_entry_id: string;
+  created_at: number;
+}
+
+export interface InvoiceList {
+  invoices: Invoice[];
+  next_cursor: string | null;
+}
+
+export interface InvoiceEmailResult {
+  ok: boolean;
+  emailed_to: string;
+  message: string;
+}

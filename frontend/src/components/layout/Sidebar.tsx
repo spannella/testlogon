@@ -60,6 +60,7 @@ import {
   Lightbulb,
   Palette,
   Gauge,
+  Receipt,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -113,6 +114,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Shop", i18nKey: "nav.shop", path: "/shop", icon: <Store className="h-5 w-5" /> },
       { label: "Cart", i18nKey: "nav.cart", path: "/cart", icon: <ShoppingCart className="h-5 w-5" /> },
       { label: "Billing", i18nKey: "nav.billing", path: "/billing", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "Invoices", i18nKey: "nav.invoices", path: "/billing/invoices", icon: <Receipt className="h-5 w-5" /> },
       { label: "Orders", i18nKey: "nav.orders", path: "/purchases", icon: <ClipboardList className="h-5 w-5" /> },
       { label: "Subscriptions", i18nKey: "nav.subscriptions", path: "/subscriptions", icon: <Repeat className="h-5 w-5" /> },
       { label: "Tier Manager", i18nKey: "nav.tierManager", path: "/subscriptions/manage", icon: <Layers className="h-5 w-5" /> },

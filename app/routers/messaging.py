@@ -12683,6 +12683,24 @@ def send_message_tip(
             tip_payment_id=tip_payment_id,
             extra_meta={"conversation_id": conversation_id},
         ))
+        # FIN-001: generate an invoice for the tip (best-effort)
+        from app.services.invoices import create_invoice_safe
+        from app.services.profile import get_profile_identity
+        _buyer = get_profile_identity(user_id)
+        _seller = get_profile_identity(msg_author)
+        create_invoice_safe(
+            user_sub=user_id,
+            invoice_type="tip",
+            amount_cents=int(inp.amount_cents),
+            line_items=[{"description": "Tip on message", "quantity": 1, "amount_cents": int(inp.amount_cents)}],
+            ledger_entry_id=tip_payment_id,
+            seller_id=msg_author,
+            seller_name=_seller.get("display_name") or msg_author,
+            buyer_name=_buyer.get("display_name") or user_id,
+            buyer_email=_buyer.get("email") or "",
+            payment_method_summary=str(inp.payment_method_id or ""),
+            currency=str(inp.currency or "usd").lower(),
+        )
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -12795,6 +12813,30 @@ def unlock_message(
         })
     except Exception:
         pass  # Best-effort ledger write
+
+    # FIN-001: generate an invoice for the unlock (best-effort)
+    try:
+        from app.services.invoices import create_invoice_safe
+        from app.services.profile import get_profile_identity
+        _seller_id = msg.get("sender_id") or ""
+        _buyer = get_profile_identity(user_id)
+        _seller = get_profile_identity(_seller_id) if _seller_id else {}
+        _lock_desc = msg.get("lock_description") or "content"
+        create_invoice_safe(
+            user_sub=user_id,
+            invoice_type="unlock",
+            amount_cents=int(amount_cents),
+            line_items=[{"description": f"Unlock: {_lock_desc}", "quantity": 1, "amount_cents": int(amount_cents)}],
+            ledger_entry_id=unlock_payment_id,
+            seller_id=_seller_id,
+            seller_name=(_seller.get("display_name") if _seller else None) or _seller_id or "Platform",
+            buyer_name=_buyer.get("display_name") or user_id,
+            buyer_email=_buyer.get("email") or "",
+            payment_method_summary=str(inp.payment_method_id or ""),
+            currency="usd",
+        )
+    except Exception:
+        pass
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,

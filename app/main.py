@@ -425,6 +425,7 @@ def create_app() -> FastAPI:
             os.environ.get("S3_BUCKET_IMAGES", ""),
             _S.video_upload_bucket,
             _S.vod_output_bucket or "vod-output",
+            _S.filemgr_bucket or "filemgr",  # FIN-001 invoice PDFs
         ] if b]
         app.add_event_handler("startup", lambda: _start_s3_mock(_dev_buckets))
 
@@ -622,6 +623,9 @@ def create_app() -> FastAPI:
     app.include_router(agent_compliance_router)
     from app.routers.agent_accountant import agent_accountant_router
     app.include_router(agent_accountant_router)
+    from app.routers.invoices import invoices_router, invoices_admin_router
+    app.include_router(invoices_router)
+    app.include_router(invoices_admin_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)

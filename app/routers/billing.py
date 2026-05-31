@@ -2359,6 +2359,25 @@ def wallet_deposit(body: WalletDepositReq, req: Request = None, ctx=Depends(requ
     if pi.get("status") == "succeeded":
         wallet_balance_cents = apply_wallet_delta(T.billing, pk, int(body.amount_cents), currency=currency)
         settle_or_reverse_ledger(T.billing, "pk", pk, led_sk, "settled")
+        # FIN-001: generate an invoice for the settled wallet deposit (best-effort)
+        try:
+            from app.services.invoices import create_invoice_safe
+            from app.services.profile import get_profile_identity
+            _buyer = get_profile_identity(user_id)
+            create_invoice_safe(
+                user_sub=user_id,
+                invoice_type="deposit",
+                amount_cents=int(body.amount_cents),
+                line_items=[{"description": "Wallet deposit", "quantity": 1, "amount_cents": int(body.amount_cents)}],
+                ledger_entry_id=led_item.get("entry_id", ""),
+                seller_name="Platform",
+                buyer_name=_buyer.get("display_name") or user_id,
+                buyer_email=_buyer.get("email") or "",
+                payment_method_summary=str(payment_method_id or ""),
+                currency=currency,
+            )
+        except Exception:
+            pass
 
     audit_event(
         "billing_wallet_deposit",

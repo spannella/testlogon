@@ -688,6 +688,32 @@ def purchase_cart(
     except Exception:
         pass  # Non-critical: TTL removal is best-effort
 
+    # FIN-001: generate an invoice for the shop purchase (best-effort)
+    try:
+        from app.services.invoices import create_invoice_safe
+        _line_items = []
+        for _it in items:
+            _qty = int(_it.get("quantity", 1) or 1)
+            _line_total = int(_it.get("line_total_cents", 0) or 0)
+            _line_items.append({
+                "description": str(_it.get("name") or _it.get("item_id") or "Item"),
+                "quantity": _qty,
+                "amount_cents": _line_total,
+            })
+        create_invoice_safe(
+            user_sub=user_sub,
+            invoice_type="shop",
+            amount_cents=int(final_total),
+            line_items=_line_items,
+            ledger_entry_id=str(txn_id),
+            seller_name="Shop",
+            buyer_name=(buyer or {}).get("display_name") or user_sub,
+            buyer_email=(buyer or {}).get("displayed_email") or "",
+            currency=str(cart.get("currency", "USD")).lower(),
+        )
+    except Exception:
+        pass
+
     return {
         "cart_id": cart_id,
         "order_id": order_id,

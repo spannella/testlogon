@@ -1709,6 +1709,20 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # FIN-001: Invoices / Receipt PDF.
+        # pk=USER#{user_sub}, sk=INV#{invoice_number}; plus COUNTER/SEQ row.
+        # GSI1=invoices by type (USER#{sub}#TYPE#{type} / created_at).
+        # GSI2=admin lookup (ADMIN_ALL / created_at).
+        TableDef(
+            _resolve_table_name(S.invoices_table_name, "invoices"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
     ]
 
 
