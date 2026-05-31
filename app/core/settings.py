@@ -1647,6 +1647,16 @@ class Settings:
     agent_coder_enabled: bool = os.environ.get("AGENT_CODER_ENABLED", "1") not in ("0", "false", "False")
     agent_coder_execute_commands: bool = os.environ.get("AGENT_CODER_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
 
+    # Documentation Agent (AGENT-014). Reuses the agent_types table for doc_config.
+    agent_doc_coverage_table_name: str = os.environ.get("AGENT_DOC_COVERAGE_TABLE_NAME", "agent_doc_coverage")
+    agent_doc_templates_table_name: str = os.environ.get("AGENT_DOC_TEMPLATES_TABLE_NAME", "agent_doc_templates")
+    # Master kill switch + sub-flags for the doc agent. When disabled the real
+    # doc-writing / PR-trigger paths are off; freshness comparison and coverage
+    # tracking remain available (deterministic, mockable) so E2E stays green.
+    doc_agent_enabled: bool = os.environ.get("DOC_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    doc_pr_trigger_enabled: bool = os.environ.get("DOC_PR_TRIGGER_ENABLED", "0") not in ("0", "false", "False")
+    doc_inline_tickets_enabled: bool = os.environ.get("DOC_INLINE_TICKETS_ENABLED", "1") not in ("0", "false", "False")
+
     # QA Agent (AGENT-009). Reuses the agent_types / agent_runs tables.
     agent_qa_enabled: bool = os.environ.get("QA_AGENT_ENABLED", "1") not in ("0", "false", "False")
     # When false (default, and always in E2E), the QA lifecycle never runs real

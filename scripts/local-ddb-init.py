@@ -1510,6 +1510,24 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # Documentation Agent (AGENT-014) — doc coverage + freshness tracking
+        # (pk=USER#{id}, sk=DOC#{path}). GSI1 = by doc_type, GSI2 = by staleness.
+        TableDef(
+            _resolve_table_name(S.agent_doc_coverage_table_name, "agent_doc_coverage"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # Documentation Agent (AGENT-014) — doc templates (pk=USER#{id}, sk=TMPL#{id})
+        TableDef(
+            _resolve_table_name(S.agent_doc_templates_table_name, "agent_doc_templates"),
+            "pk",
+            "sk",
+        ),
     ]
 
 

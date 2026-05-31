@@ -6554,3 +6554,99 @@ export interface ArchitectMetrics {
   period_start: number;
   period_end: number;
 }
+
+// --- Documentation Agent (AGENT-014) ---
+
+export interface DocCoverageRecord {
+  doc_path: string;
+  doc_type: "api" | "architecture" | "user_guide" | "adr" | "readme" | "inline";
+  source_refs: string[];
+  coverage_score: number;
+  is_stale: boolean;
+  stale_since?: number;
+  last_verified: number;
+  last_updated: number;
+  created_at: number;
+}
+
+export interface DocCoverageDetails {
+  docs: DocCoverageRecord[];
+  count: number;
+}
+
+export interface DocTypeSummary {
+  count: number;
+  avg_coverage: number;
+  stale_count: number;
+}
+
+export interface DocCoverageSummary {
+  overall_coverage: number;
+  total_docs: number;
+  stale_docs: number;
+  by_type: Record<string, DocTypeSummary>;
+}
+
+export interface FreshnessCheckResult {
+  total: number;
+  stale: number;
+  fresh: number;
+  stale_docs: Array<{
+    doc_path: string;
+    doc_type: string;
+    changed_sources: string[];
+    stale_since: number;
+  }>;
+  checked_at: number;
+}
+
+export interface StaleDocsList {
+  docs: DocCoverageRecord[];
+  count: number;
+}
+
+export interface PrImpactAssessment {
+  docs_to_update: DocCoverageRecord[];
+  uncovered_files: string[];
+  impact_level: "none" | "low" | "medium" | "high";
+}
+
+export interface DocTemplate {
+  template_id: string;
+  name: string;
+  doc_type: string;
+  template_body: string;
+  required_sections: string[];
+  created_at: number;
+}
+
+export interface DocTemplatesList {
+  templates: DocTemplate[];
+  count: number;
+}
+
+export interface DocTemplateIn {
+  name: string;
+  doc_type: "api" | "architecture" | "user_guide" | "adr" | "readme";
+  template_body: string;
+  required_sections: string[];
+}
+
+export interface DocAgentConfig {
+  trigger_on_pr_merge: boolean;
+  freshness_check_frequency: "hourly" | "daily" | "weekly";
+  freshness_check_hour_utc: number;
+  doc_format: string;
+  doc_root: string;
+  min_coverage_threshold: number;
+  create_tickets_for_inline_docs: boolean;
+  inline_doc_target_agent_type: string;
+  ignored_paths: string[];
+}
+
+export interface RegisterDocBody {
+  doc_path: string;
+  doc_type: "api" | "architecture" | "user_guide" | "adr" | "readme" | "inline";
+  source_refs: string[];
+  coverage_score: number;
+}
