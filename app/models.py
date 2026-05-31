@@ -7093,3 +7093,296 @@ class TicketCreateFeatureIn(BaseModel):
     description: str = Field(default="", max_length=10000)
     labels: List[str] = Field(default_factory=lambda: ["type:feature_request"], max_length=20)
     space_id: Optional[str] = Field(default=None, max_length=100)
+
+
+# ─── Project Manager Agent (AGENT-012) ──────────────────────────────
+
+
+class PmConfigIn(BaseModel):
+    priority_framework: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "P0": "Critical/blocking",
+            "P1": "High/next sprint",
+            "P2": "Medium/backlog",
+            "P3": "Low/nice-to-have",
+        }
+    )
+    priority_weights: Dict[str, float] = Field(
+        default_factory=lambda: {
+            "user_impact": 0.4,
+            "revenue_impact": 0.3,
+            "technical_debt": 0.15,
+            "effort_inverse": 0.15,
+        }
+    )
+    sprint_duration_days: int = Field(default=14, ge=1, le=90)
+    capacity_per_agent_type: Dict[str, int] = Field(
+        default_factory=lambda: {"coder": 80, "qa": 40, "devops": 20, "architect": 20}
+    )
+    reporting_cadence: Literal["daily", "weekly", "both"] = "both"
+    report_time_utc: str = Field(default="09:00", pattern=r"^\d{2}:\d{2}$")
+    idea_intake_enabled: bool = True
+    auto_prioritize: bool = True
+    auto_create_feature_requests: bool = False
+    blocker_stale_hours: int = Field(default=48, ge=1, le=720)
+    escalation_on_conflict: bool = True
+    coding_tool: Literal["claude_code", "codex"] = "claude_code"
+    coding_tool_model: Optional[str] = Field(default=None, max_length=100)
+    project_space_id: Optional[str] = Field(default=None, max_length=100)
+    stakeholder_subs: Optional[List[str]] = Field(default=None, max_length=20)
+
+    @field_validator("priority_framework")
+    @classmethod
+    def _validate_framework(cls, v: Dict[str, str]) -> Dict[str, str]:
+        for level in ("P0", "P1", "P2", "P3"):
+            if level not in v:
+                raise ValueError(f"Priority framework must define {level}")
+        return v
+
+    @field_validator("priority_weights")
+    @classmethod
+    def _validate_weights(cls, v: Dict[str, float]) -> Dict[str, float]:
+        total = sum(float(x) for x in v.values())
+        if abs(total - 1.0) > 0.01:
+            raise ValueError("Priority weights must sum to 1.0")
+        return v
+
+    @field_validator("capacity_per_agent_type")
+    @classmethod
+    def _validate_capacity(cls, v: Dict[str, int]) -> Dict[str, int]:
+        if "coder" not in v:
+            raise ValueError("Capacity must include at least 'coder' agent type")
+        for agent_type, hours in v.items():
+            if int(hours) <= 0:
+                raise ValueError(f"Capacity for {agent_type} must be greater than 0")
+        return v
+
+
+class PmConfigOut(BaseModel):
+    priority_framework: Dict[str, str] = Field(default_factory=dict)
+    priority_weights: Dict[str, float] = Field(default_factory=dict)
+    sprint_duration_days: int = 14
+    capacity_per_agent_type: Dict[str, int] = Field(default_factory=dict)
+    reporting_cadence: str = "both"
+    report_time_utc: str = "09:00"
+    idea_intake_enabled: bool = True
+    auto_prioritize: bool = True
+    auto_create_feature_requests: bool = False
+    blocker_stale_hours: int = 48
+    escalation_on_conflict: bool = True
+    coding_tool: str = "claude_code"
+    coding_tool_model: Optional[str] = None
+    project_space_id: Optional[str] = None
+    stakeholder_subs: Optional[List[str]] = None
+    updated_at: Optional[int] = None
+
+
+class PmConfigValidationOut(BaseModel):
+    valid: bool
+    errors: List[str] = Field(default_factory=list)
+
+
+class SubmitIdeaIn(BaseModel):
+    title: str = Field(..., min_length=3, max_length=200)
+    description: str = Field(..., min_length=10, max_length=5000)
+
+
+class UpdateIdeaIn(BaseModel):
+    status: Literal["accepted", "rejected"]
+    rejection_reason: Optional[str] = Field(default=None, max_length=1000)
+
+
+class IdeaOut(BaseModel):
+    idea_id: str
+    submitted_by: str
+    title: str
+    description: str
+    status: str
+    priority_suggestion: Optional[str] = None
+    impact_score: Optional[float] = None
+    effort_score: Optional[float] = None
+    priority_rationale: Optional[str] = None
+    feature_ticket_id: Optional[str] = None
+    agent_run_id: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class IdeaListOut(BaseModel):
+    ideas: List[IdeaOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class BacklogItemOut(BaseModel):
+    ticket_id: str
+    subject: str = ""
+    labels: List[str] = Field(default_factory=list)
+    priority: str = "P3"
+    priority_score: float = 0.0
+    complexity: Optional[str] = None
+    estimated_hours: float = 0.0
+    status: str = "open"
+    assigned_to: Optional[str] = None
+    age_hours: float = 0.0
+
+
+class BacklogOut(BaseModel):
+    items: List[BacklogItemOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class ReprioritizeOut(BaseModel):
+    tickets_reprioritized: int = 0
+    operation_type: str = "backlog_prioritize"
+    escalations_created: int = 0
+
+
+class CreateSprintIn(BaseModel):
+    start_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    end_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    planned_ticket_ids: Optional[List[str]] = None
+
+
+class UpdateSprintIn(BaseModel):
+    action: Literal["activate", "close"]
+
+
+class SprintOut(BaseModel):
+    sprint_id: str
+    sprint_number: int = 0
+    start_date: str = ""
+    end_date: str = ""
+    status: str = "planned"
+    planned_hours: float = 0.0
+    completed_hours: float = 0.0
+    tickets_planned: int = 0
+    tickets_completed: int = 0
+    tickets_carried_over: int = 0
+    velocity: float = 0.0
+    blockers_count: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+    planned_ticket_ids: List[str] = Field(default_factory=list)
+
+
+class SprintListOut(BaseModel):
+    sprints: List[SprintOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class SprintBurndownPointOut(BaseModel):
+    date: str
+    remaining_hours: float = 0.0
+    ideal_hours: float = 0.0
+
+
+class SprintDetailOut(BaseModel):
+    sprint: SprintOut
+    burndown: List[SprintBurndownPointOut] = Field(default_factory=list)
+
+
+class ReportOut(BaseModel):
+    report_id: str
+    report_type: str = "daily"
+    content: str = ""
+    metrics_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int = 0
+
+
+class ReportListOut(BaseModel):
+    reports: List[ReportOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class BlockerOut(BaseModel):
+    ticket_id: str
+    ticket_subject: str = ""
+    blocker_type: str = "stale"
+    stale_since: Optional[int] = None
+    assigned_agent: Optional[str] = None
+    details: str = ""
+    priority: str = "P3"
+
+
+class BlockerListOut(BaseModel):
+    blockers: List[BlockerOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class AgentCapacityOut(BaseModel):
+    agent_type: str
+    total_capacity_hours: float = 0.0
+    used_hours: float = 0.0
+    available_hours: float = 0.0
+    utilization_pct: float = 0.0
+
+
+class CapacityOut(BaseModel):
+    capacity: List[AgentCapacityOut] = Field(default_factory=list)
+    fits: bool = True
+    overflow_hours: float = 0.0
+    recommendation: str = ""
+
+
+class PmOutputOut(BaseModel):
+    operation_type: str = ""
+    ideas_processed: int = 0
+    ideas_accepted: int = 0
+    ideas_rejected: int = 0
+    feature_tickets_created: List[str] = Field(default_factory=list)
+    tickets_reprioritized: int = 0
+    blockers_found: int = 0
+    escalations_created: int = 0
+    report_id: Optional[str] = None
+    sprint_id: Optional[str] = None
+    velocity_current: Optional[float] = None
+    velocity_trend: Optional[str] = None
+    total_duration_seconds: int = 0
+
+
+class PmMetricsOut(BaseModel):
+    ideas_submitted: int = 0
+    ideas_converted: int = 0
+    features_in_pipeline: int = 0
+    velocity_current: float = 0.0
+    velocity_trend: str = "stable"
+    backlog_size: int = 0
+    p0_count: int = 0
+    blockers_count: int = 0
+    avg_cycle_time_hours: float = 0.0
+    period_start: int = 0
+    period_end: int = 0
+
+
+class ProjectDashboardVelocityPointOut(BaseModel):
+    sprint_number: int = 0
+    velocity: float = 0.0
+
+
+class ProjectPipelineStageOut(BaseModel):
+    stage: str
+    count: int = 0
+
+
+class ProjectCompletionOut(BaseModel):
+    ticket_id: str
+    subject: str = ""
+    completed_at: int = 0
+
+
+class ProjectDashboardOut(BaseModel):
+    sprint: Optional[SprintOut] = None
+    velocity_trend: List[ProjectDashboardVelocityPointOut] = Field(default_factory=list)
+    backlog_by_priority: Dict[str, int] = Field(default_factory=dict)
+    pipeline_funnel: List[ProjectPipelineStageOut] = Field(default_factory=list)
+    agent_utilization: List[AgentCapacityOut] = Field(default_factory=list)
+    blockers: List[BlockerOut] = Field(default_factory=list)
+    recent_completions: List[ProjectCompletionOut] = Field(default_factory=list)
+
+
+class TriggerPmOperationIn(BaseModel):
+    operation_type: Literal[
+        "idea_triage", "backlog_prioritize", "report_generate", "blocker_detect"
+    ]
+    report_type: Literal["daily", "weekly"] = "daily"

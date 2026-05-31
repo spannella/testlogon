@@ -165,6 +165,9 @@ class Tables:
     agent_runs: Any
     deployment_log: Any
     feature_decompositions: Any
+    product_ideas: Any
+    project_sprints: Any
+    project_reports: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -324,4 +327,7 @@ T = Tables(
     agent_runs=ddb.Table(S.agent_runs_table_name),
     deployment_log=ddb.Table(S.deployment_log_table_name),
     feature_decompositions=ddb.Table(S.feature_decompositions_table_name),
+    product_ideas=ddb.Table(S.product_ideas_table_name),
+    project_sprints=ddb.Table(S.project_sprints_table_name),
+    project_reports=ddb.Table(S.project_reports_table_name),
 )

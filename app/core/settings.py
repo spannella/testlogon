@@ -1675,5 +1675,14 @@ class Settings:
     # shell/git/coding-tool commands — the workflow is generated and driven in mock mode.
     architect_execute_commands: bool = os.environ.get("ARCHITECT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
 
+    # Project Manager Agent (AGENT-012). Reuses the agent_types / agent_runs / tickets tables.
+    product_ideas_table_name: str = os.environ.get("PRODUCT_IDEAS_TABLE_NAME", "product_ideas")
+    project_sprints_table_name: str = os.environ.get("PROJECT_SPRINTS_TABLE_NAME", "project_sprints")
+    project_reports_table_name: str = os.environ.get("PROJECT_REPORTS_TABLE_NAME", "project_reports")
+    pm_agent_enabled: bool = os.environ.get("PM_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    # When false (default, and always in E2E), idea triage / orchestration never invokes a
+    # real coding tool / LLM — triage uses a deterministic formula scorer so tests are reproducible.
+    pm_execute_commands: bool = os.environ.get("PM_AGENT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
+
 
 S = Settings()

@@ -1510,6 +1510,29 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # Project Manager Agent (AGENT-012) — product idea intake funnel
+        TableDef(
+            _resolve_table_name(S.product_ideas_table_name, "product_ideas"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # Project Manager Agent (AGENT-012) — sprint/cycle boundaries + velocity
+        TableDef(
+            _resolve_table_name(S.project_sprints_table_name, "project_sprints"),
+            "pk",
+            "sk",
+        ),
+        # Project Manager Agent (AGENT-012) — generated progress reports
+        TableDef(
+            _resolve_table_name(S.project_reports_table_name, "project_reports"),
+            "pk",
+            "sk",
+        ),
     ]
 
 

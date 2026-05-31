@@ -152,7 +152,9 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Workers", i18nKey: "nav.workers", path: "/agents/workers", icon: <Bot className="h-5 w-5" /> },
       { label: "Fleet Dashboard", i18nKey: "nav.fleetDashboard", path: "/agents/fleet", icon: <LayoutGrid className="h-5 w-5" /> },
+      { label: "Project Dashboard", i18nKey: "nav.projectDashboard", path: "/agents/project-dashboard", icon: <LayoutDashboard className="h-5 w-5" /> },
       { label: "Agent PRs", i18nKey: "nav.agentPrs", path: "/agents/prs", icon: <GitPullRequest className="h-5 w-5" /> },
+      { label: "Submit Idea", i18nKey: "nav.submitIdea", path: "/ideas/submit", icon: <ClipboardList className="h-5 w-5" /> },
     ],
   },
   {
