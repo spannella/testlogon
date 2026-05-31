@@ -636,6 +636,17 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # VOD Rentals (VOD-019): time-limited rental + view-once access grants.
+        # pk=USER#{buyer} sk=VIDEO#{video_id}; GSI ByVideoExpiresAt for owner history.
+        TableDef(
+            _resolve_table_name(S.vod_rentals_table_name, "VodRentals"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByVideoExpiresAt", "partition_key": "video_id", "sort_key": "expires_at"},
+            ],
+            attr_types={"expires_at": "N"},
+        ),
         # Messaging extended tables (from PR 127 compliance/visibility features)
         # ConversationPins: pk=(conversation_id, message_id), GSI ByConversationActivePinnedAt
         TableDef(

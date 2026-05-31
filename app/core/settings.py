@@ -1350,6 +1350,10 @@ class Settings:
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")
     vod_rental_default_duration_hours: int = int(os.environ.get("VOD_RENTAL_DEFAULT_DURATION_HOURS", "48"))
     vod_view_once_enabled: bool = os.environ.get("VOD_VIEW_ONCE_ENABLED", "1") not in ("0", "false", "False")
+    # VOD-019 rental-access layer (dedicated vod_rentals table)
+    vod_rentals_table_name: str = os.environ.get("DDB_VOD_RENTALS", "VodRentals")
+    vod_rental_enabled: bool = os.environ.get("VOD_RENTAL_ENABLED", "1") not in ("0", "false", "False")
+    vod_rental_playback_ttl_seconds: int = int(os.environ.get("VOD_RENTAL_PLAYBACK_TTL_SECONDS", "3600"))
 
     # Privacy / GDPR (PRIVACY-001)
     data_requests_table_name: str = os.environ.get("DATA_REQUESTS_TABLE_NAME", "data_requests")

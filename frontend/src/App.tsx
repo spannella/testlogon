@@ -65,6 +65,7 @@ const DiscoverPage = lazy(() => import("@/pages/discover/DiscoverPage"));
 const TagPage = lazy(() => import("@/pages/discover/TagPage"));
 const SearchPage = lazy(() => import("@/pages/search/SearchPage"));
 const VideoPlayerPage = lazy(() => import("@/pages/videos/VideoPlayerPage"));
+const VodRentalsPage = lazy(() => import("@/pages/vod/VodRentalsPage"));
 const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
 const BroadcastSchedulePage = lazy(() => import("@/pages/broadcast/BroadcastSchedulePage"));
 const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
@@ -240,6 +241,7 @@ export default function App() {
           <Route path="gallery/:videoId" element={<GalleryVideoDetailPage />} />
           <Route path="videos" element={<VideosPage />} />
           <Route path="videos/:videoId" element={<VideoPlayerPage />} />
+          <Route path="vod/rentals" element={<VodRentalsPage />} />
           {showBroadcastNavigation && <Route path="broadcast" element={<BroadcastPage />} />}
           {showBroadcastNavigation && <Route path="broadcast/schedule" element={<BroadcastSchedulePage />} />}
           {showBroadcastNavigation && <Route path="broadcast/:sessionId/live-qa" element={<LiveQaPage />} />}

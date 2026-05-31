@@ -9567,3 +9567,79 @@ class DelegationApiSendMessageIn(BaseModel):
     """Send a message as the creator via a delegation API key."""
     text: str = Field(min_length=1, max_length=10000)
     reply_to_message_id: Optional[str] = None
+
+
+# ─── VOD-019: Rental / View-Once Access ───────────────────────────────────────
+
+
+class VodRentalStartIn(BaseModel):
+    """Start a rental or view-once access grant for a video."""
+    tier: str = Field(pattern=r"^(rental|view_once)$")
+    payment_method_id: Optional[str] = None
+    rental_duration_hours: Optional[int] = Field(default=None, ge=1, le=720)
+
+
+class VodRentalStartOut(BaseModel):
+    """Response after starting a rental / view-once grant."""
+    video_id: str
+    rental_id: str
+    tier: str
+    already_active: bool = False
+    started: bool = False
+    expires_at: Optional[int] = None
+    views_remaining: int = -1
+    amount_cents: int = 0
+    duration_hours: Optional[int] = None
+
+
+class VodRentalAccessOut(BaseModel):
+    """Current rental access state for a video + viewer."""
+    active: bool
+    tier: str = ""
+    reason: str = "not_rented"
+    expires_at: Optional[int] = None
+    remaining_seconds: int = 0
+    views_remaining: int = -1
+    rental_id: str = ""
+    started: bool = False
+
+
+class VodRentalPlaybackOut(BaseModel):
+    """Gated playback URL issued for a valid rental."""
+    video_id: str
+    playback_url: str
+    manifest_key: str = ""
+    mode: str = "dev"
+    thumbnail_url: Optional[str] = None
+    token_expires_at: int = 0
+    access: VodRentalAccessOut
+
+
+class VodRentalConsumeOut(BaseModel):
+    """Result of consuming a view-once rental after playback."""
+    ok: bool
+    tier: str = ""
+    views_remaining: int = -1
+    consumed: bool = False
+
+
+class VodRentalStatusOut(BaseModel):
+    """Rental status / history entry for a single video."""
+    video_id: str
+    rental_id: str = ""
+    tier: str = ""
+    amount_cents: int = 0
+    created_at: int = 0
+    started_at: int = 0
+    duration_hours: int = 0
+    active: bool = False
+    reason: str = "not_rented"
+    expires_at: Optional[int] = None
+    remaining_seconds: int = 0
+    views_remaining: int = -1
+    started: bool = False
+
+
+class VodRentalListOut(BaseModel):
+    """List of a viewer's rentals."""
+    items: List[VodRentalStatusOut] = Field(default_factory=list)
