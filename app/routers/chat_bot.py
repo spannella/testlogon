@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from app.services.sessions import require_ui_session
-from app.auth.deps import require_ui_session
 from app.core.settings import S
 from app.services.chat_bot import (
     BotLimitExceeded,
