@@ -161,7 +161,7 @@ export default function PublicUserProfilePage() {
   const hasPlans = pub.has_subscription_plans ?? false;
 
   const showVideosTab = isAuthenticated;
-  const defaultTab = showVideosTab ? "videos" : "posts";
+  const defaultTab = "posts";
 
   // The identifier to use for profile posts endpoint
   const profileIdentifier = pub.identifier || identifier;
