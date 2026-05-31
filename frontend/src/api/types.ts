@@ -1950,6 +1950,37 @@ export interface PostFileAttachment {
 
 
 /** Metadata attached to broadcast-related newsfeed posts (BCAST-010). */
+// ─── BCAST-010: Broadcast Newsfeed Promotion ──────────────────────
+
+export interface BroadcastPromoLink {
+  broadcast_id: string;
+  post_id: string;
+  owner_user_id: string;
+  promoted_at: number;
+  last_synced_status: string;
+  removed: boolean;
+}
+
+export interface BroadcastPromoLiveItem {
+  broadcast_id: string;
+  post_id: string;
+  title: string;
+  owner_user_id: string;
+  promoted_at: number;
+}
+
+export interface BroadcastPromoLinkResponse {
+  link: BroadcastPromoLink;
+}
+
+export interface BroadcastPromoLiveResponse {
+  items: BroadcastPromoLiveItem[];
+}
+
+export interface BroadcastPromoDeleteResponse {
+  ok: boolean;
+}
+
 export interface BroadcastPostMeta {
   session_id: string;
   post_type: "broadcast_announcement" | "broadcast_live" | "broadcast_vod";

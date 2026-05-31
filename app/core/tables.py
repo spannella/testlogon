@@ -37,6 +37,7 @@ class Tables:
     projects: Any
     contacts: Any
     broadcast_profiles: Any
+    broadcast_promo_posts: Any
     broadcast_sessions: Any
     broadcast_outputs: Any
     broadcast_session_transitions: Any
@@ -241,6 +242,7 @@ T = Tables(
     projects=ddb.Table(S.projects_table_name),
     contacts=ddb.Table(S.contacts_table_name),
     broadcast_profiles=ddb.Table(S.broadcast_profiles_table_name),
+    broadcast_promo_posts=ddb.Table(S.broadcast_promo_posts_table_name),
     broadcast_sessions=ddb.Table(S.broadcast_sessions_table_name),
     broadcast_outputs=ddb.Table(S.broadcast_outputs_table_name),
     broadcast_session_transitions=ddb.Table(S.broadcast_session_transitions_table_name),
