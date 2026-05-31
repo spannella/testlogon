@@ -1614,6 +1614,22 @@ class Settings:
 
     # Delegates (DELEGATE-001)
     delegates_table_name: str = os.environ.get("DELEGATES_TABLE_NAME", "delegates")
+    # Delegation API (DELEGATE-005)
+    delegation_api_enabled: bool = os.environ.get("DELEGATION_API_ENABLED", "true").lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    delegation_api_keys_table_name: str = os.environ.get(
+        "DELEGATION_API_KEYS_TABLE_NAME", "delegation_api_keys"
+    )
+    delegation_api_default_rate_limit_rpm: int = int(
+        os.environ.get("DELEGATION_API_DEFAULT_RATE_LIMIT_RPM", "60")
+    )
+    delegation_api_max_rate_limit_rpm: int = int(
+        os.environ.get("DELEGATION_API_MAX_RATE_LIMIT_RPM", "300")
+    )
     # Bot Framework (BOT-001)
     bot_framework_enabled: bool = os.environ.get("BOT_FRAMEWORK_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     chat_bots_table_name: str = os.environ.get("CHAT_BOTS_TABLE_NAME", "chat_bots")

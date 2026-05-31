@@ -218,6 +218,7 @@ from app.routers.bot_template import router as bot_template_router
 from app.routers.bot_auto_reply import router as bot_auto_reply_router
 from app.services.bot_scheduler import start_bot_scheduler_task
 from app.routers.delegate_feed import router as delegate_feed_router
+from app.routers.delegation_api import delegation_api_router
 from app.routers.notification_engine import router as notification_engine_router
 from app.routers.issued_licenses import router as issued_licenses_router
 from app.routers.license_requests import router as license_requests_router
@@ -587,6 +588,7 @@ def create_app() -> FastAPI:
     app.include_router(bot_auto_reply_router, prefix="/ui")
     app.add_event_handler("startup", start_bot_scheduler_task)
     app.include_router(delegate_feed_router)
+    app.include_router(delegation_api_router)
     app.include_router(notification_engine_router)
     app.include_router(issued_licenses_router)
     app.include_router(license_requests_router)

@@ -1401,6 +1401,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N"},
         ),
+        # Delegation API keys (DELEGATE-005)
+        TableDef(
+            _resolve_table_name(S.delegation_api_keys_table_name, "delegation_api_keys"),
+            "key_id",
+            gsi=[
+                {"index_name": "ByOwner", "partition_key": "GSI_OWNER_PK", "sort_key": "GSI_OWNER_SK"},
+                {"index_name": "ByDelegationCreator", "partition_key": "GSI_CREATOR_PK", "sort_key": "GSI_CREATOR_SK"},
+            ],
+            attr_types={"GSI_OWNER_SK": "N", "GSI_CREATOR_SK": "N"},
+        ),
         # Syndicates (SYND-001 / SYND-002)
         TableDef(
             _resolve_table_name(S.syndicates_table_name, "syndicates"),
