@@ -9423,3 +9423,35 @@ export interface GroupCampaignStats {
   status: string;
 }
 
+
+// ── PLATFORM-013: Theme Customization ────────────────────────────────────────
+
+export type ThemeMode = "light" | "dark" | "system";
+export type ThemeAccentColor =
+  | "blue"
+  | "purple"
+  | "green"
+  | "orange"
+  | "pink"
+  | "red"
+  | "teal"
+  | "custom";
+export type ThemeFontScale = "small" | "default" | "large" | "xlarge";
+export type ThemeDensity = "compact" | "comfortable" | "spacious";
+export type ThemePreset = "default" | "midnight" | "sunrise" | "forest" | "ocean";
+
+export interface ThemeConfig {
+  mode: ThemeMode;
+  accent_color: ThemeAccentColor;
+  custom_accent_hex: string | null;
+  font_scale: ThemeFontScale;
+  density: ThemeDensity;
+  preset: ThemePreset;
+  high_contrast: boolean;
+}
+
+export interface ThemeConfigResponse {
+  theme: ThemeConfig;
+}
+
+export type ThemeConfigPatch = Partial<ThemeConfig>;

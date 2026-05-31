@@ -1,0 +1,75 @@
+/* PLATFORM-013: Theme customization — density + high-contrast modes.
+ *
+ * These classes are toggled on <html> by lib/themeCustomization.applyThemeConfig
+ * (prefix `tc-` to avoid clashing with any existing density / high-contrast CSS).
+ * They drive spacing custom properties and contrast overrides. Print resets to
+ * comfortable defaults.
+ */
+
+:root {
+  --tc-spacing-unit: 1rem;
+  --tc-sidebar-item-py: 0.5rem;
+  --tc-table-row-py: 0.75rem;
+  --tc-card-padding: 1.5rem;
+  --tc-input-height: 2.5rem;
+}
+
+.tc-density-compact {
+  --tc-spacing-unit: 0.75rem;
+  --tc-sidebar-item-py: 0.25rem;
+  --tc-table-row-py: 0.375rem;
+  --tc-card-padding: 1rem;
+  --tc-input-height: 2rem;
+}
+
+.tc-density-comfortable {
+  --tc-spacing-unit: 1rem;
+  --tc-sidebar-item-py: 0.5rem;
+  --tc-table-row-py: 0.75rem;
+  --tc-card-padding: 1.5rem;
+  --tc-input-height: 2.5rem;
+}
+
+.tc-density-spacious {
+  --tc-spacing-unit: 1.25rem;
+  --tc-sidebar-item-py: 0.75rem;
+  --tc-table-row-py: 1rem;
+  --tc-card-padding: 2rem;
+  --tc-input-height: 3rem;
+}
+
+/* Keep interactive targets accessible even in compact mode. */
+.tc-density-compact button,
+.tc-density-compact a[role="button"] {
+  min-height: 32px;
+}
+
+/* High contrast mode */
+.tc-high-contrast .text-muted-foreground {
+  opacity: 1 !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.tc-high-contrast .border {
+  border-width: 2px !important;
+}
+
+.tc-high-contrast *:focus-visible {
+  outline: 3px solid hsl(var(--primary)) !important;
+  outline-offset: 2px !important;
+}
+
+/* Print: reset font scale + density to comfortable defaults. */
+@media print {
+  html {
+    font-size: 12pt !important;
+  }
+  .tc-density-compact,
+  .tc-density-spacious {
+    --tc-spacing-unit: 1rem;
+    --tc-sidebar-item-py: 0.5rem;
+    --tc-table-row-py: 0.75rem;
+    --tc-card-padding: 1.5rem;
+    --tc-input-height: 2.5rem;
+  }
+}

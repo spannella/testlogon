@@ -1972,6 +1972,10 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"started_at": "N"},
         ),
+        TableDef(
+            _resolve_table_name(S.user_themes_table_name, "user_themes"),
+            "user_sub",
+        ),
     ]
 
 

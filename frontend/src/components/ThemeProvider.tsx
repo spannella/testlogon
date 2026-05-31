@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { useUiStore } from "@/stores/uiStore";
 import type { AccentColor, FontSize, Density } from "@/stores/uiStore";
+import { getThemeCustomization } from "@/api/endpoints/themeCustomization";
+import { applyThemeConfig } from "@/lib/themeCustomization";
 
 /**
  * Accent color presets — HSL values (without `hsl()` wrapper) matching
@@ -161,6 +163,24 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     document.documentElement.classList.toggle("high-contrast", highContrast);
   }, [highContrast]);
+
+  // ── PLATFORM-013: load + apply persisted server theme config ────────
+  // Fetches the user's saved theme once on mount and applies it on top of
+  // the local uiStore-driven defaults. Failures are swallowed (offline /
+  // unauthenticated) so the local theme remains intact.
+  useEffect(() => {
+    let cancelled = false;
+    getThemeCustomization()
+      .then((config) => {
+        if (!cancelled) applyThemeConfig(config);
+      })
+      .catch(() => {
+        /* keep local theme */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return <>{children}</>;
 }

@@ -48,6 +48,25 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Theme Customization</CardTitle>
+        </CardHeader>
+        <Separator />
+        <CardContent className="pt-4">
+          <p className="mb-3 text-sm text-muted-foreground">
+            Personalize accent color, font size, density, presets, and high
+            contrast. Saved to your account and applied on every device.
+          </p>
+          <a
+            href="/settings/theme"
+            className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+          >
+            Open Theme Customization
+          </a>
+        </CardContent>
+      </Card>
+
       <Account />
 
       <JiraIntegrationSettings />

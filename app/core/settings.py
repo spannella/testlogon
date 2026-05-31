@@ -1821,6 +1821,9 @@ class Settings:
     # Group Advertising & Fundraising (GROUP-003)
     group_fundraising_enabled: bool = os.environ.get("GROUP_FUNDRAISING_ENABLED", "1") not in ("0", "false", "False")
     group_fundraising_campaigns_table_name: str = os.environ.get("GROUP_FUNDRAISING_CAMPAIGNS_TABLE_NAME", "group_fundraising_campaigns")
+
+    # PLATFORM-013: per-user theme customization
+    user_themes_table_name: str = os.environ.get("USER_THEMES_TABLE_NAME", "user_themes")
     # Agent Orchestration (AGENT-002 / AGENT-003)
     # Compute Cost Tracking (INFRA-005)
     compute_billing_table_name: str = os.environ.get("COMPUTE_BILLING_TABLE_NAME", "compute_billing")
