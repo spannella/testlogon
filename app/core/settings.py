@@ -1491,4 +1491,11 @@ class Settings:
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
 
+    # Delegates (DELEGATE-001)
+    delegates_table_name: str = os.environ.get("DELEGATES_TABLE_NAME", "delegates")
+
+    # Broadcast Moderation (DELEGATE-004)
+    broadcast_moderation_table_name: str = os.environ.get("BROADCAST_MODERATION_TABLE_NAME", "broadcast_moderation")
+
+
 S = Settings()
