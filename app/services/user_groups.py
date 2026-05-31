@@ -496,6 +496,16 @@ def _get_membership(group_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     return resp.get("Item")
 
 
+def require_membership(group_id: str, user_id: str) -> Dict[str, Any]:
+    """Public: require user is an active member. Returns membership or raises 403."""
+    return _require_role(group_id, user_id, "member")
+
+
+def require_admin(group_id: str, user_id: str) -> Dict[str, Any]:
+    """Public: require user is the group admin. Returns membership or raises 403."""
+    return _require_role(group_id, user_id, "admin")
+
+
 def _require_role(group_id: str, user_id: str, min_role: str) -> Dict[str, Any]:
     """Require user has at least the specified role. Returns membership."""
     membership = _get_membership(group_id, user_id)

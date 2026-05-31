@@ -142,6 +142,9 @@ const KycResidencyReviewQueuePage = lazy(() => import("@/pages/kyc/KycResidencyR
 const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
 const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
+const GroupFundraisingPage = lazy(() => import("@/pages/groups/GroupFundraisingPage"));
+const GroupAdsPage = lazy(() => import("@/pages/groups/GroupAdsPage"));
+const PublicDonationPage = lazy(() => import("@/pages/groups/PublicDonationPage"));
 const AgentDashboard = lazy(() => import("@/pages/agents/AgentDashboard"));
 const AdAnalyticsDashboard = lazy(() => import("@/pages/ads/AdAnalyticsDashboard"));
 const AdSchedulePage = lazy(() => import("@/pages/ads/AdSchedulePage"));
@@ -204,6 +207,7 @@ export default function App() {
         <Route path="/magic-link-verify" element={<MagicLinkVerify />} />
         {showCanonicalProfileRoute && <Route path="/u/:identifier" element={<PublicUserProfilePage />} />}
         <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
+        <Route path="/donate/:fundraiserId" element={<PublicDonationPage />} />
         <Route path="/questionnaires/published/:publishedSlug/respond" element={<QuestionnaireRespondentPage />} />
         <Route path="live/:sessionId" element={<LivePlayer />} />
         <Route path="party/:inviteCode" element={<PartyListPage />} />
@@ -300,6 +304,8 @@ export default function App() {
           <Route path="groups" element={<GroupsListPage />} />
           <Route path="groups/:groupId" element={<GroupPage />} />
           <Route path="groups/:groupId/treasury" element={<GroupTreasuryPage />} />
+          <Route path="groups/:groupId/fundraising" element={<GroupFundraisingPage />} />
+          <Route path="groups/:groupId/ads" element={<GroupAdsPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />

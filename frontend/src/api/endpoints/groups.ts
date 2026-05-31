@@ -125,3 +125,101 @@ export const spendTreasury = (
     reference_id?: string;
   },
 ) => api.post<SpendResponse>(`/ui/groups/${groupId}/treasury/spend`, data);
+
+
+// ---------------------------------------------------------------------------
+// GROUP-003: Group Advertising & Fundraising
+// ---------------------------------------------------------------------------
+
+import type {
+  GroupFundraiser,
+  GroupFundraiserListResponse,
+  GroupPublicFundraiser,
+  GroupDonation,
+  GroupDonationListResponse,
+  GroupDonationReceipt,
+  GroupCampaign,
+  GroupCampaignListResponse,
+  GroupCampaignStats,
+} from "@/api/types";
+
+// Advertising campaigns (admin / member)
+export const createGroupCampaign = (
+  groupId: string,
+  data: {
+    name: string;
+    daily_budget_cents: number;
+    lifetime_budget_cents: number;
+    creative_text?: string;
+    creative_image_url?: string;
+  },
+) => api.post<GroupCampaign>(`/ui/groups/fundraising/${groupId}/campaigns`, data);
+
+export const listGroupCampaigns = (groupId: string) =>
+  api.get<GroupCampaignListResponse>(`/ui/groups/fundraising/${groupId}/campaigns`);
+
+export const getGroupCampaignStats = (groupId: string, campaignId: string) =>
+  api.get<GroupCampaignStats>(`/ui/groups/fundraising/${groupId}/campaigns/${campaignId}/stats`);
+
+export const updateGroupCampaign = (
+  groupId: string,
+  campaignId: string,
+  data: { status?: "active" | "paused"; daily_budget_cents?: number },
+) => api.patch<GroupCampaign>(`/ui/groups/fundraising/${groupId}/campaigns/${campaignId}`, data);
+
+// Fundraisers (admin / member)
+export const createGroupFundraiser = (
+  groupId: string,
+  data: {
+    title: string;
+    description?: string;
+    goal_cents?: number;
+    cover_image_url?: string;
+    ends_at?: number;
+  },
+) => api.post<GroupFundraiser>(`/ui/groups/fundraising/${groupId}/fundraisers`, data);
+
+export const listGroupFundraisers = (groupId: string) =>
+  api.get<GroupFundraiserListResponse>(`/ui/groups/fundraising/${groupId}/fundraisers`);
+
+export const getGroupFundraiser = (groupId: string, fundraiserId: string) =>
+  api.get<GroupFundraiser>(`/ui/groups/fundraising/${groupId}/fundraisers/${fundraiserId}`);
+
+export const updateGroupFundraiser = (
+  groupId: string,
+  fundraiserId: string,
+  data: {
+    title?: string;
+    description?: string;
+    goal_cents?: number;
+    status?: "active" | "paused" | "cancelled";
+    ends_at?: number;
+  },
+) => api.patch<GroupFundraiser>(`/ui/groups/fundraising/${groupId}/fundraisers/${fundraiserId}`, data);
+
+export const listGroupDonations = (groupId: string, fundraiserId: string) =>
+  api.get<GroupDonationListResponse>(
+    `/ui/groups/fundraising/${groupId}/fundraisers/${fundraiserId}/donations`,
+  );
+
+// Public donor-facing endpoints (no auth -- use plain axios so the auth/CSRF
+// interceptors and 401->logout handling in the api client are bypassed).
+export const getPublicFundraiser = (fundraiserId: string) =>
+  axios
+    .get<GroupPublicFundraiser>(`/public/fundraisers/${fundraiserId}`)
+    .then((r) => r.data);
+
+export const submitDonation = (
+  fundraiserId: string,
+  data: { amount_cents: number; donor_name?: string; donor_email?: string },
+) =>
+  axios
+    .post<GroupDonation>(`/public/fundraisers/${fundraiserId}/donate`, data)
+    .then((r) => r.data);
+
+export const getDonationReceipt = (fundraiserId: string, donationId: string) =>
+  axios
+    .get<GroupDonationReceipt>(
+      `/public/fundraisers/${fundraiserId}/donations/${donationId}/receipt`,
+    )
+    .then((r) => r.data);

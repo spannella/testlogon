@@ -10284,3 +10284,155 @@ class JobRunNowOut(BaseModel):
 class JobSeedOut(BaseModel):
     ok: bool = True
     seeded: int = 0
+# ---------------------------------------------------------------------------
+# Group Advertising & Fundraising (GROUP-003)
+# ---------------------------------------------------------------------------
+
+
+class GroupCreateCampaignIn(BaseModel):
+    name: str = Field(..., min_length=3, max_length=200)
+    daily_budget_cents: int = Field(..., ge=100)
+    lifetime_budget_cents: int = Field(..., ge=1000)
+    creative_text: Optional[str] = Field(default=None, max_length=500)
+    creative_image_url: Optional[str] = Field(default=None, max_length=2048)
+
+    @field_validator("lifetime_budget_cents")
+    @classmethod
+    def lifetime_gte_daily(cls, v: int, info) -> int:
+        daily = info.data.get("daily_budget_cents", 0)
+        if daily and v < daily:
+            raise ValueError("Lifetime budget must be >= daily budget")
+        return v
+
+
+class GroupUpdateCampaignIn(BaseModel):
+    status: Optional[Literal["active", "paused"]] = None
+    daily_budget_cents: Optional[int] = Field(default=None, ge=100)
+
+
+class GroupCampaignOut(BaseModel):
+    campaign_id: str
+    group_id: str
+    name: str
+    status: Literal["active", "paused", "completed", "draft"]
+    daily_budget_cents: int
+    lifetime_budget_cents: int
+    spent_cents: int = 0
+    impressions: int = 0
+    clicks: int = 0
+    creative_text: Optional[str] = None
+    creative_image_url: Optional[str] = None
+    created_at: int
+
+
+class GroupCampaignListOut(BaseModel):
+    campaigns: List[GroupCampaignOut] = Field(default_factory=list)
+
+
+class GroupCampaignStatsOut(BaseModel):
+    campaign_id: str
+    impressions: int = 0
+    clicks: int = 0
+    ctr: float = 0.0
+    spent_cents: int = 0
+    remaining_cents: int = 0
+    daily_spent_cents: int = 0
+    daily_budget_cents: int = 0
+    status: str = "active"
+
+
+class GroupCreateFundraiserIn(BaseModel):
+    title: str = Field(..., min_length=3, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    goal_cents: Optional[int] = Field(default=None, ge=100)
+    cover_image_url: Optional[str] = Field(default=None, max_length=2048)
+    ends_at: Optional[int] = None
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Title cannot be blank")
+        return v
+
+
+class GroupUpdateFundraiserIn(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=3, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    goal_cents: Optional[int] = Field(default=None, ge=100)
+    status: Optional[Literal["active", "paused", "cancelled"]] = None
+    ends_at: Optional[int] = None
+
+
+class GroupFundraiserOut(BaseModel):
+    fundraiser_id: str
+    group_id: str
+    title: str
+    description: str = ""
+    goal_cents: Optional[int] = None
+    raised_cents: int = 0
+    donation_count: int = 0
+    currency: str = "usd"
+    status: Literal["active", "paused", "completed", "cancelled"]
+    cover_image_url: Optional[str] = None
+    created_at: int
+    ends_at: Optional[int] = None
+
+
+class GroupFundraiserListOut(BaseModel):
+    fundraisers: List[GroupFundraiserOut] = Field(default_factory=list)
+
+
+class GroupPublicFundraiserOut(BaseModel):
+    fundraiser_id: str
+    group_id: str
+    group_name: str
+    title: str
+    description: str = ""
+    goal_cents: Optional[int] = None
+    raised_cents: int = 0
+    donation_count: int = 0
+    currency: str = "usd"
+    status: str
+    cover_image_url: Optional[str] = None
+    ends_at: Optional[int] = None
+
+
+class GroupDonateIn(BaseModel):
+    amount_cents: int = Field(..., ge=100, le=10000000)
+    donor_name: Optional[str] = Field(default=None, max_length=100)
+    donor_email: Optional[str] = Field(default=None, max_length=254)
+
+    @field_validator("donor_email")
+    @classmethod
+    def validate_email(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v != "" and "@" not in v:
+            raise ValueError("Invalid email format")
+        return v
+
+
+class GroupDonationOut(BaseModel):
+    donation_id: str
+    amount_cents: int
+    donor_name: Optional[str] = None
+    status: Literal["pending", "completed", "failed", "refunded"]
+    created_at: int
+    is_external: bool = True
+    checkout_url: Optional[str] = None
+
+
+class GroupDonationListOut(BaseModel):
+    donations: List[GroupDonationOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    has_more: bool = False
+
+
+class GroupDonationReceiptOut(BaseModel):
+    donation_id: str
+    amount_cents: int
+    currency: str = "usd"
+    donor_name: Optional[str] = None
+    group_name: str
+    fundraiser_title: str
+    created_at: int
+    status: str

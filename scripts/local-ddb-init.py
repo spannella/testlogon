@@ -1308,6 +1308,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N"},
         ),
+        # Group Advertising & Fundraising (GROUP-003)
+        TableDef(
+            _resolve_table_name(S.group_fundraising_campaigns_table_name, "group_fundraising_campaigns"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByGroupCreated", "partition_key": "group_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Watch Parties (ENGAGE-004)
         TableDef(
             _resolve_table_name(S.watch_parties_table_name, "watch_parties"),

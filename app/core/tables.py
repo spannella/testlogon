@@ -207,6 +207,7 @@ class Tables:
     ssh_session_recordings: Any
     ssh_bastion_paths: Any
     job_runs: Any
+    group_fundraising_campaigns: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -408,4 +409,5 @@ T = Tables(
     ssh_session_recordings=ddb.Table(S.ssh_session_recordings_table_name),
     ssh_bastion_paths=ddb.Table(S.ssh_bastion_paths_table_name),
     job_runs=ddb.Table(S.job_runs_table_name),
+    group_fundraising_campaigns=ddb.Table(S.group_fundraising_campaigns_table_name),
 )
