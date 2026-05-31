@@ -4982,6 +4982,32 @@ class Ec2InstanceOut(BaseModel):
     status: str
     public_ip: str
     private_ip: str
+# ─── Kubernetes Container Launcher (INFRA-004) ──────────────────────────────
+
+class K8sLaunchPodIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=100)
+    image: str = Field(..., min_length=1)
+    preset: Literal["small", "medium", "large", "xlarge"] = "small"
+    ssh_key_id: Optional[str] = None
+    ttl_seconds: int = Field(default=14400, ge=600, le=86400)
+    env_vars: Dict[str, str] = Field(default_factory=dict)
+    template_id: Optional[str] = None
+
+
+class K8sPodOut(BaseModel):
+    pod_id: str
+    k8s_pod_name: str
+    namespace: str
+    label: str
+    image: str
+    image_display_name: str
+    preset: str
+    cpu_millicores: int
+    memory_mb: int
+    status: str
+    pod_ip: str
+    service_hostname: str
+    ssh_port: int = 22
     ssh_key_id: str = ""
     host_id: str = ""
     created_at: int
@@ -5011,6 +5037,25 @@ class Ec2InstanceTypeListOut(BaseModel):
 class Ec2AmiInfo(BaseModel):
     ami_id: str
     name: str
+    terminated_at: int = 0
+    ttl_seconds: int
+    expires_at: int
+    last_activity_at: int = 0
+
+
+class K8sPodListOut(BaseModel):
+    pods: List[K8sPodOut]
+    count: int
+
+
+class K8sPodLogsOut(BaseModel):
+    pod_id: str
+    lines: List[str]
+
+
+class K8sImageInfo(BaseModel):
+    image: str
+    display_name: str
     os_type: str
     username: str
 
@@ -5477,3 +5522,16 @@ class BroadcastModerationLogEntry(BaseModel):
     target_message_id: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
     ts: int = 0
+class K8sImageListOut(BaseModel):
+    images: List[K8sImageInfo]
+
+
+class K8sPresetInfo(BaseModel):
+    preset: str
+    cpu_millicores: int
+    memory_mb: int
+    cost_cents_per_min: float
+
+
+class K8sPresetListOut(BaseModel):
+    presets: List[K8sPresetInfo]
