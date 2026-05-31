@@ -6780,3 +6780,194 @@ export interface PmTriggerReviewResult {
   ideas: FeatureIdea[];
   completed_at: number;
 }
+
+// ─── Project Manager Agent (AGENT-012) ──────────────────────────────
+
+export interface PmConfig {
+  priority_framework: Record<string, string>;
+  priority_weights: Record<string, number>;
+  sprint_duration_days: number;
+  capacity_per_agent_type: Record<string, number>;
+  reporting_cadence: "daily" | "weekly" | "both";
+  report_time_utc: string;
+  idea_intake_enabled: boolean;
+  auto_prioritize: boolean;
+  auto_create_feature_requests: boolean;
+  blocker_stale_hours: number;
+  escalation_on_conflict: boolean;
+  coding_tool: "claude_code" | "codex";
+  coding_tool_model?: string | null;
+  project_space_id?: string | null;
+  stakeholder_subs?: string[] | null;
+  updated_at?: number;
+}
+
+export type PmConfigIn = Omit<PmConfig, "updated_at">;
+
+export interface PmConfigValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+export interface ProductIdea {
+  idea_id: string;
+  submitted_by: string;
+  title: string;
+  description: string;
+  status: "submitted" | "triaging" | "accepted" | "rejected" | "converted";
+  priority_suggestion?: string | null;
+  impact_score?: number | null;
+  effort_score?: number | null;
+  priority_rationale?: string | null;
+  feature_ticket_id?: string | null;
+  agent_run_id?: string | null;
+  rejection_reason?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface IdeaListResult {
+  ideas: ProductIdea[];
+  next_cursor?: string | null;
+}
+
+export interface BacklogItem {
+  ticket_id: string;
+  subject: string;
+  labels: string[];
+  priority: string;
+  priority_score: number;
+  complexity?: string | null;
+  estimated_hours: number;
+  status: string;
+  assigned_to?: string | null;
+  age_hours: number;
+}
+
+export interface BacklogResult {
+  items: BacklogItem[];
+  count: number;
+}
+
+export interface ReprioritizeResult {
+  tickets_reprioritized: number;
+  operation_type: string;
+  escalations_created: number;
+}
+
+export interface Sprint {
+  sprint_id: string;
+  sprint_number: number;
+  start_date: string;
+  end_date: string;
+  status: "planned" | "active" | "completed";
+  planned_hours: number;
+  completed_hours: number;
+  tickets_planned: number;
+  tickets_completed: number;
+  tickets_carried_over: number;
+  velocity: number;
+  blockers_count: number;
+  created_at: number;
+  updated_at: number;
+  planned_ticket_ids: string[];
+}
+
+export interface SprintListResult {
+  sprints: Sprint[];
+  count: number;
+}
+
+export interface SprintBurndown {
+  date: string;
+  remaining_hours: number;
+  ideal_hours: number;
+}
+
+export interface SprintDetail {
+  sprint: Sprint;
+  burndown: SprintBurndown[];
+}
+
+export interface ProjectReport {
+  report_id: string;
+  report_type: "daily" | "weekly" | "sprint_summary";
+  content: string;
+  metrics_snapshot: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface ReportListResult {
+  reports: ProjectReport[];
+  count: number;
+}
+
+export interface Blocker {
+  ticket_id: string;
+  ticket_subject: string;
+  blocker_type: "stale" | "blocked" | "agent_error" | "dependency";
+  stale_since?: number | null;
+  assigned_agent?: string | null;
+  details: string;
+  priority: string;
+}
+
+export interface BlockerListResult {
+  blockers: Blocker[];
+  count: number;
+}
+
+export interface AgentCapacity {
+  agent_type: string;
+  total_capacity_hours: number;
+  used_hours: number;
+  available_hours: number;
+  utilization_pct: number;
+}
+
+export interface CapacityResult {
+  capacity: AgentCapacity[];
+  fits: boolean;
+  overflow_hours: number;
+  recommendation: string;
+}
+
+export interface PmOutput {
+  operation_type: string;
+  ideas_processed: number;
+  ideas_accepted: number;
+  ideas_rejected: number;
+  feature_tickets_created: string[];
+  tickets_reprioritized: number;
+  blockers_found: number;
+  escalations_created: number;
+  report_id?: string | null;
+  sprint_id?: string | null;
+  velocity_current?: number | null;
+  velocity_trend?: string | null;
+  total_duration_seconds: number;
+}
+
+export interface PmMetrics {
+  ideas_submitted: number;
+  ideas_converted: number;
+  features_in_pipeline: number;
+  velocity_current: number;
+  velocity_trend: "increasing" | "stable" | "decreasing";
+  backlog_size: number;
+  p0_count: number;
+  blockers_count: number;
+  avg_cycle_time_hours: number;
+  period_start: number;
+  period_end: number;
+}
+
+export interface ProjectDashboard {
+  sprint: Sprint | null;
+  velocity_trend: { sprint_number: number; velocity: number }[];
+  backlog_by_priority: Record<string, number>;
+  pipeline_funnel: { stage: string; count: number }[];
+  agent_utilization: AgentCapacity[];
+  blockers: Blocker[];
+  recent_completions: Array<{ ticket_id: string; subject: string; completed_at: number }>;
+}

@@ -215,6 +215,8 @@ const MOBILE_NAV_GROUPS = [
     items: [
       { label: "LLM Keys", path: "/agents/llm-keys", icon: KeyRound },
       { label: "Fleet Dashboard", path: "/agents/fleet", icon: LayoutGrid },
+      { label: "Project Dashboard", path: "/agents/project-dashboard", icon: LayoutDashboard },
+      { label: "Submit Idea", path: "/ideas/submit", icon: ClipboardList },
     ],
   },
   {

@@ -119,6 +119,9 @@ const ArchitectAgentConfigPage = lazy(() => import("@/pages/agents/ArchitectAgen
 const DocCoveragePage = lazy(() => import("@/pages/agents/DocCoveragePage"));
 const DocTemplatesPage = lazy(() => import("@/pages/agents/DocTemplatesPage"));
 const FeatureIdeasPage = lazy(() => import("@/pages/agents/FeatureIdeasPage"));
+const PmAgentConfigPage = lazy(() => import("@/pages/agents/PmAgentConfigPage"));
+const ProjectDashboardPage = lazy(() => import("@/pages/agents/ProjectDashboardPage"));
+const IdeaSubmissionPage = lazy(() => import("@/pages/agents/IdeaSubmissionPage"));
 
 function PageSpinner() {
   return (
@@ -261,6 +264,9 @@ export default function App() {
           <Route path="agents/docs" element={<DocCoveragePage />} />
           <Route path="agents/docs/templates" element={<DocTemplatesPage />} />
           <Route path="agents/pm/ideas" element={<FeatureIdeasPage />} />
+          <Route path="agents/types/:typeId/pm" element={<PmAgentConfigPage />} />
+          <Route path="agents/project-dashboard" element={<ProjectDashboardPage />} />
+          <Route path="ideas/submit" element={<IdeaSubmissionPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

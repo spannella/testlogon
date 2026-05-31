@@ -169,6 +169,9 @@ class Tables:
     feature_decompositions: Any
     agent_feature_ideas: Any
     agent_preference_learning: Any
+    product_ideas: Any
+    project_sprints: Any
+    project_reports: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -332,4 +335,7 @@ T = Tables(
     feature_decompositions=ddb.Table(S.feature_decompositions_table_name),
     agent_feature_ideas=ddb.Table(S.agent_feature_ideas_table_name),
     agent_preference_learning=ddb.Table(S.agent_preference_learning_table_name),
+    product_ideas=ddb.Table(S.product_ideas_table_name),
+    project_sprints=ddb.Table(S.project_sprints_table_name),
+    project_reports=ddb.Table(S.project_reports_table_name),
 )
