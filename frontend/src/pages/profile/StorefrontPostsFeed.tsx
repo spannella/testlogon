@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Sparkles, ImageIcon, Video, Type } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Sparkles, ImageIcon, Video, Type, Lock } from "lucide-react";
 import { Heart, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,45 +15,84 @@ interface StorefrontPostsFeedProps {
 }
 
 function StorefrontPostCard({ post }: { post: ProfilePostItem }) {
+  const navigate = useNavigate();
+
   return (
-    <div className="rounded-lg border bg-card p-4 space-y-2" data-testid="post-card">
-      {post.locked && (
-        <span className="inline-block rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
-          Locked{post.unlock_price_cents ? ` - $${(post.unlock_price_cents / 100).toFixed(2)}` : ""}
-        </span>
-      )}
-
-      {post.body_preview && (
-        <p className="text-sm leading-relaxed line-clamp-4">{post.body_preview}</p>
-      )}
-
+    <div
+      className="rounded-lg border bg-card overflow-hidden cursor-pointer hover:shadow-md transition-shadow group"
+      data-testid="post-card"
+      role="listitem"
+      onClick={() => navigate(`/feed/${post.post_id}`)}
+    >
+      {/* Image thumbnail */}
       {post.image_urls.length > 0 && (
-        <div className="overflow-hidden rounded-md">
+        <div className="relative aspect-square">
           <img
             src={post.image_urls[0]}
             alt="Post image"
-            className="w-full max-h-64 object-cover"
+            className="w-full h-full object-cover"
             loading="lazy"
           />
+          {/* Hover overlay with stats */}
+          <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4 text-white">
+            {post.like_count > 0 && (
+              <span className="flex items-center gap-1">
+                <Heart className="h-4 w-4" /> {post.like_count}
+              </span>
+            )}
+            {post.comment_count > 0 && (
+              <span className="flex items-center gap-1">
+                <MessageCircle className="h-4 w-4" /> {post.comment_count}
+              </span>
+            )}
+          </div>
+          {/* Lock badge */}
+          {post.locked && (
+            <div className="absolute top-2 right-2 bg-amber-500/90 text-white text-xs px-2 py-1 rounded flex items-center gap-1">
+              <Lock className="h-3 w-3" />
+              {post.unlock_price_cents ? `$${(post.unlock_price_cents / 100).toFixed(2)}` : "Locked"}
+            </div>
+          )}
         </div>
       )}
 
-      {post.has_video && (
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <Video className="h-3 w-3" />
-          <span>Video post</span>
+      {/* Video placeholder */}
+      {!post.image_urls.length && post.has_video && (
+        <div className="aspect-square bg-muted flex items-center justify-center">
+          <Video className="h-8 w-8 text-muted-foreground" />
         </div>
       )}
 
-      <div className="flex items-center gap-4 text-xs text-muted-foreground pt-1">
-        <span className="flex items-center gap-1">
-          <Heart className="h-3 w-3" />
-          {post.like_count}
-        </span>
-        <span className="flex items-center gap-1">
-          <MessageCircle className="h-3 w-3" />
-          {post.comment_count}
-        </span>
+      {/* Card body */}
+      <div className="p-3 space-y-2">
+        {post.locked && !post.image_urls.length && (
+          <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+            <Lock className="h-3 w-3" />
+            Locked{post.unlock_price_cents ? ` - $${(post.unlock_price_cents / 100).toFixed(2)}` : ""}
+          </span>
+        )}
+
+        {post.body_preview && (
+          <p className="text-sm leading-relaxed line-clamp-3">{post.body_preview}</p>
+        )}
+
+        {/* Stats row for text-only posts (no hover overlay) */}
+        {!post.image_urls.length && !post.has_video && (
+          <div className="flex items-center gap-4 text-xs text-muted-foreground pt-1">
+            {post.like_count > 0 && (
+              <span className="flex items-center gap-1">
+                <Heart className="h-3 w-3" />
+                {post.like_count}
+              </span>
+            )}
+            {post.comment_count > 0 && (
+              <span className="flex items-center gap-1">
+                <MessageCircle className="h-3 w-3" />
+                {post.comment_count}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -112,11 +152,11 @@ export function StorefrontPostsFeed({ identifier }: StorefrontPostsFeedProps) {
         ))}
       </div>
 
-      {/* Posts list */}
+      {/* Posts grid */}
       {isLoading ? (
-        <div className="space-y-4">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-32 w-full rounded-lg" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="aspect-square w-full rounded-lg" />
           ))}
         </div>
       ) : allPosts.length === 0 ? (
@@ -125,7 +165,7 @@ export function StorefrontPostsFeed({ identifier }: StorefrontPostsFeedProps) {
           <p className="text-sm">No posts yet</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" role="list" data-testid="posts-grid">
           {allPosts.map((post) => (
             <StorefrontPostCard key={post.post_id} post={post} />
           ))}
