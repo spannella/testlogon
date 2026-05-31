@@ -26,6 +26,7 @@ const CartPage = lazy(() => import("@/pages/shop/CartPage"));
 const Checkout = lazy(() => import("@/pages/shop/Checkout"));
 const FeedPage = lazy(() => import("@/pages/feed/FeedPage"));
 const PostDetailPage = lazy(() => import("@/pages/feed/PostDetailPage"));
+const DelegateFeedPage = lazy(() => import("@/pages/feed/DelegateFeedPage"));
 const AlertsPage = lazy(() => import("@/pages/alerts/AlertsPage"));
 const SecurityPage = lazy(() => import("@/pages/security/SecurityPage"));
 const ProfilePage = lazy(() => import("@/pages/settings/ProfilePage"));
@@ -153,6 +154,7 @@ export default function App() {
           <Route path="search" element={<SearchPage />} />
           <Route path="saved" element={<SavedPage />} />
           <Route path="posts/:postId" element={<PostDetailPage />} />
+          <Route path="feed/delegate/:creatorId" element={<DelegateFeedPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />

@@ -1490,5 +1490,9 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Delegates (DELEGATE-001..003)
+    delegates_table_name: str = os.environ.get("DELEGATES_TABLE_NAME", "delegates")
+    delegate_feed_enabled: bool = os.environ.get("DELEGATE_FEED_ENABLED", "1") not in ("0", "false", "False")
+
 
 S = Settings()

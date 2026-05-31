@@ -3878,3 +3878,202 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# -- Delegate Management (DELEGATE-001) --
+
+class DelegateAddIn(BaseModel):
+    delegate_id: str = Field(min_length=1, max_length=255, description="User ID or email of the delegate")
+    permissions: List[str] = Field(min_length=1, description="List of permission keys")
+    preset: Optional[str] = Field(None, description="Permission preset key")
+    label: str = Field(default="", max_length=200, description="Optional label for the delegate")
+
+
+class DelegateUpdatePermissionsIn(BaseModel):
+    permissions: List[str] = Field(min_length=1)
+    preset: Optional[str] = None
+
+
+class DelegateInviteRespondIn(BaseModel):
+    accept: bool
+
+
+class DelegateSettingsIn(BaseModel):
+    require_acceptance: bool = True
+    max_delegates: int = Field(default=10, ge=1, le=20)
+    default_preset: Optional[str] = None
+    delegate_tag_enabled: bool = True
+    delegate_tag_format: str = Field(default="[via @{delegate_name}]", max_length=100)
+
+
+class DelegateOut(BaseModel):
+    delegate_id: str
+    creator_id: str
+    permissions: List[str] = Field(default_factory=list)
+    preset: Optional[str] = None
+    status: str = ""
+    label: str = ""
+    show_delegate_tag: bool = True
+    delegate_tag_format: str = "[via @{delegate_name}]"
+    invited_at: int = 0
+    accepted_at: int = 0
+    updated_at: int = 0
+
+
+class ManagedCreatorOut(BaseModel):
+    creator_id: str
+    permissions: List[str] = Field(default_factory=list)
+    preset: Optional[str] = None
+    status: str = ""
+    label: str = ""
+    accepted_at: int = 0
+
+
+class DelegateSettingsOut(BaseModel):
+    require_acceptance: bool = True
+    max_delegates: int = 10
+    default_preset: Optional[str] = None
+    delegate_tag_enabled: bool = True
+    delegate_tag_format: str = "[via @{delegate_name}]"
+
+
+class DelegateAuditOut(BaseModel):
+    event_id: str
+    actor_id: str
+    actor_type: str = ""
+    action: str = ""
+    target_id: str = ""
+    details: Optional[Dict[str, Any]] = None
+    ts: int = 0
+
+
+class PermissionPresetOut(BaseModel):
+    key: str
+    label: str
+    permissions: List[str]
+
+
+# -- Chat Delegation (DELEGATE-002) --
+
+class DelegatedSendMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+    reply_to_message_id: Optional[str] = None
+
+class DelegatedMessageOut(BaseModel):
+    conversation_id: str
+    message_id: str
+    sender_id: str
+    created_at: int = 0
+    kind: str = "text"
+    text: Optional[str] = None
+    is_encrypted: bool = False
+    sent_by_delegate: Optional[str] = None
+    delegate_display_name: Optional[str] = None
+    delegate_tag: Optional[str] = None
+    delegate_cannot_decrypt: bool = False
+    reply_to_message_id: Optional[str] = None
+
+class DelegatedConversationOut(BaseModel):
+    conversation_id: str
+    type: str = "dm"
+    title: Optional[str] = None
+    created_at: int = 0
+    last_message_at: int = 0
+    last_message_preview: Optional[str] = None
+    participant_count: int = 0
+    status: str = "active"
+    unread_count: int = 0
+    participants: List[Dict[str, Any]] = Field(default_factory=list)
+
+class ChatDelegateAuditEntry(BaseModel):
+    event_id: str
+    delegate_id: str
+    conversation_id: str
+    message_id: str = ""
+    text_preview: str = ""
+    delegate_display_name: str = ""
+    created_at: int = 0
+
+
+# -- Newsfeed Delegation (DELEGATE-003) --
+
+class DelegatedPostCreateIn(BaseModel):
+    text: str = Field(min_length=1, max_length=10000)
+    image_url: Optional[str] = None
+    lock_price_cents: int = Field(default=0, ge=0)
+    tags: List[str] = Field(default_factory=list)
+    scheduled_at: Optional[int] = None
+
+
+class DelegatedPostEditIn(BaseModel):
+    text: Optional[str] = Field(None, min_length=1, max_length=10000)
+    image_url: Optional[str] = None
+    lock_price_cents: Optional[int] = Field(None, ge=0)
+    tags: Optional[List[str]] = None
+
+
+class DraftApprovalIn(BaseModel):
+    note: str = Field(default="", max_length=500)
+
+
+class CommentModerationIn(BaseModel):
+    action: str = Field(description="hide | pin | unpin | delete")
+
+
+class FeedDelegationSettingsIn(BaseModel):
+    require_post_approval: bool = False
+    allow_delegate_scheduling: bool = True
+    allow_delegate_locking: bool = False
+    delegate_tag_on_posts: bool = False
+    delegate_tag_format: str = Field(default="[posted by @{delegate_name}]", max_length=100)
+
+
+class DelegatedPostOut(BaseModel):
+    post_id: str
+    author_id: str
+    text: str = ""
+    image_url: Optional[str] = None
+    lock_price_cents: int = 0
+    tags: List[str] = Field(default_factory=list)
+    status: str = "published"
+    posted_by_delegate: Optional[str] = None
+    delegate_display_name: Optional[str] = None
+    delegate_tag: Optional[str] = None
+    approval_status: Optional[str] = None
+    approval_note: Optional[str] = None
+    approved_at: Optional[int] = None
+    created_at: str = ""
+    updated_at: str = ""
+    view_count: int = 0
+    like_count: int = 0
+    comment_count: int = 0
+
+
+class FeedAnalyticsOut(BaseModel):
+    period: str
+    total_posts: int = 0
+    total_views: int = 0
+    total_likes: int = 0
+    total_comments: int = 0
+    engagement_rate: float = 0.0
+    locked_post_revenue_cents: int = 0
+    delegate_post_count: int = 0
+    top_posts: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class FeedDelegateAuditEntry(BaseModel):
+    event_id: str
+    delegate_id: str
+    delegate_display_name: str = ""
+    action: str = ""
+    target_id: str = ""
+    details: Optional[Dict[str, Any]] = None
+    ts: int = 0
+
+
+class FeedDelegationSettingsOut(BaseModel):
+    require_post_approval: bool = False
+    allow_delegate_scheduling: bool = True
+    allow_delegate_locking: bool = False
+    delegate_tag_on_posts: bool = False
+    delegate_tag_format: str = "[posted by @{delegate_name}]"
