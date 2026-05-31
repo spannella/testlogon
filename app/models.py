@@ -6609,6 +6609,74 @@ class QaConfigValidationOut(BaseModel):
     errors: List[str] = Field(default_factory=list)
 
 
+# ─── DevOps/SRE Agent (AGENT-010) ───────────────────────────────────
+
+
+class EnvironmentConfigIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+    requires_approval: bool = False
+    deploy_commands: List[str] = Field(..., min_length=1, max_length=50)
+    rollback_commands: List[str] = Field(default_factory=list, max_length=50)
+    health_check_urls: List[str] = Field(default_factory=list, max_length=20)
+    health_check_timeout_seconds: int = Field(default=120, ge=10, le=600)
+    smoke_test_command: Optional[str] = Field(default=None, max_length=1000)
+    rollback_window_seconds: int = Field(default=300, ge=0, le=3600)
+    env_vars: Optional[Dict[str, str]] = None
+
+    @field_validator("health_check_urls")
+    @classmethod
+    def _validate_health_urls(cls, v: List[str]) -> List[str]:
+        for url in v:
+            if not (url.startswith("http://") or url.startswith("https://")):
+                raise ValueError("Health check URLs must be valid HTTP or HTTPS URLs")
+        return v
+
+
+class MonitoringEndpointIn(BaseModel):
+    name: str = Field(..., max_length=100)
+    url: str = Field(..., max_length=500)
+    metric_type: str = Field(..., max_length=50)
+    threshold: float = Field(ge=0)
+
+
+class RunbookIn(BaseModel):
+    trigger_label: str = Field(..., max_length=100)
+    name: str = Field(..., max_length=200)
+    steps: List[str] = Field(..., min_length=1, max_length=50)
+
+
+class DevOpsConfigIn(BaseModel):
+    environments: List[EnvironmentConfigIn] = Field(..., min_length=1, max_length=10)
+    deploy_ticket_labels: List[str] = Field(default=["type:deployment"], max_length=20)
+    infra_ticket_labels: List[str] = Field(default=["type:infrastructure"], max_length=20)
+    incident_ticket_labels: List[str] = Field(default=["type:incident"], max_length=20)
+    auto_deploy_on_qa_approved: bool = False
+    coding_tool: Literal["claude_code", "codex"] = "claude_code"
+    max_operation_time_seconds: int = Field(default=1800, ge=300, le=14400)
+    incident_space_id: Optional[str] = None
+    monitoring_endpoints: Optional[List[MonitoringEndpointIn]] = None
+    runbooks: Optional[List[RunbookIn]] = None
+
+    @field_validator("environments")
+    @classmethod
+    def _validate_unique_envs(cls, v: List[EnvironmentConfigIn]) -> List[EnvironmentConfigIn]:
+        names = [e.name for e in v]
+        if len(names) != len(set(names)):
+            raise ValueError("Environment names must be unique")
+        return v
+
+
+class DevOpsConfigOut(BaseModel):
+    type_id: str
+    devops_config: DevOpsConfigIn
+    updated_at: int
+
+
+class DevOpsConfigValidationOut(BaseModel):
+    valid: bool
+    errors: List[str] = Field(default_factory=list)
+
+
 class QaScreenshotItem(BaseModel):
     name: str = ""
     s3_key: str = ""
@@ -6661,6 +6729,77 @@ class QaMetricsOut(BaseModel):
     bugs_found_count: int = Field(default=0, ge=0)
     avg_duration_seconds: float = Field(default=0.0, ge=0.0)
     flaky_test_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+class DeploymentApprovalIn(BaseModel):
+    approved: bool = True
+    approver_notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class DeploymentApprovalOut(BaseModel):
+    run_id: str
+    deployment_id: str
+    approval_status: Literal["approved", "rejected"]
+    approved_by: str
+    approved_at: int
+    notes: Optional[str] = None
+
+
+class HealthCheckResult(BaseModel):
+    url: str
+    status_code: int
+    response_time_ms: int
+    healthy: bool
+
+
+class SmokeTestResult(BaseModel):
+    command: str
+    exit_code: int
+    passed: bool
+
+
+class DeploymentLogStepOut(BaseModel):
+    step_number: int
+    step_type: str
+    command: str
+    exit_code: Optional[int] = None
+    stdout_tail: str = ""
+    stderr_tail: str = ""
+    started_at: int = 0
+    completed_at: int = 0
+    duration_seconds: int = 0
+    status: str = "success"
+
+
+class DeploymentLogOut(BaseModel):
+    deployment_id: str
+    environment: str
+    steps: List[DeploymentLogStepOut] = Field(default_factory=list)
+
+
+class DevOpsOutputOut(BaseModel):
+    deployment_id: str
+    ticket_id: str = ""
+    environment: str
+    operation_type: str
+    status: str
+    version_deployed: Optional[str] = None
+    steps_total: int = Field(default=0, ge=0)
+    steps_completed: int = Field(default=0, ge=0)
+    health_check_results: List[HealthCheckResult] = Field(default_factory=list)
+    smoke_test_result: Optional[SmokeTestResult] = None
+    rollback_executed: bool = False
+    rollback_success: Optional[bool] = None
+    incident_ticket_id: Optional[str] = None
+    total_duration_seconds: int = Field(default=0, ge=0)
+    approval_received_at: Optional[int] = None
+    monitoring_snapshot: Optional[Dict[str, Any]] = None
+
+
+class DevOpsMetricsOut(BaseModel):
+    deployment_frequency: float = Field(default=0, ge=0)
+    success_rate: float = Field(default=0, ge=0, le=1)
+    mttr_seconds: float = Field(default=0, ge=0)
+    rollback_rate: float = Field(default=0, ge=0, le=1)
+    incidents_count: int = Field(default=0, ge=0)
     period_start: int = 0
     period_end: int = 0
 
@@ -6688,6 +6827,45 @@ class QaWorkflowStepOut(BaseModel):
     on_failure: str = "next"
 
 
+class DevOpsEligibleTicketOut(BaseModel):
+    ticket_id: str
+    subject: str = ""
+    labels: List[str] = Field(default_factory=list)
+    operation_type: str = "deployment"
+    status: str = "open"
+    created_at: int = 0
+
+
+class DevOpsEligibleTicketsOut(BaseModel):
+    tickets: List[DevOpsEligibleTicketOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class DevOpsDeploymentRowOut(BaseModel):
+    run_id: str = ""
+    agent_type_id: str = ""
+    deployment_id: str = ""
+    ticket_id: str = ""
+    environment: str = ""
+    status: str = ""
+    version_deployed: Optional[str] = None
+    total_duration_seconds: int = 0
+    created_at: int = 0
+
+
+class DevOpsDeploymentsOut(BaseModel):
+    deployments: List[DevOpsDeploymentRowOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class DevOpsWorkflowStepOut(BaseModel):
+    step_id: int
+    type: str
+    command: Optional[str] = None
+    timeout_seconds: int = 0
+    on_failure: str = "next"
+
+
 class QaWorkflowPreviewOut(BaseModel):
     steps: List[QaWorkflowStepOut] = Field(default_factory=list)
     new_test_file: str = ""
@@ -6702,3 +6880,29 @@ class QaClaimIn(BaseModel):
 class QaExecuteIn(BaseModel):
     ticket_id: str = Field(..., min_length=1, max_length=100)
     scenario: Literal["pass", "fail", "flaky", "error"] = "fail"
+class DevOpsWorkflowPreviewOut(BaseModel):
+    steps: List[DevOpsWorkflowStepOut] = Field(default_factory=list)
+    environment: str = ""
+    operation_type: str = "deployment"
+    requires_approval: bool = False
+    total_timeout_seconds: int = 0
+
+
+class DevOpsTestWorkflowIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=100)
+    environment_name: Optional[str] = Field(default=None, max_length=50)
+    version: Optional[str] = Field(default=None, max_length=100)
+
+
+class DevOpsExecuteWorkflowIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=100)
+    environment_name: Optional[str] = Field(default=None, max_length=50)
+    version: Optional[str] = Field(default=None, max_length=100)
+    force_health_failure: bool = False
+
+
+class TicketCreateDevOpsIn(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=300)
+    description: str = Field(default="", max_length=10000)
+    labels: List[str] = Field(default_factory=list, max_length=20)
+    space_id: Optional[str] = Field(default=None, max_length=100)

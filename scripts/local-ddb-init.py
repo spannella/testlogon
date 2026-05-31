@@ -1490,6 +1490,16 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByTypeDate", "partition_key": "gsi_type_date_pk", "sort_key": "gsi_type_date_sk"},
             ],
         ),
+        # DevOps/SRE Agent (AGENT-010) — deployment audit log (pk=DEPLOY#{id}, sk=STEP#{nnnn})
+        TableDef(
+            _resolve_table_name(S.deployment_log_table_name, "deployment_log"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByEnv", "partition_key": "gsi_env_pk", "sort_key": "gsi_env_sk"},
+            ],
+            attr_types={"gsi_env_sk": "N"},
+        ),
     ]
 
 

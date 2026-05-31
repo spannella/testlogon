@@ -1656,6 +1656,12 @@ class Settings:
     agent_qa_screenshot_bucket: str = os.environ.get("QA_AGENT_SCREENSHOT_BUCKET", os.environ.get("S3_BUCKET", "local-bucket"))
     agent_qa_screenshot_url_ttl_seconds: int = int(os.environ.get("QA_AGENT_SCREENSHOT_URL_TTL_SECONDS", "900"))
     agent_qa_max_screenshots: int = int(os.environ.get("QA_AGENT_MAX_SCREENSHOTS", "50"))
+    # DevOps/SRE Agent (AGENT-010)
+    deployment_log_table_name: str = os.environ.get("DEPLOYMENT_LOG_TABLE_NAME", "deployment_log")
+    agent_devops_enabled: bool = os.environ.get("DEVOPS_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    # When false (default, and always in E2E), the devops lifecycle never runs real
+    # commands/infra — the deployment state machine is driven in-memory (mock mode).
+    agent_devops_execute_commands: bool = os.environ.get("DEVOPS_AGENT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
 
 
 S = Settings()

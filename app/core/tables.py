@@ -163,6 +163,7 @@ class Tables:
     agent_feedback: Any
     agent_types: Any
     agent_runs: Any
+    deployment_log: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -320,4 +321,5 @@ T = Tables(
     agent_feedback=ddb.Table(S.agent_feedback_table_name),
     agent_types=ddb.Table(S.agent_types_table_name),
     agent_runs=ddb.Table(S.agent_runs_table_name),
+    deployment_log=ddb.Table(S.deployment_log_table_name),
 )
