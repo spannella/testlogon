@@ -5033,6 +5033,8 @@ export interface AdServeResponse {
   reviewed_by?: string | null;
   promo_code_id?: string | null;
   affiliate_link_id?: string | null;
+}
+
 // -- Bot Templates & Scheduled Messages (BOT-002) --
 
 export interface QuickReply {
@@ -5115,6 +5117,8 @@ export interface IssuedLicenseIndexItem {
   license_mode: string;
   status: string;
   created_at: number;
+}
+
 export interface BotScheduledSend {
   schedule_id: string;
   bot_id: string;
@@ -5134,6 +5138,8 @@ export interface TemplatePreviewOut {
   resolved_variables: Record<string, string>;
   unresolved_variables: string[];
   quick_replies?: QuickReply[];
+}
+
 // ── Ad Targeting (ADS-003) ──────────────────────────────────────────────────
 
 export interface AdTargeting {
@@ -5173,6 +5179,8 @@ export interface AdBlock {
   account_id: string;
   blocked_at: number;
   reason: string;
+}
+
 // -- Syndicate Bundled Subscriptions (SYND-002) --
 
 export interface BundlePlanOut {
@@ -5257,6 +5265,8 @@ export interface AdServingStats {
   clicks: number;
   skips: number;
   ctr_pct: number;
+}
+
 // ─── EC2 Instance Launcher (INFRA-003) ────────────────────────────
 
 export interface Ec2LaunchIn {

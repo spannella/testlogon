@@ -20,7 +20,7 @@ export default function MyBundlesPage() {
 
   const { data: bundles = [] } = useQuery({
     queryKey: ["my-bundles"],
-    queryFn: async () => (await listMyBundles()).data,
+    queryFn: () => listMyBundles(),
   });
 
   return (

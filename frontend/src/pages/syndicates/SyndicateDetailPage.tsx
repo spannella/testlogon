@@ -1,12 +1,6 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Users, UserPlus, Shield, Clock, LogOut, Trash2, ArrowLeftRight } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Users, UserPlus, Shield, Clock, LogOut, Trash2, ArrowLeftRight, Package, Plus } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,7 +28,6 @@ import {
   transferAdmin,
   leaveSyndicate,
   removeMember,
-} from "@/api/endpoints/syndicates";
   listBundlePlans,
   createBundlePlan,
   updateBundlePlan,
@@ -52,25 +45,25 @@ export default function SyndicateDetailPage() {
 
   const { data: syndicate } = useQuery({
     queryKey: ["syndicates", syndicateId],
-    queryFn: async () => (await getSyndicate(syndicateId!)).data,
+    queryFn: () => getSyndicate(syndicateId!),
     enabled: !!syndicateId,
   });
 
   const { data: members = [] } = useQuery({
     queryKey: ["syndicates", syndicateId, "members"],
-    queryFn: async () => (await listMembers(syndicateId!)).data,
+    queryFn: () => listMembers(syndicateId!),
     enabled: !!syndicateId,
   });
 
   const { data: requests = [] } = useQuery({
     queryKey: ["syndicates", syndicateId, "requests"],
-    queryFn: async () => (await listRequests(syndicateId!)).data,
+    queryFn: () => listRequests(syndicateId!),
     enabled: !!syndicateId,
   });
 
   const { data: auditLog = [] } = useQuery({
     queryKey: ["syndicates", syndicateId, "audit"],
-    queryFn: async () => (await getAuditLog(syndicateId!)).data,
+    queryFn: () => getAuditLog(syndicateId!),
     enabled: !!syndicateId,
   });
 
@@ -325,7 +318,7 @@ function BundlePlansTab({ syndicateId, isAdmin }: { syndicateId: string; isAdmin
 
   const { data: plans = [] } = useQuery({
     queryKey: ["syndicate-plans", syndicateId],
-    queryFn: async () => (await listBundlePlans(syndicateId)).data,
+    queryFn: () => listBundlePlans(syndicateId),
     enabled: !!syndicateId,
   });
 

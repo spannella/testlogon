@@ -84,7 +84,7 @@ export default function Checkout() {
   const creatorId = useMemo(() => {
     const ids = new Set(
       items
-        .map((i: Record<string, unknown>) => (i as any).creator_user_id ?? (i as any).seller_id)
+        .map((i) => (i as any).creator_user_id ?? (i as any).seller_id)
         .filter(Boolean),
     );
     if (ids.size === 1) return [...ids][0] as string;

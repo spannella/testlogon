@@ -29,17 +29,17 @@ export default function SyndicatesPage() {
 
   const { data: mySyndicates = [] } = useQuery({
     queryKey: ["syndicates", "mine"],
-    queryFn: async () => (await listMySyndicates()).data,
+    queryFn: () => listMySyndicates(),
   });
 
   const { data: invites = [] } = useQuery({
     queryKey: ["syndicates", "invites"],
-    queryFn: async () => (await listMyInvites()).data,
+    queryFn: () => listMyInvites(),
   });
 
   const { data: discoverList = [] } = useQuery({
     queryKey: ["syndicates", "discover"],
-    queryFn: async () => (await discoverSyndicates()).data,
+    queryFn: () => discoverSyndicates(),
   });
 
   return (
