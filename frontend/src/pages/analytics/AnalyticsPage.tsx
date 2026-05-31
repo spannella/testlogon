@@ -104,6 +104,11 @@ export default function AnalyticsPage() {
     return diff;
   });
 
+  // Client-side sort for the Top Content "Engagement" column (ANALYTICS-002).
+  // Engagement rate is computed server-side after BatchGetItem, so it is not a
+  // valid backend sort_by key — we sort the returned rows in the browser.
+  const [engagementSort, setEngagementSort] = useState<"none" | "desc" | "asc">("none");
+
   const params = useMemo(
     () => ({ from_date: fromDate, to_date: toDate, granularity }),
     [fromDate, toDate, granularity]
@@ -174,6 +179,22 @@ export default function AnalyticsPage() {
   const subscribers = subscribersQ.data;
   const topContent = topContentQ.data;
   const audience = audienceQ.data;
+
+  // Apply client-side engagement sort when active.
+  const topContentItems = useMemo(() => {
+    const items = topContent?.items ?? [];
+    if (engagementSort === "none") return items;
+    const sorted = [...items].sort(
+      (a, b) => (a.engagement_rate ?? 0) - (b.engagement_rate ?? 0)
+    );
+    return engagementSort === "desc" ? sorted.reverse() : sorted;
+  }, [topContent, engagementSort]);
+
+  function toggleEngagementSort() {
+    setEngagementSort((prev) =>
+      prev === "none" ? "desc" : prev === "desc" ? "asc" : "none"
+    );
+  }
 
   // ── Render ───────────────────────────────────────────────────
 
@@ -399,11 +420,22 @@ export default function AnalyticsPage() {
                     <th className="pb-2 pr-4">Type</th>
                     <th className="pb-2 pr-4 text-right">Views</th>
                     <th className="pb-2 pr-4 text-right">Revenue</th>
-                    <th className="pb-2 text-right">Engagement</th>
+                    <th className="pb-2 text-right">
+                      <button
+                        type="button"
+                        onClick={toggleEngagementSort}
+                        className="inline-flex items-center gap-1 hover:text-foreground"
+                        aria-label="Sort by engagement"
+                      >
+                        Engagement
+                        {engagementSort === "desc" && <span aria-hidden>↓</span>}
+                        {engagementSort === "asc" && <span aria-hidden>↑</span>}
+                      </button>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {topContent?.items.map((item, i) => (
+                  {topContentItems.map((item, i) => (
                     <tr
                       key={item.content_id}
                       className="border-b last:border-0 cursor-pointer hover:bg-muted/50 transition-colors"
