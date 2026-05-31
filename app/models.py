@@ -5074,6 +5074,7 @@ class Ec2LaunchIn(BaseModel):
     auto_terminate_after: int = Field(default=7200, ge=600, le=86400)
     startup_script: str = Field(default="", max_length=16_384)
     template_id: Optional[str] = None
+    security_group_id: Optional[str] = None  # INFRA-009: defaults to user's default SG
 
 
 class Ec2InstanceOut(BaseModel):
@@ -9237,3 +9238,79 @@ class LicenseAgreementReviewItemOut(BaseModel):
 class LicenseAgreementReviewQueueOut(BaseModel):
     items: List[LicenseAgreementReviewItemOut] = Field(default_factory=list)
     next_cursor: Optional[str] = None
+# ─── Security Groups & Network Rules (INFRA-009) ────────────────────────────
+
+class SecurityRuleIn(BaseModel):
+    protocol: Literal["tcp", "udp", "icmp", "all"]
+    port_from: int = Field(default=0, ge=0, le=65535)
+    port_to: int = Field(default=0, ge=0, le=65535)
+    source: str = Field(..., min_length=1, max_length=100)
+    direction: Literal["inbound", "outbound"] = "inbound"
+    description: str = Field(default="", max_length=200)
+
+
+class SecurityRuleOut(BaseModel):
+    rule_id: str
+    protocol: str
+    port_from: int
+    port_to: int
+    source: str
+    direction: str
+    description: str
+
+
+class CreateSgIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
+    rules: List[SecurityRuleIn] = Field(default_factory=list)
+
+
+class UpdateSgIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=500)
+
+
+class SecurityGroupOut(BaseModel):
+    sg_id: str
+    name: str
+    description: str
+    rules: List[SecurityRuleOut]
+    is_default: bool
+    created_at: int
+    updated_at: int
+    associated_instances: List[str]
+
+
+class SgListOut(BaseModel):
+    security_groups: List[SecurityGroupOut]
+    count: int
+
+
+class AddRuleIn(SecurityRuleIn):
+    pass
+
+
+class UpdateRuleIn(BaseModel):
+    protocol: Optional[Literal["tcp", "udp", "icmp", "all"]] = None
+    port_from: Optional[int] = Field(default=None, ge=0, le=65535)
+    port_to: Optional[int] = Field(default=None, ge=0, le=65535)
+    source: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    direction: Optional[Literal["inbound", "outbound"]] = None
+    description: Optional[str] = Field(default=None, max_length=200)
+
+
+class EffectiveRuleOut(BaseModel):
+    rule_id: str
+    protocol: str
+    port_from: int
+    port_to: int
+    source: str
+    resolved_sources: List[str]
+    direction: str
+    description: str
+
+
+class EffectiveRulesOut(BaseModel):
+    sg_id: str
+    rules: List[EffectiveRuleOut]
+    count: int
