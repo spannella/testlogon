@@ -7,6 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Users, UserPlus, Shield, Clock, LogOut, Trash2, ArrowLeftRight, Package, Plus } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -27,6 +35,13 @@ import {
   leaveSyndicate,
   removeMember,
 } from "@/api/endpoints/syndicates";
+  listBundlePlans,
+  createBundlePlan,
+  updateBundlePlan,
+  archiveBundlePlan,
+  subscribeToBundlePlan,
+} from "@/api/endpoints/syndicates";
+import type { BundlePlanOut } from "@/api/types";
 import { useAuthStore } from "@/stores/authStore";
 
 export default function SyndicateDetailPage() {
@@ -112,6 +127,7 @@ export default function SyndicateDetailPage() {
       <Tabs defaultValue="members">
         <TabsList>
           <TabsTrigger value="members">Members</TabsTrigger>
+          <TabsTrigger value="plans">Plans</TabsTrigger>
           {isAdmin && <TabsTrigger value="requests">Requests ({requests.length})</TabsTrigger>}
           {isAdmin && <TabsTrigger value="audit">Audit Log</TabsTrigger>}
         </TabsList>
@@ -149,6 +165,11 @@ export default function SyndicateDetailPage() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Plans Tab (SYND-002) */}
+        <TabsContent value="plans">
+          <BundlePlansTab syndicateId={syndicateId!} isAdmin={isAdmin} />
         </TabsContent>
 
         {/* Requests Tab */}
@@ -296,6 +317,190 @@ function RemoveMemberButton({ syndicateId, targetUserId }: { syndicateId: string
     >
       <Trash2 className="h-4 w-4" />
     </Button>
+  );
+}
+
+function BundlePlansTab({ syndicateId, isAdmin }: { syndicateId: string; isAdmin: boolean }) {
+  const queryClient = useQueryClient();
+
+  const { data: plans = [] } = useQuery({
+    queryKey: ["syndicate-plans", syndicateId],
+    queryFn: async () => (await listBundlePlans(syndicateId)).data,
+    enabled: !!syndicateId,
+  });
+
+  const archiveMut = useMutation({
+    mutationFn: (planId: string) => archiveBundlePlan(syndicateId, planId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["syndicate-plans", syndicateId] });
+    },
+  });
+
+  const subscribeMut = useMutation({
+    mutationFn: (planId: string) => subscribeToBundlePlan(syndicateId, planId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["my-bundles"] });
+      queryClient.invalidateQueries({ queryKey: ["syndicate-plans", syndicateId] });
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2">
+          <Package className="h-5 w-5" />
+          Bundle Plans
+        </CardTitle>
+        {isAdmin && <CreateBundlePlanDialog syndicateId={syndicateId} />}
+      </CardHeader>
+      <CardContent>
+        {plans.length === 0 ? (
+          <div className="text-center py-6">
+            <p className="text-muted-foreground">No bundle plans yet</p>
+            {isAdmin && (
+              <p className="text-sm text-muted-foreground mt-1">Create your first plan to attract subscribers</p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {plans.map((p: BundlePlanOut) => (
+              <div key={p.plan_id} className="rounded-lg border p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold">{p.name}</h3>
+                  <Badge variant={p.status === "active" ? "default" : "secondary"}>
+                    {p.status}
+                  </Badge>
+                </div>
+                {p.description && (
+                  <p className="text-sm text-muted-foreground mb-2">{p.description}</p>
+                )}
+                <p className="text-lg font-medium mb-3">
+                  ${(p.price_cents / 100).toFixed(2)}/{p.interval}
+                </p>
+                <div className="flex gap-2">
+                  {isAdmin && p.status === "active" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-destructive"
+                      onClick={() => archiveMut.mutate(p.plan_id)}
+                      disabled={archiveMut.isPending}
+                    >
+                      Archive
+                    </Button>
+                  )}
+                  {!isAdmin && p.status === "active" && (
+                    <Button
+                      size="sm"
+                      onClick={() => subscribeMut.mutate(p.plan_id)}
+                      disabled={subscribeMut.isPending}
+                    >
+                      Subscribe
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CreateBundlePlanDialog({ syndicateId }: { syndicateId: string }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [priceDollars, setPriceDollars] = useState("");
+  const [interval, setInterval] = useState("month");
+  const queryClient = useQueryClient();
+
+  const mut = useMutation({
+    mutationFn: () =>
+      createBundlePlan(syndicateId, {
+        name,
+        description,
+        price_cents: Math.round(parseFloat(priceDollars) * 100),
+        interval,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["syndicate-plans", syndicateId] });
+      setOpen(false);
+      setName("");
+      setDescription("");
+      setPriceDollars("");
+      setInterval("month");
+    },
+  });
+
+  const priceValid = priceDollars && parseFloat(priceDollars) >= 1 && parseFloat(priceDollars) <= 1000;
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm">
+          <Plus className="h-4 w-4 mr-1" /> Create Plan
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create Bundle Plan</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">Name</label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="All-Access Bundle"
+              maxLength={100}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Description</label>
+            <Textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Access content from all syndicate creators"
+              maxLength={1000}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Price (USD)</label>
+            <Input
+              type="number"
+              value={priceDollars}
+              onChange={(e) => setPriceDollars(e.target.value)}
+              placeholder="20.00"
+              min={1}
+              max={1000}
+              step={0.01}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Billing Interval</label>
+            <Select value={interval} onValueChange={setInterval}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="month">Monthly</SelectItem>
+                <SelectItem value="year">Yearly</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            onClick={() => mut.mutate()}
+            disabled={name.length < 2 || !priceValid || mut.isPending}
+          >
+            {mut.isPending ? "Creating..." : "Create Plan"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

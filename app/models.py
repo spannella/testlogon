@@ -4661,3 +4661,56 @@ class CreatorAdSettingsOut(BaseModel):
 class AdBlockIn(BaseModel):
     account_id: str
     reason: str = ""
+
+# -- Syndicate Bundled Subscriptions (SYND-002) --
+
+class BundlePlanCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    price_cents: int = Field(ge=100, le=100000)
+    interval: str = Field(default="month", pattern="^(month|year)$")
+
+class BundlePlanUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    price_cents: Optional[int] = Field(default=None, ge=100, le=100000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def at_least_one_field(cls, values):
+        if isinstance(values, dict):
+            non_none = {k: v for k, v in values.items() if v is not None}
+            if not non_none:
+                raise ValueError("At least one field must be provided")
+        return values
+
+class BundlePlanOut(BaseModel):
+    plan_id: str
+    plan_type: str = "syndicate_bundle"
+    syndicate_id: str
+    name: str
+    description: str = ""
+    price_cents: int = 0
+    interval: str = "month"
+    status: str = "active"
+    included_creator_ids: List[str] = Field(default_factory=list)
+    current_members: List[SyndicateMemberOut] = Field(default_factory=list)
+    created_at: int = 0
+
+class BundleSubscribeIn(BaseModel):
+    payment_method_id: Optional[str] = None
+
+class BundleSubscriptionOut(BaseModel):
+    subscription_id: str
+    plan_id: str
+    plan_type: str = "syndicate_bundle"
+    syndicate_id: str
+    syndicate_name: str = ""
+    status: str
+    price_cents: int = 0
+    interval: str = "month"
+    current_period_start: int = 0
+    current_period_end: int = 0
+    created_at: int = 0
+    cancelled_at: Optional[int] = None
+    included_creators: List[SyndicateMemberOut] = Field(default_factory=list)

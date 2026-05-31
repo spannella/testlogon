@@ -6,6 +6,8 @@ import type {
   SyndicateAuditOut,
   SyndicateMemberOut,
   SyndicateUserEntry,
+  BundlePlanOut,
+  BundleSubscriptionOut,
 } from "@/api/types";
 
 // -- Syndicate CRUD --
@@ -61,3 +63,29 @@ export const listRequests = (syndicateId: string) =>
 
 export const getAuditLog = (syndicateId: string, limit = 50) =>
   api.get<SyndicateAuditOut[]>(`/ui/syndicates/${syndicateId}/audit`, { params: { limit } });
+
+// -- Bundle Plans (SYND-002) --
+
+export const createBundlePlan = (syndicateId: string, body: { name: string; description?: string; price_cents: number; interval?: string }) =>
+  api.post<BundlePlanOut>(`/ui/syndicates/${syndicateId}/plans`, body);
+
+export const listBundlePlans = (syndicateId: string) =>
+  api.get<BundlePlanOut[]>(`/ui/syndicates/${syndicateId}/plans`);
+
+export const getBundlePlan = (syndicateId: string, planId: string) =>
+  api.get<BundlePlanOut>(`/ui/syndicates/${syndicateId}/plans/${planId}`);
+
+export const updateBundlePlan = (syndicateId: string, planId: string, body: { name?: string; description?: string; price_cents?: number }) =>
+  api.put<BundlePlanOut>(`/ui/syndicates/${syndicateId}/plans/${planId}`, body);
+
+export const archiveBundlePlan = (syndicateId: string, planId: string) =>
+  api.del<{ ok: boolean; plan_id: string; status: string }>(`/ui/syndicates/${syndicateId}/plans/${planId}`);
+
+export const subscribeToBundlePlan = (syndicateId: string, planId: string, body: { payment_method_id?: string } = {}) =>
+  api.post<BundleSubscriptionOut>(`/ui/syndicates/${syndicateId}/plans/${planId}/subscribe`, body);
+
+export const cancelBundleSubscription = (syndicateId: string, subscriptionId: string) =>
+  api.post<{ subscription_id: string; status: string; current_period_end: number; cancelled_at: number }>(`/ui/syndicates/${syndicateId}/subscriptions/${subscriptionId}/cancel`);
+
+export const listMyBundles = () =>
+  api.get<BundleSubscriptionOut[]>("/ui/syndicates/my-bundles");

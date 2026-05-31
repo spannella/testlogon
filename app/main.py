@@ -184,6 +184,7 @@ from app.routers.chat_bot import router as chat_bot_router
 from app.routers.bot_template import router as bot_template_router
 from app.services.bot_scheduler import start_bot_scheduler_task
 from app.routers.ads_targeting import router as ads_targeting_router
+from app.routers.syndicates import router as syndicates_router
 
 logger = logging.getLogger(__name__)
 
@@ -491,6 +492,7 @@ def create_app() -> FastAPI:
     app.include_router(bot_template_router, prefix="/ui")
     app.add_event_handler("startup", start_bot_scheduler_task)
     app.include_router(ads_targeting_router)
+    app.include_router(syndicates_router)
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)

@@ -5083,4 +5083,34 @@ export interface AdBlock {
   account_id: string;
   blocked_at: number;
   reason: string;
+// -- Syndicate Bundled Subscriptions (SYND-002) --
+
+export interface BundlePlanOut {
+  plan_id: string;
+  plan_type: string;
+  syndicate_id: string;
+  name: string;
+  description: string;
+  price_cents: number;
+  interval: string;
+  status: string;
+  included_creator_ids: string[];
+  current_members: SyndicateMemberOut[];
+  created_at: number;
+}
+
+export interface BundleSubscriptionOut {
+  subscription_id: string;
+  plan_id: string;
+  plan_type: string;
+  syndicate_id: string;
+  syndicate_name: string;
+  status: string;
+  price_cents: number;
+  interval: string;
+  current_period_start: number;
+  current_period_end: number;
+  created_at: number;
+  cancelled_at?: number;
+  included_creators: SyndicateMemberOut[];
 }

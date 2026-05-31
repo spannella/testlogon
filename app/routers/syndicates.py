@@ -1,4 +1,5 @@
 """Syndicate management router (SYND-001)."""
+"""Syndicate management router (SYND-001 + SYND-002)."""
 
 from __future__ import annotations
 
@@ -8,6 +9,11 @@ from fastapi import APIRouter, Depends, Query
 
 from app.services.sessions import require_ui_session
 from app.models import (
+    BundlePlanCreateIn,
+    BundlePlanOut,
+    BundlePlanUpdateIn,
+    BundleSubscribeIn,
+    BundleSubscriptionOut,
     SyndicateAuditOut,
     SyndicateCreateIn,
     SyndicateInviteIn,
@@ -21,6 +27,7 @@ from app.models import (
     SyndicateUpdateIn,
 )
 from app.services import syndicates as svc
+from app.services import syndicate_subscriptions as bundle_svc
 
 router = APIRouter(prefix="/ui/syndicates", tags=["syndicates"])
 
@@ -66,6 +73,38 @@ def list_my_invites(session=Depends(require_ui_session)):
             status=i.get("status", "pending"),
         )
         for i in items
+    ]
+
+
+@router.get("/my-bundles")
+def list_my_bundles(session=Depends(require_ui_session)):
+    """List the calling user's active bundle subscriptions."""
+    bundles = bundle_svc.list_subscriber_bundles(session["user_sub"])
+    return [
+        BundleSubscriptionOut(
+            subscription_id=b.get("subscription_id", ""),
+            plan_id=b.get("plan_id", ""),
+            plan_type="syndicate_bundle",
+            syndicate_id=b.get("syndicate_id", ""),
+            syndicate_name=b.get("syndicate_name", ""),
+            status=b.get("status", "active"),
+            price_cents=int(b.get("price_cents", 0)),
+            interval=b.get("interval", "month"),
+            current_period_start=int(b.get("current_period_start", 0)),
+            current_period_end=int(b.get("current_period_end", 0)),
+            created_at=int(b.get("created_at", 0)),
+            cancelled_at=b.get("cancelled_at"),
+            included_creators=[
+                SyndicateMemberOut(
+                    user_id=m.get("user_id", ""),
+                    display_name=m.get("display_name", ""),
+                    role=m.get("role", "member"),
+                    joined_at=int(m.get("joined_at", 0)),
+                )
+                for m in b.get("included_creators", [])
+            ],
+        )
+        for b in bundles
     ]
 
 
@@ -263,6 +302,153 @@ def get_audit(
 
 
 # ---------------------------------------------------------------------------
+# Bundle Plans (SYND-002)
+# ---------------------------------------------------------------------------
+
+@router.post("/{syndicate_id}/plans", status_code=201)
+def create_bundle_plan(
+    syndicate_id: str,
+    body: BundlePlanCreateIn,
+    session=Depends(require_ui_session),
+):
+    plan = bundle_svc.create_bundle_plan(
+        syndicate_id=syndicate_id,
+        admin_sub=session["user_sub"],
+        name=body.name,
+        description=body.description,
+        price_cents=body.price_cents,
+        interval=body.interval,
+    )
+    return _plan_to_out(plan)
+
+
+@router.get("/{syndicate_id}/plans")
+def list_bundle_plans(syndicate_id: str, session=Depends(require_ui_session)):
+    # Verify syndicate exists
+    svc.get_syndicate_detail(syndicate_id)
+    items = bundle_svc.list_bundle_plans(syndicate_id)
+    return [
+        BundlePlanOut(
+            plan_id=p.get("plan_id", ""),
+            plan_type="syndicate_bundle",
+            syndicate_id=syndicate_id,
+            name=p.get("name", ""),
+            price_cents=int(p.get("price_cents", 0)),
+            status=p.get("status", "active"),
+            created_at=int(p.get("created_at", 0)),
+        )
+        for p in items
+    ]
+
+
+@router.get("/{syndicate_id}/plans/{plan_id}")
+def get_bundle_plan_detail(
+    syndicate_id: str,
+    plan_id: str,
+    session=Depends(require_ui_session),
+):
+    plan = bundle_svc.get_bundle_details(plan_id)
+    return _plan_to_out(plan)
+
+
+@router.put("/{syndicate_id}/plans/{plan_id}")
+def update_bundle_plan(
+    syndicate_id: str,
+    plan_id: str,
+    body: BundlePlanUpdateIn,
+    session=Depends(require_ui_session),
+):
+    plan = bundle_svc.update_bundle_plan(
+        syndicate_id=syndicate_id,
+        plan_id=plan_id,
+        admin_sub=session["user_sub"],
+        name=body.name,
+        description=body.description,
+        price_cents=body.price_cents,
+    )
+    return _plan_to_out(plan)
+
+
+@router.delete("/{syndicate_id}/plans/{plan_id}")
+def archive_bundle_plan(
+    syndicate_id: str,
+    plan_id: str,
+    session=Depends(require_ui_session),
+):
+    return bundle_svc.archive_bundle_plan(
+        syndicate_id=syndicate_id,
+        plan_id=plan_id,
+        admin_sub=session["user_sub"],
+    )
+
+
+@router.post("/{syndicate_id}/plans/{plan_id}/subscribe")
+def subscribe_to_bundle(
+    syndicate_id: str,
+    plan_id: str,
+    body: BundleSubscribeIn,
+    session=Depends(require_ui_session),
+):
+    sub = bundle_svc.subscribe_to_bundle(
+        subscriber_id=session["user_sub"],
+        plan_id=plan_id,
+        payment_method_id=body.payment_method_id,
+    )
+    # Enrich with syndicate name
+    syndicate = svc.get_syndicate(syndicate_id) or {}
+    members = svc.list_members(syndicate_id)
+    return BundleSubscriptionOut(
+        subscription_id=sub.get("subscription_id", ""),
+        plan_id=sub.get("plan_id", ""),
+        plan_type="syndicate_bundle",
+        syndicate_id=syndicate_id,
+        syndicate_name=syndicate.get("name", ""),
+        status=sub.get("status", "active"),
+        price_cents=int(sub.get("price_cents", 0)),
+        interval=sub.get("interval", "month"),
+        current_period_start=int(sub.get("current_period_start", 0)),
+        current_period_end=int(sub.get("current_period_end", 0)),
+        created_at=int(sub.get("created_at", 0)),
+        included_creators=[
+            SyndicateMemberOut(
+                user_id=m.get("user_id", ""),
+                display_name=m.get("display_name", ""),
+                role=m.get("role", "member"),
+                joined_at=int(m.get("joined_at", 0)),
+            )
+            for m in members
+        ],
+    )
+
+
+@router.post("/{syndicate_id}/subscriptions/{subscription_id}/cancel")
+def cancel_bundle_subscription(
+    syndicate_id: str,
+    subscription_id: str,
+    session=Depends(require_ui_session),
+):
+    return bundle_svc.cancel_bundle_subscription(
+        subscriber_id=session["user_sub"],
+        subscription_id=subscription_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bundle access check (SYND-002)
+# ---------------------------------------------------------------------------
+
+@router.get("/{syndicate_id}/access/{creator_id}")
+def check_bundle_access(
+    syndicate_id: str,
+    creator_id: str,
+    session=Depends(require_ui_session),
+):
+    """Check if the calling user has bundle access to a specific creator."""
+    has_access = bundle_svc.has_bundle_access(session["user_sub"], creator_id)
+    return {"has_access": has_access, "creator_id": creator_id}
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -276,6 +462,31 @@ def _meta_to_out(meta: dict) -> SyndicateOut:
         member_count=int(meta.get("member_count", 0)),
         created_at=int(meta.get("created_at", 0)),
         updated_at=int(meta.get("updated_at", 0)),
+    )
+
+
+def _plan_to_out(plan: dict) -> BundlePlanOut:
+    members = [
+        SyndicateMemberOut(
+            user_id=m.get("user_id", ""),
+            display_name=m.get("display_name", ""),
+            role=m.get("role", "member"),
+            joined_at=int(m.get("joined_at", 0)),
+        )
+        for m in plan.get("current_members", [])
+    ]
+    return BundlePlanOut(
+        plan_id=plan.get("plan_id", ""),
+        plan_type=plan.get("plan_type", "syndicate_bundle"),
+        syndicate_id=plan.get("syndicate_id", ""),
+        name=plan.get("name", ""),
+        description=plan.get("description", ""),
+        price_cents=int(plan.get("price_cents", 0)),
+        interval=plan.get("interval", "month"),
+        status=plan.get("status", "active"),
+        included_creator_ids=plan.get("included_creator_ids", []),
+        current_members=members,
+        created_at=int(plan.get("created_at", 0)),
     )
 
 

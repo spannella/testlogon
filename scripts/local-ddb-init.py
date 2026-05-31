@@ -1257,6 +1257,9 @@ def _table_defs() -> List[TableDef]:
         # Issued Licenses (LICENSE-002)
         TableDef(
             _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),
+        # Syndicates (SYND-001 + SYND-002)
+        TableDef(
+            _resolve_table_name(S.syndicates_table_name, "syndicates"),
             "pk",
             "sk",
             gsi=[

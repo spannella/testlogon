@@ -1524,6 +1524,8 @@ class Settings:
     ssh_key_max_per_user: int = int(os.environ.get("SSH_KEY_MAX_PER_USER", "20"))
     # Issued Licenses (LICENSE-002)
     issued_licenses_table_name: str = os.environ.get("ISSUED_LICENSES_TABLE_NAME", "issued_licenses")
+    # Syndicates (SYND-001)
+    syndicates_table_name: str = os.environ.get("SYNDICATES_TABLE_NAME", "syndicates")
 
 
 S = Settings()
