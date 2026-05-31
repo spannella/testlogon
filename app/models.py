@@ -8733,3 +8733,116 @@ class InvoiceEmailOut(BaseModel):
     ok: bool = True
     emailed_to: str = ""
     message: str = ""
+
+
+# ---------------------------------------------------------------------------
+# MOD-001: Video Review Queue
+# ---------------------------------------------------------------------------
+
+
+class VideoReviewQueueEnqueueIn(BaseModel):
+    video_id: str = Field(min_length=1, max_length=128)
+    owner_user_id: str = Field(min_length=1, max_length=256)
+    title: str = Field(default="", max_length=512)
+    description: str = Field(default="", max_length=4000)
+    priority: Literal["urgent", "high", "normal", "low"] = "normal"
+    source: Literal["manual", "flagged", "upload"] = "manual"
+    thumbnail_url: Optional[str] = Field(default=None, max_length=2048)
+    hls_manifest_url: Optional[str] = Field(default=None, max_length=2048)
+    duration_seconds: Optional[float] = None
+    flag_reason: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("flag_reason", "description")
+    @classmethod
+    def _strip_html(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return re.sub(r"<[^>]+>", "", v)
+
+
+class VideoReviewQueueItemOut(BaseModel):
+    entry_id: str
+    video_id: str
+    owner_user_id: str
+    title: str = ""
+    description: str = ""
+    status: str
+    priority: str = "normal"
+    priority_rank: int = 2
+    source: str = "manual"
+    created_at: int = 0
+    updated_at: int = 0
+    claimed_by: str = ""
+    claimed_at: int = 0
+    reviewed_by: str = ""
+    reviewed_at: int = 0
+    review_notes: str = ""
+    decision: str = ""
+    escalated: bool = False
+    thumbnail_url: Optional[str] = None
+    hls_manifest_url: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    flag_reason: Optional[str] = None
+
+
+class VideoReviewQueueListOut(BaseModel):
+    items: List[VideoReviewQueueItemOut] = Field(default_factory=list)
+    total: int = 0
+    next_cursor: Optional[str] = None
+
+
+class VideoReviewQueueStatsOut(BaseModel):
+    counts: Dict[str, int] = Field(default_factory=dict)
+    total_open: int = 0
+
+
+class VideoReviewDetailOut(BaseModel):
+    entry: VideoReviewQueueItemOut
+    prior_review_history: List[Dict[str, Any]] = Field(default_factory=list)
+    prior_approvals_count: int = 0
+    prior_rejections_count: int = 0
+
+
+class VideoReviewApproveIn(BaseModel):
+    review_notes: str = Field(default="", max_length=2000)
+    notify_creator: bool = True
+
+    @field_validator("review_notes")
+    @classmethod
+    def _sanitize_notes(cls, v: str) -> str:
+        return re.sub(r"<[^>]+>", "", v)
+
+
+class VideoReviewRejectIn(BaseModel):
+    rejection_reason: str = Field(min_length=5, max_length=2000)
+    notify_creator: bool = True
+
+    @field_validator("rejection_reason")
+    @classmethod
+    def _sanitize_reason(cls, v: str) -> str:
+        return re.sub(r"<[^>]+>", "", v)
+
+
+class VideoReviewEscalateIn(BaseModel):
+    escalation_reason: str = Field(min_length=5, max_length=2000)
+    notify_creator: bool = False
+
+    @field_validator("escalation_reason")
+    @classmethod
+    def _sanitize_reason(cls, v: str) -> str:
+        return re.sub(r"<[^>]+>", "", v)
+
+
+class VideoReviewClaimOut(BaseModel):
+    ok: bool = True
+    entry: VideoReviewQueueItemOut
+
+
+class VideoReviewDecisionOut(BaseModel):
+    ok: bool = True
+    entry_id: str
+    decision: str
+    new_status: str
+    reviewed_by: str
+    reviewed_at: int
+    audit_id: str

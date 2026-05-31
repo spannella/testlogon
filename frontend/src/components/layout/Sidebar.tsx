@@ -194,6 +194,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Moderation Board", i18nKey: "nav.moderationBoard", path: "/admin/moderation", icon: <Scale className="h-5 w-5" /> },
       { label: "Payment Incidents", i18nKey: "nav.paymentIncidents", path: "/admin/payment-incidents", icon: <CreditCard className="h-5 w-5" /> },
       { label: "Video Review", i18nKey: "nav.videoReview", path: "/admin/video-review", icon: <Video className="h-5 w-5" /> },
+      { label: "Video Review Queue", i18nKey: "nav.videoReviewQueue", path: "/admin/video-review-queue", icon: <Video className="h-5 w-5" /> },
       { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: <Scale className="h-5 w-5" /> },
       { label: "Refund Queue", i18nKey: "nav.refundQueue", path: "/admin/refunds", icon: <CreditCard className="h-5 w-5" /> },
       { label: "Dispute Queue", i18nKey: "nav.disputeQueue", path: "/admin/disputes", icon: <ShieldAlert className="h-5 w-5" /> },
@@ -268,6 +269,7 @@ export default function Sidebar() {
             if (item.path === "/admin/moderation") return showModerationBoard;
             if (item.path === "/admin/payment-incidents") return showPaymentIncidents;
             if (item.path === "/admin/video-review") return showModerationBoard;
+            if (item.path === "/admin/video-review-queue") return showModerationBoard;
             if (item.path === "/admin/dmca") return showModerationBoard;
             if (item.path === "/admin/communications") return showModerationBoard;
             if (item.path === "/admin/rate-limits") return showRootRoleManagement;

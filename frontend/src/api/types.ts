@@ -7868,3 +7868,57 @@ export interface InvoiceEmailResult {
   emailed_to: string;
   message: string;
 }
+
+// MOD-001: Video Review Queue
+export interface VideoReviewQueueItem {
+  entry_id: string;
+  video_id: string;
+  owner_user_id: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  priority_rank: number;
+  source: string;
+  created_at: number;
+  updated_at: number;
+  claimed_by: string;
+  claimed_at: number;
+  reviewed_by: string;
+  reviewed_at: number;
+  review_notes: string;
+  decision: string;
+  escalated: boolean;
+  thumbnail_url?: string | null;
+  hls_manifest_url?: string | null;
+  duration_seconds?: number | null;
+  flag_reason?: string | null;
+}
+
+export interface VideoReviewQueueList {
+  items: VideoReviewQueueItem[];
+  total: number;
+  next_cursor?: string | null;
+}
+
+export interface VideoReviewQueueStats {
+  counts: Record<string, number>;
+  total_open: number;
+}
+
+export interface VideoReviewDetail {
+  entry: VideoReviewQueueItem;
+  prior_review_history: Array<Record<string, unknown>>;
+  prior_approvals_count: number;
+  prior_rejections_count: number;
+}
+
+export interface VideoReviewDecision {
+  ok: boolean;
+  entry_id: string;
+  decision: string;
+  new_status: string;
+  reviewed_by: string;
+  reviewed_at: number;
+  audit_id: string;
+}

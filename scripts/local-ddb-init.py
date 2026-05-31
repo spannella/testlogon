@@ -461,6 +461,27 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.moderation_video_queue_table_name, "ModerationVideoQueue"),
+            "entry_id",
+            gsi=[
+                {
+                    "index_name": "ByStatusCreatedAt",
+                    "partition_key": "status",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByStatusPriority",
+                    "partition_key": "status",
+                    "sort_key": "priority_rank",
+                },
+                {
+                    "index_name": "ByVideo",
+                    "partition_key": "video_id",
+                },
+            ],
+            attr_types={"created_at": "N", "priority_rank": "N"},
+        ),
+        TableDef(
             _resolve_table_name(S.user_enforcement_history_table_name, "UserEnforcementHistory"),
             "user_id",
             "enforcement_id",

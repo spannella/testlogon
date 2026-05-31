@@ -53,6 +53,7 @@ class Tables:
     moderation_tickets: Any
     moderation_actions: Any
     moderation_audit_log: Any
+    moderation_video_queue: Any
     user_enforcement_history: Any
     dmca_claims: Any
     message_legal_holds: Any
@@ -234,6 +235,7 @@ T = Tables(
     moderation_tickets=ddb.Table(S.moderation_tickets_table_name),
     moderation_actions=ddb.Table(S.moderation_actions_table_name),
     moderation_audit_log=ddb.Table(S.moderation_audit_log_table_name),
+    moderation_video_queue=ddb.Table(S.moderation_video_queue_table_name),
     user_enforcement_history=ddb.Table(S.user_enforcement_history_table_name),
     dmca_claims=ddb.Table(S.dmca_claims_table_name),
     message_legal_holds=ddb.Table(S.message_legal_holds_table_name),

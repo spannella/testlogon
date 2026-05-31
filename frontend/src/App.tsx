@@ -40,6 +40,7 @@ const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManageme
 const ModerationBoardPage = lazy(() => import("@/pages/admin/ModerationBoardPage"));
 const PaymentIncidentQueuePage = lazy(() => import("@/pages/admin/PaymentIncidentQueuePage"));
 const VideoReviewQueuePage = lazy(() => import("@/pages/admin/VideoReviewQueuePage"));
+const VideoReviewQueueModerationPage = lazy(() => import("@/pages/admin/VideoReviewQueueModerationPage"));
 const PublicEventPage = lazy(() => import("@/pages/calendar/PublicEventPage"));
 const ContactsPage = lazy(() => import("@/pages/contacts/ContactsPage"));
 const HelpdeskPage = lazy(() => import("@/pages/helpdesk/HelpdeskPage"));
@@ -264,6 +265,7 @@ export default function App() {
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />
           <Route path="admin/video-review" element={<VideoReviewQueuePage />} />
+          <Route path="admin/video-review-queue" element={<VideoReviewQueueModerationPage />} />
           <Route path="dmca/submit" element={<DmcaClaimForm />} />
           <Route path="admin/dmca" element={<DmcaDashboardPage />} />
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
