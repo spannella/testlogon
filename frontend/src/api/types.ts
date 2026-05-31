@@ -7922,3 +7922,75 @@ export interface VideoReviewDecision {
   reviewed_at: number;
   audit_id: string;
 }
+
+// -- Syndicate Revenue Splitting (SYND-003) --
+// percentages are integer basis points (10000 = 100%); money is integer cents.
+
+export type SplitMode = "equal" | "weighted" | "performance";
+export type PerformanceMetric = "views" | "engagement" | "subscribers";
+
+export interface SplitConfig {
+  mode: SplitMode;
+  platform_fee_bps: number;
+  weights_bps: Record<string, number>;
+  performance_metric: string;
+  performance_window_days: number;
+  updated_at: number;
+  updated_by: string;
+}
+
+export interface SplitConfigInput {
+  mode: SplitMode;
+  weights_bps?: Record<string, number>;
+  performance_metric?: string;
+  performance_window_days?: number;
+  platform_fee_bps?: number;
+}
+
+export interface SplitDistribution {
+  user_id: string;
+  display_name: string;
+  amount_cents: number;
+  percentage_bps: number;
+  ledger_entry_id: string;
+}
+
+export interface SplitExecution {
+  split_id: string;
+  syndicate_id: string;
+  source_type: string;
+  subscription_id: string;
+  invoice_id: string;
+  gross_amount_cents: number;
+  platform_fee_cents: number;
+  platform_fee_bps: number;
+  net_amount_cents: number;
+  currency: string;
+  mode: string;
+  distributions: SplitDistribution[];
+  created_at: number;
+}
+
+export interface ExecuteSplitInput {
+  source_type?: "subscription" | "tip";
+  subscription_id?: string;
+  invoice_id?: string;
+  gross_amount_cents: number;
+  currency?: string;
+}
+
+export interface MemberEarningEntry {
+  split_id: string;
+  amount_cents: number;
+  percentage_bps: number;
+  created_at: number;
+  source_type: string;
+}
+
+export interface MemberEarnings {
+  syndicate_id: string;
+  user_id: string;
+  total_cents: number;
+  split_count: number;
+  entries: MemberEarningEntry[];
+}

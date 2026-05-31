@@ -238,6 +238,26 @@ def subscribe_to_bundle(
         "bundle.subscribed subscriber_id=%s syndicate_id=%s plan_id=%s",
         subscriber_id, syndicate_id, plan_id,
     )
+
+    # SYND-003: attribute the bundle payment across syndicate members.
+    # Best-effort: a split failure must never break subscription creation.
+    price_cents = int(plan.get("price_cents", 0))
+    if price_cents > 0:
+        try:
+            from app.services import syndicate_revenue_split as split_svc
+
+            split_svc.execute_split(
+                syndicate_id=syndicate_id,
+                source_type="subscription",
+                subscription_id=subscription_id,
+                invoice_id=subscription_id,
+                gross_amount_cents=price_cents,
+            )
+        except Exception:
+            logger.warning(
+                "bundle.split_failed subscriber_id=%s syndicate_id=%s",
+                subscriber_id, syndicate_id,
+            )
     return sub
 
 

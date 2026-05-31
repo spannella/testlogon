@@ -145,6 +145,7 @@ class Tables:
     llm_provider_keys: Any
     delegates: Any
     syndicates: Any
+    syndicate_revenue_split: Any
     chat_bots: Any
     bot_assignments: Any
     ssh_keys: Any
@@ -327,6 +328,7 @@ T = Tables(
     llm_provider_keys=ddb.Table(S.llm_provider_keys_table_name),
     delegates=ddb.Table(S.delegates_table_name),
     syndicates=ddb.Table(S.syndicates_table_name),
+    syndicate_revenue_split=ddb.Table(S.syndicate_revenue_split_table_name),
     chat_bots=ddb.Table(S.chat_bots_table_name),
     bot_assignments=ddb.Table(S.bot_assignments_table_name),
     ssh_keys=ddb.Table(S.ssh_keys_table_name),
