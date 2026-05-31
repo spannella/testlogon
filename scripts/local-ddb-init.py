@@ -1506,6 +1506,18 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Instance Monitoring & Health (INFRA-008)
+        # Time-series metric datapoints per instance. SK = TS#{ts}; numeric `ts`
+        # attribute used as the ByTs GSI sort key for ordered range queries.
+        TableDef(
+            _resolve_table_name(S.instance_metrics_table_name, "instance_metrics"),
+            "instance_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByTs", "partition_key": "instance_id", "sort_key": "ts"},
+            ],
+            attr_types={"ts": "N"},
+        ),
         # Security Groups & Network Rules (INFRA-009)
         TableDef(
             _resolve_table_name(S.security_groups_table_name, "security_groups"),

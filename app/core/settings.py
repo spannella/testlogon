@@ -1703,6 +1703,21 @@ class Settings:
     ec2_max_instances_per_user: int = int(os.environ.get("EC2_MAX_INSTANCES_PER_USER", "5"))
     ec2_auto_terminate_enabled: bool = os.environ.get("EC2_AUTO_TERMINATE_ENABLED", "1") not in ("0", "false", "False")
 
+    # Instance Monitoring & Health (INFRA-008)
+    instance_monitoring_enabled: bool = os.environ.get("INSTANCE_MONITORING_ENABLED", "true").lower() not in ("0", "false", "no")
+    instance_metrics_table_name: str = os.environ.get("INSTANCE_METRICS_TABLE_NAME", "instance_metrics")
+    instance_monitoring_retention_points: int = int(os.environ.get("INSTANCE_MONITORING_RETENTION_POINTS", "500"))
+    instance_monitoring_max_query_points: int = int(os.environ.get("INSTANCE_MONITORING_MAX_QUERY_POINTS", "200"))
+    instance_monitoring_ttl_seconds: int = int(os.environ.get("INSTANCE_MONITORING_TTL_SECONDS", "604800"))
+    instance_monitoring_alerts_enabled: bool = os.environ.get("INSTANCE_MONITORING_ALERTS_ENABLED", "true").lower() not in ("0", "false", "no")
+    # Health thresholds (percent). At-or-above warning -> warning; at-or-above critical -> critical.
+    instance_monitoring_cpu_warning_pct: int = int(os.environ.get("INSTANCE_MONITORING_CPU_WARNING_PCT", "75"))
+    instance_monitoring_cpu_critical_pct: int = int(os.environ.get("INSTANCE_MONITORING_CPU_CRITICAL_PCT", "90"))
+    instance_monitoring_mem_warning_pct: int = int(os.environ.get("INSTANCE_MONITORING_MEM_WARNING_PCT", "80"))
+    instance_monitoring_mem_critical_pct: int = int(os.environ.get("INSTANCE_MONITORING_MEM_CRITICAL_PCT", "92"))
+    instance_monitoring_disk_warning_pct: int = int(os.environ.get("INSTANCE_MONITORING_DISK_WARNING_PCT", "80"))
+    instance_monitoring_disk_critical_pct: int = int(os.environ.get("INSTANCE_MONITORING_DISK_CRITICAL_PCT", "95"))
+
     # Security Groups & Network Rules (INFRA-009)
     security_groups_table_name: str = os.environ.get("SECURITY_GROUPS_TABLE_NAME", "security_groups")
     security_groups_enabled: bool = os.environ.get("SECURITY_GROUPS_ENABLED", "true").lower() not in ("0", "false", "no")
