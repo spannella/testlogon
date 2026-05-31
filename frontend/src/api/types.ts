@@ -6971,3 +6971,126 @@ export interface ProjectDashboard {
   blockers: Blocker[];
   recent_completions: Array<{ ticket_id: string; subject: string; completed_at: number }>;
 }
+
+// ---------------------------------------------------------------------------
+// Stylist / UI Agent (AGENT-016)
+// ---------------------------------------------------------------------------
+
+export interface UIReviewScreenshot {
+  url: string;
+  viewport: string;
+  label: string;
+}
+
+export interface UIReviewIssue {
+  issue_id: string;
+  category: string;
+  severity: "error" | "warning" | "info";
+  title: string;
+  description: string;
+  page_element?: string;
+  screenshot_index?: number;
+  annotation_rect?: { x: number; y: number; width: number; height: number };
+  design_rule_id?: string;
+  suggestion: string;
+  created_ticket_id?: string | null;
+}
+
+export interface UIReview {
+  review_id: string;
+  agent_id: string;
+  worker_id: string;
+  page_url: string;
+  page_name: string;
+  review_type: "full_page" | "component" | "responsive" | "accessibility" | "pr_review";
+  source_ref?: string | null;
+  screenshots: UIReviewScreenshot[];
+  annotations?: Array<{ screenshot_index: number; x: number; y: number; width: number; height: number; issue: string }>;
+  design_score: number;
+  accessibility_score?: number | null;
+  issues_found: number;
+  issues: UIReviewIssue[];
+  status: "completed" | "in_progress" | "failed";
+  created_at: number;
+}
+
+export interface UIReviewListResult {
+  reviews: UIReview[];
+  count: number;
+  next_cursor?: string | null;
+}
+
+export interface PageDesignScore {
+  page_url: string;
+  page_name: string;
+  design_score: number;
+  accessibility_score?: number | null;
+  issues_found: number;
+  last_reviewed: number;
+}
+
+export interface OverallDesignScore {
+  overall_design_score: number;
+  overall_accessibility_score: number;
+  pages_reviewed: number;
+  total_issues: number;
+}
+
+export interface DesignRule {
+  rule_id: string;
+  name: string;
+  category: string;
+  description: string;
+  severity: "error" | "warning" | "info";
+  enabled: boolean;
+  config?: Record<string, unknown> | null;
+  created_at: number;
+}
+
+export interface CreateDesignRuleInput {
+  name: string;
+  category: "spacing" | "color" | "typography" | "layout" | "component" | "responsive" | "accessibility";
+  description: string;
+  severity: "error" | "warning" | "info";
+  config?: Record<string, unknown>;
+}
+
+export interface UpdateDesignRuleInput {
+  name?: string;
+  category?: string;
+  description?: string;
+  severity?: "error" | "warning" | "info";
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+}
+
+export interface StylistConfig {
+  review_on_pr_merge: boolean;
+  review_on_ui_ticket: boolean;
+  periodic_review_frequency: string;
+  periodic_review_day: string;
+  periodic_review_hour_utc: number;
+  viewports: Array<{ name?: string; width: number; height: number }>;
+  pages_to_review: string[];
+  design_system_ref: string;
+  tailwind_config_path: string;
+  contrast_ratio_min: number;
+  auto_create_tickets: boolean;
+  ticket_min_severity: "error" | "warning" | "info";
+  brand_colors: string[];
+  font_families: string[];
+  updated_at?: number | null;
+}
+
+export interface CreateIssueTicketResult {
+  ok: boolean;
+  ticket_id: string;
+  review_id: string;
+  issue_id: string;
+}
+
+export interface TriggerUIReviewResult {
+  ok: boolean;
+  reviews: UIReview[];
+  count: number;
+}

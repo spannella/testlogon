@@ -122,6 +122,9 @@ const FeatureIdeasPage = lazy(() => import("@/pages/agents/FeatureIdeasPage"));
 const PmAgentConfigPage = lazy(() => import("@/pages/agents/PmAgentConfigPage"));
 const ProjectDashboardPage = lazy(() => import("@/pages/agents/ProjectDashboardPage"));
 const IdeaSubmissionPage = lazy(() => import("@/pages/agents/IdeaSubmissionPage"));
+const StylistDesignOverviewPage = lazy(() => import("@/pages/agents/StylistDesignOverviewPage"));
+const StylistReviewDetailPage = lazy(() => import("@/pages/agents/StylistReviewDetailPage"));
+const StylistDesignRulesPage = lazy(() => import("@/pages/agents/StylistDesignRulesPage"));
 
 function PageSpinner() {
   return (
@@ -266,6 +269,9 @@ export default function App() {
           <Route path="agents/pm/ideas" element={<FeatureIdeasPage />} />
           <Route path="agents/types/:typeId/pm" element={<PmAgentConfigPage />} />
           <Route path="agents/project-dashboard" element={<ProjectDashboardPage />} />
+          <Route path="agents/stylist/rules" element={<StylistDesignRulesPage />} />
+          <Route path="agents/stylist/reviews/:reviewId" element={<StylistReviewDetailPage />} />
+          <Route path="agents/stylist" element={<StylistDesignOverviewPage />} />
           <Route path="ideas/submit" element={<IdeaSubmissionPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
