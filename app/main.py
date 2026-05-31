@@ -219,6 +219,7 @@ from app.routers.instance_monitoring import instance_monitoring_router
 from app.routers.security_groups import security_groups_router
 from app.services.ec2_launcher import start_ec2_idle_checker_task
 from app.routers.admin_compute import router as admin_compute_router
+from app.routers.bulk_payout_tools import bulk_payout_tools_router
 from app.routers.platform_financial_dashboard import platform_financial_dashboard_router
 from app.routers.chat_bot import router as chat_bot_router
 from app.routers.bot_template import router as bot_template_router
@@ -649,6 +650,7 @@ def create_app() -> FastAPI:
     from app.routers.compute_billing import router as compute_billing_router
     app.include_router(compute_billing_router)
     app.include_router(admin_compute_router)
+    app.include_router(bulk_payout_tools_router)
     from app.routers.admin_ad_platform import admin_ad_platform_router
     app.include_router(admin_ad_platform_router)
     app.include_router(platform_financial_dashboard_router)

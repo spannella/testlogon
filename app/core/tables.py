@@ -90,6 +90,7 @@ class Tables:
     vod_rentals: Any
     appeals: Any
     creator_payouts: Any
+    bulk_payout_batches: Any
     broadcast_reminders: Any
     broadcast_private_sessions: Any
     broadcast_allowlist: Any
@@ -295,6 +296,7 @@ T = Tables(
     vod_rentals=ddb.Table(S.vod_rentals_table_name),
     appeals=ddb.Table(S.appeals_table_name),
     creator_payouts=ddb.Table(S.creator_payouts_table_name),
+    bulk_payout_batches=ddb.Table(S.bulk_payout_batches_table_name),
     broadcast_reminders=ddb.Table(S.broadcast_reminders_table_name),
     broadcast_private_sessions=ddb.Table(S.broadcast_private_sessions_table_name),
     broadcast_allowlist=ddb.Table(S.broadcast_allowlist_table_name),

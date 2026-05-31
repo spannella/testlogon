@@ -209,6 +209,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Video Review Queue", i18nKey: "nav.videoReviewQueue", path: "/admin/video-review-queue", icon: <Video className="h-5 w-5" /> },
       { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: <Scale className="h-5 w-5" /> },
       { label: "Refund Queue", i18nKey: "nav.refundQueue", path: "/admin/refunds", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "Bulk Payouts", path: "/admin/bulk-payouts", icon: <Wallet className="h-5 w-5" /> },
       { label: "Dispute Queue", i18nKey: "nav.disputeQueue", path: "/admin/disputes", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Risk Scoring", i18nKey: "nav.riskScoring", path: "/admin/risk", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
@@ -293,6 +294,7 @@ export default function Sidebar() {
             if (item.path === "/admin/jobs") return showModerationBoard;
             if (item.path === "/admin/ads/fraud") return showModerationBoard;
             if (item.path === "/admin/ad-platform") return showModerationBoard;
+            if (item.path === "/admin/bulk-payouts") return showRootRoleManagement;
             return true;
           });
           if (items.length === 0) return null;

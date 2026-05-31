@@ -1267,6 +1267,9 @@ class Settings:
     payout_hold_days: int = int(os.environ.get("PAYOUT_HOLD_DAYS", "7"))
     payout_minimum_cents: int = int(os.environ.get("PAYOUT_MINIMUM_CENTS", "1000"))
     payout_min_cents: int = int(os.environ.get("PAYOUT_MIN_CENTS", os.environ.get("PAYOUT_MINIMUM_CENTS", "1000")))
+    # Bulk Payout & Refund Tools (FIN-017)
+    bulk_payout_batches_table_name: str = os.environ.get("DDB_BULK_PAYOUT_BATCHES", "BulkPayoutBatches")
+    bulk_payout_use_real_provider: bool = os.environ.get("BULK_PAYOUT_USE_REAL_PROVIDER", "0") not in ("0", "false", "False")
 
     # Pay-Per-Minute Calls (CALL-011)
     call_billing_enabled: bool = os.environ.get("CALL_BILLING_ENABLED", "1") not in ("0", "false", "False")

@@ -850,6 +850,15 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Bulk Payout & Refund Tools (FIN-017)
+        TableDef(
+            _resolve_table_name(S.bulk_payout_batches_table_name, "BulkPayoutBatches"),
+            "batch_id",
+            gsi=[
+                {"index_name": "gsi_all-created_at-index", "partition_key": "gsi_all", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Broadcast Reminders (BCAST-009)
         TableDef(
             os.environ.get("DDB_BROADCAST_REMINDERS", "BroadcastReminders"),
