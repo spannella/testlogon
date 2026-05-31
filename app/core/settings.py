@@ -1549,6 +1549,9 @@ class Settings:
     # License Revenue (LICENSE-003)
     license_revenue_table_name: str = os.environ.get("LICENSE_REVENUE_TABLE_NAME", "license_revenue")
     license_revenue_platform_fee_pct: int = int(os.environ.get("LICENSE_REVENUE_PLATFORM_FEE_PCT", "20"))
+    # Activity Feed (SOC-003)
+    activity_feed_table_name: str = os.environ.get("ACTIVITY_FEED_TABLE_NAME", "activity_feed")
+    activity_feed_ttl_days: int = int(os.environ.get("ACTIVITY_FEED_TTL_DAYS", "30"))
 
 
 S = Settings()

@@ -1337,6 +1337,11 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
+        # Activity Feed (SOC-003)
+        TableDef(
+            _resolve_table_name(S.activity_feed_table_name, "activity_feed"),
+            "user_id",
+            "sk",
         ),
     ]
 
