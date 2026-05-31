@@ -20,6 +20,7 @@ from app.services.broadcast_store import (
     list_sessions_by_status,
     transition_session_status,
     list_scheduled_sessions_by_creator,
+    list_upcoming_sessions,
     update_session_fields,
 )
 from app.services.broadcast_recording import (
@@ -304,6 +305,23 @@ def list_scheduled_sessions_route(
 ):
     """List the caller's scheduled broadcasts."""
     items = list_scheduled_sessions_by_creator(ctx["user_sub"], limit=limit)
+    out_items = [_to_session_out(s) for s in items]
+    return BroadcastScheduledListOut(items=out_items, count=len(out_items))
+
+
+@router.get("/sessions/upcoming", response_model=BroadcastScheduledListOut)
+def list_upcoming_sessions_route(
+    limit: int = Query(default=50, ge=1, le=200),
+    ctx: dict = Depends(_ctx),
+):
+    """List all upcoming scheduled broadcasts (global viewer-discovery feed).
+
+    Returns sessions across all creators whose scheduled_at is still in the
+    future, soonest-first. Visible to any authenticated user.
+    """
+    _ = ctx
+    from app.core.time import now_ts
+    items = list_upcoming_sessions(now=now_ts(), limit=limit)
     out_items = [_to_session_out(s) for s in items]
     return BroadcastScheduledListOut(items=out_items, count=len(out_items))
 
@@ -2291,6 +2309,30 @@ def download_ical_route(
         media_type="text/calendar",
         headers={"Content-Disposition": 'attachment; filename="broadcast.ics"'},
     )
+
+
+class BroadcastPromoteDueOut(BaseModel):
+    processed: int = 0
+    failed: int = 0
+    session_ids: List[str] = Field(default_factory=list)
+
+
+@router.post("/scheduler/run-due", response_model=BroadcastPromoteDueOut)
+def run_due_scheduler_route(
+    now: Optional[int] = Query(default=None, description="Override 'now' (Unix seconds) — testing only"),
+    ctx: dict = Depends(_ctx),
+):
+    """Manually promote all due scheduled broadcasts to live.
+
+    Mirrors the background scheduler loop but runs synchronously, making the
+    auto-start path deterministically testable. Operator/admin role required.
+    The optional ``now`` override lets tests trigger promotion of sessions
+    scheduled in the near future without waiting for wall-clock time.
+    """
+    _require_operator_role(ctx)
+    from app.services.broadcast_scheduler import promote_due_sessions
+    summary = promote_due_sessions(now=now, limit=10)
+    return BroadcastPromoteDueOut(**summary)
 
 
 # ═══════════════════════════════════════════════════════════════════

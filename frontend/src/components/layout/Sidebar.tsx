@@ -147,6 +147,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Gallery", i18nKey: "nav.gallery", path: "/gallery", icon: <PlaySquare className="h-5 w-5" /> },
       { label: "Videos", i18nKey: "nav.videos", path: "/videos", icon: <Video className="h-5 w-5" /> },
       { label: "Broadcast", i18nKey: "nav.broadcast", path: "/broadcast", icon: <Radio className="h-5 w-5" /> },
+      { label: "Scheduled Broadcasts", i18nKey: "nav.broadcastSchedule", path: "/broadcast/schedule", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Clips", i18nKey: "nav.clips", path: "/clips", icon: <Scissors className="h-5 w-5" /> },
       { label: "Watch Parties", i18nKey: "nav.watchParties", path: "/watch-parties", icon: <Tv className="h-5 w-5" /> },
     ],
@@ -258,6 +259,7 @@ export default function Sidebar() {
         {NAV_GROUPS.map((group, gi) => {
           const items = group.items.filter((item) => {
             if (item.path === "/broadcast") return isBroadcastNavigationEnabled();
+            if (item.path === "/broadcast/schedule") return isBroadcastNavigationEnabled();
             if (item.path === "/root/roles") return showRootRoleManagement;
             if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
             if (item.path === "/admin/moderation") return showModerationBoard;

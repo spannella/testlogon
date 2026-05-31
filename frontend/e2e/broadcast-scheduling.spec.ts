@@ -294,4 +294,117 @@ test.describe("Broadcast Scheduling — API", () => {
     // Cleanup
     await apiPost(rootPage, "root", `/broadcast/sessions/${icalSessionId}/cancel-schedule`, {});
   });
+
+  test("119.11 List upcoming broadcasts (global discovery feed)", async () => {
+    const createResp = await apiPost(rootPage, "root", "/broadcast/sessions", {
+      profile_id: profileId,
+    });
+    expect(createResp.status()).toBe(201);
+    const upSessionId = (await createResp.json()).id;
+
+    const scheduledAt = Math.floor(Date.now() / 1000) + 5400;
+    await apiPost(rootPage, "root", `/broadcast/sessions/${upSessionId}/schedule`, {
+      scheduled_at: scheduledAt,
+      name: `Upcoming Show ${TS}`,
+    });
+
+    const listResp = await apiGet(rootPage, "/broadcast/sessions/upcoming");
+    expect(listResp.status()).toBe(200);
+    const body = await listResp.json();
+    const found = body.items.find((s: { id: string }) => s.id === upSessionId);
+    expect(found).toBeTruthy();
+    expect(found.schedule_status).toBe("scheduled");
+
+    await apiPost(rootPage, "root", `/broadcast/sessions/${upSessionId}/cancel-schedule`, {});
+  });
+
+  test("119.12 Manual promote-due trigger auto-starts a due scheduled broadcast", async () => {
+    // Schedule a session in the near future, then promote it via a 'now' override
+    const createResp = await apiPost(rootPage, "root", "/broadcast/sessions", {
+      profile_id: profileId,
+    });
+    expect(createResp.status()).toBe(201);
+    const dueSessionId = (await createResp.json()).id;
+
+    const scheduledAt = Math.floor(Date.now() / 1000) + 600; // 10 min from now (passes min-lead)
+    const schedResp = await apiPost(rootPage, "root", `/broadcast/sessions/${dueSessionId}/schedule`, {
+      scheduled_at: scheduledAt,
+      name: `Auto-Start Show ${TS}`,
+    });
+    expect(schedResp.status()).toBe(200);
+
+    // Trigger promotion with now AFTER the scheduled time — deterministic auto-start
+    const promoteResp = await apiPost(
+      rootPage,
+      "root",
+      `/broadcast/scheduler/run-due?now=${scheduledAt + 5}`,
+      {},
+    );
+    expect(promoteResp.status()).toBe(200);
+    const promoteBody = await promoteResp.json();
+    expect(promoteBody.session_ids).toContain(dueSessionId);
+    expect(promoteBody.processed).toBeGreaterThanOrEqual(1);
+
+    // Session should no longer be in 'scheduled' state (promoted toward live)
+    const getResp = await apiGet(rootPage, `/broadcast/sessions/${dueSessionId}`);
+    expect(getResp.status()).toBe(200);
+    const sessionBody = await getResp.json();
+    expect(sessionBody.schedule_status).not.toBe("scheduled");
+    expect(["provisioning", "ready", "live"]).toContain(sessionBody.status);
+
+    // Cleanup: stop the now-live session
+    await apiPost(rootPage, "root", `/broadcast/sessions/${dueSessionId}/stop`, {
+      reason: "test-stop",
+    });
+  });
+
+  test("119.13 Promote-due trigger requires operator role", async () => {
+    const ctx = await rootPage.context().browser()!.newContext();
+    const alicePage = await ctx.newPage();
+    await injectAuth(alicePage, "alice");
+    const resp = await apiPost(alicePage, "alice", "/broadcast/scheduler/run-due", {});
+    expect(resp.status()).toBe(403);
+    await ctx.close();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Section 120 — Broadcast Scheduling UI                              */
+/* ------------------------------------------------------------------ */
+
+test.describe("Broadcast Scheduling — UI", () => {
+  test.beforeEach(async ({ page }) => {
+    await injectAuth(page, "root");
+  });
+
+  test("120.1 Scheduled Broadcasts page loads with heading and tabs", async ({ page }) => {
+    await page.goto("/broadcast/schedule");
+    await expect(page.getByRole("heading", { name: "Scheduled Broadcasts" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "My Schedule" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Upcoming" })).toBeVisible();
+  });
+
+  test("120.2 A scheduled broadcast appears as a card with a countdown", async ({ page }) => {
+    // Create + schedule a session via API first
+    const profileResp = await apiPost(page, "root", "/broadcast/profiles", {
+      name: `ui-sched-profile-${TS}`,
+      region: "us-east-1",
+      rendition_preset: "720p30",
+    });
+    const profileId = (await profileResp.json()).id;
+    const createResp = await apiPost(page, "root", "/broadcast/sessions", { profile_id: profileId });
+    const sessionId = (await createResp.json()).id;
+    const uniqueName = `UI Scheduled ${TS}`;
+    await apiPost(page, "root", `/broadcast/sessions/${sessionId}/schedule`, {
+      scheduled_at: Math.floor(Date.now() / 1000) + 7200,
+      name: uniqueName,
+    });
+
+    await page.goto("/broadcast/schedule");
+    await expect(page.getByText(uniqueName)).toBeVisible();
+    await expect(page.getByTestId("countdown-timer").first()).toBeVisible();
+
+    // Cleanup
+    await apiPost(page, "root", `/broadcast/sessions/${sessionId}/cancel-schedule`, {});
+  });
 });
