@@ -55,6 +55,7 @@ from app.routers.calendar import public_router as calendar_public_router
 from app.routers.calendar import public_event_router as calendar_public_event_router
 from app.routers.calendar import integration_router as calendar_integration_router
 from app.routers.calendar import router as calendar_router
+from app.routers.seo_metadata import seo_metadata_router
 from app.routers.admin_calendar_integrations import router as admin_calendar_integrations_router
 from app.routers.device_trust import router as device_trust_router
 from app.routers.newsfeed import router as newsfeed_router, startup as newsfeed_startup
@@ -421,6 +422,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_calendar_integrations_router)
     app.include_router(calendar_public_router)
     app.include_router(calendar_public_event_router)
+    app.include_router(seo_metadata_router)
     app.include_router(device_trust_router)
     app.include_router(newsfeed_router)
     app.include_router(moderation_router)
