@@ -73,6 +73,36 @@ export interface VideoDetail {
   download_mp4_size_bytes?: number;
   // Watermarked Downloads (VOD-020)
   watermark_downloads?: boolean;
+  // Pay-per-view (MON-001)
+  price_cents?: number | null;
+  access_mode?: string | null;
+  purchase_count?: number;
+  is_entitled?: boolean;
+  // Subscription-gated VOD (MON-005)
+  access_reason?: string;
+  subscription_available?: boolean;
+  purchase_available?: boolean;
+  subscription_upsell?: boolean;
+}
+
+// MON-005: Creator video list with subscription-aware access info
+export interface CreatorVideoListItem {
+  video_id: string;
+  title: string;
+  description?: string | null;
+  thumbnail_url?: string | null;
+  duration_seconds?: number | null;
+  price_cents?: number | null;
+  access_mode?: string | null;
+  entitled: boolean;
+  access_reason: string;
+  created_at: number;
+}
+
+export interface CreatorVideoListResponse {
+  videos: CreatorVideoListItem[];
+  viewer_has_subscription: boolean;
+  next_cursor?: string | null;
 }
 
 export interface VideoDownloadResponse {
@@ -123,4 +153,12 @@ export const listCreatorVideos = (creatorId: string, params?: { limit?: number; 
   if (params?.limit) p.limit = String(params.limit);
   if (params?.cursor) p.cursor = params.cursor;
   return api.get<VideoListResponse>(`/ui/videos/creator/${encodeURIComponent(creatorId)}`, p);
+};
+
+// MON-005: Subscription-aware creator video list
+export const listCreatorVideosWithAccess = (creatorId: string, params?: { limit?: number; cursor?: string }): Promise<CreatorVideoListResponse> => {
+  const p: Record<string, string> = {};
+  if (params?.limit) p.limit = String(params.limit);
+  if (params?.cursor) p.cursor = params.cursor;
+  return api.get<CreatorVideoListResponse>(`/ui/videos/by-creator/${encodeURIComponent(creatorId)}`, p);
 };

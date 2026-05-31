@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft,
   AlertCircle,
@@ -20,6 +20,7 @@ import {
   Video,
   Trash2,
   Upload,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
 import { MediaPlayer, type MediaError, type SubtitleTrackInfo } from "@/components/shared/MediaPlayer";
 import { getVideoDetail, getVideoDownload, type VideoDetail } from "@/api/endpoints/videos";
 import { listSubtitles, uploadSubtitle, deleteSubtitle } from "@/api/endpoints/subtitles";
@@ -122,6 +124,157 @@ function formatDate(timestamp: number): string {
     month: "long",
     day: "numeric",
   });
+}
+
+// ─── MON-005: Subscription-Gated Access Components ─────────────────────
+
+function SubscribeCTA({
+  creatorId,
+  message,
+  variant = "default",
+}: {
+  creatorId: string;
+  message: string;
+  variant?: "default" | "outline";
+}) {
+  return (
+    <Card data-testid="subscribe-cta">
+      <CardContent className="text-center py-8">
+        <Lock className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
+        <p className="text-lg mb-4" data-testid="subscribe-message">
+          {message}
+        </p>
+        <Button variant={variant} asChild data-testid="view-plans-link">
+          <Link to={`/subscriptions?creator=${creatorId}`}>View Plans</Link>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function VideoPriceBadge({
+  priceCents,
+  accessMode,
+  entitled,
+  accessReason,
+}: {
+  priceCents?: number | null;
+  accessMode?: string | null;
+  entitled?: boolean;
+  accessReason?: string;
+}) {
+  if (entitled) {
+    if (accessReason === "owner") return null;
+    if (accessReason === "subscription")
+      return (
+        <Badge variant="default" data-testid="badge-included">
+          Included
+        </Badge>
+      );
+    if (accessReason === "purchased")
+      return (
+        <Badge variant="secondary" data-testid="badge-purchased">
+          Purchased
+        </Badge>
+      );
+    return (
+      <Badge variant="secondary" data-testid="badge-free">
+        Free
+      </Badge>
+    );
+  }
+
+  if (accessMode === "subscriber_only") {
+    return (
+      <Badge variant="secondary" data-testid="badge-subscribers-only">
+        Subscribers Only
+      </Badge>
+    );
+  }
+
+  const priceStr = priceCents ? `$${(priceCents / 100).toFixed(2)}` : "Free";
+
+  if (accessMode === "subscriber_free") {
+    return (
+      <div className="flex items-center gap-1.5">
+        <Badge variant="outline" data-testid="badge-price">
+          {priceStr}
+        </Badge>
+        <span className="text-xs text-muted-foreground">or subscribe</span>
+      </div>
+    );
+  }
+
+  return (
+    <Badge variant="outline" data-testid="badge-price">
+      {priceStr}
+    </Badge>
+  );
+}
+
+function VideoAccessGate({
+  video,
+}: {
+  video: VideoDetail;
+}) {
+  // If entitled, show nothing (player is shown separately)
+  if (video.is_entitled) return null;
+
+  // Subscriber-only: only show subscribe CTA
+  if (video.access_mode === "subscriber_only") {
+    return (
+      <SubscribeCTA
+        creatorId={video.owner_user_id}
+        message="Subscribe to watch this video"
+      />
+    );
+  }
+
+  // Subscriber-free with upsell: show purchase + subscribe option
+  if (video.subscription_upsell) {
+    return (
+      <div className="space-y-4" data-testid="access-gate-upsell">
+        <Card>
+          <CardContent className="text-center py-8">
+            <Lock className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
+            <p className="text-lg mb-2">Purchase this video</p>
+            {video.price_cents != null && video.price_cents > 0 && (
+              <p className="text-2xl font-bold mb-4" data-testid="purchase-price">
+                ${(video.price_cents / 100).toFixed(2)}
+              </p>
+            )}
+            <Button data-testid="purchase-button">Purchase</Button>
+          </CardContent>
+        </Card>
+        <Separator />
+        <SubscribeCTA
+          creatorId={video.owner_user_id}
+          message="Or subscribe for free access to all videos"
+          variant="outline"
+        />
+      </div>
+    );
+  }
+
+  // PPV: only show purchase option
+  if (video.access_mode === "ppv" || video.purchase_available) {
+    return (
+      <Card data-testid="access-gate-ppv">
+        <CardContent className="text-center py-8">
+          <Lock className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
+          <p className="text-lg mb-2">Purchase this video</p>
+          {video.price_cents != null && video.price_cents > 0 && (
+            <p className="text-2xl font-bold mb-4" data-testid="purchase-price">
+              ${(video.price_cents / 100).toFixed(2)}
+            </p>
+          )}
+          <Button data-testid="purchase-button">Purchase</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return null;
 }
 
 // ─── Main Page Component ────────────────────────────────────────────────────
@@ -309,8 +462,13 @@ export default function VideoPlayerPage() {
       {/* Processing state */}
       {isProcessing && !fetchLevelError && <ProcessingState />}
 
-      {/* Player area — only shown when video loaded and not processing */}
-      {video && !isProcessing && !fetchLevelError && (
+      {/* MON-005: Access gate — shown when video loaded but viewer is NOT entitled */}
+      {video && !isProcessing && !fetchLevelError && !video.is_entitled && (
+        <VideoAccessGate video={video} />
+      )}
+
+      {/* Player area — only shown when video loaded, not processing, and ENTITLED */}
+      {video && !isProcessing && !fetchLevelError && video.is_entitled !== false && (
         <>
           {/* HLS player error (stream failed, expired token, etc.) */}
           {playerError && (
@@ -319,15 +477,17 @@ export default function VideoPlayerPage() {
 
           {/* Active player */}
           {!playerError && playbackUrl && (
-            <MediaPlayer
-              src={playbackUrl}
-              mode="vod"
-              autoplay
-              poster={video.thumbnail_url ?? undefined}
-              title={video.title}
-              onError={handleMediaError}
-              subtitleTracks={subtitleTracksForPlayer.length > 0 ? subtitleTracksForPlayer : undefined}
-            />
+            <div data-testid="video-player">
+              <MediaPlayer
+                src={playbackUrl}
+                mode="vod"
+                autoplay
+                poster={video.thumbnail_url ?? undefined}
+                title={video.title}
+                onError={handleMediaError}
+                subtitleTracks={subtitleTracksForPlayer.length > 0 ? subtitleTracksForPlayer : undefined}
+              />
+            </div>
           )}
 
           {/* Video with manifest but no playback token (approved but token failure) */}
@@ -456,6 +616,13 @@ export default function VideoPlayerPage() {
                   {video.visibility}
                 </Badge>
               )}
+              {/* MON-005: Price / access badge */}
+              <VideoPriceBadge
+                priceCents={video.price_cents}
+                accessMode={video.access_mode}
+                entitled={video.is_entitled}
+                accessReason={video.access_reason}
+              />
             </div>
 
             {/* Renditions info */}
