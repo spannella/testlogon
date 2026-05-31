@@ -1510,6 +1510,23 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # Product Manager Agent (AGENT-013) — feature ideas with approval workflow
+        TableDef(
+            _resolve_table_name(S.agent_feature_ideas_table_name, "agent_feature_ideas"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # Product Manager Agent (AGENT-013) — preference learning (pk=USER#id, sk=PREF#cat)
+        TableDef(
+            _resolve_table_name(S.agent_preference_learning_table_name, "agent_preference_learning"),
+            "pk",
+            "sk",
+        ),
     ]
 
 
