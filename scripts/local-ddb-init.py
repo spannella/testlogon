@@ -1160,6 +1160,52 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # LLM Provider Keys (AGENT-001)
+        TableDef(
+            _resolve_table_name(S.llm_provider_keys_table_name, "llm_provider_keys"),
+            "pk",
+            "sk",
+        ),
+        # Kubernetes Pods (INFRA-006)
+        TableDef(
+            _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),
+            "pk",
+            "sk",
+        ),
+        # Agent Workers (AGENT-002/003)
+        TableDef(
+            _resolve_table_name(S.agent_workers_table_name, "agent_workers"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "pk", "sort_key": "worker_status"},
+                {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
+                {"index_name": "ByAgentType", "partition_key": "pk", "sort_key": "agent_type"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Compute Cost Tracking (INFRA-005)
+        TableDef(
+            _resolve_table_name(S.compute_billing_table_name, "compute_billing"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByResourceId", "partition_key": "resource_id", "sort_key": "created_at"},
+                {"index_name": "ByMonth", "partition_key": "month_key", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Agent Memory (AGENT-005)
+        TableDef(
+            _resolve_table_name(S.agent_memory_table_name, "agent_memory"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
+                {"index_name": "ByCategory", "partition_key": "pk", "sort_key": "category"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

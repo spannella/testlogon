@@ -3878,3 +3878,104 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# -- Agent Memory & Context Injection (AGENT-005) --
+
+
+class AgentIdentityOut(BaseModel):
+    agent_type: str
+    identity_text: str
+    custom_instructions: str = ""
+    updated_at: int = 0
+
+
+class AgentIdentityUpdateIn(BaseModel):
+    identity_text: Optional[str] = None
+    custom_instructions: Optional[str] = None
+
+
+class ProjectContextOut(BaseModel):
+    repo_url: str = ""
+    branch_convention: str = ""
+    coding_standards: str = ""
+    pr_template: str = ""
+    test_framework: str = ""
+    ci_commands: str = ""
+    file_structure_notes: str = ""
+    updated_at: int = 0
+
+
+class ProjectContextUpdateIn(BaseModel):
+    repo_url: Optional[str] = Field(None, max_length=500)
+    branch_convention: Optional[str] = Field(None, max_length=200)
+    coding_standards: Optional[str] = Field(None, max_length=5000)
+    pr_template: Optional[str] = Field(None, max_length=5000)
+    test_framework: Optional[str] = Field(None, max_length=200)
+    ci_commands: Optional[str] = Field(None, max_length=2000)
+    file_structure_notes: Optional[str] = Field(None, max_length=5000)
+
+
+class MemoryEntryIn(BaseModel):
+    category: str = Field(..., pattern=r"^(learning|decision|pattern|error|custom)$")
+    title: str = Field(..., min_length=1, max_length=200)
+    content: str = Field(..., min_length=1, max_length=10000)
+    ticket_id: str = Field(default="", max_length=100)
+    importance: int = Field(default=3, ge=1, le=5)
+
+
+class MemoryEntryUpdateIn(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    content: Optional[str] = Field(None, min_length=1, max_length=10000)
+    importance: Optional[int] = Field(None, ge=1, le=5)
+
+
+class MemoryEntryOut(BaseModel):
+    memory_id: str
+    category: str
+    title: str
+    content: str
+    ticket_id: str = ""
+    importance: int = 3
+    token_count: int = 0
+    created_at: int = 0
+    summarized: bool = False
+    summary: str = ""
+
+
+class MemoryListOut(BaseModel):
+    entries: List[MemoryEntryOut]
+    count: int
+    total_tokens: int
+
+
+class FullContextOut(BaseModel):
+    context_text: str
+    total_tokens: int
+    sections: List[str]
+
+
+class MemoryExportOut(BaseModel):
+    worker_id: str
+    exported_at: int
+    identity: Optional[AgentIdentityOut] = None
+    project_context: Optional[ProjectContextOut] = None
+    memories: List[MemoryEntryOut] = Field(default_factory=list)
+
+
+class MemoryImportIn(BaseModel):
+    identity: Optional[Dict[str, Any]] = None
+    project_context: Optional[Dict[str, Any]] = None
+    memories: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class MemoryImportOut(BaseModel):
+    identity: bool = False
+    project: bool = False
+    memories: int = 0
+
+
+class MemoryTemplateOut(BaseModel):
+    agent_type: str
+    identity_text: str
+    description: str = ""

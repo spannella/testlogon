@@ -130,6 +130,11 @@ class Tables:
     sso_sessions: Any
     sso_assertion_cache: Any
     broadcast_clips: Any
+    llm_provider_keys: Any
+    k8s_pods: Any
+    agent_workers: Any
+    compute_billing: Any
+    agent_memory: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -254,4 +259,9 @@ T = Tables(
     sso_sessions=ddb.Table(S.sso_sessions_table_name),
     sso_assertion_cache=ddb.Table(S.sso_assertion_cache_table_name),
     broadcast_clips=ddb.Table(S.broadcast_clips_table_name),
+    llm_provider_keys=ddb.Table(S.llm_provider_keys_table_name),
+    k8s_pods=ddb.Table(S.k8s_pods_table_name),
+    agent_workers=ddb.Table(S.agent_workers_table_name),
+    compute_billing=ddb.Table(S.compute_billing_table_name),
+    agent_memory=ddb.Table(S.agent_memory_table_name),
 )

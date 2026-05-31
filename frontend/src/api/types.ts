@@ -4492,3 +4492,103 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// -- Agent Memory & Context Injection (AGENT-005) --
+
+export interface AgentIdentity {
+  agent_type: string;
+  identity_text: string;
+  custom_instructions: string;
+  updated_at: number;
+}
+
+export interface AgentIdentityUpdate {
+  identity_text?: string;
+  custom_instructions?: string;
+}
+
+export interface ProjectContext {
+  repo_url: string;
+  branch_convention: string;
+  coding_standards: string;
+  pr_template: string;
+  test_framework: string;
+  ci_commands: string;
+  file_structure_notes: string;
+  updated_at: number;
+}
+
+export interface ProjectContextUpdate {
+  repo_url?: string;
+  branch_convention?: string;
+  coding_standards?: string;
+  pr_template?: string;
+  test_framework?: string;
+  ci_commands?: string;
+  file_structure_notes?: string;
+}
+
+export interface MemoryEntry {
+  memory_id: string;
+  category: string;
+  title: string;
+  content: string;
+  ticket_id: string;
+  importance: number;
+  token_count: number;
+  created_at: number;
+  summarized: boolean;
+  summary: string;
+}
+
+export interface MemoryEntryCreate {
+  category: "learning" | "decision" | "pattern" | "error" | "custom";
+  title: string;
+  content: string;
+  ticket_id?: string;
+  importance?: number;
+}
+
+export interface MemoryEntryUpdate {
+  title?: string;
+  content?: string;
+  importance?: number;
+}
+
+export interface MemoryListOut {
+  entries: MemoryEntry[];
+  count: number;
+  total_tokens: number;
+}
+
+export interface FullContextOut {
+  context_text: string;
+  total_tokens: number;
+  sections: string[];
+}
+
+export interface MemoryExport {
+  worker_id: string;
+  exported_at: number;
+  identity: AgentIdentity | null;
+  project_context: ProjectContext | null;
+  memories: MemoryEntry[];
+}
+
+export interface MemoryImportIn {
+  identity?: Record<string, unknown>;
+  project_context?: Record<string, unknown>;
+  memories?: Record<string, unknown>[];
+}
+
+export interface MemoryImportOut {
+  identity: boolean;
+  project: boolean;
+  memories: number;
+}
+
+export interface MemoryTemplate {
+  agent_type: string;
+  identity_text: string;
+  description: string;
+}

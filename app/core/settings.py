@@ -1490,5 +1490,22 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # LLM Provider Keys (AGENT-001)
+    llm_provider_keys_table_name: str = os.environ.get("LLM_PROVIDER_KEYS_TABLE_NAME", "llm_provider_keys")
+
+    # Kubernetes pods (INFRA-006)
+    k8s_pods_table_name: str = os.environ.get("K8S_PODS_TABLE_NAME", "k8s_pods")
+
+    # Agent Workers (AGENT-002)
+    agent_workers_table_name: str = os.environ.get("AGENT_WORKERS_TABLE_NAME", "agent_workers")
+
+    # Compute Billing (INFRA-005)
+    compute_billing_table_name: str = os.environ.get("COMPUTE_BILLING_TABLE_NAME", "compute_billing")
+
+    # Agent Memory (AGENT-005)
+    agent_memory_table_name: str = os.environ.get("AGENT_MEMORY_TABLE_NAME", "agent_memory")
+    agent_memory_max_entries: int = int(os.environ.get("AGENT_MEMORY_MAX_ENTRIES", "200"))
+    agent_memory_max_token_count: int = int(os.environ.get("AGENT_MEMORY_MAX_TOKEN_COUNT", "100000"))
+
 
 S = Settings()
