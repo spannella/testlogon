@@ -1490,5 +1490,10 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Notification Engine (SOC-004)
+    notifications_engine_table_name: str = os.environ.get("NOTIFICATIONS_ENGINE_TABLE_NAME", "notifications_engine")
+    notification_ttl_days: int = int(os.environ.get("NOTIFICATION_TTL_DAYS", "90"))
+    notification_batch_window_seconds: int = int(os.environ.get("NOTIFICATION_BATCH_WINDOW_SECONDS", "300"))
+
 
 S = Settings()

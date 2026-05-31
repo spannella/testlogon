@@ -1160,6 +1160,12 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Notification Engine (SOC-004)
+        TableDef(
+            _resolve_table_name(S.notifications_engine_table_name, "notifications_engine"),
+            "user_id",
+            "sk",
+        ),
     ]
 
 

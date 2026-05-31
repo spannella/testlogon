@@ -78,6 +78,7 @@ const MORE_LINKS = [
   { label: "Profile", i18nKey: "nav.profile", path: "/profile", icon: User },
   { label: "Security", i18nKey: "nav.security", path: "/security", icon: Shield },
   { label: "Alerts", i18nKey: "nav.alerts", path: "/alerts", icon: Bell },
+  { label: "Notifications", i18nKey: "nav.notifications", path: "/notifications", icon: Bell },
   { label: "Tickets", i18nKey: "nav.tickets", path: "/tickets", icon: LifeBuoy },
   { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: LifeBuoy },
   { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: MonitorSmartphone },

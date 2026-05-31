@@ -3878,3 +3878,38 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ─── Notification Engine (SOC-004) ────────────────────────────────
+
+
+class NotificationOut(BaseModel):
+    notification_id: str
+    notification_type: str = ""
+    title: str = ""
+    body: str = ""
+    data: Dict[str, Any] = Field(default_factory=dict)
+    read: bool = False
+    created_at: int = 0
+    batch_key: Optional[str] = None
+    batch_count: int = 1
+    batch_actors: List[str] = Field(default_factory=list)
+
+
+class NotificationListResponse(BaseModel):
+    items: List[NotificationOut]
+    next_cursor: Optional[str] = None
+    unread_count: int = 0
+
+
+class MarkNotificationsReadIn(BaseModel):
+    notification_ids: List[str] = Field(default_factory=list)
+
+
+class SendNotificationIn(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=256)
+    notification_type: str = Field(..., min_length=1, max_length=64)
+    title: str = Field(..., min_length=1, max_length=500)
+    body: str = Field(default="", max_length=2000)
+    data: Dict[str, Any] = Field(default_factory=dict)
+    batch_key: Optional[str] = Field(default=None, max_length=256)

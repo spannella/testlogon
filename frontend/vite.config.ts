@@ -44,7 +44,16 @@ export default defineConfig({
       "/social": "http://localhost:8000",
       "/uploads": "http://localhost:8000",
       "/sse": "http://localhost:8000",
-      "/notifications": "http://localhost:8000",
+      "/notifications": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        },
+      },
       "/mock": "http://localhost:8000",
       "/calendar/public": "http://localhost:8000",
       "/internal": "http://localhost:8000",

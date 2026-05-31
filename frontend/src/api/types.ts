@@ -4492,3 +4492,37 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ─── Notification Engine (SOC-004) ──────────────────────────────
+
+export interface NotificationOut {
+  notification_id: string;
+  notification_type: string;
+  title: string;
+  body: string;
+  data: Record<string, unknown>;
+  read: boolean;
+  created_at: number;
+  batch_key?: string | null;
+  batch_count: number;
+  batch_actors: string[];
+}
+
+export interface NotificationListResponse {
+  items: NotificationOut[];
+  next_cursor?: string | null;
+  unread_count: number;
+}
+
+export interface MarkNotificationsReadReq {
+  notification_ids: string[];
+}
+
+export interface SendNotificationReq {
+  user_id: string;
+  notification_type: string;
+  title: string;
+  body?: string;
+  data?: Record<string, unknown>;
+  batch_key?: string | null;
+}
