@@ -90,6 +90,7 @@ const WebhookEndpointDetail = lazy(() => import("@/pages/webhooks/WebhookEndpoin
 const PartyListPage = lazy(() => import("@/pages/watch-parties/PartyListPage"));
 const WatchPartyPage = lazy(() => import("@/pages/watch-parties/WatchPartyPage"));
 const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
+const KycTierProgress = lazy(() => import("@/pages/kyc/KycTierProgress"));
 
 function PageSpinner() {
   return (
@@ -203,6 +204,7 @@ export default function App() {
           <Route path="admin/audit-exports" element={<AuditExportPage />} />
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />
+          <Route path="kyc/tiers" element={<KycTierProgress />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 
