@@ -935,6 +935,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # VOD-018: ad-supported viewing sessions (pk = USER#{viewer}, sk = VIDEO#{video_id})
+        TableDef(
+            os.environ.get("DDB_VOD_AD_SESSIONS", "VodAdSessions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByVideo", "partition_key": "video_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Advertiser Accounts (ADS-001)
         TableDef(
             _resolve_table_name(S.ad_accounts_table_name, "AdAccounts"),

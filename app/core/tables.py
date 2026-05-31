@@ -88,6 +88,7 @@ class Tables:
     broadcast_product_shelf: Any
     vod_entitlements: Any
     vod_rentals: Any
+    vod_ad_sessions: Any
     appeals: Any
     creator_payouts: Any
     bulk_payout_batches: Any
@@ -296,6 +297,7 @@ T = Tables(
     broadcast_product_shelf=ddb.Table(S.broadcast_product_shelf_table_name),
     vod_entitlements=ddb.Table(S.vod_entitlements_table_name),
     vod_rentals=ddb.Table(S.vod_rentals_table_name),
+    vod_ad_sessions=ddb.Table(S.vod_ad_sessions_table_name),
     appeals=ddb.Table(S.appeals_table_name),
     creator_payouts=ddb.Table(S.creator_payouts_table_name),
     bulk_payout_batches=ddb.Table(S.bulk_payout_batches_table_name),

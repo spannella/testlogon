@@ -1389,6 +1389,13 @@ class Settings:
     vod_rentals_table_name: str = os.environ.get("DDB_VOD_RENTALS", "VodRentals")
     vod_rental_enabled: bool = os.environ.get("VOD_RENTAL_ENABLED", "1") not in ("0", "false", "False")
     vod_rental_playback_ttl_seconds: int = int(os.environ.get("VOD_RENTAL_PLAYBACK_TTL_SECONDS", "3600"))
+    # VOD-018 ad-supported viewing tier (dedicated vod_ad_sessions table)
+    vod_ad_supported_enabled: bool = os.environ.get("VOD_AD_SUPPORTED_ENABLED", "1") not in ("0", "false", "False")
+    # When true, ad selection is deterministic (static placeholder creatives) instead of
+    # calling the live ad_serving engine. Keeps E2E reproducible.
+    vod_ad_supported_deterministic: bool = os.environ.get("VOD_AD_SUPPORTED_DETERMINISTIC", "1") not in ("0", "false", "False")
+    vod_ad_supported_playback_ttl_seconds: int = int(os.environ.get("VOD_AD_SUPPORTED_PLAYBACK_TTL_SECONDS", "3600"))
+    vod_ad_sessions_table_name: str = os.environ.get("DDB_VOD_AD_SESSIONS", "VodAdSessions")
 
     # Privacy / GDPR (PRIVACY-001)
     data_requests_table_name: str = os.environ.get("DATA_REQUESTS_TABLE_NAME", "data_requests")
