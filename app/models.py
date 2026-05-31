@@ -9966,3 +9966,69 @@ class AdminAdTopSpenderOut(BaseModel):
     company_name: str = ""
     owner_sub: str = ""
     spend_cents: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Multi-Hop SSH Bastion (INFRA-011)
+# ---------------------------------------------------------------------------
+
+class SshBastionHopIn(BaseModel):
+    """A single hop (jump host or target) in a bastion path."""
+    hostname: str
+    port: conint(ge=1, le=65535) = 22
+    username: str
+    ssh_key_id: str = ""
+    label: str = ""
+
+
+class SshBastionHopOut(BaseModel):
+    hostname: str
+    port: int = 22
+    username: str = ""
+    ssh_key_id: str = ""
+    label: str = ""
+    is_bastion: bool = False
+    hop_number: int = 0
+
+
+class CreateSshBastionPathIn(BaseModel):
+    """Create a multi-hop bastion path: ordered jump hosts -> target."""
+    label: str
+    description: str = ""
+    jump_hops: List[SshBastionHopIn] = Field(default_factory=list)
+    target: SshBastionHopIn
+
+
+class UpdateSshBastionPathIn(BaseModel):
+    """Update a bastion path. Supply jump_hops + target together to replace the chain."""
+    label: Optional[str] = None
+    description: Optional[str] = None
+    jump_hops: Optional[List[SshBastionHopIn]] = None
+    target: Optional[SshBastionHopIn] = None
+
+
+class SshBastionPathOut(BaseModel):
+    path_id: str
+    label: str
+    description: str = ""
+    hops: List[SshBastionHopOut] = Field(default_factory=list)
+    total_hops: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class SshBastionPathListOut(BaseModel):
+    paths: List[SshBastionPathOut] = Field(default_factory=list)
+    total: int = 0
+
+
+class SshBastionResolvedOut(BaseModel):
+    path_id: str
+    label: str = ""
+    chain: List[SshBastionHopOut] = Field(default_factory=list)
+    jump_hops: List[SshBastionHopOut] = Field(default_factory=list)
+    target: SshBastionHopOut
+    total_hops: int = 0
+    proxy_jump: str = ""
+    ssh_command: str = ""
+    ssh_config: str = ""

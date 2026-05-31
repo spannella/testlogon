@@ -1552,6 +1552,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Multi-Hop SSH Bastion (INFRA-011)
+        TableDef(
+            _resolve_table_name(S.ssh_bastion_paths_table_name, "ssh_bastion_paths"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Kubernetes Container Launcher (INFRA-004)
         TableDef(
             _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),
