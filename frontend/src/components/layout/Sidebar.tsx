@@ -205,6 +205,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Financials", i18nKey: "nav.financials", path: "/admin/financials", icon: <BarChart3 className="h-5 w-5" /> },
       { label: "Communications", i18nKey: "nav.communications", path: "/admin/communications", icon: <MessageSquare className="h-5 w-5" /> },
       { label: "Rate Limits", i18nKey: "nav.rateLimits", path: "/admin/rate-limits", icon: <Gauge className="h-5 w-5" /> },
+      { label: "Ad Fraud", i18nKey: "nav.adFraud", path: "/admin/ads/fraud", icon: <ShieldAlert className="h-5 w-5" /> },
     ],
   },
 ];
@@ -275,6 +276,7 @@ export default function Sidebar() {
             if (item.path === "/admin/dmca") return showModerationBoard;
             if (item.path === "/admin/communications") return showModerationBoard;
             if (item.path === "/admin/rate-limits") return showRootRoleManagement;
+            if (item.path === "/admin/ads/fraud") return showModerationBoard;
             return true;
           });
           if (items.length === 0) return null;

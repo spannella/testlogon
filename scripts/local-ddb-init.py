@@ -955,6 +955,17 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByAccountDate", "partition_key": "account_id", "sort_key": "date"},
             ],
         ),
+        # Ad Fraud Events (ADS-014)
+        TableDef(
+            _resolve_table_name(S.ad_fraud_events_table_name, "AdFraudEvents"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},  # by account
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},  # by campaign
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
         # Rate limiting (PLATFORM-001)
         TableDef(
             _resolve_table_name(S.rate_limits_table_name, "rate_limits"),

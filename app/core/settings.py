@@ -1328,6 +1328,14 @@ class Settings:
     # Ad Analytics Rollups (ADS-008)
     ad_analytics_rollups_table_name: str = os.environ.get("DDB_AD_ANALYTICS_ROLLUPS", "AdAnalyticsRollups")
 
+    # Ad Fraud Prevention (ADS-014)
+    ad_fraud_detection_enabled: bool = os.environ.get(
+        "AD_FRAUD_DETECTION_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    ad_fraud_events_table_name: str = os.environ.get("DDB_AD_FRAUD_EVENTS", "AdFraudEvents")
+    ad_fraud_score_threshold: int = int(os.environ.get("AD_FRAUD_SCORE_THRESHOLD", "70"))
+    ad_fraud_auto_suspend_rate_bps: int = int(os.environ.get("AD_FRAUD_AUTO_SUSPEND_RATE_BPS", "2000"))
+
     # View-Once / Rental Access (VOD-019)
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")
     vod_rental_default_duration_hours: int = int(os.environ.get("VOD_RENTAL_DEFAULT_DURATION_HOURS", "48"))

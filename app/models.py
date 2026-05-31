@@ -5058,12 +5058,18 @@ class AdTrackEventIn(BaseModel):
     slot_type: str = Field(..., min_length=1)
     content_id: str = Field(..., min_length=1)
     creator_id: str = Field(..., min_length=1)
+    # Fraud-detection signals (ADS-014). All optional; defaults are benign.
+    view_time_ms: int = Field(default=0, ge=0)
+    user_agent: str = ""
+    geo_country: str = ""
 
 
 class AdTrackEventOut(BaseModel):
     """Response from POST /ui/ads/track."""
     ok: bool
     event_id: str = ""
+    flagged: bool = False
+    fraud_score: int = 0
 # ─── EC2 Instance Launcher (INFRA-003) ────────────────────────────────────────
 
 class Ec2LaunchIn(BaseModel):
@@ -9152,3 +9158,55 @@ class PlatformFinancialRollupOut(BaseModel):
     tx_count: int = 0
     unique_payers: int = 0
     computed_at: int = 0
+
+
+# ─── Ad Fraud Prevention (ADS-014) ────────────────────────────────────────────
+
+class AdFraudEventOut(BaseModel):
+    """A flagged ad fraud event (admin view)."""
+    event_id: str = ""
+    user_id: str = ""
+    ip_address: str = ""
+    account_id: str = ""
+    campaign_id: str = ""
+    creative_id: str = ""
+    event_type: str = ""
+    fraud_score: int = 0
+    rule_scores: Dict[str, Any] = Field(default_factory=dict)
+    details: Dict[str, Any] = Field(default_factory=dict)
+    status: str = "flagged"
+    created_at: int = 0
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[int] = None
+
+
+class AdFraudAccountRiskOut(BaseModel):
+    """Fraud risk summary for one advertiser account."""
+    account_id: str = ""
+    fraud_rate_bps: int = 0
+    total_events: int = 0
+    flagged_events: int = 0
+    status: str = "unknown"
+    last_fraud_event_at: Optional[int] = None
+    last_event_at: Optional[int] = None
+
+
+class AdFraudSummaryOut(BaseModel):
+    """Platform-wide ad fraud summary stats."""
+    flagged_events_today: int = 0
+    total_events: int = 0
+    flagged_events: int = 0
+    fraud_rate_bps: int = 0
+    suspended_accounts: int = 0
+    tracked_accounts: int = 0
+    top_fraud_rules: Dict[str, int] = Field(default_factory=dict)
+
+
+class AdFraudReviewIn(BaseModel):
+    """Admin confirm/dismiss decision on a flagged fraud event."""
+    decision: str = Field(..., pattern="^(confirm|dismiss)$")
+
+
+class AdFraudSuspendIn(BaseModel):
+    """Admin manual account suspension reason."""
+    reason: str = ""
