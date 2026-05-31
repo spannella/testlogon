@@ -116,6 +116,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Cart", i18nKey: "nav.cart", path: "/cart", icon: <ShoppingCart className="h-5 w-5" /> },
       { label: "Billing", i18nKey: "nav.billing", path: "/billing", icon: <CreditCard className="h-5 w-5" /> },
       { label: "Invoices", i18nKey: "nav.invoices", path: "/billing/invoices", icon: <Receipt className="h-5 w-5" /> },
+      { label: "Tax Documents", i18nKey: "nav.taxDocuments", path: "/billing/tax-documents", icon: <Receipt className="h-5 w-5" /> },
       { label: "Orders", i18nKey: "nav.orders", path: "/purchases", icon: <ClipboardList className="h-5 w-5" /> },
       { label: "My Rentals", i18nKey: "nav.vodRentals", path: "/vod/rentals", icon: <Video className="h-5 w-5" /> },
       { label: "Subscriptions", i18nKey: "nav.subscriptions", path: "/subscriptions", icon: <Repeat className="h-5 w-5" /> },

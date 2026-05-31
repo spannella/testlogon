@@ -196,6 +196,7 @@ class Tables:
     agent_cost_budgets: Any
     agent_cost_alerts: Any
     invoices: Any
+    tax_documents: Any
     financial_rollups: Any
     payment_provider_health: Any
     ssh_session_recordings: Any
@@ -389,6 +390,7 @@ T = Tables(
     agent_cost_budgets=ddb.Table(S.agent_cost_budgets_table_name),
     agent_cost_alerts=ddb.Table(S.agent_cost_alerts_table_name),
     invoices=ddb.Table(S.invoices_table_name),
+    tax_documents=ddb.Table(S.tax_documents_table_name),
     financial_rollups=ddb.Table(S.platform_financial_dashboard_rollups_table_name),
     payment_provider_health=ddb.Table(S.payment_provider_health_table_name),
     ssh_session_recordings=ddb.Table(S.ssh_session_recordings_table_name),
