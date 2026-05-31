@@ -89,6 +89,13 @@ class BroadcastSessionModel(BaseModel):
     # Viewer Clip Creation (ENGAGE-005)
     clips_enabled: bool = True
 
+    # Go-Private / Visibility (BCAST-011)
+    # "public": discoverable + open to any authenticated viewer
+    # "unlisted": joinable by anyone with the session id (not surfaced in discovery)
+    # "private": gated — only the creator + allowlisted viewers (or valid invite token) may join/play
+    broadcast_privacy_visibility: str = "public"
+    broadcast_privacy_updated_at: Optional[str] = None
+
 
 class BroadcastOutputModel(BaseModel):
     session_id: str = Field(min_length=1)

@@ -864,6 +864,12 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Broadcast Go-Private Allowlist / Invite Tokens (BCAST-011)
+        TableDef(
+            os.environ.get("DDB_BROADCAST_ALLOWLIST", "BroadcastAllowlist"),
+            "pk",
+            "sk",
+        ),
         # Video Views (VOD-017)
         TableDef(
             os.environ.get("DDB_VIDEO_VIEWS", "VideoViews"),

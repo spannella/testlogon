@@ -56,6 +56,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ProductShelfManager } from "./ProductShelfManager";
+import { BroadcastPrivacyControls } from "./BroadcastPrivacyControls";
 import { BroadcastTipButton } from "./BroadcastTipButton";
 import { TipGoalBar } from "./TipGoalBar";
 import { BroadcastTipSummary } from "./BroadcastTipSummary";
@@ -813,6 +814,11 @@ function SessionDetailDialog({
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Privacy & Access Controls (BCAST-011) */}
+          {isBroadcaster && ["draft", "ready", "live", "private"].includes(session.status) && (
+            <BroadcastPrivacyControls sessionId={session.id} />
           )}
 
           {/* Product Shelf Manager (LCOM-001) */}

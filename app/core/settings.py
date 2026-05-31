@@ -1272,6 +1272,10 @@ class Settings:
     broadcast_private_sessions_table_name: str = os.environ.get("DDB_BROADCAST_PRIVATE_SESSIONS", "BroadcastPrivateSessions")
     broadcast_private_default_rate_cents_per_min: int = int(os.environ.get("BROADCAST_PRIVATE_DEFAULT_RATE", "500"))
 
+    # Broadcast Go-Private Visibility / Allowlist (BCAST-011)
+    broadcast_privacy_enabled: bool = os.environ.get("BROADCAST_PRIVACY_ENABLED", "1") not in ("0", "false", "False")
+    broadcast_allowlist_table_name: str = os.environ.get("DDB_BROADCAST_ALLOWLIST", "BroadcastAllowlist")
+
     # Broadcast Private Chat Tiers (BCAST-012)
     broadcast_private_chat_enabled: bool = os.environ.get("BROADCAST_PRIVATE_CHAT_ENABLED", "1") not in ("0", "false", "False")
     broadcast_private_chat_max_duration_minutes: int = int(os.environ.get("BROADCAST_PRIVATE_CHAT_MAX_DURATION", "60"))
