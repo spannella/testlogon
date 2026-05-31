@@ -93,6 +93,7 @@ from app.routers.vnc_sessions import router as vnc_sessions_router
 from app.routers.kyc_cases import router as kyc_cases_router
 from app.routers.risk_scoring import user_router as risk_scoring_user_router, admin_router as risk_scoring_admin_router
 from app.routers.kyc_tiers import router as kyc_tiers_router
+from app.routers.kyc_documents import kyc_documents_router
 from app.routers.playback_entitlements import router as playback_entitlements_router
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
@@ -468,6 +469,7 @@ def create_app() -> FastAPI:
     app.include_router(risk_scoring_user_router)
     app.include_router(risk_scoring_admin_router)
     app.include_router(kyc_tiers_router)
+    app.include_router(kyc_documents_router)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
     # Recommendation routes MUST be registered before video_listing_router

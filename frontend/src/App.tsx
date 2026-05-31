@@ -107,6 +107,8 @@ const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentC
 const CallHistoryPage = lazy(() => import("@/pages/calls/CallHistoryPage"));
 const LicenseRequestsPage = lazy(() => import("@/pages/licenses/LicenseRequestsPage"));
 const KycTierProgress = lazy(() => import("@/pages/kyc/KycTierProgress"));
+const KycDocumentVerificationPage = lazy(() => import("@/pages/kyc/KycDocumentVerificationPage"));
+const KycDocumentReviewQueuePage = lazy(() => import("@/pages/kyc/KycDocumentReviewQueuePage"));
 const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
 const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
@@ -273,6 +275,8 @@ export default function App() {
           <Route path="admin/subscription-tiers" element={<SubscriptionTierManagerPage />} />
           <Route path="licenses/requests" element={<LicenseRequestsPage />} />
           <Route path="kyc/tiers" element={<KycTierProgress />} />
+          <Route path="kyc/documents" element={<KycDocumentVerificationPage />} />
+          <Route path="admin/kyc/documents" element={<KycDocumentReviewQueuePage />} />
           <Route path="agents/workers" element={<WorkersPage />} />
           <Route path="agents/dashboard" element={<AgentDashboard />} />
           <Route path="agents/fleet" element={<FleetDashboard />} />

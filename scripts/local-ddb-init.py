@@ -112,6 +112,16 @@ def _table_defs() -> List[TableDef]:
             attr_types={"timestamp": "N"},
         ),
         TableDef(
+            _resolve_table_name(S.kyc_documents_table_name, "kyc_documents"),
+            "document_id",
+            gsi=[
+                {"index_name": S.kyc_documents_status_index_name, "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByCase", "partition_key": "case_id", "sort_key": "created_at"},
+                {"index_name": "ByOwner", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
             _resolve_table_name(S.projects_table_name, "projects"),
             "PK",
             "SK",

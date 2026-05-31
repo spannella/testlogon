@@ -1103,6 +1103,24 @@ class Settings:
     # KYC tiered verification levels (KYC-009)
     kyc_tier_gating_enabled: bool = os.environ.get("KYC_TIER_GATING_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
+    # KYC Identity Document Verification (KYC-002)
+    kyc_documents_table_name: str = os.environ.get("KYC_DOCUMENTS_TABLE_NAME", "kyc_documents")
+    kyc_documents_status_index_name: str = os.environ.get("KYC_DOCUMENTS_STATUS_INDEX_NAME", "ByStatus")
+    kyc_documents_bucket: str = os.environ.get("KYC_DOCUMENTS_BUCKET", "local-uploads")
+    kyc_documents_s3_prefix: str = os.environ.get("KYC_DOCUMENTS_S3_PREFIX", "kyc-documents/")
+    kyc_documents_verification_enabled: bool = os.environ.get(
+        "KYC_DOCUMENTS_VERIFICATION_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    # When False (default) a deterministic mock provider is used; when True a "real"
+    # extraction provider would be invoked (not wired in dev / E2E).
+    kyc_documents_real_extraction_enabled: bool = os.environ.get(
+        "KYC_DOCUMENTS_REAL_EXTRACTION_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_documents_provider: str = os.environ.get("KYC_DOCUMENTS_PROVIDER", "mock_ocr")
+    kyc_documents_name_match_threshold: float = float(
+        os.environ.get("KYC_DOCUMENTS_NAME_MATCH_THRESHOLD", "0.85")
+    )
+
     # Video metadata (VOD-001)
     video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")
     vod_entitlements_table_name: str = os.environ.get("DDB_VOD_ENTITLEMENTS", "VodEntitlements")
