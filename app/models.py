@@ -8733,3 +8733,77 @@ class InvoiceEmailOut(BaseModel):
     ok: bool = True
     emailed_to: str = ""
     message: str = ""
+
+
+# -- Syndicate Revenue Splitting (SYND-003) --
+# Money is integer cents; split percentages are integer basis points (10000 = 100%).
+
+class SplitConfigIn(BaseModel):
+    mode: Literal["equal", "weighted", "performance"] = "equal"
+    weights_bps: Optional[Dict[str, int]] = None
+    performance_metric: Optional[str] = None
+    performance_window_days: int = Field(default=30, ge=7, le=365)
+    platform_fee_bps: int = Field(default=1500, ge=0, le=5000)
+
+
+class SplitConfigOut(BaseModel):
+    mode: str = "equal"
+    platform_fee_bps: int = 1500
+    weights_bps: Dict[str, int] = Field(default_factory=dict)
+    performance_metric: str = ""
+    performance_window_days: int = 30
+    updated_at: int = 0
+    updated_by: str = ""
+
+
+class SplitDistributionOut(BaseModel):
+    user_id: str
+    display_name: str = ""
+    amount_cents: int = 0
+    percentage_bps: int = 0
+    ledger_entry_id: str = ""
+
+
+class SplitExecutionOut(BaseModel):
+    split_id: str
+    syndicate_id: str = ""
+    source_type: str = "subscription"
+    subscription_id: str = ""
+    invoice_id: str = ""
+    gross_amount_cents: int = 0
+    platform_fee_cents: int = 0
+    platform_fee_bps: int = 0
+    net_amount_cents: int = 0
+    currency: str = "usd"
+    mode: str = "equal"
+    distributions: List[SplitDistributionOut] = Field(default_factory=list)
+    created_at: int = 0
+
+
+class ExecuteSplitIn(BaseModel):
+    source_type: Literal["subscription", "tip"] = "subscription"
+    subscription_id: str = ""
+    invoice_id: str = ""
+    gross_amount_cents: int = Field(gt=0)
+    currency: str = "usd"
+
+
+class MemberEarningEntryOut(BaseModel):
+    split_id: str = ""
+    amount_cents: int = 0
+    percentage_bps: int = 0
+    created_at: int = 0
+    source_type: str = ""
+
+
+class MemberEarningsOut(BaseModel):
+    syndicate_id: str = ""
+    user_id: str = ""
+    total_cents: int = 0
+    split_count: int = 0
+    entries: List[MemberEarningEntryOut] = Field(default_factory=list)
+
+
+class PerformanceScoresIn(BaseModel):
+    metric: Literal["views", "engagement", "subscribers"] = "views"
+    scores: Dict[str, int] = Field(default_factory=dict)

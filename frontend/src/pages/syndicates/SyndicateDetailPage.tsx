@@ -36,6 +36,9 @@ import {
 } from "@/api/endpoints/syndicates";
 import type { BundlePlanOut } from "@/api/types";
 import { useAuthStore } from "@/stores/authStore";
+import RevenueSplitConfigTab from "./RevenueSplitConfigTab";
+import RevenueSplitHistoryTab from "./RevenueSplitHistoryTab";
+import RevenueSplitEarningsCard from "./RevenueSplitEarningsCard";
 
 export default function SyndicateDetailPage() {
   const { syndicateId } = useParams<{ syndicateId: string }>();
@@ -121,6 +124,7 @@ export default function SyndicateDetailPage() {
         <TabsList>
           <TabsTrigger value="members">Members</TabsTrigger>
           <TabsTrigger value="plans">Plans</TabsTrigger>
+          <TabsTrigger value="revenue">Revenue</TabsTrigger>
           {isAdmin && <TabsTrigger value="requests">Requests ({requests.length})</TabsTrigger>}
           {isAdmin && <TabsTrigger value="audit">Audit Log</TabsTrigger>}
         </TabsList>
@@ -163,6 +167,15 @@ export default function SyndicateDetailPage() {
         {/* Plans Tab (SYND-002) */}
         <TabsContent value="plans">
           <BundlePlansTab syndicateId={syndicateId!} isAdmin={isAdmin} />
+        </TabsContent>
+
+        {/* Revenue Tab (SYND-003) */}
+        <TabsContent value="revenue">
+          <div className="space-y-4">
+            <RevenueSplitEarningsCard syndicateId={syndicateId!} />
+            <RevenueSplitConfigTab syndicateId={syndicateId!} isAdmin={isAdmin} />
+            <RevenueSplitHistoryTab syndicateId={syndicateId!} />
+          </div>
         </TabsContent>
 
         {/* Requests Tab */}

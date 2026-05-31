@@ -1593,6 +1593,10 @@ class Settings:
     llm_provider_keys_table_name: str = os.environ.get("LLM_PROVIDER_KEYS_TABLE_NAME", "llm_provider_keys")
     # Syndicates (SYND-001)
     syndicates_table_name: str = os.environ.get("SYNDICATES_TABLE_NAME", "syndicates")
+    # Syndicate Revenue Splitting (SYND-003)
+    syndicate_revenue_split_table_name: str = os.environ.get(
+        "SYNDICATE_REVENUE_SPLIT_TABLE_NAME", "syndicate_revenue_split"
+    )
     # User Groups (GROUP-001)
     # SSH Key Manager (INFRA-002)
     ssh_keys_table_name: str = os.environ.get("SSH_KEYS_TABLE_NAME", "ssh_keys")
