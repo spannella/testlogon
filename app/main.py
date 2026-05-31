@@ -574,6 +574,9 @@ def create_app() -> FastAPI:
     from app.routers.agent_feedback import router as agent_feedback_router
     app.include_router(agent_feedback_router)
 
+    from app.routers.agent_coder import router as agent_coder_router
+    app.include_router(agent_coder_router)
+
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)

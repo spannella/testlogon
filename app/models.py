@@ -6208,3 +6208,165 @@ class PatternTestIn(BaseModel):
 class PatternTestOut(BaseModel):
     matches: List[Dict[str, str]]
     match_count: int
+
+
+# ---------------------------------------------------------------------------
+# Coder Agent (AGENT-008)
+# ---------------------------------------------------------------------------
+
+
+class CoderConfigIn(BaseModel):
+    repo_url: str = Field(..., min_length=5, max_length=500)
+    repo_branch_base: str = Field(default="main", max_length=100)
+    branch_pattern: str = Field(default="feat/{ticket_id}-{slug}", max_length=200)
+    test_commands: List[str] = Field(..., min_length=1, max_length=20)
+    test_timeout_seconds: int = Field(default=600, ge=60, le=7200)
+    test_retry_limit: int = Field(default=3, ge=0, le=10)
+    pr_template: str = Field(default="Closes #{ticket_id}\n\n{summary}", max_length=5000)
+    pr_base_branch: str = Field(default="main", max_length=100)
+    skill_level: Literal["junior", "mid", "senior"] = "mid"
+    max_ticket_time_seconds: int = Field(default=3600, ge=300, le=28800)
+    complexity_labels: Optional[Dict[str, List[str]]] = None
+    coding_tool: Literal["claude_code", "codex"] = "claude_code"
+    coding_tool_model: Optional[str] = Field(default=None, max_length=100)
+    pre_commands: Optional[List[str]] = Field(default=None, max_length=20)
+    post_commands: Optional[List[str]] = Field(default=None, max_length=20)
+    file_exclude_patterns: Optional[List[str]] = Field(default=None, max_length=50)
+
+    @field_validator("repo_url")
+    @classmethod
+    def _validate_repo_url(cls, v: str) -> str:
+        if not (v.startswith("https://") or v.startswith("git@")):
+            raise ValueError("Repository URL must start with https:// or git@")
+        if " " in v:
+            raise ValueError("Repository URL must not contain spaces")
+        return v
+
+    @field_validator("branch_pattern")
+    @classmethod
+    def _validate_branch_pattern(cls, v: str) -> str:
+        if "{ticket_id}" not in v:
+            raise ValueError("Branch pattern must include {ticket_id} placeholder")
+        if not re.match(r"^[a-zA-Z0-9_/{}\-]+$", v):
+            raise ValueError("Branch pattern contains invalid characters")
+        return v
+
+    @field_validator("test_commands")
+    @classmethod
+    def _validate_test_commands(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError("At least one test command is required")
+        for cmd in v:
+            if not cmd.strip():
+                raise ValueError("Test commands must not be empty strings")
+            if len(cmd) > 500:
+                raise ValueError("Individual test command must be <= 500 characters")
+        return v
+
+    @field_validator("complexity_labels")
+    @classmethod
+    def _validate_complexity_labels(cls, v: Optional[Dict[str, List[str]]]) -> Optional[Dict[str, List[str]]]:
+        if v is None:
+            return v
+        allowed = {"junior", "mid", "senior"}
+        for level in v:
+            if level not in allowed:
+                raise ValueError(f"Complexity label key must be one of {sorted(allowed)}")
+            if not isinstance(v[level], list):
+                raise ValueError(f"Complexity labels for {level} must be a list")
+        return v
+
+
+class CoderConfigOut(BaseModel):
+    repo_url: str = ""
+    repo_branch_base: str = "main"
+    branch_pattern: str = "feat/{ticket_id}-{slug}"
+    test_commands: List[str] = Field(default_factory=list)
+    test_timeout_seconds: int = 600
+    test_retry_limit: int = 3
+    pr_template: str = "Closes #{ticket_id}\n\n{summary}"
+    pr_base_branch: str = "main"
+    skill_level: str = "mid"
+    max_ticket_time_seconds: int = 3600
+    complexity_labels: Optional[Dict[str, List[str]]] = None
+    coding_tool: str = "claude_code"
+    coding_tool_model: Optional[str] = None
+    pre_commands: Optional[List[str]] = None
+    post_commands: Optional[List[str]] = None
+    file_exclude_patterns: Optional[List[str]] = None
+    updated_at: Optional[int] = None
+
+
+class CoderConfigValidationOut(BaseModel):
+    valid: bool
+    errors: List[str] = Field(default_factory=list)
+
+
+class TicketClaimIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=100)
+
+
+class TestWorkflowIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=100)
+
+
+class EligibleTicketOut(BaseModel):
+    ticket_id: str
+    subject: str = ""
+    labels: List[str] = Field(default_factory=list)
+    complexity: Optional[str] = None
+    estimated_effort_hours: Optional[int] = None
+    created_at: int = 0
+
+
+class EligibleTicketsOutCoder(BaseModel):
+    tickets: List[EligibleTicketOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class CoderOutputOut(BaseModel):
+    branch_name: str = ""
+    pr_url: str = ""
+    pr_number: int = 0
+    files_changed: List[str] = Field(default_factory=list)
+    files_added: List[str] = Field(default_factory=list)
+    files_deleted: List[str] = Field(default_factory=list)
+    insertions: int = Field(default=0, ge=0)
+    deletions: int = Field(default=0, ge=0)
+    test_results: List[Dict[str, Any]] = Field(default_factory=list)
+    test_retry_count: int = Field(default=0, ge=0)
+    total_duration_seconds: int = Field(default=0, ge=0)
+    escalated: bool = False
+    escalation_reason: Optional[str] = None
+
+
+class CoderMetricsOut(BaseModel):
+    completed_count: int = Field(default=0, ge=0)
+    avg_duration_seconds: float = Field(default=0, ge=0)
+    failure_rate: float = Field(default=0, ge=0, le=1)
+    escalation_rate: float = Field(default=0, ge=0, le=1)
+    tickets_by_skill_level: Dict[str, int] = Field(default_factory=dict)
+    period_start: int = 0
+    period_end: int = 0
+
+
+class TicketCreateCoderIn(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=300)
+    description: str = Field(default="", max_length=10000)
+    labels: List[str] = Field(default_factory=list, max_length=20)
+    space_id: Optional[str] = Field(default=None, max_length=100)
+    estimated_effort_hours: Optional[int] = Field(default=None, ge=0, le=1000)
+
+
+class WorkflowStepOut(BaseModel):
+    step_id: int
+    type: str
+    command: Optional[str] = None
+    timeout_seconds: int = 0
+    on_failure: str = "next"
+
+
+class WorkflowPreviewOut(BaseModel):
+    steps: List[WorkflowStepOut] = Field(default_factory=list)
+    branch_name: str = ""
+    total_timeout_seconds: int = 0
