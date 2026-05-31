@@ -838,6 +838,39 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Advertiser Accounts (ADS-001)
+        TableDef(
+            _resolve_table_name(S.ad_accounts_table_name, "AdAccounts"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner", "partition_key": "owner_sub", "sort_key": "created_at"},
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Ad Campaigns (ADS-001)
+        TableDef(
+            _resolve_table_name(S.ad_campaigns_table_name, "AdCampaigns"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByCampaignId", "partition_key": "campaign_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Ad Billing (ADS-007)
+        TableDef(
+            _resolve_table_name(S.ad_billing_table_name, "AdBilling"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaign", "partition_key": "campaign_id", "sort_key": "created_at"},
+                {"index_name": "ByMonth", "partition_key": "month_key", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Rate limiting (PLATFORM-001)
         TableDef(
             _resolve_table_name(S.rate_limits_table_name, "rate_limits"),

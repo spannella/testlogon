@@ -3878,3 +3878,78 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# -- Ad Accounts & Campaigns (ADS-001) --
+
+class AdAccountCreateIn(BaseModel):
+    company_name: str = Field(..., min_length=1, max_length=200)
+    billing_email: str = Field(..., min_length=3, max_length=320)
+
+
+class CampaignCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    objective: str = Field(default="awareness")
+    budget_cents: int = Field(..., ge=100)
+    budget_type: str = Field(default="lifetime")
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class CampaignUpdateIn(BaseModel):
+    name: Optional[str] = None
+    objective: Optional[str] = None
+    budget_cents: Optional[int] = None
+    budget_type: Optional[str] = None
+    status: Optional[str] = None
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+# -- Ad Billing (ADS-007) --
+
+class AdDepositIn(BaseModel):
+    """Request body for POST /ui/ads/accounts/{id}/deposit."""
+    amount_cents: int = Field(..., ge=5000, le=10000000,
+                              description="Deposit amount in cents ($50 minimum, $100k maximum)")
+    payment_method_id: str = Field(default="",
+                                    description="Payment method ID from billing system")
+
+
+class AdDepositOut(BaseModel):
+    """Response from POST /ui/ads/accounts/{id}/deposit."""
+    ok: bool
+    entry_id: str
+    new_balance_cents: int
+
+
+class AdBillingEntryOut(BaseModel):
+    """Single billing ledger entry."""
+    entry_id: str
+    account_id: str
+    campaign_id: str
+    entry_type: str
+    amount_cents: int
+    state: str
+    reason: str
+    meta: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int
+
+
+class AdInvoiceCampaignLine(BaseModel):
+    """One campaign's line item in an invoice."""
+    campaign_id: str
+    impressions: int
+    clicks: int
+    conversions: int
+    total_cents: int
+
+
+class AdInvoiceOut(BaseModel):
+    """Monthly invoice summary."""
+    account_id: str
+    month: str
+    campaigns: List[AdInvoiceCampaignLine]
+    total_charges_cents: int
+    total_deposits_cents: int
+    entry_count: int
