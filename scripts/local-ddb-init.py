@@ -1160,6 +1160,16 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Ad Targeting (ADS-003)
+        TableDef(
+            os.environ.get("DDB_AD_TARGETING", "AdTargeting"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

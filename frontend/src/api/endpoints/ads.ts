@@ -87,3 +87,83 @@ export const setAdConfig = (
   body: AdConfigRequest,
 ): Promise<AdConfigResponse> =>
   api.patch<AdConfigResponse>(`/ui/videos/${videoId}/ad-config`, body);
+
+// ─── Ad Targeting (ADS-003) ────────────────────────────────────────────────
+
+import type {
+  AdTargeting,
+  AudienceEstimate,
+  CreatorAdSettings,
+  AdBlock,
+} from "../types";
+
+// Targeting
+
+export const createTargeting = (
+  campaignId: string,
+  body: Partial<AdTargeting>,
+): Promise<AdTargeting> =>
+  api.post<AdTargeting>(`/ui/ads/campaigns/${campaignId}/targeting`, body);
+
+export const listTargeting = (
+  campaignId: string,
+): Promise<AdTargeting[]> =>
+  api.get<AdTargeting[]>(`/ui/ads/campaigns/${campaignId}/targeting`);
+
+export const getTargeting = (
+  campaignId: string,
+  targetSetId: string,
+): Promise<AdTargeting> =>
+  api.get<AdTargeting>(
+    `/ui/ads/campaigns/${campaignId}/targeting/${targetSetId}`,
+  );
+
+export const updateTargeting = (
+  campaignId: string,
+  targetSetId: string,
+  body: Partial<AdTargeting>,
+): Promise<AdTargeting> =>
+  api.put<AdTargeting>(
+    `/ui/ads/campaigns/${campaignId}/targeting/${targetSetId}`,
+    body,
+  );
+
+export const deleteTargeting = (
+  campaignId: string,
+  targetSetId: string,
+): Promise<{ ok: boolean }> =>
+  api.del<{ ok: boolean }>(
+    `/ui/ads/campaigns/${campaignId}/targeting/${targetSetId}`,
+  );
+
+export const estimateAudience = (
+  campaignId: string,
+  body: Partial<AdTargeting>,
+): Promise<AudienceEstimate> =>
+  api.post<AudienceEstimate>(
+    `/ui/ads/campaigns/${campaignId}/targeting/estimate`,
+    body,
+  );
+
+// Creator Ad Settings
+
+export const getCreatorAdSettings = (): Promise<CreatorAdSettings> =>
+  api.get<CreatorAdSettings>("/ui/ads/creator/ad-settings");
+
+export const updateCreatorAdSettings = (
+  body: Partial<CreatorAdSettings>,
+): Promise<{ ok: boolean }> =>
+  api.patch<{ ok: boolean }>("/ui/ads/creator/ad-settings", body);
+
+export const blockAdvertiser = (
+  body: { account_id: string; reason?: string },
+): Promise<{ ok: boolean }> =>
+  api.post<{ ok: boolean }>("/ui/ads/creator/ad-blocks", body);
+
+export const unblockAdvertiser = (
+  accountId: string,
+): Promise<{ ok: boolean }> =>
+  api.del<{ ok: boolean }>(`/ui/ads/creator/ad-blocks/${accountId}`);
+
+export const listBlockedAdvertisers = (): Promise<AdBlock[]> =>
+  api.get<AdBlock[]>("/ui/ads/creator/ad-blocks");
