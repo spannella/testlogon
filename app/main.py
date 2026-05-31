@@ -180,6 +180,7 @@ from app.routers.refund_requests import router as refund_requests_router
 from app.routers.billing_disputes import billing_disputes_router
 from app.routers.achievements import router as achievements_router
 from app.routers.admin_jobs import router as admin_jobs_router
+from app.routers.job_dashboard import job_dashboard_router
 from app.routers.admin_sms import router as admin_sms_router
 from app.routers.admin_email import router as admin_email_router
 from app.routers.admin_notifications import router as admin_notifications_router
@@ -534,6 +535,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_payouts_router)
     app.include_router(admin_rate_limits_router)
     app.include_router(admin_jobs_router)
+    app.include_router(job_dashboard_router)
     app.include_router(admin_sms_router)
     app.include_router(admin_email_router)
     app.include_router(admin_notifications_router)

@@ -79,6 +79,47 @@ NEW_USERS = Counter(
     "new_users_total",
     "Total new users observed",
 )
+# Background job dashboard metrics (PLATFORM-008)
+JOB_RUN_DURATION = Histogram(
+    "job_run_duration_seconds",
+    "Background job run duration in seconds",
+    ["job_name"],
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)
+JOB_RUNS_TOTAL = Counter(
+    "job_runs_total",
+    "Total recorded background job runs",
+    ["job_name", "status"],
+)
+JOB_ITEMS_PROCESSED = Counter(
+    "job_items_processed_total",
+    "Total items processed by background jobs",
+    ["job_name"],
+)
+JOB_ITEMS_FAILED = Counter(
+    "job_items_failed_total",
+    "Total items that failed processing in background jobs",
+    ["job_name"],
+)
+
+
+def record_job_run_metrics(
+    job_name: str,
+    status: str,
+    duration_ms: float,
+    items_processed: int,
+    items_failed: int,
+) -> None:
+    """Emit Prometheus metrics for a recorded job run (best-effort)."""
+    try:
+        JOB_RUNS_TOTAL.labels(job_name=job_name, status=status).inc()
+        JOB_RUN_DURATION.labels(job_name=job_name).observe(max(0.0, duration_ms) / 1000.0)
+        if items_processed:
+            JOB_ITEMS_PROCESSED.labels(job_name=job_name).inc(items_processed)
+        if items_failed:
+            JOB_ITEMS_FAILED.labels(job_name=job_name).inc(items_failed)
+    except Exception:
+        pass
 ACTIVE_SESSIONS = Gauge(
     "active_sessions",
     "Active sessions in this process",

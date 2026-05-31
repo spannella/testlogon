@@ -76,12 +76,50 @@ async def run_unified_scheduler_loop() -> None:
             _duration_ms = (_time.perf_counter() - _poll_start) * 1000
             report_poll("unified_scheduler", items_processed=_processed,
                         items_failed=_failed, duration_ms=_duration_ms)
+            _record_run("success" if _failed == 0 else "partial",
+                        _poll_start, _processed, _failed)
 
         except Exception as exc:
             report_error("unified_scheduler", str(exc))
+            _record_run("failed", _poll_start, _processed, _failed, error=str(exc))
             logger.exception("Unified scheduler loop error")
 
         await asyncio.sleep(poll_interval)
+
+
+def _record_run(status: str, poll_start: float, processed: int, failed: int,
+                error: str | None = None) -> None:
+    """Persist this poll cycle to the job_runs history (PLATFORM-008)."""
+    try:
+        from app.services.job_dashboard import record_job_run
+
+        record_job_run(
+            "unified_scheduler", status,
+            duration_ms=(_time.perf_counter() - poll_start) * 1000,
+            items_processed=processed, items_failed=failed, error=error,
+        )
+    except Exception:
+        logger.debug("unified_scheduler: record_job_run failed", exc_info=True)
+
+
+async def run_unified_scheduler_once() -> dict:
+    """Run a single scheduler iteration (manual "run now").
+
+    Processes currently-due actions once and returns counters. Used by the
+    job dashboard's manual trigger; awaited from an async context.
+    """
+    now = now_ts()
+    processed = 0
+    failed = 0
+    due_actions = query_due_actions(now=now, limit=MAX_BATCH_SIZE)
+    for action in due_actions:
+        try:
+            await _process_action(action, now)
+            processed += 1
+        except Exception:
+            failed += 1
+            logger.exception("run-now action processing failed: %s", action.get("action_id", "?"))
+    return {"items_processed": processed, "items_failed": failed, "due": len(due_actions)}
 
 
 async def _process_action(action: dict, now: int) -> None:

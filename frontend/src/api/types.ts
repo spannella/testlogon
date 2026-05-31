@@ -9092,3 +9092,64 @@ export interface ComplianceScanResultOut {
   issues_found: number;
   alerts_sent: number;
 }
+
+// ─── Background Job Dashboard (PLATFORM-008) ─────────────────────────
+
+export interface JobRegistryEntry {
+  name: string;
+  label: string;
+  source: string;
+  description: string;
+  poll_interval_seconds: number;
+  run_now_safe: boolean;
+}
+
+export interface JobRegistryOut {
+  jobs: JobRegistryEntry[];
+}
+
+export interface JobRunOut {
+  job_name: string;
+  run_id: string;
+  status: string;
+  started_at: number;
+  finished_at: number;
+  duration_ms: number;
+  items_processed: number;
+  items_failed: number;
+  error?: string | null;
+  triggered_by: string;
+}
+
+export interface JobRunsOut {
+  items: JobRunOut[];
+  count: number;
+}
+
+export interface JobHealthEntry {
+  name: string;
+  label: string;
+  description: string;
+  poll_interval_seconds: number;
+  run_now_safe: boolean;
+  health: "ok" | "degraded" | "failed" | "unknown";
+  last_status?: string | null;
+  last_run_at?: number | null;
+  last_finished_at?: number | null;
+  last_duration_ms?: number | null;
+  last_error?: string | null;
+  last_items_processed: number;
+  last_items_failed: number;
+  next_run_at?: number | null;
+}
+
+export interface JobHealthOut {
+  jobs: JobHealthEntry[];
+  timestamp: number;
+}
+
+export interface JobRunNowOut {
+  ok: boolean;
+  job_name: string;
+  run: JobRunOut;
+}

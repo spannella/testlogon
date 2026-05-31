@@ -73,12 +73,69 @@ async def run_webhook_dispatcher_loop() -> None:
             _duration_ms = (_time.perf_counter() - _poll_start) * 1000
             report_poll("webhook_dispatcher", items_processed=_processed,
                         items_failed=_failed, duration_ms=_duration_ms)
+            _record_run("success" if _failed == 0 else "partial",
+                        _duration_ms, _processed, _failed)
 
         except Exception as exc:
             report_error("webhook_dispatcher", str(exc))
+            _record_run("failed", (_time.perf_counter() - _poll_start) * 1000,
+                        _processed, _failed, error=str(exc))
             logger.exception("Webhook dispatcher loop error")
 
         await asyncio.sleep(poll_interval)
+
+
+def _record_run(status: str, duration_ms: float, processed: int, failed: int,
+                error: str | None = None) -> None:
+    """Persist this poll cycle to the job_runs history (PLATFORM-008)."""
+    try:
+        from app.services.job_dashboard import record_job_run
+
+        record_job_run(
+            "webhook_dispatcher", status,
+            duration_ms=duration_ms, items_processed=processed,
+            items_failed=failed, error=error,
+        )
+    except Exception:
+        logger.debug("webhook_dispatcher: record_job_run failed", exc_info=True)
+
+
+async def run_webhook_dispatcher_once() -> dict:
+    """Process one batch of due webhook deliveries (manual "run now")."""
+    now = now_ts()
+    processed = 0
+    failed = 0
+    due = (
+        query_due_deliveries(status="pending", now=now, limit=MAX_BATCH_SIZE)
+        + query_due_deliveries(status="failed", now=now, limit=MAX_BATCH_SIZE)
+    )
+    for delivery in due:
+        try:
+            endpoint_id = delivery.get("endpoint_id", "")
+            user_sub = delivery.get("user_sub", "")
+            endpoint = _get_endpoint_raw(user_sub, endpoint_id)
+            if not endpoint or not endpoint.get("enabled", True):
+                mark_delivery_dead_letter(delivery, reason="endpoint_disabled")
+                continue
+            secret = _decrypt_secret(endpoint["secret"])
+            result = await deliver_webhook(
+                url=endpoint["url"],
+                payload=delivery.get("payload", "{}"),
+                secret=secret,
+                delivery_id=delivery.get("delivery_id", ""),
+                event_type=delivery.get("event_type", ""),
+            )
+            if result["success"]:
+                mark_delivery_success(delivery, result)
+                reset_endpoint_failure_count(endpoint_id, user_sub)
+                processed += 1
+            else:
+                handle_delivery_failure(delivery, endpoint, result)
+                failed += 1
+        except Exception:
+            failed += 1
+            logger.exception("run-now webhook delivery error for %s", delivery.get("delivery_id", ""))
+    return {"items_processed": processed, "items_failed": failed, "due": len(due)}
 
 
 async def start_webhook_dispatcher_task() -> None:
