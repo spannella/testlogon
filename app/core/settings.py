@@ -1490,5 +1490,24 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Agent LLM Key Management (AGENT-001)
+    agent_llm_keys_enabled: bool = os.environ.get("AGENT_LLM_KEYS_ENABLED", "1") not in ("0", "false", "False")
+    agent_llm_key_testing_enabled: bool = os.environ.get("AGENT_LLM_KEY_TESTING_ENABLED", "1") not in ("0", "false", "False")
+    llm_provider_keys_table_name: str = os.environ.get("LLM_PROVIDER_KEYS_TABLE_NAME", "llm_provider_keys")
+
+    # EC2 Instance Launcher (INFRA-003)
+    ec2_instances_table_name: str = os.environ.get("EC2_INSTANCES_TABLE_NAME", "ec2_instances")
+    ec2_mock_enabled: bool = os.environ.get("EC2_MOCK_ENABLED", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")
+    ec2_max_instances_per_user: int = int(os.environ.get("EC2_MAX_INSTANCES_PER_USER", "5"))
+
+    # Kubernetes Container Launcher (INFRA-004)
+    k8s_pods_table_name: str = os.environ.get("K8S_PODS_TABLE_NAME", "k8s_pods")
+    k8s_mock_enabled: bool = os.environ.get("K8S_MOCK_ENABLED", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")
+    k8s_max_pods_per_user: int = int(os.environ.get("K8S_MAX_PODS_PER_USER", "5"))
+
+    # Agent Worker Provisioning (AGENT-002)
+    agent_workers_table_name: str = os.environ.get("AGENT_WORKERS_TABLE_NAME", "agent_workers")
+    agent_max_workers_per_user: int = int(os.environ.get("AGENT_MAX_WORKERS_PER_USER", "5"))
+
 
 S = Settings()

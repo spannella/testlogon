@@ -4492,3 +4492,86 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// -- Agent Worker Provisioning (AGENT-002) --
+
+export interface CreateWorkerIn {
+  label: string;
+  agent_type: "coder" | "qa" | "reviewer" | "devops" | "custom";
+  tool: "claude_code" | "codex" | "custom";
+  compute_type: "ec2" | "k8s";
+  instance_type: string;
+  llm_key_id: string;
+  repo_url?: string;
+  branch_convention?: string;
+  idle_timeout_seconds?: number;
+  template_id?: string;
+  custom_install_commands?: string[];
+  custom_env_var?: string;
+  custom_verify_command?: string;
+}
+
+export interface ProvisionStep {
+  step: string;
+  status: "running" | "done" | "error";
+  ts: number;
+  detail: string;
+}
+
+export interface Worker {
+  worker_id: string;
+  user_id: string;
+  label: string;
+  agent_type: string;
+  tool: string;
+  tool_version: string;
+  compute_type: string;
+  compute_instance_id: string;
+  instance_type: string;
+  llm_key_id: string;
+  llm_provider: string;
+  host_id: string;
+  public_ip: string;
+  worker_status: "provisioning" | "installing" | "ready" | "running" | "stopped" | "error" | "terminated";
+  provision_log: ProvisionStep[];
+  repo_url: string;
+  branch_convention: string;
+  idle_timeout_seconds: number;
+  last_activity_at: number;
+  created_at: number;
+  started_at: number;
+  stopped_at: number;
+  terminated_at: number;
+  template_id: string;
+  error_message: string;
+}
+
+export interface WorkerList {
+  workers: Worker[];
+  count: number;
+}
+
+export interface ToolInfo {
+  tool: string;
+  display_name: string;
+  description: string;
+  install_time_seconds: number;
+  required_provider: string;
+}
+
+export interface ToolListOut {
+  tools: ToolInfo[];
+}
+
+export interface ComputeOption {
+  compute_type: "ec2" | "k8s";
+  instance_type: string;
+  vcpu: number;
+  memory_gb: number;
+  cost_cents_per_min: number;
+  startup_seconds: number;
+}
+
+export interface ComputeOptionListOut {
+  options: ComputeOption[];
+}
