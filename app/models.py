@@ -9752,3 +9752,72 @@ class ContentRevenueDetailOut(BaseModel):
     total_cents: int = 0
     time_series: List[ContentRevenueTimeSeriesPoint] = Field(default_factory=list)
     currency: str = "USD"
+
+
+# ---------------------------------------------------------------------------
+# Instance Monitoring & Health (INFRA-008)
+# ---------------------------------------------------------------------------
+
+class InstanceMetricIngestIn(BaseModel):
+    """A single metric datapoint pushed by/for an instance."""
+    cpu_pct: int = Field(ge=0, le=100)
+    mem_pct: int = Field(ge=0, le=100)
+    disk_pct: int = Field(ge=0, le=100)
+    net_in_kbps: int = Field(default=0, ge=0)
+    net_out_kbps: int = Field(default=0, ge=0)
+    status: str = Field(default="running")
+    ts: Optional[int] = Field(default=None, description="Unix seconds; defaults to now")
+
+
+class InstanceMonitoringSeedIn(BaseModel):
+    """Deterministic test seeding of metric datapoints."""
+    points: int = Field(default=20, ge=1, le=500)
+    interval_seconds: int = Field(default=60, ge=1, le=86400)
+    base_cpu_pct: int = Field(default=30, ge=0, le=100)
+    base_mem_pct: int = Field(default=40, ge=0, le=100)
+    base_disk_pct: int = Field(default=20, ge=0, le=100)
+
+
+class InstanceMetricPoint(BaseModel):
+    instance_id: str
+    ts: int
+    cpu_pct: int
+    mem_pct: int
+    disk_pct: int
+    net_in_kbps: int
+    net_out_kbps: int
+    status: str
+
+
+class InstanceMetricLatestOut(BaseModel):
+    instance_id: str
+    has_data: bool
+    point: Optional[InstanceMetricPoint] = None
+
+
+class InstanceMetricSeriesOut(BaseModel):
+    instance_id: str
+    points: List[InstanceMetricPoint] = Field(default_factory=list)
+    count: int = 0
+
+
+class InstanceHealthOut(BaseModel):
+    instance_id: str
+    instance_type: str = ""
+    instance_status: str = ""
+    health_status: str = "unknown"  # healthy | warning | critical | unknown
+    reasons: List[str] = Field(default_factory=list)
+    cpu_pct: int = 0
+    mem_pct: int = 0
+    disk_pct: int = 0
+    datapoints: int = 0
+    last_metric_ts: int = 0
+    checked_at: int = 0
+    thresholds: Dict[str, Any] = Field(default_factory=dict)
+
+
+class InstanceMonitoringIngestOut(BaseModel):
+    instance_id: str
+    ts: int
+    health_status: str
+    stored: bool = True

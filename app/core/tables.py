@@ -160,6 +160,7 @@ class Tables:
     bot_scheduled_sends: Any
     media_preferences: Any
     ec2_instances: Any
+    instance_metrics: Any
     security_groups: Any
     license_revenue: Any
     activity_feed: Any
@@ -353,6 +354,7 @@ T = Tables(
     bot_scheduled_sends=ddb.Table(S.bot_scheduled_sends_table_name),
     media_preferences=ddb.Table(S.media_preferences_table_name),
     ec2_instances=ddb.Table(S.ec2_instances_table_name),
+    instance_metrics=ddb.Table(S.instance_metrics_table_name),
     security_groups=ddb.Table(S.security_groups_table_name),
     license_revenue=ddb.Table(S.license_revenue_table_name),
     activity_feed=ddb.Table(S.activity_feed_table_name),

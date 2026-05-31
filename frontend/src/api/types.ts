@@ -8718,3 +8718,72 @@ export interface ContentRevenueListParams {
   limit?: number;
   cursor?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Instance Monitoring & Health (INFRA-008)
+// ---------------------------------------------------------------------------
+
+export interface InstanceMetricIngestIn {
+  cpu_pct: number;
+  mem_pct: number;
+  disk_pct: number;
+  net_in_kbps?: number;
+  net_out_kbps?: number;
+  status?: string;
+  ts?: number;
+}
+
+export interface InstanceMonitoringSeedIn {
+  points?: number;
+  interval_seconds?: number;
+  base_cpu_pct?: number;
+  base_mem_pct?: number;
+  base_disk_pct?: number;
+}
+
+export interface InstanceMetricPoint {
+  instance_id: string;
+  ts: number;
+  cpu_pct: number;
+  mem_pct: number;
+  disk_pct: number;
+  net_in_kbps: number;
+  net_out_kbps: number;
+  status: string;
+}
+
+export interface InstanceMetricLatestOut {
+  instance_id: string;
+  has_data: boolean;
+  point: InstanceMetricPoint | null;
+}
+
+export interface InstanceMetricSeriesOut {
+  instance_id: string;
+  points: InstanceMetricPoint[];
+  count: number;
+}
+
+export type InstanceHealthStatus = "healthy" | "warning" | "critical" | "unknown";
+
+export interface InstanceHealthOut {
+  instance_id: string;
+  instance_type: string;
+  instance_status: string;
+  health_status: InstanceHealthStatus;
+  reasons: string[];
+  cpu_pct: number;
+  mem_pct: number;
+  disk_pct: number;
+  datapoints: number;
+  last_metric_ts: number;
+  checked_at: number;
+  thresholds: Record<string, number>;
+}
+
+export interface InstanceMonitoringIngestOut {
+  instance_id: string;
+  ts: number;
+  health_status: InstanceHealthStatus;
+  stored: boolean;
+}
