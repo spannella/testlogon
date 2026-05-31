@@ -69,6 +69,7 @@ from app.routers.carrier_tracking_mock import router as carrier_tracking_mock_ro
 from app.routers.projects import router as projects_router
 from app.routers.contacts import router as contacts_router
 from app.routers.social import router as social_router
+from app.routers.activity_feed import router as activity_feed_router
 from app.routers.discovery import router as discovery_router
 from app.routers.search import router as search_router
 from app.routers.broadcast import router as broadcast_router
@@ -391,6 +392,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(contacts_router)
     app.include_router(social_router)
+    app.include_router(activity_feed_router)
     app.include_router(discovery_router)
     app.include_router(search_router)
     app.include_router(broadcast_router)

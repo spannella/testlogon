@@ -1490,5 +1490,9 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Activity Feed (SOC-003)
+    activity_feed_table_name: str = os.environ.get("ACTIVITY_FEED_TABLE_NAME", "activity_feed")
+    activity_feed_ttl_days: int = int(os.environ.get("ACTIVITY_FEED_TTL_DAYS", "30"))
+
 
 S = Settings()

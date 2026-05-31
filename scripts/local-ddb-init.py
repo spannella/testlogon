@@ -1160,6 +1160,12 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Activity Feed (SOC-003)
+        TableDef(
+            _resolve_table_name(S.activity_feed_table_name, "activity_feed"),
+            "user_id",
+            "sk",
+        ),
     ]
 
 

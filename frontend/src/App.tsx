@@ -27,6 +27,7 @@ const Checkout = lazy(() => import("@/pages/shop/Checkout"));
 const FeedPage = lazy(() => import("@/pages/feed/FeedPage"));
 const PostDetailPage = lazy(() => import("@/pages/feed/PostDetailPage"));
 const AlertsPage = lazy(() => import("@/pages/alerts/AlertsPage"));
+const ActivityFeedPage = lazy(() => import("@/pages/activity/ActivityFeedPage"));
 const SecurityPage = lazy(() => import("@/pages/security/SecurityPage"));
 const ProfilePage = lazy(() => import("@/pages/settings/ProfilePage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
@@ -154,6 +155,7 @@ export default function App() {
           <Route path="saved" element={<SavedPage />} />
           <Route path="posts/:postId" element={<PostDetailPage />} />
           <Route path="alerts" element={<AlertsPage />} />
+          <Route path="activity" element={<ActivityFeedPage />} />
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />
           <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />

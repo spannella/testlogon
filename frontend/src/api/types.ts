@@ -420,6 +420,29 @@ export interface TipsSummary {
   };
 }
 
+// ─── Activity Feed (SOC-003) ───────────────────────────────────
+
+export interface ActivityItem {
+  activity_id: string;
+  actor_id: string;
+  activity_type: string;
+  target_type: string;
+  target_id: string;
+  metadata: Record<string, unknown>;
+  created_at: number;
+  read: boolean;
+}
+
+export interface ActivityFeedPageResponse {
+  items: ActivityItem[];
+  next_cursor: string | null;
+  total_unread: number;
+}
+
+export interface UnreadCountResponse {
+  count: number;
+}
+
 export interface AlertPreferences {
   email_event_types?: string[];
   emails?: string[];

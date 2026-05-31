@@ -3878,3 +3878,27 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ─── Activity Feed (SOC-003) ────────────────────────────────────
+
+
+class ActivityOut(BaseModel):
+    activity_id: str
+    actor_id: str
+    activity_type: str
+    target_type: str = ""
+    target_id: str = ""
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int = 0
+    read: bool = False
+
+
+class ActivityFeedResponse(BaseModel):
+    items: List[ActivityOut]
+    next_cursor: Optional[str] = None
+    total_unread: int = 0
+
+
+class MarkActivitiesReadIn(BaseModel):
+    up_to_ts: Optional[int] = None
