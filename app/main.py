@@ -574,6 +574,15 @@ def create_app() -> FastAPI:
     from app.routers.agent_feedback import router as agent_feedback_router
     app.include_router(agent_feedback_router)
 
+    from app.routers.agent_pr_integration import (
+        router as agent_pr_router,
+        webhook_router as agent_pr_webhook_router,
+        admin_router as agent_pr_admin_router,
+    )
+    app.include_router(agent_pr_router)
+    app.include_router(agent_pr_webhook_router)
+    app.include_router(agent_pr_admin_router)
+
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)

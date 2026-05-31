@@ -5825,3 +5825,73 @@ export interface PatternTestOut {
   matches: Array<{ signal: string; pattern: string; match: string }>;
   match_count: number;
 }
+
+// ─── Agent PR & Ticket Integration (AGENT-007) ──────────────────
+
+export interface AgentPr {
+  pr_id: string;
+  worker_id: string;
+  ticket_id: string;
+  repo_url: string;
+  pr_url: string;
+  pr_number: number;
+  branch: string;
+  title: string;
+  description: string;
+  files_changed: string[];
+  commit_count: number;
+  status: string;
+  created_at: number;
+  merged_at: number;
+  user_id: string;
+}
+
+export interface AgentPrListOut {
+  prs: AgentPr[];
+  count: number;
+}
+
+export interface AgentPrCreateIn {
+  ticket_id: string;
+  repo_url?: string;
+  branch?: string;
+  title?: string;
+  description?: string;
+  files_changed?: string[];
+  method?: "cli" | "api";
+}
+
+export interface WorkSummary {
+  ticket_id: string;
+  text: string;
+  files_changed: string[];
+  decisions: string[];
+  test_results: Record<string, number>;
+}
+
+export interface AgentCompletion {
+  ticket_id: string;
+  summary: WorkSummary;
+  pr: AgentPr | null;
+  new_status: string;
+  next_agent_type: string;
+}
+
+export interface StatusFlowConfig {
+  agent_type: string;
+  on_claim: string;
+  on_working: string;
+  on_complete: string;
+  on_pr_created: string;
+  on_pr_merged: string;
+  next_agent_type: string;
+}
+
+export interface StatusFlowUpdateIn {
+  on_claim?: string;
+  on_working?: string;
+  on_complete?: string;
+  on_pr_created?: string;
+  on_pr_merged?: string;
+  next_agent_type?: string;
+}

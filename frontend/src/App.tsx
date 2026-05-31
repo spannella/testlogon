@@ -110,6 +110,7 @@ const AdAnalyticsDashboard = lazy(() => import("@/pages/ads/AdAnalyticsDashboard
 const FleetDashboard = lazy(() => import("@/pages/agents/FleetDashboard"));
 const AgentMemoryPage = lazy(() => import("@/pages/agents/AgentMemoryPage"));
 const AgentFeedbackPage = lazy(() => import("@/pages/agents/AgentFeedbackPage"));
+const AgentPrList = lazy(() => import("@/pages/agents/AgentPrList"));
 
 function PageSpinner() {
   return (
@@ -243,6 +244,7 @@ export default function App() {
           <Route path="agents/workers" element={<WorkersPage />} />
           <Route path="agents/dashboard" element={<AgentDashboard />} />
           <Route path="agents/fleet" element={<FleetDashboard />} />
+          <Route path="agents/prs" element={<AgentPrList />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

@@ -845,6 +845,8 @@ class Settings:
         os.environ.get("PROJECTS_PROVIDER_FAILURE_ALERT_THRESHOLD", "5")
     )
     github_api_base_url: str = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
+    github_token: str = os.environ.get("GITHUB_TOKEN", "")
+    github_webhook_secret: str = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
     gitlab_api_base_url: str = os.environ.get("GITLAB_API_BASE_URL", "https://gitlab.com/api/v4").rstrip("/")
     google_oauth_client_id: str = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
     google_oauth_client_secret: str = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")

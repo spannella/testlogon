@@ -6208,3 +6208,89 @@ class PatternTestIn(BaseModel):
 class PatternTestOut(BaseModel):
     matches: List[Dict[str, str]]
     match_count: int
+
+
+# ---------------------------------------------------------------------------
+# Agent PR & Ticket Integration (AGENT-007)
+# ---------------------------------------------------------------------------
+
+
+class AgentPrCreateIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=200)
+    repo_url: str = Field(default="", max_length=500)
+    branch: str = Field(default="", max_length=200)
+    title: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=10000)
+    files_changed: Optional[List[str]] = None
+    method: str = Field(default="cli", pattern="^(cli|api)$")
+
+
+class AgentPrOut(BaseModel):
+    pr_id: str
+    worker_id: str
+    ticket_id: str
+    repo_url: str = ""
+    pr_url: str = ""
+    pr_number: int = 0
+    branch: str = ""
+    title: str = ""
+    description: str = ""
+    files_changed: List[str] = Field(default_factory=list)
+    commit_count: int = 0
+    status: str = "open"
+    created_at: int = 0
+    merged_at: int = 0
+    user_id: str = ""
+
+
+class AgentPrListOut(BaseModel):
+    prs: List[AgentPrOut]
+    count: int
+
+
+class WorkSummaryOut(BaseModel):
+    ticket_id: str
+    text: str
+    files_changed: List[str] = Field(default_factory=list)
+    decisions: List[str] = Field(default_factory=list)
+    test_results: Dict[str, int] = Field(default_factory=dict)
+
+
+class AgentCompletionOut(BaseModel):
+    ticket_id: str
+    summary: WorkSummaryOut
+    pr: Optional[AgentPrOut] = None
+    new_status: str
+    next_agent_type: str = ""
+
+
+class StatusFlowConfig(BaseModel):
+    agent_type: str
+    on_claim: str = "in_progress"
+    on_working: str = "in_progress"
+    on_complete: str = "code_complete"
+    on_pr_created: str = "in_review"
+    on_pr_merged: str = "done"
+    next_agent_type: str = ""
+
+
+class StatusFlowUpdateIn(BaseModel):
+    on_claim: Optional[str] = Field(default=None, max_length=64)
+    on_working: Optional[str] = Field(default=None, max_length=64)
+    on_complete: Optional[str] = Field(default=None, max_length=64)
+    on_pr_created: Optional[str] = Field(default=None, max_length=64)
+    on_pr_merged: Optional[str] = Field(default=None, max_length=64)
+    next_agent_type: Optional[str] = Field(default=None, max_length=64)
+
+
+class AgentWorkCompleteIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=200)
+
+
+class GithubWebhookResult(BaseModel):
+    handled: bool
+    action: str = ""
+    reason: str = ""
+    pr_url: str = ""
+    ticket_id: str = ""
+    review_state: str = ""
