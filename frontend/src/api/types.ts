@@ -5282,3 +5282,63 @@ export interface ComputeOption {
 export interface ComputeOptionListOut {
   options: ComputeOption[];
 }
+
+// ─── Ad Accounts & Campaigns (ADS-001) ──────────────────────────────
+
+export interface AdAccount {
+  account_id: string;
+  owner_sub: string;
+  company_name: string;
+  billing_email: string;
+  status: string;
+  balance_cents: number;
+  lifetime_spend_cents: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface Campaign {
+  campaign_id: string;
+  account_id: string;
+  name: string;
+  objective: string;
+  budget_cents: number;
+  budget_type: string;
+  daily_budget_cents: number;
+  spent_today_cents: number;
+  lifetime_spent_cents: number;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+// ─── Ad Billing (ADS-007) ───────────────────────────────────────────
+
+export interface AdBillingEntry {
+  entry_id: string;
+  account_id: string;
+  campaign_id: string;
+  entry_type: string;
+  amount_cents: number;
+  state: string;
+  reason: string;
+  meta: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface AdInvoiceCampaignLine {
+  campaign_id: string;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  total_cents: number;
+}
+
+export interface AdInvoice {
+  account_id: string;
+  month: string;
+  campaigns: AdInvoiceCampaignLine[];
+  total_charges_cents: number;
+  total_deposits_cents: number;
+  entry_count: number;
+}

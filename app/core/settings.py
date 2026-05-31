@@ -1269,6 +1269,7 @@ class Settings:
 
     # Subscription-Gated VOD (MON-005)
     vod_subscription_gating_enabled: bool = os.environ.get("VOD_SUBSCRIPTION_GATING_ENABLED", "1") not in ("0", "false", "False")
+    ad_billing_table_name: str = os.environ.get("DDB_AD_BILLING", "AdBilling")
 
     # View-Once / Rental Access (VOD-019)
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")

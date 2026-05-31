@@ -1,13 +1,16 @@
-"""Advertiser account + campaign + creative endpoints, ad serving, plus admin review (ADS-001/002/004)."""
+"""Advertiser account + campaign + creative endpoints, ad serving, billing, plus admin review (ADS-001/002/004/007)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+import re
+
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_or_root
 from app.services.sessions import require_ui_session
 from app.models import (
     AdAccountCreateIn,
+    AdDepositIn,
     AdAccountReviewIn,
     AdFeedbackIn,
     AdServeRequestIn,
@@ -387,3 +390,86 @@ async def why_this_ad(creative_id: str, ctx=Depends(require_ui_session)):
         "categories": ["general"],
         "note": "Ads are selected based on the content you view and your platform activity.",
     }
+
+
+# ── Ad Billing (ADS-007) ──────────────────────────────────────────
+
+@router.post("/accounts/{account_id}/deposit")
+async def deposit_endpoint(account_id: str, body: AdDepositIn, ctx=Depends(require_ui_session)):
+    from app.services.ad_billing import deposit_funds
+    _require_account_owner(account_id, ctx["user_sub"])
+    try:
+        return deposit_funds(account_id, body.amount_cents, body.payment_method_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/accounts/{account_id}/billing")
+async def billing_history_endpoint(
+    account_id: str,
+    limit: int = Query(default=50, ge=1, le=500),
+    ctx=Depends(require_ui_session),
+):
+    from app.services.ad_billing import get_billing_history
+    _require_account_owner(account_id, ctx["user_sub"])
+    return get_billing_history(account_id, limit)
+
+
+@router.get("/accounts/{account_id}/billing/campaigns/{campaign_id}")
+async def campaign_spending_endpoint(
+    account_id: str,
+    campaign_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    ctx=Depends(require_ui_session),
+):
+    from app.services.ad_billing import get_campaign_spending
+    _require_account_owner(account_id, ctx["user_sub"])
+    return get_campaign_spending(campaign_id, limit)
+
+
+@router.get("/accounts/{account_id}/invoices/{month}")
+async def invoice_endpoint(account_id: str, month: str, ctx=Depends(require_ui_session)):
+    from app.services.ad_billing import generate_invoice
+    _require_account_owner(account_id, ctx["user_sub"])
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="Invalid month format, use YYYY-MM")
+    return generate_invoice(account_id, month)
+
+
+@router.post("/internal/charge-impression")
+async def internal_charge_impression(body: dict, ctx=Depends(require_ui_session)):
+    from app.services.ad_billing import charge_impression
+    return charge_impression(
+        account_id=body["account_id"],
+        campaign_id=body["campaign_id"],
+        creative_id=body.get("creative_id", ""),
+        creator_id=body.get("creator_id", ""),
+        content_id=body.get("content_id", ""),
+        bid_cpm_cents=body.get("bid_cpm_cents", 500),
+    )
+
+
+@router.post("/internal/charge-click")
+async def internal_charge_click(body: dict, ctx=Depends(require_ui_session)):
+    from app.services.ad_billing import charge_click
+    return charge_click(
+        account_id=body["account_id"],
+        campaign_id=body["campaign_id"],
+        creative_id=body.get("creative_id", ""),
+        creator_id=body.get("creator_id", ""),
+        content_id=body.get("content_id", ""),
+        bid_cpc_cents=body.get("bid_cpc_cents", 50),
+    )
+
+
+@router.post("/internal/charge-conversion")
+async def internal_charge_conversion(body: dict, ctx=Depends(require_ui_session)):
+    from app.services.ad_billing import charge_conversion
+    return charge_conversion(
+        account_id=body["account_id"],
+        campaign_id=body["campaign_id"],
+        creative_id=body.get("creative_id", ""),
+        creator_id=body.get("creator_id", ""),
+        content_id=body.get("content_id", ""),
+        bid_cpa_cents=body.get("bid_cpa_cents", 500),
+    )

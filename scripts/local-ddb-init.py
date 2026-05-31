@@ -908,6 +908,17 @@ def _table_defs() -> List[TableDef]:
             "sk",
             ttl_attribute="expires_at",
         ),
+        # Ad Billing (ADS-007)
+        TableDef(
+            _resolve_table_name(S.ad_billing_table_name, "AdBilling"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaign", "partition_key": "campaign_id", "sort_key": "created_at"},
+                {"index_name": "ByMonth", "partition_key": "month_key", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Rate limiting (PLATFORM-001)
         TableDef(
             _resolve_table_name(S.rate_limits_table_name, "rate_limits"),

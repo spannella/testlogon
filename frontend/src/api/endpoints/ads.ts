@@ -92,6 +92,9 @@ export const setAdConfig = (
 // ─── Advertiser Campaign Manager (ADS-001) ────────────────────────────────
 
 import type { AdAccount, AdCreative, Campaign } from "../types";
+// ─── Advertiser Account & Campaign (ADS-001) ─────────────────────────────
+
+import type { AdAccount, Campaign, AdBillingEntry, AdInvoice } from "../types";
 
 /** Create a new advertiser account */
 export const createAdAccount = (data: { company_name: string; billing_email: string }) =>
@@ -304,3 +307,29 @@ export const whyThisAd = (
   creativeId: string,
 ): Promise<WhyThisAdResponse> =>
   api.get<WhyThisAdResponse>(`/ui/ads/why/${creativeId}`);
+
+// ─── Ad Billing (ADS-007) ────────────────────────────────────────────────
+
+/** Deposit funds into ad account */
+export const depositAdFunds = (accountId: string, data: {
+  amount_cents: number;
+  payment_method_id?: string;
+}) =>
+  api.post<{ ok: boolean; entry_id: string; new_balance_cents: number }>(
+    `/ui/ads/accounts/${accountId}/deposit`,
+    data,
+  );
+
+/** Get billing history for an ad account */
+export const getAdBillingHistory = (accountId: string, limit = 50) =>
+  api.get<AdBillingEntry[]>(`/ui/ads/accounts/${accountId}/billing?limit=${limit}`);
+
+/** Get spending for a specific campaign */
+export const getCampaignSpending = (accountId: string, campaignId: string, limit = 100) =>
+  api.get<AdBillingEntry[]>(
+    `/ui/ads/accounts/${accountId}/billing/campaigns/${campaignId}?limit=${limit}`,
+  );
+
+/** Get monthly invoice */
+export const getAdInvoice = (accountId: string, month: string) =>
+  api.get<AdInvoice>(`/ui/ads/accounts/${accountId}/invoices/${month}`);

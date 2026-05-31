@@ -102,6 +102,7 @@ const CallHistoryPage = lazy(() => import("@/pages/calls/CallHistoryPage"));
 const LicenseRequestsPage = lazy(() => import("@/pages/licenses/LicenseRequestsPage"));
 const KycTierProgress = lazy(() => import("@/pages/kyc/KycTierProgress"));
 const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
+const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 
 function PageSpinner() {
   return (
@@ -153,6 +154,7 @@ export default function App() {
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />
           <Route path="billing/refunds" element={<RefundRequestsPage />} />
+          <Route path="ads/billing" element={<AdBillingPage />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="content-calendar" element={<ContentCalendarPage />} />
           <Route path="scheduler" element={<SchedulerPage />} />
