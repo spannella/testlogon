@@ -122,6 +122,11 @@ from app.routers.creator_payouts import router as creator_payouts_router
 from app.routers.admin_payouts import router as admin_payouts_router
 from app.routers.admin_rate_limits import router as admin_rate_limits_router
 from app.routers.privacy import router as privacy_router, admin_router as admin_privacy_router
+from app.routers.account_deletion import (
+    account_deletion_router,
+    account_deletion_admin_router,
+)
+from app.services.deletion_scheduler import start_deletion_scheduler_task
 from app.routers.referrals import router as referrals_router, internal_router as referrals_internal_router
 from app.routers.promo_codes import router as promo_codes_router
 from app.routers.affiliate_links import router as affiliate_links_router
@@ -440,6 +445,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_broadcast_scheduler_task)
     app.add_event_handler("startup", start_broadcast_reminder_task)
     app.add_event_handler("startup", _seed_notification_templates_on_startup)
+    app.add_event_handler("startup", start_deletion_scheduler_task)
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
@@ -512,6 +518,8 @@ def create_app() -> FastAPI:
     app.include_router(ses_notifications_router)
     app.include_router(privacy_router)
     app.include_router(admin_privacy_router)
+    app.include_router(account_deletion_router)
+    app.include_router(account_deletion_admin_router)
     app.include_router(stories_router)
     app.include_router(referrals_router)
     app.include_router(referrals_internal_router)

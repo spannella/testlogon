@@ -187,6 +187,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Containers", i18nKey: "nav.containers", path: "/remote/k8s", icon: <Container className="h-5 w-5" /> },
       { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
       { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: <ShieldCheck className="h-5 w-5" /> },
+      { label: "Account Deletion", i18nKey: "nav.accountDeletion", path: "/settings/account-deletion", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "Blocked Users", i18nKey: "nav.blockedUsers", path: "/settings/blocked", icon: <Ban className="h-5 w-5" /> },
       { label: "Webhooks", i18nKey: "nav.webhooks", path: "/settings/webhooks", icon: <Webhook className="h-5 w-5" /> },
       { label: "Geo Rules", i18nKey: "nav.geoRules", path: "/settings/geo", icon: <Globe className="h-5 w-5" /> },

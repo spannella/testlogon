@@ -106,6 +106,7 @@ class Tables:
     analytics_rollups: Any
     data_requests: Any
     data_request_audit: Any
+    account_deletion_requests: Any
     webhook_endpoints: Any
     webhook_deliveries: Any
     webhook_stats: Any
@@ -289,6 +290,7 @@ T = Tables(
     analytics_rollups=ddb.Table(S.analytics_rollups_table_name),
     data_requests=ddb.Table(S.data_requests_table_name),
     data_request_audit=ddb.Table(S.data_request_audit_table_name),
+    account_deletion_requests=ddb.Table(S.account_deletion_requests_table_name),
     webhook_endpoints=ddb.Table(S.webhook_endpoints_table_name),
     webhook_deliveries=ddb.Table(S.webhook_deliveries_table_name),
     webhook_stats=ddb.Table(S.webhooks_stats_table_name),

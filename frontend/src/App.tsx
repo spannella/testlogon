@@ -75,6 +75,7 @@ const AnalyticsPage = lazy(() => import("@/pages/analytics/AnalyticsPage"));
 const ContentDetailPage = lazy(() => import("@/pages/analytics/ContentDetailPage"));
 const PayoutDashboard = lazy(() => import("@/pages/payouts/PayoutDashboard"));
 const PrivacyPage = lazy(() => import("@/pages/settings/PrivacyPage"));
+const AccountDeletionPage = lazy(() => import("@/pages/settings/AccountDeletionPage"));
 const BlockedUsersPage = lazy(() => import("@/pages/settings/BlockedUsersPage"));
 const WebhooksPage = lazy(() => import("@/pages/settings/WebhooksPage"));
 const GeoRulesPage = lazy(() => import("@/pages/settings/GeoRulesPage"));
@@ -237,6 +238,7 @@ export default function App() {
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="settings/privacy" element={<PrivacyPage />} />
+          <Route path="settings/account-deletion" element={<AccountDeletionPage />} />
           <Route path="settings/blocked" element={<BlockedUsersPage />} />
           <Route path="settings/webhooks" element={<WebhooksPage />} />
           <Route path="settings/geo" element={<GeoRulesPage />} />
