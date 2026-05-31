@@ -4747,6 +4747,7 @@ class CreativeReviewIn(BaseModel):
     decision: str = Field(..., pattern=r"^(approve|reject)$")
     notes: Optional[str] = Field(default=None, max_length=1000)
 # -- Issued Licenses (LICENSE-002) --
+# ─── Issued Licenses (LICENSE-002) ────────────────────────────────────────────
 
 class IssueLicenseIn(BaseModel):
     content_id: str
@@ -4791,6 +4792,15 @@ class IssuedLicenseOut(BaseModel):
     created_at: int = 0
     updated_at: int = 0
     expires_at: Optional[int] = None
+
+
+class IssuedLicenseIndexItem(BaseModel):
+    issued_license_id: str = ""
+    content_id: str = ""
+    licensee_id: Optional[str] = None
+    license_mode: str = ""
+    status: str = ""
+    created_at: int = 0
 
 
 class HeldLicenseOut(BaseModel):
@@ -5368,3 +5378,55 @@ class RiskProfileOut(BaseModel):
 class RiskOverrideIn(BaseModel):
     score: int = Field(ge=0, le=100)
     reason: str = Field(min_length=1, max_length=500)
+
+
+# ─── License Requests (LICENSE-004) ───────────────────────────────────────────
+
+class LicenseTermsIn(BaseModel):
+    profit_share_pct: int = Field(default=0, ge=0, le=100)
+    fixed_cost_cents: int = Field(default=0, ge=0)
+    revenue_share_pct: int = Field(default=0, ge=0, le=100)
+
+
+class LicenseRequestCreateIn(BaseModel):
+    content_id: str
+    content_type: str = Field(description="One of: video, music, image, post, broadcast, clip")
+    owner_id: str
+    proposed_terms: LicenseTermsIn
+    message: str = Field(default="", max_length=1000)
+
+
+class LicenseRequestDenyIn(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+class LicenseRequestCounterIn(BaseModel):
+    counter_terms: LicenseTermsIn
+
+
+class LicenseRequestOut(BaseModel):
+    request_id: str
+    content_id: str
+    content_type: str
+    requester_id: str
+    requester_display_name: str = ""
+    owner_id: str
+    owner_display_name: str = ""
+    status: str  # pending, approved, denied, negotiating, withdrawn, expired
+    proposed_terms: Dict[str, Any] = Field(default_factory=dict)
+    counter_terms: Optional[Dict[str, Any]] = None
+    denial_reason: str = ""
+    message: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+    expires_at: int = 0
+
+
+class LicenseRequestApprovalOut(BaseModel):
+    request: LicenseRequestOut
+    issued_license: Optional[IssuedLicenseOut] = None
+
+
+class LicenseRequestListOut(BaseModel):
+    items: List[LicenseRequestOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None

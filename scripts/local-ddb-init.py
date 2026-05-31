@@ -1308,6 +1308,9 @@ def _table_defs() -> List[TableDef]:
         # Delegates (DELEGATE-001..003)
         TableDef(
             _resolve_table_name(S.delegates_table_name, "delegates"),
+        # Issued Licenses (LICENSE-002) + License Requests (LICENSE-004)
+        TableDef(
+            _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),
             "pk",
             "sk",
             gsi=[
@@ -1362,6 +1365,10 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.call_history_table_name, "call_history"),
             "user_id",
             "sk",
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+                {"index_name": "GSI4", "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N", "GSI4SK": "N"},
         ),
     ]
 

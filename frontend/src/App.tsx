@@ -98,6 +98,7 @@ const PartyListPage = lazy(() => import("@/pages/watch-parties/PartyListPage"));
 const WatchPartyPage = lazy(() => import("@/pages/watch-parties/WatchPartyPage"));
 const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
 const CallHistoryPage = lazy(() => import("@/pages/calls/CallHistoryPage"));
+const LicenseRequestsPage = lazy(() => import("@/pages/licenses/LicenseRequestsPage"));
 
 function PageSpinner() {
   return (
@@ -219,6 +220,7 @@ export default function App() {
           <Route path="admin/sso" element={<SsoProvidersPage />} />
           <Route path="licenses/revenue" element={<LicenseRevenuePage />} />
           <Route path="admin/risk" element={<RiskDashboardPage />} />
+          <Route path="licenses/requests" element={<LicenseRequestsPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

@@ -1571,6 +1571,7 @@ class Settings:
     notification_batch_window_seconds: int = int(os.environ.get("NOTIFICATION_BATCH_WINDOW_SECONDS", "300"))
     # Call History (CALL-004)
     call_history_table_name: str = os.environ.get("CALL_HISTORY_TABLE_NAME", "call_history")
+    # Licensing (LICENSE-002 / LICENSE-004)
 
 
 S = Settings()
