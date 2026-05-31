@@ -1685,5 +1685,21 @@ class Settings:
     # shell/git/coding-tool commands — the workflow is generated and driven in mock mode.
     architect_execute_commands: bool = os.environ.get("ARCHITECT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
 
+    # Product Manager Agent (AGENT-013)
+    agent_feature_ideas_table_name: str = os.environ.get(
+        "AGENT_FEATURE_IDEAS_TABLE_NAME", "agent_feature_ideas"
+    )
+    agent_preference_learning_table_name: str = os.environ.get(
+        "AGENT_PREFERENCE_LEARNING_TABLE_NAME", "agent_preference_learning"
+    )
+    # Master kill switch for the PM agent feature.
+    pm_agent_enabled: bool = os.environ.get("PM_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    # When false (default, and always in E2E), the PM review lifecycle never runs real
+    # Playwright/browsing commands — the review is generated and driven in mock mode.
+    pm_agent_execute_commands: bool = os.environ.get("PM_AGENT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
+    pm_competitor_analysis_enabled: bool = os.environ.get("PM_COMPETITOR_ANALYSIS_ENABLED", "0") not in ("0", "false", "False")
+    pm_support_analysis_enabled: bool = os.environ.get("PM_SUPPORT_ANALYSIS_ENABLED", "1") not in ("0", "false", "False")
+    pm_auto_ticket_creation: bool = os.environ.get("PM_AUTO_TICKET_CREATION", "1") not in ("0", "false", "False")
+
 
 S = Settings()

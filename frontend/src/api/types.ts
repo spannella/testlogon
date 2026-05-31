@@ -6650,3 +6650,133 @@ export interface RegisterDocBody {
   source_refs: string[];
   coverage_score: number;
 }
+
+// ---------------------------------------------------------------------------
+// Product Manager Agent (AGENT-013)
+// ---------------------------------------------------------------------------
+
+export type PmIdeaCategory =
+  | "ux"
+  | "feature"
+  | "performance"
+  | "integration"
+  | "monetization"
+  | "accessibility";
+
+export type PmIdeaPriority = "critical" | "high" | "medium" | "low";
+
+export type PmIdeaStatus = "pending" | "approved" | "rejected" | "archived";
+
+export interface FeatureIdeaEvidence {
+  type: string;
+  url?: string;
+  description: string;
+}
+
+export interface FeatureIdeaCompetitorRef {
+  url: string;
+  feature: string;
+  notes: string;
+}
+
+export interface FeatureIdea {
+  idea_id: string;
+  user_id: string;
+  agent_id: string;
+  title: string;
+  description: string;
+  category: PmIdeaCategory;
+  priority_suggestion: PmIdeaPriority;
+  user_impact: string;
+  mockup_description?: string;
+  evidence?: FeatureIdeaEvidence[];
+  competitor_refs?: FeatureIdeaCompetitorRef[];
+  support_ticket_refs?: string[];
+  status: PmIdeaStatus;
+  rejection_reason?: string;
+  created_ticket_id?: string;
+  created_at: number;
+  reviewed_at?: number;
+}
+
+export interface FeatureIdeaList {
+  ideas: FeatureIdea[];
+  next_cursor?: string | null;
+}
+
+export interface CreateFeatureIdeaIn {
+  agent_id?: string;
+  worker_id?: string;
+  title: string;
+  description?: string;
+  category: PmIdeaCategory;
+  priority_suggestion: PmIdeaPriority;
+  user_impact?: string;
+  mockup_description?: string;
+  evidence?: FeatureIdeaEvidence[];
+  competitor_refs?: FeatureIdeaCompetitorRef[];
+  support_ticket_refs?: string[];
+}
+
+export interface PreferenceSummary {
+  category: string;
+  total_suggested: number;
+  total_approved: number;
+  total_rejected: number;
+  approval_rate: number;
+}
+
+export interface PreferenceSummaryList {
+  preferences: PreferenceSummary[];
+}
+
+export interface PmAgentConfig {
+  review_frequency: "daily" | "weekly" | "biweekly";
+  review_day?: string;
+  review_hour_utc: number;
+  focus_areas: string[];
+  competitor_urls: Array<{ url: string; name: string }>;
+  max_ideas_per_review: number;
+  analyze_support_tickets: boolean;
+  support_ticket_lookback_days: number;
+  app_url?: string;
+}
+
+export interface UpdatePmConfigIn {
+  review_frequency?: "daily" | "weekly" | "biweekly";
+  review_day?: string;
+  review_hour_utc?: number;
+  focus_areas?: string[];
+  competitor_urls?: Array<{ url: string; name: string }>;
+  max_ideas_per_review?: number;
+  analyze_support_tickets?: boolean;
+  support_ticket_lookback_days?: number;
+  app_url?: string;
+}
+
+export interface PmReviewSession {
+  review_id: string;
+  agent_id: string;
+  worker_id: string;
+  ideas_count: number;
+  screenshots_count: number;
+  session_at: number;
+}
+
+export interface PmReviewSessionList {
+  reviews: PmReviewSession[];
+}
+
+export interface PmReviewScreenshot {
+  idea_id?: string;
+  description: string;
+  url?: string;
+}
+
+export interface PmTriggerReviewResult {
+  ok: boolean;
+  agent_id: string;
+  ideas_created: number;
+  ideas: FeatureIdea[];
+  completed_at: number;
+}

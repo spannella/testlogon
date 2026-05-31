@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional
 
 import re
+from enum import Enum
 from datetime import datetime, timezone
 
 from pydantic import (
@@ -7219,3 +7220,157 @@ class UpdateDocConfigIn(BaseModel):
 class CreateInlineDocTicketIn(BaseModel):
     source_file: str = Field(..., min_length=1, max_length=500)
     description: str = Field(default="", max_length=5000)
+# Product Manager Agent (AGENT-013)
+# ---------------------------------------------------------------------------
+
+
+class PmIdeaCategory(str, Enum):
+    UX = "ux"
+    FEATURE = "feature"
+    PERFORMANCE = "performance"
+    INTEGRATION = "integration"
+    MONETIZATION = "monetization"
+    ACCESSIBILITY = "accessibility"
+
+
+class PmIdeaPriority(str, Enum):
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class PmIdeaStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    ARCHIVED = "archived"
+
+
+class PmEvidenceItem(BaseModel):
+    type: str = Field(max_length=50)
+    url: Optional[str] = Field(default=None, max_length=500)
+    description: str = Field(default="", max_length=500)
+
+
+class PmCompetitorRef(BaseModel):
+    url: str = Field(max_length=500)
+    feature: str = Field(default="", max_length=200)
+    notes: str = Field(default="", max_length=500)
+
+
+class CreateFeatureIdeaIn(BaseModel):
+    agent_id: str = Field(default="pm-agent", max_length=200)
+    worker_id: str = Field(default="", max_length=200)
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    category: PmIdeaCategory
+    priority_suggestion: PmIdeaPriority
+    user_impact: str = Field(default="", max_length=1000)
+    mockup_description: Optional[str] = Field(default=None, max_length=2000)
+    evidence: Optional[List[PmEvidenceItem]] = None
+    competitor_refs: Optional[List[PmCompetitorRef]] = None
+    support_ticket_refs: Optional[List[str]] = None
+
+
+class FeatureIdeaOut(BaseModel):
+    idea_id: str
+    user_id: str
+    agent_id: str
+    title: str
+    description: str
+    category: PmIdeaCategory
+    priority_suggestion: PmIdeaPriority
+    user_impact: str
+    mockup_description: Optional[str] = None
+    evidence: Optional[List[PmEvidenceItem]] = None
+    competitor_refs: Optional[List[PmCompetitorRef]] = None
+    support_ticket_refs: Optional[List[str]] = None
+    status: PmIdeaStatus
+    rejection_reason: Optional[str] = None
+    created_ticket_id: Optional[str] = None
+    created_at: int
+    reviewed_at: Optional[int] = None
+
+
+class FeatureIdeaListOut(BaseModel):
+    ideas: List[FeatureIdeaOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class RejectIdeaIn(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+
+class PreferenceSummaryOut(BaseModel):
+    category: str
+    total_suggested: int = Field(ge=0)
+    total_approved: int = Field(ge=0)
+    total_rejected: int = Field(ge=0)
+    approval_rate: float = Field(ge=0.0, le=1.0)
+
+
+class PreferenceSummaryListOut(BaseModel):
+    preferences: List[PreferenceSummaryOut] = Field(default_factory=list)
+
+
+class UpdatePmConfigIn(BaseModel):
+    review_frequency: Optional[Literal["daily", "weekly", "biweekly"]] = None
+    review_day: Optional[
+        Literal["monday", "tuesday", "wednesday", "thursday", "friday"]
+    ] = None
+    review_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
+    focus_areas: Optional[List[str]] = None
+    competitor_urls: Optional[List[Dict[str, Any]]] = None
+    max_ideas_per_review: Optional[int] = Field(default=None, ge=1, le=20)
+    analyze_support_tickets: Optional[bool] = None
+    support_ticket_lookback_days: Optional[int] = Field(default=None, ge=1, le=90)
+    app_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class PmAgentConfigOut(BaseModel):
+    review_frequency: str
+    review_day: Optional[str] = None
+    review_hour_utc: int
+    focus_areas: List[str] = Field(default_factory=list)
+    competitor_urls: List[Dict[str, Any]] = Field(default_factory=list)
+    max_ideas_per_review: int
+    analyze_support_tickets: bool
+    support_ticket_lookback_days: int
+    app_url: Optional[str] = None
+
+
+class TriggerReviewIn(BaseModel):
+    agent_id: str = Field(default="pm-agent", max_length=200)
+    count: int = Field(default=3, ge=1, le=20)
+
+
+class TriggerReviewOut(BaseModel):
+    ok: bool
+    agent_id: str
+    ideas_created: int
+    ideas: List[FeatureIdeaOut] = Field(default_factory=list)
+    completed_at: int
+
+
+class ReviewSessionOut(BaseModel):
+    review_id: str
+    agent_id: str
+    worker_id: str = ""
+    ideas_count: int = 0
+    screenshots_count: int = 0
+    session_at: int = 0
+
+
+class ReviewSessionListOut(BaseModel):
+    reviews: List[ReviewSessionOut] = Field(default_factory=list)
+
+
+class ReviewScreenshotOut(BaseModel):
+    idea_id: Optional[str] = None
+    description: str = ""
+    url: Optional[str] = None
+
+
+class ReviewScreenshotListOut(BaseModel):
+    screenshots: List[ReviewScreenshotOut] = Field(default_factory=list)

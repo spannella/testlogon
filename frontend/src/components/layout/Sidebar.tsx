@@ -56,6 +56,7 @@ import {
   LayoutGrid,
   GitPullRequest,
   BookOpen,
+  Lightbulb,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -155,6 +156,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Fleet Dashboard", i18nKey: "nav.fleetDashboard", path: "/agents/fleet", icon: <LayoutGrid className="h-5 w-5" /> },
       { label: "Agent PRs", i18nKey: "nav.agentPrs", path: "/agents/prs", icon: <GitPullRequest className="h-5 w-5" /> },
       { label: "Doc Coverage", i18nKey: "nav.docCoverage", path: "/agents/docs", icon: <BookOpen className="h-5 w-5" /> },
+      { label: "Feature Ideas", i18nKey: "nav.featureIdeas", path: "/agents/pm/ideas", icon: <Lightbulb className="h-5 w-5" /> },
     ],
   },
   {

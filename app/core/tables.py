@@ -167,6 +167,8 @@ class Tables:
     agent_doc_templates: Any
     deployment_log: Any
     feature_decompositions: Any
+    agent_feature_ideas: Any
+    agent_preference_learning: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -328,4 +330,6 @@ T = Tables(
     agent_doc_templates=ddb.Table(S.agent_doc_templates_table_name),
     deployment_log=ddb.Table(S.deployment_log_table_name),
     feature_decompositions=ddb.Table(S.feature_decompositions_table_name),
+    agent_feature_ideas=ddb.Table(S.agent_feature_ideas_table_name),
+    agent_preference_learning=ddb.Table(S.agent_preference_learning_table_name),
 )
