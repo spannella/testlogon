@@ -1173,8 +1173,11 @@ class Settings:
 
     # Creator Payouts (MON-004)
     creator_payouts_table_name: str = os.environ.get("DDB_CREATOR_PAYOUTS", "CreatorPayouts")
+    payouts_table_name: str = os.environ.get("DDB_CREATOR_PAYOUTS", "CreatorPayouts")
     payout_hold_period_seconds: int = int(os.environ.get("PAYOUT_HOLD_PERIOD_SECONDS", "604800"))
+    payout_hold_days: int = int(os.environ.get("PAYOUT_HOLD_DAYS", "7"))
     payout_minimum_cents: int = int(os.environ.get("PAYOUT_MINIMUM_CENTS", "1000"))
+    payout_min_cents: int = int(os.environ.get("PAYOUT_MIN_CENTS", os.environ.get("PAYOUT_MINIMUM_CENTS", "1000")))
 
     # Pay-Per-Minute Calls (CALL-011)
     call_billing_enabled: bool = os.environ.get("CALL_BILLING_ENABLED", "1") not in ("0", "false", "False")
