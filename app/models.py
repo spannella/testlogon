@@ -6552,3 +6552,153 @@ class WorkflowPreviewOut(BaseModel):
     steps: List[WorkflowStepOut] = Field(default_factory=list)
     branch_name: str = ""
     total_timeout_seconds: int = 0
+
+
+# ---------------------------------------------------------------------------
+# QA Agent (AGENT-009)
+# ---------------------------------------------------------------------------
+
+
+class QaConfigIn(BaseModel):
+    test_framework: Literal["playwright", "cypress", "pytest"] = "playwright"
+    browser: Literal["chromium", "firefox", "webkit"] = "chromium"
+    test_dir: str = Field(default="frontend/e2e/", max_length=200)
+    test_file_pattern: str = Field(default="{feature}.spec.ts", max_length=200)
+    test_run_command: str = Field(default="cd frontend && npx playwright test", min_length=1, max_length=500)
+    test_run_specific_command: str = Field(
+        default="cd frontend && npx playwright test e2e/{file}", min_length=1, max_length=500
+    )
+    regression_scope: Literal["full", "affected", "none"] = "affected"
+    regression_command: str = Field(default="just e2e", max_length=500)
+    screenshot_enabled: bool = True
+    screenshot_on_failure: bool = False
+    screenshot_s3_prefix: str = Field(default="qa-screenshots/", max_length=200)
+    visual_diff_threshold: float = Field(default=0.01, ge=0.0, le=1.0)
+    max_test_time_seconds: int = Field(default=1800, ge=300, le=14400)
+    flaky_retry_count: int = Field(default=2, ge=0, le=5)
+    bug_ticket_space_id: Optional[str] = Field(default=None, max_length=100)
+    pr_review_enabled: bool = True
+    coding_tool: Literal["claude_code", "codex"] = "claude_code"
+    coding_tool_model: Optional[str] = Field(default=None, max_length=100)
+
+
+class QaConfigOut(BaseModel):
+    test_framework: str = "playwright"
+    browser: str = "chromium"
+    test_dir: str = "frontend/e2e/"
+    test_file_pattern: str = "{feature}.spec.ts"
+    test_run_command: str = "cd frontend && npx playwright test"
+    test_run_specific_command: str = "cd frontend && npx playwright test e2e/{file}"
+    regression_scope: str = "affected"
+    regression_command: str = "just e2e"
+    screenshot_enabled: bool = True
+    screenshot_on_failure: bool = False
+    screenshot_s3_prefix: str = "qa-screenshots/"
+    visual_diff_threshold: float = 0.01
+    max_test_time_seconds: int = 1800
+    flaky_retry_count: int = 2
+    bug_ticket_space_id: Optional[str] = None
+    pr_review_enabled: bool = True
+    coding_tool: str = "claude_code"
+    coding_tool_model: Optional[str] = None
+    updated_at: Optional[int] = None
+
+
+class QaConfigValidationOut(BaseModel):
+    valid: bool
+    errors: List[str] = Field(default_factory=list)
+
+
+class QaScreenshotItem(BaseModel):
+    name: str = ""
+    s3_key: str = ""
+    step: str = ""
+    status: str = "pass"
+
+
+class QaOutputOut(BaseModel):
+    verdict: Literal["pass", "fail", "flaky", "error"]
+    pr_url: str = ""
+    pr_branch: str = ""
+    ticket_id: str = ""
+    acceptance_criteria_count: int = Field(default=0, ge=0)
+    new_tests_written: int = Field(default=0, ge=0)
+    new_test_file: str = ""
+    new_tests_pass_count: int = Field(default=0, ge=0)
+    new_tests_fail_count: int = Field(default=0, ge=0)
+    regression_tests_run: int = Field(default=0, ge=0)
+    regression_tests_pass: int = Field(default=0, ge=0)
+    regression_tests_fail: int = Field(default=0, ge=0)
+    regression_failures: List[str] = Field(default_factory=list)
+    screenshots: List[QaScreenshotItem] = Field(default_factory=list)
+    bug_ticket_ids: List[str] = Field(default_factory=list)
+    pr_review_action: Literal["approved", "changes_requested", "none"] = "none"
+    total_duration_seconds: int = Field(default=0, ge=0)
+    flaky_tests: List[str] = Field(default_factory=list)
+
+
+class QaReportOut(BaseModel):
+    run_id: str
+    verdict: str
+    report_markdown: str
+    generated_at: int
+
+
+class QaScreenshotOut(BaseModel):
+    name: str
+    presigned_url: str
+    step: str = ""
+    status: str = "pass"
+
+
+class QaScreenshotsOut(BaseModel):
+    screenshots: List[QaScreenshotOut] = Field(default_factory=list)
+
+
+class QaMetricsOut(BaseModel):
+    tested_count: int = Field(default=0, ge=0)
+    pass_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    bugs_found_count: int = Field(default=0, ge=0)
+    avg_duration_seconds: float = Field(default=0.0, ge=0.0)
+    flaky_test_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    period_start: int = 0
+    period_end: int = 0
+
+
+class QaEligibleTicketOut(BaseModel):
+    ticket_id: str
+    subject: str = ""
+    status: str = ""
+    pr_url: Optional[str] = None
+    pr_branch: Optional[str] = None
+    created_at: int = 0
+    labels: List[str] = Field(default_factory=list)
+
+
+class QaEligibleTicketsOut(BaseModel):
+    tickets: List[QaEligibleTicketOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class QaWorkflowStepOut(BaseModel):
+    step_id: int
+    type: str
+    command: Optional[str] = None
+    timeout_seconds: int = 0
+    on_failure: str = "next"
+
+
+class QaWorkflowPreviewOut(BaseModel):
+    steps: List[QaWorkflowStepOut] = Field(default_factory=list)
+    new_test_file: str = ""
+    pr_branch: str = ""
+    total_timeout_seconds: int = 0
+
+
+class QaClaimIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=100)
+
+
+class QaExecuteIn(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=100)
+    scenario: Literal["pass", "fail", "flaky", "error"] = "fail"

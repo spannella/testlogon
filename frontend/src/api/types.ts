@@ -6101,3 +6101,132 @@ export interface CoderWorkflowPreview {
   branch_name: string;
   total_timeout_seconds: number;
 }
+
+// --- QA Agent (AGENT-009) ---
+
+export interface QaConfig {
+  test_framework: "playwright" | "cypress" | "pytest";
+  browser: "chromium" | "firefox" | "webkit";
+  test_dir: string;
+  test_file_pattern: string;
+  test_run_command: string;
+  test_run_specific_command: string;
+  regression_scope: "full" | "affected" | "none";
+  regression_command: string;
+  screenshot_enabled: boolean;
+  screenshot_on_failure: boolean;
+  screenshot_s3_prefix: string;
+  visual_diff_threshold: number;
+  max_test_time_seconds: number;
+  flaky_retry_count: number;
+  bug_ticket_space_id?: string | null;
+  pr_review_enabled: boolean;
+  coding_tool: "claude_code" | "codex";
+  coding_tool_model?: string | null;
+  updated_at?: number | null;
+}
+
+export interface QaConfigIn {
+  test_framework?: "playwright" | "cypress" | "pytest";
+  browser?: "chromium" | "firefox" | "webkit";
+  test_dir?: string;
+  test_file_pattern?: string;
+  test_run_command?: string;
+  test_run_specific_command?: string;
+  regression_scope?: "full" | "affected" | "none";
+  regression_command?: string;
+  screenshot_enabled?: boolean;
+  screenshot_on_failure?: boolean;
+  screenshot_s3_prefix?: string;
+  visual_diff_threshold?: number;
+  max_test_time_seconds?: number;
+  flaky_retry_count?: number;
+  bug_ticket_space_id?: string | null;
+  pr_review_enabled?: boolean;
+  coding_tool?: "claude_code" | "codex";
+  coding_tool_model?: string | null;
+}
+
+export interface QaConfigValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+export interface QaScreenshot {
+  name: string;
+  presigned_url: string;
+  step: string;
+  status: "pass" | "fail";
+}
+
+export interface QaScreenshotsResult {
+  screenshots: QaScreenshot[];
+}
+
+export interface QaOutput {
+  verdict: "pass" | "fail" | "flaky" | "error";
+  pr_url: string;
+  pr_branch: string;
+  ticket_id: string;
+  acceptance_criteria_count: number;
+  new_tests_written: number;
+  new_test_file: string;
+  new_tests_pass_count: number;
+  new_tests_fail_count: number;
+  regression_tests_run: number;
+  regression_tests_pass: number;
+  regression_tests_fail: number;
+  regression_failures: string[];
+  screenshots: Array<{ name: string; s3_key: string; step: string; status: string }>;
+  bug_ticket_ids: string[];
+  pr_review_action: "approved" | "changes_requested" | "none";
+  total_duration_seconds: number;
+  flaky_tests: string[];
+}
+
+export interface QaReport {
+  run_id: string;
+  verdict: string;
+  report_markdown: string;
+  generated_at: number;
+}
+
+export interface QaMetrics {
+  tested_count: number;
+  pass_rate: number;
+  bugs_found_count: number;
+  avg_duration_seconds: number;
+  flaky_test_rate: number;
+  period_start: number;
+  period_end: number;
+}
+
+export interface QaEligibleTicket {
+  ticket_id: string;
+  subject: string;
+  status: string;
+  pr_url?: string | null;
+  pr_branch?: string | null;
+  created_at: number;
+  labels: string[];
+}
+
+export interface QaEligibleTicketsResult {
+  tickets: QaEligibleTicket[];
+  count: number;
+}
+
+export interface QaWorkflowStep {
+  step_id: number;
+  type: string;
+  command?: string | null;
+  timeout_seconds: number;
+  on_failure: string;
+}
+
+export interface QaWorkflowPreview {
+  steps: QaWorkflowStep[];
+  new_test_file: string;
+  pr_branch: string;
+  total_timeout_seconds: number;
+}

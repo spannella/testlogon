@@ -12,13 +12,25 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
-_TICKET_STATUSES = ("open", "in_progress", "waiting_on_user", "done", "code_complete", "blocked")
+_TICKET_STATUSES = (
+    "open",
+    "in_progress",
+    "waiting_on_user",
+    "done",
+    "code_complete",
+    "qa_in_progress",
+    "qa_approved",
+    "blocked",
+)
 _STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "open": ("in_progress", "done", "blocked"),
     "in_progress": ("waiting_on_user", "done", "open", "code_complete", "blocked"),
     "waiting_on_user": ("in_progress", "done", "open"),
     "done": ("open",),
-    "code_complete": ("done", "in_progress", "open"),
+    # AGENT-009: code_complete tickets are picked up by the QA agent.
+    "code_complete": ("done", "in_progress", "open", "qa_in_progress"),
+    "qa_in_progress": ("qa_approved", "in_progress", "code_complete", "open"),
+    "qa_approved": ("done", "in_progress", "open"),
     "blocked": ("open", "in_progress"),
 }
 

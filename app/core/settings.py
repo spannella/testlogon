@@ -1647,5 +1647,15 @@ class Settings:
     agent_coder_enabled: bool = os.environ.get("AGENT_CODER_ENABLED", "1") not in ("0", "false", "False")
     agent_coder_execute_commands: bool = os.environ.get("AGENT_CODER_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
 
+    # QA Agent (AGENT-009). Reuses the agent_types / agent_runs tables.
+    agent_qa_enabled: bool = os.environ.get("QA_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    # When false (default, and always in E2E), the QA lifecycle never runs real
+    # shell/git/test/PR commands — the workflow is generated and driven in-memory
+    # so tests are deterministic.
+    agent_qa_execute_commands: bool = os.environ.get("QA_AGENT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
+    agent_qa_screenshot_bucket: str = os.environ.get("QA_AGENT_SCREENSHOT_BUCKET", os.environ.get("S3_BUCKET", "local-bucket"))
+    agent_qa_screenshot_url_ttl_seconds: int = int(os.environ.get("QA_AGENT_SCREENSHOT_URL_TTL_SECONDS", "900"))
+    agent_qa_max_screenshots: int = int(os.environ.get("QA_AGENT_MAX_SCREENSHOTS", "50"))
+
 
 S = Settings()
