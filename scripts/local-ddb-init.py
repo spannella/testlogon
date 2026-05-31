@@ -1773,6 +1773,13 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N"},
         ),
+        # Platform Financial Dashboard daily/live rollups (FIN-013).
+        # pk=ROLLUP#DAILY sk=YYYY-MM-DD ; pk=ROLLUP#LIVE sk=CURRENT
+        TableDef(
+            _resolve_table_name(S.platform_financial_dashboard_rollups_table_name, "financial_rollups"),
+            "pk",
+            "sk",
+        ),
     ]
 
 

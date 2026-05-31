@@ -9079,3 +9079,76 @@ class LiveQaStatsOut(BaseModel):
     total_upvotes: int
     avg_upvotes: float
     answer_rate: float
+# ---------------------------------------------------------------------------
+# Platform Financial Dashboard (FIN-013)
+# ---------------------------------------------------------------------------
+
+class PlatformFinancialKpis(BaseModel):
+    gmv_cents: int = 0
+    net_revenue_cents: int = 0
+    refunds_cents: int = 0
+    take_rate_bps: int = 0  # basis points (2000 = 20%)
+    tx_count: int = 0
+    unique_payers: int = 0
+    avg_tx_cents: int = 0
+    period: Dict[str, str] = Field(default_factory=dict)
+
+
+class PlatformFinancialTrendPoint(BaseModel):
+    date: str
+    gmv_cents: int = 0
+    net_revenue_cents: int = 0
+    tx_count: int = 0
+
+
+class PlatformFinancialTrendsResponse(BaseModel):
+    data: List[PlatformFinancialTrendPoint] = Field(default_factory=list)
+    granularity: str = "daily"
+
+
+class PlatformFinancialProviderEntry(BaseModel):
+    provider: str
+    total_cents: int = 0
+    tx_count: int = 0
+    avg_cents: int = 0
+    pct: float = 0.0
+    success_rate: float = 0.0
+
+
+class PlatformFinancialProviderResponse(BaseModel):
+    data: List[PlatformFinancialProviderEntry] = Field(default_factory=list)
+
+
+class PlatformFinancialTypeEntry(BaseModel):
+    entry_type: str
+    total_cents: int = 0
+    tx_count: int = 0
+    avg_cents: int = 0
+
+
+class PlatformFinancialTypeResponse(BaseModel):
+    data: List[PlatformFinancialTypeEntry] = Field(default_factory=list)
+
+
+class PlatformFinancialTopCreatorEntry(BaseModel):
+    user_id: str
+    revenue_cents: int = 0
+    tx_count: int = 0
+    avg_cents: int = 0
+
+
+class PlatformFinancialTopCreatorsResponse(BaseModel):
+    data: List[PlatformFinancialTopCreatorEntry] = Field(default_factory=list)
+
+
+class PlatformFinancialRollupIn(BaseModel):
+    date: Optional[str] = None  # YYYY-MM-DD; defaults to today (UTC)
+
+
+class PlatformFinancialRollupOut(BaseModel):
+    date: str
+    gmv_cents: int = 0
+    net_revenue_cents: int = 0
+    tx_count: int = 0
+    unique_payers: int = 0
+    computed_at: int = 0

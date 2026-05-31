@@ -191,6 +191,7 @@ class Tables:
     agent_cost_budgets: Any
     agent_cost_alerts: Any
     invoices: Any
+    financial_rollups: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -376,4 +377,5 @@ T = Tables(
     agent_cost_budgets=ddb.Table(S.agent_cost_budgets_table_name),
     agent_cost_alerts=ddb.Table(S.agent_cost_alerts_table_name),
     invoices=ddb.Table(S.invoices_table_name),
+    financial_rollups=ddb.Table(S.platform_financial_dashboard_rollups_table_name),
 )

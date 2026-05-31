@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.time import now_ts
+
+
+def ledger_date_for_ts(ts: int) -> str:
+    """UTC date string (YYYY-MM-DD) for a Unix timestamp. Used by FIN-013
+    to bucket ledger entries by day for platform financial aggregation."""
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d")
 
 BAL_FIELDS = [
     "owed_pending_cents",
@@ -237,6 +244,9 @@ def new_ledger_entry(
         "amount_cents": int(amount_cents),
         "state": state,
         "reason": reason,
+        # FIN-013: denormalized UTC date for platform financial dashboard
+        # aggregation. Lets cross-user scans bucket entries by day cheaply.
+        "ledger_date": ledger_date_for_ts(ts),
     }
     if extra:
         item.update(extra)
