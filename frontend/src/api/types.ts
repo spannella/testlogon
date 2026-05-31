@@ -8937,3 +8937,97 @@ export interface AdminAdModerationQueue {
   account_count: number;
   creative_count: number;
 }
+
+// ─── License Compliance (LICENSE-006) ──────────────────────────────────────
+
+export interface ComplianceStatusOut {
+  content_id: string;
+  content_type: string;
+  creator_id: string;
+  compliance_status: string;
+  issues: Array<Record<string, unknown>>;
+  last_checked_at: number | null;
+  resolved_at: number | null;
+  resolved_by: string | null;
+}
+
+export interface LicenseRefOut {
+  license_id: string;
+  license_type: string;
+  license_status: string;
+  expires_at: number | null;
+  verified_at: number | null;
+}
+
+export interface LicenseRefListOut {
+  items: LicenseRefOut[];
+}
+
+export interface ComplianceFlagOut {
+  flag_id: string;
+  content_id: string;
+  reporter_id: string;
+  reporter_type: string;
+  reason: string;
+  evidence: string;
+  status: string;
+  created_at: number;
+  resolved_at: number | null;
+  resolved_by: string | null;
+  resolution_notes: string;
+}
+
+export interface ComplianceFlagListOut {
+  items: ComplianceFlagOut[];
+  next_cursor?: string | null;
+}
+
+export interface ComplianceCheckResultOut {
+  content_id: string;
+  compliance_status: string;
+  issues: Array<Record<string, unknown>>;
+  checked_at: number;
+}
+
+export interface CreatorComplianceItemOut {
+  content_id: string;
+  content_type: string;
+  compliance_status: string;
+  issue_count: number;
+  last_checked_at: number | null;
+}
+
+export interface ComplianceSummaryOut {
+  total: number;
+  compliant: number;
+  expiring_soon: number;
+  issues: number;
+  flagged: number;
+}
+
+export interface CreatorComplianceListOut {
+  items: CreatorComplianceItemOut[];
+  summary: ComplianceSummaryOut;
+  next_cursor?: string | null;
+}
+
+export interface AdminComplianceIssueOut {
+  content_id: string;
+  creator_id: string;
+  creator_display_name: string;
+  compliance_status: string;
+  issue_type: string;
+  severity: string;
+  created_at: number;
+}
+
+export interface AdminComplianceIssueListOut {
+  items: AdminComplianceIssueOut[];
+  next_cursor?: string | null;
+}
+
+export interface ComplianceScanResultOut {
+  checked: number;
+  issues_found: number;
+  alerts_sent: number;
+}

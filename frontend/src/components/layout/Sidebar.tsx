@@ -144,6 +144,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Scheduled", i18nKey: "nav.scheduled", path: "/scheduler", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: <FilePen className="h-5 w-5" /> },
       { label: "Licenses", i18nKey: "nav.licenses", path: "/licenses", icon: <FileCheck className="h-5 w-5" /> },
+      { label: "License Compliance", i18nKey: "nav.licenseCompliance", path: "/licenses/compliance", icon: <FileCheck className="h-5 w-5" /> },
       { label: "Organizations", i18nKey: "nav.organizations", path: "/orgs", icon: <Building2 className="h-5 w-5" /> },
     ],
   },

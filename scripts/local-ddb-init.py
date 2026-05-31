@@ -1475,6 +1475,18 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
         ),
+        # License Compliance Verification (LICENSE-006)
+        TableDef(
+            _resolve_table_name(S.license_compliance_checks_table_name, "license_compliance_checks"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
+        ),
         # License Revenue (LICENSE-003)
         TableDef(
             _resolve_table_name(S.license_revenue_table_name, "license_revenue"),
