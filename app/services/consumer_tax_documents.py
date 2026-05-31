@@ -1,0 +1,474 @@
+"""Consumer Tax Documents (FIN-004).
+
+Generates annual tax documents (earnings summary / 1099-style) for creators
+from their billing ledger *credit* (earnings) entries.
+
+This module does NOT recompute or duplicate the ledger / earnings logic:
+  - It reuses ``app.services.creator_earnings.classify_entry`` to categorize
+    each credited ledger entry (tips, subscriptions, unlocks, vod_purchases,
+    other).
+  - It reuses ``app.services.receipts._render_pdf`` for text-based PDF
+    rendering (no new PDF dependency).
+  - It reads the billing ledger directly via a date-range KeyCondition on the
+    ``LEDGER#{ts}#{entry_id}`` sort key.
+
+Storage (``tax_documents`` table, single-table by user PK):
+  - Document records: pk=USER#{user_sub} sk=DOC#{year}#{doc_id}
+  - Cache rows:       pk=USER#{user_sub} sk=CACHE#{year}
+
+MONEY values are integer cents throughout.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
+
+from boto3.dynamodb.conditions import Attr, Key
+
+from app.core.aws_clients import s3_client
+from app.core.settings import S
+from app.core.tables import T
+from app.core.time import now_ts
+from app.services.billing_shared import ulidish
+from app.services.creator_earnings import classify_entry
+from app.services.profile import get_profile
+from app.services.receipts import _render_pdf
+
+logger = logging.getLogger(__name__)
+
+_s3 = s3_client()
+
+# Platform launch year — no data exists before this.
+_PLATFORM_LAUNCH_YEAR = 2024
+
+# Canonical earnings categories surfaced in tax documents.
+CATEGORIES = ("subscriptions", "tips", "unlocks", "vod_purchases", "other")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _to_int(val: Any) -> int:
+    if isinstance(val, Decimal):
+        return int(val)
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, str) and val.isdigit():
+        return int(val)
+    return 0
+
+
+def user_pk(user_sub: str) -> str:
+    return f"USER#{user_sub}"
+
+
+def year_bounds(year: int) -> tuple[int, int]:
+    """Return (start_ts_inclusive, end_ts_inclusive) for a calendar year in UTC."""
+    start = int(datetime(year, 1, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())
+    end = int(datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp())
+    return start, end
+
+
+def _fmt_date(ts: int) -> str:
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%B %d, %Y")
+
+
+def _bucket() -> str:
+    return S.filemgr_bucket or "filemgr"
+
+
+def _s3_key(user_sub: str, doc_id: str) -> str:
+    return f"tax-docs/{user_sub}/{doc_id}.pdf"
+
+
+def _store_pdf(user_sub: str, doc_id: str, pdf: bytes) -> str:
+    key = _s3_key(user_sub, doc_id)
+    try:
+        _s3.put_object(Bucket=_bucket(), Key=key, Body=pdf, ContentType="application/pdf")
+    except Exception:  # pragma: no cover - best effort in dev
+        logger.warning("tax doc PDF upload failed for %s", doc_id, exc_info=True)
+    return key
+
+
+def _pdf_url(s3_key: str) -> Optional[str]:
+    if S.dev_mode:
+        return f"{S.public_base_url}/mock/s3/{_bucket()}/{s3_key}"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Ledger query (credit/earnings entries within a date range)
+# ---------------------------------------------------------------------------
+
+def _query_credit_entries(*, user_sub: str, date_from: int, date_to: int) -> List[Dict[str, Any]]:
+    """Query billing ledger *credit* entries for a user within [date_from, date_to].
+
+    The ledger SK format is ``LEDGER#{ts}#{entry_id}``. The ``~`` upper-bound
+    suffix ensures every entry within the ``date_to`` second is included
+    (ASCII ``~`` sorts after any entry-id character).
+
+    Loops on ``LastEvaluatedKey`` because DDB applies the type filter only
+    after fetching a 1MB page.
+    """
+    pk = user_pk(user_sub)
+    key_cond = Key("pk").eq(pk) & Key("sk").between(
+        f"LEDGER#{date_from}#", f"LEDGER#{date_to}#~"
+    )
+    query_kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": key_cond,
+        "FilterExpression": Attr("type").eq("credit"),
+        "Limit": 500,
+    }
+    collected: List[Dict[str, Any]] = []
+    for _ in range(40):  # safety cap (~20k entries)
+        resp = T.billing.query(**query_kwargs)
+        collected.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        query_kwargs["ExclusiveStartKey"] = last_key
+    return collected
+
+
+# ---------------------------------------------------------------------------
+# Summary computation
+# ---------------------------------------------------------------------------
+
+def compute_earnings_summary(
+    *,
+    user_sub: str,
+    date_from: int,
+    date_to: int,
+) -> Dict[str, Any]:
+    """Aggregate credited earnings by category for a date range.
+
+    Returns a dict matching ``SpendingSummaryOut`` (categories list of
+    {category, total_cents, transaction_count}, grand_total_cents,
+    transaction_count, currency, date_from, date_to).
+    """
+    entries = _query_credit_entries(user_sub=user_sub, date_from=date_from, date_to=date_to)
+
+    totals: Dict[str, int] = {c: 0 for c in CATEGORIES}
+    counts: Dict[str, int] = {c: 0 for c in CATEGORIES}
+    grand_total = 0
+    txn_count = 0
+    currency = "usd"
+
+    for entry in entries:
+        amount = _to_int(entry.get("amount_cents", 0))
+        category = classify_entry(entry)
+        if category not in totals:
+            category = "other"
+        totals[category] += amount
+        counts[category] += 1
+        grand_total += amount
+        txn_count += 1
+        cur = entry.get("currency")
+        if cur:
+            currency = str(cur).lower()
+
+    categories = [
+        {"category": c, "total_cents": totals[c], "transaction_count": counts[c]}
+        for c in CATEGORIES
+    ]
+
+    logger.info(
+        "tax_earnings_summary_computed",
+        extra={
+            "user_sub": user_sub,
+            "date_from": date_from,
+            "date_to": date_to,
+            "grand_total_cents": grand_total,
+            "transaction_count": txn_count,
+        },
+    )
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "categories": categories,
+        "grand_total_cents": grand_total,
+        "transaction_count": txn_count,
+        "currency": currency,
+    }
+
+
+def get_annual_summary(
+    *,
+    user_sub: str,
+    year: int,
+    use_cache: bool = True,
+) -> Dict[str, Any]:
+    """Get or compute the annual earnings summary for a year.
+
+    Past years are immutable and cached in ``CACHE#{year}``; the current year
+    is always computed fresh.
+    """
+    current_year = datetime.now(timezone.utc).year
+    date_from, date_to = year_bounds(year)
+    is_past_year = year < current_year
+
+    if use_cache and is_past_year:
+        cached = T.tax_documents.get_item(
+            Key={"pk": user_pk(user_sub), "sk": f"CACHE#{year}"}
+        ).get("Item")
+        if cached and cached.get("categories"):
+            return _cache_to_summary(cached, date_from, date_to)
+
+    summary = compute_earnings_summary(
+        user_sub=user_sub, date_from=date_from, date_to=date_to
+    )
+
+    if is_past_year:
+        _write_cache(user_sub=user_sub, year=year, summary=summary)
+
+    return summary
+
+
+def _cache_to_summary(item: Dict[str, Any], date_from: int, date_to: int) -> Dict[str, Any]:
+    raw = item.get("categories") or {}
+    categories = []
+    for c in CATEGORIES:
+        cat = raw.get(c) or {}
+        categories.append(
+            {
+                "category": c,
+                "total_cents": _to_int(cat.get("total_cents", 0)),
+                "transaction_count": _to_int(cat.get("count", cat.get("transaction_count", 0))),
+            }
+        )
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "categories": categories,
+        "grand_total_cents": _to_int(item.get("grand_total_cents", 0)),
+        "transaction_count": _to_int(item.get("transaction_count", 0)),
+        "currency": str(item.get("currency", "usd")),
+    }
+
+
+def _write_cache(*, user_sub: str, year: int, summary: Dict[str, Any]) -> None:
+    categories_map = {
+        c["category"]: {
+            "total_cents": int(c["total_cents"]),
+            "count": int(c["transaction_count"]),
+        }
+        for c in summary["categories"]
+    }
+    T.tax_documents.put_item(
+        Item={
+            "pk": user_pk(user_sub),
+            "sk": f"CACHE#{year}",
+            "year": int(year),
+            "categories": categories_map,
+            "grand_total_cents": int(summary["grand_total_cents"]),
+            "transaction_count": int(summary["transaction_count"]),
+            "currency": summary.get("currency", "usd"),
+            "computed_at": now_ts(),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Year-over-year comparison
+# ---------------------------------------------------------------------------
+
+def get_year_comparison(*, user_sub: str, year: int) -> Dict[str, Any]:
+    previous_year = year - 1
+    current_summary = get_annual_summary(user_sub=user_sub, year=year)
+    previous_summary = get_annual_summary(user_sub=user_sub, year=previous_year)
+
+    cur_total = current_summary["grand_total_cents"]
+    prev_total = previous_summary["grand_total_cents"]
+    if prev_total > 0:
+        change_pct = round((cur_total - prev_total) / prev_total * 100.0, 2)
+    elif cur_total > 0:
+        change_pct = 100.0
+    else:
+        change_pct = 0.0
+
+    return {
+        "current_year": year,
+        "previous_year": previous_year,
+        "current_summary": current_summary,
+        "previous_summary": previous_summary,
+        "change_pct": change_pct,
+    }
+
+
+# ---------------------------------------------------------------------------
+# PDF generation
+# ---------------------------------------------------------------------------
+
+def generate_tax_summary_pdf(
+    *,
+    user_sub: str,
+    summary: Dict[str, Any],
+    year: Optional[int] = None,
+) -> bytes:
+    """Render an earnings tax summary to PDF bytes (reuses receipts._render_pdf)."""
+    profile = get_profile(user_sub)
+    name = profile.get("display_name") or user_sub
+    email = profile.get("displayed_email") or ""
+
+    date_from = int(summary["date_from"])
+    date_to = int(summary["date_to"])
+
+    lines: List[str] = [
+        "ANNUAL EARNINGS TAX SUMMARY",
+        "-" * 52,
+    ]
+    if year is not None:
+        lines.append(f"Tax Year       : {year}")
+    lines.append(f"Period         : {_fmt_date(date_from)} - {_fmt_date(date_to)}")
+    lines.append(f"Prepared For   : {name}")
+    if email:
+        lines.append(f"Email          : {email}")
+    lines.append(f"Generated      : {_fmt_date(now_ts())}")
+    lines.append("")
+    lines.append(f"{'Category':<20}{'Count':>8}{'Total':>14}")
+    lines.append("-" * 52)
+
+    label_map = {
+        "subscriptions": "Subscriptions",
+        "tips": "Tips",
+        "unlocks": "Unlocks",
+        "vod_purchases": "VOD Purchases",
+        "other": "Other",
+    }
+    for cat in summary["categories"]:
+        label = label_map.get(cat["category"], cat["category"].title())
+        count = int(cat["transaction_count"])
+        total = f"${int(cat['total_cents']) / 100:.2f}"
+        lines.append(f"{label:<20}{count:>8}{total:>14}")
+
+    lines.append("-" * 52)
+    grand = f"${int(summary['grand_total_cents']) / 100:.2f}"
+    lines.append(f"{'GRAND TOTAL':<20}{int(summary['transaction_count']):>8}{grand:>14}")
+    lines.append("")
+    lines.append("This document is for informational purposes only and does")
+    lines.append("not constitute tax advice. Consult a tax professional for")
+    lines.append("guidance on income reporting and deductibility.")
+
+    return _render_pdf(lines)
+
+
+# ---------------------------------------------------------------------------
+# Document generation / persistence
+# ---------------------------------------------------------------------------
+
+def _doc_record_out(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "doc_id": item.get("doc_id", ""),
+        "doc_type": item.get("doc_type", "annual_summary"),
+        "year": _to_int(item["year"]) if item.get("year") is not None else None,
+        "date_from": _to_int(item.get("date_from", 0)),
+        "date_to": _to_int(item.get("date_to", 0)),
+        "grand_total_cents": _to_int(item.get("grand_total_cents", 0)),
+        "transaction_count": _to_int(item.get("transaction_count", 0)),
+        "currency": str(item.get("currency", "usd")),
+        "created_at": _to_int(item.get("created_at", 0)),
+    }
+
+
+def generate_tax_document(
+    *,
+    user_sub: str,
+    year: int,
+    regenerate: bool = False,
+) -> Dict[str, Any]:
+    """Generate (or regenerate) an annual tax document, render its PDF, and persist it.
+
+    Enforces the configurable minimum earnings threshold. Returns the document
+    record dict. Raises ``ValueError`` with a code when the threshold is not met.
+    """
+    summary = get_annual_summary(user_sub=user_sub, year=year, use_cache=not regenerate)
+
+    min_cents = int(S.tax_documents_min_earnings_cents)
+    if summary["grand_total_cents"] < min_cents:
+        raise ValueError(
+            f"below_threshold:Earnings ${summary['grand_total_cents'] / 100:.2f} "
+            f"are below the ${min_cents / 100:.2f} minimum required to issue a tax document."
+        )
+
+    date_from, date_to = year_bounds(year)
+
+    existing = _find_doc_for_year(user_sub=user_sub, year=year)
+    if existing and not regenerate:
+        return _doc_record_out(existing)
+
+    doc_id = existing.get("doc_id") if existing else f"td_{ulidish()}"
+    pdf = generate_tax_summary_pdf(user_sub=user_sub, summary=summary, year=year)
+    s3_key = _store_pdf(user_sub, doc_id, pdf)
+
+    categories_map = {
+        c["category"]: {
+            "total_cents": int(c["total_cents"]),
+            "count": int(c["transaction_count"]),
+        }
+        for c in summary["categories"]
+    }
+    item = {
+        "pk": user_pk(user_sub),
+        "sk": f"DOC#{year}#{doc_id}",
+        "doc_id": doc_id,
+        "user_sub": user_sub,
+        "doc_type": "annual_summary",
+        "year": int(year),
+        "date_from": int(date_from),
+        "date_to": int(date_to),
+        "categories": categories_map,
+        "grand_total_cents": int(summary["grand_total_cents"]),
+        "transaction_count": int(summary["transaction_count"]),
+        "currency": summary.get("currency", "usd"),
+        "s3_key": s3_key,
+        "created_at": now_ts(),
+    }
+    T.tax_documents.put_item(Item=item)
+
+    logger.info(
+        "tax_document_generated",
+        extra={
+            "user_sub": user_sub,
+            "year": year,
+            "doc_id": doc_id,
+            "regenerate": regenerate,
+            "grand_total_cents": summary["grand_total_cents"],
+        },
+    )
+    return _doc_record_out(item)
+
+
+def _find_doc_for_year(*, user_sub: str, year: int) -> Optional[Dict[str, Any]]:
+    resp = T.tax_documents.query(
+        KeyConditionExpression=Key("pk").eq(user_pk(user_sub))
+        & Key("sk").begins_with(f"DOC#{year}#"),
+    )
+    items = resp.get("Items", [])
+    if not items:
+        return None
+    # Newest first.
+    items.sort(key=lambda i: _to_int(i.get("created_at", 0)), reverse=True)
+    return items[0]
+
+
+def list_tax_documents(*, user_sub: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """List previously generated tax documents for a user (newest first)."""
+    resp = T.tax_documents.query(
+        KeyConditionExpression=Key("pk").eq(user_pk(user_sub))
+        & Key("sk").begins_with("DOC#"),
+        Limit=limit * 2,
+    )
+    items = [_doc_record_out(i) for i in resp.get("Items", [])]
+    items.sort(key=lambda d: (d.get("year") or 0, d.get("created_at") or 0), reverse=True)
+    return items[:limit]
+
+
+def download_tax_document_pdf(*, user_sub: str, year: int) -> bytes:
+    """Return PDF bytes for the given year's tax document, generating fresh if needed."""
+    summary = get_annual_summary(user_sub=user_sub, year=year)
+    return generate_tax_summary_pdf(user_sub=user_sub, summary=summary, year=year)

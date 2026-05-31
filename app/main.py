@@ -668,6 +668,12 @@ def create_app() -> FastAPI:
     from app.routers.invoices import invoices_router, invoices_admin_router
     app.include_router(invoices_router)
     app.include_router(invoices_admin_router)
+    from app.routers.consumer_tax_documents import (
+        consumer_tax_documents_router,
+        consumer_tax_documents_admin_router,
+    )
+    app.include_router(consumer_tax_documents_router)
+    app.include_router(consumer_tax_documents_admin_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)

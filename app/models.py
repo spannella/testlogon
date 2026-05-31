@@ -9821,3 +9821,47 @@ class InstanceMonitoringIngestOut(BaseModel):
     ts: int
     health_status: str
     stored: bool = True
+# -- Consumer Tax Documents (FIN-004) --
+
+class SpendingCategoryOut(BaseModel):
+    category: str
+    total_cents: int = 0
+    transaction_count: int = 0
+
+
+class SpendingSummaryOut(BaseModel):
+    date_from: int
+    date_to: int
+    categories: List[SpendingCategoryOut] = Field(default_factory=list)
+    grand_total_cents: int = 0
+    transaction_count: int = 0
+    currency: str = "usd"
+
+
+class YearComparisonOut(BaseModel):
+    current_year: int
+    previous_year: int
+    current_summary: SpendingSummaryOut
+    previous_summary: SpendingSummaryOut
+    change_pct: float = 0.0
+
+
+class TaxDocumentOut(BaseModel):
+    doc_id: str
+    doc_type: str = "annual_summary"
+    year: Optional[int] = None
+    date_from: int = 0
+    date_to: int = 0
+    grand_total_cents: int = 0
+    transaction_count: int = 0
+    currency: str = "usd"
+    created_at: int = 0
+
+
+class TaxDocumentListOut(BaseModel):
+    documents: List[TaxDocumentOut] = Field(default_factory=list)
+
+
+class GenerateTaxDocumentIn(BaseModel):
+    year: int
+    regenerate: bool = False

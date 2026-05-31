@@ -1871,6 +1871,15 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # FIN-004: Consumer Tax Documents.
+        # Doc records: pk=USER#{user_sub} sk=DOC#{year}#{doc_id}
+        # Cache rows:  pk=USER#{user_sub} sk=CACHE#{year}
+        # All access is by user PK; no GSI needed.
+        TableDef(
+            _resolve_table_name(S.tax_documents_table_name, "tax_documents"),
+            "pk",
+            "sk",
+        ),
     ]
 
 

@@ -1937,6 +1937,16 @@ class Settings:
     invoices_table_name: str = os.environ.get("INVOICES_TABLE_NAME", "invoices")
     invoices_enabled: bool = os.environ.get("INVOICES_ENABLED", "true").lower() not in ("0", "false")
     invoices_tax_bps: int = int(os.environ.get("INVOICES_TAX_BPS", "0"))
+    # FIN-004: Consumer Tax Documents (annual creator earnings / 1099-style summaries)
+    tax_documents_table_name: str = os.environ.get("TAX_DOCUMENTS_TABLE_NAME", "tax_documents")
+    tax_documents_enabled: bool = os.environ.get("TAX_DOCUMENTS_ENABLED", "true").lower() not in (
+        "0",
+        "false",
+    )
+    # Minimum yearly credited earnings (cents) required to issue a tax document.
+    tax_documents_min_earnings_cents: int = int(
+        os.environ.get("TAX_DOCUMENTS_MIN_EARNINGS_CENTS", "0")
+    )
     # FIN-014: Payment Provider Health monitoring. Records per-provider
     # success/failure/latency of payment operations, computes health status,
     # error rates, and a recent-incident timeline.

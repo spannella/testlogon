@@ -8787,3 +8787,44 @@ export interface InstanceMonitoringIngestOut {
   health_status: InstanceHealthStatus;
   stored: boolean;
 }
+
+// -- Consumer Tax Documents (FIN-004) --
+
+export interface SpendingCategory {
+  category: string;
+  total_cents: number;
+  transaction_count: number;
+}
+
+export interface SpendingSummary {
+  date_from: number;
+  date_to: number;
+  categories: SpendingCategory[];
+  grand_total_cents: number;
+  transaction_count: number;
+  currency: string;
+}
+
+export interface YearComparison {
+  current_year: number;
+  previous_year: number;
+  current_summary: SpendingSummary;
+  previous_summary: SpendingSummary;
+  change_pct: number;
+}
+
+export interface TaxDocument {
+  doc_id: string;
+  doc_type: string;
+  year?: number;
+  date_from: number;
+  date_to: number;
+  grand_total_cents: number;
+  transaction_count: number;
+  currency: string;
+  created_at: number;
+}
+
+export interface TaxDocumentList {
+  documents: TaxDocument[];
+}
