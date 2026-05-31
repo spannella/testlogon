@@ -3878,3 +3878,162 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ── Advertiser Accounts & Campaigns (ADS-001) ──────────────────────
+
+
+class AdAccountCreateIn(BaseModel):
+    company_name: str = Field(..., min_length=1, max_length=200)
+    billing_email: str = Field(..., min_length=1, max_length=320)
+
+
+class AdAccountReviewIn(BaseModel):
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    notes: Optional[str] = None
+
+
+class CampaignCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    objective: str = Field(default="awareness")
+    budget_cents: int = Field(..., ge=100)
+    budget_type: str = Field(default="lifetime", pattern="^(lifetime|daily)$")
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class CampaignUpdateIn(BaseModel):
+    name: Optional[str] = None
+    objective: Optional[str] = None
+    budget_cents: Optional[int] = None
+    budget_type: Optional[str] = None
+    status: Optional[str] = None
+    bid_cpm_cents: Optional[int] = None
+
+
+class CampaignReviewIn(BaseModel):
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    notes: Optional[str] = None
+
+
+# ── Ad Creatives (ADS-002) ──────────────────────────────────────────
+
+
+class CreativeCreateIn(BaseModel):
+    format: str = Field(..., pattern="^(native_post|image|video|carousel)$")
+    title: str = Field(..., min_length=1, max_length=200)
+    headline: Optional[str] = None
+    body_text: Optional[str] = None
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    alt_text: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_seconds: Optional[int] = None
+    skip_after_seconds: Optional[int] = None
+    rotation_weight: int = Field(default=50, ge=0, le=100)
+    promo_code_id: Optional[str] = None
+    affiliate_link_id: Optional[str] = None
+
+
+class CreativeUpdateIn(BaseModel):
+    title: Optional[str] = None
+    headline: Optional[str] = None
+    body_text: Optional[str] = None
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    rotation_weight: Optional[int] = None
+    skip_after_seconds: Optional[int] = None
+
+
+class CreativeReviewIn(BaseModel):
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    notes: Optional[str] = None
+
+
+# ── Ad Targeting (ADS-003) ──────────────────────────────────────────
+
+
+class TargetingCreateIn(BaseModel):
+    name: str = Field(default="Default targeting")
+    age_ranges: Optional[List[str]] = None
+    genders: Optional[List[str]] = None
+    country_codes: Optional[List[str]] = None
+    regions: Optional[List[str]] = None
+    cities: Optional[List[str]] = None
+    content_categories: Optional[List[str]] = None
+    active_hours: Optional[List[int]] = None
+    device_types: Optional[List[str]] = None
+    new_user_only: bool = False
+    creator_ids: Optional[List[str]] = None
+    content_types: Optional[List[str]] = None
+    exclude_creator_ids: Optional[List[str]] = None
+    exclude_categories: Optional[List[str]] = None
+
+
+class CreatorAdSettingsIn(BaseModel):
+    allow_ads: Optional[bool] = None
+    allowed_ad_categories: Optional[List[str]] = None
+    min_cpm_cents: Optional[int] = None
+
+
+# ── Ad Serving (ADS-004) ───────────────────────────────────────────
+
+
+class AdServeRequestIn(BaseModel):
+    """Request body for POST /ui/ads/serve."""
+    surface: str = Field(..., pattern="^(newsfeed|broadcast|vod)$",
+                         description="Ad surface: newsfeed, broadcast, or vod")
+    content_type: str = Field(default="",
+                              description="Content type: post, broadcast_session, video")
+    creator_id: str = Field(..., min_length=1,
+                            description="Creator who owns the content being viewed")
+    content_id: str = Field(..., min_length=1,
+                            description="ID of the content item")
+    slot_type: str = Field(default="sponsored_post",
+                           pattern="^(pre_roll|mid_roll|overlay|sponsored_post|broadcast_preroll|broadcast_midroll)$",
+                           description="Type of ad slot within the surface")
+    user_context: Optional[Dict[str, Any]] = Field(default=None,
+                                                    description="Additional viewer context for targeting")
+
+
+class AdServeResponseOut(BaseModel):
+    """Response from POST /ui/ads/serve."""
+    filled: bool
+    creative_id: Optional[str] = None
+    format: Optional[str] = None
+    title: str = ""
+    headline: Optional[str] = None
+    body_text: Optional[str] = None
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    image_url: Optional[str] = None
+    video_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    skip_after_seconds: int = 5
+    impression_url: Optional[str] = None
+    click_url: Optional[str] = None
+    skip_url: Optional[str] = None
+    is_house_ad: bool = False
+    campaign_id: Optional[str] = None
+    promo_code_id: Optional[str] = None
+    affiliate_link_id: Optional[str] = None
+    fill_reason: Optional[str] = None
+
+
+class AdTrackEventIn(BaseModel):
+    """Request body for POST /ui/ads/track."""
+    event: str = Field(..., pattern="^(impression|click|skip|complete)$")
+    creative_id: str = Field(..., min_length=1)
+    campaign_id: str = Field(..., min_length=1)
+    account_id: str = Field(..., min_length=1)
+    surface: str = Field(..., min_length=1)
+    slot_type: str = Field(..., min_length=1)
+    content_id: str = Field(..., min_length=1)
+    creator_id: str = Field(..., min_length=1)
+
+
+class AdTrackEventOut(BaseModel):
+    """Response from POST /ui/ads/track."""
+    ok: bool
+    event_id: str = ""

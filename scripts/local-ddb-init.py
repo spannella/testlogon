@@ -838,6 +838,57 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Advertiser Accounts (ADS-001)
+        TableDef(
+            os.environ.get("DDB_AD_ACCOUNTS", "AdAccounts"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner", "partition_key": "owner_sub", "sort_key": "created_at"},
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Ad Campaigns (ADS-001)
+        TableDef(
+            os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByCampaignId", "partition_key": "campaign_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Ad Creatives (ADS-002)
+        TableDef(
+            os.environ.get("DDB_AD_CREATIVES", "AdCreatives"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByFormat", "partition_key": "format", "sort_key": "created_at"},
+                {"index_name": "ByCreativeId", "partition_key": "creative_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Ad Targeting (ADS-003)
+        TableDef(
+            os.environ.get("DDB_AD_TARGETING", "AdTargeting"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Ad Frequency Caps (ADS-004)
+        TableDef(
+            os.environ.get("DDB_AD_FREQUENCY_CAPS", "AdFrequencyCaps"),
+            "pk",
+            "sk",
+            ttl_attribute="expires_at",
+        ),
         # Rate limiting (PLATFORM-001)
         TableDef(
             _resolve_table_name(S.rate_limits_table_name, "rate_limits"),

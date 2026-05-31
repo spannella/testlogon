@@ -91,6 +91,11 @@ class Tables:
     video_views: Any
     video_likes: Any
     ad_impressions: Any
+    ad_accounts: Any
+    ad_campaigns: Any
+    ad_creatives: Any
+    ad_targeting: Any
+    ad_frequency_caps: Any
     call_billing_ledger: Any
     rate_limits: Any
     rate_limit_events: Any
@@ -215,6 +220,11 @@ T = Tables(
     video_views=ddb.Table(S.video_views_table_name),
     video_likes=ddb.Table(S.video_likes_table_name),
     ad_impressions=ddb.Table(S.ad_impressions_table_name),
+    ad_accounts=ddb.Table(S.ad_accounts_table_name),
+    ad_campaigns=ddb.Table(S.ad_campaigns_table_name),
+    ad_creatives=ddb.Table(S.ad_creatives_table_name),
+    ad_targeting=ddb.Table(S.ad_targeting_table_name),
+    ad_frequency_caps=ddb.Table(S.ad_frequency_caps_table_name),
     call_billing_ledger=ddb.Table(S.call_billing_ledger_table_name),
     rate_limits=ddb.Table(S.rate_limits_table_name),
     rate_limit_events=ddb.Table(S.rate_limit_events_table_name),

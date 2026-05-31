@@ -1240,6 +1240,16 @@ class Settings:
     vod_ads_enabled: bool = os.environ.get("VOD_ADS_ENABLED", "1") not in ("0", "false", "False")
     vod_ad_cpm_cents: int = int(os.environ.get("VOD_AD_CPM_CENTS", "500"))
     ad_impressions_table_name: str = os.environ.get("DDB_AD_IMPRESSIONS", "AdImpressions")
+    ad_accounts_table_name: str = os.environ.get("DDB_AD_ACCOUNTS", "AdAccounts")
+    ad_campaigns_table_name: str = os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns")
+    ad_creatives_table_name: str = os.environ.get("DDB_AD_CREATIVES", "AdCreatives")
+    ad_targeting_table_name: str = os.environ.get("DDB_AD_TARGETING", "AdTargeting")
+
+    # Ad Serving Engine (ADS-004)
+    ad_serving_enabled: bool = os.environ.get("AD_SERVING_ENABLED", "1") not in ("0", "false", "False")
+    ad_frequency_cap_hourly: int = int(os.environ.get("AD_FREQUENCY_CAP_HOURLY", "3"))
+    ad_frequency_cap_daily: int = int(os.environ.get("AD_FREQUENCY_CAP_DAILY", "10"))
+    ad_frequency_caps_table_name: str = os.environ.get("DDB_AD_FREQUENCY_CAPS", "AdFrequencyCaps")
 
     # View-Once / Rental Access (VOD-019)
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")

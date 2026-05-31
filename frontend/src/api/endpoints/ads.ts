@@ -87,3 +87,26 @@ export const setAdConfig = (
   body: AdConfigRequest,
 ): Promise<AdConfigResponse> =>
   api.patch<AdConfigResponse>(`/ui/videos/${videoId}/ad-config`, body);
+
+
+// ─── Ad Serving (ADS-004) ──────────────────────────────────────────────────
+
+import type {
+  AdServeRequest,
+  AdServeResponse,
+  AdTrackRequest,
+  AdTrackResponse,
+  AdServingStats,
+} from "../types";
+
+/** Request an ad for the given surface and context */
+export const serveAd = (data: AdServeRequest): Promise<AdServeResponse> =>
+  api.post<AdServeResponse>("/ui/ads/serve", data);
+
+/** Track an ad event (impression, click, skip, complete) */
+export const trackAdEvent = (data: AdTrackRequest): Promise<AdTrackResponse> =>
+  api.post<AdTrackResponse>("/ui/ads/track", data);
+
+/** Get serving stats for a campaign (owner only) */
+export const getServingStats = (campaignId: string): Promise<AdServingStats> =>
+  api.get<AdServingStats>(`/ui/ads/stats/${campaignId}`);

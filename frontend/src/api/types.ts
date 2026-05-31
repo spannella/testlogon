@@ -4492,3 +4492,113 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ─── Advertiser Accounts & Campaigns (ADS-001) ──────────────────────
+
+export interface AdAccount {
+  account_id: string;
+  owner_sub: string;
+  company_name: string;
+  billing_email: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface Campaign {
+  campaign_id: string;
+  account_id: string;
+  name: string;
+  objective: string;
+  budget_cents: number;
+  budget_type: string;
+  daily_budget_cents: number;
+  spent_today_cents: number;
+  lifetime_spent_cents: number;
+  bid_cpm_cents: number;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+// ─── Ad Creatives (ADS-002) ─────────────────────────────────────────
+
+export interface AdCreative {
+  creative_id: string;
+  campaign_id: string;
+  account_id: string;
+  format: string;
+  title: string;
+  headline?: string;
+  body_text?: string;
+  cta_text?: string;
+  cta_url?: string;
+  image_url?: string;
+  video_url?: string;
+  thumbnail_url?: string;
+  skip_after_seconds: number;
+  rotation_weight: number;
+  status: string;
+  promo_code_id?: string;
+  affiliate_link_id?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+// ─── Ad Serving (ADS-004) ───────────────────────────────────────────
+
+export interface AdServeRequest {
+  surface: "newsfeed" | "broadcast" | "vod";
+  content_type?: string;
+  creator_id: string;
+  content_id: string;
+  slot_type?: string;
+  user_context?: Record<string, unknown>;
+}
+
+export interface AdServeResponse {
+  filled: boolean;
+  creative_id?: string;
+  format?: string;
+  title?: string;
+  headline?: string | null;
+  body_text?: string | null;
+  cta_text?: string | null;
+  cta_url?: string | null;
+  image_url?: string | null;
+  video_url?: string | null;
+  thumbnail_url?: string | null;
+  skip_after_seconds?: number;
+  impression_url?: string;
+  click_url?: string;
+  skip_url?: string;
+  is_house_ad: boolean;
+  campaign_id?: string;
+  promo_code_id?: string | null;
+  affiliate_link_id?: string | null;
+  fill_reason?: string;
+}
+
+export interface AdTrackRequest {
+  event: "impression" | "click" | "skip" | "complete";
+  creative_id: string;
+  campaign_id: string;
+  account_id: string;
+  surface: string;
+  slot_type: string;
+  content_id: string;
+  creator_id: string;
+}
+
+export interface AdTrackResponse {
+  ok: boolean;
+  event_id: string;
+}
+
+export interface AdServingStats {
+  campaign_id: string;
+  impressions: number;
+  clicks: number;
+  skips: number;
+  ctr_pct: number;
+}
