@@ -624,6 +624,8 @@ def create_app() -> FastAPI:
     from app.routers.compute_billing import router as compute_billing_router
     app.include_router(compute_billing_router)
     app.include_router(admin_compute_router)
+    from app.routers.admin_ad_platform import admin_ad_platform_router
+    app.include_router(admin_ad_platform_router)
     app.include_router(platform_financial_dashboard_router)
     from app.routers.payment_provider_health import payment_provider_health_router
     app.include_router(payment_provider_health_router)

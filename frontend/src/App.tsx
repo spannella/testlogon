@@ -82,6 +82,7 @@ const AdminComputeDashboard = lazy(() => import("@/pages/admin/AdminComputeDashb
 const FinancialDashboard = lazy(() => import("@/pages/admin/financials/FinancialDashboard"));
 const PaymentHealthDashboard = lazy(() => import("@/pages/admin/paymentHealth/PaymentHealthDashboard"));
 const AdFraudDashboard = lazy(() => import("@/pages/admin/ads/AdFraudDashboard"));
+const AdPlatformDashboard = lazy(() => import("@/pages/admin/AdPlatformDashboard"));
 const GalleryPage = lazy(() => import("@/pages/gallery/GalleryPage"));
 const GalleryVideoDetailPage = lazy(() => import("@/pages/gallery/VideoDetailPage"));
 const AnalyticsPage = lazy(() => import("@/pages/analytics/AnalyticsPage"));
@@ -303,6 +304,7 @@ export default function App() {
           <Route path="admin/financials" element={<FinancialDashboard />} />
           <Route path="admin/payment-health" element={<PaymentHealthDashboard />} />
           <Route path="admin/ads/fraud" element={<AdFraudDashboard />} />
+          <Route path="admin/ad-platform" element={<AdPlatformDashboard />} />
           <Route path="admin/audit-exports" element={<AuditExportPage />} />
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />

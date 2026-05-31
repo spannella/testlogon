@@ -1312,6 +1312,9 @@ class Settings:
     ad_campaigns_table_name: str = os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns")
     ad_creatives_table_name: str = os.environ.get("DDB_AD_CREATIVES", "AdCreatives")
     ad_targeting_table_name: str = os.environ.get("DDB_AD_TARGETING", "AdTargeting")  # ADS-003
+    # Admin Ad Platform Management (ADS-018) — moderation audit log
+    ad_moderation_log_table_name: str = os.environ.get("DDB_AD_MODERATION_LOG", "AdModerationLog")
+    admin_ad_platform_enabled: bool = os.environ.get("ADMIN_AD_PLATFORM_ENABLED", "1") not in ("0", "false", "False")
 
     # Ad Serving Engine (ADS-004)
     ad_serving_enabled: bool = os.environ.get("AD_SERVING_ENABLED", "1") not in ("0", "false", "False")

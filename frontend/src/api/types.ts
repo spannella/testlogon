@@ -8828,3 +8828,112 @@ export interface TaxDocument {
 export interface TaxDocumentList {
   documents: TaxDocument[];
 }
+
+// ── Admin Ad Platform Management (ADS-018) ──────────────────────────────────
+
+export interface AdminAdAccount {
+  account_id: string;
+  owner_sub: string;
+  company_name: string;
+  billing_email: string;
+  status: string;
+  balance_cents: number;
+  lifetime_spend_cents: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AdminAdCampaign {
+  campaign_id: string;
+  account_id: string;
+  name: string;
+  objective: string;
+  status: string;
+  budget_cents: number;
+  lifetime_spent_cents: number;
+  created_at: number;
+}
+
+export interface AdminAdCreative {
+  creative_id: string;
+  campaign_id: string;
+  account_id: string;
+  format: string;
+  title: string;
+  status: string;
+  created_at: number;
+}
+
+export interface AdminAdAccountDetail {
+  account: AdminAdAccount;
+  campaigns: AdminAdCampaign[];
+  campaign_count: number;
+}
+
+export interface AdminAdModerationAction {
+  action: "approve" | "reject" | "suspend";
+  reason?: string;
+  notes?: string;
+}
+
+export interface AdminAdModerationResult {
+  ok: boolean;
+  item_type: string;
+  item_id: string;
+  status: string;
+}
+
+export interface AdminAdModerationEvent {
+  event_id: string;
+  item_type: string;
+  item_id: string;
+  action: string;
+  admin_sub: string;
+  reason: string;
+  notes: string;
+  prev_status: string;
+  new_status: string;
+  created_at: number;
+}
+
+export interface AdminAdPlatformMetrics {
+  total_spend_cents: number;
+  platform_revenue_cents: number;
+  creator_share_cents: number;
+  revenue_share_percent: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  effective_cpm_cents: number;
+  account_count: number;
+  campaign_count: number;
+  creative_count: number;
+  accounts_by_status: Record<string, number>;
+  campaigns_by_status: Record<string, number>;
+  creatives_by_status: Record<string, number>;
+  pending_account_reviews: number;
+  pending_creative_reviews: number;
+}
+
+export interface AdminAdRevenuePoint {
+  month: string;
+  spend_cents: number;
+  platform_revenue_cents: number;
+  creator_share_cents: number;
+  impressions: number;
+  clicks: number;
+}
+
+export interface AdminAdTopSpender {
+  account_id: string;
+  company_name: string;
+  owner_sub: string;
+  spend_cents: number;
+}
+
+export interface AdminAdModerationQueue {
+  accounts: AdminAdAccount[];
+  creatives: AdminAdCreative[];
+  account_count: number;
+  creative_count: number;
+}

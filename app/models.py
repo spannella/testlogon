@@ -9865,3 +9865,104 @@ class TaxDocumentListOut(BaseModel):
 class GenerateTaxDocumentIn(BaseModel):
     year: int
     regenerate: bool = False
+# ── Admin Ad Platform Management (ADS-018) ──────────────────────────────────
+
+class AdminAdAccountOut(BaseModel):
+    """Advertiser account as seen by a platform admin (cross-user view)."""
+    account_id: str
+    owner_sub: str = ""
+    company_name: str = ""
+    billing_email: str = ""
+    status: str = "pending_review"
+    balance_cents: int = 0
+    lifetime_spend_cents: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class AdminAdCampaignOut(BaseModel):
+    campaign_id: str
+    account_id: str = ""
+    name: str = ""
+    objective: str = ""
+    status: str = "draft"
+    budget_cents: int = 0
+    lifetime_spent_cents: int = 0
+    created_at: int = 0
+
+
+class AdminAdCreativeOut(BaseModel):
+    creative_id: str
+    campaign_id: str = ""
+    account_id: str = ""
+    format: str = ""
+    title: str = ""
+    status: str = "draft"
+    created_at: int = 0
+
+
+class AdminAdAccountDetailOut(BaseModel):
+    account: AdminAdAccountOut
+    campaigns: List[AdminAdCampaignOut] = Field(default_factory=list)
+    campaign_count: int = 0
+
+
+class AdminAdModerationAction(BaseModel):
+    action: str = Field(pattern=r"^(approve|reject|suspend)$")
+    reason: str = Field(default="", max_length=500)
+    notes: str = Field(default="", max_length=1000)
+
+
+class AdminAdModerationResult(BaseModel):
+    ok: bool = True
+    item_type: str
+    item_id: str
+    status: str
+
+
+class AdminAdModerationEventOut(BaseModel):
+    event_id: str
+    item_type: str
+    item_id: str
+    action: str
+    admin_sub: str = ""
+    reason: str = ""
+    notes: str = ""
+    prev_status: str = ""
+    new_status: str = ""
+    created_at: int = 0
+
+
+class AdminAdPlatformMetricsOut(BaseModel):
+    total_spend_cents: int = 0
+    platform_revenue_cents: int = 0
+    creator_share_cents: int = 0
+    revenue_share_percent: float = 0.0
+    impressions: int = 0
+    clicks: int = 0
+    conversions: int = 0
+    effective_cpm_cents: int = 0
+    account_count: int = 0
+    campaign_count: int = 0
+    creative_count: int = 0
+    accounts_by_status: Dict[str, int] = Field(default_factory=dict)
+    campaigns_by_status: Dict[str, int] = Field(default_factory=dict)
+    creatives_by_status: Dict[str, int] = Field(default_factory=dict)
+    pending_account_reviews: int = 0
+    pending_creative_reviews: int = 0
+
+
+class AdminAdRevenuePoint(BaseModel):
+    month: str
+    spend_cents: int = 0
+    platform_revenue_cents: int = 0
+    creator_share_cents: int = 0
+    impressions: int = 0
+    clicks: int = 0
+
+
+class AdminAdTopSpenderOut(BaseModel):
+    account_id: str
+    company_name: str = ""
+    owner_sub: str = ""
+    spend_cents: int = 0
