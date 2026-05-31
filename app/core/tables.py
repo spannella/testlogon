@@ -206,6 +206,7 @@ class Tables:
     payment_provider_health: Any
     ssh_session_recordings: Any
     ssh_bastion_paths: Any
+    connection_profiles: Any
     job_runs: Any
     group_fundraising_campaigns: Any
 
@@ -408,6 +409,7 @@ T = Tables(
     payment_provider_health=ddb.Table(S.payment_provider_health_table_name),
     ssh_session_recordings=ddb.Table(S.ssh_session_recordings_table_name),
     ssh_bastion_paths=ddb.Table(S.ssh_bastion_paths_table_name),
+    connection_profiles=ddb.Table(S.connection_profiles_table_name),
     job_runs=ddb.Table(S.job_runs_table_name),
     group_fundraising_campaigns=ddb.Table(S.group_fundraising_campaigns_table_name),
 )

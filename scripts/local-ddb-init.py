@@ -1594,6 +1594,17 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Connection Profiles & Quick Connect (INFRA-006)
+        TableDef(
+            _resolve_table_name(S.connection_profiles_table_name, "connection_profiles"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+                {"index_name": "ByLastUsedAt", "partition_key": "user_sub", "sort_key": "last_used_at"},
+            ],
+            attr_types={"created_at": "N", "last_used_at": "N"},
+        ),
         # Kubernetes Container Launcher (INFRA-004)
         TableDef(
             _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),

@@ -9055,6 +9055,106 @@ export interface SshBastionResolvedOut {
   ssh_config: string;
 }
 
+// ─── Connection Profiles & Quick Connect (INFRA-006) ───────────────────────
+
+export type ConnectionProtocol = "ssh" | "vnc";
+export type ConnectionAuthMethod = "key" | "key_ref" | "password";
+export type TerminalColorScheme =
+  | "dark"
+  | "light"
+  | "monokai"
+  | "solarized"
+  | "dracula";
+
+export interface ConnectionProfile {
+  profile_id: string;
+  label: string;
+  protocol: ConnectionProtocol;
+  hostname: string;
+  instance_id: string;
+  port: number;
+  username: string;
+  auth_method: ConnectionAuthMethod;
+  ssh_key_id: string;
+  bastion_path_id: string;
+  terminal_cols: number;
+  terminal_rows: number;
+  terminal_font_size: number;
+  terminal_color_scheme: TerminalColorScheme;
+  is_favorite: boolean;
+  auto_connect: boolean;
+  use_count: number;
+  created_at: number;
+  updated_at: number;
+  last_used_at: number;
+}
+
+export interface ConnectionProfileList {
+  profiles: ConnectionProfile[];
+  total: number;
+}
+
+export interface CreateConnectionProfileInput {
+  label: string;
+  protocol?: ConnectionProtocol;
+  hostname?: string;
+  instance_id?: string;
+  port?: number;
+  username?: string;
+  auth_method?: ConnectionAuthMethod;
+  ssh_key_id?: string;
+  bastion_path_id?: string;
+  terminal_cols?: number;
+  terminal_rows?: number;
+  terminal_font_size?: number;
+  terminal_color_scheme?: TerminalColorScheme;
+  is_favorite?: boolean;
+  auto_connect?: boolean;
+}
+
+export interface UpdateConnectionProfileInput {
+  label?: string;
+  hostname?: string;
+  instance_id?: string;
+  port?: number;
+  username?: string;
+  auth_method?: ConnectionAuthMethod;
+  ssh_key_id?: string;
+  bastion_path_id?: string;
+  terminal_cols?: number;
+  terminal_rows?: number;
+  terminal_font_size?: number;
+  terminal_color_scheme?: TerminalColorScheme;
+  is_favorite?: boolean;
+  auto_connect?: boolean;
+}
+
+export interface QuickConnectBastion {
+  path_id: string;
+  proxy_jump: string;
+  ssh_command: string;
+  total_hops: number;
+}
+
+export interface QuickConnectResult {
+  profile_id: string;
+  label: string;
+  protocol: ConnectionProtocol;
+  hostname: string;
+  port: number;
+  username: string;
+  auth_method: ConnectionAuthMethod;
+  ssh_key_id: string;
+  bastion_path_id: string;
+  bastion: QuickConnectBastion | null;
+  terminal_cols: number;
+  terminal_rows: number;
+  terminal_font_size: number;
+  terminal_color_scheme: TerminalColorScheme;
+  auto_connect: boolean;
+  connected_at: number;
+}
+
 // ─── License Compliance (LICENSE-006) ──────────────────────────────────────
 
 export interface ComplianceStatusOut {
