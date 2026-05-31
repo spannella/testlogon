@@ -1,14 +1,23 @@
 """Admin SMS delivery monitoring endpoints (PLATFORM-007)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.auth.deps import AuthenticatedUser, get_authenticated_user
 from app.auth.policy import require_admin_or_root
 from app.core.settings import S
+from app.core.time import now_ts
+from app.models import (
+    DashboardBreakdownOut,
+    DashboardSuppressionAdd,
+    DashboardTimeseriesOut,
+    SmsDashboardStatsOut,
+)
 from app.services.sms_delivery import (
     get_dev_sms_log,
     get_sms_delivery_stats,
+    get_sms_delivery_timeseries,
+    get_sms_failure_breakdown,
     get_suppression_list,
     is_sms_suppressed,
     list_sms_deliveries,
@@ -99,3 +108,70 @@ async def dev_log(
         raise HTTPException(status_code=404, detail="Not available in production")
     entries = get_dev_sms_log()
     return {"entries": entries, "count": len(entries)}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# ADMIN-002: Dashboard endpoints
+# ──────────────────────────────────────────────────────────────────────
+
+
+@router.post("/suppressed")
+async def add_sms_suppression(
+    payload: DashboardSuppressionAdd = Body(...),
+    actor: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """Add a phone number to the SMS suppression list (body-based, idempotent)."""
+    suppress_sms(payload.address, reason=payload.reason)
+    return {
+        "ok": True,
+        "address": payload.address,
+        "reason": payload.reason,
+        "suppressed_at": now_ts(),
+        "suppressed_by": actor.sub,
+    }
+
+
+@router.get("/dashboard/stats", response_model=SmsDashboardStatsOut)
+async def sms_dashboard_stats(
+    days: int = Query(default=7, ge=1, le=365),
+    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+) -> SmsDashboardStatsOut:
+    """Normalized SMS delivery stats for the dashboard KPI cards."""
+    raw = get_sms_delivery_stats(days=days)
+    sent = max(int(raw.get("sent", 0) or 0), 0)
+    failed = max(int(raw.get("failed", 0) or 0), 0)
+    total = sent + failed
+    denom = max(total, 1)
+    return SmsDashboardStatsOut(
+        sent=sent,
+        delivered=sent,
+        failed=failed,
+        total=total,
+        total_segments=max(int(raw.get("total_segments", 0) or 0), 0),
+        estimated_cost_usd=float(raw.get("estimated_cost_usd", 0.0) or 0.0),
+        suppressed_numbers=max(int(raw.get("suppressed_numbers", 0) or 0), 0),
+        delivery_rate=sent / denom * 100.0,
+        failure_rate=failed / denom * 100.0,
+        period_days=days,
+    )
+
+
+@router.get("/dashboard/timeseries", response_model=DashboardTimeseriesOut)
+async def sms_dashboard_timeseries(
+    days: int = Query(default=7, ge=1, le=365),
+    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+) -> DashboardTimeseriesOut:
+    """Daily SMS delivery counts for charting."""
+    points = get_sms_delivery_timeseries(days=days)
+    return DashboardTimeseriesOut(channel="sms", period_days=days, points=points)
+
+
+@router.get("/dashboard/failure-types", response_model=DashboardBreakdownOut)
+async def sms_dashboard_failure_types(
+    days: int = Query(default=7, ge=1, le=365),
+    limit: int = Query(default=10, ge=1, le=50),
+    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+) -> DashboardBreakdownOut:
+    """SMS failures grouped by error type."""
+    items = get_sms_failure_breakdown(days=days, limit=limit)
+    return DashboardBreakdownOut(channel="sms", dimension="error_type", items=items)

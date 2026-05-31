@@ -212,6 +212,23 @@ class Settings:
     email_delivery_table_name: str = os.environ.get("EMAIL_DELIVERY_TABLE_NAME", "email_delivery")
     email_suppression_enabled: bool = os.environ.get("EMAIL_SUPPRESSION_ENABLED", "1") not in ("0", "false", "False")
 
+    # Admin Email/SMS Dashboards (ADMIN-002)
+    admin_messaging_templates_table_name: str = os.environ.get(
+        "ADMIN_MESSAGING_TEMPLATES_TABLE_NAME", "admin_messaging_templates"
+    )
+    admin_messaging_dashboard_enabled: bool = os.environ.get(
+        "ADMIN_MESSAGING_DASHBOARD_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    admin_messaging_dashboard_template_edit_enabled: bool = os.environ.get(
+        "ADMIN_MESSAGING_DASHBOARD_TEMPLATE_EDIT_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    admin_messaging_dashboard_test_send_enabled: bool = os.environ.get(
+        "ADMIN_MESSAGING_DASHBOARD_TEST_SEND_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    admin_messaging_dashboard_test_send_limit_per_hour: int = int(
+        os.environ.get("ADMIN_MESSAGING_DASHBOARD_TEST_SEND_LIMIT_PER_HOUR", "10")
+    )
+
     siem_webhook_enabled: bool = os.environ.get("SIEM_WEBHOOK_ENABLED", "0") not in ("0", "false", "False")
     siem_webhook_url: str = os.environ.get("SIEM_WEBHOOK_URL", "")
     siem_webhook_secret: str = os.environ.get("SIEM_WEBHOOK_SECRET", "")

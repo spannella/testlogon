@@ -194,6 +194,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Risk Scoring", i18nKey: "nav.riskScoring", path: "/admin/risk", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
       { label: "Compute", i18nKey: "nav.compute", path: "/admin/compute", icon: <Server className="h-5 w-5" /> },
+      { label: "Communications", i18nKey: "nav.communications", path: "/admin/communications", icon: <MessageSquare className="h-5 w-5" /> },
     ],
   },
 ];
@@ -260,6 +261,7 @@ export default function Sidebar() {
             if (item.path === "/admin/payment-incidents") return showPaymentIncidents;
             if (item.path === "/admin/video-review") return showModerationBoard;
             if (item.path === "/admin/dmca") return showModerationBoard;
+            if (item.path === "/admin/communications") return showModerationBoard;
             return true;
           });
           if (items.length === 0) return null;
