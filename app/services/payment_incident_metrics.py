@@ -170,6 +170,19 @@ def record_webhook_outcome(*, provider: str, outcome: str, reason: str = "none")
         outcome=outcome,
         reason=reason,
     )
+    # FIN-014: also record a per-provider health datapoint so the payment
+    # provider health dashboard reflects live webhook/payment outcomes.
+    try:
+        from app.services.payment_provider_health import record_provider_event
+
+        record_provider_event(
+            provider=provider,
+            success=(str(outcome).lower() == "success"),
+            error_type=("" if str(outcome).lower() == "success" else str(reason or outcome)),
+            op="webhook",
+        )
+    except Exception:
+        pass
 
 
 def record_webhook_replay_event(*, provider: str, event: str) -> None:

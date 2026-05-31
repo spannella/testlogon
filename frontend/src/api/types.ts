@@ -8355,3 +8355,94 @@ export interface AdFraudSummary {
   tracked_accounts: number;
   top_fraud_rules: Record<string, number>;
 }
+
+// FIN-014: Payment Provider Health
+export interface PaymentHealthProviderStatus {
+  provider: string;
+  status: string; // "healthy" | "degraded" | "down"
+  enabled: boolean;
+  success_rate: number;
+  error_rate_bps: number;
+  avg_latency_ms: number;
+  p50_latency_ms: number;
+  p95_latency_ms: number;
+  p99_latency_ms: number;
+  total_success: number;
+  total_failure: number;
+  last_check_at: number;
+}
+
+export interface PaymentHealthTimelineBucket {
+  hour: string;
+  success: number;
+  failure: number;
+  avg_latency_ms: number;
+  status: string;
+}
+
+export interface PaymentHealthTimeline {
+  provider: string;
+  hours: number;
+  data: PaymentHealthTimelineBucket[];
+}
+
+export interface PaymentHealthRecentFailure {
+  ts: number;
+  provider: string;
+  error_type: string;
+  op: string;
+  latency_ms: number;
+}
+
+export interface PaymentHealthErrorDrilldown {
+  provider: string;
+  error_types: Record<string, number>;
+  recent_failures: PaymentHealthRecentFailure[];
+}
+
+export interface PaymentHealthProviderConfig {
+  provider: string;
+  enabled: boolean;
+  alert_error_rate_threshold: number;
+  alert_latency_threshold_ms: number;
+  alert_email: string;
+  disabled_at: number | null;
+  disabled_by: string;
+  disable_reason: string;
+}
+
+export interface PaymentHealthConfigUpdate {
+  alert_error_rate_threshold?: number;
+  alert_latency_threshold_ms?: number;
+  alert_email?: string;
+}
+
+export interface PaymentHealthToggleIn {
+  enabled: boolean;
+  reason?: string;
+}
+
+export interface PaymentHealthToggleOut {
+  provider: string;
+  enabled: boolean;
+  toggled_at: number;
+  reason: string;
+}
+
+export interface PaymentHealthIncident {
+  incident_id: string;
+  provider: string;
+  started_at: number;
+  ended_at: number | null;
+  status: string;
+  peak_error_rate: number;
+  affected_webhooks: number;
+}
+
+export interface PaymentHealthUptimeReport {
+  provider: string;
+  days: number;
+  uptime_pct: number;
+  total_incidents: number;
+  total_downtime_minutes: number;
+}

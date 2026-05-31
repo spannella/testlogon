@@ -206,6 +206,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
       { label: "Compute", i18nKey: "nav.compute", path: "/admin/compute", icon: <Server className="h-5 w-5" /> },
       { label: "Financials", i18nKey: "nav.financials", path: "/admin/financials", icon: <BarChart3 className="h-5 w-5" /> },
+      { label: "Payment Health", i18nKey: "nav.paymentHealth", path: "/admin/payment-health", icon: <Activity className="h-5 w-5" /> },
       { label: "Communications", i18nKey: "nav.communications", path: "/admin/communications", icon: <MessageSquare className="h-5 w-5" /> },
       { label: "Rate Limits", i18nKey: "nav.rateLimits", path: "/admin/rate-limits", icon: <Gauge className="h-5 w-5" /> },
       { label: "Ad Fraud", i18nKey: "nav.adFraud", path: "/admin/ads/fraud", icon: <ShieldAlert className="h-5 w-5" /> },

@@ -1879,6 +1879,15 @@ class Settings:
     invoices_table_name: str = os.environ.get("INVOICES_TABLE_NAME", "invoices")
     invoices_enabled: bool = os.environ.get("INVOICES_ENABLED", "true").lower() not in ("0", "false")
     invoices_tax_bps: int = int(os.environ.get("INVOICES_TAX_BPS", "0"))
+    # FIN-014: Payment Provider Health monitoring. Records per-provider
+    # success/failure/latency of payment operations, computes health status,
+    # error rates, and a recent-incident timeline.
+    payment_provider_health_table_name: str = os.environ.get(
+        "PAYMENT_PROVIDER_HEALTH_TABLE_NAME", "payment_provider_health"
+    )
+    payment_provider_health_enabled: bool = os.environ.get(
+        "PAYMENT_PROVIDER_HEALTH_ENABLED", "true"
+    ).lower() not in ("0", "false", "no")
 
 
 S = Settings()

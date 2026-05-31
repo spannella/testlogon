@@ -1813,6 +1813,20 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # FIN-014: Payment Provider Health.
+        # Datapoints: pk=PROVIDER#{provider} sk=DP#{ts}#{uuid}; GSI1 time-ordered.
+        # Config:     pk=PROVIDER#{provider} sk=CONFIG
+        # Incidents:  pk=PROVIDER#{provider} sk=INCIDENT#{id};
+        #             GSI1PK=INCIDENTS#ALL GSI1SK={started_at} (numeric).
+        TableDef(
+            _resolve_table_name(S.payment_provider_health_table_name, "payment_provider_health"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
     ]
 
 
