@@ -12790,7 +12790,11 @@ def unlock_message(
         ExpressionAttributeValues={":pid": unlock_payment_id},
     )
 
-    # Write billing ledger debit entry for the unlock
+    # Write billing ledger entries for the unlock.
+    # Debit the buyer and credit the seller. Both carry content_id (the
+    # message_id) so FIN-006 per-content revenue can attribute unlock
+    # earnings to the locked content item.
+    _seller_id = msg.get("sender_id") or ""
     try:
         billing_tbl_led = ddb.Table(S.billing_table_name)
         led_entry_id = uuid.uuid4().hex
@@ -12808,9 +12812,33 @@ def unlock_message(
             "meta": {
                 "conversation_id": conversation_id,
                 "message_id": message_id,
+                "content_id": message_id,
+                "content_type": "message",
                 "unlock_payment_id": unlock_payment_id,
             },
         })
+        # Credit the seller (creator) so unlock revenue is attributable.
+        if _seller_id and _seller_id != user_id:
+            credit_entry_id = uuid.uuid4().hex
+            billing_tbl_led.put_item(Item={
+                "pk": f"USER#{_seller_id}",
+                "sk": f"LEDGER#{unlock_ts}#{credit_entry_id}",
+                "entry_id": credit_entry_id,
+                "ts": unlock_ts,
+                "type": "credit",
+                "amount_cents": amount_cents,
+                "currency": "USD",
+                "state": "settled",
+                "reason": "Message unlock",
+                "meta": {
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "content_id": message_id,
+                    "content_type": "message",
+                    "unlock_payment_id": unlock_payment_id,
+                    "unlocker_id": user_id,
+                },
+            })
     except Exception:
         pass  # Best-effort ledger write
 

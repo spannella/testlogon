@@ -522,6 +522,8 @@ def purchase_video(
             reason="VOD sale",
             meta={
                 "video_id": video_id,
+                "content_id": video_id,
+                "content_type": "vod",
                 "buyer_id": buyer_id,
                 "purchase_id": purchase_id,
             },

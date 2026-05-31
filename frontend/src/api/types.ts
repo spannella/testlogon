@@ -8542,3 +8542,61 @@ export interface DelegationApiKeyScopeOut {
   rate_limit_rpm: number;
   total_calls: number;
 }
+
+// ── Per-Content Revenue Breakdown (FIN-006) ──────────────────────────
+
+export interface ContentRevenueItem {
+  content_id: string;
+  content_type: string; // "vod" | "post" | "broadcast"
+  title: string;
+  published_at: number;
+  tips_cents: number;
+  unlocks_cents: number;
+  subscriptions_cents: number;
+  ads_cents: number;
+  vod_cents: number;
+  total_cents: number;
+}
+
+export interface ContentRevenueListResponse {
+  items: ContentRevenueItem[];
+  total_items: number;
+  total_revenue_cents: number;
+  next_cursor: string | null;
+  currency: string;
+}
+
+export interface ContentRevenueTimeSeriesPoint {
+  date: string;
+  tips_cents: number;
+  unlocks_cents: number;
+  subscriptions_cents: number;
+  ads_cents: number;
+  vod_cents: number;
+  total_cents: number;
+}
+
+export interface ContentRevenueDetailResponse {
+  content_id: string;
+  content_type: string;
+  title: string;
+  published_at: number;
+  tips_cents: number;
+  unlocks_cents: number;
+  subscriptions_cents: number;
+  ads_cents: number;
+  vod_cents: number;
+  total_cents: number;
+  time_series: ContentRevenueTimeSeriesPoint[];
+  currency: string;
+}
+
+export interface ContentRevenueListParams {
+  from_date?: string;
+  to_date?: string;
+  sort_by?: string;
+  sort_order?: string;
+  content_type?: string;
+  limit?: number;
+  cursor?: string;
+}

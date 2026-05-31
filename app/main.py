@@ -118,6 +118,7 @@ from app.routers.creator_earnings import router as creator_earnings_router
 from app.routers.tip_leaderboard import router as tip_leaderboard_router
 from app.routers.tip_leaderboard import internal_router as tip_leaderboard_internal_router
 from app.routers.creator_analytics import router as creator_analytics_router
+from app.routers.per_content_revenue import per_content_revenue_router
 from app.routers.creator_dashboard import router as creator_dashboard_router
 from app.routers.creator_payouts import router as creator_payouts_router
 from app.routers.admin_payouts import router as admin_payouts_router
@@ -517,6 +518,7 @@ def create_app() -> FastAPI:
     app.include_router(tip_leaderboard_router)
     app.include_router(tip_leaderboard_internal_router)
     app.include_router(creator_analytics_router)
+    app.include_router(per_content_revenue_router)
     app.include_router(creator_dashboard_router)
     app.include_router(creator_payouts_router)
     app.include_router(admin_payouts_router)

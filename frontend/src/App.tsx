@@ -83,6 +83,7 @@ const GalleryPage = lazy(() => import("@/pages/gallery/GalleryPage"));
 const GalleryVideoDetailPage = lazy(() => import("@/pages/gallery/VideoDetailPage"));
 const AnalyticsPage = lazy(() => import("@/pages/analytics/AnalyticsPage"));
 const ContentDetailPage = lazy(() => import("@/pages/analytics/ContentDetailPage"));
+const ContentRevenuePage = lazy(() => import("@/pages/analytics/ContentRevenuePage"));
 const PayoutDashboard = lazy(() => import("@/pages/payouts/PayoutDashboard"));
 const PrivacyPage = lazy(() => import("@/pages/settings/PrivacyPage"));
 const AccountDeletionPage = lazy(() => import("@/pages/settings/AccountDeletionPage"));
@@ -265,6 +266,7 @@ export default function App() {
           <Route path="subscriptions/manage" element={<TierManager />} />
           <Route path="creator-dashboard" element={<CreatorDashboard />} />
           <Route path="analytics" element={<AnalyticsPage />} />
+          <Route path="analytics/content-revenue" element={<ContentRevenuePage />} />
           <Route path="analytics/content/:contentId" element={<ContentDetailPage />} />
           <Route path="payouts" element={<PayoutDashboard />} />
           <Route path="referrals" element={<ReferralDashboard />} />

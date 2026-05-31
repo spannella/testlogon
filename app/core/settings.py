@@ -1464,6 +1464,11 @@ class Settings:
     analytics_rollup_interval_seconds: int = int(os.environ.get("ANALYTICS_ROLLUP_INTERVAL_SECONDS", "900"))
     analytics_rollup_lookback_days: int = int(os.environ.get("ANALYTICS_ROLLUP_LOOKBACK_DAYS", "3"))
 
+    # Per-Content Revenue Breakdown (FIN-006)
+    per_content_revenue_enabled: bool = os.environ.get("PER_CONTENT_REVENUE_ENABLED", "1") not in ("0", "false", "False")
+    per_content_revenue_table_name: str = os.environ.get("DDB_PER_CONTENT_REVENUE", "PerContentRevenue")
+    per_content_revenue_max_export_rows: int = int(os.environ.get("PER_CONTENT_REVENUE_MAX_EXPORT_ROWS", "10000"))
+
     # Geo-blocking (GEO-001)
     geo_blocking_enabled: bool = os.environ.get("GEO_BLOCKING_ENABLED", "1") not in ("0", "false", "False")
     geo_platform_block_countries: str = os.environ.get("GEO_PLATFORM_BLOCK_COUNTRIES", "")
