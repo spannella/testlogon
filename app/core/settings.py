@@ -1749,6 +1749,11 @@ class Settings:
     ssh_bastion_max_hops: int = int(os.environ.get("SSH_BASTION_MAX_HOPS", "3"))
     ssh_bastion_max_paths_per_user: int = int(os.environ.get("SSH_BASTION_MAX_PATHS_PER_USER", "50"))
 
+    # Background Job Dashboard (PLATFORM-008)
+    job_runs_table_name: str = os.environ.get("JOB_RUNS_TABLE_NAME", "job_runs")
+    job_dashboard_max_runs_per_job: int = int(os.environ.get("JOB_DASHBOARD_MAX_RUNS_PER_JOB", "200"))
+    job_dashboard_ttl_days: int = int(os.environ.get("JOB_DASHBOARD_TTL_DAYS", "30"))
+
     # License Revenue (LICENSE-003)
     license_revenue_table_name: str = os.environ.get("LICENSE_REVENUE_TABLE_NAME", "license_revenue")
     license_revenue_platform_fee_pct: int = int(os.environ.get("LICENSE_REVENUE_PLATFORM_FEE_PCT", "20"))

@@ -10147,3 +10147,69 @@ class ComplianceScanResultOut(BaseModel):
     checked: int = 0
     issues_found: int = 0
     alerts_sent: int = 0
+
+
+# ─── Background Job Dashboard (PLATFORM-008) ─────────────────────────
+
+class JobRegistryEntry(BaseModel):
+    name: str
+    label: str = ""
+    source: str = ""
+    description: str = ""
+    poll_interval_seconds: int = 0
+    run_now_safe: bool = False
+
+
+class JobRegistryOut(BaseModel):
+    jobs: List[JobRegistryEntry] = Field(default_factory=list)
+
+
+class JobRunOut(BaseModel):
+    job_name: str
+    run_id: str
+    status: str
+    started_at: int = 0
+    finished_at: int = 0
+    duration_ms: float = 0
+    items_processed: int = 0
+    items_failed: int = 0
+    error: Optional[str] = None
+    triggered_by: str = ""
+
+
+class JobRunsOut(BaseModel):
+    items: List[JobRunOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class JobHealthEntry(BaseModel):
+    name: str
+    label: str = ""
+    description: str = ""
+    poll_interval_seconds: int = 0
+    run_now_safe: bool = False
+    health: str = "unknown"
+    last_status: Optional[str] = None
+    last_run_at: Optional[int] = None
+    last_finished_at: Optional[int] = None
+    last_duration_ms: Optional[float] = None
+    last_error: Optional[str] = None
+    last_items_processed: int = 0
+    last_items_failed: int = 0
+    next_run_at: Optional[int] = None
+
+
+class JobHealthOut(BaseModel):
+    jobs: List[JobHealthEntry] = Field(default_factory=list)
+    timestamp: int = 0
+
+
+class JobRunNowOut(BaseModel):
+    ok: bool = True
+    job_name: str
+    run: JobRunOut
+
+
+class JobSeedOut(BaseModel):
+    ok: bool = True
+    seeded: int = 0

@@ -1915,6 +1915,18 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # Background Job Dashboard (PLATFORM-008): run history.
+        # pk=job_name sk=RUN#{started_at}#{uuid}
+        # GSI ByStartedAt: GSI_PK="JOBRUN" started_at(N) for cross-job recents.
+        TableDef(
+            _resolve_table_name(S.job_runs_table_name, "job_runs"),
+            "job_name",
+            "run_id",
+            gsi=[
+                {"index_name": "ByStartedAt", "partition_key": "GSI_PK", "sort_key": "started_at"},
+            ],
+            attr_types={"started_at": "N"},
+        ),
     ]
 
 
