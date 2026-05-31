@@ -8315,3 +8315,43 @@ export interface EffectiveRulesOut {
   rules: EffectiveRuleOut[];
   count: number;
 }
+
+// ─── Ad Fraud Prevention (ADS-014) ────────────────────────────────────────────
+
+export interface AdFraudEvent {
+  event_id: string;
+  user_id: string;
+  ip_address: string;
+  account_id: string;
+  campaign_id: string;
+  creative_id: string;
+  event_type: string;
+  fraud_score: number;
+  rule_scores: Record<string, number>;
+  details: Record<string, unknown>;
+  status: string;
+  created_at: number;
+  reviewed_by?: string | null;
+  reviewed_at?: number | null;
+}
+
+export interface AdFraudAccountRisk {
+  account_id: string;
+  fraud_rate_bps: number;
+  total_events: number;
+  flagged_events: number;
+  status: string;
+  last_fraud_event_at?: number | null;
+  last_event_at?: number | null;
+  recent_events?: AdFraudEvent[];
+}
+
+export interface AdFraudSummary {
+  flagged_events_today: number;
+  total_events: number;
+  flagged_events: number;
+  fraud_rate_bps: number;
+  suspended_accounts: number;
+  tracked_accounts: number;
+  top_fraud_rules: Record<string, number>;
+}

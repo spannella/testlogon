@@ -79,6 +79,14 @@ def serve_ad(
     for campaign in active_campaigns:
         account_id = campaign["account_id"]
 
+        # Fraud suspension check (ADS-014): suspended accounts serve no ads.
+        try:
+            from app.services.ad_fraud_prevention import is_account_suspended
+            if is_account_suspended(account_id):
+                continue
+        except Exception:
+            pass
+
         # Creator block check
         if is_advertiser_blocked(creator_id, account_id):
             continue
@@ -165,10 +173,59 @@ def track_ad_event(
     content_id: str,
     creator_id: str,
     user_id: str,
+    ip_address: str = "",
+    user_agent: str = "",
+    view_time_ms: int = 0,
+    geo_country: str = "",
 ) -> Dict[str, Any]:
-    """Record an ad event and process billing."""
+    """Record an ad event and process billing.
+
+    All events first pass through ad-fraud detection (ADS-014). Events scoring
+    at/above the fraud threshold are recorded in the fraud-events table and
+    excluded from the impression record (so they are never billed/credited).
+    """
     ts = now_ts()
     event_id = f"evt_{ts}_{creative_id}"
+
+    # ── Fraud detection (ADS-014) ──────────────────────────────────────
+    fraud_score = 0
+    if getattr(S, "ad_fraud_detection_enabled", True):
+        try:
+            from app.services import ad_fraud_prevention as fraud
+
+            result = fraud.check_fraud(
+                user_id=user_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                creative_id=creative_id,
+                campaign_id=campaign_id,
+                view_time_ms=view_time_ms,
+                event_type=event,
+                geo_country=geo_country,
+            )
+            fraud_score = result.score
+            if result.flagged:
+                fraud.record_fraud_event(
+                    event_id=event_id,
+                    user_id=user_id,
+                    ip_address=ip_address,
+                    account_id=account_id,
+                    campaign_id=campaign_id,
+                    creative_id=creative_id,
+                    event_type=event,
+                    fraud_result=result,
+                )
+                fraud.maybe_auto_suspend(account_id=account_id)
+                return {
+                    "ok": True,
+                    "event_id": event_id,
+                    "flagged": True,
+                    "fraud_score": fraud_score,
+                }
+            # Legitimate event — record account activity for fraud-rate stats.
+            fraud.record_account_activity(account_id=account_id, flagged=False)
+        except Exception:
+            logger.warning("ad_fraud_check_failed event=%s creative=%s", event, creative_id)
 
     # Write impression record to ad_impressions table
     try:
@@ -200,7 +257,7 @@ def track_ad_event(
     if event == "impression":
         _increment_frequency_cap(user_id, campaign_id)
 
-    return {"ok": True, "event_id": event_id}
+    return {"ok": True, "event_id": event_id, "flagged": False, "fraud_score": fraud_score}
 
 
 def get_serving_stats(campaign_id: str) -> Dict[str, Any]:

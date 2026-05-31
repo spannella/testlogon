@@ -229,6 +229,7 @@ from app.routers.k8s_launcher import router as k8s_launcher_router
 from app.services.k8s_launcher import start_k8s_ttl_checker_task
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ads_targeting import router as ads_targeting_router
+from app.routers.ad_fraud import ad_fraud_router
 from app.routers.agent_workers import router as agent_workers_router
 from app.routers.ads import router as ads_router
 from app.routers.agent_orchestrator import router as agent_orchestrator_router
@@ -596,6 +597,7 @@ def create_app() -> FastAPI:
     app.include_router(ads_router)
     app.include_router(ads_admin_router)
     app.include_router(ads_targeting_router)
+    app.include_router(ad_fraud_router)
     app.include_router(agent_workers_router)
     app.include_router(ads_router)
 

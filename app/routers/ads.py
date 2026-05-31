@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_or_root
@@ -343,7 +343,11 @@ async def serve_ad_endpoint(body: AdServeRequestIn, ctx=Depends(require_ui_sessi
 
 
 @router.post("/track")
-async def track_ad_event_endpoint(body: AdTrackEventIn, ctx=Depends(require_ui_session)):
+async def track_ad_event_endpoint(body: AdTrackEventIn, request: Request, ctx=Depends(require_ui_session)):
+    ip_address = request.client.host if request.client else ""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        ip_address = fwd.split(",")[0].strip()
     return track_ad_event(
         event=body.event,
         creative_id=body.creative_id,
@@ -354,6 +358,10 @@ async def track_ad_event_endpoint(body: AdTrackEventIn, ctx=Depends(require_ui_s
         content_id=getattr(body, "content_id", ""),
         creator_id=getattr(body, "creator_id", ""),
         user_id=ctx["user_sub"],
+        ip_address=ip_address,
+        user_agent=body.user_agent or request.headers.get("user-agent", ""),
+        view_time_ms=body.view_time_ms,
+        geo_country=body.geo_country,
     )
 
 
