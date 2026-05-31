@@ -10436,3 +10436,94 @@ class GroupDonationReceiptOut(BaseModel):
     fundraiser_title: str
     created_at: int
     status: str
+
+
+# ─── Connection Profiles & Quick Connect (INFRA-006) ─────────────────────────
+
+class CreateConnectionProfileIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=200)
+    protocol: Literal["ssh", "vnc"] = "ssh"
+    hostname: Optional[str] = Field(default="", max_length=253)
+    instance_id: Optional[str] = Field(default="", max_length=128)
+    port: int = Field(default=22, ge=1, le=65535)
+    username: Optional[str] = Field(default="", max_length=64)
+    auth_method: Literal["key", "key_ref", "password"] = "key_ref"
+    ssh_key_id: Optional[str] = Field(default="", max_length=128)
+    bastion_path_id: Optional[str] = Field(default="", max_length=128)
+    terminal_cols: int = Field(default=80, ge=40, le=300)
+    terminal_rows: int = Field(default=24, ge=10, le=100)
+    terminal_font_size: int = Field(default=14, ge=8, le=32)
+    terminal_color_scheme: Literal["dark", "light", "monokai", "solarized", "dracula"] = "dark"
+    is_favorite: bool = False
+    auto_connect: bool = False
+
+
+class UpdateConnectionProfileIn(BaseModel):
+    label: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    hostname: Optional[str] = Field(default=None, max_length=253)
+    instance_id: Optional[str] = Field(default=None, max_length=128)
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    username: Optional[str] = Field(default=None, max_length=64)
+    auth_method: Optional[Literal["key", "key_ref", "password"]] = None
+    ssh_key_id: Optional[str] = Field(default=None, max_length=128)
+    bastion_path_id: Optional[str] = Field(default=None, max_length=128)
+    terminal_cols: Optional[int] = Field(default=None, ge=40, le=300)
+    terminal_rows: Optional[int] = Field(default=None, ge=10, le=100)
+    terminal_font_size: Optional[int] = Field(default=None, ge=8, le=32)
+    terminal_color_scheme: Optional[Literal["dark", "light", "monokai", "solarized", "dracula"]] = None
+    is_favorite: Optional[bool] = None
+    auto_connect: Optional[bool] = None
+
+
+class ConnectionProfileOut(BaseModel):
+    profile_id: str
+    label: str
+    protocol: str = "ssh"
+    hostname: str = ""
+    instance_id: str = ""
+    port: int = 22
+    username: str = ""
+    auth_method: str = "key_ref"
+    ssh_key_id: str = ""
+    bastion_path_id: str = ""
+    terminal_cols: int = 80
+    terminal_rows: int = 24
+    terminal_font_size: int = 14
+    terminal_color_scheme: str = "dark"
+    is_favorite: bool = False
+    auto_connect: bool = False
+    use_count: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+    last_used_at: int = 0
+
+
+class ConnectionProfileListOut(BaseModel):
+    profiles: List[ConnectionProfileOut]
+    total: int
+
+
+class QuickConnectBastionOut(BaseModel):
+    path_id: str
+    proxy_jump: str
+    ssh_command: str
+    total_hops: int
+
+
+class QuickConnectOut(BaseModel):
+    profile_id: str
+    label: str
+    protocol: str
+    hostname: str
+    port: int
+    username: str
+    auth_method: str
+    ssh_key_id: str = ""
+    bastion_path_id: str = ""
+    bastion: Optional[QuickConnectBastionOut] = None
+    terminal_cols: int = 80
+    terminal_rows: int = 24
+    terminal_font_size: int = 14
+    terminal_color_scheme: str = "dark"
+    auto_connect: bool = False
+    connected_at: int = 0

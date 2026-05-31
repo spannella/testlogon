@@ -1772,6 +1772,11 @@ class Settings:
     ssh_bastion_max_hops: int = int(os.environ.get("SSH_BASTION_MAX_HOPS", "3"))
     ssh_bastion_max_paths_per_user: int = int(os.environ.get("SSH_BASTION_MAX_PATHS_PER_USER", "50"))
 
+    # Connection Profiles & Quick Connect (INFRA-006)
+    connection_profiles_table_name: str = os.environ.get("CONNECTION_PROFILES_TABLE_NAME", "connection_profiles")
+    connection_profiles_enabled: bool = os.environ.get("CONNECTION_PROFILES_ENABLED", "true").lower() not in ("0", "false", "no")
+    connection_profiles_max_per_user: int = int(os.environ.get("CONNECTION_PROFILES_MAX_PER_USER", "100"))
+
     # Background Job Dashboard (PLATFORM-008)
     job_runs_table_name: str = os.environ.get("JOB_RUNS_TABLE_NAME", "job_runs")
     job_dashboard_max_runs_per_job: int = int(os.environ.get("JOB_DASHBOARD_MAX_RUNS_PER_JOB", "200"))
