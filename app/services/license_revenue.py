@@ -176,40 +176,44 @@ def process_revenue_split(
             licensee_id=licensee_id,
         )
 
-        # Bilateral ledger entries
-        _sk_cr, item_cr = new_ledger_entry(
-            key_name="pk",
-            key_value=user_pk(licensor_id),
-            entry_type="license_revenue_credit",
-            amount_cents=split_cents,
-            state="settled",
-            reason=f"License revenue share from {source_type}",
-            meta={
-                "license_id": lic.get("issued_license_id", ""),
-                "content_id": content_id,
-                "source_txn_id": source_txn_id,
-            },
-        )
-        T.billing.put_item(Item=item_cr)
-        try:
-            apply_wallet_delta(T.billing, user_pk(licensor_id), split_cents, currency=currency)
-        except Exception:
-            logger.warning("Failed to apply wallet credit for licensor %s", licensor_id)
+        # Bilateral ledger entries (only if billing table is configured)
+        if T.billing.name:
+            try:
+                _sk_cr, item_cr = new_ledger_entry(
+                    key_name="pk",
+                    key_value=user_pk(licensor_id),
+                    entry_type="license_revenue_credit",
+                    amount_cents=split_cents,
+                    state="settled",
+                    reason=f"License revenue share from {source_type}",
+                    meta={
+                        "license_id": lic.get("issued_license_id", ""),
+                        "content_id": content_id,
+                        "source_txn_id": source_txn_id,
+                    },
+                )
+                T.billing.put_item(Item=item_cr)
+                apply_wallet_delta(T.billing, user_pk(licensor_id), split_cents, currency=currency)
+            except Exception:
+                logger.warning("Failed to write billing ledger for licensor %s", licensor_id)
 
-        _sk_db, item_db = new_ledger_entry(
-            key_name="pk",
-            key_value=user_pk(licensee_id),
-            entry_type="license_revenue_debit",
-            amount_cents=split_cents,
-            state="settled",
-            reason=f"License revenue share to {licensor_id}",
-            meta={
-                "license_id": lic.get("issued_license_id", ""),
-                "content_id": content_id,
-                "source_txn_id": source_txn_id,
-            },
-        )
-        T.billing.put_item(Item=item_db)
+            try:
+                _sk_db, item_db = new_ledger_entry(
+                    key_name="pk",
+                    key_value=user_pk(licensee_id),
+                    entry_type="license_revenue_debit",
+                    amount_cents=split_cents,
+                    state="settled",
+                    reason=f"License revenue share to {licensor_id}",
+                    meta={
+                        "license_id": lic.get("issued_license_id", ""),
+                        "content_id": content_id,
+                        "source_txn_id": source_txn_id,
+                    },
+                )
+                T.billing.put_item(Item=item_db)
+            except Exception:
+                logger.warning("Failed to write billing ledger for licensee %s", licensee_id)
 
         # Update summaries
         _update_summary("LICENSOR", licensor_id, split_cents, ts)
@@ -511,32 +515,35 @@ def _process_fixed_fee(
 
     licensor_id = license_item["licensor_id"]
 
-    # Credit licensor
-    _sk, item = new_ledger_entry(
-        key_name="pk",
-        key_value=user_pk(licensor_id),
-        entry_type="license_fixed_fee_credit",
-        amount_cents=fixed_cost,
-        state="settled",
-        reason="License fixed fee",
-        meta={"license_id": issued_license_id, "content_id": content_id},
-    )
-    T.billing.put_item(Item=item)
-    try:
-        apply_wallet_delta(T.billing, user_pk(licensor_id), fixed_cost, currency=currency)
-    except Exception:
-        logger.warning("Failed to apply fixed fee wallet credit for %s", licensor_id)
+    # Write billing ledger entries if billing table is configured
+    if T.billing.name:
+        try:
+            _sk, item = new_ledger_entry(
+                key_name="pk",
+                key_value=user_pk(licensor_id),
+                entry_type="license_fixed_fee_credit",
+                amount_cents=fixed_cost,
+                state="settled",
+                reason="License fixed fee",
+                meta={"license_id": issued_license_id, "content_id": content_id},
+            )
+            T.billing.put_item(Item=item)
+            apply_wallet_delta(T.billing, user_pk(licensor_id), fixed_cost, currency=currency)
+        except Exception:
+            logger.warning("Failed to write billing fixed fee credit for %s", licensor_id)
 
-    # Debit licensee
-    _sk2, item2 = new_ledger_entry(
-        key_name="pk",
-        key_value=user_pk(licensee_id),
-        entry_type="license_fixed_fee_debit",
-        amount_cents=fixed_cost,
-        state="settled",
-        reason=f"License fixed fee to {licensor_id}",
-        meta={"license_id": issued_license_id, "content_id": content_id},
-    )
-    T.billing.put_item(Item=item2)
+        try:
+            _sk2, item2 = new_ledger_entry(
+                key_name="pk",
+                key_value=user_pk(licensee_id),
+                entry_type="license_fixed_fee_debit",
+                amount_cents=fixed_cost,
+                state="settled",
+                reason=f"License fixed fee to {licensor_id}",
+                meta={"license_id": issued_license_id, "content_id": content_id},
+            )
+            T.billing.put_item(Item=item2)
+        except Exception:
+            logger.warning("Failed to write billing fixed fee debit for %s", licensee_id)
 
     return True

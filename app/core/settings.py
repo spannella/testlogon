@@ -1540,5 +1540,9 @@ class Settings:
     ec2_max_instances_per_user: int = int(os.environ.get("EC2_MAX_INSTANCES_PER_USER", "5"))
     ec2_auto_terminate_enabled: bool = os.environ.get("EC2_AUTO_TERMINATE_ENABLED", "1") not in ("0", "false", "False")
 
+    # License Revenue (LICENSE-003)
+    license_revenue_table_name: str = os.environ.get("LICENSE_REVENUE_TABLE_NAME", "license_revenue")
+    license_revenue_platform_fee_pct: int = int(os.environ.get("LICENSE_REVENUE_PLATFORM_FEE_PCT", "20"))
+
 
 S = Settings()

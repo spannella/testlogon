@@ -44,13 +44,7 @@ const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage"));
 const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
 const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
 const RemoteDesktopPage = lazy(() => import("@/pages/remote/RemoteDesktopPage"));
-const SshKeyManagerPage = lazy(() => import("@/pages/remote/SshKeyManagerPage"));
-const Ec2LauncherPage = lazy(() => import("@/pages/remote/Ec2LauncherPage"));
 const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
-const IssuedLicensesPage = lazy(() => import("@/pages/licenses/IssuedLicensesPage"));
-const HeldLicensesPage = lazy(() => import("@/pages/licenses/HeldLicensesPage"));
-const LicensedLibraryPage = lazy(() => import("@/pages/licenses/LicensedLibraryPage"));
-const TargetingEditorPage = lazy(() => import("@/pages/ads/TargetingEditor"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
@@ -65,15 +59,11 @@ const ClipGalleryPage = lazy(() => import("@/pages/clips/ClipGalleryPage"));
 const ClipPlayerPage = lazy(() => import("@/pages/clips/ClipPlayerPage"));
 const DmcaClaimForm = lazy(() => import("@/pages/dmca/DmcaClaimForm"));
 const DmcaDashboardPage = lazy(() => import("@/pages/admin/DmcaDashboardPage"));
-const KycQueuePage = lazy(() => import("@/pages/admin/KycQueuePage"));
-const KycCaseDetailPage = lazy(() => import("@/pages/admin/KycCaseDetailPage"));
-const KycMetricsDashboard = lazy(() => import("@/pages/admin/KycMetricsDashboard"));
 const RateLimitDashboard = lazy(() => import("@/pages/admin/RateLimitDashboard"));
 const GalleryPage = lazy(() => import("@/pages/gallery/GalleryPage"));
 const GalleryVideoDetailPage = lazy(() => import("@/pages/gallery/VideoDetailPage"));
 const AnalyticsPage = lazy(() => import("@/pages/analytics/AnalyticsPage"));
 const ContentDetailPage = lazy(() => import("@/pages/analytics/ContentDetailPage"));
-const EarningsPage = lazy(() => import("@/pages/earnings/EarningsPage"));
 const PayoutDashboard = lazy(() => import("@/pages/payouts/PayoutDashboard"));
 const PrivacyPage = lazy(() => import("@/pages/settings/PrivacyPage"));
 const BlockedUsersPage = lazy(() => import("@/pages/settings/BlockedUsersPage"));
@@ -95,31 +85,13 @@ const SsoProvidersPage = lazy(() => import("@/pages/admin/SsoProvidersPage"));
 const CreatorDashboard = lazy(() => import("@/pages/dashboard/CreatorDashboard"));
 const OrgsPage = lazy(() => import("@/pages/orgs/OrgsPage"));
 const OrgDashboard = lazy(() => import("@/pages/orgs/OrgDashboard"));
+const GroupsListPage = lazy(() => import("@/pages/groups/GroupsListPage"));
+const GroupPage = lazy(() => import("@/pages/groups/GroupPage"));
 const WebhookDashboard = lazy(() => import("@/pages/webhooks/WebhookDashboard"));
 const WebhookEndpointDetail = lazy(() => import("@/pages/webhooks/WebhookEndpointDetail"));
 const PartyListPage = lazy(() => import("@/pages/watch-parties/PartyListPage"));
 const WatchPartyPage = lazy(() => import("@/pages/watch-parties/WatchPartyPage"));
 const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
-const LlmKeysPage = lazy(() => import("@/pages/agents/LlmKeysPage"));
-const AdvertiserDashboard = lazy(() => import("@/pages/ads/AdvertiserDashboard"));
-const CampaignListPage = lazy(() => import("@/pages/ads/CampaignList"));
-const DelegatesPage = lazy(() => import("@/pages/delegates/DelegatesPage"));
-const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
-const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetailPage"));
-const BotManagerPage = lazy(() => import("@/pages/bots/BotManagerPage"));
-const GroupsListPage = lazy(() => import("@/pages/groups/GroupsListPage"));
-const GroupSettingsPage = lazy(() => import("@/pages/groups/GroupSettingsPage"));
-const CreativeListPage = lazy(() => import("@/pages/ads/CreativeListPage"));
-const AdminCreativeReviewPage = lazy(() => import("@/pages/ads/AdminCreativeReviewPage"));
-const BotManagerPage = lazy(() => import("@/pages/bots/BotManagerPage"));
-const TemplateEditorPage = lazy(() => import("@/pages/bots/TemplateEditorPage"));
-const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
-const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetailPage"));
-const MyBundlesPage = lazy(() => import("@/pages/syndicates/MyBundlesPage"));
-const MediaSettingsPage = lazy(() => import("@/pages/calls/MediaSettingsPage"));
-const BotManagerPage = lazy(() => import("@/pages/bots/BotManagerPage"));
-const TemplateEditorPage = lazy(() => import("@/pages/bots/TemplateEditorPage"));
-const BotAutoReplyPage = lazy(() => import("@/pages/bots/BotAutoReplyPage"));
 
 function PageSpinner() {
   return (
@@ -165,10 +137,6 @@ export default function App() {
           <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />
           <Route path="signing" element={<SigningPage />} />
-          <Route path="licenses/issued" element={<IssuedLicensesPage />} />
-          <Route path="licenses/held" element={<HeldLicensesPage />} />
-          <Route path="licenses/library" element={<LicensedLibraryPage />} />
-          <Route path="ads/targeting" element={<TargetingEditorPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
@@ -201,8 +169,6 @@ export default function App() {
           <Route path="clips" element={<ClipGalleryPage />} />
           <Route path="clips/:clipId" element={<ClipPlayerPage />} />
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
-          <Route path="remote/ssh-keys" element={<SshKeyManagerPage />} />
-          <Route path="remote/ec2" element={<Ec2LauncherPage />} />
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
@@ -210,7 +176,6 @@ export default function App() {
           <Route path="settings/blocked" element={<BlockedUsersPage />} />
           <Route path="settings/webhooks" element={<WebhooksPage />} />
           <Route path="settings/geo" element={<GeoRulesPage />} />
-          <Route path="calls/settings" element={<MediaSettingsPage />} />
           <Route path="webhooks" element={<WebhookDashboard />} />
           <Route path="webhooks/:endpointId" element={<WebhookEndpointDetail />} />
           <Route path="purchases" element={<PurchasesPage />} />
@@ -220,26 +185,17 @@ export default function App() {
           <Route path="creator-dashboard" element={<CreatorDashboard />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="analytics/content/:contentId" element={<ContentDetailPage />} />
-          <Route path="earnings" element={<EarningsPage />} />
           <Route path="payouts" element={<PayoutDashboard />} />
           <Route path="referrals" element={<ReferralDashboard />} />
           <Route path="promo" element={<PromoCodesPage />} />
           <Route path="affiliates" element={<AffiliateDashboard />} />
           <Route path="achievements" element={<AchievementsPage />} />
           <Route path="collaborations" element={<CollaborationsPage />} />
-          <Route path="delegates" element={<DelegatesPage />} />
           <Route path="fan-club" element={<FanClubPage />} />
-          <Route path="syndicates" element={<SyndicatesPage />} />
-          <Route path="syndicates/:syndicateId" element={<SyndicateDetailPage />} />
-          <Route path="bots" element={<BotManagerPage />} />
-          <Route path="bots" element={<BotManagerPage />} />
-          <Route path="bots/:botId/templates" element={<TemplateEditorPage />} />
-          <Route path="syndicates/my-bundles" element={<MyBundlesPage />} />
-          <Route path="syndicates/:syndicateId" element={<SyndicateDetailPage />} />
           <Route path="orgs" element={<OrgsPage />} />
           <Route path="orgs/:orgId" element={<OrgDashboard />} />
           <Route path="groups" element={<GroupsListPage />} />
-          <Route path="groups/:groupId/settings" element={<GroupSettingsPage />} />
+          <Route path="groups/:groupId" element={<GroupPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />
@@ -249,19 +205,8 @@ export default function App() {
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
           <Route path="admin/audit-exports" element={<AuditExportPage />} />
-          <Route path="ads/dashboard" element={<AdvertiserDashboard />} />
-          <Route path="ads/campaigns" element={<CampaignListPage />} />
-          <Route path="ads/creatives" element={<CreativeListPage />} />
-          <Route path="admin/ads/creatives/review" element={<AdminCreativeReviewPage />} />
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />
-          <Route path="agents/llm-keys" element={<LlmKeysPage />} />
-          <Route path="admin/kyc" element={<KycQueuePage />} />
-          <Route path="admin/kyc/cases/:caseId" element={<KycCaseDetailPage />} />
-          <Route path="admin/kyc/metrics" element={<KycMetricsDashboard />} />
-          <Route path="bots" element={<BotManagerPage />} />
-          <Route path="bots/:botId/templates" element={<TemplateEditorPage />} />
-          <Route path="bots/:botId/auto-replies" element={<BotAutoReplyPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

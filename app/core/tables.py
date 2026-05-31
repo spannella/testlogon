@@ -147,6 +147,7 @@ class Tables:
     bot_scheduled_sends: Any
     media_preferences: Any
     ec2_instances: Any
+    license_revenue: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -288,4 +289,5 @@ T = Tables(
     bot_scheduled_sends=ddb.Table(S.bot_scheduled_sends_table_name),
     media_preferences=ddb.Table(S.media_preferences_table_name),
     ec2_instances=ddb.Table(S.ec2_instances_table_name),
+    license_revenue=ddb.Table(S.license_revenue_table_name),
 )

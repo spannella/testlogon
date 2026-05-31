@@ -17,8 +17,8 @@ import {
   Settings,
   Bell,
   LifeBuoy,
-  UsersRound,
   Users,
+  UsersRound,
   BookUser,
   Headphones,
   PanelLeftClose,
@@ -40,7 +40,6 @@ import {
   CalendarClock,
   Ban,
   Wallet,
-  DollarSign,
   Layers,
   Link2,
   Handshake,
@@ -48,12 +47,6 @@ import {
   Building2,
   Tv,
   Scissors,
-  Bot,
-  KeyRound,
-  Megaphone,
-  UserCog,
-  Phone,
-  Cloud,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -110,15 +103,12 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Tier Manager", i18nKey: "nav.tierManager", path: "/subscriptions/manage", icon: <Layers className="h-5 w-5" /> },
       { label: "Creator Dashboard", i18nKey: "nav.creatorDashboard", path: "/creator-dashboard", icon: <BarChart3 className="h-5 w-5" /> },
       { label: "Analytics", i18nKey: "nav.analytics", path: "/analytics", icon: <BarChart3 className="h-5 w-5" /> },
-      { label: "Earnings", i18nKey: "nav.earnings", path: "/earnings", icon: <DollarSign className="h-5 w-5" /> },
       { label: "Payouts", i18nKey: "nav.payouts", path: "/payouts", icon: <Wallet className="h-5 w-5" /> },
       { label: "Referrals", i18nKey: "nav.referrals", path: "/referrals", icon: <Share2 className="h-5 w-5" /> },
       { label: "Promo Codes", i18nKey: "nav.promoCodes", path: "/promo", icon: <Tag className="h-5 w-5" /> },
       { label: "Affiliates", i18nKey: "nav.affiliates", path: "/affiliates", icon: <Link2 className="h-5 w-5" /> },
       { label: "Collaborations", i18nKey: "nav.collaborations", path: "/collaborations", icon: <Handshake className="h-5 w-5" /> },
       { label: "Fan Club", i18nKey: "nav.fanClub", path: "/fan-club", icon: <UsersRound className="h-5 w-5" /> },
-      { label: "Ads Manager", i18nKey: "nav.adsManager", path: "/ads/dashboard", icon: <Megaphone className="h-5 w-5" /> },
-      { label: "Syndicates", i18nKey: "nav.syndicates", path: "/syndicates", icon: <Users className="h-5 w-5" /> },
       { label: "Groups", i18nKey: "nav.groups", path: "/groups", icon: <Users className="h-5 w-5" /> },
     ],
   },
@@ -132,7 +122,6 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Content Calendar", i18nKey: "nav.contentCalendar", path: "/content-calendar", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Scheduled", i18nKey: "nav.scheduled", path: "/scheduler", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: <FilePen className="h-5 w-5" /> },
-      { label: "Bots", i18nKey: "nav.bots", path: "/bots", icon: <Bot className="h-5 w-5" /> },
       { label: "Organizations", i18nKey: "nav.organizations", path: "/orgs", icon: <Building2 className="h-5 w-5" /> },
     ],
   },
@@ -148,22 +137,6 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    title: "AI Agents",
-    i18nKey: "nav.aiAgents",
-    items: [
-      { label: "LLM Keys", i18nKey: "nav.llmKeys", path: "/agents/llm-keys", icon: <KeyRound className="h-5 w-5" /> },
-    ],
-  },
-  {
-    title: "Licenses",
-    i18nKey: "nav.licenses",
-    items: [
-      { label: "Issued", i18nKey: "nav.licensesIssued", path: "/licenses/issued", icon: <Scale className="h-5 w-5" /> },
-      { label: "Held", i18nKey: "nav.licensesHeld", path: "/licenses/held", icon: <Scale className="h-5 w-5" /> },
-      { label: "Library", i18nKey: "nav.licensedLibrary", path: "/licenses/library", icon: <Scale className="h-5 w-5" /> },
-    ],
-  },
-  {
     title: "Account",
     i18nKey: "nav.account",
     items: [
@@ -173,11 +146,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Tickets", i18nKey: "nav.tickets", path: "/tickets", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
-      { label: "Delegates", i18nKey: "nav.delegates", path: "/delegates", icon: <UserCog className="h-5 w-5" /> },
-      { label: "SSH Keys", i18nKey: "nav.sshKeys", path: "/remote/ssh-keys", icon: <KeyRound className="h-5 w-5" /> },
-      { label: "EC2 Instances", i18nKey: "nav.ec2Instances", path: "/remote/ec2", icon: <Cloud className="h-5 w-5" /> },
       { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
-      { label: "Media Settings", i18nKey: "nav.mediaSettings", path: "/calls/settings", icon: <Phone className="h-5 w-5" /> },
       { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "Blocked Users", i18nKey: "nav.blockedUsers", path: "/settings/blocked", icon: <Ban className="h-5 w-5" /> },
       { label: "Webhooks", i18nKey: "nav.webhooks", path: "/settings/webhooks", icon: <Webhook className="h-5 w-5" /> },
@@ -188,7 +157,6 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Video Review", i18nKey: "nav.videoReview", path: "/admin/video-review", icon: <Video className="h-5 w-5" /> },
       { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: <Scale className="h-5 w-5" /> },
       { label: "Refund Queue", i18nKey: "nav.refundQueue", path: "/admin/refunds", icon: <CreditCard className="h-5 w-5" /> },
-      { label: "KYC Review", i18nKey: "nav.kycReview", path: "/admin/kyc", icon: <ShieldCheck className="h-5 w-5" /> },
     ],
   },
 ];
@@ -255,7 +223,6 @@ export default function Sidebar() {
             if (item.path === "/admin/payment-incidents") return showPaymentIncidents;
             if (item.path === "/admin/video-review") return showModerationBoard;
             if (item.path === "/admin/dmca") return showModerationBoard;
-            if (item.path === "/admin/kyc") return showModerationBoard;
             return true;
           });
           if (items.length === 0) return null;

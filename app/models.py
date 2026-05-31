@@ -5010,3 +5010,57 @@ class AutoReplyTestOut(BaseModel):
     first_match: Optional[Dict[str, Any]] = None
     all_matches: List[Dict[str, Any]] = Field(default_factory=list)
     match_count: int = 0
+
+
+# ─── License Revenue (LICENSE-003) ─────────────────────────────────────────────
+
+
+class RevenueSummaryOut(BaseModel):
+    total_cents: int = 0
+    total_transactions: int = 0
+    last_transaction_at: Optional[int] = None
+    currency: str = "usd"
+
+
+class RevenueTransactionOut(BaseModel):
+    txn_id: str
+    issued_license_id: str = ""
+    content_id: str = ""
+    counterparty_id: str = ""
+    source_type: str = ""
+    source_amount_cents: int = 0
+    split_amount_cents: int = 0
+    split_type: str = ""
+    currency: str = "usd"
+    created_at: int = 0
+
+
+class RevenueListOut(BaseModel):
+    summary: RevenueSummaryOut
+    transactions: List[RevenueTransactionOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class RevenueSplitPreviewOut(BaseModel):
+    source_amount_cents: int = 0
+    platform_fee_cents: int = 0
+    revenue_share_cents: int = 0
+    profit_share_cents: int = 0
+    total_licensor_share_cents: int = 0
+    licensee_net_cents: int = 0
+
+
+class AdminRevenueEntryOut(BaseModel):
+    txn_id: str = ""
+    licensor_id: str = ""
+    licensee_id: str = ""
+    content_id: str = ""
+    source_type: str = ""
+    source_amount_cents: int = 0
+    split_amount_cents: int = 0
+    created_at: int = 0
+
+
+class AdminRevenueListOut(BaseModel):
+    transactions: List[AdminRevenueEntryOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None

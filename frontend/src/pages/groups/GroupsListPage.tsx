@@ -1,167 +1,56 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Users, Plus, Search, Globe, Lock } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useToast } from "@/components/ui/use-toast";
-import { listMyGroups, discoverGroups, joinGroup } from "@/api/endpoints/groups";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Users, Plus, Search, Globe, Lock } from "lucide-react";
+import { listMyGroups, discoverGroups, createGroup, joinGroup } from "@/api/endpoints/groups";
 import type { UserGroup } from "@/api/types";
-import CreateGroupDialog from "./CreateGroupDialog";
-
-function roleBadgeVariant(role?: string) {
-  switch (role) {
-    case "admin":
-      return "default" as const;
-    case "moderator":
-      return "secondary" as const;
-    default:
-      return "outline" as const;
-  }
-}
-
-function GroupCard({ group }: { group: UserGroup }) {
-  return (
-    <Link to={`/groups/${group.group_id}/settings`}>
-      <Card className="hover:bg-accent/50 transition-colors">
-        <CardContent className="p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-                <Users className="h-5 w-5 text-primary" />
-              </div>
-              <div className="min-w-0">
-                <p className="font-semibold truncate">{group.name}</p>
-                <p className="text-sm text-muted-foreground truncate">
-                  {group.member_count} member{group.member_count !== 1 ? "s" : ""}
-                  {group.topic ? ` · ${group.topic}` : ""}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {group.visibility === "private" ? (
-                <Lock className="h-4 w-4 text-muted-foreground" />
-              ) : (
-                <Globe className="h-4 w-4 text-muted-foreground" />
-              )}
-              {group.my_role && (
-                <Badge variant={roleBadgeVariant(group.my_role)}>
-                  {group.my_role}
-                </Badge>
-              )}
-            </div>
-          </div>
-          {group.description && (
-            <p className="mt-2 text-sm text-muted-foreground line-clamp-2">
-              {group.description}
-            </p>
-          )}
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
-
-function DiscoverCard({
-  group,
-  onJoin,
-  isJoining,
-}: {
-  group: UserGroup;
-  onJoin: (id: string) => void;
-  isJoining: boolean;
-}) {
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-              <Users className="h-5 w-5 text-primary" />
-            </div>
-            <div className="min-w-0">
-              <p className="font-semibold truncate">{group.name}</p>
-              <p className="text-sm text-muted-foreground truncate">
-                {group.member_count} member{group.member_count !== 1 ? "s" : ""}
-                {group.topic && (
-                  <Badge variant="outline" className="ml-2 text-xs">
-                    {group.topic}
-                  </Badge>
-                )}
-              </p>
-            </div>
-          </div>
-          <Button
-            size="sm"
-            onClick={() => onJoin(group.group_id)}
-            disabled={isJoining}
-          >
-            {group.visibility === "private" ? "Request" : "Join"}
-          </Button>
-        </div>
-        {group.description && (
-          <p className="mt-2 text-sm text-muted-foreground line-clamp-2">
-            {group.description}
-          </p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
 
 export default function GroupsListPage() {
-  const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [createOpen, setCreateOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
 
-  const myGroupsQuery = useQuery({
-    queryKey: ["groups", "my"],
-    queryFn: () => listMyGroups().then((r) => r.data),
+  const { data: myGroups } = useQuery({
+    queryKey: ["my-groups"],
+    queryFn: () => listMyGroups(),
     staleTime: 30_000,
   });
 
-  const discoverQuery = useQuery({
-    queryKey: ["groups", "discover", searchQuery],
-    queryFn: () =>
-      discoverGroups({
-        query: searchQuery || undefined,
-        limit: 50,
-      }).then((r) => r.data),
+  const { data: publicGroups } = useQuery({
+    queryKey: ["discover-groups", searchQuery],
+    queryFn: () => discoverGroups({ query: searchQuery }),
     staleTime: 60_000,
   });
 
-  const joinMut = useMutation({
-    mutationFn: (groupId: string) => joinGroup(groupId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["groups"] });
-      toast({ title: "Joined group successfully" });
-    },
-    onError: (err: any) => {
-      toast({
-        title: "Could not join group",
-        description: err?.response?.data?.detail || "Unknown error",
-        variant: "destructive",
-      });
-    },
-  });
-
   return (
-    <div className="container max-w-3xl py-6 space-y-6" data-testid="groups-list-page">
+    <div className="max-w-3xl mx-auto p-4 space-y-4" data-testid="groups-list-page">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Groups</h1>
-          <p className="text-muted-foreground">
-            Create and join communities
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Create Group
-        </Button>
+        <h1 className="text-2xl font-bold">Groups</h1>
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="h-4 w-4 mr-1" /> Create Group
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create Group</DialogTitle>
+            </DialogHeader>
+            <CreateGroupForm
+              onCreated={() => {
+                setCreateOpen(false);
+                queryClient.invalidateQueries({ queryKey: ["my-groups"] });
+              }}
+            />
+          </DialogContent>
+        </Dialog>
       </div>
 
       <Tabs defaultValue="my-groups">
@@ -171,59 +60,155 @@ export default function GroupsListPage() {
         </TabsList>
 
         <TabsContent value="my-groups" className="space-y-3 mt-4">
-          {myGroupsQuery.isLoading && (
-            <p className="text-muted-foreground text-center py-8">Loading...</p>
+          {(myGroups as any)?.groups?.length === 0 && (
+            <p className="text-muted-foreground text-center py-8">
+              You haven't joined any groups yet.
+            </p>
           )}
-          {myGroupsQuery.data && myGroupsQuery.data.length === 0 && (
-            <Card>
-              <CardContent className="py-8 text-center text-muted-foreground">
-                You haven't joined any groups yet.
-              </CardContent>
-            </Card>
-          )}
-          {myGroupsQuery.data?.map((group) => (
+          {(myGroups as any)?.groups?.map((group: UserGroup) => (
             <GroupCard key={group.group_id} group={group} />
           ))}
         </TabsContent>
 
         <TabsContent value="discover" className="space-y-3 mt-4">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              className="pl-10"
-              placeholder="Search groups by name or topic..."
+              placeholder="Search groups..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10"
             />
           </div>
-          {discoverQuery.isLoading && (
-            <p className="text-muted-foreground text-center py-8">Loading...</p>
-          )}
-          {discoverQuery.data?.groups?.length === 0 && (
-            <Card>
-              <CardContent className="py-8 text-center text-muted-foreground">
-                No public groups found.
-              </CardContent>
-            </Card>
-          )}
-          {discoverQuery.data?.groups?.map((group) => (
-            <DiscoverCard
+          {(publicGroups as any)?.groups?.map((group: UserGroup) => (
+            <DiscoverGroupCard
               key={group.group_id}
               group={group}
-              onJoin={(id) => joinMut.mutate(id)}
-              isJoining={joinMut.isPending}
+              onJoined={() => {
+                queryClient.invalidateQueries({ queryKey: ["my-groups"] });
+                queryClient.invalidateQueries({ queryKey: ["discover-groups"] });
+              }}
             />
           ))}
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
 
-      <CreateGroupDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onCreated={() => {
-          queryClient.invalidateQueries({ queryKey: ["groups"] });
-        }}
+function GroupCard({ group }: { group: UserGroup }) {
+  return (
+    <Link to={`/groups/${group.group_id}`}>
+      <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
+        <CardContent className="py-3 flex items-center justify-between">
+          <div>
+            <p className="font-medium">{group.name}</p>
+            <p className="text-sm text-muted-foreground line-clamp-1">
+              {group.description}
+            </p>
+            <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+              <Users className="h-3 w-3" />
+              <span>{group.member_count} members</span>
+              {group.my_role && <Badge variant="outline" className="text-xs">{group.my_role}</Badge>}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+function DiscoverGroupCard({
+  group,
+  onJoined,
+}: {
+  group: UserGroup;
+  onJoined: () => void;
+}) {
+  const joinMut = useMutation({
+    mutationFn: () => joinGroup(group.group_id),
+    onSuccess: onJoined,
+  });
+
+  return (
+    <Card>
+      <CardContent className="py-3 flex items-center justify-between">
+        <div>
+          <p className="font-medium">{group.name}</p>
+          <p className="text-sm text-muted-foreground line-clamp-1">
+            {group.description}
+          </p>
+          <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+            <Users className="h-3 w-3" />
+            <span>{group.member_count} members</span>
+            {group.topic && <Badge variant="secondary" className="text-xs">{group.topic}</Badge>}
+          </div>
+        </div>
+        <Button
+          size="sm"
+          onClick={() => joinMut.mutate()}
+          disabled={joinMut.isPending}
+        >
+          {group.visibility === "public" ? "Join" : "Request"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CreateGroupForm({ onCreated }: { onCreated: () => void }) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [visibility, setVisibility] = useState<"public" | "private">("public");
+  const [topic, setTopic] = useState("");
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      createGroup({ name, description, visibility, topic: topic || undefined }),
+    onSuccess: onCreated,
+  });
+
+  return (
+    <div className="space-y-3">
+      <Input
+        placeholder="Group name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
       />
+      <Textarea
+        placeholder="Description"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        rows={3}
+      />
+      <Input
+        placeholder="Topic (optional)"
+        value={topic}
+        onChange={(e) => setTopic(e.target.value)}
+      />
+      <div className="flex gap-2">
+        <Button
+          variant={visibility === "public" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setVisibility("public")}
+        >
+          <Globe className="h-3 w-3 mr-1" /> Public
+        </Button>
+        <Button
+          variant={visibility === "private" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setVisibility("private")}
+        >
+          <Lock className="h-3 w-3 mr-1" /> Private
+        </Button>
+      </div>
+      <Button
+        className="w-full"
+        onClick={() => createMut.mutate()}
+        disabled={!name.trim() || name.length < 3 || createMut.isPending}
+      >
+        Create Group
+      </Button>
     </div>
   );
 }
