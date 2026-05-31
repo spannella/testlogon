@@ -1307,6 +1307,7 @@ def _table_defs() -> List[TableDef]:
         ),
         # LLM Provider Keys (AGENT-001)
         # Agent LLM Key Management (AGENT-001)
+        # Agent Platform (AGENT-001 .. AGENT-004)
         TableDef(
             _resolve_table_name(S.llm_provider_keys_table_name, "llm_provider_keys"),
             "pk",
@@ -1434,6 +1435,7 @@ def _table_defs() -> List[TableDef]:
         ),
         # Agent Worker Provisioning (AGENT-002)
         # Agent Workers (AGENT-002/003)
+        ),
         TableDef(
             _resolve_table_name(S.agent_workers_table_name, "agent_workers"),
             "pk",

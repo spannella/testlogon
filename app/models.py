@@ -5810,6 +5810,10 @@ class SpendResponse(BaseModel):
     balance_cents: int
     total_spent_cents: int
     ledger_entry_id: str
+class ComputeOptionListOut(BaseModel):
+    options: List[ComputeOption]
+
+
 # -- Agent Orchestrator (AGENT-003) --
 
 class TicketFilterConfig(BaseModel):
@@ -5972,3 +5976,64 @@ class BudgetOut(BaseModel):
 class UpdateBudgetIn(BaseModel):
     budget_monthly_cents: int = Field(..., ge=100, le=1_000_000)
     alert_thresholds: Optional[List[int]] = None
+
+# -- Agent Fleet Management (AGENT-004) --
+
+class WorkerSummary(BaseModel):
+    worker_id: str
+    label: str
+    agent_type: str
+    tool: str
+    worker_status: str
+    agent_state: str = "idle"
+    current_ticket_id: str = ""
+    current_ticket_title: str = ""
+    uptime_seconds: int = 0
+    estimated_cost_cents: int = 0
+    tickets_completed: int = 0
+
+class FleetStatusOut(BaseModel):
+    total_workers: int = Field(ge=0)
+    status_counts: Dict[str, int]
+    queue_depth: int = Field(ge=0)
+    workers: List[WorkerSummary]
+
+class BulkActionOut(BaseModel):
+    count: int
+    errors: List[Dict[str, str]] = Field(default_factory=list)
+
+class CapacityOut(BaseModel):
+    queue_by_type: Dict[str, int]
+    workers_by_type: Dict[str, int]
+    workers_by_state: Dict[str, int]
+    recommended_action: str = ""
+
+class WorkerTemplateIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=200)
+    agent_type: str = Field(..., min_length=1, max_length=50)
+    tool: str = Field(..., min_length=1, max_length=50)
+    compute_type: str = Field(..., min_length=1, max_length=50)
+    instance_type: str = Field(..., min_length=1, max_length=100)
+    llm_key_id: str = Field(..., min_length=1, max_length=100)
+    repo_url: str = Field(default="", max_length=500)
+    branch_convention: str = Field(default="", max_length=200)
+    idle_timeout_seconds: int = Field(default=7200, ge=600, le=86400)
+    ticket_filter: Optional[TicketFilterConfig] = None
+
+class WorkerTemplateOut(BaseModel):
+    template_id: str
+    label: str
+    agent_type: str
+    tool: str
+    compute_type: str
+    instance_type: str
+    llm_key_id: str
+    repo_url: str = ""
+    branch_convention: str = ""
+    idle_timeout_seconds: int = 7200
+    ticket_filter: Optional[Dict[str, Any]] = None
+    created_at: int = 0
+
+class WorkerTemplateListOut(BaseModel):
+    templates: List[WorkerTemplateOut]
+    count: int

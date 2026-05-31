@@ -107,6 +107,7 @@ const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
 const AgentDashboard = lazy(() => import("@/pages/agents/AgentDashboard"));
 const AdAnalyticsDashboard = lazy(() => import("@/pages/ads/AdAnalyticsDashboard"));
+const FleetDashboard = lazy(() => import("@/pages/agents/FleetDashboard"));
 
 function PageSpinner() {
   return (
@@ -237,6 +238,7 @@ export default function App() {
           <Route path="kyc/tiers" element={<KycTierProgress />} />
           <Route path="agents/workers" element={<WorkersPage />} />
           <Route path="agents/dashboard" element={<AgentDashboard />} />
+          <Route path="agents/fleet" element={<FleetDashboard />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

@@ -149,6 +149,7 @@ import {
   Bot,
   Activity,
   Phone,
+  LayoutGrid,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -213,6 +214,7 @@ const MOBILE_NAV_GROUPS = [
     title: "AI Agents",
     items: [
       { label: "LLM Keys", path: "/agents/llm-keys", icon: KeyRound },
+      { label: "Fleet Dashboard", path: "/agents/fleet", icon: LayoutGrid },
     ],
   },
   {

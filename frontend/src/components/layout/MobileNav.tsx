@@ -44,6 +44,7 @@ import {
   Megaphone,
   UserCog,
   Bot,
+  LayoutGrid,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -120,6 +121,7 @@ const MORE_LINKS = [
   { label: "Ads Manager", i18nKey: "nav.adsManager", path: "/ads/dashboard", icon: Megaphone },
   { label: "Syndicates", i18nKey: "nav.syndicates", path: "/syndicates", icon: Users },
   { label: "Ads Manager", i18nKey: "nav.adsManager", path: "/ads/dashboard", icon: Megaphone },
+  { label: "Fleet Dashboard", i18nKey: "nav.fleetDashboard", path: "/agents/fleet", icon: LayoutGrid },
 ];
 
 // ─── MobileNav Component ────────────────────────────────────────

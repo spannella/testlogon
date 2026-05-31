@@ -5579,3 +5579,76 @@ export interface UpdateBudgetIn {
   budget_monthly_cents: number;
   alert_thresholds?: number[];
 }
+
+// -- Agent Fleet Management (AGENT-004) --
+
+export interface WorkerSummary {
+  worker_id: string;
+  label: string;
+  agent_type: string;
+  tool: string;
+  worker_status: string;
+  agent_state: string;
+  current_ticket_id: string;
+  current_ticket_title: string;
+  uptime_seconds: number;
+  estimated_cost_cents: number;
+  tickets_completed: number;
+}
+
+export interface FleetStatus {
+  total_workers: number;
+  status_counts: Record<string, number>;
+  queue_depth: number;
+  workers: WorkerSummary[];
+}
+
+export interface BulkActionResult {
+  count: number;
+  errors: Array<{ worker_id: string; error: string }>;
+}
+
+export interface Capacity {
+  queue_by_type: Record<string, number>;
+  workers_by_type: Record<string, number>;
+  workers_by_state: Record<string, number>;
+  recommended_action: string;
+}
+
+export interface WorkerTemplateIn {
+  label: string;
+  agent_type: string;
+  tool: string;
+  compute_type: string;
+  instance_type: string;
+  llm_key_id: string;
+  repo_url?: string;
+  branch_convention?: string;
+  idle_timeout_seconds?: number;
+  ticket_filter?: {
+    types?: string[];
+    tags?: string[];
+    space_ids?: string[];
+    priorities?: string[];
+  };
+}
+
+export interface WorkerTemplate {
+  template_id: string;
+  label: string;
+  agent_type: string;
+  tool: string;
+  compute_type: string;
+  instance_type: string;
+  llm_key_id: string;
+  repo_url: string;
+  branch_convention: string;
+  idle_timeout_seconds: number;
+  ticket_filter?: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface WorkerTemplateList {
+  templates: WorkerTemplate[];
+  count: number;
+}

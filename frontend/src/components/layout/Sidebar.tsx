@@ -52,6 +52,8 @@ import {
   ShieldAlert,
   Container,
   Bot,
+  Bot,
+  LayoutGrid,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -148,6 +150,7 @@ const NAV_GROUPS: NavGroup[] = [
     i18nKey: "nav.aiAgents",
     items: [
       { label: "Workers", i18nKey: "nav.workers", path: "/agents/workers", icon: <Bot className="h-5 w-5" /> },
+      { label: "Fleet Dashboard", i18nKey: "nav.fleetDashboard", path: "/agents/fleet", icon: <LayoutGrid className="h-5 w-5" /> },
     ],
   },
   {
