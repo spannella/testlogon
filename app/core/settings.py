@@ -1574,4 +1574,10 @@ class Settings:
     # Licensing (LICENSE-002 / LICENSE-004)
 
 
+    # Delegates (DELEGATE-001)
+
+    # Broadcast Moderation (DELEGATE-004)
+    broadcast_moderation_table_name: str = os.environ.get("BROADCAST_MODERATION_TABLE_NAME", "broadcast_moderation")
+
+
 S = Settings()

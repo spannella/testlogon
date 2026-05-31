@@ -5015,4 +5015,51 @@ export interface LicenseRequestApprovalOut {
 export interface LicenseRequestListOut {
   items: LicenseRequestOut[];
   next_cursor?: string | null;
+// -- Broadcast Delegation (DELEGATE-004) --
+
+export interface BroadcastMuteReq {
+  user_id: string;
+  duration_seconds: number;
+}
+
+export interface BroadcastBanReq {
+  user_id: string;
+  reason?: string;
+}
+
+export interface BroadcastAnnouncementReq {
+  text: string;
+}
+
+export interface BroadcastScheduleReq {
+  title: string;
+  scheduled_at: number;
+  profile_id?: string;
+}
+
+export interface BroadcastModeratorOut {
+  delegate_id: string;
+  display_name: string;
+  connected_at: number;
+  status: string;
+  actions_count: number;
+}
+
+export interface BroadcastBanOut {
+  user_id: string;
+  banned_by: string;
+  banned_by_display_name: string;
+  banned_at: number;
+  reason: string;
+}
+
+export interface BroadcastModerationLogEntry {
+  event_id: string;
+  moderator_id: string;
+  moderator_display_name: string;
+  moderation_type: string;
+  target_user_id?: string;
+  target_message_id?: string;
+  details?: Record<string, unknown>;
+  ts: number;
 }

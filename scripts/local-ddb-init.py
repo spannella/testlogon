@@ -1311,6 +1311,9 @@ def _table_defs() -> List[TableDef]:
         # Issued Licenses (LICENSE-002) + License Requests (LICENSE-004)
         TableDef(
             _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),
+        # Delegates (DELEGATE-001)
+        TableDef(
+            _resolve_table_name(S.delegates_table_name, "delegates"),
             "pk",
             "sk",
             gsi=[
@@ -1369,6 +1372,12 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI4", "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N", "GSI4SK": "N"},
+        ),
+        # Broadcast Moderation (DELEGATE-004)
+        TableDef(
+            _resolve_table_name(S.broadcast_moderation_table_name, "broadcast_moderation"),
+            "pk",
+            "sk",
         ),
     ]
 

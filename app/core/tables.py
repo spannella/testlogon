@@ -152,6 +152,7 @@ class Tables:
     notifications_engine: Any
     call_history: Any
     kyc_risk_scores: Any
+    broadcast_moderation: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -298,4 +299,5 @@ T = Tables(
     notifications_engine=ddb.Table(S.notifications_engine_table_name),
     call_history=ddb.Table(S.call_history_table_name),
     kyc_risk_scores=ddb.Table(S.kyc_risk_scores_table_name),
+    broadcast_moderation=ddb.Table(S.broadcast_moderation_table_name),
 )

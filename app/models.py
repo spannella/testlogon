@@ -5430,3 +5430,50 @@ class LicenseRequestApprovalOut(BaseModel):
 class LicenseRequestListOut(BaseModel):
     items: List[LicenseRequestOut] = Field(default_factory=list)
     next_cursor: Optional[str] = None
+# -- Broadcast Delegation (DELEGATE-004) --
+
+class BroadcastMuteIn(BaseModel):
+    user_id: str
+    duration_seconds: int = Field(ge=30, le=86400, description="Mute duration in seconds (30s to 24h)")
+
+
+class BroadcastBanIn(BaseModel):
+    user_id: str
+    reason: str = Field(default="", max_length=500)
+
+
+class BroadcastAnnouncementIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class BroadcastScheduleIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    scheduled_at: int = Field(description="Unix timestamp, must be in the future")
+    profile_id: Optional[str] = None
+
+
+class BroadcastModeratorOut(BaseModel):
+    delegate_id: str
+    display_name: str = ""
+    connected_at: int = 0
+    status: str = "online"
+    actions_count: int = 0
+
+
+class BroadcastBanOut(BaseModel):
+    user_id: str
+    banned_by: str
+    banned_by_display_name: str = ""
+    banned_at: int = 0
+    reason: str = ""
+
+
+class BroadcastModerationLogEntry(BaseModel):
+    event_id: str
+    moderator_id: str
+    moderator_display_name: str = ""
+    moderation_type: str = ""
+    target_user_id: Optional[str] = None
+    target_message_id: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+    ts: int = 0

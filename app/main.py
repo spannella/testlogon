@@ -73,6 +73,8 @@ from app.routers.activity_feed import router as activity_feed_router
 from app.routers.discovery import router as discovery_router
 from app.routers.search import router as search_router
 from app.routers.broadcast import router as broadcast_router
+from app.routers.delegates import router as delegates_router
+from app.routers.delegate_broadcast import router as delegate_broadcast_router
 from app.routers.broadcast_clips import router as broadcast_clips_router
 from app.routers.broadcast_devtools import router as broadcast_devtools_router
 from app.routers.entitlements import router as entitlements_router
@@ -500,6 +502,8 @@ def create_app() -> FastAPI:
     app.include_router(watermark_internal_router)
     app.include_router(watch_party_router)
     app.include_router(media_preferences_router)
+    app.include_router(delegates_router)
+    app.include_router(delegate_broadcast_router)
     app.include_router(content_calendar_router)
     app.include_router(tenant_admin_router)
     app.include_router(tenant_public_router)
