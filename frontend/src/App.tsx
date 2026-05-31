@@ -48,6 +48,7 @@ const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
 const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
 const RemoteDesktopPage = lazy(() => import("@/pages/remote/RemoteDesktopPage"));
 const K8sLauncherPage = lazy(() => import("@/pages/remote/K8sLauncherPage"));
+const ComputeSpendingPage = lazy(() => import("@/pages/remote/ComputeSpendingPage"));
 const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
@@ -190,6 +191,7 @@ export default function App() {
           <Route path="clips/:clipId" element={<ClipPlayerPage />} />
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
           <Route path="remote/k8s" element={<K8sLauncherPage />} />
+          <Route path="remote/billing" element={<ComputeSpendingPage />} />
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />

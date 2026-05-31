@@ -5896,3 +5896,79 @@ class AdBreakdownEntryOut(BaseModel):
 class AdAccountCreateIn(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=200)
     billing_email: str = Field(..., min_length=3, max_length=320)
+# ---------------------------------------------------------------------------
+# Compute Cost Tracking (INFRA-005)
+# ---------------------------------------------------------------------------
+
+class ComputeBillingTickIn(BaseModel):
+    resource_type: str = Field(..., pattern=r"^(ec2|k8s)$")
+    resource_id: str = Field(..., min_length=1, max_length=128)
+    resource_label: str = Field(default="", max_length=256)
+    instance_type_or_preset: str = Field(..., min_length=1, max_length=64)
+    duration_minutes: float = Field(..., gt=0, le=1440)
+
+
+class ComputeBillingTickOut(BaseModel):
+    ok: bool = True
+    entry_id: str
+    amount_cents: int
+    wallet_balance_after: int
+    rate_cents_per_min: float
+    created_at: int
+
+
+class SpendingSummaryOut(BaseModel):
+    month: str
+    total_cents: int
+    budget_cents: int
+    budget_pct: float
+    ec2_total_cents: int
+    k8s_total_cents: int
+    resource_count: int
+
+
+class BillingLedgerEntry(BaseModel):
+    entry_id: str
+    resource_type: str
+    resource_id: str
+    resource_label: str
+    instance_type_or_preset: str
+    event: str
+    amount_cents: int
+    duration_minutes: float
+    rate_cents_per_min: float
+    wallet_balance_after: int
+    created_at: int
+
+
+class BillingLedgerOut(BaseModel):
+    entries: List[BillingLedgerEntry]
+    count: int
+    cursor: Optional[str] = None
+
+
+class ResourceBreakdownEntry(BaseModel):
+    resource_id: str
+    resource_label: str
+    resource_type: str
+    instance_type_or_preset: str
+    total_cents: int
+    total_minutes: float
+    status: str
+
+
+class ResourceBreakdownOut(BaseModel):
+    resources: List[ResourceBreakdownEntry]
+    month: str
+
+
+class BudgetOut(BaseModel):
+    budget_monthly_cents: int
+    alert_thresholds: List[int]
+    current_month_total_cents: int
+    current_month_pct: float
+
+
+class UpdateBudgetIn(BaseModel):
+    budget_monthly_cents: int = Field(..., ge=100, le=1_000_000)
+    alert_thresholds: Optional[List[int]] = None

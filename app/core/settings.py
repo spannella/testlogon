@@ -1608,6 +1608,11 @@ class Settings:
     # Group Treasury (GROUP-004)
     group_treasury_enabled: bool = os.environ.get("GROUP_TREASURY_ENABLED", "1") not in ("0", "false", "False")
     # Agent Orchestration (AGENT-002 / AGENT-003)
+    # Compute Cost Tracking (INFRA-005)
+    compute_billing_table_name: str = os.environ.get("COMPUTE_BILLING_TABLE_NAME", "compute_billing")
+    compute_billing_enabled: bool = os.environ.get("COMPUTE_BILLING_ENABLED", "1") not in ("0", "false", "False")
+    compute_billing_poll_interval: int = int(os.environ.get("COMPUTE_BILLING_POLL_INTERVAL", "300"))
+    compute_billing_default_budget_cents: int = int(os.environ.get("COMPUTE_BILLING_DEFAULT_BUDGET_CENTS", "5000"))
 
 
 S = Settings()
