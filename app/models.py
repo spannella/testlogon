@@ -7665,3 +7665,188 @@ class TriggerPmOperationIn(BaseModel):
         "idea_triage", "backlog_prioritize", "report_generate", "blocker_detect"
     ]
     report_type: Literal["daily", "weekly"] = "daily"
+
+
+# ---------------------------------------------------------------------------
+# Stylist / UI Agent (AGENT-016)
+# ---------------------------------------------------------------------------
+
+
+class StylistScreenshot(BaseModel):
+    url: str = ""
+    viewport: str = ""
+    label: str = ""
+
+
+class StylistAnnotation(BaseModel):
+    screenshot_index: int = 0
+    x: int = 0
+    y: int = 0
+    width: int = 0
+    height: int = 0
+    issue: str = ""
+
+
+class UIReviewIssueOut(BaseModel):
+    issue_id: str
+    category: str
+    severity: Literal["error", "warning", "info"]
+    title: str = ""
+    description: str = ""
+    page_element: Optional[str] = None
+    screenshot_index: Optional[int] = None
+    annotation_rect: Optional[Dict[str, int]] = None
+    design_rule_id: Optional[str] = None
+    suggestion: str = ""
+    created_ticket_id: Optional[str] = None
+
+
+class UIReviewIssueIn(BaseModel):
+    category: Literal[
+        "spacing", "color", "typography", "layout", "component", "responsive", "accessibility", "design"
+    ] = "design"
+    severity: Literal["error", "warning", "info"] = "warning"
+    title: str = Field(default="", max_length=300)
+    description: str = Field(default="", max_length=2000)
+    page_element: Optional[str] = Field(default=None, max_length=500)
+    screenshot_index: Optional[int] = None
+    annotation_rect: Optional[Dict[str, int]] = None
+    suggestion: str = Field(default="", max_length=2000)
+
+
+class UIReviewOut(BaseModel):
+    review_id: str
+    agent_id: str = ""
+    worker_id: str = ""
+    page_url: str
+    page_name: str = ""
+    review_type: Literal["full_page", "component", "responsive", "accessibility", "pr_review"]
+    source_ref: Optional[str] = None
+    screenshots: List[Dict[str, Any]] = Field(default_factory=list)
+    annotations: List[Dict[str, Any]] = Field(default_factory=list)
+    design_score: float = 0.0
+    accessibility_score: Optional[float] = None
+    issues_found: int = 0
+    issues: List[UIReviewIssueOut] = Field(default_factory=list)
+    status: Literal["completed", "in_progress", "failed"] = "completed"
+    created_at: int = 0
+
+
+class CreateUIReviewIn(BaseModel):
+    page_url: str = Field(..., min_length=1, max_length=500)
+    page_name: str = Field(default="", max_length=300)
+    review_type: Literal["full_page", "component", "responsive", "accessibility", "pr_review"] = "full_page"
+    agent_id: str = Field(default="", max_length=200)
+    worker_id: str = Field(default="", max_length=200)
+    source_ref: Optional[str] = Field(default=None, max_length=200)
+    design_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    accessibility_score: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    screenshots: List[StylistScreenshot] = Field(default_factory=list)
+    annotations: List[StylistAnnotation] = Field(default_factory=list)
+    issues: List[UIReviewIssueIn] = Field(default_factory=list)
+
+
+class UIReviewListOut(BaseModel):
+    reviews: List[UIReviewOut] = Field(default_factory=list)
+    count: int = 0
+    next_cursor: Optional[str] = None
+
+
+class PageDesignScoreOut(BaseModel):
+    page_url: str
+    page_name: str = ""
+    design_score: float = 0.0
+    accessibility_score: Optional[float] = None
+    issues_found: int = 0
+    last_reviewed: int = 0
+
+
+class OverallDesignScoreOut(BaseModel):
+    overall_design_score: float = 0.0
+    overall_accessibility_score: float = 0.0
+    pages_reviewed: int = 0
+    total_issues: int = 0
+
+
+class DesignRuleOut(BaseModel):
+    rule_id: str
+    name: str
+    category: str
+    description: str = ""
+    severity: Literal["error", "warning", "info"] = "warning"
+    enabled: bool = True
+    config: Optional[Dict[str, Any]] = None
+    created_at: int = 0
+
+
+class CreateDesignRuleIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    category: Literal[
+        "spacing", "color", "typography", "layout", "component", "responsive", "accessibility"
+    ]
+    description: str = Field(..., min_length=1, max_length=1000)
+    severity: Literal["error", "warning", "info"]
+    config: Optional[Dict[str, Any]] = None
+
+
+class UpdateDesignRuleIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    category: Optional[
+        Literal["spacing", "color", "typography", "layout", "component", "responsive", "accessibility"]
+    ] = None
+    description: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+    severity: Optional[Literal["error", "warning", "info"]] = None
+    enabled: Optional[bool] = None
+    config: Optional[Dict[str, Any]] = None
+
+
+class CreateIssueTicketOut(BaseModel):
+    ok: bool = True
+    ticket_id: str
+    review_id: str
+    issue_id: str
+
+
+class TriggerUIReviewIn(BaseModel):
+    pages: List[str] = Field(..., min_length=1, max_length=20)
+    review_type: Literal["full_page", "responsive", "accessibility"] = "full_page"
+    viewports: Optional[List[Dict[str, int]]] = None
+
+
+class TriggerUIReviewOut(BaseModel):
+    ok: bool = True
+    reviews: List[UIReviewOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class StylistConfigOut(BaseModel):
+    review_on_pr_merge: bool = True
+    review_on_ui_ticket: bool = True
+    periodic_review_frequency: str = "weekly"
+    periodic_review_day: str = "wednesday"
+    periodic_review_hour_utc: int = 10
+    viewports: List[Dict[str, Any]] = Field(default_factory=list)
+    pages_to_review: List[str] = Field(default_factory=list)
+    design_system_ref: str = "shadcn-ui"
+    tailwind_config_path: str = "frontend/src/globals.css"
+    contrast_ratio_min: float = 4.5
+    auto_create_tickets: bool = False
+    ticket_min_severity: Literal["error", "warning", "info"] = "warning"
+    brand_colors: List[str] = Field(default_factory=list)
+    font_families: List[str] = Field(default_factory=list)
+    updated_at: Optional[int] = None
+
+
+class UpdateStylistConfigIn(BaseModel):
+    review_on_pr_merge: Optional[bool] = None
+    review_on_ui_ticket: Optional[bool] = None
+    periodic_review_frequency: Optional[Literal["daily", "weekly", "biweekly"]] = None
+    periodic_review_day: Optional[str] = None
+    periodic_review_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
+    viewports: Optional[List[Dict[str, int]]] = None
+    pages_to_review: Optional[List[str]] = None
+    contrast_ratio_min: Optional[float] = Field(default=None, ge=3.0, le=7.0)
+    auto_create_tickets: Optional[bool] = None
+    ticket_min_severity: Optional[Literal["error", "warning", "info"]] = None
+    brand_colors: Optional[List[str]] = None
+    font_families: Optional[List[str]] = None

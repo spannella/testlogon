@@ -165,6 +165,8 @@ class Tables:
     agent_runs: Any
     agent_doc_coverage: Any
     agent_doc_templates: Any
+    stylist_ui_reviews: Any
+    stylist_design_rules: Any
     deployment_log: Any
     feature_decompositions: Any
     agent_feature_ideas: Any
@@ -331,6 +333,8 @@ T = Tables(
     agent_runs=ddb.Table(S.agent_runs_table_name),
     agent_doc_coverage=ddb.Table(S.agent_doc_coverage_table_name),
     agent_doc_templates=ddb.Table(S.agent_doc_templates_table_name),
+    stylist_ui_reviews=ddb.Table(S.stylist_ui_reviews_table_name),
+    stylist_design_rules=ddb.Table(S.stylist_design_rules_table_name),
     deployment_log=ddb.Table(S.deployment_log_table_name),
     feature_decompositions=ddb.Table(S.feature_decompositions_table_name),
     agent_feature_ideas=ddb.Table(S.agent_feature_ideas_table_name),

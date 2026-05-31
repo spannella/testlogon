@@ -598,6 +598,8 @@ def create_app() -> FastAPI:
     app.include_router(agent_pm_router)
     from app.routers.agent_project import router as agent_project_router
     app.include_router(agent_project_router)
+    from app.routers.agent_stylist import agent_stylist_router
+    app.include_router(agent_stylist_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)

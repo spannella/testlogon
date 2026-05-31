@@ -1647,6 +1647,17 @@ class Settings:
     agent_coder_enabled: bool = os.environ.get("AGENT_CODER_ENABLED", "1") not in ("0", "false", "False")
     agent_coder_execute_commands: bool = os.environ.get("AGENT_CODER_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
 
+    # Stylist / UI Agent (AGENT-016). Reuses the agent_types table for stylist_config.
+    stylist_ui_reviews_table_name: str = os.environ.get("STYLIST_UI_REVIEWS_TABLE_NAME", "stylist_ui_reviews")
+    stylist_design_rules_table_name: str = os.environ.get("STYLIST_DESIGN_RULES_TABLE_NAME", "stylist_design_rules")
+    stylist_agent_enabled: bool = os.environ.get("STYLIST_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    # When false (default, and always in E2E), the stylist lifecycle never drives a
+    # real browser / Playwright capture — review payloads are accepted/generated and
+    # stored verbatim so the lifecycle is deterministic / testable.
+    stylist_agent_execute_commands: bool = os.environ.get("STYLIST_AGENT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
+    stylist_agent_pr_trigger_enabled: bool = os.environ.get("STYLIST_PR_TRIGGER_ENABLED", "0") not in ("0", "false", "False")
+    stylist_agent_ticket_creation_enabled: bool = os.environ.get("STYLIST_TICKET_CREATION_ENABLED", "0") not in ("0", "false", "False")
+
     # Documentation Agent (AGENT-014). Reuses the agent_types table for doc_config.
     agent_doc_coverage_table_name: str = os.environ.get("AGENT_DOC_COVERAGE_TABLE_NAME", "agent_doc_coverage")
     agent_doc_templates_table_name: str = os.environ.get("AGENT_DOC_TEMPLATES_TABLE_NAME", "agent_doc_templates")
