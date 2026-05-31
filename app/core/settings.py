@@ -1243,6 +1243,8 @@ class Settings:
     ad_accounts_table_name: str = os.environ.get("DDB_AD_ACCOUNTS", "AdAccounts")
     ad_campaigns_table_name: str = os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns")
     ad_creatives_table_name: str = os.environ.get("DDB_AD_CREATIVES", "AdCreatives")
+    ad_campaigns_table_name: str = os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns")  # ADS-001
+    ad_targeting_table_name: str = os.environ.get("DDB_AD_TARGETING", "AdTargeting")  # ADS-003
 
     # View-Once / Rental Access (VOD-019)
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")

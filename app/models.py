@@ -4424,6 +4424,131 @@ class CreativeOut(BaseModel):
     reviewed_by: Optional[str] = None
     promo_code_id: Optional[str] = None
     affiliate_link_id: Optional[str] = None
+# ── Ad Targeting (ADS-003) ──────────────────────────────────────────────────
+
+VALID_AGE_RANGES = {"18-24", "25-34", "35-44", "45-54", "55+"}
+VALID_GENDERS = {"male", "female", "other"}
+VALID_DEVICE_TYPES = {"mobile", "desktop", "tablet"}
+VALID_CONTENT_TYPES = {"newsfeed", "broadcast", "vod"}
+VALID_AD_CATEGORIES = {
+    "gaming", "music", "fitness", "beauty", "tech", "food", "travel",
+    "finance", "education", "entertainment", "lifestyle", "sports",
+}
+_ISO_3166_PATTERN = re.compile(r"^[A-Z]{2}$")
+
+
+class TargetingCreateIn(BaseModel):
+    name: str = Field(default="Default", max_length=100)
+    age_ranges: Optional[List[str]] = None
+    genders: Optional[List[str]] = None
+    country_codes: Optional[List[str]] = None
+    regions: Optional[List[str]] = None
+    cities: Optional[List[str]] = None
+    content_categories: Optional[List[str]] = None
+    active_hours: Optional[List[int]] = None
+    device_types: Optional[List[str]] = None
+    new_user_only: bool = False
+    creator_ids: Optional[List[str]] = None
+    content_types: Optional[List[str]] = None
+    exclude_creator_ids: Optional[List[str]] = None
+    exclude_categories: Optional[List[str]] = None
+
+    @field_validator("age_ranges")
+    @classmethod
+    def validate_age_ranges(cls, v):
+        if v is None:
+            return v
+        for r in v:
+            if r not in VALID_AGE_RANGES:
+                raise ValueError(f"Invalid age range: {r}. Must be one of {VALID_AGE_RANGES}")
+        return v
+
+    @field_validator("genders")
+    @classmethod
+    def validate_genders(cls, v):
+        if v is None:
+            return v
+        for g in v:
+            if g not in VALID_GENDERS:
+                raise ValueError(f"Invalid gender: {g}. Must be one of {VALID_GENDERS}")
+        return v
+
+    @field_validator("country_codes")
+    @classmethod
+    def validate_country_codes(cls, v):
+        if v is None:
+            return v
+        for code in v:
+            if not _ISO_3166_PATTERN.match(code):
+                raise ValueError(f"Invalid country code: {code}. Must be ISO 3166-1 alpha-2")
+        return v
+
+    @field_validator("active_hours")
+    @classmethod
+    def validate_active_hours(cls, v):
+        if v is None:
+            return v
+        for h in v:
+            if not (0 <= h <= 23):
+                raise ValueError(f"Active hour {h} out of range. Must be 0-23")
+        return v
+
+    @field_validator("device_types")
+    @classmethod
+    def validate_device_types(cls, v):
+        if v is None:
+            return v
+        for d in v:
+            if d not in VALID_DEVICE_TYPES:
+                raise ValueError(f"Invalid device type: {d}. Must be one of {VALID_DEVICE_TYPES}")
+        return v
+
+    @field_validator("content_types")
+    @classmethod
+    def validate_content_types(cls, v):
+        if v is None:
+            return v
+        for ct in v:
+            if ct not in VALID_CONTENT_TYPES:
+                raise ValueError(f"Invalid content type: {ct}. Must be one of {VALID_CONTENT_TYPES}")
+        return v
+
+    @field_validator("creator_ids")
+    @classmethod
+    def validate_creator_ids_limit(cls, v):
+        if v is not None and len(v) > 100:
+            raise ValueError("Maximum 100 creator IDs per targeting set")
+        return v
+
+    @field_validator("exclude_creator_ids")
+    @classmethod
+    def validate_no_contradictory_creators(cls, v, info):
+        if v is None:
+            return v
+        creator_ids = info.data.get("creator_ids") or []
+        overlap = set(v) & set(creator_ids)
+        if overlap:
+            raise ValueError(f"Cannot exclude and include the same creator: {overlap}")
+        return v
+
+
+class TargetingOut(BaseModel):
+    target_set_id: str
+    campaign_id: str
+    name: str
+    age_ranges: Optional[List[str]] = None
+    genders: Optional[List[str]] = None
+    country_codes: Optional[List[str]] = None
+    regions: Optional[List[str]] = None
+    cities: Optional[List[str]] = None
+    content_categories: Optional[List[str]] = None
+    active_hours: Optional[List[int]] = None
+    device_types: Optional[List[str]] = None
+    new_user_only: bool = False
+    creator_ids: Optional[List[str]] = None
+    content_types: Optional[List[str]] = None
+    exclude_creator_ids: Optional[List[str]] = None
+    exclude_categories: Optional[List[str]] = None
     created_at: int
     updated_at: int
 
@@ -4505,3 +4630,34 @@ class LicenseCheckOut(BaseModel):
     issued_license_id: Optional[str] = None
     license_mode: Optional[str] = None
     terms: Optional[Dict[str, Any]] = None
+class AudienceEstimateOut(BaseModel):
+    estimated_reach: int
+    targeting_summary: dict
+
+
+class CreatorAdSettingsIn(BaseModel):
+    allow_ads: Optional[bool] = None
+    allowed_ad_categories: Optional[List[str]] = None
+    min_cpm_cents: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("allowed_ad_categories")
+    @classmethod
+    def validate_ad_categories(cls, v):
+        if v is None:
+            return v
+        for cat in v:
+            if cat not in VALID_AD_CATEGORIES:
+                raise ValueError(f"Invalid ad category: {cat}")
+        return v
+
+
+class CreatorAdSettingsOut(BaseModel):
+    allow_ads: bool = True
+    allowed_ad_categories: List[str] = Field(default_factory=list)
+    min_cpm_cents: int = 0
+    updated_at: Optional[int] = None
+
+
+class AdBlockIn(BaseModel):
+    account_id: str
+    reason: str = ""

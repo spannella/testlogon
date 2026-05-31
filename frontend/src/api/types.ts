@@ -5044,4 +5044,43 @@ export interface TemplatePreviewOut {
   resolved_variables: Record<string, string>;
   unresolved_variables: string[];
   quick_replies?: QuickReply[];
+// ── Ad Targeting (ADS-003) ──────────────────────────────────────────────────
+
+export interface AdTargeting {
+  target_set_id: string;
+  campaign_id: string;
+  name: string;
+  age_ranges?: string[] | null;
+  genders?: string[] | null;
+  country_codes?: string[] | null;
+  regions?: string[] | null;
+  cities?: string[] | null;
+  content_categories?: string[] | null;
+  active_hours?: number[] | null;
+  device_types?: string[] | null;
+  new_user_only: boolean;
+  creator_ids?: string[] | null;
+  content_types?: string[] | null;
+  exclude_creator_ids?: string[] | null;
+  exclude_categories?: string[] | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AudienceEstimate {
+  estimated_reach: number;
+  targeting_summary: Record<string, unknown>;
+}
+
+export interface CreatorAdSettings {
+  allow_ads: boolean;
+  allowed_ad_categories: string[];
+  min_cpm_cents: number;
+  updated_at?: number;
+}
+
+export interface AdBlock {
+  account_id: string;
+  blocked_at: number;
+  reason: string;
 }

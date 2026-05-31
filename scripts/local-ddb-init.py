@@ -1276,6 +1276,15 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
+        # Ad Targeting (ADS-003)
+        TableDef(
+            os.environ.get("DDB_AD_TARGETING", "AdTargeting"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
         ),
     ]
 

@@ -49,6 +49,7 @@ const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
 const IssuedLicensesPage = lazy(() => import("@/pages/licenses/IssuedLicensesPage"));
 const HeldLicensesPage = lazy(() => import("@/pages/licenses/HeldLicensesPage"));
 const LicensedLibraryPage = lazy(() => import("@/pages/licenses/LicensedLibraryPage"));
+const TargetingEditorPage = lazy(() => import("@/pages/ads/TargetingEditor"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
@@ -159,6 +160,7 @@ export default function App() {
           <Route path="licenses/issued" element={<IssuedLicensesPage />} />
           <Route path="licenses/held" element={<HeldLicensesPage />} />
           <Route path="licenses/library" element={<LicensedLibraryPage />} />
+          <Route path="ads/targeting" element={<TargetingEditorPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
