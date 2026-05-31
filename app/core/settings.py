@@ -1598,6 +1598,10 @@ class Settings:
     # Agent Worker Provisioning (AGENT-002)
     agent_workers_table_name: str = os.environ.get("AGENT_WORKERS_TABLE_NAME", "agent_workers")
     agent_max_workers_per_user: int = int(os.environ.get("AGENT_MAX_WORKERS_PER_USER", "5"))
+    # User Groups (GROUP-001)
+
+    # Group Treasury (GROUP-004)
+    group_treasury_enabled: bool = os.environ.get("GROUP_TREASURY_ENABLED", "1") not in ("0", "false", "False")
 
 
 S = Settings()

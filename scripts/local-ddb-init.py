@@ -1333,6 +1333,10 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.delegates_table_name, "delegates"),
             "pk",
             "sk",
+        # User Groups (GROUP-001)
+        TableDef(
+            _resolve_table_name(S.ddb_user_groups_table, "user_groups"),
+            "pk", "sk",
             gsi=[
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},

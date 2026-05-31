@@ -103,6 +103,7 @@ const LicenseRequestsPage = lazy(() => import("@/pages/licenses/LicenseRequestsP
 const KycTierProgress = lazy(() => import("@/pages/kyc/KycTierProgress"));
 const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
 const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
+const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
 
 function PageSpinner() {
   return (
@@ -213,6 +214,7 @@ export default function App() {
           <Route path="orgs/:orgId" element={<OrgDashboard />} />
           <Route path="groups" element={<GroupsListPage />} />
           <Route path="groups/:groupId" element={<GroupPage />} />
+          <Route path="groups/:groupId/treasury" element={<GroupTreasuryPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />
