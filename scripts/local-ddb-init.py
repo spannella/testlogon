@@ -1152,6 +1152,17 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "slug-index", "partition_key": "slug", "sort_key": "org_id"},
             ],
         ),
+        # User Groups (GROUP-001 / GROUP-002)
+        TableDef(
+            _resolve_table_name(S.ddb_user_groups_table, "user_groups"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
         # Watch Parties (ENGAGE-004)
         TableDef(
             _resolve_table_name(S.watch_parties_table_name, "watch_parties"),

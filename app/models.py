@@ -4283,6 +4283,7 @@ class SyndicateAuditOut(BaseModel):
     details: Optional[Dict[str, Any]] = None
     ts: int = 0
 # -- User Groups (GROUP-001) --
+# ── User Groups (GROUP-001) ──────────────────────────────────────────────────
 
 class CreateGroupIn(BaseModel):
     name: str = Field(..., min_length=3, max_length=100)
@@ -4296,6 +4297,7 @@ class CreateGroupIn(BaseModel):
         if not v.strip():
             raise ValueError("Group name cannot be blank")
         return v.strip()
+
 
 class UpdateGroupIn(BaseModel):
     name: Optional[str] = Field(default=None, min_length=3, max_length=100)
@@ -4315,6 +4317,23 @@ class GroupReviewRequestIn(BaseModel):
 class GroupUpdateRoleIn(BaseModel):
     role: Literal["moderator", "member"]
 
+
+class GroupInviteIn(BaseModel):
+    user_id: str
+
+
+class GroupInviteResponseIn(BaseModel):
+    accept: bool
+
+
+class GroupReviewRequestIn(BaseModel):
+    approved: bool
+
+
+class GroupUpdateRoleIn(BaseModel):
+    role: Literal["moderator", "member"]
+
+
 class GroupOut(BaseModel):
     group_id: str
     name: str
@@ -4323,11 +4342,13 @@ class GroupOut(BaseModel):
     visibility: str = "public"
     status: str = "active"
     admin_user_id: str
+    admin_user_id: str = ""
     cover_image_url: Optional[str] = None
     member_count: int = 0
     created_at: int = 0
     updated_at: int = 0
     my_role: Optional[str] = None
+
 
 class GroupMemberOut(BaseModel):
     user_id: str
@@ -4336,6 +4357,7 @@ class GroupMemberOut(BaseModel):
     display_name: str = ""
     joined_at: Optional[int] = None
     promoted_at: Optional[int] = None
+
 
 class GroupListOut(BaseModel):
     groups: List[GroupOut] = Field(default_factory=list)
@@ -5064,3 +5086,73 @@ class AdminRevenueEntryOut(BaseModel):
 class AdminRevenueListOut(BaseModel):
     transactions: List[AdminRevenueEntryOut] = Field(default_factory=list)
     next_cursor: Optional[str] = None
+
+class GroupMemberListOut(BaseModel):
+    members: List[GroupMemberOut] = Field(default_factory=list)
+    count: int = 0
+
+
+# ── Group Feed (GROUP-002) ───────────────────────────────────────────────────
+
+class CreateGroupPostIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=10000)
+    body_format: Literal["plain", "markdown", "richtext"] = "plain"
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+    audience: Literal["public", "members_only"] = "public"
+    unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("text")
+    @classmethod
+    def text_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Post text cannot be blank or whitespace-only")
+        return v
+
+    @field_validator("image_url")
+    @classmethod
+    def validate_image_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not (v.startswith("http://") or v.startswith("https://") or v.startswith("/mock/")):
+            raise ValueError("Invalid image URL format")
+        return v
+
+
+class GroupFeedPostOut(BaseModel):
+    post_id: str
+    user_id: str
+    user_display_name: str = ""
+    user_avatar_url: Optional[str] = None
+    text: Optional[str] = None
+    body_format: str = "plain"
+    image_url: Optional[str] = None
+    group_id: str = ""
+    audience: Literal["public", "members_only"] = "public"
+    pinned: bool = False
+    pinned_at: Optional[int] = None
+    pinned_by: Optional[str] = None
+    unlock_price_cents: Optional[int] = None
+    unlocked: bool = True
+    tip_total_cents: int = 0
+    reactions_counts: Dict[str, int] = Field(default_factory=dict)
+    my_reactions: List[str] = Field(default_factory=list)
+    comment_count: int = 0
+    created_at: int = 0
+    updated_at: Optional[int] = None
+
+
+class GroupFeedResponse(BaseModel):
+    posts: List[GroupFeedPostOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    has_more: bool = False
+
+
+class PinPostOut(BaseModel):
+    post_id: str
+    pinned: bool
+    pinned_at: Optional[int] = None
+    pinned_by: Optional[str] = None
+
+
+class DeleteGroupPostOut(BaseModel):
+    ok: bool = True
+    post_id: str
+    deleted_by: str

@@ -126,6 +126,7 @@ class Tables:
     fan_club_channels: Any
     fan_club_messages: Any
     organizations: Any
+    user_groups: Any
     watch_parties: Any
     watch_party_participants: Any
     tenants: Any
@@ -140,7 +141,6 @@ class Tables:
     syndicates: Any
     chat_bots: Any
     bot_assignments: Any
-    user_groups: Any
     ssh_keys: Any
     issued_licenses: Any
     bot_templates: Any
@@ -268,6 +268,7 @@ T = Tables(
     fan_club_channels=ddb.Table(S.fan_club_channels_table_name),
     fan_club_messages=ddb.Table(S.fan_club_messages_table_name),
     organizations=ddb.Table(S.organizations_table_name),
+    user_groups=ddb.Table(S.ddb_user_groups_table),
     watch_parties=ddb.Table(S.watch_parties_table_name),
     watch_party_participants=ddb.Table(S.watch_party_participants_table_name),
     tenants=ddb.Table(S.tenants_table_name),
@@ -282,7 +283,6 @@ T = Tables(
     syndicates=ddb.Table(S.syndicates_table_name),
     chat_bots=ddb.Table(S.chat_bots_table_name),
     bot_assignments=ddb.Table(S.bot_assignments_table_name),
-    user_groups=ddb.Table(S.ddb_user_groups_table),
     ssh_keys=ddb.Table(S.ssh_keys_table_name),
     issued_licenses=ddb.Table(S.issued_licenses_table_name),
     bot_templates=ddb.Table(S.bot_templates_table_name),

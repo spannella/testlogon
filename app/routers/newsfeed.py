@@ -2012,6 +2012,12 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "tags": list(post.get("tags") or []),
         # ENGAGE-002: Poll data
         **_poll_fields_for_post(post, locked_body, viewer_id),
+        # GROUP-002: Group context fields
+        **({"group_id": post["group_id"], "audience": post.get("audience", "public"),
+            "pinned": bool(post.get("pinned")),
+            "pinned_at": int(post["pinned_at"]) if post.get("pinned_at") else None,
+            "pinned_by": post.get("pinned_by")}
+           if post.get("group_id") else {}),
     }
 
 
