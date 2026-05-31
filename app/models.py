@@ -9702,3 +9702,53 @@ class VodRentalStatusOut(BaseModel):
 class VodRentalListOut(BaseModel):
     """List of a viewer's rentals."""
     items: List[VodRentalStatusOut] = Field(default_factory=list)
+# ── Per-Content Revenue Breakdown (FIN-006) ──────────────────────────
+
+class ContentRevenueItem(BaseModel):
+    """Single content item with per-source revenue breakdown (cents)."""
+    content_id: str
+    content_type: str = "post"  # "vod" | "post" | "broadcast"
+    title: str = ""
+    published_at: int = 0
+    tips_cents: int = 0
+    unlocks_cents: int = 0
+    subscriptions_cents: int = 0
+    ads_cents: int = 0
+    vod_cents: int = 0
+    total_cents: int = 0
+
+
+class ContentRevenueListOut(BaseModel):
+    """Paginated list of content items with revenue."""
+    items: List[ContentRevenueItem] = Field(default_factory=list)
+    total_items: int = 0
+    total_revenue_cents: int = 0
+    next_cursor: Optional[str] = None
+    currency: str = "USD"
+
+
+class ContentRevenueTimeSeriesPoint(BaseModel):
+    """Single day in the content revenue time series."""
+    date: str
+    tips_cents: int = 0
+    unlocks_cents: int = 0
+    subscriptions_cents: int = 0
+    ads_cents: int = 0
+    vod_cents: int = 0
+    total_cents: int = 0
+
+
+class ContentRevenueDetailOut(BaseModel):
+    """Revenue breakdown for a single content item with time series."""
+    content_id: str
+    content_type: str = "post"
+    title: str = ""
+    published_at: int = 0
+    tips_cents: int = 0
+    unlocks_cents: int = 0
+    subscriptions_cents: int = 0
+    ads_cents: int = 0
+    vod_cents: int = 0
+    total_cents: int = 0
+    time_series: List[ContentRevenueTimeSeriesPoint] = Field(default_factory=list)
+    currency: str = "USD"
