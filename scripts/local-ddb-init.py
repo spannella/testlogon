@@ -930,6 +930,13 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Admin Ad Platform Moderation Log (ADS-018)
+        TableDef(
+            _resolve_table_name(S.ad_moderation_log_table_name, "AdModerationLog"),
+            "pk",
+            "sk",
+            gsi=[],
+        ),
         # Ad Targeting (ADS-003)
         TableDef(
             os.environ.get("DDB_AD_TARGETING", "AdTargeting"),
