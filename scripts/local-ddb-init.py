@@ -1160,6 +1160,17 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Agent Platform (AGENT-001 .. AGENT-004)
+        TableDef(
+            _resolve_table_name(S.llm_provider_keys_table_name, "llm_provider_keys"),
+            "pk",
+            "sk",
+        ),
+        TableDef(
+            _resolve_table_name(S.agent_workers_table_name, "agent_workers"),
+            "pk",
+            "sk",
+        ),
     ]
 
 

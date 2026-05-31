@@ -3878,3 +3878,156 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# -- Agent Worker Provisioning (AGENT-002) --
+
+class CreateWorkerIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=200)
+    agent_type: str = Field(..., pattern=r"^(coder|qa|reviewer|devops|custom)$")
+    tool: str = Field(..., pattern=r"^(claude_code|codex|custom)$")
+    compute_type: str = Field(..., pattern=r"^(ec2|k8s)$")
+    instance_type: str = Field(..., min_length=1)
+    llm_key_id: str = Field(..., min_length=1)
+    repo_url: str = Field(default="", max_length=500)
+    branch_convention: str = Field(default="agent/{worker_id}/{ticket_id}", max_length=200)
+    idle_timeout_seconds: int = Field(default=7200, ge=600, le=86400)
+    template_id: str = Field(default="", max_length=100)
+    custom_install_commands: Optional[List[str]] = None
+    custom_env_var: str = Field(default="", max_length=100)
+    custom_verify_command: str = Field(default="", max_length=500)
+
+
+class ProvisionStepOut(BaseModel):
+    step: str
+    status: str
+    ts: int
+    detail: str = ""
+
+
+class WorkerOut(BaseModel):
+    worker_id: str
+    user_id: str
+    label: str
+    agent_type: str
+    tool: str
+    tool_version: str = ""
+    compute_type: str
+    compute_instance_id: str = ""
+    instance_type: str
+    llm_key_id: str
+    llm_provider: str = ""
+    host_id: str = ""
+    public_ip: str = ""
+    worker_status: str
+    provision_log: List[ProvisionStepOut] = Field(default_factory=list)
+    repo_url: str = ""
+    branch_convention: str = ""
+    idle_timeout_seconds: int = 7200
+    last_activity_at: int = 0
+    created_at: int = 0
+    started_at: int = 0
+    stopped_at: int = 0
+    terminated_at: int = 0
+    template_id: str = ""
+    error_message: str = ""
+
+
+class WorkerListOut(BaseModel):
+    workers: List[WorkerOut]
+    count: int
+
+
+class ToolInfo(BaseModel):
+    tool: str
+    display_name: str
+    description: str
+    install_time_seconds: int
+    required_provider: str
+
+
+class ToolListOut(BaseModel):
+    tools: List[ToolInfo]
+
+
+class ComputeOption(BaseModel):
+    compute_type: str
+    instance_type: str
+    vcpu: int
+    memory_gb: float
+    cost_cents_per_min: float
+
+
+class ComputeOptionListOut(BaseModel):
+    options: List[ComputeOption]
+
+
+# -- Agent Orchestrator (AGENT-003) --
+
+class TicketFilterConfig(BaseModel):
+    types: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+    space_ids: List[str] = Field(default_factory=list)
+    priorities: List[str] = Field(default_factory=list)
+
+
+# -- Agent Fleet Management (AGENT-004) --
+
+class WorkerSummary(BaseModel):
+    worker_id: str
+    label: str
+    agent_type: str
+    tool: str
+    worker_status: str
+    agent_state: str = "idle"
+    current_ticket_id: str = ""
+    current_ticket_title: str = ""
+    uptime_seconds: int = 0
+    estimated_cost_cents: int = 0
+    tickets_completed: int = 0
+
+class FleetStatusOut(BaseModel):
+    total_workers: int = Field(ge=0)
+    status_counts: Dict[str, int]
+    queue_depth: int = Field(ge=0)
+    workers: List[WorkerSummary]
+
+class BulkActionOut(BaseModel):
+    count: int
+    errors: List[Dict[str, str]] = Field(default_factory=list)
+
+class CapacityOut(BaseModel):
+    queue_by_type: Dict[str, int]
+    workers_by_type: Dict[str, int]
+    workers_by_state: Dict[str, int]
+    recommended_action: str = ""
+
+class WorkerTemplateIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=200)
+    agent_type: str = Field(..., min_length=1, max_length=50)
+    tool: str = Field(..., min_length=1, max_length=50)
+    compute_type: str = Field(..., min_length=1, max_length=50)
+    instance_type: str = Field(..., min_length=1, max_length=100)
+    llm_key_id: str = Field(..., min_length=1, max_length=100)
+    repo_url: str = Field(default="", max_length=500)
+    branch_convention: str = Field(default="", max_length=200)
+    idle_timeout_seconds: int = Field(default=7200, ge=600, le=86400)
+    ticket_filter: Optional[TicketFilterConfig] = None
+
+class WorkerTemplateOut(BaseModel):
+    template_id: str
+    label: str
+    agent_type: str
+    tool: str
+    compute_type: str
+    instance_type: str
+    llm_key_id: str
+    repo_url: str = ""
+    branch_convention: str = ""
+    idle_timeout_seconds: int = 7200
+    ticket_filter: Optional[Dict[str, Any]] = None
+    created_at: int = 0
+
+class WorkerTemplateListOut(BaseModel):
+    templates: List[WorkerTemplateOut]
+    count: int
