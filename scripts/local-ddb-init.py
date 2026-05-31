@@ -1160,6 +1160,16 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Agent Workers (AGENT-002/003)
+        TableDef(
+            _resolve_table_name(S.agent_workers_table_name, "agent_workers"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "pk", "sort_key": "worker_status"},
+                {"index_name": "ByAgentType", "partition_key": "pk", "sort_key": "agent_type"},
+            ],
+        ),
     ]
 
 

@@ -1490,5 +1490,9 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Agent Orchestration (AGENT-002 / AGENT-003)
+    agent_workers_table_name: str = os.environ.get("AGENT_WORKERS_TABLE_NAME", "agent_workers")
+    agent_max_workers_per_user: int = int(os.environ.get("AGENT_MAX_WORKERS_PER_USER", "10"))
+
 
 S = Settings()
