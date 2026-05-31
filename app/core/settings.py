@@ -1340,6 +1340,29 @@ class Settings:
     privacy_export_s3_bucket: str = os.environ.get("PRIVACY_EXPORT_S3_BUCKET", "data-exports")
     privacy_export_rate_limit_hours: int = int(os.environ.get("PRIVACY_EXPORT_RATE_LIMIT_HOURS", "24"))
 
+    # Account Deletion (PLATFORM-018)
+    account_deletion_requests_table_name: str = os.environ.get(
+        "ACCOUNT_DELETION_REQUESTS_TABLE_NAME", "account_deletion_requests"
+    )
+    account_deletion_enabled: bool = os.environ.get(
+        "ACCOUNT_DELETION_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    account_deletion_grace_period_days: int = int(
+        os.environ.get("ACCOUNT_DELETION_GRACE_PERIOD_DAYS", "30")
+    )
+    account_deletion_scheduler_enabled: bool = os.environ.get(
+        "ACCOUNT_DELETION_SCHEDULER_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    account_deletion_scheduler_interval_seconds: int = int(
+        os.environ.get("ACCOUNT_DELETION_SCHEDULER_INTERVAL_SECONDS", "21600")
+    )
+    account_deletion_export_ttl_days: int = int(
+        os.environ.get("ACCOUNT_DELETION_EXPORT_TTL_DAYS", "7")
+    )
+    account_deletion_destructive: bool = os.environ.get(
+        "ACCOUNT_DELETION_DESTRUCTIVE", "0"
+    ) not in ("0", "false", "False")
+
     # Stories / Ephemeral Content (FEED-002)
     stories_enabled: bool = os.environ.get("STORIES_ENABLED", "1") not in ("0", "false", "False")
     story_max_duration_seconds: int = int(os.environ.get("STORY_MAX_DURATION_SECONDS", "60"))

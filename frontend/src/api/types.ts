@@ -7994,3 +7994,71 @@ export interface MemberEarnings {
   split_count: number;
   entries: MemberEarningEntry[];
 }
+
+// ─── Account Deletion (PLATFORM-018) ────────────────────────────
+
+export interface AccountDeletionRequestBody {
+  password: string;
+  confirm_text: string;
+  reason?: string;
+}
+
+export interface AccountDeletionStatus {
+  request_id: string;
+  status: string;
+  created_at: number;
+  scheduled_for?: number | null;
+  grace_days_remaining?: number | null;
+  can_cancel: boolean;
+  retention_hold: boolean;
+  retention_hold_reason?: string | null;
+  reason?: string | null;
+  completed_at?: number | null;
+  deletion_summary?: Record<string, unknown> | null;
+  user_sub?: string | null;
+}
+
+export interface AccountDeletionListResp {
+  requests: AccountDeletionStatus[];
+  total: number;
+}
+
+export interface AccountDeletionCancelResp {
+  ok: boolean;
+  request_id: string;
+  status: string;
+  cancelled_at: number;
+}
+
+export interface PrivacyExportRequestBody {
+  categories: Record<string, boolean>;
+}
+
+export interface PrivacyExportStatus {
+  request_id: string;
+  status: string;
+  created_at: number;
+  completed_at?: number | null;
+  download_url?: string | null;
+  download_expires_at?: number | null;
+  categories_requested: number;
+  file_size_bytes?: number | null;
+  data?: Record<string, unknown> | null;
+}
+
+export interface AccountDeletionRetentionHoldBody {
+  reason: string;
+}
+
+export interface AccountDeletionAuditEvent {
+  event_id: string;
+  event_type: string;
+  actor: string;
+  timestamp: number;
+  details: Record<string, unknown>;
+}
+
+export interface AccountDeletionAuditTrail {
+  request_id: string;
+  events: AccountDeletionAuditEvent[];
+}

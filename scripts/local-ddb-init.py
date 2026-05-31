@@ -992,6 +992,16 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # Account Deletion (PLATFORM-018)
+        TableDef(
+            _resolve_table_name(S.account_deletion_requests_table_name, "account_deletion_requests"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatusScheduled", "partition_key": "status", "sort_key": "scheduled_for"},
+            ],
+            attr_types={"scheduled_for": "N"},
+        ),
         # Webhooks (PLATFORM-002)
         TableDef(
             _resolve_table_name(S.webhook_endpoints_table_name, "webhook_endpoints"),

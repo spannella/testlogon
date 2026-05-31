@@ -8918,3 +8918,114 @@ class MemberEarningsOut(BaseModel):
 class PerformanceScoresIn(BaseModel):
     metric: Literal["views", "engagement", "subscribers"] = "views"
     scores: Dict[str, int] = Field(default_factory=dict)
+
+
+# ─── Account Deletion (PLATFORM-018) ────────────────────────────
+
+_ACCOUNT_DELETION_CONFIRM_TEXT = "DELETE MY ACCOUNT"
+_EXPORT_CATEGORY_KEYS = {
+    "profile", "messages", "posts", "billing", "files",
+    "contacts", "calendar", "subscriptions", "push_devices",
+    "tickets", "sessions",
+}
+
+
+class AccountDeletionRequestIn(BaseModel):
+    """Request body for POST /ui/privacy/account-deletion/request."""
+    password: str = Field(min_length=1, max_length=200)
+    confirm_text: str = Field(...)
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("confirm_text")
+    @classmethod
+    def _validate_confirm(cls, v: str) -> str:
+        if v != _ACCOUNT_DELETION_CONFIRM_TEXT:
+            raise ValueError("Confirmation text must be exactly 'DELETE MY ACCOUNT'")
+        return v
+
+
+class AccountDeletionStatusOut(BaseModel):
+    request_id: str
+    status: str
+    created_at: int
+    scheduled_for: Optional[int] = None
+    grace_days_remaining: Optional[int] = None
+    can_cancel: bool = False
+    retention_hold: bool = False
+    retention_hold_reason: Optional[str] = None
+    reason: Optional[str] = None
+    completed_at: Optional[int] = None
+    deletion_summary: Optional[Dict[str, Any]] = None
+    user_sub: Optional[str] = None
+
+
+class AccountDeletionListOut(BaseModel):
+    requests: List[AccountDeletionStatusOut] = Field(default_factory=list)
+    total: int = 0
+
+
+class AccountDeletionCancelOut(BaseModel):
+    ok: bool = True
+    request_id: str
+    status: str
+    cancelled_at: int
+
+
+class PrivacyExportRequestIn(BaseModel):
+    """Request body for POST /ui/privacy/account-deletion/export."""
+    categories: Dict[str, bool] = Field(
+        default_factory=lambda: {k: True for k in _EXPORT_CATEGORY_KEYS}
+    )
+
+    @field_validator("categories")
+    @classmethod
+    def _validate_categories(cls, v: Dict[str, bool]) -> Dict[str, bool]:
+        invalid = set(v.keys()) - _EXPORT_CATEGORY_KEYS
+        if invalid:
+            raise ValueError(f"Unknown categories: {', '.join(sorted(invalid))}")
+        return v
+
+
+class PrivacyExportStatusOut(BaseModel):
+    request_id: str
+    status: str
+    created_at: int
+    completed_at: Optional[int] = None
+    download_url: Optional[str] = None
+    download_expires_at: Optional[int] = None
+    categories_requested: int = 0
+    file_size_bytes: Optional[int] = None
+    data: Optional[Dict[str, Any]] = None
+
+
+class AccountDeletionRetentionHoldIn(BaseModel):
+    reason: str = Field(min_length=5, max_length=500)
+
+
+class AccountDeletionRetentionHoldOut(BaseModel):
+    ok: bool = True
+    request_id: str
+    retention_hold: bool
+    retention_hold_reason: Optional[str] = None
+    held_by: Optional[str] = None
+    held_at: Optional[int] = None
+
+
+class AccountDeletionAuditEventOut(BaseModel):
+    event_id: str
+    event_type: str
+    actor: str
+    timestamp: int
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AccountDeletionAuditTrailOut(BaseModel):
+    request_id: str
+    events: List[AccountDeletionAuditEventOut] = Field(default_factory=list)
+
+
+class AccountDeletionProcessDueOut(BaseModel):
+    ok: bool = True
+    processed: int = 0
+    skipped: int = 0
+    request_ids: List[str] = Field(default_factory=list)
