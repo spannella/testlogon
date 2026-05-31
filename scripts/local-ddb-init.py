@@ -1347,6 +1347,9 @@ def _table_defs() -> List[TableDef]:
         # Notification Engine (SOC-004)
         TableDef(
             _resolve_table_name(S.notifications_engine_table_name, "notifications_engine"),
+        # Call History (CALL-004): pk=user_id, sk=CALL#{inverted_ts}#{call_id}
+        TableDef(
+            _resolve_table_name(S.call_history_table_name, "call_history"),
             "user_id",
             "sk",
         ),

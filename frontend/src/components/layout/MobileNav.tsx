@@ -24,6 +24,7 @@ import {
   PlaySquare,
   Scale,
   Compass,
+  Phone,
   BarChart3,
   ShieldCheck,
   Share2,
@@ -68,6 +69,7 @@ const PRIMARY_TABS = [
 ];
 
 const MORE_LINKS = [
+  { label: "Call History", i18nKey: "nav.callHistory", path: "/calls/history", icon: Phone },
   { label: "Feed", i18nKey: "nav.feed", path: "/feed", icon: Rss },
   { label: "Discover", i18nKey: "nav.discover", path: "/discover", icon: Compass },
   { label: "Saved", i18nKey: "nav.saved", path: "/saved", icon: Bookmark },

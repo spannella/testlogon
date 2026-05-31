@@ -103,6 +103,7 @@ from app.routers.video_subtitles import router as video_subtitles_router
 from app.routers.transcode_jobs import router as transcode_jobs_router, video_router as transcode_video_router
 from app.routers.call_recording import router as call_recording_router
 from app.routers.call_billing import router as call_billing_router
+from app.routers.call_history import router as call_history_router
 from app.routers.group_calls import router as group_calls_router
 from app.routers.vod_bridge import router as vod_bridge_router
 from app.routers.creator_earnings import router as creator_earnings_router
@@ -454,6 +455,7 @@ def create_app() -> FastAPI:
     app.include_router(transcode_video_router)
     app.include_router(call_recording_router)
     app.include_router(call_billing_router)
+    app.include_router(call_history_router)
     app.include_router(group_calls_router)
     app.include_router(vod_bridge_router)
     app.include_router(creator_earnings_router)

@@ -1558,6 +1558,8 @@ class Settings:
     notifications_engine_table_name: str = os.environ.get("NOTIFICATIONS_ENGINE_TABLE_NAME", "notifications_engine")
     notification_ttl_days: int = int(os.environ.get("NOTIFICATION_TTL_DAYS", "90"))
     notification_batch_window_seconds: int = int(os.environ.get("NOTIFICATION_BATCH_WINDOW_SECONDS", "300"))
+    # Call History (CALL-004)
+    call_history_table_name: str = os.environ.get("CALL_HISTORY_TABLE_NAME", "call_history")
 
 
 S = Settings()

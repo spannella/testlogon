@@ -48,6 +48,7 @@ import {
   Tv,
   Scissors,
   Activity,
+  Phone,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -84,6 +85,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Dashboard", i18nKey: "nav.dashboard", path: "/", icon: <LayoutDashboard className="h-5 w-5" /> },
       { label: "Messages", i18nKey: "nav.messages", path: "/messages", icon: <MessageSquare className="h-5 w-5" /> },
+      { label: "Call History", i18nKey: "nav.callHistory", path: "/calls/history", icon: <Phone className="h-5 w-5" /> },
       { label: "Contacts", i18nKey: "nav.contacts", path: "/contacts", icon: <BookUser className="h-5 w-5" /> },
       { label: "Helpdesk", i18nKey: "nav.helpdesk", path: "/helpdesk", icon: <Headphones className="h-5 w-5" /> },
       { label: "Feed", i18nKey: "nav.feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },

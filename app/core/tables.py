@@ -150,6 +150,7 @@ class Tables:
     license_revenue: Any
     activity_feed: Any
     notifications_engine: Any
+    call_history: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -294,4 +295,5 @@ T = Tables(
     license_revenue=ddb.Table(S.license_revenue_table_name),
     activity_feed=ddb.Table(S.activity_feed_table_name),
     notifications_engine=ddb.Table(S.notifications_engine_table_name),
+    call_history=ddb.Table(S.call_history_table_name),
 )
