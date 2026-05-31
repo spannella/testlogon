@@ -1736,6 +1736,12 @@ class Settings:
     ssh_session_recording_max_events: int = int(os.environ.get("SSH_SESSION_RECORDING_MAX_EVENTS", "50000"))
     ssh_session_recording_max_bytes: int = int(os.environ.get("SSH_SESSION_RECORDING_MAX_BYTES", "5242880"))
 
+    # Multi-Hop SSH Bastion (INFRA-011)
+    ssh_bastion_paths_table_name: str = os.environ.get("SSH_BASTION_PATHS_TABLE_NAME", "ssh_bastion_paths")
+    ssh_bastion_enabled: bool = os.environ.get("SSH_BASTION_ENABLED", "true").lower() not in ("0", "false", "no")
+    ssh_bastion_max_hops: int = int(os.environ.get("SSH_BASTION_MAX_HOPS", "3"))
+    ssh_bastion_max_paths_per_user: int = int(os.environ.get("SSH_BASTION_MAX_PATHS_PER_USER", "50"))
+
     # License Revenue (LICENSE-003)
     license_revenue_table_name: str = os.environ.get("LICENSE_REVENUE_TABLE_NAME", "license_revenue")
     license_revenue_platform_fee_pct: int = int(os.environ.get("LICENSE_REVENUE_PLATFORM_FEE_PCT", "20"))

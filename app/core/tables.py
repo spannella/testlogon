@@ -202,6 +202,7 @@ class Tables:
     financial_rollups: Any
     payment_provider_health: Any
     ssh_session_recordings: Any
+    ssh_bastion_paths: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -398,4 +399,5 @@ T = Tables(
     financial_rollups=ddb.Table(S.platform_financial_dashboard_rollups_table_name),
     payment_provider_health=ddb.Table(S.payment_provider_health_table_name),
     ssh_session_recordings=ddb.Table(S.ssh_session_recordings_table_name),
+    ssh_bastion_paths=ddb.Table(S.ssh_bastion_paths_table_name),
 )

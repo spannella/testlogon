@@ -8937,3 +8937,64 @@ export interface AdminAdModerationQueue {
   account_count: number;
   creative_count: number;
 }
+
+// ── Multi-Hop SSH Bastion (INFRA-011) ──────────────────────────────
+
+export interface SshBastionHopIn {
+  hostname: string;
+  port?: number;
+  username: string;
+  ssh_key_id?: string;
+  label?: string;
+}
+
+export interface SshBastionHopOut {
+  hostname: string;
+  port: number;
+  username: string;
+  ssh_key_id: string;
+  label: string;
+  is_bastion: boolean;
+  hop_number: number;
+}
+
+export interface CreateSshBastionPathIn {
+  label: string;
+  description?: string;
+  jump_hops: SshBastionHopIn[];
+  target: SshBastionHopIn;
+}
+
+export interface UpdateSshBastionPathIn {
+  label?: string;
+  description?: string;
+  jump_hops?: SshBastionHopIn[];
+  target?: SshBastionHopIn;
+}
+
+export interface SshBastionPathOut {
+  path_id: string;
+  label: string;
+  description: string;
+  hops: SshBastionHopOut[];
+  total_hops: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SshBastionPathListOut {
+  paths: SshBastionPathOut[];
+  total: number;
+}
+
+export interface SshBastionResolvedOut {
+  path_id: string;
+  label: string;
+  chain: SshBastionHopOut[];
+  jump_hops: SshBastionHopOut[];
+  target: SshBastionHopOut;
+  total_hops: number;
+  proxy_jump: string;
+  ssh_command: string;
+  ssh_config: string;
+}
