@@ -100,6 +100,7 @@ class Tables:
     ad_impressions: Any
     ad_accounts: Any
     ad_campaigns: Any
+    content_boosts: Any
     ad_creatives: Any
     ad_moderation_log: Any
     ad_targeting: Any
@@ -305,6 +306,7 @@ T = Tables(
     ad_impressions=ddb.Table(S.ad_impressions_table_name),
     ad_accounts=ddb.Table(S.ad_accounts_table_name),
     ad_campaigns=ddb.Table(S.ad_campaigns_table_name),
+    content_boosts=ddb.Table(S.content_boosts_table_name),
     ad_creatives=ddb.Table(S.ad_creatives_table_name),
     ad_moderation_log=ddb.Table(S.ad_moderation_log_table_name),
     ad_targeting=ddb.Table(S.ad_targeting_table_name),
