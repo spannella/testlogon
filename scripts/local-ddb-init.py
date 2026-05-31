@@ -957,6 +957,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        TableDef(
+            _resolve_table_name(S.content_boosts_table_name, "content_boosts"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
         # Ad Creatives (ADS-002)
         TableDef(
             _resolve_table_name(S.ad_creatives_table_name, "AdCreatives"),

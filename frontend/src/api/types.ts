@@ -9423,3 +9423,46 @@ export interface GroupCampaignStats {
   status: string;
 }
 
+
+
+// --- Content Boost (ADS-012) ---
+
+export interface ContentBoost {
+  boost_id: string;
+  owner_sub: string;
+  content_type: string;
+  content_id: string;
+  budget_cents: number;
+  spent_cents: number;
+  remaining_cents: number;
+  duration_seconds: number;
+  starts_at: number;
+  ends_at: number;
+  status: string;
+  created_at: number;
+}
+
+export interface ContentBoostListResponse {
+  boosts: ContentBoost[];
+}
+
+export interface ContentBoostSpend {
+  boost_id: string;
+  budget_cents: number;
+  spent_cents: number;
+  remaining_cents: number;
+  status: string;
+}
+
+export interface ContentBoostCancelResponse {
+  boost_id: string;
+  status: string;
+  refunded_cents: number;
+}
+
+export interface ContentBoostCreateInput {
+  content_type: string;
+  content_id: string;
+  budget_cents: number;
+  duration_seconds: number;
+}

@@ -151,6 +151,8 @@ const PublicDonationPage = lazy(() => import("@/pages/groups/PublicDonationPage"
 const AgentDashboard = lazy(() => import("@/pages/agents/AgentDashboard"));
 const AdAnalyticsDashboard = lazy(() => import("@/pages/ads/AdAnalyticsDashboard"));
 const AdSchedulePage = lazy(() => import("@/pages/ads/AdSchedulePage"));
+const ContentBoostPage = lazy(() => import("@/pages/ads/ContentBoostPage"));
+const ContentBoostDetail = lazy(() => import("@/pages/ads/ContentBoostDetail"));
 const FleetDashboard = lazy(() => import("@/pages/agents/FleetDashboard"));
 const AgentMemoryPage = lazy(() => import("@/pages/agents/AgentMemoryPage"));
 const AgentFeedbackPage = lazy(() => import("@/pages/agents/AgentFeedbackPage"));
@@ -235,6 +237,8 @@ export default function App() {
           <Route path="ads/billing" element={<AdBillingPage />} />
           <Route path="ads/analytics" element={<AdAnalyticsDashboard />} />
           <Route path="ads/scheduling" element={<AdSchedulePage />} />
+          <Route path="ads/boost" element={<ContentBoostPage />} />
+          <Route path="ads/boost/:boostId" element={<ContentBoostDetail />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="content-calendar" element={<ContentCalendarPage />} />
           <Route path="agents/memory/:workerId" element={<AgentMemoryPage />} />

@@ -15,6 +15,7 @@ from app.core.settings import Settings
 from app.metrics import METRICS_ENABLED, metrics_endpoint, metrics_middleware, set_app_info
 from app.metrics import record_api_key_registry_drift
 from app.routers.ui_session import router as ui_session_router
+from app.routers.content_boost import content_boost_router
 from app.routers.ui_mfa import router as ui_mfa_router
 from app.routers.mfa_devices import router as mfa_devices_router
 from app.routers.api_keys import router as api_keys_router
@@ -378,6 +379,7 @@ def create_app() -> FastAPI:
         app.get("/metrics")(metrics_endpoint)
 
     app.include_router(ui_session_router)
+    app.include_router(content_boost_router)
     app.include_router(ui_mfa_router)
     app.include_router(mfa_devices_router)
     app.include_router(api_keys_router)

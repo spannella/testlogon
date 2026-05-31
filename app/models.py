@@ -10602,3 +10602,46 @@ class BroadcastPromoLiveResponse(BaseModel):
 
 class BroadcastPromoDeleteResponse(BaseModel):
     ok: bool = True
+
+
+# --- Content Boost (ADS-012) ---
+
+
+class ContentBoostCreate(BaseModel):
+    content_type: str = Field(..., description="post | video | broadcast")
+    content_id: str = Field(..., min_length=1)
+    budget_cents: int = Field(..., ge=1, description="total budget in integer cents")
+    duration_seconds: int = Field(..., ge=1, description="boost duration in seconds")
+
+
+class ContentBoostOut(BaseModel):
+    boost_id: str
+    owner_sub: str
+    content_type: str
+    content_id: str
+    budget_cents: int
+    spent_cents: int
+    remaining_cents: int
+    duration_seconds: int
+    starts_at: int
+    ends_at: int
+    status: str
+    created_at: int
+
+
+class ContentBoostListOut(BaseModel):
+    boosts: List[ContentBoostOut]
+
+
+class ContentBoostSpendOut(BaseModel):
+    boost_id: str
+    budget_cents: int
+    spent_cents: int
+    remaining_cents: int
+    status: str
+
+
+class ContentBoostCancelOut(BaseModel):
+    boost_id: str
+    status: str
+    refunded_cents: int

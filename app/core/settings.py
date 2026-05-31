@@ -1090,6 +1090,7 @@ class Settings:
     messaging_screen_share_enabled: bool = os.environ.get("MESSAGING_SCREEN_SHARE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     # Subscriptions
     subscriptions_table_name: str = os.environ.get("SUBSCRIPTIONS_TABLE_NAME", "subscriptions")
+    content_boosts_table_name: str = os.environ.get("CONTENT_BOOSTS_TABLE_NAME", "content_boosts")
     questionnaire_table_name: str = os.environ.get("QUESTIONNAIRE_TABLE_NAME", "questionnaires")
     questionnaire_owner_index_name: str = os.environ.get("QUESTIONNAIRE_OWNER_INDEX_NAME", "owner-updated-index")
     questionnaire_status_index_name: str = os.environ.get("QUESTIONNAIRE_STATUS_INDEX_NAME", "status-updated-index")
