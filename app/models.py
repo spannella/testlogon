@@ -8575,3 +8575,25 @@ class NotificationTemplateTestSend(BaseModel):
         if isinstance(v, str):
             return v.strip().lower()
         return v
+
+
+# ---------------------------------------------------------------------------
+# ADMIN-003: Rate Limit Admin UI models
+# ---------------------------------------------------------------------------
+
+class RateLimitLiveSummary(BaseModel):
+    """Aggregated rate-limit hit summary for the live dashboard."""
+
+    by_group: Dict[str, int] = Field(default_factory=dict)
+    by_source: List[Dict[str, Any]] = Field(default_factory=list)
+    time_series: List[Dict[str, Any]] = Field(default_factory=list)
+    total_hits: int = 0
+    window_hours: int = 1
+
+
+class RateLimitConfigReset(BaseModel):
+    """Response when an endpoint group config override is reset to default."""
+
+    ok: bool = True
+    group: str
+    is_override: bool = False
