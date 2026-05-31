@@ -4165,6 +4165,50 @@ class PermissionPresetOut(BaseModel):
     key: str
     label: str
     permissions: List[str]
+
+
+# -- Chat Delegation (DELEGATE-002) --
+
+class DelegatedSendMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+    reply_to_message_id: Optional[str] = None
+
+class DelegatedMessageOut(BaseModel):
+    conversation_id: str
+    message_id: str
+    sender_id: str
+    created_at: int = 0
+    kind: str = "text"
+    text: Optional[str] = None
+    is_encrypted: bool = False
+    sent_by_delegate: Optional[str] = None
+    delegate_display_name: Optional[str] = None
+    delegate_tag: Optional[str] = None
+    delegate_cannot_decrypt: bool = False
+    reply_to_message_id: Optional[str] = None
+
+class DelegatedConversationOut(BaseModel):
+    conversation_id: str
+    type: str = "dm"
+    title: Optional[str] = None
+    created_at: int = 0
+    last_message_at: int = 0
+    last_message_preview: Optional[str] = None
+    participant_count: int = 0
+    status: str = "active"
+    unread_count: int = 0
+    participants: List[Dict[str, Any]] = Field(default_factory=list)
+
+class ChatDelegateAuditEntry(BaseModel):
+    event_id: str
+    delegate_id: str
+    conversation_id: str
+    message_id: str = ""
+    text_preview: str = ""
+    delegate_display_name: str = ""
+    created_at: int = 0
+
+
 # -- Syndicates (SYND-001) --
 
 class SyndicateCreateIn(BaseModel):
