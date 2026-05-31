@@ -9497,3 +9497,38 @@ export interface ThemeConfigResponse {
 }
 
 export type ThemeConfigPatch = Partial<ThemeConfig>;
+
+// ── PLATFORM-005: SEO / OpenGraph metadata ──────────────────────────
+export interface SeoOpenGraphTags {
+  "og:title"?: string;
+  "og:description"?: string;
+  "og:type"?: string;
+  "og:site_name"?: string;
+  "og:locale"?: string;
+  "og:url"?: string;
+  "og:image"?: string;
+  [key: string]: string | undefined;
+}
+
+export interface SeoTwitterTags {
+  "twitter:card"?: string;
+  "twitter:title"?: string;
+  "twitter:description"?: string;
+  "twitter:image"?: string;
+  [key: string]: string | undefined;
+}
+
+export interface SeoMetadata {
+  resource_type: string | null;
+  resource_id: string | null;
+  available: boolean;
+  title: string;
+  description: string;
+  canonical_url: string;
+  site_name: string;
+  locale: string;
+  og: SeoOpenGraphTags;
+  twitter: SeoTwitterTags;
+  image: string | null;
+  json_ld: Record<string, unknown> | null;
+}

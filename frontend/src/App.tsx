@@ -1,4 +1,6 @@
 import { lazy, Suspense } from "react";
+import { SeoHead } from "@/components/shared/SeoHead";
+
 import { Routes, Route } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import { Loader2 } from "lucide-react";
@@ -196,6 +198,11 @@ export default function App() {
 
   return (
     <>
+    <SeoHead
+      title="Control Panel"
+      description="Your all-in-one platform for messaging, commerce, and content creation."
+      ogType="website"
+    />
       <Helmet>
         <title>Control Panel</title>
         <meta name="description" content="Your all-in-one platform for messaging, commerce, and content creation." />
