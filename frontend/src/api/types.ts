@@ -4492,3 +4492,38 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ─── Bot Auto-Reply (BOT-003) ─────────────────────────────────────
+
+export interface AutoReplyRule {
+  rule_id: string;
+  bot_id: string;
+  creator_id: string;
+  trigger_pattern: string;
+  response_template: string;
+  match_type: "keyword" | "regex" | "contains" | "exact";
+  priority: number;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+  match_count: number;
+}
+
+export interface AutoReplyTestResult {
+  matched: boolean;
+  first_match: {
+    rule_id: string;
+    match_type: string;
+    trigger_pattern: string;
+    response_text: string;
+    priority: number;
+  } | null;
+  all_matches: Array<{
+    rule_id: string;
+    match_type: string;
+    trigger_pattern: string;
+    response_text: string;
+    priority: number;
+  }>;
+  match_count: number;
+}

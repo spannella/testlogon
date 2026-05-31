@@ -3878,3 +3878,39 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ─── Bot Auto-Reply (BOT-003) ────────────────────────────────────
+
+
+class AutoReplyRuleIn(BaseModel):
+    trigger_pattern: str = Field(..., min_length=1, max_length=500)
+    response_template: str = Field(..., min_length=1, max_length=2000)
+    match_type: Literal["keyword", "regex", "contains", "exact"] = "contains"
+    priority: int = Field(default=100, ge=1, le=10000)
+    enabled: bool = True
+
+
+class AutoReplyRuleOut(BaseModel):
+    rule_id: str
+    bot_id: str
+    creator_id: str
+    trigger_pattern: str
+    response_template: str
+    match_type: str
+    priority: int
+    enabled: bool
+    created_at: int
+    updated_at: int
+    match_count: int
+
+
+class AutoReplyTestIn(BaseModel):
+    message_text: str = Field(..., min_length=1, max_length=5000)
+
+
+class AutoReplyTestOut(BaseModel):
+    matched: bool
+    first_match: Optional[Dict[str, Any]] = None
+    all_matches: List[Dict[str, Any]] = Field(default_factory=list)
+    match_count: int = 0
