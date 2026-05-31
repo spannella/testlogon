@@ -1259,6 +1259,9 @@ class Settings:
     ad_frequency_cap_daily: int = int(os.environ.get("AD_FREQUENCY_CAP_DAILY", "10"))
     ad_frequency_caps_table_name: str = os.environ.get("DDB_AD_FREQUENCY_CAPS", "AdFrequencyCaps")
 
+    # Subscription-Gated VOD (MON-005)
+    vod_subscription_gating_enabled: bool = os.environ.get("VOD_SUBSCRIPTION_GATING_ENABLED", "1") not in ("0", "false", "False")
+
     # View-Once / Rental Access (VOD-019)
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")
     vod_rental_default_duration_hours: int = int(os.environ.get("VOD_RENTAL_DEFAULT_DURATION_HOURS", "48"))
