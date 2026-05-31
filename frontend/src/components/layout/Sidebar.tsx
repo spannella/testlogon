@@ -53,6 +53,7 @@ import {
   Megaphone,
   UserCog,
   Phone,
+  Cloud,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -174,6 +175,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
       { label: "Delegates", i18nKey: "nav.delegates", path: "/delegates", icon: <UserCog className="h-5 w-5" /> },
       { label: "SSH Keys", i18nKey: "nav.sshKeys", path: "/remote/ssh-keys", icon: <KeyRound className="h-5 w-5" /> },
+      { label: "EC2 Instances", i18nKey: "nav.ec2Instances", path: "/remote/ec2", icon: <Cloud className="h-5 w-5" /> },
       { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
       { label: "Media Settings", i18nKey: "nav.mediaSettings", path: "/calls/settings", icon: <Phone className="h-5 w-5" /> },
       { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: <ShieldCheck className="h-5 w-5" /> },

@@ -1529,6 +1529,11 @@ class Settings:
     # Syndicates (SYND-001)
     # Media Preferences (CALL-003)
     media_preferences_table_name: str = os.environ.get("MEDIA_PREFERENCES_TABLE_NAME", "media_preferences")
+    # EC2 Instance Launcher (INFRA-003)
+    ec2_instances_table_name: str = os.environ.get("EC2_INSTANCES_TABLE_NAME", "ec2_instances")
+    ec2_mock_enabled: bool = os.environ.get("EC2_MOCK_ENABLED", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")
+    ec2_max_instances_per_user: int = int(os.environ.get("EC2_MAX_INSTANCES_PER_USER", "5"))
+    ec2_auto_terminate_enabled: bool = os.environ.get("EC2_AUTO_TERMINATE_ENABLED", "1") not in ("0", "false", "False")
 
 
 S = Settings()

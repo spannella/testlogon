@@ -1313,6 +1313,16 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.media_preferences_table_name, "media_preferences"),
             "user_sub",
             "sk",
+        # EC2 Instance Launcher (INFRA-003)
+        TableDef(
+            _resolve_table_name(S.ec2_instances_table_name, "ec2_instances"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "user_sub", "sort_key": "status"},
+                {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
         ),
     ]
 

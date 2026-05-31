@@ -5257,4 +5257,61 @@ export interface AdServingStats {
   clicks: number;
   skips: number;
   ctr_pct: number;
+// ─── EC2 Instance Launcher (INFRA-003) ────────────────────────────
+
+export interface Ec2LaunchIn {
+  label: string;
+  instance_type: string;
+  ami_id: string;
+  ssh_key_id?: string;
+  auto_terminate_after?: number;
+  startup_script?: string;
+  template_id?: string;
+}
+
+export interface Ec2InstanceOut {
+  instance_id: string;
+  ec2_instance_id: string;
+  label: string;
+  instance_type: string;
+  ami_id: string;
+  ami_name: string;
+  status: string;
+  public_ip: string;
+  private_ip: string;
+  ssh_key_id: string;
+  host_id: string;
+  created_at: number;
+  started_at: number;
+  stopped_at: number;
+  terminated_at: number;
+  last_activity_at: number;
+  auto_terminate_after: number;
+}
+
+export interface Ec2InstanceListOut {
+  instances: Ec2InstanceOut[];
+  count: number;
+}
+
+export interface Ec2InstanceTypeInfo {
+  instance_type: string;
+  vcpu: number;
+  memory_gb: number;
+  cost_cents_per_min: number;
+}
+
+export interface Ec2InstanceTypeListOut {
+  types: Ec2InstanceTypeInfo[];
+}
+
+export interface Ec2AmiInfo {
+  ami_id: string;
+  name: string;
+  os_type: string;
+  username: string;
+}
+
+export interface Ec2AmiListOut {
+  amis: Ec2AmiInfo[];
 }

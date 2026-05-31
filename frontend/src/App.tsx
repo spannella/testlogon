@@ -45,6 +45,7 @@ const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
 const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
 const RemoteDesktopPage = lazy(() => import("@/pages/remote/RemoteDesktopPage"));
 const SshKeyManagerPage = lazy(() => import("@/pages/remote/SshKeyManagerPage"));
+const Ec2LauncherPage = lazy(() => import("@/pages/remote/Ec2LauncherPage"));
 const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
 const IssuedLicensesPage = lazy(() => import("@/pages/licenses/IssuedLicensesPage"));
 const HeldLicensesPage = lazy(() => import("@/pages/licenses/HeldLicensesPage"));
@@ -198,6 +199,7 @@ export default function App() {
           <Route path="clips/:clipId" element={<ClipPlayerPage />} />
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
           <Route path="remote/ssh-keys" element={<SshKeyManagerPage />} />
+          <Route path="remote/ec2" element={<Ec2LauncherPage />} />
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
