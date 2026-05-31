@@ -62,6 +62,7 @@ const VideoPlayerPage = lazy(() => import("@/pages/videos/VideoPlayerPage"));
 const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
 const BroadcastSchedulePage = lazy(() => import("@/pages/broadcast/BroadcastSchedulePage"));
 const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
+const LiveQaPage = lazy(() => import("@/pages/broadcast/LiveQaPage"));
 const ClipGalleryPage = lazy(() => import("@/pages/clips/ClipGalleryPage"));
 const ClipPlayerPage = lazy(() => import("@/pages/clips/ClipPlayerPage"));
 const DmcaClaimForm = lazy(() => import("@/pages/dmca/DmcaClaimForm"));
@@ -228,6 +229,7 @@ export default function App() {
           <Route path="videos/:videoId" element={<VideoPlayerPage />} />
           {showBroadcastNavigation && <Route path="broadcast" element={<BroadcastPage />} />}
           {showBroadcastNavigation && <Route path="broadcast/schedule" element={<BroadcastSchedulePage />} />}
+          {showBroadcastNavigation && <Route path="broadcast/:sessionId/live-qa" element={<LiveQaPage />} />}
           <Route path="clips" element={<ClipGalleryPage />} />
           <Route path="clips/:clipId" element={<ClipPlayerPage />} />
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}

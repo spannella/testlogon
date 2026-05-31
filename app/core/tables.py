@@ -128,6 +128,7 @@ class Tables:
     user_achievement_progress: Any
     achievement_leaderboard: Any
     broadcast_qa_questions: Any
+    live_qa_questions: Any
     collaboration_agreements: Any
     fan_club_channels: Any
     fan_club_messages: Any
@@ -311,6 +312,7 @@ T = Tables(
     user_achievement_progress=ddb.Table(S.user_achievement_progress_table_name),
     achievement_leaderboard=ddb.Table(S.achievement_leaderboard_table_name),
     broadcast_qa_questions=ddb.Table(S.broadcast_qa_questions_table_name),
+    live_qa_questions=ddb.Table(S.live_qa_questions_table_name),
     collaboration_agreements=ddb.Table(S.collaboration_agreements_table_name),
     fan_club_channels=ddb.Table(S.fan_club_channels_table_name),
     fan_club_messages=ddb.Table(S.fan_club_messages_table_name),

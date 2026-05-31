@@ -7994,3 +7994,49 @@ export interface MemberEarnings {
   split_count: number;
   entries: MemberEarningEntry[];
 }
+
+// ── Live Q&A Mode (ENGAGE-003) ──────────────────────────────────────────────
+
+export type LiveQaStatus =
+  | "pending"
+  | "featured"
+  | "answered"
+  | "dismissed"
+  | "removed";
+
+export interface LiveQaQuestion {
+  question_id: string;
+  session_id: string;
+  submitter_id: string;
+  submitter_display_name: string;
+  text: string;
+  status: LiveQaStatus;
+  vote_count: number;
+  pinned: boolean;
+  featured_at?: number | null;
+  answered_at?: number | null;
+  created_at: number;
+  featured_by?: string | null;
+}
+
+export interface LiveQaQueueResponse {
+  questions: LiveQaQuestion[];
+  has_more: boolean;
+}
+
+export interface LiveQaModeResponse {
+  ok: boolean;
+  session_id: string;
+  qa_mode_enabled: boolean;
+}
+
+export interface LiveQaStats {
+  total_questions: number;
+  answered: number;
+  dismissed: number;
+  featured: number;
+  pending: number;
+  total_upvotes: number;
+  avg_upvotes: number;
+  answer_rate: number;
+}
