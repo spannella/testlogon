@@ -1247,7 +1247,8 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
             ],
-            attr_types={"created_at": "N", "updated_at": "N"},
+            # GSI1SK holds string sort keys (META / BOT#... / RULE#...); created_at/updated_at
+            # are non-key attributes and must NOT be declared in AttributeDefinitions.
         ),
         # Bot Assignments (BOT-001)
         TableDef(
@@ -1257,7 +1258,7 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
             ],
-            attr_types={"created_at": "N"},
+            # GSI1SK holds a string sort key (BOT#...); created_at is a non-key attribute.
         ),
         # Bot Templates (BOT-002)
         TableDef(
@@ -1267,8 +1268,8 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
             ],
-            attr_types={"created_at": "N", "updated_at": "N", "ab_weight": "N",
-                        "impression_count": "N", "response_count": "N", "GSI1SK": "N"},
+            # Only GSI1SK is a key attribute (numeric timestamp); the rest are non-key.
+            attr_types={"GSI1SK": "N"},
         ),
         # Bot Scheduled Sends (BOT-002)
         TableDef(
@@ -1278,7 +1279,8 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
             ],
-            attr_types={"next_run_at": "N", "last_run_at": "N", "created_at": "N", "GSI1SK": "N"},
+            # Only GSI1SK is a key attribute (numeric next_run); the rest are non-key.
+            attr_types={"GSI1SK": "N"},
         ),
         # SSO / SAML (ENTERPRISE-002)
         TableDef(
