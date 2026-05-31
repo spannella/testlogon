@@ -130,6 +130,7 @@ class Tables:
     sso_sessions: Any
     sso_assertion_cache: Any
     broadcast_clips: Any
+    call_history: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -254,4 +255,5 @@ T = Tables(
     sso_sessions=ddb.Table(S.sso_sessions_table_name),
     sso_assertion_cache=ddb.Table(S.sso_assertion_cache_table_name),
     broadcast_clips=ddb.Table(S.broadcast_clips_table_name),
+    call_history=ddb.Table(S.call_history_table_name),
 )

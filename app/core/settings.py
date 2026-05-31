@@ -1490,5 +1490,8 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Call History (CALL-004)
+    call_history_table_name: str = os.environ.get("CALL_HISTORY_TABLE_NAME", "call_history")
+
 
 S = Settings()

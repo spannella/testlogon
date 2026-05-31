@@ -1160,6 +1160,12 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Call History (CALL-004): pk=user_id, sk=CALL#{inverted_ts}#{call_id}
+        TableDef(
+            _resolve_table_name(S.call_history_table_name, "call_history"),
+            "user_id",
+            "sk",
+        ),
     ]
 
 

@@ -4492,3 +4492,36 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ─── Call History (CALL-004) ─────────────────────────────────────
+
+export interface CallRecordIn {
+  caller_id: string;
+  callee_id: string;
+  call_type: "audio" | "video";
+  duration_seconds: number;
+  status: "completed" | "missed" | "declined" | "failed";
+}
+
+export interface CallRecordOut {
+  call_id: string;
+  caller_id: string;
+  callee_id: string;
+  call_type: string;
+  duration_seconds: number;
+  status: string;
+  direction: string;
+  created_at: number;
+}
+
+export interface CallHistoryResponse {
+  items: CallRecordOut[];
+  next_cursor?: string | null;
+}
+
+export interface CallStatsOut {
+  total_calls: number;
+  total_duration_seconds: number;
+  calls_by_type: Record<string, number>;
+  calls_by_status: Record<string, number>;
+}

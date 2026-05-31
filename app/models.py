@@ -3878,3 +3878,36 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ─── Call History (CALL-004) ─────────────────────────────────────
+
+class CallRecordIn(BaseModel):
+    caller_id: str
+    callee_id: str
+    call_type: Literal["audio", "video"]
+    duration_seconds: int = Field(ge=0)
+    status: Literal["completed", "missed", "declined", "failed"]
+
+
+class CallRecordOut(BaseModel):
+    call_id: str
+    caller_id: str
+    callee_id: str
+    call_type: str
+    duration_seconds: int = 0
+    status: str = "completed"
+    direction: str = "outgoing"
+    created_at: int = 0
+
+
+class CallHistoryResponse(BaseModel):
+    items: List[CallRecordOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class CallStatsOut(BaseModel):
+    total_calls: int = 0
+    total_duration_seconds: int = 0
+    calls_by_type: Dict[str, int] = Field(default_factory=dict)
+    calls_by_status: Dict[str, int] = Field(default_factory=dict)

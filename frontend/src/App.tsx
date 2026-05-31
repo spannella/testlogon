@@ -90,6 +90,7 @@ const WebhookEndpointDetail = lazy(() => import("@/pages/webhooks/WebhookEndpoin
 const PartyListPage = lazy(() => import("@/pages/watch-parties/PartyListPage"));
 const WatchPartyPage = lazy(() => import("@/pages/watch-parties/WatchPartyPage"));
 const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentCalendarPage"));
+const CallHistoryPage = lazy(() => import("@/pages/calls/CallHistoryPage"));
 
 function PageSpinner() {
   return (
@@ -131,6 +132,7 @@ export default function App() {
         <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
           <Route index element={<Dashboard />} />
           <Route path="messages" element={<MessagesPage />} />
+          <Route path="calls/history" element={<CallHistoryPage />} />
           <Route path="contacts" element={<ContactsPage />} />
           <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />

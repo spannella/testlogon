@@ -142,6 +142,7 @@ import {
   Trophy,
   Building2,
   Scissors,
+  Phone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -155,6 +156,7 @@ const MOBILE_NAV_GROUPS = [
     items: [
       { label: "Dashboard", path: "/", icon: LayoutDashboard },
       { label: "Messages", path: "/messages", icon: MessageSquare },
+      { label: "Call History", path: "/calls/history", icon: Phone },
       { label: "Feed", path: "/feed", icon: Rss },
       { label: "Saved", path: "/saved", icon: Bookmark },
       { label: "Achievements", path: "/achievements", icon: Trophy },
