@@ -83,6 +83,24 @@ export interface AllowlistEntry {
   reason: string;
 }
 
+export interface RateLimitLiveSourceCount {
+  source_ip: string;
+  count: number;
+}
+
+export interface RateLimitLiveTimePoint {
+  bucket: string;
+  count: number;
+}
+
+export interface RateLimitLiveSummary {
+  by_group: Record<string, number>;
+  by_source: RateLimitLiveSourceCount[];
+  time_series: RateLimitLiveTimePoint[];
+  total_hits: number;
+  window_hours: number;
+}
+
 // ── API calls ────────────────────────────────────────────────────
 
 export const getRateLimitConfig = () =>
@@ -120,3 +138,41 @@ export const getBlocklist = () =>
 
 export const getAllowlist = () =>
   api.get<{ entries: AllowlistEntry[] }>("/ui/admin/rate-limits/allowlist");
+
+// ── ADMIN-003: reset, live summary, CSV export ───────────────────
+
+export const resetRateLimitConfig = (group: string) =>
+  api.del<{ ok: boolean; group: string; is_override: boolean }>(
+    `/ui/admin/rate-limits/config/${encodeURIComponent(group)}`,
+  );
+
+export const getRateLimitLiveSummary = (hours = 1) =>
+  api.get<RateLimitLiveSummary>("/ui/admin/rate-limits/live-summary", {
+    hours: String(hours),
+  });
+
+/**
+ * Download the rate-limit event log as CSV.
+ * Uses a raw fetch (the JSON api wrapper can't return a blob) and triggers a
+ * browser download. Carries cookies + CSRF for the cookie-auth session.
+ */
+export async function exportRateLimitEvents(hours = 24, status?: string): Promise<void> {
+  const params = new URLSearchParams({ hours: String(hours) });
+  if (status) params.set("status", status);
+  const res = await fetch(`/ui/admin/rate-limits/events/export?${params.toString()}`, {
+    method: "GET",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    throw new Error(`Export failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "rate-limit-events.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

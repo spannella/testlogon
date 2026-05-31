@@ -59,6 +59,7 @@ import {
   BookOpen,
   Lightbulb,
   Palette,
+  Gauge,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -195,6 +196,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
       { label: "Compute", i18nKey: "nav.compute", path: "/admin/compute", icon: <Server className="h-5 w-5" /> },
       { label: "Communications", i18nKey: "nav.communications", path: "/admin/communications", icon: <MessageSquare className="h-5 w-5" /> },
+      { label: "Rate Limits", i18nKey: "nav.rateLimits", path: "/admin/rate-limits", icon: <Gauge className="h-5 w-5" /> },
     ],
   },
 ];
@@ -262,6 +264,7 @@ export default function Sidebar() {
             if (item.path === "/admin/video-review") return showModerationBoard;
             if (item.path === "/admin/dmca") return showModerationBoard;
             if (item.path === "/admin/communications") return showModerationBoard;
+            if (item.path === "/admin/rate-limits") return showRootRoleManagement;
             return true;
           });
           if (items.length === 0) return null;

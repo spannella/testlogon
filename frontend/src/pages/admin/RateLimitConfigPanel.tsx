@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getRateLimitConfig,
   updateRateLimitConfig,
+  resetRateLimitConfig,
   type RateLimitGroupConfig,
 } from "@/api/endpoints/adminRateLimits";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,7 +25,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Pencil, Save } from "lucide-react";
+import { Pencil, Save, RotateCcw } from "lucide-react";
 
 export default function RateLimitConfigPanel() {
   const queryClient = useQueryClient();
@@ -51,6 +52,13 @@ export default function RateLimitConfigPanel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "rate-limits", "config"] });
       setEditingGroup(null);
+    },
+  });
+
+  const resetMut = useMutation({
+    mutationFn: resetRateLimitConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "rate-limits", "config"] });
     },
   });
 
@@ -227,6 +235,17 @@ export default function RateLimitConfigPanel() {
                           </div>
                         </DialogContent>
                       </Dialog>
+                      {group.is_override && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="Reset to default"
+                          disabled={resetMut.isPending}
+                          onClick={() => resetMut.mutate(name)}
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

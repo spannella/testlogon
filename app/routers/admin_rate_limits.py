@@ -5,14 +5,19 @@ All endpoints require root role via ``require_ui_session`` + role check.
 """
 from __future__ import annotations
 
+import csv
+import io
+from collections import Counter
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_root
 from app.core.settings import S
+from app.core.tables import T
 from app.services.rate_limit_config import (
     ENDPOINT_GROUPS,
     get_all_configs,
@@ -222,3 +227,149 @@ async def get_blocklist(user: AuthenticatedUser = Depends(require_root)):
 async def get_allowlist(user: AuthenticatedUser = Depends(require_root)):
     """List all allowlist entries."""
     return {"entries": list_allowlist()}
+
+
+# ---------------------------------------------------------------------------
+# ADMIN-003: reset override, live summary, CSV export
+# ---------------------------------------------------------------------------
+
+def _event_ts(evt: Dict[str, Any]) -> int:
+    """Extract the unix timestamp from an event's ``sk`` (``{ts}#{event_id}``)."""
+    sk = str(evt.get("sk", ""))
+    head = sk.split("#", 1)[0]
+    try:
+        return int(head)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _live_summary(events: List[Dict[str, Any]], hours: int) -> Dict[str, Any]:
+    """Aggregate events into by_group / by_source / time_series buckets."""
+    by_group: Counter = Counter()
+    by_source: Counter = Counter()
+    bucket_counts: Counter = Counter()
+
+    for evt in events:
+        group = str(evt.get("endpoint_group", "") or "unknown")
+        by_group[group] += 1
+
+        source = str(evt.get("identity_value", "") or "unknown")
+        by_source[source] += 1
+
+        ts = _event_ts(evt)
+        if ts:
+            # 5-minute (300s) buckets, keyed by ISO minute
+            bucket_start = ts - (ts % 300)
+            label = datetime.fromtimestamp(bucket_start, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M")
+            bucket_counts[label] += 1
+
+    time_series = [
+        {"bucket": label, "count": count}
+        for label, count in sorted(bucket_counts.items())
+    ]
+    top_sources = [
+        {"source_ip": source, "count": count}
+        for source, count in by_source.most_common(20)
+    ]
+
+    return {
+        "by_group": dict(by_group),
+        "by_source": top_sources,
+        "time_series": time_series,
+        "total_hits": len(events),
+        "window_hours": hours,
+    }
+
+
+@router.delete("/config/{group}")
+async def reset_config(
+    group: str,
+    user: AuthenticatedUser = Depends(require_root),
+):
+    """Reset an endpoint group's config back to its in-code default.
+
+    Removes any persisted override row; the group then reflects defaults.
+    """
+    if not S.rate_limit_dashboard_enabled:
+        raise HTTPException(status_code=404, detail="Rate limit dashboard is disabled")
+
+    if group not in ENDPOINT_GROUPS and group != "global_ip":
+        raise HTTPException(status_code=400, detail=f"Unknown group: {group}")
+
+    try:
+        T.rate_limits.delete_item(Key={"pk": "CONFIG#global", "sk": f"GROUP#{group}"})
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=500, detail="Failed to reset config") from exc
+
+    # Bust the in-process override cache so the next read reflects defaults.
+    from app.services import rate_limit_config as _rlc
+
+    _rlc._CONFIG_CACHE.pop(group, None)
+    _rlc._CONFIG_CACHE_TS.pop(group, None)
+
+    return {"ok": True, "group": group, "is_override": False}
+
+
+@router.get("/live-summary")
+async def live_summary(
+    hours: int = Query(default=1, ge=1, le=24),
+    user: AuthenticatedUser = Depends(require_root),
+):
+    """Real-time rate-limit hit summary for the last *hours* hours.
+
+    Returns hits grouped by endpoint group and by source, plus a 5-minute
+    bucketed time series.
+    """
+    if not S.rate_limit_dashboard_enabled:
+        raise HTTPException(status_code=404, detail="Rate limit dashboard is disabled")
+
+    events = query_events(hours=hours, limit=1000)
+    return _live_summary(events, hours)
+
+
+@router.get("/events/export")
+async def export_events(
+    hours: int = Query(default=24, ge=1, le=168),
+    status: Optional[str] = Query(default=None),
+    user: AuthenticatedUser = Depends(require_root),
+):
+    """Export rate-limit events for the last *hours* hours as CSV (capped 10000)."""
+    if not S.rate_limit_dashboard_enabled:
+        raise HTTPException(status_code=404, detail="Rate limit dashboard is disabled")
+
+    events = query_events(hours=hours, limit=10000, status_filter=status)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "timestamp",
+        "endpoint_group",
+        "identity_type",
+        "identity_value",
+        "endpoint",
+        "method",
+        "status",
+        "count",
+        "limit",
+    ])
+    for evt in events:
+        writer.writerow([
+            _event_ts(evt),
+            evt.get("endpoint_group", ""),
+            evt.get("identity_type", ""),
+            evt.get("identity_value", ""),
+            evt.get("endpoint", ""),
+            evt.get("method", ""),
+            evt.get("status", ""),
+            evt.get("count", ""),
+            evt.get("limit", ""),
+        ])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=rate-limit-events.csv",
+            "Cache-Control": "no-store",
+        },
+    )
