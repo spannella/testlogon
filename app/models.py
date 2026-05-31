@@ -8637,3 +8637,61 @@ class RateLimitConfigReset(BaseModel):
     ok: bool = True
     group: str
     is_override: bool = False
+
+
+# ---------------------------------------------------------------------------
+# KYC-002: Identity Document Verification models
+# ---------------------------------------------------------------------------
+
+class KycDocumentUploadRequest(BaseModel):
+    """Request to upload an identity document image for verification."""
+
+    document_type: Literal["id_front", "id_back"]
+    file_name: str = Field(min_length=1, max_length=255)
+    case_id: Optional[str] = None
+    # Base64-encoded image bytes. Optional in dev/E2E (mock provider keys off
+    # the filename, not the bytes).
+    content_b64: Optional[str] = None
+
+
+class KycDocumentFieldMatch(BaseModel):
+    """Per-field comparison of an extracted value against the user profile."""
+
+    status: Literal["match", "mismatch", "partial", "not_available"]
+    profile_value: Optional[str] = None
+    extracted_value: Optional[str] = None
+    similarity: Optional[float] = None
+
+
+class KycDocumentOut(BaseModel):
+    """A KYC identity document record with its extraction/verification state."""
+
+    document_id: str
+    case_id: Optional[str] = None
+    user_sub: Optional[str] = None
+    document_type: Literal["id_front", "id_back"]
+    file_name: str
+    status: Literal["pending", "extracted", "failed", "approved", "rejected"]
+    provider: Optional[str] = None
+    image_url: Optional[str] = None
+    extraction_id: Optional[str] = None
+    extracted_fields: Dict[str, str] = Field(default_factory=dict)
+    match_results: Optional[Dict[str, KycDocumentFieldMatch]] = None
+    overall_confidence: Optional[Literal["high", "medium", "low", "failed"]] = None
+    review_decision: Optional[str] = None
+    review_note: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class KycDocumentListResponse(BaseModel):
+    """List of KYC identity documents."""
+
+    documents: List[KycDocumentOut] = Field(default_factory=list)
+
+
+class KycDocumentReviewRequest(BaseModel):
+    """Reviewer approve/reject decision for a document."""
+
+    decision: Literal["approve", "reject"]
+    note: Optional[str] = Field(default=None, max_length=2000)

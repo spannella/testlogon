@@ -7782,3 +7782,51 @@ export interface NotificationTemplateTestSendResult {
   recipient: string;
   sent_at: number;
 }
+
+// ── KYC-002: Identity Document Verification ──────────────────────────────
+export type KycDocumentType = "id_front" | "id_back";
+export type KycDocumentStatus = "pending" | "extracted" | "failed" | "approved" | "rejected";
+export type KycDocumentConfidence = "high" | "medium" | "low" | "failed";
+export type KycDocumentMatchStatus = "match" | "mismatch" | "partial" | "not_available";
+
+export interface KycDocumentFieldMatch {
+  status: KycDocumentMatchStatus;
+  profile_value?: string | null;
+  extracted_value?: string | null;
+  similarity?: number | null;
+}
+
+export interface KycDocumentOut {
+  document_id: string;
+  case_id?: string | null;
+  user_sub?: string | null;
+  document_type: KycDocumentType;
+  file_name: string;
+  status: KycDocumentStatus;
+  provider?: string | null;
+  image_url?: string | null;
+  extraction_id?: string | null;
+  extracted_fields: Record<string, string>;
+  match_results?: Record<string, KycDocumentFieldMatch> | null;
+  overall_confidence?: KycDocumentConfidence | null;
+  review_decision?: string | null;
+  review_note?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface KycDocumentListResponse {
+  documents: KycDocumentOut[];
+}
+
+export interface KycDocumentUploadRequest {
+  document_type: KycDocumentType;
+  file_name: string;
+  case_id?: string | null;
+  content_b64?: string | null;
+}
+
+export interface KycDocumentReviewRequest {
+  decision: "approve" | "reject";
+  note?: string | null;
+}

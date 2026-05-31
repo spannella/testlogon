@@ -73,6 +73,7 @@ class Tables:
     tickets: Any
     questionnaires: Any
     kyc_cases: Any
+    kyc_documents: Any
     video_metadata: Any
     transcode_jobs: Any
     broadcast_viewers: Any
@@ -252,6 +253,7 @@ T = Tables(
     tickets=ddb.Table(S.tickets_table_name),
     questionnaires=ddb.Table(S.questionnaire_table_name),
     kyc_cases=ddb.Table(S.kyc_cases_table_name),
+    kyc_documents=ddb.Table(S.kyc_documents_table_name),
     video_metadata=ddb.Table(S.video_metadata_table_name),
     transcode_jobs=ddb.Table(S.transcode_jobs_table_name),
     broadcast_viewers=ddb.Table(S.broadcast_viewers_table_name),
