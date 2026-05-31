@@ -189,6 +189,10 @@ from app.routers.syndicates import router as syndicates_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ec2_launcher import router as ec2_launcher_router
 from app.services.ec2_launcher import start_ec2_idle_checker_task
+from app.routers.chat_bot import router as chat_bot_router
+from app.routers.bot_template import router as bot_template_router
+from app.routers.bot_auto_reply import router as bot_auto_reply_router
+from app.services.bot_scheduler import start_bot_scheduler_task
 
 logger = logging.getLogger(__name__)
 
@@ -502,6 +506,10 @@ def create_app() -> FastAPI:
     app.include_router(ads_admin_router)
     app.include_router(ec2_launcher_router)
     app.add_event_handler("startup", start_ec2_idle_checker_task)
+    app.include_router(chat_bot_router, prefix="/ui")
+    app.include_router(bot_template_router, prefix="/ui")
+    app.include_router(bot_auto_reply_router, prefix="/ui")
+    app.add_event_handler("startup", start_bot_scheduler_task)
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)

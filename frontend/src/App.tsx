@@ -117,6 +117,9 @@ const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
 const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetailPage"));
 const MyBundlesPage = lazy(() => import("@/pages/syndicates/MyBundlesPage"));
 const MediaSettingsPage = lazy(() => import("@/pages/calls/MediaSettingsPage"));
+const BotManagerPage = lazy(() => import("@/pages/bots/BotManagerPage"));
+const TemplateEditorPage = lazy(() => import("@/pages/bots/TemplateEditorPage"));
+const BotAutoReplyPage = lazy(() => import("@/pages/bots/BotAutoReplyPage"));
 
 function PageSpinner() {
   return (
@@ -256,6 +259,9 @@ export default function App() {
           <Route path="admin/kyc" element={<KycQueuePage />} />
           <Route path="admin/kyc/cases/:caseId" element={<KycCaseDetailPage />} />
           <Route path="admin/kyc/metrics" element={<KycMetricsDashboard />} />
+          <Route path="bots" element={<BotManagerPage />} />
+          <Route path="bots/:botId/templates" element={<TemplateEditorPage />} />
+          <Route path="bots/:botId/auto-replies" element={<BotAutoReplyPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 
