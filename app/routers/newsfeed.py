@@ -2383,6 +2383,55 @@ def is_hidden(user_id: str, post_id: str) -> bool:
     return bool(it and it.get("hidden") is True)
 
 
+@router.post("/feed/unhide")
+def unhide_post(req: HidePostRequest, user_id: UserIdDep):
+    """Unhide a post for the current viewer (FEED-006).
+
+    Deletes the per-viewer hide record written by ``hide_post`` (pk=HIDE#{user},
+    sk=POST#{post_id}). Idempotent: unhiding a post that is not hidden is a no-op
+    success (DynamoDB delete_item does not error on a missing key).
+    """
+    ddb_delete_item({"pk": pk_hide(user_id), "sk": f"POST#{req.post_id}"})
+    return {"ok": True, "post_id": req.post_id, "hidden": False}
+
+
+@router.get("/feed/hidden")
+def list_hidden_posts(
+    limit: int = Query(20, ge=1, le=100),
+    cursor: Optional[str] = None,
+    user_id: UserIdDep = None,
+):
+    """List the posts the current viewer has hidden (FEED-006).
+
+    Queries the viewer's hide partition (pk=HIDE#{user}, sk begins_with POST#)
+    and hydrates each post via ``_post_to_dict``. Posts that were deleted after
+    being hidden are returned as a minimal stub so the client can still offer an
+    unhide affordance. Paginated with the same cursor scheme as the feed.
+    """
+    eks = decode_cursor_or_400(cursor)
+    resp = ddb_query(
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
+        ExpressionAttributeValues={":pk": pk_hide(user_id), ":prefix": "POST#"},
+        Limit=limit,
+        ExclusiveStartKey=eks if eks else None,
+        ScanIndexForward=False,
+    )
+    items: List[Dict[str, Any]] = []
+    for rec in resp.get("Items", []):
+        sk = rec.get("sk", "")
+        post_id = sk.split("#", 1)[-1] if "#" in sk else sk
+        if not post_id:
+            continue
+        post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+        if not post:
+            items.append({"post_id": post_id, "hidden": True})
+            continue
+        d = _post_to_dict(post, viewer_id=user_id)
+        d["hidden"] = True
+        items.append(d)
+    return {"items": items, "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
+
+
 def has_unlocked(user_id: str, post_id: str) -> bool:
     it = ddb_get_item({"pk": pk_unlock(user_id), "sk": f"POST#{post_id}"})
     return bool(it and it.get("unlocked") is True)
