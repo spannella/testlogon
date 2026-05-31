@@ -101,6 +101,7 @@ const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentC
 const CallHistoryPage = lazy(() => import("@/pages/calls/CallHistoryPage"));
 const LicenseRequestsPage = lazy(() => import("@/pages/licenses/LicenseRequestsPage"));
 const KycTierProgress = lazy(() => import("@/pages/kyc/KycTierProgress"));
+const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
 
 function PageSpinner() {
   return (
@@ -225,6 +226,7 @@ export default function App() {
           <Route path="admin/risk" element={<RiskDashboardPage />} />
           <Route path="licenses/requests" element={<LicenseRequestsPage />} />
           <Route path="kyc/tiers" element={<KycTierProgress />} />
+          <Route path="agents/workers" element={<WorkersPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

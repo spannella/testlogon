@@ -154,6 +154,7 @@ class Tables:
     kyc_risk_scores: Any
     broadcast_moderation: Any
     k8s_pods: Any
+    agent_workers: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -302,4 +303,5 @@ T = Tables(
     kyc_risk_scores=ddb.Table(S.kyc_risk_scores_table_name),
     broadcast_moderation=ddb.Table(S.broadcast_moderation_table_name),
     k8s_pods=ddb.Table(S.k8s_pods_table_name),
+    agent_workers=ddb.Table(S.agent_workers_table_name),
 )

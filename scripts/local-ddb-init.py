@@ -1283,6 +1283,7 @@ def _table_defs() -> List[TableDef]:
             "assertion_id",
         ),
         # LLM Provider Keys (AGENT-001)
+        # Agent LLM Key Management (AGENT-001)
         TableDef(
             _resolve_table_name(S.llm_provider_keys_table_name, "llm_provider_keys"),
             "pk",
@@ -1390,6 +1391,31 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.broadcast_moderation_table_name, "broadcast_moderation"),
             "pk",
             "sk",
+        ),
+        ),
+        # EC2 Instance Launcher (INFRA-003)
+        TableDef(
+            _resolve_table_name(S.ec2_instances_table_name, "ec2_instances"),
+            "pk",
+            "sk",
+        ),
+        # Kubernetes Container Launcher (INFRA-004)
+        TableDef(
+            _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),
+            "pk",
+            "sk",
+        ),
+        # Agent Worker Provisioning (AGENT-002)
+        TableDef(
+            _resolve_table_name(S.agent_workers_table_name, "agent_workers"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "pk", "sort_key": "worker_status"},
+                {"index_name": "ByCreatedAt", "partition_key": "pk", "sort_key": "created_at"},
+                {"index_name": "ByAgentType", "partition_key": "pk", "sort_key": "agent_type"},
+            ],
+            attr_types={"created_at": "N"},
         ),
     ]
 

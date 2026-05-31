@@ -1910,6 +1910,7 @@ export interface PostFileAttachment {
   url: string;
 }
 
+
 /** Metadata attached to broadcast-related newsfeed posts (BCAST-010). */
 export interface BroadcastPostMeta {
   session_id: string;
@@ -2069,6 +2070,8 @@ export interface GroupFeedResponse {
   posts: GroupFeedPost[];
   cursor?: string;
   has_more: boolean;
+}
+
 /** ADS-005: Ad feedback request */
 export interface AdFeedbackRequest {
   creative_id: string;
@@ -2076,6 +2079,7 @@ export interface AdFeedbackRequest {
   feedback_type: "hide" | "not_relevant" | "repetitive" | "offensive";
   reason?: string;
 }
+
 
 /** ADS-005: Why this ad response */
 export interface WhyThisAdResponse {
@@ -4634,6 +4638,8 @@ export interface AdminRevenueEntryOut {
 export interface AdminRevenueListOut {
   transactions: AdminRevenueEntryOut[];
   next_cursor?: string;
+}
+
 // -- Delegate Management (DELEGATE-001) --
 
 export interface DelegateAddReq {
@@ -4834,6 +4840,8 @@ export interface FeedDelegationSettingsOut {
   allow_delegate_locking: boolean;
   delegate_tag_on_posts: boolean;
   delegate_tag_format: string;
+}
+
 // ─── Notification Engine (SOC-004) ──────────────────────────────
 
 export interface NotificationOut {
@@ -4866,6 +4874,8 @@ export interface SendNotificationReq {
   body?: string;
   data?: Record<string, unknown>;
   batch_key?: string | null;
+}
+
 // ─── Call History (CALL-004) ─────────────────────────────────────
 
 export interface CallRecordIn {
@@ -4897,6 +4907,8 @@ export interface CallStatsOut {
   total_duration_seconds: number;
   calls_by_type: Record<string, number>;
   calls_by_status: Record<string, number>;
+}
+
 // ─── Risk Scoring (KYC-008) ────────────────────────────────────
 
 export interface RiskFactorDetail {
@@ -5042,6 +5054,8 @@ export interface LicenseRequestApprovalOut {
 export interface LicenseRequestListOut {
   items: LicenseRequestOut[];
   next_cursor?: string | null;
+}
+
 // -- Broadcast Delegation (DELEGATE-004) --
 
 export interface BroadcastMuteReq {
@@ -5089,6 +5103,8 @@ export interface BroadcastModerationLogEntry {
   target_message_id?: string;
   details?: Record<string, unknown>;
   ts: number;
+}
+
 // ─── Kubernetes Container Launcher (INFRA-004) ──────────────────────
 
 export interface K8sLaunchPodIn {
@@ -5155,6 +5171,8 @@ export interface K8sPresetInfo {
 
 export interface K8sPresetListOut {
   presets: K8sPresetInfo[];
+}
+
 // ── KYC Tiered Verification (KYC-009) ─────────────────────────────
 
 export interface TierHistoryEntry {
@@ -5180,4 +5198,87 @@ export interface TierRequirements {
   met: string[];
   unmet: string[];
   eligible: boolean;
+}
+
+// -- Agent Worker Provisioning (AGENT-002) --
+
+export interface CreateWorkerIn {
+  label: string;
+  agent_type: "coder" | "qa" | "reviewer" | "devops" | "custom";
+  tool: "claude_code" | "codex" | "custom";
+  compute_type: "ec2" | "k8s";
+  instance_type: string;
+  llm_key_id: string;
+  repo_url?: string;
+  branch_convention?: string;
+  idle_timeout_seconds?: number;
+  template_id?: string;
+  custom_install_commands?: string[];
+  custom_env_var?: string;
+  custom_verify_command?: string;
+}
+
+export interface ProvisionStep {
+  step: string;
+  status: "running" | "done" | "error";
+  ts: number;
+  detail: string;
+}
+
+export interface Worker {
+  worker_id: string;
+  user_id: string;
+  label: string;
+  agent_type: string;
+  tool: string;
+  tool_version: string;
+  compute_type: string;
+  compute_instance_id: string;
+  instance_type: string;
+  llm_key_id: string;
+  llm_provider: string;
+  host_id: string;
+  public_ip: string;
+  worker_status: "provisioning" | "installing" | "ready" | "running" | "stopped" | "error" | "terminated";
+  provision_log: ProvisionStep[];
+  repo_url: string;
+  branch_convention: string;
+  idle_timeout_seconds: number;
+  last_activity_at: number;
+  created_at: number;
+  started_at: number;
+  stopped_at: number;
+  terminated_at: number;
+  template_id: string;
+  error_message: string;
+}
+
+export interface WorkerList {
+  workers: Worker[];
+  count: number;
+}
+
+export interface ToolInfo {
+  tool: string;
+  display_name: string;
+  description: string;
+  install_time_seconds: number;
+  required_provider: string;
+}
+
+export interface ToolListOut {
+  tools: ToolInfo[];
+}
+
+export interface ComputeOption {
+  compute_type: "ec2" | "k8s";
+  instance_type: string;
+  vcpu: number;
+  memory_gb: number;
+  cost_cents_per_min: number;
+  startup_seconds: number;
+}
+
+export interface ComputeOptionListOut {
+  options: ComputeOption[];
 }
