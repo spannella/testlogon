@@ -1490,5 +1490,11 @@ class Settings:
     tenant_domain_cache_ttl_seconds: int = int(os.environ.get("TENANT_DOMAIN_CACHE_TTL_SECONDS", "300"))
     default_tenant_id: str = os.environ.get("DEFAULT_TENANT_ID", "default")
 
+    # Compute Cost Tracking (INFRA-005)
+    compute_billing_table_name: str = os.environ.get("COMPUTE_BILLING_TABLE_NAME", "compute_billing")
+    compute_billing_enabled: bool = os.environ.get("COMPUTE_BILLING_ENABLED", "1") not in ("0", "false", "False")
+    compute_billing_poll_interval: int = int(os.environ.get("COMPUTE_BILLING_POLL_INTERVAL", "300"))
+    compute_billing_default_budget_cents: int = int(os.environ.get("COMPUTE_BILLING_DEFAULT_BUDGET_CENTS", "5000"))
+
 
 S = Settings()

@@ -1160,6 +1160,17 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.sso_assertion_cache_table_name, "sso_assertion_cache"),
             "assertion_id",
         ),
+        # Compute Cost Tracking (INFRA-005)
+        TableDef(
+            _resolve_table_name(S.compute_billing_table_name, "compute_billing"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByResourceId", "partition_key": "resource_id", "sort_key": "created_at"},
+                {"index_name": "ByMonth", "partition_key": "month_key", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

@@ -4492,3 +4492,81 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ---------------------------------------------------------------------------
+// Compute Cost Tracking (INFRA-005)
+// ---------------------------------------------------------------------------
+
+export interface ComputeBillingTickIn {
+  resource_type: "ec2" | "k8s";
+  resource_id: string;
+  resource_label?: string;
+  instance_type_or_preset: string;
+  duration_minutes: number;
+}
+
+export interface ComputeBillingTickOut {
+  ok: boolean;
+  entry_id: string;
+  amount_cents: number;
+  wallet_balance_after: number;
+  rate_cents_per_min: number;
+  created_at: number;
+}
+
+export interface SpendingSummaryOut {
+  month: string;
+  total_cents: number;
+  budget_cents: number;
+  budget_pct: number;
+  ec2_total_cents: number;
+  k8s_total_cents: number;
+  resource_count: number;
+}
+
+export interface BillingLedgerEntry {
+  entry_id: string;
+  resource_type: string;
+  resource_id: string;
+  resource_label: string;
+  instance_type_or_preset: string;
+  event: string;
+  amount_cents: number;
+  duration_minutes: number;
+  rate_cents_per_min: number;
+  wallet_balance_after: number;
+  created_at: number;
+}
+
+export interface BillingLedgerOut {
+  entries: BillingLedgerEntry[];
+  count: number;
+  cursor?: string;
+}
+
+export interface ResourceBreakdownEntry {
+  resource_id: string;
+  resource_label: string;
+  resource_type: string;
+  instance_type_or_preset: string;
+  total_cents: number;
+  total_minutes: number;
+  status: string;
+}
+
+export interface ResourceBreakdownOut {
+  resources: ResourceBreakdownEntry[];
+  month: string;
+}
+
+export interface BudgetOut {
+  budget_monthly_cents: number;
+  alert_thresholds: number[];
+  current_month_total_cents: number;
+  current_month_pct: number;
+}
+
+export interface UpdateBudgetIn {
+  budget_monthly_cents: number;
+  alert_thresholds?: number[];
+}
