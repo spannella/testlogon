@@ -141,6 +141,18 @@ def launch_pod(
             f"Maximum {max_pods} running pods. Terminate one first."
         )
 
+    # 3b. Enforce per-user admin quota (INFRA-012)
+    if S.admin_compute_dashboard_enabled:
+        from app.services.admin_compute import (
+            enforce_k8s_quota,
+            QuotaExceeded,
+            SpendingLimitReached,
+        )
+        try:
+            enforce_k8s_quota(user_sub, preset)
+        except (QuotaExceeded, SpendingLimitReached) as e:
+            raise PodLimitReached(str(e))
+
     # 4. Build pod metadata
     pod_id = f"p_{uuid.uuid4().hex[:8]}"
     namespace = _sanitize_namespace(user_sub)

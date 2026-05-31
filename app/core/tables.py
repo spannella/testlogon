@@ -158,6 +158,7 @@ class Tables:
     k8s_pods: Any
     agent_workers: Any
     compute_billing: Any
+    compute_quotas: Any
     agent_memory: Any
     agent_feedback: Any
 
@@ -312,6 +313,7 @@ T = Tables(
     k8s_pods=ddb.Table(S.k8s_pods_table_name),
     agent_workers=ddb.Table(S.agent_workers_table_name),
     compute_billing=ddb.Table(S.compute_billing_table_name),
+    compute_quotas=ddb.Table(S.compute_quotas_table_name),
     agent_memory=ddb.Table(S.agent_memory_table_name),
     agent_feedback=ddb.Table(S.agent_feedback_table_name),
 )

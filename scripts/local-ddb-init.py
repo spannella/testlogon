@@ -1441,6 +1441,11 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Admin Compute Quotas (INFRA-012)
+        TableDef(
+            _resolve_table_name(S.compute_quotas_table_name, "compute_quotas"),
+            "user_sub",
+        ),
         # Agent Memory (AGENT-005)
         TableDef(
             _resolve_table_name(S.agent_memory_table_name, "agent_memory"),

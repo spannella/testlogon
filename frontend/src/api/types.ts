@@ -5895,3 +5895,103 @@ export interface StatusFlowUpdateIn {
   on_pr_merged?: string;
   next_agent_type?: string;
 }
+
+// ─── Admin Compute Dashboard (INFRA-012) ─────────────────────────
+
+export interface AdminInstance {
+  instance_id: string;
+  user_sub: string;
+  label: string;
+  instance_type: string;
+  ami_name: string;
+  status: string;
+  public_ip: string;
+  created_at: number;
+  last_activity_at: number;
+  auto_terminate_after: number;
+}
+
+export interface AdminInstanceListOut {
+  instances: AdminInstance[];
+  count: number;
+  cursor: string | null;
+}
+
+export interface AdminPod {
+  pod_id: string;
+  user_sub: string;
+  label: string;
+  image: string;
+  preset: string;
+  status: string;
+  pod_ip: string;
+  created_at: number;
+  ttl_seconds: number;
+  expires_at: number;
+}
+
+export interface AdminPodListOut {
+  pods: AdminPod[];
+  count: number;
+  cursor: string | null;
+}
+
+export interface ForceTerminateReq {
+  reason?: string;
+}
+
+export interface PlatformSpendingOut {
+  month: string;
+  total_cents: number;
+  ec2_total_cents: number;
+  k8s_total_cents: number;
+  active_user_count: number;
+  active_instance_count: number;
+  active_pod_count: number;
+}
+
+export interface PerUserSpendingEntry {
+  user_sub: string;
+  total_cents: number;
+  ec2_cents: number;
+  k8s_cents: number;
+  instance_count: number;
+  pod_count: number;
+}
+
+export interface PerUserSpendingOut {
+  users: PerUserSpendingEntry[];
+  month: string;
+}
+
+export interface InstanceTypeStatEntry {
+  instance_type: string;
+  running_count: number;
+  total_launched: number;
+}
+
+export interface InstanceTypeStatsOut {
+  stats: InstanceTypeStatEntry[];
+}
+
+export interface ComputeQuota {
+  user_sub: string;
+  max_ec2_instances: number;
+  max_k8s_pods: number;
+  max_monthly_spend_cents: number;
+  allowed_instance_types: string[];
+  allowed_k8s_presets: string[];
+  is_custom: boolean;
+  updated_at: number;
+  updated_by: string;
+  notes: string;
+}
+
+export interface SetQuotaReq {
+  max_ec2_instances: number;
+  max_k8s_pods: number;
+  max_monthly_spend_cents: number;
+  allowed_instance_types: string[];
+  allowed_k8s_presets: string[];
+  notes?: string;
+}

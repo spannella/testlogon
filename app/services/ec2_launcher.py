@@ -144,6 +144,18 @@ def launch_instance(
             f"Maximum {S.ec2_max_instances_per_user} active instances allowed"
         )
 
+    # 3b. Enforce per-user admin quota (INFRA-012)
+    if S.admin_compute_dashboard_enabled:
+        from app.services.admin_compute import (
+            enforce_ec2_quota,
+            QuotaExceeded,
+            SpendingLimitReached,
+        )
+        try:
+            enforce_ec2_quota(user_sub, instance_type)
+        except (QuotaExceeded, SpendingLimitReached) as e:
+            raise InstanceLimitExceeded(str(e))
+
     # 4. Launch (mock or real)
     instance_id = uuid.uuid4().hex
     if S.ec2_mock_enabled:

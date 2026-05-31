@@ -198,6 +198,7 @@ from app.routers.syndicates import router as syndicates_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ec2_launcher import router as ec2_launcher_router
 from app.services.ec2_launcher import start_ec2_idle_checker_task
+from app.routers.admin_compute import router as admin_compute_router
 from app.routers.chat_bot import router as chat_bot_router
 from app.routers.bot_template import router as bot_template_router
 from app.routers.bot_auto_reply import router as bot_auto_reply_router
@@ -566,6 +567,7 @@ def create_app() -> FastAPI:
 
     from app.routers.compute_billing import router as compute_billing_router
     app.include_router(compute_billing_router)
+    app.include_router(admin_compute_router)
 
     app.include_router(agent_workers_router)
     app.include_router(agent_fleet_router)

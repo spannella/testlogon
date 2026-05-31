@@ -50,6 +50,7 @@ import {
   Activity,
   Phone,
   ShieldAlert,
+  Server,
   Container,
   Bot,
   LayoutGrid,
@@ -179,6 +180,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: <Scale className="h-5 w-5" /> },
       { label: "Refund Queue", i18nKey: "nav.refundQueue", path: "/admin/refunds", icon: <CreditCard className="h-5 w-5" /> },
       { label: "Risk Scoring", i18nKey: "nav.riskScoring", path: "/admin/risk", icon: <ShieldAlert className="h-5 w-5" /> },
+      { label: "Compute", i18nKey: "nav.compute", path: "/admin/compute", icon: <Server className="h-5 w-5" /> },
     ],
   },
 ];
