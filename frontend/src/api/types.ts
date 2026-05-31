@@ -4607,4 +4607,204 @@ export interface AdminRevenueEntryOut {
 export interface AdminRevenueListOut {
   transactions: AdminRevenueEntryOut[];
   next_cursor?: string;
+// -- Delegate Management (DELEGATE-001) --
+
+export interface DelegateAddReq {
+  delegate_id: string;
+  permissions: string[];
+  preset?: string;
+  label?: string;
+}
+
+export interface DelegateUpdatePermissionsReq {
+  permissions: string[];
+  preset?: string;
+}
+
+export interface DelegateInviteRespondReq {
+  accept: boolean;
+}
+
+export interface DelegateSettingsReq {
+  require_acceptance?: boolean;
+  max_delegates?: number;
+  default_preset?: string;
+  delegate_tag_enabled?: boolean;
+  delegate_tag_format?: string;
+}
+
+export interface DelegateOut {
+  delegate_id: string;
+  creator_id: string;
+  permissions: string[];
+  preset?: string;
+  status: string;
+  label: string;
+  show_delegate_tag: boolean;
+  delegate_tag_format: string;
+  invited_at: number;
+  accepted_at: number;
+  updated_at: number;
+}
+
+export interface ManagedCreatorOut {
+  creator_id: string;
+  permissions: string[];
+  preset?: string;
+  status: string;
+  label: string;
+  accepted_at: number;
+}
+
+export interface DelegateSettingsOut {
+  require_acceptance: boolean;
+  max_delegates: number;
+  default_preset?: string;
+  delegate_tag_enabled: boolean;
+  delegate_tag_format: string;
+}
+
+export interface DelegateAuditOut {
+  event_id: string;
+  actor_id: string;
+  actor_type: string;
+  action: string;
+  target_id: string;
+  details?: Record<string, unknown>;
+  ts: number;
+}
+
+export interface PermissionPresetOut {
+  key: string;
+  label: string;
+  permissions: string[];
+}
+
+// -- Chat Delegation (DELEGATE-002) --
+
+export interface DelegatedSendMessageReq {
+  text: string;
+  reply_to_message_id?: string;
+}
+
+export interface DelegatedMessage {
+  conversation_id: string;
+  message_id: string;
+  sender_id: string;
+  created_at: number;
+  kind: string;
+  text?: string;
+  is_encrypted: boolean;
+  sent_by_delegate?: string;
+  delegate_display_name?: string;
+  delegate_tag?: string;
+  delegate_cannot_decrypt?: boolean;
+  reply_to_message_id?: string;
+}
+
+export interface DelegatedConversation {
+  conversation_id: string;
+  type: string;
+  title?: string;
+  created_at: number;
+  last_message_at: number;
+  last_message_preview?: string;
+  participant_count: number;
+  status: string;
+  unread_count: number;
+  participants: Array<Record<string, unknown>>;
+}
+
+export interface ChatDelegateAuditEntry {
+  event_id: string;
+  delegate_id: string;
+  conversation_id: string;
+  message_id: string;
+  text_preview: string;
+  delegate_display_name: string;
+  created_at: number;
+}
+
+// -- Newsfeed Delegation (DELEGATE-003) --
+
+export interface DelegatedPostCreateReq {
+  text: string;
+  image_url?: string;
+  lock_price_cents?: number;
+  tags?: string[];
+  scheduled_at?: number;
+}
+
+export interface DelegatedPostEditReq {
+  text?: string;
+  image_url?: string;
+  lock_price_cents?: number;
+  tags?: string[];
+}
+
+export interface DraftApprovalReq {
+  note?: string;
+}
+
+export interface CommentModerationReq {
+  action: "hide" | "pin" | "unpin" | "delete";
+}
+
+export interface DelegatedPostOut {
+  post_id: string;
+  author_id: string;
+  text: string;
+  image_url?: string;
+  lock_price_cents: number;
+  tags: string[];
+  status: string;
+  posted_by_delegate?: string;
+  delegate_display_name?: string;
+  delegate_tag?: string;
+  approval_status?: string;
+  approval_note?: string;
+  approved_at?: number;
+  created_at: string;
+  updated_at: string;
+  view_count: number;
+  like_count: number;
+  comment_count: number;
+}
+
+export interface FeedAnalyticsOut {
+  period: string;
+  total_posts: number;
+  total_views: number;
+  total_likes: number;
+  total_comments: number;
+  engagement_rate: number;
+  locked_post_revenue_cents: number;
+  delegate_post_count: number;
+  top_posts: Array<Record<string, unknown>>;
+}
+
+export interface FeedDelegateAuditEntry {
+  event_id: string;
+  delegate_id: string;
+  delegate_display_name: string;
+  action: string;
+  target_id: string;
+  details?: Record<string, unknown>;
+  ts: number;
+}
+
+export interface FeedDelegationSettingsReq {
+  require_post_approval?: boolean;
+  allow_delegate_scheduling?: boolean;
+  allow_delegate_locking?: boolean;
+  delegate_tag_on_posts?: boolean;
+  delegate_tag_format?: string;
+}
+
+export interface FeedDelegationSettingsOut {
+  require_post_approval: boolean;
+  allow_delegate_scheduling: boolean;
+  allow_delegate_locking: boolean;
+  delegate_tag_on_posts: boolean;
+  delegate_tag_format: string;
 }

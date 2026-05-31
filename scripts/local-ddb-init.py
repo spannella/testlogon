@@ -230,6 +230,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI4", "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
                 {"index_name": "GSI5", "partition_key": "GSI5PK", "sort_key": "GSI5SK"},
             ],
+            attr_types={"GSI5SK": "N"},
         ),
         TableDef(
             os.getenv("DDB_CONVERSATIONS", "Conversations"),
@@ -1294,6 +1295,9 @@ def _table_defs() -> List[TableDef]:
         # License Revenue (LICENSE-003)
         TableDef(
             _resolve_table_name(S.license_revenue_table_name, "license_revenue"),
+        # Delegates (DELEGATE-001..003)
+        TableDef(
+            _resolve_table_name(S.delegates_table_name, "delegates"),
             "pk",
             "sk",
             gsi=[
