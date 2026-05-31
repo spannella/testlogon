@@ -97,7 +97,7 @@ def _compute_stock_status(item: dict) -> str:
     sc = int(sc)
     if sc <= 0:
         return "out_of_stock"
-    threshold = int(item.get("low_stock_threshold", 5) or 5)
+    threshold = int(item.get("low_stock_threshold") or S.catalog_default_low_stock_threshold)
     if sc <= threshold:
         return "low_stock"
     return "in_stock"
@@ -120,7 +120,7 @@ def _catalog_item_out(item: dict) -> CatalogItemOut:
         updated_at=item["updated_at"],
         stock_count=int(sc) if sc is not None else None,
         stock_status=_compute_stock_status(item),
-        low_stock_threshold=int(item.get("low_stock_threshold", 5) or 5),
+        low_stock_threshold=int(item.get("low_stock_threshold") or S.catalog_default_low_stock_threshold),
         stock_updated_at=item.get("stock_updated_at"),
         position=int(pos) if pos is not None else None,
     )
@@ -609,7 +609,9 @@ else:
 
 
 def _check_low_stock_alert(item: dict, new_stock: int) -> None:
-    threshold = int(item.get("low_stock_threshold", 5) or 5)
+    if not S.catalog_stock_alerts_enabled:
+        return
+    threshold = int(item.get("low_stock_threshold") or S.catalog_default_low_stock_threshold)
     if new_stock <= threshold and new_stock >= 0:
         try:
             from app.services.alerts import write_alert
@@ -734,7 +736,7 @@ async def adjust_stock(
         item_id=item_id,
         stock_count=int(sc) if sc is not None else None,
         stock_status=_compute_stock_status(updated),
-        low_stock_threshold=int(updated.get("low_stock_threshold", 5) or 5),
+        low_stock_threshold=int(updated.get("low_stock_threshold") or S.catalog_default_low_stock_threshold),
         stock_updated_at=updated.get("stock_updated_at"),
     )
 

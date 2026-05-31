@@ -761,6 +761,8 @@ class Settings:
     cart_ttl_days: int = int(os.environ.get("CART_TTL_DAYS", "30"))
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
+    catalog_default_low_stock_threshold: int = int(os.environ.get("CATALOG_LOW_STOCK_THRESHOLD", "5"))
+    catalog_stock_alerts_enabled: bool = os.environ.get("CATALOG_STOCK_ALERTS_ENABLED", "1") not in ("0", "false", "False")
 
     # File manager
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
