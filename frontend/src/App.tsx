@@ -86,6 +86,7 @@ const AuditExportPage = lazy(() => import("@/pages/admin/AuditExportPage"));
 const TenantAdmin = lazy(() => import("@/pages/admin/TenantAdmin"));
 const SsoProvidersPage = lazy(() => import("@/pages/admin/SsoProvidersPage"));
 const LicenseRevenuePage = lazy(() => import("@/pages/licenses/LicenseRevenuePage"));
+const RiskDashboardPage = lazy(() => import("@/pages/admin/RiskDashboardPage"));
 const CreatorDashboard = lazy(() => import("@/pages/dashboard/CreatorDashboard"));
 const OrgsPage = lazy(() => import("@/pages/orgs/OrgsPage"));
 const OrgDashboard = lazy(() => import("@/pages/orgs/OrgDashboard"));
@@ -217,6 +218,7 @@ export default function App() {
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />
           <Route path="licenses/revenue" element={<LicenseRevenuePage />} />
+          <Route path="admin/risk" element={<RiskDashboardPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

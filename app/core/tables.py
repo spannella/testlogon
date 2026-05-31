@@ -151,6 +151,7 @@ class Tables:
     activity_feed: Any
     notifications_engine: Any
     call_history: Any
+    kyc_risk_scores: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -296,4 +297,5 @@ T = Tables(
     activity_feed=ddb.Table(S.activity_feed_table_name),
     notifications_engine=ddb.Table(S.notifications_engine_table_name),
     call_history=ddb.Table(S.call_history_table_name),
+    kyc_risk_scores=ddb.Table(S.kyc_risk_scores_table_name),
 )

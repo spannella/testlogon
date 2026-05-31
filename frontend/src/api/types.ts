@@ -4870,4 +4870,54 @@ export interface CallStatsOut {
   total_duration_seconds: number;
   calls_by_type: Record<string, number>;
   calls_by_status: Record<string, number>;
+// ─── Risk Scoring (KYC-008) ────────────────────────────────────
+
+export interface RiskFactorDetail {
+  score: number;
+  weight: number;
+  weighted_score: number;
+  raw_value: string;
+  description: string;
+}
+
+export interface RiskScoreOut {
+  score_id: string;
+  case_id: string;
+  user_sub: string;
+  total_score: number;
+  risk_tier: "low" | "medium" | "high" | "critical";
+  factors: Record<string, RiskFactorDetail>;
+  trigger: string;
+  auto_action_taken: string;
+  model_version: string;
+  created_at: number;
+  previous_score?: number | null;
+  previous_tier?: string | null;
+}
+
+export interface RiskFactorOut {
+  factor_name: string;
+  score: number;
+  weight: number;
+  weighted_score: number;
+  raw_value: string;
+  description: string;
+}
+
+export interface RiskProfileOut {
+  user_sub: string;
+  latest_score: RiskScoreOut | null;
+  history: RiskScoreOut[];
+}
+
+export interface RiskDistributionOut {
+  distribution: Record<string, number>;
+  total_scored: number;
+  auto_approve_rate: number;
+  auto_escalate_rate: number;
+}
+
+export interface RiskOverrideIn {
+  score: number;
+  reason: string;
 }
