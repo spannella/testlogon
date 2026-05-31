@@ -70,6 +70,119 @@ _UNLOCK_ATTEMPT_THROTTLE: Dict[str, deque] = {}
 _UNLOCK_ATTEMPT_THROTTLE_LOCK = threading.Lock()
 
 
+def _inject_sponsored_posts(
+    posts: List[Dict[str, Any]],
+    viewer_id: str,
+    interval: Optional[int] = None,
+    max_sponsored: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Inject sponsored posts into the feed at regular intervals (ADS-005)."""
+    if not posts:
+        return posts
+    if not getattr(S, "sponsored_posts_enabled", False):
+        return posts
+
+    _interval = interval or int(getattr(S, "sponsored_post_interval", 5))
+    _max = max_sponsored or int(getattr(S, "sponsored_post_max_per_page", 3))
+
+    # Load hidden ad IDs once for this request
+    from app.services.ad_feedback import get_hidden_ad_ids
+    hidden_ids = get_hidden_ad_ids(viewer_id)
+
+    result: List[Dict[str, Any]] = []
+    sponsored_count = 0
+
+    for i, post in enumerate(posts):
+        result.append(post)
+        # Inject after every `_interval` organic posts
+        if (i + 1) % _interval == 0 and sponsored_count < _max:
+            # Check if the post allows ads near it
+            if not post.get("allow_ads_near", True):
+                logger.debug(
+                    "sponsored_injection_skipped",
+                    extra={"viewer_id": viewer_id, "reason": "allow_ads_near_false"},
+                )
+                continue
+            sponsored = _fetch_sponsored_post(viewer_id, i, hidden_ids)
+            if sponsored:
+                result.append(sponsored)
+                sponsored_count += 1
+
+    return result
+
+
+def _fetch_sponsored_post(
+    viewer_id: str,
+    position: int,
+    hidden_ids: Set[str],
+) -> Optional[Dict[str, Any]]:
+    """Fetch a sponsored post from the ad serving engine."""
+    try:
+        from app.services.ad_serving import serve_ad
+        ad = serve_ad(
+            surface="newsfeed",
+            content_type="post",
+            creator_id="platform",
+            content_id=f"feed_slot_{position}",
+            slot_type="sponsored_post",
+            user_id=viewer_id,
+        )
+        if not ad.get("filled") or ad.get("is_house_ad"):
+            return None
+
+        creative_id = ad.get("creative_id", "")
+        if creative_id in hidden_ids:
+            logger.debug(
+                "sponsored_injection_skipped",
+                extra={"viewer_id": viewer_id, "reason": "hidden", "creative_id": creative_id},
+            )
+            return None
+
+        ts = int(time.time())
+        sponsored = {
+            "post_id": f"sponsored_{creative_id}_{position}",
+            "is_sponsored": True,
+            "sponsor_account_id": ad.get("campaign_id", ""),
+            "sponsor_label": ad.get("title", "Sponsored"),
+            "headline": ad.get("headline"),
+            "body": ad.get("body_text", ""),
+            "cta_text": ad.get("cta_text"),
+            "cta_url": ad.get("cta_url"),
+            "image_urls": [ad["image_url"]] if ad.get("image_url") else [],
+            "impression_url": ad.get("impression_url"),
+            "click_url": ad.get("click_url"),
+            "creative_id": creative_id,
+            "campaign_id": ad.get("campaign_id"),
+            "reactions_counts": {},
+            "comment_count": 0,
+            "comments_enabled": False,
+            "created_at": ts,
+            "author_id": "",
+            "like_count": 0,
+            "tip_total_cents": 0,
+            "liked_by_me": False,
+            "my_reactions": [],
+            "tags": [],
+            "allow_ads_near": False,
+        }
+        logger.info(
+            "sponsored_injected",
+            extra={
+                "viewer_id": viewer_id,
+                "creative_id": creative_id,
+                "position": position,
+                "campaign_id": ad.get("campaign_id"),
+            },
+        )
+        return sponsored
+    except Exception:
+        logger.debug(
+            "sponsored_injection_skipped",
+            extra={"viewer_id": viewer_id, "reason": "serve_error"},
+        )
+        return None
+
+
 def _csv_values(raw: Optional[str]) -> Set[str]:
     if not raw:
         return set()
@@ -1291,6 +1404,8 @@ class CreatePostRequest(ContentFieldsMixin):
     lottery_won_at: Optional[str] = None
     lottery_version: Optional[int] = Field(default=None, ge=0)
     file_paths: List[str] = Field(default_factory=list)
+    # ADS-005: allow sponsored posts adjacent in feed
+    allow_ads_near: bool = Field(default=True, description="Allow sponsored posts adjacent in feed")
     # ENGAGE-002: Poll/Survey post type
     post_type: Optional[Literal["standard", "poll", "survey"]] = None
     poll_data: Optional[PollDataIn] = None
@@ -1386,6 +1501,8 @@ class PostResponse(BaseModel):
     like_count: int = 0
     comment_count: int = 0
     video: Optional[PostVideoEmbed] = None
+    # ADS-005: creator ad adjacency control
+    allow_ads_near: bool = True
     # ENGAGE-002: Poll fields
     post_type: str = "standard"
     poll_data: Optional[Dict[str, Any]] = None
@@ -2010,6 +2127,8 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "reposted_by_me": _check_reposted_by_me(viewer_id, post_id) if viewer_id else False,
         # SOCIAL-006: hashtags/topics
         "tags": list(post.get("tags") or []),
+        # ADS-005: creator ad adjacency control
+        "allow_ads_near": bool(post.get("allow_ads_near", True)),
         # ENGAGE-002: Poll data
         **_poll_fields_for_post(post, locked_body, viewer_id),
     }
@@ -3267,6 +3386,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "comment_count": 0,
         "file_attachments": file_attachments,
         "tags": all_tags,
+        "allow_ads_near": req.allow_ads_near,
         "body_plain_lc": (content.get("body_plain") or content.get("body") or "").lower(),
     }
     # ENGAGE-002: Attach poll data to post item
@@ -3363,6 +3483,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         lottery_version=lottery_version,
         like_count=0,
         comment_count=0,
+        allow_ads_near=req.allow_ads_near,
         post_type=req_post_type,
         poll_data=poll_data_built if poll_data_built else None,
         poll_vote_counts=poll_vote_counts_init if poll_vote_counts_init else None,
@@ -4367,7 +4488,12 @@ def view_feed(
             if len(ordered) >= limit or not next_eks:
                 break
 
-        out = {"items": ordered[:limit], "next_cursor": encode_cursor(next_eks)}
+        # ADS-005: Inject sponsored posts into the feed
+        feed_items = ordered[:limit]
+        if not author_filter:  # Only inject in the main feed, not author-filtered views
+            feed_items = _inject_sponsored_posts(feed_items, user_id)
+
+        out = {"items": feed_items, "next_cursor": encode_cursor(next_eks)}
         _emit_feed_filter_usage_metrics(mode=mode, q=normalized_q, from_ts=from_ts, to_ts=to_ts, has_media=has_media)
         record_newsfeed_feed_page_depth(mode=mode, depth=page_depth)
         record_newsfeed_feed_request(mode=mode, outcome="success")

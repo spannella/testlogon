@@ -3,6 +3,7 @@ import { Loader2, Newspaper, Repeat2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreatePost } from "./CreatePost";
 import { PostCard } from "./PostCard";
+import { SponsoredPostCard } from "./SponsoredPostCard";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { useFeedTimelineQuery } from "@/hooks/useFeedTimelineQuery";
 import { mergeFeedPages } from "@/lib/feedPagination";
@@ -136,19 +137,25 @@ export function FeedTimeline({
         <>
           {allPosts.map((post) => (
             <div key={post.post_id}>
-              {post.reposted_by && (
-                <div className="flex items-center gap-1 px-4 py-1.5 text-sm text-muted-foreground" data-testid="repost-attribution">
-                  <Repeat2 className="h-3.5 w-3.5" />
-                  <span className="font-medium">{post.reposted_by.display_name}</span>
-                  <span>reposted</span>
-                </div>
+              {post.is_sponsored ? (
+                <SponsoredPostCard post={post} />
+              ) : (
+                <>
+                  {post.reposted_by && (
+                    <div className="flex items-center gap-1 px-4 py-1.5 text-sm text-muted-foreground" data-testid="repost-attribution">
+                      <Repeat2 className="h-3.5 w-3.5" />
+                      <span className="font-medium">{post.reposted_by.display_name}</span>
+                      <span>reposted</span>
+                    </div>
+                  )}
+                  {post.repost_quote && (
+                    <div className="px-4 pb-2 text-sm italic text-foreground" data-testid="repost-quote">
+                      &ldquo;{post.repost_quote}&rdquo;
+                    </div>
+                  )}
+                  <PostCard post={post} />
+                </>
               )}
-              {post.repost_quote && (
-                <div className="px-4 pb-2 text-sm italic text-foreground" data-testid="repost-quote">
-                  &ldquo;{post.repost_quote}&rdquo;
-                </div>
-              )}
-              <PostCard post={post} />
             </div>
           ))}
 

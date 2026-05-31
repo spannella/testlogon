@@ -3878,3 +3878,305 @@ class SsoInfoOut(BaseModel):
     sso_login_url: Optional[str] = None
     provider_display_name: Optional[str] = None
     provider_protocol: Optional[str] = None
+
+
+# ── Ad Accounts & Campaigns (ADS-001) ─────────────────────────────────────
+
+
+class AdAccountCreateIn(BaseModel):
+    company_name: str = Field(..., min_length=1, max_length=200)
+    billing_email: str = Field(..., min_length=1, max_length=320)
+
+
+class AdAccountReviewIn(BaseModel):
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    notes: Optional[str] = None
+
+
+class CampaignCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    objective: str = Field(..., pattern=r"^(awareness|traffic|conversions)$")
+    budget_cents: int = Field(..., ge=100)
+    budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class CampaignUpdateIn(BaseModel):
+    name: Optional[str] = None
+    objective: Optional[str] = None
+    budget_cents: Optional[int] = None
+    budget_type: Optional[str] = None
+    status: Optional[str] = None
+    bid_cpm_cents: Optional[int] = None
+
+
+class CampaignReviewIn(BaseModel):
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    notes: Optional[str] = None
+
+
+# ── Ad Creatives (ADS-002) ─────────────────────────────────────────────
+
+
+class CreativeCreateIn(BaseModel):
+    format: str = Field(..., pattern="^(native_post|image|video|carousel)$")
+    title: str = Field(..., min_length=1, max_length=200)
+    headline: Optional[str] = None
+    body_text: Optional[str] = None
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    alt_text: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_seconds: Optional[int] = None
+    skip_after_seconds: Optional[int] = None
+    rotation_weight: int = Field(default=50, ge=0, le=100)
+    promo_code_id: Optional[str] = None
+    affiliate_link_id: Optional[str] = None
+
+    @field_validator("cta_url")
+    @classmethod
+    def validate_cta_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("CTA URL must start with http:// or https://")
+        return v
+
+    @field_validator("title")
+    @classmethod
+    def strip_title(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("headline")
+    @classmethod
+    def strip_headline(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() if v else v
+
+    @field_validator("body_text")
+    @classmethod
+    def sanitize_body(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return re.sub(r"<script[^>]*>.*?</script>", "", v, flags=re.DOTALL | re.IGNORECASE).strip()
+
+
+class CreativeUpdateIn(BaseModel):
+    title: Optional[str] = None
+    headline: Optional[str] = None
+    body_text: Optional[str] = None
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    rotation_weight: Optional[int] = None
+    skip_after_seconds: Optional[int] = None
+
+
+class CreativeReviewIn(BaseModel):
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    notes: Optional[str] = None
+
+
+# ── Ad Serving (ADS-004) ─────────────────────────────────────────────
+
+
+class AdServeRequestIn(BaseModel):
+    surface: str = Field(..., pattern="^(newsfeed|broadcast|vod)$")
+    content_type: str = Field(default="")
+    creator_id: str = Field(..., min_length=1)
+    content_id: str = Field(..., min_length=1)
+    slot_type: str = Field(default="sponsored_post",
+                           pattern="^(pre_roll|mid_roll|overlay|sponsored_post|broadcast_preroll|broadcast_midroll)$")
+    user_context: Optional[Dict[str, Any]] = None
+
+
+class AdTrackEventIn(BaseModel):
+    event: str = Field(..., pattern="^(impression|click|skip|complete)$")
+    creative_id: str = Field(..., min_length=1)
+    campaign_id: str = Field(..., min_length=1)
+    account_id: str = Field(..., min_length=1)
+    surface: str = Field(..., min_length=1)
+    slot_type: str = Field(..., min_length=1)
+    content_id: str = Field(..., min_length=1)
+    creator_id: str = Field(..., min_length=1)
+
+
+# ── Ad Feedback / Sponsored Posts (ADS-005) ──────────────────────────────
+
+
+VALID_AD_FEEDBACK_TYPES = {"hide", "not_relevant", "repetitive", "offensive"}
+
+
+class AdFeedbackIn(BaseModel):
+    creative_id: str = Field(..., min_length=1, max_length=100)
+    campaign_id: str = Field(default="", max_length=100)
+    feedback_type: str = Field(..., min_length=1)
+    reason: str = Field(default="", max_length=500)
+
+    @field_validator("feedback_type")
+    @classmethod
+    def validate_feedback_type(cls, v: str) -> str:
+        if v not in VALID_AD_FEEDBACK_TYPES:
+            raise ValueError(f"Invalid feedback type: {v}. Must be one of {VALID_AD_FEEDBACK_TYPES}")
+        return v
+
+
+class WhyThisAdOut(BaseModel):
+    reason: str
+    categories: List[str]
+    note: str
+
+
+# ── Ad Targeting (ADS-003) ─────────────────────────────────────────────
+
+VALID_AGE_RANGES = {"18-24", "25-34", "35-44", "45-54", "55+"}
+VALID_GENDERS = {"male", "female", "other"}
+VALID_DEVICE_TYPES = {"mobile", "desktop", "tablet"}
+VALID_CONTENT_TYPES = {"newsfeed", "broadcast", "vod"}
+VALID_AD_CATEGORIES = {
+    "gaming", "music", "fitness", "beauty", "tech", "food", "travel",
+    "finance", "education", "entertainment", "lifestyle", "sports",
+}
+_ISO_3166_PATTERN = re.compile(r"^[A-Z]{2}$")
+
+
+class TargetingCreateIn(BaseModel):
+    name: str = Field(default="Default", max_length=100)
+    age_ranges: Optional[List[str]] = None
+    genders: Optional[List[str]] = None
+    country_codes: Optional[List[str]] = None
+    regions: Optional[List[str]] = None
+    cities: Optional[List[str]] = None
+    content_categories: Optional[List[str]] = None
+    active_hours: Optional[List[int]] = None
+    device_types: Optional[List[str]] = None
+    new_user_only: bool = False
+    creator_ids: Optional[List[str]] = None
+    content_types: Optional[List[str]] = None
+    exclude_creator_ids: Optional[List[str]] = None
+    exclude_categories: Optional[List[str]] = None
+
+    @field_validator("age_ranges")
+    @classmethod
+    def validate_age_ranges(cls, v):
+        if v is None:
+            return v
+        for r in v:
+            if r not in VALID_AGE_RANGES:
+                raise ValueError(f"Invalid age range: {r}. Must be one of {VALID_AGE_RANGES}")
+        return v
+
+    @field_validator("genders")
+    @classmethod
+    def validate_genders(cls, v):
+        if v is None:
+            return v
+        for g in v:
+            if g not in VALID_GENDERS:
+                raise ValueError(f"Invalid gender: {g}. Must be one of {VALID_GENDERS}")
+        return v
+
+    @field_validator("country_codes")
+    @classmethod
+    def validate_country_codes(cls, v):
+        if v is None:
+            return v
+        for code in v:
+            if not _ISO_3166_PATTERN.match(code):
+                raise ValueError(f"Invalid country code: {code}. Must be ISO 3166-1 alpha-2")
+        return v
+
+    @field_validator("active_hours")
+    @classmethod
+    def validate_active_hours(cls, v):
+        if v is None:
+            return v
+        for h in v:
+            if not (0 <= h <= 23):
+                raise ValueError(f"Active hour {h} out of range. Must be 0-23")
+        return v
+
+    @field_validator("device_types")
+    @classmethod
+    def validate_device_types(cls, v):
+        if v is None:
+            return v
+        for d in v:
+            if d not in VALID_DEVICE_TYPES:
+                raise ValueError(f"Invalid device type: {d}. Must be one of {VALID_DEVICE_TYPES}")
+        return v
+
+    @field_validator("content_types")
+    @classmethod
+    def validate_content_types(cls, v):
+        if v is None:
+            return v
+        for ct in v:
+            if ct not in VALID_CONTENT_TYPES:
+                raise ValueError(f"Invalid content type: {ct}. Must be one of {VALID_CONTENT_TYPES}")
+        return v
+
+    @field_validator("creator_ids")
+    @classmethod
+    def validate_creator_ids_limit(cls, v):
+        if v is not None and len(v) > 100:
+            raise ValueError("Maximum 100 creator IDs per targeting set")
+        return v
+
+    @field_validator("exclude_creator_ids")
+    @classmethod
+    def validate_no_contradictory_creators(cls, v, info):
+        if v is None:
+            return v
+        creator_ids = info.data.get("creator_ids") or []
+        overlap = set(v) & set(creator_ids)
+        if overlap:
+            raise ValueError(f"Cannot exclude and include the same creator: {overlap}")
+        return v
+
+
+class TargetingOut(BaseModel):
+    target_set_id: str
+    campaign_id: str
+    name: str
+    age_ranges: Optional[List[str]] = None
+    genders: Optional[List[str]] = None
+    country_codes: Optional[List[str]] = None
+    regions: Optional[List[str]] = None
+    cities: Optional[List[str]] = None
+    content_categories: Optional[List[str]] = None
+    active_hours: Optional[List[int]] = None
+    device_types: Optional[List[str]] = None
+    new_user_only: bool = False
+    creator_ids: Optional[List[str]] = None
+    content_types: Optional[List[str]] = None
+    exclude_creator_ids: Optional[List[str]] = None
+    exclude_categories: Optional[List[str]] = None
+    created_at: int
+    updated_at: int
+
+
+class AudienceEstimateOut(BaseModel):
+    estimated_reach: int
+    targeting_summary: dict
+
+
+class CreatorAdSettingsIn(BaseModel):
+    allow_ads: Optional[bool] = None
+    allowed_ad_categories: Optional[List[str]] = None
+    min_cpm_cents: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("allowed_ad_categories")
+    @classmethod
+    def validate_ad_categories(cls, v):
+        if v is None:
+            return v
+        for cat in v:
+            if cat not in VALID_AD_CATEGORIES:
+                raise ValueError(f"Invalid ad category: {cat}")
+        return v
+
+
+class AdBlockIn(BaseModel):
+    account_id: str
+    reason: str = ""

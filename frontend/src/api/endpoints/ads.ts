@@ -87,3 +87,19 @@ export const setAdConfig = (
   body: AdConfigRequest,
 ): Promise<AdConfigResponse> =>
   api.patch<AdConfigResponse>(`/ui/videos/${videoId}/ad-config`, body);
+
+// ─── Ad Feedback & Sponsored Posts (ADS-005) ───────────────────────────────
+
+import type { AdFeedbackRequest, WhyThisAdResponse } from "../types";
+
+/** Submit feedback on a sponsored post (hide, not_relevant, etc.) */
+export const submitAdFeedback = (
+  body: AdFeedbackRequest,
+): Promise<{ ok: boolean }> =>
+  api.post<{ ok: boolean }>("/ui/ads/feedback", body);
+
+/** Get the reason why a sponsored ad is shown */
+export const whyThisAd = (
+  creativeId: string,
+): Promise<WhyThisAdResponse> =>
+  api.get<WhyThisAdResponse>(`/ui/ads/why/${creativeId}`);
