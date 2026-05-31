@@ -2004,5 +2004,16 @@ class Settings:
         "PAYMENT_PROVIDER_HEALTH_ENABLED", "true"
     ).lower() not in ("0", "false", "no")
 
+    # KYC Proof of Funds / Source of Funds (KYC-005)
+    kyc_proof_of_funds_table_name: str = os.environ.get(
+        "KYC_PROOF_OF_FUNDS_TABLE_NAME", "kyc_proof_of_funds"
+    ) if True else None
+    kyc_proof_of_funds_real_analysis_enabled: bool = os.environ.get(
+        "KYC_PROOF_OF_FUNDS_REAL_ANALYSIS_ENABLED", ""
+    ) not in ("", "0", "false", "False")
+    kyc_proof_of_funds_validity_days: int = int(
+        os.environ.get("KYC_PROOF_OF_FUNDS_VALIDITY_DAYS", "365")
+    )
+
 
 S = Settings()
