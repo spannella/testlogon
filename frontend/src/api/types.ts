@@ -6971,3 +6971,122 @@ export interface ProjectDashboard {
   blockers: Blocker[];
   recent_completions: Array<{ ticket_id: string; subject: string; completed_at: number }>;
 }
+
+// ── Compliance & Security Agent (AGENT-015) ─────────────────────────────────
+
+export interface SecurityFinding {
+  finding_id: string;
+  agent_id: string;
+  source: "pr_review" | "ticket_review" | "periodic_audit" | "manual_scan";
+  source_ref: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  category: string;
+  title: string;
+  description: string;
+  file_path?: string;
+  line_range?: string;
+  code_snippet?: string;
+  remediation: string;
+  status: "open" | "acknowledged" | "remediated" | "false_positive" | "accepted_risk";
+  remediation_ticket_id?: string;
+  resolved_at?: number;
+  note?: string;
+  created_at: number;
+}
+
+export interface SecurityFindingsList {
+  findings: SecurityFinding[];
+  count: number;
+  next_cursor?: string | null;
+}
+
+export interface SecurityAudit {
+  audit_id: string;
+  agent_id: string;
+  worker_id: string;
+  status: "running" | "completed" | "failed";
+  started_at: number;
+  completed_at?: number;
+  finding_counts: Record<string, number>;
+  files_scanned: number;
+  compliance_summary: Record<string, { passed: number; failed: number; open: number }>;
+  report_s3_key?: string;
+}
+
+export interface SecurityAuditsList {
+  audits: SecurityAudit[];
+  count: number;
+  next_cursor?: string | null;
+}
+
+export interface SecurityTrendWeek {
+  week_start: number;
+  by_severity: Record<string, number>;
+  by_category: Record<string, number>;
+  total: number;
+}
+
+export interface SecurityTrends {
+  weeks: SecurityTrendWeek[];
+  days: number;
+  total: number;
+}
+
+export interface ComplianceFrameworkStatus {
+  name: string;
+  passed: number;
+  failed: number;
+  open_findings: number;
+  status: "passing" | "failing" | "unknown";
+}
+
+export interface ComplianceStatus {
+  frameworks: Record<string, ComplianceFrameworkStatus>;
+}
+
+export interface SecurityAgentConfig {
+  scan_on_pr: boolean;
+  scan_on_ticket_update: boolean;
+  block_merge_on_critical: boolean;
+  block_merge_on_high: boolean;
+  periodic_audit_frequency: string;
+  periodic_audit_day: string;
+  periodic_audit_hour_utc: number;
+  compliance_frameworks: string[];
+  wcag_level: string;
+  severity_thresholds: Record<string, string>;
+  ignored_paths: string[];
+  auto_create_remediation_tickets: boolean;
+  remediation_ticket_min_severity: string;
+  updated_at?: number;
+}
+
+export interface SecurityAgentConfigIn {
+  scan_on_pr?: boolean;
+  scan_on_ticket_update?: boolean;
+  block_merge_on_critical?: boolean;
+  block_merge_on_high?: boolean;
+  periodic_audit_frequency?: "daily" | "weekly" | "biweekly" | "monthly";
+  periodic_audit_day?: string;
+  periodic_audit_hour_utc?: number;
+  compliance_frameworks?: Array<"owasp_top_10" | "gdpr" | "pci_dss" | "wcag">;
+  wcag_level?: "A" | "AA" | "AAA";
+  severity_thresholds?: Record<string, string>;
+  ignored_paths?: string[];
+  auto_create_remediation_tickets?: boolean;
+  remediation_ticket_min_severity?: "critical" | "high" | "medium" | "low";
+}
+
+export interface CreateSecurityFindingIn {
+  agent_id?: string;
+  source: "pr_review" | "ticket_review" | "periodic_audit" | "manual_scan";
+  source_ref: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  category: string;
+  title: string;
+  description: string;
+  file_path?: string;
+  line_range?: string;
+  code_snippet?: string;
+  remediation?: string;
+}

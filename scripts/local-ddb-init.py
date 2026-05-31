@@ -1568,6 +1568,34 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # Compliance & Security Agent (AGENT-015) — security findings.
+        # pk=USER#{id}, sk=FINDING#{id}. GSI1=by severity, GSI2=by status, GSI3=by source_ref.
+        TableDef(
+            _resolve_table_name(
+                S.compliance_security_findings_table_name, "compliance_security_findings"
+            ),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
+        ),
+        # Compliance & Security Agent (AGENT-015) — periodic/manual audit runs.
+        # pk=USER#{id}, sk=AUDIT#{id}. GSI1=audits by started_at.
+        TableDef(
+            _resolve_table_name(
+                S.compliance_security_audits_table_name, "compliance_security_audits"
+            ),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
     ]
 
 

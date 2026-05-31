@@ -159,6 +159,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Doc Coverage", i18nKey: "nav.docCoverage", path: "/agents/docs", icon: <BookOpen className="h-5 w-5" /> },
       { label: "Feature Ideas", i18nKey: "nav.featureIdeas", path: "/agents/pm/ideas", icon: <Lightbulb className="h-5 w-5" /> },
       { label: "Submit Idea", i18nKey: "nav.submitIdea", path: "/ideas/submit", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "Security & Compliance", i18nKey: "nav.securityCompliance", path: "/agents/compliance", icon: <ShieldAlert className="h-5 w-5" /> },
     ],
   },
   {

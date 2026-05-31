@@ -172,6 +172,8 @@ class Tables:
     product_ideas: Any
     project_sprints: Any
     project_reports: Any
+    compliance_findings: Any
+    compliance_audits: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -338,4 +340,6 @@ T = Tables(
     product_ideas=ddb.Table(S.product_ideas_table_name),
     project_sprints=ddb.Table(S.project_sprints_table_name),
     project_reports=ddb.Table(S.project_reports_table_name),
+    compliance_findings=ddb.Table(S.compliance_security_findings_table_name),
+    compliance_audits=ddb.Table(S.compliance_security_audits_table_name),
 )
