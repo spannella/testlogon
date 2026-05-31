@@ -112,6 +112,7 @@ class Tables:
     watermark_jobs: Any
     recommendations: Any
     refund_requests: Any
+    billing_disputes: Any
     translations: Any
     group_call_sessions: Any
     sms_delivery: Any
@@ -290,6 +291,7 @@ T = Tables(
     watermark_jobs=ddb.Table(S.watermark_jobs_table_name),
     recommendations=ddb.Table(S.recommendations_table_name),
     refund_requests=ddb.Table(S.refund_requests_table_name),
+    billing_disputes=ddb.Table(S.billing_disputes_table_name),
     translations=ddb.Table(S.translations_table_name),
     group_call_sessions=ddb.Table(S.group_call_sessions_table_name),
     sms_delivery=ddb.Table(S.sms_delivery_table_name),

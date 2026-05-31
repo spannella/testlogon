@@ -1441,6 +1441,11 @@ class Settings:
     max_refund_requests_per_month: int = int(os.environ.get("MAX_REFUND_REQUESTS_PER_MONTH", "3"))
     refund_max_amount_cents: int = int(os.environ.get("REFUND_MAX_AMOUNT_CENTS", "100000"))
 
+    # Billing Disputes / Chargebacks (BILLING-001)
+    billing_disputes_table_name: str = os.environ.get("DDB_BILLING_DISPUTES", "BillingDisputes")
+    billing_disputes_enabled: bool = os.environ.get("BILLING_DISPUTES_ENABLED", "1") not in ("0", "false", "False")
+    billing_disputes_default_deadline_days: int = int(os.environ.get("BILLING_DISPUTES_DEADLINE_DAYS", "14"))
+
     # Notification Delivery Enhancements (NOTIFY-001)
     notification_dispatch_enabled: bool = os.environ.get("NOTIFICATION_DISPATCH_ENABLED", "1") not in ("0", "false", "False")
     notification_email_templates_enabled: bool = os.environ.get("NOTIFICATION_EMAIL_TEMPLATES_ENABLED", "1") not in ("0", "false", "False")

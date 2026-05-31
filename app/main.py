@@ -167,6 +167,7 @@ from app.services.unified_scheduler import start_unified_scheduler_task
 from app.routers.csv_export import router as csv_export_router
 from app.routers.audit_export import router as audit_export_router
 from app.routers.refund_requests import router as refund_requests_router
+from app.routers.billing_disputes import billing_disputes_router
 from app.routers.achievements import router as achievements_router
 from app.routers.admin_jobs import router as admin_jobs_router
 from app.routers.admin_sms import router as admin_sms_router
@@ -512,6 +513,7 @@ def create_app() -> FastAPI:
     app.include_router(csv_export_router)
     app.include_router(audit_export_router)
     app.include_router(refund_requests_router)
+    app.include_router(billing_disputes_router)
     app.include_router(achievements_router)
     app.include_router(promo_codes_router)
     app.include_router(affiliate_links_router)
