@@ -176,6 +176,8 @@ class Tables:
     project_reports: Any
     marketing_content: Any
     marketing_engagement: Any
+    compliance_findings: Any
+    compliance_audits: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -346,4 +348,6 @@ T = Tables(
     project_reports=ddb.Table(S.project_reports_table_name),
     marketing_content=ddb.Table(S.marketing_content_table_name),
     marketing_engagement=ddb.Table(S.marketing_engagement_table_name),
+    compliance_findings=ddb.Table(S.compliance_security_findings_table_name),
+    compliance_audits=ddb.Table(S.compliance_security_audits_table_name),
 )

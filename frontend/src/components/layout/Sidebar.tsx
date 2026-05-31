@@ -163,6 +163,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Design Review", i18nKey: "nav.designReview", path: "/agents/stylist", icon: <Palette className="h-5 w-5" /> },
       { label: "Submit Idea", i18nKey: "nav.submitIdea", path: "/ideas/submit", icon: <ClipboardList className="h-5 w-5" /> },
       { label: "Marketing", i18nKey: "nav.marketing", path: "/agents/marketing", icon: <Megaphone className="h-5 w-5" /> },
+      { label: "Security & Compliance", i18nKey: "nav.securityCompliance", path: "/agents/compliance", icon: <ShieldAlert className="h-5 w-5" /> },
     ],
   },
   {

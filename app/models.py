@@ -7748,6 +7748,46 @@ class CreateUIReviewIn(BaseModel):
 
 class UIReviewListOut(BaseModel):
     reviews: List[UIReviewOut] = Field(default_factory=list)
+# Compliance & Security Agent (AGENT-015)
+# ---------------------------------------------------------------------------
+
+
+class CreateSecurityFindingIn(BaseModel):
+    agent_id: str = Field(default="", max_length=200)
+    source: Literal["pr_review", "ticket_review", "periodic_audit", "manual_scan"]
+    source_ref: str = Field(max_length=300)
+    severity: Literal["critical", "high", "medium", "low", "info"]
+    category: str = Field(max_length=100)
+    title: str = Field(max_length=200)
+    description: str = Field(max_length=5000)
+    file_path: Optional[str] = Field(default=None, max_length=500)
+    line_range: Optional[str] = Field(default=None, max_length=50)
+    code_snippet: Optional[str] = Field(default=None, max_length=1000)
+    remediation: str = Field(default="", max_length=2000)
+
+
+class SecurityFindingOut(BaseModel):
+    finding_id: str
+    agent_id: str = ""
+    source: str
+    source_ref: str
+    severity: str
+    category: str
+    title: str
+    description: str
+    file_path: Optional[str] = None
+    line_range: Optional[str] = None
+    code_snippet: Optional[str] = None
+    remediation: str = ""
+    status: str
+    remediation_ticket_id: Optional[str] = None
+    resolved_at: Optional[int] = None
+    note: Optional[str] = None
+    created_at: int
+
+
+class SecurityFindingsListOut(BaseModel):
+    findings: List[SecurityFindingOut] = Field(default_factory=list)
     count: int = 0
     next_cursor: Optional[str] = None
 
@@ -8017,3 +8057,91 @@ class MarketingGenerateResultOut(BaseModel):
     missing_ticket_ids: List[str] = Field(default_factory=list)
     contents: List[MarketingContentOut] = Field(default_factory=list)
     count: int = 0
+class UpdateFindingStatusIn(BaseModel):
+    status: Literal["acknowledged", "remediated", "false_positive", "accepted_risk"]
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class SecurityAuditOut(BaseModel):
+    audit_id: str
+    agent_id: str = ""
+    worker_id: str = ""
+    status: str
+    started_at: int
+    completed_at: Optional[int] = None
+    finding_counts: Dict[str, int] = Field(default_factory=dict)
+    files_scanned: int = 0
+    compliance_summary: Dict[str, Any] = Field(default_factory=dict)
+    report_s3_key: Optional[str] = None
+
+
+class SecurityAuditsListOut(BaseModel):
+    audits: List[SecurityAuditOut] = Field(default_factory=list)
+    count: int = 0
+    next_cursor: Optional[str] = None
+
+
+class SecurityTrendWeekOut(BaseModel):
+    week_start: int
+    by_severity: Dict[str, int] = Field(default_factory=dict)
+    by_category: Dict[str, int] = Field(default_factory=dict)
+    total: int = 0
+
+
+class SecurityTrendsOut(BaseModel):
+    weeks: List[SecurityTrendWeekOut] = Field(default_factory=list)
+    days: int = 90
+    total: int = 0
+
+
+class ComplianceFrameworkStatusOut(BaseModel):
+    name: str
+    passed: int = 0
+    failed: int = 0
+    open_findings: int = 0
+    status: str = "unknown"
+
+
+class ComplianceStatusOut(BaseModel):
+    frameworks: Dict[str, ComplianceFrameworkStatusOut] = Field(default_factory=dict)
+
+
+class UpdateSecurityConfigIn(BaseModel):
+    scan_on_pr: Optional[bool] = None
+    scan_on_ticket_update: Optional[bool] = None
+    block_merge_on_critical: Optional[bool] = None
+    block_merge_on_high: Optional[bool] = None
+    periodic_audit_frequency: Optional[
+        Literal["daily", "weekly", "biweekly", "monthly"]
+    ] = None
+    periodic_audit_day: Optional[str] = Field(default=None, max_length=20)
+    periodic_audit_hour_utc: Optional[int] = Field(default=None, ge=0, le=23)
+    compliance_frameworks: Optional[
+        List[Literal["owasp_top_10", "gdpr", "pci_dss", "wcag"]]
+    ] = None
+    wcag_level: Optional[Literal["A", "AA", "AAA"]] = None
+    severity_thresholds: Optional[
+        Dict[str, Literal["critical", "high", "medium", "low", "info"]]
+    ] = None
+    ignored_paths: Optional[List[str]] = None
+    auto_create_remediation_tickets: Optional[bool] = None
+    remediation_ticket_min_severity: Optional[
+        Literal["critical", "high", "medium", "low"]
+    ] = None
+
+
+class SecurityAgentConfigOut(BaseModel):
+    scan_on_pr: bool = True
+    scan_on_ticket_update: bool = True
+    block_merge_on_critical: bool = True
+    block_merge_on_high: bool = False
+    periodic_audit_frequency: str = "weekly"
+    periodic_audit_day: str = "sunday"
+    periodic_audit_hour_utc: int = 2
+    compliance_frameworks: List[str] = Field(default_factory=list)
+    wcag_level: str = "AA"
+    severity_thresholds: Dict[str, str] = Field(default_factory=dict)
+    ignored_paths: List[str] = Field(default_factory=list)
+    auto_create_remediation_tickets: bool = True
+    remediation_ticket_min_severity: str = "high"
+    updated_at: Optional[int] = None

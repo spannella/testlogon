@@ -1727,6 +1727,21 @@ class Settings:
     # generation uses a deterministic template producer so tests are reproducible.
     marketing_agent_execute_commands: bool = os.environ.get("MARKETING_AGENT_EXECUTE_COMMANDS", "0") not in ("0", "false", "False")
     marketing_agent_auto_publish: bool = os.environ.get("MARKETING_AGENT_AUTO_PUBLISH", "0") not in ("0", "false", "False")
+    # Compliance & Security Agent (AGENT-015). Reuses the agent_types table for security_config.
+    compliance_security_findings_table_name: str = os.environ.get(
+        "COMPLIANCE_SECURITY_FINDINGS_TABLE_NAME", "compliance_security_findings"
+    )
+    compliance_security_audits_table_name: str = os.environ.get(
+        "COMPLIANCE_SECURITY_AUDITS_TABLE_NAME", "compliance_security_audits"
+    )
+    # Master kill switch for the compliance/security agent feature.
+    compliance_agent_enabled: bool = os.environ.get("COMPLIANCE_AGENT_ENABLED", "1") not in ("0", "false", "False")
+    # When false (default, and always in E2E), the scanning lifecycle never runs real
+    # shell/git/scanner commands — findings + audits are driven in-memory (mock mode)
+    # so tests are deterministic.
+    compliance_agent_execute_commands: bool = os.environ.get(
+        "COMPLIANCE_AGENT_EXECUTE_COMMANDS", "0"
+    ) not in ("0", "false", "False")
 
 
 S = Settings()

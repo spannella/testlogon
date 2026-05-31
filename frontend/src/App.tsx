@@ -129,6 +129,7 @@ const MarketingContentDashboardPage = lazy(() => import("@/pages/agents/Marketin
 const MarketingContentEditorPage = lazy(() => import("@/pages/agents/MarketingContentEditorPage"));
 const MarketingContentCalendarPage = lazy(() => import("@/pages/agents/MarketingContentCalendarPage"));
 const MarketingEngagementDashboardPage = lazy(() => import("@/pages/agents/MarketingEngagementDashboardPage"));
+const ComplianceAgentConfigPage = lazy(() => import("@/pages/agents/ComplianceAgentConfigPage"));
 
 function PageSpinner() {
   return (
@@ -280,6 +281,10 @@ export default function App() {
           <Route path="agents/marketing/content/:contentId" element={<MarketingContentEditorPage />} />
           <Route path="agents/marketing/calendar" element={<MarketingContentCalendarPage />} />
           <Route path="agents/marketing/engagement" element={<MarketingEngagementDashboardPage />} />
+          <Route path="agents/compliance" element={<ComplianceAgentConfigPage />} />
+          <Route path="agents/security" element={<ComplianceAgentConfigPage />} />
+          <Route path="agents/security/findings" element={<ComplianceAgentConfigPage />} />
+          <Route path="agents/security/audits" element={<ComplianceAgentConfigPage />} />
           <Route path="ideas/submit" element={<IdeaSubmissionPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
