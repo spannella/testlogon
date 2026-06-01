@@ -340,6 +340,118 @@ def disburse(
 
 
 # ---------------------------------------------------------------------------
+# Advertising spend (treasury → ad campaign) — used by SYND-006
+# ---------------------------------------------------------------------------
+
+
+def spend_on_advertising(
+    *,
+    syndicate_id: str,
+    admin_sub: str,
+    amount_cents: int,
+    campaign_id: str,
+    campaign_name: str = "",
+) -> Dict[str, Any]:
+    """Debit the treasury to fund an advertising campaign budget.
+
+    Reuses the conditional-debit pattern from ``disburse`` so an overspend is
+    rejected atomically. Does NOT credit any member wallet — the funds leave the
+    treasury to fund the campaign. Returns the treasury ledger entry id.
+    """
+    if amount_cents <= 0:
+        raise HTTPException(status_code=400, detail="Spend amount must be positive")
+
+    pk_treasury = _treasury_pk(syndicate_id)
+    ts = now_ts()
+
+    # Conditional debit: balance must exist and be >= amount → else reject.
+    try:
+        T.syndicate_treasury.update_item(
+            Key={"pk": pk_treasury, "sk": BALANCE_SK},
+            UpdateExpression=(
+                "SET balance_cents = balance_cents - :amt, "
+                "total_disbursed_cents = if_not_exists(total_disbursed_cents, :z) + :amt, "
+                "updated_at = :t"
+            ),
+            ConditionExpression="attribute_exists(balance_cents) AND balance_cents >= :amt",
+            ExpressionAttributeValues={":amt": amount_cents, ":z": 0, ":t": ts},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise HTTPException(status_code=409, detail="Insufficient treasury balance")
+        raise
+
+    reason = f"Ad campaign budget: {campaign_name or campaign_id}"
+    entry_id = _write_treasury_ledger(
+        syndicate_id,
+        direction="debit",
+        amount_cents=amount_cents,
+        reason=reason,
+        actor_user_id=admin_sub,
+        counterparty_user_id="",
+        ts=ts,
+    )
+
+    balance = get_treasury_balance(syndicate_id)
+    return {
+        "ok": True,
+        "amount_cents": amount_cents,
+        "campaign_id": campaign_id,
+        "ledger_entry_id": entry_id,
+        "new_treasury_balance_cents": balance["balance_cents"],
+    }
+
+
+def refund_advertising(
+    *,
+    syndicate_id: str,
+    admin_sub: str,
+    amount_cents: int,
+    campaign_id: str,
+) -> Dict[str, Any]:
+    """Credit unspent advertising budget back to the treasury (not to a member)."""
+    if amount_cents <= 0:
+        return {"ok": True, "amount_cents": 0, "campaign_id": campaign_id}
+
+    pk_treasury = _treasury_pk(syndicate_id)
+    ts = now_ts()
+
+    T.syndicate_treasury.update_item(
+        Key={"pk": pk_treasury, "sk": BALANCE_SK},
+        UpdateExpression=(
+            "SET balance_cents = if_not_exists(balance_cents, :z) + :amt, "
+            "total_disbursed_cents = if_not_exists(total_disbursed_cents, :z) - :amt, "
+            "updated_at = :t, syndicate_id = :sid"
+        ),
+        ExpressionAttributeValues={
+            ":z": 0,
+            ":amt": amount_cents,
+            ":t": ts,
+            ":sid": syndicate_id,
+        },
+    )
+
+    entry_id = _write_treasury_ledger(
+        syndicate_id,
+        direction="credit",
+        amount_cents=amount_cents,
+        reason=f"Cancelled campaign budget refund: {campaign_id}",
+        actor_user_id=admin_sub,
+        counterparty_user_id="",
+        ts=ts,
+    )
+
+    balance = get_treasury_balance(syndicate_id)
+    return {
+        "ok": True,
+        "amount_cents": amount_cents,
+        "campaign_id": campaign_id,
+        "ledger_entry_id": entry_id,
+        "new_treasury_balance_cents": balance["balance_cents"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Ledger & contributions
 # ---------------------------------------------------------------------------
 
