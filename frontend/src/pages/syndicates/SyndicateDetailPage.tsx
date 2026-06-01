@@ -39,6 +39,7 @@ import { useAuthStore } from "@/stores/authStore";
 import RevenueSplitConfigTab from "./RevenueSplitConfigTab";
 import RevenueSplitHistoryTab from "./RevenueSplitHistoryTab";
 import RevenueSplitEarningsCard from "./RevenueSplitEarningsCard";
+import SyndicateTreasuryTab from "./SyndicateTreasuryTab";
 
 export default function SyndicateDetailPage() {
   const { syndicateId } = useParams<{ syndicateId: string }>();
@@ -125,6 +126,7 @@ export default function SyndicateDetailPage() {
           <TabsTrigger value="members">Members</TabsTrigger>
           <TabsTrigger value="plans">Plans</TabsTrigger>
           <TabsTrigger value="revenue">Revenue</TabsTrigger>
+          <TabsTrigger value="treasury">Treasury</TabsTrigger>
           {isAdmin && <TabsTrigger value="requests">Requests ({requests.length})</TabsTrigger>}
           {isAdmin && <TabsTrigger value="audit">Audit Log</TabsTrigger>}
         </TabsList>
@@ -176,6 +178,11 @@ export default function SyndicateDetailPage() {
             <RevenueSplitConfigTab syndicateId={syndicateId!} isAdmin={isAdmin} />
             <RevenueSplitHistoryTab syndicateId={syndicateId!} />
           </div>
+        </TabsContent>
+
+        {/* Treasury Tab (SYND-004) */}
+        <TabsContent value="treasury">
+          <SyndicateTreasuryTab syndicateId={syndicateId!} isAdmin={isAdmin} members={members} />
         </TabsContent>
 
         {/* Requests Tab */}

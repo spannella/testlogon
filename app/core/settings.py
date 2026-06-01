@@ -1767,6 +1767,13 @@ class Settings:
     syndicate_revenue_split_table_name: str = os.environ.get(
         "SYNDICATE_REVENUE_SPLIT_TABLE_NAME", "syndicate_revenue_split"
     )
+    # Syndicate Treasury / Fund Management (SYND-004)
+    syndicate_treasury_table_name: str = os.environ.get(
+        "SYNDICATE_TREASURY_TABLE_NAME", "syndicate_treasury"
+    )
+    syndicate_treasury_enabled: bool = os.environ.get(
+        "SYNDICATE_TREASURY_ENABLED", "true"
+    ) not in ("0", "false", "False")
     # User Groups (GROUP-001)
     # SSH Key Manager (INFRA-002)
     ssh_keys_table_name: str = os.environ.get("SSH_KEYS_TABLE_NAME", "ssh_keys")

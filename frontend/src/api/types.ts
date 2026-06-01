@@ -9758,3 +9758,59 @@ export interface SponsorshipDealEvent {
   details: Record<string, unknown>;
   created_at: number;
 }
+
+// ── Syndicate Treasury / Fund Management (SYND-004) ──────────────────────────
+
+export interface SyndicateTreasuryBalanceOut {
+  syndicate_id: string;
+  balance_cents: number;
+  total_deposited_cents: number;
+  total_disbursed_cents: number;
+  currency: string;
+  updated_at: number;
+}
+
+export interface SyndicateTreasuryDepositOut {
+  ok: boolean;
+  amount_cents: number;
+  new_personal_balance_cents: number;
+  new_treasury_balance_cents: number;
+  treasury_entry_id: string;
+  user_entry_id: string;
+}
+
+export interface SyndicateTreasuryDisburseOut {
+  ok: boolean;
+  amount_cents: number;
+  recipient_user_id: string;
+  new_treasury_balance_cents: number;
+  new_recipient_balance_cents: number;
+  treasury_entry_id: string;
+  user_entry_id: string;
+}
+
+export interface SyndicateTreasuryLedgerEntryOut {
+  entry_id: string;
+  ts: number;
+  direction: string;
+  amount_cents: number;
+  reason: string;
+  actor_user_id: string;
+  counterparty_user_id: string;
+  currency: string;
+}
+
+export interface SyndicateTreasuryLedgerOut {
+  entries: SyndicateTreasuryLedgerEntryOut[];
+  cursor: string | null;
+  has_more: boolean;
+}
+
+export interface SyndicateTreasuryContributorOut {
+  user_id: string;
+  total_contributed_cents: number;
+  total_refunded_cents: number;
+  net_contributed_cents: number;
+  contribution_count: number;
+  last_contribution_at: number;
+}

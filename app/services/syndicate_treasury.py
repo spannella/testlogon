@@ -1,0 +1,432 @@
+"""Syndicate treasury and fund management (SYND-004).
+
+Provides a shared treasury wallet for syndicates:
+- Members deposit funds from their personal wallet into the syndicate treasury.
+- Syndicate admins disburse/withdraw treasury funds to member wallets.
+- Every fund movement is recorded as a paired ledger entry (treasury side in the
+  dedicated ``syndicate_treasury`` table, member side in the shared billing table).
+- Per-member contribution tracking + transaction history.
+
+Mirrors the pattern in ``app/services/group_treasury.py``. Treasury balance,
+transaction ledger, and per-member contribution trackers all live in the
+dedicated ``syndicate_treasury`` DDB table (single-table design with
+``pk = TREASURY#{syndicate_id}``). Member-facing wallet credits/debits use the
+shared billing table via ``apply_wallet_delta`` + ledger entries.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import logging
+import secrets
+from typing import Any, Dict, List, Optional
+
+from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
+from fastapi import HTTPException
+
+from app.core.tables import T
+from app.core.time import now_ts
+from app.services import syndicates as syndicate_svc
+from app.services.billing_shared import apply_wallet_delta, ledger_sk, ulidish, user_pk
+
+logger = logging.getLogger(__name__)
+
+BALANCE_SK = "BALANCE"
+
+# Deposit bounds (cents): $1 - $10,000
+MIN_DEPOSIT_CENTS = 100
+MAX_DEPOSIT_CENTS = 1_000_000
+
+
+def _treasury_pk(syndicate_id: str) -> str:
+    return f"TREASURY#{syndicate_id}"
+
+
+def _gen_id() -> str:
+    return f"{int(now_ts() * 1000)}_{secrets.token_hex(8)}"
+
+
+# ---------------------------------------------------------------------------
+# Balance
+# ---------------------------------------------------------------------------
+
+
+def get_treasury_balance(syndicate_id: str) -> Dict[str, Any]:
+    """Return the current treasury balance and lifetime totals."""
+    pk = _treasury_pk(syndicate_id)
+    resp = T.syndicate_treasury.get_item(Key={"pk": pk, "sk": BALANCE_SK})
+    row = resp.get("Item")
+    if not row:
+        return {
+            "syndicate_id": syndicate_id,
+            "balance_cents": 0,
+            "total_deposited_cents": 0,
+            "total_disbursed_cents": 0,
+            "currency": "usd",
+            "updated_at": 0,
+        }
+    return {
+        "syndicate_id": syndicate_id,
+        "balance_cents": int(row.get("balance_cents", 0)),
+        "total_deposited_cents": int(row.get("total_deposited_cents", 0)),
+        "total_disbursed_cents": int(row.get("total_disbursed_cents", 0)),
+        "currency": row.get("currency", "usd"),
+        "updated_at": int(row.get("updated_at", 0)),
+    }
+
+
+def _write_treasury_ledger(
+    syndicate_id: str,
+    *,
+    direction: str,
+    amount_cents: int,
+    reason: str,
+    actor_user_id: str,
+    counterparty_user_id: str = "",
+    ts: Optional[int] = None,
+) -> str:
+    """Write a treasury-side ledger entry. Returns the entry id."""
+    ts = ts or now_ts()
+    entry_id = _gen_id()
+    item = {
+        "pk": _treasury_pk(syndicate_id),
+        "sk": ledger_sk(ts, entry_id),
+        "entry_id": entry_id,
+        "ts": ts,
+        "direction": direction,  # "credit" or "debit"
+        "amount_cents": int(amount_cents),
+        "reason": reason,
+        "actor_user_id": actor_user_id,
+        "counterparty_user_id": counterparty_user_id,
+        "currency": "usd",
+        "created_at": ts,
+    }
+    T.syndicate_treasury.put_item(Item=item)
+    return entry_id
+
+
+# ---------------------------------------------------------------------------
+# Deposit (member → treasury)
+# ---------------------------------------------------------------------------
+
+
+def deposit(
+    *,
+    syndicate_id: str,
+    user_id: str,
+    amount_cents: int,
+) -> Dict[str, Any]:
+    """Member deposits funds from their personal wallet into the treasury."""
+    if amount_cents < MIN_DEPOSIT_CENTS or amount_cents > MAX_DEPOSIT_CENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Deposit must be between {MIN_DEPOSIT_CENTS} and {MAX_DEPOSIT_CENTS} cents",
+        )
+
+    # Must be a member of an active syndicate.
+    syndicate = syndicate_svc._get_meta(syndicate_id)
+    if syndicate.get("status") != "active":
+        raise HTTPException(status_code=400, detail="Syndicate is not active")
+    syndicate_svc._require_is_member(syndicate_id, user_id)
+
+    pk_user = user_pk(user_id)
+    pk_treasury = _treasury_pk(syndicate_id)
+    ts = now_ts()
+
+    # 1. Debit personal wallet (conditional overdraft check).
+    try:
+        new_personal_balance = apply_wallet_delta(T.billing, pk_user, -amount_cents)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise HTTPException(status_code=400, detail="Insufficient wallet balance")
+        raise
+
+    # 2. Credit treasury balance (atomic ADD, auto-create).
+    T.syndicate_treasury.update_item(
+        Key={"pk": pk_treasury, "sk": BALANCE_SK},
+        UpdateExpression=(
+            "SET balance_cents = if_not_exists(balance_cents, :z) + :amt, "
+            "total_deposited_cents = if_not_exists(total_deposited_cents, :z) + :amt, "
+            "total_disbursed_cents = if_not_exists(total_disbursed_cents, :z), "
+            "currency = :c, updated_at = :t, syndicate_id = :sid"
+        ),
+        ExpressionAttributeValues={
+            ":z": 0,
+            ":amt": amount_cents,
+            ":c": "usd",
+            ":t": ts,
+            ":sid": syndicate_id,
+        },
+    )
+
+    # 3. Update contribution tracker.
+    T.syndicate_treasury.update_item(
+        Key={"pk": pk_treasury, "sk": f"CONTRIB#{user_id}"},
+        UpdateExpression=(
+            "SET user_id = :uid, "
+            "total_contributed_cents = if_not_exists(total_contributed_cents, :z) + :amt, "
+            "total_refunded_cents = if_not_exists(total_refunded_cents, :z), "
+            "contribution_count = if_not_exists(contribution_count, :z) + :one, "
+            "first_contributed_at = if_not_exists(first_contributed_at, :t), "
+            "last_contribution_at = :t"
+        ),
+        ExpressionAttributeValues={
+            ":uid": user_id,
+            ":z": 0,
+            ":amt": amount_cents,
+            ":one": 1,
+            ":t": ts,
+        },
+    )
+
+    # 4. Treasury ledger entry (credit).
+    treasury_entry_id = _write_treasury_ledger(
+        syndicate_id,
+        direction="credit",
+        amount_cents=amount_cents,
+        reason=f"Treasury deposit from {user_id}",
+        actor_user_id=user_id,
+        counterparty_user_id=user_id,
+        ts=ts,
+    )
+
+    # 5. Member-side billing ledger entry (debit).
+    user_entry_id = ulidish()
+    T.billing.put_item(Item={
+        "pk": pk_user,
+        "sk": ledger_sk(ts, user_entry_id),
+        "entry_id": user_entry_id,
+        "ts": ts,
+        "type": "syndicate_treasury_deposit",
+        "amount_cents": amount_cents,
+        "state": "settled",
+        "reason": "Syndicate treasury deposit",
+        "direction": "debit",
+        "category": "syndicate_treasury",
+        "syndicate_id": syndicate_id,
+        "syndicate_name": syndicate.get("name", ""),
+        "currency": "usd",
+        "created_at": ts,
+    })
+
+    syndicate_svc._write_audit(
+        syndicate_id, user_id, "treasury_deposit", "",
+        {"amount_cents": amount_cents},
+    )
+
+    balance = get_treasury_balance(syndicate_id)
+    logger.info(
+        "syndicate_treasury.deposit",
+        extra={"syndicate_id": syndicate_id, "user_id": user_id, "amount_cents": amount_cents},
+    )
+
+    return {
+        "ok": True,
+        "amount_cents": amount_cents,
+        "new_personal_balance_cents": new_personal_balance,
+        "new_treasury_balance_cents": balance["balance_cents"],
+        "treasury_entry_id": treasury_entry_id,
+        "user_entry_id": user_entry_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Disbursement / withdrawal (treasury → member, admin only)
+# ---------------------------------------------------------------------------
+
+
+def disburse(
+    *,
+    syndicate_id: str,
+    admin_sub: str,
+    recipient_user_id: str,
+    amount_cents: int,
+    note: str = "",
+) -> Dict[str, Any]:
+    """Admin disburses/withdraws treasury funds to a member's personal wallet."""
+    # Admin-only.
+    syndicate_svc._require_admin(syndicate_id, admin_sub)
+
+    if amount_cents <= 0:
+        raise HTTPException(status_code=400, detail="Disbursement amount must be positive")
+
+    # Recipient must be a member of the syndicate.
+    syndicate = syndicate_svc._get_meta(syndicate_id)
+    syndicate_svc._require_is_member(syndicate_id, recipient_user_id)
+
+    pk_treasury = _treasury_pk(syndicate_id)
+    pk_recipient = user_pk(recipient_user_id)
+    ts = now_ts()
+
+    # 1. Debit treasury (conditional: balance >= amount → reject overdraw).
+    try:
+        T.syndicate_treasury.update_item(
+            Key={"pk": pk_treasury, "sk": BALANCE_SK},
+            UpdateExpression=(
+                "SET balance_cents = balance_cents - :amt, "
+                "total_disbursed_cents = if_not_exists(total_disbursed_cents, :z) + :amt, "
+                "updated_at = :t"
+            ),
+            ConditionExpression="attribute_exists(balance_cents) AND balance_cents >= :amt",
+            ExpressionAttributeValues={":amt": amount_cents, ":z": 0, ":t": ts},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise HTTPException(status_code=409, detail="Insufficient treasury balance")
+        raise
+
+    # 2. Credit recipient's personal wallet.
+    new_recipient_balance = apply_wallet_delta(T.billing, pk_recipient, amount_cents)
+
+    reason = note.strip() or f"Treasury disbursement to {recipient_user_id}"
+
+    # 3. Treasury ledger entry (debit).
+    treasury_entry_id = _write_treasury_ledger(
+        syndicate_id,
+        direction="debit",
+        amount_cents=amount_cents,
+        reason=reason,
+        actor_user_id=admin_sub,
+        counterparty_user_id=recipient_user_id,
+        ts=ts,
+    )
+
+    # 4. Member-side billing ledger entry (credit).
+    user_entry_id = ulidish()
+    T.billing.put_item(Item={
+        "pk": pk_recipient,
+        "sk": ledger_sk(ts, user_entry_id),
+        "entry_id": user_entry_id,
+        "ts": ts,
+        "type": "syndicate_treasury_disbursement",
+        "amount_cents": amount_cents,
+        "state": "settled",
+        "reason": "Syndicate treasury disbursement",
+        "direction": "credit",
+        "category": "syndicate_treasury",
+        "syndicate_id": syndicate_id,
+        "syndicate_name": syndicate.get("name", ""),
+        "currency": "usd",
+        "created_at": ts,
+    })
+
+    syndicate_svc._write_audit(
+        syndicate_id, admin_sub, "treasury_disbursement", recipient_user_id,
+        {"amount_cents": amount_cents},
+    )
+
+    balance = get_treasury_balance(syndicate_id)
+    logger.info(
+        "syndicate_treasury.disburse",
+        extra={
+            "syndicate_id": syndicate_id,
+            "admin_sub": admin_sub,
+            "recipient_user_id": recipient_user_id,
+            "amount_cents": amount_cents,
+        },
+    )
+
+    return {
+        "ok": True,
+        "amount_cents": amount_cents,
+        "recipient_user_id": recipient_user_id,
+        "new_treasury_balance_cents": balance["balance_cents"],
+        "new_recipient_balance_cents": new_recipient_balance,
+        "treasury_entry_id": treasury_entry_id,
+        "user_entry_id": user_entry_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Ledger & contributions
+# ---------------------------------------------------------------------------
+
+
+def list_treasury_ledger(
+    syndicate_id: str,
+    *,
+    cursor: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """List treasury transaction history (newest first)."""
+    pk = _treasury_pk(syndicate_id)
+    kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("pk").eq(pk) & Key("sk").begins_with("LEDGER#"),
+        "ScanIndexForward": False,
+        "Limit": limit,
+    }
+    if cursor:
+        try:
+            kwargs["ExclusiveStartKey"] = json.loads(base64.b64decode(cursor).decode())
+        except Exception:
+            pass
+
+    resp = T.syndicate_treasury.query(**kwargs)
+    items = resp.get("Items", [])
+
+    entries = [
+        {
+            "entry_id": i.get("entry_id", ""),
+            "ts": int(i.get("created_at", i.get("ts", 0))),
+            "direction": i.get("direction", "credit"),
+            "amount_cents": int(i.get("amount_cents", 0)),
+            "reason": i.get("reason", ""),
+            "actor_user_id": i.get("actor_user_id", ""),
+            "counterparty_user_id": i.get("counterparty_user_id", ""),
+            "currency": i.get("currency", "usd"),
+        }
+        for i in items
+    ]
+
+    next_cursor = None
+    last_key = resp.get("LastEvaluatedKey")
+    if last_key:
+        next_cursor = base64.b64encode(json.dumps(last_key).encode()).decode()
+
+    return {
+        "entries": entries,
+        "cursor": next_cursor,
+        "has_more": next_cursor is not None,
+    }
+
+
+def list_contributions(syndicate_id: str) -> List[Dict[str, Any]]:
+    """Per-member contribution breakdown (sorted by total contributed desc)."""
+    pk = _treasury_pk(syndicate_id)
+    resp = T.syndicate_treasury.query(
+        KeyConditionExpression=Key("pk").eq(pk) & Key("sk").begins_with("CONTRIB#"),
+    )
+    items = resp.get("Items", [])
+    contributors = [
+        {
+            "user_id": i.get("user_id", ""),
+            "total_contributed_cents": int(i.get("total_contributed_cents", 0)),
+            "total_refunded_cents": int(i.get("total_refunded_cents", 0)),
+            "net_contributed_cents": int(i.get("total_contributed_cents", 0))
+            - int(i.get("total_refunded_cents", 0)),
+            "contribution_count": int(i.get("contribution_count", 0)),
+            "last_contribution_at": int(i.get("last_contribution_at", 0)),
+        }
+        for i in items
+    ]
+    contributors.sort(key=lambda c: c["total_contributed_cents"], reverse=True)
+    return contributors
+
+
+def get_my_contributions(syndicate_id: str, user_id: str) -> Dict[str, Any]:
+    """A single member's contribution summary."""
+    pk = _treasury_pk(syndicate_id)
+    resp = T.syndicate_treasury.get_item(Key={"pk": pk, "sk": f"CONTRIB#{user_id}"})
+    item = resp.get("Item") or {}
+    total_contributed = int(item.get("total_contributed_cents", 0))
+    total_refunded = int(item.get("total_refunded_cents", 0))
+    return {
+        "user_id": user_id,
+        "total_contributed_cents": total_contributed,
+        "total_refunded_cents": total_refunded,
+        "net_contributed_cents": total_contributed - total_refunded,
+        "contribution_count": int(item.get("contribution_count", 0)),
+        "last_contribution_at": int(item.get("last_contribution_at", 0)),
+    }
