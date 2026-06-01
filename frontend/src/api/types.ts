@@ -10751,3 +10751,23 @@ export interface KycWebhookEmitResult {
   webhook_delivery_ids: string[];
   reason?: string | null;
 }
+
+// ── SOCIAL-007: Snooze Following ──────────────────────────────────
+export interface SnoozedFollowing {
+  following_sub: string;
+  following_name?: string;
+  following_avatar_url?: string;
+  followed_at: number;
+  snoozed_until: number;
+  snooze_remaining_hours?: number;
+}
+
+export interface SnoozedFollowingList {
+  snoozed: SnoozedFollowing[];
+  total: number;
+}
+
+export interface SnoozeResult {
+  ok: boolean;
+  snoozed_until: number;
+}

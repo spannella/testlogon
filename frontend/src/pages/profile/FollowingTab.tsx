@@ -1,16 +1,38 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { Loader2, UserCheck } from "lucide-react";
-import { getFollowing } from "@/api/endpoints/social";
+import { useState } from "react";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { BellOff, Loader2, UserCheck } from "lucide-react";
+import { toast } from "sonner";
+import {
+  getFollowing,
+  snoozeFollowing,
+  unsnoozeFollowing,
+} from "@/api/endpoints/social";
 import type { FollowUser, FollowListResponse } from "@/api/endpoints/social";
 import { FollowButton } from "@/components/shared/FollowButton";
+import { SnoozeDurationPicker } from "@/components/shared/SnoozeDurationPicker";
+import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/stores/authStore";
 
 interface FollowingTabProps {
   userId: string;
 }
 
+function snoozeUntilLabel(ts: number): string {
+  try {
+    return new Date(ts * 1000).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return "";
+  }
+}
+
 export function FollowingTab({ userId }: FollowingTabProps) {
   const viewerUserId = useAuthStore((s: { userId: string | null }) => s.userId);
+  const queryClient = useQueryClient();
+  const [pickerFor, setPickerFor] = useState<FollowUser | null>(null);
+  const isOwnList = viewerUserId === userId;
 
   const {
     data,
@@ -25,6 +47,31 @@ export function FollowingTab({ userId }: FollowingTabProps) {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage: FollowListResponse) => lastPage.next_cursor ?? undefined,
     staleTime: 30_000,
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["following", userId] });
+    queryClient.invalidateQueries({ queryKey: ["social", "snoozed"] });
+    queryClient.invalidateQueries({ queryKey: ["feed"] });
+  };
+
+  const snoozeMut = useMutation({
+    mutationFn: ({ id, days }: { id: string; days: number }) => snoozeFollowing(id, days),
+    onSuccess: () => {
+      toast.success("User snoozed");
+      setPickerFor(null);
+      invalidate();
+    },
+    onError: () => toast.error("Failed to snooze"),
+  });
+
+  const unsnoozeMut = useMutation({
+    mutationFn: (id: string) => unsnoozeFollowing(id),
+    onSuccess: () => {
+      toast.success("User unsnoozed");
+      invalidate();
+    },
+    onError: () => toast.error("Failed to unsnooze"),
   });
 
   const allItems: FollowUser[] = data?.pages.flatMap((p: FollowListResponse) => p.items) ?? [];
@@ -52,6 +99,7 @@ export function FollowingTab({ userId }: FollowingTabProps) {
         <div
           key={user.user_id}
           role="listitem"
+          data-testid={`following-row-${user.user_id}`}
           className="flex items-center gap-3 rounded-lg border bg-card p-3"
         >
           {user.profile_photo_url ? (
@@ -67,15 +115,49 @@ export function FollowingTab({ userId }: FollowingTabProps) {
           )}
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">{user.display_name ?? user.user_id}</p>
-            {user.is_mutual && (
-              <span
-                className="inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"
-                aria-label="Mutual follower"
-              >
-                Mutual
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {user.is_mutual && (
+                <span
+                  className="inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                  aria-label="Mutual follower"
+                >
+                  Mutual
+                </span>
+              )}
+              {user.is_snoozed && user.snoozed_until && (
+                <span
+                  data-testid={`snooze-badge-${user.user_id}`}
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-600"
+                >
+                  <BellOff className="h-3 w-3" />
+                  Snoozed until {snoozeUntilLabel(user.snoozed_until)}
+                </span>
+              )}
+            </div>
           </div>
+          {isOwnList && viewerUserId !== user.user_id && (
+            user.is_snoozed ? (
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid={`unsnooze-btn-${user.user_id}`}
+                disabled={unsnoozeMut.isPending}
+                onClick={() => unsnoozeMut.mutate(user.user_id)}
+              >
+                Unsnooze
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid={`snooze-btn-${user.user_id}`}
+                onClick={() => setPickerFor(user)}
+              >
+                <BellOff className="mr-1 h-3.5 w-3.5" />
+                Snooze
+              </Button>
+            )
+          )}
           {viewerUserId && viewerUserId !== user.user_id && (
             <FollowButton targetUserId={user.user_id} isFollowing={user.is_following} size="sm" />
           )}
@@ -94,6 +176,17 @@ export function FollowingTab({ userId }: FollowingTabProps) {
             "Load more"
           )}
         </button>
+      )}
+
+      {pickerFor && (
+        <SnoozeDurationPicker
+          userId={pickerFor.user_id}
+          userName={pickerFor.display_name ?? pickerFor.user_id}
+          open={!!pickerFor}
+          onClose={() => setPickerFor(null)}
+          isPending={snoozeMut.isPending}
+          onSnooze={(days) => snoozeMut.mutate({ id: pickerFor.user_id, days })}
+        />
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 import { api } from "../client";
-import type { TopSupportersResp } from "../types";
+import type { TopSupportersResp, SnoozedFollowingList, SnoozeResult } from "../types";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -9,6 +9,9 @@ export interface FollowUser {
   profile_photo_url?: string;
   is_following: boolean;
   is_mutual: boolean;
+  // SOCIAL-007: snooze state (set on the viewer's own following list)
+  snoozed_until?: number | null;
+  is_snoozed?: boolean;
 }
 
 export interface FollowListResponse {
@@ -64,6 +67,17 @@ export const getFollowStatus = (userId: string) =>
 
 export const getMutualFollowers = (userId: string, params?: Record<string, string>) =>
   api.get<FollowListResponse>(`/ui/social/mutual/${userId}`, params);
+
+// ── Snooze Following (SOCIAL-007) ────────────────────────────────
+
+export const snoozeFollowing = (userId: string, days: number) =>
+  api.post<SnoozeResult>(`/ui/social/following/${userId}/snooze`, { days });
+
+export const unsnoozeFollowing = (userId: string) =>
+  api.del<{ ok: boolean }>(`/ui/social/following/${userId}/snooze`);
+
+export const listSnoozedFollowings = () =>
+  api.get<SnoozedFollowingList>("/ui/social/following/snoozed");
 
 // ── Tip Leaderboards (SOCIAL-005) ────────────────────────────────
 
