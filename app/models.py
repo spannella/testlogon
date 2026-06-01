@@ -8836,6 +8836,120 @@ class KycDocumentReviewRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# KYC-010: Passport / National-ID Scanner models
+# ---------------------------------------------------------------------------
+
+
+class KycIdScannerScanRequest(BaseModel):
+    """Request to scan an uploaded passport / national-ID document image."""
+
+    document_type: Literal["passport", "national_id_card", "driving_license", "residence_permit"]
+    file_type: Literal["id_front", "id_back"] = "id_front"
+    mrz_lines: Optional[List[str]] = Field(
+        default=None,
+        description="Optional manual MRZ lines (2 for TD3 passport, 3 for TD1 ID card).",
+    )
+    image_ref: Optional[str] = Field(default=None, max_length=512)
+
+
+class KycIdScannerValidateRequest(BaseModel):
+    """Request to validate document-type side / MRZ requirements for a case."""
+
+    document_type: Literal["passport", "national_id_card", "driving_license", "residence_permit"]
+
+
+class KycIdScannerAdjudicateRequest(BaseModel):
+    """Reviewer approve/decline decision for a scan result."""
+
+    decision: Literal["approve", "decline"]
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class KycIdScannerChecksums(BaseModel):
+    """Per-field MRZ check-digit validation results."""
+
+    document_number: bool
+    date_of_birth: bool
+    expiry_date: bool
+    optional_data: Optional[bool] = None
+    composite: bool
+
+
+class KycIdScannerExtraction(BaseModel):
+    """Parsed MRZ / document-field extraction."""
+
+    valid: Optional[bool] = None
+    format: Optional[str] = None
+    error: Optional[str] = None
+    document_type: Optional[str] = None
+    issuing_state: Optional[str] = None
+    surname: Optional[str] = None
+    given_names: Optional[str] = None
+    document_number: Optional[str] = None
+    nationality: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    sex: Optional[str] = None
+    expiry_date: Optional[str] = None
+    checksums: Optional[KycIdScannerChecksums] = None
+
+
+class KycIdScannerExpiryCheck(BaseModel):
+    """Document expiry check result."""
+
+    status: Literal["valid", "expired", "expiring_soon", "unknown"]
+    message: str
+    expiry_date: Optional[str] = None
+    days_until_expiry: Optional[int] = None
+
+
+class KycIdScannerCrossReference(BaseModel):
+    """Cross-reference of extraction against the case / user profile."""
+
+    match_score: int = Field(ge=0, le=100)
+    total_fields_checked: int
+    fields_matched: int
+    matches: Dict[str, Any] = Field(default_factory=dict)
+    mismatches: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KycIdScannerScanOut(BaseModel):
+    """A complete passport / national-ID scan result."""
+
+    scan_id: str
+    case_id: str
+    user_sub: Optional[str] = None
+    document_type: str
+    file_type: str
+    status: Literal["matched", "flagged", "rejected", "approved", "declined"]
+    mrz_valid: bool
+    extraction: KycIdScannerExtraction
+    expiry_check: KycIdScannerExpiryCheck
+    cross_reference: Optional[KycIdScannerCrossReference] = None
+    image_url: Optional[str] = None
+    review_decision: Optional[str] = None
+    review_note: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class KycIdScannerScanListResponse(BaseModel):
+    """List of scan-result summaries for a case / reviewer queue."""
+
+    scans: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class KycIdScannerValidationOut(BaseModel):
+    """Document-type requirement validation result."""
+
+    document_type: str
+    sides_required: List[str]
+    has_mrz: bool
+    mrz_format: Optional[str] = None
+    sides_present: List[str] = Field(default_factory=list)
+    all_sides_present: bool
+
+
+# ---------------------------------------------------------------------------
 # KYC-004: Proof of Residency Verification models
 # ---------------------------------------------------------------------------
 

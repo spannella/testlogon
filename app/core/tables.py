@@ -78,6 +78,7 @@ class Tables:
     questionnaires: Any
     kyc_cases: Any
     kyc_documents: Any
+    kyc_id_scans: Any
     kyc_residency_documents: Any
     kyc_liveness_calls: Any
     kyc_screening_results: Any
@@ -300,6 +301,7 @@ T = Tables(
     questionnaires=ddb.Table(S.questionnaire_table_name),
     kyc_cases=ddb.Table(S.kyc_cases_table_name),
     kyc_documents=ddb.Table(S.kyc_documents_table_name),
+    kyc_id_scans=ddb.Table(S.kyc_id_scans_table_name),
     kyc_residency_documents=ddb.Table(S.kyc_residency_documents_table_name),
     kyc_liveness_calls=ddb.Table(S.kyc_liveness_calls_table_name),
     kyc_screening_results=ddb.Table(S.kyc_screening_results_table_name),

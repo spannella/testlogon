@@ -154,6 +154,8 @@ const KycProofOfFunds = lazy(() => import("@/pages/kyc/KycProofOfFunds"));
 const KycLivenessCallSchedulePage = lazy(() => import("@/pages/kyc/KycLivenessCallSchedulePage"));
 const KycLivenessCallVerifierPage = lazy(() => import("@/pages/kyc/KycLivenessCallVerifierPage"));
 const KycScreeningReviewQueuePage = lazy(() => import("@/pages/kyc/KycScreeningReviewQueuePage"));
+const KycIdScannerPage = lazy(() => import("@/pages/kyc/KycIdScannerPage"));
+const KycIdScannerReviewQueuePage = lazy(() => import("@/pages/kyc/KycIdScannerReviewQueuePage"));
 const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
 const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
@@ -384,6 +386,8 @@ export default function App() {
           <Route path="kyc/liveness-call" element={<KycLivenessCallSchedulePage />} />
           <Route path="admin/kyc/liveness-call" element={<KycLivenessCallVerifierPage />} />
           <Route path="admin/kyc/screening" element={<KycScreeningReviewQueuePage />} />
+          <Route path="kyc/id-scanner" element={<KycIdScannerPage />} />
+          <Route path="admin/kyc/id-scanner" element={<KycIdScannerReviewQueuePage />} />
           <Route path="agents/workers" element={<WorkersPage />} />
           <Route path="agents/dashboard" element={<AgentDashboard />} />
           <Route path="agents/fleet" element={<FleetDashboard />} />
