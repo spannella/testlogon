@@ -10858,3 +10858,80 @@ class VodAdBreakReportOut(BaseModel):
     next_required_break_id: Optional[str] = None
     playback_unlocked: bool
     status: str
+
+
+# ── Sponsored Content & Creator Partnerships (ADS-013) ──────────────
+
+
+class SponsorshipDealCreate(BaseModel):
+    """Advertiser proposes a sponsorship deal to a creator."""
+
+    advertiser_account_id: str = Field(min_length=1)
+    creator_sub: str = Field(min_length=1)
+    content_type: str = Field(pattern=r"^(post|video|broadcast)$")
+    brief: str = Field(min_length=10, max_length=5000)
+    deliverables: List[str] = Field(min_length=1, max_length=10)
+    compensation_cents: int = Field(ge=1000)  # min $10
+    cpm_bonus_cents: int = Field(default=0, ge=0)
+    deadline: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class SponsorshipDealOut(BaseModel):
+    """Serialized sponsorship deal."""
+
+    deal_id: str
+    advertiser_account_id: str
+    advertiser_sub: str
+    creator_sub: str
+    content_type: str
+    brief: str
+    deliverables: List[str]
+    compensation_cents: int
+    cpm_bonus_cents: int
+    platform_commission_bps: int
+    status: str
+    deadline: str
+    content_id: Optional[str] = None
+    dm_conversation_id: Optional[str] = None
+    escrow_hold_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+    completed_at: Optional[int] = None
+    cancelled_at: Optional[int] = None
+    cancel_reason: Optional[str] = None
+    payment_details: Optional[Dict[str, int]] = None
+
+
+class SponsorshipContentSubmit(BaseModel):
+    """Creator links produced content to an accepted deal."""
+
+    content_id: str = Field(min_length=1)
+
+
+class SponsorshipRejectRequest(BaseModel):
+    """Creator rejects a proposed deal."""
+
+    reason: str = Field(default="", max_length=500)
+
+
+class SponsorshipCounterRequest(BaseModel):
+    """Creator counter-offers on a proposed deal."""
+
+    compensation_cents: Optional[int] = Field(default=None, ge=1000)
+    note: str = Field(default="", max_length=2000)
+
+
+class SponsorshipCancelRequest(BaseModel):
+    """Either party cancels the deal."""
+
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class SponsorshipDealEventOut(BaseModel):
+    """A single deal lifecycle event."""
+
+    event_id: str
+    event_type: str
+    actor_sub: str
+    details: Dict[str, Any]
+    created_at: int

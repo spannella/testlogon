@@ -2129,6 +2129,10 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "tags": list(post.get("tags") or []),
         # ADS-005: creator ad adjacency control
         "allow_ads_near": bool(post.get("allow_ads_near", True)),
+        # ADS-013: sponsored content / FTC disclosure
+        "sponsored_by": post.get("sponsored_by"),
+        "deal_id": post.get("deal_id"),
+        "ftc_disclosure": post.get("ftc_disclosure"),
         # ENGAGE-002: Poll data
         **_poll_fields_for_post(post, locked_body, viewer_id),
         # GROUP-002: Group context fields

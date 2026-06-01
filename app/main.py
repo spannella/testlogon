@@ -257,6 +257,7 @@ from app.routers.agent_workers import router as agent_workers_router
 from app.routers.ads import router as ads_router
 from app.routers.agent_orchestrator import router as agent_orchestrator_router
 from app.routers.ads import router as ads_router
+from app.routers.sponsorship_deals import sponsorship_deals_router
 from app.routers.agent_workers import router as agent_workers_router
 from app.routers.agent_fleet import router as agent_fleet_router
 from app.routers.agent_memory import router as agent_memory_router
@@ -598,6 +599,7 @@ def create_app() -> FastAPI:
     app.include_router(llm_provider_keys_router)
     app.include_router(ads_router)
     app.include_router(ads_admin_router)
+    app.include_router(sponsorship_deals_router)
     app.include_router(delegates_router)
     app.include_router(syndicates_router)
     app.include_router(syndicate_revenue_split_router)

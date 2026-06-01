@@ -2008,6 +2008,10 @@ export interface ImageVariant {
 export interface FeedPost {
   post_id: string;
   author_id: string;
+  // ADS-013: sponsored content / FTC disclosure (set server-side, immutable)
+  sponsored_by?: string | null;
+  deal_id?: string | null;
+  ftc_disclosure?: string | null;
   body: string;
   body_plain?: string;
   body_markdown?: string;
@@ -9692,4 +9696,65 @@ export interface VodWatermarkExtractResponse {
   found: boolean;
   payload?: string | null;
   decoded?: Record<string, unknown> | null;
+}
+
+// ── Sponsored Content & Creator Partnerships (ADS-013) ──────────────
+
+export type SponsorshipDealStatus =
+  | "proposed"
+  | "negotiating"
+  | "accepted"
+  | "content_submitted"
+  | "completed"
+  | "rejected"
+  | "cancelled";
+
+export interface SponsorshipDealCreate {
+  advertiser_account_id: string;
+  creator_sub: string;
+  content_type: "post" | "video" | "broadcast";
+  brief: string;
+  deliverables: string[];
+  compensation_cents: number;
+  cpm_bonus_cents?: number;
+  deadline: string;
+}
+
+export interface SponsorshipPaymentDetails {
+  total_cents?: number;
+  commission_cents?: number;
+  creator_cents?: number;
+  advertiser_cents?: number;
+}
+
+export interface SponsorshipDeal {
+  deal_id: string;
+  advertiser_account_id: string;
+  advertiser_sub: string;
+  creator_sub: string;
+  content_type: string;
+  brief: string;
+  deliverables: string[];
+  compensation_cents: number;
+  cpm_bonus_cents: number;
+  platform_commission_bps: number;
+  status: SponsorshipDealStatus;
+  deadline: string;
+  content_id?: string | null;
+  dm_conversation_id?: string | null;
+  escrow_hold_id?: string | null;
+  created_at: number;
+  updated_at: number;
+  completed_at?: number | null;
+  cancelled_at?: number | null;
+  cancel_reason?: string | null;
+  payment_details?: SponsorshipPaymentDetails | null;
+}
+
+export interface SponsorshipDealEvent {
+  event_id: string;
+  event_type: string;
+  actor_sub: string;
+  details: Record<string, unknown>;
+  created_at: number;
 }
