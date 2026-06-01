@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText, Flag, Bookmark, BookmarkCheck, Hash, Clock, AlertCircle, RotateCcw, Trash2 } from "lucide-react";
+import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText, Flag, Bookmark, BookmarkCheck, Hash, Clock, AlertCircle, RotateCcw, Trash2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { likePost, unlikePost, unlockPost, addPostReaction, removePostReaction, reportFeedContent } from "@/api/endpoints/newsfeed";
+import { markPostInteresting, unmarkPostInteresting } from "@/api/endpoints/postInteresting";
 import { createBookmark, removeBookmark } from "@/api/endpoints/bookmarks";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { ApiError } from "@/api/client";
@@ -257,6 +258,30 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         return;
       }
       setIsBookmarked((prev) => !prev);
+      toast.error("Action failed");
+    },
+  });
+
+  // FEED-007: per-viewer "interesting" signal (more-like-this)
+  const [isInteresting, setIsInteresting] = useState(post.is_interesting ?? false);
+  useEffect(() => {
+    setIsInteresting(post.is_interesting ?? false);
+  }, [post.is_interesting]);
+  const interestingMutation = useMutation({
+    mutationFn: () =>
+      isInteresting
+        ? unmarkPostInteresting(post.post_id)
+        : markPostInteresting(post.post_id),
+    onMutate: () => {
+      setIsInteresting((prev) => !prev);
+    },
+    onSuccess: (res) => {
+      setIsInteresting(res.is_interesting);
+      queryClient.invalidateQueries({ queryKey: ["feed"] });
+      toast.success(res.is_interesting ? "Marked interesting" : "Removed");
+    },
+    onError: () => {
+      setIsInteresting((prev) => !prev);
       toast.error("Action failed");
     },
   });
@@ -662,6 +687,23 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
               <Bookmark className="h-4 w-4" />
             )}
           </button>
+          {!isOwn && (
+            <button
+              className={cn(
+                "flex items-center gap-1 text-sm transition-colors",
+                isInteresting
+                  ? "text-sky-500"
+                  : "text-muted-foreground hover:text-sky-500",
+              )}
+              onClick={() => interestingMutation.mutate()}
+              disabled={interestingMutation.isPending || isOfflinePost}
+              aria-label={isInteresting ? "Unmark interesting" : "Mark interesting"}
+              data-testid="interesting-toggle"
+            >
+              <Sparkles className={cn("h-4 w-4", isInteresting && "fill-sky-500")} />
+              <span>Interesting</span>
+            </button>
+          )}
           {(post.tip_total_cents ?? 0) > 0 && (
             <span className="ml-auto text-xs text-emerald-600">
               ${((post.tip_total_cents ?? 0) / 100).toFixed(2)} tipped

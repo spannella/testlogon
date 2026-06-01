@@ -41,6 +41,7 @@ from app.services.newsfeed_feed_query import FeedFilterParams, parse_filter_wind
 from app.services.rate_limit import rate_limit_feed_query
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
+from app.services import post_interesting as _post_interesting_svc
 from app.services.subscription_access import can_access_creator
 from app.services.usage_metering import (
     build_usage_event,
@@ -2125,6 +2126,9 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         # SOCIAL-002: repost count
         "repost_count": int(post.get("repost_count", 0)),
         "reposted_by_me": _check_reposted_by_me(viewer_id, post_id) if viewer_id else False,
+        # FEED-007: per-viewer "interesting" signal + public aggregate
+        "interesting_count": int(post.get("interesting_count", 0)),
+        "is_interesting": _is_post_interesting(viewer_id, post_id) if viewer_id else False,
         # SOCIAL-006: hashtags/topics
         "tags": list(post.get("tags") or []),
         # ADS-005: creator ad adjacency control
@@ -4240,6 +4244,57 @@ def hide_post(req: HidePostRequest, user_id: UserIdDep):
     }
     ddb_put_item(item)
     return {"ok": True}
+
+
+def _is_post_interesting(viewer_id: Optional[str], post_id: str) -> bool:
+    """FEED-007: whether ``viewer_id`` marked ``post_id`` interesting."""
+    if not viewer_id:
+        return False
+    try:
+        return _post_interesting_svc.is_interesting(viewer_id, post_id)
+    except Exception:
+        return False
+
+
+@router.post("/feed/interesting")
+def mark_post_interesting(req: HidePostRequest, user_id: UserIdDep):
+    """FEED-007: Mark a post "interesting" for the current viewer (toggle ON).
+
+    Per-viewer signal stored on the billing table (PK=USER#{sub},
+    SK=POST_SIGNAL#{post_id}); distinct from likes/reactions. Idempotent: the
+    service checks for an existing signal before writing, so a repeated mark is a
+    no-op and the aggregate ``interesting_count`` is bumped exactly once.
+    """
+    post = ddb_get_item({"pk": pk_post(req.post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("user_id") == user_id:
+        raise HTTPException(status_code=400, detail="Cannot signal your own post")
+    return _post_interesting_svc.mark_interesting(user_id, req.post_id)
+
+
+@router.post("/feed/uninteresting")
+def unmark_post_interesting(req: HidePostRequest, user_id: UserIdDep):
+    """FEED-007: Remove the viewer's "interesting" signal (toggle OFF).
+
+    Idempotent — unmarking a post that is not marked is a no-op success and does
+    not move the aggregate counter.
+    """
+    return _post_interesting_svc.unmark_interesting(user_id, req.post_id)
+
+
+@router.get("/feed/interesting")
+def list_interesting_posts(
+    limit: int = Query(200, ge=1, le=1000),
+    user_id: UserIdDep = None,
+):
+    """FEED-007: List post_ids the current viewer marked interesting.
+
+    Powers the "more like this" feed-ranking boost: callers prioritise these
+    posts (and same-author posts) in ranking.
+    """
+    post_ids = _post_interesting_svc.list_interesting_post_ids(user_id, limit=limit)
+    return {"post_ids": post_ids, "count": len(post_ids)}
 
 
 def _feed_request_mode(author_filter: Optional[str]) -> str:

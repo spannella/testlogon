@@ -11891,3 +11891,15 @@ class OptimizationConfigUpdate(BaseModel):
     auto_pause_min_impressions: Optional[int] = Field(default=None, ge=100)
     roas_threshold: Optional[float] = Field(default=None, ge=0.1)
     budget_pace_alert_ratio: Optional[float] = Field(default=None, ge=1.0, le=3.0)
+
+
+# FEED-007: Mark Post Interesting (per-viewer "more like this" signal)
+class PostInterestingOut(BaseModel):
+    ok: bool = True
+    post_id: str
+    is_interesting: bool
+
+
+class PostInterestingListOut(BaseModel):
+    post_ids: List[str] = Field(default_factory=list)
+    count: int = 0
