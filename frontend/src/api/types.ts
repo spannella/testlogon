@@ -9153,6 +9153,42 @@ export interface TaxDocumentList {
   documents: TaxDocument[];
 }
 
+// ── Creator 1099 / Tax-Form Generation (FIN-008) ────────────────────────────
+// Platform-issuer side: annual 1099-NEC earnings forms for creators/payees.
+// DISTINCT from the consumer TaxDocument types above.
+
+export interface TaxForm1099 {
+  form_id: string;
+  user_sub: string;
+  tax_year: number;
+  total_earnings_cents: number;
+  qualifies: boolean;
+  status: string;
+  correction_count: number;
+  generated_at: number;
+  updated_at: number;
+  payer_name: string;
+  payer_tin_last4: string;
+  download_url?: string | null;
+}
+
+export interface TaxForm1099List {
+  items: TaxForm1099[];
+}
+
+export interface TaxForm1099Download {
+  download_url: string;
+}
+
+export interface BatchGenerateTaxForm1099Result {
+  tax_year: number;
+  total_creators: number;
+  qualifying: number;
+  generated: number;
+  skipped: number;
+  errors: number;
+}
+
 // ── Admin Ad Platform Management (ADS-018) ──────────────────────────────────
 
 export interface AdminAdAccount {

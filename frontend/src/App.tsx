@@ -117,6 +117,8 @@ const SchedulerPage = lazy(() => import("@/pages/scheduler/SchedulerPage"));
 const RefundRequestsPage = lazy(() => import("@/pages/billing/RefundRequestsPage"));
 const InvoicesPage = lazy(() => import("@/pages/billing/InvoicesPage"));
 const TaxDocumentsPage = lazy(() => import("@/pages/billing/TaxDocumentsPage"));
+const TaxForm1099Page = lazy(() => import("@/pages/billing/TaxForm1099Page"));
+const TaxForm1099AdminPage = lazy(() => import("@/pages/admin/TaxForm1099AdminPage"));
 const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePage"));
 const BulkPayoutConsole = lazy(() => import("@/pages/admin/BulkPayoutConsole"));
 const DisputesPage = lazy(() => import("@/pages/billing/DisputesPage"));
@@ -258,6 +260,7 @@ export default function App() {
           <Route path="billing/refunds" element={<RefundRequestsPage />} />
           <Route path="billing/invoices" element={<InvoicesPage />} />
           <Route path="billing/tax-documents" element={<TaxDocumentsPage />} />
+          <Route path="billing/tax-forms" element={<TaxForm1099Page />} />
           <Route path="billing/disputes" element={<DisputesPage />} />
           <Route path="ads/billing" element={<AdBillingPage />} />
           <Route path="ads/analytics" element={<AdAnalyticsDashboard />} />
@@ -352,6 +355,7 @@ export default function App() {
           <Route path="groups/:groupId/fundraising" element={<GroupFundraisingPage />} />
           <Route path="groups/:groupId/ads" element={<GroupAdsPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
+          <Route path="admin/tax-forms-1099" element={<TaxForm1099AdminPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />
           <Route path="admin/video-review" element={<VideoReviewQueuePage />} />

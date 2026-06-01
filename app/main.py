@@ -744,6 +744,8 @@ def create_app() -> FastAPI:
     )
     app.include_router(consumer_tax_documents_router)
     app.include_router(consumer_tax_documents_admin_router)
+    from app.routers.tax_form_1099 import tax_form_1099_router
+    app.include_router(tax_form_1099_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
