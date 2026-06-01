@@ -1360,6 +1360,17 @@ class Settings:
 
     # Advertiser Accounts & Campaigns (ADS-001)
 
+    # Sponsored Content & Creator Partnerships (ADS-013)
+    sponsorship_deals_table_name: str = os.environ.get(
+        "DDB_SPONSORSHIP_DEALS", "sponsorship_deals"
+    )
+    sponsorship_deals_enabled: bool = os.environ.get(
+        "SPONSORSHIP_DEALS_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    sponsorship_deals_commission_bps: int = int(
+        os.environ.get("SPONSORSHIP_DEALS_COMMISSION_BPS", "1500")
+    )
+
     # Ad Analytics Rollups (ADS-008)
     ad_analytics_rollups_table_name: str = os.environ.get("DDB_AD_ANALYTICS_ROLLUPS", "AdAnalyticsRollups")
 

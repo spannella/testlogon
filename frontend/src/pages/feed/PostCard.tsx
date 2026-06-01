@@ -426,6 +426,17 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
           <BroadcastPostCard broadcastMeta={post.broadcast_meta} />
         )}
 
+        {/* ADS-013: FTC sponsorship disclosure (set server-side, immutable) */}
+        {post.ftc_disclosure && (
+          <div
+            className="mt-2 flex items-center gap-1 text-xs text-muted-foreground"
+            data-testid="ftc-disclosure"
+          >
+            <Check className="h-3 w-3" />
+            <span>{post.ftc_disclosure}</span>
+          </div>
+        )}
+
         {/* Post body */}
         <div className="mt-3">
           {unlockLimit != null && (
