@@ -9758,3 +9758,86 @@ export interface SponsorshipDealEvent {
   details: Record<string, unknown>;
   created_at: number;
 }
+
+// ── KYC-006: Sanctions / PEP Screening ──────────────────────────────────────
+
+export type KycScreenType =
+  | "sanctions_ofac"
+  | "sanctions_eu"
+  | "sanctions_un"
+  | "pep_check"
+  | "adverse_media";
+
+export type KycScreeningResultStatus = "clear" | "potential_match" | "confirmed_match";
+export type KycScreeningDecision = "clear" | "confirm" | "escalate";
+export type KycScreeningTrigger =
+  | "submission"
+  | "profile_change"
+  | "continuous_monitoring"
+  | "manual";
+
+export interface KycScreeningMatchDetail {
+  list_name: string;
+  matched_name: string;
+  matched_dob?: string | null;
+  match_score: number;
+  entity_id: string;
+  entity_type: "individual" | "entity" | "vessel" | "aircraft";
+  listed_since?: string | null;
+  source_url?: string | null;
+}
+
+export interface KycScreeningResultOut {
+  screening_id: string;
+  case_id?: string | null;
+  screen_key?: string | null;
+  screen_type: KycScreenType;
+  user_sub?: string | null;
+  result: KycScreeningResultStatus;
+  match_details: KycScreeningMatchDetail[];
+  reviewed_by?: string | null;
+  review_decision?: KycScreeningDecision | null;
+  review_note?: string | null;
+  reviewed_at?: number | null;
+  trigger: KycScreeningTrigger;
+  provider: string;
+  created_at: number;
+}
+
+export interface KycScreeningResultsListResponse {
+  results: KycScreeningResultOut[];
+}
+
+export interface KycScreeningPendingReviewsResponse {
+  items: KycScreeningResultOut[];
+  cursor?: string | null;
+}
+
+export interface KycScreeningUserHistoryResponse {
+  user_sub: string;
+  results: KycScreeningResultOut[];
+  total: number;
+}
+
+export interface KycScreeningRunRequest {
+  user_sub: string;
+  case_id?: string | null;
+  name?: string | null;
+  dob?: string | null;
+  country?: string | null;
+}
+
+export interface KycScreeningRescreenResponse {
+  ok: boolean;
+  case_id: string;
+  user_sub: string;
+  results_count: number;
+  trigger: KycScreeningTrigger;
+  matches_found: number;
+  results: KycScreeningResultOut[];
+}
+
+export interface KycScreeningReviewRequest {
+  decision: KycScreeningDecision;
+  note: string;
+}
