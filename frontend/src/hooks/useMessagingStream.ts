@@ -118,6 +118,16 @@ export function useMessagingStream(enabled = true) {
           }
         }
 
+        // CALL-014: Voicemail signaling. When a voicemail recording completes,
+        // a new voicemail message has been written to the conversation — refresh
+        // the message list so it appears for the callee (and any participant).
+        if (eventType === "call.voicemail_start" || eventType === "call.voicemail_complete") {
+          if (eventType === "call.voicemail_complete" && conversationId) {
+            queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+            queryClient.invalidateQueries({ queryKey: ["conversations"] });
+          }
+        }
+
         if (eventType.startsWith("call.")) {
           window.dispatchEvent(
             new CustomEvent("messaging:call-event", {
@@ -175,6 +185,8 @@ export function useMessagingStream(enabled = true) {
       "call.recording_decline",
       "call.recording_started",
       "call.recording_stopped",
+      "call.voicemail_start",
+      "call.voicemail_complete",
       "call.billing_tick",
       "call.balance_low",
       "call.balance_depleted",

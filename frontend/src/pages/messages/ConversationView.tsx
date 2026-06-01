@@ -1283,6 +1283,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
 
       <CallSessionOverlay
         session={overlaySession}
+        conversationId={convoId}
+        voicemailEligible={callsEnabled}
         isBusy={callActionMutation.isPending}
         localStream={rtcLocalStream ?? mediaCapture.stream ?? null}
         remoteStream={rtcRemoteStream ?? null}
