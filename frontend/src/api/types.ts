@@ -7925,6 +7925,114 @@ export interface KycDocumentReviewRequest {
   note?: string | null;
 }
 
+// KYC-010: Passport / National-ID Scanner
+export type KycIdScannerDocumentType =
+  | "passport"
+  | "national_id_card"
+  | "driving_license"
+  | "residence_permit";
+export type KycIdScannerFileType = "id_front" | "id_back";
+export type KycIdScannerStatus = "matched" | "flagged" | "rejected" | "approved" | "declined";
+export type KycIdScannerExpiryStatus = "valid" | "expired" | "expiring_soon" | "unknown";
+
+export interface KycIdScannerChecksums {
+  document_number: boolean;
+  date_of_birth: boolean;
+  expiry_date: boolean;
+  optional_data?: boolean | null;
+  composite: boolean;
+}
+
+export interface KycIdScannerExtraction {
+  valid?: boolean | null;
+  format?: string | null;
+  error?: string | null;
+  document_type?: string | null;
+  issuing_state?: string | null;
+  surname?: string | null;
+  given_names?: string | null;
+  document_number?: string | null;
+  nationality?: string | null;
+  date_of_birth?: string | null;
+  sex?: string | null;
+  expiry_date?: string | null;
+  checksums?: KycIdScannerChecksums | null;
+}
+
+export interface KycIdScannerExpiryCheck {
+  status: KycIdScannerExpiryStatus;
+  message: string;
+  expiry_date?: string | null;
+  days_until_expiry?: number | null;
+}
+
+export interface KycIdScannerCrossReference {
+  match_score: number;
+  total_fields_checked: number;
+  fields_matched: number;
+  matches: Record<string, unknown>;
+  mismatches: Record<string, unknown>;
+}
+
+export interface KycIdScannerScanOut {
+  scan_id: string;
+  case_id: string;
+  user_sub?: string | null;
+  document_type: string;
+  file_type: string;
+  status: KycIdScannerStatus;
+  mrz_valid: boolean;
+  extraction: KycIdScannerExtraction;
+  expiry_check: KycIdScannerExpiryCheck;
+  cross_reference?: KycIdScannerCrossReference | null;
+  image_url?: string | null;
+  review_decision?: string | null;
+  review_note?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface KycIdScannerScanSummary {
+  scan_id: string;
+  case_id: string;
+  document_type: string;
+  file_type: string;
+  status: KycIdScannerStatus;
+  mrz_valid: boolean;
+  expiry_status?: KycIdScannerExpiryStatus | null;
+  match_score?: number | null;
+  created_at: number;
+}
+
+export interface KycIdScannerScanListResponse {
+  scans: KycIdScannerScanSummary[];
+}
+
+export interface KycIdScannerScanRequest {
+  document_type: KycIdScannerDocumentType;
+  file_type?: KycIdScannerFileType;
+  mrz_lines?: string[] | null;
+  image_ref?: string | null;
+}
+
+export interface KycIdScannerValidateRequest {
+  document_type: KycIdScannerDocumentType;
+}
+
+export interface KycIdScannerAdjudicateRequest {
+  decision: "approve" | "decline";
+  note?: string | null;
+}
+
+export interface KycIdScannerValidationOut {
+  document_type: string;
+  sides_required: string[];
+  has_mrz: boolean;
+  mrz_format?: string | null;
+  sides_present: string[];
+  all_sides_present: boolean;
+}
+
 // KYC-004: Proof of Residency Verification
 export type KycResidencyDocumentType =
   | "utility_bill"

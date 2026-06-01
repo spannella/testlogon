@@ -1156,6 +1156,22 @@ class Settings:
         os.environ.get("KYC_DOCUMENTS_NAME_MATCH_THRESHOLD", "0.85")
     )
 
+    # KYC Passport / National-ID Scanner (KYC-010)
+    kyc_id_scans_table_name: str = os.environ.get("KYC_ID_SCANS_TABLE_NAME", "kyc_id_scans")
+    kyc_id_scanner_status_index_name: str = os.environ.get(
+        "KYC_ID_SCANNER_STATUS_INDEX_NAME", "ByStatus"
+    )
+    kyc_id_scanner_bucket: str = os.environ.get("KYC_ID_SCANNER_BUCKET", "local-uploads")
+    kyc_id_scanner_s3_prefix: str = os.environ.get("KYC_ID_SCANNER_S3_PREFIX", "kyc-id-scans/")
+    kyc_id_scanner_enabled: bool = os.environ.get(
+        "KYC_ID_SCANNER_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    # When False (default) deterministic mock MRZ extraction is used; when True a
+    # "real" OCR/MRZ provider would be invoked (not wired in dev / E2E).
+    kyc_id_scanner_real_ocr_enabled: bool = os.environ.get(
+        "KYC_ID_SCANNER_REAL_OCR_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+
     # KYC Proof of Residency Verification (KYC-004)
     kyc_residency_documents_table_name: str = os.environ.get(
         "KYC_RESIDENCY_DOCUMENTS_TABLE_NAME", "kyc_residency_documents"
