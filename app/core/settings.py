@@ -1050,6 +1050,11 @@ class Settings:
 
     # Image optimization (PLATFORM-004)
     image_optimization_enabled: bool = os.environ.get("IMAGE_OPTIMIZATION_ENABLED", "1") not in ("0", "false", "False")
+    image_variant_sm_max_width: int = int(os.environ.get("IMAGE_VARIANT_SM_MAX_WIDTH", "480"))
+    image_variant_md_max_width: int = int(os.environ.get("IMAGE_VARIANT_MD_MAX_WIDTH", "960"))
+    image_variant_lg_max_width: int = int(os.environ.get("IMAGE_VARIANT_LG_MAX_WIDTH", "1920"))
+    image_webp_quality: int = int(os.environ.get("IMAGE_WEBP_QUALITY", "80"))
+    image_optimizations_table_name: str = os.environ.get("IMAGE_OPTIMIZATIONS_TABLE_NAME", "image_optimizations")
 
     # VOD File Bridge (VOD-014)
     vod_file_bridge_enabled: bool = os.environ.get("VOD_FILE_BRIDGE_ENABLED", "1") not in ("0", "false", "False")

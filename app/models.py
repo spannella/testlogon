@@ -10935,3 +10935,43 @@ class SponsorshipDealEventOut(BaseModel):
     actor_sub: str
     details: Dict[str, Any]
     created_at: int
+
+
+# ---------------------------------------------------------------------------
+# Image Optimization (PLATFORM-004)
+# ---------------------------------------------------------------------------
+class ImageOptimizeRequest(BaseModel):
+    """Request on-demand optimization of an already-uploaded image.
+
+    ``source_key`` is the S3 key returned by ``POST /ui/newsfeed/uploads/image``
+    (the ``s3_key`` field). ``source_url`` (a ``/uploads/object?s3_key=...`` URL)
+    may be supplied instead and the key is extracted from it.
+    """
+
+    source_key: Optional[str] = Field(default=None, max_length=2048)
+    source_url: Optional[str] = Field(default=None, max_length=4096)
+    format: str = Field(default="webp")
+    use_cache: bool = Field(default=True)
+
+
+class ImageOptimizationVariant(BaseModel):
+    """A single responsive variant of an optimized image."""
+
+    url: str
+    width: int
+    height: int
+    size_bytes: int
+    format: str = "webp"
+
+
+class ImageOptimizationRecord(BaseModel):
+    """Persisted optimization record returned to the client."""
+
+    optimization_id: str
+    owner_sub: str
+    source_key: str
+    source_url: str
+    output_format: str = "webp"
+    variants: Dict[str, ImageOptimizationVariant] = Field(default_factory=dict)
+    cached: bool = False
+    created_at: int

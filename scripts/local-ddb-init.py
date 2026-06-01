@@ -2037,6 +2037,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
         ),
+        # Image Optimization records + cache (PLATFORM-004)
+        TableDef(
+            _resolve_table_name(S.image_optimizations_table_name, "image_optimizations"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "BySourceKey", "partition_key": "source_key_hash", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

@@ -9758,3 +9758,30 @@ export interface SponsorshipDealEvent {
   details: Record<string, unknown>;
   created_at: number;
 }
+
+// Image Optimization (PLATFORM-004) - on-demand optimization records
+export interface ImageOptimizationVariant {
+  url: string;
+  width: number;
+  height: number;
+  size_bytes: number;
+  format: string;
+}
+
+export interface ImageOptimizationRecord {
+  optimization_id: string;
+  owner_sub: string;
+  source_key: string;
+  source_url: string;
+  output_format: string;
+  variants: Record<string, ImageOptimizationVariant>;
+  cached: boolean;
+  created_at: number;
+}
+
+export interface ImageOptimizeRequest {
+  source_key?: string;
+  source_url?: string;
+  format?: string;
+  use_cache?: boolean;
+}

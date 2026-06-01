@@ -218,6 +218,7 @@ class Tables:
     group_fundraising_campaigns: Any
     user_themes: Any
     sponsorship_deals: Any
+    image_optimizations: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -430,4 +431,5 @@ T = Tables(
     group_fundraising_campaigns=ddb.Table(S.group_fundraising_campaigns_table_name),
     user_themes=ddb.Table(S.user_themes_table_name),
     sponsorship_deals=ddb.Table(S.sponsorship_deals_table_name),
+    image_optimizations=ddb.Table(S.image_optimizations_table_name),
 )
