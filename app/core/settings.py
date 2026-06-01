@@ -772,6 +772,7 @@ class Settings:
     cart_abandonment_scan_interval_sec: int = int(os.environ.get("CART_ABANDONMENT_SCAN_INTERVAL_SEC", "300"))
     cart_abandonment_max_reminders: int = int(os.environ.get("CART_ABANDONMENT_MAX_REMINDERS", "2"))
     cart_abandonment_reminder_cooldown_hours: int = int(os.environ.get("CART_ABANDONMENT_REMINDER_COOLDOWN_HOURS", "48"))
+    cart_abandonment_expire_hours: int = int(os.environ.get("CART_ABANDONMENT_EXPIRE_HOURS", "720"))
     cart_ttl_days: int = int(os.environ.get("CART_TTL_DAYS", "30"))
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
