@@ -62,6 +62,7 @@ def _table_defs() -> List[TableDef]:
         TableDef(_resolve_table_name(S.alert_prefs_table_name, "alert_prefs"), "user_sub"),
         TableDef(_resolve_table_name(S.push_devices_table_name, "push_devices"), "user_sub", "device_id"),
         TableDef(_resolve_table_name(S.billing_table_name, "billing"), "pk", "sk"),
+        TableDef(_resolve_table_name(S.billing_config_table_name, "billing_config"), "pk", "sk"),
         TableDef(_resolve_table_name(S.account_state_table_name, "account_state"), "user_sub"),
         TableDef(_resolve_table_name(S.profile_table_name, "profiles"), "user_sub"),
         TableDef(_resolve_table_name(S.addresses_table_name, "addresses"), "user_sub", "address_id"),

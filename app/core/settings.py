@@ -2118,5 +2118,18 @@ class Settings:
         os.environ.get("KYC_PROOF_OF_FUNDS_VALIDITY_DAYS", "365")
     )
 
+    # FIN-018: Billing Configuration UI. Runtime-editable billing parameters
+    # (platform fee bps, payout minimum, deposit min/max, currency, tax rate)
+    # stored as DDB overrides; effective value = DB override if set else env default.
+    billing_config_table_name: str = os.environ.get(
+        "BILLING_CONFIG_TABLE_NAME", "billing_config"
+    )
+    billing_config_ddb_enabled: bool = os.environ.get(
+        "BILLING_CONFIG_DDB_ENABLED", "true"
+    ).lower() not in ("0", "false", "no")
+    billing_config_cache_ttl_seconds: int = int(
+        os.environ.get("BILLING_CONFIG_CACHE_TTL_SECONDS", "60")
+    )
+
 
 S = Settings()

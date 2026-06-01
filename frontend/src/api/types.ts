@@ -9926,3 +9926,76 @@ export interface KycScreeningReviewRequest {
   decision: KycScreeningDecision;
   note: string;
 }
+
+// ─── FIN-018: Billing Configuration UI ──────────────────────────────────────
+
+export interface BillingConfigOut {
+  fee_tips_bps: number;
+  fee_unlocks_bps: number;
+  fee_subscriptions_bps: number;
+  fee_catalog_bps: number;
+  fee_ad_revenue_bps: number;
+  min_payout_cents: number;
+  payout_fee_cents: number;
+  payout_schedule: string;
+  auto_payout_enabled: boolean;
+  min_deposit_cents: number;
+  max_deposit_cents: number;
+  deposit_fee_bps: number;
+  default_currency: string;
+  supported_currencies: string[];
+  tax_enabled: boolean;
+  default_tax_rate_bps: number;
+  updated_at: number | null;
+  updated_by: string | null;
+}
+
+export interface BillingConfigUpdate {
+  fee_tips_bps?: number;
+  fee_unlocks_bps?: number;
+  fee_subscriptions_bps?: number;
+  fee_catalog_bps?: number;
+  fee_ad_revenue_bps?: number;
+  min_payout_cents?: number;
+  payout_fee_cents?: number;
+  payout_schedule?: string;
+  auto_payout_enabled?: boolean;
+  min_deposit_cents?: number;
+  max_deposit_cents?: number;
+  deposit_fee_bps?: number;
+  default_currency?: string;
+  supported_currencies?: string[];
+  tax_enabled?: boolean;
+  default_tax_rate_bps?: number;
+}
+
+export interface BillingConfigAuditChange {
+  field: string;
+  old_value: string | number | null;
+  new_value: string | number | null;
+}
+
+export interface BillingConfigAuditEntry {
+  admin_sub: string;
+  changes: BillingConfigAuditChange[];
+  created_at: number;
+}
+
+export interface BillingConfigAuditLog {
+  entries: BillingConfigAuditEntry[];
+  count: number;
+  cursor: string | null;
+}
+
+export interface BillingConfigSample {
+  amount_cents: number;
+  fee_cents: number;
+  net_cents: number;
+}
+
+export interface BillingConfigPreview {
+  affected_tx_types: string[];
+  projected_daily_delta_cents: number;
+  sample_before: BillingConfigSample;
+  sample_after: BillingConfigSample;
+}

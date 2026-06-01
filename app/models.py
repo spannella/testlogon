@@ -11142,3 +11142,85 @@ class KycScreeningReviewRequest(BaseModel):
 
     decision: KycScreeningDecision
     note: str = Field(min_length=1, max_length=2000)
+
+
+# --------------------------------------------------------------------------- #
+#  FIN-018: Billing Configuration UI                                            #
+# --------------------------------------------------------------------------- #
+
+
+class BillingConfigOut(BaseModel):
+    """Effective billing configuration (override-or-default)."""
+
+    fee_tips_bps: int = Field(..., ge=0, le=5000, description="Platform fee for tips in basis points")
+    fee_unlocks_bps: int = Field(..., ge=0, le=5000, description="Platform fee for unlocks")
+    fee_subscriptions_bps: int = Field(..., ge=0, le=5000, description="Platform fee for subscriptions")
+    fee_catalog_bps: int = Field(..., ge=0, le=5000, description="Platform fee for catalog purchases")
+    fee_ad_revenue_bps: int = Field(..., ge=0, le=5000, description="Platform fee for ad revenue share")
+    min_payout_cents: int = Field(..., ge=0, description="Minimum payout threshold in cents")
+    payout_fee_cents: int = Field(..., ge=0, description="Per-payout processing fee in cents")
+    payout_schedule: str = Field(..., description="Payout frequency: daily, weekly, or monthly")
+    auto_payout_enabled: bool = Field(..., description="Whether auto-payout is enabled")
+    min_deposit_cents: int = Field(..., ge=0, description="Minimum deposit amount in cents")
+    max_deposit_cents: int = Field(..., ge=0, description="Maximum deposit amount in cents")
+    deposit_fee_bps: int = Field(..., ge=0, le=5000, description="Deposit fee in basis points")
+    default_currency: str = Field(..., description="Default currency (ISO 4217)")
+    supported_currencies: List[str] = Field(..., description="List of supported currency codes")
+    tax_enabled: bool = Field(..., description="Whether tax collection is active")
+    default_tax_rate_bps: int = Field(..., ge=0, le=10000, description="Default tax rate in basis points")
+    updated_at: Optional[int] = Field(default=None, description="Last update timestamp")
+    updated_by: Optional[str] = Field(default=None, description="Admin who last updated")
+
+
+class BillingConfigUpdate(BaseModel):
+    """Partial update request for billing configuration."""
+
+    fee_tips_bps: Optional[int] = Field(default=None, ge=0, le=5000)
+    fee_unlocks_bps: Optional[int] = Field(default=None, ge=0, le=5000)
+    fee_subscriptions_bps: Optional[int] = Field(default=None, ge=0, le=5000)
+    fee_catalog_bps: Optional[int] = Field(default=None, ge=0, le=5000)
+    fee_ad_revenue_bps: Optional[int] = Field(default=None, ge=0, le=5000)
+    min_payout_cents: Optional[int] = Field(default=None, ge=0)
+    payout_fee_cents: Optional[int] = Field(default=None, ge=0)
+    payout_schedule: Optional[str] = Field(default=None, pattern=r"^(daily|weekly|monthly)$")
+    auto_payout_enabled: Optional[bool] = Field(default=None)
+    min_deposit_cents: Optional[int] = Field(default=None, ge=0)
+    max_deposit_cents: Optional[int] = Field(default=None, ge=0)
+    deposit_fee_bps: Optional[int] = Field(default=None, ge=0, le=5000)
+    default_currency: Optional[str] = Field(default=None, pattern=r"^[A-Za-z]{3}$")
+    supported_currencies: Optional[List[str]] = Field(default=None)
+    tax_enabled: Optional[bool] = Field(default=None)
+    default_tax_rate_bps: Optional[int] = Field(default=None, ge=0, le=10000)
+
+
+class BillingConfigResetRequest(BaseModel):
+    """Reset one or more config keys to their env/code defaults."""
+
+    keys: Optional[List[str]] = Field(default=None, description="Keys to reset; null = reset all")
+
+
+class BillingConfigAuditEntry(BaseModel):
+    """Single entry in the billing-config audit log."""
+
+    admin_sub: str = Field(..., description="Admin who made the change")
+    changes: List[Dict[str, Any]] = Field(
+        ..., description="List of field changes: [{field, old_value, new_value}]"
+    )
+    created_at: int = Field(..., description="Unix timestamp of the change")
+
+
+class BillingConfigAuditLog(BaseModel):
+    """Paginated billing-config audit log."""
+
+    entries: List[BillingConfigAuditEntry] = Field(default_factory=list)
+    count: int = 0
+    cursor: Optional[str] = Field(default=None)
+
+
+class BillingConfigPreview(BaseModel):
+    """Impact preview for proposed billing-config changes."""
+
+    affected_tx_types: List[str] = Field(..., description="Transaction types affected")
+    projected_daily_delta_cents: int = Field(..., description="Projected daily revenue delta in cents")
+    sample_before: Dict[str, Any] = Field(..., description="Sample $10 transaction with current fees")
+    sample_after: Dict[str, Any] = Field(..., description="Same transaction with proposed fees")
