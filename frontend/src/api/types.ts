@@ -2094,6 +2094,10 @@ export interface FeedPost {
   repost_count?: number;
   /** SOCIAL-002: whether the current viewer has reposted this post */
   reposted_by_me?: boolean;
+  /** FEED-007: aggregate count of viewers who marked this post interesting */
+  interesting_count?: number;
+  /** FEED-007: whether the current viewer marked this post interesting */
+  is_interesting?: boolean;
   /** SOCIAL-002: present when a feed item is a repost — who reposted it */
   reposted_by?: { user_id: string; display_name: string };
   /** SOCIAL-002: quote text from a quote repost */
