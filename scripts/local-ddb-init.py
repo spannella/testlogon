@@ -1539,6 +1539,12 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # Syndicate Treasury / Fund Management (SYND-004)
+        TableDef(
+            _resolve_table_name(S.syndicate_treasury_table_name, "syndicate_treasury"),
+            "pk",
+            "sk",
+        ),
         # Issued Licenses (LICENSE-002) + License Requests (LICENSE-004)
         TableDef(
             _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),

@@ -10975,3 +10975,72 @@ class ImageOptimizationRecord(BaseModel):
     variants: Dict[str, ImageOptimizationVariant] = Field(default_factory=dict)
     cached: bool = False
     created_at: int
+
+
+
+# ---------------------------------------------------------------------------
+# Syndicate Treasury / Fund Management (SYND-004)
+# ---------------------------------------------------------------------------
+
+class SyndicateTreasuryDepositIn(BaseModel):
+    amount_cents: int = Field(ge=100, le=1000000)
+
+
+class SyndicateTreasuryDisburseIn(BaseModel):
+    recipient_user_id: str = Field(min_length=1)
+    amount_cents: int = Field(ge=1, le=1000000)
+    note: str = ""
+
+
+class SyndicateTreasuryBalanceOut(BaseModel):
+    syndicate_id: str
+    balance_cents: int = 0
+    total_deposited_cents: int = 0
+    total_disbursed_cents: int = 0
+    currency: str = "usd"
+    updated_at: int = 0
+
+
+class SyndicateTreasuryDepositOut(BaseModel):
+    ok: bool = True
+    amount_cents: int = 0
+    new_personal_balance_cents: int = 0
+    new_treasury_balance_cents: int = 0
+    treasury_entry_id: str = ""
+    user_entry_id: str = ""
+
+
+class SyndicateTreasuryDisburseOut(BaseModel):
+    ok: bool = True
+    amount_cents: int = 0
+    recipient_user_id: str = ""
+    new_treasury_balance_cents: int = 0
+    new_recipient_balance_cents: int = 0
+    treasury_entry_id: str = ""
+    user_entry_id: str = ""
+
+
+class SyndicateTreasuryLedgerEntryOut(BaseModel):
+    entry_id: str
+    ts: int = 0
+    direction: str = "credit"
+    amount_cents: int = 0
+    reason: str = ""
+    actor_user_id: str = ""
+    counterparty_user_id: str = ""
+    currency: str = "usd"
+
+
+class SyndicateTreasuryLedgerOut(BaseModel):
+    entries: List[SyndicateTreasuryLedgerEntryOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    has_more: bool = False
+
+
+class SyndicateTreasuryContributorOut(BaseModel):
+    user_id: str
+    total_contributed_cents: int = 0
+    total_refunded_cents: int = 0
+    net_contributed_cents: int = 0
+    contribution_count: int = 0
+    last_contribution_at: int = 0
