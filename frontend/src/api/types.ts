@@ -10771,3 +10771,43 @@ export interface SnoozeResult {
   ok: boolean;
   snoozed_until: number;
 }
+
+
+
+// Encrypted one-time share links (FILES-001)
+export interface ShareLink {
+  link_id: string;
+  file_node_id: string;
+  file_name: string;
+  file_size_bytes: number;
+  content_type: string;
+  created_at: number;
+  expires_at: number;
+  max_downloads: number;
+  download_count: number;
+  has_password: boolean;
+  is_revoked: boolean;
+  share_url: string;
+}
+
+export interface ShareLinkList {
+  items: ShareLink[];
+}
+
+export interface ShareLinkPublicInfo {
+  file_name: string;
+  file_size_bytes: number;
+  content_type: string;
+  requires_password: boolean;
+  is_expired: boolean;
+  is_used: boolean;
+  is_revoked: boolean;
+  remaining_downloads: number;
+}
+
+export interface CreateShareLinkInput {
+  file_node_id: string;
+  expiry_hours?: number;
+  max_downloads?: number;
+  password?: string;
+}

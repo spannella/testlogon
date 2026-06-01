@@ -882,6 +882,16 @@ class Settings:
     filemgr_s3_mounts_max_download_bytes: int = int(os.environ.get("FILEMGR_S3_MOUNTS_MAX_DOWNLOAD_BYTES", "0"))
     filemgr_s3_mounts_upload_rate_per_minute: int = int(os.environ.get("FILEMGR_S3_MOUNTS_UPLOAD_RATE_PER_MINUTE", "0"))
     filemgr_s3_mounts_download_rate_per_minute: int = int(os.environ.get("FILEMGR_S3_MOUNTS_DOWNLOAD_RATE_PER_MINUTE", "0"))
+
+    # Encrypted one-time share links (FILES-001)
+    file_share_links_enabled: bool = os.environ.get("FILE_SHARE_LINKS_ENABLED", "true").lower() == "true"
+    ddb_file_share_links_table: str = os.environ.get("DDB_FILE_SHARE_LINKS_TABLE", "file_share_links")
+    share_link_default_expiry_hours: int = int(os.environ.get("SHARE_LINK_DEFAULT_EXPIRY_HOURS", "24"))
+    share_link_max_expiry_hours: int = int(os.environ.get("SHARE_LINK_MAX_EXPIRY_HOURS", "720"))  # 30 days
+    share_link_max_file_size_bytes: int = int(os.environ.get("SHARE_LINK_MAX_FILE_SIZE", "1073741824"))  # 1GB
+    share_link_s3_prefix: str = os.environ.get("SHARE_LINK_S3_PREFIX", "share-links")
+    share_link_base_url: str = os.environ.get("SHARE_LINK_BASE_URL", "http://localhost:3000/share").rstrip("/")
+
     projects_reconcile_enabled: bool = os.environ.get("PROJECTS_RECONCILE_ENABLED", "false").lower() == "true"
     projects_reconcile_interval_seconds: int = int(os.environ.get("PROJECTS_RECONCILE_INTERVAL_SECONDS", "900"))
     projects_reconcile_scan_limit: int = int(os.environ.get("PROJECTS_RECONCILE_SCAN_LIMIT", "200"))

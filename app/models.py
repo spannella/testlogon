@@ -12255,3 +12255,51 @@ class SnoozedFollowingListOut(BaseModel):
     """Response for GET /ui/social/following/snoozed."""
     snoozed: List[SnoozedFollowingOut] = Field(default_factory=list)
     total: int = 0
+
+
+
+
+# ---------------------------------------------------------------------------
+# Encrypted one-time share links (FILES-001)
+# ---------------------------------------------------------------------------
+
+
+class CreateShareLinkIn(BaseModel):
+    file_node_id: str = Field(..., min_length=1, max_length=2048)
+    expiry_hours: int = Field(default=24, ge=1, le=720)
+    max_downloads: int = Field(default=1, ge=1, le=100)
+    password: Optional[str] = Field(default=None, min_length=4, max_length=128)
+
+
+class ShareLinkOut(BaseModel):
+    link_id: str
+    file_node_id: str
+    file_name: str
+    file_size_bytes: int
+    content_type: str
+    created_at: int
+    expires_at: int
+    max_downloads: int
+    download_count: int
+    has_password: bool = False
+    is_revoked: bool = False
+    share_url: str
+
+
+class ShareLinkListOut(BaseModel):
+    items: List[ShareLinkOut] = Field(default_factory=list)
+
+
+class ShareLinkPublicInfoOut(BaseModel):
+    file_name: str
+    file_size_bytes: int
+    content_type: str
+    requires_password: bool = False
+    is_expired: bool = False
+    is_used: bool = False
+    is_revoked: bool = False
+    remaining_downloads: int = 0
+
+
+class ShareLinkDownloadIn(BaseModel):
+    password: Optional[str] = Field(default=None, max_length=128)

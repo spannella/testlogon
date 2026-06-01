@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { File, Folder, MoreHorizontal, Download, Share2, Pencil, Move, Trash2, Eye, Image, Cloud } from "lucide-react";
+import { File, Folder, MoreHorizontal, Download, Share2, Link2, Pencil, Move, Trash2, Eye, Image, Cloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -80,6 +80,7 @@ interface FileTableProps {
   onDownload?: (file: FileEntry) => void;
   onEditImage?: (file: FileEntry) => void;
   onShare: (file: FileEntry) => void;
+  onShareLink?: (file: FileEntry) => void;
   onRename: (file: FileEntry) => void;
   onMove: (file: FileEntry) => void;
   onDelete: (file: FileEntry) => void;
@@ -104,6 +105,7 @@ export function FileTable({
   onDownload,
   onEditImage,
   onShare,
+  onShareLink,
   onRename,
   onMove,
   onDelete,
@@ -251,6 +253,12 @@ export function FileTable({
               <Share2 className="h-4 w-4" />
               Share
             </DropdownMenuItem>
+            {onShareLink && row.type === "file" && (
+              <DropdownMenuItem onClick={() => onShareLink(row)}>
+                <Link2 className="h-4 w-4" />
+                Create Share Link
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={() => onRename(row)}>
               <Pencil className="h-4 w-4" />
               Rename

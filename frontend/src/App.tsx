@@ -26,6 +26,8 @@ const AdminLicenseCompliancePage = lazy(
   () => import("@/pages/licenses/AdminLicenseCompliancePage"),
 );
 const FilesPage = lazy(() => import("@/pages/files/FilesPage"));
+const ShareLinksPage = lazy(() => import("@/pages/files/ShareLinksPage"));
+const PublicDownloadPage = lazy(() => import("@/pages/files/PublicDownloadPage"));
 const ProjectsPage = lazy(() => import("@/pages/projects/ProjectsPage"));
 const ProjectDetailPage = lazy(() => import("@/pages/projects/ProjectDetailPage"));
 const BillingPage = lazy(() => import("@/pages/billing/BillingPage"));
@@ -241,6 +243,7 @@ export default function App() {
         <Route path="/magic-link-verify" element={<MagicLinkVerify />} />
         {showCanonicalProfileRoute && <Route path="/u/:identifier" element={<PublicUserProfilePage />} />}
         <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
+        <Route path="/share/:linkId" element={<PublicDownloadPage />} />
         <Route path="/donate/:fundraiserId" element={<PublicDonationPage />} />
         <Route path="/questionnaires/published/:publishedSlug/respond" element={<QuestionnaireRespondentPage />} />
         <Route path="live/:sessionId" element={<LivePlayer />} />
@@ -254,6 +257,7 @@ export default function App() {
           <Route path="contacts" element={<ContactsPage />} />
           <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />
+          <Route path="files/share-links" element={<ShareLinksPage />} />
           <Route path="signing" element={<SigningPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />

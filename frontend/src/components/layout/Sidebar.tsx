@@ -140,6 +140,7 @@ const NAV_GROUPS: NavGroup[] = [
     i18nKey: "nav.productivity",
     items: [
       { label: "Files", i18nKey: "nav.files", path: "/files", icon: <FolderOpen className="h-5 w-5" /> },
+      { label: "Share Links", i18nKey: "nav.shareLinks", path: "/files/share-links", icon: <Link2 className="h-5 w-5" /> },
       { label: "Projects", i18nKey: "nav.projects", path: "/projects", icon: <FolderKanban className="h-5 w-5" /> },
       { label: "Calendar", i18nKey: "nav.calendar", path: "/calendar", icon: <CalendarDays className="h-5 w-5" /> },
       { label: "Content Calendar", i18nKey: "nav.contentCalendar", path: "/content-calendar", icon: <CalendarClock className="h-5 w-5" /> },
