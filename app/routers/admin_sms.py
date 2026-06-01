@@ -12,6 +12,8 @@ from app.models import (
     DashboardSuppressionAdd,
     DashboardTimeseriesOut,
     SmsDashboardStatsOut,
+    SmsSendTestIn,
+    SmsSendTestOut,
 )
 from app.services.sms_delivery import (
     get_dev_sms_log,
@@ -23,6 +25,7 @@ from app.services.sms_delivery import (
     list_sms_deliveries,
     list_sms_failures,
     remove_sms_suppression,
+    send_sms,
     suppress_sms,
 )
 
@@ -97,6 +100,27 @@ async def unsuppress_phone(
     """Remove phone from suppression list (admin re-consent)."""
     remove_sms_suppression(phone)
     return {"ok": True, "phone": phone, "suppressed": False}
+
+
+@router.post("/send-test", response_model=SmsSendTestOut)
+async def send_test_sms(
+    payload: SmsSendTestIn = Body(...),
+    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+) -> SmsSendTestOut:
+    """Send a test SMS through the production pipeline (PLATFORM-007).
+
+    Drives :func:`app.services.sms_delivery.send_sms`: in dev mode this
+    dev-logs and records a ``dev_logged`` delivery row (never touches real
+    AWS); in production it sends via SNS when enabled. Suppression and the
+    per-number daily limit are honoured, so the returned status may be
+    ``suppressed`` or ``rate_limited``.
+    """
+    result = send_sms(payload.phone, payload.body)
+    return SmsSendTestOut(
+        number=result.get("number", payload.phone),
+        message_id=result.get("message_id"),
+        status=result.get("status", "failed"),
+    )
 
 
 @router.get("/dev-log")

@@ -87,6 +87,16 @@ export const addSmsSuppression = (address: string, reason: string) =>
 export const removeSmsSuppression = (phone: string) =>
   api.del<{ ok: boolean }>(`/ui/admin/sms/suppressed/${encodeURIComponent(phone)}`);
 
+// ── PLATFORM-007 production send-test ────────────────────────────────────
+export interface SmsSendTestResult {
+  number: string;
+  message_id: string | null;
+  status: string;
+}
+
+export const sendTestSms = (phone: string, body: string) =>
+  api.post<SmsSendTestResult>("/ui/admin/sms/send-test", { phone, body });
+
 // ── Templates ──────────────────────────────────────────────────────────
 export const listNotificationTemplates = (channel?: string) =>
   api.get<NotificationTemplate[]>(

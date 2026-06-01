@@ -8618,6 +8618,26 @@ class DashboardBreakdownOut(BaseModel):
     items: List[DashboardBreakdownItem] = Field(default_factory=list)
 
 
+class SmsSendTestIn(BaseModel):
+    """Admin send-test request (PLATFORM-007 production pipeline)."""
+    phone: str = Field(min_length=3, max_length=20)
+    body: str = Field(default="Test SMS from admin console", min_length=1, max_length=1400)
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def _strip_phone(cls, v):
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
+
+class SmsSendTestOut(BaseModel):
+    """Result of an admin send-test through the production pipeline."""
+    number: str
+    message_id: Optional[str] = None
+    status: str
+
+
 class DashboardSuppressionAdd(BaseModel):
     address: str = Field(min_length=1, max_length=320)
     reason: str = Field(default="manual", max_length=200)

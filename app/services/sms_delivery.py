@@ -141,6 +141,127 @@ def _estimate_segments(body: str) -> int:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Production send path (PLATFORM-007)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _build_sms_attributes() -> Dict[str, Any]:
+    """Build SNS SMS MessageAttributes for delivery optimization.
+
+    Controls SMSType (Transactional vs Promotional), optional alphanumeric
+    SenderID, and optional dedicated OriginationNumber (10DLC / toll-free /
+    short code). Driven by the PLATFORM-007 settings.
+    """
+    attrs: Dict[str, Any] = {
+        "AWS.SNS.SMS.SMSType": {
+            "DataType": "String",
+            "StringValue": S.sms_message_type or "Transactional",
+        },
+    }
+    if S.sms_sender_id:
+        attrs["AWS.SNS.SMS.SenderID"] = {
+            "DataType": "String",
+            "StringValue": S.sms_sender_id,
+        }
+    if S.sms_origination_number:
+        attrs["AWS.MM.SMS.OriginationNumber"] = {
+            "DataType": "String",
+            "StringValue": S.sms_origination_number,
+        }
+    return attrs
+
+
+def send_sms(phone: str, body: str, *, check_suppression: bool = True,
+             enforce_daily_limit: bool = True) -> Dict[str, Any]:
+    """Production single-number SMS sender.
+
+    This is the consolidated production pipeline used by the alert fanout and
+    the admin send-test endpoint. Behaviour:
+
+    - In dev mode (``S.dev_mode``): never touches real AWS — writes to the dev
+      SMS log and records a ``dev_logged`` delivery row. Fully deterministic
+      for E2E.
+    - In production (``not S.dev_mode``): gated on ``S.alerts_sms_enabled``;
+      honours the suppression list and the per-number daily limit; sends via
+      SNS with proper ``MessageAttributes``; records a ``sent`` / ``failed``
+      delivery row either way.
+
+    Returns a result dict ``{number, message_id, status}`` where status is one
+    of: ``dev_logged``, ``disabled``, ``suppressed``, ``rate_limited``,
+    ``sent``, ``failed``.
+    """
+    from app.metrics import SMS_FAILED, SMS_RATE_LIMITED, SMS_SENT, SMS_SUPPRESSED
+
+    if not phone:
+        return {"number": phone, "message_id": None, "status": "failed"}
+
+    # Suppression check (hot path) — applies in dev and prod so opt-out is
+    # always honoured and deterministically testable.
+    if check_suppression and S.sms_suppression_enabled:
+        try:
+            if is_sms_suppressed(phone):
+                SMS_SUPPRESSED.labels(reason="opt_out").inc()
+                return {"number": phone, "message_id": None, "status": "suppressed"}
+        except Exception:
+            logger.exception("Suppression check failed for %s", phone)
+
+    # Per-number daily rate limit (applies in dev and prod).
+    if enforce_daily_limit:
+        try:
+            if sms_daily_limit_exceeded(phone):
+                SMS_RATE_LIMITED.inc()
+                logger.info("SMS rate limited for %s (daily limit exceeded)", phone)
+                return {"number": phone, "message_id": None, "status": "rate_limited"}
+        except Exception:
+            logger.exception("Daily-limit check failed for %s", phone)
+
+    # Dev mode: log + record, never hit AWS.
+    if S.dev_mode:
+        try:
+            from datetime import datetime, timezone
+
+            from app.services.alerts import _write_dev_log
+
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            _write_dev_log(S.dev_sms_log, f"[{ts}] ALERT_SMS TO={phone}\n  Body: {body}\n\n")
+        except Exception:
+            pass
+        record_sms_dev_logged(phone, body)
+        SMS_SENT.inc()
+        return {"number": phone, "message_id": f"dev-{now_ts()}", "status": "dev_logged"}
+
+    # Production gate: SMS disabled → no-op.
+    if not S.alerts_sms_enabled:
+        return {"number": phone, "message_id": None, "status": "disabled"}
+
+    # Real SNS send.
+    try:
+        from app.core.aws import sns_client
+
+        sns = sns_client()
+        response = sns.publish(
+            PhoneNumber=phone,
+            Message=(body or "")[:1400],
+            MessageAttributes=_build_sms_attributes(),
+        )
+        message_id = response.get("MessageId", "")
+        record_sms_sent(phone, body, message_id)
+        SMS_SENT.inc()
+        logger.info("SMS sent: message_id=%s, to=%s", message_id, phone)
+        return {"number": phone, "message_id": message_id, "status": "sent"}
+    except Exception as exc:
+        record_sms_failure(phone, body, str(exc))
+        SMS_FAILED.inc()
+        logger.exception("SMS send failed: to=%s, error=%s", phone, str(exc)[:200])
+        return {"number": phone, "message_id": None, "status": "failed"}
+
+
+def send_sms_bulk(numbers: List[str], body: str, *, limit: int = 5) -> List[Dict[str, Any]]:
+    """Send to up to ``limit`` numbers via :func:`send_sms`. Returns result dicts."""
+    return [send_sms(n, body) for n in (numbers or [])[:limit]]
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Suppression / Opt-out
 # ──────────────────────────────────────────────────────────────────────
 
