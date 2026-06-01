@@ -198,6 +198,7 @@ def respond_to_invite(
         _add_member(syndicate_id, user_id, role="member", ts=ts)
         _increment_member_count(syndicate_id, 1)
         _write_audit(syndicate_id, user_id, "member_joined", user_id)
+        _on_member_joined_hook(syndicate_id, user_id)
     else:
         _write_audit(syndicate_id, user_id, "invite_declined", user_id)
 
@@ -269,6 +270,7 @@ def approve_request(
     _add_member(syndicate_id, requester_user_id, role="member", ts=ts)
     _increment_member_count(syndicate_id, 1)
     _write_audit(syndicate_id, admin_sub, "request_approved", requester_user_id)
+    _on_member_joined_hook(syndicate_id, requester_user_id)
 
     request_item["status"] = "approved"
     return request_item
@@ -391,6 +393,7 @@ def leave_syndicate(
             _write_audit(syndicate_id, user_id, "admin_auto_promoted", new_admin)
 
     _write_audit(syndicate_id, user_id, "member_left", user_id)
+    _on_member_left_hook(syndicate_id, user_id)
     return {"dissolved": False, "syndicate_id": syndicate_id}
 
 
@@ -412,6 +415,7 @@ def remove_member(
     _set_member_count(syndicate_id, new_count)
 
     _write_audit(syndicate_id, admin_sub, "member_removed", target_user_id)
+    _on_member_left_hook(syndicate_id, target_user_id)
     return {"ok": True}
 
 
@@ -454,6 +458,31 @@ def get_audit_log(syndicate_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         Limit=limit,
     )
     return resp.get("Items", [])
+
+
+# ---------------------------------------------------------------------------
+# Open-licensing lifecycle hooks (LICENSE-005)
+# ---------------------------------------------------------------------------
+
+def _on_member_joined_hook(syndicate_id: str, user_id: str) -> None:
+    """Auto-license existing syndicate content to a newly joined member (LICENSE-005).
+
+    Imported lazily to avoid a circular import (open-licensing imports this module).
+    """
+    try:
+        from app.services import syndicate_open_licensing as sol
+        sol.on_member_joined(syndicate_id=syndicate_id, new_member_id=user_id)
+    except Exception:
+        logger.warning("open-licensing on_member_joined hook failed", exc_info=True)
+
+
+def _on_member_left_hook(syndicate_id: str, user_id: str) -> None:
+    """No-op for licensing (existing auto-licenses persist), kept for audit symmetry."""
+    try:
+        from app.services import syndicate_open_licensing as sol
+        sol.on_member_left(syndicate_id=syndicate_id, member_id=user_id)
+    except Exception:
+        logger.warning("open-licensing on_member_left hook failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

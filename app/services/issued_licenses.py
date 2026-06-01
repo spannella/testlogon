@@ -16,7 +16,7 @@ from app.services.profile import get_profile
 
 logger = logging.getLogger(__name__)
 
-VALID_LICENSE_MODES = {"per_user", "blanket"}
+VALID_LICENSE_MODES = {"per_user", "blanket", "syndicate_auto"}
 VALID_CONTENT_TYPES = {"video", "music", "image", "post", "broadcast", "clip"}
 MAX_PROFIT_SHARE_PCT = 100
 MAX_REVENUE_SHARE_PCT = 100
@@ -36,14 +36,15 @@ def issue_license(
     title: str = "",
     thumbnail_url: str = "",
     expires_at: Optional[int] = None,
+    syndicate_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Issue a new license for content owned by the licensor."""
     if license_mode not in VALID_LICENSE_MODES:
         raise ValueError(f"Invalid license_mode: {license_mode}")
     if content_type not in VALID_CONTENT_TYPES:
         raise ValueError(f"Invalid content_type: {content_type}")
-    if license_mode == "per_user" and not licensee_id:
-        raise ValueError("licensee_id required for per_user license")
+    if license_mode in ("per_user", "syndicate_auto") and not licensee_id:
+        raise ValueError("licensee_id required for this license mode")
     if license_mode == "blanket" and licensee_id:
         raise ValueError("licensee_id must be null for blanket license")
     if not (0 <= profit_share_pct <= MAX_PROFIT_SHARE_PCT):
@@ -84,6 +85,8 @@ def issue_license(
         item["licensee_id"] = licensee_id
     if expires_at is not None:
         item["expires_at"] = expires_at
+    if syndicate_id:
+        item["syndicate_id"] = syndicate_id
 
     T.issued_licenses.put_item(Item=item)
 
@@ -99,14 +102,17 @@ def issue_license(
     }
     if licensee_id:
         licensor_index["licensee_id"] = licensee_id
+    if syndicate_id:
+        licensor_index["syndicate_id"] = syndicate_id
     T.issued_licenses.put_item(Item=licensor_index)
 
-    # Per-user: write licensee index + notify
-    if license_mode == "per_user" and licensee_id:
+    # Per-user / syndicate_auto: write licensee index + notify
+    if license_mode in ("per_user", "syndicate_auto") and licensee_id:
         _write_licensee_index(
             issued_license_id, licensee_id, content_id,
             content_type, licensor_sub, profit_share_pct,
             fixed_cost_cents, revenue_share_pct,
+            license_mode=license_mode, syndicate_id=syndicate_id,
         )
         try:
             write_alert(
@@ -258,8 +264,8 @@ def revoke_license(
 
     licensee_id = item.get("licensee_id")
 
-    # Per-user: update licensee index + notify
-    if item.get("license_mode") == "per_user" and licensee_id:
+    # Per-user / syndicate_auto: update licensee index + notify
+    if item.get("license_mode") in ("per_user", "syndicate_auto") and licensee_id:
         try:
             T.issued_licenses.update_item(
                 Key={"pk": f"LICENSEE#{licensee_id}", "sk": f"HELD#{issued_license_id}"},
@@ -462,6 +468,9 @@ def _write_licensee_index(
     psp: int,
     fcc: int,
     rsp: int,
+    *,
+    license_mode: str = "per_user",
+    syndicate_id: Optional[str] = None,
 ) -> None:
     """Write LICENSEE#{id}/HELD#{license_id} index entry."""
     item = {
@@ -471,6 +480,7 @@ def _write_licensee_index(
         "content_id": content_id,
         "content_type": content_type,
         "licensor_id": licensor_id,
+        "license_mode": license_mode,
         "status": "active",
         "terms_snapshot": {
             "profit_share_pct": psp,
@@ -478,6 +488,8 @@ def _write_licensee_index(
             "revenue_share_pct": rsp,
         },
     }
+    if syndicate_id:
+        item["syndicate_id"] = syndicate_id
     T.issued_licenses.put_item(Item=item)
 
 

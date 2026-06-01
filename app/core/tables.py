@@ -171,6 +171,7 @@ class Tables:
     syndicate_treasury: Any
     syndicate_posts: Any
     syndicate_ad_campaigns: Any
+    syndicate_open_licensing: Any
     chat_bots: Any
     bot_assignments: Any
     ssh_keys: Any
@@ -394,6 +395,7 @@ T = Tables(
     syndicate_treasury=ddb.Table(S.syndicate_treasury_table_name),
     syndicate_posts=ddb.Table(S.syndicate_posts_table_name),
     syndicate_ad_campaigns=ddb.Table(S.syndicate_ad_campaigns_table_name),
+    syndicate_open_licensing=ddb.Table(S.syndicate_open_licensing_table_name),
     chat_bots=ddb.Table(S.chat_bots_table_name),
     bot_assignments=ddb.Table(S.bot_assignments_table_name),
     ssh_keys=ddb.Table(S.ssh_keys_table_name),

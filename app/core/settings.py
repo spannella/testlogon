@@ -1862,6 +1862,13 @@ class Settings:
     syndicate_advertising_enabled: bool = os.environ.get(
         "SYNDICATE_ADVERTISING_ENABLED", "true"
     ) not in ("0", "false", "False")
+    # Syndicate Open Licensing (LICENSE-005)
+    syndicate_open_licensing_table_name: str = os.environ.get(
+        "SYNDICATE_OPEN_LICENSING_TABLE_NAME", "syndicate_open_licensing"
+    )
+    syndicate_open_licensing_enabled: bool = os.environ.get(
+        "SYNDICATE_OPEN_LICENSING_ENABLED", "true"
+    ) not in ("0", "false", "False")
     # User Groups (GROUP-001)
     # SSH Key Manager (INFRA-002)
     ssh_keys_table_name: str = os.environ.get("SSH_KEYS_TABLE_NAME", "ssh_keys")
