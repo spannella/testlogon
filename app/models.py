@@ -811,6 +811,21 @@ class ShoppingCartSummary(BaseModel):
     reminder_count: Optional[int] = 0
 
 
+class CartAbandonmentSweepIn(BaseModel):
+    # SHOP-003: Manual sweep trigger. `now` is injectable for deterministic E2E.
+    threshold_hours: Optional[conint(ge=0, le=8760)] = None
+    now: Optional[conint(ge=0)] = None
+    expire: bool = False
+    expire_hours: Optional[conint(ge=0, le=87600)] = None
+
+
+class CartAbandonmentSweepOut(BaseModel):
+    scanned: int
+    reminded: int
+    expired: int = 0
+    threshold_hours: int
+
+
 class ShoppingCartItemIn(BaseModel):
     sku: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=256)

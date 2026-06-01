@@ -732,23 +732,37 @@ def purchase_cart(
 # ─── SHOP-003: Cart Abandonment Detection & Reminders ──────────────────────────
 
 
-def scan_abandoned_carts(*, threshold_hours: int = 24) -> List[Dict[str, Any]]:
+def scan_abandoned_carts(*, threshold_hours: int = 24, now: Optional[int] = None) -> List[Dict[str, Any]]:
     """Find OPEN carts with no activity in the last threshold_hours.
 
     Uses ByStatusActivity GSI: status="OPEN" AND last_activity_at < cutoff.
     Filters out recently reminded carts and carts at max reminders.
+    Loops over LastEvaluatedKey so a busy table doesn't silently hide carts
+    beyond the first page (CLAUDE.md FilterExpression/pagination gotcha).
+
+    `now` is injectable for deterministic testing; defaults to the wall clock.
     """
-    cutoff = int(datetime.now(timezone.utc).timestamp()) - (threshold_hours * 3600)
-    now = int(datetime.now(timezone.utc).timestamp())
+    if now is None:
+        now = int(datetime.now(timezone.utc).timestamp())
+    cutoff = now - (threshold_hours * 3600)
     cooldown = S.cart_abandonment_reminder_cooldown_hours * 3600
     max_reminders = S.cart_abandonment_max_reminders
 
-    resp = T.shopping_cart.query(
-        IndexName="ByStatusActivity",
-        KeyConditionExpression=Key("status").eq("OPEN") & Key("last_activity_at").lt(cutoff),
-        Limit=200,
-    )
-    items = resp.get("Items", [])
+    items: List[Dict[str, Any]] = []
+    last_key: Optional[Dict[str, Any]] = None
+    while len(items) < 200:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByStatusActivity",
+            "KeyConditionExpression": Key("status").eq("OPEN") & Key("last_activity_at").lt(cutoff),
+            "Limit": 200,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = T.shopping_cart.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
 
     # Filter in-memory: skip recently reminded or maxed-out carts
     eligible: List[Dict[str, Any]] = []
@@ -764,16 +778,24 @@ def scan_abandoned_carts(*, threshold_hours: int = 24) -> List[Dict[str, Any]]:
     return eligible
 
 
-def send_cart_reminder(cart: Dict[str, Any]) -> None:
+def send_cart_reminder(cart: Dict[str, Any], *, now: Optional[int] = None) -> None:
     """Send an abandonment reminder for a single cart.
 
     Writes in-app alert, sends email, updates cart reminder tracking.
+    `now` is injectable for deterministic testing.
     """
     from app.services.alerts import write_alert, send_alert_email
 
     user_sub = cart["PK"].replace("USER#", "")
     cart_id = cart.get("cart_id", "")
-    ts = int(datetime.now(timezone.utc).timestamp())
+    ts = now if now is not None else int(datetime.now(timezone.utc).timestamp())
+
+    # Race guard: cart may have been purchased between scan and send (edge 8.3).
+    latest = T.shopping_cart.get_item(
+        Key={"PK": cart["PK"], "SK": cart["SK"]}
+    ).get("Item")
+    if not latest or latest.get("status") != "OPEN":
+        return
 
     # Count items in this cart
     prefix = f"CART#{cart_id}#ITEM#"
@@ -859,3 +881,51 @@ def get_abandonment_stats() -> Dict[str, Any]:
         "total_carts": total_carts,
         "abandonment_rate": round(abandonment_rate, 2),
     }
+
+
+def expire_abandoned_carts(*, expire_hours: Optional[int] = None, now: Optional[int] = None) -> List[str]:
+    """Auto-expire OPEN carts whose last_activity_at is older than expire_hours.
+
+    Transitions such carts to status="EXPIRED" (immediately, ahead of the DDB
+    TTL sweep). DDB TTL still acts as the final cleanup. Returns the list of
+    expired cart_ids. `now` is injectable for deterministic testing.
+    """
+    if expire_hours is None:
+        expire_hours = S.cart_abandonment_expire_hours
+    if expire_hours <= 0:
+        return []
+    if now is None:
+        now = int(datetime.now(timezone.utc).timestamp())
+    cutoff = now - (expire_hours * 3600)
+
+    expired: List[str] = []
+    last_key: Optional[Dict[str, Any]] = None
+    scanned = 0
+    while scanned < 500:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByStatusActivity",
+            "KeyConditionExpression": Key("status").eq("OPEN") & Key("last_activity_at").lt(cutoff),
+            "Limit": 200,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = T.shopping_cart.query(**kwargs)
+        page = resp.get("Items", [])
+        scanned += len(page)
+        for item in page:
+            try:
+                T.shopping_cart.update_item(
+                    Key={"PK": item["PK"], "SK": item["SK"]},
+                    UpdateExpression="SET #status = :expired, abandoned_at = if_not_exists(abandoned_at, :ts)",
+                    ConditionExpression="#status = :open",
+                    ExpressionAttributeNames={"#status": "status"},
+                    ExpressionAttributeValues={":expired": "EXPIRED", ":open": "OPEN", ":ts": now},
+                )
+                expired.append(str(item.get("cart_id", "")))
+            except ClientError:
+                pass  # Status changed (purchased/already expired) — skip
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
+    return expired

@@ -489,3 +489,97 @@ print('OK')
     expect(stats.total_open).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Section 5: Deterministic sweep (injectable now), buyer status, auto-expire
+// ═══════════════════════════════════════════════════════════════════════════════
+
+test.describe("SHOP-003 — Section 5: Deterministic sweep & expiry", () => {
+  let detCartId: string;
+
+  test.beforeAll(async ({ browser }) => {
+    alicePage = await newIdentityPage(browser, "alice");
+    rootPage = await newIdentityPage(browser, "root");
+
+    const createResp = await cartPost(alicePage, "alice", "/ui/shoppingcart/carts");
+    detCartId = (await createResp.json()).cart_id;
+    await cartPost(alicePage, "alice", `/ui/shoppingcart/carts/${detCartId}/items`, {
+      sku: `det_sku_${TS}`,
+      name: `Deterministic ${TS}`,
+      quantity: 1,
+      unit_price_cents: 700,
+    });
+  });
+
+  test.afterAll(async () => {
+    await alicePage?.close();
+    await rootPage?.close();
+  });
+
+  test("5.1 Sweep with injectable now reminds a backdated cart deterministically", async () => {
+    // Backdate activity to a fixed point and pin `now` 25h after it.
+    const baseTs = 1_700_000_000;
+    ddbUpdateCartTimestamp(ALICE_ID, detCartId, baseTs);
+    const pinnedNow = baseTs + 25 * 3600;
+
+    const session = adminSession("root");
+    const scanResp = await rootPage.request.post(
+      `${API}/ui/shoppingcart/admin/cart-abandonment/scan`,
+      {
+        headers: { "x-csrf-token": session.csrf_token },
+        data: { now: pinnedNow, threshold_hours: 24 },
+      },
+    );
+    expect(scanResp.status()).toBe(200);
+    const result = await scanResp.json();
+    expect(result.reminded).toBeGreaterThanOrEqual(1);
+
+    const raw = ddbGetCartRaw(ALICE_ID, detCartId);
+    expect(Number(raw.reminder_count ?? 0)).toBeGreaterThanOrEqual(1);
+    expect(Number(raw.last_reminder_at ?? 0)).toBe(pinnedNow);
+    expect(Number(raw.abandoned_at ?? 0)).toBe(pinnedNow);
+  });
+
+  test("5.2 Buyer-facing abandonment-status reflects reminder", async () => {
+    const resp = await cartGet(
+      alicePage,
+      `/ui/shoppingcart/carts/${detCartId}/abandonment-status`,
+    );
+    expect(resp.status()).toBe(200);
+    const status = await resp.json();
+    expect(status.cart_id).toBe(detCartId);
+    expect(status.is_abandoned).toBe(true);
+    expect(status.reminder_count).toBeGreaterThanOrEqual(1);
+  });
+
+  test("5.3 Auto-expire transitions a long-abandoned cart to EXPIRED", async () => {
+    // Create a fresh cart, backdate far beyond the expire window, sweep with expire.
+    const createResp = await cartPost(alicePage, "alice", "/ui/shoppingcart/carts");
+    const expireCartId = (await createResp.json()).cart_id;
+    await cartPost(alicePage, "alice", `/ui/shoppingcart/carts/${expireCartId}/items`, {
+      sku: `exp_sku_${TS}`,
+      name: `Expire ${TS}`,
+      quantity: 1,
+      unit_price_cents: 250,
+    });
+
+    const baseTs = 1_600_000_000; // very old
+    ddbUpdateCartTimestamp(ALICE_ID, expireCartId, baseTs);
+    const pinnedNow = baseTs + 1000 * 3600; // well past 720h expire window
+
+    const session = adminSession("root");
+    const scanResp = await rootPage.request.post(
+      `${API}/ui/shoppingcart/admin/cart-abandonment/scan`,
+      {
+        headers: { "x-csrf-token": session.csrf_token },
+        data: { now: pinnedNow, threshold_hours: 24, expire: true, expire_hours: 720 },
+      },
+    );
+    expect(scanResp.status()).toBe(200);
+    const result = await scanResp.json();
+    expect(result.expired).toBeGreaterThanOrEqual(1);
+
+    const raw = ddbGetCartRaw(ALICE_ID, expireCartId);
+    expect(raw.status).toBe("EXPIRED");
+  });
+});

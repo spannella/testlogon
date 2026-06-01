@@ -1817,6 +1817,31 @@ export interface CartSummary {
   reminder_count?: number;
 }
 
+// SHOP-003: Cart abandonment
+export interface CartAbandonmentStatus {
+  cart_id: string;
+  status: string;
+  last_activity_at: number;
+  abandoned_at: number;
+  reminder_count: number;
+  is_abandoned: boolean;
+}
+
+export interface CartAbandonmentStats {
+  total_open: number;
+  total_abandoned: number;
+  total_purchased: number;
+  total_carts: number;
+  abandonment_rate: number;
+}
+
+export interface CartAbandonmentSweepResult {
+  scanned: number;
+  reminded: number;
+  expired: number;
+  threshold_hours: number;
+}
+
 export interface CartItemIn {
   sku: string;
   name: string;

@@ -9,6 +9,8 @@ from app.auth.deps import AuthenticatedUser, get_authenticated_user
 from app.auth.policy import require_admin_or_root
 from app.core.settings import S
 from app.models import (
+    CartAbandonmentSweepIn,
+    CartAbandonmentSweepOut,
     CartPurchaseIn,
     CatalogCartItemIn,
     ShoppingCartItemIn,
@@ -28,7 +30,9 @@ from app.services.shoppingcart import (
     cart_total_cents,
     decrement_item,
     delete_cart,
+    expire_abandoned_carts,
     get_abandonment_stats,
+    get_cart,
     list_carts,
     list_items,
     purchase_cart,
@@ -206,19 +210,54 @@ async def ui_cart_abandonment_stats(user: AuthenticatedUser = Depends(require_ad
     return get_abandonment_stats()
 
 
-@router.post("/admin/cart-abandonment/scan")
-async def ui_cart_abandonment_scan(user: AuthenticatedUser = Depends(require_admin_or_root)):
-    """Dev/admin endpoint to trigger cart abandonment scan manually."""
-    threshold = S.cart_abandonment_threshold_hours
-    carts = scan_abandoned_carts(threshold_hours=threshold)
+@router.post("/admin/cart-abandonment/scan", response_model=CartAbandonmentSweepOut)
+async def ui_cart_abandonment_scan(
+    body: CartAbandonmentSweepIn | None = None,
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """Admin/root endpoint to run an abandonment sweep manually.
+
+    `now` is injectable so E2E can pin the clock and assert deterministically.
+    When `expire` is set, also auto-expires long-abandoned carts.
+    """
+    body = body or CartAbandonmentSweepIn()
+    threshold = body.threshold_hours if body.threshold_hours is not None else S.cart_abandonment_threshold_hours
+    now = body.now
+
+    carts = scan_abandoned_carts(threshold_hours=threshold, now=now)
     reminded = 0
     for cart in carts:
         try:
-            send_cart_reminder(cart)
+            send_cart_reminder(cart, now=now)
             reminded += 1
         except Exception:
             pass
-    return {"scanned": len(carts), "reminded": reminded, "threshold_hours": threshold}
+
+    expired_count = 0
+    if body.expire:
+        expired = expire_abandoned_carts(expire_hours=body.expire_hours, now=now)
+        expired_count = len(expired)
+
+    return CartAbandonmentSweepOut(
+        scanned=len(carts),
+        reminded=reminded,
+        expired=expired_count,
+        threshold_hours=threshold,
+    )
+
+
+@router.get("/carts/{cart_id}/abandonment-status")
+async def ui_cart_abandonment_status(cart_id: str, ctx=Depends(require_ui_session)):
+    """Buyer-facing abandonment status for one of their own carts."""
+    cart = get_cart(ctx["user_sub"], cart_id)
+    return {
+        "cart_id": cart_id,
+        "status": cart.get("status"),
+        "last_activity_at": int(cart.get("last_activity_at", 0) or 0),
+        "abandoned_at": int(cart.get("abandoned_at", 0) or 0),
+        "reminder_count": int(cart.get("reminder_count", 0) or 0),
+        "is_abandoned": int(cart.get("abandoned_at", 0) or 0) > 0,
+    }
 
 
 # ─── SHOP-003: Background Cart Abandonment Loop ───────────────────────────────
@@ -241,6 +280,11 @@ async def _cart_abandonment_loop() -> None:
                             "cart_reminder_failed",
                             extra={"cart_id": cart.get("cart_id")},
                         )
+                # Auto-expire long-abandoned carts (best-effort)
+                try:
+                    expire_abandoned_carts()
+                except Exception:
+                    logger.exception("Cart auto-expire failed")
             except Exception:
                 logger.exception("Cart abandonment check failed")
         await asyncio.sleep(S.cart_abandonment_scan_interval_sec)
