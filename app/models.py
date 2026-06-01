@@ -12219,3 +12219,39 @@ class KycWebhookEmitResult(BaseModel):
     alert_id: Optional[str] = None
     webhook_delivery_ids: List[str] = Field(default_factory=list)
     reason: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# SOCIAL-007: Snooze Following
+# ---------------------------------------------------------------------------
+
+class SnoozeFollowingIn(BaseModel):
+    """Request body for POST /ui/social/following/{user_id}/snooze."""
+    days: int = Field(..., ge=1, le=90, description="Number of days to snooze (1-90)")
+
+
+class SnoozeFollowingOut(BaseModel):
+    """Response for the snooze endpoint."""
+    ok: bool = True
+    snoozed_until: int
+
+
+class UnsnoozeFollowingOut(BaseModel):
+    """Response for the unsnooze endpoint."""
+    ok: bool = True
+
+
+class SnoozedFollowingOut(BaseModel):
+    """A single snoozed following in the list."""
+    following_sub: str
+    following_name: Optional[str] = None
+    following_avatar_url: Optional[str] = None
+    followed_at: int = 0
+    snoozed_until: int = 0
+    snooze_remaining_hours: Optional[int] = None
+
+
+class SnoozedFollowingListOut(BaseModel):
+    """Response for GET /ui/social/following/snoozed."""
+    snoozed: List[SnoozedFollowingOut] = Field(default_factory=list)
+    total: int = 0

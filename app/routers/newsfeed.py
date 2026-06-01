@@ -4459,6 +4459,16 @@ def view_feed(
         from app.services.blocking import get_blocked_set, get_blocked_by_set
         _feed_blocked_set = get_blocked_set(user_id) | get_blocked_by_set(user_id)
 
+        # SOCIAL-007: Load snoozed-following set once; exclude their posts from the
+        # main feed. Snooze auto-expires (snoozed_until <= now is not included).
+        _feed_snoozed_set: Set[str] = set()
+        if not author_filter:
+            try:
+                from app.services.social import get_snoozed_following_ids
+                _feed_snoozed_set = get_snoozed_following_ids(user_id)
+            except Exception:
+                logger.exception("failed to load snoozed following set for feed filter")
+
         while len(ordered) < limit:
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             if page_depth >= max_scanned_pages:
@@ -4572,6 +4582,9 @@ def view_feed(
                 post_id = str(post.get("post_id") or "")
                 # Filter out posts from blocked users
                 if author and author in _feed_blocked_set:
+                    continue
+                # SOCIAL-007: Filter out posts from snoozed followings
+                if author and author in _feed_snoozed_set:
                     continue
                 if author and author != user_id and not can_view_post(user_id, post):
                     continue
