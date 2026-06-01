@@ -10254,6 +10254,52 @@ class TaxDocumentListOut(BaseModel):
 class GenerateTaxDocumentIn(BaseModel):
     year: int
     regenerate: bool = False
+
+
+# ── Creator 1099 / Tax-Form Generation (FIN-008) ────────────────────────────
+# DISTINCT from consumer tax documents above: this is the platform-issuer side,
+# generating annual 1099-NEC earnings forms for CREATORS / payees.
+
+class TaxForm1099Out(BaseModel):
+    form_id: str = ""
+    user_sub: str = ""
+    tax_year: int = 0
+    total_earnings_cents: int = 0
+    qualifies: bool = False
+    status: str = "generated"
+    correction_count: int = 0
+    generated_at: int = 0
+    updated_at: int = 0
+    payer_name: str = ""
+    payer_tin_last4: str = ""
+    download_url: Optional[str] = None
+
+
+class TaxForm1099ListOut(BaseModel):
+    items: List[TaxForm1099Out] = Field(default_factory=list)
+
+
+class GenerateTaxForm1099In(BaseModel):
+    tax_year: int = Field(ge=2020, le=2100)
+
+
+class TaxForm1099DownloadOut(BaseModel):
+    download_url: str
+
+
+class BatchGenerateTaxForm1099In(BaseModel):
+    tax_year: int = Field(ge=2020, le=2100)
+
+
+class BatchGenerateTaxForm1099Out(BaseModel):
+    tax_year: int
+    total_creators: int = 0
+    qualifying: int = 0
+    generated: int = 0
+    skipped: int = 0
+    errors: int = 0
+
+
 # ── Admin Ad Platform Management (ADS-018) ──────────────────────────────────
 
 class AdminAdAccountOut(BaseModel):

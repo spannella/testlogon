@@ -2156,6 +2156,21 @@ class Settings:
     tax_documents_min_earnings_cents: int = int(
         os.environ.get("TAX_DOCUMENTS_MIN_EARNINGS_CENTS", "0")
     )
+    # FIN-008: Creator 1099 / Tax-Form generation (platform-issuer 1099-NEC forms
+    # for creators/payees). DISTINCT from consumer tax documents above.
+    tax_forms_1099_table_name: str = os.environ.get(
+        "TAX_FORMS_1099_TABLE_NAME", "tax_forms_1099"
+    )
+    tax_form_1099_enabled: bool = os.environ.get(
+        "TAX_FORM_1099_ENABLED", "true"
+    ).lower() not in (
+        "0",
+        "false",
+    )
+    # IRS reportable threshold: 1099-NEC issued at $600.00 (60000 cents).
+    tax_form_1099_min_reportable_cents: int = int(
+        os.environ.get("TAX_FORM_1099_MIN_REPORTABLE_CENTS", "60000")
+    )
     # FIN-014: Payment Provider Health monitoring. Records per-provider
     # success/failure/latency of payment operations, computes health status,
     # error rates, and a recent-incident timeline.

@@ -2087,6 +2087,20 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # FIN-008: Creator 1099 / Tax-Form generation (platform-issuer 1099-NEC).
+        # Form records: pk=USER#{user_sub} sk=FORM#{tax_year}
+        # Batch locks:  pk=BATCH#{tax_year} sk=LOCK
+        # GSI ByTaxYear: GSI1PK=YEAR#{tax_year} GSI1SK=created_at(N) — list all
+        # forms issued for a tax year (admin).
+        TableDef(
+            _resolve_table_name(S.tax_forms_1099_table_name, "tax_forms_1099"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByTaxYear", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
         # Background Job Dashboard (PLATFORM-008): run history.
         # pk=job_name sk=RUN#{started_at}#{uuid}
         # GSI ByStartedAt: GSI_PK="JOBRUN" started_at(N) for cross-job recents.
