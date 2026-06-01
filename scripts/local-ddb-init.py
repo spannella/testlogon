@@ -1565,6 +1565,16 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # Syndicate Page & Newsfeed (SYND-005)
+        TableDef(
+            _resolve_table_name(S.syndicate_posts_table_name, "syndicate_posts"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSSYND", "partition_key": "GSSYND_PK", "sort_key": "GSSYND_SK"},
+            ],
+            attr_types={"GSSYND_SK": "N"},
+        ),
         # Issued Licenses (LICENSE-002) + License Requests (LICENSE-004)
         TableDef(
             _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),

@@ -1816,6 +1816,13 @@ class Settings:
     syndicate_treasury_enabled: bool = os.environ.get(
         "SYNDICATE_TREASURY_ENABLED", "true"
     ) not in ("0", "false", "False")
+    # Syndicate Page & Newsfeed (SYND-005)
+    syndicate_posts_table_name: str = os.environ.get(
+        "SYNDICATE_POSTS_TABLE_NAME", "syndicate_posts"
+    )
+    syndicate_feed_enabled: bool = os.environ.get(
+        "SYNDICATE_FEED_ENABLED", "true"
+    ) not in ("0", "false", "False")
     # User Groups (GROUP-001)
     # SSH Key Manager (INFRA-002)
     ssh_keys_table_name: str = os.environ.get("SSH_KEYS_TABLE_NAME", "ssh_keys")
