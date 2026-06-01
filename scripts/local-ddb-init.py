@@ -276,6 +276,12 @@ def _table_defs() -> List[TableDef]:
             "packet_id",
         ),
         TableDef(
+            _resolve_table_name(S.signature_templates_table_name, "signature_templates"),
+            "template_key",
+            "version",
+            attr_types={"version": "N"},
+        ),
+        TableDef(
             _resolve_table_name(S.api_usage_table_name, "api_usage_events"),
             "PK",
             "SK",

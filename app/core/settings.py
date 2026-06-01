@@ -860,6 +860,14 @@ class Settings:
         "By signing this document, you agree your signature is legally binding.",
     )
     signature_packet_reminder_schedule_hours: str = os.environ.get("SIGNATURE_PACKET_REMINDER_SCHEDULE_HOURS", "24,72,168")
+    signature_templates_table_name: str = os.environ.get(
+        "SIGNATURE_TEMPLATES_TABLE_NAME",
+        "signature_templates",
+    )
+    signature_template_versioning_enabled: bool = os.environ.get(
+        "SIGNATURE_TEMPLATE_VERSIONING_ENABLED",
+        "true",
+    ).lower() not in ("0", "false", "no", "off")
     filemgr_bucket: str = os.environ.get("FILEMGR_BUCKET", "")
     filemgr_retention_days: int = int(os.environ.get("FILEMGR_RETENTION_DAYS", "30"))
     filemgr_purge_scan_limit: int = int(os.environ.get("FILEMGR_PURGE_SCAN_LIMIT", "200"))

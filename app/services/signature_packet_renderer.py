@@ -37,6 +37,26 @@ class SignaturePacketRenderError(Exception):
 RenderFn = Callable[[bytes, List[Dict[str, Any]]], bytes]
 
 
+def _render_payload_for_overlay(field: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the overlay render payload for a filled field.
+
+    For ``notary_stamp`` fields we draw an explicit stamp block (image ref, number,
+    expiry) so the flattened PDF marker records the official certification. Other
+    field types pass through their stored render_payload unchanged.
+    """
+    payload = dict(field.get("render_payload") or {})
+    if str(field.get("field_type") or "") == "notary_stamp":
+        return {
+            "kind": "notary_stamp",
+            "stamp_image_ref": str(payload.get("stamp_image_ref") or ""),
+            "stamp_number": str(payload.get("stamp_number") or ""),
+            "stamp_expiry": str(payload.get("stamp_expiry") or ""),
+            "stamped_at": int(payload.get("stamped_at") or 0),
+            "draw": "stamp_box",
+        }
+    return payload
+
+
 def render_signature_packet_pdf_overlay(source_pdf_bytes: bytes, fields: List[Dict[str, Any]]) -> bytes:
     if not source_pdf_bytes.startswith(b"%PDF"):
         raise SignaturePacketRenderError("source_not_pdf", retryable=False)
@@ -48,7 +68,7 @@ def render_signature_packet_pdf_overlay(source_pdf_bytes: bytes, fields: List[Di
             "field_type": str(field.get("field_type") or ""),
             "value": str(field.get("value") or ""),
             "capture_mode": str(field.get("capture_mode") or ""),
-            "render_payload": field.get("render_payload") or {},
+            "render_payload": _render_payload_for_overlay(field),
             "filled_at": str(field.get("filled_at") or ""),
         }
         for field in fields

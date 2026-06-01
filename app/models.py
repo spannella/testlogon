@@ -11449,3 +11449,90 @@ class SyndicateFeedOut(BaseModel):
     posts: List[SyndicatePostOut] = Field(default_factory=list)
     next_cursor: Optional[str] = None
     is_member: bool = False
+
+
+# ---------------------------------------------------------------------------
+# KYC-007: Enhanced Document Signing — versioned templates + notary stamp
+# ---------------------------------------------------------------------------
+
+
+class SignatureTemplateFieldModel(BaseModel):
+    """A field definition within a versioned signature template."""
+
+    id: str = Field(..., min_length=1, max_length=64)
+    type: Literal["text", "signature", "initials", "date", "notary_stamp"] = Field(...)
+    label: str = Field(default="", max_length=200)
+    required: bool = Field(default=True)
+
+
+class SignatureTemplateVersionOut(BaseModel):
+    """A single version of a signature template."""
+
+    template_key: str
+    version: int
+    display_name: str
+    description: str = ""
+    fields: List[SignatureTemplateFieldModel] = Field(default_factory=list)
+    created_at: int = 0
+    created_by: str = ""
+    is_active: bool = True
+
+
+class SignatureTemplateListOut(BaseModel):
+    """Latest-version summary for every signature template key."""
+
+    templates: List[SignatureTemplateVersionOut] = Field(default_factory=list)
+
+
+class SignatureTemplateVersionsOut(BaseModel):
+    """All versions of a single signature template, newest first."""
+
+    template_key: str
+    versions: List[SignatureTemplateVersionOut] = Field(default_factory=list)
+
+
+class CreateSignatureTemplateVersionIn(BaseModel):
+    """Request body to create the next version of a signature template."""
+
+    template_key: str = Field(..., min_length=1, max_length=128)
+    display_name: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    fields: List[SignatureTemplateFieldModel] = Field(..., min_length=1)
+
+
+class SignatureTemplateMigrationOut(BaseModel):
+    """A template pin that has a newer version available (needs re-signing)."""
+
+    template_key: str
+    display_name: str
+    pinned_version: int
+    latest_version: int
+    needs_resigning: bool = True
+
+
+class SignatureTemplateMigrationCheckIn(BaseModel):
+    """Request body listing the template versions a set of packets pinned."""
+
+    pins: List["SignatureTemplatePin"] = Field(default_factory=list)
+
+
+class SignatureTemplatePin(BaseModel):
+    template_key: str = Field(..., min_length=1, max_length=128)
+    version: int = Field(..., ge=1)
+
+
+class SignatureTemplateMigrationListOut(BaseModel):
+    migrations: List[SignatureTemplateMigrationOut] = Field(default_factory=list)
+
+
+class NotaryStampFieldValue(BaseModel):
+    """Value stored in a notary_stamp signature field."""
+
+    stamp_image_ref: str = Field(..., min_length=1, max_length=512)
+    stamp_number: str = Field(..., min_length=1, max_length=128)
+    stamp_expiry: str = Field(..., min_length=1, max_length=10, description="YYYY-MM-DD")
+    stamped_at: int = Field(default=0)
+    stamped_by: str = Field(default="")
+
+
+SignatureTemplateMigrationCheckIn.model_rebuild()

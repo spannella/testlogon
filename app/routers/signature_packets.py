@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Literal, Optional
 
-from datetime import date
+from datetime import date, datetime, timezone
 import base64
+import json
+import time
 
 from uuid import uuid4
 
@@ -148,10 +150,17 @@ class SignaturePacketLegalNoticeAckOut(BaseModel):
     notice_version: str
 
 
+class NotaryStampFieldIn(BaseModel):
+    stamp_image_ref: str = Field(..., min_length=1, max_length=512)
+    stamp_number: str = Field(..., min_length=1, max_length=128)
+    stamp_expiry: str = Field(..., min_length=1, max_length=10, description="YYYY-MM-DD")
+
+
 class SignaturePacketFieldFillIn(BaseModel):
     value: Optional[str] = None
     input_mode: Optional[Literal["typed", "drawn"]] = None
     drawn_strokes: Optional[list[list[float]]] = None
+    notary_stamp: Optional[NotaryStampFieldIn] = None
 
 
 class SignaturePacketFieldFillOut(BaseModel):
@@ -584,7 +593,63 @@ def _normalize_field_value(field_type: str, inp: SignaturePacketFieldFillIn) -> 
         if len(raw) > 500:
             raise HTTPException(status_code=400, detail={"code": "text_value_too_long", "max_length": 500})
         return {"value": raw}
+    if field_type == SignatureFieldType.NOTARY_STAMP.value:
+        return _normalize_notary_stamp_value(inp)
     raise HTTPException(status_code=400, detail={"code": "unsupported_field_type"})
+
+
+def _normalize_notary_stamp_value(inp: SignaturePacketFieldFillIn) -> Dict[str, Any]:
+    """Validate and normalize a notary_stamp field value.
+
+    The stamp payload is supplied either via the structured ``notary_stamp`` body
+    field or, for convenience/E2E determinism, as a JSON object encoded in ``value``.
+    Stores stamp_image_ref, stamp_number, stamp_expiry (YYYY-MM-DD) and stamped_at.
+    """
+    payload = getattr(inp, "notary_stamp", None)
+    data: Dict[str, Any]
+    if payload is not None:
+        data = payload.model_dump() if hasattr(payload, "model_dump") else dict(payload)
+    else:
+        raw = (inp.value or "").strip()
+        if not raw:
+            raise HTTPException(status_code=400, detail={"code": "empty_notary_stamp_value"})
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail={"code": "invalid_notary_stamp_value"}) from exc
+        if not isinstance(parsed, dict):
+            raise HTTPException(status_code=400, detail={"code": "invalid_notary_stamp_value"})
+        data = parsed
+
+    stamp_image_ref = str(data.get("stamp_image_ref") or "").strip()
+    stamp_number = str(data.get("stamp_number") or "").strip()
+    stamp_expiry = str(data.get("stamp_expiry") or "").strip()
+    if not stamp_image_ref or not stamp_number or not stamp_expiry:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "notary_stamp_missing_fields", "required": ["stamp_image_ref", "stamp_number", "stamp_expiry"]},
+        )
+    try:
+        expiry_date = date.fromisoformat(stamp_expiry)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "invalid_notary_stamp_expiry", "expected": "YYYY-MM-DD"}) from exc
+    # Reject expired notary commissions (error matrix #14).
+    if expiry_date < datetime.now(timezone.utc).date():
+        raise HTTPException(status_code=400, detail={"code": "notary_stamp_expired"})
+
+    stamped_at = int(time.time())
+    render_payload = {
+        "kind": "notary_stamp",
+        "stamp_image_ref": stamp_image_ref,
+        "stamp_number": stamp_number,
+        "stamp_expiry": stamp_expiry,
+        "stamped_at": stamped_at,
+    }
+    return {
+        "value": f"notary:{stamp_number}",
+        "capture_mode": "notary_stamp",
+        "render_payload": render_payload,
+    }
 
 
 @router.post("/{packet_id}/fields/{field_id}/fill", response_model=SignaturePacketFieldFillOut)

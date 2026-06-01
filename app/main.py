@@ -50,6 +50,7 @@ from app.routers.profile import router as profile_router
 from app.routers.messaging import router as messaging_router
 from app.routers.filemanager import router as filemanager_router
 from app.routers.signature_packets import router as signature_packets_router
+from app.routers.signature_templates import router as signature_templates_router
 from app.routers.addresses import router as addresses_router
 from app.routers.calendar import public_router as calendar_public_router
 from app.routers.calendar import public_event_router as calendar_public_event_router
@@ -428,6 +429,7 @@ def create_app() -> FastAPI:
     app.include_router(messaging_router)
     app.include_router(filemanager_router)
     app.include_router(signature_packets_router)
+    app.include_router(signature_templates_router)
     app.include_router(addresses_router)
     app.include_router(calendar_router)
     app.include_router(calendar_integration_router)
