@@ -1166,6 +1166,30 @@ class Settings:
         os.environ.get("KYC_RESIDENCY_RECENCY_DAYS", "90")
     )
 
+    # KYC-006: Sanctions / PEP Screening
+    kyc_screening_results_table_name: str = os.environ.get(
+        "KYC_SCREENING_RESULTS_TABLE_NAME", "kyc_screening_results"
+    )
+    kyc_screening_status_index_name: str = os.environ.get(
+        "KYC_SCREENING_STATUS_INDEX_NAME", "ByStatus"
+    )
+    kyc_screening_user_index_name: str = os.environ.get(
+        "KYC_SCREENING_USER_INDEX_NAME", "ByUserSub"
+    )
+    kyc_screening_enabled: bool = os.environ.get(
+        "KYC_SCREENING_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    # When False (default) a deterministic mock watchlist provider is used; when
+    # True a "real" screening provider would be invoked (not wired in dev / E2E).
+    kyc_screening_real_provider_enabled: bool = os.environ.get(
+        "KYC_SCREENING_REAL_PROVIDER_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_screening_provider: str = os.environ.get("KYC_SCREENING_PROVIDER", "mock_screening")
+    # Minimum normalized-name similarity (0.0-1.0) required to register a match.
+    kyc_screening_match_threshold: float = float(
+        os.environ.get("KYC_SCREENING_MATCH_THRESHOLD", "0.85")
+    )
+
     # KYC-003: Liveness Video Verification Call
     kyc_liveness_calls_table_name: str = os.environ.get(
         "KYC_LIVENESS_CALLS_TABLE_NAME", "kyc_liveness_calls"

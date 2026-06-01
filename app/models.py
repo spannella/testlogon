@@ -11044,3 +11044,101 @@ class SyndicateTreasuryContributorOut(BaseModel):
     net_contributed_cents: int = 0
     contribution_count: int = 0
     last_contribution_at: int = 0
+
+
+
+# ---------------------------------------------------------------------------
+# KYC-006: Sanctions / PEP Screening models
+# ---------------------------------------------------------------------------
+
+KycScreenType = Literal[
+    "sanctions_ofac", "sanctions_eu", "sanctions_un", "pep_check", "adverse_media"
+]
+KycScreeningResultStatus = Literal["clear", "potential_match", "confirmed_match"]
+KycScreeningDecision = Literal["clear", "confirm", "escalate"]
+KycScreeningTrigger = Literal[
+    "submission", "profile_change", "continuous_monitoring", "manual"
+]
+
+
+class KycScreeningMatchDetail(BaseModel):
+    """A single match from a sanctions / PEP watchlist."""
+
+    list_name: str
+    matched_name: str
+    matched_dob: Optional[str] = None
+    match_score: float = Field(ge=0.0, le=1.0)
+    entity_id: str
+    entity_type: Literal["individual", "entity", "vessel", "aircraft"] = "individual"
+    listed_since: Optional[str] = None
+    source_url: Optional[str] = None
+
+
+class KycScreeningResultOut(BaseModel):
+    """A single screening result for one screen type."""
+
+    screening_id: str
+    case_id: Optional[str] = None
+    screen_key: Optional[str] = None
+    screen_type: KycScreenType
+    user_sub: Optional[str] = None
+    result: KycScreeningResultStatus
+    match_details: List[KycScreeningMatchDetail] = Field(default_factory=list)
+    reviewed_by: Optional[str] = None
+    review_decision: Optional[KycScreeningDecision] = None
+    review_note: Optional[str] = None
+    reviewed_at: Optional[int] = None
+    trigger: KycScreeningTrigger = "submission"
+    provider: str = "mock_screening"
+    created_at: int = 0
+
+
+class KycScreeningResultsListResponse(BaseModel):
+    """All screening results for a case."""
+
+    results: List[KycScreeningResultOut] = Field(default_factory=list)
+
+
+class KycScreeningPendingReviewsResponse(BaseModel):
+    """Screening results that need reviewer adjudication."""
+
+    items: List[KycScreeningResultOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+
+
+class KycScreeningUserHistoryResponse(BaseModel):
+    """Screening history for a user across all cases."""
+
+    user_sub: str
+    results: List[KycScreeningResultOut] = Field(default_factory=list)
+    total: int = 0
+
+
+class KycScreeningRunRequest(BaseModel):
+    """Trigger a screening run for a user / case (admin / reviewer)."""
+
+    user_sub: str = Field(min_length=1, max_length=320)
+    case_id: Optional[str] = None
+    # Optional injectable identity inputs for deterministic screening.
+    name: Optional[str] = Field(default=None, max_length=200)
+    dob: Optional[str] = Field(default=None, max_length=32)
+    country: Optional[str] = Field(default=None, max_length=64)
+
+
+class KycScreeningRescreenResponse(BaseModel):
+    """Response from triggering a (re-)screen run."""
+
+    ok: bool = True
+    case_id: str
+    user_sub: str
+    results_count: int = 0
+    trigger: KycScreeningTrigger = "manual"
+    matches_found: int = 0
+    results: List[KycScreeningResultOut] = Field(default_factory=list)
+
+
+class KycScreeningReviewRequest(BaseModel):
+    """Reviewer adjudication of a screening match."""
+
+    decision: KycScreeningDecision
+    note: str = Field(min_length=1, max_length=2000)
