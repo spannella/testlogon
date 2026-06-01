@@ -7918,6 +7918,68 @@ export interface KycResidencyReviewRequest {
   note?: string | null;
 }
 
+// KYC-003: Liveness Video Verification Call
+export type KycLivenessCallStatus =
+  | "scheduled"
+  | "in_progress"
+  | "passed"
+  | "failed"
+  | "cancelled"
+  | "expired";
+
+export interface KycLivenessCallScheduleRequest {
+  case_id: string;
+  scheduled_at: number;
+  duration_minutes?: number;
+  verifier_sub?: string | null;
+  note?: string | null;
+}
+
+export interface KycLivenessCallResultRequest {
+  result: "passed" | "failed";
+  notes: string;
+  recording_linked?: boolean;
+}
+
+export interface KycLivenessCallOut {
+  call_id: string;
+  case_id: string;
+  user_sub?: string | null;
+  status: KycLivenessCallStatus;
+  scheduled_at: number;
+  duration_minutes: number;
+  note?: string | null;
+  verifier_sub?: string | null;
+  result?: "passed" | "failed" | null;
+  result_notes?: string | null;
+  result_set_at?: number | null;
+  recording_ref?: string | null;
+  started_at?: number | null;
+  join_url?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface KycLivenessCallStatusOut {
+  call_id: string;
+  case_id: string;
+  status: KycLivenessCallStatus;
+  scheduled_at: number;
+  duration_minutes: number;
+  result?: "passed" | "failed" | null;
+  join_url?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface KycLivenessCallListResponse {
+  calls: KycLivenessCallOut[];
+}
+
+export interface KycLivenessCallStatusResponse {
+  verification_call?: KycLivenessCallStatusOut | null;
+}
+
 // FIN-001: Invoice / Receipt PDF
 export interface InvoiceLineItem {
   description: string;

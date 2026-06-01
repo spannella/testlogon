@@ -8816,6 +8816,79 @@ class KycResidencyReviewRequest(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
 
 
+# KYC-003: Liveness Video Verification Call models
+# ---------------------------------------------------------------------------
+
+KycLivenessCallStatus = Literal[
+    "scheduled", "in_progress", "passed", "failed", "cancelled", "expired"
+]
+
+
+class KycLivenessCallScheduleRequest(BaseModel):
+    """Owner request to schedule a liveness video verification call for a case."""
+
+    case_id: str = Field(min_length=1, max_length=128)
+    scheduled_at: int = Field(..., description="Unix timestamp of the call start")
+    duration_minutes: int = Field(default=15, ge=5, le=60)
+    verifier_sub: Optional[str] = Field(default=None, max_length=256)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class KycLivenessCallResultRequest(BaseModel):
+    """Verifier request to record the pass/fail outcome of a conducted call."""
+
+    result: Literal["passed", "failed"]
+    notes: str = Field(min_length=1, max_length=2000)
+    recording_linked: bool = True
+
+
+class KycLivenessCallOut(BaseModel):
+    """Full verifier/admin view of a KYC liveness verification call."""
+
+    call_id: str
+    case_id: str
+    user_sub: Optional[str] = None
+    status: KycLivenessCallStatus
+    scheduled_at: int = 0
+    duration_minutes: int = 0
+    note: Optional[str] = None
+    verifier_sub: Optional[str] = None
+    result: Optional[Literal["passed", "failed"]] = None
+    result_notes: Optional[str] = None
+    result_set_at: Optional[int] = None
+    recording_ref: Optional[str] = None
+    started_at: Optional[int] = None
+    join_url: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class KycLivenessCallStatusOut(BaseModel):
+    """Owner-facing view of a KYC liveness verification call (no verifier identity)."""
+
+    call_id: str
+    case_id: str
+    status: KycLivenessCallStatus
+    scheduled_at: int = 0
+    duration_minutes: int = 0
+    result: Optional[Literal["passed", "failed"]] = None
+    join_url: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class KycLivenessCallListResponse(BaseModel):
+    """List of KYC liveness verification calls."""
+
+    calls: List[KycLivenessCallOut] = Field(default_factory=list)
+
+
+class KycLivenessCallStatusResponse(BaseModel):
+    """Owner verification-call status wrapper (call may be null)."""
+
+    verification_call: Optional[KycLivenessCallStatusOut] = None
+
+
 # FIN-001: Invoice / Receipt PDF models
 # ---------------------------------------------------------------------------
 

@@ -1161,6 +1161,33 @@ class Settings:
         os.environ.get("KYC_RESIDENCY_RECENCY_DAYS", "90")
     )
 
+    # KYC-003: Liveness Video Verification Call
+    kyc_liveness_calls_table_name: str = os.environ.get(
+        "KYC_LIVENESS_CALLS_TABLE_NAME", "kyc_liveness_calls"
+    )
+    kyc_liveness_call_status_index_name: str = os.environ.get(
+        "KYC_LIVENESS_CALL_STATUS_INDEX_NAME", "ByStatus"
+    )
+    kyc_liveness_call_bucket: str = os.environ.get("KYC_LIVENESS_CALL_BUCKET", "local-uploads")
+    kyc_liveness_call_s3_prefix: str = os.environ.get(
+        "KYC_LIVENESS_CALL_S3_PREFIX", "kyc-liveness-calls/"
+    )
+    kyc_liveness_call_enabled: bool = os.environ.get(
+        "KYC_LIVENESS_CALL_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    # Minimum lead time (seconds) between "now" and the scheduled call start.
+    kyc_liveness_call_min_lead_seconds: int = int(
+        os.environ.get("KYC_LIVENESS_CALL_MIN_LEAD_SECONDS", "0")
+    )
+    # Window (seconds) before scheduled_at within which the join link is active.
+    kyc_liveness_call_join_window_seconds: int = int(
+        os.environ.get("KYC_LIVENESS_CALL_JOIN_WINDOW_SECONDS", "300")
+    )
+    # Calls not started before scheduled_at + this many seconds are expirable.
+    kyc_liveness_call_expiry_seconds: int = int(
+        os.environ.get("KYC_LIVENESS_CALL_EXPIRY_SECONDS", "86400")
+    )
+
     # Video metadata (VOD-001)
     video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")
     vod_entitlements_table_name: str = os.environ.get("DDB_VOD_ENTITLEMENTS", "VodEntitlements")

@@ -132,6 +132,17 @@ def _table_defs() -> List[TableDef]:
             attr_types={"created_at": "N"},
         ),
         TableDef(
+            _resolve_table_name(S.kyc_liveness_calls_table_name, "kyc_liveness_calls"),
+            "call_id",
+            gsi=[
+                {"index_name": S.kyc_liveness_call_status_index_name, "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByCase", "partition_key": "case_id", "sort_key": "created_at"},
+                {"index_name": "ByOwner", "partition_key": "user_sub", "sort_key": "created_at"},
+                {"index_name": "ByVerifier", "partition_key": "verifier_sub", "sort_key": "scheduled_at"},
+            ],
+            attr_types={"created_at": "N", "scheduled_at": "N"},
+        ),
+        TableDef(
             _resolve_table_name(S.kyc_proof_of_funds_table_name, "kyc_proof_of_funds"),
             "user_sub",
             "submission_id",

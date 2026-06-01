@@ -60,6 +60,9 @@ class KycCaseOut(BaseModel):
     signature: KycCaseSignatureRef = Field(default_factory=KycCaseSignatureRef)
     submission: dict[str, Any] = Field(default_factory=dict)
     review: KycCaseReviewRef = Field(default_factory=KycCaseReviewRef)
+    # KYC-003: liveness video verification call outcome (mirrored onto the case
+    # by app/services/kyc_liveness_call.py when a verifier records the result).
+    verification_call: dict[str, Any] | None = None
     created_at: int
     updated_at: int
     version: int
