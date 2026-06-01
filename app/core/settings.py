@@ -1405,6 +1405,9 @@ class Settings:
     ad_campaigns_table_name: str = os.environ.get("DDB_AD_CAMPAIGNS", "AdCampaigns")
     ad_creatives_table_name: str = os.environ.get("DDB_AD_CREATIVES", "AdCreatives")
     ad_targeting_table_name: str = os.environ.get("DDB_AD_TARGETING", "AdTargeting")  # ADS-003
+    # Content-Provider Ad Controls (ADS-010) — per-content ad overrides
+    content_ad_controls_table_name: str = os.environ.get("DDB_CONTENT_AD_CONTROLS", "ContentAdControls")
+    content_ad_controls_enabled: bool = os.environ.get("CONTENT_AD_CONTROLS_ENABLED", "1") not in ("0", "false", "False")
     # Admin Ad Platform Management (ADS-018) — moderation audit log
     ad_moderation_log_table_name: str = os.environ.get("DDB_AD_MODERATION_LOG", "AdModerationLog")
     admin_ad_platform_enabled: bool = os.environ.get("ADMIN_AD_PLATFORM_ENABLED", "1") not in ("0", "false", "False")

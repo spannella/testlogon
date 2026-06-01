@@ -203,12 +203,23 @@ def get_ad_config(video_id: str, viewer_user_id: str) -> Dict[str, Any]:
 
     slots = calculate_ad_slots(duration, ad_config)
 
-    return {
+    result = {
         "ads_enabled": True,
         "slots": slots,
         "ad_free": False,
         "skip_after_seconds": ad_config.get("skip_after_seconds", 5),
     }
+
+    # ADS-010: per-content ad-control override takes precedence over the
+    # video's own ad_config. Backward-compatible: no override → unchanged.
+    try:
+        from app.services.content_ad_controls import apply_content_override_to_config
+
+        result = apply_content_override_to_config(video_id, result)
+    except Exception:  # pragma: no cover - best-effort, never break playback
+        logger.warning("content_ad_override_failed", extra={"video_id": video_id})
+
+    return result
 
 
 # ─── Ad Impression Tracking ─────────────────────────────────────────────────

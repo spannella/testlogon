@@ -223,6 +223,7 @@ from app.routers.chat_bot import router as chat_bot_router
 from app.routers.bot_template import router as bot_template_router
 from app.services.bot_scheduler import start_bot_scheduler_task
 from app.routers.ads_targeting import router as ads_targeting_router
+from app.routers.content_ad_controls import content_ad_controls_router
 from app.routers.syndicates import router as syndicates_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ec2_launcher import router as ec2_launcher_router
@@ -626,6 +627,7 @@ def create_app() -> FastAPI:
     app.include_router(bot_template_router, prefix="/ui")
     app.add_event_handler("startup", start_bot_scheduler_task)
     app.include_router(ads_targeting_router)
+    app.include_router(content_ad_controls_router)
     app.include_router(syndicates_router)
     app.include_router(ads_router)
     app.include_router(ads_admin_router)
@@ -655,7 +657,6 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_recording_cleanup_task)
     app.include_router(ads_router)
     app.include_router(ads_admin_router)
-    app.include_router(ads_targeting_router)
     app.include_router(ad_fraud_router)
     from app.routers.ad_dayparting import ad_dayparting_router
     app.include_router(ad_dayparting_router)
