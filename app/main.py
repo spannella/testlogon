@@ -99,6 +99,7 @@ from app.routers.risk_scoring import user_router as risk_scoring_user_router, ad
 from app.routers.kyc_tiers import router as kyc_tiers_router
 from app.routers.kyc_documents import kyc_documents_router
 from app.routers.kyc_residency import kyc_residency_router
+from app.routers.kyc_liveness_call import kyc_liveness_call_router
 from app.routers.kyc_proof_of_funds import kyc_proof_of_funds_router
 from app.routers.playback_entitlements import router as playback_entitlements_router
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
@@ -514,6 +515,7 @@ def create_app() -> FastAPI:
     app.include_router(kyc_tiers_router)
     app.include_router(kyc_documents_router)
     app.include_router(kyc_residency_router)
+    app.include_router(kyc_liveness_call_router)
     app.include_router(kyc_proof_of_funds_router)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
