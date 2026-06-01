@@ -9,6 +9,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.settings import S
 from app.models import (
+    CollabContentAssignIn,
+    CollabContentItem,
+    CollabContentListOut,
+    CollabContentSplitTriggerIn,
+    CollabDisputeIn,
+    CollabDisputeListOut,
+    CollabDisputeOut,
+    CollabDisputeResolveIn,
+    CollabSplitHistoryOut,
+    CollabSplitRecord,
     CollaborationCreateIn,
     CollaborationCounterIn,
     CollaborationListOut,
@@ -35,6 +45,7 @@ from app.services.collaborations import (
     update_collab_settings,
 )
 from app.services.collaboration_splits import write_collaboration_split_ledger
+from app.services import collaboration_revenue as cr
 from app.services.sessions import require_ui_session
 
 logger = logging.getLogger(__name__)
@@ -300,3 +311,223 @@ def split_revenue(collab_id: str, body: CollaborationSplitIn, ctx: Dict = Depend
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"ok": True, "splits": {k: int(v) for k, v in results.items()}}
+
+
+# ---------------------------------------------------------------------------
+# Collaboration Revenue Splitting (FIN-011)
+# ---------------------------------------------------------------------------
+
+def _content_item_out(item: Dict[str, Any]) -> CollabContentItem:
+    return CollabContentItem(
+        content_id=item.get("content_id", ""),
+        content_type=item.get("content_type", ""),
+        title=item.get("title", ""),
+        assigned_by=item.get("assigned_by", ""),
+        assigned_at=item.get("assigned_at", 0),
+        total_revenue_cents=item.get("total_revenue_cents", 0),
+        split_count=item.get("split_count", 0),
+    )
+
+
+def _split_record_out(item: Dict[str, Any]) -> CollabSplitRecord:
+    return CollabSplitRecord(
+        split_id=item.get("split_id", ""),
+        content_id=item.get("content_id", ""),
+        content_type=item.get("content_type", ""),
+        gross_amount_cents=item.get("gross_amount_cents", 0),
+        source=item.get("source", ""),
+        distributions=item.get("distributions", []) or [],
+        created_at=item.get("created_at", 0),
+        dispute_status=item.get("dispute_status"),
+    )
+
+
+def _dispute_out(item: Dict[str, Any]) -> CollabDisputeOut:
+    proposed = item.get("proposed_split")
+    return CollabDisputeOut(
+        dispute_id=item.get("dispute_id", ""),
+        split_id=item.get("split_id", ""),
+        collaboration_id=item.get("collaboration_id", ""),
+        filed_by=item.get("filed_by", ""),
+        reason=item.get("reason", ""),
+        proposed_split={k: int(v) for k, v in proposed.items()} if proposed else None,
+        status=item.get("status", ""),
+        resolution=item.get("resolution", "") or "",
+        resolved_by=item.get("resolved_by", "") or "",
+        resolved_at=item.get("resolved_at", 0),
+        created_at=item.get("created_at", 0),
+    )
+
+
+def _is_admin(ctx: Dict) -> bool:
+    return str(ctx.get("role", "")).lower() in ("admin", "root")
+
+
+@router.post("/{collab_id}/content", status_code=200)
+def assign_content_to_collab(
+    collab_id: str, body: CollabContentAssignIn, ctx: Dict = Depends(require_ui_session),
+):
+    _check_enabled()
+    try:
+        cr.assign_content(
+            collaboration_id=collab_id,
+            content_id=body.content_id,
+            content_type=body.content_type,
+            assigned_by=ctx["user_sub"],
+            title=body.title,
+        )
+    except KeyError:
+        raise HTTPException(404, "Collaboration not found")
+    except PermissionError:
+        raise HTTPException(403, "Not a collaboration participant")
+    except cr.NotActiveError:
+        raise HTTPException(400, "Collaboration is not active")
+    except cr.AlreadyAssignedError:
+        raise HTTPException(409, "Content already in another collaboration")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "content_id": body.content_id, "collaboration_id": collab_id}
+
+
+@router.get("/{collab_id}/content", response_model=CollabContentListOut)
+def list_collab_content(collab_id: str, ctx: Dict = Depends(require_ui_session)):
+    _check_enabled()
+    collab = get_collaboration(collab_id)
+    if not collab:
+        raise HTTPException(404, "Collaboration not found")
+    if not cr.is_participant(collab, ctx["user_sub"]):
+        raise HTTPException(403, "Not a collaboration participant")
+    items = cr.list_collaboration_content(collab_id)
+    return CollabContentListOut(
+        items=[_content_item_out(i) for i in items],
+        collaboration_id=collab_id,
+    )
+
+
+@router.delete("/{collab_id}/content/{content_id}", status_code=200)
+def unassign_content_from_collab(
+    collab_id: str, content_id: str, ctx: Dict = Depends(require_ui_session),
+):
+    _check_enabled()
+    try:
+        removed = cr.unassign_content(collab_id, content_id, ctx["user_sub"])
+    except KeyError:
+        raise HTTPException(404, "Collaboration not found")
+    except PermissionError:
+        raise HTTPException(403, "Not a collaboration participant")
+    if not removed:
+        raise HTTPException(404, "Content not assigned to this collaboration")
+    return {"ok": True, "content_id": content_id, "collaboration_id": collab_id}
+
+
+@router.post("/{collab_id}/content/{content_id}/revenue-event", status_code=200)
+def record_content_revenue_event(
+    collab_id: str, content_id: str, body: CollabContentSplitTriggerIn,
+    ctx: Dict = Depends(require_ui_session),
+):
+    """Deterministically trigger an auto-split for a revenue event on assigned
+    content (used by billing hooks and E2E). Splits per the agreement."""
+    _check_enabled()
+    collab = get_collaboration(collab_id)
+    if not collab:
+        raise HTTPException(404, "Collaboration not found")
+    if not cr.is_participant(collab, ctx["user_sub"]):
+        raise HTTPException(403, "Not a collaboration participant")
+    if body.content_id != content_id:
+        raise HTTPException(400, "content_id mismatch")
+    record = cr.execute_content_split(
+        content_id=content_id,
+        amount_cents=body.amount_cents,
+        source=body.source,
+        payer_user_id=ctx["user_sub"],
+        currency=body.currency,
+    )
+    if record is None:
+        raise HTTPException(400, "Content is not assigned to an active collaboration")
+    return {"ok": True, "split": _split_record_out(record).model_dump()}
+
+
+@router.get("/{collab_id}/splits", response_model=CollabSplitHistoryOut)
+def get_collab_split_history(
+    collab_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    cursor: Optional[str] = Query(None),
+    ctx: Dict = Depends(require_ui_session),
+):
+    _check_enabled()
+    try:
+        result = cr.get_split_history(collab_id, ctx["user_sub"], limit=limit, cursor=cursor)
+    except KeyError:
+        raise HTTPException(404, "Collaboration not found")
+    except PermissionError:
+        raise HTTPException(403, "Not a collaboration participant")
+    return CollabSplitHistoryOut(
+        items=[_split_record_out(i) for i in result["items"]],
+        next_cursor=result.get("next_cursor"),
+    )
+
+
+@router.post("/{collab_id}/splits/{split_id}/dispute", status_code=200)
+def file_split_dispute(
+    collab_id: str, split_id: str, body: CollabDisputeIn,
+    ctx: Dict = Depends(require_ui_session),
+):
+    _check_enabled()
+    try:
+        cr.file_dispute(
+            collaboration_id=collab_id,
+            split_id=split_id,
+            filed_by=ctx["user_sub"],
+            reason=body.reason,
+            proposed_split=body.proposed_split,
+        )
+    except KeyError as e:
+        if "split" in str(e):
+            raise HTTPException(404, "Split record not found")
+        raise HTTPException(404, "Collaboration not found")
+    except PermissionError:
+        raise HTTPException(403, "Not a collaboration participant")
+    except cr.AlreadyDisputedError:
+        raise HTTPException(409, "Dispute already filed on this split")
+    return {"ok": True, "dispute_status": "disputed"}
+
+
+@router.get("/{collab_id}/disputes", response_model=CollabDisputeListOut)
+def list_collab_disputes(
+    collab_id: str,
+    status: Optional[str] = Query(None),
+    ctx: Dict = Depends(require_ui_session),
+):
+    _check_enabled()
+    collab = get_collaboration(collab_id)
+    if not collab:
+        raise HTTPException(404, "Collaboration not found")
+    if not cr.is_participant(collab, ctx["user_sub"]) and not _is_admin(ctx):
+        raise HTTPException(403, "Not a collaboration participant")
+    items = cr.list_disputes(collaboration_id=collab_id, status=status)
+    return CollabDisputeListOut(items=[_dispute_out(i) for i in items])
+
+
+@router.post("/{collab_id}/disputes/{dispute_id}/resolve", status_code=200)
+def resolve_collab_dispute(
+    collab_id: str, dispute_id: str, body: CollabDisputeResolveIn,
+    ctx: Dict = Depends(require_ui_session),
+):
+    _check_enabled()
+    admin = _is_admin(ctx)
+    try:
+        result = cr.resolve_dispute(
+            dispute_id=dispute_id,
+            collaboration_id=collab_id,
+            resolved_by=ctx["user_sub"],
+            resolution=body.resolution,
+            accept=body.accept,
+            is_admin=admin,
+        )
+    except KeyError as e:
+        if "dispute" in str(e):
+            raise HTTPException(404, "Dispute not found")
+        raise HTTPException(404, "Collaboration not found")
+    except PermissionError:
+        raise HTTPException(403, "Not a collaboration participant")
+    return {"ok": True, "status": result.get("status", ""), "dispute": _dispute_out(result).model_dump()}

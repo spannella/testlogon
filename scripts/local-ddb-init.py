@@ -1374,7 +1374,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByStatusVotes", "partition_key": "gsi_status_pk", "sort_key": "gsi_votes_sk"},
             ],
         ),
-        # Collaboration Requests (CREATOR-001)
+        # Collaboration Requests (CREATOR-001) + Revenue Splitting (FIN-011)
         TableDef(
             _resolve_table_name(S.collaboration_agreements_table_name, "collaboration_agreements"),
             "collaboration_id",
@@ -1383,8 +1383,13 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByInitiator", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
                 {"index_name": "ByRecipient", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
                 {"index_name": "ByStatus", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+                {"index_name": "ByContentId", "partition_key": "gsi_content_pk", "sort_key": "gsi_content_sk"},
+                {"index_name": "ByDisputeStatus", "partition_key": "gsi_dispute_pk", "sort_key": "gsi_dispute_sk"},
             ],
-            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
+            attr_types={
+                "GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N",
+                "gsi_dispute_sk": "N",
+            },
         ),
         # Fan Club Channels (CREATOR-002)
         TableDef(

@@ -4331,6 +4331,85 @@ export interface CollaborationSettingsIn {
   auto_expire_days?: number;
 }
 
+// FIN-011: Collaboration Revenue Splitting
+export interface CollabContentAssignIn {
+  content_id: string;
+  content_type: "vod" | "post" | "broadcast";
+  title?: string;
+}
+
+export interface CollabContentItem {
+  content_id: string;
+  content_type: string;
+  title: string;
+  assigned_by: string;
+  assigned_at: number;
+  total_revenue_cents: number;
+  split_count: number;
+}
+
+export interface CollabContentListOut {
+  items: CollabContentItem[];
+  collaboration_id: string;
+}
+
+export interface CollabSplitDistribution {
+  user_id: string;
+  amount_cents: number;
+  percentage: number;
+}
+
+export interface CollabSplitRecord {
+  split_id: string;
+  content_id: string;
+  content_type: string;
+  gross_amount_cents: number;
+  source: string;
+  distributions: CollabSplitDistribution[];
+  created_at: number;
+  dispute_status?: string | null;
+}
+
+export interface CollabSplitHistoryOut {
+  items: CollabSplitRecord[];
+  next_cursor?: string | null;
+}
+
+export interface CollabContentSplitTriggerIn {
+  content_id: string;
+  amount_cents: number;
+  source?: "tip" | "unlock" | "vod_purchase" | "subscription" | "sale";
+  currency?: string;
+}
+
+export interface CollabDisputeIn {
+  reason: string;
+  proposed_split?: Record<string, number> | null;
+}
+
+export interface CollabDisputeResolveIn {
+  resolution: string;
+  accept: boolean;
+}
+
+export interface CollabDisputeOut {
+  dispute_id: string;
+  split_id: string;
+  collaboration_id: string;
+  filed_by: string;
+  reason: string;
+  proposed_split?: Record<string, number> | null;
+  status: string;
+  resolution: string;
+  resolved_by: string;
+  resolved_at: number;
+  created_at: number;
+}
+
+export interface CollabDisputeListOut {
+  items: CollabDisputeOut[];
+}
+
 // ENGAGE-003: Live Q&A Mode
 export interface QAQuestion {
   question_id: string;
