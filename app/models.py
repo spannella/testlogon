@@ -11685,3 +11685,95 @@ class NotaryStampFieldValue(BaseModel):
 
 
 SignatureTemplateMigrationCheckIn.model_rebuild()
+
+
+# ── Ad Performance Optimization (ADS-017) ──────────────────────────────
+
+class OptimizationCreativeStat(BaseModel):
+    """Per-creative performance snapshot used to score recommendations."""
+
+    creative_id: str
+    impressions: int = 0
+    clicks: int = 0
+    ctr: float = 0.0
+    weight: float = 0.0
+
+
+class OptimizationRecommendation(BaseModel):
+    """A single generated optimization recommendation (persisted)."""
+
+    recommendation_id: str
+    campaign_id: str
+    account_id: str
+    action: str = Field(
+        ...,
+        description='Suggested action: "pause_creative", "reallocate_budget", "adjust_bid"',
+    )
+    creative_id: Optional[str] = None
+    title: str = ""
+    description: str = ""
+    impact: str = ""
+    severity: str = "info"
+    details: Dict[str, Any] = Field(default_factory=dict)
+    status: str = Field(default="open", description='"open", "applied", or "dismissed"')
+    created_at: int = 0
+    updated_at: int = 0
+    applied_at: Optional[int] = None
+    dismissed_at: Optional[int] = None
+
+
+class OptimizationGenerateResult(BaseModel):
+    """Result of a generate-now run: weights + new recommendations."""
+
+    campaign_id: str
+    creative_weights: Dict[str, float] = Field(default_factory=dict)
+    creative_stats: List[OptimizationCreativeStat] = Field(default_factory=list)
+    underperformers: List[Dict[str, Any]] = Field(default_factory=list)
+    alerts: List[Dict[str, Any]] = Field(default_factory=list)
+    recommendations: List[OptimizationRecommendation] = Field(default_factory=list)
+    generated_at: int = 0
+
+
+class OptimizationRecommendationList(BaseModel):
+    recommendations: List[OptimizationRecommendation] = Field(default_factory=list)
+
+
+class ABTestRequest(BaseModel):
+    creative_a_id: str
+    creative_b_id: str
+    confidence_level: float = Field(default=0.95, ge=0.80, le=0.99)
+
+
+class ABTestResult(BaseModel):
+    variant_a_ctr: float
+    variant_b_ctr: float
+    lift_percent: float
+    z_score: float
+    p_value: float
+    significant: bool
+    confidence_level: float
+    winner: Optional[str] = None
+    sample_size_sufficient: bool
+
+
+class SuggestedBidOut(BaseModel):
+    min_bid_cpm_cents: int
+    suggested_bid_cpm_cents: int
+    max_bid_cpm_cents: int
+    estimated_fill_rate: float
+    competition_level: str
+
+
+class BudgetRecommendationOut(BaseModel):
+    estimated_daily_reach: int
+    recommended_daily_budget_cents: int
+    estimated_cpm_cents: int
+    reach_per_dollar: float
+
+
+class OptimizationConfigUpdate(BaseModel):
+    auto_optimize_enabled: Optional[bool] = None
+    ctr_threshold: Optional[float] = Field(default=None, ge=0.001, le=0.5)
+    auto_pause_min_impressions: Optional[int] = Field(default=None, ge=100)
+    roas_threshold: Optional[float] = Field(default=None, ge=0.1)
+    budget_pace_alert_ratio: Optional[float] = Field(default=None, ge=1.0, le=3.0)

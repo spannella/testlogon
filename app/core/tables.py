@@ -115,6 +115,7 @@ class Tables:
     ad_billing: Any
     ad_analytics_rollups: Any
     ad_fraud_events: Any
+    ad_optimization_recommendations: Any
     call_billing_ledger: Any
     rate_limits: Any
     rate_limit_events: Any
@@ -336,6 +337,7 @@ T = Tables(
     ad_billing=ddb.Table(S.ad_billing_table_name),
     ad_analytics_rollups=ddb.Table(S.ad_analytics_rollups_table_name),
     ad_fraud_events=ddb.Table(S.ad_fraud_events_table_name),
+    ad_optimization_recommendations=ddb.Table(S.ad_optimization_recommendations_table_name),
     call_billing_ledger=ddb.Table(S.call_billing_ledger_table_name),
     rate_limits=ddb.Table(S.rate_limits_table_name),
     rate_limit_events=ddb.Table(S.rate_limit_events_table_name),

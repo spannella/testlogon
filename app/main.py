@@ -668,6 +668,8 @@ def create_app() -> FastAPI:
     app.include_router(ad_fraud_router)
     from app.routers.ad_dayparting import ad_dayparting_router
     app.include_router(ad_dayparting_router)
+    from app.routers.ad_optimization import ad_optimization_router
+    app.include_router(ad_optimization_router)
     app.include_router(agent_workers_router)
     app.include_router(ads_router)
 
