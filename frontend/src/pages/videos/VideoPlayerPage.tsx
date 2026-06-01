@@ -33,7 +33,7 @@ import { MediaPlayer, type MediaError, type SubtitleTrackInfo } from "@/componen
 import { getVideoDetail, getVideoDownload, type VideoDetail } from "@/api/endpoints/videos";
 import { listSubtitles, uploadSubtitle, deleteSubtitle } from "@/api/endpoints/subtitles";
 import ClipDialog from "@/components/shared/ClipDialog";
-import WatermarkedDownloadButton from "./WatermarkedDownloadButton";
+import VodWatermarkDownloadButton from "./VodWatermarkDownloadButton";
 import { useAuthStore } from "@/stores/authStore";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { SubtitleTrack } from "@/api/types";
@@ -508,7 +508,7 @@ export default function VideoPlayerPage() {
       {video && !fetchLevelError && video.download_available && (
         <div className="flex items-center gap-3" data-testid="download-section">
           {video.watermark_downloads ? (
-            <WatermarkedDownloadButton videoId={video.video_id} />
+            <VodWatermarkDownloadButton videoId={video.video_id} />
           ) : (
             <Button
               onClick={handleDownload}
