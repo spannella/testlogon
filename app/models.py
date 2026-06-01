@@ -3543,6 +3543,116 @@ class CollaborationSplitIn(BaseModel):
     content_id: str = ""
 
 
+# ─── Collaboration Revenue Splitting (FIN-011) ───────────────────
+
+class CollabContentAssignIn(BaseModel):
+    content_id: str = Field(..., min_length=1, max_length=200)
+    content_type: str = Field(..., pattern="^(vod|post|broadcast)$")
+    title: str = Field(default="", max_length=200)
+
+
+class CollabContentItem(BaseModel):
+    content_id: str
+    content_type: str
+    title: str = ""
+    assigned_by: str = ""
+    assigned_at: int = 0
+    total_revenue_cents: int = 0
+    split_count: int = 0
+
+    @field_validator(
+        "assigned_at", "total_revenue_cents", "split_count", mode="before",
+    )
+    @classmethod
+    def _collab_content_coerce(cls, v: Any) -> int:
+        if v is None:
+            return 0
+        return int(v)
+
+
+class CollabContentListOut(BaseModel):
+    items: List[CollabContentItem] = Field(default_factory=list)
+    collaboration_id: str = ""
+
+
+class CollabSplitDistribution(BaseModel):
+    user_id: str
+    amount_cents: int = 0
+    percentage: int = 0
+
+    @field_validator("amount_cents", "percentage", mode="before")
+    @classmethod
+    def _collab_dist_coerce(cls, v: Any) -> int:
+        if v is None:
+            return 0
+        return int(v)
+
+
+class CollabSplitRecord(BaseModel):
+    split_id: str
+    content_id: str
+    content_type: str = ""
+    gross_amount_cents: int = 0
+    source: str = ""
+    distributions: List[CollabSplitDistribution] = Field(default_factory=list)
+    created_at: int = 0
+    dispute_status: Optional[str] = None
+
+    @field_validator("gross_amount_cents", "created_at", mode="before")
+    @classmethod
+    def _collab_split_coerce(cls, v: Any) -> int:
+        if v is None:
+            return 0
+        return int(v)
+
+
+class CollabSplitHistoryOut(BaseModel):
+    items: List[CollabSplitRecord] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class CollabContentSplitTriggerIn(BaseModel):
+    content_id: str = Field(..., min_length=1, max_length=200)
+    amount_cents: int = Field(..., gt=0)
+    source: str = Field(default="tip", pattern="^(tip|unlock|vod_purchase|subscription|sale)$")
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+
+
+class CollabDisputeIn(BaseModel):
+    reason: str = Field(..., min_length=10, max_length=2000)
+    proposed_split: Optional[Dict[str, int]] = None
+
+
+class CollabDisputeResolveIn(BaseModel):
+    resolution: str = Field(..., min_length=5, max_length=2000)
+    accept: bool = True
+
+
+class CollabDisputeOut(BaseModel):
+    dispute_id: str
+    split_id: str
+    collaboration_id: str = ""
+    filed_by: str
+    reason: str
+    proposed_split: Optional[Dict[str, int]] = None
+    status: str
+    resolution: str = ""
+    resolved_by: str = ""
+    resolved_at: int = 0
+    created_at: int = 0
+
+    @field_validator("resolved_at", "created_at", mode="before")
+    @classmethod
+    def _collab_dispute_coerce(cls, v: Any) -> int:
+        if v is None:
+            return 0
+        return int(v)
+
+
+class CollabDisputeListOut(BaseModel):
+    items: List[CollabDisputeOut] = Field(default_factory=list)
+
+
 # ─── Fan Clubs / Membership Tiers (CREATOR-002) ──────────────────
 
 class TierBenefit(BaseModel):

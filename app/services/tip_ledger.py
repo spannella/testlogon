@@ -97,6 +97,30 @@ def write_tip_ledger(entry: TipLedgerEntry) -> Dict[str, str]:
     Returns:
         Dict with "debit_entry_id" and "credit_entry_id" keys.
     """
+    # FIN-011: if the tipped content is assigned to an active collaboration,
+    # split the revenue per the agreement instead of crediting a single creator.
+    if entry.content_id:
+        try:
+            from app.services.collaboration_revenue import maybe_split_content_revenue
+
+            split_record = maybe_split_content_revenue(
+                content_id=entry.content_id,
+                amount_cents=entry.amount_cents,
+                source="tip",
+                payer_user_id=entry.tipper_user_id,
+                content_type=entry.content_type,
+                currency=entry.currency,
+            )
+            if split_record is not None:
+                # Collaboration split wrote its own paired ledger entries.
+                return {
+                    "debit_entry_id": "",
+                    "credit_entry_id": "",
+                    "collaboration_split_id": split_record.get("split_id", ""),
+                }
+        except Exception:
+            logger.warning("collaboration split check failed; falling back to single credit", exc_info=True)
+
     ts = now_ts()
     debit_id = uuid.uuid4().hex
     credit_id = uuid.uuid4().hex

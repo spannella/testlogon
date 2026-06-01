@@ -1719,6 +1719,8 @@ class Settings:
     # Collaboration Requests (CREATOR-001)
     collaborations_enabled: bool = os.environ.get("COLLABORATIONS_ENABLED", "1") not in ("0", "false", "False")
     collaboration_agreements_table_name: str = os.environ.get("DDB_COLLABORATION_AGREEMENTS", "collaboration_agreements")
+    # Collaboration Revenue Splitting (FIN-011)
+    collaboration_revenue_enabled: bool = os.environ.get("COLLABORATION_REVENUE_ENABLED", "1") not in ("0", "false", "False")
 
     # Organizations / Workspaces (ENTERPRISE-003)
     orgs_enabled: bool = os.environ.get("ORGS_ENABLED", "0") not in ("0", "false", "False")

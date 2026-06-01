@@ -126,6 +126,7 @@ const AdminDisputeQueuePage = lazy(() => import("@/pages/admin/AdminDisputeQueue
 const SavedPage = lazy(() => import("@/pages/saved/SavedPage"));
 const AffiliateDashboard = lazy(() => import("@/pages/affiliates/AffiliateDashboard"));
 const CollaborationsPage = lazy(() => import("@/pages/collaborations/CollaborationsPage"));
+const CollaborationRevenuePage = lazy(() => import("@/pages/collaborations/CollaborationRevenuePage"));
 const FanClubPage = lazy(() => import("@/pages/fan-club/FanClubPage"));
 const AchievementsPage = lazy(() => import("@/pages/achievements/AchievementsPage"));
 const AuditExportPage = lazy(() => import("@/pages/admin/AuditExportPage"));
@@ -346,6 +347,7 @@ export default function App() {
           <Route path="affiliates" element={<AffiliateDashboard />} />
           <Route path="achievements" element={<AchievementsPage />} />
           <Route path="collaborations" element={<CollaborationsPage />} />
+          <Route path="collaborations/:collabId/revenue" element={<CollaborationRevenuePage />} />
           <Route path="fan-club" element={<FanClubPage />} />
           <Route path="orgs" element={<OrgsPage />} />
           <Route path="orgs/:orgId" element={<OrgDashboard />} />
