@@ -41,6 +41,7 @@ import RevenueSplitHistoryTab from "./RevenueSplitHistoryTab";
 import RevenueSplitEarningsCard from "./RevenueSplitEarningsCard";
 import SyndicateTreasuryTab from "./SyndicateTreasuryTab";
 import SyndicateAdvertisingTab from "./SyndicateAdvertisingTab";
+import SyndicateOpenLicensingTab from "./SyndicateOpenLicensingTab";
 
 export default function SyndicateDetailPage() {
   const { syndicateId } = useParams<{ syndicateId: string }>();
@@ -129,6 +130,7 @@ export default function SyndicateDetailPage() {
           <TabsTrigger value="revenue">Revenue</TabsTrigger>
           <TabsTrigger value="treasury">Treasury</TabsTrigger>
           <TabsTrigger value="advertising">Advertising</TabsTrigger>
+          <TabsTrigger value="open-licensing">Open Licensing</TabsTrigger>
           {isAdmin && <TabsTrigger value="requests">Requests ({requests.length})</TabsTrigger>}
           {isAdmin && <TabsTrigger value="audit">Audit Log</TabsTrigger>}
         </TabsList>
@@ -190,6 +192,14 @@ export default function SyndicateDetailPage() {
         {/* Advertising Tab (SYND-006) */}
         <TabsContent value="advertising">
           <SyndicateAdvertisingTab syndicateId={syndicateId!} isAdmin={isAdmin} />
+        </TabsContent>
+
+        <TabsContent value="open-licensing">
+          <SyndicateOpenLicensingTab
+            syndicateId={syndicateId!}
+            isAdmin={isAdmin}
+            currentUserId={userId ?? ""}
+          />
         </TabsContent>
 
         {/* Requests Tab */}

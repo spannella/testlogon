@@ -5025,6 +5025,8 @@ class HeldLicenseOut(BaseModel):
     licensor_id: str
     licensor_display_name: str = ""
     status: str
+    license_mode: str = "per_user"
+    syndicate_id: Optional[str] = None
     terms_snapshot: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -11949,3 +11951,64 @@ class PostInterestingOut(BaseModel):
 class PostInterestingListOut(BaseModel):
     post_ids: List[str] = Field(default_factory=list)
     count: int = 0
+
+
+# -- Syndicate Open Licensing (LICENSE-005) --
+
+class SyndicateOpenLicensingTermsIn(BaseModel):
+    profit_share_pct: int = Field(default=0, ge=0, le=100)
+    fixed_cost_cents: int = Field(default=0, ge=0)
+    revenue_share_pct: int = Field(default=0, ge=0, le=100)
+    currency: str = Field(default="usd", max_length=3)
+
+
+class SyndicateOpenLicensingEnableIn(BaseModel):
+    terms: SyndicateOpenLicensingTermsIn = Field(default_factory=SyndicateOpenLicensingTermsIn)
+
+
+class SyndicateOpenLicensingTermsUpdateIn(BaseModel):
+    terms: SyndicateOpenLicensingTermsIn
+
+
+class SyndicateOpenLicensingRegisterIn(BaseModel):
+    content_id: str = Field(min_length=1, max_length=200)
+    content_type: str = Field(description="One of: video, music, image, post, broadcast, clip")
+
+
+class SyndicateOpenLicensingConfigOut(BaseModel):
+    syndicate_id: str
+    open_licensing_enabled: bool = False
+    open_licensing_terms: Optional[Dict[str, Any]] = None
+    enabled_at: Optional[int] = None
+    disabled_at: Optional[int] = None
+
+
+class SyndicateOpenLicensingEnableOut(BaseModel):
+    syndicate_id: str
+    open_licensing_enabled: bool = False
+    open_licensing_terms: Optional[Dict[str, Any]] = None
+    enabled_at: Optional[int] = None
+    disabled_at: Optional[int] = None
+    licenses_created: int = 0
+
+
+class SyndicateOpenLicensingContentOut(BaseModel):
+    content_id: str
+    content_type: str
+    creator_id: str
+    registered_at: int = 0
+    exempt: bool = False
+
+
+class SyndicateOpenLicensingRegistrationOut(BaseModel):
+    content_id: str
+    syndicate_id: str
+    licenses_created: int = 0
+
+
+class SyndicateOpenLicensingExemptionOut(BaseModel):
+    content_id: str
+    syndicate_id: str
+    exempt: bool = False
+    revoked_count: int = 0
+    licenses_created: int = 0

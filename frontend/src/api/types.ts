@@ -10540,3 +10540,43 @@ export interface ApplyRecommendationResult {
   creative_weights?: Record<string, number>;
   suggested_bid_cpm_cents?: number;
 }
+
+// -- Syndicate Open Licensing (LICENSE-005) --
+
+export interface SyndicateOpenLicensingTerms {
+  profit_share_pct: number;
+  fixed_cost_cents: number;
+  revenue_share_pct: number;
+  currency: string;
+}
+
+export interface SyndicateOpenLicensingConfig {
+  syndicate_id: string;
+  open_licensing_enabled: boolean;
+  open_licensing_terms: SyndicateOpenLicensingTerms | null;
+  enabled_at: number | null;
+  disabled_at: number | null;
+  licenses_created?: number;
+}
+
+export interface SyndicateOpenLicensingContent {
+  content_id: string;
+  content_type: string;
+  creator_id: string;
+  registered_at: number;
+  exempt: boolean;
+}
+
+export interface SyndicateOpenLicensingRegistration {
+  content_id: string;
+  syndicate_id: string;
+  licenses_created: number;
+}
+
+export interface SyndicateOpenLicensingExemption {
+  content_id: string;
+  syndicate_id: string;
+  exempt: boolean;
+  revoked_count: number;
+  licenses_created: number;
+}

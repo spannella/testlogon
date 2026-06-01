@@ -64,6 +64,8 @@ def _held_out(item: Dict[str, Any]) -> HeldLicenseOut:
         licensor_id=item.get("licensor_id", ""),
         licensor_display_name=item.get("licensor_display_name", ""),
         status=item.get("status", ""),
+        license_mode=item.get("license_mode", "per_user"),
+        syndicate_id=item.get("syndicate_id"),
         terms_snapshot=clean_ts,
     )
 
