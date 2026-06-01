@@ -2,7 +2,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { api, normalizeErrorDetail } from "@/api/client";
 
 export type SignatureOriginChannel = "share" | "message";
-export type SignatureFieldType = "signature" | "initials" | "date" | "text";
+export type SignatureFieldType = "signature" | "initials" | "date" | "text" | "notary_stamp";
 
 export type SignaturePacketStatus =
   | "draft"

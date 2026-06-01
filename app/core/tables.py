@@ -73,6 +73,7 @@ class Tables:
     signature_packet_fields: Any
     signature_packet_events: Any
     signature_packet_artifacts: Any
+    signature_templates: Any
     tickets: Any
     questionnaires: Any
     kyc_cases: Any
@@ -292,6 +293,7 @@ T = Tables(
     signature_packet_fields=ddb.Table(S.signature_packet_fields_table_name),
     signature_packet_events=ddb.Table(S.signature_packet_events_table_name),
     signature_packet_artifacts=ddb.Table(S.signature_packet_artifacts_table_name),
+    signature_templates=ddb.Table(S.signature_templates_table_name),
     tickets=ddb.Table(S.tickets_table_name),
     questionnaires=ddb.Table(S.questionnaire_table_name),
     kyc_cases=ddb.Table(S.kyc_cases_table_name),

@@ -23,6 +23,7 @@ class SignatureFieldType(str, Enum):
     INITIALS = "initials"
     DATE = "date"
     TEXT = "text"
+    NOTARY_STAMP = "notary_stamp"
 
 
 _VALID_PACKET_TRANSITIONS: Final[Mapping[SignaturePacketStatus, FrozenSet[SignaturePacketStatus]]] = {
