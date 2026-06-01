@@ -4655,6 +4655,59 @@ class CreativeReviewIn(BaseModel):
     notes: Optional[str] = None
 
 
+# ── Advertiser API (ADS-011) ────────────────────────────────────────
+# Models for the programmatic, API-key-authenticated advertiser API
+# (router prefix /api/v1/ads). These wrap the existing ad services.
+
+class AdsApiCampaignCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    objective: str = Field(default="awareness", pattern=r"^(awareness|traffic|conversions)$")
+    budget_cents: int = Field(..., ge=100)  # minimum $1
+    budget_type: str = Field(default="daily", pattern=r"^(daily|lifetime)$")
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class AdsApiCampaignUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    budget_cents: Optional[int] = Field(default=None, ge=100)
+    budget_type: Optional[str] = Field(default=None, pattern=r"^(daily|lifetime)$")
+    status: Optional[str] = Field(default=None, pattern=r"^(draft|active|paused|archived)$")
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class AdsApiBudgetUpdate(BaseModel):
+    budget_cents: int = Field(..., ge=100)
+    budget_type: Optional[str] = Field(default=None, pattern=r"^(daily|lifetime)$")
+
+
+class AdsApiBulkAction(BaseModel):
+    campaign_ids: List[str] = Field(..., min_length=1, max_length=100)
+    action: str = Field(..., pattern=r"^(pause|resume|archive)$")
+
+
+class AdsApiCreativeCreate(BaseModel):
+    campaign_id: str = Field(..., min_length=1)
+    format: str = Field(..., pattern="^(native_post|image|video|carousel)$")
+    title: str = Field(..., min_length=1, max_length=200)
+    headline: Optional[str] = None
+    body_text: Optional[str] = None
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    alt_text: Optional[str] = None
+    rotation_weight: int = Field(default=50, ge=0, le=100)
+
+
+class AdsApiCreativeUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    headline: Optional[str] = Field(default=None, max_length=100)
+    body_text: Optional[str] = Field(default=None, max_length=300)
+    cta_text: Optional[str] = Field(default=None, max_length=25)
+    cta_url: Optional[str] = Field(default=None, max_length=1024)
+    rotation_weight: Optional[int] = Field(default=None, ge=0, le=100)
+
+
 # ── Ad Targeting (ADS-003) ──────────────────────────────────────────
 
 

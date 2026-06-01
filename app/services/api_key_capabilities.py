@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Set
 
 CANONICAL_API_KEY_CAPABILITIES: tuple[str, ...] = (
+    "ads:manage",
+    "ads:read",
+    "ads:serve",
     "filemanager:admin",
     "filemanager:read",
     "filemanager:share",
@@ -27,6 +30,7 @@ _CANONICAL_SET = set(CANONICAL_API_KEY_CAPABILITIES)
 # Canonical inheritance semantics for broader capability grants.
 # These are one-way implications: the broader scope implies the narrower scopes.
 CAPABILITY_IMPLICATIONS: Dict[str, tuple[str, ...]] = {
+    "ads:manage": ("ads:read", "ads:serve"),
     "filemanager:admin": ("filemanager:read", "filemanager:write", "filemanager:share"),
     "messager:manage": ("messager:read", "messager:write"),
     "newsfeed:moderate": ("newsfeed:read", "newsfeed:write"),
