@@ -1707,6 +1707,11 @@ class Settings:
     affiliate_links_table_name: str = os.environ.get("DDB_AFFILIATE_LINKS", "AffiliateLinks")
     affiliate_clicks_table_name: str = os.environ.get("DDB_AFFILIATE_CLICKS", "AffiliateClicks")
 
+    # Ad Creative Affiliate Discounts (ADS-015)
+    ad_creative_affiliate_enabled: bool = os.environ.get("AD_CREATIVE_AFFILIATE_ENABLED", "1") not in ("0", "false", "False")
+    ad_creative_affiliate_promo_cookie_max_age: int = int(os.environ.get("AD_CREATIVE_AFFILIATE_PROMO_COOKIE_MAX_AGE", "86400"))
+    ad_creative_affiliates_table_name: str = os.environ.get("DDB_AD_CREATIVE_AFFILIATES", "AdCreativeAffiliates")
+
     # Achievements & Gamification (ENGAGE-001)
     achievements_enabled: bool = os.environ.get("ACHIEVEMENTS_ENABLED", "0") not in ("0", "false", "False")
     achievements_table_name: str = os.environ.get("ACHIEVEMENTS_TABLE_NAME", "achievements")

@@ -11142,3 +11142,92 @@ class KycScreeningReviewRequest(BaseModel):
 
     decision: KycScreeningDecision
     note: str = Field(min_length=1, max_length=2000)
+
+
+# ─── Ad Creative Affiliate Discounts (ADS-015) ───────────────────────
+# Links an ad creative to an affiliate tracking code + promo discount code.
+# Reuses promo_codes.py for discount validation and affiliate_links.py for
+# click/conversion attribution. MONEY = int cents.
+
+
+class AdAffiliateDiscountAttachIn(BaseModel):
+    """Attach (or replace) an affiliate/promo discount on an ad creative."""
+
+    campaign_id: str = Field(min_length=1, max_length=128)
+    affiliate_code: Optional[str] = Field(default=None, max_length=20)
+    promo_code: Optional[str] = Field(default=None, max_length=30)
+    promo_value_display: Optional[str] = Field(default=None, max_length=50)
+    click_through_url: Optional[str] = Field(default=None, max_length=2048)
+
+
+class AdAffiliateDiscountUpdateIn(BaseModel):
+    """Patch mutable fields on an attached affiliate/promo discount."""
+
+    affiliate_code: Optional[str] = Field(default=None, max_length=20)
+    promo_code: Optional[str] = Field(default=None, max_length=30)
+    promo_value_display: Optional[str] = Field(default=None, max_length=50)
+    click_through_url: Optional[str] = Field(default=None, max_length=2048)
+    # Pass true to explicitly clear the affiliate or promo code.
+    clear_affiliate_code: bool = False
+    clear_promo_code: bool = False
+
+
+class AdAffiliateDiscountOut(BaseModel):
+    """An affiliate/promo discount attached to an ad creative."""
+
+    creative_id: str
+    campaign_id: str
+    owner_sub: str
+    affiliate_code: Optional[str] = None
+    promo_code: Optional[str] = None
+    promo_value_display: Optional[str] = None
+    click_through_url: Optional[str] = None
+    click_count: int = 0
+    redemption_count: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class AdAffiliateDiscountListOut(BaseModel):
+    items: List[AdAffiliateDiscountOut] = Field(default_factory=list)
+
+
+class AdAffiliateClickResult(BaseModel):
+    """Result of an ad-creative click redirect."""
+
+    redirect_url: str
+    affiliate_code: Optional[str] = None
+    promo_code: Optional[str] = None
+    promo_value_display: Optional[str] = None
+
+
+class AdAffiliateRedeemIn(BaseModel):
+    """Validate + record an affiliate-discount redemption at checkout."""
+
+    creative_id: str = Field(min_length=1, max_length=128)
+    checkout_type: str = Field(default="shop", max_length=32)
+    item_price_cents: int = Field(ge=0)
+    creator_user_id: str = Field(min_length=1, max_length=128)
+    order_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class AdAffiliateRedeemOut(BaseModel):
+    """Validation / redemption result for an ad-creative discount."""
+
+    valid: bool
+    creative_id: str
+    promo_code: Optional[str] = None
+    affiliate_code: Optional[str] = None
+    discount_type: Optional[str] = None
+    discount_cents: int = 0
+    final_price_cents: int = 0
+    message: Optional[str] = None
+
+
+class AdAffiliateStatsOut(BaseModel):
+    """Attribution stats for an ad-creative affiliate discount."""
+
+    creative_id: str
+    click_count: int = 0
+    redemption_count: int = 0
+    total_discount_cents: int = 0

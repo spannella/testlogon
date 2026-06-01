@@ -2063,6 +2063,17 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Ad Creative Affiliate Discounts (ADS-015)
+        # PK=CREATIVE#{creative_id}; SK=CONFIG (link), CLICK#{ts}#{id}, REDEEM#{ts}#{id}
+        TableDef(
+            _resolve_table_name(S.ad_creative_affiliates_table_name, "AdCreativeAffiliates"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner", "partition_key": "owner_scope", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 
