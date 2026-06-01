@@ -1464,6 +1464,14 @@ class Settings:
         "AD_DAYPARTING_DEFAULT_TIMEZONE", "UTC"
     )
 
+    # Ad Performance Optimization (ADS-017)
+    ad_optimization_enabled: bool = os.environ.get(
+        "AD_OPTIMIZATION_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    ad_optimization_recommendations_table_name: str = os.environ.get(
+        "DDB_AD_OPTIMIZATION_RECOMMENDATIONS", "AdOptimizationRecommendations"
+    )
+
     # View-Once / Rental Access (VOD-019)
     vod_purchase_tiers_enabled: bool = os.environ.get("VOD_PURCHASE_TIERS_ENABLED", "1") not in ("0", "false", "False")
     vod_rental_default_duration_hours: int = int(os.environ.get("VOD_RENTAL_DEFAULT_DURATION_HOURS", "48"))

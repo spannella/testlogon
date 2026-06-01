@@ -10227,3 +10227,106 @@ export interface SyndicateFeed {
   next_cursor: string | null;
   is_member: boolean;
 }
+
+// ── Ad Performance Optimization (ADS-017) ──────────────────────────────
+
+export interface OptimizationCreativeStat {
+  creative_id: string;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  weight: number;
+}
+
+export interface OptimizationRecommendation {
+  recommendation_id: string;
+  campaign_id: string;
+  account_id: string;
+  action: "pause_creative" | "reallocate_budget" | "adjust_bid" | string;
+  creative_id?: string | null;
+  title: string;
+  description: string;
+  impact: string;
+  severity: string;
+  details: Record<string, unknown>;
+  status: "open" | "applied" | "dismissed" | string;
+  created_at: number;
+  updated_at: number;
+  applied_at?: number | null;
+  dismissed_at?: number | null;
+}
+
+export interface OptimizationGenerateResult {
+  campaign_id: string;
+  creative_weights: Record<string, number>;
+  creative_stats: OptimizationCreativeStat[];
+  underperformers: Array<{
+    creative_id: string;
+    impressions: number;
+    clicks: number;
+    ctr: number;
+    reason: string;
+  }>;
+  alerts: Array<{
+    alert_type: string;
+    severity: string;
+    message: string;
+  }>;
+  recommendations: OptimizationRecommendation[];
+  generated_at: number;
+}
+
+export interface OptimizationRecommendationList {
+  recommendations: OptimizationRecommendation[];
+}
+
+export interface ABTestResult {
+  variant_a_ctr: number;
+  variant_b_ctr: number;
+  lift_percent: number;
+  z_score: number;
+  p_value: number;
+  significant: boolean;
+  confidence_level: number;
+  winner: string | null;
+  sample_size_sufficient: boolean;
+}
+
+export interface SuggestedBid {
+  min_bid_cpm_cents: number;
+  suggested_bid_cpm_cents: number;
+  max_bid_cpm_cents: number;
+  estimated_fill_rate: number;
+  competition_level: string;
+}
+
+export interface BudgetRecommendation {
+  estimated_daily_reach: number;
+  recommended_daily_budget_cents: number;
+  estimated_cpm_cents: number;
+  reach_per_dollar: number;
+}
+
+export interface OptimizationConfigUpdate {
+  auto_optimize_enabled?: boolean;
+  ctr_threshold?: number;
+  auto_pause_min_impressions?: number;
+  roas_threshold?: number;
+  budget_pace_alert_ratio?: number;
+}
+
+export interface OptimizationConfigResult {
+  ok: boolean;
+  auto_optimize_enabled: boolean;
+  optimization_config: Record<string, number>;
+}
+
+export interface ApplyRecommendationResult {
+  ok: boolean;
+  status: string;
+  action?: string;
+  creative_id?: string;
+  new_creative_status?: string;
+  creative_weights?: Record<string, number>;
+  suggested_bid_cpm_cents?: number;
+}

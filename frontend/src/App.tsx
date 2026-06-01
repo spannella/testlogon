@@ -162,6 +162,7 @@ const PublicDonationPage = lazy(() => import("@/pages/groups/PublicDonationPage"
 const AgentDashboard = lazy(() => import("@/pages/agents/AgentDashboard"));
 const AdAnalyticsDashboard = lazy(() => import("@/pages/ads/AdAnalyticsDashboard"));
 const AdSchedulePage = lazy(() => import("@/pages/ads/AdSchedulePage"));
+const AdOptimizationPanel = lazy(() => import("@/pages/ads/AdOptimizationPanel"));
 const ContentBoostPage = lazy(() => import("@/pages/ads/ContentBoostPage"));
 const ContentBoostDetail = lazy(() => import("@/pages/ads/ContentBoostDetail"));
 const SponsorshipInbox = lazy(() => import("@/pages/ads/SponsorshipInbox"));
@@ -258,6 +259,7 @@ export default function App() {
           <Route path="ads/billing" element={<AdBillingPage />} />
           <Route path="ads/analytics" element={<AdAnalyticsDashboard />} />
           <Route path="ads/scheduling" element={<AdSchedulePage />} />
+          <Route path="ads/optimization" element={<AdOptimizationPanel />} />
           <Route path="ads/boost" element={<ContentBoostPage />} />
           <Route path="ads/boost/:boostId" element={<ContentBoostDetail />} />
           <Route path="ads/sponsorships" element={<SponsorshipInbox />} />

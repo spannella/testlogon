@@ -1069,6 +1069,23 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByAccountDate", "partition_key": "account_id", "sort_key": "date"},
             ],
         ),
+        # Ad Optimization Recommendations (ADS-017)
+        TableDef(
+            _resolve_table_name(
+                S.ad_optimization_recommendations_table_name,
+                "AdOptimizationRecommendations",
+            ),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "ByCampaignCreatedAt",
+                    "partition_key": "campaign_id",
+                    "sort_key": "created_at",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Ad Fraud Events (ADS-014)
         TableDef(
             _resolve_table_name(S.ad_fraud_events_table_name, "AdFraudEvents"),
