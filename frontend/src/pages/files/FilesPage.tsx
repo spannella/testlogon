@@ -82,6 +82,7 @@ import { isEditableImageFile } from "./imageEdit";
 import { FilePreview } from "./FilePreview";
 import { SharedWithMe } from "./SharedWithMe";
 import { ShareDialog } from "./ShareDialog";
+import { ShareLinkDialog } from "./ShareLinkDialog";
 import { UploadZone } from "./UploadZone";
 import { BulkActions } from "./BulkActions";
 import { MoveDialog } from "./MoveDialog";
@@ -199,6 +200,7 @@ export default function FilesPage() {
   const [renameTarget, setRenameTarget] = React.useState<FileEntry | null>(null);
   const [renameName, setRenameName] = React.useState("");
   const [shareTarget, setShareTarget] = React.useState<FileEntry | null>(null);
+  const [shareLinkTarget, setShareLinkTarget] = React.useState<FileEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<FileEntry | null>(null);
 
   // iCloud onboarding wizard state
@@ -1202,6 +1204,7 @@ export default function FilesPage() {
                 onDownload={handleDownload}
                 onEditImage={handleEditImage}
                 onShare={(f) => setShareTarget(f)}
+                onShareLink={(f) => setShareLinkTarget(f)}
                 onRename={(f) => { setRenameTarget(f); setRenameName(f.name); }}
                 onMove={handleMoveOpen}
                 onDelete={(f) => setDeleteTarget(f)}
@@ -1303,6 +1306,15 @@ export default function FilesPage() {
           open={!!shareTarget}
           onOpenChange={(open) => { if (!open) setShareTarget(null); }}
           filePath={shareTarget.path}
+        />
+      )}
+
+      {/* Encrypted one-time share link dialog (FILES-001) */}
+      {shareLinkTarget && (
+        <ShareLinkDialog
+          open={!!shareLinkTarget}
+          onOpenChange={(open) => { if (!open) setShareLinkTarget(null); }}
+          file={shareLinkTarget}
         />
       )}
 

@@ -2165,6 +2165,18 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Encrypted one-time share links (FILES-001)
+        # PK=link_id (fsl_<uuid>); SK=META; GSI1 lists links by owner, GSI2 by file
+        TableDef(
+            _resolve_table_name(S.ddb_file_share_links_table, "file_share_links"),
+            "link_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "owner_sub", "sort_key": "created_at"},
+                {"index_name": "GSI2", "partition_key": "file_node_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 
