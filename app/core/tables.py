@@ -137,6 +137,7 @@ class Tables:
     admin_messaging_templates: Any
     affiliate_links: Any
     affiliate_clicks: Any
+    ad_creative_affiliates: Any
     audit_exports: Any
     achievements: Any
     user_achievements: Any
@@ -353,6 +354,7 @@ T = Tables(
     admin_messaging_templates=ddb.Table(S.admin_messaging_templates_table_name),
     affiliate_links=ddb.Table(S.affiliate_links_table_name),
     affiliate_clicks=ddb.Table(S.affiliate_clicks_table_name),
+    ad_creative_affiliates=ddb.Table(S.ad_creative_affiliates_table_name),
     audit_exports=ddb.Table(S.audit_export_table_name),
     achievements=ddb.Table(S.achievements_table_name),
     user_achievements=ddb.Table(S.user_achievements_table_name),

@@ -10024,3 +10024,48 @@ export interface BillingConfigPreview {
   sample_before: BillingConfigSample;
   sample_after: BillingConfigSample;
 }
+
+
+// ─── Ad Creative Affiliate Discounts (ADS-015) ─────────────────────
+export interface AdAffiliateDiscount {
+  creative_id: string;
+  campaign_id: string;
+  owner_sub: string;
+  affiliate_code?: string | null;
+  promo_code?: string | null;
+  promo_value_display?: string | null;
+  click_through_url?: string | null;
+  click_count: number;
+  redemption_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AdAffiliateDiscountList {
+  items: AdAffiliateDiscount[];
+}
+
+export interface AdAffiliateClickResult {
+  redirect_url: string;
+  affiliate_code?: string | null;
+  promo_code?: string | null;
+  promo_value_display?: string | null;
+}
+
+export interface AdAffiliateRedeemResult {
+  valid: boolean;
+  creative_id: string;
+  promo_code?: string | null;
+  affiliate_code?: string | null;
+  discount_type?: string | null;
+  discount_cents: number;
+  final_price_cents: number;
+  message?: string | null;
+}
+
+export interface AdAffiliateStats {
+  creative_id: string;
+  click_count: number;
+  redemption_count: number;
+  total_discount_cents: number;
+}

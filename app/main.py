@@ -143,6 +143,7 @@ from app.services.deletion_scheduler import start_deletion_scheduler_task
 from app.routers.referrals import router as referrals_router, internal_router as referrals_internal_router
 from app.routers.promo_codes import router as promo_codes_router
 from app.routers.affiliate_links import router as affiliate_links_router
+from app.routers.ad_creative_affiliate import ad_creative_affiliate_router
 from app.routers.collaborations import router as collaborations_router
 from app.routers.orgs import router as orgs_router
 from app.routers.user_groups import router as user_groups_router
@@ -582,6 +583,7 @@ def create_app() -> FastAPI:
     app.include_router(achievements_router)
     app.include_router(promo_codes_router)
     app.include_router(affiliate_links_router)
+    app.include_router(ad_creative_affiliate_router)
     app.include_router(collaborations_router)
     app.include_router(orgs_router)
     app.include_router(user_groups_router)
