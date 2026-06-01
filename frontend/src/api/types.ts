@@ -10069,3 +10069,78 @@ export interface AdAffiliateStats {
   redemption_count: number;
   total_discount_cents: number;
 }
+
+// -- Syndicate Page & Newsfeed (SYND-005) --
+
+export interface SyndicateFeedMember {
+  user_id: string;
+  display_name: string;
+  role: string;
+  joined_at: number;
+}
+
+export interface SyndicateBundlePlan {
+  plan_id: string;
+  plan_type: string;
+  syndicate_id: string;
+  name: string;
+  description: string;
+  price_cents: number;
+  interval: string;
+  status: string;
+  included_creator_ids: string[];
+  created_at: number;
+}
+
+export interface SyndicateProfile {
+  syndicate_id: string;
+  name: string;
+  description: string;
+  avatar_url: string;
+  banner_url: string;
+  website_url: string;
+  tags: string[];
+  admin_user_id: string;
+  status: string;
+  member_count: number;
+  post_count: number;
+  members: SyndicateFeedMember[];
+  bundle_plans: SyndicateBundlePlan[];
+  is_member: boolean;
+  created_at: number;
+}
+
+export interface SyndicateProfileUpdate {
+  avatar_url?: string;
+  banner_url?: string;
+  website_url?: string;
+  tags?: string[];
+  description?: string;
+}
+
+export interface SyndicatePost {
+  post_id: string;
+  author_id: string;
+  author_name: string;
+  author_avatar: string;
+  text: string;
+  image_url: string;
+  syndicate_id: string;
+  visibility: "public" | "members_only";
+  created_at: number;
+  comment_count: number;
+  reaction_counts: Record<string, number>;
+  tip_total_cents: number;
+}
+
+export interface SyndicatePostCreate {
+  text: string;
+  visibility: "public" | "members_only";
+  image_url?: string | null;
+}
+
+export interface SyndicateFeed {
+  posts: SyndicatePost[];
+  next_cursor: string | null;
+  is_member: boolean;
+}

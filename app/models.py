@@ -11329,3 +11329,69 @@ class AdAffiliateStatsOut(BaseModel):
     click_count: int = 0
     redemption_count: int = 0
     total_discount_cents: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Syndicate Page & Newsfeed (SYND-005)
+# ---------------------------------------------------------------------------
+
+class SyndicateProfileUpdateIn(BaseModel):
+    avatar_url: Optional[str] = None
+    banner_url: Optional[str] = None
+    website_url: Optional[str] = Field(default=None, max_length=200)
+    tags: Optional[List[str]] = Field(default=None, max_length=10)
+    description: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode="before")
+    @classmethod
+    def at_least_one_field(cls, values):
+        if isinstance(values, dict):
+            non_none = {k: v for k, v in values.items() if v is not None}
+            if not non_none:
+                raise ValueError("At least one field must be provided for update")
+        return values
+
+
+class SyndicateProfileOut(BaseModel):
+    syndicate_id: str
+    name: str
+    description: str = ""
+    avatar_url: str = ""
+    banner_url: str = ""
+    website_url: str = ""
+    tags: List[str] = Field(default_factory=list)
+    admin_user_id: str
+    status: str = "active"
+    member_count: int = 0
+    post_count: int = 0
+    members: List[SyndicateMemberOut] = Field(default_factory=list)
+    bundle_plans: List[BundlePlanOut] = Field(default_factory=list)
+    is_member: bool = False
+    created_at: int = 0
+
+
+class SyndicatePostCreateIn(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+    visibility: str = Field(default="public", pattern="^(public|members_only)$")
+    image_url: Optional[str] = None
+
+
+class SyndicatePostOut(BaseModel):
+    post_id: str
+    author_id: str
+    author_name: str = ""
+    author_avatar: str = ""
+    text: str = ""
+    image_url: str = ""
+    syndicate_id: str
+    visibility: str = "public"
+    created_at: int = 0
+    comment_count: int = 0
+    reaction_counts: Dict[str, int] = Field(default_factory=dict)
+    tip_total_cents: int = 0
+
+
+class SyndicateFeedOut(BaseModel):
+    posts: List[SyndicatePostOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+    is_member: bool = False
