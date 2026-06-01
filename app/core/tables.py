@@ -109,6 +109,7 @@ class Tables:
     ad_creatives: Any
     ad_moderation_log: Any
     ad_targeting: Any
+    content_ad_controls: Any
     ad_frequency_caps: Any
     ad_billing: Any
     ad_analytics_rollups: Any
@@ -326,6 +327,7 @@ T = Tables(
     ad_creatives=ddb.Table(S.ad_creatives_table_name),
     ad_moderation_log=ddb.Table(S.ad_moderation_log_table_name),
     ad_targeting=ddb.Table(S.ad_targeting_table_name),
+    content_ad_controls=ddb.Table(S.content_ad_controls_table_name),
     ad_frequency_caps=ddb.Table(S.ad_frequency_caps_table_name),
     ad_billing=ddb.Table(S.ad_billing_table_name),
     ad_analytics_rollups=ddb.Table(S.ad_analytics_rollups_table_name),

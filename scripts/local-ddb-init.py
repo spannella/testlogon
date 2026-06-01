@@ -1045,6 +1045,15 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Content-Provider Ad Controls (ADS-010) — per-content ad overrides
+        TableDef(
+            _resolve_table_name(
+                getattr(S, "content_ad_controls_table_name", "ContentAdControls"),
+                "ContentAdControls",
+            ),
+            "content_id",
+            gsi=[{"index_name": "ByOwner", "partition_key": "owner_sub"}],
+        ),
         # Ad Analytics Rollups (ADS-008)
         TableDef(
             os.environ.get("DDB_AD_ANALYTICS_ROLLUPS", "AdAnalyticsRollups"),

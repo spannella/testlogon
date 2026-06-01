@@ -11329,3 +11329,56 @@ class AdAffiliateStatsOut(BaseModel):
     click_count: int = 0
     redemption_count: int = 0
     total_discount_cents: int = 0
+
+
+# ── Content-Provider Ad Controls (ADS-010) ──────────────────────────────────
+
+
+class ContentAdOverrideIn(BaseModel):
+    """Per-content ad-control override request (creator-owned content)."""
+
+    content_type: str = Field(default="video", pattern="^(video|post|broadcast)$")
+    ad_enabled: Optional[bool] = None
+    ad_density: Optional[str] = Field(default=None, pattern="^(low|standard|high)$")
+    pre_roll_enabled: Optional[bool] = None
+    mid_roll_enabled: Optional[bool] = None
+    ads_free_for_subscribers: Optional[bool] = None
+
+
+class ContentAdOverrideOut(BaseModel):
+    content_id: str
+    content_type: str = "video"
+    owner_sub: Optional[str] = None
+    ad_enabled: bool = True
+    ad_density: str = "standard"
+    pre_roll_enabled: bool = True
+    mid_roll_enabled: bool = True
+    ads_free_for_subscribers: bool = False
+    updated_at: Optional[int] = None
+
+
+class RevenueShareIn(BaseModel):
+    """Negotiated revenue share in basis points (0-10000)."""
+
+    revenue_share_bps: int = Field(ge=0, le=10000)
+
+
+class AdRevenueBreakdownContentOut(BaseModel):
+    content_id: str
+    revenue_cents: int = 0
+
+
+class AdRevenueBreakdownOut(BaseModel):
+    total_ad_revenue_cents: int = 0
+    entry_count: int = 0
+    days: int = 30
+    revenue_share_bps: int = 7000
+    top_content: List[AdRevenueBreakdownContentOut] = Field(default_factory=list)
+
+
+class AdvertiserTransparencyOut(BaseModel):
+    account_id: str
+    company_name: str = "Unknown"
+    total_impressions: int = 0
+    total_clicks: int = 0
+    total_revenue_cents: int = 0

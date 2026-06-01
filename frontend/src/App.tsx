@@ -165,6 +165,7 @@ const SponsorshipInbox = lazy(() => import("@/pages/ads/SponsorshipInbox"));
 const SponsorshipManager = lazy(() => import("@/pages/ads/SponsorshipManager"));
 const SponsorshipDealDetail = lazy(() => import("@/pages/ads/SponsorshipDealDetail"));
 const AdAffiliateDiscountPage = lazy(() => import("@/pages/ads/AdAffiliateDiscountPage"));
+const ContentAdControlsPage = lazy(() => import("@/pages/ads/ContentAdControlsPage"));
 const FleetDashboard = lazy(() => import("@/pages/agents/FleetDashboard"));
 const AgentMemoryPage = lazy(() => import("@/pages/agents/AgentMemoryPage"));
 const AgentFeedbackPage = lazy(() => import("@/pages/agents/AgentFeedbackPage"));
@@ -260,6 +261,7 @@ export default function App() {
           <Route path="ads/sponsorships/manage" element={<SponsorshipManager />} />
           <Route path="ads/sponsorships/:dealId" element={<SponsorshipDealDetail />} />
           <Route path="ads/affiliate-discounts" element={<AdAffiliateDiscountPage />} />
+          <Route path="ads/content-controls" element={<ContentAdControlsPage />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="content-calendar" element={<ContentCalendarPage />} />
           <Route path="agents/memory/:workerId" element={<AgentMemoryPage />} />

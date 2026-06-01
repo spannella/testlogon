@@ -10069,3 +10069,51 @@ export interface AdAffiliateStats {
   redemption_count: number;
   total_discount_cents: number;
 }
+
+// ── Content-Provider Ad Controls (ADS-010) ──────────────────────────────────
+
+export interface ContentAdOverride {
+  content_id: string;
+  content_type: string;
+  owner_sub?: string | null;
+  ad_enabled: boolean;
+  ad_density: "low" | "standard" | "high";
+  pre_roll_enabled: boolean;
+  mid_roll_enabled: boolean;
+  ads_free_for_subscribers: boolean;
+  updated_at?: number | null;
+}
+
+export interface ContentAdOverrideInput {
+  content_type?: string;
+  ad_enabled?: boolean;
+  ad_density?: "low" | "standard" | "high";
+  pre_roll_enabled?: boolean;
+  mid_roll_enabled?: boolean;
+  ads_free_for_subscribers?: boolean;
+}
+
+export interface AdRevenueBreakdownContent {
+  content_id: string;
+  revenue_cents: number;
+}
+
+export interface AdRevenueBreakdown {
+  total_ad_revenue_cents: number;
+  entry_count: number;
+  days: number;
+  revenue_share_bps: number;
+  top_content: AdRevenueBreakdownContent[];
+}
+
+export interface AdvertiserTransparency {
+  account_id: string;
+  company_name: string;
+  total_impressions: number;
+  total_clicks: number;
+  total_revenue_cents: number;
+}
+
+export interface RevenueShare {
+  revenue_share_bps: number;
+}
