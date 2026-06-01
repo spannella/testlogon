@@ -115,3 +115,125 @@ def map_carrier_status(carrier: str, raw_status: str) -> str:
         return "picked_up"
 
     return "in_transit"  # safe default
+
+
+# ── Order shipping status update (SHOP-004) ───────────────────────
+#
+# These helpers apply a carrier tracking result to an order's shipping
+# sub-record. Used by both the webhook receiver and the polling layer so
+# the two share a single code path. They reuse update_shipping() from the
+# purchase_history service (which itself reuses detect_carrier /
+# build_tracking_url) and fire the seller delivery alert on delivery.
+
+# Internal statuses that mean the package is still moving and worth polling.
+ACTIVE_TRACKING_STATUSES = {
+    "shipped",
+    "label_created",
+    "picked_up",
+    "in_transit",
+    "out_for_delivery",
+}
+
+
+def apply_tracking_result(
+    order: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Apply a normalized carrier tracking result to an order's shipping record.
+
+    ``order`` is a full purchase-transaction DynamoDB item (must include
+    ``user_sub`` / ``buyer_id`` and ``txn_id``). ``result`` is a normalized
+    tracking response with at least a ``status`` field, and optionally
+    ``status_description``, ``events``, ``estimated_delivery`` and
+    ``delivered_at``.
+
+    Returns the updated transaction info dict if the order was changed, or
+    ``None`` if nothing changed (status unchanged → idempotent, no update).
+    """
+    # Imported lazily to avoid a circular import (purchase_history imports
+    # build_tracking_url / detect_carrier from this module).
+    from app.core.time import now_ts
+    from app.services.purchase_history import update_shipping
+
+    shipping = dict(order.get("shipping") or {})
+    new_status = (result.get("status") or "").strip()
+    if not new_status:
+        return None
+
+    old_status = (shipping.get("status") or "").strip()
+    delivered_already = old_status == "delivered"
+
+    # Idempotent: don't re-write or re-alert when nothing changed.
+    if new_status == old_status:
+        return None
+
+    shipping["status"] = new_status
+    if result.get("status_description"):
+        shipping["status_description"] = result["status_description"]
+    if result.get("estimated_delivery"):
+        shipping["estimated_delivery"] = result["estimated_delivery"]
+    events = result.get("events")
+    if events:
+        # Cap at 20 stored events to bound item size.
+        shipping["carrier_events"] = list(events)[:20]
+    shipping["last_carrier_check"] = now_ts()
+    if new_status == "delivered":
+        shipping["delivered_at"] = now_ts()
+
+    buyer_sub = order.get("user_sub") or order.get("buyer_id")
+    txn_id = order.get("txn_id")
+    if not buyer_sub or not txn_id:
+        return None
+
+    info = update_shipping(str(buyer_sub), str(txn_id), shipping)
+
+    # Fire the seller delivery alert exactly once on the transition to
+    # "delivered" (skip if it was already delivered).
+    if new_status == "delivered" and not delivered_already:
+        send_delivery_alert(order, shipping.get("tracking_number"))
+
+    return info
+
+
+def send_delivery_alert(order: Dict[str, Any], tracking_number: Optional[str]) -> None:
+    """Alert the seller (and buyer) that a package was delivered.
+
+    Reuses the existing alerts system (write_alert). Best effort — never
+    raises into the caller.
+    """
+    from app.services.alerts import write_alert
+
+    txn_id = str(order.get("txn_id") or "")
+    buyer_sub = str(order.get("user_sub") or order.get("buyer_id") or "")
+    # Seller may be stored under a few keys depending on order shape.
+    seller_sub = str(
+        order.get("seller_sub")
+        or order.get("seller_id")
+        or (order.get("metadata") or {}).get("seller_sub")
+        or ""
+    )
+    tn = str(tracking_number or "")
+
+    details = {
+        "alert_type": "delivery_confirmed",
+        "txn_id": txn_id,
+        "tracking_number": tn,
+    }
+
+    targets = [s for s in (seller_sub, buyer_sub) if s]
+    # Avoid double-alerting when buyer == seller.
+    seen: set = set()
+    for sub in targets:
+        if sub in seen:
+            continue
+        seen.add(sub)
+        try:
+            write_alert(
+                sub,
+                event="delivery_confirmed",
+                outcome="success",
+                title="Package delivered",
+                details=details,
+            )
+        except Exception:
+            pass

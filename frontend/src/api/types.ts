@@ -2442,12 +2442,46 @@ export interface PurchaseShipping {
   tracking_number?: string;
   tracking_url?: string;
   status?: string;
+  status_description?: string;
   shipped_at?: number;
   delivered_at?: number;
   estimated_delivery?: string;
   carrier_events?: CarrierEvent[];
   last_carrier_check?: number;
   address?: Record<string, unknown>;
+}
+
+export interface CarrierTrackingView {
+  txn_id: string;
+  carrier?: string | null;
+  tracking_number?: string | null;
+  tracking_url?: string | null;
+  status?: string | null;
+  status_description?: string | null;
+  estimated_delivery?: string | null;
+  delivered_at?: number | null;
+  carrier_events?: CarrierEvent[] | null;
+  last_carrier_check?: number | null;
+}
+
+export interface CarrierPollResult {
+  txn_id: string;
+  polled: boolean;
+  updated: boolean;
+  old_status?: string | null;
+  new_status?: string | null;
+  reason: string;
+}
+
+export interface CarrierPollTransactionOut {
+  poll: CarrierPollResult;
+  tracking: CarrierTrackingView;
+}
+
+export interface CarrierPollNowOut {
+  checked: number;
+  updated: number;
+  results: CarrierPollResult[];
 }
 
 export interface PurchaseTransactionInfo extends PurchaseTransactionSummary {
