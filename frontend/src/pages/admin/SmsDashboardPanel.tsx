@@ -30,6 +30,7 @@ import {
   getSmsSuppressions,
   getSmsTimeseries,
   removeSmsSuppression,
+  sendTestSms,
 } from "@/api/endpoints/adminMessagingDashboards";
 
 function KpiCard({
@@ -75,6 +76,9 @@ export default function SmsDashboardPanel({ days = 7 }: { days?: number }) {
   const [showAdd, setShowAdd] = useState(false);
   const [addr, setAddr] = useState("");
   const [reason, setReason] = useState("");
+  const [showSend, setShowSend] = useState(false);
+  const [testPhone, setTestPhone] = useState("");
+  const [testBody, setTestBody] = useState("Test SMS from admin console");
 
   const stats = useQuery({
     queryKey: ["admin-sms", "stats", days],
@@ -128,10 +132,26 @@ export default function SmsDashboardPanel({ days = 7 }: { days?: number }) {
     onError: () => toast.error("Failed to remove SMS suppression"),
   });
 
+  const sendTestMut = useMutation({
+    mutationFn: () => sendTestSms(testPhone, testBody || "Test SMS from admin console"),
+    onSuccess: (res) => {
+      toast.success(`Test SMS: ${res.status}`);
+      setShowSend(false);
+      setTestPhone("");
+      qc.invalidateQueries({ queryKey: ["admin-sms"] });
+    },
+    onError: () => toast.error("Failed to send test SMS"),
+  });
+
   const s = stats.data;
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-end">
+        <Button size="sm" onClick={() => setShowSend(true)} data-testid="sms-send-test">
+          Send test SMS
+        </Button>
+      </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KpiCard title="Sent (7d)" value={s?.sent ?? "—"} testid="kpi-sms-sent" />
         <KpiCard title="Delivery Rate" value={s ? `${s.delivery_rate}%` : "—"} testid="kpi-sms-delivery" />
@@ -315,6 +335,43 @@ export default function SmsDashboardPanel({ days = 7 }: { days?: number }) {
               data-testid="sms-suppression-submit"
             >
               Add
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showSend} onOpenChange={setShowSend}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send Test SMS</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="sms-test-phone">Phone (E.164)</Label>
+              <Input
+                id="sms-test-phone"
+                value={testPhone}
+                onChange={(e) => setTestPhone(e.target.value)}
+                placeholder="+15551234567"
+                data-testid="sms-test-phone"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="sms-test-body">Message</Label>
+              <Input
+                id="sms-test-body"
+                value={testBody}
+                onChange={(e) => setTestBody(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => sendTestMut.mutate()}
+              disabled={!testPhone || sendTestMut.isPending}
+              data-testid="sms-send-test-submit"
+            >
+              Send
             </Button>
           </DialogFooter>
         </DialogContent>
