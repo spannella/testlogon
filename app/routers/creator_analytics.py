@@ -32,6 +32,11 @@ from app.models import (
     ContentAnalyticsOut,
     ContentAnalyticsRevenueBreakdown,
     ContentAnalyticsViewsItem,
+    EngagementPublicOut,
+    EngagementPublicToggleIn,
+    EngagementRateOut,
+    EngagementTimeSeriesItem,
+    EngagementTimeSeriesOut,
 )
 from app.services.creator_analytics import (
     get_audience,
@@ -44,11 +49,21 @@ from app.services.creator_analytics import (
     upsert_daily_rollup,
     upsert_summary_sentinel,
 )
+from app.services.engagement_rate import (
+    VALID_PERIOD_DAYS,
+    get_engagement_history,
+    get_engagement_summary,
+    get_public_engagement,
+    set_public_engagement_visibility,
+)
 from app.services.sessions import require_ui_session
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ui/analytics", tags=["analytics"])
+
+# Public (no-auth) router for profile-facing engagement display.
+public_router = APIRouter(tags=["analytics-public"])
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -311,4 +326,99 @@ def analytics_refresh(session=Depends(require_ui_session)):
         ok=True,
         message=f"Rollup refresh triggered for {lookback} days",
         days_refreshed=lookback,
+    )
+
+
+# ── Engagement Rate (FIN-012) ────────────────────────────────────
+
+
+def _validate_period_days(period_days: int) -> int:
+    if period_days not in VALID_PERIOD_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail="period_days must be 7, 14, 30, 60, or 90",
+        )
+    return period_days
+
+
+@router.get("/engagement", response_model=EngagementRateOut)
+def analytics_engagement(
+    period_days: int = Query(default=30),
+    session=Depends(require_ui_session),
+):
+    """Get the authenticated creator's engagement rate with breakdown.
+
+    Computed deterministically from real like/comment/tip data in the daily
+    rollups, normalized by current follower count and posts-in-period. Returns
+    ``engagement_rate = 0.0`` (no division by zero) when followers or posts are
+    zero.
+    """
+    _validate_period_days(period_days)
+    user_id = session["user_sub"]
+    result = get_engagement_summary(user_id, period_days)
+    return EngagementRateOut(
+        engagement_rate=result["engagement_rate"],
+        engagement_rate_bps=result["engagement_rate_bps"],
+        period_days=result["period_days"],
+        total_interactions=result["total_interactions"],
+        follower_count=result["follower_count"],
+        posts_in_period=result["posts_in_period"],
+        likes=result["likes"],
+        comments=result["comments"],
+        shares=result["shares"],
+        tips=result["tips"],
+        trend=result["trend"],
+        trend_delta=result["trend_delta"],
+    )
+
+
+@router.get("/engagement/history", response_model=EngagementTimeSeriesOut)
+def analytics_engagement_history(
+    from_date: Optional[str] = Query(default=None),
+    to_date: Optional[str] = Query(default=None),
+    session=Depends(require_ui_session),
+):
+    """Get the engagement-rate time series from the creator's daily rollups."""
+    fd = _validate_date(from_date) if from_date else _days_ago(30)
+    td = _validate_date(to_date) if to_date else _today()
+    _validate_date_range(fd, td)
+
+    user_id = session["user_sub"]
+    rows = get_engagement_history(user_id, fd, td)
+    items = [EngagementTimeSeriesItem(**r) for r in rows]
+    return EngagementTimeSeriesOut(items=items)
+
+
+@router.put("/engagement/public", response_model=EngagementPublicOut)
+def analytics_engagement_public_toggle(
+    body: EngagementPublicToggleIn,
+    session=Depends(require_ui_session),
+):
+    """Toggle whether the engagement rate is shown on the public profile."""
+    user_id = session["user_sub"]
+    set_public_engagement_visibility(user_id, body.visible)
+    if not body.visible:
+        return EngagementPublicOut(visible=False)
+    s30 = get_engagement_summary(user_id, 30)
+    s7 = get_engagement_summary(user_id, 7)
+    return EngagementPublicOut(
+        engagement_rate_30d=s30["engagement_rate"],
+        engagement_rate_7d=s7["engagement_rate"],
+        visible=True,
+    )
+
+
+@public_router.get("/api/creators/{creator_id}/engagement", response_model=EngagementPublicOut)
+def public_creator_engagement(creator_id: str):
+    """Public engagement rate for a creator's profile (if they opted in).
+
+    Returns 404 when the creator has not enabled public display.
+    """
+    data = get_public_engagement(creator_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Engagement data not available")
+    return EngagementPublicOut(
+        engagement_rate_30d=data["engagement_rate_30d"],
+        engagement_rate_7d=data["engagement_rate_7d"],
+        visible=True,
     )

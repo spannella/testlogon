@@ -50,6 +50,7 @@ import {
 } from "@/api/endpoints/analytics";
 import { useAuthStore } from "@/stores/authStore";
 import TopSupportersCard from "./TopSupportersCard";
+import EngagementRateSection from "./EngagementRateSection";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -274,6 +275,9 @@ export default function AnalyticsPage() {
           loading={overviewQ.isLoading}
         />
       </div>
+
+      {/* Engagement Rate (FIN-012) */}
+      <EngagementRateSection />
 
       {/* Charts row */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

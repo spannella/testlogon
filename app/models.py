@@ -12012,3 +12012,43 @@ class SyndicateOpenLicensingExemptionOut(BaseModel):
     exempt: bool = False
     revoked_count: int = 0
     licenses_created: int = 0
+
+
+# ── Engagement Rate Calculation (FIN-012) ──────────────────────────
+
+
+class EngagementRateOut(BaseModel):
+    engagement_rate: float = 0.0
+    engagement_rate_bps: int = 0
+    period_days: int = 30
+    total_interactions: int = 0
+    follower_count: int = 0
+    posts_in_period: int = 0
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    tips: int = 0
+    trend: str = ""
+    trend_delta: float = 0.0
+
+
+class EngagementTimeSeriesItem(BaseModel):
+    date: str
+    engagement_rate: float = 0.0
+    engagement_rate_bps: int = 0
+    interactions: int = 0
+    post_count: int = 0
+
+
+class EngagementTimeSeriesOut(BaseModel):
+    items: List[EngagementTimeSeriesItem] = Field(default_factory=list)
+
+
+class EngagementPublicToggleIn(BaseModel):
+    visible: bool
+
+
+class EngagementPublicOut(BaseModel):
+    engagement_rate_30d: float = 0.0
+    engagement_rate_7d: float = 0.0
+    visible: bool = False

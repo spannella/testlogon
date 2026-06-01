@@ -521,7 +521,15 @@ def get_audience(user_id: str, from_date: str, to_date: str) -> Dict[str, Any]:
 
 
 def upsert_daily_rollup(user_id: str, date_str: str, data: Dict[str, Any]) -> None:
-    """Write or update a daily rollup row for a creator."""
+    """Write or update a daily rollup row for a creator.
+
+    FIN-012: extends the rollup with engagement fields (likes, comments,
+    shares, tips, post_count, follower snapshot) and a deterministically
+    computed daily ``engagement_rate_bps`` (basis points). Engagement inputs
+    are read from the caller-supplied ``data`` (or its ``post_reactions`` /
+    ``post_comments`` aliases) so the rollup carries everything the engagement
+    endpoints need without a second write.
+    """
     pk = f"CREATOR#{user_id}"
     sk = f"DAILY#{date_str}"
     now = now_ts()
@@ -534,6 +542,38 @@ def upsert_daily_rollup(user_id: str, date_str: str, data: Dict[str, Any]) -> No
         "updated_at": now,
     }
     item.update(data)
+
+    # ── FIN-012: engagement enrichment ─────────────────────────────
+    try:
+        from app.services.engagement_rate import (
+            build_engagement_rollup_fields,
+            _get_follower_count,
+        )
+
+        likes = data.get("engagement_likes", data.get("post_reactions", 0))
+        comments = data.get("engagement_comments", data.get("post_comments", 0))
+        shares = data.get("engagement_shares", 0)
+        tips = data.get("engagement_tips", 0)
+        post_count = data.get("post_count", 0)
+        follower_count = data.get("follower_snapshot")
+        if follower_count is None:
+            follower_count = _get_follower_count(user_id)
+
+        engagement_fields = build_engagement_rollup_fields(
+            likes=likes,
+            comments=comments,
+            shares=shares,
+            tips=tips,
+            post_count=post_count,
+            follower_count=follower_count,
+        )
+        # Caller-supplied explicit engagement fields win; otherwise fill in.
+        for k, v in engagement_fields.items():
+            item.setdefault(k, v)
+        # engagement_rate_bps is always recomputed deterministically.
+        item["engagement_rate_bps"] = engagement_fields["engagement_rate_bps"]
+    except Exception:
+        logger.warning("Engagement enrichment failed for %s on %s", user_id, date_str, exc_info=True)
 
     try:
         T.analytics_rollups.put_item(Item=item)

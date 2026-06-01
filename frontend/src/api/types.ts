@@ -10580,3 +10580,38 @@ export interface SyndicateOpenLicensingExemption {
   revoked_count: number;
   licenses_created: number;
 }
+
+// ── Engagement Rate Calculation (FIN-012) ──────────────────────────
+
+export interface EngagementRate {
+  engagement_rate: number;
+  engagement_rate_bps: number;
+  period_days: number;
+  total_interactions: number;
+  follower_count: number;
+  posts_in_period: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  tips: number;
+  trend: string;
+  trend_delta: number;
+}
+
+export interface EngagementTimeSeriesItem {
+  date: string;
+  engagement_rate: number;
+  engagement_rate_bps: number;
+  interactions: number;
+  post_count: number;
+}
+
+export interface EngagementTimeSeries {
+  items: EngagementTimeSeriesItem[];
+}
+
+export interface EngagementPublic {
+  engagement_rate_30d: number;
+  engagement_rate_7d: number;
+  visible: boolean;
+}
