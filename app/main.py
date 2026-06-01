@@ -132,6 +132,7 @@ from app.routers.per_content_revenue import per_content_revenue_router
 from app.routers.creator_dashboard import router as creator_dashboard_router
 from app.routers.creator_payouts import router as creator_payouts_router
 from app.routers.admin_payouts import router as admin_payouts_router
+from app.routers.billing_config import billing_config_router
 from app.routers.admin_rate_limits import router as admin_rate_limits_router
 from app.routers.privacy import router as privacy_router, admin_router as admin_privacy_router
 from app.routers.account_deletion import (
@@ -558,6 +559,7 @@ def create_app() -> FastAPI:
     app.include_router(creator_dashboard_router)
     app.include_router(creator_payouts_router)
     app.include_router(admin_payouts_router)
+    app.include_router(billing_config_router)
     app.include_router(admin_rate_limits_router)
     app.include_router(admin_jobs_router)
     app.include_router(job_dashboard_router)

@@ -171,7 +171,13 @@ def request_payout(user_id: str, amount_cents: int, method: str = "bank_transfer
 
     Returns: {payout_id, amount_cents, status, created_at}
     """
-    minimum = S.payout_minimum_cents
+    # FIN-018: prefer the runtime DB override (falls back to S.payout_minimum_cents).
+    try:
+        from app.services.billing_config import get_min_payout_cents
+
+        minimum = get_min_payout_cents()
+    except Exception:
+        minimum = S.payout_minimum_cents
     if amount_cents < minimum:
         raise ValueError(f"Amount must be at least {minimum} cents (${minimum / 100:.2f})")
 

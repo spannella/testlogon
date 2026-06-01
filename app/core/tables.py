@@ -20,6 +20,7 @@ class Tables:
     alert_prefs: Any
     push_devices: Any
     billing: Any
+    billing_config: Any
     payment_incidents: Any
     payment_incident_events: Any
     payment_dispute_evidence: Any
@@ -235,6 +236,7 @@ T = Tables(
     alert_prefs=ddb.Table(S.alert_prefs_table_name),
     push_devices=ddb.Table(S.push_devices_table_name),
     billing=ddb.Table(S.billing_table_name),
+    billing_config=ddb.Table(S.billing_config_table_name),
     payment_incidents=ddb.Table(S.payment_incidents_table_name),
     payment_incident_events=ddb.Table(S.payment_incident_events_table_name),
     payment_dispute_evidence=ddb.Table(S.payment_dispute_evidence_table_name),
