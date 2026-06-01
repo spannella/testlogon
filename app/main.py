@@ -70,6 +70,7 @@ from app.routers.admin_subscription_tiers import admin_subscription_tiers_router
 from app.routers.admin_tenant_watermark_assets import router as admin_tenant_watermark_assets_router
 from app.routers.ups import router as ups_router
 from app.routers.carrier_tracking_mock import router as carrier_tracking_mock_router
+from app.routers.carrier_tracking_poller import carrier_tracking_poller_router
 from app.routers.projects import router as projects_router
 from app.routers.contacts import router as contacts_router
 from app.routers.social import router as social_router
@@ -486,6 +487,8 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_broadcast_reminder_task)
     app.add_event_handler("startup", _seed_notification_templates_on_startup)
     app.add_event_handler("startup", start_deletion_scheduler_task)
+    from app.services.carrier_tracking_poller import start_carrier_polling_task
+    app.add_event_handler("startup", start_carrier_polling_task)
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
@@ -498,6 +501,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_tenant_watermark_assets_router)
     app.include_router(ups_router)
     app.include_router(carrier_tracking_mock_router)
+    app.include_router(carrier_tracking_poller_router)
     app.include_router(projects_router)
     app.include_router(contacts_router)
     app.include_router(social_router)

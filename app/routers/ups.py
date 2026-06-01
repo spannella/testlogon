@@ -97,6 +97,8 @@ async def ups_tracking_webhook(req: Request) -> Dict[str, Any]:
 
     payload = await req.json() if raw else {}
     tracking_number = payload.get("tracking_number") or payload.get("trackingNumber") or "unknown"
+
+    # 1. Audit log (existing behavior — preserved).
     T.billing.put_item(
         Item={
             "user_sub": "UPS_TRACKING",
@@ -105,7 +107,41 @@ async def ups_tracking_webhook(req: Request) -> Dict[str, Any]:
             "created_at": now_ts(),
         }
     )
-    return {"received": True}
+
+    # 2. SHOP-004: resolve the tracking number to an order and update its
+    #    shipping status (instead of only auditing). On delivery, fire the
+    #    seller delivery alert. Best effort — webhook still returns 200.
+    order_updated = False
+    try:
+        from app.services.carrier_tracking import apply_tracking_result, map_carrier_status
+        from app.services.purchase_history import find_transaction_by_tracking
+
+        order = find_transaction_by_tracking(tracking_number)
+        if order:
+            raw_status = (
+                payload.get("status_description")
+                or payload.get("statusDescription")
+                or payload.get("status")
+                or ""
+            )
+            new_status = map_carrier_status("ups", str(raw_status))
+            result = {
+                "status": new_status,
+                "status_description": payload.get("status_description")
+                or payload.get("statusDescription")
+                or str(raw_status),
+                "delivered_at": payload.get("delivered_at"),
+                "events": payload.get("events"),
+            }
+            # apply_tracking_result updates the order shipping record and fires
+            # the seller delivery alert on the transition to "delivered".
+            if apply_tracking_result(order, result) is not None:
+                order_updated = True
+    except Exception:
+        # Never fail the webhook on an order-update error; the audit row stands.
+        pass
+
+    return {"received": True, "order_updated": order_updated}
 
 
 def _decode_basic(auth_header: str) -> tuple[str, str]:

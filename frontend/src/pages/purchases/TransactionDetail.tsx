@@ -30,6 +30,7 @@ import {
   respondCancel,
 } from "@/api/endpoints/purchases";
 import type { TransactionEvent } from "@/api/endpoints/purchases";
+import { pollCarrierTracking } from "@/api/endpoints/carrierTracking";
 import { getCartItems } from "@/api/endpoints/cart";
 import type { CartItem } from "@/api/types";
 
@@ -300,6 +301,19 @@ export function TransactionDetail() {
     onError: () => toast.error("Failed to respond to cancellation"),
   });
 
+  const pollTrackingMutation = useMutation({
+    mutationFn: () => pollCarrierTracking(txnId!),
+    onSuccess: (data) => {
+      if (data.poll.updated) {
+        toast.success(`Tracking updated: ${data.poll.new_status ?? ""}`);
+      } else {
+        toast.message("Tracking is up to date");
+      }
+      invalidate();
+    },
+    onError: () => toast.error("Failed to refresh tracking"),
+  });
+
   const receiptMutation = useMutation({
     mutationFn: () => getReceipt(txnId!),
     onSuccess: (data) => {
@@ -475,6 +489,24 @@ export function TransactionDetail() {
                   </div>
                 )}
               </dl>
+              {txn.shipping.tracking_number && (
+                <div className="mt-3">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    data-testid="poll-tracking"
+                    disabled={pollTrackingMutation.isPending}
+                    onClick={() => pollTrackingMutation.mutate()}
+                  >
+                    {pollTrackingMutation.isPending ? (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    ) : (
+                      <RotateCcw className="mr-1 h-3 w-3" />
+                    )}
+                    Refresh tracking
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 

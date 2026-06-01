@@ -45,6 +45,20 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
 }
 
 const ALICE_ID = "alice";
+const ROOT_ID = "root";
+
+async function apiPost(
+  page: Page,
+  identity: string,
+  path: string,
+  body?: unknown,
+) {
+  const s = getSessions()[identity];
+  return page.request.post(`${API}${path}`, {
+    headers: { "x-csrf-token": s.csrf_token },
+    data: body === undefined ? {} : body,
+  });
+}
 
 // ─── SHOP-004: Carrier Tracking ─────────────────────────────────────────────
 
@@ -228,5 +242,226 @@ test.describe("81 · Carrier Tracking — Purchase history integration", () => {
     expect(body.tracking_url).toBeTruthy();
     expect(body.tracking_url).toContain("ups.com/track");
     expect(body.tracking_url).toContain(SHIP_TRACKING);
+  });
+});
+
+// ─── SHOP-004: Carrier polling → order status update ────────────────────────
+
+test.describe("82 · Carrier Tracking — Polling updates order status", () => {
+  let alicePage: Page;
+  let rootPage: Page;
+  let txnId: string;
+  const POLL_TRACKING = `1Z${"P".repeat(8)}${String(TS).slice(-8)}`;
+
+  test.beforeAll(async ({ browser }) => {
+    alicePage = await newIdentityPage(browser, ALICE_ID);
+    rootPage = await newIdentityPage(browser, ROOT_ID);
+    await alicePage.request.post(`${API}/mock/carrier-tracking/reset`);
+
+    // Create an order and attach UPS shipping with a tracking number.
+    const createResp = await apiPost(alicePage, ALICE_ID, "/ui/purchase-history/transactions", {
+      money: { amount: 19.99, currency: "usd" },
+      description: `PollWidget_${TS}`,
+    });
+    // create requires idempotency header; resend with it
+    if (createResp.status() !== 200) {
+      const s = getSessions()[ALICE_ID];
+      const retry = await alicePage.request.post(`${API}/ui/purchase-history/transactions`, {
+        headers: { "x-csrf-token": s.csrf_token, "X-Idempotency-Key": `poll-${TS}` },
+        data: { money: { amount: 19.99, currency: "usd" }, description: `PollWidget_${TS}` },
+      });
+      txnId = (await retry.json()).txn_id;
+    } else {
+      txnId = (await createResp.json()).txn_id;
+    }
+
+    const s = getSessions()[ALICE_ID];
+    const shipResp = await alicePage.request.put(
+      `${API}/ui/purchase-history/transactions/${txnId}/shipping`,
+      {
+        data: { shipping: { carrier: "ups", tracking_number: POLL_TRACKING, status: "shipped" } },
+        headers: { "x-csrf-token": s.csrf_token },
+      },
+    );
+    expect(shipResp.status()).toBe(200);
+  });
+
+  test.afterAll(async () => {
+    await alicePage.request.post(`${API}/mock/carrier-tracking/reset`);
+    await alicePage?.context().close();
+    await rootPage?.context().close();
+  });
+
+  test("82.1 Poll with no carrier data reports no_carrier_data", async () => {
+    const resp = await apiPost(
+      alicePage,
+      ALICE_ID,
+      `/ui/shop/tracking/transactions/${txnId}/poll`,
+    );
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.poll.txn_id).toBe(txnId);
+    expect(body.poll.polled).toBe(false);
+    expect(body.poll.reason).toBe("no_carrier_data");
+  });
+
+  test("82.2 Poll applies seeded in_transit status to the order", async () => {
+    // Seed carrier state as in_transit.
+    const seed = await alicePage.request.post(`${API}/mock/carrier-tracking/seed`, {
+      data: {
+        carrier: "ups",
+        tracking_number: POLL_TRACKING,
+        status: "in_transit",
+        status_description: "In Transit",
+        events: [{ timestamp: "2026-05-30T10:00:00Z", description: "In transit", location: "Denver, CO" }],
+      },
+    });
+    expect(seed.status()).toBe(200);
+
+    const resp = await apiPost(
+      alicePage,
+      ALICE_ID,
+      `/ui/shop/tracking/transactions/${txnId}/poll`,
+    );
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.poll.polled).toBe(true);
+    expect(body.poll.updated).toBe(true);
+    expect(body.poll.new_status).toBe("in_transit");
+    expect(body.tracking.status).toBe("in_transit");
+    expect(Array.isArray(body.tracking.carrier_events)).toBe(true);
+    expect(body.tracking.tracking_url).toContain("ups.com/track");
+  });
+
+  test("82.3 Polling again with unchanged status is idempotent", async () => {
+    const resp = await apiPost(
+      alicePage,
+      ALICE_ID,
+      `/ui/shop/tracking/transactions/${txnId}/poll`,
+    );
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.poll.polled).toBe(true);
+    expect(body.poll.updated).toBe(false);
+    expect(body.poll.reason).toBe("unchanged");
+  });
+
+  test("82.4 Poll applies delivered status and sets delivered_at", async () => {
+    await alicePage.request.post(`${API}/mock/carrier-tracking/seed`, {
+      data: {
+        carrier: "ups",
+        tracking_number: POLL_TRACKING,
+        status: "delivered",
+        status_description: "Delivered",
+      },
+    });
+    const resp = await apiPost(
+      alicePage,
+      ALICE_ID,
+      `/ui/shop/tracking/transactions/${txnId}/poll`,
+    );
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.poll.updated).toBe(true);
+    expect(body.poll.new_status).toBe("delivered");
+    expect(body.tracking.status).toBe("delivered");
+    expect(body.tracking.delivered_at).toBeTruthy();
+  });
+
+  test("82.5 Delivery generated a delivery_confirmed alert for the buyer", async () => {
+    // The order owner (Alice) is alerted on delivery.
+    const resp = await apiGet(alicePage, `/ui/alerts`, { limit: "50" });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    const delivery = (body.alerts || []).find(
+      (a: { event?: string }) => a.event === "delivery_confirmed",
+    );
+    expect(delivery).toBeTruthy();
+  });
+
+  test("82.6 Admin poll-now requires admin/root (USER → 403)", async () => {
+    const resp = await apiPost(alicePage, ALICE_ID, `/ui/shop/tracking/poll-now`);
+    expect(resp.status()).toBe(403);
+  });
+
+  test("82.7 Root poll-now returns a batch summary", async () => {
+    const resp = await apiPost(rootPage, ROOT_ID, `/ui/shop/tracking/poll-now`);
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(typeof body.checked).toBe("number");
+    expect(typeof body.updated).toBe("number");
+    expect(Array.isArray(body.results)).toBe(true);
+  });
+});
+
+// ─── SHOP-004: Webhook → order update + delivery alert ──────────────────────
+
+test.describe("83 · Carrier Tracking — Webhook updates order", () => {
+  let alicePage: Page;
+  let txnId: string;
+  const WH_TRACKING = `1Z${"W".repeat(8)}${String(TS).slice(-8)}`;
+
+  test.beforeAll(async ({ browser }) => {
+    alicePage = await newIdentityPage(browser, ALICE_ID);
+
+    const s = getSessions()[ALICE_ID];
+    const createResp = await alicePage.request.post(`${API}/ui/purchase-history/transactions`, {
+      headers: { "x-csrf-token": s.csrf_token, "X-Idempotency-Key": `wh-${TS}` },
+      data: { money: { amount: 5.0, currency: "usd" }, description: `WebhookWidget_${TS}` },
+    });
+    expect(createResp.status()).toBe(200);
+    txnId = (await createResp.json()).txn_id;
+
+    const shipResp = await alicePage.request.put(
+      `${API}/ui/purchase-history/transactions/${txnId}/shipping`,
+      {
+        data: { shipping: { carrier: "ups", tracking_number: WH_TRACKING, status: "shipped" } },
+        headers: { "x-csrf-token": s.csrf_token },
+      },
+    );
+    expect(shipResp.status()).toBe(200);
+  });
+
+  test.afterAll(async () => {
+    await alicePage?.context().close();
+  });
+
+  test("83.1 Delivered webhook updates the order shipping status", async () => {
+    // Emit a signed UPS webhook via the dev emitter.
+    const emit = await alicePage.request.post(`${API}/emit/ups-tracking-webhook`, {
+      data: { payload: { tracking_number: WH_TRACKING, status: "Delivered" } },
+    });
+    expect(emit.status()).toBe(200);
+    const emitBody = await emit.json();
+    expect(emitBody.ok).toBe(true);
+
+    // The order shipping status should now be delivered.
+    const trackResp = await apiGet(
+      alicePage,
+      `/ui/purchase-history/transactions/${txnId}/tracking`,
+    );
+    expect(trackResp.status()).toBe(200);
+    const body = await trackResp.json();
+    expect(body.status).toBe("delivered");
+    expect(body.delivered_at).toBeTruthy();
+  });
+
+  test("83.2 Webhook with invalid signature is rejected (403)", async () => {
+    const resp = await alicePage.request.post(`${API}/api/ups/tracking/webhook`, {
+      headers: { "content-type": "application/json", "x-ups-signature": "deadbeef" },
+      data: { tracking_number: WH_TRACKING, status: "Delivered" },
+    });
+    expect(resp.status()).toBe(403);
+  });
+
+  test("83.3 Delivery webhook generated a buyer delivery alert", async () => {
+    const resp = await apiGet(alicePage, `/ui/alerts`, { limit: "50" });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    const delivery = (body.alerts || []).find(
+      (a: { event?: string; details?: { tracking_number?: string } }) =>
+        a.event === "delivery_confirmed" && a.details?.tracking_number === WH_TRACKING,
+    );
+    expect(delivery).toBeTruthy();
   });
 });
