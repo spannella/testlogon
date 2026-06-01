@@ -59,6 +59,7 @@ from app.routers.seo_metadata import seo_metadata_router
 from app.routers.admin_calendar_integrations import router as admin_calendar_integrations_router
 from app.routers.device_trust import router as device_trust_router
 from app.routers.newsfeed import router as newsfeed_router, startup as newsfeed_startup
+from app.routers.image_optimization import image_optimization_router
 from app.routers.purchase_history import router as purchase_history_router
 from app.routers.shoppingcart import router as shoppingcart_router, start_cart_abandonment_task
 from app.routers.catalog import router as catalog_router
@@ -429,6 +430,7 @@ def create_app() -> FastAPI:
     app.include_router(seo_metadata_router)
     app.include_router(device_trust_router)
     app.include_router(newsfeed_router)
+    app.include_router(image_optimization_router)
     app.include_router(moderation_router)
     app.include_router(moderation_compat_router)
     app.include_router(admin_moderation_router)

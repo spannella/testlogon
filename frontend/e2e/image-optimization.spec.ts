@@ -219,3 +219,112 @@ test.describe("82 · Image Optimization — ResponsiveImage UI", () => {
     await page.context().close();
   });
 });
+
+// ─── PLATFORM-004: On-demand optimization router (/ui/images/optimize) ───────
+
+test.describe("83 · Image Optimization — On-demand optimization API", () => {
+  let alicePage: Page;
+  let sourceKey: string;
+  let optimizationId: string;
+
+  test.beforeAll(async ({ browser }) => {
+    alicePage = await newIdentityPage(browser, ALICE_ID);
+    // Upload a source image to optimize on demand.
+    const session = getSessions()[ALICE_ID];
+    const pngBuffer = createTestPng(1200, 900);
+    const resp = await alicePage.request.post(`${API}/uploads/image`, {
+      headers: { "x-csrf-token": session.csrf_token },
+      multipart: {
+        file: { name: `ondemand_${TS}.png`, mimeType: "image/png", buffer: pngBuffer },
+      },
+    });
+    expect(resp.status()).toBe(200);
+    sourceKey = (await resp.json()).s3_key;
+  });
+
+  test.afterAll(async () => {
+    await alicePage?.context().close();
+  });
+
+  test("83.1 Request optimization returns a record with variants", async () => {
+    const session = getSessions()[ALICE_ID];
+    const resp = await alicePage.request.post(`${API}/ui/images/optimize`, {
+      headers: { "x-csrf-token": session.csrf_token },
+      data: { source_key: sourceKey, format: "webp" },
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.optimization_id).toBeTruthy();
+    expect(body.output_format).toBe("webp");
+    expect(body.variants).toBeTruthy();
+    expect(body.variants).toHaveProperty("sm");
+    expect(body.variants.sm.width).toBeLessThanOrEqual(480);
+    expect(body.variants.sm.format).toBe("webp");
+    optimizationId = body.optimization_id;
+  });
+
+  test("83.2 Served variant is fetchable as WebP", async () => {
+    const session = getSessions()[ALICE_ID];
+    const resp = await alicePage.request.post(`${API}/ui/images/optimize`, {
+      headers: { "x-csrf-token": session.csrf_token },
+      data: { source_key: sourceKey },
+    });
+    const body = await resp.json();
+    const smUrl = body.variants.sm.url;
+    const served = await alicePage.request.get(`${API}${smUrl}`);
+    expect(served.status()).toBe(200);
+    expect(served.headers()["content-type"] || "").toContain("image/webp");
+  });
+
+  test("83.3 Repeat request returns a cached record", async () => {
+    const session = getSessions()[ALICE_ID];
+    const resp = await alicePage.request.post(`${API}/ui/images/optimize`, {
+      headers: { "x-csrf-token": session.csrf_token },
+      data: { source_key: sourceKey, use_cache: true },
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.cached).toBe(true);
+  });
+
+  test("83.4 Fetch persisted optimization record by id", async () => {
+    expect(optimizationId).toBeTruthy();
+    const resp = await alicePage.request.get(`${API}/ui/images/optimize/${optimizationId}`);
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.optimization_id).toBe(optimizationId);
+    expect(body.variants).toHaveProperty("sm");
+  });
+
+  test("83.5 Missing source_key/source_url returns 422", async () => {
+    const session = getSessions()[ALICE_ID];
+    const resp = await alicePage.request.post(`${API}/ui/images/optimize`, {
+      headers: { "x-csrf-token": session.csrf_token },
+      data: { format: "webp" },
+    });
+    expect(resp.status()).toBe(422);
+  });
+
+  test("83.6 Invalid format returns 422", async () => {
+    const session = getSessions()[ALICE_ID];
+    const resp = await alicePage.request.post(`${API}/ui/images/optimize`, {
+      headers: { "x-csrf-token": session.csrf_token },
+      data: { source_key: sourceKey, format: "gif" },
+    });
+    expect(resp.status()).toBe(422);
+  });
+
+  test("83.7 Optimizing a non-existent source returns 404", async () => {
+    const session = getSessions()[ALICE_ID];
+    const resp = await alicePage.request.post(`${API}/ui/images/optimize`, {
+      headers: { "x-csrf-token": session.csrf_token },
+      data: { source_key: `uploads/${ALICE_ID}/does-not-exist-${TS}/missing.png` },
+    });
+    expect(resp.status()).toBe(404);
+  });
+
+  test("83.8 Fetching an unknown optimization id returns 404", async () => {
+    const resp = await alicePage.request.get(`${API}/ui/images/optimize/nonexistent${TS}`);
+    expect(resp.status()).toBe(404);
+  });
+});
