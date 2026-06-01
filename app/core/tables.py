@@ -123,6 +123,7 @@ class Tables:
     promo_codes: Any
     scheduled_actions: Any
     watermark_jobs: Any
+    vod_watermark_downloads: Any
     recommendations: Any
     refund_requests: Any
     billing_disputes: Any
@@ -332,6 +333,7 @@ T = Tables(
     promo_codes=ddb.Table(S.promo_codes_table_name),
     scheduled_actions=ddb.Table(S.scheduled_actions_table_name),
     watermark_jobs=ddb.Table(S.watermark_jobs_table_name),
+    vod_watermark_downloads=ddb.Table(S.vod_watermark_downloads_table_name),
     recommendations=ddb.Table(S.recommendations_table_name),
     refund_requests=ddb.Table(S.refund_requests_table_name),
     billing_disputes=ddb.Table(S.billing_disputes_table_name),

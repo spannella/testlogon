@@ -1143,6 +1143,15 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # Per-viewer Watermarked Download renders (VOD-020 — distinct pipeline)
+        TableDef(
+            _resolve_table_name(S.vod_watermark_downloads_table_name, "vod_watermark_downloads"),
+            "render_id",
+            gsi=[
+                {"index_name": "ByViewerVideo", "partition_key": "viewer_video_key", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Content Recommendations (DISC-001)
         TableDef(
             _resolve_table_name(S.recommendations_table_name, "recommendations"),

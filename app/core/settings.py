@@ -1534,6 +1534,15 @@ class Settings:
     watermark_cache_ttl_seconds: int = int(os.environ.get("WATERMARK_CACHE_TTL_SECONDS", "86400"))
     watermark_max_concurrent_jobs: int = int(os.environ.get("WATERMARK_MAX_CONCURRENT_JOBS", "5"))
 
+    # Watermarked Downloads — per-viewer render flow (VOD-020, distinct pipeline)
+    vod_watermark_download_enabled: bool = os.environ.get("VOD_WATERMARK_DOWNLOAD_ENABLED", "1") not in ("0", "false", "False")
+    vod_watermark_download_real_ffmpeg: bool = os.environ.get("VOD_WATERMARK_DOWNLOAD_REAL_FFMPEG", "0") not in ("0", "false", "False")
+    vod_watermark_downloads_table_name: str = os.environ.get("VOD_WATERMARK_DOWNLOADS_TABLE_NAME", "vod_watermark_downloads")
+    vod_watermark_download_ttl_seconds: int = int(os.environ.get("VOD_WATERMARK_DOWNLOAD_TTL_SECONDS", "86400"))
+    vod_watermark_download_url_ttl_seconds: int = int(os.environ.get("VOD_WATERMARK_DOWNLOAD_URL_TTL_SECONDS", "3600"))
+    vod_watermark_download_max_concurrent: int = int(os.environ.get("VOD_WATERMARK_DOWNLOAD_MAX_CONCURRENT", "5"))
+    vod_watermark_download_opacity: float = float(os.environ.get("VOD_WATERMARK_DOWNLOAD_OPACITY", "0.02"))
+
     # Subtitles / Closed Captions (VOD-021)
     video_subtitle_enabled: bool = os.environ.get("VIDEO_SUBTITLE_ENABLED", "1") not in ("0", "false", "False")
     video_subtitle_max_tracks: int = int(os.environ.get("VIDEO_SUBTITLE_MAX_TRACKS", "20"))

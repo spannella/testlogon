@@ -9591,3 +9591,43 @@ export interface VodAdBreakReportResponse {
   playback_unlocked: boolean;
   status: string;
 }
+
+// ─── VOD-020: Watermarked Downloads (per-viewer render) ──────────────────────
+
+export interface VodWatermarkDownloadResponse {
+  status: "ready" | "processing" | "failed";
+  render_id: string;
+  download_url?: string | null;
+  cached?: boolean;
+  watermark_payload?: string | null;
+  output_size_bytes?: number | null;
+}
+
+export interface VodWatermarkDownloadStatusResponse {
+  status: "ready" | "processing" | "failed" | "not_found";
+  render_id?: string | null;
+  download_url?: string | null;
+  output_size_bytes?: number | null;
+  created_at?: number | null;
+  error?: string | null;
+}
+
+export interface VodWatermarkRenderItem {
+  render_id: string;
+  video_id: string;
+  viewer_id: string;
+  watermark_payload: string;
+  status: string;
+  created_at: number;
+  output_size_bytes?: number | null;
+}
+
+export interface VodWatermarkRenderListResponse {
+  items: VodWatermarkRenderItem[];
+}
+
+export interface VodWatermarkExtractResponse {
+  found: boolean;
+  payload?: string | null;
+  decoded?: Record<string, unknown> | null;
+}

@@ -146,6 +146,7 @@ from app.routers.group_feed import router as group_feed_router, public_group_fee
 from app.routers.fan_club import router as fan_club_router, public_router as fan_club_public_router
 from app.routers.stories import router as stories_router
 from app.routers.watermark import router as watermark_router, internal_router as watermark_internal_router
+from app.routers.vod_watermark_download import vod_watermark_download_router
 from app.routers.watch_party import router as watch_party_router
 from app.routers.media_preferences import router as media_preferences_router
 from app.middleware.rate_limit import rate_limit_middleware_factory
@@ -527,6 +528,7 @@ def create_app() -> FastAPI:
     # Watermark router registered before video_listing_router so
     # /my-downloads matches before /{video_id} (VOD-020)
     app.include_router(watermark_router)
+    app.include_router(vod_watermark_download_router)
     app.include_router(video_listing_router)
     app.include_router(video_subtitles_router)
     app.include_router(vod_router)
