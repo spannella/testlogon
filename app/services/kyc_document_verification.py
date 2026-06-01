@@ -39,6 +39,18 @@ from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
 
+
+def _emit_kyc_event_safe(*, event: str, user_sub: str, **kw) -> None:
+    """Emit a KYC webhook/notification event (KYC-011), lazy-import-safe."""
+    if not user_sub:
+        return
+    try:
+        from app.services.kyc_webhooks import emit_kyc_event
+
+        emit_kyc_event(event=event, user_sub=user_sub, **kw)
+    except Exception:  # pragma: no cover - defensive
+        pass
+
 # --- constants -------------------------------------------------------------
 
 ALLOWED_DOCUMENT_TYPES = {"id_front", "id_back"}
@@ -386,6 +398,13 @@ class KycDocumentVerificationStore:
             document_id,
             dec,
             reviewer_sub,
+        )
+        _emit_kyc_event_safe(
+            event="kyc.document.verified" if dec == "approve" else "kyc.document.rejected",
+            user_sub=str(item.get("user_sub") or ""),
+            case_id=str(item.get("case_id") or "") or None,
+            document_id=document_id,
+            decision=dec,
         )
         return {**item, **update}
 

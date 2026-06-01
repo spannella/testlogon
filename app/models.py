@@ -12162,3 +12162,60 @@ class EngagementPublicOut(BaseModel):
     engagement_rate_30d: float = 0.0
     engagement_rate_7d: float = 0.0
     visible: bool = False
+
+
+
+
+# ─── KYC Webhooks & Notifications (KYC-011) ──────────────────────────────────
+
+class KycWebhookEventType(BaseModel):
+    event_type: str
+    description: str
+
+
+class KycWebhookEventTypesOut(BaseModel):
+    event_types: List[KycWebhookEventType] = Field(default_factory=list)
+
+
+class KycWebhookPrefsOut(BaseModel):
+    in_app_enabled: bool = True
+    email_enabled: bool = True
+    events: List[str] = Field(default_factory=list)
+
+
+class KycWebhookPrefsUpdateRequest(BaseModel):
+    in_app_enabled: Optional[bool] = None
+    email_enabled: Optional[bool] = None
+    events: Optional[List[str]] = Field(default=None, max_length=40)
+
+
+class KycWebhookNotificationItem(BaseModel):
+    alert_id: str
+    event: str
+    title: str = ""
+    details: Dict[str, Any] = Field(default_factory=dict)
+    action_url: Optional[str] = None
+    read: bool = False
+    created_at: int = 0
+
+
+class KycWebhookNotificationsOut(BaseModel):
+    items: List[KycWebhookNotificationItem] = Field(default_factory=list)
+    total: int = 0
+
+
+class KycWebhookEmitRequest(BaseModel):
+    event: str = Field(min_length=1, max_length=80)
+    user_sub: str = Field(min_length=1, max_length=256)
+    case_id: Optional[str] = Field(default=None, max_length=128)
+    data: Optional[Dict[str, Any]] = None
+
+
+class KycWebhookEmitResult(BaseModel):
+    event: str
+    user_sub: str
+    dispatched: bool = False
+    channels: Dict[str, bool] = Field(default_factory=dict)
+    alert_id: Optional[str] = None
+    webhook_delivery_ids: List[str] = Field(default_factory=list)
+    reason: Optional[str] = None

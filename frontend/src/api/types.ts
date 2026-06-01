@@ -10694,3 +10694,60 @@ export interface EngagementPublic {
   engagement_rate_7d: number;
   visible: boolean;
 }
+
+
+
+// ─── KYC Webhooks & Notifications (KYC-011) ──────────────────────────────────
+
+export interface KycWebhookEventType {
+  event_type: string;
+  description: string;
+}
+
+export interface KycWebhookEventTypesOut {
+  event_types: KycWebhookEventType[];
+}
+
+export interface KycWebhookPrefsOut {
+  in_app_enabled: boolean;
+  email_enabled: boolean;
+  events: string[];
+}
+
+export interface KycWebhookPrefsUpdateRequest {
+  in_app_enabled?: boolean;
+  email_enabled?: boolean;
+  events?: string[];
+}
+
+export interface KycWebhookNotificationItem {
+  alert_id: string;
+  event: string;
+  title: string;
+  details: Record<string, unknown>;
+  action_url?: string | null;
+  read: boolean;
+  created_at: number;
+}
+
+export interface KycWebhookNotificationsOut {
+  items: KycWebhookNotificationItem[];
+  total: number;
+}
+
+export interface KycWebhookEmitRequest {
+  event: string;
+  user_sub: string;
+  case_id?: string | null;
+  data?: Record<string, unknown> | null;
+}
+
+export interface KycWebhookEmitResult {
+  event: string;
+  user_sub: string;
+  dispatched: boolean;
+  channels: Record<string, boolean>;
+  alert_id?: string | null;
+  webhook_delivery_ids: string[];
+  reason?: string | null;
+}
