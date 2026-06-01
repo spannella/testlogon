@@ -211,6 +211,7 @@ from app.routers.sso_saml import router as sso_saml_router
 from app.routers.license_revenue import router as license_revenue_router, admin_router as license_revenue_admin_router
 from app.routers.llm_provider_keys import router as llm_provider_keys_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
+from app.routers.advertiser_api import advertiser_api_router
 from app.routers.delegates import router as delegates_router
 from app.routers.syndicates import router as syndicates_router
 from app.routers.syndicate_revenue_split import syndicate_revenue_split_router
@@ -614,6 +615,7 @@ def create_app() -> FastAPI:
     app.include_router(llm_provider_keys_router)
     app.include_router(ads_router)
     app.include_router(ads_admin_router)
+    app.include_router(advertiser_api_router)
     app.include_router(sponsorship_deals_router)
     app.include_router(delegates_router)
     app.include_router(syndicates_router)
