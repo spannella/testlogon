@@ -1831,6 +1831,13 @@ class Settings:
     syndicate_feed_enabled: bool = os.environ.get(
         "SYNDICATE_FEED_ENABLED", "true"
     ) not in ("0", "false", "False")
+    # Syndicate Advertising (SYND-006)
+    syndicate_ad_campaigns_table_name: str = os.environ.get(
+        "SYNDICATE_AD_CAMPAIGNS_TABLE_NAME", "syndicate_ad_campaigns"
+    )
+    syndicate_advertising_enabled: bool = os.environ.get(
+        "SYNDICATE_ADVERTISING_ENABLED", "true"
+    ) not in ("0", "false", "False")
     # User Groups (GROUP-001)
     # SSH Key Manager (INFRA-002)
     ssh_keys_table_name: str = os.environ.get("SSH_KEYS_TABLE_NAME", "ssh_keys")

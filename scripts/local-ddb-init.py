@@ -1581,6 +1581,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSSYND_SK": "N"},
         ),
+        # Syndicate Advertising (SYND-006)
+        TableDef(
+            _resolve_table_name(S.syndicate_ad_campaigns_table_name, "syndicate_ad_campaigns"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
         # Issued Licenses (LICENSE-002) + License Requests (LICENSE-004)
         TableDef(
             _resolve_table_name(S.issued_licenses_table_name, "issued_licenses"),

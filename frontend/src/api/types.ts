@@ -9903,6 +9903,68 @@ export interface SyndicateTreasuryContributorOut {
 }
 
 
+// ── Syndicate Advertising (SYND-006) ────────────────────────────────────────
+
+export interface SyndicateCampaignCreativeIn {
+  headline: string;
+  body: string;
+  image_url?: string | null;
+  cta_text: string;
+  cta_url: string;
+}
+
+export interface SyndicateCampaignTargetingIn {
+  audience?: string;
+  interests?: string[];
+  geo?: string | null;
+  age_min?: number | null;
+  age_max?: number | null;
+}
+
+export interface SyndicateCampaignCreateIn {
+  name: string;
+  description?: string;
+  budget_cents: number;
+  creative: SyndicateCampaignCreativeIn;
+  targeting?: SyndicateCampaignTargetingIn | null;
+  start_date?: string;
+  end_date?: string | null;
+}
+
+export interface SyndicateCampaignOut {
+  campaign_id: string;
+  syndicate_id: string;
+  name: string;
+  description: string;
+  status: string;
+  budget_cents: number;
+  spent_cents: number;
+  remaining_cents: number;
+  creative: Record<string, unknown>;
+  targeting: Record<string, unknown>;
+  start_date: string;
+  end_date: string;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+  stats_summary: Record<string, unknown>;
+}
+
+export interface SyndicateCampaignDailyStatsOut {
+  date: string;
+  impressions: number;
+  clicks: number;
+  spend_cents: number;
+  unique_viewers: number;
+}
+
+export interface SyndicateCampaignAnalyticsOut {
+  campaign_id: string;
+  daily: SyndicateCampaignDailyStatsOut[];
+  totals: Record<string, unknown>;
+}
+
+
 // ── KYC-006: Sanctions / PEP Screening ──────────────────────────────────────
 
 export type KycScreenType =

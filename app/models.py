@@ -11134,6 +11134,82 @@ class SyndicateTreasuryContributorOut(BaseModel):
     last_contribution_at: int = 0
 
 
+# ---------------------------------------------------------------------------
+# Syndicate Advertising (SYND-006)
+# ---------------------------------------------------------------------------
+
+
+class SyndicateCampaignCreativeIn(BaseModel):
+    headline: str = Field(min_length=1, max_length=100)
+    body: str = Field(min_length=1, max_length=500)
+    image_url: Optional[str] = None
+    cta_text: str = Field(min_length=1, max_length=50)
+    cta_url: str = Field(min_length=1, max_length=200)
+
+
+class SyndicateCampaignTargetingIn(BaseModel):
+    audience: str = Field(default="all")
+    interests: List[str] = Field(default_factory=list, max_length=10)
+    geo: Optional[str] = None
+    age_min: Optional[int] = Field(default=None, ge=13, le=100)
+    age_max: Optional[int] = Field(default=None, ge=13, le=100)
+
+
+class SyndicateCampaignCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    description: str = Field(default="", max_length=500)
+    budget_cents: int = Field(ge=100, le=10_000_000)
+    creative: SyndicateCampaignCreativeIn
+    targeting: Optional[SyndicateCampaignTargetingIn] = None
+    start_date: str = ""
+    end_date: Optional[str] = None
+
+
+class SyndicateCampaignStatusUpdateIn(BaseModel):
+    status: str = Field(pattern="^(active|paused|cancelled)$")
+
+
+class SyndicateCampaignBudgetAddIn(BaseModel):
+    additional_cents: int = Field(ge=100, le=10_000_000)
+
+
+class SyndicateCampaignImpressionIn(BaseModel):
+    viewer_user_id: str = ""
+    clicked: bool = False
+
+
+class SyndicateCampaignOut(BaseModel):
+    campaign_id: str
+    syndicate_id: str
+    name: str
+    description: str = ""
+    status: str
+    budget_cents: int = 0
+    spent_cents: int = 0
+    remaining_cents: int = 0
+    creative: Dict[str, Any] = Field(default_factory=dict)
+    targeting: Dict[str, Any] = Field(default_factory=dict)
+    start_date: str = ""
+    end_date: str = ""
+    created_by: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+    stats_summary: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SyndicateCampaignDailyStatsOut(BaseModel):
+    date: str
+    impressions: int = 0
+    clicks: int = 0
+    spend_cents: int = 0
+    unique_viewers: int = 0
+
+
+class SyndicateCampaignAnalyticsOut(BaseModel):
+    campaign_id: str
+    daily: List[SyndicateCampaignDailyStatsOut] = Field(default_factory=list)
+    totals: Dict[str, Any] = Field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # KYC-006: Sanctions / PEP Screening models
