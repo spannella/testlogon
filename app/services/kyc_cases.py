@@ -14,6 +14,19 @@ from app.core.tables import T
 from app.core.time import now_ts
 
 
+def _emit_kyc_event_safe(*, event: str, user_sub: str, **kw: Any) -> None:
+    """Emit a KYC webhook/notification event (KYC-011), lazy-import-safe.
+
+    Never raises — a notification failure must not break a case transition.
+    """
+    try:
+        from app.services.kyc_webhooks import emit_kyc_event
+
+        emit_kyc_event(event=event, user_sub=user_sub, **kw)
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+
 _ALLOWED_STATUSES = {
     "draft",
     "submitted",
@@ -363,6 +376,12 @@ class KycCaseStore:
                     return latest
                 raise KycCaseConflictError("kyc_case_update_conflict") from exc
             raise
+        _emit_kyc_event_safe(
+            event="kyc.case.submitted",
+            user_sub=owner_sub,
+            case_id=case_id,
+            submitted_at=ts,
+        )
         return self.get_case(case_id)
 
     def sync_from_ticket_event(

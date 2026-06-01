@@ -54,6 +54,18 @@ from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
 
+
+def _emit_kyc_event_safe(*, event: str, user_sub: str, **kw) -> None:
+    """Emit a KYC webhook/notification event (KYC-011), lazy-import-safe."""
+    if not user_sub:
+        return
+    try:
+        from app.services.kyc_webhooks import emit_kyc_event
+
+        emit_kyc_event(event=event, user_sub=user_sub, **kw)
+    except Exception:  # pragma: no cover - defensive
+        pass
+
 # --- constants -------------------------------------------------------------
 
 SCREEN_TYPES = [
@@ -327,8 +339,21 @@ class KycSanctionsScreeningStore:
             logger.warning(
                 "kyc.screening.match_found case_id=%s matches=%s", case_id, matches
             )
+            _emit_kyc_event_safe(
+                event="kyc.sanctions.match",
+                user_sub=user_sub,
+                case_id=case_id,
+                match_count=matches,
+                trigger=trigger,
+            )
         else:
             logger.info("kyc.screening.all_clear case_id=%s trigger=%s", case_id, trigger)
+            _emit_kyc_event_safe(
+                event="kyc.sanctions.clear",
+                user_sub=user_sub,
+                case_id=case_id,
+                trigger=trigger,
+            )
         self._write_case_screening_summary(case_id=case_id, results=results)
         return results
 

@@ -106,6 +106,7 @@ from app.routers.kyc_residency import kyc_residency_router
 from app.routers.kyc_liveness_call import kyc_liveness_call_router
 from app.routers.kyc_sanctions_screening import kyc_sanctions_screening_router
 from app.routers.kyc_proof_of_funds import kyc_proof_of_funds_router
+from app.routers.kyc_webhooks import kyc_webhooks_router
 from app.routers.playback_entitlements import router as playback_entitlements_router
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
@@ -539,6 +540,7 @@ def create_app() -> FastAPI:
     app.include_router(kyc_liveness_call_router)
     app.include_router(kyc_sanctions_screening_router)
     app.include_router(kyc_proof_of_funds_router)
+    app.include_router(kyc_webhooks_router)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
     # Recommendation routes MUST be registered before video_listing_router

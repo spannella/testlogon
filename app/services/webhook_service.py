@@ -141,6 +141,31 @@ WEBHOOK_EVENT_TYPES_V2: Dict[str, str] = {
     # Organizations
     "org.member_joined": "A member joined an organization",
     "org.member_removed": "A member was removed from an organization",
+
+    # KYC (KYC-011)
+    "kyc.case.created": "A new KYC verification case was created",
+    "kyc.case.submitted": "A KYC case was submitted for review",
+    "kyc.case.approved": "A KYC case was approved",
+    "kyc.case.rejected": "A KYC case was rejected",
+    "kyc.case.needs_info": "Additional information was requested for a KYC case",
+    "kyc.tier.changed": "A user verification tier changed",
+    "kyc.tier.upgraded": "A user verification tier was upgraded",
+    "kyc.tier.downgraded": "A user verification tier was downgraded",
+    "kyc.document.verified": "A KYC document was verified",
+    "kyc.document.rejected": "A KYC document was rejected",
+    "kyc.residency.verified": "A residency proof was verified",
+    "kyc.proof_of_funds.verified": "A proof-of-funds submission was verified",
+    "kyc.liveness.passed": "A liveness/verification call passed",
+    "kyc.liveness.failed": "A liveness/verification call failed",
+    "kyc.id_scan.result": "An ID document scan produced a result",
+    "kyc.sanctions.match": "A sanctions/PEP screening match was found",
+    "kyc.sanctions.clear": "A sanctions/PEP screening came back clear",
+}
+
+# Canonical allowlist of KYC webhook event types (KYC-011).
+# These are also added to WEBHOOK_EVENT_TYPES_V2 above so subscriptions validate.
+KYC_WEBHOOK_EVENT_TYPES: Dict[str, str] = {
+    k: v for k, v in WEBHOOK_EVENT_TYPES_V2.items() if k.startswith("kyc.")
 }
 
 
@@ -152,8 +177,12 @@ def get_event_types() -> Dict[str, str]:
 
 
 def is_valid_event_type(event_type: str) -> bool:
-    """Check whether an event type is valid in the current mode."""
-    return event_type in get_event_types()
+    """Check whether an event type is valid in the current mode.
+
+    KYC event types (KYC-011) are always valid regardless of the v2 flag so
+    that KYC webhook subscriptions work even when v2 is disabled.
+    """
+    return event_type in get_event_types() or event_type in KYC_WEBHOOK_EVENT_TYPES
 
 
 # ─── Retry schedule ─────────────────────────────────────────────────────────
