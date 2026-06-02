@@ -1106,6 +1106,13 @@ class Settings:
     gif_provider: str = os.environ.get("GIF_PROVIDER", "mock")
     sticker_max_file_size_bytes: int = int(os.environ.get("STICKER_MAX_FILE_SIZE", "524288"))
     sticker_max_per_collection: int = int(os.environ.get("STICKER_MAX_PER_COLLECTION", "100"))
+    # Custom emojis (MSG-007)
+    custom_emojis_enabled: bool = os.environ.get("CUSTOM_EMOJIS_ENABLED", "true").lower() == "true"
+    ddb_custom_emojis_table: str = os.environ.get("DDB_CUSTOM_EMOJIS_TABLE", "custom_emojis")
+    custom_emoji_max_file_size_bytes: int = int(os.environ.get("CUSTOM_EMOJI_MAX_FILE_SIZE", "262144"))
+    custom_emoji_max_dimension_px: int = int(os.environ.get("CUSTOM_EMOJI_MAX_DIMENSION", "128"))
+    custom_emoji_max_per_user: int = int(os.environ.get("CUSTOM_EMOJI_MAX_PER_USER", "100"))
+    custom_emoji_s3_prefix: str = os.environ.get("CUSTOM_EMOJI_S3_PREFIX", "emojis")
     messaging_gallery_enabled: bool = os.environ.get("MESSAGING_GALLERY_ENABLED", "true").lower() == "true"
     # Find-a-DateTime messages (MSG-009)
     find_datetime_enabled: bool = os.environ.get("FIND_DATETIME_ENABLED", "true").lower() == "true"

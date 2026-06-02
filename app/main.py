@@ -49,6 +49,7 @@ from app.routers.account_state import router as account_state_router
 from app.routers.profile import router as profile_router
 from app.routers.messaging import router as messaging_router
 from app.routers.sticker_collections import router as sticker_collections_router, admin_router as sticker_admin_router
+from app.routers.custom_emojis import router as custom_emojis_router, admin_router as custom_emojis_admin_router
 from app.routers.filemanager import router as filemanager_router
 from app.routers.signature_packets import router as signature_packets_router
 from app.routers.signature_templates import router as signature_templates_router
@@ -443,6 +444,8 @@ def create_app() -> FastAPI:
     app.include_router(messaging_router)
     app.include_router(sticker_collections_router)
     app.include_router(sticker_admin_router)
+    app.include_router(custom_emojis_router)
+    app.include_router(custom_emojis_admin_router)
     app.include_router(filemanager_router)
     app.include_router(signature_packets_router)
     app.include_router(signature_templates_router)

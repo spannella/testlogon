@@ -22,6 +22,7 @@ class Tables:
     billing: Any
     billing_config: Any
     sticker_collections: Any
+    custom_emojis: Any
     fraud_cases: Any
     payment_incidents: Any
     payment_incident_events: Any
@@ -251,6 +252,7 @@ T = Tables(
     billing=ddb.Table(S.billing_table_name),
     billing_config=ddb.Table(S.billing_config_table_name),
     sticker_collections=ddb.Table(S.ddb_sticker_collections_table),
+    custom_emojis=ddb.Table(S.ddb_custom_emojis_table),
     fraud_cases=ddb.Table(S.ddb_fraud_cases_table),
     payment_incidents=ddb.Table(S.payment_incidents_table_name),
     payment_incident_events=ddb.Table(S.payment_incident_events_table_name),

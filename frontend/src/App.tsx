@@ -114,6 +114,7 @@ const PrivacyPage = lazy(() => import("@/pages/settings/PrivacyPage"));
 const AccountDeletionPage = lazy(() => import("@/pages/settings/AccountDeletionPage"));
 const BlockedUsersPage = lazy(() => import("@/pages/settings/BlockedUsersPage"));
 const WebhooksPage = lazy(() => import("@/pages/settings/WebhooksPage"));
+const CustomEmojisPage = lazy(() => import("@/pages/settings/CustomEmojisPage"));
 const GeoRulesPage = lazy(() => import("@/pages/settings/GeoRulesPage"));
 const ReferralDashboard = lazy(() => import("@/pages/referrals/ReferralDashboard"));
 const PromoCodesPage = lazy(() => import("@/pages/promo/PromoCodesPage"));
@@ -343,6 +344,7 @@ export default function App() {
           <Route path="settings/account-deletion" element={<AccountDeletionPage />} />
           <Route path="settings/blocked" element={<BlockedUsersPage />} />
           <Route path="settings/webhooks" element={<WebhooksPage />} />
+          <Route path="settings/emojis" element={<CustomEmojisPage />} />
           <Route path="settings/geo" element={<GeoRulesPage />} />
           <Route path="webhooks" element={<WebhookDashboard />} />
           <Route path="webhooks/:endpointId" element={<WebhookEndpointDetail />} />

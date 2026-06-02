@@ -17,6 +17,62 @@ export function replaceShortcodes(text: string): string {
   });
 }
 
+// MSG-007: custom emoji shortcode helpers.
+// A custom shortcode looks like `:my_cat:` where the inner text is [a-z0-9_]{2,32}.
+const CUSTOM_SHORTCODE_RE = /:([a-z0-9_]{2,32}):/g;
+
+/**
+ * Extract the unique set of `:shortcode:` tokens present in `text` whose inner
+ * value does NOT correspond to a built-in Unicode emoji. These are candidate
+ * custom-emoji shortcodes that must be resolved server-side.
+ */
+export function extractCustomShortcodes(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const out = new Set<string>();
+  let m: RegExpExecArray | null;
+  CUSTOM_SHORTCODE_RE.lastIndex = 0;
+  while ((m = CUSTOM_SHORTCODE_RE.exec(text)) !== null) {
+    const code = m[1].toLowerCase();
+    if (!SHORTCODE_MAP.has(code)) out.add(code);
+  }
+  return Array.from(out);
+}
+
+export type CustomEmojiTextPart =
+  | { type: "text"; value: string }
+  | { type: "emoji"; shortcode: string; url: string };
+
+/**
+ * Split `text` into a sequence of plain-text and resolved custom-emoji parts.
+ * `customEmojiMap` maps a shortcode -> image URL. Shortcodes not present in the
+ * map are kept verbatim as text.
+ */
+export function splitCustomEmojiText(
+  text: string,
+  customEmojiMap: Record<string, string>,
+): CustomEmojiTextPart[] {
+  const parts: CustomEmojiTextPart[] = [];
+  if (!text) return parts;
+  let lastIndex = 0;
+  let m: RegExpExecArray | null;
+  CUSTOM_SHORTCODE_RE.lastIndex = 0;
+  while ((m = CUSTOM_SHORTCODE_RE.exec(text)) !== null) {
+    const code = m[1].toLowerCase();
+    const url = customEmojiMap[code];
+    if (!url) continue;
+    if (m.index > lastIndex) {
+      parts.push({ type: "text", value: text.slice(lastIndex, m.index) });
+    }
+    parts.push({ type: "emoji", shortcode: code, url });
+    lastIndex = m.index + m[0].length;
+  }
+  if (lastIndex < text.length) {
+    parts.push({ type: "text", value: text.slice(lastIndex) });
+  }
+  if (parts.length === 0) parts.push({ type: "text", value: text });
+  return parts;
+}
+
 // Matches a single emoji "cluster" (base emoji + optional ZWJ-joined parts +
 // optional variation selectors / skin-tone modifiers). The `u` flag enables
 // Unicode property escapes.
