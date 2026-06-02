@@ -13,6 +13,17 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  useKycSupportedLocales,
+  useKycTranslations,
+} from "@/hooks/useKycTranslations";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -63,6 +74,11 @@ export default function KycWizardPage() {
   const qc = useQueryClient();
   const [currentStep, setCurrentStep] = useState(0);
   const [caseId, setCaseId] = useState<string | null>(null);
+  const [locale, setLocale] = useState<string>(
+    () => localStorage.getItem("i18nextLng")?.split("-")[0] || "en",
+  );
+  const localesQuery = useKycSupportedLocales();
+  const { t, rtl } = useKycTranslations(locale);
 
   const casesQuery = useQuery({
     queryKey: ["kyc", "cases"],
@@ -124,10 +140,32 @@ export default function KycWizardPage() {
   const stepProps = { ensureCase, refresh, kycCase };
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8" data-testid="kyc-wizard">
-      <div className="mb-6 flex items-center gap-2">
-        <ShieldCheck className="h-6 w-6 text-blue-600" />
-        <h1 className="text-2xl font-bold">Identity Verification</h1>
+    <div
+      className="mx-auto max-w-3xl px-4 py-8"
+      data-testid="kyc-wizard"
+      dir={rtl ? "rtl" : "ltr"}
+    >
+      <div className="mb-6 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-6 w-6 text-blue-600" />
+          <h1 className="text-2xl font-bold">
+            {t("kyc.ui.label.wizard.title", "Identity Verification")}
+          </h1>
+        </div>
+        <Select value={locale} onValueChange={setLocale}>
+          <SelectTrigger className="w-40" data-testid="kyc-locale-switcher">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(localesQuery.data?.locales ?? [{ code: "en", name: "English", native_name: "English", rtl: false }]).map(
+              (l) => (
+                <SelectItem key={l.code} value={l.code}>
+                  {l.native_name || l.name}
+                </SelectItem>
+              ),
+            )}
+          </SelectContent>
+        </Select>
       </div>
 
       <Progress value={((currentStep + 1) / STEPS.length) * 100} className="mb-6" />

@@ -12348,3 +12348,82 @@ export interface KycTemplateRenderForCaseResult {
   case_id: string;
   rendered: KycRenderedTemplate[];
 }
+
+// ── KYC Multi-Language Support (KYC-020) ─────────────────────────────
+
+export interface KycSupportedLocale {
+  code: string;
+  name: string;
+  native_name: string;
+  rtl: boolean;
+}
+
+export interface KycSupportedLocales {
+  default: string;
+  locales: KycSupportedLocale[];
+}
+
+export interface KycTranslationBundle {
+  language: string;
+  rtl: boolean;
+  translations: Record<string, string>;
+}
+
+export interface KycTranslation {
+  language_code: string;
+  key: string;
+  value: string;
+  context?: string;
+  status?: "published" | "draft" | "needs_review";
+  updated_by?: string | null;
+  updated_at?: number | null;
+}
+
+export interface KycTranslationCoverage {
+  language_code: string;
+  total_keys: number;
+  translated_keys: number;
+  missing_keys: number;
+  coverage_pct: number;
+}
+
+export interface KycTranslationList {
+  items: KycTranslation[];
+  coverage?: KycTranslationCoverage | null;
+  total: number;
+}
+
+export interface KycCoverageReport {
+  languages: Record<string, KycTranslationCoverage>;
+}
+
+export interface KycLocalizedLegalNotice {
+  text: string;
+  language: string;
+  version: string;
+  is_fallback: boolean;
+  rtl: boolean;
+}
+
+export interface KycLocalizedQuestionnaire {
+  questionnaire: Record<string, unknown>;
+  language: string;
+  rtl: boolean;
+  fallback_keys: string[];
+}
+
+export interface KycTranslationBulkImportResult {
+  imported: number;
+  skipped: number;
+  errors: string[];
+}
+
+export interface KycTranslationExport {
+  language: string;
+  translations: Record<string, string>;
+}
+
+export interface KycMyLocale {
+  language: string;
+  rtl: boolean;
+}

@@ -120,6 +120,7 @@ from app.routers.kyc_webhooks import kyc_webhooks_router
 from app.routers.kyc_eidv import kyc_eidv_router
 from app.routers.kyc_partner_api import kyc_partner_api_router
 from app.routers.kyc_case_assignment import router as kyc_case_assignment_router
+from app.routers.kyc_translations import router as kyc_translations_router
 from app.services.kyc_case_assignment import start_kyc_sla_checker_task
 from app.routers.playback_entitlements import router as playback_entitlements_router
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
@@ -576,6 +577,7 @@ def create_app() -> FastAPI:
     app.include_router(kyc_eidv_router)
     app.include_router(kyc_partner_api_router)
     app.include_router(kyc_case_assignment_router)
+    app.include_router(kyc_translations_router)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
     # Recommendation routes MUST be registered before video_listing_router

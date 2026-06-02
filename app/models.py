@@ -13888,3 +13888,115 @@ class KycTemplateRenderForCaseOut(BaseModel):
 
     case_id: str
     rendered: List[KycRenderedTemplateOut] = Field(default_factory=list)
+
+
+# ── KYC Multi-Language Support (KYC-020) ─────────────────────────────────────
+
+
+class KycTranslationIn(BaseModel):
+    """Request model for creating/updating a KYC translation."""
+
+    value: str = Field(..., min_length=1, max_length=10000, description="Translated string value")
+    context: str = Field(default="", max_length=500, description="Usage context hint for translators")
+    status: str = Field(default="published", pattern=r"^(published|draft|needs_review)$")
+
+
+class KycTranslationOut(BaseModel):
+    """Response model for a single KYC translation entry."""
+
+    language_code: str
+    key: str
+    value: str
+    context: str = ""
+    status: str = "published"
+    updated_by: Optional[str] = None
+    updated_at: Optional[int] = None
+
+
+class KycTranslationListOut(BaseModel):
+    """Response model for listing KYC translations (admin)."""
+
+    items: List[KycTranslationOut] = Field(default_factory=list)
+    coverage: Optional[Dict[str, Any]] = None
+    total: int = 0
+
+
+class KycTranslationBundleOut(BaseModel):
+    """Response model for a locale translation bundle (user-facing)."""
+
+    language: str
+    rtl: bool = False
+    translations: Dict[str, str] = Field(default_factory=dict)
+
+
+class KycSupportedLocaleOut(BaseModel):
+    """A single supported locale descriptor."""
+
+    code: str
+    name: str
+    native_name: str = ""
+    rtl: bool = False
+
+
+class KycSupportedLocalesOut(BaseModel):
+    """Response model for the list of supported KYC locales."""
+
+    default: str = "en"
+    locales: List[KycSupportedLocaleOut] = Field(default_factory=list)
+
+
+class KycTranslationCoverageOut(BaseModel):
+    """Response model for KYC translation coverage of one language."""
+
+    language_code: str
+    total_keys: int = 0
+    translated_keys: int = 0
+    missing_keys: int = 0
+    coverage_pct: float = 0.0
+
+
+class KycCoverageReportOut(BaseModel):
+    """Response model for multi-language KYC coverage report."""
+
+    languages: Dict[str, KycTranslationCoverageOut] = Field(default_factory=dict)
+
+
+class KycLocalizedQuestionnaireOut(BaseModel):
+    """Response model for a localized questionnaire."""
+
+    questionnaire: Dict[str, Any] = Field(default_factory=dict)
+    language: str = "en"
+    rtl: bool = False
+    fallback_keys: List[str] = Field(default_factory=list)
+
+
+class KycLocalizedLegalNoticeOut(BaseModel):
+    """Response model for a localized legal notice."""
+
+    text: str
+    language: str
+    version: str
+    is_fallback: bool = False
+    rtl: bool = False
+
+
+class KycTranslationBulkImportIn(BaseModel):
+    """Request model for bulk KYC translation import."""
+
+    translations: Dict[str, str] = Field(..., description="Map of key -> value", max_length=500)
+    status: str = Field(default="draft", pattern=r"^(published|draft|needs_review)$")
+
+
+class KycTranslationBulkImportOut(BaseModel):
+    """Response model for bulk import results."""
+
+    imported: int = 0
+    skipped: int = 0
+    errors: List[str] = Field(default_factory=list)
+
+
+class KycTranslationExportOut(BaseModel):
+    """Response model for exporting translations for a language."""
+
+    language: str
+    translations: Dict[str, str] = Field(default_factory=dict)
