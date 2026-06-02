@@ -144,12 +144,6 @@ export function FeedTimeline({
                   <span>posted</span>
                 </div>
               )}
-              {post.reposted_by && (
-                <div className="flex items-center gap-1 px-4 py-1.5 text-sm text-muted-foreground" data-testid="repost-attribution">
-                  <Repeat2 className="h-3.5 w-3.5" />
-                  <span className="font-medium">{post.reposted_by.display_name}</span>
-                  <span>reposted</span>
-                </div>
               {post.is_sponsored ? (
                 <SponsoredPostCard post={post} />
               ) : (
