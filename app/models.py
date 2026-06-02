@@ -13670,3 +13670,118 @@ class KycWorkloadDashboardOut(BaseModel):
     sla_config: Dict[str, Dict[str, int]] = Field(default_factory=dict)
     total_active_cases: int = 0
     total_on_duty_admins: int = 0
+
+
+# === KYC-018: Address Verification Service =================================
+
+
+class AddressInput(BaseModel):
+    """Structured address input for verification."""
+
+    line_1: str = Field(..., min_length=1, max_length=200)
+    line_2: str = Field(default="", max_length=200)
+    city: str = Field(..., min_length=1, max_length=100)
+    state: str = Field(default="", max_length=100)
+    postal_code: str = Field(..., min_length=1, max_length=20)
+    country: str = Field(..., min_length=2, max_length=2)
+
+
+class VerifyAddressRequest(BaseModel):
+    """Request body for triggering an address verification."""
+
+    address: AddressInput
+
+
+class PostalCodeValidationRequest(BaseModel):
+    """Request body for standalone postal code validation."""
+
+    postal_code: str = Field(..., min_length=1, max_length=20)
+    country: str = Field(..., min_length=2, max_length=2)
+
+
+class CrossReferenceRequest(BaseModel):
+    """Request body for cross-referencing a document address (admin)."""
+
+    document_address: AddressInput
+
+
+class AddressOverrideRequest(BaseModel):
+    """Request body for an admin override of the verification decision."""
+
+    decision: Literal["verified", "needs_review", "failed"]
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class GeocodingOut(BaseModel):
+    """Geocoding coordinates."""
+
+    lat: float = Field(..., ge=-90.0, le=90.0)
+    lng: float = Field(..., ge=-180.0, le=180.0)
+
+
+class CrossReferenceOut(BaseModel):
+    """Cross-reference result between profile and document addresses."""
+
+    match_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    discrepancies: List[str] = Field(default_factory=list)
+    field_comparisons: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class AddressOverrideOut(BaseModel):
+    """Admin override metadata on a verification record."""
+
+    decision: Literal["verified", "needs_review", "failed"]
+    reviewer_sub: Optional[str] = None
+    note: Optional[str] = None
+    decided_at: Optional[int] = None
+
+
+class AddressVerificationOut(BaseModel):
+    """Address verification result for a KYC case."""
+
+    verification_id: Optional[str] = None
+    kyc_case_id: Optional[str] = None
+    status: Literal[
+        "verified", "partial_match", "unverifiable", "pending", "error"
+    ] = "pending"
+    decision: Literal["verified", "needs_review", "failed"] = "needs_review"
+    confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    country: Optional[str] = None
+    country_format_valid: bool = False
+    postal_format_hint: str = ""
+    input_address: Optional[AddressInput] = None
+    standardized_address: Optional[AddressInput] = None
+    geocoding: Optional[GeocodingOut] = None
+    discrepancies: List[str] = Field(default_factory=list)
+    cross_reference: Optional[CrossReferenceOut] = None
+    override: Optional[AddressOverrideOut] = None
+    provider: Optional[str] = None
+    verified_at: Optional[int] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class AddressVerificationResponse(BaseModel):
+    """Envelope returned by verify / get / override endpoints."""
+
+    verification: AddressVerificationOut
+
+
+class AddressVerificationListResponse(BaseModel):
+    """List of verification attempts for a case."""
+
+    attempts: List[AddressVerificationOut] = Field(default_factory=list)
+
+
+class PostalCodeValidationOut(BaseModel):
+    """Postal code validation result."""
+
+    valid: bool = False
+    format_hint: str = ""
+    normalized: str = ""
+
+
+class CrossReferenceResponse(BaseModel):
+    """Envelope returned by the cross-reference endpoint."""
+
+    cross_reference: CrossReferenceOut

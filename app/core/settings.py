@@ -1283,6 +1283,38 @@ class Settings:
         os.environ.get("KYC_RESIDENCY_RECENCY_DAYS", "90")
     )
 
+    # KYC-018: Address Verification Service
+    # Master switch for the address verification feature.
+    kyc_address_verification_enabled: bool = os.environ.get(
+        "KYC_ADDRESS_VERIFICATION_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    # Enable mock geocoding (deterministic lat/lng derived from address hash).
+    kyc_address_geocoding_enabled: bool = os.environ.get(
+        "KYC_ADDRESS_GEOCODING_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    # When False (default) a deterministic mock provider is used; when True a
+    # "real" external postal provider would be invoked (not wired in dev / E2E).
+    kyc_address_real_provider_enabled: bool = os.environ.get(
+        "KYC_ADDRESS_REAL_PROVIDER_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_address_provider: str = os.environ.get(
+        "KYC_ADDRESS_PROVIDER", "mock_postal"
+    )
+    # Confidence threshold (inclusive) at/above which a result buckets to
+    # "verified"; below this but above the review floor buckets to
+    # "needs_review"; below the review floor buckets to "failed".
+    kyc_address_verified_threshold: float = float(
+        os.environ.get("KYC_ADDRESS_VERIFIED_THRESHOLD", "0.9")
+    )
+    kyc_address_review_threshold: float = float(
+        os.environ.get("KYC_ADDRESS_REVIEW_THRESHOLD", "0.5")
+    )
+    # Cross-reference match score (inclusive) at/above which a profile-vs-doc
+    # comparison is considered a "high" match (no discrepancy flag).
+    kyc_address_cross_reference_match_threshold: float = float(
+        os.environ.get("KYC_ADDRESS_CROSS_REFERENCE_MATCH_THRESHOLD", "0.8")
+    )
+
     # KYC-006: Sanctions / PEP Screening
     kyc_screening_results_table_name: str = os.environ.get(
         "KYC_SCREENING_RESULTS_TABLE_NAME", "kyc_screening_results"
