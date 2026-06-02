@@ -123,8 +123,8 @@ T.ad_analytics_rollups.put_item(Item=_floats_to_decimal(item))
 print("seeded")
 `;
   const out = execSync(
-    `bash -c 'set -a; source /home/ubuntu/testlogon/.env.local; set +a; cd /home/ubuntu/testlogon && PYTHONPATH=/home/ubuntu/testlogon /home/ubuntu/testlogon/.venv/bin/python -c ${JSON.stringify(py)}'`,
-    { timeout: 30_000 },
+    `bash -c 'set -a; source /home/ubuntu/testlogon/.env.local; set +a; cd /home/ubuntu/testlogon && PYTHONPATH=/home/ubuntu/testlogon /home/ubuntu/testlogon/.venv/bin/python -'`,
+    { timeout: 30_000, input: py },
   ).toString();
   if (!out.includes("seeded")) throw new Error(`seed failed: ${out}`);
 }

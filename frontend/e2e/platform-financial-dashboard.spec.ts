@@ -105,7 +105,7 @@ ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL',
 client = ddb.meta.client
 billing_name = os.environ.get('BILLING_TABLE_NAME') or os.environ.get('DDB_TABLE') or 'billing'
 rollup_name = os.environ.get('PLATFORM_FINANCIAL_DASHBOARD_ROLLUPS_TABLE_NAME') or 'financial_rollups'
-existing = client.list_tables()['TableNames']
+existing = [t for _p in client.get_paginator('list_tables').paginate() for t in _p['TableNames']]
 def ensure(name):
     if name in existing: return
     client.create_table(TableName=name, KeySchema=[{'AttributeName':'pk','KeyType':'HASH'},{'AttributeName':'sk','KeyType':'RANGE'}], AttributeDefinitions=[{'AttributeName':'pk','AttributeType':'S'},{'AttributeName':'sk','AttributeType':'S'}], BillingMode='PAY_PER_REQUEST')

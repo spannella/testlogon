@@ -96,31 +96,36 @@ ddb = boto3.resource('dynamodb',
 }
 
 function ddbPut(tableName: string, item: Record<string, unknown>): void {
-  const itemJson = JSON.stringify(item).replace(/'/g, "\\'");
   const script = `${pyEnvPreamble()}
-item = json.loads('${itemJson}', parse_float=decimal.Decimal, parse_int=decimal.Decimal)
-ddb.Table('${tableName}').put_item(Item=item)
+item = json.loads(os.environ['DDB_ITEM'], parse_float=decimal.Decimal, parse_int=decimal.Decimal)
+ddb.Table(os.environ['DDB_TABLE']).put_item(Item=item)
 print('ok')
 `;
-  execSync(`python3 -c "${script}"`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+  execSync("python3 -", {
+    cwd: "/home/ubuntu/testlogon",
+    timeout: 10_000,
+    input: script,
+    env: { ...process.env, DDB_ITEM: JSON.stringify(item), DDB_TABLE: tableName },
+  });
 }
 
 function ddbGet(tableName: string, key: Record<string, string>): Record<string, unknown> | null {
-  const keyJson = JSON.stringify(key).replace(/'/g, "\\'");
   const script = `${pyEnvPreamble()}
 class Enc(json.JSONEncoder):
     def default(self, o):
         if isinstance(o, decimal.Decimal):
             return int(o) if o == int(o) else float(o)
         return super().default(o)
-key = json.loads('${keyJson}')
-resp = ddb.Table('${tableName}').get_item(Key=key)
+key = json.loads(os.environ['DDB_KEY'])
+resp = ddb.Table(os.environ['DDB_TABLE']).get_item(Key=key)
 item = resp.get('Item')
 print(json.dumps(item, cls=Enc) if item else 'null')
 `;
-  const raw = execSync(`python3 -c "${script}"`, {
+  const raw = execSync("python3 -", {
     cwd: "/home/ubuntu/testlogon",
     timeout: 10_000,
+    input: script,
+    env: { ...process.env, DDB_KEY: JSON.stringify(key), DDB_TABLE: tableName },
   }).toString().trim();
   return raw === "null" ? null : JSON.parse(raw);
 }

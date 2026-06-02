@@ -105,7 +105,7 @@ function ensureBusinessTable() {
   execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 name = 'kyc_business_cases'
-existing = client.list_tables()['TableNames']
+existing = [t for _p in client.get_paginator('list_tables').paginate() for t in _p['TableNames']]
 if name not in existing:
     client.create_table(
         TableName=name,

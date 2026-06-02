@@ -84,7 +84,7 @@ client = boto3.client('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL'
 function ensureInvoicesTable(): void {
   execSync(`${PYTHON} -c "${pyEnvPreamble()}
 name = os.environ.get('INVOICES_TABLE_NAME','invoices')
-existing = client.list_tables().get('TableNames', [])
+existing = [t for _p in client.get_paginator('list_tables').paginate() for t in _p['TableNames']]
 if name not in existing:
     client.create_table(
         TableName=name,

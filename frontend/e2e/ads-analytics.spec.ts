@@ -202,9 +202,10 @@ for i in range(7):
 
 print("SEED_OK")
 `;
-  const result = execSync(`python3 -c ${JSON.stringify(script)}`, {
+  const result = execSync(`python3 -`, {
     cwd: "/home/ubuntu/testlogon",
     timeout: 30_000,
+    input: script,
   }).toString();
   if (!result.includes("SEED_OK")) {
     throw new Error(`Seed failed: ${result}`);

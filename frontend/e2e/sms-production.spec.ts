@@ -90,7 +90,7 @@ function ddbPy(snippet: string): string {
 
 function ensureTable() {
   ddbPy([
-    "names = client.list_tables()['TableNames']",
+    "names = [t for _p in client.get_paginator('list_tables').paginate() for t in _p['TableNames']]",
     `if '${SMS_TABLE}' not in names:`,
     "    client.create_table(",
     `        TableName='${SMS_TABLE}',`,

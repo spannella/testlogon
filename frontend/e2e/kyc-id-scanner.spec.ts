@@ -73,7 +73,7 @@ function seedCaseIdentity(caseId: string, firstName: string, lastName: string, d
     "import boto3, os",
     "ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name=os.environ.get('AWS_DEFAULT_REGION','us-east-1'), aws_access_key_id='test', aws_secret_access_key='test')",
     "t = ddb.Table('kyc_cases')",
-    `t.update_item(Key={'pk':'KYC#${caseId}','sk':'META'}, UpdateExpression='SET identity = :i', ExpressionAttributeValues={':i': {'first_name':'${firstName}','last_name':'${lastName}','date_of_birth':'${dob}','nationality':'${nat}'}})`,
+    `t.update_item(Key={'pk':'KYC#${caseId}','sk':'META'}, UpdateExpression='SET #idn = :i', ExpressionAttributeNames={'#idn':'identity'}, ExpressionAttributeValues={':i': {'first_name':'${firstName}','last_name':'${lastName}','date_of_birth':'${dob}','nationality':'${nat}'}})`,
   ].join("\n");
   execSync(`python3 -c "${py.replace(/"/g, '\\"')}"`, {
     cwd: "/home/ubuntu/testlogon",
