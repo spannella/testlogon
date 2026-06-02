@@ -36,6 +36,8 @@ function getSessions(): Record<string, SessionData> {
       { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
+    // admin setup keys by short name (alice/bob); alias by user_sub so email-id lookups resolve
+    for (const _k of Object.keys(_sessions)) { const _s = _sessions[_k]; if (_s && _s.user_sub && !_sessions[_s.user_sub]) _sessions[_s.user_sub] = _s; }
   }
   return _sessions!;
 }
