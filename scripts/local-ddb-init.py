@@ -140,6 +140,15 @@ def _table_defs() -> List[TableDef]:
             attr_types={"timestamp": "N"},
         ),
         TableDef(
+            _resolve_table_name(S.kyc_review_schedule_table_name, "kyc_review_schedule"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByNextReviewDate", "partition_key": "gsi_status_pk", "sort_key": "next_review_date"},
+            ],
+            attr_types={"next_review_date": "N"},
+        ),
+        TableDef(
             _resolve_table_name(S.kyc_documents_table_name, "kyc_documents"),
             "document_id",
             gsi=[

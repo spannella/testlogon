@@ -13401,3 +13401,47 @@ class KybScreeningEnvelope(BaseModel):
 
 class KybAdminQueueEnvelope(BaseModel):
     cases: List[Dict[str, Any]]
+
+
+# ── KYC Ongoing Monitoring & Periodic Review (KYC-016) ──────────────────────
+
+
+class KycTriggerEventRequest(BaseModel):
+    reason: str = Field(min_length=5, max_length=500)
+
+
+class KycCompleteReviewRequest(BaseModel):
+    new_risk_tier: Optional[Literal["low", "medium", "high", "critical"]] = None
+    case_id: Optional[str] = None
+
+
+class KycReviewScheduleEnvelope(BaseModel):
+    schedule: Optional[Dict[str, Any]] = None
+
+
+class KycTriggerEventListEnvelope(BaseModel):
+    events: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class KycMonitoringDashboardEnvelope(BaseModel):
+    generated_at: int
+    upcoming_reviews: List[Dict[str, Any]] = Field(default_factory=list)
+    overdue_reviews: List[Dict[str, Any]] = Field(default_factory=list)
+    needs_review_count: int = 0
+
+
+class KycReviewCheckResult(BaseModel):
+    checked_at: int
+    dry_run: bool
+    entered_grace_period: int = 0
+    auto_downgraded: int = 0
+
+
+class KycRescreeningResult(BaseModel):
+    screened_at: int
+    dry_run: bool
+    total_screened: int = 0
+    matches_found: int = 0
+    triggers_created: int = 0
+    skipped: Optional[bool] = None
+    reason: Optional[str] = None

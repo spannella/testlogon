@@ -1183,6 +1183,12 @@ class Settings:
     # KYC tiered verification levels (KYC-009)
     kyc_tier_gating_enabled: bool = os.environ.get("KYC_TIER_GATING_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
+    # KYC Ongoing Monitoring & Periodic Review (KYC-016)
+    kyc_review_schedule_table_name: str = os.environ.get("KYC_REVIEW_SCHEDULE_TABLE_NAME", "kyc_review_schedule")
+    kyc_review_grace_period_days: int = int(os.environ.get("KYC_REVIEW_GRACE_PERIOD_DAYS", "30"))
+    kyc_large_transaction_threshold_cents: int = int(os.environ.get("KYC_LARGE_TRANSACTION_THRESHOLD_CENTS", "500000"))
+    kyc_rescreening_enabled: bool = os.environ.get("KYC_RESCREENING_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
     # KYC Identity Document Verification (KYC-002)
     kyc_documents_table_name: str = os.environ.get("KYC_DOCUMENTS_TABLE_NAME", "kyc_documents")
     kyc_documents_status_index_name: str = os.environ.get("KYC_DOCUMENTS_STATUS_INDEX_NAME", "ByStatus")

@@ -98,6 +98,7 @@ const PublicClipPage = lazy(() => import("@/pages/clips/PublicClipPage"));
 const DmcaClaimForm = lazy(() => import("@/pages/dmca/DmcaClaimForm"));
 const DmcaDashboardPage = lazy(() => import("@/pages/admin/DmcaDashboardPage"));
 const RateLimitDashboard = lazy(() => import("@/pages/admin/RateLimitDashboard"));
+const KycMonitoringPage = lazy(() => import("@/pages/admin/KycMonitoringPage"));
 const EmailSmsDashboardPage = lazy(() => import("@/pages/admin/EmailSmsDashboardPage"));
 const AdminComputeDashboard = lazy(() => import("@/pages/admin/AdminComputeDashboard"));
 const JobDashboardPage = lazy(() => import("@/pages/admin/JobDashboardPage"));
@@ -388,6 +389,7 @@ export default function App() {
           <Route path="admin/disputes" element={<AdminDisputeQueuePage />} />
           <Route path="admin/fraud" element={<FraudReviewQueuePage />} />
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
+          <Route path="admin/kyc/monitoring" element={<KycMonitoringPage />} />
           <Route path="admin/communications" element={<EmailSmsDashboardPage />} />
           <Route path="admin/compute" element={<AdminComputeDashboard />} />
           <Route path="admin/jobs" element={<JobDashboardPage />} />
