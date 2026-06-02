@@ -40,6 +40,7 @@ import { BroadcastPostCard } from "@/components/newsfeed/BroadcastPostCard";
 import type { FileEntry } from "@/api/types";
 import { isTipLotteryEnabled } from "@/config/featureFlags";
 import { PollCard } from "./PollCard";
+import { CountdownCard } from "@/components/shared/CountdownCard";
 import { useOfflineStore } from "@/stores/offlineStore";
 
 function formatBytes(bytes?: number): string {
@@ -559,6 +560,18 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
                 </Badge>
               </Link>
             ))}
+          </div>
+        )}
+
+        {/* FEED-005: Countdown card */}
+        {post.post_kind === "countdown" && post.countdown_title && post.target_datetime && !isLocked && (
+          <div className="mt-3">
+            <CountdownCard
+              title={post.countdown_title}
+              targetDatetime={post.target_datetime}
+              associatedEventType={post.associated_event_type ?? "custom"}
+              associatedEventId={post.associated_event_id}
+            />
           </div>
         )}
 

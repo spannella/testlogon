@@ -1410,6 +1410,18 @@ class CreatePostRequest(ContentFieldsMixin):
     # ENGAGE-002: Poll/Survey post type
     post_type: Optional[Literal["standard", "poll", "survey"]] = None
     poll_data: Optional[PollDataIn] = None
+    # FEED-005: Countdown post fields
+    post_kind: Optional[Literal["text", "countdown"]] = Field(
+        default=None,
+        description="Post content kind. Default is text.",
+    )
+    countdown_title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    target_datetime: Optional[int] = Field(
+        default=None,
+        description="UTC Unix timestamp (seconds) for countdown target.",
+    )
+    associated_event_type: Optional[Literal["broadcast", "call", "calendar", "custom"]] = None
+    associated_event_id: Optional[str] = Field(default=None, max_length=128)
     publish_at: Optional[int] = Field(
         default=None,
         ge=0,
@@ -1509,6 +1521,12 @@ class PostResponse(BaseModel):
     poll_data: Optional[Dict[str, Any]] = None
     poll_vote_counts: Optional[Dict[str, Any]] = None
     poll_my_votes: Optional[Dict[str, Any]] = None
+    # FEED-005: Countdown fields
+    post_kind: str = "text"
+    countdown_title: Optional[str] = None
+    target_datetime: Optional[int] = None
+    associated_event_type: Optional[str] = None
+    associated_event_id: Optional[str] = None
 
 
 class ScheduledPostsResponse(BaseModel):
@@ -2139,6 +2157,14 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "ftc_disclosure": post.get("ftc_disclosure"),
         # ENGAGE-002: Poll data
         **_poll_fields_for_post(post, locked_body, viewer_id),
+        # FEED-005: Countdown fields (countdown_title hidden when post body is locked)
+        "post_kind": post.get("post_kind", "text"),
+        "countdown_title": None if locked_body else post.get("countdown_title"),
+        "target_datetime": (
+            int(post["target_datetime"]) if post.get("target_datetime") is not None else None
+        ),
+        "associated_event_type": post.get("associated_event_type"),
+        "associated_event_id": None if locked_body else post.get("associated_event_id"),
         # GROUP-002: Group context fields
         **({"group_id": post["group_id"], "audience": post.get("audience", "public"),
             "pinned": bool(post.get("pinned")),
@@ -3398,6 +3424,26 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         )
         poll_vote_counts_init = build_initial_vote_counts(poll_data_built)
 
+    # --- FEED-005: Countdown post validation ---
+    post_kind = getattr(req, "post_kind", None) or "text"
+    countdown_title: Optional[str] = None
+    target_datetime: Optional[int] = None
+    associated_event_type: Optional[str] = None
+    associated_event_id: Optional[str] = None
+    if post_kind == "countdown":
+        if not bool(getattr(S, "countdown_posts_enabled", True)):
+            raise HTTPException(status_code=403, detail="Countdown posts are disabled")
+        if not req.countdown_title:
+            raise HTTPException(status_code=400, detail="countdown_title required for countdown posts")
+        if req.target_datetime is None or int(req.target_datetime) <= now_ts:
+            raise HTTPException(status_code=400, detail="target_datetime must be in the future")
+        if req.associated_event_type and req.associated_event_type != "custom" and not req.associated_event_id:
+            raise HTTPException(status_code=400, detail="associated_event_id required for non-custom events")
+        countdown_title = req.countdown_title
+        target_datetime = int(req.target_datetime)
+        associated_event_type = req.associated_event_type
+        associated_event_id = req.associated_event_id
+
     content = _content_from_payload(req)
     _emit_newsfeed_content_metric(
         "create_post",
@@ -3452,6 +3498,13 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "allow_ads_near": req.allow_ads_near,
         "body_plain_lc": (content.get("body_plain") or content.get("body") or "").lower(),
     }
+    # FEED-005: persist countdown fields (additive; only for countdown posts)
+    if post_kind == "countdown":
+        post_item["post_kind"] = "countdown"
+        post_item["countdown_title"] = countdown_title
+        post_item["target_datetime"] = target_datetime
+        post_item["associated_event_type"] = associated_event_type
+        post_item["associated_event_id"] = associated_event_id
     # ENGAGE-002: Attach poll data to post item
     if req_post_type in ("poll", "survey") and poll_data_built:
         post_item["post_type"] = req_post_type
@@ -3551,6 +3604,11 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         poll_data=poll_data_built if poll_data_built else None,
         poll_vote_counts=poll_vote_counts_init if poll_vote_counts_init else None,
         poll_my_votes=None,
+        post_kind=post_kind,
+        countdown_title=countdown_title,
+        target_datetime=target_datetime,
+        associated_event_type=associated_event_type,
+        associated_event_id=associated_event_id,
     )
 
 

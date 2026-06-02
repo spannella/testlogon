@@ -12303,3 +12303,45 @@ class ShareLinkPublicInfoOut(BaseModel):
 
 class ShareLinkDownloadIn(BaseModel):
     password: Optional[str] = Field(default=None, max_length=128)
+
+
+# ---------------------------------------------------------------------------
+# FEED-005: Countdown Posts
+# ---------------------------------------------------------------------------
+class CreateCountdownPostIn(BaseModel):
+    """Request model for creating a countdown post."""
+
+    post_kind: Literal["countdown"] = "countdown"
+    countdown_title: str = Field(..., min_length=1, max_length=200)
+    target_datetime: int = Field(..., gt=0, description="UTC Unix timestamp (seconds)")
+    associated_event_type: Optional[Literal["broadcast", "call", "calendar", "custom"]] = None
+    associated_event_id: Optional[str] = Field(default=None, max_length=128)
+    body: Optional[str] = Field(default=None, max_length=5000)
+    image_urls: Optional[List[str]] = None
+    unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+    publish_at: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_event_link(self):
+        if self.associated_event_type and self.associated_event_type != "custom":
+            if not self.associated_event_id:
+                raise ValueError("associated_event_id required for non-custom events")
+        return self
+
+
+class CountdownPostOut(BaseModel):
+    """Response model for countdown post data."""
+
+    post_id: str
+    user_id: str
+    user_name: Optional[str] = None
+    post_kind: Literal["countdown"] = "countdown"
+    countdown_title: str
+    target_datetime: int
+    associated_event_type: Optional[str] = None
+    associated_event_id: Optional[str] = None
+    body: Optional[str] = None
+    created_at: int = 0
+    like_count: int = 0
+    comment_count: int = 0
+    reactions_counts: Optional[Dict[str, int]] = None

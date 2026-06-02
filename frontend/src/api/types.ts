@@ -2104,6 +2104,12 @@ export interface FeedPost {
   repost_quote?: string;
   /** SOCIAL-006: hashtags/topics on this post */
   tags?: string[];
+  /** FEED-005: countdown post fields */
+  post_kind?: "text" | "countdown" | null;
+  countdown_title?: string | null;
+  target_datetime?: number | null;
+  associated_event_type?: "broadcast" | "call" | "calendar" | "custom" | null;
+  associated_event_id?: string | null;
   /** ENGAGE-002: poll data when post_type is "poll" or "survey" */
   poll_data?: PollData | null;
   /** ENGAGE-002: vote counts per question per option */
@@ -2298,6 +2304,12 @@ export interface CreatePostReq {
   tags?: string[];
   /** ENGAGE-002: post type for poll/survey */
   post_type?: "standard" | "poll" | "survey";
+  /** FEED-005: countdown post fields */
+  post_kind?: "text" | "countdown";
+  countdown_title?: string;
+  target_datetime?: number;
+  associated_event_type?: "broadcast" | "call" | "calendar" | "custom";
+  associated_event_id?: string;
   /** ENGAGE-002: poll data for creating poll/survey posts */
   poll_data?: {
     questions: Array<{
