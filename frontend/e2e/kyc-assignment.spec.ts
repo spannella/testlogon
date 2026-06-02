@@ -82,11 +82,13 @@ function seedCase(opts: {
 }): void {
   const status = opts.status ?? "under_review";
   const intake = opts.intakeProfile ?? "basic";
-  const review = {
-    assigned_admin_sub: opts.assignedAdmin ?? null,
-    sla_due_at: opts.slaDueAt ?? null,
-    escalation_level: opts.escalationLevel ?? 0,
-  };
+  // Build a Python dict literal (single-quoted) for `review` rather than embedding
+  // JSON.stringify output — its double quotes collide with the double-quoted
+  // `python3 -c "..."` shell wrapper and break the command.
+  const reviewPy =
+    `{'assigned_admin_sub': ${opts.assignedAdmin ? `'${opts.assignedAdmin}'` : "None"}, ` +
+    `'sla_due_at': ${opts.slaDueAt ?? "None"}, ` +
+    `'escalation_level': ${opts.escalationLevel ?? 0}}`;
   execSync(
     `python3 -c "
 import boto3, os, json, time
@@ -99,7 +101,7 @@ for line in env.read_text().splitlines():
 ddb=boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
 t=ddb.Table(os.environ.get('KYC_CASES_TABLE_NAME','kyc_cases'))
 now=int(time.time())
-review=json.loads('${JSON.stringify(review).replace(/'/g, "")}')
+review=${reviewPy}
 item={'pk':'KYC#${opts.caseId}','sk':'META','entity_type':'kyc_case','kyc_case_id':'${opts.caseId}','user_sub':'seed_user','status':'${status}','intake_profile':'${intake}','review':review,'created_at':now,'updated_at':now,'version':1,'gsi_status_pk':'STATUS#${status}','gsi_status_sk':'UPDATED#%013d#KYC#${opts.caseId}'%now}
 t.put_item(Item=item)
 print('seeded ${opts.caseId}')
@@ -109,7 +111,9 @@ print('seeded ${opts.caseId}')
 }
 
 function clearAvailabilityAndCases(adminSubs: string[]): void {
-  const subsJson = JSON.stringify(adminSubs);
+  // Python list literal (single-quoted) — avoid JSON double quotes colliding
+  // with the double-quoted `python3 -c "..."` shell wrapper.
+  const subsPy = "[" + adminSubs.map((s) => `'${s}'`).join(", ") + "]";
   execSync(
     `python3 -c "
 import boto3, os, json
@@ -121,7 +125,7 @@ for line in env.read_text().splitlines():
         k,v=line.split('=',1); os.environ.setdefault(k.strip(), v.strip())
 ddb=boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
 t=ddb.Table(os.environ.get('KYC_CASES_TABLE_NAME','kyc_cases'))
-for s in json.loads('${subsJson}'):
+for s in ${subsPy}:
     t.delete_item(Key={'pk':'ADMIN#'+s,'sk':'AVAILABILITY'})
 print('cleared availability')
 "`,
