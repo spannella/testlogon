@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from boto3.dynamodb.conditions import Attr, Key
 from fastapi import APIRouter, Depends, HTTPException, File, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 
 from app.models import PreferencesPatchReq, ProfilePatchReq, ProfilePutReq
@@ -128,7 +129,10 @@ async def ui_get_profile_by_identifier(identifier: str, req: Request):
 
         status_code = 200
         result = "success"
-        return JSONResponse(content=body, headers=_profile_lookup_response_headers(etag))
+        # jsonable_encoder coerces DynamoDB Decimal (e.g. follower/post counts that
+        # become Decimal once data exists) to JSON numbers — raw JSONResponse uses
+        # json.dumps which raises on Decimal (500, and a cross-spec flake trigger).
+        return JSONResponse(content=jsonable_encoder(body), headers=_profile_lookup_response_headers(etag))
     except HTTPException as exc:
         status_code = int(exc.status_code or 500)
         if status_code == 429:
