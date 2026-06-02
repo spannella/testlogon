@@ -5983,8 +5983,10 @@ class ComputeOptionListOut(BaseModel):
 
 class AdDepositIn(BaseModel):
     """Request body for POST /ui/ads/accounts/{id}/deposit."""
-    amount_cents: int = Field(..., ge=5000, le=10000000,
-                              description="Deposit amount in cents ($50 minimum, $100k maximum)")
+    amount_cents: int = Field(..., ge=1, le=10000000,
+                              description="Deposit amount in cents ($100k maximum); the $50 "
+                                          "minimum is enforced in the service so the client gets "
+                                          "a 400 with a clear 'Minimum deposit' message")
     payment_method_id: str = Field(default="",
                                     description="Payment method ID from billing system")
 
