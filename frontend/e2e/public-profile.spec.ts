@@ -1,11 +1,11 @@
 /**
  * E2E tests for SOC-005: Public Profile Page
  *
- * Section 112: Public Profile UI (8 tests)
- * Section 113: Profile SEO (3 tests)
- * Section 114: Subscribe CTA (4 tests)
- * Section 115: Public Profile API (5 tests)
- * Section 116: Profile Posts API (5 tests)
+ * Section 723: Public Profile UI (8 tests)
+ * Section 724: Profile SEO (3 tests)
+ * Section 725: Subscribe CTA (4 tests)
+ * Section 726: Public Profile API (5 tests)
+ * Section 727: Profile Posts API (5 tests)
  */
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
@@ -343,11 +343,11 @@ test.afterAll(async () => {
 });
 
 // =============================================================================
-// Section 112: Public Profile UI
+// Section 723: Public Profile UI
 // =============================================================================
 
-test.describe("112 - Public Profile UI", () => {
-  test("112.1 Profile page loads with header and stats", async ({ browser }) => {
+test.describe("723 - Public Profile UI", () => {
+  test("723.1 Profile page loads with header and stats", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -365,7 +365,7 @@ test.describe("112 - Public Profile UI", () => {
     await page.close();
   });
 
-  test("112.2 Follow button works", async ({ browser }) => {
+  test("723.2 Follow button works", async ({ browser }) => {
     cleanupFollow();
 
     const page = await browser.newPage();
@@ -393,7 +393,7 @@ test.describe("112 - Public Profile UI", () => {
     await page.close();
   });
 
-  test("112.3 Unfollow works", async ({ browser }) => {
+  test("723.3 Unfollow works", async ({ browser }) => {
     // Set up: Bob follows Alice
     const setupPage = await newIdentityPage(browser, BOB_KEY);
     await apiPost(setupPage, BOB_KEY, "/ui/social/follow", {
@@ -425,7 +425,7 @@ test.describe("112 - Public Profile UI", () => {
     await page.close();
   });
 
-  test("112.4 Message button is visible", async ({ browser }) => {
+  test("723.4 Message button is visible", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -438,7 +438,7 @@ test.describe("112 - Public Profile UI", () => {
     await page.close();
   });
 
-  test("112.5 Posts tab shows post cards", async ({ browser }) => {
+  test("723.5 Posts tab shows post cards", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -460,7 +460,7 @@ test.describe("112 - Public Profile UI", () => {
     await page.close();
   });
 
-  test("112.6 About tab shows profile details", async ({ browser }) => {
+  test("723.6 About tab shows profile details", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -478,7 +478,7 @@ test.describe("112 - Public Profile UI", () => {
     await page.close();
   });
 
-  test("112.7 Post card click navigates to post detail", async ({ browser }) => {
+  test("723.7 Post card click navigates to post detail", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -500,7 +500,7 @@ test.describe("112 - Public Profile UI", () => {
     await page.close();
   });
 
-  test("112.8 Unauthenticated viewer sees sign-in prompt", async ({ browser }) => {
+  test("723.8 Unauthenticated viewer sees sign-in prompt", async ({ browser }) => {
     // No auth injection - just visit the profile page
     const page = await browser.newPage();
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -522,11 +522,11 @@ test.describe("112 - Public Profile UI", () => {
 });
 
 // =============================================================================
-// Section 113: Profile SEO
+// Section 724: Profile SEO
 // =============================================================================
 
-test.describe("113 - Profile SEO", () => {
-  test("113.1 Page title includes display name", async ({ browser }) => {
+test.describe("724 - Profile SEO", () => {
+  test("724.1 Page title includes display name", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -541,7 +541,7 @@ test.describe("113 - Profile SEO", () => {
     await page.close();
   });
 
-  test("113.2 OG meta tags set correctly", async ({ browser }) => {
+  test("724.2 OG meta tags set correctly", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -562,7 +562,7 @@ test.describe("113 - Profile SEO", () => {
     await page.close();
   });
 
-  test("113.3 Canonical link is set", async ({ browser }) => {
+  test("724.3 Canonical link is set", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -580,11 +580,11 @@ test.describe("113 - Profile SEO", () => {
 });
 
 // =============================================================================
-// Section 114: Subscribe CTA
+// Section 725: Subscribe CTA
 // =============================================================================
 
-test.describe("114 - Subscribe CTA", () => {
-  test("114.1 Subscribe section shown for creator with plans (Alice)", async ({ browser }) => {
+test.describe("725 - Subscribe CTA", () => {
+  test("725.1 Subscribe section shown for creator with plans (Alice)", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -600,7 +600,7 @@ test.describe("114 - Subscribe CTA", () => {
     await page.close();
   });
 
-  test("114.2 Subscribe section hidden for user without plans (Bob)", async ({ browser }) => {
+  test("725.2 Subscribe section hidden for user without plans (Bob)", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, ALICE_KEY);
     await page.goto(`${BASE}/u/${BOB_SUB}`, { waitUntil: "domcontentloaded" });
@@ -615,7 +615,7 @@ test.describe("114 - Subscribe CTA", () => {
     await page.close();
   });
 
-  test("114.3 Subscribe section shows plan details", async ({ browser }) => {
+  test("725.3 Subscribe section shows plan details", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, BOB_KEY);
     await page.goto(`${BASE}/u/${ALICE_SUB}`, { waitUntil: "domcontentloaded" });
@@ -631,7 +631,7 @@ test.describe("114 - Subscribe CTA", () => {
     await page.close();
   });
 
-  test("114.4 Subscribe section visible to unauthenticated viewer", async ({ browser }) => {
+  test("725.4 Subscribe section visible to unauthenticated viewer", async ({ browser }) => {
     // Unauthenticated viewer should still see subscription plans info
     // (the public profile endpoint returns has_subscription_plans even without auth)
     const page = await browser.newPage();
@@ -656,11 +656,11 @@ test.describe("114 - Subscribe CTA", () => {
 });
 
 // =============================================================================
-// Section 115: Public Profile API
+// Section 726: Public Profile API
 // =============================================================================
 
-test.describe("115 - Public Profile API", () => {
-  test("115.1 Get Alice's public profile (authenticated as Bob)", async () => {
+test.describe("726 - Public Profile API", () => {
+  test("726.1 Get Alice's public profile (authenticated as Bob)", async () => {
     const resp = await apiGet(bobPage, `/ui/profile/public/${ALICE_SUB}`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
@@ -673,7 +673,7 @@ test.describe("115 - Public Profile API", () => {
     expect(typeof data.is_followed_by).toBe("boolean");
   });
 
-  test("115.2 Profile includes social counts", async () => {
+  test("726.2 Profile includes social counts", async () => {
     const resp = await apiGet(bobPage, `/ui/profile/public/${ALICE_SUB}`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
@@ -685,7 +685,7 @@ test.describe("115 - Public Profile API", () => {
     expect(data.post_count).toBeGreaterThanOrEqual(0);
   });
 
-  test("115.3 Meta endpoint returns SEO data", async () => {
+  test("726.3 Meta endpoint returns SEO data", async () => {
     const resp = await apiGet(bobPage, `/ui/profile/meta/${ALICE_SUB}`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
@@ -695,7 +695,7 @@ test.describe("115 - Public Profile API", () => {
     expect(typeof data.image).toBe("string");
   });
 
-  test("115.4 Non-existent profile returns 404", async () => {
+  test("726.4 Non-existent profile returns 404", async () => {
     const resp = await apiGet(
       bobPage,
       `/ui/profile/public/nonexistent_user_that_does_not_exist@nowhere.invalid`,
@@ -703,7 +703,7 @@ test.describe("115 - Public Profile API", () => {
     expect(resp.status()).toBe(404);
   });
 
-  test("115.5 Profile with follow relationship shows is_following", async () => {
+  test("726.5 Profile with follow relationship shows is_following", async () => {
     // Ensure clean state
     cleanupFollow();
 
@@ -734,11 +734,11 @@ test.describe("115 - Public Profile API", () => {
 });
 
 // =============================================================================
-// Section 116: Profile Posts API
+// Section 727: Profile Posts API
 // =============================================================================
 
-test.describe("116 - Profile Posts API", () => {
-  test("116.1 Get Alice's public posts", async () => {
+test.describe("727 - Profile Posts API", () => {
+  test("727.1 Get Alice's public posts", async () => {
     const resp = await apiGet(bobPage, `/ui/profile/public/${ALICE_SUB}/posts`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
@@ -746,7 +746,7 @@ test.describe("116 - Profile Posts API", () => {
     expect(typeof data.total_count).toBe("number");
   });
 
-  test("116.2 Posts have expected fields", async () => {
+  test("727.2 Posts have expected fields", async () => {
     const resp = await apiGet(bobPage, `/ui/profile/public/${ALICE_SUB}/posts`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
@@ -764,7 +764,7 @@ test.describe("116 - Profile Posts API", () => {
     expect(typeof item.comment_count).toBe("number");
   });
 
-  test("116.3 Filter by type (text)", async () => {
+  test("727.3 Filter by type (text)", async () => {
     const resp = await apiGet(
       bobPage,
       `/ui/profile/public/${ALICE_SUB}/posts`,
@@ -782,7 +782,7 @@ test.describe("116 - Profile Posts API", () => {
     }
   });
 
-  test("116.4 Pagination with limit", async () => {
+  test("727.4 Pagination with limit", async () => {
     const resp = await apiGet(
       bobPage,
       `/ui/profile/public/${ALICE_SUB}/posts`,
@@ -797,7 +797,7 @@ test.describe("116 - Profile Posts API", () => {
     }
   });
 
-  test("116.5 Non-existent user posts returns 404", async () => {
+  test("727.5 Non-existent user posts returns 404", async () => {
     const resp = await apiGet(
       bobPage,
       `/ui/profile/public/nonexistent@nowhere.invalid/posts`,
