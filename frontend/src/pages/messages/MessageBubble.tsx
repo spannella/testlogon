@@ -169,6 +169,8 @@ function replyPreviewText(msg: Message): string {
   if (msg.kind === "voice_message") return "[Voice message]";
   if (msg.kind === "voicemail") return "[Voicemail]";
   if (msg.kind === "countdown") return `[Countdown: ${msg.countdown_title ?? msg.text ?? ""}]`;
+  if (msg.kind === "gif") return "[GIF]";
+  if (msg.kind === "sticker") return "[Sticker]";
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
   if (msg.is_encrypted) return "[Encrypted message]";
   return (msg.text ?? "").slice(0, 80) || "[Message]";
@@ -1691,6 +1693,35 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 associatedEventId={message.associated_event_id}
               />
             )}
+
+          {/* ── GIF message (MSG-008) ── */}
+          {message.kind === "gif" && message.gif_url && (
+            <div className="max-w-xs" data-testid="gif-message">
+              <img
+                src={message.gif_url}
+                alt={message.gif_alt_text || "GIF"}
+                className="rounded-lg w-full"
+                style={{
+                  aspectRatio: `${message.gif_width || 320} / ${message.gif_height || 240}`,
+                }}
+                loading="lazy"
+                decoding="async"
+              />
+            </div>
+          )}
+
+          {/* ── Sticker message (MSG-008) ── */}
+          {message.kind === "sticker" && message.sticker_url && (
+            <div className="h-32 w-32" data-testid="sticker-message">
+              <img
+                src={message.sticker_url}
+                alt={message.sticker_alt_text || "Sticker"}
+                className="h-full w-full object-contain"
+                loading="lazy"
+                decoding="async"
+              />
+            </div>
+          )}
 
           {message.tip_amount_cents && message.tip_amount_cents > 0 && (
             <div className={cn(

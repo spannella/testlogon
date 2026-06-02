@@ -12453,3 +12453,80 @@ class TemplateLaunchPodOut(BaseModel):
 
 
 LaunchFromTemplateOut.model_rebuild()
+
+
+# ===========================================================================
+# MSG-008: GIF & Sticker Messages
+# ===========================================================================
+
+class GifSearchResult(BaseModel):
+    """Single GIF result from the provider."""
+    id: str = Field(..., description="Provider-specific GIF ID")
+    url: str = Field(..., max_length=2048, description="GIF URL (direct link)")
+    alt_text: str = Field(default="", max_length=256, description="GIF alt text")
+    width: int = Field(default=0, ge=0, le=4096, description="Width in pixels")
+    height: int = Field(default=0, ge=0, le=4096, description="Height in pixels")
+
+
+class StickerOut(BaseModel):
+    """Single sticker within a collection."""
+    sticker_id: str = Field(..., max_length=64)
+    image_url: str = Field(..., max_length=2048)
+    alt_text: str = Field(default="", max_length=256)
+    sort_order: int = Field(default=0, ge=0)
+    width: int = Field(default=256, ge=0, le=4096)
+    height: int = Field(default=256, ge=0, le=4096)
+
+
+class StickerCollectionOut(BaseModel):
+    """Sticker collection metadata."""
+    collection_id: str
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
+    thumbnail_url: Optional[str] = None
+    sticker_count: int = Field(default=0, ge=0)
+    is_active: bool = True
+    created_at: int
+    stickers: List[StickerOut] = Field(default_factory=list)
+
+
+class StickerCollectionListOut(BaseModel):
+    """Response for listing sticker collections."""
+    collections: List[StickerCollectionOut]
+
+
+class StickerListOut(BaseModel):
+    """Response for listing stickers within a collection."""
+    stickers: List[StickerOut]
+
+
+class StickerFavoriteOut(BaseModel):
+    """Response when adding/removing a favorite."""
+    ok: bool
+    collection_id: str
+
+
+class StickerSearchResult(BaseModel):
+    """A sticker matching a search query."""
+    sticker_id: str
+    collection_id: str
+    image_url: str
+    alt_text: str
+    collection_name: str
+
+
+class StickerSearchResponse(BaseModel):
+    """Response for sticker search."""
+    results: List[StickerSearchResult]
+
+
+class CreateStickerCollectionOut(BaseModel):
+    """Response after creating a sticker collection (admin)."""
+    collection_id: str
+    name: str
+    description: str
+    sticker_count: int
+    thumbnail_url: Optional[str] = None
+    is_active: bool = True
+    created_at: int
+    stickers: List[StickerOut]

@@ -2077,6 +2077,22 @@ class SendCountdownMessageIn(BaseModel):
         return self
 
 
+class SendGifMessageIn(BaseModel):
+    """Request body for sending a GIF message (MSG-008)."""
+    gif_url: str = Field(..., max_length=2048)
+    gif_alt_text: str = Field(default="", max_length=256)
+    gif_width: int = Field(default=0, ge=0, le=4096)
+    gif_height: int = Field(default=0, ge=0, le=4096)
+    reply_to_message_id: Optional[str] = None
+
+
+class SendStickerMessageIn(BaseModel):
+    """Request body for sending a sticker message (MSG-008)."""
+    sticker_id: str = Field(..., min_length=1, max_length=64)
+    sticker_collection_id: str = Field(..., min_length=1, max_length=64)
+    reply_to_message_id: Optional[str] = None
+
+
 class PollVoteIn(BaseModel):
     votes: Dict[str, Literal["yes", "no", "maybe"]]
 
@@ -2347,7 +2363,7 @@ class MessageOut(BaseModel):
     message_id: str
     sender_id: str
     created_at: int
-    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message", "voicemail", "countdown"]
+    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message", "voicemail", "countdown", "gif", "sticker"]
     text: Optional[str] = None
     image: Optional[Dict[str, Any]] = None
     file: Optional[Dict[str, Any]] = None
@@ -2364,6 +2380,17 @@ class MessageOut(BaseModel):
     target_datetime: Optional[int] = None
     associated_event_type: Optional[str] = None
     associated_event_id: Optional[str] = None
+    # GIF message fields (MSG-008)
+    gif_url: Optional[str] = None
+    gif_alt_text: Optional[str] = None
+    gif_width: Optional[int] = None
+    gif_height: Optional[int] = None
+    gif_provider: Optional[str] = None
+    # Sticker message fields (MSG-008)
+    sticker_id: Optional[str] = None
+    sticker_collection_id: Optional[str] = None
+    sticker_url: Optional[str] = None
+    sticker_alt_text: Optional[str] = None
     preview: Optional[Dict[str, Any]] = None
     # Gallery message fields
     free_images: Optional[List[Dict[str, Any]]] = None
@@ -4033,6 +4060,28 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         countdown_event_type_out = merged_item.get("associated_event_type")
         countdown_event_id_out = merged_item.get("associated_event_id")
 
+    # GIF / Sticker message projection (MSG-008)
+    gif_url_out: Optional[str] = None
+    gif_alt_text_out: Optional[str] = None
+    gif_width_out: Optional[int] = None
+    gif_height_out: Optional[int] = None
+    gif_provider_out: Optional[str] = None
+    sticker_id_out: Optional[str] = None
+    sticker_collection_id_out: Optional[str] = None
+    sticker_url_out: Optional[str] = None
+    sticker_alt_text_out: Optional[str] = None
+    if merged_item.get("kind") == "gif":
+        gif_url_out = merged_item.get("gif_url")
+        gif_alt_text_out = merged_item.get("gif_alt_text") or ""
+        gif_width_out = int(merged_item.get("gif_width") or 0)
+        gif_height_out = int(merged_item.get("gif_height") or 0)
+        gif_provider_out = merged_item.get("gif_provider") or "mock"
+    elif merged_item.get("kind") == "sticker":
+        sticker_id_out = merged_item.get("sticker_id")
+        sticker_collection_id_out = merged_item.get("sticker_collection_id")
+        sticker_url_out = merged_item.get("sticker_url")
+        sticker_alt_text_out = merged_item.get("sticker_alt_text") or ""
+
     thread_id_value = str(merged_item.get(MESSAGE_FIELD_THREAD_ID) or "").strip()
     has_thread = False
     thread_reply_count: Optional[int] = None
@@ -4062,6 +4111,15 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         target_datetime=countdown_target_out,
         associated_event_type=countdown_event_type_out,
         associated_event_id=countdown_event_id_out,
+        gif_url=gif_url_out,
+        gif_alt_text=gif_alt_text_out,
+        gif_width=gif_width_out,
+        gif_height=gif_height_out,
+        gif_provider=gif_provider_out,
+        sticker_id=sticker_id_out,
+        sticker_collection_id=sticker_collection_id_out,
+        sticker_url=sticker_url_out,
+        sticker_alt_text=sticker_alt_text_out,
         lottery=lottery_out,
         preview=preview,
         free_images=free_images_out,
@@ -9489,6 +9547,163 @@ def create_countdown_message(
         message_id=mid,
         actor_user_id=user_id,
         event_type="message.sent",
+        payload={"mutation": "send", "scheduled": False, "message": _serialize_message_event_payload(item, user_id)},
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return _message_out_from_item(item, user_id)
+
+
+@router.post("/conversations/{conversation_id}/messages/gif", response_model=MessageOut, status_code=201)
+def send_gif_message(
+    conversation_id: str,
+    inp: SendGifMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Send a GIF message to a conversation (MSG-008)."""
+    if not S.gif_messages_enabled:
+        raise HTTPException(403, "GIF messages are not enabled")
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    _validate_reply_target(conversation_id, inp.reply_to_message_id)
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    ts = now_ts()
+    mid = "m_" + new_id()
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "gif",
+        "reactions": {},
+        "text": None,
+        "gif_url": inp.gif_url,
+        "gif_alt_text": inp.gif_alt_text or "",
+        "gif_width": int(inp.gif_width or 0),
+        "gif_height": int(inp.gif_height or 0),
+        "gif_provider": S.gif_provider or "mock",
+    }
+    if inp.reply_to_message_id:
+        item[MESSAGE_FIELD_REPLY_TO_ID] = inp.reply_to_message_id
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+    _bump_unread_counts(conversation_id, user_id, participants)
+    _record_delivery_receipts(conversation_id, mid, user_id, participants)
+    tbl_convos.update_item(
+        Key={"conversation_id": conversation_id},
+        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+        ExpressionAttributeValues={":ts": ts, ":p": "[GIF]", ":mid": mid},
+    )
+    _fanout_new_message_event(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_item=item,
+        payload={
+            "message_id": mid,
+            "created_at": ts,
+            "message": _serialize_message_event_payload(item, user_id),
+        },
+        respect_mute=False,
+    )
+    audit_event(
+        "messaging_message_sent", user_id, req, outcome="success",
+        conversation_id=conversation_id, message_id=mid, kind="gif",
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send", event_ts=ts, conversation_id=conversation_id, message_id=mid,
+        actor_user_id=user_id, event_type="message.sent",
+        payload={"mutation": "send", "scheduled": False, "message": _serialize_message_event_payload(item, user_id)},
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return _message_out_from_item(item, user_id)
+
+
+@router.post("/conversations/{conversation_id}/messages/sticker", response_model=MessageOut, status_code=201)
+def send_sticker_message(
+    conversation_id: str,
+    inp: SendStickerMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Send a sticker message to a conversation (MSG-008)."""
+    if not S.sticker_messages_enabled:
+        raise HTTPException(403, "Sticker messages are not enabled")
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    _validate_reply_target(conversation_id, inp.reply_to_message_id)
+
+    # Resolve the sticker from the collection (must exist + be active).
+    from app.services import sticker_collections as _sticker_svc
+    collection_meta = _sticker_svc.get_collection_meta(inp.sticker_collection_id, active_only=True)
+    if not collection_meta:
+        raise HTTPException(404, "collection_not_found")
+    sticker = _sticker_svc.get_sticker(inp.sticker_collection_id, inp.sticker_id)
+    if not sticker:
+        raise HTTPException(404, "sticker_not_found")
+
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    ts = now_ts()
+    mid = "m_" + new_id()
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "sticker",
+        "reactions": {},
+        "text": None,
+        "sticker_id": inp.sticker_id,
+        "sticker_collection_id": inp.sticker_collection_id,
+        "sticker_url": sticker["image_url"],
+        "sticker_alt_text": sticker.get("alt_text") or "",
+    }
+    if inp.reply_to_message_id:
+        item[MESSAGE_FIELD_REPLY_TO_ID] = inp.reply_to_message_id
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+    _bump_unread_counts(conversation_id, user_id, participants)
+    _record_delivery_receipts(conversation_id, mid, user_id, participants)
+    tbl_convos.update_item(
+        Key={"conversation_id": conversation_id},
+        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+        ExpressionAttributeValues={":ts": ts, ":p": "[Sticker]", ":mid": mid},
+    )
+    _fanout_new_message_event(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_item=item,
+        payload={
+            "message_id": mid,
+            "created_at": ts,
+            "message": _serialize_message_event_payload(item, user_id),
+        },
+        respect_mute=False,
+    )
+    audit_event(
+        "messaging_message_sent", user_id, req, outcome="success",
+        conversation_id=conversation_id, message_id=mid, kind="sticker",
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send", event_ts=ts, conversation_id=conversation_id, message_id=mid,
+        actor_user_id=user_id, event_type="message.sent",
         payload={"mutation": "send", "scheduled": False, "message": _serialize_message_event_payload(item, user_id)},
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)

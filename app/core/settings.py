@@ -1095,6 +1095,13 @@ class Settings:
     messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() == "true"
     messaging_encrypted_messages_kill_switch: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_KILL_SWITCH", "false").lower() == "true"
     countdown_messages_enabled: bool = os.environ.get("COUNTDOWN_MESSAGES_ENABLED", "true").lower() == "true"
+    # GIF & Sticker messages (MSG-008)
+    gif_messages_enabled: bool = os.environ.get("GIF_MESSAGES_ENABLED", "true").lower() == "true"
+    sticker_messages_enabled: bool = os.environ.get("STICKER_MESSAGES_ENABLED", "true").lower() == "true"
+    ddb_sticker_collections_table: str = os.environ.get("DDB_STICKER_COLLECTIONS_TABLE", "sticker_collections")
+    gif_provider: str = os.environ.get("GIF_PROVIDER", "mock")
+    sticker_max_file_size_bytes: int = int(os.environ.get("STICKER_MAX_FILE_SIZE", "524288"))
+    sticker_max_per_collection: int = int(os.environ.get("STICKER_MAX_PER_COLLECTION", "100"))
     messaging_gallery_enabled: bool = os.environ.get("MESSAGING_GALLERY_ENABLED", "true").lower() == "true"
     messaging_gallery_kill_switch: bool = os.environ.get("MESSAGING_GALLERY_KILL_SWITCH", "false").lower() == "true"
     messaging_gallery_index_enabled: bool = os.environ.get("MESSAGING_GALLERY_INDEX_ENABLED", "false").lower() == "true"
