@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOfflineStore } from "@/stores/offlineStore";
-import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video, Hash, BarChart3 } from "lucide-react";
+import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video, Hash, BarChart3, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -146,6 +146,14 @@ export function CreatePost() {
   const [tagInput, setTagInput] = useState("");
   const [pollMode, setPollMode] = useState(false);
   const [pendingPollData, setPendingPollData] = useState<PollDataInput | null>(null);
+  // FEED-005: Countdown composer state
+  const [countdownMode, setCountdownMode] = useState(false);
+  const [countdownTitle, setCountdownTitle] = useState("");
+  const [countdownTarget, setCountdownTarget] = useState("");
+  const [countdownEventType, setCountdownEventType] = useState<
+    "custom" | "broadcast" | "call" | "calendar"
+  >("custom");
+  const [countdownEventId, setCountdownEventId] = useState("");
   const { data: capabilities } = useQuery({
     queryKey: ["feed", "capabilities"],
     queryFn: getFeedCapabilities,
@@ -184,6 +192,18 @@ export function CreatePost() {
     if (!Number.isFinite(n) || n < 1) return undefined;
     return n;
   })();
+  // FEED-005: derive Unix-seconds target from the datetime-local input
+  const countdownTargetTs = (() => {
+    if (!countdownMode || !countdownTarget) return undefined;
+    const ms = new Date(countdownTarget).getTime();
+    if (Number.isNaN(ms)) return undefined;
+    return Math.floor(ms / 1000);
+  })();
+  const countdownReady =
+    countdownMode &&
+    countdownTitle.trim().length > 0 &&
+    !!countdownTargetTs &&
+    (countdownEventType === "custom" || countdownEventId.trim().length > 0);
 
   const validateUnlockControls = () => {
     if (lockEnabled && !unlockPriceCents) {
@@ -299,6 +319,11 @@ export function CreatePost() {
     setTagInput("");
     setPollMode(false);
     setPendingPollData(null);
+    setCountdownMode(false);
+    setCountdownTitle("");
+    setCountdownTarget("");
+    setCountdownEventType("custom");
+    setCountdownEventId("");
   };
 
   const draftsQuery = useQuery({
@@ -330,6 +355,17 @@ export function CreatePost() {
         ...(pendingVideo ? { video_id: pendingVideo.video_id } : {}),
         ...(tags.length > 0 ? { tags } : {}),
         ...(pollMode && pendingPollData ? { post_type: "poll" as const, poll_data: pendingPollData } : {}),
+        ...(countdownMode && countdownTargetTs
+          ? {
+              post_kind: "countdown" as const,
+              countdown_title: countdownTitle.trim(),
+              target_datetime: countdownTargetTs,
+              associated_event_type: countdownEventType,
+              ...(countdownEventType !== "custom" && countdownEventId.trim()
+                ? { associated_event_id: countdownEventId.trim() }
+                : {}),
+            }
+          : {}),
       });
     },
     onSuccess: async (resp, target) => {
@@ -1052,6 +1088,61 @@ export function CreatePost() {
             <PollComposer onPollDataChange={setPendingPollData} />
           )}
 
+          {/* FEED-005: Countdown composer */}
+          {countdownMode && (
+            <div
+              className="rounded-md border border-border bg-muted/30 p-3 text-xs space-y-2"
+              data-testid="countdown-composer"
+            >
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Timer className="h-3.5 w-3.5" />
+                <span className="font-medium">Countdown</span>
+              </div>
+              <input
+                type="text"
+                value={countdownTitle}
+                onChange={(e) => setCountdownTitle(e.target.value)}
+                placeholder="Countdown title"
+                maxLength={200}
+                data-testid="countdown-title-input"
+                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+              <input
+                type="datetime-local"
+                value={countdownTarget}
+                onChange={(e) => setCountdownTarget(e.target.value)}
+                data-testid="countdown-target-input"
+                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+              <select
+                value={countdownEventType}
+                onChange={(e) =>
+                  setCountdownEventType(
+                    e.target.value as "custom" | "broadcast" | "call" | "calendar",
+                  )
+                }
+                data-testid="countdown-event-type"
+                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+              >
+                <option value="custom">Custom</option>
+                <option value="broadcast">Broadcast</option>
+                <option value="call">Call</option>
+                <option value="calendar">Calendar Event</option>
+              </select>
+              {countdownEventType !== "custom" && (
+                <input
+                  type="text"
+                  value={countdownEventId}
+                  onChange={(e) => setCountdownEventId(e.target.value)}
+                  placeholder="Event ID"
+                  maxLength={128}
+                  data-testid="countdown-event-id"
+                  className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+              )}
+            </div>
+          )}
+
           {lockEnabled && (
             <div className="rounded-md border border-border bg-muted/30 p-2 text-xs space-y-1.5">
               <div className="flex items-center gap-2">
@@ -1183,6 +1274,19 @@ export function CreatePost() {
                 Poll
               </Button>
 
+              {/* Countdown toggle (FEED-005) */}
+              <Button
+                type="button"
+                variant={countdownMode ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setCountdownMode((v) => !v)}
+                disabled={mutation.isPending}
+                data-testid="countdown-toggle-btn"
+              >
+                <Timer className="mr-1 h-3.5 w-3.5" />
+                Countdown
+              </Button>
+
               {/* Lock toggle */}
               <Button
                 type="button"
@@ -1212,7 +1316,7 @@ export function CreatePost() {
             <Button
               type="submit"
               size="sm"
-              disabled={(!body.trim() && imageUrls.length === 0 && pendingFiles.length === 0) || mutation.isPending || saveDraftMutation.isPending || uploading}
+              disabled={(!body.trim() && imageUrls.length === 0 && pendingFiles.length === 0 && !countdownReady) || (countdownMode && !countdownReady) || mutation.isPending || saveDraftMutation.isPending || uploading}
             >
               <Send className="mr-1 h-3.5 w-3.5" />
               {(mutation.isPending || saveDraftMutation.isPending) ? "Posting..." : "Post"}

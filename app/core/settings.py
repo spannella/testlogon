@@ -1066,6 +1066,9 @@ class Settings:
     sponsored_post_interval: int = int(os.environ.get("SPONSORED_POST_INTERVAL", "5"))
     sponsored_post_max_per_page: int = int(os.environ.get("SPONSORED_POST_MAX_PER_PAGE", "3"))
 
+    # Countdown posts (FEED-005)
+    countdown_posts_enabled: bool = os.environ.get("COUNTDOWN_POSTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
     # Newsfeed polls (ENGAGE-002)
     newsfeed_polls_enabled: bool = os.environ.get("NEWSFEED_POLLS_ENABLED", "1") not in ("0", "false", "False")
     newsfeed_poll_max_options: int = int(os.environ.get("NEWSFEED_POLL_MAX_OPTIONS", "10"))
