@@ -194,6 +194,7 @@ class Tables:
     call_history: Any
     kyc_risk_scores: Any
     kyc_review_schedule: Any
+    kyc_document_templates: Any
     broadcast_moderation: Any
     k8s_pods: Any
     agent_workers: Any
@@ -472,4 +473,5 @@ T = Tables(
     image_optimizations=ddb.Table(S.image_optimizations_table_name),
     file_share_links=ddb.Table(S.ddb_file_share_links_table),
     host_inventory=ddb.Table(S.ddb_host_inventory_table),
+    kyc_document_templates=ddb.Table(S.kyc_document_templates_table_name),
 )

@@ -27,6 +27,7 @@ const AdminLicenseCompliancePage = lazy(
 );
 const FilesPage = lazy(() => import("@/pages/files/FilesPage"));
 const KycWorkloadPage = lazy(() => import("@/pages/admin/KycWorkloadPage"));
+const KycDocumentTemplatesPage = lazy(() => import("@/pages/admin/KycDocumentTemplatesPage"));
 const ShareLinksPage = lazy(() => import("@/pages/files/ShareLinksPage"));
 const PublicDownloadPage = lazy(() => import("@/pages/files/PublicDownloadPage"));
 const ProjectsPage = lazy(() => import("@/pages/projects/ProjectsPage"));
@@ -394,6 +395,7 @@ export default function App() {
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
           <Route path="admin/kyc/monitoring" element={<KycMonitoringPage />} />
           <Route path="admin/kyc/address-verification" element={<KycAddressVerificationPanel />} />
+          <Route path="admin/kyc/templates" element={<KycDocumentTemplatesPage />} />
           <Route path="admin/communications" element={<EmailSmsDashboardPage />} />
           <Route path="admin/compute" element={<AdminComputeDashboard />} />
           <Route path="admin/jobs" element={<JobDashboardPage />} />

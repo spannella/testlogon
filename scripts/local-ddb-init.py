@@ -148,6 +148,17 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"next_review_date": "N"},
         ),
+        # KYC-017: Document Signing Template Library
+        TableDef(
+            _resolve_table_name(S.kyc_document_templates_table_name, "kyc_document_templates"),
+            "template_id",
+            "sk",
+            gsi=[
+                {"index_name": "slug-status-index", "partition_key": "slug", "sort_key": "status"},
+                {"index_name": "status-updated-index", "partition_key": "status", "sort_key": "updated_at"},
+            ],
+            attr_types={"updated_at": "N", "created_at": "N"},
+        ),
         TableDef(
             _resolve_table_name(S.kyc_documents_table_name, "kyc_documents"),
             "document_id",

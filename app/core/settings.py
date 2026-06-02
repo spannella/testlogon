@@ -2355,6 +2355,29 @@ class Settings:
         os.environ.get("FRAUD_SCORE_THRESHOLD", "70")
     )
 
+    # KYC-017: Document Signing Template Library
+    kyc_document_templates_table_name: str = os.environ.get(
+        "KYC_DOCUMENT_TEMPLATES_TABLE_NAME", "kyc_document_templates"
+    )
+    kyc_document_templates_slug_index: str = os.environ.get(
+        "KYC_DOCUMENT_TEMPLATES_SLUG_INDEX", "slug-status-index"
+    )
+    kyc_document_templates_status_index: str = os.environ.get(
+        "KYC_DOCUMENT_TEMPLATES_STATUS_INDEX", "status-updated-index"
+    )
+    kyc_document_templates_bucket: str = os.environ.get(
+        "KYC_DOCUMENT_TEMPLATES_BUCKET", "local-uploads"
+    )
+    kyc_document_templates_s3_prefix: str = os.environ.get(
+        "KYC_DOCUMENT_TEMPLATES_S3_PREFIX", "kyc-document-templates/"
+    )
+    kyc_document_templates_enabled: bool = os.environ.get(
+        "KYC_DOCUMENT_TEMPLATES_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_document_templates_max_pdf_bytes: int = int(
+        os.environ.get("KYC_DOCUMENT_TEMPLATES_MAX_PDF_BYTES", str(10 * 1024 * 1024))
+    )
+
     # INFRA-001: Host Inventory Management
     ddb_host_inventory_table: str = os.environ.get(
         "DDB_HOST_INVENTORY_TABLE", "host_inventory"

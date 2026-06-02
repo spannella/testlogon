@@ -13785,3 +13785,106 @@ class CrossReferenceResponse(BaseModel):
     """Envelope returned by the cross-reference endpoint."""
 
     cross_reference: CrossReferenceOut
+
+
+
+
+# ── KYC-017: Document Signing Template Library ──────────────────────────
+
+KycTemplateTier = Literal["none", "tier_1", "tier_2", "tier_3"]
+KycTemplateStatus = Literal["active", "inactive", "archived"]
+
+
+class KycDocumentTemplateCreateIn(BaseModel):
+    """Request to create a new document signing template."""
+
+    slug: str = Field(
+        min_length=3,
+        max_length=100,
+        pattern=r"^[a-z0-9_-]+$",
+        description="URL-safe, unique slug (lowercase, digits, _ or -).",
+    )
+    display_name: str = Field(min_length=3, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    required_tier: KycTemplateTier = "tier_1"
+    placeholder_fields: List[str] = Field(default_factory=list, max_length=20)
+
+
+class KycDocumentTemplateUploadIn(BaseModel):
+    """JSON-mode upload of a base64-encoded PDF for a template version."""
+
+    pdf_base64: str = Field(min_length=1, description="Base64-encoded PDF bytes.")
+
+
+class KycDocumentTemplateVersionOut(BaseModel):
+    """One version row of a document template."""
+
+    template_id: str
+    version: int = Field(ge=0)
+    slug: str
+    display_name: Optional[str] = None
+    required_tier: KycTemplateTier = "tier_1"
+    status: KycTemplateStatus = "active"
+    s3_key: str = ""
+    pdf_uploaded: bool = False
+    placeholder_fields: List[str] = Field(default_factory=list)
+    created_by: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class KycDocumentTemplateOut(BaseModel):
+    """A document template (metadata) with its version history."""
+
+    template_id: str
+    slug: str
+    display_name: str
+    description: str = ""
+    required_tier: KycTemplateTier = "tier_1"
+    status: KycTemplateStatus = "active"
+    placeholder_fields: List[str] = Field(default_factory=list)
+    latest_version: int = 0
+    s3_key: str = ""
+    created_by: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+    versions: List[KycDocumentTemplateVersionOut] = Field(default_factory=list)
+
+
+class KycDocumentTemplateListOut(BaseModel):
+    """List of document templates."""
+
+    items: List[KycDocumentTemplateOut] = Field(default_factory=list)
+    total: int = 0
+
+
+class KycRequiredTemplatesOut(BaseModel):
+    """Active templates required for a given tier."""
+
+    tier: KycTemplateTier
+    items: List[KycDocumentTemplateVersionOut] = Field(default_factory=list)
+
+
+class KycTemplateRenderForCaseIn(BaseModel):
+    """Request to render all required templates for a KYC case."""
+
+    case_id: str = Field(min_length=1, max_length=100)
+
+
+class KycRenderedTemplateOut(BaseModel):
+    """One rendered+instantiated template for a case."""
+
+    slug: str
+    template_id: str
+    version: int
+    rendered_s3_key: str
+    packet_id: Optional[str] = None
+    fields_populated: int = 0
+    fields_fallback: int = 0
+
+
+class KycTemplateRenderForCaseOut(BaseModel):
+    """Result of rendering required templates for a case."""
+
+    case_id: str
+    rendered: List[KycRenderedTemplateOut] = Field(default_factory=list)

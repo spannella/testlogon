@@ -12277,3 +12277,74 @@ export interface PostalCodeValidationOut {
 export interface CrossReferenceResponse {
   cross_reference: CrossReferenceOut;
 }
+
+
+
+// ── KYC-017: Document Signing Template Library ───────────────────────────
+
+export type KycTemplateTier = "none" | "tier_1" | "tier_2" | "tier_3";
+export type KycTemplateStatus = "active" | "inactive" | "archived";
+
+export interface KycDocumentTemplateVersion {
+  template_id: string;
+  version: number;
+  slug: string;
+  display_name?: string | null;
+  required_tier: KycTemplateTier;
+  status: KycTemplateStatus;
+  s3_key: string;
+  pdf_uploaded: boolean;
+  placeholder_fields: string[];
+  created_by?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface KycDocumentTemplate {
+  template_id: string;
+  slug: string;
+  display_name: string;
+  description: string;
+  required_tier: KycTemplateTier;
+  status: KycTemplateStatus;
+  placeholder_fields: string[];
+  latest_version: number;
+  s3_key: string;
+  created_by?: string | null;
+  created_at: number;
+  updated_at: number;
+  versions: KycDocumentTemplateVersion[];
+}
+
+export interface KycDocumentTemplateList {
+  items: KycDocumentTemplate[];
+  total: number;
+}
+
+export interface CreateKycTemplateRequest {
+  slug: string;
+  display_name: string;
+  description?: string | null;
+  required_tier: KycTemplateTier;
+  placeholder_fields: string[];
+}
+
+export interface KycRequiredTemplates {
+  tier: KycTemplateTier;
+  items: KycDocumentTemplateVersion[];
+}
+
+export interface KycRenderedTemplate {
+  slug: string;
+  template_id: string;
+  version: number;
+  rendered_s3_key: string;
+  packet_id?: string | null;
+  fields_populated: number;
+  fields_fallback: number;
+}
+
+export interface KycTemplateRenderForCaseResult {
+  case_id: string;
+  rendered: KycRenderedTemplate[];
+}
