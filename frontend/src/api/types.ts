@@ -4784,6 +4784,11 @@ export interface ClipListResponse {
   next_cursor?: string;
 }
 
+export interface PublicBroadcastClip extends BroadcastClip {
+  broadcaster_display_name: string;
+  profile_id: string;
+}
+
 // ─── SSO / SAML (ENTERPRISE-002) ────────────────────────────────
 
 export interface SsoInfoOut {

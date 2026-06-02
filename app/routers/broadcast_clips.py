@@ -9,11 +9,12 @@ from fastapi import APIRouter, Depends, Query
 from fastapi import HTTPException, status as http_status
 from pydantic import BaseModel
 
-from app.models import CreateClipIn, ClipOut, ClipListOut
+from app.models import CreateClipIn, ClipOut, ClipListOut, PublicClipOut
 from app.services.sessions import require_ui_session
 from app.services.broadcast_clip import (
     create_broadcast_clip,
     get_clip,
+    get_public_clip,
     list_clips_for_session,
     list_my_clips,
     list_gallery,
@@ -24,6 +25,9 @@ from app.services.broadcast_clip import (
 from app.services.broadcast_store import get_session, update_session_fields
 
 router = APIRouter(tags=["broadcast-clips"])
+
+# Public router -- no auth, for shareable clip pages (ENGAGE-005 §4.5)
+public_clips_router = APIRouter(prefix="/broadcast/public", tags=["broadcast-clips-public"])
 
 
 def _ctx(ctx=Depends(require_ui_session)):
@@ -125,3 +129,26 @@ def update_clips_config_route(
         )
     updated = update_session_fields(session_id, {"clips_enabled": body.clips_enabled})
     return {"ok": True, "clips_enabled": updated.clips_enabled}
+
+
+# --- Public (no-auth) shareable clip endpoints ---
+
+@public_clips_router.get("/clips/{clip_id}", response_model=PublicClipOut)
+def public_clip_route(clip_id: str):
+    """Public shareable clip view with broadcaster attribution. No auth required."""
+    return get_public_clip(clip_id)
+
+
+@public_clips_router.post("/clips/{clip_id}/view")
+def public_record_view_route(clip_id: str):
+    """Record a view from the public clip page. No auth required."""
+    # Ensure the clip exists / is not deleted before counting the view.
+    get_public_clip(clip_id)
+    return record_view(clip_id)
+
+
+@public_clips_router.post("/clips/{clip_id}/share")
+def public_record_share_route(clip_id: str):
+    """Record a share from the public clip page. No auth required."""
+    get_public_clip(clip_id)
+    return record_share(clip_id)

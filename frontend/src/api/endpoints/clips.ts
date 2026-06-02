@@ -1,5 +1,5 @@
 import { api } from "../client";
-import type { BroadcastClip, ClipListResponse } from "@/api/types";
+import type { BroadcastClip, ClipListResponse, PublicBroadcastClip } from "@/api/types";
 
 // ─── VOD Clip Types (VOD-015) ───────────────────────────────────────────────
 
@@ -57,3 +57,14 @@ export const recordClipView = (clipId: string) =>
 
 export const recordClipShare = (clipId: string) =>
   api.post<{ ok: boolean; share_count: number; share_url: string }>(`/broadcast/clips/${clipId}/share`);
+
+// ─── Public (no-auth) shareable clip API (ENGAGE-005 §4.5) ──────────────────
+
+export const getPublicClip = (clipId: string) =>
+  api.get<PublicBroadcastClip>(`/broadcast/public/clips/${clipId}`);
+
+export const recordPublicClipView = (clipId: string) =>
+  api.post<{ ok: boolean; view_count: number }>(`/broadcast/public/clips/${clipId}/view`);
+
+export const recordPublicClipShare = (clipId: string) =>
+  api.post<{ ok: boolean; share_count: number; share_url: string }>(`/broadcast/public/clips/${clipId}/share`);

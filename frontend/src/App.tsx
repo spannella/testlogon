@@ -93,6 +93,7 @@ const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
 const LiveQaPage = lazy(() => import("@/pages/broadcast/LiveQaPage"));
 const ClipGalleryPage = lazy(() => import("@/pages/clips/ClipGalleryPage"));
 const ClipPlayerPage = lazy(() => import("@/pages/clips/ClipPlayerPage"));
+const PublicClipPage = lazy(() => import("@/pages/clips/PublicClipPage"));
 const DmcaClaimForm = lazy(() => import("@/pages/dmca/DmcaClaimForm"));
 const DmcaDashboardPage = lazy(() => import("@/pages/admin/DmcaDashboardPage"));
 const RateLimitDashboard = lazy(() => import("@/pages/admin/RateLimitDashboard"));
@@ -248,6 +249,7 @@ export default function App() {
         <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
         <Route path="/share/:linkId" element={<PublicDownloadPage />} />
         <Route path="/donate/:fundraiserId" element={<PublicDonationPage />} />
+        <Route path="/c/:clipId" element={<PublicClipPage />} />
         <Route path="/questionnaires/published/:publishedSlug/respond" element={<QuestionnaireRespondentPage />} />
         <Route path="live/:sessionId" element={<LivePlayer />} />
         <Route path="party/:inviteCode" element={<PartyListPage />} />

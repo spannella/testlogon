@@ -4070,6 +4070,26 @@ class ClipListOut(BaseModel):
     next_cursor: Optional[str] = None
 
 
+class PublicClipOut(BaseModel):
+    clip_id: str
+    session_id: str
+    broadcaster_user_id: str
+    broadcaster_display_name: str
+    profile_id: str
+    creator_user_id: str
+    creator_display_name: str
+    video_id: str
+    title: str
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+    status: Literal["processing", "ready", "failed", "deleted"]
+    view_count: int
+    share_count: int
+    thumbnail_url: str
+    created_at: int
+
+
 # --- SSO / SAML Models (ENTERPRISE-002) ---
 
 class SsoProviderCreateReq(BaseModel):
