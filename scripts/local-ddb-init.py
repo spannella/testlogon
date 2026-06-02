@@ -368,7 +368,10 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI4", "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
                 {"index_name": "GSI5", "partition_key": "GSI5PK", "sort_key": "GSI5SK"},
             ],
-            attr_types={"GSI5SK": "N"},
+            # GSI5SK is a string sort key ("{created_at}#{follower_id}", written by
+            # social.follow_user — the sole GSI5 writer). It was mistakenly typed "N"
+            # (DELEGATE-003), which made every follow PutItem fail with a key type mismatch.
+            attr_types={"GSI5SK": "S"},
         ),
         TableDef(
             os.getenv("DDB_CONVERSATIONS", "Conversations"),
