@@ -1825,6 +1825,17 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.compute_quotas_table_name, "compute_quotas"),
             "user_sub",
         ),
+        # Instance Templates & Presets (INFRA-007)
+        TableDef(
+            _resolve_table_name(S.instance_templates_table_name, "instance_templates"),
+            "owner_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByCategory", "partition_key": "category", "sort_key": "name_lower"},
+                {"index_name": "ByCreatedAt", "partition_key": "owner_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Agent Memory (AGENT-005)
         TableDef(
             _resolve_table_name(S.agent_memory_table_name, "agent_memory"),

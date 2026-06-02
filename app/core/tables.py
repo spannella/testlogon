@@ -194,6 +194,7 @@ class Tables:
     agent_workers: Any
     compute_billing: Any
     compute_quotas: Any
+    instance_templates: Any
     agent_memory: Any
     agent_feedback: Any
     agent_types: Any
@@ -420,6 +421,7 @@ T = Tables(
     agent_workers=ddb.Table(S.agent_workers_table_name),
     compute_billing=ddb.Table(S.compute_billing_table_name),
     compute_quotas=ddb.Table(S.compute_quotas_table_name),
+    instance_templates=ddb.Table(S.instance_templates_table_name),
     agent_memory=ddb.Table(S.agent_memory_table_name),
     agent_feedback=ddb.Table(S.agent_feedback_table_name),
     agent_types=ddb.Table(S.agent_types_table_name),

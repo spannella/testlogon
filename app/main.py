@@ -262,6 +262,8 @@ from app.routers.license_compliance import (
 )
 from app.routers.k8s_launcher import router as k8s_launcher_router
 from app.services.k8s_launcher import start_k8s_ttl_checker_task
+from app.routers.instance_templates import router as instance_templates_router
+from app.services.instance_templates import ensure_system_templates
 from app.routers.ssh_session_recording import ssh_session_recording_router
 from app.services.ssh_session_recording import start_recording_cleanup_task
 from app.routers.ssh_bastion import ssh_bastion_router
@@ -670,6 +672,8 @@ def create_app() -> FastAPI:
     app.include_router(license_compliance_admin_router)
     app.include_router(k8s_launcher_router)
     app.add_event_handler("startup", start_k8s_ttl_checker_task)
+    app.include_router(instance_templates_router)
+    app.add_event_handler("startup", ensure_system_templates)
     app.include_router(ssh_session_recording_router)
     app.include_router(ssh_bastion_router)
     app.include_router(connection_profiles_router)
