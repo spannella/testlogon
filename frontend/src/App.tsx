@@ -269,6 +269,7 @@ export default function App() {
         <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
           <Route index element={<Dashboard />} />
           <Route path="messages" element={<MessagesPage />} />
+          <Route path="messages/:conversationId" element={<MessagesPage />} />
           <Route path="calls/history" element={<CallHistoryPage />} />
           <Route path="contacts" element={<ContactsPage />} />
           <Route path="helpdesk" element={<HelpdeskPage />} />

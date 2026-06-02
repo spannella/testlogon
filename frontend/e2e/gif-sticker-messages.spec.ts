@@ -171,6 +171,29 @@ print('seeded')
   );
 }
 
+/**
+ * Purge a user's accumulated sticker favorites (billing table FAV_STICKER# rows).
+ * Prior test runs leave stale favorites; the search endpoint caps results at 50, so
+ * stale favorites can crowd out the freshly-seeded collection. Clean before seeding.
+ */
+function cleanupStickerFavorites(userSub: string) {
+  execSync(
+    `${PYTHON} -c "${DDB_HELPER_PRELUDE}
+from boto3.dynamodb.conditions import Key
+tbl = ddb.Table(os.environ.get('BILLING_TABLE_NAME', 'billing'))
+resp = tbl.query(
+    KeyConditionExpression=Key('pk').eq('USER#${userSub}') & Key('sk').begins_with('FAV_STICKER#'),
+)
+n = 0
+for item in resp.get('Items', []):
+    tbl.delete_item(Key={'pk': item['pk'], 'sk': item['sk']})
+    n += 1
+print('purged', n)
+"`,
+    { timeout: 15_000 },
+  );
+}
+
 // ─── DM conversation bootstrap ────────────────────────────────────────────────
 
 let _dmConvoId: string | null = null;
@@ -285,6 +308,7 @@ test.describe("Section 706: GIF Search API", () => {
 
 test.describe("Section 707: Sticker Collection API", () => {
   test.beforeAll(async ({ browser }) => {
+    cleanupStickerFavorites(ALICE_ID);
     seedStickerCollection();
     const page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
@@ -633,10 +657,12 @@ test.describe("Section 710: Admin Sticker Management API", () => {
     expect(del.status()).toBe(200);
 
     // No longer in active list (Alice's view).
-    const page = await request.get(`${API}/ui/stickers/collections`, {
-      headers: { Authorization: `Bearer ${ALICE_ID}` },
+    const alice = getSessions()[ALICE_ID];
+    const aliceCookie = alice.cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+    const listResp = await request.get(`${API}/ui/stickers/collections`, {
+      headers: { Cookie: aliceCookie, "x-csrf-token": alice.csrf_token },
     });
-    const body = await page.json();
+    const body = await listResp.json();
     const ids = (body.collections as Array<{ collection_id: string }>).map((c) => c.collection_id);
     expect(ids).not.toContain(cid);
   });
@@ -649,6 +675,7 @@ test.describe("Section 710: Admin Sticker Management API", () => {
 test.describe("Section 711: GIF & Sticker UI", () => {
   let convoId: string;
   test.beforeAll(async ({ browser }) => {
+    cleanupStickerFavorites(ALICE_ID);
     seedStickerCollection();
     const page = await browser.newPage();
     await injectAuth(page, ALICE_ID);

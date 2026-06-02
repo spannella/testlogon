@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -14,9 +14,11 @@ import { useMessagingStream } from "@/hooks/useMessagingStream";
 import { useHeartbeat } from "@/hooks/usePresence";
 import { useAuthStore } from "@/stores/authStore";
 import { listDelegatedConversations } from "@/api/endpoints/delegates";
+import { getConversation } from "@/api/endpoints/messaging";
 
 export default function MessagesPage() {
   const location = useLocation();
+  const { conversationId: routeConversationId } = useParams();
   const managingCreatorId = useAuthStore((s) => s.managingCreatorId);
 
   const [activeConvo, setActiveConvo] = React.useState<Conversation | null>(
@@ -50,6 +52,22 @@ export default function MessagesPage() {
     enabled: !!managingCreatorId,
     refetchInterval: 10_000,
   });
+
+  // Deep-link support: /messages/:conversationId auto-opens that conversation.
+  const { data: deepLinkedConvo } = useQuery<Conversation>({
+    queryKey: ["conversation", routeConversationId],
+    queryFn: () => getConversation(routeConversationId!),
+    enabled: !!routeConversationId && !managingCreatorId,
+  });
+
+  React.useEffect(() => {
+    if (deepLinkedConvo && deepLinkedConvo.conversation_id === routeConversationId) {
+      setActiveConvo((prev) =>
+        prev?.conversation_id === deepLinkedConvo.conversation_id ? prev : deepLinkedConvo,
+      );
+      setMobileShowConvo(true);
+    }
+  }, [deepLinkedConvo, routeConversationId]);
 
   const handleSelect = (convo: Conversation) => {
     setActiveConvo(convo);
