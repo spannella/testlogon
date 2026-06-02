@@ -1308,6 +1308,11 @@ class ContentFieldsMixin(BaseModel):
 
     @model_validator(mode="after")
     def validate_content_fields(self):
+        # FEED-004: media comments (kind=gif/sticker) carry no body content;
+        # skip the text-content requirement for them. Subclasses without a
+        # `kind` field (e.g. posts) default to "text" and validate as before.
+        if getattr(self, "kind", "text") != "text":
+            return self
         has_legacy = bool((self.body or "").strip())
         has_plain = bool((self.body_plain or "").strip())
         has_markdown = bool((self.body_markdown or "").strip())
@@ -1569,6 +1574,19 @@ class ScheduledPostsResponse(BaseModel):
 
 class CreateCommentRequest(ContentFieldsMixin):
     parent_comment_id: Optional[str] = None
+    # FEED-004: emoji/GIF/sticker comments. `kind` selects the content type.
+    # For kind="text" the existing ContentFieldsMixin body_* fields are used.
+    kind: Literal["text", "gif", "sticker"] = "text"
+    # GIF fields (required when kind=gif) — mirrors MSG-008 message field names.
+    gif_url: Optional[str] = Field(default=None, max_length=2048)
+    gif_alt_text: Optional[str] = Field(default=None, max_length=256)
+    gif_width: Optional[int] = Field(default=None, ge=0, le=4096)
+    gif_height: Optional[int] = Field(default=None, ge=0, le=4096)
+    # Sticker fields (required when kind=sticker)
+    sticker_id: Optional[str] = Field(default=None, max_length=64)
+    sticker_collection_id: Optional[str] = Field(default=None, max_length=64)
+    sticker_url: Optional[str] = Field(default=None, max_length=2048)
+    sticker_alt_text: Optional[str] = Field(default=None, max_length=256)
 
     model_config = {
         "json_schema_extra": {
@@ -1580,9 +1598,32 @@ class CreateCommentRequest(ContentFieldsMixin):
                     "body_rich": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Rich comment"}]}]},
                     "body_format": "rich",
                 },
+                {"kind": "gif", "gif_url": "https://media.giphy.com/x.gif", "gif_alt_text": "dance"},
+                {
+                    "kind": "sticker",
+                    "sticker_id": "stk_love_heart_01",
+                    "sticker_collection_id": "coll_love_pack",
+                    "sticker_url": "/mock/s3/stickers/coll_love_pack/stk_love_heart_01.webp",
+                    "sticker_alt_text": "Love heart sticker",
+                },
             ]
         }
     }
+
+    @model_validator(mode="after")
+    def validate_comment_kind(self):
+        # For text comments, defer to the inherited body-content validation
+        # (ContentFieldsMixin.validate_content_fields already ran). For media
+        # comments require the corresponding media fields and skip body checks.
+        if self.kind == "gif":
+            if not (self.gif_url or "").strip():
+                raise ValueError("gif_url is required for gif comments")
+        elif self.kind == "sticker":
+            if not (self.sticker_id or "").strip():
+                raise ValueError("sticker_id is required for sticker comments")
+            if not (self.sticker_url or "").strip():
+                raise ValueError("sticker_url is required for sticker comments")
+        return self
 
 
 class EditCommentRequest(ContentFieldsMixin):
@@ -1606,6 +1647,16 @@ class CommentResponse(BaseModel):
     body_version: int = 1
     version: int = 1
     tip_total_cents: int = 0
+    # FEED-004: emoji/GIF/sticker comments
+    kind: str = "text"
+    gif_url: Optional[str] = None
+    gif_alt_text: Optional[str] = None
+    gif_width: Optional[int] = None
+    gif_height: Optional[int] = None
+    sticker_id: Optional[str] = None
+    sticker_collection_id: Optional[str] = None
+    sticker_url: Optional[str] = None
+    sticker_alt_text: Optional[str] = None
 
 
 class TipRequest(BaseModel):
@@ -2219,6 +2270,16 @@ def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
         "body_version": _body_version,
         "version": int(it.get("version", 1)),
         "tip_total_cents": int(it.get("tip_total_cents", 0)),
+        # FEED-004: emoji/GIF/sticker comments (additive — legacy items lack these)
+        "kind": it.get("kind", "text"),
+        "gif_url": it.get("gif_url"),
+        "gif_alt_text": it.get("gif_alt_text"),
+        "gif_width": int(it["gif_width"]) if it.get("gif_width") is not None else None,
+        "gif_height": int(it["gif_height"]) if it.get("gif_height") is not None else None,
+        "sticker_id": it.get("sticker_id"),
+        "sticker_collection_id": it.get("sticker_collection_id"),
+        "sticker_url": it.get("sticker_url"),
+        "sticker_alt_text": it.get("sticker_alt_text"),
     }
 
 
@@ -5266,10 +5327,39 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to comment")
 
+    # FEED-004: gate media comments behind feature flag
+    if req.kind in ("gif", "sticker") and not bool(getattr(S, "rich_comments_enabled", True)):
+        raise HTTPException(status_code=400, detail="Media comments are not enabled")
+
     comment_id = new_id("cmt")
     created_at = now_iso()
     parent = req.parent_comment_id
-    content = _content_from_payload(req)
+
+    # FEED-004: media comments (gif/sticker) carry no body content; text comments
+    # use the existing ContentFieldsMixin envelope.
+    if req.kind == "text":
+        content = _content_from_payload(req)
+    else:
+        content = {
+            "body": None,
+            "body_plain": None,
+            "body_markdown": None,
+            "body_markdown_html": None,
+            "body_rich": None,
+            "body_format": "plain",
+            "body_version": 1,
+        }
+    media_fields = {
+        "kind": req.kind,
+        "gif_url": req.gif_url,
+        "gif_alt_text": req.gif_alt_text,
+        "gif_width": req.gif_width,
+        "gif_height": req.gif_height,
+        "sticker_id": req.sticker_id,
+        "sticker_collection_id": req.sticker_collection_id,
+        "sticker_url": req.sticker_url,
+        "sticker_alt_text": req.sticker_alt_text,
+    }
     _emit_newsfeed_content_metric("create_comment", surface="comment", body_format=content.get("body_format", "plain"))
 
     item = {
@@ -5284,6 +5374,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         "deleted": False,
         "parent_comment_id": parent,
         **content,
+        **media_fields,
         "version": 1,
         "tip_total_cents": 0,
         "GSI2PK": pk_post_comments(post_id),
@@ -5346,6 +5437,15 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         body_version=content["body_version"],
         version=1,
         tip_total_cents=0,
+        kind=req.kind,
+        gif_url=req.gif_url,
+        gif_alt_text=req.gif_alt_text,
+        gif_width=req.gif_width,
+        gif_height=req.gif_height,
+        sticker_id=req.sticker_id,
+        sticker_collection_id=req.sticker_collection_id,
+        sticker_url=req.sticker_url,
+        sticker_alt_text=req.sticker_alt_text,
     )
 
 
@@ -5430,6 +5530,15 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
         body_version=int(updated.get("body_version") or 1),
         version=int(updated.get("version", 1)),
         tip_total_cents=int(updated.get("tip_total_cents", 0)),
+        kind=updated.get("kind", "text"),
+        gif_url=updated.get("gif_url"),
+        gif_alt_text=updated.get("gif_alt_text"),
+        gif_width=int(updated["gif_width"]) if updated.get("gif_width") is not None else None,
+        gif_height=int(updated["gif_height"]) if updated.get("gif_height") is not None else None,
+        sticker_id=updated.get("sticker_id"),
+        sticker_collection_id=updated.get("sticker_collection_id"),
+        sticker_url=updated.get("sticker_url"),
+        sticker_alt_text=updated.get("sticker_alt_text"),
     )
 
 

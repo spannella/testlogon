@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Send, MoreHorizontal, Pencil, Trash2, X, Check, DollarSign, Flag } from "lucide-react";
+import { Send, MoreHorizontal, Pencil, Trash2, X, Check, DollarSign, Flag, Smile, Images, Sticker as StickerIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,6 +14,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
+import { EmojiPicker } from "@/components/shared/EmojiPicker";
+import { GifPicker } from "@/components/shared/GifPicker";
+import { StickerPicker } from "@/components/shared/StickerPicker";
 import {
   getComments,
   createComment,
@@ -22,7 +26,8 @@ import {
 } from "@/api/endpoints/newsfeed";
 import { useAuthStore } from "@/stores/authStore";
 import { ApiError } from "@/api/client";
-import type { FeedComment } from "@/api/types";
+import type { FeedComment, CreateCommentReq } from "@/api/types";
+import { isEmojiOnly } from "@/utils/emoji";
 import { TipDialog } from "./TipDialog";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { MarkdownComposer, type EditorMode, type RichDoc, richDocToPlain, buildContentPayload } from "./MarkdownComposer";
@@ -38,6 +43,9 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
   const [body, setBody] = useState("");
   const [editorMode, setEditorMode] = useState<EditorMode>("plain");
   const [richDoc, setRichDoc] = useState<RichDoc | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
+  const [stickerOpen, setStickerOpen] = useState(false);
 
   const commentsQuery = useInfiniteQuery({
     queryKey: ["comments", postId],
@@ -47,7 +55,7 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
   });
 
   const sendMutation = useMutation({
-    mutationFn: () => createComment(postId, buildContentPayload(body, editorMode, richDoc)),
+    mutationFn: (payload: CreateCommentReq) => createComment(postId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["comments", postId] });
       queryClient.invalidateQueries({ queryKey: ["feed"] });
@@ -63,7 +71,35 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!body.trim()) return;
-    sendMutation.mutate();
+    sendMutation.mutate({ kind: "text", ...buildContentPayload(body, editorMode, richDoc) });
+  };
+
+  // FEED-004: insert an emoji at the end of the comment draft (plain mode).
+  const handleEmojiInsert = (emoji: string) => {
+    setBody((prev) => prev + emoji);
+  };
+
+  // FEED-004: GIF / sticker comments send immediately (one-click).
+  const handleGifSelect = (gif: { url: string; alt_text: string; width: number; height: number }) => {
+    setGifOpen(false);
+    sendMutation.mutate({
+      kind: "gif",
+      gif_url: gif.url,
+      gif_alt_text: gif.alt_text,
+      gif_width: gif.width,
+      gif_height: gif.height,
+    });
+  };
+
+  const handleStickerSelect = (sticker: { id: string; collection_id: string; url: string; alt_text: string }) => {
+    setStickerOpen(false);
+    sendMutation.mutate({
+      kind: "sticker",
+      sticker_id: sticker.id,
+      sticker_collection_id: sticker.collection_id,
+      sticker_url: sticker.url,
+      sticker_alt_text: sticker.alt_text,
+    });
   };
 
   const allComments = (commentsQuery.data?.pages ?? []).flatMap((p) => p.items);
@@ -114,7 +150,64 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
           placeholder="Write a comment..."
           rows={2}
         />
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between">
+          {/* FEED-004: emoji / GIF / sticker toolbar */}
+          <div className="flex items-center gap-1">
+            <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  aria-label="Insert emoji"
+                  data-testid="comment-emoji-button"
+                  disabled={sendMutation.isPending}
+                >
+                  <Smile className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent side="top" align="start" className="w-auto p-0">
+                <EmojiPicker onSelect={handleEmojiInsert} onClose={() => setEmojiOpen(false)} />
+              </PopoverContent>
+            </Popover>
+            <Popover open={gifOpen} onOpenChange={setGifOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  aria-label="Add a GIF"
+                  data-testid="comment-gif-button"
+                  disabled={sendMutation.isPending}
+                >
+                  <Images className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent side="top" align="start" className="w-auto p-2">
+                <GifPicker onSelect={handleGifSelect} />
+              </PopoverContent>
+            </Popover>
+            <Popover open={stickerOpen} onOpenChange={setStickerOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  aria-label="Add a sticker"
+                  data-testid="comment-sticker-button"
+                  disabled={sendMutation.isPending}
+                >
+                  <StickerIcon className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent side="top" align="start" className="w-auto p-2">
+                <StickerPicker onSelect={handleStickerSelect} />
+              </PopoverContent>
+            </Popover>
+          </div>
           <Button
             type="submit"
             size="sm"
@@ -146,15 +239,57 @@ function commentMode(comment: FeedComment): EditorMode {
 }
 
 function commentDraftText(comment: FeedComment): string {
-  if (comment.body_format === "markdown") return comment.body_markdown ?? comment.body_plain ?? comment.body;
+  if (comment.kind === "gif" || comment.kind === "sticker") return "";
+  if (comment.body_format === "markdown") return comment.body_markdown ?? comment.body_plain ?? comment.body ?? "";
   if (comment.body_format === "rich") {
     const doc = (comment.body_rich as RichDoc | undefined) ?? null;
-    return doc ? (richDocToPlain(doc) || comment.body_plain || comment.body) : (comment.body_plain || comment.body);
+    return doc ? (richDocToPlain(doc) || comment.body_plain || comment.body || "") : (comment.body_plain || comment.body || "");
   }
-  return comment.body_plain ?? comment.body;
+  return comment.body_plain ?? comment.body ?? "";
+}
+
+// FEED-004: media comments (gif/sticker) cannot be edited via the text editor.
+function isMediaComment(comment: FeedComment): boolean {
+  return comment.kind === "gif" || comment.kind === "sticker";
 }
 
 function CommentBodyView({ comment }: { comment: FeedComment }) {
+  // FEED-004: GIF comment
+  if (comment.kind === "gif" && comment.gif_url) {
+    return (
+      <img
+        src={comment.gif_url}
+        alt={comment.gif_alt_text || "GIF"}
+        className="mt-1 max-w-[200px] rounded"
+        loading="lazy"
+        data-testid="comment-gif"
+      />
+    );
+  }
+  // FEED-004: sticker comment
+  if (comment.kind === "sticker" && comment.sticker_url) {
+    return (
+      <img
+        src={comment.sticker_url}
+        alt={comment.sticker_alt_text || "Sticker"}
+        className="mt-1 h-20 w-20 object-contain"
+        loading="lazy"
+        data-testid="comment-sticker"
+      />
+    );
+  }
+  // FEED-004: emoji-only text renders jumbo (3x)
+  const plain = comment.body_plain ?? comment.body;
+  if (
+    (comment.body_format ?? "plain") === "plain" &&
+    isEmojiOnly(plain)
+  ) {
+    return (
+      <p className="text-3xl leading-relaxed" data-testid="comment-emoji-jumbo">
+        {plain}
+      </p>
+    );
+  }
   return (
     <RichContentRenderer
       body={comment.body}
@@ -362,9 +497,11 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
             <DropdownMenuContent align="end">
               {isOwn ? (
                 <>
-                  <DropdownMenuItem onClick={startEdit}>
-                    <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
-                  </DropdownMenuItem>
+                  {!isMediaComment(comment) && (
+                    <DropdownMenuItem onClick={startEdit}>
+                      <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
                     onClick={() => setDeleteOpen(true)}
