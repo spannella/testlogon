@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag, Dices, Mic, Clock, AlertCircle, RotateCcw } from "lucide-react";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, SmilePlus, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag, Dices, Mic, Clock, AlertCircle, RotateCcw } from "lucide-react";
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -8,6 +8,8 @@ import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 import { isEmojiOnly } from "@/utils/emoji";
 import { MessageText } from "@/components/shared/MessageText";
 import { ReactionEmoji } from "@/components/shared/ReactionEmoji";
+import { EmojiPicker } from "@/components/shared/EmojiPicker";
+import { ReactionDetailPopover } from "./ReactionDetailPopover";
 import {
   decryptMessage,
   decryptBytes,
@@ -82,6 +84,17 @@ import {
 } from "@/lib/offlineMessageHelpers";
 
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+// MSG-011: emoji added by double-tapping a message (quick-react).
+const QUICK_REACT_EMOJI = "❤️";
+
+// MSG-011: the EmojiPicker emits custom emojis as ":shortcode:"; reactions are
+// stored under the "custom:shortcode" key (see ReactionEmoji). Normalize here.
+function normalizeReactionKey(picked: string): string {
+  const m = /^:([a-zA-Z0-9_-]+):$/.exec(picked);
+  if (m) return `custom:${m[1].toLowerCase()}`;
+  return picked;
+}
 
 interface MessageBubbleProps {
   message: Message;
@@ -419,6 +432,9 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [fullPickerOpen, setFullPickerOpen] = useState(false);
+  // MSG-011: emoji currently playing the pop animation (briefly set on add).
+  const [animatingEmoji, setAnimatingEmoji] = useState<string | null>(null);
   const [tipStep, setTipStep] = useState<null | "amount" | "confirm">(null);
   const [tipAmount, setTipAmount] = useState("");
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null);
@@ -495,12 +511,38 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     mutationFn: (emoji: string) => {
       const alreadyReacted = (message.my_reactions ?? []).includes(emoji);
       const action = alreadyReacted ? "remove" : "add";
+      // MSG-011: play the pop animation only when adding a reaction.
+      if (action === "add") {
+        setAnimatingEmoji(emoji);
+        window.setTimeout(() => setAnimatingEmoji((cur) => (cur === emoji ? null : cur)), 320);
+      }
       return reactToMessage(conversationId, message.message_id, emoji, action).then(() => {
         void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+        void queryClient.invalidateQueries({ queryKey: ["conversations"] });
       });
     },
-    onError: () => toast.error("Failed to react"),
+    onError: (err: unknown) => {
+      const detail =
+        err instanceof ApiError ? (err.body as { detail?: string } | undefined)?.detail : undefined;
+      toast.error(detail || "Failed to react");
+    },
   });
+
+  // MSG-011: double-tap the message body to quickly add/remove a heart reaction.
+  const handleQuickReact = useCallback(() => {
+    if (message.__offline || message.revoked_at) return;
+    reactMut.mutate(QUICK_REACT_EMOJI);
+  }, [message.__offline, message.revoked_at, reactMut]);
+
+  // MSG-011: pick from the full emoji picker (incl. custom emojis) as a reaction.
+  const handlePickReaction = useCallback(
+    (picked: string) => {
+      reactMut.mutate(normalizeReactionKey(picked));
+      setFullPickerOpen(false);
+      setEmojiPickerOpen(false);
+    },
+    [reactMut],
+  );
 
   const hideMut = useMutation({
     mutationFn: () => hideMessage(conversationId, message.message_id),
@@ -781,6 +823,8 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     <>
       <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
         <div
+          data-testid="message-bubble"
+          onDoubleClick={handleQuickReact}
           className={cn(
             "group relative max-w-[75%] rounded-2xl px-4 py-2 transition-opacity",
             isOwn
@@ -808,7 +852,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               </Button>
               {emojiPickerOpen && (
                 <div className={cn(
-                  "absolute top-full mt-1 z-50 flex gap-1 rounded-full border border-border bg-popover p-1 shadow-lg",
+                  "absolute top-full mt-1 z-50 flex items-center gap-1 rounded-full border border-border bg-popover p-1 shadow-lg",
                   isOwn ? "right-0" : "left-0",
                 )}>
                   {QUICK_EMOJIS.map((emoji) => (
@@ -823,6 +867,27 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                       {emoji}
                     </button>
                   ))}
+                  {/* MSG-011: open the full emoji picker (incl. custom emojis) */}
+                  <button
+                    aria-label="More reactions"
+                    data-testid="reaction-more-button"
+                    onClick={() => { setEmojiPickerOpen(false); setFullPickerOpen(true); }}
+                    className="flex h-7 w-7 items-center justify-center rounded-full text-base transition-colors hover:bg-accent"
+                  >
+                    <SmilePlus className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+              {/* MSG-011: full emoji picker for reactions (Unicode + custom) */}
+              {fullPickerOpen && (
+                <div className={cn(
+                  "absolute top-full mt-1 z-50",
+                  isOwn ? "right-0" : "left-0",
+                )}>
+                  <EmojiPicker
+                    onSelect={handlePickReaction}
+                    onClose={() => setFullPickerOpen(false)}
+                  />
                 </div>
               )}
             </div>
@@ -1764,20 +1829,39 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
           )}
 
           {message.reactions_counts && Object.keys(message.reactions_counts).length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
+            <div className="mt-1 flex flex-wrap items-center gap-1" data-testid="reaction-bar">
               {Object.entries(message.reactions_counts).map(([emoji, count]) => (
                 <button
                   key={emoji}
                   type="button"
+                  data-testid={`reaction-badge-${emoji}`}
                   onClick={() => reactMut.mutate(emoji)}
                   className={cn(
-                    "inline-flex items-center rounded-full bg-background/80 px-1.5 py-0.5 text-xs transition-colors hover:bg-accent",
+                    "msg011-reaction-badge inline-flex items-center rounded-full bg-background/80 px-1.5 py-0.5 text-xs transition-colors hover:bg-accent",
                     (message.my_reactions ?? []).includes(emoji) && "bg-primary/20 ring-1 ring-primary/40",
+                    animatingEmoji === emoji && "reaction-badge-enter",
                   )}
                 >
                   <ReactionEmoji reactionKey={emoji} /> {count > 1 && <span className="ml-0.5">{count}</span>}
                 </button>
               ))}
+              {/* MSG-011: tap to see who reacted with what */}
+              <ReactionDetailPopover
+                conversationId={conversationId}
+                messageId={message.message_id}
+                emojis={Object.keys(message.reactions_counts)}
+                counts={message.reactions_counts}
+                trigger={
+                  <button
+                    type="button"
+                    aria-label="See who reacted"
+                    data-testid="reaction-details-trigger"
+                    className="inline-flex h-5 items-center rounded-full px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
+                  >
+                    <Info className="h-3 w-3" />
+                  </button>
+                }
+              />
             </div>
           )}
 

@@ -44,6 +44,7 @@ import type {
   ConversationDraftListResp,
   CreateConversationDraftReq,
   UpdateConversationDraftReq,
+  ReactionDetails,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingDmLotteryEnabled, isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -448,6 +449,12 @@ export const editMessage = async (conversationId: string, messageId: string, bod
 
 export const reactToMessage = (conversationId: string, messageId: string, emoji: string, action: "add" | "remove" = "add") =>
   api.post(`/messaging/conversations/${conversationId}/messages/${messageId}/reactions`, { emoji, action });
+
+// MSG-011: fetch who reacted with what (avatars + display names per emoji).
+export const getReactionDetails = (conversationId: string, messageId: string) =>
+  api.get<ReactionDetails>(
+    `/messaging/conversations/${conversationId}/messages/${messageId}/reactions/details`,
+  );
 
 export const deleteMessage = (conversationId: string, messageId: string) =>
   api.del(`/messaging/conversations/${conversationId}/messages/${messageId}`);

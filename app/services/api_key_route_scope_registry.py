@@ -105,6 +105,7 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "GET:/messaging/conversations/{conversation_id}/messages/search": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
     "GET:/messaging/conversations/{conversation_id}/messages/{message_id}/attachment": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
     "GET:/messaging/conversations/{conversation_id}/messages/{message_id}/edits": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
+    "GET:/messaging/conversations/{conversation_id}/messages/{message_id}/reactions/details": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
     "GET:/messaging/conversations/{conversation_id}/messages/{message_id}/views": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
     "GET:/messaging/conversations/{conversation_id}/participants": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
     "GET:/messaging/conversations/{conversation_id}/pins": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},

@@ -2209,8 +2209,26 @@ ConversationOut.model_rebuild(raise_errors=False)
 
 
 class ReactIn(BaseModel):
-    emoji: str = Field(min_length=1, max_length=32)
+    # max_length 64 to accommodate MSG-007 custom emoji reaction keys
+    # of the form "custom:<shortcode>".
+    emoji: str = Field(min_length=1, max_length=64)
     action: Literal["add", "remove"] = "add"
+
+
+# MSG-011: max unique emoji reaction keys allowed per message.
+MAX_UNIQUE_REACTIONS_PER_MESSAGE = 20
+
+
+class ReactionUserOut(BaseModel):
+    """A single user who reacted with a specific emoji."""
+    user_sub: str
+    display_name: str
+    profile_photo_url: Optional[str] = None
+
+
+class ReactionDetailsOut(BaseModel):
+    """Detailed reaction breakdown for a message: emoji -> list of reactors."""
+    reactions: Dict[str, List[ReactionUserOut]] = Field(default_factory=dict)
 
 
 class UpdateConversationIn(BaseModel):
@@ -10851,6 +10869,21 @@ def react_to_message(
     if isinstance(msg, dict) and msg.get("revoked_at"):
         raise HTTPException(400, "Cannot react to a revoked message")
 
+    # MSG-011: enforce a per-message unique-emoji reaction cap. Adding a brand
+    # new emoji key once the cap is reached is rejected; reacting with an emoji
+    # that already exists on the message (a new user joining an existing
+    # reaction) is always allowed.
+    if inp.action == "add":
+        existing_reactions = msg.get("reactions") or {}
+        if (
+            inp.emoji not in existing_reactions
+            and len(existing_reactions) >= MAX_UNIQUE_REACTIONS_PER_MESSAGE
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Maximum {MAX_UNIQUE_REACTIONS_PER_MESSAGE} unique reactions per message",
+            )
+
     expr_names = {"#e": inp.emoji}
 
     try:
@@ -10902,6 +10935,58 @@ def react_to_message(
         action=inp.action,
     )
     return {"ok": True}
+
+
+# MSG-011: Reaction detail — who reacted with what (avatars + display names).
+@router.get(
+    "/conversations/{conversation_id}/messages/{message_id}/reactions/details",
+    response_model=ReactionDetailsOut,
+)
+def get_reaction_details(
+    conversation_id: str,
+    message_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    reactions = msg.get("reactions") or {}
+
+    # Collect the distinct reactor user-subs across all emoji keys, then resolve
+    # each to a display name + avatar once (a user may react with many emojis).
+    all_subs: set[str] = set()
+    for userset in reactions.values():
+        try:
+            all_subs.update(set(userset))
+        except TypeError:
+            continue
+
+    profile_cache: Dict[str, dict] = {}
+    for sub in all_subs:
+        try:
+            profile_cache[sub] = get_profile_identity(sub) or {}
+        except Exception:
+            profile_cache[sub] = {}
+
+    details: Dict[str, List[ReactionUserOut]] = {}
+    for emoji, userset in reactions.items():
+        try:
+            subs = list(set(userset))
+        except TypeError:
+            continue
+        users: List[ReactionUserOut] = []
+        for sub in subs:
+            ident = profile_cache.get(sub) or {}
+            name = (ident.get("display_name") or "").strip() or sub[:8]
+            users.append(
+                ReactionUserOut(
+                    user_sub=sub,
+                    display_name=name,
+                    profile_photo_url=ident.get("profile_photo_url"),
+                )
+            )
+        details[emoji] = users
+
+    return ReactionDetailsOut(reactions=details)
 
 
 # -------------------------
