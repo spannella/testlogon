@@ -95,6 +95,17 @@
   animation: chat-scroll-left 8s linear forwards;
 }
 
+/* MSG-011: reaction badge pop animation (played when a reaction is added). */
+@keyframes reaction-pop {
+  0% { transform: scale(0.5); opacity: 0; }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.reaction-badge-enter {
+  animation: reaction-pop 0.3s ease-out;
+}
+
 /*
  * Dark mode overrides — applied when <html class="dark">
  */

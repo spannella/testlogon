@@ -1417,6 +1417,17 @@ export interface MessageViewer {
   view_count: number;
 }
 
+// MSG-011: reaction detail — who reacted with what (avatars + display names).
+export interface ReactionUser {
+  user_sub: string;
+  display_name: string;
+  profile_photo_url?: string | null;
+}
+
+export interface ReactionDetails {
+  reactions: Record<string, ReactionUser[]>;
+}
+
 export interface MessageControlsErrorResp {
   detail: string;
   error_code?: string;
