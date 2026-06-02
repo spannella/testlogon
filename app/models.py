@@ -13049,3 +13049,90 @@ class AdminFaceComparisonOut(BaseModel):
     best_comparison: Optional[BestComparisonOut] = None
     total_attempts: int = Field(ge=0)
     max_attempts: int = Field(default=3)
+
+
+# -- KYC-022: Electronic Identity Verification (eIDV) -----------------------
+
+
+class StartEidVerificationIn(BaseModel):
+    """Request to start an eID verification session for a case."""
+
+    scheme: str = Field(..., pattern=r"^(eidas|digid|bankid|aadhaar)$", description="eID scheme identifier")
+
+
+class StartEidVerificationOut(BaseModel):
+    """Response after starting an eID verification session."""
+
+    session_id: str
+    redirect_url: str
+    expires_at: int
+    scheme: str
+
+
+class EidSchemeOut(BaseModel):
+    """A single supported eID scheme."""
+
+    id: str
+    name: str
+    countries: List[str]
+    assurance_level: str
+    auth_flow: str
+    description: str = ""
+
+
+class EidSchemesListOut(BaseModel):
+    """List of supported eID schemes."""
+
+    schemes: List[EidSchemeOut]
+
+
+class EidVerifiedFieldsOut(BaseModel):
+    """Government-verified identity fields extracted from an eID assertion."""
+
+    first_name: str = ""
+    last_name: str = ""
+    date_of_birth: str = ""
+    nationality: str = ""
+    document_number: str = ""
+    document_type: str = ""
+    issuing_country: str = ""
+
+
+class EidDiscrepancyOut(BaseModel):
+    """A discrepancy between eID-verified data and the user's profile."""
+
+    field: str
+    profile_value: str
+    eid_value: str
+    severity: Literal["match", "warning", "critical"]
+
+
+class EidVerificationOut(BaseModel):
+    """The eID verification result for a case."""
+
+    scheme: str
+    assertion_id: str
+    assurance_level: str
+    verified_at: int
+    auto_tier_upgrade: bool = False
+    discrepancies: List[EidDiscrepancyOut] = Field(default_factory=list)
+    verified_fields: Optional[EidVerifiedFieldsOut] = None
+
+
+class EidStatusOut(BaseModel):
+    """eID verification status envelope for a case."""
+
+    eid_verification: Optional[EidVerificationOut] = None
+
+
+class MockEidRequest(BaseModel):
+    """Request body for the mock eID provider endpoint (dev mode only)."""
+
+    session_id: str = Field(..., min_length=1)
+
+
+class MockEidResponse(BaseModel):
+    """Response from the mock eID provider: a base64 assertion + HMAC signature."""
+
+    assertion: str
+    signature: str
