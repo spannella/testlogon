@@ -68,7 +68,7 @@ def _table_defs() -> List[TableDef]:
             "collection_id",
             "sk",
             gsi=[{"index_name": "GSI1", "partition_key": "is_active", "sort_key": "created_at"}],
-            attr_types={"created_at": "N", "sticker_count": "N", "sort_order": "N", "width": "N", "height": "N"},
+            attr_types={"created_at": "N"},
         ),
         TableDef(
             _resolve_table_name(S.ddb_custom_emojis_table, "custom_emojis"),
@@ -166,7 +166,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "slug-status-index", "partition_key": "slug", "sort_key": "status"},
                 {"index_name": "status-updated-index", "partition_key": "status", "sort_key": "updated_at"},
             ],
-            attr_types={"updated_at": "N", "created_at": "N"},
+            attr_types={"updated_at": "N"},
         ),
         TableDef(
             _resolve_table_name(S.kyc_documents_table_name, "kyc_documents"),
