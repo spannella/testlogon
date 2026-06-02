@@ -1768,6 +1768,18 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N", "last_used_at": "N"},
         ),
+        # Host Inventory Management (INFRA-001)
+        TableDef(
+            _resolve_table_name(S.ddb_host_inventory_table, "host_inventory"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByLabel", "partition_key": "user_sub", "sort_key": "label_lower"},
+                {"index_name": "ByProtocol", "partition_key": "user_sub", "sort_key": "protocol"},
+                {"index_name": "ByLastConnected", "partition_key": "user_sub", "sort_key": "last_connected_at"},
+            ],
+            attr_types={"last_connected_at": "N"},
+        ),
         # Kubernetes Container Launcher (INFRA-004)
         TableDef(
             _resolve_table_name(S.k8s_pods_table_name, "k8s_pods"),

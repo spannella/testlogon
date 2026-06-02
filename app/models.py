@@ -13049,3 +13049,99 @@ class AdminFaceComparisonOut(BaseModel):
     best_comparison: Optional[BestComparisonOut] = None
     total_attempts: int = Field(ge=0)
     max_attempts: int = Field(default=3)
+
+
+# ---------------------------------------------------------------------------
+# Host Inventory Management (INFRA-001)
+# ---------------------------------------------------------------------------
+
+class CreateHostIn(BaseModel):
+    label: str = Field(..., min_length=1, max_length=100)
+    hostname: str = Field(..., min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    protocol: Literal["ssh", "vnc", "rdp"] = "ssh"
+    username: str = Field(default="", max_length=64)
+    description: str = Field(default="", max_length=500)
+    tags: List[str] = Field(default_factory=list, max_length=20)
+    group: str = Field(default="", max_length=50)
+    os_type: Literal["linux", "windows", "macos", "unknown"] = "unknown"
+
+
+class UpdateHostIn(BaseModel):
+    label: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    hostname: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    protocol: Optional[Literal["ssh", "vnc", "rdp"]] = None
+    username: Optional[str] = Field(default=None, max_length=64)
+    description: Optional[str] = Field(default=None, max_length=500)
+    tags: Optional[List[str]] = Field(default=None, max_length=20)
+    group: Optional[str] = Field(default=None, max_length=50)
+    os_type: Optional[Literal["linux", "windows", "macos", "unknown"]] = None
+    is_pinned: Optional[bool] = None
+
+
+class HostOut(BaseModel):
+    host_id: str
+    label: str
+    hostname: str
+    port: int
+    protocol: str
+    username: str = ""
+    description: str = ""
+    tags: List[str] = []
+    group: str = ""
+    os_type: str = "unknown"
+    created_at: int
+    updated_at: int
+    last_connected_at: int = 0
+    connection_count: int = 0
+    status: str = "unknown"
+    is_pinned: bool = False
+    source: str = "manual"
+
+
+class HostListOut(BaseModel):
+    hosts: List[HostOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+class HostConnectionEventOut(BaseModel):
+    connected_at: int
+    protocol: str
+
+
+class HostHistoryOut(BaseModel):
+    host_id: str
+    connection_count: int
+    last_connected_at: int
+    events: List[HostConnectionEventOut]
+
+
+class ImportHostsCsvIn(BaseModel):
+    csv_content: str = Field(..., max_length=100_000)
+
+
+class ImportResultOut(BaseModel):
+    imported: int
+    skipped: int
+    errors: List[str]
+
+
+class GroupListOut(BaseModel):
+    groups: List[str]
+
+
+class HostQuickConnectOut(BaseModel):
+    host_id: str
+    protocol: str
+    hostname: str
+    port: int
+    username: str = ""
+    label: str = ""
+    # For VNC, a target_id the VNC session system can resolve via the
+    # user host inventory ("user:{host_id}"); empty for non-VNC.
+    target_id: str = ""
+    ws_url: str = ""
+    # Frontend route to navigate to with these params pre-filled.
+    connect_path: str = ""
