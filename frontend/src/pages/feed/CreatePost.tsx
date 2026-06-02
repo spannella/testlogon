@@ -1,7 +1,10 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOfflineStore } from "@/stores/offlineStore";
-import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video, Hash, BarChart3, Timer } from "lucide-react";
+import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video, Hash, BarChart3, Timer, Smile } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { EmojiPicker } from "@/components/shared/EmojiPicker";
+import { replaceShortcodes } from "@/utils/emoji";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -122,6 +125,7 @@ export function CreatePost() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   const [attachFilePickerOpen, setAttachFilePickerOpen] = useState(false);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<FileEntry[]>([]);
   const [lockEnabled, setLockEnabled] = useState(false);
   const [lockPrice, setLockPrice] = useState("");
@@ -340,7 +344,8 @@ export function CreatePost() {
         return publishDraftPost(draftId, false, draftUpdatedAt);
       }
       return createPost({
-        ...buildContentPayload(body, editorMode, richDoc),
+        // MSG-006: replace :shortcode: tokens with Unicode emoji before publish.
+        ...buildContentPayload(replaceShortcodes(body), editorMode, richDoc),
         ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
         ...(pendingFiles.length > 0 ? { file_paths: pendingFiles.map((f) => f.path) } : {}),
         ...(unlockPriceCents ? { unlock_price_cents: unlockPriceCents } : {}),
@@ -1209,6 +1214,28 @@ export function CreatePost() {
                   {isEditingLoadedDraft ? (hasUnsavedDraftChanges ? "Save changes" : "Saved") : "Save Draft"}
                 </Button>
               )}
+
+              <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Insert emoji"
+                    data-testid="post-emoji-button"
+                    disabled={uploading}
+                  >
+                    <Smile className="mr-1 h-3.5 w-3.5" />
+                    Emoji
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent side="top" align="start" className="w-auto p-0">
+                  <EmojiPicker
+                    onSelect={(emoji) => setBody((b) => b + emoji)}
+                    onClose={() => setEmojiPickerOpen(false)}
+                  />
+                </PopoverContent>
+              </Popover>
 
               <Button
                 type="button"

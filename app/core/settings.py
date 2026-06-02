@@ -125,6 +125,8 @@ class Settings:
 
     # Calendar integrations
     calendar_integrations_enabled: bool = os.environ.get("CALENDAR_INTEGRATIONS_ENABLED", "1") not in ("0", "false", "False")
+    # MSG-006: Emoji messages — shortcode replacement feature flag (frontend reads via /ui/config).
+    emoji_shortcodes_enabled: bool = os.environ.get("EMOJI_SHORTCODES_ENABLED", "1") not in ("0", "false", "False")
     apple_caldav_enabled: bool = os.environ.get("APPLE_CALDAV_ENABLED", "0") not in ("0", "false", "False")
     apple_caldav_base_url: str = os.environ.get("APPLE_CALDAV_BASE_URL", "https://caldav.icloud.com").rstrip("/")
     apple_caldav_mock_enabled: bool = os.environ.get("APPLE_CALDAV_MOCK_ENABLED", "0") not in ("0", "false", "False")

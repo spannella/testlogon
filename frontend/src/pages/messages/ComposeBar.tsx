@@ -4,6 +4,8 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { GifPicker } from "@/components/shared/GifPicker";
 import { StickerPicker } from "@/components/shared/StickerPicker";
+import { EmojiPicker } from "@/components/shared/EmojiPicker";
+import { replaceShortcodes } from "@/utils/emoji";
 import { sendGifMessage, sendStickerMessage } from "@/api/endpoints/messaging";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -116,6 +118,7 @@ export function ComposeBar({
   const queryClient = useQueryClient();
   const [gifPickerOpen, setGifPickerOpen] = React.useState(false);
   const [stickerPickerOpen, setStickerPickerOpen] = React.useState(false);
+  const [emojiPickerOpen, setEmojiPickerOpen] = React.useState(false);
 
   const sendGifMut = useMutation({
     mutationFn: (gif: { url: string; alt_text: string; width: number; height: number }) =>
@@ -303,6 +306,29 @@ export function ComposeBar({
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
+  };
+
+  // MSG-006: Insert an emoji at the current caret position in the textarea.
+  const insertEmoji = (emoji: string) => {
+    const ta = textareaRef.current;
+    if (!ta) {
+      setText((prev) => prev + emoji);
+      return;
+    }
+    const start = ta.selectionStart ?? text.length;
+    const end = ta.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    setText(next);
+    if (draftsEnabled) {
+      const trimmed = next.trim();
+      setDraftDirty(trimmed.length > 0 && trimmed !== lastPersistedDraftTextRef.current);
+    }
+    // Restore focus + caret after React re-renders.
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + emoji.length;
+      ta.setSelectionRange(pos, pos);
+    });
   };
 
   const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id"> => {
@@ -527,7 +553,9 @@ export function ComposeBar({
 
   const handleSubmit = async () => {
     if (sending || encrypting) return;
-    const trimmed = text.trim();
+    // MSG-006: Convert :shortcode: tokens to Unicode emoji before sending so the
+    // backend only ever stores Unicode characters.
+    const trimmed = replaceShortcodes(text.trim());
 
     // Gallery mode: submit gallery instead of normal message
     if (galleryMode && onSendGallery) {
@@ -1581,6 +1609,28 @@ export function ComposeBar({
             <Video className="h-4 w-4" />
           </Button>
         )}
+        <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 shrink-0"
+              aria-label="Insert emoji"
+              data-testid="emoji-button"
+              disabled={disabled || sending}
+            >
+              <Smile className="h-4 w-4" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="start" className="w-auto p-0">
+            <EmojiPicker
+              onSelect={(emoji) => insertEmoji(emoji)}
+              onClose={() => setEmojiPickerOpen(false)}
+            />
+          </PopoverContent>
+        </Popover>
+
         <Popover open={gifPickerOpen} onOpenChange={setGifPickerOpen}>
           <PopoverTrigger asChild>
             <Button
@@ -1591,7 +1641,7 @@ export function ComposeBar({
               aria-label="Send a GIF"
               disabled={disabled || sending}
             >
-              <Smile className="h-4 w-4" />
+              <Images className="h-4 w-4" />
             </Button>
           </PopoverTrigger>
           <PopoverContent side="top" align="start" className="w-auto p-2">

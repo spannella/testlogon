@@ -27,6 +27,7 @@ import { CommentsThread } from "./CommentsThread";
 import { PostActions } from "./PostActions";
 import { EditPostDialog } from "./EditPostDialog";
 import { RichContentRenderer } from "./RichContentRenderer";
+import { isEmojiOnly } from "@/utils/emoji";
 import { TipDialog } from "./TipDialog";
 import { SharePostDialog } from "./SharePostDialog";
 import { RepostButton } from "./RepostButton";
@@ -546,6 +547,10 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
               bodyMarkdownHtml={post.body_markdown_html}
               bodyRich={(post.body_rich as Record<string, unknown> | null) ?? null}
               bodyFormat={post.body_format}
+              className={
+                // MSG-006: render emoji-only posts at larger size.
+                isEmojiOnly(post.body_plain ?? post.body) ? "text-5xl leading-relaxed py-1" : ""
+              }
             />
           )}
         </div>
