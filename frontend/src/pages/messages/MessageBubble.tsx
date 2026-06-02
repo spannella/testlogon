@@ -60,6 +60,7 @@ import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
 import { WaveformPlayer } from "./WaveformPlayer";
 import { VoicemailBubble } from "./VoicemailBubble";
+import { CountdownCard } from "./CountdownCard";
 import { VideoShareCard } from "./VideoShareCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
 import { DeliveryStatus } from "./DeliveryStatus";
@@ -167,6 +168,7 @@ function replyPreviewText(msg: Message): string {
   if (msg.kind === "audio") return "[Audio]";
   if (msg.kind === "voice_message") return "[Voice message]";
   if (msg.kind === "voicemail") return "[Voicemail]";
+  if (msg.kind === "countdown") return `[Countdown: ${msg.countdown_title ?? msg.text ?? ""}]`;
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
   if (msg.is_encrypted) return "[Encrypted message]";
   return (msg.text ?? "").slice(0, 80) || "[Message]";
@@ -1677,6 +1679,18 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
           {message.kind === "meeting_poll" && message.text && (
             <p className="mt-1 text-sm">{message.text}</p>
           )}
+
+          {/* ── Countdown card (MSG-010) ── */}
+          {message.kind === "countdown" &&
+            message.countdown_title &&
+            message.target_datetime != null && (
+              <CountdownCard
+                title={message.countdown_title}
+                targetDatetime={message.target_datetime}
+                associatedEventType={message.associated_event_type ?? "custom"}
+                associatedEventId={message.associated_event_id}
+              />
+            )}
 
           {message.tip_amount_cents && message.tip_amount_cents > 0 && (
             <div className={cn(

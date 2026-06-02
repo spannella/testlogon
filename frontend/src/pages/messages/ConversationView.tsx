@@ -17,6 +17,7 @@ import {
   sendCalendarShareMessage,
   sendCalendarEventMessage,
   sendMeetingPollMessage,
+  sendCountdownMessage,
   createLotteryMessage,
   sendVoiceMessage,
   markRead,
@@ -530,6 +531,20 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
     onError: () => toast.error("Failed to create poll"),
+  });
+
+  const sendCountdown = useMutation({
+    mutationFn: (params: {
+      title: string;
+      target_datetime: number;
+      associated_event_type?: "broadcast" | "call" | "calendar" | "custom";
+      associated_event_id?: string;
+    }) => sendCountdownMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to create countdown"),
   });
 
   const sendLottery = useMutation({
@@ -1213,9 +1228,10 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendCalendarShare={(params) => sendCalendarShare.mutate(params)}
         onSendCalendarEvent={(params) => sendCalendarEvent.mutate(params)}
         onSendMeetingPoll={(params) => sendMeetingPoll.mutate(params)}
+        onSendCountdown={(params) => sendCountdown.mutate(params)}
         onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}
         onSendVoiceMessage={(blob, meta) => sendVoice.mutate({ blob, meta })}
-        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || videoShareMut.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending || sendLottery.isPending || sendVoice.isPending}
+        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || videoShareMut.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending || sendCountdown.isPending || sendLottery.isPending || sendVoice.isPending}
         onKeystroke={onKeystroke}
         replyingTo={replyingTo}
         onCancelReply={() => setReplyingTo(null)}

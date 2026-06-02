@@ -327,6 +327,8 @@ function getPreviewText(lastMsg: Message | undefined, convo: Conversation): stri
   if (lastMsg.locked && !lastMsg.is_unlocked) return "[Locked message]";
   if (lastMsg.kind === "voice_message") return "[Voice message]";
   if (lastMsg.kind === "voicemail") return "[Voicemail]";
+  if (lastMsg.kind === "countdown")
+    return `[Countdown: ${lastMsg.countdown_title ?? lastMsg.text ?? ""}]`;
   return lastMsg.text ?? convo.last_message_preview ?? "No messages yet";
 }
 
