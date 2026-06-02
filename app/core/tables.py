@@ -235,6 +235,7 @@ class Tables:
     sponsorship_deals: Any
     image_optimizations: Any
     file_share_links: Any
+    host_inventory: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -464,4 +465,5 @@ T = Tables(
     sponsorship_deals=ddb.Table(S.sponsorship_deals_table_name),
     image_optimizations=ddb.Table(S.image_optimizations_table_name),
     file_share_links=ddb.Table(S.ddb_file_share_links_table),
+    host_inventory=ddb.Table(S.ddb_host_inventory_table),
 )

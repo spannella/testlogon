@@ -11598,3 +11598,103 @@ export interface AdminFaceComparison {
   total_attempts: number;
   max_attempts: number;
 }
+
+// ── Host Inventory Management (INFRA-001) ──────────────────────────────────
+
+export type HostProtocol = "ssh" | "vnc" | "rdp";
+export type HostOsType = "linux" | "windows" | "macos" | "unknown";
+export type HostStatus = "online" | "offline" | "unknown";
+export type HostSource = "manual" | "csv_import" | "ec2_auto" | "k8s_auto";
+
+export interface HostOut {
+  host_id: string;
+  label: string;
+  hostname: string;
+  port: number;
+  protocol: HostProtocol;
+  username: string;
+  description: string;
+  tags: string[];
+  group: string;
+  os_type: HostOsType;
+  created_at: number;
+  updated_at: number;
+  last_connected_at: number;
+  connection_count: number;
+  status: HostStatus;
+  is_pinned: boolean;
+  source: HostSource;
+}
+
+export interface HostListOut {
+  hosts: HostOut[];
+  count: number;
+  cursor?: string | null;
+}
+
+export interface CreateHostInput {
+  label: string;
+  hostname: string;
+  port?: number;
+  protocol?: HostProtocol;
+  username?: string;
+  description?: string;
+  tags?: string[];
+  group?: string;
+  os_type?: HostOsType;
+}
+
+export interface UpdateHostInput {
+  label?: string;
+  hostname?: string;
+  port?: number;
+  protocol?: HostProtocol;
+  username?: string;
+  description?: string;
+  tags?: string[];
+  group?: string;
+  os_type?: HostOsType;
+  is_pinned?: boolean;
+}
+
+export interface HostConnectionEvent {
+  connected_at: number;
+  protocol: string;
+}
+
+export interface HostHistoryOut {
+  host_id: string;
+  connection_count: number;
+  last_connected_at: number;
+  events: HostConnectionEvent[];
+}
+
+export interface ImportHostsResult {
+  imported: number;
+  skipped: number;
+  errors: string[];
+}
+
+export interface HostGroupListOut {
+  groups: string[];
+}
+
+export interface HostQuickConnectOut {
+  host_id: string;
+  protocol: string;
+  hostname: string;
+  port: number;
+  username: string;
+  label: string;
+  target_id: string;
+  ws_url: string;
+  connect_path: string;
+}
+
+export interface ListHostsParams {
+  protocol?: string;
+  group?: string;
+  sort_by?: string;
+  limit?: number;
+  cursor?: string;
+}

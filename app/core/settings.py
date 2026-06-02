@@ -2294,5 +2294,16 @@ class Settings:
         os.environ.get("FRAUD_SCORE_THRESHOLD", "70")
     )
 
+    # INFRA-001: Host Inventory Management
+    ddb_host_inventory_table: str = os.environ.get(
+        "DDB_HOST_INVENTORY_TABLE", "host_inventory"
+    )
+    host_inventory_enabled: bool = os.environ.get(
+        "HOST_INVENTORY_ENABLED", "true"
+    ).lower() not in ("0", "false", "no")
+    host_inventory_max_per_user: int = int(
+        os.environ.get("HOST_INVENTORY_MAX_PER_USER", "500")
+    )
+
 
 S = Settings()
