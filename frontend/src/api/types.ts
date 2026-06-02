@@ -12062,3 +12062,134 @@ export interface KycCompleteReviewRequest {
   new_risk_tier?: "low" | "medium" | "high" | "critical" | null;
   case_id?: string | null;
 }
+
+
+
+// ─── KYC-019: Case Assignment & Workload Management ──────────────────
+
+export interface KycAdminAvailability {
+  admin_sub: string;
+  on_duty: boolean;
+  current_case_count: number;
+  avg_processing_hours: number;
+  expertise_tiers: string[];
+  languages: string[];
+  seniority_level: number;
+  max_cases: number;
+  last_assigned_at?: number | null;
+  updated_at?: number | null;
+}
+
+export interface KycAdminAvailabilityReq {
+  on_duty: boolean;
+  expertise_tiers: string[];
+  languages: string[];
+  max_cases: number;
+  seniority_level: number;
+}
+
+export interface KycAutoAssignResult {
+  assigned_admin_sub?: string | null;
+  score: number;
+  tier: string;
+  reason: string;
+}
+
+export interface KycReassignReq {
+  new_admin_sub: string;
+  reason: string;
+}
+
+export interface KycReassignResult {
+  ok: boolean;
+  previous_admin_sub?: string | null;
+  new_admin_sub: string;
+  reason: string;
+}
+
+export interface KycClaimResult {
+  ok: boolean;
+  assigned_admin_sub?: string | null;
+  previous_admin_sub?: string | null;
+}
+
+export interface KycSlaTierConfig {
+  target_hours: number;
+  warning_pct: number;
+  escalation_pct?: number;
+}
+
+export interface KycSlaConfigEnvelope {
+  sla_config: Record<string, KycSlaTierConfig>;
+}
+
+export interface KycSlaConfigUpdateReq {
+  target_hours: number;
+  warning_pct: number;
+}
+
+export interface KycSlaConfigResult {
+  tier: string;
+  target_hours: number;
+  warning_pct: number;
+  escalation_pct: number;
+  updated_at?: number | null;
+  updated_by?: string | null;
+}
+
+export interface KycAssignmentEvent {
+  event_type: string;
+  from_admin?: string | null;
+  to_admin?: string | null;
+  reason: string;
+  actor_sub?: string | null;
+  escalation_level?: number | null;
+  created_at: number;
+}
+
+export interface KycAssignmentHistory {
+  events: KycAssignmentEvent[];
+}
+
+export interface KycMyAssignedCase {
+  kyc_case_id: string;
+  status: string;
+  tier: string;
+  assigned_at?: number | null;
+  sla_due_at?: number | null;
+  overdue: boolean;
+  escalation_level: number;
+}
+
+export interface KycMyAssigned {
+  cases: KycMyAssignedCase[];
+}
+
+export interface KycSlaBreach {
+  kyc_case_id: string;
+  assigned_admin_sub?: string | null;
+  tier: string;
+  sla_due_at: number;
+  hours_overdue: number;
+  escalation_level: number;
+}
+
+export interface KycSlaBreachList {
+  breaches: KycSlaBreach[];
+}
+
+export interface KycEscalateResult {
+  ok: boolean;
+  kyc_case_id: string;
+  escalation_level: number;
+  previous_admin_sub?: string | null;
+  new_admin_sub?: string | null;
+  reason: string;
+}
+
+export interface KycWorkloadDashboard {
+  admins: KycAdminAvailability[];
+  sla_config: Record<string, KycSlaTierConfig>;
+  total_active_cases: number;
+  total_on_duty_admins: number;
+}
