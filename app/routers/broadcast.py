@@ -451,7 +451,8 @@ def get_session_route(session_id: str, request: Request, ctx: dict = Depends(_ct
     # Geo-check: non-owners are subject to geo-blocking
     if session.created_by != ctx["user_sub"]:
         from app.services.geo_check import check_geo_access
-        raw = T.broadcast_sessions.get_item(Key={"session_id": session_id}).get("Item", {})
+        from app.core.tables import T as _T
+        raw = _T.broadcast_sessions.get_item(Key={"session_id": session_id}).get("Item", {})
         check_geo_access(request, raw.get("geo_mode"), raw.get("geo_countries"))
     return _to_session_out(session)
 

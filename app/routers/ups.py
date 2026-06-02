@@ -101,7 +101,7 @@ async def ups_tracking_webhook(req: Request) -> Dict[str, Any]:
     # 1. Audit log (existing behavior — preserved).
     T.billing.put_item(
         Item={
-            "user_sub": "UPS_TRACKING",
+            "pk": "UPS_TRACKING",
             "sk": f"{now_ts()}#{tracking_number}",
             "payload": payload,
             "created_at": now_ts(),

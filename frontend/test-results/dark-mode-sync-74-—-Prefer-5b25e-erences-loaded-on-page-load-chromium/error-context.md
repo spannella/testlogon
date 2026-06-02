@@ -1,0 +1,649 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - link "Skip to content" [ref=e5] [cursor=pointer]:
+      - /url: "#main-content"
+    - complementary [ref=e6]:
+      - generic [ref=e8]:
+        - generic [ref=e10]: T
+        - generic [ref=e11]: TestLogon
+      - navigation [ref=e12]:
+        - generic [ref=e13]:
+          - generic [ref=e14]: Main
+          - list [ref=e15]:
+            - listitem [ref=e16]:
+              - link "Dashboard" [ref=e17] [cursor=pointer]:
+                - /url: /
+                - img [ref=e19]
+                - generic [ref=e24]: Dashboard
+            - listitem [ref=e25]:
+              - link "Messages 2" [ref=e26] [cursor=pointer]:
+                - /url: /messages
+                - img [ref=e28]
+                - generic [ref=e30]: Messages
+                - generic [ref=e31]: "2"
+            - listitem [ref=e32]:
+              - link "nav.callHistory" [ref=e33] [cursor=pointer]:
+                - /url: /calls/history
+                - img [ref=e35]
+                - generic [ref=e37]: nav.callHistory
+            - listitem [ref=e38]:
+              - link "Contacts" [ref=e39] [cursor=pointer]:
+                - /url: /contacts
+                - img [ref=e41]
+                - generic [ref=e45]: Contacts
+            - listitem [ref=e46]:
+              - link "Helpdesk" [ref=e47] [cursor=pointer]:
+                - /url: /helpdesk
+                - img [ref=e49]
+                - generic [ref=e51]: Helpdesk
+            - listitem [ref=e52]:
+              - link "Feed" [ref=e53] [cursor=pointer]:
+                - /url: /feed
+                - img [ref=e55]
+                - generic [ref=e59]: Feed
+            - listitem [ref=e60]:
+              - link "nav.activity" [ref=e61] [cursor=pointer]:
+                - /url: /activity
+                - img [ref=e63]
+                - generic [ref=e65]: nav.activity
+            - listitem [ref=e66]:
+              - link "Discover" [ref=e67] [cursor=pointer]:
+                - /url: /discover
+                - img [ref=e69]
+                - generic [ref=e72]: Discover
+            - listitem [ref=e73]:
+              - link "nav.saved" [ref=e74] [cursor=pointer]:
+                - /url: /saved
+                - img [ref=e76]
+                - generic [ref=e78]: nav.saved
+            - listitem [ref=e79]:
+              - link "nav.achievements" [ref=e80] [cursor=pointer]:
+                - /url: /achievements
+                - img [ref=e82]
+                - generic [ref=e88]: nav.achievements
+        - generic [ref=e89]:
+          - generic [ref=e90]: Commerce
+          - list [ref=e91]:
+            - listitem [ref=e92]:
+              - link "Shop" [ref=e93] [cursor=pointer]:
+                - /url: /shop
+                - img [ref=e95]
+                - generic [ref=e100]: Shop
+            - listitem [ref=e101]:
+              - link "Cart" [ref=e102] [cursor=pointer]:
+                - /url: /cart
+                - img [ref=e104]
+                - generic [ref=e108]: Cart
+            - listitem [ref=e109]:
+              - link "Billing" [ref=e110] [cursor=pointer]:
+                - /url: /billing
+                - img [ref=e112]
+                - generic [ref=e114]: Billing
+            - listitem [ref=e115]:
+              - link "nav.invoices" [ref=e116] [cursor=pointer]:
+                - /url: /billing/invoices
+                - img [ref=e118]
+                - generic [ref=e121]: nav.invoices
+            - listitem [ref=e122]:
+              - link "nav.taxDocuments" [ref=e123] [cursor=pointer]:
+                - /url: /billing/tax-documents
+                - img [ref=e125]
+                - generic [ref=e128]: nav.taxDocuments
+            - listitem [ref=e129]:
+              - link "nav.taxForms1099" [ref=e130] [cursor=pointer]:
+                - /url: /billing/tax-forms
+                - img [ref=e132]
+                - generic [ref=e135]: nav.taxForms1099
+            - listitem [ref=e136]:
+              - link "Orders" [ref=e137] [cursor=pointer]:
+                - /url: /purchases
+                - img [ref=e139]
+                - generic [ref=e142]: Orders
+            - listitem [ref=e143]:
+              - link "nav.vodRentals" [ref=e144] [cursor=pointer]:
+                - /url: /vod/rentals
+                - img [ref=e146]
+                - generic [ref=e149]: nav.vodRentals
+            - listitem [ref=e150]:
+              - link "Subscriptions" [ref=e151] [cursor=pointer]:
+                - /url: /subscriptions
+                - img [ref=e153]
+                - generic [ref=e158]: Subscriptions
+            - listitem [ref=e159]:
+              - link "nav.tierManager" [ref=e160] [cursor=pointer]:
+                - /url: /subscriptions/manage
+                - img [ref=e162]
+                - generic [ref=e166]: nav.tierManager
+            - listitem [ref=e167]:
+              - link "nav.creatorDashboard" [ref=e168] [cursor=pointer]:
+                - /url: /creator-dashboard
+                - img [ref=e170]
+                - generic [ref=e172]: nav.creatorDashboard
+            - listitem [ref=e173]:
+              - link "Analytics" [ref=e174] [cursor=pointer]:
+                - /url: /analytics
+                - img [ref=e176]
+                - generic [ref=e178]: Analytics
+            - listitem [ref=e179]:
+              - link "nav.contentRevenue" [ref=e180] [cursor=pointer]:
+                - /url: /analytics/content-revenue
+                - img [ref=e182]
+                - generic [ref=e184]: nav.contentRevenue
+            - listitem [ref=e185]:
+              - link "nav.payouts" [ref=e186] [cursor=pointer]:
+                - /url: /payouts
+                - img [ref=e188]
+                - generic [ref=e191]: nav.payouts
+            - listitem [ref=e192]:
+              - link "Referrals" [ref=e193] [cursor=pointer]:
+                - /url: /referrals
+                - img [ref=e195]
+                - generic [ref=e201]: Referrals
+            - listitem [ref=e202]:
+              - link "Promo Codes" [ref=e203] [cursor=pointer]:
+                - /url: /promo
+                - img [ref=e205]
+                - generic [ref=e208]: Promo Codes
+            - listitem [ref=e209]:
+              - link "nav.affiliates" [ref=e210] [cursor=pointer]:
+                - /url: /affiliates
+                - img [ref=e212]
+                - generic [ref=e215]: nav.affiliates
+            - listitem [ref=e216]:
+              - link "nav.collaborations" [ref=e217] [cursor=pointer]:
+                - /url: /collaborations
+                - img [ref=e219]
+                - generic [ref=e224]: nav.collaborations
+            - listitem [ref=e225]:
+              - link "nav.fanClub" [ref=e226] [cursor=pointer]:
+                - /url: /fan-club
+                - img [ref=e228]
+                - generic [ref=e232]: nav.fanClub
+            - listitem [ref=e233]:
+              - link "nav.groups" [ref=e234] [cursor=pointer]:
+                - /url: /groups
+                - img [ref=e236]
+                - generic [ref=e241]: nav.groups
+        - generic [ref=e242]:
+          - generic [ref=e243]: Productivity
+          - list [ref=e244]:
+            - listitem [ref=e245]:
+              - link "Files" [ref=e246] [cursor=pointer]:
+                - /url: /files
+                - img [ref=e248]
+                - generic [ref=e250]: Files
+            - listitem [ref=e251]:
+              - link "nav.shareLinks" [ref=e252] [cursor=pointer]:
+                - /url: /files/share-links
+                - img [ref=e254]
+                - generic [ref=e257]: nav.shareLinks
+            - listitem [ref=e258]:
+              - link "Projects" [ref=e259] [cursor=pointer]:
+                - /url: /projects
+                - img [ref=e261]
+                - generic [ref=e263]: Projects
+            - listitem [ref=e264]:
+              - link "Calendar" [ref=e265] [cursor=pointer]:
+                - /url: /calendar
+                - img [ref=e267]
+                - generic [ref=e269]: Calendar
+            - listitem [ref=e270]:
+              - link "nav.contentCalendar" [ref=e271] [cursor=pointer]:
+                - /url: /content-calendar
+                - img [ref=e273]
+                - generic [ref=e277]: nav.contentCalendar
+            - listitem [ref=e278]:
+              - link "Scheduled" [ref=e279] [cursor=pointer]:
+                - /url: /scheduler
+                - img [ref=e281]
+                - generic [ref=e285]: Scheduled
+            - listitem [ref=e286]:
+              - link "Signing" [ref=e287] [cursor=pointer]:
+                - /url: /signing
+                - img [ref=e289]
+                - generic [ref=e293]: Signing
+            - listitem [ref=e294]:
+              - link "nav.licenses" [ref=e295] [cursor=pointer]:
+                - /url: /licenses
+                - img [ref=e297]
+                - generic [ref=e301]: nav.licenses
+            - listitem [ref=e302]:
+              - link "nav.licenseCompliance" [ref=e303] [cursor=pointer]:
+                - /url: /licenses/compliance
+                - img [ref=e305]
+                - generic [ref=e309]: nav.licenseCompliance
+            - listitem [ref=e310]:
+              - link "nav.organizations" [ref=e311] [cursor=pointer]:
+                - /url: /orgs
+                - img [ref=e313]
+                - generic [ref=e317]: nav.organizations
+        - generic [ref=e318]:
+          - generic [ref=e319]: Media
+          - list [ref=e320]:
+            - listitem [ref=e321]:
+              - link "Gallery" [ref=e322] [cursor=pointer]:
+                - /url: /gallery
+                - img [ref=e324]
+                - generic [ref=e327]: Gallery
+            - listitem [ref=e328]:
+              - link "Videos" [ref=e329] [cursor=pointer]:
+                - /url: /videos
+                - img [ref=e331]
+                - generic [ref=e334]: Videos
+            - listitem [ref=e335]:
+              - link "Broadcast" [ref=e336] [cursor=pointer]:
+                - /url: /broadcast
+                - img [ref=e338]
+                - generic [ref=e344]: Broadcast
+            - listitem [ref=e345]:
+              - link "nav.broadcastSchedule" [ref=e346] [cursor=pointer]:
+                - /url: /broadcast/schedule
+                - img [ref=e348]
+                - generic [ref=e352]: nav.broadcastSchedule
+            - listitem [ref=e353]:
+              - link "nav.clips" [ref=e354] [cursor=pointer]:
+                - /url: /clips
+                - img [ref=e356]
+                - generic [ref=e362]: nav.clips
+            - listitem [ref=e363]:
+              - link "nav.watchParties" [ref=e364] [cursor=pointer]:
+                - /url: /watch-parties
+                - img [ref=e366]
+                - generic [ref=e369]: nav.watchParties
+        - generic [ref=e370]:
+          - generic [ref=e371]: nav.aiAgents
+          - list [ref=e372]:
+            - listitem [ref=e373]:
+              - link "nav.workers" [ref=e374] [cursor=pointer]:
+                - /url: /agents/workers
+                - img [ref=e376]
+                - generic [ref=e379]: nav.workers
+            - listitem [ref=e380]:
+              - link "nav.fleetDashboard" [ref=e381] [cursor=pointer]:
+                - /url: /agents/fleet
+                - img [ref=e383]
+                - generic [ref=e388]: nav.fleetDashboard
+            - listitem [ref=e389]:
+              - link "nav.projectDashboard" [ref=e390] [cursor=pointer]:
+                - /url: /agents/project-dashboard
+                - img [ref=e392]
+                - generic [ref=e397]: nav.projectDashboard
+            - listitem [ref=e398]:
+              - link "nav.agentPrs" [ref=e399] [cursor=pointer]:
+                - /url: /agents/prs
+                - img [ref=e401]
+                - generic [ref=e405]: nav.agentPrs
+            - listitem [ref=e406]:
+              - link "nav.docCoverage" [ref=e407] [cursor=pointer]:
+                - /url: /agents/docs
+                - img [ref=e409]
+                - generic [ref=e411]: nav.docCoverage
+            - listitem [ref=e412]:
+              - link "nav.featureIdeas" [ref=e413] [cursor=pointer]:
+                - /url: /agents/pm/ideas
+                - img [ref=e415]
+                - generic [ref=e417]: nav.featureIdeas
+            - listitem [ref=e418]:
+              - link "nav.designReview" [ref=e419] [cursor=pointer]:
+                - /url: /agents/stylist
+                - img [ref=e421]
+                - generic [ref=e427]: nav.designReview
+            - listitem [ref=e428]:
+              - link "nav.submitIdea" [ref=e429] [cursor=pointer]:
+                - /url: /ideas/submit
+                - img [ref=e431]
+                - generic [ref=e434]: nav.submitIdea
+            - listitem [ref=e435]:
+              - link "nav.marketing" [ref=e436] [cursor=pointer]:
+                - /url: /agents/marketing
+                - img [ref=e438]
+                - generic [ref=e441]: nav.marketing
+            - listitem [ref=e442]:
+              - link "nav.securityCompliance" [ref=e443] [cursor=pointer]:
+                - /url: /agents/compliance
+                - img [ref=e445]
+                - generic [ref=e447]: nav.securityCompliance
+            - listitem [ref=e448]:
+              - link "nav.costTracking" [ref=e449] [cursor=pointer]:
+                - /url: /agents/costs
+                - img [ref=e451]
+                - generic [ref=e454]: nav.costTracking
+        - generic [ref=e455]:
+          - generic [ref=e456]: Account
+          - list [ref=e457]:
+            - listitem [ref=e458]:
+              - link "Profile" [ref=e459] [cursor=pointer]:
+                - /url: /profile
+                - img [ref=e461]
+                - generic [ref=e464]: Profile
+            - listitem [ref=e465]:
+              - link "Security" [ref=e466] [cursor=pointer]:
+                - /url: /security
+                - img [ref=e468]
+                - generic [ref=e470]: Security
+            - listitem [ref=e471]:
+              - link "nav.kycVerify" [ref=e472] [cursor=pointer]:
+                - /url: /kyc
+                - img [ref=e474]
+                - generic [ref=e477]: nav.kycVerify
+            - listitem [ref=e478]:
+              - link "nav.kycStatus" [ref=e479] [cursor=pointer]:
+                - /url: /kyc/status
+                - img [ref=e481]
+                - generic [ref=e484]: nav.kycStatus
+            - listitem [ref=e485]:
+              - link "nav.kycVerification" [ref=e486] [cursor=pointer]:
+                - /url: /kyc/tiers
+                - img [ref=e488]
+                - generic [ref=e491]: nav.kycVerification
+            - listitem [ref=e492]:
+              - link "nav.kycDocuments" [ref=e493] [cursor=pointer]:
+                - /url: /kyc/documents
+                - img [ref=e495]
+                - generic [ref=e498]: nav.kycDocuments
+            - listitem [ref=e499]:
+              - link "nav.kycResidency" [ref=e500] [cursor=pointer]:
+                - /url: /kyc/residency
+                - img [ref=e502]
+                - generic [ref=e505]: nav.kycResidency
+            - listitem [ref=e506]:
+              - link "nav.kycLivenessCall" [ref=e507] [cursor=pointer]:
+                - /url: /kyc/liveness-call
+                - img [ref=e509]
+                - generic [ref=e512]: nav.kycLivenessCall
+            - listitem [ref=e513]:
+              - link "Alerts" [ref=e514] [cursor=pointer]:
+                - /url: /alerts
+                - img [ref=e516]
+                - generic [ref=e519]: Alerts
+            - listitem [ref=e520]:
+              - link "nav.notifications" [ref=e521] [cursor=pointer]:
+                - /url: /notifications
+                - img [ref=e523]
+                - generic [ref=e526]: nav.notifications
+            - listitem [ref=e527]:
+              - link "Tickets" [ref=e528] [cursor=pointer]:
+                - /url: /tickets
+                - img [ref=e530]
+                - generic [ref=e537]: Tickets
+            - listitem [ref=e538]:
+              - link "Ticket Spaces" [ref=e539] [cursor=pointer]:
+                - /url: /tickets/spaces
+                - img [ref=e541]
+                - generic [ref=e548]: Ticket Spaces
+            - listitem [ref=e549]:
+              - link "Remote Desktop" [ref=e550] [cursor=pointer]:
+                - /url: /remote-desktop
+                - img [ref=e552]
+                - generic [ref=e555]: Remote Desktop
+            - listitem [ref=e556]:
+              - link "nav.containers" [ref=e557] [cursor=pointer]:
+                - /url: /remote/k8s
+                - img [ref=e559]
+                - generic [ref=e563]: nav.containers
+            - listitem [ref=e564]:
+              - link "nav.securityGroups" [ref=e565] [cursor=pointer]:
+                - /url: /remote/security-groups
+                - img [ref=e567]
+                - generic [ref=e569]: nav.securityGroups
+            - listitem [ref=e570]:
+              - link "nav.instanceTemplates" [ref=e571] [cursor=pointer]:
+                - /url: /remote/templates
+                - img [ref=e573]
+                - generic [ref=e577]: nav.instanceTemplates
+            - listitem [ref=e578]:
+              - link "nav.sshRecordings" [ref=e579] [cursor=pointer]:
+                - /url: /remote/recordings
+                - img [ref=e581]
+                - generic [ref=e584]: nav.sshRecordings
+            - listitem [ref=e585]:
+              - link "nav.sshBastion" [ref=e586] [cursor=pointer]:
+                - /url: /remote/bastion
+                - img [ref=e588]
+                - generic [ref=e593]: nav.sshBastion
+            - listitem [ref=e594]:
+              - link "nav.hostInventory" [ref=e595] [cursor=pointer]:
+                - /url: /remote/hosts
+                - img [ref=e597]
+                - generic [ref=e600]: nav.hostInventory
+            - listitem [ref=e601]:
+              - link "Settings" [ref=e602] [cursor=pointer]:
+                - /url: /settings
+                - img [ref=e604]
+                - generic [ref=e607]: Settings
+            - listitem [ref=e608]:
+              - link "nav.theme" [ref=e609] [cursor=pointer]:
+                - /url: /settings/theme
+                - img [ref=e611]
+                - generic [ref=e617]: nav.theme
+            - listitem [ref=e618]:
+              - link "Privacy" [ref=e619] [cursor=pointer]:
+                - /url: /settings/privacy
+                - img [ref=e621]
+                - generic [ref=e624]: Privacy
+            - listitem [ref=e625]:
+              - link "nav.accountDeletion" [ref=e626] [cursor=pointer]:
+                - /url: /settings/account-deletion
+                - img [ref=e628]
+                - generic [ref=e631]: nav.accountDeletion
+            - listitem [ref=e632]:
+              - link "nav.blockedUsers" [ref=e633] [cursor=pointer]:
+                - /url: /settings/blocked
+                - img [ref=e635]
+                - generic [ref=e638]: nav.blockedUsers
+            - listitem [ref=e639]:
+              - link "Webhooks" [ref=e640] [cursor=pointer]:
+                - /url: /settings/webhooks
+                - img [ref=e642]
+                - generic [ref=e646]: Webhooks
+            - listitem [ref=e647]:
+              - link "Geo Rules" [ref=e648] [cursor=pointer]:
+                - /url: /settings/geo
+                - img [ref=e650]
+                - generic [ref=e653]: Geo Rules
+            - listitem [ref=e654]:
+              - link "nav.refundQueue" [ref=e655] [cursor=pointer]:
+                - /url: /admin/refunds
+                - img [ref=e657]
+                - generic [ref=e659]: nav.refundQueue
+            - listitem [ref=e660]:
+              - link "nav.disputeQueue" [ref=e661] [cursor=pointer]:
+                - /url: /admin/disputes
+                - img [ref=e663]
+                - generic [ref=e665]: nav.disputeQueue
+            - listitem [ref=e666]:
+              - link "nav.fraudDetection" [ref=e667] [cursor=pointer]:
+                - /url: /admin/fraud
+                - img [ref=e669]
+                - generic [ref=e671]: nav.fraudDetection
+            - listitem [ref=e672]:
+              - link "nav.riskScoring" [ref=e673] [cursor=pointer]:
+                - /url: /admin/risk
+                - img [ref=e675]
+                - generic [ref=e677]: nav.riskScoring
+            - listitem [ref=e678]:
+              - link "nav.subscriptionTiers" [ref=e679] [cursor=pointer]:
+                - /url: /admin/subscription-tiers
+                - img [ref=e681]
+                - generic [ref=e685]: nav.subscriptionTiers
+            - listitem [ref=e686]:
+              - link "nav.compute" [ref=e687] [cursor=pointer]:
+                - /url: /admin/compute
+                - img [ref=e689]
+                - generic [ref=e692]: nav.compute
+            - listitem [ref=e693]:
+              - link "nav.financials" [ref=e694] [cursor=pointer]:
+                - /url: /admin/financials
+                - img [ref=e696]
+                - generic [ref=e698]: nav.financials
+            - listitem [ref=e699]:
+              - link "Billing Config" [ref=e700] [cursor=pointer]:
+                - /url: /admin/billing-config
+                - img [ref=e702]
+                - generic [ref=e704]: Billing Config
+            - listitem [ref=e705]:
+              - link "1099 Batch" [ref=e706] [cursor=pointer]:
+                - /url: /admin/tax-forms-1099
+                - img [ref=e708]
+                - generic [ref=e711]: 1099 Batch
+            - listitem [ref=e712]:
+              - link "nav.paymentHealth" [ref=e713] [cursor=pointer]:
+                - /url: /admin/payment-health
+                - img [ref=e715]
+                - generic [ref=e717]: nav.paymentHealth
+      - link "Dev Tools" [ref=e719] [cursor=pointer]:
+        - /url: http://localhost:3001/devtools.html
+        - img [ref=e720]
+        - generic [ref=e722]: Dev Tools
+      - button "Collapse sidebar" [ref=e724]:
+        - img
+        - generic [ref=e725]: Collapse
+    - generic [ref=e726]:
+      - banner [ref=e727]:
+        - button "Search... Ctrl+K" [ref=e728]:
+          - img
+          - generic [ref=e729]: Search...
+          - generic: Ctrl+K
+        - 'button "Theme: dark" [ref=e730]':
+          - img
+        - button "Alerts" [ref=e731]:
+          - img
+          - generic [ref=e732]: 99+
+        - button "User menu" [ref=e733]:
+          - generic [ref=e735]: AT
+      - main [ref=e736]:
+        - generic [ref=e738]:
+          - generic [ref=e740]:
+            - heading "Dashboard" [level=1] [ref=e741]
+            - paragraph [ref=e742]: Overview of your account activity
+          - generic [ref=e743]:
+            - generic [ref=e744]:
+              - generic [ref=e745]:
+                - img [ref=e746]
+                - generic [ref=e748]: Get Started
+              - button "Dismiss onboarding" [ref=e749]:
+                - img
+            - generic [ref=e750]:
+              - generic [ref=e752]:
+                - generic [ref=e753]: 0 of 4 complete
+                - generic [ref=e754]: 0%
+              - list [ref=e756]:
+                - listitem [ref=e757]:
+                  - generic [ref=e758]:
+                    - button [ref=e759]
+                    - generic [ref=e760]: Complete your profile
+                  - button "Go" [ref=e761]
+                - listitem [ref=e762]:
+                  - generic [ref=e763]:
+                    - button [ref=e764]
+                    - generic [ref=e765]: Add a payment method
+                  - button "Go" [ref=e766]
+                - listitem [ref=e767]:
+                  - generic [ref=e768]:
+                    - button [ref=e769]
+                    - generic [ref=e770]: Set up MFA
+                  - button "Go" [ref=e771]
+                - listitem [ref=e772]:
+                  - generic [ref=e773]:
+                    - button [ref=e774]
+                    - generic [ref=e775]: Send your first message
+                  - button "Go" [ref=e776]
+          - generic [ref=e777]:
+            - generic [ref=e778] [cursor=pointer]:
+              - generic [ref=e779]:
+                - generic [ref=e780]: Messages
+                - img [ref=e782]
+              - generic [ref=e784]:
+                - paragraph [ref=e785]: 2 unread
+                - paragraph [ref=e786]: 182 conversations
+            - generic [ref=e787] [cursor=pointer]:
+              - generic [ref=e788]:
+                - generic [ref=e789]: Balance
+                - img [ref=e791]
+              - generic [ref=e793]:
+                - paragraph [ref=e794]: $0.00
+                - paragraph [ref=e795]: "Autopay: OFF"
+            - generic [ref=e796] [cursor=pointer]:
+              - generic [ref=e797]:
+                - generic [ref=e798]: Files
+                - img [ref=e800]
+              - generic [ref=e802]:
+                - paragraph [ref=e803]:
+                  - text: "10"
+                  - generic [ref=e804]: items
+                - paragraph [ref=e805]: In root directory
+            - generic [ref=e806] [cursor=pointer]:
+              - generic [ref=e807]:
+                - generic [ref=e808]: Calendar
+                - img [ref=e810]
+              - generic [ref=e812]:
+                - paragraph [ref=e813]: No upcoming events
+                - paragraph [ref=e814]: Your schedule is clear
+            - generic [ref=e815] [cursor=pointer]:
+              - generic [ref=e816]:
+                - generic [ref=e817]: Alerts
+                - img [ref=e819]
+              - generic [ref=e822]:
+                - paragraph [ref=e823]: 5 unread
+                - paragraph [ref=e824]: View all alerts
+            - generic [ref=e825] [cursor=pointer]:
+              - generic [ref=e826]:
+                - generic [ref=e827]: Cart
+                - img [ref=e829]
+              - generic [ref=e833]:
+                - paragraph [ref=e834]:
+                  - text: "0"
+                  - generic [ref=e835]: active carts
+                - paragraph [ref=e836]: Start shopping
+          - generic [ref=e837]:
+            - generic [ref=e838]:
+              - generic [ref=e839]: Recent Activity
+              - button "View all" [ref=e840]:
+                - text: View all
+                - img [ref=e841]
+            - generic [ref=e844]:
+              - generic [ref=e845]:
+                - img [ref=e847]
+                - generic [ref=e850]:
+                  - generic [ref=e851]:
+                    - paragraph
+                    - generic [ref=e852]: New
+                  - paragraph
+                  - paragraph [ref=e853]: 20606d ago
+              - generic [ref=e854]:
+                - img [ref=e856]
+                - generic [ref=e859]:
+                  - generic [ref=e860]:
+                    - paragraph [ref=e861]: messaging message sent
+                    - generic [ref=e862]: New
+                  - paragraph [ref=e863]: "IP: 127.0.0.1"
+                  - paragraph [ref=e864]: just now
+              - generic [ref=e865]:
+                - img [ref=e867]
+                - generic [ref=e870]:
+                  - generic [ref=e871]:
+                    - paragraph [ref=e872]: messaging conversation started
+                    - generic [ref=e873]: New
+                  - paragraph [ref=e874]: "IP: 127.0.0.1"
+                  - paragraph [ref=e875]: just now
+              - generic [ref=e876]:
+                - img [ref=e878]
+                - generic [ref=e881]:
+                  - generic [ref=e882]:
+                    - paragraph [ref=e883]: messaging message sent
+                    - generic [ref=e884]: New
+                  - paragraph [ref=e885]: "IP: 127.0.0.1"
+                  - paragraph [ref=e886]: just now
+              - generic [ref=e887]:
+                - img [ref=e889]
+                - generic [ref=e892]:
+                  - generic [ref=e893]:
+                    - paragraph [ref=e894]: messaging message sent
+                    - generic [ref=e895]: New
+                  - paragraph [ref=e896]: "IP: 127.0.0.1"
+                  - paragraph [ref=e897]: 1m ago
+  - region "Notifications alt+T"
+```
