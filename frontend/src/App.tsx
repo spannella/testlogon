@@ -165,6 +165,8 @@ const KycIdScannerPage = lazy(() => import("@/pages/kyc/KycIdScannerPage"));
 const KycWebhookSettingsPage = lazy(() => import("@/pages/kyc/KycWebhookSettingsPage"));
 const KycComplianceReportsPage = lazy(() => import("@/pages/kyc/KycComplianceReportsPage"));
 const KycIdScannerReviewQueuePage = lazy(() => import("@/pages/kyc/KycIdScannerReviewQueuePage"));
+const KycWizardPage = lazy(() => import("@/pages/kyc/KycWizardPage"));
+const KycStatusPage = lazy(() => import("@/pages/kyc/KycStatusPage"));
 const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
 const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
@@ -393,6 +395,8 @@ export default function App() {
           <Route path="admin/subscription-tiers" element={<SubscriptionTierManagerPage />} />
           <Route path="admin/billing-config" element={<BillingConfigPage />} />
           <Route path="licenses/requests" element={<LicenseRequestsPage />} />
+          <Route path="kyc" element={<KycWizardPage />} />
+          <Route path="kyc/status" element={<KycStatusPage />} />
           <Route path="kyc/tiers" element={<KycTierProgress />} />
           <Route path="kyc/documents" element={<KycDocumentVerificationPage />} />
           <Route path="admin/kyc/documents" element={<KycDocumentReviewQueuePage />} />

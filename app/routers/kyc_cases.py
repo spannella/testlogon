@@ -13,6 +13,7 @@ from app.contracts.kyc_cases_contract import (
     KycAdminRequestInfoRequest,
     KycAdminDecisionRequest,
     KycMetricsSummaryEnvelope,
+    KycEstimatedWaitEnvelope,
     KycPurgeRunEnvelope,
     KycCaseCreateRequest,
     KycCaseDraftPatchRequest,
@@ -545,6 +546,51 @@ def list_my_kyc_cases(
     items = [row for row in STORE.list_cases_by_owner(user_sub=user.sub, limit=100) if not _is_purged_case(row)]
     audit_event("kyc_case_listed", user.sub, request, outcome="success", count=len(items))
     return KycCaseListEnvelope.model_validate({"items": items, "next_cursor": None})
+
+
+def _wait_message(hours: int) -> str:
+    if hours <= 2:
+        return "Your application is being processed. Expected review within a few hours."
+    if hours <= 24:
+        return f"Estimated review time: {hours} hours. We'll notify you when there's an update."
+    if hours <= 72:
+        return f"Estimated review time: {hours // 24} days. We'll notify you when there's an update."
+    return "Review times are currently extended. We'll notify you as soon as possible."
+
+
+@router.get("/estimated-wait", response_model=KycEstimatedWaitEnvelope)
+def get_estimated_wait_time(
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """User-facing estimated KYC review wait time (KYC-013).
+
+    Aggregates the existing admin metrics snapshot into a coarse, queue-detail-free
+    estimate. No admin role required — only the derived hours/message are returned.
+    """
+    snapshot = STORE.get_metrics_snapshot(stale_after_seconds=48 * 3600)
+    funnel = snapshot.get("funnel_counts") or {}
+    queue_size = int(funnel.get("submitted") or 0) + int(funnel.get("under_review") or 0)
+    p50 = (snapshot.get("review_latency_seconds") or {}).get("p50")
+
+    if queue_size == 0:
+        est_hours = 1
+    elif p50:
+        est_hours = max(1, int(float(p50) / 3600))
+    else:
+        est_hours = 24
+
+    audit_event("kyc_estimated_wait_read", user.sub, request, outcome="success", estimated_hours=est_hours)
+    return KycEstimatedWaitEnvelope.model_validate(
+        {
+            "estimated_wait": {
+                "estimated_hours": est_hours,
+                "queue_position": None,
+                "message": _wait_message(est_hours),
+            }
+        }
+    )
 
 
 @router.get("/{case_id}", response_model=KycCaseEnvelope)
