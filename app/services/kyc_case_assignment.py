@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from decimal import Decimal
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -222,7 +223,7 @@ class KycCaseAssignmentService:
             "languages": [str(l) for l in (languages if languages is not None else existing.get("languages") or [])],
             "max_cases": int(max_cases if max_cases is not None else existing.get("max_cases") or S.kyc_assignment_default_max_cases),
             "seniority_level": int(seniority_level if seniority_level is not None else existing.get("seniority_level") or 0),
-            "avg_processing_hours": float(existing.get("avg_processing_hours") or 0.0),
+            "avg_processing_hours": Decimal(str(round(float(existing.get("avg_processing_hours") or 0.0), 2))),
             "last_assigned_at": existing.get("last_assigned_at"),
             "updated_at": ts,
         }

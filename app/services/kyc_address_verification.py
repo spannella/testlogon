@@ -37,6 +37,18 @@ import hashlib
 import logging
 import re
 import uuid
+from decimal import Decimal
+
+
+def _floats_to_decimal(obj):
+    """Recursively convert float values to Decimal so DynamoDB accepts the item."""
+    if isinstance(obj, float):
+        return Decimal(str(obj))
+    if isinstance(obj, dict):
+        return {k: _floats_to_decimal(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_floats_to_decimal(v) for v in obj]
+    return obj
 import zlib
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -448,7 +460,7 @@ class KycAddressVerificationStore:
             "created_at": ts,
             "updated_at": ts,
         }
-        self._table.put_item(Item=record)
+        self._table.put_item(Item=_floats_to_decimal(record))
         logger.info(
             "kyc.address.verified case_id=%s status=%s decision=%s confidence=%s",
             case_id,
@@ -491,7 +503,7 @@ class KycAddressVerificationStore:
         self._table.update_item(
             Key={"pk": _case_pk(case_id), "sk": latest["sk"]},
             UpdateExpression="SET cross_reference = :cr, updated_at = :ts",
-            ExpressionAttributeValues={":cr": cross_ref, ":ts": ts},
+            ExpressionAttributeValues={":cr": _floats_to_decimal(cross_ref), ":ts": ts},
         )
         logger.info(
             "kyc.address.cross_reference case_id=%s match_score=%s actor=%s",

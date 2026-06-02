@@ -39,6 +39,10 @@ def write_collaboration_split_ledger(
     split = collab.get("split", {})
     initiator_id = collab["initiator_id"]
 
+    # Revenue events may arrive with a float amount (e.g. dollars); DynamoDB
+    # rejects float types, so normalize to integer cents before any math/writes.
+    amount_cents = int(round(amount_cents))
+
     entries: Dict[str, int] = {}
     allocated = 0
 

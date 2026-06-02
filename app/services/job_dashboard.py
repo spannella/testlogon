@@ -232,7 +232,7 @@ def record_job_run(
         "status": status,
         "started_at": started,
         "finished_at": finished,
-        "duration_ms": round(float(duration_ms), 1),
+        "duration_ms": int(round(float(duration_ms))),  # DynamoDB rejects float; ms as int is sufficient
         "items_processed": int(items_processed),
         "items_failed": int(items_failed),
         "triggered_by": triggered_by,
