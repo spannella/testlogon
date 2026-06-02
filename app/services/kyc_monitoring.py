@@ -114,7 +114,7 @@ def create_review_schedule(
         actor_sub or "system",
         None,
         outcome="success",
-        user_sub=user_sub,
+        subject_sub=user_sub,
         risk_tier=risk_tier,
         next_review_date=next_review,
     )
@@ -169,7 +169,7 @@ def complete_review(
         admin_sub,
         request,
         outcome="success",
-        user_sub=user_sub,
+        subject_sub=user_sub,
         risk_tier=risk_tier,
     )
     return item
@@ -215,7 +215,7 @@ def create_trigger_event(
         actor_sub or "system",
         request,
         outcome="info",
-        user_sub=user_sub,
+        subject_sub=user_sub,
         trigger_type=trigger_type,
     )
 
@@ -365,7 +365,7 @@ def _auto_downgrade(user_sub: str, schedule: dict[str, Any]) -> None:
         "system:kyc_monitoring",
         None,
         outcome="warning",
-        user_sub=user_sub,
+        subject_sub=user_sub,
         from_tier=current_tier,
         to_tier=new_tier,
         reason="periodic_review_overdue",

@@ -95,7 +95,10 @@ ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL',
 `;
 
 function runPy(body: string): string {
-  return execSync(`python3 -c "${PY_ENV}${body}"`.replace(/\n/g, "\\n"), {
+  // NOTE: do NOT replace real newlines with literal "\n" — python -c cannot parse
+  // backslash-n as a statement separator (SyntaxError). Real newlines in the
+  // double-quoted shell argument are preserved and execute correctly.
+  return execSync(`python3 -c "${PY_ENV}${body}"`, {
     cwd: "/home/ubuntu/testlogon",
     timeout: 15_000,
   }).toString();
