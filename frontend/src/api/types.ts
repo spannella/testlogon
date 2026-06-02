@@ -10934,3 +10934,136 @@ export interface LaunchFromTemplateOut {
   instance?: TemplateLaunchInstance | null;
   pod?: TemplateLaunchPod | null;
 }
+
+// ── KYC-012: Compliance Reporting & Export ──────────────────────────────────
+
+export interface KycVolumeReport {
+  report_type: "volume";
+  period_start: number;
+  period_end: number;
+  total_cases: number;
+  counts_by_status: Record<string, number>;
+  approval_rate: number;
+  rejection_rate: number;
+  generated_at: number;
+}
+
+export interface KycScreeningComplianceReport {
+  report_type: "screening";
+  period_start: number;
+  period_end: number;
+  total_screenings: number;
+  total_hits: number;
+  hit_rate_pct: number;
+  resolutions: Record<string, number>;
+  false_positive_count: number;
+  escalated_count: number;
+  confirmed_count: number;
+  generated_at: number;
+}
+
+export interface KycProcessingTimeReport {
+  report_type: "processing_time";
+  period_start: number;
+  period_end: number;
+  total_decided: number;
+  avg_seconds: number;
+  p50_seconds: number | null;
+  p90_seconds: number | null;
+  p95_seconds: number | null;
+  min_seconds: number | null;
+  max_seconds: number | null;
+  generated_at: number;
+}
+
+export interface KycOverdueCase {
+  case_id: string;
+  user_sub: string;
+  status: string;
+  submitted_at: number;
+  age_hours: number;
+  severity: "warning" | "critical";
+  assigned_admin: string | null;
+}
+
+export interface KycDeadlineReport {
+  report_type: "deadlines";
+  warn_after_hours: number;
+  critical_after_hours: number;
+  total_overdue: number;
+  critical_count: number;
+  warning_count: number;
+  cases: KycOverdueCase[];
+  generated_at: number;
+}
+
+export interface KycRetentionInventoryItem {
+  case_id: string;
+  user_sub: string;
+  status: string;
+  decided_at: number;
+  retention_days: number;
+  purge_due_at: number;
+  purge_overdue: boolean;
+  file_count: number;
+  has_selfie: boolean;
+  has_id_document: boolean;
+  has_proof_of_address: boolean;
+  purged: boolean;
+}
+
+export interface KycRetentionReport {
+  report_type: "retention";
+  policies: Record<string, string>;
+  total_records: number;
+  overdue_purge_count: number;
+  already_purged_count: number;
+  inventory: KycRetentionInventoryItem[];
+  generated_at: number;
+}
+
+export interface KycAuditEvent {
+  event_name: string;
+  actor_sub: string;
+  timestamp: number;
+  outcome: string | null;
+  details: Record<string, unknown>;
+}
+
+export interface KycAuditTrail {
+  report_type: "audit_trail";
+  user_sub: string;
+  total_events: number;
+  events: KycAuditEvent[];
+  generated_at: number;
+}
+
+export interface KycSarCaseRef {
+  case_id: string;
+  status: string;
+  created_at: number;
+  decided_at: number | null;
+}
+
+export interface KycSar {
+  sar_id: string;
+  generated_at: number;
+  generated_by: string;
+  subject_user_sub: string;
+  reason: string;
+  kyc_cases: KycSarCaseRef[];
+  flagged_transactions: Record<string, unknown>[];
+  audit_trail: Record<string, unknown>[];
+}
+
+export interface KycSarRequest {
+  user_sub: string;
+  reason: string;
+  transaction_ids?: string[] | null;
+}
+
+export interface KycReportExportRequest {
+  format: "csv" | "pdf";
+  start_date?: number | null;
+  end_date?: number | null;
+}
