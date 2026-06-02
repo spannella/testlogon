@@ -1230,6 +1230,20 @@ def _admin_decide_case(
         reason_codes=list(body.reason_codes),
     )
     _emit_kyc_metric(request, metric_name="kyc_funnel_transition", tags={"to_status": str(updated.get("status") or "")})
+    # KYC-016: schedule the first periodic review when a case is approved.
+    if decision == "approve" and str(updated.get("status") or "") == "approved":
+        try:
+            from app.services.kyc_monitoring import create_review_schedule
+
+            risk_tier = str((updated.get("review") or {}).get("risk_tier") or "medium")
+            create_review_schedule(
+                user_sub=str(updated.get("user_sub") or ""),
+                risk_tier=risk_tier,
+                case_id=case_id,
+                actor_sub=user.sub,
+            )
+        except Exception:  # noqa: BLE001 — monitoring must never block approval
+            pass
     return _wrap_case(updated)
 
 

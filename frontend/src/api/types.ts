@@ -11977,3 +11977,88 @@ export interface KycPartnerWebhook {
   events: string[];
   created_at: number;
 }
+
+
+
+// ── KYC Ongoing Monitoring & Periodic Review (KYC-016) ──────────────────────
+
+export interface KycReviewSchedule {
+  pk: string;
+  sk: string;
+  user_sub: string;
+  risk_tier: string;
+  review_frequency_days: number;
+  last_review_date: number;
+  next_review_date: number;
+  grace_period_days: number;
+  grace_deadline: number;
+  status: "active" | "needs_review" | "grace_period" | "downgraded";
+  case_id: string;
+  created_at: number;
+  updated_at: number;
+  [key: string]: unknown;
+}
+
+export interface KycReviewScheduleEnvelope {
+  schedule: KycReviewSchedule | null;
+}
+
+export interface KycTriggerEvent {
+  pk: string;
+  sk: string;
+  event_id: string;
+  user_sub: string;
+  trigger_type: string;
+  details: Record<string, unknown>;
+  created_at: number;
+  created_by: string;
+}
+
+export interface KycTriggerEventListEnvelope {
+  events: KycTriggerEvent[];
+}
+
+export interface KycUpcomingReview {
+  user_sub: string;
+  risk_tier: string;
+  next_review_date: number;
+  days_until_due: number;
+}
+
+export interface KycOverdueReview {
+  user_sub: string;
+  risk_tier: string;
+  next_review_date: number;
+  status: string;
+  days_overdue: number;
+  grace_deadline: number;
+}
+
+export interface KycMonitoringDashboard {
+  generated_at: number;
+  upcoming_reviews: KycUpcomingReview[];
+  overdue_reviews: KycOverdueReview[];
+  needs_review_count: number;
+}
+
+export interface KycReviewCheckResult {
+  checked_at: number;
+  dry_run: boolean;
+  entered_grace_period: number;
+  auto_downgraded: number;
+}
+
+export interface KycRescreeningResult {
+  screened_at: number;
+  dry_run: boolean;
+  total_screened: number;
+  matches_found: number;
+  triggers_created: number;
+  skipped?: boolean | null;
+  reason?: string | null;
+}
+
+export interface KycCompleteReviewRequest {
+  new_risk_tier?: "low" | "medium" | "high" | "critical" | null;
+  case_id?: string | null;
+}
