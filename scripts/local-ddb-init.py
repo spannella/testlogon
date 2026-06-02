@@ -120,6 +120,16 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.kyc_business_cases_table_name, "kyc_business_cases"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": S.kyc_business_cases_owner_index_name, "partition_key": "gsi_owner_pk", "sort_key": "gsi_owner_sk"},
+                {"index_name": S.kyc_business_cases_status_index_name, "partition_key": "gsi_status_pk", "sort_key": "gsi_status_sk"},
+                {"index_name": S.kyc_business_cases_org_index_name, "partition_key": "gsi_org_pk", "sort_key": "gsi_org_sk"},
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.kyc_risk_scores_table_name, "kyc_risk_scores"),
             "user_sub",
             "timestamp",

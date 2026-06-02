@@ -80,6 +80,7 @@ class Tables:
     tickets: Any
     questionnaires: Any
     kyc_cases: Any
+    kyc_business_cases: Any
     kyc_documents: Any
     kyc_id_scans: Any
     kyc_residency_documents: Any
@@ -311,6 +312,7 @@ T = Tables(
     tickets=ddb.Table(S.tickets_table_name),
     questionnaires=ddb.Table(S.questionnaire_table_name),
     kyc_cases=ddb.Table(S.kyc_cases_table_name),
+    kyc_business_cases=ddb.Table(S.kyc_business_cases_table_name),
     kyc_documents=ddb.Table(S.kyc_documents_table_name),
     kyc_id_scans=ddb.Table(S.kyc_id_scans_table_name),
     kyc_residency_documents=ddb.Table(S.kyc_residency_documents_table_name),
