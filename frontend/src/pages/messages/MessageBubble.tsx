@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanst
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
+import { isEmojiOnly } from "@/utils/emoji";
 import {
   decryptMessage,
   decryptBytes,
@@ -1146,7 +1147,14 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                   </>
                 )
               ) : decryptedText ? (
-                <p className="whitespace-pre-wrap break-words text-sm">{decryptedText}</p>
+                <p
+                  className={cn(
+                    "whitespace-pre-wrap break-words text-sm",
+                    isEmojiOnly(decryptedText) && "text-5xl leading-relaxed py-1",
+                  )}
+                >
+                  {decryptedText}
+                </p>
               ) : (
                 <>
                   <p className="whitespace-pre-wrap break-words text-sm italic">
@@ -1229,7 +1237,14 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 Already viewed
               </div>
             ) : viewOnceTextRevealed ? (
-              <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
+              <p
+                className={cn(
+                  "whitespace-pre-wrap break-words text-sm",
+                  isEmojiOnly(message.text) && "text-5xl leading-relaxed py-1",
+                )}
+              >
+                {message.text}
+              </p>
             ) : (
               <button
                 type="button"
@@ -1246,7 +1261,14 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               </button>
             )
           ) : message.text ? (
-            <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
+            <p
+              className={cn(
+                "whitespace-pre-wrap break-words text-sm",
+                isEmojiOnly(message.text) && "text-5xl leading-relaxed py-1",
+              )}
+            >
+              {message.text}
+            </p>
           ) : null}
 
           {message.preview?.url && (
