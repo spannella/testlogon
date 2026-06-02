@@ -1103,6 +1103,10 @@ class Settings:
     sticker_max_file_size_bytes: int = int(os.environ.get("STICKER_MAX_FILE_SIZE", "524288"))
     sticker_max_per_collection: int = int(os.environ.get("STICKER_MAX_PER_COLLECTION", "100"))
     messaging_gallery_enabled: bool = os.environ.get("MESSAGING_GALLERY_ENABLED", "true").lower() == "true"
+    # Find-a-DateTime messages (MSG-009)
+    find_datetime_enabled: bool = os.environ.get("FIND_DATETIME_ENABLED", "true").lower() == "true"
+    find_datetime_max_date_range_days: int = int(os.environ.get("FIND_DATETIME_MAX_DATE_RANGE", "14"))
+    find_datetime_max_slots_per_user: int = int(os.environ.get("FIND_DATETIME_MAX_SLOTS", "500"))
     messaging_gallery_kill_switch: bool = os.environ.get("MESSAGING_GALLERY_KILL_SWITCH", "false").lower() == "true"
     messaging_gallery_index_enabled: bool = os.environ.get("MESSAGING_GALLERY_INDEX_ENABLED", "false").lower() == "true"
     messaging_mass_send_enabled: bool = os.environ.get("MESSAGING_MASS_SEND_ENABLED", "true").lower() == "true"

@@ -2057,6 +2057,31 @@ class CreateMeetingPollMessageIn(BaseModel):
     text: Optional[str] = Field(default=None, max_length=2000)
 
 
+class CreateFindDateTimeMessageIn(BaseModel):
+    """Request body for creating a Find-a-DateTime poll message (MSG-009)."""
+    title: str = Field(min_length=1, max_length=200)
+    from_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    to_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    start_hour: int = Field(ge=0, le=23)
+    end_hour: int = Field(ge=1, le=24)
+    slot_duration_minutes: int = Field(default=30)
+    deadline_hours: int = Field(default=48, ge=1, le=336)
+    text: Optional[str] = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _validate_fadt(self):
+        if self.slot_duration_minutes not in (15, 30, 60):
+            raise ValueError("slot_duration_minutes must be 15, 30, or 60")
+        if self.start_hour >= self.end_hour:
+            raise ValueError("start_hour must be less than end_hour")
+        return self
+
+
+class SubmitAvailabilityIn(BaseModel):
+    """Request body for submitting Find-a-DateTime availability (MSG-009)."""
+    slots: List[str] = Field(min_length=1, max_length=500)
+
+
 class SendCountdownMessageIn(BaseModel):
     """Request model for sending a countdown message (MSG-010)."""
     title: str = Field(min_length=1, max_length=200)
@@ -2363,7 +2388,7 @@ class MessageOut(BaseModel):
     message_id: str
     sender_id: str
     created_at: int
-    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message", "voicemail", "countdown", "gif", "sticker"]
+    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message", "voicemail", "countdown", "gif", "sticker", "find_datetime"]
     text: Optional[str] = None
     image: Optional[Dict[str, Any]] = None
     file: Optional[Dict[str, Any]] = None
@@ -2371,6 +2396,8 @@ class MessageOut(BaseModel):
     calendar_share: Optional[Dict[str, Any]] = None
     calendar_event: Optional[Dict[str, Any]] = None
     meeting_poll: Optional[Dict[str, Any]] = None
+    # Find-a-DateTime message fields (MSG-009)
+    find_datetime: Optional[Dict[str, Any]] = None
     video_share: Optional[Dict[str, Any]] = None
     lottery: Optional[Dict[str, Any]] = None
     voice_message: Optional[Dict[str, Any]] = None
@@ -3955,6 +3982,22 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         meeting_poll_out = {k: raw.get(k) for k in
             ["poll_id", "creator_id", "title", "duration_minutes", "status", "confirmed_slot_id"]}
 
+    # Find-a-DateTime message projection (MSG-009)
+    find_datetime_out: Optional[Dict[str, Any]] = None
+    if merged_item.get("kind") == "find_datetime":
+        raw = merged_item.get("find_datetime") or {}
+        find_datetime_out = {
+            "poll_id": raw.get("poll_id"),
+            "creator_id": raw.get("creator_id"),
+            "title": raw.get("title"),
+            "from_date": raw.get("from_date"),
+            "to_date": raw.get("to_date"),
+            "start_hour": int(raw["start_hour"]) if raw.get("start_hour") is not None else None,
+            "end_hour": int(raw["end_hour"]) if raw.get("end_hour") is not None else None,
+            "slot_duration_minutes": int(raw["slot_duration_minutes"]) if raw.get("slot_duration_minutes") is not None else None,
+            "status": raw.get("status"),
+        }
+
     # Video share message projection
     video_share_out: Optional[Dict[str, Any]] = None
     if merged_item.get("kind") == "video_share":
@@ -4104,6 +4147,7 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         calendar_share=calendar_share_out,
         calendar_event=calendar_event_out,
         meeting_poll=meeting_poll_out,
+        find_datetime=find_datetime_out,
         video_share=video_share_out,
         voice_message=voice_message_out,
         voicemail=voicemail_out,
@@ -9887,6 +9931,373 @@ def confirm_meeting_poll(
         respect_mute=False,
     )
     return {"ok": True, "event_id": event_id, "calendar_id": inp.calendar_id}
+
+
+# ---------------------------------------------------------------------------
+# Find-a-DateTime (MSG-009)
+# ---------------------------------------------------------------------------
+
+
+def _fadt_pk(poll_id: str) -> str:
+    return f"FADT#{poll_id}"
+
+
+def _fadt_meta_or_404(poll_id: str) -> dict:
+    meta = T.calendar.get_item(Key={"calendar_id": _fadt_pk(poll_id), "sk": "META"}).get("Item")
+    if not meta:
+        raise HTTPException(404, "Find-a-DateTime poll not found")
+    return meta
+
+
+def _fadt_display_name(user_sub: str) -> str:
+    try:
+        ident = get_profile_identity(user_sub)
+        name = (ident.get("display_name") or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    try:
+        u = tbl_users.get_item(Key={"user_id": user_sub}).get("Item", {})
+        if u.get("display_name"):
+            return str(u["display_name"])
+    except Exception:
+        pass
+    return user_sub
+
+
+def _fadt_meta_out(meta: dict) -> dict:
+    return {
+        "poll_id": meta.get("poll_id"),
+        "conversation_id": meta.get("conversation_id"),
+        "message_id": meta.get("message_id"),
+        "creator_sub": meta.get("creator_sub"),
+        "title": meta.get("title"),
+        "from_date": meta.get("from_date"),
+        "to_date": meta.get("to_date"),
+        "start_hour": int(meta.get("start_hour", 0)),
+        "end_hour": int(meta.get("end_hour", 0)),
+        "slot_duration_minutes": int(meta.get("slot_duration_minutes", 30)),
+        "deadline_at": int(meta.get("deadline_at", 0)),
+        "status": meta.get("status", "open"),
+        "created_at": int(meta.get("created_at", 0)),
+        "participant_count": int(meta.get("participant_count", 0)),
+    }
+
+
+@router.post("/conversations/{conversation_id}/messages/find-datetime", response_model=MessageOut, status_code=201)
+def create_find_datetime_message(
+    conversation_id: str,
+    inp: CreateFindDateTimeMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Create a Find-a-DateTime poll message in a conversation (MSG-009)."""
+    if not S.find_datetime_enabled:
+        raise HTTPException(403, "Find-a-DateTime messages are not enabled")
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+
+    from app.services.messaging_find_datetime import parse_date
+
+    try:
+        d0 = parse_date(inp.from_date)
+        d1 = parse_date(inp.to_date)
+    except ValueError:
+        raise HTTPException(400, "Invalid date format")
+    if d0 >= d1:
+        raise HTTPException(400, "from_date must be before to_date")
+    span_days = (d1 - d0).days + 1
+    if span_days > S.find_datetime_max_date_range_days:
+        raise HTTPException(400, f"Date range cannot exceed {S.find_datetime_max_date_range_days} days")
+
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    poll_id = "fadt_" + uuid.uuid4().hex
+    ts = now_ts()
+    mid = "m_" + new_id()
+    deadline_at = ts + inp.deadline_hours * 3600
+
+    T.calendar.put_item(Item={
+        "calendar_id": _fadt_pk(poll_id),
+        "sk": "META",
+        "type": "find_datetime",
+        "poll_id": poll_id,
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "creator_sub": user_id,
+        "title": inp.title,
+        "from_date": inp.from_date,
+        "to_date": inp.to_date,
+        "start_hour": inp.start_hour,
+        "end_hour": inp.end_hour,
+        "slot_duration_minutes": inp.slot_duration_minutes,
+        "deadline_at": deadline_at,
+        "status": "open",
+        "created_at": ts,
+        "participant_count": 0,
+    })
+
+    find_datetime_data: Dict[str, Any] = {
+        "poll_id": poll_id,
+        "creator_id": user_id,
+        "title": inp.title,
+        "from_date": inp.from_date,
+        "to_date": inp.to_date,
+        "start_hour": inp.start_hour,
+        "end_hour": inp.end_hour,
+        "slot_duration_minutes": inp.slot_duration_minutes,
+        "status": "open",
+    }
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "find_datetime",
+        "reactions": {},
+        "find_datetime": find_datetime_data,
+    }
+    if inp.text:
+        item["text"] = inp.text
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+
+    _bump_unread_counts(conversation_id, user_id, participants)
+    _record_delivery_receipts(conversation_id, mid, user_id, participants)
+    preview_text = inp.text or f"[Find a Time: {inp.title}]"
+    tbl_convos.update_item(
+        Key={"conversation_id": conversation_id},
+        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+        ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
+    )
+    _fanout_new_message_event(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_item=item,
+        payload={
+            "message_id": mid,
+            "created_at": ts,
+            "message": _serialize_message_event_payload(item, user_id),
+        },
+        respect_mute=False,
+    )
+
+    audit_event(
+        "messaging_message_sent", user_id, req, outcome="success",
+        conversation_id=conversation_id, message_id=mid, kind="find_datetime",
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send", event_ts=ts, conversation_id=conversation_id, message_id=mid,
+        actor_user_id=user_id, event_type="message.sent",
+        payload={"mutation": "send", "scheduled": False, "message": _serialize_message_event_payload(item, user_id)},
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return _message_out_from_item(item, user_id)
+
+
+@router.get("/messages/find-datetime/{poll_id}")
+def get_find_datetime(
+    poll_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Get Find-a-DateTime poll metadata, all availabilities, and result (MSG-009)."""
+    meta = _fadt_meta_or_404(poll_id)
+    conversation_id = meta.get("conversation_id")
+    require_participant_active(user_id, conversation_id)
+
+    items = T.calendar.query(
+        KeyConditionExpression=Key("calendar_id").eq(_fadt_pk(poll_id)),
+    ).get("Items", [])
+
+    availabilities: List[Dict[str, Any]] = []
+    result: Optional[Dict[str, Any]] = None
+    for it in items:
+        sk = str(it.get("sk", ""))
+        if sk.startswith("AVAIL#"):
+            availabilities.append({
+                "user_sub": it.get("user_sub"),
+                "user_name": it.get("user_name") or it.get("user_sub"),
+                "slots": [str(s) for s in (it.get("slots") or [])],
+                "submitted_at": int(it.get("submitted_at", 0)),
+            })
+        elif sk == "RESULT":
+            result = {
+                "computed_at": int(it.get("computed_at", 0)),
+                "best_windows": [
+                    {
+                        "start": w.get("start"),
+                        "end": w.get("end"),
+                        "count": int(w.get("count", 0)),
+                        "participants": [str(p) for p in (w.get("participants") or [])],
+                    }
+                    for w in (it.get("best_windows") or [])
+                ],
+            }
+    availabilities.sort(key=lambda a: a["submitted_at"])
+
+    return {
+        "meta": _fadt_meta_out(meta),
+        "availabilities": availabilities,
+        "result": result,
+    }
+
+
+@router.post("/messages/find-datetime/{poll_id}/availability")
+def submit_find_datetime_availability(
+    poll_id: str,
+    inp: SubmitAvailabilityIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Submit or update availability for a Find-a-DateTime poll (MSG-009)."""
+    meta = _fadt_meta_or_404(poll_id)
+    conversation_id = meta.get("conversation_id")
+    require_participant_active(user_id, conversation_id)
+
+    if meta.get("status") != "open":
+        raise HTTPException(400, "Poll is closed")
+    ts = now_ts()
+    if ts > int(meta.get("deadline_at", 0)):
+        raise HTTPException(400, "Submission deadline has passed")
+
+    from app.services.messaging_find_datetime import enumerate_slots
+
+    valid_slots = set(enumerate_slots(
+        from_date=meta["from_date"],
+        to_date=meta["to_date"],
+        start_hour=int(meta["start_hour"]),
+        end_hour=int(meta["end_hour"]),
+        slot_duration_minutes=int(meta["slot_duration_minutes"]),
+    ))
+    # Deduplicate while preserving determinism.
+    submitted = []
+    seen = set()
+    for s in inp.slots:
+        if s in seen:
+            continue
+        seen.add(s)
+        if s not in valid_slots:
+            raise HTTPException(400, "Slot is outside the allowed range")
+        submitted.append(s)
+    submitted.sort()
+
+    existing = T.calendar.get_item(
+        Key={"calendar_id": _fadt_pk(poll_id), "sk": f"AVAIL#{user_id}"}
+    ).get("Item")
+    is_update = existing is not None
+
+    user_name = _fadt_display_name(user_id)
+    T.calendar.put_item(Item={
+        "calendar_id": _fadt_pk(poll_id),
+        "sk": f"AVAIL#{user_id}",
+        "type": "fadt_availability",
+        "user_sub": user_id,
+        "user_name": user_name,
+        "slots": submitted,
+        "submitted_at": ts,
+    })
+
+    participant_count = int(meta.get("participant_count", 0))
+    if not is_update:
+        try:
+            upd = T.calendar.update_item(
+                Key={"calendar_id": _fadt_pk(poll_id), "sk": "META"},
+                UpdateExpression="ADD participant_count :one",
+                ExpressionAttributeValues={":one": 1},
+                ReturnValues="UPDATED_NEW",
+            )
+            participant_count = int(upd.get("Attributes", {}).get("participant_count", participant_count + 1))
+        except Exception:
+            participant_count += 1
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="fadt:availability",
+        payload={"poll_id": poll_id, "user_sub": user_id, "participant_count": participant_count},
+        respect_mute=False,
+    )
+    return {
+        "ok": True,
+        "poll_id": poll_id,
+        "user_sub": user_id,
+        "slots_count": len(submitted),
+        "participant_count": participant_count,
+        "submitted_at": ts,
+    }
+
+
+@router.post("/messages/find-datetime/{poll_id}/close")
+def close_find_datetime(
+    poll_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Close a Find-a-DateTime poll and compute best windows (creator only, MSG-009)."""
+    meta = _fadt_meta_or_404(poll_id)
+    conversation_id = meta.get("conversation_id")
+    require_participant_active(user_id, conversation_id)
+
+    if meta.get("creator_sub") != user_id:
+        raise HTTPException(403, "Only the creator can close this poll")
+    if meta.get("status") == "closed":
+        raise HTTPException(400, "Poll is already closed")
+
+    from app.services.messaging_find_datetime import compute_best_windows
+
+    avail_items = T.calendar.query(
+        KeyConditionExpression=Key("calendar_id").eq(_fadt_pk(poll_id)) & Key("sk").begins_with("AVAIL#"),
+    ).get("Items", [])
+    availabilities = [
+        {
+            "user_sub": it.get("user_sub"),
+            "user_name": it.get("user_name") or it.get("user_sub"),
+            "slots": [str(s) for s in (it.get("slots") or [])],
+        }
+        for it in avail_items
+    ]
+
+    best_windows = compute_best_windows(
+        availabilities,
+        int(meta.get("slot_duration_minutes", 30)),
+    )
+
+    ts = now_ts()
+    T.calendar.put_item(Item={
+        "calendar_id": _fadt_pk(poll_id),
+        "sk": "RESULT",
+        "type": "fadt_result",
+        "computed_at": ts,
+        "best_windows": best_windows,
+    })
+    T.calendar.update_item(
+        Key={"calendar_id": _fadt_pk(poll_id), "sk": "META"},
+        UpdateExpression="SET #s = :s",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":s": "closed"},
+    )
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="fadt:result",
+        payload={"poll_id": poll_id, "best_windows": best_windows},
+        respect_mute=False,
+    )
+    return {
+        "ok": True,
+        "poll_id": poll_id,
+        "status": "closed",
+        "result": {"computed_at": ts, "best_windows": best_windows},
+    }
 
 
 @router.post("/conversations/{conversation_id}/messages/file", response_model=MessageOut)

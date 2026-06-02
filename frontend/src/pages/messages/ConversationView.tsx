@@ -17,6 +17,7 @@ import {
   sendCalendarShareMessage,
   sendCalendarEventMessage,
   sendMeetingPollMessage,
+  sendFindDateTimeMessage,
   sendCountdownMessage,
   createLotteryMessage,
   sendVoiceMessage,
@@ -30,7 +31,7 @@ import {
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
 import { useOfflineStore } from "@/stores/offlineStore";
-import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, CreateLotteryMessageReq } from "@/api/types";
+import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, SendFindDateTimeReq, CreateLotteryMessageReq } from "@/api/types";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
@@ -531,6 +532,15 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
     onError: () => toast.error("Failed to create poll"),
+  });
+
+  const sendFindDateTime = useMutation({
+    mutationFn: (params: SendFindDateTimeReq) => sendFindDateTimeMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to create Find a Time poll"),
   });
 
   const sendCountdown = useMutation({
@@ -1228,6 +1238,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendCalendarShare={(params) => sendCalendarShare.mutate(params)}
         onSendCalendarEvent={(params) => sendCalendarEvent.mutate(params)}
         onSendMeetingPoll={(params) => sendMeetingPoll.mutate(params)}
+        onSendFindDateTime={(params) => sendFindDateTime.mutate(params)}
         onSendCountdown={(params) => sendCountdown.mutate(params)}
         onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}
         onSendVoiceMessage={(blob, meta) => sendVoice.mutate({ blob, meta })}

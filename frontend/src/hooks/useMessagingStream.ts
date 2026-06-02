@@ -66,6 +66,14 @@ export function useMessagingStream(enabled = true) {
           }
         }
 
+        // Refresh Find-a-DateTime state on availability submit / result (MSG-009)
+        if (eventType === "fadt:availability" || eventType === "fadt:result") {
+          const pollId = typeof data.poll_id === "string" ? data.poll_id : undefined;
+          if (pollId) {
+            queryClient.invalidateQueries({ queryKey: ["find-datetime", pollId] });
+          }
+        }
+
         // Typing indicator — write directly to cache for instant update
         if (eventType === "typing:update" && conversationId) {
           const userId = typeof data.user_id === "string" ? data.user_id : undefined;
@@ -171,6 +179,8 @@ export function useMessagingStream(enabled = true) {
       "presence:update",
       "poll:vote",
       "poll:confirmed",
+      "fadt:availability",
+      "fadt:result",
       "helpdesk.conversation.alerted",
       "helpdesk.conversation.assigned",
       "helpdesk.conversation.released",

@@ -30,6 +30,8 @@ import type {
   SendCalendarEventReq,
   SendMeetingPollReq,
   MeetingPollState,
+  SendFindDateTimeReq,
+  FindDateTimeFull,
   HelpdeskClaimOut,
   RoutingEventOut,
   MessageControlActionResp,
@@ -756,6 +758,43 @@ export async function sendMeetingPollMessage(
     params,
   );
   return adaptMessage(res);
+}
+
+// ---- Find-a-DateTime (MSG-009) ----
+
+export async function sendFindDateTimeMessage(
+  conversationId: string,
+  params: SendFindDateTimeReq,
+): Promise<Message> {
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/find-datetime`,
+    params,
+  );
+  return adaptMessage(res);
+}
+
+export async function getFindDateTime(pollId: string): Promise<FindDateTimeFull> {
+  return api.get<FindDateTimeFull>(`/messaging/messages/find-datetime/${pollId}`);
+}
+
+export async function submitFindDateTimeAvailability(
+  pollId: string,
+  slots: string[],
+): Promise<{
+  ok: boolean;
+  poll_id: string;
+  user_sub: string;
+  slots_count: number;
+  participant_count: number;
+  submitted_at: number;
+}> {
+  return api.post(`/messaging/messages/find-datetime/${pollId}/availability`, { slots });
+}
+
+export async function closeFindDateTime(
+  pollId: string,
+): Promise<{ ok: boolean; poll_id: string; status: string; result: FindDateTimeFull["result"] }> {
+  return api.post(`/messaging/messages/find-datetime/${pollId}/close`, {});
 }
 
 export async function sendCountdownMessage(
