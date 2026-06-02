@@ -2057,6 +2057,26 @@ class CreateMeetingPollMessageIn(BaseModel):
     text: Optional[str] = Field(default=None, max_length=2000)
 
 
+class SendCountdownMessageIn(BaseModel):
+    """Request model for sending a countdown message (MSG-010)."""
+    title: str = Field(min_length=1, max_length=200)
+    target_datetime: int = Field(description="UTC Unix timestamp of the target event")
+    associated_event_type: str = Field(
+        default="custom",
+        pattern=r"^(broadcast|call|calendar|custom)$",
+    )
+    associated_event_id: Optional[str] = Field(default=None, max_length=128)
+    reply_to_message_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_countdown(self):
+        if self.target_datetime <= now_ts():
+            raise ValueError("target_datetime must be in the future")
+        if self.associated_event_type != "custom" and not self.associated_event_id:
+            raise ValueError("associated_event_id required for non-custom events")
+        return self
+
+
 class PollVoteIn(BaseModel):
     votes: Dict[str, Literal["yes", "no", "maybe"]]
 
@@ -2327,7 +2347,7 @@ class MessageOut(BaseModel):
     message_id: str
     sender_id: str
     created_at: int
-    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message", "voicemail"]
+    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message", "voicemail", "countdown"]
     text: Optional[str] = None
     image: Optional[Dict[str, Any]] = None
     file: Optional[Dict[str, Any]] = None
@@ -2339,6 +2359,11 @@ class MessageOut(BaseModel):
     lottery: Optional[Dict[str, Any]] = None
     voice_message: Optional[Dict[str, Any]] = None
     voicemail: Optional[Dict[str, Any]] = None
+    # Countdown message fields (MSG-010)
+    countdown_title: Optional[str] = None
+    target_datetime: Optional[int] = None
+    associated_event_type: Optional[str] = None
+    associated_event_id: Optional[str] = None
     preview: Optional[Dict[str, Any]] = None
     # Gallery message fields
     free_images: Optional[List[Dict[str, Any]]] = None
@@ -3996,6 +4021,18 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
             "callee_user_id": str(merged_item.get("callee_user_id") or ""),
         }
 
+    # Countdown message projection (MSG-010)
+    countdown_title_out: Optional[str] = None
+    countdown_target_out: Optional[int] = None
+    countdown_event_type_out: Optional[str] = None
+    countdown_event_id_out: Optional[str] = None
+    if merged_item.get("kind") == "countdown":
+        countdown_title_out = merged_item.get("countdown_title")
+        if merged_item.get("target_datetime") is not None:
+            countdown_target_out = int(merged_item["target_datetime"])
+        countdown_event_type_out = merged_item.get("associated_event_type")
+        countdown_event_id_out = merged_item.get("associated_event_id")
+
     thread_id_value = str(merged_item.get(MESSAGE_FIELD_THREAD_ID) or "").strip()
     has_thread = False
     thread_reply_count: Optional[int] = None
@@ -4021,6 +4058,10 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         video_share=video_share_out,
         voice_message=voice_message_out,
         voicemail=voicemail_out,
+        countdown_title=countdown_title_out,
+        target_datetime=countdown_target_out,
+        associated_event_type=countdown_event_type_out,
+        associated_event_id=countdown_event_id_out,
         lottery=lottery_out,
         preview=preview,
         free_images=free_images_out,
@@ -9353,6 +9394,93 @@ def create_meeting_poll_message(
         conversation_id=conversation_id,
         message_id=mid,
         kind="meeting_poll",
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": False, "message": _serialize_message_event_payload(item, user_id)},
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return _message_out_from_item(item, user_id)
+
+
+@router.post("/conversations/{conversation_id}/messages/countdown", response_model=MessageOut, status_code=201)
+def create_countdown_message(
+    conversation_id: str,
+    inp: SendCountdownMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Send a countdown message to a conversation (MSG-010)."""
+    if not S.countdown_messages_enabled:
+        raise HTTPException(403, "Countdown messages are not enabled")
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    _validate_reply_target(conversation_id, inp.reply_to_message_id)
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    ts = now_ts()
+    mid = "m_" + new_id()
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "countdown",
+        "reactions": {},
+        "text": inp.title,
+        "countdown_title": inp.title,
+        "target_datetime": inp.target_datetime,
+        "associated_event_type": inp.associated_event_type,
+    }
+    if inp.associated_event_id:
+        item["associated_event_id"] = inp.associated_event_id
+    if inp.reply_to_message_id:
+        item[MESSAGE_FIELD_REPLY_TO_ID] = inp.reply_to_message_id
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+
+    _bump_unread_counts(conversation_id, user_id, participants)
+    _record_delivery_receipts(conversation_id, mid, user_id, participants)
+    preview_text = f"[Countdown: {inp.title}]"
+    tbl_convos.update_item(
+        Key={"conversation_id": conversation_id},
+        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+        ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
+    )
+    _fanout_new_message_event(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_item=item,
+        payload={
+            "message_id": mid,
+            "created_at": ts,
+            "message": _serialize_message_event_payload(item, user_id),
+        },
+        respect_mute=False,
+    )
+
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="countdown",
     )
     _emit_message_lifecycle_archive_event_or_503(
         mutation="send",

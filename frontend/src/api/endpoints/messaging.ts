@@ -758,6 +758,23 @@ export async function sendMeetingPollMessage(
   return adaptMessage(res);
 }
 
+export async function sendCountdownMessage(
+  conversationId: string,
+  params: {
+    title: string;
+    target_datetime: number;
+    associated_event_type?: "broadcast" | "call" | "calendar" | "custom";
+    associated_event_id?: string;
+    reply_to_message_id?: string;
+  },
+): Promise<Message> {
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/countdown`,
+    params,
+  );
+  return adaptMessage(res);
+}
+
 export async function getMeetingPoll(
   conversationId: string,
   pollId: string,

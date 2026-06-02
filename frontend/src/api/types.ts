@@ -984,7 +984,7 @@ export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -1031,6 +1031,11 @@ export interface Message {
     caller_user_id: string;
     callee_user_id: string;
   };
+  // Countdown message fields (MSG-010)
+  countdown_title?: string | null;
+  target_datetime?: number | null;
+  associated_event_type?: "broadcast" | "call" | "calendar" | "custom" | null;
+  associated_event_id?: string | null;
   lottery?: {
     message_type: "lottery_dm";
     lock_state: "locked" | "unlocked";

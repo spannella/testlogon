@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileSha
 import { CalendarPickerDialog } from "./CalendarPickerDialog";
 import { EventPickerDialog } from "./EventPickerDialog";
 import { MeetingPollComposer } from "./MeetingPollComposer";
+import { CountdownComposerDialog, type CountdownSubmitData } from "./CountdownComposerDialog";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -61,6 +62,7 @@ interface ComposeBarProps {
   onSendCalendarShare?: (params: SendCalendarShareReq) => void;
   onSendCalendarEvent?: (params: SendCalendarEventReq) => void;
   onSendMeetingPoll?: (params: SendMeetingPollReq) => void;
+  onSendCountdown?: (params: CountdownSubmitData) => void;
   onSendLottery?: (params: Omit<CreateLotteryMessageReq, "conversation_id">) => void;
   onSendVoiceMessage?: (blob: Blob, meta: { duration: number; waveform: number[]; contentType: string; consumption_policy?: "none" | "listen_once"; reply_to_message_id?: string | null; send_at?: number | null }) => void;
   sending?: boolean;
@@ -90,6 +92,7 @@ export function ComposeBar({
   onSendCalendarShare,
   onSendCalendarEvent,
   onSendMeetingPoll,
+  onSendCountdown,
   onSendLottery,
   onSendVoiceMessage,
   sending,
@@ -158,6 +161,7 @@ export function ComposeBar({
   const [calendarPickerOpen, setCalendarPickerOpen] = React.useState(false);
   const [eventPickerOpen, setEventPickerOpen] = React.useState(false);
   const [meetingPollOpen, setMeetingPollOpen] = React.useState(false);
+  const [countdownOpen, setCountdownOpen] = React.useState(false);
   const [activeDraftId, setActiveDraftId] = React.useState<string | null>(null);
   const [draftDirty, setDraftDirty] = React.useState(false);
   const [lastDraftSavedAt, setLastDraftSavedAt] = React.useState<number | null>(null);
@@ -1537,7 +1541,7 @@ export function ComposeBar({
             <Video className="h-4 w-4" />
           </Button>
         )}
-        {(onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll) && (
+        {(onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendCountdown) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -1564,6 +1568,11 @@ export function ComposeBar({
               {onSendMeetingPoll && (
                 <DropdownMenuItem onClick={() => setMeetingPollOpen(true)}>
                   <Users className="mr-2 h-4 w-4" /> Schedule a meeting
+                </DropdownMenuItem>
+              )}
+              {onSendCountdown && (
+                <DropdownMenuItem onClick={() => setCountdownOpen(true)}>
+                  <Timer className="mr-2 h-4 w-4" /> Create a countdown
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
@@ -1779,6 +1788,17 @@ export function ComposeBar({
           onClose={() => setMeetingPollOpen(false)}
           onSend={(params) => {
             onSendMeetingPoll(params);
+          }}
+        />
+      )}
+
+      {onSendCountdown && (
+        <CountdownComposerDialog
+          open={countdownOpen}
+          onClose={() => setCountdownOpen(false)}
+          onSubmit={(data) => {
+            onSendCountdown(data);
+            setCountdownOpen(false);
           }}
         />
       )}
