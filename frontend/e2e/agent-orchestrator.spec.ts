@@ -115,12 +115,12 @@ test.beforeAll(async ({ browser }) => {
   expect(createResp.status()).toBe(200);
 
   // Create a ticket space for our tests
-  const spaceResp = await apiPost(rootPage, "root", "tickets/spaces", {
+  const spaceResp = await apiPost(rootPage, "root", "ticket-spaces", {
     name: `e2e_orch_space_${TS}`,
   });
   expect(spaceResp.status()).toBe(200);
   const spaceData = await spaceResp.json();
-  testSpaceId = spaceData.space_id;
+  testSpaceId = spaceData.space.space_id;
 
   // 2. Create a test ticket with agent_eligible = "yes"
   const ticketResp = await apiPost(rootPage, "root", "tickets", {

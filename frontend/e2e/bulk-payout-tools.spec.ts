@@ -69,7 +69,7 @@ function seedPending(kind: "payout" | "refund", userId: string, amountCents: num
     [
       "-lc",
       `set -a; source .env.local 2>/dev/null; set +a; ` +
-        `.venv/bin/python scripts/e2e_seed_bulk_payouts.py ${kind} ${userId} ${amountCents}`,
+        `PYTHONPATH=. .venv/bin/python scripts/e2e_seed_bulk_payouts.py ${kind} ${userId} ${amountCents}`,
     ],
     { cwd: REPO_ROOT, encoding: "utf-8" },
   );

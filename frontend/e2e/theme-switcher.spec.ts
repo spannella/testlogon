@@ -81,7 +81,7 @@ async function gotoSettings(page: Page) {
   );
   await page.goto(`${BASE}/settings`, { waitUntil: "load" });
   await settled.catch(() => {});
-  await expect(page.getByText("Theme")).toBeVisible({ timeout: 8_000 });
+  await expect(page.getByText("Theme").first()).toBeVisible({ timeout: 8_000 });
 }
 
 // ─── Color / visibility helpers ───────────────────────────────────────────────

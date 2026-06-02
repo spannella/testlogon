@@ -83,7 +83,7 @@ async function gotoSettings(page: Page) {
   );
   await page.goto(`${BASE}/settings`, { waitUntil: "load" });
   await settled.catch(() => {});
-  await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 }
 
 async function getCSSVar(page: Page, name: string): Promise<string> {
