@@ -984,7 +984,7 @@ export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -1036,6 +1036,16 @@ export interface Message {
   target_datetime?: number | null;
   associated_event_type?: "broadcast" | "call" | "calendar" | "custom" | null;
   associated_event_id?: string | null;
+  // GIF & Sticker message fields (MSG-008)
+  gif_url?: string | null;
+  gif_alt_text?: string | null;
+  gif_width?: number | null;
+  gif_height?: number | null;
+  gif_provider?: string | null;
+  sticker_id?: string | null;
+  sticker_collection_id?: string | null;
+  sticker_url?: string | null;
+  sticker_alt_text?: string | null;
   lottery?: {
     message_type: "lottery_dm";
     lock_state: "locked" | "unlocked";

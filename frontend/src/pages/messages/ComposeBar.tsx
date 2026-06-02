@@ -1,6 +1,10 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon } from "lucide-react";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { GifPicker } from "@/components/shared/GifPicker";
+import { StickerPicker } from "@/components/shared/StickerPicker";
+import { sendGifMessage, sendStickerMessage } from "@/api/endpoints/messaging";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -106,6 +110,38 @@ export function ComposeBar({
     [conversationId],
   );
   const [text, setText] = React.useState("");
+  const queryClient = useQueryClient();
+  const [gifPickerOpen, setGifPickerOpen] = React.useState(false);
+  const [stickerPickerOpen, setStickerPickerOpen] = React.useState(false);
+
+  const sendGifMut = useMutation({
+    mutationFn: (gif: { url: string; alt_text: string; width: number; height: number }) =>
+      sendGifMessage(normalizedConversationId, {
+        gif_url: gif.url,
+        gif_alt_text: gif.alt_text,
+        gif_width: gif.width,
+        gif_height: gif.height,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", normalizedConversationId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to send GIF"),
+  });
+
+  const sendStickerMut = useMutation({
+    mutationFn: (sticker: { id: string; collection_id: string }) =>
+      sendStickerMessage(normalizedConversationId, {
+        sticker_id: sticker.id,
+        sticker_collection_id: sticker.collection_id,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", normalizedConversationId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to send sticker"),
+  });
+
   const [encryptEnabled, setEncryptEnabled] = React.useState(false);
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
@@ -1541,6 +1577,52 @@ export function ComposeBar({
             <Video className="h-4 w-4" />
           </Button>
         )}
+        <Popover open={gifPickerOpen} onOpenChange={setGifPickerOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 shrink-0"
+              aria-label="Send a GIF"
+              disabled={disabled || sending}
+            >
+              <Smile className="h-4 w-4" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="start" className="w-auto p-2">
+            <GifPicker
+              onSelect={(gif) => {
+                sendGifMut.mutate(gif);
+                setGifPickerOpen(false);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+
+        <Popover open={stickerPickerOpen} onOpenChange={setStickerPickerOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 shrink-0"
+              aria-label="Send a sticker"
+              disabled={disabled || sending}
+            >
+              <StickerIcon className="h-4 w-4" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent side="top" align="start" className="w-auto p-2">
+            <StickerPicker
+              onSelect={(sticker) => {
+                sendStickerMut.mutate({ id: sticker.id, collection_id: sticker.collection_id });
+                setStickerPickerOpen(false);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+
         {(onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendCountdown) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

@@ -775,6 +775,38 @@ export async function sendCountdownMessage(
   return adaptMessage(res);
 }
 
+export async function sendGifMessage(
+  conversationId: string,
+  params: {
+    gif_url: string;
+    gif_alt_text?: string;
+    gif_width?: number;
+    gif_height?: number;
+    reply_to_message_id?: string;
+  },
+): Promise<Message> {
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/gif`,
+    params,
+  );
+  return adaptMessage(res);
+}
+
+export async function sendStickerMessage(
+  conversationId: string,
+  params: {
+    sticker_id: string;
+    sticker_collection_id: string;
+    reply_to_message_id?: string;
+  },
+): Promise<Message> {
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/sticker`,
+    params,
+  );
+  return adaptMessage(res);
+}
+
 export async function getMeetingPoll(
   conversationId: string,
   pollId: string,
