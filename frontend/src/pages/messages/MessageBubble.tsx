@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 import { isEmojiOnly } from "@/utils/emoji";
+import { MessageText } from "@/components/shared/MessageText";
+import { ReactionEmoji } from "@/components/shared/ReactionEmoji";
 import {
   decryptMessage,
   decryptBytes,
@@ -1261,14 +1263,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               </button>
             )
           ) : message.text ? (
-            <p
-              className={cn(
-                "whitespace-pre-wrap break-words text-sm",
-                isEmojiOnly(message.text) && "text-5xl leading-relaxed py-1",
-              )}
-            >
-              {message.text}
-            </p>
+            <MessageText text={message.text} />
           ) : null}
 
           {message.preview?.url && (
@@ -1780,7 +1775,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                     (message.my_reactions ?? []).includes(emoji) && "bg-primary/20 ring-1 ring-primary/40",
                   )}
                 >
-                  {emoji} {count > 1 && <span className="ml-0.5">{count}</span>}
+                  <ReactionEmoji reactionKey={emoji} /> {count > 1 && <span className="ml-0.5">{count}</span>}
                 </button>
               ))}
             </div>

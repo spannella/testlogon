@@ -6,7 +6,8 @@
 // recents list.
 
 import * as React from "react";
-import { Search, X } from "lucide-react";
+import { Search, X, Star } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +22,10 @@ import {
   type EmojiEntry,
 } from "@/data/emoji-data";
 import { useEmojiStore } from "@/stores/emojiStore";
+import { listMyCustomEmojis } from "@/api/endpoints/customEmojis";
+import type { CustomEmoji } from "@/api/types";
+
+const CUSTOM_TAB = "__custom__";
 
 export interface EmojiPickerProps {
   onSelect: (emoji: string) => void;
@@ -31,7 +36,22 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
   const [rawQuery, setRawQuery] = React.useState("");
   const [query, setQuery] = React.useState("");
   const [activeCategory, setActiveCategory] = React.useState<EmojiCategory>("smileys");
+  const [customActive, setCustomActive] = React.useState(false);
   const [toneOpen, setToneOpen] = React.useState(false);
+
+  const { data: customData } = useQuery({
+    queryKey: ["custom-emojis"],
+    queryFn: listMyCustomEmojis,
+    staleTime: 5 * 60 * 1000,
+  });
+  const customEmojis: CustomEmoji[] = customData?.emojis ?? [];
+
+  const handleCustomPick = React.useCallback(
+    (emoji: CustomEmoji) => {
+      onSelect(`:${emoji.shortcode}:`);
+    },
+    [onSelect],
+  );
 
   const recentEmojis = useEmojiStore((s) => s.recentEmojis);
   const skinTone = useEmojiStore((s) => s.skinTone);
@@ -62,6 +82,7 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
   );
 
   const scrollToCategory = (cat: EmojiCategory) => {
+    setCustomActive(false);
     setActiveCategory(cat);
     const el = sectionRefs.current[cat];
     if (el && gridRef.current) {
@@ -186,6 +207,24 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
               {cat.icon}
             </button>
           ))}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={customActive}
+            data-testid="emoji-category-custom"
+            title="Custom"
+            aria-label="Custom"
+            onClick={() => {
+              setCustomActive(true);
+              setRawQuery("");
+            }}
+            className={cn(
+              "flex h-8 w-full items-center justify-center text-base hover:bg-accent",
+              customActive && "bg-accent",
+            )}
+          >
+            <Star className="h-4 w-4" />
+          </button>
         </div>
 
         {/* Scrollable grid */}
@@ -194,7 +233,39 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
           className="h-64 flex-1 overflow-y-auto p-1.5"
           style={{ contentVisibility: "auto" } as React.CSSProperties}
         >
-          {query ? (
+          {customActive && !query ? (
+            // Custom emoji tab
+            <div data-testid="emoji-custom-section">
+              {customEmojis.length > 0 ? (
+                <div className="grid grid-cols-8 gap-0.5">
+                  {customEmojis.map((ce) => (
+                    <button
+                      key={`custom-${ce.emoji_id}`}
+                      type="button"
+                      title={`:${ce.shortcode}:`}
+                      aria-label={ce.name || ce.shortcode}
+                      data-custom-emoji={ce.shortcode}
+                      onClick={() => handleCustomPick(ce)}
+                      className="flex h-8 w-8 items-center justify-center rounded hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                    >
+                      <img
+                        src={ce.image_url}
+                        alt={ce.alt_text || ce.shortcode}
+                        className="h-6 w-6 object-contain"
+                      />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div
+                  data-testid="emoji-custom-empty"
+                  className="flex h-full items-center justify-center text-center text-xs text-muted-foreground"
+                >
+                  No custom emojis yet
+                </div>
+              )}
+            </div>
+          ) : query ? (
             // Search results
             searchResults.length > 0 ? (
               <div className="grid grid-cols-8 gap-0.5" data-testid="emoji-search-results">

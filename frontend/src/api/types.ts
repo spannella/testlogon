@@ -11698,3 +11698,31 @@ export interface ListHostsParams {
   limit?: number;
   cursor?: string;
 }
+
+
+
+// ---- Custom Emojis (MSG-007) ----
+
+export interface CustomEmoji {
+  emoji_id: string;
+  shortcode: string;
+  name: string;
+  image_url: string;
+  alt_text: string;
+  category: string;
+  owner_scope: string;
+  created_by: string;
+  created_at: number;
+  content_type: string;
+  file_size_bytes: number;
+}
+
+export interface CustomEmojiListOut {
+  emojis: CustomEmoji[];
+  personal_count: number;
+  global_count: number;
+}
+
+export interface ResolveShortcodesOut {
+  resolved: Record<string, string>;
+}

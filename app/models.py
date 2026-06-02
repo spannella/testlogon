@@ -12698,6 +12698,41 @@ class CreateStickerCollectionOut(BaseModel):
     stickers: List[StickerOut]
 
 
+# ===========================================================================
+# MSG-007: Custom Emojis
+# ===========================================================================
+
+
+class CustomEmojiOut(BaseModel):
+    """A single custom emoji (personal or global)."""
+    emoji_id: str
+    shortcode: str
+    name: str
+    image_url: str
+    alt_text: str = ""
+    category: str = "Uncategorized"
+    owner_scope: str
+    created_by: str
+    created_at: int = 0
+    content_type: str = "image/png"
+    file_size_bytes: int = 0
+
+
+class CustomEmojiListOut(BaseModel):
+    """Response for listing custom emojis visible to a caller."""
+    emojis: List[CustomEmojiOut] = Field(default_factory=list)
+    personal_count: int = 0
+    global_count: int = 0
+
+
+class ResolveShortcodesOut(BaseModel):
+    """Map of custom shortcode -> image URL."""
+    resolved: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of shortcode -> image_url",
+    )
+
+
 
 
 # ===========================================================================

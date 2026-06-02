@@ -70,6 +70,16 @@ def _table_defs() -> List[TableDef]:
             gsi=[{"index_name": "GSI1", "partition_key": "is_active", "sort_key": "created_at"}],
             attr_types={"created_at": "N", "sticker_count": "N", "sort_order": "N", "width": "N", "height": "N"},
         ),
+        TableDef(
+            _resolve_table_name(S.ddb_custom_emojis_table, "custom_emojis"),
+            "owner_scope",
+            "emoji_sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "owner_scope", "sort_key": "shortcode"},
+                {"index_name": "GSI2", "partition_key": "created_by", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         TableDef(_resolve_table_name(S.account_state_table_name, "account_state"), "user_sub"),
         TableDef(_resolve_table_name(S.profile_table_name, "profiles"), "user_sub"),
         TableDef(_resolve_table_name(S.addresses_table_name, "addresses"), "user_sub", "address_id"),
