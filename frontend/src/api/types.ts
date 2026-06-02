@@ -11929,3 +11929,51 @@ export interface KybScreeningEnvelope {
     results: Array<Record<string, unknown>>;
   }>;
 }
+
+// ── KYC-021: Third-Party Partner API ─────────────────────────────────
+
+export interface KycPartnerApplicantAddress {
+  street: string;
+  city: string;
+  state?: string;
+  postal_code: string;
+  country: string;
+}
+
+export interface KycPartnerApplicant {
+  first_name: string;
+  last_name: string;
+  date_of_birth: string;
+  email: string;
+  phone?: string | null;
+  address?: KycPartnerApplicantAddress | null;
+}
+
+export interface KycPartnerApplication {
+  application_id: string;
+  external_id: string;
+  status: string;
+  decision?: string | null;
+  reason_codes: string[];
+  applicant: Record<string, unknown>;
+  documents: Array<Record<string, unknown>>;
+  tier: string;
+  created_at: number;
+  updated_at: number;
+  sandbox: boolean;
+}
+
+export interface KycPartnerApplicationResult {
+  decision: string;
+  decided_at: number;
+  reason_codes: string[];
+  risk_score?: number | null;
+  verified_fields: Record<string, unknown>;
+}
+
+export interface KycPartnerWebhook {
+  webhook_id: string;
+  url: string;
+  events: string[];
+  created_at: number;
+}
