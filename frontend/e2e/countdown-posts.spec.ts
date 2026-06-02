@@ -237,6 +237,7 @@ test.describe("702 — Countdown Post in Feed + Interactions API", () => {
       target_datetime: target,
       associated_event_type: "custom",
       body: `Feed body ${TS}`,
+      visibility: "public",
     });
     expect(resp.ok()).toBeTruthy();
     postId = (await resp.json()).post_id;
