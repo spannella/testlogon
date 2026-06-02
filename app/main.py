@@ -111,6 +111,7 @@ from app.routers.kyc_monitoring import router as kyc_monitoring_router
 from app.routers.kyc_documents import kyc_documents_router
 from app.routers.kyc_id_scanner import kyc_id_scanner_router
 from app.routers.kyc_residency import kyc_residency_router
+from app.routers.kyc_address_verification import kyc_address_verification_router
 from app.routers.kyc_liveness_call import kyc_liveness_call_router
 from app.routers.kyc_sanctions_screening import kyc_sanctions_screening_router
 from app.routers.kyc_proof_of_funds import kyc_proof_of_funds_router
@@ -565,6 +566,7 @@ def create_app() -> FastAPI:
     app.include_router(kyc_documents_router)
     app.include_router(kyc_id_scanner_router)
     app.include_router(kyc_residency_router)
+    app.include_router(kyc_address_verification_router)
     app.include_router(kyc_liveness_call_router)
     app.include_router(kyc_sanctions_screening_router)
     app.include_router(kyc_proof_of_funds_router)

@@ -12193,3 +12193,87 @@ export interface KycWorkloadDashboard {
   total_active_cases: number;
   total_on_duty_admins: number;
 }
+
+// === KYC-018: Address Verification Service ================================
+
+export interface AddressInput {
+  line_1: string;
+  line_2?: string;
+  city: string;
+  state?: string;
+  postal_code: string;
+  country: string;
+}
+
+export type AddressVerificationStatus =
+  | "verified"
+  | "partial_match"
+  | "unverifiable"
+  | "pending"
+  | "error";
+
+export type AddressVerificationDecision = "verified" | "needs_review" | "failed";
+
+export interface GeocodingOut {
+  lat: number;
+  lng: number;
+}
+
+export interface AddressFieldComparison {
+  field: string;
+  profile: string;
+  document: string;
+  match: boolean;
+}
+
+export interface CrossReferenceOut {
+  match_score: number;
+  discrepancies: string[];
+  field_comparisons: AddressFieldComparison[];
+}
+
+export interface AddressOverrideOut {
+  decision: AddressVerificationDecision;
+  reviewer_sub?: string | null;
+  note?: string | null;
+  decided_at?: number | null;
+}
+
+export interface AddressVerificationOut {
+  verification_id?: string | null;
+  kyc_case_id?: string | null;
+  status: AddressVerificationStatus;
+  decision: AddressVerificationDecision;
+  confidence_score: number;
+  country?: string | null;
+  country_format_valid: boolean;
+  postal_format_hint: string;
+  input_address?: AddressInput | null;
+  standardized_address?: AddressInput | null;
+  geocoding?: GeocodingOut | null;
+  discrepancies: string[];
+  cross_reference?: CrossReferenceOut | null;
+  override?: AddressOverrideOut | null;
+  provider?: string | null;
+  verified_at?: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AddressVerificationResponse {
+  verification: AddressVerificationOut;
+}
+
+export interface AddressVerificationListResponse {
+  attempts: AddressVerificationOut[];
+}
+
+export interface PostalCodeValidationOut {
+  valid: boolean;
+  format_hint: string;
+  normalized: string;
+}
+
+export interface CrossReferenceResponse {
+  cross_reference: CrossReferenceOut;
+}
