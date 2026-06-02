@@ -228,10 +228,13 @@ def build_mock_assertion(session_id: str) -> dict[str, str]:
     if not session:
         raise KycEidvError("eid_session_not_found")
     scheme_def = _scheme_def(str(session.get("scheme") or ""))
-    ts = now_ts()
+    # Determinism for a session: derive the assertion id + issued time from the
+    # session (stable) rather than a fresh uuid / now_ts() per call, so repeated
+    # mock verifies of the same session return an identical signed assertion.
+    ts = int(session.get("created_at") or now_ts())
     fields = _mock_assertion_fields(scheme_def=scheme_def, session_id=session_id)
     payload = {
-        "assertion_id": _new_assertion_id(),
+        "assertion_id": "ea_" + hashlib.sha256(f"aid|{session_id}".encode("utf-8")).hexdigest()[:12],
         "scheme": scheme_def["id"],
         "issuer": f"{scheme_def['id'].upper()}-MOCK",
         "subject_id": f"{scheme_def.get('default_nationality') or 'XX'}:{fields['document_number']}",
