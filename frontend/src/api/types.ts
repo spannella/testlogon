@@ -10811,3 +10811,109 @@ export interface CreateShareLinkInput {
   max_downloads?: number;
   password?: string;
 }
+
+// ─── Instance Templates & Presets (INFRA-007) ────────────────────────────────
+
+export type TemplateCategory = "compute" | "database" | "web" | "ml" | "custom";
+export type TemplateTarget = "ec2" | "k8s";
+
+export interface InstanceTemplate {
+  template_id: string;
+  name: string;
+  description: string;
+  category: string;
+  target: string;
+  instance_type: string;
+  ami_id: string;
+  k8s_image: string;
+  k8s_preset: string;
+  startup_script: string;
+  ports: number[];
+  env_vars: Record<string, string>;
+  tags: string[];
+  auto_terminate_after: number;
+  icon: string;
+  is_system: boolean;
+  owner_sub: string;
+  created_at: number;
+  updated_at: number;
+  use_count: number;
+}
+
+export interface InstanceTemplateListOut {
+  templates: InstanceTemplate[];
+  count: number;
+}
+
+export interface CreateTemplateReq {
+  name: string;
+  description?: string;
+  category?: TemplateCategory;
+  target: TemplateTarget;
+  instance_type?: string;
+  ami_id?: string;
+  k8s_image?: string;
+  k8s_preset?: string;
+  startup_script?: string;
+  ports?: number[];
+  env_vars?: Record<string, string>;
+  tags?: string[];
+  auto_terminate_after?: number;
+}
+
+export interface UpdateTemplateReq {
+  name?: string;
+  description?: string;
+  category?: TemplateCategory;
+  instance_type?: string;
+  ami_id?: string;
+  k8s_image?: string;
+  k8s_preset?: string;
+  startup_script?: string;
+  ports?: number[];
+  env_vars?: Record<string, string>;
+  tags?: string[];
+  auto_terminate_after?: number;
+}
+
+export interface CloneTemplateReq {
+  new_name: string;
+}
+
+export interface LaunchFromTemplateReq {
+  label?: string;
+  instance_type?: string;
+  ami_id?: string;
+  k8s_image?: string;
+  k8s_preset?: string;
+  auto_terminate_after?: number;
+  ssh_key_id?: string;
+}
+
+export interface TemplateLaunchInstance {
+  instance_id: string;
+  label: string;
+  instance_type: string;
+  ami_id: string;
+  status: string;
+  public_ip: string;
+  auto_terminate_after: number;
+}
+
+export interface TemplateLaunchPod {
+  pod_id: string;
+  label: string;
+  image: string;
+  preset: string;
+  status: string;
+  pod_ip: string;
+  ttl_seconds: number;
+}
+
+export interface LaunchFromTemplateOut {
+  target: string;
+  template_id: string;
+  resource_id: string;
+  instance?: TemplateLaunchInstance | null;
+  pod?: TemplateLaunchPod | null;
+}

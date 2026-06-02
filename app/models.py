@@ -12303,3 +12303,109 @@ class ShareLinkPublicInfoOut(BaseModel):
 
 class ShareLinkDownloadIn(BaseModel):
     password: Optional[str] = Field(default=None, max_length=128)
+
+
+# ─── Instance Templates & Presets (INFRA-007) ────────────────────────────────
+
+class CreateTemplateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    category: Literal["compute", "database", "web", "ml", "custom"] = "custom"
+    target: Literal["ec2", "k8s"]
+    instance_type: str = Field(default="", max_length=20)
+    ami_id: str = Field(default="", max_length=50)
+    k8s_image: str = Field(default="", max_length=100)
+    k8s_preset: str = Field(default="", max_length=20)
+    startup_script: str = Field(default="", max_length=16_384)
+    ports: List[int] = Field(default_factory=list)
+    env_vars: Dict[str, str] = Field(default_factory=dict)
+    tags: List[str] = Field(default_factory=list)
+    auto_terminate_after: int = Field(default=7200, ge=600, le=86400)
+
+
+class UpdateTemplateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    category: Optional[Literal["compute", "database", "web", "ml", "custom"]] = None
+    instance_type: Optional[str] = Field(default=None, max_length=20)
+    ami_id: Optional[str] = Field(default=None, max_length=50)
+    k8s_image: Optional[str] = Field(default=None, max_length=100)
+    k8s_preset: Optional[str] = Field(default=None, max_length=20)
+    startup_script: Optional[str] = Field(default=None, max_length=16_384)
+    ports: Optional[List[int]] = None
+    env_vars: Optional[Dict[str, str]] = None
+    tags: Optional[List[str]] = None
+    auto_terminate_after: Optional[int] = Field(default=None, ge=600, le=86400)
+
+
+class CloneTemplateIn(BaseModel):
+    new_name: str = Field(..., min_length=1, max_length=100)
+
+
+class LaunchFromTemplateIn(BaseModel):
+    label: str = Field(default="", max_length=100)
+    instance_type: Optional[str] = Field(default=None, max_length=20)
+    ami_id: Optional[str] = Field(default=None, max_length=50)
+    k8s_image: Optional[str] = Field(default=None, max_length=100)
+    k8s_preset: Optional[str] = Field(default=None, max_length=20)
+    auto_terminate_after: Optional[int] = Field(default=None, ge=600, le=86400)
+    ssh_key_id: Optional[str] = None
+
+
+class TemplateOut(BaseModel):
+    template_id: str
+    name: str
+    description: str = ""
+    category: str = "custom"
+    target: str = "ec2"
+    instance_type: str = ""
+    ami_id: str = ""
+    k8s_image: str = ""
+    k8s_preset: str = ""
+    startup_script: str = ""
+    ports: List[int] = Field(default_factory=list)
+    env_vars: Dict[str, str] = Field(default_factory=dict)
+    tags: List[str] = Field(default_factory=list)
+    auto_terminate_after: int = 7200
+    icon: str = ""
+    is_system: bool = False
+    owner_sub: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+    use_count: int = 0
+
+
+class TemplateListOut(BaseModel):
+    templates: List[TemplateOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class LaunchFromTemplateOut(BaseModel):
+    target: str
+    template_id: str
+    resource_id: str = ""
+    instance: Optional[TemplateLaunchInstanceOut] = None
+    pod: Optional[TemplateLaunchPodOut] = None
+
+
+class TemplateLaunchInstanceOut(BaseModel):
+    instance_id: str = ""
+    label: str = ""
+    instance_type: str = ""
+    ami_id: str = ""
+    status: str = ""
+    public_ip: str = ""
+    auto_terminate_after: int = 0
+
+
+class TemplateLaunchPodOut(BaseModel):
+    pod_id: str = ""
+    label: str = ""
+    image: str = ""
+    preset: str = ""
+    status: str = ""
+    pod_ip: str = ""
+    ttl_seconds: int = 0
+
+
+LaunchFromTemplateOut.model_rebuild()
