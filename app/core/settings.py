@@ -1828,6 +1828,16 @@ class Settings:
     i18n_rtl_enabled: bool = os.environ.get("I18N_RTL_ENABLED", "1") not in ("0", "false", "False")
     i18n_admin_management_enabled: bool = os.environ.get("I18N_ADMIN_MANAGEMENT_ENABLED", "1") not in ("0", "false", "False")
 
+    # KYC Multi-Language Support (KYC-020)
+    kyc_translations_table_name: str = os.environ.get("KYC_TRANSLATIONS_TABLE_NAME", "kyc_translations")
+    i18n_kyc_supported_locales: str = os.environ.get(
+        "I18N_KYC_SUPPORTED_LOCALES", "en,es,fr,de,pt,zh,ja,ko,ar,hi"
+    )
+    i18n_kyc_default_locale: str = os.environ.get("I18N_KYC_DEFAULT_LOCALE", "en")
+    i18n_kyc_localization_enabled: bool = os.environ.get(
+        "I18N_KYC_LOCALIZATION_ENABLED", "1"
+    ) not in ("0", "false", "False")
+
     # Group Video Calls (CALL-012)
     group_call_sessions_table_name: str = os.environ.get("DDB_GROUP_CALL_SESSIONS", "GroupCallSessions")
     group_calls_enabled: bool = os.environ.get("GROUP_CALLS_ENABLED", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")

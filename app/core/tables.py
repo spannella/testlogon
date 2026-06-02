@@ -193,6 +193,7 @@ class Tables:
     notifications_engine: Any
     call_history: Any
     kyc_risk_scores: Any
+    kyc_translations: Any
     kyc_review_schedule: Any
     kyc_document_templates: Any
     broadcast_moderation: Any
@@ -427,6 +428,7 @@ T = Tables(
     notifications_engine=ddb.Table(S.notifications_engine_table_name),
     call_history=ddb.Table(S.call_history_table_name),
     kyc_risk_scores=ddb.Table(S.kyc_risk_scores_table_name),
+    kyc_translations=ddb.Table(S.kyc_translations_table_name),
     kyc_review_schedule=ddb.Table(S.kyc_review_schedule_table_name),
     broadcast_moderation=ddb.Table(S.broadcast_moderation_table_name),
     k8s_pods=ddb.Table(S.k8s_pods_table_name),

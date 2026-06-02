@@ -139,6 +139,15 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"timestamp": "N"},
         ),
+        # KYC Multi-Language Support (KYC-020)
+        TableDef(
+            _resolve_table_name(S.kyc_translations_table_name, "kyc_translations"),
+            "language_code",
+            "key",
+            gsi=[
+                {"index_name": "status-language-index", "partition_key": "status", "sort_key": "language_code"},
+            ],
+        ),
         TableDef(
             _resolve_table_name(S.kyc_review_schedule_table_name, "kyc_review_schedule"),
             "pk",
