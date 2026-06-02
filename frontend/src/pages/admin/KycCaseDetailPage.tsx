@@ -44,6 +44,7 @@ import {
   type KycTimelineEvent,
   type KycFileRef,
 } from "@/api/endpoints/kyc-admin";
+import { KycFacialComparisonReview } from "@/pages/admin/KycFacialComparisonReview";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -431,6 +432,7 @@ export default function KycCaseDetailPage() {
         {/* Left: Document Viewer (60%) */}
         <div className="lg:col-span-3 space-y-6">
           <DocumentViewer files={caseData.files_ref} />
+          <KycFacialComparisonReview caseId={caseData.kyc_case_id} />
         </div>
 
         {/* Right: Info + Actions (40%) */}

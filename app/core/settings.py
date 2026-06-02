@@ -1203,6 +1203,17 @@ class Settings:
         "KYC_ID_SCANNER_REAL_OCR_ENABLED", "false"
     ).lower() in ("1", "true", "yes", "on")
 
+    # KYC Facial Comparison (KYC-014)
+    kyc_face_comparison_enabled: bool = os.environ.get(
+        "KYC_FACE_COMPARISON_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_face_admin_override_enabled: bool = os.environ.get(
+        "KYC_FACE_ADMIN_OVERRIDE_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_face_auto_compare: bool = os.environ.get(
+        "KYC_FACE_AUTO_COMPARE", "false"
+    ).lower() in ("1", "true", "yes", "on")
+
     # KYC Proof of Residency Verification (KYC-004)
     kyc_residency_documents_table_name: str = os.environ.get(
         "KYC_RESIDENCY_DOCUMENTS_TABLE_NAME", "kyc_residency_documents"

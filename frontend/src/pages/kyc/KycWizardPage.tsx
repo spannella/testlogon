@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CameraCapture } from "@/components/shared/CameraCapture";
+import { FaceComparisonResult } from "@/pages/kyc/FaceComparisonResult";
 import { ApiError } from "@/api/client";
 import {
   createKycCase,
@@ -155,7 +156,16 @@ export default function KycWizardPage() {
         <CardContent className="p-6">
           {currentStep === 0 && <PersonalInfoStep {...stepProps} />}
           {currentStep === 1 && <IdUploadStep {...stepProps} />}
-          {currentStep === 2 && <SelfieStep {...stepProps} />}
+          {currentStep === 2 && (
+            <>
+              <SelfieStep {...stepProps} />
+              {caseId && hasFileType(kycCase, "selfie") && hasFileType(kycCase, "id_front") && (
+                <div className="mt-6">
+                  <FaceComparisonResult caseId={caseId} />
+                </div>
+              )}
+            </>
+          )}
           {currentStep === 3 && <AddressProofStep {...stepProps} />}
           {currentStep === 4 && <QuestionnaireStep caseId={caseId} ensureCase={ensureCase} refresh={refresh} />}
           {currentStep === 5 && <ConsentStep caseId={caseId} ensureCase={ensureCase} refresh={refresh} kycCase={kycCase} />}
