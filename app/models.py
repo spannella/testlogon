@@ -12453,3 +12453,147 @@ class TemplateLaunchPodOut(BaseModel):
 
 
 LaunchFromTemplateOut.model_rebuild()
+
+
+# --------------------------------------------------------------------------- #
+# KYC-012: Compliance Reporting & Export                                       #
+# --------------------------------------------------------------------------- #
+class KycSarRequest(BaseModel):
+    """Request body for Suspicious Activity Report generation."""
+
+    user_sub: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=10, max_length=2000)
+    transaction_ids: Optional[List[str]] = Field(default=None, max_length=50)
+
+
+class KycReportExportRequest(BaseModel):
+    """Request body for exporting a compliance report as CSV or PDF."""
+
+    format: Literal["csv", "pdf"] = "csv"
+    start_date: Optional[int] = Field(default=None, ge=0)
+    end_date: Optional[int] = Field(default=None, ge=0)
+
+
+class KycVolumeReportOut(BaseModel):
+    report_type: Literal["volume"] = "volume"
+    period_start: int
+    period_end: int
+    total_cases: int = Field(ge=0)
+    counts_by_status: Dict[str, int]
+    approval_rate: float = Field(ge=0, le=100)
+    rejection_rate: float = Field(ge=0, le=100)
+    generated_at: int
+
+
+class KycScreeningComplianceReportOut(BaseModel):
+    report_type: Literal["screening"] = "screening"
+    period_start: int
+    period_end: int
+    total_screenings: int = Field(ge=0)
+    total_hits: int = Field(ge=0)
+    hit_rate_pct: float = Field(ge=0, le=100)
+    resolutions: Dict[str, int]
+    false_positive_count: int = Field(ge=0)
+    escalated_count: int = Field(ge=0)
+    confirmed_count: int = Field(ge=0)
+    generated_at: int
+
+
+class KycProcessingTimeReportOut(BaseModel):
+    report_type: Literal["processing_time"] = "processing_time"
+    period_start: int
+    period_end: int
+    total_decided: int = Field(ge=0)
+    avg_seconds: int = Field(ge=0)
+    p50_seconds: Optional[int] = None
+    p90_seconds: Optional[int] = None
+    p95_seconds: Optional[int] = None
+    min_seconds: Optional[int] = None
+    max_seconds: Optional[int] = None
+    generated_at: int
+
+
+class KycOverdueCaseOut(BaseModel):
+    case_id: str
+    user_sub: str
+    status: str
+    submitted_at: int
+    age_hours: float
+    severity: Literal["warning", "critical"]
+    assigned_admin: Optional[str] = None
+
+
+class KycDeadlineReportOut(BaseModel):
+    report_type: Literal["deadlines"] = "deadlines"
+    warn_after_hours: int
+    critical_after_hours: int
+    total_overdue: int = Field(ge=0)
+    critical_count: int = Field(ge=0)
+    warning_count: int = Field(ge=0)
+    cases: List[KycOverdueCaseOut]
+    generated_at: int
+
+
+class KycRetentionInventoryItemOut(BaseModel):
+    case_id: str
+    user_sub: str
+    status: str
+    decided_at: int
+    retention_days: int
+    purge_due_at: int
+    purge_overdue: bool
+    file_count: int
+    has_selfie: bool
+    has_id_document: bool
+    has_proof_of_address: bool
+    purged: bool
+
+
+class KycRetentionReportOut(BaseModel):
+    report_type: Literal["retention"] = "retention"
+    policies: Dict[str, str]
+    total_records: int = Field(ge=0)
+    overdue_purge_count: int = Field(ge=0)
+    already_purged_count: int = Field(ge=0)
+    inventory: List[KycRetentionInventoryItemOut]
+    generated_at: int
+
+
+class KycAuditEventOut(BaseModel):
+    event_name: str
+    actor_sub: str
+    timestamp: int
+    outcome: Optional[str] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KycAuditTrailOut(BaseModel):
+    report_type: Literal["audit_trail"] = "audit_trail"
+    user_sub: str
+    total_events: int = Field(ge=0)
+    events: List[KycAuditEventOut]
+    generated_at: int
+
+
+class KycSarCaseRefOut(BaseModel):
+    case_id: str
+    status: str
+    created_at: int
+    decided_at: Optional[int] = None
+
+
+class KycSarOut(BaseModel):
+    sar_id: str = Field(pattern=r"^SAR_[a-f0-9]{12}$")
+    generated_at: int
+    generated_by: str
+    subject_user_sub: str
+    reason: str
+    kyc_cases: List[KycSarCaseRefOut]
+    flagged_transactions: List[Dict[str, Any]]
+    audit_trail: List[Dict[str, Any]]
+
+
+class KycReportExportOut(BaseModel):
+    format: Literal["csv", "pdf"]
+    content: str = Field(description="CSV content as string (empty if no data)")
+    report_type: str
