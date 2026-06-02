@@ -1166,6 +1166,15 @@ class Settings:
     kyc_review_ticket_space_id: str = os.environ.get("KYC_REVIEW_TICKET_SPACE_ID", "kyc-ops")
     kyc_review_ticket_category: str = os.environ.get("KYC_REVIEW_TICKET_CATEGORY", "kyc_review")
 
+    # KYC Case Assignment & Workload Management (KYC-019)
+    kyc_assignment_enabled: bool = os.environ.get("KYC_ASSIGNMENT_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    kyc_sla_checker_enabled: bool = os.environ.get("KYC_SLA_CHECKER_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    kyc_auto_assign_on_submit: bool = os.environ.get("KYC_AUTO_ASSIGN_ON_SUBMIT", "false").lower() in ("1", "true", "yes", "on")
+    kyc_assignment_default_max_cases: int = int(os.environ.get("KYC_ASSIGNMENT_DEFAULT_MAX_CASES", "20"))
+    kyc_sla_tier1_hours: int = int(os.environ.get("KYC_SLA_TIER1_HOURS", "24"))
+    kyc_sla_tier2_hours: int = int(os.environ.get("KYC_SLA_TIER2_HOURS", "48"))
+    kyc_sla_tier3_hours: int = int(os.environ.get("KYC_SLA_TIER3_HOURS", "120"))
+
     # KYC for Business / Corporate Accounts (KYB) (KYC-015)
     kyc_business_enabled: bool = os.environ.get("KYC_BUSINESS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     kyc_business_cases_table_name: str = os.environ.get("KYC_BUSINESS_CASES_TABLE_NAME", "kyc_business_cases")

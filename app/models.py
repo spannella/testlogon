@@ -13401,3 +13401,140 @@ class KybScreeningEnvelope(BaseModel):
 
 class KybAdminQueueEnvelope(BaseModel):
     cases: List[Dict[str, Any]]
+
+
+# ── KYC-019: Case Assignment & Workload Management ──────────────────
+
+
+class KycAdminAvailabilityIn(BaseModel):
+    on_duty: bool = Field(..., description="Whether admin is available for new assignments")
+    expertise_tiers: List[str] = Field(default_factory=list, max_length=5)
+    languages: List[str] = Field(default_factory=list, max_length=10)
+    max_cases: int = Field(default=20, ge=1, le=100)
+    seniority_level: int = Field(default=0, ge=0, le=3)
+
+
+class KycAdminAvailabilityOut(BaseModel):
+    admin_sub: str
+    on_duty: bool = False
+    current_case_count: int = 0
+    avg_processing_hours: float = 0.0
+    expertise_tiers: List[str] = Field(default_factory=list)
+    languages: List[str] = Field(default_factory=list)
+    seniority_level: int = 0
+    max_cases: int = 20
+    last_assigned_at: Optional[int] = None
+    updated_at: Optional[int] = None
+
+
+class KycAutoAssignIn(BaseModel):
+    applicant_language: str = Field(default="en", min_length=2, max_length=8)
+
+
+class KycAutoAssignOut(BaseModel):
+    assigned_admin_sub: Optional[str] = None
+    score: float = 0.0
+    tier: str = ""
+    reason: str = ""
+
+
+class KycAutoAssignBatchIn(BaseModel):
+    case_ids: List[str] = Field(..., min_length=1, max_length=100)
+    applicant_language: str = Field(default="en", min_length=2, max_length=8)
+
+
+class KycAutoAssignBatchOut(BaseModel):
+    results: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class KycReassignIn(BaseModel):
+    new_admin_sub: str = Field(..., min_length=1)
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+class KycReassignOut(BaseModel):
+    ok: bool = True
+    previous_admin_sub: Optional[str] = None
+    new_admin_sub: str = ""
+    reason: str = ""
+
+
+class KycClaimOut(BaseModel):
+    ok: bool = True
+    assigned_admin_sub: Optional[str] = None
+    previous_admin_sub: Optional[str] = None
+
+
+class KycSlaConfigEnvelope(BaseModel):
+    sla_config: Dict[str, Dict[str, int]] = Field(default_factory=dict)
+
+
+class KycSlaConfigUpdateIn(BaseModel):
+    target_hours: int = Field(..., ge=1, le=720)
+    warning_pct: int = Field(..., ge=50, le=99)
+
+
+class KycSlaConfigOut(BaseModel):
+    tier: str
+    target_hours: int
+    warning_pct: int
+    escalation_pct: int = 100
+    updated_at: Optional[int] = None
+    updated_by: Optional[str] = None
+
+
+class KycAssignmentEventOut(BaseModel):
+    event_type: str
+    from_admin: Optional[str] = None
+    to_admin: Optional[str] = None
+    reason: str = ""
+    actor_sub: Optional[str] = None
+    escalation_level: Optional[int] = None
+    created_at: int = 0
+
+
+class KycAssignmentHistoryOut(BaseModel):
+    events: List[KycAssignmentEventOut] = Field(default_factory=list)
+
+
+class KycMyAssignedCaseOut(BaseModel):
+    kyc_case_id: str
+    status: str
+    tier: str
+    assigned_at: Optional[int] = None
+    sla_due_at: Optional[int] = None
+    overdue: bool = False
+    escalation_level: int = 0
+
+
+class KycMyAssignedOut(BaseModel):
+    cases: List[KycMyAssignedCaseOut] = Field(default_factory=list)
+
+
+class KycSlaBreachOut(BaseModel):
+    kyc_case_id: str
+    assigned_admin_sub: Optional[str] = None
+    tier: str
+    sla_due_at: int
+    hours_overdue: float
+    escalation_level: int = 0
+
+
+class KycSlaBreachListOut(BaseModel):
+    breaches: List[KycSlaBreachOut] = Field(default_factory=list)
+
+
+class KycEscalateOut(BaseModel):
+    ok: bool = True
+    kyc_case_id: str
+    escalation_level: int
+    previous_admin_sub: Optional[str] = None
+    new_admin_sub: Optional[str] = None
+    reason: str = ""
+
+
+class KycWorkloadDashboardOut(BaseModel):
+    admins: List[KycAdminAvailabilityOut] = Field(default_factory=list)
+    sla_config: Dict[str, Dict[str, int]] = Field(default_factory=dict)
+    total_active_cases: int = 0
+    total_on_duty_admins: int = 0
