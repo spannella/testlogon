@@ -11737,3 +11737,195 @@ export interface CustomEmojiListOut {
 export interface ResolveShortcodesOut {
   resolved: Record<string, string>;
 }
+
+// KYC-015: KYC for Business / Corporate Accounts (KYB)
+
+export type KybCompanyType =
+  | "llc"
+  | "corp"
+  | "partnership"
+  | "sole_prop"
+  | "nonprofit"
+  | "cooperative"
+  | "trust";
+
+export type KybDirectorRole =
+  | "director"
+  | "secretary"
+  | "ceo"
+  | "cfo"
+  | "coo"
+  | "treasurer";
+
+export type KybDocumentType =
+  | "certificate_of_incorporation"
+  | "articles_of_association"
+  | "shareholder_register"
+  | "financial_statements"
+  | "board_resolution"
+  | "proof_of_address_registered"
+  | "proof_of_address_trading";
+
+export type KybAddressType = "registered" | "trading";
+
+export type KybStatus =
+  | "draft"
+  | "submitted"
+  | "under_review"
+  | "needs_more_info"
+  | "approved"
+  | "rejected"
+  | "expired";
+
+export interface KybCompany {
+  legal_name: string;
+  trading_name?: string | null;
+  registration_number: string;
+  jurisdiction: string;
+  incorporation_date?: string | null;
+  company_type: KybCompanyType;
+  tax_id?: string | null;
+  website?: string | null;
+  industry?: string | null;
+}
+
+export interface KybUboSummary {
+  total_ubos: number;
+  all_kyc_approved: boolean;
+  total_ownership_pct: number;
+}
+
+export interface KybCase {
+  kyb_case_id: string;
+  user_sub: string;
+  status: KybStatus;
+  company: KybCompany;
+  ubo_summary: KybUboSummary;
+  director_count: number;
+  document_count: number;
+  registration_verification?: Record<string, unknown>;
+  submission?: Record<string, unknown>;
+  review?: Record<string, unknown>;
+  org_id?: string | null;
+  created_at: number;
+  updated_at: number;
+  version: number;
+}
+
+export interface KybUbo {
+  ubo_id: string;
+  full_name: string;
+  date_of_birth?: string | null;
+  nationality?: string | null;
+  ownership_percentage: number;
+  personal_kyc_case_id?: string | null;
+  personal_kyc_status?: string | null;
+  added_at: number;
+}
+
+export interface KybDirector {
+  director_id: string;
+  full_name: string;
+  role: KybDirectorRole;
+  date_of_birth?: string | null;
+  nationality?: string | null;
+  personal_kyc_case_id?: string | null;
+  added_at: number;
+}
+
+export interface KybDocument {
+  doc_id: string;
+  document_type: KybDocumentType;
+  file_node_id: string;
+  file_name?: string;
+  uploaded_at: number;
+}
+
+export interface KybCreateRequest {
+  legal_name: string;
+  trading_name?: string | null;
+  registration_number: string;
+  jurisdiction: string;
+  company_type: KybCompanyType;
+  incorporation_date?: string | null;
+  tax_id?: string | null;
+  website?: string | null;
+  industry?: string | null;
+  org_id?: string | null;
+}
+
+export interface KybUboAddRequest {
+  full_name: string;
+  date_of_birth?: string | null;
+  nationality?: string | null;
+  ownership_percentage: number;
+  personal_kyc_case_id?: string | null;
+}
+
+export interface KybDirectorAddRequest {
+  full_name: string;
+  role?: KybDirectorRole;
+  date_of_birth?: string | null;
+  nationality?: string | null;
+  personal_kyc_case_id?: string | null;
+}
+
+export interface KybDocumentRequest {
+  document_type: KybDocumentType;
+  file_node_id: string;
+  file_name?: string;
+}
+
+export interface KybAddressRequest {
+  address_type: KybAddressType;
+  line1: string;
+  line2?: string | null;
+  city: string;
+  state?: string | null;
+  postal_code: string;
+  country: string;
+}
+
+export interface KybCaseEnvelope {
+  case: KybCase;
+}
+
+export interface KybCaseListEnvelope {
+  cases: KybCase[];
+}
+
+export interface KybUboEnvelope {
+  ubo: KybUbo;
+}
+
+export interface KybUboListEnvelope {
+  ubos: KybUbo[];
+}
+
+export interface KybDirectorEnvelope {
+  director: KybDirector;
+}
+
+export interface KybDirectorListEnvelope {
+  directors: KybDirector[];
+}
+
+export interface KybDocumentEnvelope {
+  document: KybDocument;
+}
+
+export interface KybAdminQueueEnvelope {
+  cases: KybCase[];
+}
+
+export interface KybScreeningEnvelope {
+  case_id: string;
+  any_hit: boolean;
+  screened: Array<{
+    subject: string;
+    name: string;
+    ubo_id?: string;
+    director_id?: string;
+    results: Array<Record<string, unknown>>;
+  }>;
+}

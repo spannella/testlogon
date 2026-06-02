@@ -13269,3 +13269,135 @@ class HostQuickConnectOut(BaseModel):
     ws_url: str = ""
     # Frontend route to navigate to with these params pre-filled.
     connect_path: str = ""
+
+
+# KYC-015: KYC for Business / Corporate Accounts (KYB) models
+
+CompanyTypeLiteral = Literal[
+    "llc", "corp", "partnership", "sole_prop", "nonprofit", "cooperative", "trust"
+]
+DirectorRoleLiteral = Literal["director", "secretary", "ceo", "cfo", "coo", "treasurer"]
+KybDocumentTypeLiteral = Literal[
+    "certificate_of_incorporation",
+    "articles_of_association",
+    "shareholder_register",
+    "financial_statements",
+    "board_resolution",
+    "proof_of_address_registered",
+    "proof_of_address_trading",
+]
+KybAddressTypeLiteral = Literal["registered", "trading"]
+
+
+class KybCreateRequest(BaseModel):
+    legal_name: str = Field(min_length=2, max_length=200)
+    trading_name: Optional[str] = Field(default=None, max_length=200)
+    registration_number: str = Field(min_length=1, max_length=50)
+    jurisdiction: str = Field(min_length=2, max_length=10)
+    company_type: CompanyTypeLiteral
+    incorporation_date: Optional[str] = Field(default=None, max_length=20)
+    tax_id: Optional[str] = Field(default=None, max_length=50)
+    website: Optional[str] = Field(default=None, max_length=200)
+    industry: Optional[str] = Field(default=None, max_length=100)
+    org_id: Optional[str] = Field(default=None, max_length=100)
+
+
+class KybCompanyPatchRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    legal_name: Optional[str] = Field(default=None, min_length=2, max_length=200)
+    trading_name: Optional[str] = Field(default=None, max_length=200)
+    registration_number: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    jurisdiction: Optional[str] = Field(default=None, min_length=2, max_length=10)
+    company_type: Optional[CompanyTypeLiteral] = None
+    incorporation_date: Optional[str] = Field(default=None, max_length=20)
+    tax_id: Optional[str] = Field(default=None, max_length=50)
+    website: Optional[str] = Field(default=None, max_length=200)
+    industry: Optional[str] = Field(default=None, max_length=100)
+
+
+class KybUboAddRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=200)
+    date_of_birth: Optional[str] = Field(default=None, max_length=20)
+    nationality: Optional[str] = Field(default=None, max_length=3)
+    ownership_percentage: float = Field(gt=0, le=100)
+    personal_kyc_case_id: Optional[str] = Field(default=None, max_length=80)
+
+
+class KybUboLinkRequest(BaseModel):
+    personal_kyc_case_id: str = Field(min_length=1, max_length=80)
+
+
+class KybDirectorAddRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=200)
+    role: DirectorRoleLiteral = "director"
+    date_of_birth: Optional[str] = Field(default=None, max_length=20)
+    nationality: Optional[str] = Field(default=None, max_length=3)
+    personal_kyc_case_id: Optional[str] = Field(default=None, max_length=80)
+
+
+class KybDocumentRequest(BaseModel):
+    document_type: KybDocumentTypeLiteral
+    file_node_id: str = Field(min_length=1, max_length=200)
+    file_name: Optional[str] = Field(default=None, max_length=300)
+
+
+class KybAddressRequest(BaseModel):
+    address_type: KybAddressTypeLiteral
+    line1: str = Field(min_length=1, max_length=200)
+    line2: Optional[str] = Field(default=None, max_length=200)
+    city: str = Field(min_length=1, max_length=100)
+    state: Optional[str] = Field(default=None, max_length=100)
+    postal_code: str = Field(min_length=1, max_length=20)
+    country: str = Field(min_length=2, max_length=3)
+
+
+class KybSubmitRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+
+
+class KybAdminDecisionRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    reason_codes: List[str] = Field(default_factory=list)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class KybCaseEnvelope(BaseModel):
+    case: Dict[str, Any]
+
+
+class KybCaseListEnvelope(BaseModel):
+    cases: List[Dict[str, Any]]
+
+
+class KybUboEnvelope(BaseModel):
+    ubo: Dict[str, Any]
+
+
+class KybUboListEnvelope(BaseModel):
+    ubos: List[Dict[str, Any]]
+
+
+class KybDirectorEnvelope(BaseModel):
+    director: Dict[str, Any]
+
+
+class KybDirectorListEnvelope(BaseModel):
+    directors: List[Dict[str, Any]]
+
+
+class KybDocumentEnvelope(BaseModel):
+    document: Dict[str, Any]
+
+
+class KybAddressEnvelope(BaseModel):
+    address: Dict[str, Any]
+
+
+class KybScreeningEnvelope(BaseModel):
+    case_id: str
+    any_hit: bool
+    screened: List[Dict[str, Any]]
+
+
+class KybAdminQueueEnvelope(BaseModel):
+    cases: List[Dict[str, Any]]

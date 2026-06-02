@@ -156,6 +156,8 @@ const ContentCalendarPage = lazy(() => import("@/pages/content-calendar/ContentC
 const CallHistoryPage = lazy(() => import("@/pages/calls/CallHistoryPage"));
 const LicenseRequestsPage = lazy(() => import("@/pages/licenses/LicenseRequestsPage"));
 const KycTierProgress = lazy(() => import("@/pages/kyc/KycTierProgress"));
+const BusinessKycPage = lazy(() => import("@/pages/kyc/BusinessKycPage"));
+const BusinessKycReviewPage = lazy(() => import("@/pages/kyc/BusinessKycReviewPage"));
 const KycDocumentVerificationPage = lazy(() => import("@/pages/kyc/KycDocumentVerificationPage"));
 const KycDocumentReviewQueuePage = lazy(() => import("@/pages/kyc/KycDocumentReviewQueuePage"));
 const KycResidencyVerificationPage = lazy(() => import("@/pages/kyc/KycResidencyVerificationPage"));
@@ -404,6 +406,8 @@ export default function App() {
           <Route path="kyc" element={<KycWizardPage />} />
           <Route path="kyc/status" element={<KycStatusPage />} />
           <Route path="kyc/tiers" element={<KycTierProgress />} />
+          <Route path="kyc/business" element={<BusinessKycPage />} />
+          <Route path="admin/kyc/business" element={<BusinessKycReviewPage />} />
           <Route path="kyc/documents" element={<KycDocumentVerificationPage />} />
           <Route path="admin/kyc/documents" element={<KycDocumentReviewQueuePage />} />
           <Route path="kyc/residency" element={<KycResidencyVerificationPage />} />

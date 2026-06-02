@@ -1166,6 +1166,13 @@ class Settings:
     kyc_review_ticket_space_id: str = os.environ.get("KYC_REVIEW_TICKET_SPACE_ID", "kyc-ops")
     kyc_review_ticket_category: str = os.environ.get("KYC_REVIEW_TICKET_CATEGORY", "kyc_review")
 
+    # KYC for Business / Corporate Accounts (KYB) (KYC-015)
+    kyc_business_enabled: bool = os.environ.get("KYC_BUSINESS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    kyc_business_cases_table_name: str = os.environ.get("KYC_BUSINESS_CASES_TABLE_NAME", "kyc_business_cases")
+    kyc_business_cases_owner_index_name: str = os.environ.get("KYC_BUSINESS_CASES_OWNER_INDEX_NAME", "owner-updated-index")
+    kyc_business_cases_status_index_name: str = os.environ.get("KYC_BUSINESS_CASES_STATUS_INDEX_NAME", "status-updated-index")
+    kyc_business_cases_org_index_name: str = os.environ.get("KYC_BUSINESS_CASES_ORG_INDEX_NAME", "org-index")
+
     # KYC Risk Scoring (KYC-008)
     kyc_risk_scores_table_name: str = os.environ.get("KYC_RISK_SCORES_TABLE_NAME", "kyc_risk_scores")
     kyc_risk_auto_approve_enabled: bool = os.environ.get("KYC_RISK_AUTO_APPROVE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
