@@ -178,6 +178,39 @@ def get_clip(clip_id: str) -> Dict[str, Any]:
     return _clip_out(item)
 
 
+def get_public_clip(clip_id: str) -> Dict[str, Any]:
+    """Get a clip for the public shareable page (no auth).
+
+    Returns the clip plus broadcaster attribution (display name + profile id)
+    so that the public clip view can link back to the original broadcast.
+    """
+    resp = T.broadcast_clips.get_item(Key={"clip_id": clip_id})
+    item = resp.get("Item")
+    if not item or item.get("status") == "deleted":
+        raise HTTPException(404, "Clip not found")
+
+    out = _clip_out(item)
+
+    # Resolve broadcaster attribution from the source session's profile.
+    broadcaster_display_name = ""
+    profile_id = ""
+    try:
+        from app.services.broadcast_store import get_session, get_profile
+
+        session = get_session(out["session_id"])
+        profile_id = session.profile_id
+        profile = get_profile(session.profile_id)
+        broadcaster_display_name = profile.name
+    except Exception:
+        # Source session/profile may be gone (expired recording); attribution
+        # degrades gracefully -- the clip itself remains viewable.
+        pass
+
+    out["broadcaster_display_name"] = broadcaster_display_name
+    out["profile_id"] = profile_id
+    return out
+
+
 def list_clips_for_session(session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     """List clips for a broadcast session, newest first."""
     resp = T.broadcast_clips.query(
