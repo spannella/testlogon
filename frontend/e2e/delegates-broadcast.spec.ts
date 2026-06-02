@@ -131,7 +131,7 @@ async function ensureDelegateWithPerms(
 // -- Broadcast session setup --------------------------------------------------
 
 async function createBroadcastProfile(page: Page, userId: string): Promise<string> {
-  const resp = await apiPost(page, userId, "/ui/broadcast/profiles", {
+  const resp = await apiPost(page, userId, "/broadcast/profiles", {
     name: `E2E Profile ${TS}`,
     region: "us-east-1",
     rendition_preset: "adaptive-720p",
@@ -142,7 +142,7 @@ async function createBroadcastProfile(page: Page, userId: string): Promise<strin
 }
 
 async function createBroadcastSession(page: Page, userId: string, profileId: string): Promise<string> {
-  const resp = await apiPost(page, userId, "/ui/broadcast/sessions", {
+  const resp = await apiPost(page, userId, "/broadcast/sessions", {
     profile_id: profileId,
   });
   expect(resp.status()).toBe(201);
@@ -156,7 +156,7 @@ async function sendChatMessage(
   sessionId: string,
   text: string,
 ): Promise<string> {
-  const resp = await apiPost(page, userId, `/ui/broadcast/sessions/${sessionId}/chat`, {
+  const resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/chat`, {
     text,
   });
   expect(resp.status()).toBe(200);
@@ -651,7 +651,7 @@ test.describe("502 -- Moderation Audit & System Messages API", () => {
     // Check chat history for system message
     const chatResp = await apiGet(
       alicePage,
-      `/ui/broadcast/sessions/${sessionId}/chat?limit=50`,
+      `/broadcast/sessions/${sessionId}/chat?limit=50`,
     );
     expect(chatResp.ok()).toBeTruthy();
     const chatData = await chatResp.json();
@@ -677,7 +677,7 @@ test.describe("502 -- Moderation Audit & System Messages API", () => {
     // Check chat history for system message
     const chatResp = await apiGet(
       alicePage,
-      `/ui/broadcast/sessions/${sessionId}/chat?limit=50`,
+      `/broadcast/sessions/${sessionId}/chat?limit=50`,
     );
     expect(chatResp.ok()).toBeTruthy();
     const chatData = await chatResp.json();

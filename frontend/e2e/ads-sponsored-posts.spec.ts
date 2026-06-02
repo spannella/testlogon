@@ -31,13 +31,15 @@ interface SessionData {
   }>;
 }
 
-// Load sessions from pre-seeded admin sessions file (read via fs to avoid
-// ESM JSON-import-attribute requirements across loader versions).
-import { readFileSync as _readFileSync } from "fs";
-import { fileURLToPath as _furl } from "url";
-import { dirname as _dirname, join as _join } from "path";
+// Generate sessions fresh (a static file goes stale across backend restarts —
+// dead session ids => 401). e2e_admin_session_setup.py prints JSON keyed by
+// short name (alice/bob/root) to stdout.
+import { execSync as _execSync } from "child_process";
 const sessions = JSON.parse(
-  _readFileSync(_join(_dirname(_furl(import.meta.url)), "..", "e2e-admin-sessions.json"), "utf-8"),
+  _execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
+    cwd: "/home/ubuntu/testlogon",
+    timeout: 30_000,
+  }).toString(),
 ) as Record<string, SessionData>;
 
 const alice = sessions.alice as SessionData;

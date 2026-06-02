@@ -78,6 +78,36 @@ let syndicateId = "";
 
 const RS = (id: string) => `/ui/syndicates/revenue-split/${id}`;
 
+// Each run creates a syndicate for Alice; the backend caps a user at 10
+// syndicate memberships, so accumulated runs eventually return 400
+// "User already in 10 syndicates". Purge Alice's + Bob's USER_SYND# membership
+// rows before setup so the count resets.
+function cleanupSyndicates(): void {
+  const script = `
+import boto3, os
+from boto3.dynamodb.conditions import Key
+from pathlib import Path
+for line in Path('/home/ubuntu/testlogon/.env.local').read_text().splitlines():
+    line = line.strip()
+    if line and not line.startswith('#') and '=' in line:
+        k, v = line.split('=', 1); os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'),
+    region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+t = ddb.Table(os.environ.get('SYNDICATES_TABLE_NAME','syndicates'))
+for sub in os.environ['SUBS'].split(','):
+    resp = t.query(KeyConditionExpression=Key('pk').eq(f'USER_SYND#{sub}'))
+    for it in resp.get('Items', []):
+        t.delete_item(Key={'pk': it['pk'], 'sk': it['sk']})
+print('cleaned')
+`;
+  execSync("python3 -", {
+    cwd: "/home/ubuntu/testlogon",
+    timeout: 15_000,
+    input: script,
+    env: { ...process.env, SUBS: `${ALICE_ID},${BOB_ID}` },
+  });
+}
+
 // Create a syndicate owned by Alice with Bob as a second member.
 async function setupSyndicate(): Promise<string> {
   const createResp = await apiPost(alicePage, "alice", "/ui/syndicates", {
@@ -103,6 +133,7 @@ async function setupSyndicate(): Promise<string> {
 
 test.describe("Section 431: Split Configuration API", () => {
   test.beforeAll(async ({ browser }) => {
+    cleanupSyndicates();
     alicePage = await newIdentityPage(browser, "alice");
     bobPage = await newIdentityPage(browser, "bob");
     syndicateId = await setupSyndicate();
@@ -161,6 +192,7 @@ test.describe("Section 432: Split Execution API", () => {
   let equalSyndId = "";
 
   test.beforeAll(async ({ browser }) => {
+    cleanupSyndicates();
     alicePage = await newIdentityPage(browser, "alice");
     bobPage = await newIdentityPage(browser, "bob");
     equalSyndId = await setupSyndicate();
@@ -270,6 +302,7 @@ test.describe("Section 433: Split History & Earnings API", () => {
   let histSyndId = "";
 
   test.beforeAll(async ({ browser }) => {
+    cleanupSyndicates();
     alicePage = await newIdentityPage(browser, "alice");
     bobPage = await newIdentityPage(browser, "bob");
     histSyndId = await setupSyndicate();
@@ -342,6 +375,7 @@ test.describe("Section 434: Split Config UI", () => {
   let uiSyndId = "";
 
   test.beforeAll(async ({ browser }) => {
+    cleanupSyndicates();
     alicePage = await newIdentityPage(browser, "alice");
     bobPage = await newIdentityPage(browser, "bob");
     uiSyndId = await setupSyndicate();

@@ -25,7 +25,7 @@ async function createBroadcast(
   identity: string,
   title: string
 ): Promise<string> {
-  const res = await ctx.post(`${BASE}/ui/broadcast/sessions`, {
+  const res = await ctx.post(`${BASE}/broadcast/sessions`, {
     headers: authHeaders(identity),
     data: { title },
   });
@@ -35,7 +35,7 @@ async function createBroadcast(
 }
 
 async function goLive(ctx: APIRequestContext, identity: string, id: string) {
-  const res = await ctx.post(`${BASE}/ui/broadcast/sessions/${id}/go-live`, {
+  const res = await ctx.post(`${BASE}/broadcast/sessions/${id}/go-live`, {
     headers: authHeaders(identity),
     data: {},
   });
@@ -43,7 +43,7 @@ async function goLive(ctx: APIRequestContext, identity: string, id: string) {
 }
 
 async function endBroadcast(ctx: APIRequestContext, identity: string, id: string) {
-  const res = await ctx.post(`${BASE}/ui/broadcast/sessions/${id}/end`, {
+  const res = await ctx.post(`${BASE}/broadcast/sessions/${id}/end`, {
     headers: authHeaders(identity),
     data: {},
   });

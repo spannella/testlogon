@@ -36,11 +36,24 @@ interface SessionRec {
   csrf_token: string;
 }
 
+// Generate fresh — a cached session file goes stale across backend restarts
+// (dead session ids => 401/empty results). Fall back to the file if generation
+// fails for any reason.
 let SESSIONS: Record<string, SessionRec> = {};
 try {
-  SESSIONS = JSON.parse(fs.readFileSync(SESSION_FILE, "utf-8"));
+  SESSIONS = JSON.parse(
+    execFileSync("python3", ["/home/ubuntu/testlogon/e2e_admin_session_setup.py"], {
+      cwd: "/home/ubuntu/testlogon",
+      timeout: 30_000,
+      encoding: "utf-8",
+    }),
+  );
 } catch {
-  SESSIONS = {};
+  try {
+    SESSIONS = JSON.parse(fs.readFileSync(SESSION_FILE, "utf-8"));
+  } catch {
+    SESSIONS = {};
+  }
 }
 
 function rec(identity: string): SessionRec {
