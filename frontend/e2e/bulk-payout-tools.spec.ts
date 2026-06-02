@@ -17,7 +17,11 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import { execFileSync } from "child_process";
+
+// ESM-safe __dirname (this spec runs under Playwright's ESM loader).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const BASE = "http://localhost:3000";
 const API = "/ui/admin/bulk-payouts";

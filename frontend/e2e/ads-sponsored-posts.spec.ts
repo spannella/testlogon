@@ -31,8 +31,14 @@ interface SessionData {
   }>;
 }
 
-// Load sessions from pre-seeded admin sessions file
-import sessions from "../e2e-admin-sessions.json";
+// Load sessions from pre-seeded admin sessions file (read via fs to avoid
+// ESM JSON-import-attribute requirements across loader versions).
+import { readFileSync as _readFileSync } from "fs";
+import { fileURLToPath as _furl } from "url";
+import { dirname as _dirname, join as _join } from "path";
+const sessions = JSON.parse(
+  _readFileSync(_join(_dirname(_furl(import.meta.url)), "..", "e2e-admin-sessions.json"), "utf-8"),
+) as Record<string, SessionData>;
 
 const alice = sessions.alice as SessionData;
 const bob = sessions.bob as SessionData;
