@@ -187,6 +187,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Profile", i18nKey: "nav.profile", path: "/profile", icon: <User className="h-5 w-5" /> },
       { label: "Security", i18nKey: "nav.security", path: "/security", icon: <Shield className="h-5 w-5" /> },
+      { label: "Verify Your Identity", i18nKey: "nav.kycVerify", path: "/kyc", icon: <ShieldCheck className="h-5 w-5" /> },
+      { label: "Verification Status", i18nKey: "nav.kycStatus", path: "/kyc/status", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "KYC Verification", i18nKey: "nav.kycVerification", path: "/kyc/tiers", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "ID Documents", i18nKey: "nav.kycDocuments", path: "/kyc/documents", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "Proof of Residency", i18nKey: "nav.kycResidency", path: "/kyc/residency", icon: <ShieldCheck className="h-5 w-5" /> },

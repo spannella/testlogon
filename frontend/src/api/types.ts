@@ -11184,3 +11184,132 @@ export interface FraudStatsOut {
   flags_resolved_today: number;
   avg_resolution_hours: number;
 }
+
+// ── KYC-013: User Self-Service Portal ────────────────────────────────────
+export type KycCaseStatus =
+  | "draft"
+  | "submitted"
+  | "under_review"
+  | "needs_more_info"
+  | "approved"
+  | "rejected"
+  | "expired";
+
+export type KycSelfServiceFileType = "id_front" | "id_back" | "selfie" | "proof_of_address";
+
+export interface KycCaseQuestionnaireRef {
+  questionnaire_id?: string | null;
+  version_id?: string | null;
+  response_session_id?: string | null;
+  response_pdf_ref?: string | null;
+}
+
+export interface KycCaseSignatureRef {
+  packet_id?: string | null;
+  status?: string | null;
+  final_pdf_ref?: string | null;
+  legal_notice_version?: string | null;
+  legal_notice_accepted?: boolean | null;
+}
+
+export interface KycCaseReviewRef {
+  ticket_id?: string | null;
+  assigned_admin_sub?: string | null;
+  decision?: string | null;
+  decided_at?: number | null;
+  reason_codes?: string[];
+}
+
+export interface KycSelfServiceFile {
+  type: string;
+  path: string;
+  uploaded_at?: number | null;
+  size?: number | null;
+  verification_state?: string | null;
+}
+
+export interface KycSelfServiceCase {
+  contract_version: string;
+  kyc_case_id: string;
+  user_sub: string;
+  status: KycCaseStatus;
+  intake_profile?: string | null;
+  questionnaire: KycCaseQuestionnaireRef;
+  files: KycSelfServiceFile[];
+  signature: KycCaseSignatureRef;
+  submission: Record<string, unknown>;
+  review: KycCaseReviewRef;
+  verification_call?: Record<string, unknown> | null;
+  created_at: number;
+  updated_at: number;
+  version: number;
+  missing_requirements: string[];
+}
+
+export interface KycSelfServiceCaseEnvelope {
+  case: KycSelfServiceCase;
+}
+
+export interface KycSelfServiceCaseListEnvelope {
+  items: KycSelfServiceCase[];
+  next_cursor: string | null;
+}
+
+export interface KycReadinessResult {
+  contract_version: string;
+  kyc_case_id: string;
+  status: KycCaseStatus;
+  ready_to_submit: boolean;
+  missing_requirements: string[];
+  missing_hints: string[];
+  checks: Record<string, boolean>;
+  requirements: Array<Record<string, unknown>>;
+}
+
+export interface KycReadinessEnvelope {
+  readiness: KycReadinessResult;
+}
+
+export interface KycQuestionnaireStatusResult {
+  contract_version: string;
+  kyc_case_id: string;
+  questionnaire_bound: boolean;
+  questionnaire_id?: string | null;
+  version_id?: string | null;
+  response_session_id?: string | null;
+  submitted: boolean;
+  response_pdf_ref?: string | null;
+  ready_for_submit_gate: boolean;
+}
+
+export interface KycQuestionnaireStatusEnvelope {
+  questionnaire: KycQuestionnaireStatusResult;
+}
+
+export interface KycSignatureStatusResult {
+  contract_version: string;
+  kyc_case_id: string;
+  packet_id?: string | null;
+  packet_status?: string | null;
+  completed: boolean;
+  final_pdf_ready: boolean;
+  final_pdf_ref?: string | null;
+  legal_notice_version?: string | null;
+  legal_notice_accepted: boolean;
+  ready_for_submit_gate: boolean;
+}
+
+export interface KycSignatureStatusEnvelope {
+  signature: KycSignatureStatusResult;
+}
+
+export interface KycEstimatedWaitResult {
+  contract_version: string;
+  estimated_hours: number;
+  queue_position: number | null;
+  message: string;
+}
+
+export interface KycEstimatedWaitEnvelope {
+  estimated_wait: KycEstimatedWaitResult;
+}

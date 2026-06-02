@@ -233,6 +233,23 @@ class KycMetricsSummaryEnvelope(BaseModel):
     metrics: KycMetricsSummaryOut
 
 
+class KycEstimatedWaitOut(BaseModel):
+    """User-facing estimated review wait time (KYC-013).
+
+    Derived from the existing admin metrics snapshot but exposes no queue
+    internals — only a coarse estimate in hours and a human-readable message.
+    """
+
+    contract_version: Literal["2026-03-kyc-v1"] = KYC_CONTRACT_VERSION
+    estimated_hours: int = Field(..., ge=1, description="Estimated hours until review")
+    queue_position: int | None = Field(default=None, description="Not exposed to users")
+    message: str = Field(..., description="Human-readable wait-time message")
+
+
+class KycEstimatedWaitEnvelope(BaseModel):
+    estimated_wait: KycEstimatedWaitOut
+
+
 class KycPurgeRunOut(BaseModel):
     contract_version: Literal["2026-03-kyc-v1"] = KYC_CONTRACT_VERSION
     scanned_statuses: list[str] = Field(default_factory=list)
