@@ -154,7 +154,7 @@ async function createDm(page: Page): Promise<string> {
   return (await resp.json()).conversation_id as string;
 }
 
-async function createGroup(page: Page): Promise<string> {
+async function createGroup(page: Page, request: APIRequestContext): Promise<string> {
   const bobSub = getSessions()[BOB_ID].user_sub;
   const charlieSub = getSessions()[CHARLIE_ID].user_sub;
   const resp = await apiPost(page, "/messaging/conversations/group", {
@@ -165,7 +165,14 @@ async function createGroup(page: Page): Promise<string> {
     const body = await resp.text().catch(() => "(unreadable)");
     throw new Error(`Group creation failed: HTTP ${resp.status()} — ${body}`);
   }
-  return (await resp.json()).conversation_id as string;
+  const convoId = (await resp.json()).conversation_id as string;
+  // Group members are invited as "pending" and must accept before they count as
+  // active participants (require_participant_active) — otherwise availability
+  // submission returns 403 and participant_count stays at 1.
+  for (const userId of [BOB_ID, CHARLIE_ID]) {
+    await apiPostBearer(request, `/messaging/conversations/${convoId}/accept`, {}, userId);
+  }
+  return convoId;
 }
 
 async function createFadt(page: Page, convoId: string, req: CreateFadtReq) {
@@ -304,10 +311,10 @@ test.describe("Section 713: Availability Submission API", () => {
   let convoId: string;
   let pollId: string;
 
-  test.beforeAll(async ({ browser }) => {
+  test.beforeAll(async ({ browser, request }) => {
     const page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
-    convoId = await createGroup(page);
+    convoId = await createGroup(page, request);
     const resp = await createFadt(page, convoId, { title: `AvailPoll ${TS}-713` });
     pollId = (await resp.json()).find_datetime.poll_id;
     await page.close();
@@ -398,7 +405,7 @@ test.describe("Section 714: Close & Compute API", () => {
   test.beforeAll(async ({ browser, request }) => {
     const page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
-    convoId = await createGroup(page);
+    convoId = await createGroup(page, request);
     const resp = await createFadt(page, convoId, { title: `ClosePoll ${TS}-714` });
     pollId = (await resp.json()).find_datetime.poll_id;
     // Alice + Bob both available 09:00-10:00 (overlap), Alice also 14:00.
@@ -538,7 +545,7 @@ test.describe("Section 716: Group parity & edge cases", () => {
   test("716.1 FADT works in group chats with 3 participants", async ({ browser, request }) => {
     const page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
-    const convoId = await createGroup(page);
+    const convoId = await createGroup(page, request);
     const resp = await createFadt(page, convoId, { title: `GroupFADT ${TS}-716-1` });
     expect(resp.status()).toBe(201);
     const pollId = (await resp.json()).find_datetime.poll_id;
