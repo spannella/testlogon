@@ -320,7 +320,7 @@ class Settings:
     carrier_tracking_poll_interval_minutes: int = int(os.environ.get("CARRIER_TRACKING_POLL_INTERVAL_MINUTES", "30"))
     carrier_tracking_poll_batch_size: int = int(os.environ.get("CARRIER_TRACKING_POLL_BATCH_SIZE", "50"))
     # Billing / PayPal
-    billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", os.environ.get("DDB_TABLE", ""))
+    billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", os.environ.get("DDB_TABLE", "billing"))
     public_base_url: str = os.environ.get("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 
     paypal_env: str = os.environ.get("PAYPAL_ENV", "sandbox").lower()
@@ -1018,7 +1018,7 @@ class Settings:
     api_usage_pricing_catalog: str = os.environ.get("API_USAGE_PRICING_CATALOG", "")
     api_usage_default_pricing_catalog_version: str = os.environ.get("API_USAGE_DEFAULT_PRICING_CATALOG_VERSION", "v1")
     api_usage_pricing_missing_route_behavior: str = os.environ.get("API_USAGE_PRICING_MISSING_ROUTE_BEHAVIOR", "default_route")
-    api_usage_table_name: str = os.environ.get("API_USAGE_TABLE_NAME", "")
+    api_usage_table_name: str = os.environ.get("API_USAGE_TABLE_NAME", "api_usage_events")
     api_usage_event_retention_days: int = int(os.environ.get("API_USAGE_EVENT_RETENTION_DAYS", "365"))
     api_usage_account_rps_limit: int = int(os.environ.get("API_USAGE_ACCOUNT_RPS_LIMIT", "0"))
     api_usage_account_rpm_limit: int = int(os.environ.get("API_USAGE_ACCOUNT_RPM_LIMIT", "0"))
