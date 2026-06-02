@@ -1046,6 +1046,8 @@ class Settings:
     # Newsfeed rich-content feature flags
     newsfeed_markdown_enabled: bool = os.environ.get("NEWSFEED_MARKDOWN_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     newsfeed_richtext_enabled: bool = os.environ.get("NEWSFEED_RICHTEXT_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    # FEED-004: emoji/GIF/sticker comments
+    rich_comments_enabled: bool = os.environ.get("RICH_COMMENTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     newsfeed_drafts_enabled: bool = os.environ.get("NEWSFEED_DRAFTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     newsfeed_drafts_enabled_user_ids: str = os.environ.get("NEWSFEED_DRAFTS_ENABLED_USER_IDS", "")
     newsfeed_drafts_disabled_user_ids: str = os.environ.get("NEWSFEED_DRAFTS_DISABLED_USER_IDS", "")

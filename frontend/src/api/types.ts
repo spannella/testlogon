@@ -2408,6 +2408,16 @@ export interface FeedComment {
   deleted?: boolean;
   version?: number;
   tip_total_cents?: number;
+  // FEED-004: emoji/GIF/sticker comments
+  kind?: "text" | "gif" | "sticker";
+  gif_url?: string | null;
+  gif_alt_text?: string | null;
+  gif_width?: number | null;
+  gif_height?: number | null;
+  sticker_id?: string | null;
+  sticker_collection_id?: string | null;
+  sticker_url?: string | null;
+  sticker_alt_text?: string | null;
 }
 
 export interface FeedCapabilities {
@@ -2471,6 +2481,17 @@ export interface CreateCommentReq {
   body_rich?: Record<string, unknown>;
   body_format?: "plain" | "markdown" | "rich";
   body_version?: number;
+  parent_comment_id?: string | null;
+  // FEED-004: emoji/GIF/sticker comments
+  kind?: "text" | "gif" | "sticker";
+  gif_url?: string | null;
+  gif_alt_text?: string | null;
+  gif_width?: number | null;
+  gif_height?: number | null;
+  sticker_id?: string | null;
+  sticker_collection_id?: string | null;
+  sticker_url?: string | null;
+  sticker_alt_text?: string | null;
 }
 
 export interface EditPostReq {
