@@ -313,16 +313,18 @@ class PlanOut(BaseModel):
     plan_id: str
     creator_id: str
     name: str
-    description: Optional[str]
+    description: Optional[str] = None
     price_cents: int
-    currency: str
-    interval: str
+    currency: str = "USD"
+    interval: str = "month"
     annual_price_cents: Optional[int] = None
-    status: str
-    metadata: Dict[str, Any]
-    assets: List[Dict[str, Any]]
-    created_at: int
-    updated_at: int
+    # Tolerant defaults: stored plans (esp. older/seeded ones) may omit these
+    # optional-metadata fields; the list/get endpoints must not 500 on them.
+    status: str = "active"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    assets: List[Dict[str, Any]] = Field(default_factory=list)
+    created_at: int = 0
+    updated_at: int = 0
     creator_profile: Optional[Dict[str, Optional[str]]] = None
 
 
