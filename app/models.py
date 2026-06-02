@@ -12947,3 +12947,105 @@ class FindDateTimePostPollOut(BaseModel):
     participant_count: int = 0
     availabilities: List[AvailabilityOut] = Field(default_factory=list)
     best_windows: Optional[List[BestWindowOut]] = None
+
+
+# --- KYC-014: Facial Comparison (selfie vs ID photo) -----------------------
+
+
+class FaceComparisonOverrideRequest(BaseModel):
+    """Request for an admin to override a face-comparison result."""
+
+    decision: Literal["pass", "fail"] = Field(
+        description="Override decision. Must be 'pass' or 'fail'.",
+    )
+    reason: str = Field(
+        min_length=5,
+        max_length=500,
+        description="Reason for the override decision.",
+    )
+
+
+class AntiSpoofCheckOut(BaseModel):
+    """Result of a single anti-spoof check."""
+
+    check: str = Field(description="Check name (file_size, image_format, not_screenshot)")
+    passed: bool
+    detail: str
+
+
+class AntiSpoofResultOut(BaseModel):
+    """Overall anti-spoof result."""
+
+    passed: bool
+    checks: List[AntiSpoofCheckOut]
+    total_checks: int = Field(ge=0)
+    passed_checks: int = Field(ge=0)
+
+
+class FaceComparisonAdminOverrideOut(BaseModel):
+    """Admin override details attached to a comparison."""
+
+    decision: Literal["pass", "fail"]
+    reason: str
+    admin_sub: str
+    overridden_at: int
+
+
+class FaceComparisonResultOut(BaseModel):
+    """Result of a single face-comparison attempt."""
+
+    comparison_id: str
+    confidence_score: int = Field(ge=0, le=100)
+    result: Literal["pass", "review", "fail"]
+    anti_spoof: AntiSpoofResultOut
+    attempt_number: int = Field(ge=1, le=3)
+    max_attempts: int = Field(default=3)
+    remaining_attempts: int = Field(ge=0, le=3)
+    created_at: int
+    admin_override: Optional[FaceComparisonAdminOverrideOut] = None
+
+
+class FaceComparisonListOut(BaseModel):
+    """List of face-comparison attempts for a case."""
+
+    comparisons: List[FaceComparisonResultOut]
+
+
+class FaceComparisonOverrideResultOut(BaseModel):
+    """Response after an admin overrides a comparison."""
+
+    comparison_id: str
+    original_result: Literal["pass", "review", "fail"]
+    original_score: int
+    admin_override: FaceComparisonAdminOverrideOut
+
+
+class KycFaceFileRefOut(BaseModel):
+    """File reference for the admin comparison view."""
+
+    file_type: str
+    file_node_id: str
+    attached_at: int
+
+
+class BestComparisonOut(BaseModel):
+    """Summary of the best comparison for the admin view."""
+
+    comparison_id: str
+    confidence_score: int
+    result: Literal["pass", "review", "fail"]
+
+
+class AdminFaceComparisonOut(BaseModel):
+    """Admin side-by-side face-comparison view payload."""
+
+    case_id: str
+    user_sub: Optional[str] = None
+    selfie_file: Optional[KycFaceFileRefOut] = None
+    id_front_file: Optional[KycFaceFileRefOut] = None
+    selfie_url: Optional[str] = None
+    id_front_url: Optional[str] = None
+    comparisons: List[FaceComparisonResultOut]
+    best_comparison: Optional[BestComparisonOut] = None
+    total_attempts: int = Field(ge=0)
+    max_attempts: int = Field(default=3)

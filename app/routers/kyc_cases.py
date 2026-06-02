@@ -30,6 +30,13 @@ from app.contracts.kyc_cases_contract import (
     kyc_error_envelope,
     kyc_error_http_status,
 )
+from app.models import (
+    AdminFaceComparisonOut,
+    FaceComparisonListOut,
+    FaceComparisonOverrideRequest,
+    FaceComparisonOverrideResultOut,
+    FaceComparisonResultOut,
+)
 from app.services.kyc_cases import KycCaseConflictError, KycCaseValidationError, STORE
 from app.services.alerts import audit_event
 from app.services.filemanager import get_node, norm_path
@@ -1338,3 +1345,120 @@ def signature_completion_status(
             pass
     audit_event("kyc_signature_status", user.sub, request, outcome="success", kyc_case_id=case_id, ready=payload.get("ready_for_submit_gate"))
     return KycSignatureStatusEnvelope.model_validate({"signature": payload})
+
+
+# --- KYC-014: Facial Comparison endpoints ----------------------------------
+
+_FACE_COMPARISON_ERROR_STATUS: dict[str, int] = {
+    "case_not_found": 404,
+    "access_forbidden": 403,
+    "selfie_not_uploaded": 400,
+    "id_front_not_uploaded": 400,
+    "max_attempts_exceeded": 409,
+    "comparison_not_found": 404,
+    "comparison_service_error": 500,
+}
+
+
+@router.post("/{case_id}/compare-face", response_model=FaceComparisonResultOut)
+def run_face_comparison(
+    case_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.kyc_face_comparison_enabled:
+        raise HTTPException(status_code=503, detail="kyc_face_comparison_disabled")
+    from app.services.kyc_facial_comparison import (
+        KycFacialComparisonError,
+        compare_faces,
+    )
+
+    try:
+        result = compare_faces(case_id=case_id, user_sub=user.sub, request=request)
+    except KycFacialComparisonError as exc:
+        code = str(exc)
+        raise HTTPException(
+            status_code=_FACE_COMPARISON_ERROR_STATUS.get(code, 400),
+            detail=code,
+        )
+    return FaceComparisonResultOut.model_validate(result)
+
+
+@router.get("/{case_id}/face-comparisons", response_model=FaceComparisonListOut)
+def list_face_comparisons(
+    case_id: str,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    from app.services.kyc_facial_comparison import _get_comparisons, _public_view
+
+    case = STORE.get_case(case_id)
+    if not case:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    if case.get("user_sub") != user.sub:
+        _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+    comparisons = [_public_view(c) for c in _get_comparisons(case_id)]
+    return FaceComparisonListOut.model_validate({"comparisons": comparisons})
+
+
+@router.get(
+    "/admin/cases/{case_id}/face-comparison",
+    response_model=AdminFaceComparisonOut,
+)
+def admin_face_comparison(
+    case_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if normalize_role(user.role) not in {Role.ADMIN, Role.ROOT}:
+        audit_event("kyc_face_comparison_admin_denied", user.sub, request, outcome="failure", reason="admin_role_required", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_admin_role_required")
+    from app.services.kyc_facial_comparison import build_admin_view
+
+    payload = build_admin_view(case_id)
+    if payload is None:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    audit_event("kyc_face_comparison_admin_read", user.sub, request, outcome="success", kyc_case_id=case_id, total_attempts=payload.get("total_attempts"))
+    return AdminFaceComparisonOut.model_validate(payload)
+
+
+@router.post(
+    "/admin/cases/{case_id}/face-comparison/{comparison_id}/override",
+    response_model=FaceComparisonOverrideResultOut,
+)
+def admin_override_face_comparison(
+    case_id: str,
+    comparison_id: str,
+    body: FaceComparisonOverrideRequest,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if normalize_role(user.role) not in {Role.ADMIN, Role.ROOT}:
+        audit_event("kyc_face_comparison_override_denied", user.sub, request, outcome="failure", reason="admin_role_required", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_admin_role_required")
+    if not S.kyc_face_admin_override_enabled:
+        raise HTTPException(status_code=503, detail="kyc_face_admin_override_disabled")
+    from app.services.kyc_facial_comparison import (
+        KycFacialComparisonError,
+        admin_override_comparison,
+    )
+
+    try:
+        result = admin_override_comparison(
+            case_id=case_id,
+            comparison_id=comparison_id,
+            decision=body.decision,
+            reason=body.reason,
+            admin_sub=user.sub,
+            request=request,
+        )
+    except KycFacialComparisonError as exc:
+        code = str(exc)
+        raise HTTPException(
+            status_code=_FACE_COMPARISON_ERROR_STATUS.get(code, 400),
+            detail=code,
+        )
+    return FaceComparisonOverrideResultOut.model_validate(result)

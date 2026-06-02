@@ -11438,3 +11438,80 @@ export interface KycEstimatedWaitResult {
 export interface KycEstimatedWaitEnvelope {
   estimated_wait: KycEstimatedWaitResult;
 }
+
+// ─── KYC-014: Facial Comparison ─────────────────────────────────────────────
+
+export type FaceComparisonResultValue = "pass" | "review" | "fail";
+
+export interface AntiSpoofCheck {
+  check: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface AntiSpoofResult {
+  passed: boolean;
+  checks: AntiSpoofCheck[];
+  total_checks: number;
+  passed_checks: number;
+}
+
+export interface FaceComparisonAdminOverride {
+  decision: "pass" | "fail";
+  reason: string;
+  admin_sub: string;
+  overridden_at: number;
+}
+
+export interface FaceComparisonResult {
+  comparison_id: string;
+  confidence_score: number;
+  result: FaceComparisonResultValue;
+  anti_spoof: AntiSpoofResult;
+  attempt_number: number;
+  max_attempts: number;
+  remaining_attempts: number;
+  created_at: number;
+  admin_override?: FaceComparisonAdminOverride | null;
+}
+
+export interface FaceComparisonList {
+  comparisons: FaceComparisonResult[];
+}
+
+export interface FaceComparisonOverrideRequest {
+  decision: "pass" | "fail";
+  reason: string;
+}
+
+export interface FaceComparisonOverrideResult {
+  comparison_id: string;
+  original_result: FaceComparisonResultValue;
+  original_score: number;
+  admin_override: FaceComparisonAdminOverride;
+}
+
+export interface KycFaceFileRef {
+  file_type: string;
+  file_node_id: string;
+  attached_at: number;
+}
+
+export interface BestComparison {
+  comparison_id: string;
+  confidence_score: number;
+  result: FaceComparisonResultValue;
+}
+
+export interface AdminFaceComparison {
+  case_id: string;
+  user_sub?: string | null;
+  selfie_file?: KycFaceFileRef | null;
+  id_front_file?: KycFaceFileRef | null;
+  selfie_url?: string | null;
+  id_front_url?: string | null;
+  comparisons: FaceComparisonResult[];
+  best_comparison?: BestComparison | null;
+  total_attempts: number;
+  max_attempts: number;
+}
