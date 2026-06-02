@@ -14,6 +14,9 @@ import type {
   UpdateDraftPostReq,
   ListDraftPostsResp,
   ScheduledPostsResp,
+  CreateFindDateTimePostReq,
+  FindDateTimePost,
+  FindDateTimePostPoll,
 } from "@/api/types";
 
 export interface FeedQueryParams {
@@ -226,3 +229,29 @@ export const bulkDeletePosts = (postIds: string[]) =>
 
 export const bulkArchivePosts = (postIds: string[]) =>
   api.post<PostBulkResult>("/posts/bulk-archive", { post_ids: postIds });
+
+// ── FEED-003: Find-a-DateTime posts ─────────────────────────────────────────
+
+export const createFindDateTimePost = (body: CreateFindDateTimePostReq) =>
+  api.post<FindDateTimePost>("/posts/find-datetime", body);
+
+export const getPostFindDateTime = (pollId: string) =>
+  api.get<FindDateTimePostPoll>(`/posts/find-datetime/${pollId}`);
+
+export const submitPostAvailability = (pollId: string, slots: string[]) =>
+  api.post<{
+    ok: boolean;
+    poll_id: string;
+    your_slot_count: number;
+    participant_count: number;
+    submitted_at: number;
+  }>(`/posts/find-datetime/${pollId}/availability`, { slots });
+
+export const closePostFindDateTime = (pollId: string) =>
+  api.post<{
+    ok: boolean;
+    poll_id: string;
+    status: string;
+    participant_count: number;
+    best_windows: FindDateTimePostPoll["best_windows"];
+  }>(`/posts/find-datetime/${pollId}/close`);

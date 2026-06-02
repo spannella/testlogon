@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOfflineStore } from "@/stores/offlineStore";
-import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video, Hash, BarChart3, Timer, Smile } from "lucide-react";
+import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video, Hash, BarChart3, Timer, Smile, CalendarSearch } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/shared/EmojiPicker";
 import { replaceShortcodes } from "@/utils/emoji";
@@ -19,6 +19,7 @@ import {
   updateDraftPost,
   deleteDraftPost,
   publishDraftPost,
+  createFindDateTimePost,
 } from "@/api/endpoints/newsfeed";
 import { downloadUrl, getFileInfo } from "@/api/endpoints/files";
 import { ApiError } from "@/api/client";
@@ -158,6 +159,21 @@ export function CreatePost() {
     "custom" | "broadcast" | "call" | "calendar"
   >("custom");
   const [countdownEventId, setCountdownEventId] = useState("");
+  // FEED-003: Find-a-DateTime composer state
+  const [findTimeMode, setFindTimeMode] = useState(false);
+  const [fdtTitle, setFdtTitle] = useState("");
+  const [fdtFromDate, setFdtFromDate] = useState("");
+  const [fdtToDate, setFdtToDate] = useState("");
+  const [fdtStartHour, setFdtStartHour] = useState(9);
+  const [fdtEndHour, setFdtEndHour] = useState(17);
+  const [fdtSlotDuration, setFdtSlotDuration] = useState(60);
+  const fdtReady =
+    findTimeMode &&
+    fdtTitle.trim().length > 0 &&
+    !!fdtFromDate &&
+    !!fdtToDate &&
+    fdtFromDate < fdtToDate &&
+    fdtStartHour < fdtEndHour;
   const { data: capabilities } = useQuery({
     queryKey: ["feed", "capabilities"],
     queryFn: getFeedCapabilities,
@@ -328,6 +344,13 @@ export function CreatePost() {
     setCountdownTarget("");
     setCountdownEventType("custom");
     setCountdownEventId("");
+    setFindTimeMode(false);
+    setFdtTitle("");
+    setFdtFromDate("");
+    setFdtToDate("");
+    setFdtStartHour(9);
+    setFdtEndHour(17);
+    setFdtSlotDuration(60);
   };
 
   const draftsQuery = useQuery({
@@ -412,6 +435,29 @@ export function CreatePost() {
         reportDraftLifecycleEvent("publish_from_draft", "fail", telemetryReasonCodeFromError(err));
       }
       const msg = err instanceof Error ? err.message : "Failed to create post";
+      toast.error(msg);
+    },
+  });
+
+  // FEED-003: Find-a-DateTime post creation
+  const findTimeMutation = useMutation({
+    mutationFn: () =>
+      createFindDateTimePost({
+        title: fdtTitle.trim(),
+        from_date: fdtFromDate,
+        to_date: fdtToDate,
+        start_hour: fdtStartHour,
+        end_hour: fdtEndHour,
+        slot_duration_minutes: fdtSlotDuration,
+        body: body.trim(),
+      }),
+    onSuccess: async (resp) => {
+      await invalidateFeedCaches(queryClient, resp.user_id);
+      resetComposer();
+      toast.success("Find-a-Time post published");
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Failed to create Find-a-Time post";
       toast.error(msg);
     },
   });
@@ -675,7 +721,13 @@ export function CreatePost() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (mutation.isPending || saveDraftMutation.isPending) return;
+    if (mutation.isPending || saveDraftMutation.isPending || findTimeMutation.isPending) return;
+    // FEED-003: Find-a-DateTime posts use a dedicated endpoint.
+    if (findTimeMode) {
+      if (!fdtReady) return;
+      findTimeMutation.mutate();
+      return;
+    }
     if (!body.trim() && imageUrls.length === 0 && pendingFiles.length === 0) return;
     if (!validateUnlockControls()) return;
 
@@ -1148,6 +1200,89 @@ export function CreatePost() {
             </div>
           )}
 
+          {/* FEED-003: Find-a-DateTime composer */}
+          {findTimeMode && (
+            <div
+              className="rounded-md border border-border bg-muted/30 p-3 text-xs space-y-2"
+              data-testid="find-time-composer"
+            >
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <CalendarSearch className="h-3.5 w-3.5" />
+                <span className="font-medium">Find a Time</span>
+              </div>
+              <input
+                type="text"
+                value={fdtTitle}
+                onChange={(e) => setFdtTitle(e.target.value)}
+                placeholder="Event title (e.g. Community Meetup)"
+                maxLength={200}
+                data-testid="find-time-title-input"
+                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+              <div className="flex flex-wrap gap-2">
+                <label className="flex flex-col gap-1">
+                  <span className="text-muted-foreground">From</span>
+                  <input
+                    type="date"
+                    value={fdtFromDate}
+                    onChange={(e) => setFdtFromDate(e.target.value)}
+                    data-testid="find-time-from-date"
+                    className="rounded border border-input bg-background px-2 py-1 text-xs"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-muted-foreground">To</span>
+                  <input
+                    type="date"
+                    value={fdtToDate}
+                    onChange={(e) => setFdtToDate(e.target.value)}
+                    data-testid="find-time-to-date"
+                    className="rounded border border-input bg-background px-2 py-1 text-xs"
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <label className="flex flex-col gap-1">
+                  <span className="text-muted-foreground">Start hour</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={fdtStartHour}
+                    onChange={(e) => setFdtStartHour(Number(e.target.value))}
+                    data-testid="find-time-start-hour"
+                    className="w-20 rounded border border-input bg-background px-2 py-1 text-xs"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-muted-foreground">End hour</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={fdtEndHour}
+                    onChange={(e) => setFdtEndHour(Number(e.target.value))}
+                    data-testid="find-time-end-hour"
+                    className="w-20 rounded border border-input bg-background px-2 py-1 text-xs"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-muted-foreground">Slot (min)</span>
+                  <select
+                    value={fdtSlotDuration}
+                    onChange={(e) => setFdtSlotDuration(Number(e.target.value))}
+                    data-testid="find-time-slot-duration"
+                    className="rounded border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option value={15}>15</option>
+                    <option value={30}>30</option>
+                    <option value={60}>60</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          )}
+
           {lockEnabled && (
             <div className="rounded-md border border-border bg-muted/30 p-2 text-xs space-y-1.5">
               <div className="flex items-center gap-2">
@@ -1314,6 +1449,19 @@ export function CreatePost() {
                 Countdown
               </Button>
 
+              {/* Find-a-DateTime toggle (FEED-003) */}
+              <Button
+                type="button"
+                variant={findTimeMode ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setFindTimeMode((v) => !v)}
+                disabled={mutation.isPending || findTimeMutation.isPending}
+                data-testid="find-time-toggle-btn"
+              >
+                <CalendarSearch className="mr-1 h-3.5 w-3.5" />
+                Find a Time
+              </Button>
+
               {/* Lock toggle */}
               <Button
                 type="button"
@@ -1343,10 +1491,14 @@ export function CreatePost() {
             <Button
               type="submit"
               size="sm"
-              disabled={(!body.trim() && imageUrls.length === 0 && pendingFiles.length === 0 && !countdownReady) || (countdownMode && !countdownReady) || mutation.isPending || saveDraftMutation.isPending || uploading}
+              disabled={
+                findTimeMode
+                  ? !fdtReady || findTimeMutation.isPending
+                  : (!body.trim() && imageUrls.length === 0 && pendingFiles.length === 0 && !countdownReady) || (countdownMode && !countdownReady) || mutation.isPending || saveDraftMutation.isPending || uploading
+              }
             >
               <Send className="mr-1 h-3.5 w-3.5" />
-              {(mutation.isPending || saveDraftMutation.isPending) ? "Posting..." : "Post"}
+              {(mutation.isPending || saveDraftMutation.isPending || findTimeMutation.isPending) ? "Posting..." : "Post"}
             </Button>
           </div>
 
