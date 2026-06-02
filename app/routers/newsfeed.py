@@ -1313,6 +1313,10 @@ class ContentFieldsMixin(BaseModel):
         # `kind` field (e.g. posts) default to "text" and validate as before.
         if getattr(self, "kind", "text") != "text":
             return self
+        # FEED-005: content-less post kinds (e.g. countdown) are title+metadata
+        # only and carry no body; exempt them from the text-content requirement.
+        if getattr(self, "post_kind", "text") not in (None, "text"):
+            return self
         has_legacy = bool((self.body or "").strip())
         has_plain = bool((self.body_plain or "").strip())
         has_markdown = bool((self.body_markdown or "").strip())

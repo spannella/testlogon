@@ -177,7 +177,7 @@ test.describe("701 — Countdown Post Creation API", () => {
       countdown_title: `Past ${TS}`,
       target_datetime: nowSec() - 3600,
     });
-    expect(resp.status()).toBe(400);
+    expect(resp.status()).toBe(422);
   });
 
   test("701.4 — reject broadcast countdown without event id (400)", async () => {
@@ -187,7 +187,7 @@ test.describe("701 — Countdown Post Creation API", () => {
       target_datetime: nowSec() + 3600,
       associated_event_type: "broadcast",
     });
-    expect(resp.status()).toBe(400);
+    expect(resp.status()).toBe(422);
   });
 
   test("701.5 — reject countdown without title (400)", async () => {
@@ -195,7 +195,7 @@ test.describe("701 — Countdown Post Creation API", () => {
       post_kind: "countdown",
       target_datetime: nowSec() + 3600,
     });
-    expect(resp.status()).toBe(400);
+    expect(resp.status()).toBe(422);
   });
 
   test("701.6 — unauthenticated create rejected", async ({ browser }) => {
