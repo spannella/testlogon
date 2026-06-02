@@ -11077,3 +11077,105 @@ export interface KycReportExportRequest {
   start_date?: number | null;
   end_date?: number | null;
 }
+
+
+
+// --- Fraud Detection (FIN-015) ---
+
+export interface FraudFlagOut {
+  flag_id: string;
+  user_id: string;
+  tx_id: string;
+  rule_triggered: string;
+  risk_score: number;
+  amount_cents: number;
+  status: "pending" | "approved" | "blocked" | "investigating";
+  reviewed_by: string | null;
+  reviewed_at: number | null;
+  resolution: "false_positive" | "confirmed_fraud" | "inconclusive" | null;
+  notes: string | null;
+  created_at: number;
+}
+
+export interface FraudFlagQueueOut {
+  flags: FraudFlagOut[];
+  count: number;
+  cursor: string | null;
+}
+
+export interface FraudFlagReview {
+  action: "approve" | "block" | "investigate";
+  notes?: string;
+}
+
+export interface UserRiskProfile {
+  user_id: string;
+  score: number;
+  components: Record<string, number>;
+  flagged: boolean;
+  frozen: boolean;
+  frozen_at: number | null;
+  frozen_by: string | null;
+  tx_count_24h: number;
+  tx_total_24h: number;
+  chargeback_count: number;
+  last_scored_at: number;
+  recent_flags?: FraudFlagOut[];
+}
+
+export interface FreezeUserRequest {
+  reason: string;
+}
+
+export interface FraudCaseCreate {
+  user_id: string;
+  flag_ids: string[];
+  notes?: string;
+}
+
+export interface FraudCaseOut {
+  case_id: string;
+  user_id: string;
+  status: "open" | "investigating" | "resolved";
+  assigned_to: string | null;
+  flags: string[];
+  resolution: "false_positive" | "confirmed_fraud" | "inconclusive" | null;
+  notes: string | null;
+  created_at: number;
+  resolved_at: number | null;
+}
+
+export interface FraudCaseResolve {
+  resolution: "false_positive" | "confirmed_fraud" | "inconclusive";
+  notes?: string;
+}
+
+export interface FraudConfigOut {
+  velocity_max_tx_per_hour: number;
+  velocity_max_amount_per_hour: number;
+  large_tx_threshold: number;
+  new_account_age_days: number;
+  new_account_high_value: number;
+  chargeback_threshold: number;
+  flag_score_threshold: number;
+  updated_at?: number;
+  updated_by?: string;
+}
+
+export interface FraudConfigUpdate {
+  velocity_max_tx_per_hour?: number;
+  velocity_max_amount_per_hour?: number;
+  large_tx_threshold?: number;
+  new_account_age_days?: number;
+  new_account_high_value?: number;
+  chargeback_threshold?: number;
+  flag_score_threshold?: number;
+}
+
+export interface FraudStatsOut {
+  pending_flags: number;
+  open_cases: number;
+  frozen_users: number;
+  flags_resolved_today: number;
+  avg_resolution_hours: number;
+}

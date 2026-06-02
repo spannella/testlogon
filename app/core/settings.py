@@ -2239,5 +2239,22 @@ class Settings:
         os.environ.get("BILLING_CONFIG_CACHE_TTL_SECONDS", "60")
     )
 
+    # FIN-015: Fraud Detection Dashboard
+    ddb_fraud_cases_table: str = os.environ.get(
+        "DDB_FRAUD_CASES_TABLE", "fraud_detection"
+    )
+    fraud_detection_enabled: bool = os.environ.get(
+        "FRAUD_DETECTION_ENABLED", "true"
+    ).lower() not in ("0", "false", "no")
+    fraud_block_enabled: bool = os.environ.get(
+        "FRAUD_BLOCK_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    fraud_freeze_enabled: bool = os.environ.get(
+        "FRAUD_FREEZE_ENABLED", "true"
+    ).lower() not in ("0", "false", "no")
+    fraud_score_threshold: int = int(
+        os.environ.get("FRAUD_SCORE_THRESHOLD", "70")
+    )
+
 
 S = Settings()

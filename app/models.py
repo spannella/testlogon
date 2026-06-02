@@ -12676,3 +12676,128 @@ class CreateStickerCollectionOut(BaseModel):
     is_active: bool = True
     created_at: int
     stickers: List[StickerOut]
+
+
+
+
+# ===========================================================================
+# FIN-015: Fraud Detection Dashboard
+# ===========================================================================
+
+class FraudFlagOut(BaseModel):
+    """Response model for a flagged transaction."""
+    flag_id: str = Field(..., description="Unique flag identifier")
+    user_id: str = Field(..., description="User who triggered the flag")
+    tx_id: str = Field(..., description="Billing ledger entry ID that triggered the flag")
+    rule_triggered: str = Field(..., description="Which fraud rule fired")
+    risk_score: int = Field(..., ge=0, le=100, description="User's risk score at time of flag")
+    amount_cents: int = Field(..., ge=0, description="Transaction amount in cents")
+    status: str = Field(..., description="Current flag status")
+    reviewed_by: Optional[str] = Field(None, description="Admin who reviewed this flag")
+    reviewed_at: Optional[int] = Field(None, description="Unix timestamp of review")
+    resolution: Optional[str] = Field(None, description="Resolution outcome")
+    notes: Optional[str] = Field(None, description="Admin notes")
+    created_at: int = Field(..., description="Unix timestamp when flag was created")
+
+
+class FraudFlagReview(BaseModel):
+    """Request model for reviewing a flagged transaction."""
+    action: str = Field(..., pattern=r"^(approve|block|investigate)$", description="Review action")
+    notes: str = Field(default="", max_length=1000, description="Optional admin notes")
+
+
+class FraudFlagQueueOut(BaseModel):
+    """Paginated list of flagged transactions."""
+    flags: List[FraudFlagOut]
+    count: int = Field(..., ge=0, description="Number of flags in this page")
+    cursor: Optional[str] = Field(None, description="Pagination cursor for next page")
+
+
+class UserRiskProfile(BaseModel):
+    """Full risk profile for a user."""
+    user_id: str
+    score: int = Field(..., ge=0, le=100, description="Composite risk score (0-100)")
+    components: Dict[str, int] = Field(..., description="Score breakdown by component")
+    flagged: bool = Field(..., description="Whether user is currently flagged for review")
+    frozen: bool = Field(..., description="Whether user's financial operations are frozen")
+    frozen_at: Optional[int] = Field(None, description="Unix timestamp when frozen")
+    frozen_by: Optional[str] = Field(None, description="Admin who froze the user")
+    tx_count_24h: int = Field(..., ge=0, description="Number of transactions in last 24 hours")
+    tx_total_24h: int = Field(..., ge=0, description="Total transaction amount (cents) in last 24h")
+    chargeback_count: int = Field(..., ge=0, description="Lifetime chargeback count")
+    last_scored_at: int = Field(..., description="Unix timestamp of last score computation")
+    recent_flags: Optional[List[FraudFlagOut]] = Field(None, description="Most recent flags")
+
+
+class FreezeUserRequest(BaseModel):
+    """Request model for freezing a user's financial operations."""
+    reason: str = Field(..., min_length=1, max_length=500, description="Reason for freezing")
+
+
+class FraudCaseCreate(BaseModel):
+    """Request model for creating a fraud investigation case."""
+    user_id: str = Field(..., description="User ID to investigate")
+    flag_ids: List[str] = Field(..., min_length=1, description="Flag IDs to link to this case")
+    notes: str = Field(default="", max_length=2000, description="Initial case notes")
+
+
+class FraudCaseOut(BaseModel):
+    """Response model for a fraud investigation case."""
+    case_id: str = Field(..., description="Unique case identifier")
+    user_id: str = Field(..., description="User under investigation")
+    status: str = Field(..., description="Case status")
+    assigned_to: Optional[str] = Field(None, description="Admin assigned to the case")
+    flags: List[str] = Field(..., description="List of linked flag IDs")
+    resolution: Optional[str] = Field(None, description="Resolution outcome when closed")
+    notes: Optional[str] = Field(None, description="Case notes")
+    created_at: int = Field(..., description="Unix timestamp when case was opened")
+    resolved_at: Optional[int] = Field(None, description="Unix timestamp when case was resolved")
+
+
+class FraudCaseResolve(BaseModel):
+    """Request model for resolving a fraud case."""
+    resolution: str = Field(
+        ..., pattern=r"^(false_positive|confirmed_fraud|inconclusive)$",
+        description="Resolution outcome",
+    )
+    notes: str = Field(default="", max_length=2000, description="Resolution notes")
+
+
+class FraudConfigOut(BaseModel):
+    """Response model for fraud detection configuration."""
+    velocity_max_tx_per_hour: int = Field(..., ge=1, le=1000)
+    velocity_max_amount_per_hour: int = Field(..., ge=1000)
+    large_tx_threshold: int = Field(..., ge=1000)
+    new_account_age_days: int = Field(..., ge=1, le=90)
+    new_account_high_value: int = Field(..., ge=100)
+    chargeback_threshold: int = Field(..., ge=1, le=100)
+    flag_score_threshold: int = Field(..., ge=10, le=100)
+    updated_at: Optional[int] = None
+    updated_by: Optional[str] = None
+
+
+class FraudConfigUpdate(BaseModel):
+    """Request model for updating fraud detection thresholds."""
+    velocity_max_tx_per_hour: Optional[int] = Field(default=None, ge=1, le=1000)
+    velocity_max_amount_per_hour: Optional[int] = Field(default=None, ge=1000)
+    large_tx_threshold: Optional[int] = Field(default=None, ge=1000)
+    new_account_age_days: Optional[int] = Field(default=None, ge=1, le=90)
+    new_account_high_value: Optional[int] = Field(default=None, ge=100)
+    chargeback_threshold: Optional[int] = Field(default=None, ge=1, le=100)
+    flag_score_threshold: Optional[int] = Field(default=None, ge=10, le=100)
+
+
+class FraudChargebackRecord(BaseModel):
+    """Request model for recording a chargeback against a user."""
+    user_id: str = Field(..., description="User who initiated the chargeback")
+    amount_cents: int = Field(default=0, ge=0, description="Chargeback amount in cents")
+    tx_id: str = Field(default="", description="Disputed ledger entry ID")
+
+
+class FraudStatsOut(BaseModel):
+    """Response model for fraud dashboard statistics."""
+    pending_flags: int = Field(..., ge=0, description="Number of flags awaiting review")
+    open_cases: int = Field(..., ge=0, description="Number of open investigation cases")
+    frozen_users: int = Field(..., ge=0, description="Number of currently frozen users")
+    flags_resolved_today: int = Field(..., ge=0, description="Flags resolved since midnight UTC")
+    avg_resolution_hours: float = Field(..., ge=0, description="Average resolution time (hours)")
