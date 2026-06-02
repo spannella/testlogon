@@ -13678,12 +13678,15 @@ class KycWorkloadDashboardOut(BaseModel):
 class AddressInput(BaseModel):
     """Structured address input for verification."""
 
-    line_1: str = Field(..., min_length=1, max_length=200)
+    # Address verification echoes possibly-partial input addresses (and compares
+    # profile vs document addresses that may have missing fields), so these are
+    # lenient rather than strictly-required to avoid response-model 500s.
+    line_1: str = Field(default="", max_length=200)
     line_2: str = Field(default="", max_length=200)
-    city: str = Field(..., min_length=1, max_length=100)
+    city: str = Field(default="", max_length=100)
     state: str = Field(default="", max_length=100)
-    postal_code: str = Field(..., min_length=1, max_length=20)
-    country: str = Field(..., min_length=2, max_length=2)
+    postal_code: str = Field(default="", max_length=20)
+    country: str = Field(default="", max_length=2)
 
 
 class VerifyAddressRequest(BaseModel):

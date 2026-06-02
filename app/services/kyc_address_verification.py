@@ -544,9 +544,9 @@ class KycAddressVerificationStore:
         }
         self._table.update_item(
             Key={"pk": _case_pk(case_id), "sk": latest["sk"]},
-            UpdateExpression="SET #d = :d, override = :ov, updated_at = :ts",
-            ExpressionAttributeNames={"#d": "decision"},
-            ExpressionAttributeValues={":d": dec, ":ov": override, ":ts": ts},
+            UpdateExpression="SET #d = :d, #o = :ov, updated_at = :ts",
+            ExpressionAttributeNames={"#d": "decision", "#o": "override"},
+            ExpressionAttributeValues={":d": dec, ":ov": _floats_to_decimal(override), ":ts": ts},
         )
         logger.info(
             "kyc.address.override case_id=%s decision=%s reviewer=%s",
