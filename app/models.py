@@ -13401,3 +13401,87 @@ class KybScreeningEnvelope(BaseModel):
 
 class KybAdminQueueEnvelope(BaseModel):
     cases: List[Dict[str, Any]]
+
+
+# ── KYC-021: Third-Party Partner API ─────────────────────────────────
+
+class KycPartnerApplicantAddress(BaseModel):
+    street: str = Field(..., min_length=1, max_length=200)
+    city: str = Field(..., min_length=1, max_length=100)
+    state: str = Field(default="", max_length=100)
+    postal_code: str = Field(..., min_length=1, max_length=20)
+    country: str = Field(..., min_length=2, max_length=2)  # ISO 3166-1 alpha-2
+
+
+class KycPartnerApplicantIn(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    date_of_birth: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    email: str = Field(..., max_length=254)
+    phone: Optional[str] = Field(default=None, max_length=20)
+    address: Optional[KycPartnerApplicantAddress] = None
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, v: str) -> str:
+        if "@" not in v:
+            raise ValueError("Invalid email address")
+        return v.lower().strip()
+
+
+class KycPartnerApplicationCreateIn(BaseModel):
+    external_id: str = Field(..., min_length=1, max_length=128)
+    applicant: KycPartnerApplicantIn
+    tier: str = Field(default="tier_1", pattern=r"^tier_[123]$")
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class KycPartnerApplicationOut(BaseModel):
+    application_id: str
+    external_id: str
+    status: str
+    decision: Optional[str] = None
+    reason_codes: List[str] = Field(default_factory=list)
+    applicant: Dict[str, Any] = Field(default_factory=dict)
+    documents: List[Dict[str, Any]] = Field(default_factory=list)
+    tier: str = "tier_1"
+    created_at: int = 0
+    updated_at: int = 0
+    sandbox: bool = False
+
+
+class KycPartnerApplicationResultOut(BaseModel):
+    decision: str  # "approved" | "rejected"
+    decided_at: int = 0
+    reason_codes: List[str] = Field(default_factory=list)
+    risk_score: Optional[float] = None
+    verified_fields: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KycPartnerWebhookRegisterIn(BaseModel):
+    url: str = Field(..., min_length=10, max_length=2048)
+    events: List[str] = Field(..., min_length=1)
+    secret: str = Field(..., min_length=16, max_length=128)
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        if not v.startswith(("https://", "http://localhost")):
+            raise ValueError("Webhook URL must use HTTPS (or http://localhost in dev)")
+        return v
+
+    @field_validator("events")
+    @classmethod
+    def _validate_events(cls, v: List[str]) -> List[str]:
+        allowed = {"status_changed", "decision_made", "document_uploaded"}
+        for event in v:
+            if event not in allowed:
+                raise ValueError(f"Invalid event: {event}. Allowed: {', '.join(sorted(allowed))}")
+        return v
+
+
+class KycPartnerWebhookOut(BaseModel):
+    webhook_id: str
+    url: str
+    events: List[str] = Field(default_factory=list)
+    created_at: int = 0
