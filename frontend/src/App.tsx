@@ -126,6 +126,7 @@ const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePa
 const BulkPayoutConsole = lazy(() => import("@/pages/admin/BulkPayoutConsole"));
 const DisputesPage = lazy(() => import("@/pages/billing/DisputesPage"));
 const AdminDisputeQueuePage = lazy(() => import("@/pages/admin/AdminDisputeQueuePage"));
+const FraudReviewQueuePage = lazy(() => import("@/pages/admin/fraud/FraudReviewQueuePage"));
 const SavedPage = lazy(() => import("@/pages/saved/SavedPage"));
 const AffiliateDashboard = lazy(() => import("@/pages/affiliates/AffiliateDashboard"));
 const CollaborationsPage = lazy(() => import("@/pages/collaborations/CollaborationsPage"));
@@ -374,6 +375,7 @@ export default function App() {
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
           <Route path="admin/bulk-payouts" element={<BulkPayoutConsole />} />
           <Route path="admin/disputes" element={<AdminDisputeQueuePage />} />
+          <Route path="admin/fraud" element={<FraudReviewQueuePage />} />
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
           <Route path="admin/communications" element={<EmailSmsDashboardPage />} />
           <Route path="admin/compute" element={<AdminComputeDashboard />} />

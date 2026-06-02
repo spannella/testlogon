@@ -217,6 +217,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Refund Queue", i18nKey: "nav.refundQueue", path: "/admin/refunds", icon: <CreditCard className="h-5 w-5" /> },
       { label: "Bulk Payouts", path: "/admin/bulk-payouts", icon: <Wallet className="h-5 w-5" /> },
       { label: "Dispute Queue", i18nKey: "nav.disputeQueue", path: "/admin/disputes", icon: <ShieldAlert className="h-5 w-5" /> },
+      { label: "Fraud Detection", i18nKey: "nav.fraudDetection", path: "/admin/fraud", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Risk Scoring", i18nKey: "nav.riskScoring", path: "/admin/risk", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
       { label: "Compute", i18nKey: "nav.compute", path: "/admin/compute", icon: <Server className="h-5 w-5" /> },

@@ -21,6 +21,7 @@ class Tables:
     push_devices: Any
     billing: Any
     billing_config: Any
+    fraud_cases: Any
     payment_incidents: Any
     payment_incident_events: Any
     payment_dispute_evidence: Any
@@ -248,6 +249,7 @@ T = Tables(
     push_devices=ddb.Table(S.push_devices_table_name),
     billing=ddb.Table(S.billing_table_name),
     billing_config=ddb.Table(S.billing_config_table_name),
+    fraud_cases=ddb.Table(S.ddb_fraud_cases_table),
     payment_incidents=ddb.Table(S.payment_incidents_table_name),
     payment_incident_events=ddb.Table(S.payment_incident_events_table_name),
     payment_dispute_evidence=ddb.Table(S.payment_dispute_evidence_table_name),
