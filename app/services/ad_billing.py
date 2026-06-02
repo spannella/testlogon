@@ -29,13 +29,15 @@ def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "
     entry_id = f"dep_{uuid.uuid4().hex[:12]}"
     month_key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
 
-    # Write billing ledger entry
+    # Write billing ledger entry. Omit campaign_id entirely (rather than "")
+    # because it is the key of the ByCampaign GSI and DynamoDB rejects empty
+    # strings as index keys; a deposit is not tied to a campaign, so it should
+    # simply be absent from that sparse index.
     T.ad_billing.put_item(Item={
         "pk": f"ACCT#{account_id}",
         "sk": f"LEDGER#{ts}#{entry_id}",
         "entry_id": entry_id,
         "account_id": account_id,
-        "campaign_id": "",
         "entry_type": "budget_deposit",
         "amount_cents": amount_cents,
         "state": "settled",

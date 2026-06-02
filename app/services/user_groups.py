@@ -79,6 +79,11 @@ def get_group(group_id: str) -> Optional[Dict[str, Any]]:
     return resp.get("Item")
 
 
+def get_membership(group_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """Public accessor for a single membership record (used by group_feed)."""
+    return _get_membership(group_id, user_id)
+
+
 def get_group_or_404(group_id: str) -> Dict[str, Any]:
     """Get group metadata, raise 404 if not found."""
     meta = get_group(group_id)

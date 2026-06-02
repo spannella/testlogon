@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from botocore.exceptions import ClientError
@@ -225,6 +226,12 @@ def update_qa_config(
         )
     normalized = _normalize_config(config)
     ts = now_ts()
+    # DynamoDB rejects Python floats; persist float fields as Decimal. The read
+    # path (_coerce_numbers) converts them back to float for the API response.
+    persisted = dict(normalized)
+    for field in _FLOAT_FIELDS:
+        if field in persisted and persisted[field] is not None:
+            persisted[field] = Decimal(str(persisted[field]))
     T.agent_types.put_item(
         Item={
             "pk": _type_pk(agent_type_id),
@@ -232,7 +239,7 @@ def update_qa_config(
             "agent_type_id": agent_type_id,
             "agent_type": QA_AGENT_TYPE,
             "owner_sub": owner_sub,
-            "qa_config": normalized,
+            "qa_config": persisted,
             "updated_at": ts,
         }
     )

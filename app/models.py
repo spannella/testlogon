@@ -7305,6 +7305,9 @@ class TicketCreateDevOpsIn(BaseModel):
     subject: str = Field(..., min_length=1, max_length=300)
     description: str = Field(default="", max_length=10000)
     labels: List[str] = Field(default_factory=list, max_length=20)
+    space_id: Optional[str] = None
+
+
 class ArchitectWorkflowPreviewOut(BaseModel):
     steps: List[ArchitectWorkflowStepOut] = Field(default_factory=list)
     feature_ticket_id: str = ""
@@ -8392,7 +8395,7 @@ class ComplianceFrameworkStatusOut(BaseModel):
     status: str = "unknown"
 
 
-class ComplianceStatusOut(BaseModel):
+class AgentComplianceStatusOut(BaseModel):
     frameworks: Dict[str, ComplianceFrameworkStatusOut] = Field(default_factory=dict)
 
 

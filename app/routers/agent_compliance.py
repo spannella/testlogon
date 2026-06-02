@@ -16,7 +16,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.auth.policy import require_admin_or_root
 from app.models import (
-    ComplianceStatusOut,
+    AgentComplianceStatusOut,
     CreateSecurityFindingIn,
     SecurityAgentConfigOut,
     SecurityAuditOut,
@@ -205,9 +205,9 @@ async def get_trends(
     return SecurityTrendsOut(**trends)
 
 
-@agent_compliance_router.get("/compliance", response_model=ComplianceStatusOut)
+@agent_compliance_router.get("/compliance", response_model=AgentComplianceStatusOut)
 async def get_compliance(session=Depends(require_ui_session)):
-    return ComplianceStatusOut(**svc.get_compliance_status(user_id=_user_id(session)))
+    return AgentComplianceStatusOut(**svc.get_compliance_status(user_id=_user_id(session)))
 
 
 # ---------------------------------------------------------------------------

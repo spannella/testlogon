@@ -133,6 +133,7 @@ class BroadcastActionAuditEventModel(BaseModel):
         "create_profile", "create_session", "start_session", "stop_session", "delete_session",
         "schedule_session", "cancel_scheduled_session", "reschedule_session",
         "go_private", "end_private", "private_chat_start", "private_chat_end",
+        "set_visibility",
     ]
     actor: str = Field(min_length=1)
     correlation_id: str = Field(min_length=1)
