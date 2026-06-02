@@ -55,12 +55,13 @@ import {
 } from "@/api/endpoints/messaging";
 import { createEvent } from "@/api/endpoints/calendar";
 import { ApiError } from "@/api/client";
-import type { GalleryImageItem, Message, MeetingPollAttachment, PaymentMethod } from "@/api/types";
+import type { GalleryImageItem, Message, MeetingPollAttachment, FindDateTimeAttachment, PaymentMethod } from "@/api/types";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
 import { WaveformPlayer } from "./WaveformPlayer";
 import { VoicemailBubble } from "./VoicemailBubble";
 import { CountdownCard } from "./CountdownCard";
+import { FindDateTimeCard } from "./FindDateTimeCard";
 import { VideoShareCard } from "./VideoShareCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
 import { DeliveryStatus } from "./DeliveryStatus";
@@ -171,6 +172,7 @@ function replyPreviewText(msg: Message): string {
   if (msg.kind === "countdown") return `[Countdown: ${msg.countdown_title ?? msg.text ?? ""}]`;
   if (msg.kind === "gif") return "[GIF]";
   if (msg.kind === "sticker") return "[Sticker]";
+  if (msg.kind === "find_datetime") return "[Find a Time]";
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
   if (msg.is_encrypted) return "[Encrypted message]";
   return (msg.text ?? "").slice(0, 80) || "[Message]";
@@ -1679,6 +1681,17 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             />
           )}
           {message.kind === "meeting_poll" && message.text && (
+            <p className="mt-1 text-sm">{message.text}</p>
+          )}
+
+          {/* ── Find-a-DateTime card (MSG-009) ── */}
+          {message.kind === "find_datetime" && message.find_datetime && (
+            <FindDateTimeCard
+              stub={message.find_datetime as FindDateTimeAttachment}
+              isOwn={isOwn}
+            />
+          )}
+          {message.kind === "find_datetime" && message.text && (
             <p className="mt-1 text-sm">{message.text}</p>
           )}
 

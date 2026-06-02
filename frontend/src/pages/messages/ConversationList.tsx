@@ -331,6 +331,7 @@ function getPreviewText(lastMsg: Message | undefined, convo: Conversation): stri
     return `[Countdown: ${lastMsg.countdown_title ?? lastMsg.text ?? ""}]`;
   if (lastMsg.kind === "gif") return "[GIF]";
   if (lastMsg.kind === "sticker") return "[Sticker]";
+  if (lastMsg.kind === "find_datetime") return "[Find a Time]";
   return lastMsg.text ?? convo.last_message_preview ?? "No messages yet";
 }
 

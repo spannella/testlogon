@@ -16,10 +16,11 @@ import {
   isMessagingDraftsEnabled,
 } from "@/lib/featureFlags";
 import { encryptMessage, type MessageEncryptionEnvelope } from "@/lib/messageEncryption";
-import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, CreateLotteryMessageReq } from "@/api/types";
+import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, SendFindDateTimeReq, CreateLotteryMessageReq } from "@/api/types";
 import { CalendarPickerDialog } from "./CalendarPickerDialog";
 import { EventPickerDialog } from "./EventPickerDialog";
 import { MeetingPollComposer } from "./MeetingPollComposer";
+import { FindDateTimeComposer } from "./FindDateTimeComposer";
 import { CountdownComposerDialog, type CountdownSubmitData } from "./CountdownComposerDialog";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -66,6 +67,7 @@ interface ComposeBarProps {
   onSendCalendarShare?: (params: SendCalendarShareReq) => void;
   onSendCalendarEvent?: (params: SendCalendarEventReq) => void;
   onSendMeetingPoll?: (params: SendMeetingPollReq) => void;
+  onSendFindDateTime?: (params: SendFindDateTimeReq) => void;
   onSendCountdown?: (params: CountdownSubmitData) => void;
   onSendLottery?: (params: Omit<CreateLotteryMessageReq, "conversation_id">) => void;
   onSendVoiceMessage?: (blob: Blob, meta: { duration: number; waveform: number[]; contentType: string; consumption_policy?: "none" | "listen_once"; reply_to_message_id?: string | null; send_at?: number | null }) => void;
@@ -96,6 +98,7 @@ export function ComposeBar({
   onSendCalendarShare,
   onSendCalendarEvent,
   onSendMeetingPoll,
+  onSendFindDateTime,
   onSendCountdown,
   onSendLottery,
   onSendVoiceMessage,
@@ -197,6 +200,7 @@ export function ComposeBar({
   const [calendarPickerOpen, setCalendarPickerOpen] = React.useState(false);
   const [eventPickerOpen, setEventPickerOpen] = React.useState(false);
   const [meetingPollOpen, setMeetingPollOpen] = React.useState(false);
+  const [findDateTimeOpen, setFindDateTimeOpen] = React.useState(false);
   const [countdownOpen, setCountdownOpen] = React.useState(false);
   const [activeDraftId, setActiveDraftId] = React.useState<string | null>(null);
   const [draftDirty, setDraftDirty] = React.useState(false);
@@ -1623,7 +1627,7 @@ export function ComposeBar({
           </PopoverContent>
         </Popover>
 
-        {(onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendCountdown) && (
+        {(onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendFindDateTime || onSendCountdown) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -1650,6 +1654,11 @@ export function ComposeBar({
               {onSendMeetingPoll && (
                 <DropdownMenuItem onClick={() => setMeetingPollOpen(true)}>
                   <Users className="mr-2 h-4 w-4" /> Schedule a meeting
+                </DropdownMenuItem>
+              )}
+              {onSendFindDateTime && (
+                <DropdownMenuItem onClick={() => setFindDateTimeOpen(true)}>
+                  <Clock className="mr-2 h-4 w-4" /> Find a Time
                 </DropdownMenuItem>
               )}
               {onSendCountdown && (
@@ -1870,6 +1879,16 @@ export function ComposeBar({
           onClose={() => setMeetingPollOpen(false)}
           onSend={(params) => {
             onSendMeetingPoll(params);
+          }}
+        />
+      )}
+
+      {onSendFindDateTime && (
+        <FindDateTimeComposer
+          open={findDateTimeOpen}
+          onClose={() => setFindDateTimeOpen(false)}
+          onSend={(params) => {
+            onSendFindDateTime(params);
           }}
         />
       )}

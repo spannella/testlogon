@@ -12801,3 +12801,55 @@ class FraudStatsOut(BaseModel):
     frozen_users: int = Field(..., ge=0, description="Number of currently frozen users")
     flags_resolved_today: int = Field(..., ge=0, description="Flags resolved since midnight UTC")
     avg_resolution_hours: float = Field(..., ge=0, description="Average resolution time (hours)")
+
+
+# ---------------------------------------------------------------------------
+# Find-a-DateTime (MSG-009)
+# ---------------------------------------------------------------------------
+
+
+class BestWindowOut(BaseModel):
+    """A computed best overlapping availability window."""
+    start: str = Field(..., description="Window start ISO datetime (inclusive)")
+    end: str = Field(..., description="Window end ISO datetime (exclusive)")
+    count: int = Field(..., ge=0, description="Number of available participants")
+    participants: List[str] = Field(default_factory=list, description="Display names of available participants")
+
+
+class FindDateTimeResultOut(BaseModel):
+    """Computed result after closing a Find-a-DateTime poll."""
+    computed_at: int
+    best_windows: List[BestWindowOut] = Field(default_factory=list)
+
+
+class AvailabilityOut(BaseModel):
+    """A single participant's availability submission."""
+    user_sub: str
+    user_name: str
+    slots: List[str] = Field(default_factory=list)
+    submitted_at: int
+
+
+class FindDateTimeMetaOut(BaseModel):
+    """Find-a-DateTime poll metadata."""
+    poll_id: str
+    conversation_id: str
+    message_id: Optional[str] = None
+    creator_sub: str
+    title: str
+    from_date: str
+    to_date: str
+    start_hour: int
+    end_hour: int
+    slot_duration_minutes: int
+    deadline_at: int
+    status: str  # "open" | "closed"
+    created_at: int
+    participant_count: int
+
+
+class FindDateTimeFullOut(BaseModel):
+    """Complete Find-a-DateTime response: metadata, availabilities, and result."""
+    meta: FindDateTimeMetaOut
+    availabilities: List[AvailabilityOut] = Field(default_factory=list)
+    result: Optional[FindDateTimeResultOut] = None

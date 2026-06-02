@@ -980,11 +980,78 @@ export interface SendMeetingPollReq {
   text?: string;
 }
 
+// ---- Find-a-DateTime (MSG-009) ----
+
+export interface FindDateTimeAttachment {
+  poll_id: string;
+  creator_id: string;
+  title: string;
+  from_date: string;
+  to_date: string;
+  start_hour: number;
+  end_hour: number;
+  slot_duration_minutes: number;
+  status: "open" | "closed";
+}
+
+export interface SendFindDateTimeReq {
+  title: string;
+  from_date: string;
+  to_date: string;
+  start_hour: number;
+  end_hour: number;
+  slot_duration_minutes: number;
+  deadline_hours?: number;
+  text?: string;
+}
+
+export interface FindDateTimeBestWindow {
+  start: string;
+  end: string;
+  count: number;
+  participants: string[];
+}
+
+export interface FindDateTimeAvailability {
+  user_sub: string;
+  user_name: string;
+  slots: string[];
+  submitted_at: number;
+}
+
+export interface FindDateTimeMeta {
+  poll_id: string;
+  conversation_id: string;
+  message_id?: string | null;
+  creator_sub: string;
+  title: string;
+  from_date: string;
+  to_date: string;
+  start_hour: number;
+  end_hour: number;
+  slot_duration_minutes: number;
+  deadline_at: number;
+  status: "open" | "closed";
+  created_at: number;
+  participant_count: number;
+}
+
+export interface FindDateTimeResult {
+  computed_at: number;
+  best_windows: FindDateTimeBestWindow[];
+}
+
+export interface FindDateTimeFull {
+  meta: FindDateTimeMeta;
+  availabilities: FindDateTimeAvailability[];
+  result: FindDateTimeResult | null;
+}
+
 export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker" | "find_datetime";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -997,6 +1064,7 @@ export interface Message {
   calendar_share?: CalendarShareAttachment;
   calendar_event?: CalendarEventAttachment;
   meeting_poll?: MeetingPollAttachment;
+  find_datetime?: FindDateTimeAttachment;
   video_share?: {
     video_id: string;
     owner_user_id: string;

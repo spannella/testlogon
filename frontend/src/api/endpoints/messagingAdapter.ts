@@ -118,6 +118,7 @@ export function adaptMessage(raw: RawMessage): Message {
     calendar_share: raw.calendar_share,
     calendar_event: raw.calendar_event,
     meeting_poll: raw.meeting_poll,
+    find_datetime: raw.find_datetime,
     video_share: raw.video_share,
     voice_message: raw.voice_message,
     voicemail: raw.voicemail,
