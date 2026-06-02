@@ -8139,6 +8139,68 @@ export interface NotificationTemplateTestSendResult {
 }
 
 // ── KYC-002: Identity Document Verification ──────────────────────────────
+// ── KYC-022: Electronic Identity Verification (eIDV) ─────────────────────────
+export type EidAssuranceLevel = "low" | "substantial" | "high";
+export type EidAuthFlow = "browser_redirect" | "mobile_app_qr" | "otp_biometric";
+export type EidScheme = "eidas" | "digid" | "bankid" | "aadhaar";
+export type EidDiscrepancySeverity = "match" | "warning" | "critical";
+
+export interface EidSchemeInfo {
+  id: string;
+  name: string;
+  countries: string[];
+  assurance_level: EidAssuranceLevel;
+  auth_flow: EidAuthFlow;
+  description: string;
+}
+
+export interface EidSchemesList {
+  schemes: EidSchemeInfo[];
+}
+
+export interface StartEidVerificationResult {
+  session_id: string;
+  redirect_url: string;
+  expires_at: number;
+  scheme: string;
+}
+
+export interface EidVerifiedFields {
+  first_name?: string;
+  last_name?: string;
+  date_of_birth?: string;
+  nationality?: string;
+  document_number?: string;
+  document_type?: string;
+  issuing_country?: string;
+}
+
+export interface EidDiscrepancy {
+  field: string;
+  profile_value: string;
+  eid_value: string;
+  severity: EidDiscrepancySeverity;
+}
+
+export interface EidVerification {
+  scheme: string;
+  assertion_id: string;
+  assurance_level: string;
+  verified_at: number;
+  auto_tier_upgrade: boolean;
+  discrepancies: EidDiscrepancy[];
+  verified_fields?: EidVerifiedFields | null;
+}
+
+export interface EidStatus {
+  eid_verification: EidVerification | null;
+}
+
+export interface MockEidAssertion {
+  assertion: string;
+  signature: string;
+}
+
 export type KycDocumentType = "id_front" | "id_back";
 export type KycDocumentStatus = "pending" | "extracted" | "failed" | "approved" | "rejected";
 export type KycDocumentConfidence = "high" | "medium" | "low" | "failed";

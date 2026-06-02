@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CameraCapture } from "@/components/shared/CameraCapture";
 import { FaceComparisonResult } from "@/pages/kyc/FaceComparisonResult";
+import { EidVerificationPanel } from "@/components/shared/EidVerificationPanel";
 import { ApiError } from "@/api/client";
 import {
   createKycCase,
@@ -155,7 +156,19 @@ export default function KycWizardPage() {
       <Card>
         <CardContent className="p-6">
           {currentStep === 0 && <PersonalInfoStep {...stepProps} />}
-          {currentStep === 1 && <IdUploadStep {...stepProps} />}
+          {currentStep === 1 && (
+            <>
+              <IdUploadStep {...stepProps} />
+              {caseId && (
+                <div className="mt-6 border-t pt-6">
+                  <p className="mb-3 text-sm font-medium text-gray-700">
+                    Or skip the upload and verify with your electronic ID:
+                  </p>
+                  <EidVerificationPanel caseId={caseId} onVerified={refresh} />
+                </div>
+              )}
+            </>
+          )}
           {currentStep === 2 && (
             <>
               <SelfieStep {...stepProps} />

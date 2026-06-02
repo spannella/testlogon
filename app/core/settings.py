@@ -1214,6 +1214,23 @@ class Settings:
         "KYC_FACE_AUTO_COMPARE", "false"
     ).lower() in ("1", "true", "yes", "on")
 
+    # KYC Electronic Identity Verification / eIDV (KYC-022)
+    kyc_eid_enabled: bool = os.environ.get(
+        "KYC_EID_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_eid_mock_enabled: bool = os.environ.get(
+        "KYC_EID_MOCK_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_eid_auto_tier_upgrade: bool = os.environ.get(
+        "KYC_EID_AUTO_TIER_UPGRADE", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    kyc_eid_schemes: str = os.environ.get(
+        "KYC_EID_SCHEMES", "eidas,digid,bankid,aadhaar"
+    )
+    kyc_eid_mock_signing_key: str = os.environ.get(
+        "KYC_EID_MOCK_SIGNING_KEY", "dev-mock-eid-signing-key"
+    )
+
     # KYC Proof of Residency Verification (KYC-004)
     kyc_residency_documents_table_name: str = os.environ.get(
         "KYC_RESIDENCY_DOCUMENTS_TABLE_NAME", "kyc_residency_documents"
