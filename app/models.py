@@ -12873,3 +12873,77 @@ class FindDateTimeFullOut(BaseModel):
     meta: FindDateTimeMetaOut
     availabilities: List[AvailabilityOut] = Field(default_factory=list)
     result: Optional[FindDateTimeResultOut] = None
+
+
+# ---------------------------------------------------------------------------
+# FEED-003: Find-a-DateTime Newsfeed Post
+# ---------------------------------------------------------------------------
+
+
+class CreateFindDateTimePostIn(BaseModel):
+    """Request model for creating a Find-a-DateTime newsfeed post (FEED-003)."""
+    title: str = Field(min_length=1, max_length=200)
+    from_date: str = Field(
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="Start date in YYYY-MM-DD format",
+    )
+    to_date: str = Field(
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="End date in YYYY-MM-DD format",
+    )
+    start_hour: int = Field(ge=0, le=23, description="Earliest hour of day (0-23)")
+    end_hour: int = Field(ge=1, le=24, description="Latest hour of day (1-24)")
+    slot_duration_minutes: int = Field(default=30)
+    deadline_hours: int = Field(default=48, ge=1, le=336)
+    body: str = Field(default="", max_length=5000, description="Optional description text")
+
+    @model_validator(mode="after")
+    def _validate_fadt_post(self) -> "CreateFindDateTimePostIn":
+        if self.slot_duration_minutes not in (15, 30, 60):
+            raise ValueError("slot_duration_minutes must be 15, 30, or 60")
+        if self.start_hour >= self.end_hour:
+            raise ValueError("start_hour must be less than end_hour")
+        return self
+
+
+class SubmitPostAvailabilityIn(BaseModel):
+    """Request model for submitting availability on a FADT post poll (FEED-003)."""
+    slots: List[str] = Field(min_length=1, max_length=500)
+
+
+class FindDateTimePostOut(BaseModel):
+    """Response model for a created Find-a-DateTime post (FEED-003)."""
+    post_id: str
+    user_id: str
+    post_kind: Literal["find_datetime"] = "find_datetime"
+    find_datetime_id: str
+    title: str
+    body: str = ""
+    from_date: str
+    to_date: str
+    start_hour: int
+    end_hour: int
+    slot_duration_minutes: int
+    deadline_at: int
+    status: str = "open"
+    created_at: str = ""
+    like_count: int = 0
+    comment_count: int = 0
+
+
+class FindDateTimePostPollOut(BaseModel):
+    """Response model for FADT post poll data (FEED-003)."""
+    poll_id: str
+    post_id: Optional[str] = None
+    creator_sub: str
+    title: str
+    from_date: str
+    to_date: str
+    start_hour: int
+    end_hour: int
+    slot_duration_minutes: int
+    deadline_at: int
+    status: str  # "open" | "closed"
+    participant_count: int = 0
+    availabilities: List[AvailabilityOut] = Field(default_factory=list)
+    best_windows: Optional[List[BestWindowOut]] = None

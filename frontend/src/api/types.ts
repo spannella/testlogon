@@ -1047,6 +1047,54 @@ export interface FindDateTimeFull {
   result: FindDateTimeResult | null;
 }
 
+// FEED-003: Find-a-DateTime newsfeed post types
+export interface CreateFindDateTimePostReq {
+  title: string;
+  from_date: string;
+  to_date: string;
+  start_hour: number;
+  end_hour: number;
+  slot_duration_minutes?: number;
+  deadline_hours?: number;
+  body?: string;
+}
+
+export interface FindDateTimePost {
+  post_id: string;
+  user_id: string;
+  post_kind: "find_datetime";
+  find_datetime_id: string;
+  title: string;
+  body: string;
+  from_date: string;
+  to_date: string;
+  start_hour: number;
+  end_hour: number;
+  slot_duration_minutes: number;
+  deadline_at: number;
+  status: "open" | "closed";
+  created_at: string;
+  like_count: number;
+  comment_count: number;
+}
+
+export interface FindDateTimePostPoll {
+  poll_id: string;
+  post_id?: string | null;
+  creator_sub: string;
+  title: string;
+  from_date: string;
+  to_date: string;
+  start_hour: number;
+  end_hour: number;
+  slot_duration_minutes: number;
+  deadline_at: number;
+  status: "open" | "closed";
+  participant_count: number;
+  availabilities: FindDateTimeAvailability[];
+  best_windows: FindDateTimeBestWindow[] | null;
+}
+
 export interface Message {
   message_id: string;
   conversation_id: string;
@@ -2188,11 +2236,20 @@ export interface FeedPost {
   /** SOCIAL-006: hashtags/topics on this post */
   tags?: string[];
   /** FEED-005: countdown post fields */
-  post_kind?: "text" | "countdown" | null;
+  post_kind?: "text" | "countdown" | "find_datetime" | null;
   countdown_title?: string | null;
   target_datetime?: number | null;
   associated_event_type?: "broadcast" | "call" | "calendar" | "custom" | null;
   associated_event_id?: string | null;
+  /** FEED-003: Find-a-DateTime post fields */
+  find_datetime_id?: string | null;
+  find_datetime_title?: string | null;
+  find_datetime_from_date?: string | null;
+  find_datetime_to_date?: string | null;
+  find_datetime_start_hour?: number | null;
+  find_datetime_end_hour?: number | null;
+  find_datetime_slot_duration_minutes?: number | null;
+  find_datetime_status?: "open" | "closed" | null;
   /** ENGAGE-002: poll data when post_type is "poll" or "survey" */
   poll_data?: PollData | null;
   /** ENGAGE-002: vote counts per question per option */

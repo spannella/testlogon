@@ -41,6 +41,7 @@ import type { FileEntry } from "@/api/types";
 import { isTipLotteryEnabled } from "@/config/featureFlags";
 import { PollCard } from "./PollCard";
 import { CountdownCard } from "@/components/shared/CountdownCard";
+import { FindDateTimePostCard } from "./FindDateTimePostCard";
 import { useOfflineStore } from "@/stores/offlineStore";
 
 function formatBytes(bytes?: number): string {
@@ -573,6 +574,11 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
               associatedEventId={post.associated_event_id}
             />
           </div>
+        )}
+
+        {/* FEED-003: Find-a-DateTime card */}
+        {post.post_kind === "find_datetime" && post.find_datetime_id && !isLocked && (
+          <FindDateTimePostCard post={post} isOwn={isOwn} />
         )}
 
         {/* ENGAGE-002: Poll/Survey card */}

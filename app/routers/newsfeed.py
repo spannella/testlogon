@@ -60,6 +60,8 @@ EVENTS_SQS_URL = os.environ.get("EVENTS_SQS_URL")
 tbl = ddb.Table(APP_TABLE)
 _ddb_type_serializer = TypeSerializer()
 
+from app.core.tables import T  # noqa: E402  (FEED-003: calendar table for FADT post polls)
+
 s3 = s3_client() if UPLOAD_BUCKET else None
 sqs = sqs_client() if EVENTS_SQS_URL else None
 
@@ -2165,6 +2167,22 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         ),
         "associated_event_type": post.get("associated_event_type"),
         "associated_event_id": None if locked_body else post.get("associated_event_id"),
+        # FEED-003: Find-a-DateTime post fields (additive; only set for find_datetime posts)
+        "find_datetime_id": post.get("find_datetime_id"),
+        "find_datetime_title": post.get("find_datetime_title"),
+        "find_datetime_from_date": post.get("find_datetime_from_date"),
+        "find_datetime_to_date": post.get("find_datetime_to_date"),
+        "find_datetime_start_hour": (
+            int(post["find_datetime_start_hour"]) if post.get("find_datetime_start_hour") is not None else None
+        ),
+        "find_datetime_end_hour": (
+            int(post["find_datetime_end_hour"]) if post.get("find_datetime_end_hour") is not None else None
+        ),
+        "find_datetime_slot_duration_minutes": (
+            int(post["find_datetime_slot_duration_minutes"])
+            if post.get("find_datetime_slot_duration_minutes") is not None else None
+        ),
+        "find_datetime_status": post.get("find_datetime_status"),
         # GROUP-002: Group context fields
         **({"group_id": post["group_id"], "audience": post.get("audience", "public"),
             "pinned": bool(post.get("pinned")),
@@ -4000,6 +4018,369 @@ def get_post(post_id: str, user_id: UserIdDep):
     viewer_unlocked = locked and not is_locked_for_viewer
     liked = bool(ddb_get_item({"pk": pk_like(user_id), "sk": f"POST#{post_id}"}))
     return _post_to_dict(post, locked_body=is_locked_for_viewer, liked_by_me=liked, unlocked=viewer_unlocked, viewer_id=user_id)
+
+
+# ---------------------------------------------------------------------------
+# FEED-003: Find-a-DateTime Newsfeed Post
+#
+# Reuses the MSG-009 overlap-computation service
+# (app.services.messaging_find_datetime) and the shared AvailabilityGrid
+# frontend component. Poll state is stored in the single-table `calendar` DDB
+# table keyed by POSTFADT#{poll_id} (namespaced to avoid collision with the
+# conversation-linked FADT#{poll_id} polls from MSG-009).
+# ---------------------------------------------------------------------------
+
+
+class CreateFindDateTimePostIn(BaseModel):
+    """Request body for creating a Find-a-DateTime newsfeed post (FEED-003)."""
+    title: str = Field(min_length=1, max_length=200)
+    from_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    to_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    start_hour: int = Field(ge=0, le=23)
+    end_hour: int = Field(ge=1, le=24)
+    slot_duration_minutes: int = Field(default=30)
+    deadline_hours: int = Field(default=48, ge=1, le=336)
+    body: str = Field(default="", max_length=5000)
+
+    @model_validator(mode="after")
+    def _validate_fadt_post(self) -> "CreateFindDateTimePostIn":
+        if self.slot_duration_minutes not in (15, 30, 60):
+            raise ValueError("slot_duration_minutes must be 15, 30, or 60")
+        if self.start_hour >= self.end_hour:
+            raise ValueError("start_hour must be less than end_hour")
+        return self
+
+
+class SubmitPostAvailabilityIn(BaseModel):
+    """Request body for submitting availability on a FADT post poll (FEED-003)."""
+    slots: List[str] = Field(min_length=1, max_length=500)
+
+
+def _post_fadt_pk(poll_id: str) -> str:
+    """Single-table key for a post-linked Find-a-DateTime poll."""
+    return f"POSTFADT#{poll_id}"
+
+
+def _post_fadt_meta_or_404(poll_id: str) -> Dict[str, Any]:
+    meta = T.calendar.get_item(
+        Key={"calendar_id": _post_fadt_pk(poll_id), "sk": "META"}
+    ).get("Item")
+    if not meta:
+        raise HTTPException(status_code=404, detail="Find-a-DateTime poll not found")
+    return meta
+
+
+def _post_fadt_display_name(user_sub: str) -> str:
+    try:
+        from app.core.tables import T as _T
+        profile = _T.profile.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+        name = (profile.get("display_name") or profile.get("name") or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    return user_sub
+
+
+def _post_fadt_meta_out(meta: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "poll_id": meta.get("poll_id"),
+        "post_id": meta.get("post_id"),
+        "creator_sub": meta.get("creator_sub"),
+        "title": meta.get("title"),
+        "from_date": meta.get("from_date"),
+        "to_date": meta.get("to_date"),
+        "start_hour": int(meta.get("start_hour", 0)),
+        "end_hour": int(meta.get("end_hour", 0)),
+        "slot_duration_minutes": int(meta.get("slot_duration_minutes", 30)),
+        "deadline_at": int(meta.get("deadline_at", 0)),
+        "status": meta.get("status", "open"),
+        "participant_count": int(meta.get("participant_count", 0)),
+    }
+
+
+@router.post("/posts/find-datetime", status_code=201)
+def create_find_datetime_post(body: CreateFindDateTimePostIn, user_id: UserIdDep):
+    """Create a Find-a-DateTime newsfeed post (FEED-003).
+
+    Creates a regular newsfeed post item (so it flows through the normal feed +
+    interaction endpoints) plus a linked FADT poll record in the calendar table.
+    """
+    from app.services.messaging_find_datetime import parse_date
+
+    if not bool(getattr(S, "find_datetime_posts_enabled", True)):
+        raise HTTPException(status_code=403, detail="Find-a-DateTime posts are not enabled")
+
+    try:
+        d0 = parse_date(body.from_date)
+        d1 = parse_date(body.to_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format")
+    if d0 >= d1:
+        raise HTTPException(status_code=400, detail="from_date must be before to_date")
+    span_days = (d1 - d0).days + 1
+    max_days = int(getattr(S, "find_datetime_max_date_range_days", 14))
+    if span_days > max_days:
+        raise HTTPException(status_code=400, detail=f"Date range cannot exceed {max_days} days")
+
+    _enforce_newsfeed_post_quota_precheck(user_id=user_id)
+
+    post_id = new_id("post")
+    poll_id = "fadt_" + uuid.uuid4().hex
+    created_at = now_iso()
+    ts = int(time.time())
+    deadline_at = ts + body.deadline_hours * 3600
+
+    # 1. Persist the FADT poll record (calendar single-table, post-namespaced).
+    T.calendar.put_item(Item={
+        "calendar_id": _post_fadt_pk(poll_id),
+        "sk": "META",
+        "type": "find_datetime_post",
+        "poll_id": poll_id,
+        "post_id": post_id,
+        "creator_sub": user_id,
+        "title": body.title,
+        "from_date": body.from_date,
+        "to_date": body.to_date,
+        "start_hour": body.start_hour,
+        "end_hour": body.end_hour,
+        "slot_duration_minutes": body.slot_duration_minutes,
+        "deadline_at": deadline_at,
+        "status": "open",
+        "created_at": ts,
+        "participant_count": 0,
+    })
+
+    # 2. Persist the post item with find_datetime metadata (additive fields).
+    post_item = {
+        "pk": pk_post(post_id),
+        "sk": sk_post(),
+        "Entity": "Post",
+        "post_id": post_id,
+        "user_id": user_id,
+        "created_at": created_at,
+        "published_at": created_at,
+        "status": "published",
+        "GSI2PK": f"POST_AUTHOR#{user_id}",
+        "GSI2SK": f"{created_at}#POST#{post_id}",
+        "body": body.body,
+        "body_plain": body.body,
+        "body_format": "plain",
+        "image_urls": [],
+        "visibility": "public",
+        "locked": False,
+        "like_count": 0,
+        "comment_count": 0,
+        "body_plain_lc": body.body.lower(),
+        "post_kind": "find_datetime",
+        "find_datetime_id": poll_id,
+        "find_datetime_title": body.title,
+        "find_datetime_from_date": body.from_date,
+        "find_datetime_to_date": body.to_date,
+        "find_datetime_start_hour": body.start_hour,
+        "find_datetime_end_hour": body.end_hour,
+        "find_datetime_slot_duration_minutes": body.slot_duration_minutes,
+        "find_datetime_status": "open",
+    }
+    ddb_put_item(post_item)
+
+    _write_feed_ref_for_published_post(user_id=user_id, post_id=post_id, created_at=created_at)
+    try:
+        from app.services.newsfeed_fanout import fan_out_post_to_followers
+        fan_out_post_to_followers(author_id=user_id, post_id=post_id, created_at=created_at)
+    except Exception:
+        logger.exception("Fan-out failed for find-datetime post %s by %s", post_id, user_id)
+
+    return {
+        "post_id": post_id,
+        "user_id": user_id,
+        "post_kind": "find_datetime",
+        "find_datetime_id": poll_id,
+        "title": body.title,
+        "body": body.body,
+        "from_date": body.from_date,
+        "to_date": body.to_date,
+        "start_hour": body.start_hour,
+        "end_hour": body.end_hour,
+        "slot_duration_minutes": body.slot_duration_minutes,
+        "deadline_at": deadline_at,
+        "status": "open",
+        "created_at": created_at,
+        "like_count": 0,
+        "comment_count": 0,
+    }
+
+
+@router.get("/posts/find-datetime/{poll_id}")
+def get_find_datetime_post(poll_id: str, user_id: UserIdDep):
+    """Get Find-a-DateTime poll details (metadata + availabilities + result)."""
+    from boto3.dynamodb.conditions import Key as _Key
+    meta = _post_fadt_meta_or_404(poll_id)
+
+    items = T.calendar.query(
+        KeyConditionExpression=_Key("calendar_id").eq(_post_fadt_pk(poll_id)),
+    ).get("Items", [])
+
+    availabilities: List[Dict[str, Any]] = []
+    best_windows: Optional[List[Dict[str, Any]]] = None
+    for it in items:
+        sk = str(it.get("sk", ""))
+        if sk.startswith("AVAIL#"):
+            availabilities.append({
+                "user_sub": it.get("user_sub"),
+                "user_name": it.get("user_name") or it.get("user_sub"),
+                "slots": [str(s) for s in (it.get("slots") or [])],
+                "submitted_at": int(it.get("submitted_at", 0)),
+            })
+        elif sk == "RESULT":
+            best_windows = [
+                {
+                    "start": w.get("start"),
+                    "end": w.get("end"),
+                    "count": int(w.get("count", 0)),
+                    "participants": [str(p) for p in (w.get("participants") or [])],
+                }
+                for w in (it.get("best_windows") or [])
+            ]
+    availabilities.sort(key=lambda a: a["submitted_at"])
+
+    out = _post_fadt_meta_out(meta)
+    out["availabilities"] = availabilities
+    out["best_windows"] = best_windows
+    return out
+
+
+@router.post("/posts/find-datetime/{poll_id}/availability")
+def submit_find_datetime_post_availability(
+    poll_id: str, body: SubmitPostAvailabilityIn, user_id: UserIdDep
+):
+    """Submit or update availability for a post-linked FADT poll (any follower)."""
+    from app.services.messaging_find_datetime import enumerate_slots
+
+    meta = _post_fadt_meta_or_404(poll_id)
+    if meta.get("status") != "open":
+        raise HTTPException(status_code=400, detail="Poll is closed")
+    ts = int(time.time())
+    if ts > int(meta.get("deadline_at", 0)):
+        raise HTTPException(status_code=400, detail="Submission deadline has passed")
+
+    valid_slots = set(enumerate_slots(
+        from_date=meta["from_date"],
+        to_date=meta["to_date"],
+        start_hour=int(meta["start_hour"]),
+        end_hour=int(meta["end_hour"]),
+        slot_duration_minutes=int(meta["slot_duration_minutes"]),
+    ))
+    submitted: List[str] = []
+    seen: Set[str] = set()
+    for s in body.slots:
+        if s in seen:
+            continue
+        seen.add(s)
+        if s not in valid_slots:
+            raise HTTPException(status_code=400, detail="Slot is outside the allowed range")
+        submitted.append(s)
+    submitted.sort()
+
+    existing = T.calendar.get_item(
+        Key={"calendar_id": _post_fadt_pk(poll_id), "sk": f"AVAIL#{user_id}"}
+    ).get("Item")
+    is_update = existing is not None
+
+    T.calendar.put_item(Item={
+        "calendar_id": _post_fadt_pk(poll_id),
+        "sk": f"AVAIL#{user_id}",
+        "type": "fadt_post_availability",
+        "user_sub": user_id,
+        "user_name": _post_fadt_display_name(user_id),
+        "slots": submitted,
+        "submitted_at": ts,
+    })
+
+    participant_count = int(meta.get("participant_count", 0))
+    if not is_update:
+        try:
+            upd = T.calendar.update_item(
+                Key={"calendar_id": _post_fadt_pk(poll_id), "sk": "META"},
+                UpdateExpression="ADD participant_count :one",
+                ExpressionAttributeValues={":one": 1},
+                ReturnValues="UPDATED_NEW",
+            )
+            participant_count = int(upd.get("Attributes", {}).get("participant_count", participant_count + 1))
+        except Exception:
+            participant_count += 1
+
+    return {
+        "ok": True,
+        "poll_id": poll_id,
+        "your_slot_count": len(submitted),
+        "participant_count": participant_count,
+        "submitted_at": ts,
+    }
+
+
+@router.post("/posts/find-datetime/{poll_id}/close")
+def close_find_datetime_post(poll_id: str, user_id: UserIdDep):
+    """Close a post-linked FADT poll and compute best windows (creator only)."""
+    from boto3.dynamodb.conditions import Key as _Key
+    from app.services.messaging_find_datetime import compute_best_windows
+
+    meta = _post_fadt_meta_or_404(poll_id)
+    if meta.get("creator_sub") != user_id:
+        raise HTTPException(status_code=403, detail="Only the creator can close this poll")
+    if meta.get("status") == "closed":
+        raise HTTPException(status_code=400, detail="Poll is already closed")
+
+    avail_items = T.calendar.query(
+        KeyConditionExpression=_Key("calendar_id").eq(_post_fadt_pk(poll_id))
+        & _Key("sk").begins_with("AVAIL#"),
+    ).get("Items", [])
+    availabilities = [
+        {
+            "user_sub": it.get("user_sub"),
+            "user_name": it.get("user_name") or it.get("user_sub"),
+            "slots": [str(s) for s in (it.get("slots") or [])],
+        }
+        for it in avail_items
+    ]
+
+    best_windows = compute_best_windows(
+        availabilities, int(meta.get("slot_duration_minutes", 30))
+    )
+
+    ts = int(time.time())
+    T.calendar.put_item(Item={
+        "calendar_id": _post_fadt_pk(poll_id),
+        "sk": "RESULT",
+        "type": "fadt_post_result",
+        "computed_at": ts,
+        "best_windows": best_windows,
+    })
+    T.calendar.update_item(
+        Key={"calendar_id": _post_fadt_pk(poll_id), "sk": "META"},
+        UpdateExpression="SET #s = :s",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":s": "closed"},
+    )
+    # Mirror status onto the post item so the card reflects closed state.
+    post_id = meta.get("post_id")
+    if post_id:
+        try:
+            tbl.update_item(
+                Key={"pk": pk_post(post_id), "sk": sk_post()},
+                UpdateExpression="SET find_datetime_status = :s",
+                ExpressionAttributeValues={":s": "closed"},
+            )
+        except Exception:
+            logger.warning("Failed to mirror find_datetime_status onto post %s", post_id)
+
+    return {
+        "ok": True,
+        "poll_id": poll_id,
+        "status": "closed",
+        "participant_count": int(meta.get("participant_count", 0)),
+        "best_windows": best_windows,
+    }
 
 
 @router.get("/posts/{post_id}/files/{file_index}")
