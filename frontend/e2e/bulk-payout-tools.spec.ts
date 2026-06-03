@@ -37,17 +37,29 @@ interface SessionRec {
 }
 
 // Generate fresh — a cached session file goes stale across backend restarts
-// (dead session ids => 401/empty results). Fall back to the file if generation
-// fails for any reason.
+// (dead session ids => 401/empty results). e2e_admin_session_setup.py emits
+// {key: {session_id, csrf_token, cookies:[{name,value}]}}; flatten the cookies
+// into the ui_session/ui_csrf/ui_access_token shape this spec expects.
 let SESSIONS: Record<string, SessionRec> = {};
 try {
-  SESSIONS = JSON.parse(
+  const raw = JSON.parse(
     execFileSync("python3", ["/home/ubuntu/testlogon/e2e_admin_session_setup.py"], {
       cwd: "/home/ubuntu/testlogon",
       timeout: 30_000,
       encoding: "utf-8",
     }),
-  );
+  ) as Record<string, { csrf_token: string; cookies: Array<{ name: string; value: string }> }>;
+  for (const key of Object.keys(raw)) {
+    const s = raw[key];
+    const ck: Record<string, string> = {};
+    for (const c of s.cookies ?? []) ck[c.name] = c.value;
+    SESSIONS[key] = {
+      ui_session: ck.ui_session ?? "",
+      ui_csrf: ck.ui_csrf ?? "",
+      ui_access_token: ck.ui_access_token ?? "",
+      csrf_token: s.csrf_token,
+    };
+  }
 } catch {
   try {
     SESSIONS = JSON.parse(fs.readFileSync(SESSION_FILE, "utf-8"));

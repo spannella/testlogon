@@ -25,9 +25,16 @@ async function createBroadcast(
   identity: string,
   title: string
 ): Promise<string> {
+  // A session requires a profile_id (422 otherwise).
+  const profRes = await ctx.post(`${BASE}/broadcast/profiles`, {
+    headers: authHeaders(identity),
+    data: { name: `${title} profile`, region: "us-east-1", rendition_preset: "adaptive-720p" },
+  });
+  expect(profRes.ok()).toBeTruthy();
+  const profileId = (await profRes.json()).id as string;
   const res = await ctx.post(`${BASE}/broadcast/sessions`, {
     headers: authHeaders(identity),
-    data: { title },
+    data: { title, profile_id: profileId },
   });
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
@@ -35,7 +42,7 @@ async function createBroadcast(
 }
 
 async function goLive(ctx: APIRequestContext, identity: string, id: string) {
-  const res = await ctx.post(`${BASE}/broadcast/sessions/${id}/go-live`, {
+  const res = await ctx.post(`${BASE}/broadcast/sessions/${id}/start`, {
     headers: authHeaders(identity),
     data: {},
   });
@@ -43,7 +50,7 @@ async function goLive(ctx: APIRequestContext, identity: string, id: string) {
 }
 
 async function endBroadcast(ctx: APIRequestContext, identity: string, id: string) {
-  const res = await ctx.post(`${BASE}/broadcast/sessions/${id}/end`, {
+  const res = await ctx.post(`${BASE}/broadcast/sessions/${id}/stop`, {
     headers: authHeaders(identity),
     data: {},
   });
