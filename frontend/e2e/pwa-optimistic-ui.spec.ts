@@ -250,10 +250,16 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.getByText(/sending when online/i)).toBeVisible();
 
-    // Delay the message POST to observe "Sending..." state
+    // Delay only the message POST to observe the "Sending..." state. Other
+    // methods (GET refetches) pass straight through; guard continue() against
+    // races where the route was already handled.
     await page.route("**/messaging/conversations/*/messages", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue().catch(() => {});
+        return;
+      }
       await new Promise((r) => setTimeout(r, 2000));
-      await route.continue();
+      await route.continue().catch(() => {});
     });
 
     // Come back online
@@ -446,14 +452,16 @@ test.describe("103. Failed Message UI", () => {
     await triggerRefetch(page);
     await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible({ timeout: 15000 });
 
-    // Unblock the API
+    // Unblock the API, then go offline so the retried message stays queued
+    // (pending) observably instead of flushing instantly.
     await page.unroute("**/messaging/conversations/*/messages");
+    await page.context().setOffline(true);
 
-    // Click retry
+    // Click retry → message returns to the pending "will send when online" state
     await page.getByRole("button", { name: /retry/i }).click();
-
-    // Should show pending state again
     await expect(page.getByText(/sending when online|re-queued/i)).toBeVisible({ timeout: 5000 });
+
+    await page.context().setOffline(false);
   });
 
   test("103.3 discard removes the message from the conversation", async ({ page }) => {
