@@ -5,18 +5,35 @@
 // ownership (non-owner gets 403).
 import { test, expect, request as playwrightRequest } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
+import { execSync } from "child_process";
 
 const BASE = process.env.E2E_BASE_URL || "http://localhost:8000";
 
-// Identities. In the full stack these map to seeded sessions; here we drive the
-// API with the session header + csrf header per the documented convention.
 const ALICE = "e2e_alice@test.local"; // broadcaster / owner
 const BOB = "e2e_bob@test.local"; // feed viewer / non-owner
 
+// The dev X-User-Id header fallback is disabled when Cognito is configured, so
+// these endpoints require real cookie sessions. Load them fresh (keyed by short
+// name) and alias by user_sub so email ids resolve too.
+interface Sess { csrf_token: string; cookies: Array<{ name: string; value: string }>; user_sub: string }
+const _sessions: Record<string, Sess> = JSON.parse(
+  execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
+    cwd: "/home/ubuntu/testlogon",
+    timeout: 30_000,
+  }).toString(),
+);
+for (const k of Object.keys(_sessions)) {
+  const s = _sessions[k];
+  if (s?.user_sub && !_sessions[s.user_sub]) _sessions[s.user_sub] = s;
+}
+
 function authHeaders(identity: string, csrf = true): Record<string, string> {
-  const h: Record<string, string> = { "X-User-Id": identity };
-  // Non-GET cookie requests require a CSRF token in the real stack.
-  if (csrf) h["x-csrf-token"] = `csrf-${identity}`;
+  const s = _sessions[identity];
+  if (!s) throw new Error(`No session for ${identity}`);
+  const h: Record<string, string> = {
+    Cookie: s.cookies.map((c) => `${c.name}=${c.value}`).join("; "),
+  };
+  if (csrf) h["x-csrf-token"] = s.csrf_token;
   return h;
 }
 
@@ -41,18 +58,19 @@ async function createBroadcast(
   return body.id as string;
 }
 
-async function goLive(ctx: APIRequestContext, identity: string, id: string) {
+async function goLive(ctx: APIRequestContext, _identity: string, id: string) {
+  // start/stop require an operator role (admin/root), not the broadcast owner.
   const res = await ctx.post(`${BASE}/broadcast/sessions/${id}/start`, {
-    headers: authHeaders(identity),
-    data: {},
+    headers: authHeaders("root"),
+    data: { reason: "e2e" },
   });
   expect(res.ok()).toBeTruthy();
 }
 
-async function endBroadcast(ctx: APIRequestContext, identity: string, id: string) {
+async function endBroadcast(ctx: APIRequestContext, _identity: string, id: string) {
   const res = await ctx.post(`${BASE}/broadcast/sessions/${id}/stop`, {
-    headers: authHeaders(identity),
-    data: {},
+    headers: authHeaders("root"),
+    data: { reason: "e2e" },
   });
   expect(res.ok()).toBeTruthy();
 }
