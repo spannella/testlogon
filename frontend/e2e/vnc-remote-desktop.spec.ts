@@ -117,6 +117,18 @@ async function installApiMocks(page: Page): Promise<void> {
     });
   });
 
+  // Broad /ui/** catch-all (lowest priority) so background AppShell calls
+  // (e.g. /ui/theme, /ui/settings/preferences) never 401 and trigger the
+  // logout-on-401 cascade that redirects to /login. Specific /ui mocks below
+  // are registered later and therefore take priority.
+  await page.route("http://localhost:3000/ui/**", async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({}),
+    });
+  });
+
   await page.route("**/api/vnc/session", async (route: Route) => {
     const method = route.request().method();
 
