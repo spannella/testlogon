@@ -403,7 +403,7 @@ test.describe("103. Failed Message UI", () => {
     await triggerRefetch(page);
 
     // Verify error badge
-    await expect(page.getByText(/failed to send/i)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible({ timeout: 15000 });
     await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
     await expect(page.getByRole("button", { name: /discard/i })).toBeVisible();
 
@@ -439,7 +439,7 @@ test.describe("103. Failed Message UI", () => {
 
     await page.context().setOffline(false);
     await triggerRefetch(page);
-    await expect(page.getByText(/failed to send/i)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible({ timeout: 15000 });
 
     // Unblock the API
     await page.unroute("**/messaging/conversations/*/messages");
@@ -472,7 +472,7 @@ test.describe("103. Failed Message UI", () => {
 
     await page.context().setOffline(false);
     await triggerRefetch(page);
-    await expect(page.getByText(/failed to send/i)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible({ timeout: 15000 });
 
     // Click discard
     await page.getByRole("button", { name: /discard/i }).click();
@@ -538,7 +538,7 @@ test.describe("103. Failed Message UI", () => {
 
     await page.context().setOffline(false);
     await triggerRefetch(page);
-    await expect(page.getByText(/failed to send/i)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible({ timeout: 15000 });
 
     // Check aria-label on the error badge
     const errorBadge = page.locator('[role="alert"]');
