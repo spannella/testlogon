@@ -1164,6 +1164,12 @@ class Settings:
     kyc_cases_table_name: str = os.environ.get("KYC_CASES_TABLE_NAME", "kyc_cases")
     kyc_cases_owner_index_name: str = os.environ.get("KYC_CASES_OWNER_INDEX_NAME", "owner-updated-index")
     kyc_cases_status_index_name: str = os.environ.get("KYC_CASES_STATUS_INDEX_NAME", "status-updated-index")
+    # KYC-023: PII field-level encryption & audited decryption
+    kyc_encryption_enabled: bool = os.environ.get("KYC_ENCRYPTION_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    kyc_encryption_audit_enabled: bool = os.environ.get("KYC_ENCRYPTION_AUDIT_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    kyc_dek_rotation_days: int = int(os.environ.get("KYC_DEK_ROTATION_DAYS", "90"))
+    kyc_pii_reveal_timeout_seconds: int = int(os.environ.get("KYC_PII_REVEAL_TIMEOUT_SECONDS", "30"))
+    kyc_pii_audit_accessor_index_name: str = os.environ.get("KYC_PII_AUDIT_ACCESSOR_INDEX_NAME", "pii-audit-accessor-index")
     kyc_retention_rejected_days: int = int(os.environ.get("KYC_RETENTION_REJECTED_DAYS", "30"))
     kyc_retention_expired_days: int = int(os.environ.get("KYC_RETENTION_EXPIRED_DAYS", "7"))
     kyc_retention_approved_days: int = int(os.environ.get("KYC_RETENTION_APPROVED_DAYS", "365"))

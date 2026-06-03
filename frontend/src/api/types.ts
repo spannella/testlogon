@@ -12664,3 +12664,64 @@ export interface TemplatePreviewOut {
   unresolved_variables: string[];
   quick_replies?: QuickReply[] | null;
 }
+
+// ── KYC Data Encryption & Privacy (KYC-023) ──────────────────────────
+export interface PiiEncryptedFieldMeta {
+  field_name: string;
+  encrypted: boolean;
+  key_id: string;
+  algorithm: string;
+  encrypted_at: number;
+}
+
+export interface PiiMaskedResponse {
+  pii: Record<string, string>;
+  fields: PiiEncryptedFieldMeta[];
+}
+
+export interface PiiDecryptRequest {
+  fields: string[];
+  reason: string;
+}
+
+export interface PiiDecryptResponse {
+  pii: Record<string, string>;
+}
+
+export interface PiiWriteRequest {
+  expected_version: number;
+  pii: Record<string, string>;
+}
+
+export interface PiiWriteResponse {
+  ok: boolean;
+  fields_encrypted: string[];
+}
+
+export interface PiiAuditEvent {
+  event_id: string;
+  accessor_sub: string;
+  accessor_display_name: string;
+  action: string;
+  fields: string[];
+  reason: string;
+  ip_address: string;
+  created_at: number;
+}
+
+export interface PiiAuditLogResponse {
+  events: PiiAuditEvent[];
+  next_cursor: string | null;
+}
+
+export interface KeyRotationResponse {
+  ok: boolean;
+  new_version: number;
+  fields_re_encrypted: number;
+}
+
+export interface KeyDestroyResponse {
+  ok: boolean;
+  keys_destroyed: number;
+  fields_affected: number;
+}
