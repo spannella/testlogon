@@ -26,10 +26,23 @@ from app.contracts.kyc_cases_contract import (
     KycSignatureStatusEnvelope,
     KycQuestionnaireStatusEnvelope,
     KycStartQuestionnaireRequest,
+    PiiWriteRequest,
+    PiiWriteResponse,
+    PiiDecryptRequest,
+    PiiDecryptResponse,
+    PiiMaskedResponse,
+    PiiAuditLogResponse,
+    KeyRotationResponse,
+    KeyDestroyResponse,
     kyc_error_envelope,
     kyc_error_http_status,
 )
 from app.services.kyc_cases import KycCaseConflictError, KycCaseValidationError, STORE
+from app.services.kyc_encryption import (
+    ENCRYPTION,
+    KycEncryptionError,
+    KycKeysDestroyedError,
+)
 from app.services.alerts import audit_event
 from app.services.filemanager import get_node, norm_path
 from app.services.questionnaires_repository import DynamoQuestionnaireRepository
@@ -1292,3 +1305,223 @@ def signature_completion_status(
             pass
     audit_event("kyc_signature_status", user.sub, request, outcome="success", kyc_case_id=case_id, ready=payload.get("ready_for_submit_gate"))
     return KycSignatureStatusEnvelope.model_validate({"signature": payload})
+
+
+# ── KYC-023: PII encryption, masking & audited decryption ───────────────
+
+_PII_DECRYPT_REASON_MIN = 3
+
+
+def _client_ip(request: Request) -> str:
+    fwd = str(request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if fwd:
+        return fwd
+    return str(getattr(request.client, "host", "") or "")
+
+
+def _require_admin_or_root(user: AuthenticatedUser, request: Request, *, event: str) -> None:
+    if normalize_role(user.role) not in {Role.ADMIN, Role.ROOT}:
+        audit_event(event, user.sub, request, outcome="failure", reason="admin_role_required")
+        _raise_kyc_error("kyc_admin_role_required")
+
+
+def _require_root(user: AuthenticatedUser, request: Request, *, event: str) -> None:
+    if normalize_role(user.role) != Role.ROOT:
+        audit_event(event, user.sub, request, outcome="failure", reason="root_role_required")
+        raise HTTPException(status_code=403, detail={"detail": "Only root users can perform this action."})
+
+
+@router.post("/{case_id}/pii", response_model=PiiWriteResponse)
+def write_kyc_pii(
+    case_id: str,
+    body: PiiWriteRequest,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Encrypt and store PII fields onto the owner's draft KYC case (KYC-023)."""
+    case = STORE.get_case(case_id)
+    if not case:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    if case.get("user_sub") != user.sub:
+        audit_event("kyc_pii_write_denied", user.sub, request, outcome="failure", reason="forbidden", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+    if int(case.get("version") or 0) != int(body.expected_version):
+        _raise_kyc_error("kyc_case_update_conflict", details={"kyc_case_id": case_id, "expected_version": body.expected_version})
+
+    if not S.kyc_encryption_enabled:
+        # Feature disabled: no-op write, report nothing encrypted.
+        return PiiWriteResponse(ok=True, fields_encrypted=[])
+
+    try:
+        encrypted, hints = ENCRYPTION.encrypt_fields(data=dict(body.pii), user_sub=user.sub)
+    except KycEncryptionError as exc:
+        raise HTTPException(status_code=503, detail={"detail": "Encryption service temporarily unavailable.", "code": "kms_unavailable", "reason": str(exc)})
+    if encrypted:
+        STORE.set_encrypted_pii(case_id=case_id, encrypted_pii=encrypted, pii_hints=hints)
+        ENCRYPTION.log_access(
+            accessor_sub=user.sub,
+            case_id=case_id,
+            fields_accessed=list(encrypted.keys()),
+            reason="owner_write",
+            action="encrypt",
+            ip_address=_client_ip(request),
+        )
+    audit_event("kyc_pii_written", user.sub, request, outcome="success", kyc_case_id=case_id, fields=list(encrypted.keys()))
+    return PiiWriteResponse(ok=True, fields_encrypted=list(encrypted.keys()))
+
+
+@router.get("/{case_id}/pii/masked", response_model=PiiMaskedResponse)
+def get_kyc_pii_masked(
+    case_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Return masked PII for a case (owner or any admin/root). No KMS call."""
+    case = STORE.get_case(case_id)
+    if not case:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    role = normalize_role(user.role)
+    is_owner = case.get("user_sub") == user.sub
+    if not is_owner and role not in {Role.ADMIN, Role.ROOT}:
+        audit_event("kyc_pii_masked_denied", user.sub, request, outcome="failure", reason="forbidden", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+
+    encrypted_pii = case.get("encrypted_pii") or {}
+    hints = case.get("pii_hints") or {}
+    masked = ENCRYPTION.mask_fields(encrypted_data=encrypted_pii, hints=hints)
+    field_meta = [
+        {
+            "field_name": fn,
+            "encrypted": True,
+            "key_id": str((ef or {}).get("key_id") or ""),
+            "algorithm": str((ef or {}).get("algorithm") or "AES-256-GCM"),
+            "encrypted_at": int((ef or {}).get("encrypted_at") or 0),
+        }
+        for fn, ef in encrypted_pii.items()
+    ]
+    audit_event("kyc_pii_masked", user.sub, request, outcome="success", kyc_case_id=case_id)
+    return PiiMaskedResponse.model_validate({"pii": masked, "fields": field_meta})
+
+
+@router.post("/{case_id}/pii/decrypt", response_model=PiiDecryptResponse)
+def decrypt_kyc_pii(
+    case_id: str,
+    body: PiiDecryptRequest,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Decrypt requested PII fields for the assigned admin (or root). Audited."""
+    _require_admin_or_root(user, request, event="kyc_pii_decrypt_denied")
+    case = STORE.get_case(case_id)
+    if not case:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+
+    role = normalize_role(user.role)
+    assigned = str((case.get("review") or {}).get("assigned_admin_sub") or "").strip()
+    if role != Role.ROOT and not (assigned and assigned == user.sub):
+        audit_event("kyc_pii_decrypt_denied", user.sub, request, outcome="failure", reason="not_assigned", kyc_case_id=case_id)
+        raise HTTPException(status_code=403, detail={"detail": "Only the assigned reviewer can decrypt PII for this case.", "code": "pii_not_assigned"})
+
+    encrypted_pii = case.get("encrypted_pii") or {}
+    if not encrypted_pii:
+        return PiiDecryptResponse(pii={})
+    unknown = [f for f in body.fields if f not in encrypted_pii]
+    if unknown:
+        raise HTTPException(status_code=400, detail={"detail": "Requested field is not encrypted on this case.", "code": "pii_field_not_found", "fields": unknown})
+
+    try:
+        decrypted = ENCRYPTION.decrypt_fields(
+            encrypted_data=encrypted_pii,
+            accessor_sub=user.sub,
+            access_reason=body.reason,
+            case_id=case_id,
+            user_sub=str(case.get("user_sub") or ""),
+            fields=list(body.fields),
+            ip_address=_client_ip(request),
+        )
+    except KycKeysDestroyedError:
+        audit_event("kyc_pii_decrypt_denied", user.sub, request, outcome="failure", reason="keys_destroyed", kyc_case_id=case_id)
+        raise HTTPException(status_code=410, detail={"detail": "PII data has been permanently erased and cannot be recovered.", "code": "pii_keys_destroyed"})
+    except KycEncryptionError:
+        raise HTTPException(status_code=500, detail={"detail": "Unable to decrypt data. Please try again or contact support.", "code": "pii_decrypt_error"})
+
+    audit_event("kyc_pii_decrypted", user.sub, request, outcome="success", kyc_case_id=case_id, fields=list(decrypted.keys()))
+    return PiiDecryptResponse(pii=decrypted)
+
+
+# IMPORTANT: the accessor route ("/admin/pii/audit-log") MUST be declared before
+# the case-scoped route ("/{case_id}/pii/audit-log"); otherwise FastAPI matches
+# ``case_id="admin"`` for the accessor URL and serves the wrong handler.
+@router.get("/admin/pii/audit-log", response_model=PiiAuditLogResponse)
+def get_kyc_pii_audit_log_by_accessor(
+    request: Request,
+    accessor: str = Query(..., min_length=1),
+    limit: int = Query(default=100, ge=1, le=200),
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """PII access audit log filtered by accessor sub (root only)."""
+    _require_root(user, request, event="kyc_pii_audit_denied")
+    result = ENCRYPTION.get_access_log(accessor_sub=accessor, limit=limit)
+    audit_event("kyc_pii_audit_read", user.sub, request, outcome="success", accessor=accessor)
+    return PiiAuditLogResponse.model_validate({"events": result["events"], "next_cursor": None})
+
+
+@router.get("/{case_id}/pii/audit-log", response_model=PiiAuditLogResponse)
+def get_kyc_pii_audit_log(
+    case_id: str,
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=200),
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """PII access audit log for a single case (root only)."""
+    _require_root(user, request, event="kyc_pii_audit_denied")
+    result = ENCRYPTION.get_access_log(case_id=case_id, limit=limit)
+    audit_event("kyc_pii_audit_read", user.sub, request, outcome="success", kyc_case_id=case_id)
+    return PiiAuditLogResponse.model_validate({"events": result["events"], "next_cursor": None})
+
+
+# NOTE: the path param is named ``subject_sub`` (not ``user_sub``) deliberately —
+# ``require_ui_session`` declares a ``user_sub`` parameter, and a same-named path
+# param would shadow it and break session resolution ("Unknown session").
+@router.post("/admin/encryption/rotate-key/{subject_sub}", response_model=KeyRotationResponse)
+def rotate_kyc_user_dek(
+    subject_sub: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Rotate a user's data encryption key, re-encrypting their PII (root only)."""
+    _require_root(user, request, event="kyc_pii_rotate_denied")
+    try:
+        result = ENCRYPTION.rotate_user_dek(subject_sub)
+    except KycEncryptionError as exc:
+        raise HTTPException(status_code=503, detail={"detail": "Encryption service temporarily unavailable.", "code": "kms_unavailable", "reason": str(exc)})
+    audit_event("kyc_pii_key_rotated", user.sub, request, outcome="success", target_user=subject_sub, new_version=result["new_version"])
+    return KeyRotationResponse(ok=True, new_version=int(result["new_version"]), fields_re_encrypted=int(result["fields_re_encrypted"]))
+
+
+@router.post("/admin/encryption/destroy-keys/{subject_sub}", response_model=KeyDestroyResponse)
+def destroy_kyc_user_keys(
+    subject_sub: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Permanently destroy a user's encryption keys (GDPR erasure, root only)."""
+    _require_root(user, request, event="kyc_pii_destroy_denied")
+    result = ENCRYPTION.destroy_user_keys(subject_sub)
+    audit_event(
+        "kyc_pii_keys_destroyed",
+        user.sub,
+        request,
+        outcome="success",
+        target_user=subject_sub,
+        keys_destroyed=result["keys_destroyed"],
+        fields_affected=result["fields_affected"],
+    )
+    return KeyDestroyResponse(ok=True, keys_destroyed=int(result["keys_destroyed"]), fields_affected=int(result["fields_affected"]))

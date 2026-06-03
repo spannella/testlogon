@@ -94,7 +94,10 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": S.kyc_cases_owner_index_name, "partition_key": "gsi_owner_pk", "sort_key": "gsi_owner_sk"},
                 {"index_name": S.kyc_cases_status_index_name, "partition_key": "gsi_status_pk", "sort_key": "gsi_status_sk"},
+                # KYC-023: PII access audit log, queryable by accessor (newest first).
+                {"index_name": S.kyc_pii_audit_accessor_index_name, "partition_key": "gsi_pii_accessor_pk", "sort_key": "gsi_pii_accessor_sk"},
             ],
+            attr_types={"gsi_pii_accessor_sk": "N"},
         ),
         TableDef(
             _resolve_table_name(S.projects_table_name, "projects"),

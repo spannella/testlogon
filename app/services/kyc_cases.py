@@ -242,6 +242,39 @@ class KycCaseStore:
             raise
         return self.get_case(case_id)
 
+    def set_encrypted_pii(
+        self,
+        *,
+        case_id: str,
+        encrypted_pii: dict[str, Any],
+        pii_hints: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Persist KYC-023 encrypted PII + masking hints onto a case META item.
+
+        Merges with any previously-encrypted fields so repeated writes (e.g.
+        adding tax_id after document_number) accumulate rather than replace.
+        Does not bump the optimistic ``version`` — PII writes are out-of-band
+        from the case state machine.
+        """
+        existing = self.get_case(case_id)
+        if not existing:
+            return None
+        merged_pii = dict(existing.get("encrypted_pii") or {})
+        merged_pii.update(encrypted_pii or {})
+        merged_hints = dict(existing.get("pii_hints") or {})
+        merged_hints.update(pii_hints or {})
+        ts = now_ts()
+        self._table.update_item(
+            Key={"pk": _case_pk(case_id), "sk": "META"},
+            UpdateExpression="SET encrypted_pii=:e, pii_hints=:h, updated_at=:u",
+            ExpressionAttributeValues={
+                ":e": merged_pii,
+                ":h": merged_hints,
+                ":u": ts,
+            },
+        )
+        return self.get_case(case_id)
+
     def update_case_links(
         self,
         *,

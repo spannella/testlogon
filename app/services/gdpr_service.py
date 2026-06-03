@@ -143,6 +143,18 @@ def create_deletion_request(user_sub: str, reason: Optional[str] = None) -> Dict
         item["deletion_reason"] = reason
     T.data_requests.put_item(Item=item)
     _write_audit(request_id, user_sub, "created", {"request_type": "deletion", "grace_period_ends_at": grace_ends})
+
+    # KYC-023: GDPR right-to-be-forgotten — permanently destroy the user's KYC
+    # PII encryption keys so all encrypted_pii ciphertext becomes unrecoverable.
+    # Best-effort: a key-destruction failure must not block the deletion request.
+    try:
+        from app.services.kyc_encryption import ENCRYPTION as _KYC_ENCRYPTION
+
+        destroyed = _KYC_ENCRYPTION.destroy_user_keys(user_sub)
+        _write_audit(request_id, user_sub, "kyc_keys_destroyed", destroyed)
+    except Exception:  # pragma: no cover - defensive
+        pass
+
     return item
 
 

@@ -255,6 +255,78 @@ class KycAdminDecisionRequest(BaseModel):
     note: str = Field(..., min_length=1, max_length=2000)
 
 
+# ── KYC Data Encryption & Privacy (KYC-023) ────────────────────────
+
+
+class EncryptedFieldOut(BaseModel):
+    field_name: str
+    encrypted: bool = True
+    key_id: str = ""
+    algorithm: str = "AES-256-GCM"
+    encrypted_at: int = 0
+
+
+class PiiWriteRequest(BaseModel):
+    """Owner-supplied PII to encrypt onto a draft KYC case."""
+
+    expected_version: int = Field(..., ge=1)
+    pii: dict[str, str] = Field(
+        ..., min_length=1, description="Map of field_name -> plaintext PII value"
+    )
+
+
+class PiiWriteResponse(BaseModel):
+    ok: bool = True
+    fields_encrypted: list[str] = Field(default_factory=list)
+
+
+class PiiDecryptRequest(BaseModel):
+    fields: list[str] = Field(
+        ..., min_length=1, max_length=10, description="PII field names to decrypt"
+    )
+    reason: str = Field(
+        ..., min_length=3, max_length=500,
+        description="Reason for accessing PII (required for audit)",
+    )
+
+
+class PiiDecryptResponse(BaseModel):
+    pii: dict[str, str] = Field(default_factory=dict)
+
+
+class PiiMaskedResponse(BaseModel):
+    pii: dict[str, str] = Field(default_factory=dict)
+    fields: list[EncryptedFieldOut] = Field(default_factory=list)
+
+
+class PiiAuditEvent(BaseModel):
+    event_id: str
+    accessor_sub: str
+    accessor_display_name: str = ""
+    action: str  # "decrypt", "encrypt", "mask", "delete"
+    fields: list[str] = Field(default_factory=list)
+    reason: str = ""
+    ip_address: str = ""
+    created_at: int = 0
+
+
+class PiiAuditLogResponse(BaseModel):
+    events: list[PiiAuditEvent] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+class KeyRotationResponse(BaseModel):
+    ok: bool = True
+    new_version: int = 0
+    fields_re_encrypted: int = 0
+
+
+class KeyDestroyResponse(BaseModel):
+    ok: bool = True
+    keys_destroyed: int = 0
+    fields_affected: int = 0
+
+
 _ERROR_MESSAGES: dict[str, str] = {
     "kyc_case_not_found": "KYC case not found.",
     "kyc_access_forbidden": "You are not allowed to access this KYC case.",
