@@ -157,6 +157,14 @@ def session_to_item(session: BroadcastSessionModel) -> Dict[str, Any]:
         "guest_invite_enabled": session.guest_invite_enabled,
         # Viewer Clip Creation (ENGAGE-005)
         "clips_enabled": session.clips_enabled,
+        # Ad Breaks (ADS-006)
+        "pre_roll_enabled": session.pre_roll_enabled,
+        "pre_roll_creative_id": session.pre_roll_creative_id,
+        "mid_roll_ad_break_duration_seconds": session.mid_roll_ad_break_duration_seconds,
+        "mid_roll_skip_after_seconds": session.mid_roll_skip_after_seconds,
+        "ad_break_active": session.ad_break_active,
+        "ad_break_started_at": session.ad_break_started_at,
+        "total_ad_breaks": session.total_ad_breaks,
     }
     # Remove None values to avoid DynamoDB issues with GSI sort keys
     return {k: v for k, v in item.items() if v is not None}
@@ -210,6 +218,14 @@ def session_from_item(item: Dict[str, Any]) -> BroadcastSessionModel:
         guest_invite_enabled=bool(item.get("guest_invite_enabled", False)),
         # Viewer Clip Creation (ENGAGE-005)
         clips_enabled=bool(item.get("clips_enabled", True)),
+        # Ad Breaks (ADS-006)
+        pre_roll_enabled=bool(item.get("pre_roll_enabled", True)),
+        pre_roll_creative_id=item.get("pre_roll_creative_id"),
+        mid_roll_ad_break_duration_seconds=int(item.get("mid_roll_ad_break_duration_seconds", 30) or 30),
+        mid_roll_skip_after_seconds=int(item.get("mid_roll_skip_after_seconds", 15) or 15),
+        ad_break_active=bool(item.get("ad_break_active", False)),
+        ad_break_started_at=int(item["ad_break_started_at"]) if item.get("ad_break_started_at") is not None else None,
+        total_ad_breaks=int(item.get("total_ad_breaks", 0) or 0),
     )
 
 
@@ -221,6 +237,9 @@ def create_session(
     stream_key_ref: str | None = None,
     stream_key_last_rotated_at: str | None = None,
     stream_key_rotation_interval_seconds: int = 86400,
+    pre_roll_enabled: bool = True,
+    mid_roll_ad_break_duration_seconds: int = 30,
+    mid_roll_skip_after_seconds: int = 15,
 ) -> BroadcastSessionModel:
     enforce_secret_reference_only("stream_key_ref", stream_key_ref)
     ts = now_iso()
@@ -235,6 +254,10 @@ def create_session(
         created_by=created_by,
         created_at=ts,
         updated_at=ts,
+        # Ad Breaks (ADS-006)
+        pre_roll_enabled=pre_roll_enabled,
+        mid_roll_ad_break_duration_seconds=mid_roll_ad_break_duration_seconds,
+        mid_roll_skip_after_seconds=mid_roll_skip_after_seconds,
     )
     T.broadcast_sessions.put_item(
         Item=session_to_item(session),

@@ -9,10 +9,19 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { MediaPlayer, type MediaError } from "@/components/shared/MediaPlayer";
 import { mintPlaybackUrl, getSession, type BroadcastSession } from "@/api/endpoints/broadcast";
+import {
+  adJoin,
+  endAdBreak,
+  trackAdEvent,
+  type BroadcastPreRoll,
+} from "@/api/endpoints/broadcast-ads";
+import { useBroadcastStream } from "@/hooks/useBroadcastStream";
 import { useAuthStore } from "@/stores/authStore";
 import { BroadcastChat } from "./BroadcastChat";
 import { ChatOverlay } from "./ChatOverlay";
 import { ProductShelf } from "./ProductShelf";
+import { AdOverlay } from "./AdOverlay";
+import { AdBreakButton } from "./AdBreakButton";
 import { type ChatMessage } from "@/api/endpoints/broadcast-chat";
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -38,6 +47,32 @@ export default function LivePlayer() {
   const [showShelf, setShowShelf] = useState(true);
   const [overlayEnabled, setOverlayEnabled] = useState(false);
   const [chatMessages] = useState<ChatMessage[]>([]);
+
+  // ─── Ad breaks (ADS-006) ──────────────────────────────────────
+  const userId = useAuthStore((s) => s.userId);
+  const [preRoll, setPreRoll] = useState<BroadcastPreRoll | null>(null);
+  const [preRollDone, setPreRollDone] = useState(false);
+  const [adFree, setAdFree] = useState(false);
+
+  const isBroadcaster = !!session && session.created_by === userId;
+
+  // SSE mid-roll signalling. Disabled for the broadcaster and ad-free viewers.
+  const { adBreak, clearAdBreak } = useBroadcastStream(
+    sessionId ?? null,
+    !!sessionId && !isBroadcaster && !adFree,
+  );
+  const showMidRoll = adBreak.active && !isBroadcaster && !adFree;
+
+  // Mid-roll uses the same stub house creative as pre-roll.
+  const midRollAd = showMidRoll
+    ? {
+        creative_id: "bcast_house_broadcast_midroll",
+        format: "video",
+        video_url: "/mock/s3/ad-creatives/bcast_house_broadcast_midroll.mp4",
+        image_url: null,
+        cta_url: null,
+      }
+    : null;
 
   // ─── Fetch session info ───────────────────────────────────────
 
@@ -75,12 +110,36 @@ export default function LivePlayer() {
     },
   });
 
+  // ─── Pre-roll ad fetch on join (ADS-006) ─────────────────────
+
+  const adJoinMutation = useMutation({
+    mutationFn: () => adJoin(sessionId!),
+    onSuccess: (data) => {
+      setAdFree(data.ad_free);
+      if (data.pre_roll && !data.ad_free) {
+        setPreRoll(data.pre_roll);
+      } else {
+        setPreRollDone(true);
+      }
+    },
+    onError: () => {
+      // Ad-join failure must never block playback.
+      setPreRollDone(true);
+    },
+  });
+
   // ─── Initialize ───────────────────────────────────────────────
 
   useEffect(() => {
     if (!sessionId || !isAuthenticated) return;
     sessionMutation.mutate();
   }, [sessionId, isAuthenticated]);
+
+  useEffect(() => {
+    if (!session || !isAuthenticated) return;
+    adJoinMutation.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
 
   useEffect(() => {
     if (!session || !isAuthenticated) return;
@@ -168,6 +227,51 @@ export default function LivePlayer() {
             {isLive && (
               <ChatOverlay messages={chatMessages} enabled={overlayEnabled} />
             )}
+
+            {/* Pre-roll ad overlay (ADS-006) — blocks the stream until skipped/complete */}
+            {preRoll && !preRollDone && (
+              <AdOverlay
+                ad={preRoll}
+                skipAfterSeconds={preRoll.skip_after_seconds}
+                label="Sponsored"
+                onImpression={() =>
+                  trackAdEvent(sessionId!, preRoll.creative_id, "impression", "broadcast_preroll")
+                }
+                onSkip={() => {
+                  trackAdEvent(sessionId!, preRoll.creative_id, "skip", "broadcast_preroll");
+                  setPreRollDone(true);
+                }}
+                onComplete={() => {
+                  trackAdEvent(sessionId!, preRoll.creative_id, "complete", "broadcast_preroll");
+                  setPreRollDone(true);
+                }}
+                onCtaClick={(url) => {
+                  trackAdEvent(sessionId!, preRoll.creative_id, "click", "broadcast_preroll");
+                  window.open(url, "_blank", "noopener");
+                }}
+              />
+            )}
+
+            {/* Mid-roll ad overlay (ADS-006) — appears on ad_break:start SSE */}
+            {midRollAd && (
+              <AdOverlay
+                ad={midRollAd}
+                skipAfterSeconds={adBreak.skipAfterSeconds}
+                durationSeconds={adBreak.durationSeconds}
+                label="Ad Break"
+                onImpression={() =>
+                  trackAdEvent(sessionId!, midRollAd.creative_id, "impression", "broadcast_midroll")
+                }
+                onSkip={() => {
+                  trackAdEvent(sessionId!, midRollAd.creative_id, "skip", "broadcast_midroll");
+                  clearAdBreak();
+                }}
+                onComplete={() => {
+                  trackAdEvent(sessionId!, midRollAd.creative_id, "complete", "broadcast_midroll");
+                  clearAdBreak();
+                }}
+              />
+            )}
             {playbackUrl ? (
               <MediaPlayer
                 src={playbackUrl}
@@ -248,6 +352,32 @@ export default function LivePlayer() {
           >
             {showShelf ? "Hide Products" : "Show Products"}
           </Button>
+
+          {/* Broadcaster ad-break controls (ADS-006) */}
+          {isBroadcaster && sessionId && (
+            <div className="ml-auto flex items-center gap-2">
+              <AdBreakButton
+                sessionId={sessionId}
+                isLive={isLive}
+                adBreakActive={adBreak.active}
+                durationSeconds={session?.mid_roll_ad_break_duration_seconds ?? 30}
+              />
+              {adBreak.active && (
+                <Button
+                  data-testid="ad-break-end-button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-gray-400 hover:text-white text-xs"
+                  onClick={() => {
+                    endAdBreak(sessionId);
+                    clearAdBreak();
+                  }}
+                >
+                  End Ad Break
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       )}
 

@@ -89,6 +89,15 @@ class BroadcastSessionModel(BaseModel):
     # Viewer Clip Creation (ENGAGE-005)
     clips_enabled: bool = True
 
+    # Ad Breaks (ADS-006)
+    pre_roll_enabled: bool = True
+    pre_roll_creative_id: Optional[str] = None  # Specific creative or None for dynamic
+    mid_roll_ad_break_duration_seconds: int = 30  # 15, 30, or 60
+    mid_roll_skip_after_seconds: int = 15
+    ad_break_active: bool = False
+    ad_break_started_at: Optional[int] = None
+    total_ad_breaks: int = 0
+
 
 class BroadcastOutputModel(BaseModel):
     session_id: str = Field(min_length=1)

@@ -88,6 +88,7 @@ class Tables:
     broadcast_private_sessions: Any
     broadcast_inputs: Any
     broadcast_tip_goals: Any
+    broadcast_ad_events: Any
     video_views: Any
     video_likes: Any
     ad_impressions: Any
@@ -212,6 +213,7 @@ T = Tables(
     broadcast_private_sessions=ddb.Table(S.broadcast_private_sessions_table_name),
     broadcast_inputs=ddb.Table(S.broadcast_inputs_table_name),
     broadcast_tip_goals=ddb.Table(S.broadcast_tip_goals_table_name),
+    broadcast_ad_events=ddb.Table(S.broadcast_ad_events_table_name),
     video_views=ddb.Table(S.video_views_table_name),
     video_likes=ddb.Table(S.video_likes_table_name),
     ad_impressions=ddb.Table(S.ad_impressions_table_name),

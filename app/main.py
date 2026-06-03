@@ -72,6 +72,7 @@ from app.routers.social import router as social_router
 from app.routers.discovery import router as discovery_router
 from app.routers.search import router as search_router
 from app.routers.broadcast import router as broadcast_router
+from app.routers.broadcast_ads import router as broadcast_ads_router
 from app.routers.broadcast_clips import router as broadcast_clips_router
 from app.routers.broadcast_devtools import router as broadcast_devtools_router
 from app.routers.entitlements import router as entitlements_router
@@ -394,6 +395,7 @@ def create_app() -> FastAPI:
     app.include_router(discovery_router)
     app.include_router(search_router)
     app.include_router(broadcast_router)
+    app.include_router(broadcast_ads_router)
     app.include_router(broadcast_clips_router)
     app.include_router(broadcast_devtools_router)
     app.include_router(tickets_router)

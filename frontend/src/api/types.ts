@@ -4492,3 +4492,25 @@ export interface SsoProviderStatsOut {
   last_login_at?: number;
   status: string;
 }
+
+// ─── Broadcast Ad Breaks (ADS-006) ───────────────────────────────
+
+export interface BroadcastPreRoll {
+  creative_id: string;
+  format: string;
+  video_url?: string | null;
+  image_url?: string | null;
+  cta_url?: string | null;
+  skip_after_seconds: number;
+  impression_url: string;
+  click_url: string;
+  skip_url: string;
+}
+
+export interface BroadcastJoinResponse {
+  session_id: string;
+  stream_url?: string | null;
+  pre_roll?: BroadcastPreRoll | null;
+  ad_free: boolean;
+  mid_roll_skip_after_seconds: number;
+}
