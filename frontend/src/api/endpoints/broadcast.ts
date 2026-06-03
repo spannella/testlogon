@@ -62,6 +62,14 @@ export interface BroadcastSession {
   tip_max_cents?: number;
   // Viewer Clip Creation (ENGAGE-005)
   clips_enabled?: boolean;
+  // Ad Breaks (ADS-006)
+  pre_roll_enabled?: boolean;
+  pre_roll_creative_id?: string | null;
+  mid_roll_ad_break_duration_seconds?: number;
+  mid_roll_skip_after_seconds?: number;
+  ad_break_active?: boolean;
+  ad_break_started_at?: number | null;
+  total_ad_breaks?: number;
 }
 
 export interface BroadcastTipGoal {

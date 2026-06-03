@@ -982,6 +982,16 @@ def _table_defs() -> List[TableDef]:
             "session_id",
             "goal_id",
         ),
+        # Broadcast Ad Events (ADS-006) — pre-roll/mid-roll impression/skip/complete/click tracking
+        TableDef(
+            _resolve_table_name(S.broadcast_ad_events_table_name, "BroadcastAdEvents"),
+            "session_id",
+            "event_sk",
+            gsi=[
+                {"index_name": "BySessionCreatedAt", "partition_key": "session_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Broadcast Private Sessions (BCAST-011/012)
         TableDef(
             os.environ.get("DDB_BROADCAST_PRIVATE_SESSIONS", "BroadcastPrivateSessions"),

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.services.broadcast_store import (
     create_profile,
@@ -109,6 +109,17 @@ class BroadcastSessionCreateIn(BaseModel):
     stream_key_ref: Optional[str] = Field(default=None, max_length=512)
     stream_key_last_rotated_at: Optional[str] = None
     stream_key_rotation_interval_seconds: int = Field(default=86400, ge=60)
+    # Ad Breaks (ADS-006)
+    pre_roll_enabled: bool = Field(default=True)
+    mid_roll_ad_break_duration_seconds: int = Field(default=30, ge=15, le=60)
+    mid_roll_skip_after_seconds: int = Field(default=15, ge=5, le=30)
+
+    @field_validator("mid_roll_ad_break_duration_seconds")
+    @classmethod
+    def _validate_midroll_duration(cls, v):
+        if v not in (15, 30, 60):
+            raise ValueError("mid_roll_ad_break_duration_seconds must be 15, 30, or 60")
+        return v
 
 
 class BroadcastSessionActionIn(BaseModel):
@@ -150,6 +161,14 @@ class BroadcastSessionOut(BaseModel):
     tip_max_cents: int = 100000
     # Viewer Clip Creation (ENGAGE-005)
     clips_enabled: bool = True
+    # Ad Breaks (ADS-006)
+    pre_roll_enabled: bool = True
+    pre_roll_creative_id: Optional[str] = None
+    mid_roll_ad_break_duration_seconds: int = 30
+    mid_roll_skip_after_seconds: int = 15
+    ad_break_active: bool = False
+    ad_break_started_at: Optional[int] = None
+    total_ad_breaks: int = 0
 
 
 class BroadcastScheduleIn(BaseModel):
@@ -272,6 +291,9 @@ def create_session_route(body: BroadcastSessionCreateIn, request: Request, ctx: 
         stream_key_ref=body.stream_key_ref,
         stream_key_last_rotated_at=body.stream_key_last_rotated_at,
         stream_key_rotation_interval_seconds=body.stream_key_rotation_interval_seconds,
+        pre_roll_enabled=body.pre_roll_enabled,
+        mid_roll_ad_break_duration_seconds=body.mid_roll_ad_break_duration_seconds,
+        mid_roll_skip_after_seconds=body.mid_roll_skip_after_seconds,
     )
     record_broadcast_action(
         action="create_session",

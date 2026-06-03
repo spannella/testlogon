@@ -226,6 +226,7 @@ class Tables:
     sso_sessions: Any
     sso_assertion_cache: Any
     broadcast_clips: Any
+    broadcast_ad_events: Any
     llm_provider_keys: Any
     delegates: Any
     delegation_api_keys: Any
@@ -461,6 +462,7 @@ T = Tables(
     sso_sessions=_safe_table(S.sso_sessions_table_name),
     sso_assertion_cache=_safe_table(S.sso_assertion_cache_table_name),
     broadcast_clips=_safe_table(S.broadcast_clips_table_name),
+    broadcast_ad_events=_safe_table(S.broadcast_ad_events_table_name),
     llm_provider_keys=_safe_table(S.llm_provider_keys_table_name),
     delegates=_safe_table(S.delegates_table_name),
     delegation_api_keys=_safe_table(S.delegation_api_keys_table_name),

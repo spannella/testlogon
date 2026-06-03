@@ -95,6 +95,14 @@ class BroadcastSessionModel(BaseModel):
     # "private": gated — only the creator + allowlisted viewers (or valid invite token) may join/play
     broadcast_privacy_visibility: str = "public"
     broadcast_privacy_updated_at: Optional[str] = None
+    # Ad Breaks (ADS-006)
+    pre_roll_enabled: bool = True
+    pre_roll_creative_id: Optional[str] = None  # Specific creative or None for dynamic
+    mid_roll_ad_break_duration_seconds: int = 30  # 15, 30, or 60
+    mid_roll_skip_after_seconds: int = 15
+    ad_break_active: bool = False
+    ad_break_started_at: Optional[int] = None
+    total_ad_breaks: int = 0
 
 
 class BroadcastOutputModel(BaseModel):
