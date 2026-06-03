@@ -1071,6 +1071,12 @@ class Settings:
     kyc_review_ticket_space_id: str = os.environ.get("KYC_REVIEW_TICKET_SPACE_ID", "kyc-ops")
     kyc_review_ticket_category: str = os.environ.get("KYC_REVIEW_TICKET_CATEGORY", "kyc_review")
 
+    # KYC Analytics & Funnel Dashboard (KYC-024)
+    kyc_analytics_precompute_enabled: bool = os.environ.get("KYC_ANALYTICS_PRECOMPUTE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    kyc_analytics_cache_ttl: int = int(os.environ.get("KYC_ANALYTICS_CACHE_TTL", "300"))
+    kyc_analytics_max_scan_items: int = int(os.environ.get("KYC_ANALYTICS_MAX_SCAN_ITEMS", "10000"))
+    kyc_analytics_trend_max_periods: int = int(os.environ.get("KYC_ANALYTICS_TREND_MAX_PERIODS", "90"))
+
     # Video metadata (VOD-001)
     video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")
     vod_entitlements_table_name: str = os.environ.get("DDB_VOD_ENTITLEMENTS", "VodEntitlements")

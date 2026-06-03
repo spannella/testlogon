@@ -86,6 +86,8 @@ from app.routers.browser_ssh_terminal import (
 from app.routers.questionnaires import router as questionnaires_router
 from app.routers.vnc_sessions import router as vnc_sessions_router
 from app.routers.kyc_cases import router as kyc_cases_router
+from app.routers.kyc_analytics import router as kyc_analytics_router
+from app.services.kyc_analytics import start_kyc_analytics_precompute_task
 from app.routers.playback_entitlements import router as playback_entitlements_router
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
@@ -404,6 +406,8 @@ def create_app() -> FastAPI:
     app.include_router(browser_ssh_terminal_router)
     app.include_router(questionnaires_router)
     app.include_router(kyc_cases_router)
+    app.include_router(kyc_analytics_router)
+    app.add_event_handler("startup", start_kyc_analytics_precompute_task)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
     # Recommendation routes MUST be registered before video_listing_router
