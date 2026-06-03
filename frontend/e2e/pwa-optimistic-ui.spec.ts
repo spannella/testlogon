@@ -103,7 +103,7 @@ let dmConvoId: string;
 // ────────────────────────────────────────────────────────────────
 
 test.describe("102. Offline Message Optimistic Display", () => {
-  test.beforeAll(async ({ browser }) => {
+  test.beforeEach(async ({ browser }) => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
@@ -363,7 +363,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
 // ────────────────────────────────────────────────────────────────
 
 test.describe("103. Failed Message UI", () => {
-  test.beforeAll(async ({ browser }) => {
+  test.beforeEach(async ({ browser }) => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
@@ -458,8 +458,8 @@ test.describe("103. Failed Message UI", () => {
     await page.context().setOffline(true);
 
     // Click retry → message returns to the pending "will send when online" state
-    await page.getByRole("button", { name: /retry/i }).click();
-    await expect(page.getByText(/sending when online|re-queued/i)).toBeVisible({ timeout: 5000 });
+    await page.getByRole("button", { name: /retry/i }).first().click();
+    await expect(page.getByText(/sending when online|re-queued/i).first()).toBeVisible({ timeout: 5000 });
 
     await page.context().setOffline(false);
   });
@@ -487,11 +487,13 @@ test.describe("103. Failed Message UI", () => {
     await triggerRefetch(page);
     await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible({ timeout: 15000 });
 
+    // Wait for the optimistic message to settle to a single bubble before discarding.
+    await expect(page.locator("p").filter({ hasText: testMsg })).toHaveCount(1, { timeout: 7000 });
     // Click discard
     await page.getByRole("button", { name: /discard/i }).click();
 
     // Message should be removed
-    await expect(page.locator("p").filter({ hasText: testMsg })).not.toBeVisible({ timeout: 5000 });
+    await expect(page.locator("p").filter({ hasText: testMsg })).toHaveCount(0, { timeout: 7000 });
 
     // Toast should confirm
     await expect(page.getByText(/discarded/i)).toBeVisible({ timeout: 5000 });
@@ -699,7 +701,7 @@ test.describe("104. Offline Feed Post Optimistic", () => {
 // ────────────────────────────────────────────────────────────────
 
 test.describe("105. Offline Queue Banner Integration", () => {
-  test.beforeAll(async ({ browser }) => {
+  test.beforeEach(async ({ browser }) => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
@@ -798,7 +800,7 @@ test.describe("105. Offline Queue Banner Integration", () => {
 test.describe("106. Group Chat Offline Optimistic", () => {
   let groupConvoId: string;
 
-  test.beforeAll(async ({ browser }) => {
+  test.beforeEach(async ({ browser }) => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);

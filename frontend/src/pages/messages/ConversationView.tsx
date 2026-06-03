@@ -1190,7 +1190,12 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           };
           // Only queue non-scheduled messages — scheduled messages need server-side
           // delivery at the chosen time and should not be silently deferred.
-          if (!isOnline && !fullPayload.send_at) {
+          // Use the synchronous navigator.onLine as well as the store flag: the
+          // store's isOnline lags the browser offline event by a tick, and a send
+          // fired in that window would otherwise take the online path and create a
+          // second optimistic bubble.
+          const browserOffline = typeof navigator !== "undefined" && !navigator.onLine;
+          if ((!isOnline || browserOffline) && !fullPayload.send_at) {
             const queueId = `offline-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
             // 1. Add to persistent queue with known ID
@@ -1215,16 +1220,10 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
               },
             };
 
-            queryClient.setQueryData<InfiniteData<MessagesPage>>(
-              ["messages", convoId],
-              (old) => {
-                if (!old?.pages.length) return old;
-                const pages = old.pages.map((p, i) =>
-                  i === 0 ? { ...p, messages: [optimisticOffline, ...(p.messages ?? [])] } : p,
-                );
-                return { ...old, pages };
-              },
-            );
+            // 2. The conversation view renders offline-queue messages from the
+            // store (allMessages render-merge), so we do NOT inject a copy into
+            // the messages cache here — doing both produced a duplicate bubble
+            // that survived a reconnect refetch (and broke discard).
 
             // 3. Update sidebar preview
             queryClient.setQueriesData<InfiniteData<{ conversations: Conversation[]; next_cursor?: string }>>(
