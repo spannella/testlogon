@@ -85,6 +85,15 @@ def _session_title(session) -> str:
     return (getattr(session, "name", None) or f"Broadcast {getattr(session, 'id', '')}").strip()
 
 
+def _normalize_synced_status(status: str) -> str:
+    """Canonicalize a broadcast session status for the promo link's
+    last_synced_status. The orchestrator transitions a stopped broadcast to
+    "stopped"; consumers track it as the canonical terminal state "ended"."""
+    if status in ("stopped", "stopping", "ended"):
+        return "ended"
+    return status
+
+
 def _post_body(title: str, status: str, broadcast_id: str) -> str:
     """Render the deterministic newsfeed post body for a broadcast status."""
     link = f"/broadcast/{broadcast_id}"
@@ -209,7 +218,7 @@ def promote(broadcast_id: str, owner_user_id: str) -> BroadcastPromoLink:
             post_id=existing.post_id,
             owner_user_id=existing.owner_user_id,
             promoted_at=existing.promoted_at,
-            last_synced_status=status,
+            last_synced_status=_normalize_synced_status(status),
             removed=False,
         )
 
@@ -219,7 +228,7 @@ def promote(broadcast_id: str, owner_user_id: str) -> BroadcastPromoLink:
         post_id=post_id,
         owner_user_id=owner_user_id,
         promoted_at=now_ts(),
-        last_synced_status=status,
+        last_synced_status=_normalize_synced_status(status),
         removed=False,
     )
 
@@ -245,7 +254,7 @@ def sync(broadcast_id: str) -> Optional[BroadcastPromoLink]:
         post_id=link.post_id,
         owner_user_id=link.owner_user_id,
         promoted_at=link.promoted_at,
-        last_synced_status=status,
+        last_synced_status=_normalize_synced_status(status),
         removed=False,
     )
 

@@ -415,6 +415,16 @@ def stop_session_route(
         resource_id=session_id,
         metadata={"reason": body.reason},
     )
+    # Auto-sync any promoted newsfeed post to the now-ended status (best-effort).
+    try:
+        from app.services import broadcast_newsfeed_promo as _promo
+        if _promo.get_link(session_id) is not None:
+            _promo.sync(session_id)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "promo auto-sync on stop failed for %s", session_id, exc_info=True
+        )
     return _to_session_out(current)
 
 

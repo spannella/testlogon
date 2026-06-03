@@ -175,7 +175,7 @@ def submit_creative_for_review(campaign_id: str, creative_id: str) -> dict:
         Key={"pk": f"CAMP#{campaign_id}", "sk": f"CREATIVE#{creative_id}"},
         UpdateExpression="SET #s = :s, updated_at = :u",
         ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":s": "pending_review", ":u": now_ts()},
+        ExpressionAttributeValues={":s": "pending_review", ":u": now_ts(), ":draft": "draft"},
         ConditionExpression="#s = :draft",
     )
     logger.info("creative_submitted creative_id=%s campaign_id=%s", creative_id, campaign_id)
