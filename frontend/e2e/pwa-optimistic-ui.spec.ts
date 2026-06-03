@@ -60,6 +60,13 @@ function getSessions(): Record<string, SessionData> {
 async function injectAuth(page: Page, userId = ALICE_ID) {
   const session = getSessions()[userId];
   if (!session) throw new Error(`No session for ${userId}`);
+  // The offline-queue flush (useOfflineQueue) skips the main-thread path when
+  // SyncManager exists, deferring to Service-Worker Background Sync — which does
+  // not fire in the Playwright Chromium harness. Remove SyncManager so the
+  // main-thread flush runs on reconnect (the behavior these tests exercise).
+  await page.addInitScript(() => {
+    try { delete (window as unknown as Record<string, unknown>).SyncManager; } catch { /* noop */ }
+  });
   await page.context().addCookies(session.cookies);
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
   await page.evaluate((uid: string) => {
@@ -102,7 +109,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await injectAuth(page, ALICE_ID);
 
     // Ensure a DM with Bob exists
-    const resp = await apiPost(page, "/ui/messaging/conversations", {
+    const resp = await apiPost(page, "/messaging/conversations", {
       type: "dm",
       participant_ids: [BOB_ID],
     });
@@ -110,7 +117,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     dmConvoId = data.conversation_id;
 
     // Touch the DM so it appears at the top of the sidebar
-    await apiPost(page, `/ui/messaging/conversations/${dmConvoId}/messages`, {
+    await apiPost(page, `/messaging/conversations/${dmConvoId}/messages`, {
       text: `__touch_102_${TS}`,
     });
 
@@ -125,7 +132,8 @@ test.describe("102. Offline Message Optimistic Display", () => {
 
     // Open the DM
     const sidebar = page.locator('[class*="conversation"], [data-testid="conversation-list"]').first();
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     // Go offline
@@ -133,7 +141,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
 
     const testMsg = `Offline inline ${TS}`;
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     // Verify message appears
     await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible({ timeout: 5000 });
@@ -149,13 +157,14 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     await page.context().setOffline(true);
     const testMsg = `Opacity test ${TS}_2`;
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     // Check opacity class on the message bubble
     const bubble = page.locator("p").filter({ hasText: testMsg }).locator("xpath=ancestor::div[contains(@class,'rounded-2xl')]");
@@ -169,13 +178,14 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     const testMsg = `Transition test ${TS}_3`;
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     // Verify pending
     await expect(page.getByText(/sending when online/i)).toBeVisible();
@@ -196,7 +206,8 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     await page.context().setOffline(true);
@@ -205,7 +216,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     for (const suffix of ["first", "second", "third"]) {
       const text = `Order ${suffix} ${ts}`;
       await page.getByPlaceholder(/type a message/i).fill(text);
-      await page.getByRole("button", { name: /send/i }).click();
+      await page.getByRole("button", { name: "Send message" }).click();
       await page.waitForTimeout(200);
     }
 
@@ -229,13 +240,14 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     const testMsg = `Sending state ${TS}_5`;
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.getByText(/sending when online/i)).toBeVisible();
 
     // Delay the message POST to observe "Sending..." state
@@ -262,13 +274,14 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     const testMsg = `Toolbar test ${TS}_6`;
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     // Hover over the offline message
     const bubble = page.locator("p").filter({ hasText: testMsg });
@@ -289,14 +302,15 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     await page.context().setOffline(true);
     const testMsg = `Clear compose ${TS}_7`;
     const composeInput = page.getByPlaceholder(/type a message/i);
     await composeInput.fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     // Compose bar should be cleared
     await expect(composeInput).toHaveValue("");
@@ -312,7 +326,8 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     await page.context().setOffline(true);
@@ -320,10 +335,10 @@ test.describe("102. Offline Message Optimistic Display", () => {
 
     // Send the same message twice rapidly
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
     await page.waitForTimeout(50);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     // At least one message should appear (dedup may or may not catch it depending on timing)
     await expect(page.locator("p").filter({ hasText: testMsg }).first()).toBeVisible();
@@ -343,14 +358,14 @@ test.describe("103. Failed Message UI", () => {
     await injectAuth(page, ALICE_ID);
 
     // Ensure DM exists
-    const resp = await apiPost(page, "/ui/messaging/conversations", {
+    const resp = await apiPost(page, "/messaging/conversations", {
       type: "dm",
       participant_ids: [BOB_ID],
     });
     const data = await resp.json();
     dmConvoId = data.conversation_id;
 
-    await apiPost(page, `/ui/messaging/conversations/${dmConvoId}/messages`, {
+    await apiPost(page, `/messaging/conversations/${dmConvoId}/messages`, {
       text: `__touch_103_${TS}`,
     });
 
@@ -362,7 +377,8 @@ test.describe("103. Failed Message UI", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     const testMsg = `Fail test ${TS}_1`;
@@ -370,7 +386,7 @@ test.describe("103. Failed Message UI", () => {
     // Go offline and send
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible();
 
     // Intercept message POST to return 400
@@ -406,7 +422,8 @@ test.describe("103. Failed Message UI", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     const testMsg = `Retry test ${TS}_2`;
@@ -414,7 +431,7 @@ test.describe("103. Failed Message UI", () => {
     // Create a failed message
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     await page.route("**/messaging/conversations/*/messages", (route) => {
       route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: "Error" }) });
@@ -439,14 +456,15 @@ test.describe("103. Failed Message UI", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     const testMsg = `Discard test ${TS}_3`;
 
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     await page.route("**/messaging/conversations/*/messages", (route) => {
       route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: "Bad" }) });
@@ -473,13 +491,14 @@ test.describe("103. Failed Message UI", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     const testMsg = `Server err test ${TS}_4`;
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     await page.route("**/messaging/conversations/*/messages", (route) => {
       route.fulfill({
@@ -504,13 +523,14 @@ test.describe("103. Failed Message UI", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     const testMsg = `A11y err test ${TS}_5`;
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     await page.route("**/messaging/conversations/*/messages", (route) => {
       route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: "rejected" }) });
@@ -552,7 +572,7 @@ test.describe("104. Offline Feed Post Optimistic", () => {
       return;
     }
     await composer.fill(testPost);
-    await page.getByRole("button", { name: /post|publish/i }).click();
+    await page.getByRole("button", { name: "Post", exact: true }).click();
 
     // Post should appear in the feed
     await expect(page.getByText(testPost)).toBeVisible({ timeout: 5000 });
@@ -575,7 +595,7 @@ test.describe("104. Offline Feed Post Optimistic", () => {
     if (!composerVisible) { test.skip(); return; }
 
     await composer.fill(testPost);
-    await page.getByRole("button", { name: /post|publish/i }).click();
+    await page.getByRole("button", { name: "Post", exact: true }).click();
     await expect(page.getByText(/waiting to publish/i)).toBeVisible();
 
     // Come back online
@@ -599,7 +619,7 @@ test.describe("104. Offline Feed Post Optimistic", () => {
     if (!composerVisible) { test.skip(); return; }
 
     await composer.fill(testPost);
-    await page.getByRole("button", { name: /post|publish/i }).click();
+    await page.getByRole("button", { name: "Post", exact: true }).click();
 
     // The card containing the text should have an opacity class
     const postText = page.getByText(testPost);
@@ -623,7 +643,7 @@ test.describe("104. Offline Feed Post Optimistic", () => {
     if (!composerVisible) { test.skip(); return; }
 
     await composer.fill(testPost);
-    await page.getByRole("button", { name: /post|publish/i }).click();
+    await page.getByRole("button", { name: "Post", exact: true }).click();
 
     // Composer should be cleared
     await expect(composer).toHaveValue("");
@@ -647,7 +667,7 @@ test.describe("104. Offline Feed Post Optimistic", () => {
     if (!composerVisible) { test.skip(); return; }
 
     await composer.fill(testPost);
-    await page.getByRole("button", { name: /post|publish/i }).click();
+    await page.getByRole("button", { name: "Post", exact: true }).click();
     await expect(page.getByText(testPost)).toBeVisible();
 
     // Find the like button near the offline post card
@@ -673,13 +693,13 @@ test.describe("105. Offline Queue Banner Integration", () => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
-    const resp = await apiPost(page, "/ui/messaging/conversations", {
+    const resp = await apiPost(page, "/messaging/conversations", {
       type: "dm",
       participant_ids: [BOB_ID],
     });
     const data = await resp.json();
     dmConvoId = data.conversation_id;
-    await apiPost(page, `/ui/messaging/conversations/${dmConvoId}/messages`, { text: `__touch_105_${TS}` });
+    await apiPost(page, `/messaging/conversations/${dmConvoId}/messages`, { text: `__touch_105_${TS}` });
     await ctx.close();
   });
 
@@ -688,7 +708,8 @@ test.describe("105. Offline Queue Banner Integration", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     await page.context().setOffline(true);
@@ -700,7 +721,7 @@ test.describe("105. Offline Queue Banner Integration", () => {
     // Send two messages
     for (let i = 0; i < 2; i++) {
       await page.getByPlaceholder(/type a message/i).fill(`Banner test ${i} ${TS}`);
-      await page.getByRole("button", { name: /send/i }).click();
+      await page.getByRole("button", { name: "Send message" }).click();
       await page.waitForTimeout(200);
     }
 
@@ -715,12 +736,13 @@ test.describe("105. Offline Queue Banner Integration", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(`Flush banner ${TS}_2`);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
     await page.waitForTimeout(200);
 
     // Go online
@@ -736,12 +758,13 @@ test.describe("105. Offline Queue Banner Integration", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
-    await page.getByText(BOB_ID).first().click();
+    await page.goto(`${BASE}/messages/${dmConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(`Fail banner ${TS}_3`);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     await page.route("**/messaging/conversations/*/messages", (route) => {
       route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: "Bad" }) });
@@ -769,17 +792,17 @@ test.describe("106. Group Chat Offline Optimistic", () => {
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
 
-    // Create a group chat
-    const resp = await apiPost(page, "/ui/messaging/conversations", {
+    // Create a group chat (groups require >= 3 unique participants).
+    const resp = await apiPost(page, "/messaging/conversations", {
       type: "group",
-      participant_ids: [BOB_ID],
+      participant_ids: [BOB_ID, "e2e_charlie@test.local"],
       name: `E2E Offline Group ${TS}`,
     });
     const data = await resp.json();
     groupConvoId = data.conversation_id;
 
     // Accept the group for Alice
-    await apiPost(page, `/ui/messaging/conversations/${groupConvoId}/accept`, {});
+    await apiPost(page, `/messaging/conversations/${groupConvoId}/accept`, {});
 
     await ctx.close();
   });
@@ -791,13 +814,14 @@ test.describe("106. Group Chat Offline Optimistic", () => {
     await page.waitForTimeout(1500);
 
     // Find and click the group chat
-    await page.getByText(`E2E Offline Group ${TS}`).first().click();
+    await page.goto(`${BASE}/messages/${groupConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     await page.context().setOffline(true);
     const testMsg = `Group offline ${TS}_1`;
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
     await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible();
     await expect(page.getByText(/sending when online/i)).toBeVisible();
@@ -811,13 +835,14 @@ test.describe("106. Group Chat Offline Optimistic", () => {
     await page.goto(`${BASE}/messages`);
     await page.waitForTimeout(1500);
 
-    await page.getByText(`E2E Offline Group ${TS}`).first().click();
+    await page.goto(`${BASE}/messages/${groupConvoId}`);
+    await page.getByPlaceholder(/type a message/i).first().waitFor({ state: "visible", timeout: 15000 });
     await page.waitForTimeout(1000);
 
     const testMsg = `Group trans ${TS}_2`;
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.getByText(/sending when online/i)).toBeVisible();
 
     await page.context().setOffline(false);
