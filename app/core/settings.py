@@ -1365,6 +1365,11 @@ class Settings:
     kyc_liveness_call_expiry_seconds: int = int(
         os.environ.get("KYC_LIVENESS_CALL_EXPIRY_SECONDS", "86400")
     )
+    # KYC Analytics & Funnel Dashboard (KYC-024)
+    kyc_analytics_precompute_enabled: bool = os.environ.get("KYC_ANALYTICS_PRECOMPUTE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    kyc_analytics_cache_ttl: int = int(os.environ.get("KYC_ANALYTICS_CACHE_TTL", "300"))
+    kyc_analytics_max_scan_items: int = int(os.environ.get("KYC_ANALYTICS_MAX_SCAN_ITEMS", "10000"))
+    kyc_analytics_trend_max_periods: int = int(os.environ.get("KYC_ANALYTICS_TREND_MAX_PERIODS", "90"))
 
     # Video metadata (VOD-001)
     video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")

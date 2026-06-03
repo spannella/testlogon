@@ -12427,3 +12427,122 @@ export interface KycMyLocale {
   language: string;
   rtl: boolean;
 }
+
+// ── KYC Analytics & Funnel Dashboard (KYC-024) ──────────────────────────────
+
+export interface FunnelStep {
+  step: string;
+  count: number;
+  percentage: number;
+  drop_off_count: number;
+  drop_off_pct: number;
+}
+
+export interface FunnelResponse {
+  funnel: FunnelStep[];
+  conversion_rate: number;
+}
+
+export interface TrendPoint {
+  period: string;
+  started: number;
+  submitted: number;
+  approved: number;
+  rejected: number;
+}
+
+export interface TrendsResponse {
+  trends: TrendPoint[];
+}
+
+export interface HistogramBucket {
+  bucket_label: string;
+  count: number;
+}
+
+export interface Percentiles {
+  p50: number;
+  p75: number;
+  p90: number;
+  p99: number;
+}
+
+export interface ProcessingTimesResponse {
+  histogram: HistogramBucket[];
+  percentiles: Percentiles;
+}
+
+export interface RejectionReasonsResponse {
+  reasons: Record<string, number>;
+}
+
+export interface ScreeningHitPoint {
+  period: string;
+  total_screened: number;
+  hits: number;
+  hit_rate: number;
+}
+
+export interface ScreeningHitsResponse {
+  trends: ScreeningHitPoint[];
+}
+
+export interface CountryStats {
+  country: string;
+  count: number;
+  approved: number;
+  rejected: number;
+  approval_rate: number;
+}
+
+export interface GeographicResponse {
+  countries: CountryStats[];
+}
+
+export interface DropOffStep {
+  from_step: string;
+  to_step: string;
+  continued: number;
+  dropped: number;
+  drop_rate: number;
+  avg_time_in_step_hours: number;
+}
+
+export interface DropOffResponse {
+  steps: DropOffStep[];
+}
+
+export interface AnalyticsSnapshot {
+  period_start: number;
+  period_end: number;
+  total_applications: number;
+  approved_count: number;
+  rejected_count: number;
+  pending_count: number;
+  conversion_rate: number;
+  avg_processing_hours: number;
+  processing_time_distribution: Percentiles;
+  funnel: FunnelStep[];
+  rejection_reasons: Record<string, number>;
+  geographic_distribution: CountryStats[];
+  tier_breakdown: Record<string, Record<string, number>>;
+}
+
+export interface SnapshotResponse {
+  snapshot: AnalyticsSnapshot;
+}
+
+export interface Deltas {
+  conversion_rate_delta: number;
+  volume_delta: number;
+  volume_delta_pct: number;
+  approved_delta: number;
+  rejected_delta: number;
+  avg_processing_hours_delta: number;
+}
+
+export interface CompareResponse {
+  current: AnalyticsSnapshot;
+  previous: AnalyticsSnapshot;
+  deltas: Deltas;
+}

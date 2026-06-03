@@ -220,6 +220,7 @@ const CostOverviewPage = lazy(() => import("@/pages/agents/CostOverviewPage"));
 const CostBreakdownPage = lazy(() => import("@/pages/agents/CostBreakdownPage"));
 const BudgetManagerPage = lazy(() => import("@/pages/agents/BudgetManagerPage"));
 const CostAlertsPage = lazy(() => import("@/pages/agents/CostAlertsPage"));
+const KycAnalyticsDashboard = lazy(() => import("@/pages/admin/KycAnalyticsDashboard"));
 
 function PageSpinner() {
   return (
@@ -407,6 +408,7 @@ export default function App() {
           <Route path="admin/ads/fraud" element={<AdFraudDashboard />} />
           <Route path="admin/ad-platform" element={<AdPlatformDashboard />} />
           <Route path="admin/audit-exports" element={<AuditExportPage />} />
+          <Route path="admin/kyc/analytics" element={<KycAnalyticsDashboard />} />
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />
           <Route path="licenses/revenue" element={<LicenseRevenuePage />} />

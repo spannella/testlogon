@@ -14008,3 +14008,121 @@ class KycTranslationExportOut(BaseModel):
 
     language: str
     translations: Dict[str, str] = Field(default_factory=dict)
+# ── KYC Analytics & Funnel Dashboard (KYC-024) ──────────────────────────────
+
+
+class FunnelStepOut(BaseModel):
+    step: str
+    count: int = 0
+    percentage: float = 0.0
+    drop_off_count: int = 0
+    drop_off_pct: float = 0.0
+
+
+class FunnelResponse(BaseModel):
+    funnel: List[FunnelStepOut] = Field(default_factory=list)
+    conversion_rate: float = 0.0
+
+
+class TrendPointOut(BaseModel):
+    period: str
+    started: int = 0
+    submitted: int = 0
+    approved: int = 0
+    rejected: int = 0
+
+
+class TrendsResponse(BaseModel):
+    trends: List[TrendPointOut] = Field(default_factory=list)
+
+
+class HistogramBucketOut(BaseModel):
+    bucket_label: str
+    count: int = 0
+
+
+class PercentilesOut(BaseModel):
+    p50: float = 0.0
+    p75: float = 0.0
+    p90: float = 0.0
+    p99: float = 0.0
+
+
+class ProcessingTimesResponse(BaseModel):
+    histogram: List[HistogramBucketOut] = Field(default_factory=list)
+    percentiles: PercentilesOut = Field(default_factory=PercentilesOut)
+
+
+class RejectionReasonsResponse(BaseModel):
+    reasons: Dict[str, int] = Field(default_factory=dict)
+
+
+class ScreeningHitPointOut(BaseModel):
+    period: str
+    total_screened: int = 0
+    hits: int = 0
+    hit_rate: float = 0.0
+
+
+class ScreeningHitsResponse(BaseModel):
+    trends: List[ScreeningHitPointOut] = Field(default_factory=list)
+
+
+class CountryStatsOut(BaseModel):
+    country: str
+    count: int = 0
+    approved: int = 0
+    rejected: int = 0
+    approval_rate: float = 0.0
+
+
+class GeographicResponse(BaseModel):
+    countries: List[CountryStatsOut] = Field(default_factory=list)
+
+
+class DropOffStepOut(BaseModel):
+    from_step: str
+    to_step: str
+    continued: int = 0
+    dropped: int = 0
+    drop_rate: float = 0.0
+    avg_time_in_step_hours: float = 0.0
+
+
+class DropOffResponse(BaseModel):
+    steps: List[DropOffStepOut] = Field(default_factory=list)
+
+
+class AnalyticsSnapshotOut(BaseModel):
+    period_start: int = 0
+    period_end: int = 0
+    total_applications: int = 0
+    approved_count: int = 0
+    rejected_count: int = 0
+    pending_count: int = 0
+    conversion_rate: float = 0.0
+    avg_processing_hours: float = 0.0
+    processing_time_distribution: PercentilesOut = Field(default_factory=PercentilesOut)
+    funnel: List[FunnelStepOut] = Field(default_factory=list)
+    rejection_reasons: Dict[str, int] = Field(default_factory=dict)
+    geographic_distribution: List[CountryStatsOut] = Field(default_factory=list)
+    tier_breakdown: Dict[str, Dict[str, int]] = Field(default_factory=dict)
+
+
+class SnapshotResponse(BaseModel):
+    snapshot: AnalyticsSnapshotOut
+
+
+class DeltasOut(BaseModel):
+    conversion_rate_delta: float = 0.0
+    volume_delta: int = 0
+    volume_delta_pct: float = 0.0
+    approved_delta: int = 0
+    rejected_delta: int = 0
+    avg_processing_hours_delta: float = 0.0
+
+
+class CompareResponse(BaseModel):
+    current: AnalyticsSnapshotOut
+    previous: AnalyticsSnapshotOut
+    deltas: DeltasOut
