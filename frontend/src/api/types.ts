@@ -1104,6 +1104,12 @@ export interface Message {
   text?: string;
   image?: MessageImage;
   file?: MessageFile;
+  // Bot identity + quick replies (BOT-002)
+  sender_type?: "user" | "bot";
+  bot_id?: string;
+  bot_name?: string;
+  bot_avatar_url?: string;
+  quick_replies?: QuickReply[];
   // Gallery message fields
   free_images?: GalleryImageItem[];
   locked_images?: GalleryImageItem[] | null;  // null = hidden (not unlocked yet)
@@ -12567,4 +12573,94 @@ export interface BroadcastJoinResponse {
   pre_roll?: BroadcastPreRoll | null;
   ad_free: boolean;
   mid_roll_skip_after_seconds: number;
+}
+
+// -- Chat Bots (BOT-001) --
+
+export interface ChatBot {
+  bot_id: string;
+  creator_id: string;
+  name: string;
+  avatar_url?: string | null;
+  description?: string | null;
+  personality?: string;
+  custom_personality?: string | null;
+  status: string;
+  trigger_config?: Record<string, unknown> | null;
+  created_at: number;
+  updated_at: number;
+  message_count: number;
+}
+
+export interface BotAssignment {
+  bot_id: string;
+  target_type: string;
+  target_id?: string | null;
+  created_at: number;
+  sk: string;
+}
+
+export interface BotStats {
+  message_count: number;
+  last_active_at?: number | null;
+  assignment_count: number;
+}
+
+export interface AutoReplyRule {
+  rule_id: string;
+  bot_id: string;
+  creator_id: string;
+  trigger_pattern: string;
+  response_template: string;
+  match_type: string;
+  priority: number;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+  match_count: number;
+}
+
+// -- Bot Templates & Scheduled Sends (BOT-002) --
+
+export interface QuickReply {
+  label: string;
+  value: string;
+}
+
+export interface BotTemplate {
+  template_id: string;
+  bot_id: string;
+  name: string;
+  text: string;
+  category: "greeting" | "support" | "promotion" | "farewell" | "away" | "custom";
+  body_format: "plain" | "markdown";
+  quick_replies?: QuickReply[] | null;
+  variables_used?: string[];
+  ab_group?: string | null;
+  ab_weight: number;
+  impression_count: number;
+  response_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface BotScheduledSend {
+  schedule_id: string;
+  bot_id: string;
+  template_id: string;
+  target_type: string;
+  target_id?: string | null;
+  cron_expression: string;
+  timezone: string;
+  next_run_at: number;
+  last_run_at?: number | null;
+  enabled: boolean;
+  created_at: number;
+}
+
+export interface TemplatePreviewOut {
+  rendered_text: string;
+  resolved_variables: Record<string, string>;
+  unresolved_variables: string[];
+  quick_replies?: QuickReply[] | null;
 }

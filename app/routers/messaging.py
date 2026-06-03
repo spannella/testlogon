@@ -2488,6 +2488,13 @@ class MessageOut(BaseModel):
     lock_description: Optional[str] = None
     is_unlocked: bool = False              # viewer-specific: True once paid
 
+    # Bot identity + quick replies (BOT-002)
+    sender_type: Optional[Literal["user", "bot"]] = None
+    bot_id: Optional[str] = None
+    bot_name: Optional[str] = None
+    bot_avatar_url: Optional[str] = None
+    quick_replies: Optional[List[Dict[str, str]]] = None
+
 
 # Rebuild ConversationOut now that MessageOut is also fully defined
 ConversationOut.model_rebuild()

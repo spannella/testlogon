@@ -52,6 +52,7 @@ import {
   hideMessage,
   reportMessage,
   sendMessageTip,
+  sendTextMessage,
   unlockMessage,
   unlockLotteryMessage,
   getMeetingPoll,
@@ -444,6 +445,8 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [unlockPaymentMethodId, setUnlockPaymentMethodId] = useState<string | null>(null);
   const [fileSharePreviewOpen, setFileSharePreviewOpen] = useState(false);
   const [filePreviewOpen, setFilePreviewOpen] = useState(false);
+  // BOT-002: quick-reply buttons are disabled after the first tap.
+  const [quickReplySent, setQuickReplySent] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportServerError, setReportServerError] = useState<string | null>(null);
   const [reportTarget, setReportTarget] = useState<"message" | "attachment">("message");
@@ -638,6 +641,18 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
       void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
     },
     onError: (err: Error) => toast.error(err.message || "Failed to send tip"),
+  });
+
+  // BOT-002: tapping a quick-reply sends its `value` as a regular text message.
+  const quickReplyMut = useMutation({
+    mutationFn: (value: string) => sendTextMessage(conversationId, { text: value }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+    },
+    onError: (err: Error) => {
+      setQuickReplySent(false);
+      toast.error(err.message || "Failed to send reply");
+    },
   });
 
   const time = new Date(message.created_at * 1000).toLocaleTimeString(undefined, {
@@ -1825,6 +1840,26 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             )}>
               <DollarSign className="h-3 w-3" />
               Tip: ${(message.tip_amount_cents / 100).toFixed(2)}
+            </div>
+          )}
+
+          {message.quick_replies && message.quick_replies.length > 0 && message.sender_type === "bot" && (
+            <div className="mt-2 flex flex-wrap gap-2" data-testid="quick-replies">
+              {message.quick_replies.map((qr, i) => (
+                <Button
+                  key={i}
+                  variant="outline"
+                  size="sm"
+                  disabled={quickReplySent}
+                  onClick={() => {
+                    setQuickReplySent(true);
+                    quickReplyMut.mutate(qr.value);
+                  }}
+                  data-testid={`quick-reply-${i}`}
+                >
+                  {qr.label}
+                </Button>
+              ))}
             </div>
           )}
 

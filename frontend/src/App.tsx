@@ -16,6 +16,9 @@ const Register = lazy(() => import("@/pages/Register"));
 const PasswordRecovery = lazy(() => import("@/pages/PasswordRecovery"));
 const MagicLinkVerify = lazy(() => import("@/pages/MagicLinkVerify"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const BotManagerPage = lazy(() => import("@/pages/bots/BotManagerPage"));
+const TemplateEditorPage = lazy(() => import("@/pages/bots/TemplateEditorPage"));
+const BotAutoReplyPage = lazy(() => import("@/pages/bots/BotAutoReplyPage"));
 const MessagesPage = lazy(() => import("@/pages/messages/MessagesPage"));
 const LicensesPage = lazy(() => import("@/pages/licenses/LicensesPage"));
 const AdminReviewPage = lazy(() => import("@/pages/licenses/AdminReviewPage"));
@@ -347,6 +350,9 @@ export default function App() {
           <Route path="remote/connection-profiles" element={<ConnectionProfilesPage />} />
           <Route path="remote/hosts" element={<HostInventoryPage />} />
           <Route path="remote/instances/:instanceId/monitoring" element={<InstanceMonitoringPage />} />
+          <Route path="bots" element={<BotManagerPage />} />
+          <Route path="bots/:botId/templates" element={<TemplateEditorPage />} />
+          <Route path="bots/:botId/auto-reply" element={<BotAutoReplyPage />} />
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
