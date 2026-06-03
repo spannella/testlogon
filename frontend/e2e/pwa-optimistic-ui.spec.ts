@@ -289,10 +289,15 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await bubble.hover();
     await page.waitForTimeout(500);
 
-    // Toolbar buttons should NOT appear (React, Reply, Message actions)
-    await expect(page.getByRole("button", { name: /^React$/i })).not.toBeVisible();
-    await expect(page.getByRole("button", { name: /^Reply$/i })).not.toBeVisible();
-    await expect(page.getByRole("button", { name: /message actions/i })).not.toBeVisible();
+    // The offline message bubble must not render the hover toolbar
+    // (React/Reply/actions). Scope to this bubble — other (real) messages keep
+    // their toolbar in the DOM at opacity-0, which Playwright counts as visible.
+    const offlineBubble = bubble
+      .locator("xpath=ancestor::div[contains(@class,'rounded-2xl')]")
+      .first();
+    await expect(offlineBubble.getByRole("button", { name: /^React$/i })).toHaveCount(0);
+    await expect(offlineBubble.getByRole("button", { name: /^Reply$/i })).toHaveCount(0);
+    await expect(offlineBubble.getByRole("button", { name: /message actions/i })).toHaveCount(0);
 
     await page.context().setOffline(false);
   });
@@ -670,15 +675,12 @@ test.describe("104. Offline Feed Post Optimistic", () => {
     await page.getByRole("button", { name: "Post", exact: true }).click();
     await expect(page.getByText(testPost)).toBeVisible();
 
-    // Find the like button near the offline post card
-    // The offline post is at the top of the feed
-    const postSection = page.getByText(testPost).locator("xpath=ancestor::div[contains(@class,'card') or contains(@class,'Card')]").first();
-    if (await postSection.isVisible().catch(() => false)) {
-      const likeButton = postSection.locator("button").filter({ has: page.locator("svg") }).first();
-      if (await likeButton.isVisible().catch(() => false)) {
-        await expect(likeButton).toBeDisabled();
-      }
-    }
+    // The offline post is at the top of the feed; its Like button must be
+    // disabled. Target the Like button by its accessible name within the card.
+    const postSection = page.getByText(testPost).locator("xpath=ancestor::div[contains(@class,'rounded') or contains(@class,'card') or contains(@class,'Card')]").first();
+    const likeButton = postSection.getByRole("button", { name: "Like" }).first();
+    await expect(likeButton).toBeVisible({ timeout: 5000 });
+    await expect(likeButton).toBeDisabled();
 
     await page.context().setOffline(false);
   });
@@ -749,8 +751,9 @@ test.describe("105. Offline Queue Banner Integration", () => {
     await page.context().setOffline(false);
     await triggerRefetch(page);
 
-    // Banner should eventually disappear
-    await expect(page.getByText(/queued/)).not.toBeVisible({ timeout: 15000 });
+    // Banner's queued count should eventually disappear. Scope to the warning
+    // banner — the flush success toast ("N queued item sent…") also says "queued".
+    await expect(page.locator(".bg-warning").getByText(/queued/)).not.toBeVisible({ timeout: 15000 });
   });
 
   test("105.3 banner shows failed count", async ({ page }) => {

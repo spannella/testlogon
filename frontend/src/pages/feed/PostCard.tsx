@@ -645,6 +645,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         {/* Action row */}
         <div className="mt-3 flex items-center gap-4">
           <button
+            aria-label="Like"
             className={cn(
               "flex items-center gap-1 text-sm transition-colors",
               post.liked_by_me

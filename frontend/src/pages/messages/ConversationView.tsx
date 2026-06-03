@@ -72,6 +72,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const queryClient = useQueryClient();
   const addToQueueWithId = useOfflineStore((s) => s.addToQueueWithId);
   const isOnline = useOfflineStore((s) => s.isOnline);
+  const offlineQueue = useOfflineStore((s) => s.queue);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [hasAutoScrolled, setHasAutoScrolled] = React.useState(false);
 
@@ -214,8 +215,39 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       const page = data.pages[i];
       if (page) msgs.push(...(page.messages ?? []).slice().reverse());
     }
+    // Merge still-queued offline messages for this conversation at render time
+    // (the FeedTimeline pattern). A reconnect refetch replaces the cache and
+    // drops pending/failed optimistic messages that aren't on the server yet;
+    // sourcing them from the offline store here keeps them visible until they
+    // send (and leave the queue) or are discarded.
+    const present = new Set(msgs.map((m) => m.message_id));
+    for (const action of offlineQueue) {
+      if (action.type !== "send_message") continue;
+      if (action.payload.conversationId !== convoId) continue;
+      const id = `optimistic-offline-${action.id}`;
+      if (present.has(id)) continue;
+      const req = action.payload.req;
+      msgs.push({
+        message_id: id,
+        conversation_id: convoId,
+        sender_id: userId ?? "",
+        kind: "text",
+        text: req.encryption ? "" : (req.text ?? ""),
+        is_encrypted: !!req.encryption,
+        encryption: req.encryption,
+        created_at: action.enqueuedAt / 1000,
+        reactions_counts: {},
+        reply_to_message_id: req.reply_to_message_id,
+        __offline: {
+          queueId: action.id,
+          status: (action.__status ?? "pending") as "pending" | "sending" | "failed",
+          error: action.__error,
+          enqueuedAt: action.enqueuedAt,
+        },
+      } as Message);
+    }
     return msgs;
-  }, [data]);
+  }, [data, offlineQueue, convoId, userId]);
 
   // ── Message lookup map for reply previews ──────────────────────
 
