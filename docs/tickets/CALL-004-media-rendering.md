@@ -1,5 +1,7 @@
 # CALL-004: Render Local and Remote Media Streams in Call Overlay
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 The WebRTC direct call feature (gated behind `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED`) currently provides call signalling, state management, and a UI overlay for call lifecycle states (ringing, connecting, connected, ended). However, once a call reaches the `"connected"` state, the user sees only a text description ("Connected with {peerName}") and a red "End call" button. <!-- NOTE: This ticket is now FULLY IMPLEMENTED. CallSessionOverlay.tsx (671 lines) includes VideoRenderer (line 90), AudioRenderer (line 117), CallTimer (line 131), CallControls (line 167) with mute/camera/recording/screenshare buttons, video call layout with PiP, and audio call layout. All props (localStream, remoteStream, isMuted, isCameraOff) are passed from ConversationView.tsx. The E2E test file frontend/e2e/webrtc-call-media.spec.ts does NOT exist yet, but webrtc-media.spec.ts (1375 lines) and webrtc-calls.spec.ts (661 lines) cover related scenarios. -->

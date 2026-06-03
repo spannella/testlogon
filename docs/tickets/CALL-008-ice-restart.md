@@ -1,5 +1,7 @@
 # CALL-008: ICE Restart and Mid-Call Reconnection
 
+**Status**: Implemented
+
 > **NOTE: This feature is FULLY IMPLEMENTED.** The ICE state monitoring with grace period, `performIceRestart()` with TURN credential refresh, the state machine reconnection flow, SSE `webrtc.*` event registration, and E2E tests all exist. See Codebase References at the bottom for all verified locations.
 
 ## 1. Overview & Motivation

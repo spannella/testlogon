@@ -1,6 +1,6 @@
 # INFRA-006: Connection Profiles & Quick Connect
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: Medium  

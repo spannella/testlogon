@@ -1,6 +1,6 @@
 # PROMO-001: Promo Codes & Coupons
 
-**Status**: Proposed
+**Status**: Implemented
 **Author**: Engineering
 **Date**: 2026-05-27
 **Priority**: Medium

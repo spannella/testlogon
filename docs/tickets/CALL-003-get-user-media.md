@@ -1,5 +1,7 @@
 # CALL-003: Implement getUserMedia Capture with Permission Handling
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Problem Statement

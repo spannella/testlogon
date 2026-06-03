@@ -1,6 +1,6 @@
 # ENGAGE-003: Live Q&A Mode for Broadcasts
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: High  

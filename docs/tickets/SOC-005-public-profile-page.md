@@ -1,6 +1,6 @@
 # SOC-005: Public-Facing Profile Page — Posts Grid, Follow/Subscribe CTAs, SEO Meta Tags
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-26  
 **Priority**: Medium  

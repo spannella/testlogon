@@ -1,6 +1,6 @@
 # MON-005: Subscription-Gated VOD — Subscriber Access to Creator Video Content
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-26  
 **Priority**: Medium  

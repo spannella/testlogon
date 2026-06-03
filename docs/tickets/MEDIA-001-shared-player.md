@@ -1,5 +1,7 @@
 # MEDIA-001: Create Shared HLS/DRM Player Component
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Why a shared component

@@ -1,6 +1,6 @@
 # FIN-014: Payment Provider Health Monitoring
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: High  

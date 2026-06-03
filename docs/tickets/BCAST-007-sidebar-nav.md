@@ -1,5 +1,7 @@
 # BCAST-007: Broadcast Sidebar Navigation + Routes
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Problem Statement

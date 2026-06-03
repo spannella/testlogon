@@ -1,5 +1,7 @@
 # CALL-005: Add In-Call Media Controls (Mute, Camera, End) with Duration Timer and Quality Indicator
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 The WebRTC direct call feature (gated behind `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED`) currently provides call signalling via `app/routers/messaging.py` (endpoints at `/messages/calls/*`), a state machine (`callStateMachine.ts`), and a UI overlay (`CallSessionOverlay.tsx`) for call lifecycle states. CALL-004 added media stream rendering (remote/local `<video>` and `<audio>` elements with `srcObject` management). However, once a call reaches the `"connected"` state, the user has **no interactive media controls**:

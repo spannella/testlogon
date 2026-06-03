@@ -1,6 +1,6 @@
 # BCAST-012: Broadcast Private Chat Tiers — Paid 1-on-1 Text Chat with Voyeur Mode
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-27  
 **Priority**: Medium  

@@ -1,6 +1,6 @@
 # INFRA-009: Security Groups & Network Rules
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: Medium  

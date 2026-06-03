@@ -1,5 +1,7 @@
 # BCAST-001: Broadcaster Dashboard Page (Create/Manage Sessions)
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Problem Statement

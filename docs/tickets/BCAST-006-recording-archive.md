@@ -1,5 +1,7 @@
 # BCAST-006: Recording + VOD Archive
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Problem Statement

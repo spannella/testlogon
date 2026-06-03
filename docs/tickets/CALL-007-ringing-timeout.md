@@ -1,5 +1,7 @@
 # CALL-007: Add Call Ringing Timeout and Missed-Call Handling
 
+**Status**: Implemented
+
 > **NOTE: This feature is FULLY IMPLEMENTED.** The backend `timeout_call()` function, the `POST /messages/calls/{call_id}/timeout` endpoint, the server-side `_expire_stale_invites()` backstop, the `call.missed` timeline event, the frontend client timer with backend call, the `call.missed` SSE handler, and unit tests all exist. See Codebase References at the bottom for all verified locations.
 
 ## 1. Overview & Motivation

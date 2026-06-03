@@ -1,6 +1,6 @@
 # SOC-003: User Search and Discovery — Public Search, Suggested Users, and Trending Creators
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-26  
 **Priority**: Medium  

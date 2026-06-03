@@ -1,6 +1,6 @@
 # ADS-011: Advertiser API — Programmatic Campaign & Analytics Access
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: High  

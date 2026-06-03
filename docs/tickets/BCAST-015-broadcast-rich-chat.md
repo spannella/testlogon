@@ -1,6 +1,6 @@
 # BCAST-015: Rich Messaging Features in Broadcast Chat
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: Medium  

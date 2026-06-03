@@ -1,5 +1,7 @@
 # BCAST-004: Real-Time Viewer Count and Stream Health Metrics
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Problem Statement

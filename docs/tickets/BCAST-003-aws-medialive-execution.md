@@ -1,5 +1,7 @@
 # BCAST-003: Wire AWS MediaLive Start/Stop to Actual API Calls
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Problem Statement

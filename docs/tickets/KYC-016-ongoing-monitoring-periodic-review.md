@@ -1,6 +1,6 @@
 # KYC-016: Ongoing Monitoring & Periodic Review
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: High  

@@ -1,6 +1,6 @@
 # BCAST-010: Broadcast Newsfeed Promotion — Auto-Post Announcements for Scheduled and Live Broadcasts
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-27  
 **Priority**: High  

@@ -1,7 +1,7 @@
 # MEDIA-002: FFmpeg Binary Management
 
 **Ticket**: MEDIA-002
-**Status**: Design
+**Status**: Implemented
 **Author**: Platform Engineering
 **Date**: 2026-05-24
 

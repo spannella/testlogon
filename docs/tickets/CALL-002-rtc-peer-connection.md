@@ -1,5 +1,7 @@
 # CALL-002: Implement Frontend RTCPeerConnection Setup and Teardown
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Purpose

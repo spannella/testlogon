@@ -1,6 +1,6 @@
 # BCAST-009: Broadcast Scheduling — Schedule Broadcasts for Future Date/Time
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-27  
 **Priority**: High  

@@ -1,6 +1,6 @@
 # ENGAGE-005: Viewer Clip Creation from Broadcasts
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: High  

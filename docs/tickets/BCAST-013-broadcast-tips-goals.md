@@ -1,6 +1,6 @@
 # BCAST-013: Broadcast Live Tipping, Tip Goals, and Tip Monitor
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: High  

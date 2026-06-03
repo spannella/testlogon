@@ -1,6 +1,6 @@
 # KYC-010: Passport & National ID Scanner
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: High  

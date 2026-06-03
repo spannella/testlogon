@@ -1,6 +1,6 @@
 # ADMIN-003: Rate Limit Admin UI
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: Medium  

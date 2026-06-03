@@ -1,6 +1,6 @@
 # BCAST-011: Broadcast "Go Private" (1-on-1 Paid Call)
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-27  
 **Priority**: High  

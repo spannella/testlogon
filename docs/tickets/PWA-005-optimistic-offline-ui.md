@@ -2,7 +2,7 @@
 
 **Ticket**: PWA-005
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-28
 **Depends on**: PWA-003, PWA-004
 

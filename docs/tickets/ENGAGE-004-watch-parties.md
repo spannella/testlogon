@@ -1,6 +1,6 @@
 # ENGAGE-004: Synchronized VOD Watch Parties
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: Medium  

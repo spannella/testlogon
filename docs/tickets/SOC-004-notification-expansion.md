@@ -1,6 +1,6 @@
 # SOC-004: Notification System Expansion — Social Alert Types, Batching, Unread Badge, and Real-Time SSE
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-26  
 **Priority**: Medium  

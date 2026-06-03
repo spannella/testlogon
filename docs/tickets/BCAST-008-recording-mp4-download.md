@@ -2,7 +2,7 @@
 
 **Ticket**: BCAST-008
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-24
 **Depends on**: BCAST-006 (Recording + VOD Archive)
 

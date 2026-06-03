@@ -1,6 +1,6 @@
 # KYC-014: Facial Comparison (Selfie vs ID Photo)
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: High  

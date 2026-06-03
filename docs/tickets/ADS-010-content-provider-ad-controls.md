@@ -2,7 +2,7 @@
 
 **Ticket**: ADS-010
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-29
 **Priority**: Medium
 **Estimated effort**: 6-8 days

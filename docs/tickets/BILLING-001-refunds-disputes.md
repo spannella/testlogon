@@ -1,6 +1,6 @@
 # BILLING-001: Refunds & Dispute Resolution
 
-**Status**: Proposed
+**Status**: Implemented
 **Author**: Engineering
 **Date**: 2026-05-27
 **Priority**: High

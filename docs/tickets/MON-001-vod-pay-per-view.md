@@ -1,6 +1,6 @@
 # MON-001: VOD Pay-Per-View — Entitlement-Gated Video Playback
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-26  
 **Priority**: High  

@@ -1,6 +1,6 @@
 # SOC-002: Fan-Out on Write for Newsfeed — Populate Follower Feed Indexes on Post Create
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-26  
 **Priority**: High  

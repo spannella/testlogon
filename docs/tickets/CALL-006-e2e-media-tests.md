@@ -1,5 +1,7 @@
 # CALL-006: E2E Tests for WebRTC Media Establishment
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Purpose

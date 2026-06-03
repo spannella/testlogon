@@ -1,6 +1,6 @@
 # ADS-014: Ad Fraud Prevention
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: High  

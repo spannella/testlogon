@@ -1,6 +1,6 @@
 # MSG-001: Message Editing & Deletion
 
-**Status**: Complete (verified 2026-05-27 — edit, delete, revoke implemented in backend + frontend + E2E)
+**Status**: Implemented (verified 2026-05-27 — edit, delete, revoke implemented in backend + frontend + E2E)
 **Author**: Engineering
 **Date**: 2026-05-27
 **Priority**: Medium

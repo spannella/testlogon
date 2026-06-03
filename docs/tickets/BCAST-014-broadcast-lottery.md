@@ -1,6 +1,6 @@
 # BCAST-014: Lottery Messages in Broadcast Chat
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: Medium  

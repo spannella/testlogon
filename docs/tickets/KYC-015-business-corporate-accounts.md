@@ -1,6 +1,6 @@
 # KYC-015: KYC for Business/Corporate Accounts (KYB)
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: High  

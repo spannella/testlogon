@@ -1,6 +1,6 @@
 # MON-002: Record All Tips in the Billing Ledger
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-26  
 **Priority**: High  

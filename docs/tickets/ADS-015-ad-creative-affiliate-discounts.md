@@ -1,6 +1,6 @@
 # ADS-015: Ad Creative with Affiliate Links & Discounts
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: Medium  

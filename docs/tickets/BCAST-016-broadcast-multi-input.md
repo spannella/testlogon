@@ -1,6 +1,6 @@
 # BCAST-016: Broadcast Multiple Video Inputs / Co-Streaming
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: Medium  

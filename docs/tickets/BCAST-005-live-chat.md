@@ -1,5 +1,7 @@
 # BCAST-005: Live Chat Overlay for Broadcast Viewers
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Problem Statement

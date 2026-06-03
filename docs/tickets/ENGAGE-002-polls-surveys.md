@@ -1,6 +1,6 @@
 # ENGAGE-002: Standalone Polls & Surveys in the Newsfeed
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: High  

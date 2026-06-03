@@ -1,6 +1,6 @@
 # LCOM-004: Broadcast-Exclusive Pricing — Time-Limited Discounts During Live Streams
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-26  
 **Priority**: Medium  

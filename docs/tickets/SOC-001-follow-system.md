@@ -1,6 +1,6 @@
 # SOC-001: Complete Follow/Unfollow System with Follower Lists, Counts, and Mutual Detection
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-26  
 **Priority**: High  

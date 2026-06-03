@@ -2,7 +2,7 @@
 
 **Ticket**: KYC-001
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-29
 **Priority**: High
 **Estimated effort**: 12-16 days

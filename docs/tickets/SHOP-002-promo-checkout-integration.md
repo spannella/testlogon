@@ -2,7 +2,7 @@
 
 **Ticket**: SHOP-002
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-27
 **Priority**: High
 **Estimated effort**: 6-8 days

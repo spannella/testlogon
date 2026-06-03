@@ -1,6 +1,6 @@
 # PLATFORM-015: Universal Drag-and-Drop Support — File Uploads, Reordering, and Visual Drop Zones
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-28  
 **Priority**: Medium  

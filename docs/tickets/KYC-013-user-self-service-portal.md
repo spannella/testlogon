@@ -1,6 +1,6 @@
 # KYC-013: KYC User Self-Service Portal
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-29  
 **Priority**: Critical  

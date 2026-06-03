@@ -2,7 +2,7 @@
 
 **Ticket**: PRIVACY-001
 **Author**: Engineering
-**Status**: Proposed
+**Status**: Implemented
 **Date**: 2026-05-27
 **Priority**: High
 **Estimated effort**: 14-18 days

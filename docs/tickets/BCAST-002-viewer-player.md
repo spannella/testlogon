@@ -1,5 +1,7 @@
 # BCAST-002: Build Viewer Playback Page with HLS Player
 
+**Status**: Implemented
+
 ## 1. Overview & Motivation
 
 ### Problem Statement

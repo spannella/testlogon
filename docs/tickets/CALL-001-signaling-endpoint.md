@@ -1,6 +1,6 @@
 # CALL-001: Expose Signaling HTTP Endpoint for Offer/Answer/ICE Exchange
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Author**: Engineering  
 **Date**: 2026-05-24  
 **Priority**: High  

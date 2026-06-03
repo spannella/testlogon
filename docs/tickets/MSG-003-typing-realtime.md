@@ -2,7 +2,7 @@
 
 **Ticket**: MSG-003
 **Author**: Engineering
-**Status**: Design
+**Status**: Implemented
 **Date**: 2026-05-27
 **Priority**: High
 **Estimated effort**: 3-4 days
