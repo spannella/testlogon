@@ -57,8 +57,17 @@ function getSessions(): Record<string, SessionData> {
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
   const sessions = getSessions();
+  const sub = sessions[identity].user_sub;
   const page = await browser.newPage();
   await page.context().addCookies(sessions[identity].cookies);
+  // ProtectedRoute gates on the zustand auth store (localStorage), not cookies,
+  // so the UI tests need it seeded or they redirect to /login.
+  await page.addInitScript((uid: string) => {
+    localStorage.setItem(
+      "auth-store",
+      JSON.stringify({ state: { userId: uid, accessToken: null, isAuthenticated: true }, version: 0 }),
+    );
+  }, sub);
   return page;
 }
 
@@ -81,10 +90,14 @@ if env_file.exists():
 ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
 `;
 
-function runPy(body: string): string {
-  return execSync(`python3 -c "${DDB_PRELUDE}${body}"`, {
+function runPy(body: string, extraEnv: Record<string, string> = {}): string {
+  // Pass the program via stdin (not -c) so embedded JSON/quotes can't collide
+  // with shell quoting; large payloads come in via env vars.
+  return execSync(`python3 -`, {
     cwd: "/home/ubuntu/testlogon",
     timeout: 20_000,
+    input: `${DDB_PRELUDE}${body}`,
+    env: { ...process.env, ...extraEnv },
   }).toString();
 }
 
@@ -100,11 +113,10 @@ interface SeedCase {
 
 /** Seed KYC cases directly into the kyc_cases table. */
 function seedCases(cases: SeedCase[]): void {
-  const payload = JSON.stringify(cases).replace(/"/g, '\\"');
   runPy(`
 tbl = ddb.Table(os.environ.get('KYC_CASES_TABLE_NAME','kyc_cases'))
 cohort = '${TS}'
-cases = json.loads("${payload}")
+cases = json.loads(os.environ['DDB_CASES'])
 for i, c in enumerate(cases):
     cid = f'kyc_an{cohort}_{i}'
     ts = int(c['createdAt'])
@@ -128,7 +140,7 @@ for i, c in enumerate(cases):
         del item['country']
     tbl.put_item(Item=item)
 print('seeded', len(cases))
-`);
+`, { DDB_CASES: JSON.stringify(cases) });
 }
 
 // ─── Shared pages + seed ────────────────────────────────────────────────────
