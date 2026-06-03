@@ -265,9 +265,9 @@ export default function TemplateEditorPage() {
   }
 
   function updateQuickReply(index: number, field: "label" | "value", val: string) {
-    const updated = [...formQuickReplies];
-    updated[index] = { ...updated[index], [field]: val };
-    setFormQuickReplies(updated);
+    setFormQuickReplies((prev) =>
+      prev.map((qr, i) => (i === index ? { ...qr, [field]: val } : qr)),
+    );
   }
 
   function insertVariable(variable: string) {

@@ -1,5 +1,4 @@
 import { api } from "@/api/client";
-import type { ChatBot, BotAssignment, BotStats } from "@/api/types";
 import type {
   ChatBot,
   BotAssignment,
