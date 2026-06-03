@@ -39,7 +39,10 @@ export default defineConfig({
           return null;
         },
       },
-      "/r": "http://localhost:8000",
+      // Scope to /r/ (affiliate short links GET /r/{code}); a bare "/r" prefix
+      // also swallowed SPA routes like /remote-desktop and /remote/* and proxied
+      // them to the backend (404), breaking direct navigation to those pages.
+      "/r/": "http://localhost:8000",
       "/posts": "http://localhost:8000",
       "/social": "http://localhost:8000",
       "/uploads": "http://localhost:8000",
