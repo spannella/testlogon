@@ -48,12 +48,12 @@ def bulk_preview(
     _admin=Depends(require_admin_or_root),
 ):
     try:
-        out = preview_batch(_admin["user_sub"], body.kind, body.ref_ids)
+        out = preview_batch(_admin.sub, body.kind, body.ref_ids)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     audit_event(
         "bulk_payout.preview",
-        _admin["user_sub"],
+        _admin.sub,
         request,
         batch_id=out["batch_id"],
         kind=out["kind"],
@@ -70,7 +70,7 @@ def bulk_execute(
 ):
     try:
         out = execute_batch(
-            _admin["user_sub"],
+            _admin.sub,
             kind=body.kind,
             ref_ids=body.ref_ids,
             batch_id=body.batch_id,
@@ -79,7 +79,7 @@ def bulk_execute(
         raise HTTPException(status_code=400, detail=str(e))
     audit_event(
         "bulk_payout.execute",
-        _admin["user_sub"],
+        _admin.sub,
         request,
         batch_id=out["batch_id"],
         kind=out["kind"],

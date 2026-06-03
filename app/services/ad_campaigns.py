@@ -122,7 +122,7 @@ def submit_campaign_for_review(account_id: str, campaign_id: str) -> dict:
         Key={"pk": f"ACCT#{account_id}", "sk": f"CAMPAIGN#{campaign_id}"},
         UpdateExpression="SET #s = :s, updated_at = :u",
         ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":s": "pending_review", ":u": now_ts()},
+        ExpressionAttributeValues={":s": "pending_review", ":u": now_ts(), ":draft": "draft"},
         ConditionExpression="#s = :draft",
     )
     return {"ok": True}
