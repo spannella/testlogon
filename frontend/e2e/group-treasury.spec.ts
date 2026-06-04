@@ -191,8 +191,8 @@ ts = int(time.time())
 for sub, cents in [('${rootSub}', 100000), ('${aliceSub}', 50000), ('${bobSub}', 30000)]:
     billing.update_item(
         Key={'pk': f'USER#{sub}', 'sk': 'WALLET'},
-        UpdateExpression='SET wallet_balance_cents = if_not_exists(wallet_balance_cents, :z) + :amt, currency = :c, updated_at = :t',
-        ExpressionAttributeValues={':z': 0, ':amt': cents, ':c': 'usd', ':t': ts},
+        UpdateExpression='SET wallet_balance_cents = :amt, currency = :c, updated_at = :t',
+        ExpressionAttributeValues={':amt': cents, ':c': 'usd', ':t': ts},
     )
 print('wallets seeded')
 `);
@@ -346,8 +346,12 @@ test.describe("459 — Treasury Balance & Contribution API", () => {
   });
 
   test("459.4 Insufficient wallet fails", async () => {
+    // Alice's seeded wallet is $500 (50000 cents). Use an amount that passes
+    // ContributeIn validation (le=10000000) but exceeds the wallet balance, so
+    // the service's runtime "Insufficient wallet balance" check (400) is hit
+    // rather than a 422 request-validation error.
     const resp = await apiPost(alicePage, ALICE_ID, `/ui/groups/${GROUP_ID}/treasury/contribute`, {
-      amount_cents: 99999999,
+      amount_cents: 9999999,
     });
     expect(resp.status()).toBe(400);
     const data = await resp.json();
@@ -523,7 +527,7 @@ test.describe("462 — Dissolution Pro-Rata API", () => {
     // Dissolve the treasury directly via the service function
     // (dissolution is normally triggered by dissolve_group in user_groups)
     execSync(
-      `python3 -c "
+      `/home/ubuntu/testlogon/.venv/bin/python3 -c "
 import sys, os
 sys.path.insert(0, '/home/ubuntu/testlogon')
 from pathlib import Path

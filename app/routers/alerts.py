@@ -172,16 +172,24 @@ async def mark_read(body: MarkReadReq, ctx: Dict[str, str] = Depends(require_ui_
     updated = 0
     for aid in body.alert_ids[:200]:
         try:
-            # Only count items that were previously unread
+            # Unconditionally mark the alert read and stamp read_at. Using a
+            # ConditionExpression of `read = False` previously skipped alerts that
+            # had no `read` attribute at all (created via an alternate path), which
+            # left read_at unset (0) even though the caller asked to mark it read.
+            # We still only count alerts that were *previously* unread so the
+            # `updated` total — used to decrement the unread sentinel — stays
+            # accurate.
             resp = T.alerts.update_item(
                 Key={"user_sub": ctx["user_sub"], "alert_id": aid},
                 UpdateExpression="SET #r=:t, read_at=:ts",
-                ConditionExpression="#r = :f",
+                ConditionExpression="attribute_exists(alert_id)",
                 ExpressionAttributeNames={"#r": "read"},
-                ExpressionAttributeValues={":t": True, ":ts": ts, ":f": False},
-                ReturnValues="ALL_NEW",
+                ExpressionAttributeValues={":t": True, ":ts": ts},
+                ReturnValues="ALL_OLD",
             )
-            updated += 1
+            old = resp.get("Attributes", {}) or {}
+            if not old.get("read", False):
+                updated += 1
         except Exception:
             pass
     # Decrement sentinel count for each alert marked read

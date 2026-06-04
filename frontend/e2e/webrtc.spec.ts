@@ -457,14 +457,33 @@ ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
                      aws_secret_access_key="test")
 table = ddb.Table("Conversations")
 ts = int(time.time())
+cid = ${JSON.stringify("__CONVO_ID__")}
+pids = ${JSON.stringify("__PARTICIPANTS__")}
 table.put_item(Item={
-    "conversation_id": ${JSON.stringify("__CONVO_ID__")},
-    "participant_ids": ${JSON.stringify("__PARTICIPANTS__")},
+    "conversation_id": cid,
+    "participant_ids": pids,
     "type": "dm",
     "created_at": ts,
     "last_message_at": ts,
     "updated_at": ts,
 })
+# Call lifecycle resolves participants from the Participants table via GSI1
+# (GSI1PK=conversation_id). One row per participant — mirror production schema.
+ptable = ddb.Table("Participants")
+for pid in pids:
+    ptable.put_item(Item={
+        "user_id": pid,
+        "conversation_id": cid,
+        "status": "active",
+        "role": "member",
+        "muted_until": 0,
+        "last_read_at": 0,
+        "unread_count": 0,
+        "joined_at": ts,
+        "left_at": 0,
+        "GSI1PK": cid,
+        "GSI1SK": pid,
+    })
 print("ok")
 `.replace("__CONVO_ID__", conversationId).replace('"__PARTICIPANTS__"', JSON.stringify(participantIds));
   execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {

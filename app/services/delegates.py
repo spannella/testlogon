@@ -170,7 +170,9 @@ def update_delegate_permissions(
     resolved_preset = preset or _detect_preset(permissions)
     T.delegates.update_item(
         Key={"pk": f"CREATOR#{creator_id}", "sk": f"DELEGATE#{delegate_id}"},
-        UpdateExpression="SET permissions = :p, preset = :pr, updated_at = :u",
+        # "permissions" is a DynamoDB reserved keyword — must be aliased.
+        UpdateExpression="SET #perms = :p, preset = :pr, updated_at = :u",
+        ExpressionAttributeNames={"#perms": "permissions"},
         ExpressionAttributeValues={
             ":p": permissions,
             ":pr": resolved_preset,

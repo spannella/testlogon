@@ -14,7 +14,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.auth.policy import require_admin_or_root
+from app.auth.policy import require_admin_or_root, require_admin_or_root_csrf
 from app.core.time import now_ts
 from app.models import (
     QaClaimIn,
@@ -70,7 +70,7 @@ async def get_qa_config_schema(user=Depends(require_admin_or_root)):
 async def put_qa_config(
     type_id: str,
     body: QaConfigIn,
-    user=Depends(require_admin_or_root),
+    user=Depends(require_admin_or_root_csrf),
 ):
     result = svc.update_qa_config(
         agent_type_id=type_id, owner_sub=user.sub, config=body.model_dump()

@@ -399,9 +399,12 @@ test.describe("497 -- Comment Moderation API", () => {
     // Charlie gets only feed_post (no feed_moderate)
     await ensureCharlieIsDelegateWithPerms(alicePage, ["feed_post"]);
 
-    // Alice creates a post directly (as the creator) for comments
+    // Alice creates a post directly (as the creator) for comments.
+    // Make it public so Bob (a regular, non-following user) can comment on it —
+    // the default "followers" visibility would 403 his comment via can_view_post.
     const postResp = await apiPost(alicePage, ALICE_ID, "/posts", {
       body: `Moderation test post ${TS}`,
+      visibility: "public",
     });
     expect(postResp.ok()).toBeTruthy();
     const postData = await postResp.json();

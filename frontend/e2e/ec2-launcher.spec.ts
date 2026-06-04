@@ -238,6 +238,23 @@ test.describe("250 — Instance Limits & Validation", () => {
   test.beforeAll(async ({ browser }) => {
     alicePage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);
+
+    // Clean slate: terminate any active instances left over from earlier
+    // sections or prior runs. The launch limit only counts active states
+    // (running/stopped/launching/stopping), so leftover active instances from
+    // a previously-failed run would push 250.1 over the limit on the very
+    // first launch. Terminate them so 250.1 can launch up to the limit.
+    const listResp = await apiGet(alicePage, "/ui/remote/ec2/instances");
+    if (listResp.ok()) {
+      const body = await listResp.json();
+      for (const inst of body.instances || []) {
+        if (["running", "stopped", "launching", "stopping"].includes(inst.status)) {
+          try {
+            await apiPost(alicePage, ALICE_ID, `/ui/remote/ec2/instances/${inst.instance_id}/terminate`);
+          } catch (_) { /* ignore */ }
+        }
+      }
+    }
   });
 
   test.afterAll(async () => {

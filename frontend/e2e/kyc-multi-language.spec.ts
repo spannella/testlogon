@@ -56,6 +56,11 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   const sessions = getSessions();
   const page = await browser.newPage();
   await page.context().addCookies(sessions[identity].cookies);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, sessions[identity].user_sub);
   return page;
 }
 

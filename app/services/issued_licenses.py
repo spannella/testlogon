@@ -139,7 +139,7 @@ def issue_license(
         )
 
     # Add display name to returned item
-    item["licensor_display_name"] = profile.get("display_name", "")
+    item["licensor_display_name"] = (profile.get("display_name") or "")
     return item
 
 
@@ -208,7 +208,7 @@ def update_license_terms(
         Key={"pk": f"CONTENT#{content_id}", "sk": f"LICENSE#{issued_license_id}"}
     ).get("Item", {})
     profile = get_profile(licensor_sub) or {}
-    updated["licensor_display_name"] = profile.get("display_name", "")
+    updated["licensor_display_name"] = (profile.get("display_name") or "")
     return updated
 
 
@@ -301,7 +301,7 @@ def revoke_license(
     item["updated_at"] = ts
     item["revoke_reason"] = reason
     profile = get_profile(licensor_sub) or {}
-    item["licensor_display_name"] = profile.get("display_name", "")
+    item["licensor_display_name"] = (profile.get("display_name") or "")
     return item
 
 
@@ -317,7 +317,7 @@ def get_issued_license(
     item = resp.get("Item")
     if item:
         profile = get_profile(item.get("licensor_id", "")) or {}
-        item["licensor_display_name"] = profile.get("display_name", "")
+        item["licensor_display_name"] = (profile.get("display_name") or "")
     return item
 
 
@@ -378,7 +378,7 @@ def list_licenses_held_by(
         licensor_id = item.get("licensor_id", "")
         if licensor_id:
             profile = get_profile(licensor_id) or {}
-            item["licensor_display_name"] = profile.get("display_name", "")
+            item["licensor_display_name"] = (profile.get("display_name") or "")
 
     result: Dict[str, Any] = {"items": items}
     if resp.get("LastEvaluatedKey"):
@@ -512,7 +512,7 @@ def _write_library_index(
         "content_id": content_id,
         "content_type": content_type,
         "licensor_id": licensor_id,
-        "licensor_display_name": profile.get("display_name", ""),
+        "licensor_display_name": (profile.get("display_name") or ""),
         "title": title,
         "thumbnail_url": thumbnail_url,
         "profit_share_pct": psp,

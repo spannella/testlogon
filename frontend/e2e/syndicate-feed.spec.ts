@@ -46,6 +46,14 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   const page = await browser.newPage();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await page.context().addCookies(sess.cookies as any);
+  // Seed the auth store so the React app treats the user as authenticated.
+  // Without this, ProtectedRoute redirects to /login and protected pages
+  // (e.g. the syndicate profile) never mount, so their testids never render.
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, sess.user_sub);
   return page;
 }
 
@@ -86,30 +94,35 @@ async function makeMember(adminPage: Page, sid: string, memberIdentity: string, 
   await apiPost(memberPage, memberIdentity, `/ui/syndicates/${sid}/invite/respond`, { accept: true });
 }
 
+// Shared pages and the base syndicate are created ONCE for the whole file and
+// torn down ONCE at the very end. Previously these lived in block 439's
+// beforeAll/afterAll, so block 439's afterAll closed the shared pages while
+// blocks 440/441/442 still needed them -> "Target page, context or browser has
+// been closed" (and `undefined` after a worker reset on retry).
+test.beforeAll(async ({ browser }) => {
+  alicePage = await newIdentityPage(browser, "alice");
+  bobPage = await newIdentityPage(browser, "bob");
+  charliePage = await newIdentityPage(browser, "charlie_admin");
+
+  const resp = await apiPost(alicePage, "alice", "/ui/syndicates", {
+    name: `Feed Syndicate ${TS}`,
+    description: "Syndicate for feed E2E",
+  });
+  const data = await resp.json();
+  syndicateId = data.syndicate_id;
+
+  // Bob and Charlie join as members.
+  await makeMember(alicePage, syndicateId, "bob", BOB_ID);
+  await makeMember(alicePage, syndicateId, "charlie_admin", CHARLIE_ID);
+});
+
+test.afterAll(async () => {
+  await alicePage?.close();
+  await bobPage?.close();
+  await charliePage?.close();
+});
+
 test.describe("439 — Syndicate Profile API", () => {
-  test.beforeAll(async ({ browser }) => {
-    alicePage = await newIdentityPage(browser, "alice");
-    bobPage = await newIdentityPage(browser, "bob");
-    charliePage = await newIdentityPage(browser, "charlie_admin");
-
-    const resp = await apiPost(alicePage, "alice", "/ui/syndicates", {
-      name: `Feed Syndicate ${TS}`,
-      description: "Syndicate for feed E2E",
-    });
-    const data = await resp.json();
-    syndicateId = data.syndicate_id;
-
-    // Bob and Charlie join as members.
-    await makeMember(alicePage, syndicateId, "bob", BOB_ID);
-    await makeMember(alicePage, syndicateId, "charlie_admin", CHARLIE_ID);
-  });
-
-  test.afterAll(async () => {
-    await alicePage?.close();
-    await bobPage?.close();
-    await charliePage?.close();
-  });
-
   test("439.1 GET profile returns metadata and members", async () => {
     const resp = await apiGet(alicePage, `/ui/syndicates/feed/${syndicateId}/profile`);
     expect(resp.ok()).toBe(true);

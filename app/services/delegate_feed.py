@@ -181,7 +181,12 @@ def create_post_as_creator(
         post_item["delegate_tag"] = delegate_tag
     if requires_approval:
         post_item["GSI5PK"] = f"DRAFT_QUEUE#{creator_id}"
-        post_item["GSI5SK"] = ts
+        # GSI5SK on the app single-table is declared as a STRING sort key
+        # (the follow_user writer stores "{created_at}#{follower_id}" there).
+        # Writing a raw integer here triggers a DynamoDB key-type ValidationException
+        # -> 500. Store a zero-padded decimal string so lexical order still matches
+        # chronological order for the draft-queue query (ScanIndexForward=False).
+        post_item["GSI5SK"] = f"{ts:020d}"
 
     tbl.put_item(Item=post_item)
 

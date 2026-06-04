@@ -595,7 +595,7 @@ def admin_list_review_queue(
         display = ""
         if creator_id:
             profile = get_profile(creator_id) or {}
-            display = profile.get("display_name", "")
+            display = profile.get("display_name") or ""
         items.append({
             "license_id": it.get("license_id", ""),
             "creator_id": creator_id,

@@ -165,14 +165,22 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [highContrast]);
 
   // ── PLATFORM-013: load + apply persisted server theme config ────────
-  // Fetches the user's saved theme once on mount and applies it on top of
-  // the local uiStore-driven defaults. Failures are swallowed (offline /
-  // unauthenticated) so the local theme remains intact.
+  // Fetches the user's saved theme once on mount and applies the parts that
+  // are NOT already driven reactively by the uiStore (preset overrides,
+  // high-contrast / density classes etc.). We deliberately do NOT write the
+  // accent CSS variables (--color-primary / --color-ring / …) here: those are
+  // owned by the reactive accent effect above, which is driven by the live
+  // uiStore. Re-applying them from an async fetch raced against the user's
+  // most recent swatch click and could snap the accent back to the stale
+  // server value (PLATFORM-013 accent-color regression). Server-side accent
+  // sync flows into the store via `loadServerPreferences` (AppShell), so the
+  // reactive effect remains the single source of truth for the accent vars.
   useEffect(() => {
     let cancelled = false;
     getThemeCustomization()
       .then((config) => {
-        if (!cancelled) applyThemeConfig(config);
+        if (cancelled) return;
+        applyThemeConfig(config, { skipAccent: true });
       })
       .catch(() => {
         /* keep local theme */

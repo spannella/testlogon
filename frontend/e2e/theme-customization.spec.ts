@@ -173,7 +173,7 @@ test.describe("109. Accent Color", () => {
 
     // Reload
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const after = await getCSSVar(page, "--color-primary");
     expect(after).toBe(before);
@@ -253,7 +253,7 @@ test.describe("109. Accent Color", () => {
     });
 
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     // The server had "pink" saved, but we need to verify local prefs are loaded from localStorage
     // (server pref sync is fire-and-forget). After reload, localStorage value should be applied.
@@ -267,7 +267,7 @@ test.describe("109. Accent Color", () => {
       localStorage.removeItem("ui-store");
     });
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const primary = await getCSSVar(page, "--color-primary");
     // Default blue = 221.2 83.2% 53.3%
@@ -326,7 +326,7 @@ test.describe("110. Font Size", () => {
 
   test("110.3 Persists after reload", async () => {
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
     const fontSize = await page.evaluate(() => document.documentElement.style.fontSize);
     expect(fontSize).toBe("18px");
   });
@@ -357,7 +357,7 @@ test.describe("110. Font Size", () => {
   test("110.7 Syncs to server", async () => {
     await resetUiStore(page);
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const patchPromise = page.waitForRequest(
       (r) => r.url().includes("/settings/preferences") && r.method() === "PATCH",
@@ -421,7 +421,7 @@ test.describe("111. Density", () => {
 
   test("111.4 Persists after reload", async () => {
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
     const hasClass = await page.evaluate(() =>
       document.documentElement.classList.contains("density-spacious"),
     );
@@ -450,7 +450,7 @@ test.describe("111. Density", () => {
   test("111.6 Syncs to server", async () => {
     await resetUiStore(page);
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const patchPromise = page.waitForRequest(
       (r) => r.url().includes("/settings/preferences") && r.method() === "PATCH",
@@ -468,7 +468,7 @@ test.describe("111. Density", () => {
   test("111.7 Comfortable is default", async () => {
     await resetUiStore(page);
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const comfyBtn = page.locator("button[aria-pressed]", { hasText: "Comfortable" });
     await expect(comfyBtn).toHaveAttribute("aria-pressed", "true");
@@ -548,7 +548,7 @@ test.describe("112. High Contrast", () => {
 
   test("112.4 Persists after reload", async () => {
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const hasClass = await page.evaluate(() =>
       document.documentElement.classList.contains("high-contrast"),
@@ -557,6 +557,16 @@ test.describe("112. High Contrast", () => {
   });
 
   test("112.5 Focus rings 3px solid primary", async () => {
+    // Ensure the settings page is loaded and high contrast is enabled
+    // (don't rely on state left by the prior test).
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
+    const toggle = page.getByTestId("high-contrast-toggle");
+    const state = await toggle.getAttribute("data-state");
+    if (state !== "checked") {
+      await toggle.click();
+      await page.waitForTimeout(200);
+    }
+
     // Tab to a focusable element
     const btn = page.locator("button:visible").first();
     await btn.focus();
@@ -627,7 +637,7 @@ test.describe("112. High Contrast", () => {
       }
     });
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const hasDark = await page.evaluate(() =>
       document.documentElement.classList.contains("dark"),

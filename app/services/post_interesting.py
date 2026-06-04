@@ -20,16 +20,21 @@ counter never drifts on repeated marks/unmarks.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from botocore.exceptions import ClientError
 
 from app.core.aws import ddb
-from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
 _SIGNAL_INTERESTING = "interesting"
+
+# Newsfeed posts (PK=POST#{id}, SK=META) live in the app single table, NOT the
+# billing table. Mirror the env var the newsfeed router uses so the aggregate
+# ``interesting_count`` is written to the same table the GET reads it from.
+_APP_TABLE = os.environ.get("APP_TABLE", "app_single_table")
 
 
 def _billing_pk(user_sub: str) -> str:
@@ -59,8 +64,7 @@ def is_interesting(user_sub: str, post_id: str) -> bool:
 
 def _post_meta_table():
     """The app_single_table handle that holds POST#{id}/META records."""
-    name = getattr(S, "billing_table_name", "") or ""
-    return ddb.Table(name) if name else None
+    return ddb.Table(_APP_TABLE) if _APP_TABLE else None
 
 
 def _adjust_interesting_count(post_id: str, delta: int) -> None:

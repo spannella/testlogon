@@ -68,6 +68,44 @@ async def require_admin_or_root(user: AuthenticatedUser = Depends(get_authentica
     return require_roles(user, {Role.ADMIN, Role.ROOT})
 
 
+def enforce_cookie_csrf(request: Request) -> None:
+    """Reject cookie-authenticated non-safe requests that lack a valid CSRF token.
+
+    Mirrors the CSRF check in ``require_ui_session`` but for routers that only
+    use the role-based ``require_*`` dependencies. Bearer-token / API-key clients
+    (no session cookie) are unaffected and continue to skip CSRF.
+    """
+    from app.core.settings import S as _S
+
+    method = getattr(request, "method", "GET")
+    if method.upper() in ("GET", "HEAD", "OPTIONS"):
+        return
+    cookies = getattr(request, "cookies", {}) or {}
+    headers = getattr(request, "headers", {}) or {}
+    session_cookie_name = getattr(_S, "ui_session_cookie_name", "")
+    session_cookie = cookies.get(session_cookie_name) if session_cookie_name else None
+    if not session_cookie:
+        # No browser session cookie → Bearer/API-key client → CSRF not applicable.
+        return
+    csrf_header_name = getattr(_S, "ui_csrf_header_name", "")
+    csrf_cookie_name = getattr(_S, "ui_csrf_cookie_name", "")
+    csrf_header = headers.get(csrf_header_name, "") if csrf_header_name else ""
+    csrf_cookie = cookies.get(csrf_cookie_name, "") if csrf_cookie_name else ""
+    if not csrf_header or not csrf_cookie:
+        raise HTTPException(403, "Missing CSRF token")
+    if csrf_header != csrf_cookie:
+        raise HTTPException(403, "CSRF validation failed")
+
+
+async def require_admin_or_root_csrf(
+    request: Request,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> AuthenticatedUser:
+    """``require_admin_or_root`` plus CSRF enforcement for cookie-auth requests."""
+    enforce_cookie_csrf(request)
+    return require_roles(user, {Role.ADMIN, Role.ROOT})
+
+
 async def require_general_admin_or_root(user: AuthenticatedUser = Depends(get_authenticated_user)) -> AuthenticatedUser:
     role = normalize_role(user.role)
     if role is Role.ROOT:

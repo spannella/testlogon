@@ -1,6 +1,5 @@
 import { api } from "@/api/client";
 import type { UserGroup, GroupMember, GroupFeedResponse } from "@/api/types";
-import axios from "axios";
 
 // ── GROUP-001: User Groups ──────────────────────────────────────
 
@@ -72,7 +71,7 @@ export const getGroupFeed = (groupId: string, params?: {
 export const getPublicGroupFeed = (groupId: string, params?: {
   cursor?: string;
   limit?: number;
-}) => axios.get<GroupFeedResponse>(`/public/groups/${groupId}/feed`, { params }).then(r => r.data);
+}) => api.get<GroupFeedResponse>(`/public/groups/${groupId}/feed`, params as Record<string, string>);
 
 export const pinGroupPost = (groupId: string, postId: string) =>
   api.post(`/ui/groups/${groupId}/posts/${postId}/pin`);
@@ -202,24 +201,19 @@ export const listGroupDonations = (groupId: string, fundraiserId: string) =>
     `/ui/groups/fundraising/${groupId}/fundraisers/${fundraiserId}/donations`,
   );
 
-// Public donor-facing endpoints (no auth -- use plain axios so the auth/CSRF
-// interceptors and 401->logout handling in the api client are bypassed).
+// Public donor-facing endpoints (no auth). These hit /public/* routes; the api
+// client only attaches an Authorization header / CSRF token when a session is
+// present, so unauthenticated visitors call these cleanly.
 export const getPublicFundraiser = (fundraiserId: string) =>
-  axios
-    .get<GroupPublicFundraiser>(`/public/fundraisers/${fundraiserId}`)
-    .then((r) => r.data);
+  api.get<GroupPublicFundraiser>(`/public/fundraisers/${fundraiserId}`);
 
 export const submitDonation = (
   fundraiserId: string,
   data: { amount_cents: number; donor_name?: string; donor_email?: string },
 ) =>
-  axios
-    .post<GroupDonation>(`/public/fundraisers/${fundraiserId}/donate`, data)
-    .then((r) => r.data);
+  api.post<GroupDonation>(`/public/fundraisers/${fundraiserId}/donate`, data);
 
 export const getDonationReceipt = (fundraiserId: string, donationId: string) =>
-  axios
-    .get<GroupDonationReceipt>(
-      `/public/fundraisers/${fundraiserId}/donations/${donationId}/receipt`,
-    )
-    .then((r) => r.data);
+  api.get<GroupDonationReceipt>(
+    `/public/fundraisers/${fundraiserId}/donations/${donationId}/receipt`,
+  );

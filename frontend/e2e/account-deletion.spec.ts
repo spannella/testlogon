@@ -289,11 +289,22 @@ test.describe("534. Admin account-deletion management", () => {
 // ─── 535. Privacy / Account Deletion page UI ─────────────────────────────────
 
 test.describe("535. Account Deletion page UI", () => {
-  test.beforeAll(() => { getSessions(); cleanupUser(BOB_ID); });
+  test.beforeAll(() => { getSessions(); });
   test.afterAll(() => { cleanupUser(BOB_ID); });
 
   test.beforeEach(async ({ page }) => {
+    // Each UI test must start from a clean slate: a leftover pending deletion
+    // request disables the "open delete dialog" button (disabled={!!activeRequest}),
+    // causing click() to hang. Wipe rows before every test.
+    cleanupUser(BOB_ID);
     await page.context().addCookies(getSessions()["bob"].cookies);
+    // Seed the client-side auth store so ProtectedRoute treats the page as
+    // authenticated (cookies alone only satisfy server-side API auth).
+    await page.goto("/login", { waitUntil: "domcontentloaded" });
+    await page.evaluate((uid: string) => {
+      const state = { userId: uid, accessToken: null, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    }, getSessions()["bob"].user_sub);
   });
 
   test("535.1 dialog shows password + confirm inputs", async ({ page }) => {
@@ -332,6 +343,9 @@ test.describe("535. Account Deletion page UI", () => {
   });
 
   test("535.4 cancel button cancels the active deletion", async ({ page }) => {
+    // beforeEach wipes all rows, so create a fresh pending deletion to cancel.
+    const r = await apiPost(page, "bob", `${BASE}/request`, { password: "pw", confirm_text: "DELETE MY ACCOUNT" });
+    expect(r.ok()).toBeTruthy();
     await page.goto("/settings/account-deletion");
     await expect(page.getByTestId("cancel-deletion-btn")).toBeVisible({ timeout: 10_000 });
     await page.getByTestId("cancel-deletion-btn").click();

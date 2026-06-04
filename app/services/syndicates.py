@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -15,7 +16,9 @@ from app.core.time import now_ts
 logger = logging.getLogger(__name__)
 
 MAX_MEMBERS = 50
-MAX_SYNDICATES_PER_USER = 10
+# Per-user cap on *active* syndicate memberships. Archived/dissolved syndicates
+# do not count (see count_active_user_syndicates). Env-overridable.
+MAX_SYNDICATES_PER_USER = int(os.environ.get("MAX_SYNDICATES_PER_USER", "10"))
 
 
 # ---------------------------------------------------------------------------
@@ -32,9 +35,11 @@ def create_syndicate(
     ts = now_ts()
     syndicate_id = f"synd_{uuid4().hex[:12]}"
 
-    # Check user isn't already in too many syndicates
-    existing = list_user_syndicates(creator_sub)
-    if len(existing) >= MAX_SYNDICATES_PER_USER:
+    # Check user isn't already in too many *active* syndicates. Archived/dissolved
+    # syndicates leave a stale USER_SYND# index row behind, so a plain count of
+    # list_user_syndicates over-counts and wrongly blocks creation.
+    active_count = count_active_user_syndicates(creator_sub)
+    if active_count >= MAX_SYNDICATES_PER_USER:
         raise HTTPException(status_code=400, detail=f"User already in {MAX_SYNDICATES_PER_USER} syndicates")
 
     meta: Dict[str, Any] = {
@@ -113,11 +118,29 @@ def get_syndicate_detail(syndicate_id: str) -> Dict[str, Any]:
 
 
 def list_user_syndicates(user_id: str) -> List[Dict[str, Any]]:
-    """List all syndicates a user belongs to."""
+    """List all syndicates a user belongs to (includes stale rows for archived/dissolved syndicates)."""
     resp = T.syndicates.query(
         KeyConditionExpression=Key("pk").eq(f"USER_SYND#{user_id}") & Key("sk").begins_with("SYND#"),
     )
     return resp.get("Items", [])
+
+
+def count_active_user_syndicates(user_id: str) -> int:
+    """Count the user's memberships that point to a syndicate whose META status is 'active'.
+
+    Dissolution/archival (see _archive_syndicate) only flips the META status and removes
+    the leaving user's index row; other members keep a stale USER_SYND# row. Filtering by
+    the referenced syndicate's status avoids over-counting against MAX_SYNDICATES_PER_USER.
+    """
+    count = 0
+    for row in list_user_syndicates(user_id):
+        sid = row.get("syndicate_id")
+        if not sid:
+            continue
+        meta = get_syndicate(sid)
+        if meta and meta.get("status") == "active":
+            count += 1
+    return count
 
 
 def list_members(syndicate_id: str) -> List[Dict[str, Any]]:

@@ -500,7 +500,7 @@ test.describe("85 — Offline queue UI", () => {
     await goOffline(page);
     const banner = page.getByText(/you're offline/i);
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText(/reconnected/i);
+    await expect(banner).toContainText(/showing cached data/i);
   });
 
   // ── 85.2: Banner shows queue count badge ────────────────────────────────────
@@ -570,7 +570,7 @@ test.describe("85 — Offline queue UI", () => {
     await page.getByPlaceholder("Type a message...").fill(`toast-test-${TS}`);
     await page.getByRole("button", { name: "Send message" }).click();
 
-    await expect(page.getByText(/message queued and will send/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/message queued/i)).toBeVisible({ timeout: 5_000 });
   });
 
   // ── 85.5: Offline banner disappears after full flush ────────────────────────

@@ -55,6 +55,11 @@ async function injectAuth(page: Page, identity: string) {
   const session = getAdminSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 async function apiGet(page: Page, identity: string, path: string) {

@@ -221,7 +221,10 @@ def _fetch_daily_rollups(
     offset_days: int = 0,
 ) -> list[dict]:
     now = datetime.now(timezone.utc) - timedelta(days=offset_days)
-    start_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    # ``between`` is inclusive on both ends, so a ``days``-day window is
+    # [today - (days - 1), today] — that's exactly ``days`` calendar days.
+    # Using ``days`` here would span days + 1 days and pull in an extra row.
+    start_date = (now - timedelta(days=days - 1)).strftime("%Y-%m-%d")
     end_date = now.strftime("%Y-%m-%d")
 
     if campaign_id:
@@ -249,7 +252,8 @@ def _fetch_rollups(
     granularity: str,
 ) -> list[dict]:
     now = datetime.now(timezone.utc)
-    start_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    # Inclusive ``between`` window: [today - (days - 1), today] == ``days`` days.
+    start_date = (now - timedelta(days=days - 1)).strftime("%Y-%m-%d")
     end_date = now.strftime("%Y-%m-%d")
     prefix = f"ROLLUP#{granularity}#"
 

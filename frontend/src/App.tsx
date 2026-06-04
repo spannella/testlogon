@@ -77,6 +77,11 @@ const RemoteDesktopPage = lazy(() => import("@/pages/remote/RemoteDesktopPage"))
 const K8sLauncherPage = lazy(() => import("@/pages/remote/K8sLauncherPage"));
 const ComputeSpendingPage = lazy(() => import("@/pages/remote/ComputeSpendingPage"));
 const SecurityGroupsPage = lazy(() => import("@/pages/remote/SecurityGroupsPage"));
+const SshKeyManagerPage = lazy(() => import("@/pages/remote/SshKeyManagerPage"));
+const Ec2LauncherPage = lazy(() => import("@/pages/remote/Ec2LauncherPage"));
+const LlmKeysPage = lazy(() => import("@/pages/agents/LlmKeysPage"));
+const MyBundlesPage = lazy(() => import("@/pages/syndicates/MyBundlesPage"));
+const MediaSettingsPage = lazy(() => import("@/pages/calls/MediaSettingsPage"));
 const TemplateBrowserPage = lazy(() => import("@/pages/remote/TemplateBrowserPage"));
 const SshRecordingsPage = lazy(() => import("@/pages/remote/SshRecordingsPage"));
 const InstanceMonitoringPage = lazy(() => import("@/pages/remote/InstanceMonitoringPage"));
@@ -155,6 +160,11 @@ const CreatorDashboard = lazy(() => import("@/pages/dashboard/CreatorDashboard")
 const OrgsPage = lazy(() => import("@/pages/orgs/OrgsPage"));
 const OrgDashboard = lazy(() => import("@/pages/orgs/OrgDashboard"));
 const GroupsListPage = lazy(() => import("@/pages/groups/GroupsListPage"));
+const EarningsPage = lazy(() => import("@/pages/earnings/EarningsPage"));
+const GroupSettingsPage = lazy(() => import("@/pages/groups/GroupSettingsPage"));
+const TargetingEditor = lazy(() => import("@/pages/ads/TargetingEditor"));
+const CreativeEditor = lazy(() => import("@/pages/ads/CreativeEditor"));
+const AdminCreativeReviewPage = lazy(() => import("@/pages/ads/AdminCreativeReviewPage"));
 const GroupPage = lazy(() => import("@/pages/groups/GroupPage"));
 const WebhookDashboard = lazy(() => import("@/pages/webhooks/WebhookDashboard"));
 const WebhookEndpointDetail = lazy(() => import("@/pages/webhooks/WebhookEndpointDetail"));
@@ -224,6 +234,9 @@ const CostBreakdownPage = lazy(() => import("@/pages/agents/CostBreakdownPage"))
 const BudgetManagerPage = lazy(() => import("@/pages/agents/BudgetManagerPage"));
 const CostAlertsPage = lazy(() => import("@/pages/agents/CostAlertsPage"));
 const KycAnalyticsDashboard = lazy(() => import("@/pages/admin/KycAnalyticsDashboard"));
+const KycQueuePage = lazy(() => import("@/pages/admin/KycQueuePage"));
+const KycCaseDetailPage = lazy(() => import("@/pages/admin/KycCaseDetailPage"));
+const KycMetricsDashboard = lazy(() => import("@/pages/admin/KycMetricsDashboard"));
 
 function PageSpinner() {
   return (
@@ -275,6 +288,7 @@ export default function App() {
           <Route path="messages" element={<MessagesPage />} />
           <Route path="messages/:conversationId" element={<MessagesPage />} />
           <Route path="calls/history" element={<CallHistoryPage />} />
+          <Route path="calls/settings" element={<MediaSettingsPage />} />
           <Route path="contacts" element={<ContactsPage />} />
           <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />
@@ -290,6 +304,9 @@ export default function App() {
           <Route path="billing/tax-forms" element={<TaxForm1099Page />} />
           <Route path="billing/disputes" element={<DisputesPage />} />
           <Route path="ads/billing" element={<AdBillingPage />} />
+          <Route path="ads/targeting" element={<TargetingEditor />} />
+          <Route path="ads/creatives" element={<CreativeEditor />} />
+          <Route path="earnings" element={<EarningsPage />} />
           <Route path="ads/analytics" element={<AdAnalyticsDashboard />} />
           <Route path="ads/scheduling" element={<AdSchedulePage />} />
           <Route path="ads/optimization" element={<AdOptimizationPanel />} />
@@ -317,6 +334,7 @@ export default function App() {
           <Route path="posts/:postId" element={<PostDetailPage />} />
           <Route path="feed/delegate/:creatorId" element={<DelegateFeedPage />} />
           <Route path="syndicates" element={<SyndicatesPage />} />
+          <Route path="syndicates/my-bundles" element={<MyBundlesPage />} />
           <Route path="syndicates/:syndicateId" element={<SyndicateProfilePage />} />
           <Route path="syndicates/:syndicateId/manage" element={<SyndicateDetailPage />} />
           <Route path="syndicates/:syndicateId/campaigns/:campaignId" element={<SyndicateAdvertisingDetailPage />} />
@@ -341,6 +359,8 @@ export default function App() {
           <Route path="clips" element={<ClipGalleryPage />} />
           <Route path="clips/:clipId" element={<ClipPlayerPage />} />
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
+          <Route path="remote/ec2" element={<Ec2LauncherPage />} />
+          <Route path="remote/ssh-keys" element={<SshKeyManagerPage />} />
           <Route path="remote/k8s" element={<K8sLauncherPage />} />
           <Route path="remote/billing" element={<ComputeSpendingPage />} />
           <Route path="remote/security-groups" element={<SecurityGroupsPage />} />
@@ -388,6 +408,7 @@ export default function App() {
           <Route path="groups/:groupId/treasury" element={<GroupTreasuryPage />} />
           <Route path="groups/:groupId/fundraising" element={<GroupFundraisingPage />} />
           <Route path="groups/:groupId/ads" element={<GroupAdsPage />} />
+          <Route path="groups/:groupId/settings" element={<GroupSettingsPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/tax-forms-1099" element={<TaxForm1099AdminPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
@@ -401,6 +422,9 @@ export default function App() {
           <Route path="admin/disputes" element={<AdminDisputeQueuePage />} />
           <Route path="admin/fraud" element={<FraudReviewQueuePage />} />
           <Route path="admin/kyc-workload" element={<KycWorkloadPage />} />
+          <Route path="admin/kyc" element={<KycQueuePage />} />
+          <Route path="admin/kyc/metrics" element={<KycMetricsDashboard />} />
+          <Route path="admin/kyc/cases/:caseId" element={<KycCaseDetailPage />} />
           <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
           <Route path="admin/kyc/monitoring" element={<KycMonitoringPage />} />
           <Route path="admin/kyc/address-verification" element={<KycAddressVerificationPanel />} />
@@ -411,6 +435,7 @@ export default function App() {
           <Route path="admin/jobs" element={<JobDashboardPage />} />
           <Route path="admin/financials" element={<FinancialDashboard />} />
           <Route path="admin/payment-health" element={<PaymentHealthDashboard />} />
+          <Route path="admin/ads/creatives" element={<AdminCreativeReviewPage />} />
           <Route path="admin/ads/fraud" element={<AdFraudDashboard />} />
           <Route path="admin/ad-platform" element={<AdPlatformDashboard />} />
           <Route path="admin/audit-exports" element={<AuditExportPage />} />
@@ -440,6 +465,7 @@ export default function App() {
           <Route path="admin/kyc/id-scanner" element={<KycIdScannerReviewQueuePage />} />
           <Route path="admin/kyc/compliance" element={<KycComplianceReportsPage />} />
           <Route path="agents/workers" element={<WorkersPage />} />
+          <Route path="agents/llm-keys" element={<LlmKeysPage />} />
           <Route path="agents/dashboard" element={<AgentDashboard />} />
           <Route path="agents/fleet" element={<FleetDashboard />} />
           <Route path="agents/prs" element={<AgentPrList />} />

@@ -148,13 +148,20 @@ test.beforeAll(async ({ browser }) => {
     company_name: `OptCo_${TS}`,
     billing_email: `opt_${TS}@acme.test`,
   });
+  expect(acctResp.status(), `account create: ${await acctResp.text()}`).toBe(201);
   accountId = (await acctResp.json()).account_id;
-  await apiPost(rootPage, ROOT_ID, `/ui/admin/ads/accounts/${accountId}/review`, {
-    decision: "approve",
-    notes: "ok",
-  });
+  expect(accountId, "account_id must be defined").toBeTruthy();
+
+  const reviewResp = await apiPost(
+    rootPage,
+    ROOT_ID,
+    `/ui/admin/ads/accounts/${accountId}/review`,
+    { decision: "approve", notes: "ok" },
+  );
+  expect(reviewResp.status(), `account review: ${await reviewResp.text()}`).toBe(200);
 
   // Create a campaign.
+  // CampaignCreateIn.start_date/end_date are Unix timestamps (int), not ISO strings.
   const campResp = await apiPost(
     alicePage,
     ALICE_ID,
@@ -164,11 +171,13 @@ test.beforeAll(async ({ browser }) => {
       objective: "awareness",
       budget_cents: 240000,
       budget_type: "daily",
-      start_date: "2026-06-01",
-      end_date: "2026-06-30",
+      start_date: Math.floor(Date.UTC(2026, 5, 1) / 1000),
+      end_date: Math.floor(Date.UTC(2026, 5, 30) / 1000),
     },
   );
+  expect(campResp.status(), `campaign create: ${await campResp.text()}`).toBe(201);
   campaignId = (await campResp.json()).campaign_id;
+  expect(campaignId, "campaign_id must be defined").toBeTruthy();
 
   // Create 3 creatives.
   const mk = async (title: string): Promise<string> => {

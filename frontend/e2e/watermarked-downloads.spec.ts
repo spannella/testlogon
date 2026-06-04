@@ -482,7 +482,7 @@ t.put_item(Item={
   test("4.2 Watermarked download button shown (not plain)", async () => {
     await alicePage.goto(`${BASE}/videos/${VID_UI}`, { waitUntil: "domcontentloaded" });
     // Should show watermarked download button instead of plain
-    const wmButton = alicePage.locator('[data-testid="watermarked-download-button"]');
+    const wmButton = alicePage.locator('[data-testid="vod-watermark-download-button"]');
     await expect(wmButton).toBeVisible({ timeout: 15_000 });
     // Plain button should NOT be visible
     const plainButton = alicePage.locator('[data-testid="download-mp4-button"]');
@@ -491,7 +491,7 @@ t.put_item(Item={
 
   test("4.3 Clicking download shows preparing state then completes", async () => {
     await alicePage.goto(`${BASE}/videos/${VID_UI}`, { waitUntil: "domcontentloaded" });
-    const wmButton = alicePage.locator('[data-testid="watermarked-download-button"]');
+    const wmButton = alicePage.locator('[data-testid="vod-watermark-download-button"]');
     await expect(wmButton).toBeVisible({ timeout: 15_000 });
 
     // In dev mode the download completes instantly, so we just verify the button text

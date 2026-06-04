@@ -427,8 +427,10 @@ test.describe("247 -- SSH Key Manager UI", () => {
     // Ed25519 should be selected by default
     await alicePage.getByRole("button", { name: /Generate$/i }).click();
 
-    // Wait for key to appear in table
-    await expect(alicePage.getByText(`UI Gen Key ${TS}`)).toBeVisible({ timeout: 15_000 });
+    // Wait for key to appear in table (scope to the row to avoid the toast match)
+    await expect(
+      alicePage.locator("tr").filter({ hasText: `UI Gen Key ${TS}` })
+    ).toBeVisible({ timeout: 15_000 });
 
     // Should show the public key dialog after generation
     await expect(alicePage.getByText("Public Key")).toBeVisible();
@@ -437,13 +439,17 @@ test.describe("247 -- SSH Key Manager UI", () => {
 
   test("Key appears in table with type badge", async () => {
     await alicePage.goto(`${BASE}/remote/ssh-keys`, { waitUntil: "domcontentloaded" });
-    await expect(alicePage.getByText(`UI Gen Key ${TS}`)).toBeVisible({ timeout: 10_000 });
+    await expect(
+      alicePage.locator("tr").filter({ hasText: `UI Gen Key ${TS}` })
+    ).toBeVisible({ timeout: 10_000 });
     await expect(alicePage.getByText("ED25519")).toBeVisible();
   });
 
   test("Delete key removes from list", async () => {
     await alicePage.goto(`${BASE}/remote/ssh-keys`, { waitUntil: "domcontentloaded" });
-    await expect(alicePage.getByText(`UI Gen Key ${TS}`)).toBeVisible({ timeout: 10_000 });
+    await expect(
+      alicePage.locator("tr").filter({ hasText: `UI Gen Key ${TS}` })
+    ).toBeVisible({ timeout: 10_000 });
 
     // Click the delete button (trash icon) in the row
     const row = alicePage.locator("tr").filter({ hasText: `UI Gen Key ${TS}` });

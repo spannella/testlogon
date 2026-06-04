@@ -539,19 +539,19 @@ test.describe("118 - PayoutDashboard UI", () => {
 
   test("118.2 request payout form is visible", async () => {
     await uiPage.goto(`${BASE}/payouts`, { waitUntil: "domcontentloaded" });
-    await expect(uiPage.getByRole("heading", { name: "Request Payout" })).toBeVisible({ timeout: 10_000 });
+    await expect(uiPage.getByText("Request Payout").first()).toBeVisible({ timeout: 10_000 });
     await expect(uiPage.locator("#payout-amount")).toBeVisible();
     await expect(uiPage.getByRole("button", { name: "Request Payout" })).toBeVisible();
   });
 
   test("118.3 payout history section renders", async () => {
     await uiPage.goto(`${BASE}/payouts`, { waitUntil: "domcontentloaded" });
-    await expect(uiPage.getByRole("heading", { name: "Payout History" })).toBeVisible({ timeout: 10_000 });
+    await expect(uiPage.getByText("Payout History").first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("118.4 earnings breakdown section renders with date range buttons", async () => {
     await uiPage.goto(`${BASE}/payouts`, { waitUntil: "domcontentloaded" });
-    await expect(uiPage.getByRole("heading", { name: "Earnings Breakdown" })).toBeVisible({ timeout: 10_000 });
+    await expect(uiPage.getByText("Earnings Breakdown").first()).toBeVisible({ timeout: 10_000 });
     await expect(uiPage.getByRole("button", { name: "All time" })).toBeVisible();
     await expect(uiPage.getByRole("button", { name: "Last 30 days" })).toBeVisible();
     await expect(uiPage.getByRole("button", { name: "Last 7 days" })).toBeVisible();

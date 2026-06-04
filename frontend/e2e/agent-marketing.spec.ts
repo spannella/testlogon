@@ -50,12 +50,24 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   const sessions = getSessions();
   const page = await browser.newPage();
   await page.context().addCookies(sessions[identity].cookies);
+  const uid = sessions[identity].user_sub;
+  await page.addInitScript((userId: string) => {
+    const state = { userId, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, uid);
   return page;
 }
 
 async function injectAuth(page: Page, identity: string): Promise<void> {
   const sessions = getSessions();
   await page.context().addCookies(sessions[identity].cookies);
+  // Seed the persisted auth store so ProtectedRoute treats the page as
+  // authenticated (cookie injection alone leaves isAuthenticated=false → /login).
+  const uid = sessions[identity].user_sub;
+  await page.addInitScript((userId: string) => {
+    const state = { userId, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, uid);
 }
 
 async function apiPut(page: Page, identity: string, path: string, body?: unknown) {

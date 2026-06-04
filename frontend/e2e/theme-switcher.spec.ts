@@ -223,7 +223,7 @@ test.describe("96. Theme switcher — color scheme, visibility, and persistence"
   // ── 96.5  Dark mode: key text elements are visible ───────────────────────
 
   test("96.5 dark mode: heading and navigation labels are visible", async () => {
-    await expect(page.getByText("Theme")).toBeVisible();
+    await expect(page.getByText("Theme", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
     // Sidebar nav link
     await expect(page.getByRole("link", { name: /messages/i }).first()).toBeVisible();
@@ -258,7 +258,7 @@ test.describe("96. Theme switcher — color scheme, visibility, and persistence"
   // ── 96.9  Light mode: key text elements remain visible ───────────────────
 
   test("96.9 light mode: heading and navigation labels are visible", async () => {
-    await expect(page.getByText("Theme")).toBeVisible();
+    await expect(page.getByText("Theme", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: /messages/i }).first()).toBeVisible();
   });
@@ -277,7 +277,7 @@ test.describe("96. Theme switcher — color scheme, visibility, and persistence"
     );
     await page.reload({ waitUntil: "load" });
     await settled.catch(() => {});
-    await expect(page.getByText("Theme")).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
 
     // All three invariants must hold after reload:
     expect(await hasDarkClass(page)).toBe(true);
@@ -295,7 +295,7 @@ test.describe("96. Theme switcher — color scheme, visibility, and persistence"
 
     // Navigate back to settings — theme must still be dark
     await page.goto(`${BASE}/settings`, { waitUntil: "load" });
-    await expect(page.getByText("Theme")).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
     expect(await hasDarkClass(page)).toBe(true);
     await expect(settingsBtn(page, "dark")).toHaveAttribute("aria-pressed", "true");
   });
@@ -359,7 +359,7 @@ test.describe("96. Theme switcher — color scheme, visibility, and persistence"
     );
     await p.goto(`${BASE}/settings`, { waitUntil: "load" });
     await settled.catch(() => {});
-    await expect(p.getByText("Theme")).toBeVisible({ timeout: 8_000 });
+    await expect(p.getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
 
     expect(await hasDarkClass(p)).toBe(true);
     await expect(p.locator("button[aria-pressed]", { hasText: /system/i }))
@@ -384,7 +384,7 @@ test.describe("96. Theme switcher — color scheme, visibility, and persistence"
     );
     await p.goto(`${BASE}/settings`, { waitUntil: "load" });
     await settled.catch(() => {});
-    await expect(p.getByText("Theme")).toBeVisible({ timeout: 8_000 });
+    await expect(p.getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
 
     expect(await hasDarkClass(p)).toBe(false);
     await expect(p.locator("button[aria-pressed]", { hasText: /system/i }))

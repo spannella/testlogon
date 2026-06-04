@@ -58,6 +58,14 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   const sessions = getAdminSessions();
   const page = await browser.newPage();
   await page.context().addCookies(sessions[identity].cookies);
+  // Seed the persisted auth store so ProtectedRoute treats the page as
+  // authenticated (cookie injection alone leaves isAuthenticated=false → /login
+  // redirect, which hides the UI under test).
+  const uid = sessions[identity].user_sub;
+  await page.addInitScript((userId: string) => {
+    const state = { userId, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, uid);
   return page;
 }
 
@@ -131,7 +139,7 @@ test.beforeAll(async ({ browser }) => {
   });
   expect(ticketResp.status()).toBe(200);
   const ticketData = await ticketResp.json();
-  testTicketId = ticketData.ticket_id;
+  testTicketId = ticketData.ticket.ticket_id;
 
   // Mark ticket as agent-eligible by writing directly via the API
   // We use the tickets table directly -- set agent_eligible = "yes"
@@ -270,7 +278,7 @@ test.describe("632 — Ticket Claiming API", () => {
     });
     expect(ticketResp.status()).toBe(200);
     const tData = await ticketResp.json();
-    testTicketId2 = tData.ticket_id;
+    testTicketId2 = tData.ticket.ticket_id;
     await setTicketAgentEligible(rootPage, testTicketId2);
 
     // Claim the ticket
@@ -290,10 +298,24 @@ test.describe("632 — Ticket Claiming API", () => {
   });
 
   test("Claimed ticket shows agent_worker_id", async () => {
-    // Get the ticket via the tickets API
-    const resp = await apiGet(rootPage, `tickets/${testTicketId2}`);
-    expect(resp.status()).toBe(200);
-    const ticket = await resp.json();
+    // The ticket's agent_* fields are stored on the raw DDB META item
+    // (they are not surfaced through the public TicketOut model), so read
+    // them directly from DynamoDB.
+    const raw = execSync(
+      `python3 -c "
+import boto3, json
+ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1',
+    aws_access_key_id='test', aws_secret_access_key='test')
+table = ddb.Table('tickets')
+item = table.get_item(Key={'pk': 'TICKET#${testTicketId2}', 'sk': 'META'}).get('Item', {})
+print(json.dumps({
+    'agent_worker_id': item.get('agent_worker_id', ''),
+    'agent_claimed_at': int(item.get('agent_claimed_at', 0)),
+}))
+"`,
+      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    ).toString();
+    const ticket = JSON.parse(raw);
     expect(ticket.agent_worker_id).toBe(WORKER_ID);
     expect(ticket.agent_claimed_at).toBeGreaterThan(0);
   });
@@ -330,7 +352,7 @@ test.describe("632 — Ticket Claiming API", () => {
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     // The non-eligible ticket should not appear
-    const found = data.tickets.find((t: any) => t.ticket_id === tData.ticket_id);
+    const found = data.tickets.find((t: any) => t.ticket_id === tData.ticket.ticket_id);
     expect(found).toBeUndefined();
   });
 });
@@ -373,7 +395,7 @@ test.describe("633 — Ticket Lifecycle API", () => {
       space_id: testSpaceId,
     });
     expect(bugResp.status()).toBe(200);
-    testTicketIdBug = (await bugResp.json()).ticket_id;
+    testTicketIdBug = (await bugResp.json()).ticket.ticket_id;
 
     // Mark as eligible and set type to "bug"
     try {
@@ -445,9 +467,9 @@ print('OK')
         space_id: testSpaceId,
       });
       const newData = await newTicket.json();
-      await setTicketAgentEligible(rootPage, newData.ticket_id);
+      await setTicketAgentEligible(rootPage, newData.ticket.ticket_id);
       const claim2 = await apiPost(rootPage, "root", `ui/agent/orchestrator/${WORKER_ID}/claim-ticket`, {
-        ticket_id: newData.ticket_id,
+        ticket_id: newData.ticket.ticket_id,
       });
       expect(claim2.status()).toBe(200);
     }

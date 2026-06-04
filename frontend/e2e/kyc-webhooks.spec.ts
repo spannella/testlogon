@@ -51,6 +51,11 @@ function getSessions(): Record<string, SessionData> {
 
 async function injectAuth(page: Page, identity: string): Promise<void> {
   await page.context().addCookies(getSessions()[identity].cookies);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, getSessions()[identity].user_sub);
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
@@ -121,7 +126,7 @@ test.describe("194: KYC webhook event types + preferences", () => {
   });
 
   test("194.3 PATCH preferences updates email_enabled", async () => {
-    const patch = await apiPatch(alice, "ui/kyc/webhooks/preferences", {
+    const patch = await apiPatch(alice, "alice", "ui/kyc/webhooks/preferences", {
       email_enabled: false,
     });
     expect(patch.status()).toBe(200);
@@ -130,11 +135,11 @@ test.describe("194: KYC webhook event types + preferences", () => {
     const get = await apiGet(alice, "ui/kyc/webhooks/preferences");
     expect((await get.json()).email_enabled).toBe(false);
     // restore
-    await apiPatch(alice, "ui/kyc/webhooks/preferences", { email_enabled: true });
+    await apiPatch(alice, "alice", "ui/kyc/webhooks/preferences", { email_enabled: true });
   });
 
   test("194.4 PATCH preferences filters out invalid event types", async () => {
-    const patch = await apiPatch(alice, "ui/kyc/webhooks/preferences", {
+    const patch = await apiPatch(alice, "alice", "ui/kyc/webhooks/preferences", {
       events: ["kyc.case.approved", "not.a.real.event", "kyc.case.submitted"],
     });
     expect(patch.status()).toBe(200);
@@ -145,7 +150,7 @@ test.describe("194: KYC webhook event types + preferences", () => {
   });
 
   test("194.5 Preferences are per-user (alice change does not affect bob)", async () => {
-    await apiPatch(alice, "ui/kyc/webhooks/preferences", { events: ["kyc.case.approved"] });
+    await apiPatch(alice, "alice", "ui/kyc/webhooks/preferences", { events: ["kyc.case.approved"] });
     const bobResp = await apiGet(bob, "ui/kyc/webhooks/preferences");
     const bobEvents: string[] = (await bobResp.json()).events;
     // bob keeps full defaults (not narrowed to alice's single event)
@@ -165,14 +170,14 @@ test.describe("195: KYC event dispatch via existing webhook + alert infra", () =
     root = await newIdentityPage(browser, "root");
 
     // Ensure alice subscribes to the kyc events we test-emit.
-    await apiPatch(alice, "ui/kyc/webhooks/preferences", {
+    await apiPatch(alice, "alice", "ui/kyc/webhooks/preferences", {
       in_app_enabled: true,
       email_enabled: true,
       events: ["kyc.case.submitted", "kyc.case.approved", "kyc.sanctions.match"],
     });
 
     // Register a webhook endpoint for alice subscribed to kyc.case.submitted.
-    const create = await apiPost(alice, "ui/webhooks", {
+    const create = await apiPost(alice, "alice", "ui/webhooks", {
       url: `https://kyc-hook-${TS}.example.com/ingest`,
       description: "KYC-011 e2e",
       event_types: ["kyc.case.submitted", "kyc.case.approved"],
@@ -196,7 +201,7 @@ test.describe("195: KYC event dispatch via existing webhook + alert infra", () =
 
   test("195.2 Admin test-emit dispatches a delivery to the subscribed endpoint", async () => {
     const aliceSub = getSessions().alice.user_sub;
-    const emit = await apiPost(root, "ui/kyc/webhooks/test-emit", {
+    const emit = await apiPost(root, "root", "ui/kyc/webhooks/test-emit", {
       event: "kyc.case.submitted",
       user_sub: aliceSub,
       case_id: `kyc_e2e_${TS}`,
@@ -239,7 +244,7 @@ test.describe("195: KYC event dispatch via existing webhook + alert infra", () =
 
   test("195.5 A sanctions match emit dispatches and notifies", async () => {
     const aliceSub = getSessions().alice.user_sub;
-    const emit = await apiPost(root, "ui/kyc/webhooks/test-emit", {
+    const emit = await apiPost(root, "root", "ui/kyc/webhooks/test-emit", {
       event: "kyc.sanctions.match",
       user_sub: aliceSub,
       case_id: `kyc_san_${TS}`,
@@ -270,7 +275,7 @@ test.describe("196: KYC webhook negatives + access control", () => {
   });
 
   test("196.1 Unknown kyc event type is rejected (422)", async () => {
-    const emit = await apiPost(root, "ui/kyc/webhooks/test-emit", {
+    const emit = await apiPost(root, "root", "ui/kyc/webhooks/test-emit", {
       event: "kyc.not.a.real.event",
       user_sub: getSessions().alice.user_sub,
     });
@@ -278,7 +283,7 @@ test.describe("196: KYC webhook negatives + access control", () => {
   });
 
   test("196.2 Subscribing a webhook endpoint to an unknown kyc event is rejected", async () => {
-    const create = await apiPost(alice, "ui/webhooks", {
+    const create = await apiPost(alice, "alice", "ui/webhooks", {
       url: `https://kyc-bad-${TS}.example.com/ingest`,
       event_types: ["kyc.totally.bogus"],
     });
@@ -286,7 +291,7 @@ test.describe("196: KYC webhook negatives + access control", () => {
   });
 
   test("196.3 Non-admin user cannot test-emit (403)", async () => {
-    const emit = await apiPost(alice, "ui/kyc/webhooks/test-emit", {
+    const emit = await apiPost(alice, "alice", "ui/kyc/webhooks/test-emit", {
       event: "kyc.case.submitted",
       user_sub: getSessions().alice.user_sub,
     });

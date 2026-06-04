@@ -129,8 +129,15 @@ test.describe("100 — Media Preferences API", () => {
     // Ensure table exists
     try {
       execSync(
-        "python3 scripts/local-ddb-init.py",
-        { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+        "/home/ubuntu/testlogon/.venv/bin/python3 scripts/local-ddb-init.py",
+        {
+          cwd: "/home/ubuntu/testlogon",
+          timeout: 30_000,
+          // local-ddb-init.py imports `app.*`; running it as a script puts
+          // scripts/ (not the repo root) on sys.path[0], so `app` is not
+          // importable without PYTHONPATH pointing at the repo root.
+          env: { ...process.env, PYTHONPATH: "/home/ubuntu/testlogon" },
+        },
       );
     } catch {
       // may already exist

@@ -16,7 +16,7 @@ from app.auth.policy import require_admin_or_root
 from app.core.settings import S
 from app.models import (
     GenerateTaxDocumentIn,
-    SpendingSummaryOut,
+    TaxSpendingSummaryOut,
     TaxDocumentListOut,
     TaxDocumentOut,
     YearComparisonOut,
@@ -72,13 +72,13 @@ def _validate_year(year: int) -> None:
 # Creator-scoped endpoints
 # ---------------------------------------------------------------------------
 
-@consumer_tax_documents_router.get("/summary", response_model=SpendingSummaryOut)
+@consumer_tax_documents_router.get("/summary", response_model=TaxSpendingSummaryOut)
 def get_summary(
     year: Optional[int] = Query(default=None),
     date_from: Optional[int] = Query(default=None),
     date_to: Optional[int] = Query(default=None),
     session: Dict[str, str] = Depends(require_ui_session),
-) -> SpendingSummaryOut:
+) -> TaxSpendingSummaryOut:
     _ensure_enabled()
     resolved_year, df, dt = _resolve_range(year, date_from, date_to)
     user_sub = session["user_sub"]
@@ -86,7 +86,7 @@ def get_summary(
         summary = svc.get_annual_summary(user_sub=user_sub, year=resolved_year)
     else:
         summary = svc.compute_earnings_summary(user_sub=user_sub, date_from=df, date_to=dt)
-    return SpendingSummaryOut(**summary)
+    return TaxSpendingSummaryOut(**summary)
 
 
 @consumer_tax_documents_router.get("/summary/pdf")
@@ -185,14 +185,14 @@ def _ensure_target_exists(target_user_sub: str) -> None:
         )
 
 
-@consumer_tax_documents_admin_router.get("/summary", response_model=SpendingSummaryOut)
+@consumer_tax_documents_admin_router.get("/summary", response_model=TaxSpendingSummaryOut)
 def admin_get_summary(
     user_sub: str = Query(...),
     year: Optional[int] = Query(default=None),
     date_from: Optional[int] = Query(default=None),
     date_to: Optional[int] = Query(default=None),
     _admin: Any = Depends(require_admin_or_root),
-) -> SpendingSummaryOut:
+) -> TaxSpendingSummaryOut:
     _ensure_enabled()
     if not user_sub:
         raise HTTPException(status_code=422, detail="user_sub is required")
@@ -202,7 +202,7 @@ def admin_get_summary(
         summary = svc.get_annual_summary(user_sub=user_sub, year=resolved_year)
     else:
         summary = svc.compute_earnings_summary(user_sub=user_sub, date_from=df, date_to=dt)
-    return SpendingSummaryOut(**summary)
+    return TaxSpendingSummaryOut(**summary)
 
 
 @consumer_tax_documents_admin_router.post("/generate", response_model=TaxDocumentOut)

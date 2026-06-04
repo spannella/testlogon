@@ -61,7 +61,16 @@ function getSessions(): Record<string, SessionData> {
 
 async function newPage(browser: Browser, identity: string): Promise<Page> {
   const page = await browser.newPage();
-  await page.context().addCookies(getSessions()[identity].cookies);
+  const sess = getSessions()[identity];
+  await page.context().addCookies(sess.cookies);
+  // Seed the Zustand auth-store so ProtectedRoute treats the SPA session as
+  // authenticated. Cookie auth alone satisfies API calls but is invisible to
+  // the client-side route guard, which would redirect /videos/* to /login.
+  await page.goto("/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, sess.user_sub);
   return page;
 }
 

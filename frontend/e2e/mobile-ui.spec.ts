@@ -144,7 +144,8 @@ test.describe("82 — Mobile chrome", () => {
 
   test("82.3 bottom nav contains 4 primary tabs and a More button", async () => {
     const nav = page.locator("nav.fixed.inset-x-0.bottom-0");
-    await expect(nav.getByRole("link", { name: "Home" })).toBeVisible();
+    // The Home tab renders its i18n label "nav.dashboard" → "Dashboard".
+    await expect(nav.getByRole("link", { name: "Dashboard" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Messages" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Files" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Shop" })).toBeVisible();

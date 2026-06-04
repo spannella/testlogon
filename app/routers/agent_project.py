@@ -24,7 +24,7 @@ from app.models import (
     BacklogOut,
     BlockerListOut,
     BlockerOut,
-    CapacityOut,
+    AgentProjectCapacityOut,
     CreateSprintIn,
     IdeaListOut,
     IdeaOut,
@@ -236,7 +236,7 @@ async def get_blockers(
     return BlockerListOut(blockers=[BlockerOut(**b) for b in blockers], count=len(blockers))
 
 
-@router.get("/capacity", response_model=CapacityOut)
+@router.get("/capacity", response_model=AgentProjectCapacityOut)
 async def get_capacity(
     type_id: Optional[str] = Query(default=None),
     space_id: Optional[str] = Query(default=None),
@@ -248,7 +248,7 @@ async def get_capacity(
     backlog = svc.get_backlog(space_id=resolved_space)
     utilization = svc.get_agent_utilization(capacity=capacity, backlog=backlog)
     fit = svc.check_capacity_fit(backlog=backlog, capacity=capacity)
-    return CapacityOut(
+    return AgentProjectCapacityOut(
         capacity=[AgentCapacityOut(**u) for u in utilization],
         fits=fit["fits"],
         overflow_hours=fit["overflow_hours"],

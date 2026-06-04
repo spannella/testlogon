@@ -570,7 +570,7 @@ def _write_owner_index(
         "content_id": content_id,
         "content_type": content_type,
         "requester_id": requester_id,
-        "requester_display_name": profile.get("display_name", requester_id),
+        "requester_display_name": (profile.get("display_name") or requester_id),
         "status": status,
         "created_at": ts,
     })

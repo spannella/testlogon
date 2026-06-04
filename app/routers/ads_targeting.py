@@ -6,15 +6,25 @@ creator ad settings, and advertiser block lists.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.services.sessions import require_ui_session
 from app.models import (
-    AdBlockIn,
     AudienceEstimateOut,
     CreatorAdSettingsIn,
     TargetingCreateIn,
     TargetingOut,
 )
+
+
+# Local request model for advertiser blocks. Defined here rather than
+# imported from app.models because app.models contains a duplicate
+# ``AdBlockIn`` definition with a spurious required ``startup_seconds``
+# field that incorrectly rejects valid block requests with HTTP 422.
+class AdBlockIn(BaseModel):
+    account_id: str
+    reason: str = ""
+
 
 router = APIRouter(prefix="/ui/ads", tags=["ads"])
 

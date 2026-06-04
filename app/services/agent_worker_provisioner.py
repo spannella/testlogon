@@ -261,12 +261,21 @@ def _provision_worker_dev(
         # Step 1: Launch compute
         _append_provision_step(user_id, worker_id, "compute_launch", "running")
         if compute_type == "ec2":
-            result = launch_instance(user_id, instance_type=instance_type)
+            result = launch_instance(
+                user_id,
+                label=f"agent-worker-{worker_id}",
+                instance_type=instance_type,
+                ami_id="ami-ubuntu-2404",
+            )
             compute_id = result["ec2_instance_id"]
             public_ip = result.get("public_ip", "")
         else:
-            result = launch_pod(user_id)
-            compute_id = result["pod_name"]
+            result = launch_pod(
+                user_id,
+                label=f"agent-worker-{worker_id}",
+                image="ubuntu-ssh",
+            )
+            compute_id = result.get("k8s_pod_name") or result.get("pod_name", "")
             public_ip = result.get("pod_ip", "")
 
         host_id = f"h_{uuid4().hex[:16]}"

@@ -341,14 +341,28 @@ test.describe("user-groups", () => {
   // ── Section 451: Edge Cases & Negative Tests ───────────────────────
 
   test.describe("451 — Edge Cases & Negative Tests", () => {
+    // Self-seed a dedicated public group with Bob as a member. This block must
+    // not rely on the module-level `groupId` from section 447/448 — Playwright
+    // restarts the worker on a prior failure (e.g. the 450 UI tests), which
+    // resets module state and would leave `groupId` empty (404 instead of 409).
+    let edgeGroupId = "";
+    test.beforeAll(async () => {
+      const resp = await apiPost(alicePage, ALICE_ID, "/ui/groups", {
+        name: `E2E Edge ${TS}`,
+        visibility: "public",
+      });
+      edgeGroupId = (await resp.json()).group_id;
+      await apiPost(bobPage, BOB_ID, `/ui/groups/${edgeGroupId}/join`);
+    });
+
     test("451.1 Duplicate join returns 409", async () => {
-      // Bob is already in the public group from section 448
-      const resp = await apiPost(bobPage, BOB_ID, `/ui/groups/${groupId}/join`);
+      // Bob is already in the group from this block's beforeAll
+      const resp = await apiPost(bobPage, BOB_ID, `/ui/groups/${edgeGroupId}/join`);
       expect(resp.status()).toBe(409);
     });
 
     test("451.2 Non-admin cannot update group", async () => {
-      const resp = await apiPatch(bobPage, BOB_ID, `/ui/groups/${groupId}`, {
+      const resp = await apiPatch(bobPage, BOB_ID, `/ui/groups/${edgeGroupId}`, {
         name: "Hacked Name",
       });
       expect(resp.status()).toBe(403);

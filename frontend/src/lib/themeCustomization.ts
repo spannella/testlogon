@@ -121,22 +121,31 @@ export function isDarkMode(mode: ThemeConfig["mode"]): boolean {
  * Apply a full ThemeConfig to the document root (<html>). Idempotent.
  * Only touches PLATFORM-013-owned vars/classes plus the shared `dark` class.
  */
-export function applyThemeConfig(config: ThemeConfig): void {
+export function applyThemeConfig(
+  config: ThemeConfig,
+  opts: { skipAccent?: boolean } = {},
+): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
 
   // Mode → dark class
   root.classList.toggle("dark", isDarkMode(config.mode));
 
-  // Accent → CSS variables
-  const hsl = resolveAccentHsl(config);
-  const fg = contrastForeground(hsl);
-  root.style.setProperty("--primary", hsl);
-  root.style.setProperty("--primary-foreground", fg);
-  root.style.setProperty("--ring", hsl);
-  root.style.setProperty("--color-primary", `hsl(${hsl})`);
-  root.style.setProperty("--color-primary-foreground", `hsl(${fg})`);
-  root.style.setProperty("--color-ring", `hsl(${hsl})`);
+  // Accent → CSS variables.
+  // When `skipAccent` is set the caller owns the accent vars reactively (e.g.
+  // ThemeProvider's uiStore-driven effect) — writing them here would race
+  // against the user's latest swatch selection and revert it to a stale
+  // server value, so we leave them untouched.
+  if (!opts.skipAccent) {
+    const hsl = resolveAccentHsl(config);
+    const fg = contrastForeground(hsl);
+    root.style.setProperty("--primary", hsl);
+    root.style.setProperty("--primary-foreground", fg);
+    root.style.setProperty("--ring", hsl);
+    root.style.setProperty("--color-primary", `hsl(${hsl})`);
+    root.style.setProperty("--color-primary-foreground", `hsl(${fg})`);
+    root.style.setProperty("--color-ring", `hsl(${hsl})`);
+  }
 
   // Font scale → base font-size
   root.style.fontSize = FONT_SCALE_PX[config.font_scale] || FONT_SCALE_PX.default;

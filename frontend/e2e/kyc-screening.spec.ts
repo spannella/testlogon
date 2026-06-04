@@ -52,6 +52,11 @@ function getSessions(): Record<string, SessionData> {
 
 async function injectAuth(page: Page, identity: string): Promise<void> {
   await page.context().addCookies(getSessions()[identity].cookies);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, getSessions()[identity].user_sub);
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {

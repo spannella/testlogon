@@ -1187,10 +1187,15 @@ def run_mock_workflow(
             }
         )
 
+    # Regression failures observed *before* flaky retries; drives the verdict so a
+    # test that failed initially but passed on retry is classified as flaky (not pass).
+    initial_reg_fail = 0
+
     if scenario == "pass":
         pass  # all green
     elif scenario == "flaky":
         flaky = ["flaky regression test"]
+        initial_reg_fail = len(flaky)  # failed initially
         reg_fail = 0  # resolved on retry
     elif scenario == "error":
         infra_error = True
@@ -1198,6 +1203,7 @@ def run_mock_workflow(
         new_fail = 2
         new_pass = 6
         reg_fail = 1
+        initial_reg_fail = reg_fail
         reg_pass = reg_run - reg_fail
         regression_failures = ["messaging-features > section 11 > tip flow"]
         screenshots.append(
@@ -1212,7 +1218,7 @@ def run_mock_workflow(
     verdict = determine_verdict(
         new_tests_pass=new_pass,
         new_tests_fail=new_fail,
-        regression_fail=reg_fail,
+        regression_fail=initial_reg_fail,
         flaky_tests=flaky,
         infra_error=infra_error,
     )

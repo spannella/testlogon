@@ -12725,3 +12725,26 @@ export interface KeyDestroyResponse {
   keys_destroyed: number;
   fields_affected: number;
 }
+
+// ── Media Preferences (CALL-003) ──────────────────────────────────────────────
+// Mirrors app/models.py MediaPreferencesIn / MediaPreferencesOut.
+
+export interface MediaPreferencesIn {
+  preferred_audio_input_id?: string | null;
+  preferred_video_input_id?: string | null;
+  preferred_audio_output_id?: string | null;
+  default_audio_muted?: boolean;
+  default_video_off?: boolean;
+  video_resolution?: "360" | "480" | "720" | "1080";
+}
+
+export interface MediaPreferencesOut {
+  user_sub: string;
+  preferred_audio_input_id?: string | null;
+  preferred_video_input_id?: string | null;
+  preferred_audio_output_id?: string | null;
+  default_audio_muted: boolean;
+  default_video_off: boolean;
+  video_resolution: string;
+  updated_at: number;
+}

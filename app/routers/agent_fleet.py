@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.models import (
     BulkActionOut,
-    CapacityOut,
     FleetStatusOut,
     WorkerOut,
     WorkerTemplateIn,
@@ -36,9 +35,16 @@ async def fleet_status(ctx: Dict = Depends(require_ui_session)):
     return svc.fleet_status(ctx["user_sub"])
 
 
-@router.get("/capacity", response_model=CapacityOut)
+@router.get("/capacity")
 async def fleet_capacity(ctx: Dict = Depends(require_ui_session)):
-    """Get queue depth vs. worker availability."""
+    """Get queue depth vs. worker availability.
+
+    Note: no ``response_model`` is declared because the intended
+    ``CapacityOut`` model (queue_by_type / workers_by_type / workers_by_state /
+    recommended_action) is shadowed later in ``app/models.py`` by an unrelated
+    ``CapacityOut`` definition. Returning the service dict directly preserves
+    the full fleet-capacity shape.
+    """
     return svc.fleet_capacity(ctx["user_sub"])
 
 
