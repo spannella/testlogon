@@ -217,3 +217,52 @@ keys); dependencies reasonably pinned with no obvious known-CVE versions; CI has
 use `NamedTemporaryFile`/`TemporaryDirectory` (no `mktemp`); transcode scratch dirs
 are UUID-scoped; provider cache keys include `user_sub`; CSV import validates+caps;
 API-key revocation IS checked per-request; impersonation revocation/expiry per-request.
+
+---
+
+# Wave 4 (feature-deep surfaces) — additional findings
+
+## New high-impact
+- 🌐 **Browser-SSH/SFTP destination SSRF — default allow-all** —
+  `app/routers/browser_ssh_terminal.py:408-488` (and `sftp_destination_policy.py:84`)
+  only block a host if `BROWSER_SSH_ALLOWED_HOSTS`/denied (or the SFTP policy) is
+  **configured**; default = empty = **allow any host:port**. An authed user opens the
+  WS terminal / SFTP mount to `169.254.169.254` (cloud metadata → IAM creds),
+  `127.0.0.1`, or internal services → SSRF/pivot + credential theft. No hardcoded
+  metadata/loopback denylist. → **SEC-020**, Critical.
+- 🔐 **Stored credentials returned via API** — refresh-token ciphertext exposed in
+  `provider_oauth.py:314` → `projects.py:352` metadata; **S3 `secret_access_key`
+  returned in plaintext** by `provider_credentials.py:533-543` auth-context; SFTP
+  secrets decrypted into memory with no scrub. (SSH keys, LLM keys, OAuth access
+  tokens are correctly encrypted+stripped — good.) → **SEC-022**, High.
+- 📆 **iCal injection + public-event enumeration + booking abuse** — `calendar.py:2048`
+  builds `SUMMARY`/`DESCRIPTION` without RFC-5545 escaping → CRLF/property injection
+  (ATTACH/VALARM) into `.ics`; public event endpoints (`:2079`) have **no auth/rate
+  limit** → id-enumeration of events; public booking has no rate limit and a
+  **`ctx` NameError at `:2043`** (500/DoS). → **SEC-023**, High.
+- 💳 **E-commerce price/quantity tampering** — add-to-cart trusts client
+  `unit_price_cents` (`shoppingcart.py:346`) → buy for $0; **refund/cancel doesn't
+  revoke entitlements** (`purchase_history.py:501-535`) → buy digital good, refund,
+  keep access. (Cart/txn/invoice IDOR, promo cap, stock race are correctly handled.)
+  → **SEC-024**, Critical.
+- 📡 **Broadcast/scheduler/moderation abuse** — broadcast session start/stop/delete
+  check operator-role but **not ownership** (`broadcast.py:495-575`) → any operator
+  hijacks another's session; moderation **report-flood** auto-takedown (per-user 8/min,
+  per-IP 20/IP — multi-account/proxy bypass, `moderation.py:174-222`); Q&A upvote
+  TOCTOU (`broadcast_qa.py:214`). (admin job-retry IDOR already in SEC-005; push
+  subscription + stream-key handling are correctly scoped — good.) → **SEC-025**, High.
+- ⚙️ **Agent worker / coder command-injection pattern** — `repo_url`/`branch`
+  interpolated into shell `git clone` in `agent_coder.py`/`agent_architect.py`
+  (**gated** by `AGENT_CODER_EXECUTE_COMMANDS`/`ARCHITECT_EXECUTE_COMMANDS`, default
+  off); `custom_install_commands`/`custom_verify_command` accepted but currently dead
+  code; LLM key-test echoes provider error body. Use `shlex.quote`/`shell=False`
+  before these are ever enabled. → **SEC-021**, Medium (latent).
+
+## Confirmed-good (wave 4)
+SSH private keys, LLM API keys, OAuth access tokens, GitHub/GitLab tokens, Apple CalDAV
+passwords are KMS-encrypted at rest and stripped from API responses; all credential
+reads enforce owner scoping (no IDOR). EC2/k8s instance lifecycle is owner-scoped; k8s
+image allowlist enforced. Cart/transaction/invoice reads are user-PK-scoped (no IDOR);
+promo discount capped at item price; stock decrement is atomic (no oversell). Message/
+post/catalog search is properly authz-scoped. Push register/revoke owner-scoped; stream
+keys stored as Secrets-Manager refs (never returned).
