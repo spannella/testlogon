@@ -266,3 +266,21 @@ image allowlist enforced. Cart/transaction/invoice reads are user-PK-scoped (no 
 promo discount capped at item price; stock decrement is atomic (no oversell). Message/
 post/catalog search is properly authz-scoped. Push register/revoke owner-scoped; stream
 keys stored as Secrets-Manager refs (never returned).
+
+---
+
+# SECOPS — Security Detection & Response (defensive build-out)
+
+Follow-on to the audit: instrument every suspicious event, then monitor + block
+(IP/CIDR/ASN/datacenter/geo) and deploy honeypots. Filed as a build-it ticket set
+(implement after E2E is green). Builds on existing infra: `geoip.py` (country lookups —
+add ASN), `geo_check.py`/`geo_rules.py` (content geofencing), `rate_limit*`, `alerts.py`,
+`metrics.py`, RiskDashboard/RateLimitDashboard. Hard prerequisite: **SEC-008** (trusted,
+non-spoofable client IP) — every detection/block depends on accurate source attribution.
+
+- **SECOPS-001** — Unified security-event telemetry pipeline (emitter + taxonomy +
+  IP/ASN/geo enrichment + `security_events` table). Foundation.
+- **SECOPS-002** — Network blocklist & auto-ban (IP / CIDR / ASN / Geo) enforcement
+  middleware + escalation; extends geoip.py with a GeoLite2-ASN reader + datacenter ASN list.
+- **SECOPS-003** — Honeypots & honeytokens (decoy routes, canary records/tokens, traps).
+- **SECOPS-004** — Detection/correlation/alerting + admin SecurityMonitoring dashboard.
