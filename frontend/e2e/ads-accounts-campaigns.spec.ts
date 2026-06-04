@@ -391,7 +391,7 @@ test.describe("344 — Advertiser Dashboard UI", () => {
 
   test("344.3 Campaign list shows campaigns", async () => {
     await alicePage.goto(`${BASE}/ads/campaigns?account=${accountId}`);
-    await expect(alicePage.getByText("Campaigns")).toBeVisible();
+    await expect(alicePage.getByText("Campaigns", { exact: true })).toBeVisible();
     await expect(alicePage.getByText(`Winter Sale ${TS}`)).toBeVisible({ timeout: 10000 });
   });
 

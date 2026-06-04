@@ -504,7 +504,7 @@ test.describe("430 — Bundle Plan UI", () => {
     const page = await context.newPage();
     await injectAuth(page, ALICE_ID);
 
-    await page.goto(`${BASE}/syndicates/${syndicateId}`);
+    await page.goto(`${BASE}/syndicates/${syndicateId}/manage`);
     await expect(page.getByRole("tab", { name: "Plans" })).toBeVisible();
 
     await context.close();
@@ -515,7 +515,7 @@ test.describe("430 — Bundle Plan UI", () => {
     const page = await context.newPage();
     await injectAuth(page, ALICE_ID);
 
-    await page.goto(`${BASE}/syndicates/${syndicateId}`);
+    await page.goto(`${BASE}/syndicates/${syndicateId}/manage`);
 
     // Click Plans tab
     await page.getByRole("tab", { name: "Plans" }).click();
@@ -560,7 +560,7 @@ test.describe("430 — Bundle Plan UI", () => {
     const page = await context.newPage();
     await injectAuth(page, BOB_ID);
 
-    await page.goto(`${BASE}/syndicates/${syndicateId}`);
+    await page.goto(`${BASE}/syndicates/${syndicateId}/manage`);
     await page.getByRole("tab", { name: "Plans" }).click();
 
     // Wait for plans to load

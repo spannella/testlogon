@@ -13,7 +13,7 @@
  * Uses cookie-based auth with CSRF headers on all mutating requests.
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 
 // -- Constants ----------------------------------------------------------------
@@ -151,11 +151,17 @@ async function createBroadcastSession(page: Page, userId: string, profileId: str
 }
 
 // Transition a freshly-created session to "live" so chat is available.
-// Chat (and chat moderation) requires the broadcast to be live; the start
-// flow is idempotent on an already-live session.
-async function startBroadcastSession(page: Page, userId: string, sessionId: string): Promise<void> {
-  const resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/start`, {});
+// Chat (and chat moderation) requires the broadcast to be live. The /start
+// endpoint requires an operator (admin/root) role, so the session creator
+// (Alice, a regular USER) cannot start it — start it as root instead. The
+// route does not check session ownership, only the caller's role.
+async function startBroadcastSession(browser: Browser, sessionId: string): Promise<void> {
+  const rootCtx = await browser.newContext();
+  const rootPage = await rootCtx.newPage();
+  await injectAuth(rootPage, "root");
+  const resp = await apiPost(rootPage, "root", `/broadcast/sessions/${sessionId}/start`, {});
   expect([200, 202]).toContain(resp.status());
+  await rootCtx.close();
 }
 
 async function sendChatMessage(
@@ -202,7 +208,7 @@ test.describe("499 -- Broadcast Chat Moderation API", () => {
     profileId = await createBroadcastProfile(alicePage, ALICE_ID);
     sessionId = await createBroadcastSession(alicePage, ALICE_ID, profileId);
     // Chat is only available while the broadcast is live.
-    await startBroadcastSession(alicePage, ALICE_ID, sessionId);
+    await startBroadcastSession(browser, sessionId);
 
     // Send a chat message as Alice that Bob can moderate
     chatMsgId = await sendChatMessage(alicePage, ALICE_ID, sessionId, `Test msg ${TS}`);
@@ -462,7 +468,7 @@ test.describe("501 -- Multi-Moderator & Ban API", () => {
     profileId = await createBroadcastProfile(alicePage, ALICE_ID);
     sessionId = await createBroadcastSession(alicePage, ALICE_ID, profileId);
     // Chat is only available while the broadcast is live.
-    await startBroadcastSession(alicePage, ALICE_ID, sessionId);
+    await startBroadcastSession(browser, sessionId);
   });
 
   test.afterAll(async () => {
@@ -642,7 +648,7 @@ test.describe("502 -- Moderation Audit & System Messages API", () => {
     profileId = await createBroadcastProfile(alicePage, ALICE_ID);
     sessionId = await createBroadcastSession(alicePage, ALICE_ID, profileId);
     // Chat is only available while the broadcast is live.
-    await startBroadcastSession(alicePage, ALICE_ID, sessionId);
+    await startBroadcastSession(browser, sessionId);
   });
 
   test.afterAll(async () => {
