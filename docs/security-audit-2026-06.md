@@ -173,3 +173,47 @@ authorizes per session owner; root network gate uses trusted-proxy IP resolution
 ## Note
 API keys created before scoped-capabilities default to **full scope** when
 `capabilities is None` (`api_keys.py:125`) — migrate legacy keys (tracked under SEC-005).
+
+---
+
+# Wave 3 (remaining surfaces) — additional findings
+
+## New high-impact
+- 🌐 **Security-headers middleware defined but NEVER registered** — `app/main.py:348-356`
+  defines `_security_headers_middleware` (X-Frame-Options/CSP/nosniff/Referrer-Policy)
+  but it's not added to the app → **no clickjacking/CSP/MIME protection** site-wide.
+  Plus client-side: SW `postMessage` handler with no origin check, `target=_blank`
+  without `noopener` (reverse tabnabbing), `RichContentRenderer` trusts backend
+  `bodyMarkdownHtml`, client SSO-URL assignment unvalidated. → **SEC-016**, High.
+- 👤/🌐 **SMS toll-fraud / email phishing relay** — `app/routers/mfa_devices.py`
+  SMS/email device "begin" send a code to an **attacker-supplied** phone/email
+  **before** ownership is proven (`:108-142`, `:230-267`); removal-challenge spam;
+  registration SMS to arbitrary phone (`register.py:273`); Twilio Verify bypasses the
+  per-number daily cap (`mfa.py`); no per-recipient caps → cost + harassment + your
+  domain as a phishing/spam relay. → **SEC-014**, Critical.
+- 🔑 **WebAuthn passkey register/remove without step-up MFA** —
+  `app/routers/webauthn.py:28-46` only `require_ui_session` → a hijacked session lets
+  an attacker **register their own passkey** (persistent takeover) and remove the
+  victim's → lockout. → **SEC-017**, Critical.
+- 🛡️ **Org/tenant isolation & lifecycle** — `add_org_payment_method`
+  (`orgs.py:219`) skips `assert_org_membership` (lower-role member acts); **invite
+  token not bound to email** (`org_service.py:236` — any user accepts a leaked
+  invite); member-removal/org-archival **don't revoke sessions**
+  (`org_service.py:323,178`). → **SEC-015**, High.
+- ⏱️ **Account-state revocation lag (TOCTOU)** — ban check isn't applied on the
+  **API-key** auth path, and **role downgrade is cached in the JWT** so it isn't
+  effective until token refresh (`sessions.py:291-310`); account **deletion request
+  doesn't revoke sessions** during the grace period (`account_deletion.py:175`);
+  soft-deleted **email can be re-registered** and inherit data; deletion-cancel lacks
+  step-up. → **SEC-018**, High.
+- 🧩 **DynamoDB expression injection (pattern)** — `commerce_entitlement_orchestrator.py:105`
+  builds `KeyConditionExpression` with an f-string (input currently internal, but
+  unsafe pattern); use `Key().eq()`. → **SEC-019**, Medium.
+
+## Confirmed-good (wave 3)
+Repo secret hygiene clean (.env gitignored, only dummy test values, no committed
+keys); dependencies reasonably pinned with no obvious known-CVE versions; CI has no
+`pull_request_target`/secret-echo; cursor HMAC is verified BEFORE decode; temp files
+use `NamedTemporaryFile`/`TemporaryDirectory` (no `mktemp`); transcode scratch dirs
+are UUID-scoped; provider cache keys include `user_sub`; CSV import validates+caps;
+API-key revocation IS checked per-request; impersonation revocation/expiry per-request.
