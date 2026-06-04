@@ -348,10 +348,28 @@ test.describe("user-groups", () => {
       await expect(
         alicePage.locator("[data-testid='group-settings-page']"),
       ).toBeVisible({ timeout: 10_000 });
-      // Update description via the form
       const descInput = alicePage.locator("#settings-description");
+      // The settings form is driven by react-hook-form `values:` bound to the
+      // group query, so it RE-SETS the field every time the group query data
+      // changes. Under a shard run that query is slow and/or refetches in the
+      // background (the `["groups"]` cache is invalidated by other specs'
+      // mutations), which would wipe out our typed text and submit the stale
+      // original description. Wait for the form to be hydrated with the loaded
+      // group data first, then fill and immediately submit, and confirm the
+      // value stuck right before saving.
+      await expect(descInput).toHaveValue("A test group for E2E UI", { timeout: 10_000 });
       await descInput.fill(`UI updated desc ${TS}`);
+      await expect(descInput).toHaveValue(`UI updated desc ${TS}`);
+      // Capture the PATCH so we don't read the API back before the write lands.
+      const savePromise = alicePage.waitForResponse(
+        (r) =>
+          r.url().includes(`/ui/groups/${uiGroupId}`) &&
+          r.request().method() === "PATCH",
+        { timeout: 10_000 },
+      );
       await alicePage.getByRole("button", { name: /Save Changes/i }).click();
+      const saveResp = await savePromise;
+      expect(saveResp.ok()).toBe(true);
       // Verify via API
       const resp = await apiGet(alicePage, `/ui/groups/${uiGroupId}`);
       const body = await resp.json();

@@ -99,6 +99,20 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 const TS = Date.now();
 const AGENT_ID = `pm_${TS}`;
 
+// The PM-config `max_ideas_per_review` cap (default 5) is enforced PER agent_id
+// across ALL of a user's *pending* ideas — and that pending set accumulates
+// across every prior test run (GSI1PK is `USER#alice#STATUS#pending`, never
+// wiped between runs). When many describe-blocks share a single agent_id, the
+// 5th+ create in a shard run trips the cap and returns 400, leaving the
+// dependent idea_id undefined → downstream lookups 404. Give each describe
+// block its own agent_id so its create-count starts fresh and never collides
+// with sibling blocks' (or prior runs') pending ideas.
+let _agentSeq = 0;
+function freshAgentId(label: string): string {
+  _agentSeq += 1;
+  return `pm_${TS}_${label}_${_agentSeq}`;
+}
+
 function ideaBody(overrides: Record<string, unknown> = {}) {
   return {
     agent_id: AGENT_ID,
@@ -176,9 +190,18 @@ test.describe("672. Approval & Rejection Workflow API", () => {
   test.beforeAll(async ({ browser }) => {
     getSessions();
     alicePage = await newIdentityPage(browser, "alice");
-    const a = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody());
+    // Give EACH create its own unique agent_id so the per-agent
+    // `max_ideas_per_review` cap counts 0 pending at every insert. The cap is
+    // enforced per agent_id across ALL of alice's accumulated pending ideas
+    // (the `USER#alice#STATUS#pending` GSI partition is never wiped between
+    // runs), and a prior interrupted run can leave the cap lowered (676.3 sets
+    // it to 2 before resetting). A single shared agent_id here therefore trips
+    // the cap on a busy shard, leaving the dependent idea_id undefined → the
+    // reject lookup 404s. Unique agent_ids make each create independent of
+    // both accumulation and any leaked low cap value.
+    const a = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ agent_id: freshAgentId("approve") }));
     approveId = ((await a.json()) as Record<string, unknown>).idea_id as string;
-    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ category: "ux" }));
+    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ agent_id: freshAgentId("reject"), category: "ux" }));
     rejectId = ((await r.json()) as Record<string, unknown>).idea_id as string;
   });
   test.afterAll(async () => {
@@ -195,6 +218,15 @@ test.describe("672. Approval & Rejection Workflow API", () => {
   });
 
   test("672.2 reject idea with reason", async () => {
+    // A Playwright retry can spawn a fresh worker that re-imports the module
+    // with `rejectId` undefined (only the failing test re-runs, not beforeAll) →
+    // reject of `/ideas/undefined` → 404. Re-create the idea in that case so the
+    // test is self-healing while still rejecting the same idea 672.3/672.4 act on.
+    if (!rejectId) {
+      const c = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ agent_id: freshAgentId("reject"), category: "ux" }));
+      expect(c.status()).toBe(201);
+      rejectId = ((await c.json()) as Record<string, unknown>).idea_id as string;
+    }
     const r = await apiPost(alicePage, "alice", `ui/agents/pm/ideas/${rejectId}/reject`, {
       reason: "Not aligned with roadmap",
     });

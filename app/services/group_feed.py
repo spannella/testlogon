@@ -323,13 +323,35 @@ def _batch_get_posts(tbl, post_ids: List[str]) -> List[Dict[str, Any]]:
     if not post_ids:
         return []
     from app.core.aws import ddb
-    keys = [{"pk": _pk_post(pid), "sk": _sk_post()} for pid in post_ids]
+    # Dedup keys: the feed index can legitimately contain the same post_id more
+    # than once across an accumulated table, and duplicate keys in a single
+    # BatchGetItem request are rejected ("provided list of item keys contains
+    # duplicates"). Build one key per unique post_id.
+    seen: set[str] = set()
+    keys = []
+    for pid in post_ids:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        keys.append({"pk": _pk_post(pid), "sk": _sk_post()})
     # DDB BatchGetItem limit is 100 items; chunk if needed
     results = []
     for i in range(0, len(keys), 25):
         chunk = keys[i:i + 25]
-        raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": chunk}})
-        results.extend(raw.get("Responses", {}).get(APP_TABLE, []))
+        request = {APP_TABLE: {"Keys": chunk}}
+        # BatchGetItem may return UnprocessedKeys under throttling/load (which
+        # is exactly what happens during a busy shard run). Silently dropping
+        # them undercounts pinned posts — corrupting both the pin-limit check
+        # (_count_pinned) and the feed's pinned-first rendering. Retry the
+        # leftovers until none remain (bounded) so every requested post item
+        # is returned.
+        for _ in range(8):
+            raw = ddb.batch_get_item(RequestItems=request)
+            results.extend(raw.get("Responses", {}).get(APP_TABLE, []))
+            unprocessed = raw.get("UnprocessedKeys") or {}
+            if not unprocessed.get(APP_TABLE, {}).get("Keys"):
+                break
+            request = unprocessed
     return results
 
 

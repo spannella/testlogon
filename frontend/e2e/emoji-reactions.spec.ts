@@ -175,14 +175,16 @@ async function openDmWithBob(page: Page) {
       headers: { "x-csrf-token": session.csrf_token },
     })
     .catch(() => {});
-  await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await page.waitForTimeout(600);
-  const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-  await expect(row).toBeVisible({ timeout: 12000 });
-  await row.click();
+  // Deep-link straight to the conversation by id instead of hunting the sidebar.
+  // Under a shard run the conversations list accumulates thousands of DMs and is
+  // paginated, so the "E2E Bob" sidebar row is frequently NOT rendered/visible —
+  // making the row-click flow flake (the beforeAll then throws and every test in
+  // the describe reports 0ms). The `/messages/:conversationId` route mounts the
+  // ConversationView directly via the URL param, with no sidebar dependency.
+  await page.goto(`${BASE}/messages/${convoId}`, { waitUntil: "load" });
   await expect(
     page.getByPlaceholder("Type a message...").or(page.getByPlaceholder("Type an encrypted message...")),
-  ).toBeVisible({ timeout: 5000 });
+  ).toBeVisible({ timeout: 12000 });
 }
 
 // ─── 733. Reaction limit & details API ────────────────────────────────────────

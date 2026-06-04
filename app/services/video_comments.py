@@ -116,18 +116,34 @@ def delete_comment(
     user_id: str,
 ) -> None:
     """Delete a comment. Only the comment author can delete."""
-    # Find the comment by scanning the video's comments for this comment_id
-    resp = T.video_views.query(
-        KeyConditionExpression=Key("pk").eq(f"VCOMMENT#{video_id}"),
-        FilterExpression="comment_id = :cid",
-        ExpressionAttributeValues={":cid": comment_id},
-        Limit=1,
-    )
-    items = resp.get("Items", [])
-    if not items:
+    # Find the comment by scanning the video's comments for this comment_id.
+    # NOTE: DynamoDB applies FilterExpression *after* reading up to `Limit`
+    # items, so a `Limit=1` query would read a single (likely non-matching)
+    # comment and then filter it out, yielding a spurious 404 whenever the
+    # partition already holds other comments. Page through LastEvaluatedKey so
+    # the target comment is found regardless of how many comments exist.
+    item = None
+    last_key = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(f"VCOMMENT#{video_id}"),
+            "FilterExpression": "comment_id = :cid",
+            "ExpressionAttributeValues": {":cid": comment_id},
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = T.video_views.query(**kwargs)
+        items = resp.get("Items", [])
+        if items:
+            item = items[0]
+            break
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
+    if item is None:
         raise HTTPException(404, "Comment not found")
 
-    item = items[0]
     if item.get("user_id") != user_id:
         raise HTTPException(403, "Not your comment")
 

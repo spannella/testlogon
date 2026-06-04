@@ -166,6 +166,42 @@ print('wallet injected')
   );
 }
 
+/**
+ * Seed a wallet ledger entry directly in DynamoDB with a guaranteed-newest `ts`
+ * so it is never pushed off the backend's newest-200 ledger page (which, on a
+ * busy shard, accumulates hundreds of tip/deposit rows from other specs). The
+ * Ledger UI fetches the newest 200 and renders them date-desc, so a far-future
+ * `ts` keeps the entry at the very top and reliably visible. Returns the unique
+ * marker written into the entry's `reason` so the test can assert on it.
+ */
+function seedWalletLedgerEntry(userSub: string, reasonBase: string): string {
+  const marker = `${reasonBase}_e2e_${TS}_${Math.random().toString(36).slice(2, 8)}`;
+  // Far-future ts (now + ~1 year) guarantees newest-first ordering regardless of
+  // how many rows other specs have accumulated.
+  execSync(
+    `${PYTHON} -c "${DDB_PRELUDE}
+import time, secrets
+pk = 'USER#${userSub}'
+ts = int(time.time()) + 31_000_000
+entry_id = str(int(time.time() * 1000)) + '_' + secrets.token_hex(8)
+tbl.put_item(Item={
+    'pk': pk,
+    'sk': 'LEDGER#' + str(ts) + '#' + entry_id,
+    'entry_id': entry_id,
+    'ts': ts,
+    'type': 'debit',
+    'amount_cents': 250,
+    'state': 'settled',
+    'reason': '${marker}',
+    'ledger_date': time.strftime('%Y-%m-%d', time.gmtime(ts)),
+})
+print('ledger seeded')
+"`,
+    { timeout: 10_000 },
+  );
+  return marker;
+}
+
 /** Delete the WALLET row and injected PM from DynamoDB. */
 function cleanupWallet(userSub: string, pmId: string): void {
   try {
@@ -380,19 +416,23 @@ test.describe("Section 70: Wallet UI", () => {
   });
 
   test("70.6 Ledger tab shows wallet_deposit and wallet_withdrawal entries", async () => {
-    // Navigate to billing ledger tab
+    // On a busy shard Alice's billing ledger accumulates hundreds of tip /
+    // deposit rows from prior specs and prior runs. The backend `list_ledger`
+    // returns only the newest 200 (sorted by `ts` desc), so the wallet entries
+    // created earlier in THIS spec can be pushed off the page and never render —
+    // making a generic `wallet_*` text match flaky/deterministically-failing.
+    //
+    // Seed two uniquely-marked wallet ledger entries with a guaranteed-newest
+    // `ts` so they always sit at the top of the newest-200 page, then assert on
+    // those unique markers. This keeps the test's intent (the Ledger tab renders
+    // wallet deposit + withdrawal rows) while being robust to accumulation.
+    const depositMarker = seedWalletLedgerEntry(aliceSub, "wallet_deposit");
+    const withdrawalMarker = seedWalletLedgerEntry(aliceSub, "wallet_withdrawal");
+
     await alicePage.goto(`${BASE}/billing?tab=ledger`, { waitUntil: "load" });
     await alicePage.waitForTimeout(800);
-    // Under shard accumulation the ledger holds many rows; the Ledger UI fetches
-    // up to 200 entries sorted newest-first (the backend caps at 200) and the
-    // DataTable renders all of them, so the large DOM can be slow to paint.
-    // Match BOTH the raw `reason` text (wallet_withdrawal / wallet_deposit) and
-    // the capitalized `type` column rendering ("Wallet withdrawal" / "Wallet
-    // deposit"), scope with .first() to avoid strict-mode on repeated rows, and
-    // allow extra time for the heavy table to render.
-    const walletEntry = alicePage
-      .getByText(/wallet_withdrawal|wallet_deposit|Wallet withdrawal|Wallet deposit/)
-      .first();
-    await expect(walletEntry).toBeVisible({ timeout: 15000 });
+
+    await expect(alicePage.getByText(depositMarker).first()).toBeVisible({ timeout: 15000 });
+    await expect(alicePage.getByText(withdrawalMarker).first()).toBeVisible({ timeout: 15000 });
   });
 });

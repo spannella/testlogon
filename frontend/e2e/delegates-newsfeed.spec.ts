@@ -93,8 +93,8 @@ async function apiPost(page: Page, userId: string, path: string, body: object) {
   );
 }
 
-async function apiGet(page: Page, path: string) {
-  return withRetry429(() => page.request.get(`${BASE}${path}`));
+async function apiGet(page: Page, path: string, params?: Record<string, string>) {
+  return withRetry429(() => page.request.get(`${BASE}${path}`, params ? { params } : undefined));
 }
 
 async function apiPut(page: Page, userId: string, path: string, body: object) {
@@ -168,7 +168,6 @@ test.describe("495 -- Delegated Post Creation API", () => {
   let alicePage: Page;
   let bobPage: Page;
   let charliePage: Page;
-  let createdPostId: string;
 
   test.beforeAll(async ({ browser }) => {
     const aliceCtx = await browser.newContext();
@@ -223,14 +222,27 @@ test.describe("495 -- Delegated Post Creation API", () => {
     expect(data.text).toBe(text);
     expect(data.status).toBe("published");
     expect(data.approval_status).toBe("approved");
-    createdPostId = data.post_id;
+    expect(typeof data.post_id).toBe("string");
   });
 
   test("495.2 Post appears in creator's post list", async () => {
-    const resp = await apiGet(bobPage, `/ui/newsfeed/delegate/${ALICE_ID}/posts`);
-    expect(resp.ok()).toBeTruthy();
-    const data = await resp.json();
-    const found = data.find((p: any) => p.post_id === createdPostId);
+    // Self-contained: create our own post here rather than depending on a
+    // describe-scope variable set by 495.1. On a busy shard a retry can spawn a
+    // fresh worker process (resetting `createdPostId`), and the GET can be
+    // transiently non-ok; create+poll makes this test robust to both.
+    const text = `List-check post ${TS}_${Math.random().toString(36).slice(2, 7)}`;
+    const cResp = await apiPost(bobPage, BOB_ID, `/ui/newsfeed/delegate/${ALICE_ID}/posts`, { text });
+    expect(cResp.status()).toBe(201);
+    const myPostId = (await cResp.json()).post_id as string;
+
+    let found: any = undefined;
+    for (let attempt = 0; attempt < 5 && !found; attempt++) {
+      const resp = await apiGet(bobPage, `/ui/newsfeed/delegate/${ALICE_ID}/posts`, { limit: "200" });
+      expect(resp.ok()).toBeTruthy();
+      const data = await resp.json();
+      found = data.find((p: any) => p.post_id === myPostId);
+      if (!found) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+    }
     expect(found).toBeTruthy();
     expect(found.author_id).toBe(ALICE_ID);
   });
@@ -266,8 +278,17 @@ test.describe("495 -- Delegated Post Creation API", () => {
   });
 
   test("495.5 Delegate edits creator's post", async () => {
+    // Self-contained: create the post we edit in this test so the edit target
+    // is valid even when a retry runs in a fresh worker (where the describe-scope
+    // `createdPostId` from 495.1 would be undefined → PUT /posts/undefined → 404).
+    const cResp = await apiPost(bobPage, BOB_ID, `/ui/newsfeed/delegate/${ALICE_ID}/posts`, {
+      text: `Post to edit ${TS}_${Math.random().toString(36).slice(2, 7)}`,
+    });
+    expect(cResp.status()).toBe(201);
+    const editPostId = (await cResp.json()).post_id as string;
+
     const updatedText = `Edited delegated post ${TS}`;
-    const resp = await apiPut(bobPage, BOB_ID, `/ui/newsfeed/delegate/${ALICE_ID}/posts/${createdPostId}`, {
+    const resp = await apiPut(bobPage, BOB_ID, `/ui/newsfeed/delegate/${ALICE_ID}/posts/${editPostId}`, {
       text: updatedText,
     });
     expect(resp.ok()).toBeTruthy();

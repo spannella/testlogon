@@ -720,27 +720,54 @@ def _get_post_or_404(post_id: str) -> Dict[str, Any]:
     return item
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Coerce a DDB attribute to int, tolerating strings/Decimals/None.
+
+    The `POST_AUTHOR#{creator}` GSI2 partition is shared with the *main*
+    newsfeed writer (app/routers/newsfeed.py), so this function is fed posts
+    created by many different code paths that accumulate across test runs.
+    Some of those items carry numeric-looking fields as ISO strings or other
+    non-int types; a naive ``int(...)`` there raises and turns the whole
+    ``list_creator_posts`` response into a 500. Never raise — fall back to the
+    default so one polluting item can't break the list.
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+
 def _post_item_to_out(item: Dict[str, Any]) -> Dict[str, Any]:
     """Convert a raw DDB post item to an output dict."""
+    tags = item.get("tags")
+    if not isinstance(tags, list):
+        tags = []
+    image_urls = item.get("image_urls")
+    image_url = image_urls[0] if isinstance(image_urls, list) and image_urls else None
     return {
         "post_id": item.get("post_id", ""),
         "author_id": item.get("user_id", ""),
         "text": item.get("body") or item.get("body_plain") or "",
-        "image_url": (item.get("image_urls") or [None])[0] if item.get("image_urls") else None,
-        "lock_price_cents": int(item.get("unlock_price_cents", 0) or 0),
-        "tags": item.get("tags", []),
+        "image_url": image_url,
+        "lock_price_cents": _safe_int(item.get("unlock_price_cents"), 0),
+        "tags": tags,
         "status": item.get("status", "published"),
         "posted_by_delegate": item.get("posted_by_delegate"),
         "delegate_display_name": item.get("delegate_display_name"),
         "delegate_tag": item.get("delegate_tag"),
         "approval_status": item.get("approval_status"),
         "approval_note": item.get("approval_note"),
-        "approved_at": int(item.get("approved_at", 0)) if item.get("approved_at") else None,
+        "approved_at": _safe_int(item.get("approved_at"), 0) or None if item.get("approved_at") else None,
         "created_at": item.get("created_at", ""),
         "updated_at": item.get("updated_at", ""),
         "view_count": 0,
-        "like_count": int(item.get("like_count", 0)),
-        "comment_count": int(item.get("comment_count", 0)),
+        "like_count": _safe_int(item.get("like_count"), 0),
+        "comment_count": _safe_int(item.get("comment_count"), 0),
     }
 
 
