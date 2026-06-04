@@ -347,7 +347,9 @@ test.describe("648 — Feedback page UI", () => {
     await expect(
       uiPage.getByText(`Should I deploy to production for ${TS}?`),
     ).toBeVisible();
-    await expect(uiPage.getByText("Pending")).toBeVisible();
+    await expect(
+      uiPage.getByTestId("feedback-card").getByText("Pending").first(),
+    ).toBeVisible();
   });
 
   test("648.3 Response form submits", async () => {

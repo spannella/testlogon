@@ -4747,7 +4747,7 @@ def hide_post(req: HidePostRequest, user_id: UserIdDep):
         "created_at": now_iso(),
     }
     ddb_put_item(item)
-    return {"ok": True}
+    return {"ok": True, "post_id": req.post_id, "hidden": True}
 
 
 def _is_post_interesting(viewer_id: Optional[str], post_id: str) -> bool:

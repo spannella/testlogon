@@ -57,6 +57,13 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   if (!sess) throw new Error(`No session for identity "${identity}"`);
   const page = await browser.newPage();
   await page.context().addCookies(sess.cookies);
+  // ProtectedRoute gates UI navigation on the persisted zustand auth-store
+  // (isAuthenticated); cookies alone are not enough. SyndicateDetailPage also
+  // reads userId from this store. Seed it so the page renders.
+  await page.addInitScript((uid) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, sess.user_sub);
   return page;
 }
 

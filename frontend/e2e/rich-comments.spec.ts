@@ -387,7 +387,16 @@ test.describe("FEED-004 rich comments", () => {
         sticker_alt_text: "ui sticker 728",
       });
 
-      await alice.goto(`${BASE}/posts/${uiPostId}`, { waitUntil: "domcontentloaded" });
+      // The Vite dev proxy maps /posts/* straight to the backend (no SPA
+      // bypass), so a direct browser navigation to /posts/:id returns the post
+      // JSON instead of the React app. Load a SPA-served route first (/feed has
+      // an HTML bypass) and then client-side navigate to the post detail page
+      // via the History API (React Router's BrowserRouter listens for popstate).
+      await alice.goto(`${BASE}/feed`, { waitUntil: "domcontentloaded" });
+      await alice.evaluate((id: string) => {
+        window.history.pushState({}, "", `/posts/${id}`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }, uiPostId);
 
       // GIF comment image
       await expect(alice.locator(`img[src="${uiGif}"]`).first()).toBeVisible({ timeout: 15_000 });

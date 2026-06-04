@@ -374,7 +374,10 @@ class KycSanctionsScreeningStore:
             country=identity.get("country"),
         )
         screening_id = _new_screening_id()
-        screen_key = f"{screen_type}#{_iso_ts(ts)}"
+        # Include the unique screening_id so re-screens never collide with an
+        # earlier run's SK even when they land in the same wall-clock second
+        # (_iso_ts only has second precision). Re-screening is append-only.
+        screen_key = f"{screen_type}#{_iso_ts(ts)}#{screening_id}"
         item: dict[str, Any] = {
             "case_id": case_id,
             "screen_key": screen_key,

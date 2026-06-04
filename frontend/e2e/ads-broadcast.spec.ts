@@ -46,6 +46,16 @@ async function injectAuth(page: Page, identity: string) {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  // Seed the persisted Zustand auth store so the React app treats the page as
+  // authenticated. Without this, LivePlayer (which reads `isAuthenticated` from
+  // authStore, defaulting to false) renders the "Sign in required" screen and
+  // never mounts the player or fires the ad-join request — so the ad overlay
+  // never appears. addInitScript runs before every navigation, including the
+  // /live/{sid} goto, so the store is populated on first render.
+  await page.context().addInitScript((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 async function apiPost(page: Page, identity: string, path: string, body?: object) {

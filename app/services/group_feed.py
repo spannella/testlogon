@@ -371,32 +371,55 @@ def _pinned_index_records(tbl, group_id: str) -> List[Dict[str, Any]]:
 
 
 def _update_feed_index_pinned(tbl, group_id: str, post_id: str, pinned: bool) -> None:
-    """Update the pinned flag on the feed index record."""
-    # Find the feed index record for this post
-    resp = tbl.query(
-        KeyConditionExpression=Key("pk").eq(_pk_groupfeed(group_id)),
-        FilterExpression="post_id = :pid",
-        ExpressionAttributeValues={":pid": post_id},
-    )
-    items = resp.get("Items", [])
-    for item in items:
-        tbl.update_item(
-            Key={"pk": item["pk"], "sk": item["sk"]},
-            UpdateExpression="SET pinned = :p",
-            ExpressionAttributeValues={":p": pinned},
-        )
+    """Update the pinned flag on the feed index record.
+
+    DynamoDB applies FilterExpression *after* reading a page (up to 1MB), so a
+    single query can miss the target record on a busy feed — leaving the index
+    `pinned` flag stale and corrupting the pinned count. Loop on
+    LastEvaluatedKey so the right record is always found and updated.
+    """
+    start_key: Dict[str, Any] | None = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(_pk_groupfeed(group_id)),
+            "FilterExpression": "post_id = :pid",
+            "ExpressionAttributeValues": {":pid": post_id},
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        for item in resp.get("Items", []):
+            tbl.update_item(
+                Key={"pk": item["pk"], "sk": item["sk"]},
+                UpdateExpression="SET pinned = :p",
+                ExpressionAttributeValues={":p": pinned},
+            )
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
 
 
 def _delete_feed_index(tbl, group_id: str, post_id: str) -> None:
-    """Delete the feed index record for a post."""
-    resp = tbl.query(
-        KeyConditionExpression=Key("pk").eq(_pk_groupfeed(group_id)),
-        FilterExpression="post_id = :pid",
-        ExpressionAttributeValues={":pid": post_id},
-    )
-    items = resp.get("Items", [])
-    for item in items:
-        tbl.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+    """Delete the feed index record for a post.
+
+    Loop on LastEvaluatedKey: DynamoDB applies FilterExpression after reading a
+    page, so a single query can miss the record on a busy feed.
+    """
+    start_key: Dict[str, Any] | None = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(_pk_groupfeed(group_id)),
+            "FilterExpression": "post_id = :pid",
+            "ExpressionAttributeValues": {":pid": post_id},
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        for item in resp.get("Items", []):
+            tbl.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
 
 
 def _post_out(post: Dict[str, Any], viewer_id: str | None = None) -> Dict[str, Any]:
