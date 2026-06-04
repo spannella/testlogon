@@ -360,7 +360,7 @@ test.describe("438 — Overdraw Protection & Treasury UI", () => {
       alicePage,
       "alice",
       `/ui/syndicates/treasury/${syndicateId}/disburse`,
-      { recipient_user_id: BOB_ID, amount_cents: 9999999 }, // way over $25 balance
+      { recipient_user_id: BOB_ID, amount_cents: 999999 }, // way over $25 balance, within model cap
     );
     expect(resp.status()).toBe(409);
     // Balance unchanged.
@@ -371,7 +371,7 @@ test.describe("438 — Overdraw Protection & Treasury UI", () => {
   test("438.2 Treasury tab shows balance and transaction history", async ({ browser }) => {
     const page = await browser.newPage();
     await injectAuth(page, "alice");
-    await page.goto(`${BASE}/syndicates/${syndicateId}`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${BASE}/syndicates/${syndicateId}/manage`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "Treasury" }).click();
     await expect(page.getByTestId("treasury-balance")).toBeVisible();
     await expect(page.getByTestId("treasury-balance")).toContainText("$25.00");
@@ -384,7 +384,7 @@ test.describe("438 — Overdraw Protection & Treasury UI", () => {
   }) => {
     const page = await browser.newPage();
     await injectAuth(page, "bob");
-    await page.goto(`${BASE}/syndicates/${syndicateId}`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${BASE}/syndicates/${syndicateId}/manage`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "Treasury" }).click();
     // Bob (non-admin) has Contribute but NOT Disburse.
     await expect(page.getByTestId("treasury-contribute-btn")).toBeVisible();

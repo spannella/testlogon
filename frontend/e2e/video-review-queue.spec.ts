@@ -81,6 +81,16 @@ async function apiPost(
 }
 
 async function apiGet(page: Page, path: string, params?: Record<string, string>) {
+  // Retry on 429: under a shared-backend shard run the accumulated request
+  // volume from other specs can trip the global IP rate-limit window. Honor
+  // Retry-After (capped) and retry a few times so transient 429s don't fail
+  // assertions that expect 200.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const resp = await page.request.get(`${API}/${path}`, { params });
+    if (resp.status() !== 429) return resp;
+    const ra = Number(resp.headers()["retry-after"] || "1");
+    await new Promise((r) => setTimeout(r, Math.min(Math.max(ra, 1), 3) * 1000));
+  }
   return page.request.get(`${API}/${path}`, { params });
 }
 
@@ -133,11 +143,14 @@ print(json.dumps(ids))
 
 function cleanupVideos(videoIds: string[]): void {
   if (!videoIds.length) return;
-  const idsJson = JSON.stringify(videoIds);
+  // Encode ids as base64 to avoid shell-quoting issues: a raw JSON array
+  // (e.g. ["v_a","v_b"]) embeds double-quotes which terminate the python3 -c
+  // double-quoted shell argument, corrupting json.loads() input.
+  const idsB64 = Buffer.from(JSON.stringify(videoIds)).toString("base64");
   try {
     execSync(
       `python3 -c "
-import boto3, os, json
+import boto3, os, json, base64
 from pathlib import Path
 
 env = Path('/home/ubuntu/testlogon/.env.local')
@@ -150,7 +163,7 @@ for line in env.read_text().splitlines():
 ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
 tbl = ddb.Table(os.environ.get('DDB_VIDEO_METADATA','VideoMetadata'))
 
-ids = json.loads('${idsJson.replace(/'/g, "\\'")}')
+ids = json.loads(base64.b64decode('${idsB64}'))
 for vid in ids:
     try:
         tbl.delete_item(Key={'video_id': vid})
@@ -201,7 +214,12 @@ test.describe("90. Review Queue API", () => {
     getAdminSessions();
     rootPage = await newIdentityPage(browser, "root");
     alicePage = await newIdentityPage(browser, "alice");
-    videoIds = seedPendingVideos(5);
+    // Seed comfortably more than the backend's Limit=limit*3 over-read (limit=2
+    // -> Limit=6). With <6 pending videos in the GSI page, DynamoDB returns no
+    // LastEvaluatedKey, so the limit=2 query yields next_cursor=null and the
+    // pagination test flakes depending on how many pending videos prior specs
+    // left behind. Seeding 8 guarantees a continuation cursor deterministically.
+    videoIds = seedPendingVideos(8);
   });
 
   test.afterAll(async () => {

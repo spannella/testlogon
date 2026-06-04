@@ -173,7 +173,7 @@ const BOB_ID = "bob";
 /*  Section 135 -- Broadcast Lottery API                               */
 /* ------------------------------------------------------------------ */
 
-test.describe("135 -- Broadcast Lottery API", () => {
+test.describe.serial("135 -- Broadcast Lottery API", () => {
   let rootPage: Page;
   let alicePage: Page;
   let profileId: string;
@@ -259,6 +259,11 @@ test.describe("135 -- Broadcast Lottery API", () => {
   });
 
   test("135.3 Invalid outcomes rejected (422)", async () => {
+    // The 31s cooldown sleep exceeds the default 30s per-test timeout, which
+    // would time out the test, recycle the Playwright worker, and reset the
+    // describe-scoped `lotteryId` (set in 135.1, NOT in beforeAll) to undefined
+    // -- cascading into 404s for every test from 135.4 onward.
+    test.setTimeout(40_000);
     // Wait for create rate limit to expire
     await sleep(31_000);
 
@@ -278,6 +283,11 @@ test.describe("135 -- Broadcast Lottery API", () => {
   });
 
   test("135.4 Viewer enters free lottery", async () => {
+    // Fail loudly if the lottery setup (135.1) did not run / was lost on a
+    // worker restart, rather than silently 404-ing on a `.../undefined/enter` URL.
+    expect(lotteryId, "lotteryId must be set by 135.1 before entering").toMatch(
+      /^lot_/,
+    );
     const resp = await apiPost(
       alicePage,
       ALICE_ID,
@@ -613,6 +623,8 @@ test.describe("137 -- Broadcast Lottery -- Edge Cases", () => {
   });
 
   test("137.2 Broadcaster cannot enter own lottery (403)", async () => {
+    // 31s cooldown exceeds the default 30s per-test timeout -> bump it.
+    test.setTimeout(40_000);
     // Wait for rate limit
     await sleep(31_000);
 
@@ -643,6 +655,8 @@ test.describe("137 -- Broadcast Lottery -- Edge Cases", () => {
   });
 
   test("137.3 Draw directly from open state (skip close)", async () => {
+    // 31s cooldown exceeds the default 30s per-test timeout -> bump it.
+    test.setTimeout(40_000);
     // Wait for rate limit
     await sleep(31_000);
 

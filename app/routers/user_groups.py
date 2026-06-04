@@ -86,7 +86,10 @@ def list_my_groups(session=Depends(require_ui_session)):
             membership = svc._get_membership(gid, session["user_sub"])
             role = membership.get("role") if membership else None
             groups.append(_meta_to_out(meta, my_role=role))
-    return groups
+    # Return the wrapped {groups: [...]} shape (consistent with /discover and
+    # the frontend listMyGroups contract). A bare list left the UI's
+    # `myGroups.groups` undefined, so the "My Groups" tab rendered nothing.
+    return GroupListOut(groups=groups, cursor=None, has_more=False)
 
 
 @router.get("/discover")

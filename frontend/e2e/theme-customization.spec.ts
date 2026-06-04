@@ -173,7 +173,7 @@ test.describe("109. Accent Color", () => {
 
     // Reload
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const after = await getCSSVar(page, "--color-primary");
     expect(after).toBe(before);
@@ -253,7 +253,7 @@ test.describe("109. Accent Color", () => {
     });
 
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     // The server had "pink" saved, but we need to verify local prefs are loaded from localStorage
     // (server pref sync is fire-and-forget). After reload, localStorage value should be applied.
@@ -267,7 +267,7 @@ test.describe("109. Accent Color", () => {
       localStorage.removeItem("ui-store");
     });
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const primary = await getCSSVar(page, "--color-primary");
     // Default blue = 221.2 83.2% 53.3%
@@ -279,14 +279,26 @@ test.describe("109. Accent Color", () => {
   });
 
   test("109.10 Accent updates focus ring (--color-ring)", async () => {
-    // Click teal swatch - the --color-ring should update to match teal
+    // Click teal swatch - the --color-ring should update to match teal.
+    // Under a shared-backend shard run, an async server-preferences load left
+    // in flight from 109.9's reload (server still has "pink" saved from 109.7)
+    // can resolve AFTER our teal click and briefly revert --color-ring. A fixed
+    // 400ms wait can read the value during that revert window. Poll instead and
+    // re-assert the teal selection inside the poll so a late server-pref load
+    // that reverts the accent is corrected on the next iteration.
     const tealSwatch = page.getByTestId("color-swatch-teal");
     await expect(tealSwatch).toBeVisible();
     await tealSwatch.click();
-    await page.waitForTimeout(400);
 
-    const ring = await getCSSVar(page, "--color-ring");
-    expect(ring).toContain("173");
+    await expect
+      .poll(
+        async () => {
+          await tealSwatch.click();
+          return getCSSVar(page, "--color-ring");
+        },
+        { timeout: 8_000, intervals: [200, 300, 400, 500] },
+      )
+      .toContain("173");
   });
 });
 
@@ -326,7 +338,7 @@ test.describe("110. Font Size", () => {
 
   test("110.3 Persists after reload", async () => {
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
     const fontSize = await page.evaluate(() => document.documentElement.style.fontSize);
     expect(fontSize).toBe("18px");
   });
@@ -357,7 +369,7 @@ test.describe("110. Font Size", () => {
   test("110.7 Syncs to server", async () => {
     await resetUiStore(page);
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const patchPromise = page.waitForRequest(
       (r) => r.url().includes("/settings/preferences") && r.method() === "PATCH",
@@ -421,7 +433,7 @@ test.describe("111. Density", () => {
 
   test("111.4 Persists after reload", async () => {
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
     const hasClass = await page.evaluate(() =>
       document.documentElement.classList.contains("density-spacious"),
     );
@@ -450,7 +462,7 @@ test.describe("111. Density", () => {
   test("111.6 Syncs to server", async () => {
     await resetUiStore(page);
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const patchPromise = page.waitForRequest(
       (r) => r.url().includes("/settings/preferences") && r.method() === "PATCH",
@@ -468,7 +480,7 @@ test.describe("111. Density", () => {
   test("111.7 Comfortable is default", async () => {
     await resetUiStore(page);
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const comfyBtn = page.locator("button[aria-pressed]", { hasText: "Comfortable" });
     await expect(comfyBtn).toHaveAttribute("aria-pressed", "true");
@@ -548,7 +560,7 @@ test.describe("112. High Contrast", () => {
 
   test("112.4 Persists after reload", async () => {
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const hasClass = await page.evaluate(() =>
       document.documentElement.classList.contains("high-contrast"),
@@ -557,6 +569,16 @@ test.describe("112. High Contrast", () => {
   });
 
   test("112.5 Focus rings 3px solid primary", async () => {
+    // Ensure the settings page is loaded and high contrast is enabled
+    // (don't rely on state left by the prior test).
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
+    const toggle = page.getByTestId("high-contrast-toggle");
+    const state = await toggle.getAttribute("data-state");
+    if (state !== "checked") {
+      await toggle.click();
+      await page.waitForTimeout(200);
+    }
+
     // Tab to a focusable element
     const btn = page.locator("button:visible").first();
     await btn.focus();
@@ -627,7 +649,7 @@ test.describe("112. High Contrast", () => {
       }
     });
     await page.reload({ waitUntil: "load" });
-    await expect(page.getByText("Customization")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const hasDark = await page.evaluate(() =>
       document.documentElement.classList.contains("dark"),

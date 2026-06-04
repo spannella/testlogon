@@ -5,6 +5,7 @@ import { useOfflineStore, type OfflineAction } from "@/stores/offlineStore";
 import { sendTextMessage } from "@/api/endpoints/messaging";
 import { createPost } from "@/api/endpoints/newsfeed";
 import { invalidateFeedCaches } from "@/lib/feedCacheInvalidation";
+import { removeFromSyncQueue } from "@/lib/syncQueueDb";
 import {
   updateOfflineMessageStatus,
   removeOfflineField,
@@ -44,13 +45,15 @@ export function useOfflineQueue() {
   }, [setOnline]);
 
   // ── Flush the queue whenever we come back online ────────────────
-  // Skip if SyncManager is available — Background Sync handles it.
+  // The main thread is the reliable flush path whenever the page is open and
+  // online. Background Sync (the service-worker `sync` event) is only a
+  // best-effort fallback for when the page is closed — it does not fire
+  // reliably while the page is foregrounded (and never fires for a synthetic
+  // `online` event). Relying solely on it left queued items unsent. We flush
+  // here and also delete each successfully-sent item from the IDB sync queue so
+  // a later background-sync run can't re-send it (avoids double delivery).
   React.useEffect(() => {
     if (!isOnline || queue.length === 0 || isFlushing.current) return;
-
-    // When Background Sync is available, the service worker flushes the IDB queue.
-    // The main-thread Zustand queue items will be removed via SW postMessage events.
-    if ("SyncManager" in window) return;
 
     const flush = async () => {
       isFlushing.current = true;
@@ -71,6 +74,9 @@ export function useOfflineQueue() {
           await dispatchAction(action);
           removeFromQueue(action.id);
           removeOfflineField(queryClient, action.id);
+          // Also drop it from the IDB sync queue so a later background-sync
+          // event can't re-send the same action.
+          void removeFromSyncQueue(action.id);
           successCount += 1;
         } catch (error) {
           const retryCount = action.__retryCount ?? 0;

@@ -143,7 +143,10 @@ def validate_mrz_checksum(data: str, expected: str) -> bool:
 
 
 def _mrz_date_to_iso(raw: str) -> str | None:
-    """Convert YYMMDD to YYYY-MM-DD. Century pivot: 00-29 = 2000s, 30-99 = 1900s."""
+    """Convert YYMMDD to YYYY-MM-DD. Century pivot: 00-29 = 2000s, 30-99 = 1900s.
+
+    Used for dates that are expected to be in the past (e.g. date of birth).
+    """
     if len(raw) != 6 or not raw.isdigit():
         return None
     yy = int(raw[0:2])
@@ -151,6 +154,27 @@ def _mrz_date_to_iso(raw: str) -> str | None:
     dd = raw[4:6]
     century = 2000 if yy <= 29 else 1900
     return f"{century + yy}-{mm}-{dd}"
+
+
+def _mrz_expiry_to_iso(raw: str, *, now: datetime.date | None = None) -> str | None:
+    """Convert a YYMMDD MRZ *expiry* date to YYYY-MM-DD.
+
+    Expiry dates are forward-looking, so the fixed 1900s pivot used for date of
+    birth (``_mrz_date_to_iso``) wrongly maps e.g. ``36`` -> 1936 for a passport
+    that expires in 2036. Pick the century whose resulting year is not already
+    deep in the past: if the 1900s interpretation predates the current year, roll
+    forward to the 2000s.
+    """
+    if len(raw) != 6 or not raw.isdigit():
+        return None
+    yy = int(raw[0:2])
+    mm = raw[2:4]
+    dd = raw[4:6]
+    today = now or datetime.date.today()
+    candidate = 1900 + yy if yy >= 30 else 2000 + yy
+    if candidate < today.year:
+        candidate += 100
+    return f"{candidate}-{mm}-{dd}"
 
 
 def _sex_human(code: str) -> str:
@@ -199,7 +223,7 @@ def parse_td3_mrz(line1: str, line2: str) -> dict[str, Any]:
         "nationality": line2[10:13].replace("<", ""),
         "date_of_birth": _mrz_date_to_iso(dob_raw),
         "sex": _sex_human(sex),
-        "expiry_date": _mrz_date_to_iso(expiry_raw),
+        "expiry_date": _mrz_expiry_to_iso(expiry_raw),
         "checksums": checksums,
     }
 
@@ -245,7 +269,7 @@ def parse_td1_mrz(line1: str, line2: str, line3: str) -> dict[str, Any]:
         "nationality": line2[15:18].replace("<", ""),
         "date_of_birth": _mrz_date_to_iso(dob_raw),
         "sex": _sex_human(sex),
-        "expiry_date": _mrz_date_to_iso(expiry_raw),
+        "expiry_date": _mrz_expiry_to_iso(expiry_raw),
         "checksums": checksums,
     }
 

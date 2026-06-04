@@ -47,6 +47,7 @@ from botocore.exceptions import ClientError
 DDB_ENDPOINT     = os.environ.get("DDB_ENDPOINT_URL", "http://localhost:8001")
 SESSIONS_TABLE   = os.environ.get("DDB_SESSIONS_TABLE", "sessions")
 USERS_TABLE      = os.environ.get("USERS_TABLE_NAME", "users")
+PROFILE_TABLE    = os.environ.get("PROFILE_TABLE_NAME", "profiles")
 ROLE_AUDIT_TABLE = os.environ.get("ROLE_AUDIT_TABLE_NAME", "role_audit")
 ROOT_USER_SUB    = os.environ.get("ROOT_USER_SUB", "root")
 ACCESS_SECRET    = os.environ.get(
@@ -71,6 +72,7 @@ ddb_client = boto3.client(
 )
 sessions_tbl = dynamodb.Table(SESSIONS_TABLE)
 users_tbl    = dynamodb.Table(USERS_TABLE)
+profile_tbl  = dynamodb.Table(PROFILE_TABLE)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -121,6 +123,34 @@ def ensure_auth_user(user_sub: str, display_name: str, role: str = "user") -> No
             )
         else:
             raise
+
+
+def ensure_profile(user_sub: str, display_name: str) -> None:
+    """Upsert a record in the canonical *profiles* table (PK=user_sub).
+
+    The social-graph follow service (app/services/social.py) rejects a follow
+    with `user_not_found` (HTTP 404) when the target has no profile row. The
+    test identities are seeded directly into DynamoDB, so a clean `just restart`
+    leaves the profiles table empty — create the rows here so follow/unfollow
+    and follower-list endpoints work in a fresh DB.
+    """
+    try:
+        profile_tbl.put_item(
+            Item={
+                "user_sub":     user_sub,
+                "display_name": display_name,
+                "created_at":   int(time.time()),
+            },
+            ConditionExpression="attribute_not_exists(user_sub)",
+        )
+    except ClientError as exc:
+        code = exc.response["Error"]["Code"]
+        if code == "ConditionalCheckFailedException":
+            return  # already present — leave existing profile untouched
+        if code == "ResourceNotFoundException":
+            # Profiles table missing in this environment — nothing to seed.
+            return
+        raise
 
 
 def _make_cookie(name: str, value: str, now: int, ttl: int,
@@ -198,6 +228,12 @@ ensure_auth_user(ROOT_USER_SUB,           "E2E Root Admin",    "root")
 ensure_auth_user("e2e_alice@test.local",  "E2E Alice",         "user")
 ensure_auth_user("e2e_bob@test.local",    "E2E Bob",           "user")
 ensure_auth_user("e2e_charlie@test.local","E2E Charlie",       "user")
+
+# Ensure canonical profile rows exist (social follow service requires them).
+ensure_profile(ROOT_USER_SUB,            "E2E Root Admin")
+ensure_profile("e2e_alice@test.local",   "E2E Alice")
+ensure_profile("e2e_bob@test.local",     "E2E Bob")
+ensure_profile("e2e_charlie@test.local", "E2E Charlie")
 
 # Build sessions with different role / profile combinations.
 IDENTITIES = [

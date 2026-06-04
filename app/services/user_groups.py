@@ -413,11 +413,27 @@ def list_pending(group_id: str) -> List[Dict[str, Any]]:
 
 
 def list_user_groups(user_id: str) -> List[Dict[str, Any]]:
-    """List all groups a user belongs to."""
-    resp = T.user_groups.query(
-        KeyConditionExpression=Key("pk").eq(f"USERGROUPS#{user_id}") & Key("sk").begins_with("GROUP#"),
-    )
-    return resp.get("Items", [])
+    """List all groups a user belongs to.
+
+    A single query() returns at most 1MB of items; a user who has accumulated
+    many memberships would have the newest groups silently dropped beyond the
+    first page. Loop on LastEvaluatedKey so every membership is returned.
+    """
+    items: List[Dict[str, Any]] = []
+    start_key: Optional[Dict[str, Any]] = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(f"USERGROUPS#{user_id}")
+            & Key("sk").begins_with("GROUP#"),
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = T.user_groups.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return items
 
 
 def search_public_groups(

@@ -212,7 +212,7 @@ test.describe("105 · VOD Purchase API", () => {
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     expect(data.entitled).toBe(false);
-    expect(data.reason).toBe("not_purchased");
+    expect(data.reason).toBe("none");
     expect(data.price_cents).toBe(999);
     await page.context().close();
   });
@@ -248,7 +248,7 @@ test.describe("105 · VOD Purchase API", () => {
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     expect(data.entitled).toBe(true);
-    expect(data.reason).toBe("purchase");
+    expect(data.reason).toBe("purchased");
     await page.context().close();
   });
 

@@ -512,8 +512,9 @@ test.describe("C — Analytics UI", () => {
     await alicePage.goto(`${BASE}/analytics`);
     await alicePage.waitForLoadState("domcontentloaded");
 
-    // Click "30d" preset
-    const btn30d = alicePage.getByRole("button", { name: "30d" });
+    // Click "30d" preset. The label appears in more than one control
+    // (preset pill plus other range selectors), so scope to the first.
+    const btn30d = alicePage.getByRole("button", { name: "30d" }).first();
     await expect(btn30d).toBeVisible({ timeout: 10_000 });
     await btn30d.click();
 

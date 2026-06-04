@@ -175,6 +175,14 @@ test.describe("1. Messages page loads correctly", () => {
 // ─── 2. Conversation list ─────────────────────────────────────────────────────
 
 test.describe("2. Conversation list", () => {
+  // Ensure a DM with Bob + at least one message exist before the UI tests run.
+  // On a clean DB these are the only conversations Alice has, so without this
+  // seeding the conversation list is empty and the "bob" row never renders.
+  test.beforeAll(() => {
+    getTestConvId();
+    getTestMsgId();
+  });
+
   test("Lists conversations after auth", async ({ browser }) => {
     const page = await browser.newPage();
     await gotoMessages(page, ALICE_ID);
@@ -223,6 +231,12 @@ test.describe("2. Conversation list", () => {
 });
 
 test.describe("2b. Messaging profile links", () => {
+  // Seed a DM with Bob so the conversation list (and its profile links) render.
+  test.beforeAll(() => {
+    getTestConvId();
+    getTestMsgId();
+  });
+
   test("Authenticated user can open canonical profile from conversation list (desktop)", async ({ browser }) => {
     const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
     await gotoMessages(page, ALICE_ID);
@@ -263,6 +277,12 @@ test.describe("2b. Messaging profile links", () => {
 // ─── 3. Compose bar features ──────────────────────────────────────────────────
 
 test.describe("3. Compose bar features", () => {
+  // Seed a DM with Bob so the conversation list has a row to open.
+  test.beforeAll(() => {
+    getTestConvId();
+    getTestMsgId();
+  });
+
   test("Tip attachment UI exists in compose bar", async ({ browser }) => {
     const page = await browser.newPage();
     await gotoMessages(page, ALICE_ID);

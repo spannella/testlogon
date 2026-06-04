@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from app.services.sessions import require_ui_session
 from app.core.aws_clients import s3_client
@@ -57,13 +57,18 @@ PRESIGN_TTL_SECONDS = 900  # 15 minutes
 
 
 class VideoUploadPresignIn(BaseModel):
+    # Accept either ``file_size_bytes`` (canonical) or ``size_bytes`` (the name
+    # the frontend / E2E client sends) via a validation alias.
+    model_config = {"populate_by_name": True}
+
     filename: str = Field(..., min_length=1, max_length=255)
-    content_type: str = Field(
-        ...,
-        min_length=1,
-        pattern=r"^video/(mp4|quicktime|x-msvideo|x-matroska|webm|mpeg|ogg|x-flv|3gpp|3gpp2)$",
+    # Content type is validated explicitly in the endpoint so we can return a
+    # friendly "Invalid content type" message (a Pydantic ``pattern`` would
+    # surface an opaque regex-mismatch error instead).
+    content_type: str = Field(..., min_length=1)
+    file_size_bytes: int = Field(
+        ..., ge=1, le=MAX_SIZE_BYTES, validation_alias=AliasChoices("file_size_bytes", "size_bytes")
     )
-    file_size_bytes: int = Field(..., ge=1, le=MAX_SIZE_BYTES)
     title: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = Field(default=None, max_length=5000)
     folder_path: Optional[str] = Field(default=None, max_length=1024)
@@ -71,12 +76,16 @@ class VideoUploadPresignIn(BaseModel):
 
 class VideoUploadPresignOut(BaseModel):
     upload_url: str
+    # Alias exposed under the name the frontend / E2E client reads.
+    presigned_url: str
     bucket: str
     key: str
+    s3_key: str
     ticket_id: str
     video_id: str
     content_type: str
     expires_at: str
+    expires_in_seconds: int
     max_size_bytes: int
 
 
@@ -129,11 +138,11 @@ def vod_presign_upload(
     """Request a presigned S3 PUT URL for video upload."""
     user_sub = user["user_sub"]
 
-    # Validate content type against allowlist (Pydantic pattern handles most
-    # cases, but do an explicit check for safety)
+    # Validate content type against allowlist. Returns 422 with a friendly
+    # message (matching the upload contract / E2E expectations).
     if inp.content_type not in ALLOWED_VIDEO_CONTENT_TYPES:
         raise HTTPException(
-            status_code=400,
+            status_code=422,
             detail=f"Invalid content type: {inp.content_type}. "
                    f"Allowed: {sorted(ALLOWED_VIDEO_CONTENT_TYPES)}",
         )
@@ -200,12 +209,15 @@ def vod_presign_upload(
 
     return VideoUploadPresignOut(
         upload_url=upload_url,
+        presigned_url=upload_url,
         bucket=bucket,
         key=s3_key,
+        s3_key=s3_key,
         ticket_id=ticket_id,
         video_id=video_id,
         content_type=inp.content_type,
         expires_at=expires_at,
+        expires_in_seconds=PRESIGN_TTL_SECONDS,
         max_size_bytes=MAX_SIZE_BYTES,
     )
 

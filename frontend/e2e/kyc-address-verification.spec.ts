@@ -56,6 +56,11 @@ function getSessions(): Record<string, SessionData> {
 
 async function injectAuth(page: Page, identity: string): Promise<void> {
   await page.context().addCookies(getSessions()[identity].cookies);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, getSessions()[identity].user_sub);
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
@@ -64,16 +69,32 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   return page;
 }
 
+// Retry on 429: under a shared-backend shard run the accumulated request
+// volume from other specs can trip the global IP rate-limit window. Honor
+// Retry-After (capped) so transient 429s don't drop a verify POST (which would
+// leave the readback observing stale state) or fail a GET that expects 200.
+async function withRetry(fn: () => Promise<any>) {
+  let resp = await fn();
+  for (let attempt = 0; attempt < 4 && resp.status() === 429; attempt++) {
+    const ra = Number(resp.headers()["retry-after"] || "1");
+    await new Promise((r) => setTimeout(r, Math.min(Math.max(ra, 1), 3) * 1000));
+    resp = await fn();
+  }
+  return resp;
+}
+
 async function apiPost(page: Page, identity: string, path: string, body?: unknown) {
   const sess = getSessions()[identity];
-  return page.request.post(`${API}/${path}`, {
-    data: body ?? {},
-    headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
-  });
+  return withRetry(() =>
+    page.request.post(`${API}/${path}`, {
+      data: body ?? {},
+      headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
+    }),
+  );
 }
 
 async function apiGet(page: Page, path: string) {
-  return page.request.get(`${API}/${path}`);
+  return withRetry(() => page.request.get(`${API}/${path}`));
 }
 
 const TS = Date.now();
@@ -190,9 +211,12 @@ test.describe("790: KYC address verification API", () => {
   });
 
   test("790.8 Re-verification overwrites latest result (GET returns newest)", async () => {
-    await apiPost(alice, "alice", `${BASE}/cases/${caseId}/verify`, {
+    // Confirm the re-verify POST landed (not dropped by a shard-load 429)
+    // before reading back — otherwise GET would observe a stale prior result.
+    const verifyResp = await apiPost(alice, "alice", `${BASE}/cases/${caseId}/verify`, {
       address: { ...US_ADDRESS, line_1: "999 Nonexistent Rd" },
     });
+    expect(verifyResp.status()).toBe(200);
     const getResp = await apiGet(alice, `${BASE}/cases/${caseId}`);
     expect(getResp.status()).toBe(200);
     const { verification: v } = await getResp.json();
@@ -334,9 +358,12 @@ test.describe("792: KYC address verification decisions + auth", () => {
   });
 
   test("792.2 Attempt history lists multiple attempts (newest first)", async () => {
-    await apiPost(alice, "alice", `${BASE}/cases/${caseId}/verify`, {
+    // Confirm this attempt POST landed (not dropped by a shard-load 429) before
+    // asserting the attempt count + that the newest attempt is unverifiable.
+    const verifyResp = await apiPost(alice, "alice", `${BASE}/cases/${caseId}/verify`, {
       address: { ...US_ADDRESS, line_1: "999 Nonexistent Rd" },
     });
+    expect(verifyResp.status()).toBe(200);
     const resp = await apiGet(alice, `${BASE}/cases/${caseId}/attempts`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();

@@ -4271,11 +4271,6 @@ class LlmProviderListOut(BaseModel):
     providers: List[LlmProviderInfo]
 # --- Advertiser Accounts & Campaigns (ADS-001) ---
 
-class AdAccountCreateIn(BaseModel):
-    company_name: str = Field(..., min_length=1, max_length=200)
-    billing_email: str = Field(..., min_length=5, max_length=254)
-
-
 class AdAccountOut(BaseModel):
     account_id: str
     owner_sub: str
@@ -4291,19 +4286,7 @@ class AdAccountOut(BaseModel):
 class AdAccountReviewIn(BaseModel):
     decision: str = Field(..., pattern=r"^(approve|reject|suspend)$")
     notes: Optional[str] = Field(default=None, max_length=1000)
-# ── Advertiser Accounts & Campaigns (ADS-001) ──────────────────────
-# ── Ad Accounts & Campaigns (ADS-001) ─────────────────────────────────────
 
-
-class AdAccountCreateIn(BaseModel):
-    company_name: str = Field(..., min_length=1, max_length=200)
-    billing_email: str = Field(..., min_length=1, max_length=320)
-
-
-class AdAccountReviewIn(BaseModel):
-    decision: str = Field(..., pattern="^(approve|reject)$")
-    notes: Optional[str] = None
-# -- Ad Accounts & Campaigns (ADS-001) --
 
 class AdAccountCreateIn(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=200)
@@ -4317,15 +4300,6 @@ class CampaignCreateIn(BaseModel):
     budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
     start_date: Optional[int] = None  # Unix timestamp
     end_date: Optional[int] = None    # Unix timestamp
-
-
-class CampaignUpdateIn(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    budget_cents: Optional[int] = Field(default=None, ge=100)
-    budget_type: Optional[str] = Field(default=None, pattern=r"^(daily|lifetime)$")
-    status: Optional[str] = Field(default=None, pattern=r"^(draft|active|paused|archived)$")
-    start_date: Optional[int] = None
-    end_date: Optional[int] = None
 
 
 class CampaignOut(BaseModel):
@@ -4345,9 +4319,6 @@ class CampaignOut(BaseModel):
     updated_at: int
 
 
-class CampaignReviewIn(BaseModel):
-    decision: str = Field(..., pattern=r"^(approve|reject)$")
-    notes: Optional[str] = Field(default=None, max_length=1000)
 # -- Delegates (DELEGATE-001) --
 # -- Delegate Management (DELEGATE-001) --
 
@@ -4552,19 +4523,6 @@ class UpdateGroupIn(BaseModel):
 class GroupInviteIn(BaseModel):
     user_id: str
 
-class GroupInviteResponseIn(BaseModel):
-    accept: bool
-
-class GroupReviewRequestIn(BaseModel):
-    approved: bool
-
-class GroupUpdateRoleIn(BaseModel):
-    role: Literal["moderator", "member"]
-
-
-class GroupInviteIn(BaseModel):
-    user_id: str
-
 
 class GroupInviteResponseIn(BaseModel):
     accept: bool
@@ -4656,30 +4614,6 @@ class AssociateKeyIn(BaseModel):
 
 # --- Ad Creatives (ADS-002) ---
 
-class CreativeCreateIn(BaseModel):
-    format: str = Field(..., pattern=r"^(image|video|native_post)$")
-    title: str = Field(..., min_length=1, max_length=200)
-    headline: Optional[str] = Field(default=None, max_length=100)
-    body_text: Optional[str] = Field(default=None, max_length=300)
-    cta_text: Optional[str] = Field(default=None, max_length=25)
-    cta_url: Optional[str] = Field(default=None, max_length=1024)
-    alt_text: Optional[str] = Field(default=None, max_length=200)
-    width: Optional[int] = Field(default=None, ge=100, le=4096)
-    height: Optional[int] = Field(default=None, ge=100, le=4096)
-    duration_seconds: Optional[int] = Field(default=None, ge=5, le=60)
-    skip_after_seconds: Optional[int] = Field(default=5, ge=0, le=30)
-    objective: str = Field(default="awareness")
-    budget_cents: int = Field(..., ge=100)
-    budget_type: str = Field(default="lifetime", pattern="^(lifetime|daily)$")
-    budget_cents: int = Field(..., ge=100)
-    budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
-    objective: str = Field(default="awareness")
-    budget_cents: int = Field(..., ge=100)
-    budget_type: str = Field(default="lifetime")
-    start_date: Optional[int] = None
-    end_date: Optional[int] = None
-
-
 class CampaignUpdateIn(BaseModel):
     name: Optional[str] = None
     objective: Optional[str] = None
@@ -4770,15 +4704,6 @@ class CreativeOut(BaseModel):
     format: str
     title: str
 
-class CreativeUpdateIn(BaseModel):
-    title: Optional[str] = None
-    headline: Optional[str] = None
-    body_text: Optional[str] = None
-    cta_text: Optional[str] = None
-    cta_url: Optional[str] = None
-    rotation_weight: Optional[int] = None
-    skip_after_seconds: Optional[int] = None
-
 
 class CreativeReviewIn(BaseModel):
     decision: str = Field(..., pattern="^(approve|reject)$")
@@ -4841,29 +4766,6 @@ class AdsApiCreativeUpdate(BaseModel):
 # ── Ad Targeting (ADS-003) ──────────────────────────────────────────
 
 
-class TargetingCreateIn(BaseModel):
-    name: str = Field(default="Default targeting")
-    age_ranges: Optional[List[str]] = None
-    genders: Optional[List[str]] = None
-    country_codes: Optional[List[str]] = None
-    regions: Optional[List[str]] = None
-    cities: Optional[List[str]] = None
-    content_categories: Optional[List[str]] = None
-    active_hours: Optional[List[int]] = None
-    device_types: Optional[List[str]] = None
-    new_user_only: bool = False
-    creator_ids: Optional[List[str]] = None
-    content_types: Optional[List[str]] = None
-    exclude_creator_ids: Optional[List[str]] = None
-    exclude_categories: Optional[List[str]] = None
-
-
-class CreatorAdSettingsIn(BaseModel):
-    allow_ads: Optional[bool] = None
-    allowed_ad_categories: Optional[List[str]] = None
-    min_cpm_cents: Optional[int] = None
-
-
 # ── Ad Serving (ADS-004) ───────────────────────────────────────────
 
 
@@ -4908,31 +4810,6 @@ class AdServeResponseOut(BaseModel):
     reviewed_by: Optional[str] = None
     promo_code_id: Optional[str] = None
     affiliate_link_id: Optional[str] = None
-# ── Ad Targeting (ADS-003) ──────────────────────────────────────────────────
-# ── Ad Serving (ADS-004) ─────────────────────────────────────────────
-
-
-class AdServeRequestIn(BaseModel):
-    surface: str = Field(..., pattern="^(newsfeed|broadcast|vod)$")
-    content_type: str = Field(default="")
-    creator_id: str = Field(..., min_length=1)
-    content_id: str = Field(..., min_length=1)
-    slot_type: str = Field(default="sponsored_post",
-                           pattern="^(pre_roll|mid_roll|overlay|sponsored_post|broadcast_preroll|broadcast_midroll)$")
-    user_context: Optional[Dict[str, Any]] = None
-
-
-class AdTrackEventIn(BaseModel):
-    event: str = Field(..., pattern="^(impression|click|skip|complete)$")
-    creative_id: str = Field(..., min_length=1)
-    campaign_id: str = Field(..., min_length=1)
-    account_id: str = Field(..., min_length=1)
-    surface: str = Field(..., min_length=1)
-    slot_type: str = Field(..., min_length=1)
-    content_id: str = Field(..., min_length=1)
-    creator_id: str = Field(..., min_length=1)
-
-
 # ── Ad Feedback / Sponsored Posts (ADS-005) ──────────────────────────────
 
 
@@ -5088,9 +4965,6 @@ class TargetingOut(BaseModel):
     updated_at: int
 
 
-class CreativeReviewIn(BaseModel):
-    decision: str = Field(..., pattern=r"^(approve|reject)$")
-    notes: Optional[str] = Field(default=None, max_length=1000)
 # -- Issued Licenses (LICENSE-002) --
 # ─── Issued Licenses (LICENSE-002) ────────────────────────────────────────────
 
@@ -5336,6 +5210,16 @@ class Ec2InstanceOut(BaseModel):
     status: str
     public_ip: str
     private_ip: str
+    ssh_key_id: str = ""
+    host_id: str = ""
+    created_at: int = 0
+    started_at: int = 0
+    stopped_at: int = 0
+    terminated_at: int = 0
+    last_activity_at: int = 0
+    auto_terminate_after: int = 7200
+
+
 # ─── Kubernetes Container Launcher (INFRA-004) ──────────────────────────────
 
 class K8sLaunchPodIn(BaseModel):
@@ -5368,6 +5252,8 @@ class K8sPodOut(BaseModel):
     started_at: int = 0
     stopped_at: int = 0
     terminated_at: int = 0
+    ttl_seconds: int = 14400
+    expires_at: int = 0
     last_activity_at: int = 0
     auto_terminate_after: int = 7200
 
@@ -5381,6 +5267,7 @@ class Ec2InstanceTypeInfo(BaseModel):
     instance_type: str
     vcpu: int = 0
     memory_gb: float = 0.0
+    cost_cents_per_min: float = 0.0
     description: str = ""
 
 
@@ -5469,10 +5356,8 @@ class Ec2InstanceTypeListOut(BaseModel):
 class Ec2AmiInfo(BaseModel):
     ami_id: str
     name: str
-    terminated_at: int = 0
-    ttl_seconds: int
-    expires_at: int
-    last_activity_at: int = 0
+    os_type: str = ""
+    username: str = ""
 
 
 class K8sPodListOut(BaseModel):
@@ -5582,10 +5467,6 @@ class AdminRevenueEntryOut(BaseModel):
 class AdminRevenueListOut(BaseModel):
     transactions: List[AdminRevenueEntryOut] = Field(default_factory=list)
     next_cursor: Optional[str] = None
-
-class GroupMemberListOut(BaseModel):
-    members: List[GroupMemberOut] = Field(default_factory=list)
-    count: int = 0
 
 
 # ── Group Feed (GROUP-002) ───────────────────────────────────────────────────
@@ -5967,16 +5848,6 @@ class K8sPresetInfo(BaseModel):
 
 class K8sPresetListOut(BaseModel):
     presets: List[K8sPresetInfo]
-class AdBlockIn(BaseModel):
-    account_id: str
-    reason: str = ""
-    startup_seconds: int
-
-
-class ComputeOptionListOut(BaseModel):
-    options: List[ComputeOption]
-    start_date: Optional[int] = None
-    end_date: Optional[int] = None
 
 
 # -- Ad Billing (ADS-007) --
@@ -6190,9 +6061,6 @@ class AdBreakdownEntryOut(BaseModel):
     ctr_pct: float = 0.0
 
 
-class AdAccountCreateIn(BaseModel):
-    company_name: str = Field(..., min_length=1, max_length=200)
-    billing_email: str = Field(..., min_length=3, max_length=320)
 # ---------------------------------------------------------------------------
 # Compute Cost Tracking (INFRA-005)
 # ---------------------------------------------------------------------------
@@ -6785,7 +6653,7 @@ class TestWorkflowIn(BaseModel):
     ticket_id: str = Field(..., min_length=1, max_length=100)
 
 
-class EligibleTicketOut(BaseModel):
+class EligibleTicketOutCoder(BaseModel):
     ticket_id: str
     subject: str = ""
     labels: List[str] = Field(default_factory=list)
@@ -6795,7 +6663,7 @@ class EligibleTicketOut(BaseModel):
 
 
 class EligibleTicketsOutCoder(BaseModel):
-    tickets: List[EligibleTicketOut] = Field(default_factory=list)
+    tickets: List[EligibleTicketOutCoder] = Field(default_factory=list)
     count: int = 0
 
 
@@ -7892,7 +7760,7 @@ class AgentCapacityOut(BaseModel):
     utilization_pct: float = 0.0
 
 
-class CapacityOut(BaseModel):
+class AgentProjectCapacityOut(BaseModel):
     capacity: List[AgentCapacityOut] = Field(default_factory=list)
     fits: bool = True
     overflow_hours: float = 0.0
@@ -10355,7 +10223,7 @@ class SpendingCategoryOut(BaseModel):
     transaction_count: int = 0
 
 
-class SpendingSummaryOut(BaseModel):
+class TaxSpendingSummaryOut(BaseModel):
     date_from: int
     date_to: int
     categories: List[SpendingCategoryOut] = Field(default_factory=list)
@@ -10367,8 +10235,8 @@ class SpendingSummaryOut(BaseModel):
 class YearComparisonOut(BaseModel):
     current_year: int
     previous_year: int
-    current_summary: SpendingSummaryOut
-    previous_summary: SpendingSummaryOut
+    current_summary: TaxSpendingSummaryOut
+    previous_summary: TaxSpendingSummaryOut
     change_pct: float = 0.0
 
 
@@ -13257,7 +13125,7 @@ class ImportResultOut(BaseModel):
     errors: List[str]
 
 
-class GroupListOut(BaseModel):
+class HostGroupListOut(BaseModel):
     groups: List[str]
 
 

@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.models import (
     CreateHostIn,
-    GroupListOut,
+    HostGroupListOut,
     HostHistoryOut,
     HostListOut,
     HostOut,
@@ -57,9 +57,9 @@ host_inventory_router = APIRouter(prefix="/ui/hosts", tags=["host-inventory"])
 
 # ─── List groups (declared before /{host_id} to avoid path capture) ─────────
 
-@host_inventory_router.get("/groups", response_model=GroupListOut)
+@host_inventory_router.get("/groups", response_model=HostGroupListOut)
 async def list_host_groups(session: Dict = Depends(require_ui_session)):
-    return GroupListOut(groups=list_groups(session["user_sub"]))
+    return HostGroupListOut(groups=list_groups(session["user_sub"]))
 
 
 # ─── List hosts ─────────────────────────────────────────────────────────────

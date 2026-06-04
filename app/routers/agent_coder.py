@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.auth.policy import require_admin_or_root
+from app.auth.policy import require_admin_or_root, require_admin_or_root_csrf
 from app.models import (
     CoderConfigIn,
     CoderConfigOut,
@@ -62,7 +62,7 @@ async def get_config_schema(user=Depends(require_admin_or_root)):
 async def put_coder_config(
     type_id: str,
     body: CoderConfigIn,
-    user=Depends(require_admin_or_root),
+    user=Depends(require_admin_or_root_csrf),
 ):
     result = svc.update_coder_config(
         agent_type_id=type_id, owner_sub=user.sub, config=body.model_dump()

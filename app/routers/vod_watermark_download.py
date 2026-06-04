@@ -112,6 +112,25 @@ def _check_download_entitlement(video, viewer_id: str) -> None:
 # ─── Endpoints ──────────────────────────────────────────────────────────────
 
 
+# NOTE: This static-path route must be declared BEFORE the dynamic
+# ``POST /{video_id}`` route below, otherwise FastAPI matches "/extract" as a
+# video_id and the request 404s ("video not found").
+@vod_watermark_download_router.post(
+    "/extract", response_model=VodWatermarkExtractResponse
+)
+def extract_vod_watermark(
+    body: VodWatermarkExtractIn,
+    ctx=Depends(require_ui_session),
+):
+    """Decode/validate a forensic watermark payload (admin/forensic helper)."""
+    result = svc.extract_payload(body.payload)
+    return VodWatermarkExtractResponse(
+        found=result["found"],
+        payload=result["payload"],
+        decoded=result["decoded"],
+    )
+
+
 @vod_watermark_download_router.post(
     "/{video_id}", response_model=VodWatermarkDownloadResponse
 )
@@ -263,20 +282,4 @@ def list_vod_watermark_renders(
             )
             for it in items
         ]
-    )
-
-
-@vod_watermark_download_router.post(
-    "/extract", response_model=VodWatermarkExtractResponse
-)
-def extract_vod_watermark(
-    body: VodWatermarkExtractIn,
-    ctx=Depends(require_ui_session),
-):
-    """Decode/validate a forensic watermark payload (admin/forensic helper)."""
-    result = svc.extract_payload(body.payload)
-    return VodWatermarkExtractResponse(
-        found=result["found"],
-        payload=result["payload"],
-        decoded=result["decoded"],
     )

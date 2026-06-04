@@ -53,6 +53,11 @@ async function injectAuth(page: Page, identity: string) {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 async function apiGet(page: Page, identity: string, path: string) {
@@ -218,10 +223,21 @@ test.describe("713 — KYC Status page", () => {
   const APPROVED_CASE = `kyc_apr_${TS}`;
   const NMI_CASE = `kyc_nmi_${TS}`;
 
-  test.beforeAll(() => {
+  test.beforeAll(async ({ browser }) => {
     seedCase({ caseId: ACTIVE_CASE, status: "under_review" });
     seedCase({ caseId: APPROVED_CASE, status: "approved", decidedAt: Math.floor(Date.now() / 1000) });
     seedCase({ caseId: NMI_CASE, status: "needs_more_info", reasonCodes: ["blurry_id"] });
+    // The re-upload (713.5) writes to /kyc/{caseId}/... via the file manager,
+    // which requires the parent folders to already exist (the backend does NOT
+    // auto-create them). Seed the folder tree for the needs_more_info case.
+    const page = await browser.newPage();
+    await injectAuth(page, "alice");
+    for (const path of ["/kyc", `/kyc/${NMI_CASE}`]) {
+      const resp = await apiPost(page, "alice", "/v1/fs/folder", { path });
+      // 200 = created, 409 = already exists — both fine.
+      expect([200, 409].includes(resp.status())).toBeTruthy();
+    }
+    await page.close();
   });
 
   test("713.1 status page shows an active case with a timeline", async ({ page }) => {
@@ -259,7 +275,7 @@ test.describe("713 — KYC Status page", () => {
     await page.goto(`${BASE}/kyc/status`);
     const input = page.getByTestId("kyc-reupload-input").first();
     const [resp] = await Promise.all([
-      page.waitForResponse((r) => r.url().includes("/files") && r.request().method() === "POST"),
+      page.waitForResponse((r) => r.url().includes("/v1/fs/upload") && r.request().method() === "POST"),
       input.setInputFiles({
         name: "poa.png",
         mimeType: "image/png",

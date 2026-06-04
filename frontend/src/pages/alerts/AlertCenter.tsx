@@ -242,7 +242,7 @@ export function AlertCenter() {
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
                         <Badge variant="outline" className="text-[10px]">
-                          {alert.event.replace(/_/g, " ")}
+                          {(alert.event ?? "").replace(/_/g, " ")}
                         </Badge>
                         <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                           {formatAlertDate(alert.ts)}

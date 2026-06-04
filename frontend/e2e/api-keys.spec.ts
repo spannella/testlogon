@@ -384,7 +384,7 @@ test.describe("6. IP access rules", () => {
       { timeout: 8000 },
     );
     await page.getByRole("dialog").getByRole("button", { name: "Save Rules" }).click();
-    await expect(page.getByText("IP rules updated")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("IP rules updated", { exact: true }).first()).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 3000 });
     await refetchDone;
   });

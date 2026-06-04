@@ -108,14 +108,15 @@ async function openDmWithBob(page: Page) {
       headers: { "x-csrf-token": session.csrf_token },
     })
     .catch(() => {});
-  await page.goto(`${BASE}/messages`, { waitUntil: "load" });
+  // Deep-link directly to THIS conversation id rather than clicking the first
+  // "E2E Bob" sidebar row.  Under shard accumulation there are many Bob DMs and
+  // `.first()` may open an older/other conversation, so messages sent to
+  // `_dmConvoId` would never render in the open ConversationView.
+  await page.goto(`${BASE}/messages/${convoId}`, { waitUntil: "load" });
   await page.waitForTimeout(600);
-  const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-  await expect(row).toBeVisible({ timeout: 12000 });
-  await row.click();
   await expect(
     page.getByPlaceholder("Type a message...").or(page.getByPlaceholder("Type an encrypted message...")),
-  ).toBeVisible({ timeout: 5000 });
+  ).toBeVisible({ timeout: 12000 });
 }
 
 /**
@@ -157,7 +158,11 @@ test.describe("717. Emoji Picker UI", () => {
   test("717.2 Picker shows 9 category tabs", async () => {
     await page.getByTestId("emoji-button").click();
     await expect(page.getByTestId("emoji-picker")).toBeVisible({ timeout: 5000 });
-    const tabs = page.locator('[data-testid^="emoji-category-"]');
+    // 9 standard emoji categories. The picker also renders a separate "Custom"
+    // (favorites/recents) tab with testid emoji-category-custom — exclude it here.
+    const tabs = page.locator(
+      '[data-testid^="emoji-category-"]:not([data-testid="emoji-category-custom"])',
+    );
     await expect(tabs).toHaveCount(9);
     await page.keyboard.press("Escape");
   });

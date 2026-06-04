@@ -311,43 +311,72 @@ def cancel_bundle_subscription(
     }
 
 
-def has_bundle_access(subscriber_id: str, creator_id: str) -> bool:
-    """Check if subscriber has access to creator via any syndicate bundle."""
-    # 1. Get creator's syndicates
-    creator_syndicates = syndicate_svc.list_user_syndicates(creator_id)
+def has_bundle_access(
+    subscriber_id: str,
+    creator_id: str,
+    syndicate_id: Optional[str] = None,
+) -> bool:
+    """Check if subscriber has access to creator via a syndicate bundle.
 
-    # 2. For each syndicate, check if subscriber has active bundle
+    When ``syndicate_id`` is provided the check is scoped to that single
+    syndicate: the creator must be a *current* member of it (so leaving the
+    syndicate immediately revokes bundle-subscriber access) and the subscriber
+    must hold an active (or cancelled-but-within-period) bundle subscription to
+    that same syndicate. When ``syndicate_id`` is omitted the check falls back
+    to scanning every syndicate the creator currently belongs to.
+    """
+    if syndicate_id:
+        # Scoped check: the creator must currently belong to THIS syndicate.
+        # A member who has left is no longer in list_members, so access is
+        # revoked automatically.
+        if not syndicate_svc.is_member(syndicate_id, creator_id):
+            return False
+        return _has_active_bundle_entitlement(subscriber_id, syndicate_id)
+
+    # Unscoped fallback: check every syndicate the creator currently belongs to.
+    creator_syndicates = syndicate_svc.list_user_syndicates(creator_id)
     for synd in creator_syndicates:
-        syndicate_id = synd.get("syndicate_id", "")
-        if not syndicate_id:
+        sid = synd.get("syndicate_id", "")
+        if not sid:
             continue
-        resp = T.syndicates.get_item(Key={
-            "pk": f"BUNDLE_SUB#{subscriber_id}",
-            "sk": f"SYND#{syndicate_id}",
-        })
-        item = resp.get("Item")
-        if not item:
+        # Guard against stale USER_SYND# rows: confirm live membership.
+        if not syndicate_svc.is_member(sid, creator_id):
             continue
-        status = (item.get("status") or "").lower()
-        if status == "active":
+        if _has_active_bundle_entitlement(subscriber_id, sid):
             logger.debug(
                 "bundle_access.granted_via_syndicate subscriber_id=%s creator_id=%s syndicate_id=%s",
-                subscriber_id, creator_id, syndicate_id,
+                subscriber_id, creator_id, sid,
             )
             return True
-        # Cancelled but still within period -- check period end
-        if status == "cancelled":
-            sub_id = item.get("subscription_id", "")
-            if sub_id:
-                sub_resp = T.subscriptions.get_item(Key={
-                    "pk": f"SUBSCRIPTION#{sub_id}",
-                    "sk": "META",
-                })
-                sub_item = sub_resp.get("Item")
-                if sub_item:
-                    period_end = int(sub_item.get("current_period_end", 0))
-                    if now_ts() < period_end:
-                        return True
+    return False
+
+
+def _has_active_bundle_entitlement(subscriber_id: str, syndicate_id: str) -> bool:
+    """True if subscriber holds an active (or cancelled-within-period) bundle
+    subscription to the given syndicate."""
+    resp = T.syndicates.get_item(Key={
+        "pk": f"BUNDLE_SUB#{subscriber_id}",
+        "sk": f"SYND#{syndicate_id}",
+    })
+    item = resp.get("Item")
+    if not item:
+        return False
+    status = (item.get("status") or "").lower()
+    if status == "active":
+        return True
+    # Cancelled but still within the paid period -- check period end.
+    if status == "cancelled":
+        sub_id = item.get("subscription_id", "")
+        if sub_id:
+            sub_resp = T.subscriptions.get_item(Key={
+                "pk": f"SUBSCRIPTION#{sub_id}",
+                "sk": "META",
+            })
+            sub_item = sub_resp.get("Item")
+            if sub_item:
+                period_end = int(sub_item.get("current_period_end", 0))
+                if now_ts() < period_end:
+                    return True
     return False
 
 

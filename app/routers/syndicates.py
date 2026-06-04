@@ -443,7 +443,9 @@ def check_bundle_access(
     session=Depends(require_ui_session),
 ):
     """Check if the calling user has bundle access to a specific creator."""
-    has_access = bundle_svc.has_bundle_access(session["user_sub"], creator_id)
+    has_access = bundle_svc.has_bundle_access(
+        session["user_sub"], creator_id, syndicate_id=syndicate_id
+    )
     return {"has_access": has_access, "creator_id": creator_id}
 
 

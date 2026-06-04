@@ -84,10 +84,29 @@ async function apiPost(page: Page, path: string, body: unknown) {
 // ─── DDB helpers ─────────────────────────────────────────────────────────────
 
 function ddbPut(tableName: string, item: Record<string, unknown>) {
+  // The `item` is in DynamoDB typed-attribute JSON (e.g. { S: ... }, { N: ... }),
+  // which the boto3 low-level client accepts directly via put_item(). We pass it
+  // to a short python script through argv to avoid quoting issues, using the same
+  // local DynamoDB endpoint/credentials as the rest of the dev stack.
   const itemJson = JSON.stringify(item);
+  // Single physical line of Python (statements joined with ";") so it survives
+  // being passed as one shell-quoted argument to `python3 -c`.
+  const py =
+    "import json, sys, boto3; " +
+    'c = boto3.client("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test"); ' +
+    "c.put_item(TableName=sys.argv[1], Item=json.loads(sys.argv[2]))";
   execSync(
-    `aws dynamodb put-item --table-name ${tableName} --item '${itemJson}' --endpoint-url http://localhost:8001`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000, env: { ...process.env, AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test", AWS_DEFAULT_REGION: "us-east-1" } },
+    `python3 -c ${JSON.stringify(py)} ${JSON.stringify(tableName)} ${JSON.stringify(itemJson)}`,
+    {
+      cwd: "/home/ubuntu/testlogon",
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        AWS_ACCESS_KEY_ID: "test",
+        AWS_SECRET_ACCESS_KEY: "test",
+        AWS_DEFAULT_REGION: "us-east-1",
+      },
+    },
   );
 }
 

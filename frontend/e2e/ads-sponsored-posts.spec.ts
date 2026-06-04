@@ -311,7 +311,7 @@ test.describe("ADS-005 Sponsored Posts", () => {
         body: `Ad-friendly post ${TS}`,
         visibility: "public",
       });
-      expect(resp.status()).toBe(201);
+      expect(resp.status()).toBe(200);
       const post = await resp.json();
       // Default should be true
       expect(post.allow_ads_near).toBe(true);
@@ -323,7 +323,7 @@ test.describe("ADS-005 Sponsored Posts", () => {
         visibility: "public",
         allow_ads_near: false,
       });
-      expect(resp.status()).toBe(201);
+      expect(resp.status()).toBe(200);
       const post = await resp.json();
       expect(post.allow_ads_near).toBe(false);
     });

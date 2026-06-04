@@ -13,7 +13,7 @@
  * Uses cookie-based auth with CSRF headers on all mutating requests.
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 
 // -- Constants ----------------------------------------------------------------
@@ -150,16 +150,40 @@ async function createBroadcastSession(page: Page, userId: string, profileId: str
   return data.id;
 }
 
+// Transition a freshly-created session to "live" so chat is available.
+// Chat (and chat moderation) requires the broadcast to be live. The /start
+// endpoint requires an operator (admin/root) role, so the session creator
+// (Alice, a regular USER) cannot start it — start it as root instead. The
+// route does not check session ownership, only the caller's role.
+async function startBroadcastSession(browser: Browser, sessionId: string): Promise<void> {
+  const rootCtx = await browser.newContext();
+  const rootPage = await rootCtx.newPage();
+  await injectAuth(rootPage, "root");
+  const resp = await apiPost(rootPage, "root", `/broadcast/sessions/${sessionId}/start`, {});
+  expect([200, 202]).toContain(resp.status());
+  await rootCtx.close();
+}
+
 async function sendChatMessage(
   page: Page,
   userId: string,
   sessionId: string,
   text: string,
 ): Promise<string> {
-  const resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/chat`, {
+  // Broadcast chat enforces a per-user/per-session minimum interval
+  // (BROADCAST_CHAT_RATE_LIMIT_MS=2000). Consecutive sends from the same
+  // user within 2s return 429. Wait the window out, and retry once if a
+  // residual limit from a prior send is still active.
+  let resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/chat`, {
     text,
   });
-  expect(resp.status()).toBe(200);
+  if (resp.status() === 429) {
+    await new Promise((r) => setTimeout(r, 2100));
+    resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/chat`, {
+      text,
+    });
+  }
+  expect([200, 201]).toContain(resp.status());
   const data = await resp.json();
   return data.message_id;
 }
@@ -193,6 +217,8 @@ test.describe("499 -- Broadcast Chat Moderation API", () => {
     // Create broadcast profile and session as Alice
     profileId = await createBroadcastProfile(alicePage, ALICE_ID);
     sessionId = await createBroadcastSession(alicePage, ALICE_ID, profileId);
+    // Chat is only available while the broadcast is live.
+    await startBroadcastSession(browser, sessionId);
 
     // Send a chat message as Alice that Bob can moderate
     chatMsgId = await sendChatMessage(alicePage, ALICE_ID, sessionId, `Test msg ${TS}`);
@@ -451,6 +477,8 @@ test.describe("501 -- Multi-Moderator & Ban API", () => {
 
     profileId = await createBroadcastProfile(alicePage, ALICE_ID);
     sessionId = await createBroadcastSession(alicePage, ALICE_ID, profileId);
+    // Chat is only available while the broadcast is live.
+    await startBroadcastSession(browser, sessionId);
   });
 
   test.afterAll(async () => {
@@ -629,6 +657,8 @@ test.describe("502 -- Moderation Audit & System Messages API", () => {
 
     profileId = await createBroadcastProfile(alicePage, ALICE_ID);
     sessionId = await createBroadcastSession(alicePage, ALICE_ID, profileId);
+    // Chat is only available while the broadcast is live.
+    await startBroadcastSession(browser, sessionId);
   });
 
   test.afterAll(async () => {

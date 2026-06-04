@@ -59,6 +59,11 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   const sessions = getSessions();
   const page = await browser.newPage();
   await page.context().addCookies(sessions[identity].cookies);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, sessions[identity].user_sub);
   return page;
 }
 
@@ -381,8 +386,15 @@ test.describe("783. KYC render-for-case auto-population API", () => {
   });
 
   test("783.2 render-for-case with no active templates returns 400", async () => {
-    // Deactivate the only active template version for this tier.
-    await apiPatch(rootPage, "root", `${TPL_BASE}/${templateId}/versions/1/deactivate`);
+    // Required templates are cumulative (required_tier <= the case's target
+    // tier), so sibling describe-blocks (e.g. 782) leave active tier_1 templates
+    // in the shared DynamoDB. Deactivate EVERY active version currently required
+    // for this case's tier so the render genuinely has zero templates.
+    const list = await apiGet(alicePage, `${TPL_BASE}/required/list`, { tier: "tier_1" });
+    const items = ((await list.json()) as { items: Array<{ template_id: string; version: number }> }).items;
+    for (const it of items) {
+      await apiPatch(rootPage, "root", `${TPL_BASE}/${it.template_id}/versions/${it.version}/deactivate`);
+    }
     const r = await apiPost(alicePage, "alice", `${TPL_BASE}/render-for-case`, {
       case_id: caseId,
     });

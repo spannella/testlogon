@@ -126,11 +126,22 @@ test.describe("100 — Media Preferences API", () => {
   let alicePage: Page;
 
   test.beforeAll(async ({ browser }) => {
+    // The DDB table init + prefs cleanup subprocesses can take a while on a
+    // busy host; give the hook plenty of headroom so it doesn't abort partway
+    // through (which surfaces as "browser.newContext: Test ended").
+    test.setTimeout(120_000);
     // Ensure table exists
     try {
       execSync(
-        "python3 scripts/local-ddb-init.py",
-        { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+        "/home/ubuntu/testlogon/.venv/bin/python3 scripts/local-ddb-init.py",
+        {
+          cwd: "/home/ubuntu/testlogon",
+          timeout: 60_000,
+          // local-ddb-init.py imports `app.*`; running it as a script puts
+          // scripts/ (not the repo root) on sys.path[0], so `app` is not
+          // importable without PYTHONPATH pointing at the repo root.
+          env: { ...process.env, PYTHONPATH: "/home/ubuntu/testlogon" },
+        },
       );
     } catch {
       // may already exist
@@ -317,22 +328,32 @@ test.describe("101 — Media Settings Page UI", () => {
     await injectAuth(page, ALICE_ID);
   });
 
+  // Navigate before every test so each test (including Playwright retries,
+  // which run a test in isolation without its predecessors) starts from a
+  // freshly-loaded Media Settings page rather than relying on 101.1 having
+  // run first.
+  test.beforeEach(async () => {
+    await page.goto(`${BASE}/calls/settings`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: "Media Settings" })).toBeVisible();
+  });
+
   test.afterAll(async () => {
     deletePrefs(ALICE_ID);
     await page?.context().close();
   });
 
   test("101.1 Page loads and shows heading", async () => {
-    await page.goto(`${BASE}/calls/settings`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: "Media Settings" })).toBeVisible();
   });
 
   test("101.2 Page shows permission status section", async () => {
     await expect(page.getByText("Permission Status")).toBeVisible();
-    // At minimum one of the badges should be visible
+    // At minimum one of the badges should be visible. Both badges render
+    // ("Microphone: …" and "Camera: …"), so scope to the first match to avoid
+    // a strict-mode violation.
     const micBadge = page.getByText(/Microphone:/);
     const camBadge = page.getByText(/Camera:/);
-    await expect(micBadge.or(camBadge)).toBeVisible();
+    await expect(micBadge.or(camBadge).first()).toBeVisible();
   });
 
   test("101.3 Page shows device selection section", async () => {

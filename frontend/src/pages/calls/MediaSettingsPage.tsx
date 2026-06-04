@@ -287,26 +287,6 @@ export default function MediaSettingsPage() {
   // Render
   // ---------------------------------------------------------------------------
 
-  if (!mediaSupported) {
-    return (
-      <div className="container max-w-2xl py-8">
-        <Card>
-          <CardHeader>
-            <CardTitle>Media Settings</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Alert variant="destructive">
-              <AlertDescription>
-                Your browser does not support the Media Devices API. Camera and
-                microphone features are unavailable.
-              </AlertDescription>
-            </Alert>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="container max-w-2xl py-8 space-y-6">
       {/* Header */}
@@ -316,6 +296,16 @@ export default function MediaSettingsPage() {
           Configure your camera, microphone, and speaker preferences for calls.
         </p>
       </div>
+
+      {!mediaSupported && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            Your browser does not support the Media Devices API. Camera and
+            microphone features are unavailable, but you can still save your
+            preferences.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Permission Status */}
       <Card>

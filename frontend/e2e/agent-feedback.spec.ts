@@ -58,6 +58,14 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   const sessions = getSessions();
   const page = await browser.newPage();
   await page.context().addCookies(sessions[identity].cookies);
+  // Seed the persisted auth store so ProtectedRoute treats the page as
+  // authenticated (cookie injection alone leaves isAuthenticated=false → /login
+  // redirect, which hides the UI under test).
+  const uid = sessions[identity].user_sub;
+  await page.addInitScript((userId: string) => {
+    const state = { userId, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, uid);
   return page;
 }
 
@@ -339,7 +347,9 @@ test.describe("648 — Feedback page UI", () => {
     await expect(
       uiPage.getByText(`Should I deploy to production for ${TS}?`),
     ).toBeVisible();
-    await expect(uiPage.getByText("Pending")).toBeVisible();
+    await expect(
+      uiPage.getByTestId("feedback-card").getByText("Pending").first(),
+    ).toBeVisible();
   });
 
   test("648.3 Response form submits", async () => {

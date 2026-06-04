@@ -358,16 +358,28 @@ test.describe("FEED-004 rich comments", () => {
   // ── Section 728: UI rendering ────────────────────────────────────
   test.describe("Section 728: UI rendering", () => {
     test("728.1 GIF & sticker comments render as images; emoji toolbar visible", async () => {
+      // Use a FRESH post so the two media comments are the only comments. The
+      // comments list returns the oldest 20 first (ScanIndexForward=True), so
+      // on the shared post (which accumulates many comments across sections)
+      // the newest GIF/sticker comments would fall onto a later page and never
+      // render in the first-page view.
+      const uiPostResp = await apiPost(alice, ALICE_ID, "/posts", {
+        body: `FEED-004 ui728 host post ${TS}`,
+        visibility: "public",
+      });
+      expect(uiPostResp.status()).toBe(200);
+      const uiPostId = (await uiPostResp.json()).post_id as string;
+
       // Seed one GIF and one sticker comment by Alice (the author) so they
       // render in her post detail view.
       const uiGif = `${GIF_URL}?ui728`;
       const uiSticker = `${STICKER_URL}?ui728`;
-      await apiPost(alice, ALICE_ID, `/posts/${postId}/comments`, {
+      await apiPost(alice, ALICE_ID, `/posts/${uiPostId}/comments`, {
         kind: "gif",
         gif_url: uiGif,
         gif_alt_text: "ui gif 728",
       });
-      await apiPost(alice, ALICE_ID, `/posts/${postId}/comments`, {
+      await apiPost(alice, ALICE_ID, `/posts/${uiPostId}/comments`, {
         kind: "sticker",
         sticker_id: `stk_ui728_${TS}`,
         sticker_collection_id: "coll_love_pack",
@@ -375,7 +387,16 @@ test.describe("FEED-004 rich comments", () => {
         sticker_alt_text: "ui sticker 728",
       });
 
-      await alice.goto(`${BASE}/posts/${postId}`, { waitUntil: "domcontentloaded" });
+      // The Vite dev proxy maps /posts/* straight to the backend (no SPA
+      // bypass), so a direct browser navigation to /posts/:id returns the post
+      // JSON instead of the React app. Load a SPA-served route first (/feed has
+      // an HTML bypass) and then client-side navigate to the post detail page
+      // via the History API (React Router's BrowserRouter listens for popstate).
+      await alice.goto(`${BASE}/feed`, { waitUntil: "domcontentloaded" });
+      await alice.evaluate((id: string) => {
+        window.history.pushState({}, "", `/posts/${id}`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }, uiPostId);
 
       // GIF comment image
       await expect(alice.locator(`img[src="${uiGif}"]`).first()).toBeVisible({ timeout: 15_000 });

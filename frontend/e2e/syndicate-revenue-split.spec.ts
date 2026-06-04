@@ -57,6 +57,13 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   if (!sess) throw new Error(`No session for identity "${identity}"`);
   const page = await browser.newPage();
   await page.context().addCookies(sess.cookies);
+  // ProtectedRoute gates UI navigation on the persisted zustand auth-store
+  // (isAuthenticated); cookies alone are not enough. SyndicateDetailPage also
+  // reads userId from this store. Seed it so the page renders.
+  await page.addInitScript((uid) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, sess.user_sub);
   return page;
 }
 
@@ -260,7 +267,7 @@ test.describe("Section 432: Split Execution API", () => {
     const split = await resp.json();
     const splitId = split.split_id;
 
-    const aliceLedger = await apiGet(alicePage, "/billing/ledger?limit=200");
+    const aliceLedger = await apiGet(alicePage, "/ui/billing/ledger?limit=200");
     const aliceItems = (await aliceLedger.json()).items;
     const aliceCredit = aliceItems.find(
       (it: any) =>
@@ -270,7 +277,7 @@ test.describe("Section 432: Split Execution API", () => {
     expect(aliceCredit).toBeTruthy();
     expect(aliceCredit.type).toBe("credit");
 
-    const bobLedger = await apiGet(bobPage, "/billing/ledger?limit=200");
+    const bobLedger = await apiGet(bobPage, "/ui/billing/ledger?limit=200");
     const bobItems = (await bobLedger.json()).items;
     const bobCredit = bobItems.find(
       (it: any) =>
@@ -392,12 +399,12 @@ test.describe("Section 434: Split Config UI", () => {
   });
 
   test("434.1 Revenue tab visible on syndicate page", async () => {
-    await alicePage.goto(`${BASE}/syndicates/${uiSyndId}`);
+    await alicePage.goto(`${BASE}/syndicates/${uiSyndId}/manage`);
     await expect(alicePage.getByRole("tab", { name: "Revenue" })).toBeVisible();
   });
 
   test("434.2 Mode selector changes config form", async () => {
-    await alicePage.goto(`${BASE}/syndicates/${uiSyndId}`);
+    await alicePage.goto(`${BASE}/syndicates/${uiSyndId}/manage`);
     await alicePage.getByRole("tab", { name: "Revenue" }).click();
     await expect(
       alicePage.getByText("Revenue Split Configuration"),
@@ -409,7 +416,7 @@ test.describe("Section 434: Split Config UI", () => {
   });
 
   test("434.3 Split history shows payment breakdowns", async () => {
-    await alicePage.goto(`${BASE}/syndicates/${uiSyndId}`);
+    await alicePage.goto(`${BASE}/syndicates/${uiSyndId}/manage`);
     await alicePage.getByRole("tab", { name: "Revenue" }).click();
     await expect(alicePage.getByText("Split History")).toBeVisible();
     await expect(alicePage.getByTestId("split-history")).toBeVisible();

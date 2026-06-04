@@ -491,8 +491,8 @@ test.describe("349 -- Creative Editor UI", () => {
     await alicePage.goto(`${BASE}/ads/creatives?campaign=${campaignId}`, { waitUntil: "domcontentloaded" });
     await alicePage.getByRole("button", { name: /new creative/i }).click();
     await expect(alicePage.getByText("Create New Creative")).toBeVisible();
-    // Format selector should be visible
-    await expect(alicePage.getByText("Image")).toBeVisible();
+    // Format selector should be visible (combobox shows the "Image" default value)
+    await expect(alicePage.getByRole("combobox").filter({ hasText: "Image" })).toBeVisible();
   });
 
   test("349.2 Image format shows dimension fields", async () => {

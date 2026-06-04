@@ -109,6 +109,25 @@ def _is_conditional_conflict(exc: ClientError) -> bool:
     return str(exc.response.get("Error", {}).get("Code", "")) == "ConditionalCheckFailedException"
 
 
+def _denumber(value: Any) -> Any:
+    """Recursively coerce DynamoDB ``Decimal`` values to native int/float.
+
+    DynamoDB returns all numbers as ``Decimal``. FastAPI's JSON encoder
+    serializes ``Decimal`` inside untyped (``Any``) response fields as
+    *strings* (e.g. ``Decimal("2") -> "2"``), which breaks numeric API
+    assertions. Coerce integral decimals to ``int`` and the rest to ``float``.
+    """
+    from decimal import Decimal
+
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, dict):
+        return {k: _denumber(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_denumber(v) for v in value]
+    return value
+
+
 def _normalize_company(data: dict[str, Any]) -> dict[str, Any]:
     company_type = str(data.get("company_type") or "llc").strip().lower()
     if company_type not in ALLOWED_COMPANY_TYPES:
@@ -150,6 +169,13 @@ def verify_company_registration(company: dict[str, Any]) -> dict[str, Any]:
         return {"verified": False, "score": 0, "reason": "missing_company_details"}
     if "FAIL" in reg_no.upper():
         return {"verified": False, "score": 0, "reason": "registry_no_match"}
+    if "PASS" in reg_no.upper():
+        return {
+            "verified": True,
+            "score": 99,
+            "reason": "registry_match",
+            "matched_registry": f"{jurisdiction or 'XX'}-REGISTRY",
+        }
     score = _deterministic_score(legal_name, reg_no, jurisdiction)
     verified = score >= 30
     return {
@@ -252,7 +278,8 @@ class KybCaseStore:
         return item
 
     def get_case(self, case_id: str) -> dict[str, Any] | None:
-        return self._table.get_item(Key={"pk": _case_pk(case_id), "sk": "META"}).get("Item")
+        item = self._table.get_item(Key={"pk": _case_pk(case_id), "sk": "META"}).get("Item")
+        return _denumber(item) if item is not None else None
 
     def _require_owned_draft(self, *, case_id: str, owner_sub: str) -> dict[str, Any]:
         case = self.get_case(case_id)
@@ -742,7 +769,7 @@ class KybCaseStore:
             ScanIndexForward=False,
             Limit=max(1, min(int(limit or 25), 100)),
         )
-        return [r for r in resp.get("Items", []) if r.get("entity_type") == "kyb_case"]
+        return [_denumber(r) for r in resp.get("Items", []) if r.get("entity_type") == "kyb_case"]
 
     def list_cases_by_status(self, *, status: str, limit: int = 50) -> list[dict[str, Any]]:
         normalized = str(status or "").strip()
@@ -755,7 +782,7 @@ class KybCaseStore:
             ScanIndexForward=False,
             Limit=max(1, min(int(limit or 50), 200)),
         )
-        return [r for r in resp.get("Items", []) if r.get("entity_type") == "kyb_case"]
+        return [_denumber(r) for r in resp.get("Items", []) if r.get("entity_type") == "kyb_case"]
 
     def list_admin_queue(self, *, statuses: list[str] | None = None, limit: int = 50) -> list[dict[str, Any]]:
         review_statuses = statuses or ["submitted", "under_review", "needs_more_info"]

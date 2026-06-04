@@ -401,6 +401,8 @@ test.describe("Bot Templates & Scheduled Messages (BOT-002)", () => {
       page.locator('[data-testid="schedule-manager-panel"]'),
     ).toBeVisible({ timeout: 10_000 });
     // The heading "Scheduled Sends" should be visible
-    await expect(page.getByText("Scheduled Sends")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Scheduled Sends" }),
+    ).toBeVisible();
   });
 });

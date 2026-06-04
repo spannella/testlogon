@@ -44,6 +44,14 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   const page = await browser.newPage();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await page.context().addCookies(sessions[identity].cookies as any);
+  // Seed the persisted auth store so ProtectedRoute treats the page as
+  // authenticated (cookie injection alone leaves isAuthenticated=false → /login
+  // redirect, which hides the dashboard under test).
+  const uid = sessions[identity].user_sub;
+  await page.addInitScript((userId: string) => {
+    const state = { userId, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, uid);
   return page;
 }
 

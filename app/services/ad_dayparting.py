@@ -111,6 +111,38 @@ def validate_dayparting_config(
     return None, {"timezone": tz_str, "schedule": sanitized_schedule}
 
 
+def _to_date_str(value: Any) -> Optional[str]:
+    """Normalize a campaign bound to a ``YYYY-MM-DD`` string for comparison.
+
+    Campaign ``start_date`` / ``end_date`` are persisted as Unix timestamp
+    integers (stored as ``Decimal`` in DynamoDB), whereas flight dates are
+    ``YYYY-MM-DD`` strings. Comparing the two directly raises ``TypeError``,
+    so coerce the campaign bound to a date string here.
+    """
+    if value is None or value == "":
+        return None
+    # Numeric (int / float / Decimal) → treat as a Unix timestamp.
+    if isinstance(value, (int, float)) or (
+        hasattr(value, "__int__") and not isinstance(value, str)
+    ):
+        try:
+            return datetime.fromtimestamp(int(value), tz=timezone.utc).strftime(
+                "%Y-%m-%d"
+            )
+        except (ValueError, OSError, OverflowError):
+            return None
+    text = str(value).strip()
+    if text.isdigit():
+        try:
+            return datetime.fromtimestamp(int(text), tz=timezone.utc).strftime(
+                "%Y-%m-%d"
+            )
+        except (ValueError, OSError, OverflowError):
+            return None
+    # Already a date-ish string — keep the leading YYYY-MM-DD portion.
+    return text[:10]
+
+
 def validate_flights(
     flights: Optional[List[Dict[str, Any]]],
     campaign_start: Optional[str],
@@ -126,6 +158,11 @@ def validate_flights(
     """
     if not flights:
         return None, None
+
+    # Campaign bounds are stored as Unix timestamps; flight dates are
+    # YYYY-MM-DD strings. Normalize the bounds so comparisons don't raise.
+    campaign_start = _to_date_str(campaign_start)
+    campaign_end = _to_date_str(campaign_end)
 
     sanitized: List[Dict[str, Any]] = []
     for i, flight in enumerate(flights):
@@ -156,7 +193,10 @@ def validate_flights(
                 "end_date": f_end,
                 "daily_budget_cents": budget,
                 "creative_ids": list(creative_ids),
-                "status": flight.get("status", "scheduled"),
+                # A flight's status defaults to "scheduled". The request model
+                # carries ``status: Optional[str] = None``, so ``.get`` returns
+                # an explicit ``None`` (not the default) — coalesce it here.
+                "status": flight.get("status") or "scheduled",
             }
         )
 

@@ -509,8 +509,11 @@ test.describe("Section 3: Per-Content Drill-down", () => {
 
   test("8. Clicking top content row navigates to detail page", async () => {
     await alicePage.goto(`${BASE}/analytics`, { waitUntil: "domcontentloaded" });
-    // Wait for the content table to load
-    await alicePage.waitForSelector("table");
+    // Wait for the Top Content section to finish loading. The table only
+    // renders when the top-content query returns items; when it returns none
+    // there is no <table> at all, so tolerate a missing table and fall back to
+    // direct navigation below.
+    await alicePage.waitForSelector("table", { timeout: 10_000 }).catch(() => {});
     // Find row with our video and click it
     const row = alicePage.locator("tr").filter({ hasText: "Detail Test Video" });
     if (await row.count() > 0) {

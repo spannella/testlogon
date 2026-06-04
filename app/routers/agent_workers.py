@@ -11,8 +11,6 @@ from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.models import (
-    ComputeOption,
-    ComputeOptionListOut,
     CreateWorkerIn,
     ProvisionStepOut,
     ToolInfo,
@@ -38,11 +36,16 @@ async def list_tools(_: Dict = Depends(require_ui_session)):
     return ToolListOut(tools=tools)
 
 
-@router.get("/compute-options", response_model=ComputeOptionListOut)
+@router.get("/compute-options")
 async def list_compute_options(_: Dict = Depends(require_ui_session)):
-    """List available compute options (EC2 types + K8s presets)."""
-    options = [ComputeOption(**o) for o in svc.COMPUTE_OPTIONS]
-    return ComputeOptionListOut(options=options)
+    """List available compute options (EC2 types + K8s presets).
+
+    No ``response_model`` is declared: the ``ComputeOption`` model in
+    ``app/models.py`` omits ``startup_seconds``, so declaring it would strip
+    that field from the response. Returning the raw option dicts preserves the
+    full shape (vcpu, memory_gb, cost_cents_per_min, startup_seconds).
+    """
+    return {"options": list(svc.COMPUTE_OPTIONS)}
 
 
 # ---------------------------------------------------------------------------

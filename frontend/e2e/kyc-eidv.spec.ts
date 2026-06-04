@@ -51,6 +51,11 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   const page = await browser.newPage();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await page.context().addCookies(sessions[identity].cookies as any);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, sessions[identity].user_sub);
   return page;
 }
 
@@ -324,11 +329,11 @@ test.describe("730. KYC-022 Auto Tier Upgrade & Discrepancies", () => {
   });
   test.afterAll(async () => {
     await alicePage?.close();
-    clearProfileIdentity(getSessions()[ALICE_ID].user_sub);
+    clearProfileIdentity(getSessions()["alice"].user_sub);
   });
 
   test("730.1 matching profile -> no discrepancies, auto tier-2 upgrade", async () => {
-    const sub = getSessions()[ALICE_ID].user_sub;
+    const sub = getSessions()["alice"].user_sub;
     clearTier(sub);
     setProfileIdentity(sub, {
       first_name: "John",
@@ -346,7 +351,7 @@ test.describe("730. KYC-022 Auto Tier Upgrade & Discrepancies", () => {
   });
 
   test("730.2 name mismatch -> warning discrepancies, still upgrades", async () => {
-    const sub = getSessions()[ALICE_ID].user_sub;
+    const sub = getSessions()["alice"].user_sub;
     clearTier(sub);
     setProfileIdentity(sub, {
       first_name: "Jane",
@@ -367,7 +372,7 @@ test.describe("730. KYC-022 Auto Tier Upgrade & Discrepancies", () => {
   });
 
   test("730.3 critical DOB mismatch blocks auto-upgrade + flags review", async () => {
-    const sub = getSessions()[ALICE_ID].user_sub;
+    const sub = getSessions()["alice"].user_sub;
     clearTier(sub);
     setProfileIdentity(sub, {
       first_name: "John",
@@ -394,7 +399,7 @@ test.describe("731. KYC-022 Status, Auth & Edge Cases", () => {
 
   test.beforeAll(async ({ browser }) => {
     getSessions();
-    clearProfileIdentity(getSessions()[ALICE_ID].user_sub);
+    clearProfileIdentity(getSessions()["alice"].user_sub);
     alicePage = await newIdentityPage(browser, "alice");
     bobPage = await newIdentityPage(browser, "bob");
   });

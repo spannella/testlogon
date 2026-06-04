@@ -395,14 +395,14 @@ test.describe("256 — Containers UI", () => {
 
   test("256.1 K8sLauncherPage renders pod table", async () => {
     await alicePage.goto(`${BASE}/remote/k8s`, { waitUntil: "domcontentloaded" });
-    await expect(alicePage.getByText("Containers")).toBeVisible();
+    await expect(alicePage.getByText("Containers", { exact: true })).toBeVisible();
     await expect(alicePage.getByTestId("launch-btn")).toBeVisible();
   });
 
   test("256.2 Launch dialog shows images and presets", async () => {
     await alicePage.goto(`${BASE}/remote/k8s`, { waitUntil: "domcontentloaded" });
     await alicePage.getByTestId("launch-btn").click();
-    await expect(alicePage.getByText("Launch Container")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Launch Container" })).toBeVisible();
     await expect(alicePage.getByTestId("launch-label")).toBeVisible();
     await expect(alicePage.getByTestId("launch-image")).toBeVisible();
     await expect(alicePage.getByTestId("launch-preset")).toBeVisible();
@@ -422,7 +422,7 @@ test.describe("256 — Containers UI", () => {
     }
 
     await alicePage.getByTestId("launch-btn").click();
-    await expect(alicePage.getByText("Launch Container")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Launch Container" })).toBeVisible();
 
     // Fill label
     await alicePage.getByTestId("launch-label").fill(`ui-k8s-${TS}`);

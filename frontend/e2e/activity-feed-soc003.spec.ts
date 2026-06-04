@@ -394,10 +394,12 @@ test.describe("201 — Activity Feed UI (SOC-003)", () => {
       bobPage.getByText("Activity Feed", { exact: true }).first(),
     ).toBeVisible({ timeout: 10_000 });
 
-    // Should show either items or the empty state
+    // Should show either items or the empty state. Wait for the feed query to
+    // resolve (the loading spinner is shown until then, so neither testid is
+    // present immediately after the heading mounts).
     const emptyState = bobPage.locator("[data-testid='empty-feed']");
     const actList = bobPage.locator("[data-testid='activity-list']");
-    // One of these should be visible
+    await expect(emptyState.or(actList).first()).toBeVisible({ timeout: 10_000 });
     const emptyVisible = await emptyState.isVisible().catch(() => false);
     const listVisible = await actList.isVisible().catch(() => false);
     expect(emptyVisible || listVisible).toBe(true);

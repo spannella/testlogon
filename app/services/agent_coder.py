@@ -766,11 +766,30 @@ def mark_ticket_code_complete(*, ticket_id: str, agent_sub: str, pr_url: str) ->
     ts = now_ts()
     meta = dict(ticket.get("metadata") or {})
     meta["pr_url"] = pr_url
+    # Keep the status GSI (gsi2pk/gsi2sk) in sync so the ticket is discoverable via
+    # the status index (used by QA-eligible-ticket discovery). A raw status write
+    # that skips these keys leaves the index pointing at the prior status.
+    space_id = ticket.get("space_id")
+    update_expr = (
+        "SET #st = :s, metadata = :m, updated_at = :ts, "
+        "gsi2pk = :gsi2pk, gsi2sk = :gsi2sk"
+    )
+    values = {
+        ":s": "code_complete",
+        ":m": meta,
+        ":ts": ts,
+        ":gsi2pk": tickets_svc._status_index_pk("code_complete"),  # noqa: SLF001
+        ":gsi2sk": tickets_svc._updated_index_sk(ts, ticket_id),  # noqa: SLF001
+    }
+    if space_id:
+        update_expr += ", gsi_space_status_pk = :gssp, gsi_space_status_sk = :gsss"
+        values[":gssp"] = tickets_svc._space_status_index_pk(space_id, "code_complete")  # noqa: SLF001
+        values[":gsss"] = tickets_svc._updated_index_sk(ts, ticket_id)  # noqa: SLF001
     table.update_item(
         Key={"pk": f"TICKET#{ticket_id}", "sk": "META"},
-        UpdateExpression="SET #st = :s, metadata = :m, updated_at = :ts",
+        UpdateExpression=update_expr,
         ExpressionAttributeNames={"#st": "status"},
-        ExpressionAttributeValues={":s": "code_complete", ":m": meta, ":ts": ts},
+        ExpressionAttributeValues=values,
     )
     return {"ok": True, "ticket_id": ticket_id, "status": "code_complete", "pr_url": pr_url}
 

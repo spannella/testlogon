@@ -416,9 +416,15 @@ def list_videos_by_owner(
     from boto3.dynamodb.conditions import Attr
 
     collected: List[VideoMetadataModel] = []
+    # Cursor (ExclusiveStartKey) of the last item actually returned to the
+    # caller. Must be built from that item's GSI key — using the query page's
+    # LastEvaluatedKey would skip items 3..N when fewer than a full page were
+    # returned (causing page 2 to start past the data).
+    next_cursor: Optional[Dict[str, Any]] = None
     current_cursor = cursor
     max_pages = 10
 
+    done = False
     for _ in range(max_pages):
         kwargs: Dict[str, Any] = {
             "IndexName": "ByOwnerCreatedAt",
@@ -449,13 +455,27 @@ def list_videos_by_owner(
                 continue
             collected.append(video_from_item(item))
             if len(collected) >= limit:
+                # Build the cursor from THIS item's keys so the next page
+                # resumes immediately after it.
+                next_cursor = {
+                    "video_id": item.get("video_id"),
+                    "owner_user_id": item.get("owner_user_id"),
+                    "created_at": item.get("created_at"),
+                }
+                done = True
                 break
 
-        current_cursor = resp.get("LastEvaluatedKey")
-        if len(collected) >= limit or not current_cursor:
+        if done:
             break
 
-    return {"items": collected[:limit], "cursor": current_cursor}
+        page_key = resp.get("LastEvaluatedKey")
+        if not page_key:
+            # Reached the end of the index before filling the page.
+            next_cursor = None
+            break
+        current_cursor = page_key
+
+    return {"items": collected[:limit], "cursor": next_cursor}
 
 
 def list_videos_by_status(

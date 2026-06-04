@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { KeyRound, Plus, MoreHorizontal, FlaskConical, RotateCw, Trash2, BarChart3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
   Table,
@@ -121,7 +121,7 @@ export default function LlmKeysPage() {
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
           <div className="flex items-center gap-2">
             <KeyRound className="h-5 w-5" />
-            <CardTitle>LLM API Keys</CardTitle>
+            <h1 className="font-semibold leading-none tracking-tight">LLM API Keys</h1>
           </div>
           <Button size="sm" onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4 mr-1" />

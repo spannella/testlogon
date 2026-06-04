@@ -166,18 +166,41 @@ def list_group_feed(
     resp = tbl.query(**kwargs)
     index_records = resp.get("Items", [])
 
+    # On the first page, always include pinned posts even if they are older than
+    # the most recent `limit` posts. Feed-index records are ordered by recency
+    # (SK = "{ts}#{post_id}"), so an old-but-pinned post would otherwise be
+    # sliced off below before the pinned-first sort runs.
+    #
+    # Pinned state is read from the authoritative *post* items (see below), not
+    # from the feed-index `pinned` flag, which is maintained by a separate write
+    # and can drift out of sync. We therefore identify pinned posts via the post
+    # items themselves rather than trusting the index record's stale flag.
+    if not cursor:
+        seen_ids = {r.get("post_id") for r in index_records}
+        for pinned_rec in _pinned_index_records(tbl, group_id):
+            if pinned_rec.get("post_id") not in seen_ids:
+                index_records.append(pinned_rec)
+                seen_ids.add(pinned_rec.get("post_id"))
+
     # Filter by audience
     if not is_member:
         index_records = [r for r in index_records if r.get("audience") == "public"]
 
-    # Take only requested limit
-    has_more = len(index_records) > limit or "LastEvaluatedKey" in resp
-    index_records = index_records[:limit]
-
-    # Batch fetch full posts
+    # Batch fetch full posts (authoritative source of the `pinned` flag).
     post_ids = [r["post_id"] for r in index_records]
     posts = _batch_get_posts(tbl, post_ids)
     post_map = {p["post_id"]: p for p in posts}
+
+    # Take only the requested limit, but always keep pinned posts (determined
+    # from the authoritative post item) even when slicing to the page limit.
+    has_more = len(index_records) > limit or "LastEvaluatedKey" in resp
+    pinned_records = [
+        r for r in index_records if bool(post_map.get(r["post_id"], {}).get("pinned"))
+    ]
+    other_records = [
+        r for r in index_records if not bool(post_map.get(r["post_id"], {}).get("pinned"))
+    ]
+    index_records = (pinned_records + other_records)[: max(limit, len(pinned_records))]
 
     # Build result sorted: pinned first by pinned_at desc, then by created_at desc
     result_posts = []
@@ -300,54 +323,130 @@ def _batch_get_posts(tbl, post_ids: List[str]) -> List[Dict[str, Any]]:
     if not post_ids:
         return []
     from app.core.aws import ddb
-    keys = [{"pk": _pk_post(pid), "sk": _sk_post()} for pid in post_ids]
+    # Dedup keys: the feed index can legitimately contain the same post_id more
+    # than once across an accumulated table, and duplicate keys in a single
+    # BatchGetItem request are rejected ("provided list of item keys contains
+    # duplicates"). Build one key per unique post_id.
+    seen: set[str] = set()
+    keys = []
+    for pid in post_ids:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        keys.append({"pk": _pk_post(pid), "sk": _sk_post()})
     # DDB BatchGetItem limit is 100 items; chunk if needed
     results = []
     for i in range(0, len(keys), 25):
         chunk = keys[i:i + 25]
-        raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": chunk}})
-        results.extend(raw.get("Responses", {}).get(APP_TABLE, []))
+        request = {APP_TABLE: {"Keys": chunk}}
+        # BatchGetItem may return UnprocessedKeys under throttling/load (which
+        # is exactly what happens during a busy shard run). Silently dropping
+        # them undercounts pinned posts — corrupting both the pin-limit check
+        # (_count_pinned) and the feed's pinned-first rendering. Retry the
+        # leftovers until none remain (bounded) so every requested post item
+        # is returned.
+        for _ in range(8):
+            raw = ddb.batch_get_item(RequestItems=request)
+            results.extend(raw.get("Responses", {}).get(APP_TABLE, []))
+            unprocessed = raw.get("UnprocessedKeys") or {}
+            if not unprocessed.get(APP_TABLE, {}).get("Keys"):
+                break
+            request = unprocessed
     return results
 
 
+def _all_feed_index_records(tbl, group_id: str) -> List[Dict[str, Any]]:
+    """Return every feed-index record for a group (paginated)."""
+    records: List[Dict[str, Any]] = []
+    start_key: Dict[str, Any] | None = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(_pk_groupfeed(group_id)),
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        records.extend(resp.get("Items", []))
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return records
+
+
 def _count_pinned(tbl, group_id: str) -> int:
-    """Count pinned posts in a group (scan feed index with filter)."""
-    resp = tbl.query(
-        KeyConditionExpression=Key("pk").eq(_pk_groupfeed(group_id)),
-        FilterExpression="pinned = :t",
-        ExpressionAttributeValues={":t": True},
-        Select="COUNT",
-    )
-    return resp.get("Count", 0)
+    """Count pinned posts in a group.
+
+    Pinned state is read from the authoritative *post* items, not the
+    feed-index `pinned` flag (which is maintained by a separate write and can
+    drift out of sync — leaving the count wrong and the pin-limit check leaky).
+    """
+    return len(_pinned_index_records(tbl, group_id))
+
+
+def _pinned_index_records(tbl, group_id: str) -> List[Dict[str, Any]]:
+    """Return feed-index records whose underlying post is pinned.
+
+    Determined from the authoritative post item rather than the index record's
+    own `pinned` flag, which can be stale.
+    """
+    index_records = _all_feed_index_records(tbl, group_id)
+    if not index_records:
+        return []
+    posts = _batch_get_posts(tbl, [r["post_id"] for r in index_records])
+    pinned_ids = {p["post_id"] for p in posts if bool(p.get("pinned"))}
+    return [r for r in index_records if r.get("post_id") in pinned_ids]
 
 
 def _update_feed_index_pinned(tbl, group_id: str, post_id: str, pinned: bool) -> None:
-    """Update the pinned flag on the feed index record."""
-    # Find the feed index record for this post
-    resp = tbl.query(
-        KeyConditionExpression=Key("pk").eq(_pk_groupfeed(group_id)),
-        FilterExpression="post_id = :pid",
-        ExpressionAttributeValues={":pid": post_id},
-    )
-    items = resp.get("Items", [])
-    for item in items:
-        tbl.update_item(
-            Key={"pk": item["pk"], "sk": item["sk"]},
-            UpdateExpression="SET pinned = :p",
-            ExpressionAttributeValues={":p": pinned},
-        )
+    """Update the pinned flag on the feed index record.
+
+    DynamoDB applies FilterExpression *after* reading a page (up to 1MB), so a
+    single query can miss the target record on a busy feed — leaving the index
+    `pinned` flag stale and corrupting the pinned count. Loop on
+    LastEvaluatedKey so the right record is always found and updated.
+    """
+    start_key: Dict[str, Any] | None = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(_pk_groupfeed(group_id)),
+            "FilterExpression": "post_id = :pid",
+            "ExpressionAttributeValues": {":pid": post_id},
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        for item in resp.get("Items", []):
+            tbl.update_item(
+                Key={"pk": item["pk"], "sk": item["sk"]},
+                UpdateExpression="SET pinned = :p",
+                ExpressionAttributeValues={":p": pinned},
+            )
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
 
 
 def _delete_feed_index(tbl, group_id: str, post_id: str) -> None:
-    """Delete the feed index record for a post."""
-    resp = tbl.query(
-        KeyConditionExpression=Key("pk").eq(_pk_groupfeed(group_id)),
-        FilterExpression="post_id = :pid",
-        ExpressionAttributeValues={":pid": post_id},
-    )
-    items = resp.get("Items", [])
-    for item in items:
-        tbl.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+    """Delete the feed index record for a post.
+
+    Loop on LastEvaluatedKey: DynamoDB applies FilterExpression after reading a
+    page, so a single query can miss the record on a busy feed.
+    """
+    start_key: Dict[str, Any] | None = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(_pk_groupfeed(group_id)),
+            "FilterExpression": "post_id = :pid",
+            "ExpressionAttributeValues": {":pid": post_id},
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        for item in resp.get("Items", []):
+            tbl.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
 
 
 def _post_out(post: Dict[str, Any], viewer_id: str | None = None) -> Dict[str, Any]:

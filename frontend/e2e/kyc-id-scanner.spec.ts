@@ -47,6 +47,11 @@ function getSessions(): Record<string, SessionData> {
 
 async function injectAuth(page: Page, identity: string): Promise<void> {
   await page.context().addCookies(getSessions()[identity].cookies);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, getSessions()[identity].user_sub);
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
@@ -166,8 +171,11 @@ test.describe("191: KYC ID scanner MRZ + check digits", () => {
   });
 
   test("191.2 bad check digit flags the scan (valid=false)", async () => {
+    // Use a NON-expired passport so the only failing condition is the bad check
+    // digit (an expired document is rejected outright, masking the flag).
+    const future = buildTd3Line2WithExpiry(3650);
     // Corrupt the document-number check digit (position 9).
-    const bad = TD3_LINE2.slice(0, 9) + "0" + TD3_LINE2.slice(10);
+    const bad = future.slice(0, 9) + "0" + future.slice(10);
     const resp = await apiPost(alice, "alice", `ui/kyc/id-scanner/cases/${caseId}/scan-document`, {
       document_type: "passport",
       file_type: "id_front",
@@ -351,8 +359,10 @@ test.describe("193: KYC ID scanner reviewer + ownership", () => {
     root = await newIdentityPage(browser, "root");
     caseId = await createCase(alice, "alice");
     seedCaseIdentity(caseId, "Anna Maria", "Eriksson", "1974-08-12", "UTO");
-    // A flagged scan (bad check digit).
-    const bad = TD3_LINE2.slice(0, 9) + "0" + TD3_LINE2.slice(10);
+    // A flagged scan (bad check digit on a NON-expired passport — an expired
+    // document is rejected outright, which would never appear in the flagged list).
+    const future = buildTd3Line2WithExpiry(3650);
+    const bad = future.slice(0, 9) + "0" + future.slice(10);
     const r = await apiPost(alice, "alice", `ui/kyc/id-scanner/cases/${caseId}/scan-document`, {
       document_type: "passport",
       file_type: "id_front",

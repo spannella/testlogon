@@ -6,6 +6,7 @@ import { execSync } from "child_process";
 /* ------------------------------------------------------------------ */
 
 const API = "http://localhost:8000";
+const BASE = "http://localhost:3000";
 const TS = Date.now();
 
 interface SessionData {
@@ -41,6 +42,13 @@ async function injectAuth(page: Page, identity: string) {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  // ProtectedRoute gates UI routes on the persisted auth-store; cookies alone
+  // are not enough for browser navigation. Seed it so /broadcast/* renders.
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 async function apiPost(page: Page, identity: string, path: string, body: object = {}) {
@@ -307,29 +315,37 @@ test.describe("Section 91 — Queue & Host Actions API", () => {
   });
 
   test("91.5 Dismiss a pending question", async () => {
+    // Use a fresh session so Bob's per-(session,user) submit rate-limit bucket
+    // (one question / 30s) is empty — he already submitted to `sessionId` above.
+    const fresh = await createSession(page, ALICE_ID);
     const bobCtx = await page.context().browser()!.newContext();
     const bobPage = await bobCtx.newPage();
     await injectAuth(bobPage, BOB_ID);
-    const qid = (await (await submitQuestion(bobPage, BOB_ID, sessionId, `Q-91-5-${TS}`)).json()).question_id;
+    const subResp = await submitQuestion(bobPage, BOB_ID, fresh, `Q-91-5-${TS}`);
+    expect(subResp.status()).toBe(200);
+    const qid = (await subResp.json()).question_id;
     await bobCtx.close();
 
-    const resp = await apiPost(page, ALICE_ID, `/ui/live-qa/sessions/${sessionId}/questions/${qid}/dismiss`);
+    const resp = await apiPost(page, ALICE_ID, `/ui/live-qa/sessions/${fresh}/questions/${qid}/dismiss`);
     expect(resp.status()).toBe(200);
     expect((await resp.json()).status).toBe("dismissed");
   });
 
   test("91.6 Host removes a question (soft delete, hidden)", async () => {
+    const fresh = await createSession(page, ALICE_ID);
     const rootCtx = await page.context().browser()!.newContext();
     const rootPage = await rootCtx.newPage();
     await injectAuth(rootPage, ROOT_ID);
-    const qid = (await (await submitQuestion(rootPage, ROOT_ID, sessionId, `Q-91-6-${TS}`)).json()).question_id;
+    const subResp = await submitQuestion(rootPage, ROOT_ID, fresh, `Q-91-6-${TS}`);
+    expect(subResp.status()).toBe(200);
+    const qid = (await subResp.json()).question_id;
     await rootCtx.close();
 
-    const resp = await apiPost(page, ALICE_ID, `/ui/live-qa/sessions/${sessionId}/questions/${qid}/remove`);
+    const resp = await apiPost(page, ALICE_ID, `/ui/live-qa/sessions/${fresh}/questions/${qid}/remove`);
     expect(resp.status()).toBe(200);
     expect((await resp.json()).ok).toBe(true);
 
-    const list = await (await apiGet(page, `/ui/live-qa/sessions/${sessionId}/questions?status=pending`)).json();
+    const list = await (await apiGet(page, `/ui/live-qa/sessions/${fresh}/questions?status=pending`)).json();
     expect(list.questions.some((q: { question_id: string }) => q.question_id === qid)).toBe(false);
   });
 
@@ -371,19 +387,22 @@ test.describe("Section 91 — Queue & Host Actions API", () => {
   });
 
   test("91.12 Pin a question floats it to the top", async () => {
+    const fresh = await createSession(page, ALICE_ID);
     const bobCtx = await page.context().browser()!.newContext();
     const bobPage = await bobCtx.newPage();
     await injectAuth(bobPage, BOB_ID);
-    const qid = (await (await submitQuestion(bobPage, BOB_ID, sessionId, `Q-91-12-${TS}`)).json()).question_id;
+    const subResp = await submitQuestion(bobPage, BOB_ID, fresh, `Q-91-12-${TS}`);
+    expect(subResp.status()).toBe(200);
+    const qid = (await subResp.json()).question_id;
     await bobCtx.close();
 
-    const resp = await apiPost(page, ALICE_ID, `/ui/live-qa/sessions/${sessionId}/questions/${qid}/pin`, {
+    const resp = await apiPost(page, ALICE_ID, `/ui/live-qa/sessions/${fresh}/questions/${qid}/pin`, {
       pinned: true,
     });
     expect(resp.status()).toBe(200);
     expect((await resp.json()).pinned).toBe(true);
 
-    const list = await (await apiGet(page, `/ui/live-qa/sessions/${sessionId}/questions?status=pending`)).json();
+    const list = await (await apiGet(page, `/ui/live-qa/sessions/${fresh}/questions?status=pending`)).json();
     expect(list.questions[0].question_id).toBe(qid);
   });
 });

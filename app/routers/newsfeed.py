@@ -4747,7 +4747,7 @@ def hide_post(req: HidePostRequest, user_id: UserIdDep):
         "created_at": now_iso(),
     }
     ddb_put_item(item)
-    return {"ok": True}
+    return {"ok": True, "post_id": req.post_id, "hidden": True}
 
 
 def _is_post_interesting(viewer_id: Optional[str], post_id: str) -> bool:
@@ -4805,7 +4805,9 @@ def _feed_request_mode(author_filter: Optional[str]) -> str:
     return "profile" if author_filter else "global"
 
 
-_AUTHOR_ID_ALLOWED = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+# User subs are email addresses (e.g. e2e_alice@test.local), so the author_id
+# filter must allow "@" and "+" in addition to the basic identifier characters.
+_AUTHOR_ID_ALLOWED = re.compile(r"^[A-Za-z0-9._:@+-]{1,128}$")
 
 
 def _normalize_author_filter_or_400(author_id: Optional[str]) -> Optional[str]:

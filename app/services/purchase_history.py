@@ -601,12 +601,20 @@ def find_transaction_by_tracking(tracking_number: str) -> Optional[Dict[str, Any
     if not tracking_number or tracking_number == "unknown":
         return None
 
-    resp = T.purchase_transactions.scan(
-        FilterExpression="tracking_number = :tn",
-        ExpressionAttributeValues={":tn": tracking_number},
-        Limit=1,
-    )
-    items = resp.get("Items", [])
-    if not items:
-        return None
-    return items[0]
+    # DynamoDB applies FilterExpression AFTER the page Limit, so a single
+    # scan() with Limit=1 almost always misses the matching row on a busy
+    # table. Loop via LastEvaluatedKey until we find the match or exhaust the
+    # table.
+    scan_kwargs: Dict[str, Any] = {
+        "FilterExpression": "tracking_number = :tn",
+        "ExpressionAttributeValues": {":tn": tracking_number},
+    }
+    while True:
+        resp = T.purchase_transactions.scan(**scan_kwargs)
+        items = resp.get("Items", [])
+        if items:
+            return items[0]
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            return None
+        scan_kwargs["ExclusiveStartKey"] = last_key

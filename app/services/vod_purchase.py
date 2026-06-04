@@ -563,14 +563,30 @@ def purchase_video(
 
 
 def list_purchases(user_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
-    """List all video purchases for a user."""
+    """List all video purchases for a user.
+
+    Paginates via LastEvaluatedKey: a single query() call returns at most
+    one DynamoDB page, so a busy account with many entitlements could miss
+    purchases beyond the first page. Loop until we accumulate `limit` items
+    or exhaust the table.
+    """
     pk = f"USER#{user_id}"
-    resp = T.vod_entitlements.query(
-        KeyConditionExpression=Key("pk").eq(pk) & Key("sk").begins_with("VIDEO#"),
-        ScanIndexForward=False,
-        Limit=limit,
-    )
-    items = resp.get("Items", [])
+    items: List[Dict[str, Any]] = []
+    last_key: Optional[Dict[str, Any]] = None
+    while len(items) < limit:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(pk) & Key("sk").begins_with("VIDEO#"),
+            "ScanIndexForward": False,
+            "Limit": limit - len(items),
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = T.vod_entitlements.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
     result = []
     for item in items:
         exp = int(item.get("expires_at", 0))

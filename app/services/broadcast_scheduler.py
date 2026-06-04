@@ -22,7 +22,11 @@ def promote_due_sessions(*, now: int | None = None, limit: int = 10) -> dict:
     ``schedule_status='scheduled'``, then calls ``start_session_with_provider()``.
     Returns ``{"processed": int, "failed": int, "session_ids": [...]}``.
     """
-    from app.services.broadcast_store import list_due_scheduled_sessions, get_session
+    from app.services.broadcast_store import (
+        list_due_scheduled_sessions,
+        get_session,
+        update_session_fields,
+    )
     from app.services.broadcast_orchestrator import start_session_with_provider
 
     if now is None:
@@ -50,6 +54,11 @@ def promote_due_sessions(*, now: int | None = None, limit: int = 10) -> dict:
                 reason="scheduled-auto-start",
                 correlation_id=f"sched-{session.id}-{now}",
             )
+            # Mark the schedule as launched so the session is no longer reported
+            # as 'scheduled' (and drops out of the ByScheduledAt due-query GSI,
+            # preventing re-promotion). schedule_status values: scheduled /
+            # launched / cancelled.
+            update_session_fields(session.id, {"schedule_status": "launched"})
             logger.info("Auto-start succeeded for session %s", session.id)
             processed += 1
             started.append(session.id)

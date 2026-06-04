@@ -305,14 +305,16 @@ test.describe("87. Alerts inbox", () => {
     ).toBeVisible({ timeout: 8_000 });
   });
 
-  test("87.5 UI: Alerts page has Notifications, Preferences, and Push Devices tabs", async () => {
-    await expect(page.getByRole("tab", { name: "Notifications" })).toBeVisible();
+  test("87.5 UI: Alerts page has Activity, Preferences, and Push Devices tabs", async () => {
+    await expect(page.getByRole("tab", { name: "Activity" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Preferences" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Push Devices" })).toBeVisible();
   });
 
-  test("87.6 UI: Notifications tab shows the alert search input", async () => {
-    // The Notifications tab (default) renders an AlertCenter with a search bar.
+  test("87.6 UI: All tab shows the alert search input", async () => {
+    // The "All" tab renders an AlertCenter with a search bar. (The default
+    // "Activity" tab is an activity feed without the search toolbar.)
+    await page.getByRole("tab", { name: "All", exact: true }).click();
     await expect(
       page.getByRole("textbox", { name: /search alerts/i }),
     ).toBeVisible({ timeout: 8_000 });
@@ -325,8 +327,8 @@ test.describe("87. Alerts inbox", () => {
     ).toBeVisible({ timeout: 5_000 });
   });
 
-  test("87.8 UI: Clicking back to Notifications tab shows the search input", async () => {
-    await page.getByRole("tab", { name: "Notifications" }).click();
+  test("87.8 UI: Clicking back to the All tab shows the search input", async () => {
+    await page.getByRole("tab", { name: "All", exact: true }).click();
     await expect(
       page.getByRole("textbox", { name: /search alerts/i }),
     ).toBeVisible({ timeout: 5_000 });

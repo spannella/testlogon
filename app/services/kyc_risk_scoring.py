@@ -6,6 +6,8 @@ assigns risk tiers, and optionally auto-approves or auto-escalates cases.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -15,6 +17,26 @@ from boto3.dynamodb.conditions import Key
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+
+
+# The kyc_risk_scores table uses (user_sub, timestamp) as its key. Multiple
+# scores written for the same user within the same wall-clock second would
+# collide on the sort key and silently overwrite each other (losing history).
+# Use a process-monotonic microsecond value as the sort key so every write is
+# distinct while preserving chronological ordering.
+_sort_key_lock = threading.Lock()
+_last_sort_key = 0
+
+
+def _unique_sort_key() -> int:
+    """Return a strictly-increasing integer suitable for the timestamp sort key."""
+    global _last_sort_key
+    with _sort_key_lock:
+        candidate = time.time_ns() // 1000  # microseconds
+        if candidate <= _last_sort_key:
+            candidate = _last_sort_key + 1
+        _last_sort_key = candidate
+        return candidate
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +131,7 @@ class KycRiskScoringService:
         )
 
         ts = now_ts()
+        sort_ts = _unique_sort_key()
         score_id = f"rs_{uuid4().hex[:12]}"
 
         # Convert factor values for DDB (Decimal)
@@ -124,7 +147,7 @@ class KycRiskScoringService:
 
         item: dict[str, Any] = {
             "user_sub": user_sub,
-            "timestamp": ts,
+            "timestamp": sort_ts,
             "score_id": score_id,
             "case_id": case_id,
             "total_score": total_score,
@@ -242,11 +265,12 @@ class KycRiskScoringService:
 
         tier = _determine_tier(score)
         ts = now_ts()
+        sort_ts = _unique_sort_key()
         score_id = f"rs_{uuid4().hex[:12]}"
 
         item: dict[str, Any] = {
             "user_sub": user_sub,
-            "timestamp": ts,
+            "timestamp": sort_ts,
             "score_id": score_id,
             "case_id": "override",
             "total_score": score,

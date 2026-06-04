@@ -157,6 +157,19 @@ def get_group_config(group: str) -> Dict[str, Any]:
                 config[key] = val
     else:
         config["is_override"] = False
+        # Dev/E2E: a 20-spec shard hammers each group as the same user (alice/root),
+        # tripping Layer-2 per-user/per-IP limits and causing cross-spec interference.
+        # Inflate only the in-code DEFAULTS in dev; explicit DB overrides (e.g. the
+        # rate-limiting spec's own low caps, handled in the `if override` branch above)
+        # are untouched, so the rate-limit tests still enforce and still 429.
+        try:
+            from app.core.settings import S as _S
+            if getattr(_S, "dev_mode", False):
+                for _k in ("max_requests_per_user", "max_requests_per_ip"):
+                    if isinstance(config.get(_k), int):
+                        config[_k] = config[_k] * 1000
+        except Exception:
+            pass
 
     return config
 

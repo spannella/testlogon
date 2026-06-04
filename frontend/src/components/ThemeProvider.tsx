@@ -165,14 +165,24 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [highContrast]);
 
   // ── PLATFORM-013: load + apply persisted server theme config ────────
-  // Fetches the user's saved theme once on mount and applies it on top of
-  // the local uiStore-driven defaults. Failures are swallowed (offline /
-  // unauthenticated) so the local theme remains intact.
+  // Fetches the user's saved theme once on mount and applies the parts that
+  // are NOT already driven reactively by the uiStore (preset overrides,
+  // high-contrast / density classes etc.). We deliberately do NOT write the
+  // accent CSS variables (--color-primary / --color-ring / …) NOR toggle the
+  // `dark` class here: both are owned by the reactive effects above, which are
+  // driven by the live uiStore. Re-applying them from an async fetch races
+  // against the user's most recent selection and could snap the accent back to
+  // a stale server value (PLATFORM-013 accent-color regression) or strip the
+  // user's chosen dark/light mode (theme-switcher dark-mode regression).
+  // Server-side theme/accent sync flows into the store via
+  // `loadServerPreferences` (AppShell), so the reactive effects remain the
+  // single source of truth for the accent vars and the `dark` class.
   useEffect(() => {
     let cancelled = false;
     getThemeCustomization()
       .then((config) => {
-        if (!cancelled) applyThemeConfig(config);
+        if (cancelled) return;
+        applyThemeConfig(config, { skipAccent: true, skipMode: true });
       })
       .catch(() => {
         /* keep local theme */

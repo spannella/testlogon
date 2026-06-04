@@ -309,8 +309,11 @@ function readAlertSms(logPath: string, afterOffset: number, bodyPattern: RegExp)
 
 async function goToAlerts(page: Page) {
   await page.goto(`${BASE}/alerts`, { waitUntil: "load" });
-  // Default tab is Notifications
-  await expect(page.getByRole("tab", { name: "Notifications" })).toBeVisible({ timeout: 8000 });
+  // The alert center (with the full alert list, search and mark-as-read) lives
+  // under the "All" tab. Open it so the AlertCenter component is mounted.
+  const allTab = page.getByRole("tab", { name: "All", exact: true });
+  await expect(allTab).toBeVisible({ timeout: 8000 });
+  await allTab.click();
 }
 
 async function goToPreferences(page: Page) {
@@ -608,8 +611,16 @@ test.describe("99 — Alert delivery via SMS", () => {
   });
 
   test("99.5 Marking an alert as read via API clears its unread state", async () => {
+    // Create a fresh API key so there is at least one brand-new unread alert.
+    // (Relying on alerts from prior tests is fragile on a shared, accumulating
+    // DB: the alert center returns only the newest page, so older unread alerts
+    // may fall outside the window.)
+    const keyResp = await apiPost(page, "/ui/api_keys", { label: "e2e-alerts-markread-test" });
+    expect(keyResp.ok()).toBeTruthy();
+    const freshKey = await keyResp.json();
+
     // Get the list to find an unread alert
-    const listResp = await apiGet(page, "/ui/alerts");
+    const listResp = await apiGet(page, "/ui/alerts?unread_only=1");
     const data = await listResp.json();
     const unread = data.alerts.filter((a: { read_at?: number }) => !a.read_at);
     expect(unread.length).toBeGreaterThan(0);
@@ -628,6 +639,9 @@ test.describe("99 — Alert delivery via SMS", () => {
       const alert = data2.alerts.find((a: { alert_id: string }) => a.alert_id === id);
       expect(alert?.read_at).toBeGreaterThan(0);
     }
+
+    // Cleanup the key created for this test
+    await apiPost(page, "/ui/api_keys/revoke", { key_id: freshKey.key_id });
   });
 
   test("99.6 GET /ui/alerts with unread_only=true filters to unread alerts", async () => {
@@ -686,9 +700,9 @@ test.describe("100 — Alert Center UI", () => {
     await page.close();
   });
 
-  test("100.1 Navigating to /alerts shows the Notifications tab by default", async () => {
+  test("100.1 Navigating to /alerts shows the alert tabs", async () => {
     await goToAlerts(page);
-    await expect(page.getByRole("tab", { name: "Notifications" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "All", exact: true })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Preferences" })).toBeVisible();
   });
 
@@ -771,7 +785,7 @@ test.describe("100 — Alert Center UI", () => {
     await alertEntry.click();
     await page.waitForTimeout(300);
     // Verify no crash — the page still shows content
-    await expect(page.getByRole("tab", { name: "Notifications" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "All", exact: true })).toBeVisible();
   });
 });
 

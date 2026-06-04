@@ -594,7 +594,10 @@ test.describe("5 — Referral Dashboard UI", () => {
     await alicePage.goto(`${BASE}/referrals`, { waitUntil: "domcontentloaded" });
     // Commission history section — CardTitle renders as <div>, not a heading
     await expect(alicePage.getByText("Commission History")).toBeVisible({ timeout: 10000 });
-    // Should have a table row with "subscription"
-    await expect(alicePage.getByText("subscription")).toBeVisible({ timeout: 10000 });
+    // Should have a table row with the "subscription" source-type badge.
+    // Scope to a table cell to avoid matching the sidebar "Subscriptions" nav.
+    await expect(
+      alicePage.getByRole("cell").filter({ hasText: /^subscription$/ }).first(),
+    ).toBeVisible({ timeout: 10000 });
   });
 });

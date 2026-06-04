@@ -146,7 +146,12 @@ async function createCase(
 }
 
 async function fullyProvisionCase(page: Page, identity: string): Promise<string> {
-  const caseId = await createCase(page, identity);
+  // Use a registration number containing the deterministic "PASS" marker so
+  // the mock registry verification reliably returns verified=true (the score
+  // for a random TS-derived reg number would otherwise pass only ~70% of runs).
+  const caseId = await createCase(page, identity, {
+    registration_number: `REGPASS${TS}`,
+  });
   // UBOs summing >= 75% but <= 100%
   await apiPost(page, identity, `/v1/kyc/business-cases/${caseId}/ubos`, {
     full_name: "Jane Owner",

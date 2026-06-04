@@ -15,7 +15,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.auth.policy import require_admin_or_root
+from app.auth.policy import require_admin_or_root, require_admin_or_root_csrf
 from app.models import (
     DeploymentApprovalIn,
     DeploymentApprovalOut,
@@ -73,7 +73,7 @@ async def get_config_schema(user=Depends(require_admin_or_root)):
 async def put_devops_config(
     type_id: str,
     body: DevOpsConfigIn,
-    user=Depends(require_admin_or_root),
+    user=Depends(require_admin_or_root_csrf),
 ):
     config = body.model_dump()
     errors = svc.validate_devops_config(config)

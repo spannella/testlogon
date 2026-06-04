@@ -788,8 +788,16 @@ def download_video_endpoint(
         if not is_public:
             raise HTTPException(status_code=403, detail="forbidden")
 
-        # VOD-019: Check download entitlement for non-owners
-        if S.vod_purchase_tiers_enabled:
+        # VOD-019: Check download entitlement for non-owners — but only for
+        # videos that actually require a purchase. A free public video (no
+        # purchase types, no price, no SKU) is freely downloadable by anyone.
+        requires_purchase = bool(
+            getattr(video, "available_purchase_types", None)
+            or getattr(video, "price_cents", None)
+            or getattr(video, "download_price_cents", None)
+            or getattr(video, "entitlement_sku", None)
+        )
+        if S.vod_purchase_tiers_enabled and requires_purchase:
             from app.services.vod_purchase import check_entitlement_purchase_only
             ent = check_entitlement_purchase_only(user_id=user_sub, video_id=video_id)
             if not ent.entitled or not ent.download_allowed:

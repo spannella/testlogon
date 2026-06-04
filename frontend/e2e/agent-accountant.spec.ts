@@ -50,6 +50,14 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   const sessions = getSessions();
   const page = await browser.newPage();
   await page.context().addCookies(sessions[identity].cookies);
+  // Seed the persisted auth store so ProtectedRoute treats the page as
+  // authenticated (cookie injection alone leaves isAuthenticated=false → /login
+  // redirect, which hides the UI under test).
+  const uid = sessions[identity].user_sub;
+  await page.addInitScript((userId: string) => {
+    const state = { userId, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, uid);
   return page;
 }
 
@@ -321,6 +329,16 @@ test.describe("694. Cost Dashboard UI", () => {
   test.beforeAll(async ({ browser }) => {
     getSessions();
     alicePage = await newIdentityPage(browser, "alice");
+    // Clear any budgets left over from prior runs so the UI create flow below
+    // does not collide with an existing overall/daily budget (backend returns
+    // 409 for duplicate scope+period).
+    const existing = await apiGet(alicePage, "ui/agents/accountant/costs/budgets");
+    if (existing.ok()) {
+      const list = (await existing.json()) as Array<{ budget_id: string }>;
+      for (const b of list) {
+        await apiDelete(alicePage, "alice", `ui/agents/accountant/costs/budgets/${b.budget_id}`);
+      }
+    }
     await apiPost(alicePage, "alice", "ui/agents/accountant/costs/entries", {
       worker_id: `worker_ui_${TS}`,
       agent_type: "coder",

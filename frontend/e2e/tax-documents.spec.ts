@@ -262,9 +262,20 @@ test.describe("FIN-004 Consumer Tax Documents", () => {
   });
 
   test("551.4 Credits-only: debit (refund) excluded", async () => {
-    // Seed a debit in a fresh isolated year (2022) and confirm it's excluded.
-    seedLedger(ALICE_ID, [{ reason: "Refund to fan", amount_cents: 9999, year: 2022, type: "debit" }]);
-    const resp = await apiGet(alice, "/ui/tax-documents/summary", { year: "2022" });
+    // Seed a debit at a controlled timestamp. The seed helper places year-2026
+    // entries at 2026-06-01 12:00:00 UTC. Querying by `year: "2026"` would also
+    // pick up real-time CREDIT ledger entries that other specs write to Alice
+    // during a shared-backend shard run (those land at "now", i.e. the current
+    // run date in 2026), polluting grand_total. Instead, scope to a narrow
+    // custom window around the seeded debit's exact minute so only this run's
+    // debit is in range — and confirm it is excluded (debits don't count).
+    seedLedger(ALICE_ID, [{ reason: "Refund to fan", amount_cents: 9999, year: 2026, type: "debit" }]);
+    const winFrom = Math.floor(Date.UTC(2026, 5, 1, 11, 59, 30) / 1000);
+    const winTo = Math.floor(Date.UTC(2026, 5, 1, 12, 5, 0) / 1000);
+    const resp = await apiGet(alice, "/ui/tax-documents/summary", {
+      date_from: String(winFrom),
+      date_to: String(winTo),
+    });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
     expect(body.grand_total_cents).toBe(0);

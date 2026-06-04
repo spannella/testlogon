@@ -144,7 +144,8 @@ test.describe("82 — Mobile chrome", () => {
 
   test("82.3 bottom nav contains 4 primary tabs and a More button", async () => {
     const nav = page.locator("nav.fixed.inset-x-0.bottom-0");
-    await expect(nav.getByRole("link", { name: "Home" })).toBeVisible();
+    // The Home tab renders its i18n label "nav.dashboard" → "Dashboard".
+    await expect(nav.getByRole("link", { name: "Dashboard" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Messages" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Files" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Shop" })).toBeVisible();
@@ -164,9 +165,13 @@ test.describe("82 — Mobile chrome", () => {
   test("82.5 tapping hamburger opens the slide-in nav drawer", async () => {
     const hamburger = page.getByRole("button", { name: "Open menu" });
     await hamburger.click();
-    // Scope to the Sheet dialog to avoid matching hidden desktop sidebar elements
+    // Scope to the Sheet dialog to avoid matching hidden desktop sidebar elements.
+    // Use an exact link match — plain getByText("Dashboard") also matches the
+    // "Fleet Dashboard" / "Project Dashboard" nav links (strict-mode violation).
     const drawer = page.getByRole("dialog");
-    await expect(drawer.getByText("Dashboard")).toBeVisible({ timeout: 5_000 });
+    await expect(
+      drawer.getByRole("link", { name: "Dashboard", exact: true }),
+    ).toBeVisible({ timeout: 5_000 });
     // Drawer should list navigation groups
     await expect(drawer.getByText("Messages")).toBeVisible();
   });
@@ -277,7 +282,7 @@ test.describe("83 — Mobile page usability", () => {
   test("83.2 Settings page shows Appearance card on mobile", async () => {
     await goTo(page, "/settings");
     await expect(page.getByText("Appearance")).toBeVisible({ timeout: 8_000 });
-    await expect(page.getByText("Theme")).toBeVisible();
+    await expect(page.getByText("Theme", { exact: true })).toBeVisible();
   });
 
   // ── 83.3  Appearance theme picker cards are all visible ──────────────────
@@ -285,7 +290,7 @@ test.describe("83 — Mobile page usability", () => {
   test("83.3 all three theme option cards fit in viewport without overflow", async () => {
     await goTo(page, "/settings");
     // Wait for Appearance section to render
-    await expect(page.getByText("Theme")).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
 
     // Each theme button should be visible
     await expect(page.getByRole("button", { name: /system/i }).first()).toBeVisible();
@@ -300,7 +305,7 @@ test.describe("83 — Mobile page usability", () => {
 
   test("83.4 clicking Dark in Settings Appearance card applies and remembers theme", async () => {
     await goTo(page, "/settings");
-    await expect(page.getByText("Theme")).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
 
     // Click the "Dark" card button
     await page.getByRole("button", { name: /dark/i }).first().click();

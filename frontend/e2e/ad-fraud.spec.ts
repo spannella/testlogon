@@ -366,10 +366,10 @@ test.describe("Ad Fraud Prevention (ADS-014)", () => {
 
     test("404.2 suspended account serves no ads", async () => {
       const resp = await apiPost(bobPage, BOB_ID, "/ui/ads/serve", {
-        surface: "feed",
+        surface: "newsfeed",
         creator_id: creatorId,
         content_id: `content_${TS}`,
-        slot_type: "native",
+        slot_type: "sponsored_post",
       });
       expect(resp.status()).toBe(200);
       const data = await resp.json();

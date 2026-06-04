@@ -55,9 +55,33 @@ def _detect_key_type_and_bits(private_key_obj: Any) -> tuple[str, int]:
 
 
 def _load_private_key(pem: str, passphrase: Optional[str] = None):
-    """Load a private key from PEM. Returns the key object."""
+    """Load a private key from PEM. Returns the key object.
+
+    Supports both the classic PEM formats (PKCS#1 / PKCS#8 / TraditionalOpenSSL,
+    e.g. ``-----BEGIN RSA PRIVATE KEY-----``) and the modern OpenSSH private key
+    format (``-----BEGIN OPENSSH PRIVATE KEY-----``). The latter is what
+    ``ssh-keygen`` and ``cryptography``'s ``PrivateFormat.OpenSSH`` produce by
+    default, and it is NOT parseable by ``load_pem_private_key`` -- it requires
+    ``load_ssh_private_key``.
+    """
     pem_bytes = pem.encode("utf-8")
     pw = passphrase.encode("utf-8") if passphrase else None
+
+    if "BEGIN OPENSSH PRIVATE KEY" in pem:
+        try:
+            return serialization.load_ssh_private_key(pem_bytes, password=pw)
+        except TypeError:
+            # Raised when key is password-protected but no password was given
+            raise ValueError("Passphrase required for this key")
+        except ValueError as exc:
+            # Wrong passphrase / corrupt key
+            msg = str(exc)
+            if "password" in msg.lower() or "passphrase" in msg.lower():
+                raise ValueError("Passphrase required for this key")
+            raise ValueError(f"Invalid private key format: {exc}")
+        except Exception as exc:
+            raise ValueError(f"Invalid private key format: {exc}")
+
     try:
         return serialization.load_pem_private_key(pem_bytes, password=pw)
     except TypeError:

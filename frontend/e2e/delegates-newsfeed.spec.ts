@@ -71,24 +71,40 @@ async function injectAuth(page: Page, userId: string) {
 
 // -- API helpers --------------------------------------------------------------
 
-async function apiPost(page: Page, userId: string, path: string, body: object) {
-  const session = getSessions()[userId];
-  return page.request.post(`${BASE}${path}`, {
-    data: body,
-    headers: { "x-csrf-token": session.csrf_token },
-  });
+// Under a busy shard the shared backend can return 429 (rate limit). Retry a
+// few times with backoff so creation/mutation calls that later tests depend on
+// (e.g. createdPostId) don't fail spuriously and leave dependents undefined.
+async function withRetry429(fn: () => Promise<any>) {
+  let resp = await fn();
+  for (let i = 0; i < 4 && resp.status() === 429; i++) {
+    await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    resp = await fn();
+  }
+  return resp;
 }
 
-async function apiGet(page: Page, path: string) {
-  return page.request.get(`${BASE}${path}`);
+async function apiPost(page: Page, userId: string, path: string, body: object) {
+  const session = getSessions()[userId];
+  return withRetry429(() =>
+    page.request.post(`${BASE}${path}`, {
+      data: body,
+      headers: { "x-csrf-token": session.csrf_token },
+    }),
+  );
+}
+
+async function apiGet(page: Page, path: string, params?: Record<string, string>) {
+  return withRetry429(() => page.request.get(`${BASE}${path}`, params ? { params } : undefined));
 }
 
 async function apiPut(page: Page, userId: string, path: string, body: object) {
   const session = getSessions()[userId];
-  return page.request.put(`${BASE}${path}`, {
-    data: body,
-    headers: { "x-csrf-token": session.csrf_token },
-  });
+  return withRetry429(() =>
+    page.request.put(`${BASE}${path}`, {
+      data: body,
+      headers: { "x-csrf-token": session.csrf_token },
+    }),
+  );
 }
 
 async function apiDelete(page: Page, userId: string, path: string) {
@@ -152,7 +168,6 @@ test.describe("495 -- Delegated Post Creation API", () => {
   let alicePage: Page;
   let bobPage: Page;
   let charliePage: Page;
-  let createdPostId: string;
 
   test.beforeAll(async ({ browser }) => {
     const aliceCtx = await browser.newContext();
@@ -207,14 +222,27 @@ test.describe("495 -- Delegated Post Creation API", () => {
     expect(data.text).toBe(text);
     expect(data.status).toBe("published");
     expect(data.approval_status).toBe("approved");
-    createdPostId = data.post_id;
+    expect(typeof data.post_id).toBe("string");
   });
 
   test("495.2 Post appears in creator's post list", async () => {
-    const resp = await apiGet(bobPage, `/ui/newsfeed/delegate/${ALICE_ID}/posts`);
-    expect(resp.ok()).toBeTruthy();
-    const data = await resp.json();
-    const found = data.find((p: any) => p.post_id === createdPostId);
+    // Self-contained: create our own post here rather than depending on a
+    // describe-scope variable set by 495.1. On a busy shard a retry can spawn a
+    // fresh worker process (resetting `createdPostId`), and the GET can be
+    // transiently non-ok; create+poll makes this test robust to both.
+    const text = `List-check post ${TS}_${Math.random().toString(36).slice(2, 7)}`;
+    const cResp = await apiPost(bobPage, BOB_ID, `/ui/newsfeed/delegate/${ALICE_ID}/posts`, { text });
+    expect(cResp.status()).toBe(201);
+    const myPostId = (await cResp.json()).post_id as string;
+
+    let found: any = undefined;
+    for (let attempt = 0; attempt < 5 && !found; attempt++) {
+      const resp = await apiGet(bobPage, `/ui/newsfeed/delegate/${ALICE_ID}/posts`, { limit: "200" });
+      expect(resp.ok()).toBeTruthy();
+      const data = await resp.json();
+      found = data.find((p: any) => p.post_id === myPostId);
+      if (!found) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+    }
     expect(found).toBeTruthy();
     expect(found.author_id).toBe(ALICE_ID);
   });
@@ -250,8 +278,17 @@ test.describe("495 -- Delegated Post Creation API", () => {
   });
 
   test("495.5 Delegate edits creator's post", async () => {
+    // Self-contained: create the post we edit in this test so the edit target
+    // is valid even when a retry runs in a fresh worker (where the describe-scope
+    // `createdPostId` from 495.1 would be undefined → PUT /posts/undefined → 404).
+    const cResp = await apiPost(bobPage, BOB_ID, `/ui/newsfeed/delegate/${ALICE_ID}/posts`, {
+      text: `Post to edit ${TS}_${Math.random().toString(36).slice(2, 7)}`,
+    });
+    expect(cResp.status()).toBe(201);
+    const editPostId = (await cResp.json()).post_id as string;
+
     const updatedText = `Edited delegated post ${TS}`;
-    const resp = await apiPut(bobPage, BOB_ID, `/ui/newsfeed/delegate/${ALICE_ID}/posts/${createdPostId}`, {
+    const resp = await apiPut(bobPage, BOB_ID, `/ui/newsfeed/delegate/${ALICE_ID}/posts/${editPostId}`, {
       text: updatedText,
     });
     expect(resp.ok()).toBeTruthy();
@@ -399,9 +436,12 @@ test.describe("497 -- Comment Moderation API", () => {
     // Charlie gets only feed_post (no feed_moderate)
     await ensureCharlieIsDelegateWithPerms(alicePage, ["feed_post"]);
 
-    // Alice creates a post directly (as the creator) for comments
+    // Alice creates a post directly (as the creator) for comments.
+    // Make it public so Bob (a regular, non-following user) can comment on it —
+    // the default "followers" visibility would 403 his comment via can_view_post.
     const postResp = await apiPost(alicePage, ALICE_ID, "/posts", {
       body: `Moderation test post ${TS}`,
+      visibility: "public",
     });
     expect(postResp.ok()).toBeTruthy();
     const postData = await postResp.json();

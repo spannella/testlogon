@@ -60,7 +60,7 @@ function csrf(userId: string): string {
 async function createPost(page: Page, userId: string, body: string): Promise<string> {
   const res = await page.request.post(`${BASE}/posts`, {
     headers: { "x-csrf-token": csrf(userId) },
-    data: { body },
+    data: { body, visibility: "public" },
   });
   expect(res.ok(), `createPost failed: ${res.status()}`).toBeTruthy();
   const json = await res.json();

@@ -380,7 +380,8 @@ def delete_security_group(user_sub: str, sg_id: str) -> bool:
 def _save_rules(user_sub: str, sg_id: str, rules: List[Dict[str, Any]]) -> Dict[str, Any]:
     resp = T.security_groups.update_item(
         Key={"user_sub": user_sub, "sk": f"SG#{sg_id}"},
-        UpdateExpression="SET rules = :rules, updated_at = :ts",
+        UpdateExpression="SET #rules = :rules, updated_at = :ts",
+        ExpressionAttributeNames={"#rules": "rules"},
         ExpressionAttributeValues={":rules": rules, ":ts": now_ts()},
         ReturnValues="ALL_NEW",
     )

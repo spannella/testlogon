@@ -323,6 +323,12 @@ test.describe("639 -- Worker Templates API", () => {
     const ctx = await browser.newContext();
     alicePage = await ctx.newPage();
     await injectAuth(alicePage);
+    // Self-contained: the module-level anthropicKeyId from section 637 is lost
+    // if Playwright restarts the worker process between describe blocks, which
+    // would make the template payload's llm_key_id empty (422). Recreate it.
+    if (!anthropicKeyId) {
+      anthropicKeyId = createLlmKey(ALICE_ID, "anthropic", `fleet-tpl-${TS}`);
+    }
   });
 
   test("Save a worker template", async () => {
@@ -422,12 +428,18 @@ test.describe("640 -- Fleet Dashboard UI", () => {
   });
 
   test("Worker grid shows workers", async () => {
-    // Wait for fleet status to load
-    await alicePage.waitForResponse(
+    // Reload so a fresh fleet/status fetch is guaranteed (the initial fetch
+    // from the page-render test is already cached by React Query and would
+    // not fire again).
+    const statusResp = alicePage.waitForResponse(
       (resp) =>
         resp.url().includes("/ui/agent/fleet/status") && resp.status() === 200,
       { timeout: 10_000 },
     );
+    await alicePage.goto(`${BASE}/agents/fleet`, {
+      waitUntil: "domcontentloaded",
+    });
+    await statusResp;
     // At least one worker card should appear
     await expect(
       alicePage.getByText(/Fleet Worker/).first(),

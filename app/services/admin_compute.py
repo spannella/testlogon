@@ -532,8 +532,15 @@ def enforce_ec2_quota(user_sub: str, instance_type: str) -> None:
         i for i in list_instances(user_sub)
         if i.get("status") in ("running", "stopped", "launching", "stopping")
     ]
-    if len(active) >= quota["max_ec2_instances"]:
-        raise QuotaExceeded(f"Maximum {quota['max_ec2_instances']} instances allowed")
+    # The admin compute quota only imposes an instance-count cap when an admin
+    # has explicitly set a *custom* quota for this user. When the user is on the
+    # platform default (is_custom=False), the count is governed solely by the
+    # hard launcher limit (ec2_max_instances_per_user) in ec2_launcher.launch,
+    # so we do NOT re-apply the (smaller) reporting default here. This keeps the
+    # default-quota report (=3) independent of the launch ceiling (=5).
+    if quota.get("is_custom"):
+        if len(active) >= quota["max_ec2_instances"]:
+            raise QuotaExceeded(f"Maximum {quota['max_ec2_instances']} instances allowed")
 
     if quota["allowed_instance_types"] and instance_type not in quota["allowed_instance_types"]:
         raise QuotaExceeded(f"Instance type {instance_type} not allowed by your quota")

@@ -907,8 +907,11 @@ test.describe("8. API Keys — 'View key details' dialog and CIDR list UI", () =
   // ── Info / Key-details dialog ─────────────────────────────────────────────
 
   test("Each key row has a 'View key details' button (Info icon)", async () => {
+    // Under shard accumulation revokeAllKeys may not fully clear prior keys
+    // (pagination / transient errors), leaving multiple rows.  Scope to .first()
+    // so the multi-match locator does not trigger a strict-mode violation.
     await expect(
-      page.getByRole("button", { name: "View key details" }),
+      page.getByRole("button", { name: "View key details" }).first(),
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -1061,7 +1064,15 @@ test.describe("10. Expired message — conversation list preview shows '[This me
     await page.waitForTimeout(300);
 
     // The most-recent-active DM with Bob should now show Bob's text as preview.
-    const convoRow = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    // Anchor the row to THIS run's conversation by matching the unique MSG_TEXT
+    // preview: under shard accumulation there are many Bob DMs, so .first() alone
+    // could resolve a different (older) Bob conversation.  Requiring the unique
+    // preview text guarantees we are looking at _dmConvoId before/after expiry.
+    const convoRow = page
+      .getByRole("button")
+      .filter({ hasText: "E2E Bob" })
+      .filter({ hasText: MSG_TEXT })
+      .first();
     await expect(convoRow).toBeVisible({ timeout: 8000 });
 
     // Wait for the 15-second TTL + 7-second buffer (22 s total).

@@ -42,7 +42,7 @@ export default function AgentFeedbackPage() {
 
   const feedbackQuery = useQuery({
     queryKey: ["agent-feedback"],
-    queryFn: () => listAllFeedback().then((r) => r.data),
+    queryFn: () => listAllFeedback(),
     refetchInterval: 10_000,
   });
 

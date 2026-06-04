@@ -30,7 +30,7 @@ async function createPost(page: Page, body: string): Promise<string> {
 }
 
 async function feedPostIds(page: Page): Promise<string[]> {
-  const res = await page.request.get("/feed?limit=100");
+  const res = await page.request.get("/feed?limit=50");
   expect(res.ok()).toBeTruthy();
   const json = await res.json();
   return (json.items ?? []).map((p: { post_id: string }) => p.post_id);

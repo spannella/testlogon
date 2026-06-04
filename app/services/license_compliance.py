@@ -918,7 +918,7 @@ def _enrich_display_names(items: List[Dict[str, Any]]) -> None:
                 profile = get_profile(cid) or {}
             except Exception:
                 profile = {}
-            cache[cid] = profile.get("display_name", "")
+            cache[cid] = profile.get("display_name") or ""
         it["creator_display_name"] = cache[cid]
 
 

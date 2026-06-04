@@ -564,6 +564,9 @@ test.describe("100 — Clip Management API", () => {
   let _viewClipId = "";
 
   test.beforeAll(async ({ browser }) => {
+    // This hook sleeps 31s for a clip-create rate-limit cooldown, which exceeds
+    // the default 30s timeout and would fail the whole describe block.
+    test.setTimeout(120_000);
     // Create session with root
     _mgmtSessionId = await withRootPage(browser, async (rootPage) => {
       const id = await createBroadcastSession(rootPage);

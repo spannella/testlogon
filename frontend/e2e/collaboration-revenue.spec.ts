@@ -123,7 +123,8 @@ async function ledgerCreditsForContent(
   contentId: string,
 ): Promise<number> {
   const out = execSync(
-    `python3 - <<'PY'
+    `set -a; source /home/ubuntu/testlogon/.env.local 2>/dev/null; set +a; ` +
+      `PYTHONPATH=/home/ubuntu/testlogon /home/ubuntu/testlogon/.venv/bin/python3 - <<'PY'
 import json
 from app.core.tables import T
 from boto3.dynamodb.conditions import Key
@@ -143,7 +144,8 @@ PY`,
   )
     .toString()
     .trim();
-  return parseInt(out || "0", 10);
+  const lastLine = out.split("\n").pop()!.trim();
+  return parseInt(lastLine || "0", 10);
 }
 
 // ==========================================================================
