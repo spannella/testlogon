@@ -284,3 +284,9 @@ non-spoofable client IP) — every detection/block depends on accurate source at
   middleware + escalation; extends geoip.py with a GeoLite2-ASN reader + datacenter ASN list.
 - **SECOPS-003** — Honeypots & honeytokens (decoy routes, canary records/tokens, traps).
 - **SECOPS-004** — Detection/correlation/alerting + admin SecurityMonitoring dashboard.
+
+- **SECOPS-005** — LLM-driven log analysis/triage + incident reports & alerts
+  (recommender with guardrails; prompt-injection-hardened; human-in-loop for
+  irreversible/outward actions).
+- **SECOPS-006** — AbuseIPDB reporting (confirmed-malicious only) + threat-intel
+  enrichment/ingest; hard prereq SEC-008 (trusted IP) so we never report innocents.
