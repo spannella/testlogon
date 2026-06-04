@@ -297,6 +297,15 @@ Confirmed the cluster-wide fixes carried to non-representative specs. Remaining 
 ## O. RE-SHARD #3 (authoritative, in progress)
 All 335 specs after wave 3+4+dedup+routes. Measures cumulative effect + catches regressions from the models.py dedup. Results: `/tmp/shard3_results.txt`.
 
+## P. PROGRESS LOG (full re-shards)
+- Re-shard #1 (after waves 1-2): **507 → 278**
+- Re-shard #3 (after waves 3-4 + models.py dedup + routes): **278 → 189**
+- Waves 5-6 (diagnostic-driven, restart-per-spec verified): cleared ~50+ more across syndicate/ads/kyc/agent/delegates/theme/media/compute/broadcast/mobile clusters. Real bugs fixed: syndicate bundle access scoping, agent-worker provisioner instance-id, ec2/admin-compute quota reconciliation, delegate `hidden` reserved word, ad-dayparting flight status, broadcast scheduler status, ThemeProvider dark-class clobber, agent-llm-keys heading, + many strict-mode/auth-store/route test fixes.
+- Re-shard #4 (after waves 5-6): _in progress_ → `/tmp/shard4_results.txt`.
+
+## Q. FOLLOW-UP TICKETS FILED (parked until E2E fully green, per user)
+BILLING-004 (dev wallet deposit), KYC-025 (KYC appeals), LEGAL-001 (unified legal investigation dump), AUTH-001 (registration abandonment recovery), QST-001 (questionnaire gaps), ADS-020 (broadcast ad serving/billing integration), SIGN-001 (e-signature UX).
+
 ## D. Confidence summary
 | Item | Type | Confidence | Est. tests |
 |------|------|-----------|-----------|
