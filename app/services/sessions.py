@@ -248,7 +248,7 @@ def _resolve_impersonation_context(request: Request, actor_sub: str, token: str)
         "impersonation": "true",
     }
 
-def rotate_refresh_token(response: Response, user_sub: str, session_id: str, refresh_token: str) -> None:
+def rotate_refresh_token(response: Response, user_sub: str, session_id: str, refresh_token: str) -> Optional[str]:
     if not refresh_token:
         raise HTTPException(400, "Missing refresh token")
     it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": session_id}).get("Item") or {}
@@ -279,6 +279,7 @@ def rotate_refresh_token(response: Response, user_sub: str, session_id: str, ref
             secure=S.ui_cookie_secure,
             samesite=S.ui_cookie_samesite,
         )
+    return access
 
 async def require_ui_session(
     request: Request,

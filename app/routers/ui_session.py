@@ -266,9 +266,9 @@ async def ui_session_refresh(
     if not session_id:
         raise HTTPException(401, "Missing session")
     refresh_token = req.cookies.get(S.ui_refresh_token_cookie_name, "")
-    rotate_refresh_token(response, user_sub, session_id, refresh_token)
+    access = rotate_refresh_token(response, user_sub, session_id, refresh_token)
     audit_event("ui_session_refresh", user_sub, req, outcome="success", session_id=session_id)
-    return {"status": "ok"}
+    return {"status": "ok", "access_token": access or ""}
 
 @router.post("/sessions/revoke_others")
 async def ui_sessions_revoke_others(req: Request, ctx: Dict[str, str] = Depends(require_ui_session)):

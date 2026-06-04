@@ -11,6 +11,7 @@ import { AppDropZone } from "@/components/shared/AppDropZone";
 import { InstallPrompt } from "@/components/shared/InstallPrompt";
 import { SessionExpiryWarning } from "@/components/shared/SessionExpiryWarning";
 import { useOfflineQueue } from "@/hooks/useOfflineQueue";
+import { useMessagingStream } from "@/hooks/useMessagingStream";
 import { useOfflineOptimisticRestore } from "@/hooks/useOfflineOptimisticRestore";
 import { useServiceWorkerSync } from "@/hooks/useServiceWorkerSync";
 import { useQueryClient } from "@tanstack/react-query";
@@ -26,6 +27,13 @@ import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 /** Mounts the offline queue flush side-effect — renders nothing. */
 function OfflineQueueFlusher() {
   useOfflineQueue();
+  return null;
+}
+
+/** Subscribes to the real-time messaging SSE stream app-wide so the unread
+ * badge (conversations query) updates everywhere, not only on the Messages page. */
+function MessagingStreamListener() {
+  useMessagingStream(true);
   return null;
 }
 
@@ -86,6 +94,7 @@ export default function AppShell() {
           <OfflineQueueFlusher />
           <OfflineOptimisticRestorer />
           <ServiceWorkerSyncListener />
+          <MessagingStreamListener />
           <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
           <ImpersonationBanner />
           <SessionExpiryWarning />
