@@ -41,3 +41,6 @@ categories + sanitized comment; a private/allowlisted/spoofed-XFF IP is **never*
 reported; dedup suppresses re-reports; quota exhaustion queues+backs off; `check`/
 `blacklist` results enrich the blocklist; no secret/PII appears in any payload; outbound
 disabled in dev unless explicitly enabled.
+
+---
+**Dev/Prod parity**: must satisfy [SECOPS-007](SECOPS-007-dev-prod-parity-aws-abstraction.md) — runs in dev with no AWS/offline (mock backend) and in prod on AWS, same code path, backend chosen by flag.

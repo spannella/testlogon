@@ -47,3 +47,6 @@ stream.
 ## Testing
 pytest: each emit site writes a `security_events` row with enriched ip/asn/country;
 TTL set; severity correct; no secret/token fields present; counter increments.
+
+---
+**Dev/Prod parity**: must satisfy [SECOPS-007](SECOPS-007-dev-prod-parity-aws-abstraction.md) — runs in dev with no AWS/offline (mock backend) and in prod on AWS, same code path, backend chosen by flag.

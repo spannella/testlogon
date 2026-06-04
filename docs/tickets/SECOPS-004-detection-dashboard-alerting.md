@@ -31,3 +31,6 @@ give operators one place to watch attacks and act (block/unblock).
 E2E: dashboard lists recent events and offenders; clicking "block" adds a
 `security_blocklist` entry that then 403s the source; a honeypot hit raises an alert
 record; access restricted to root/security scope (regular admin → 403).
+
+---
+**Dev/Prod parity**: must satisfy [SECOPS-007](SECOPS-007-dev-prod-parity-aws-abstraction.md) — runs in dev with no AWS/offline (mock backend) and in prod on AWS, same code path, backend chosen by flag.

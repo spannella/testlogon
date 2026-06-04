@@ -290,3 +290,9 @@ non-spoofable client IP) — every detection/block depends on accurate source at
   irreversible/outward actions).
 - **SECOPS-006** — AbuseIPDB reporting (confirmed-malicious only) + threat-intel
   enrichment/ingest; hard prereq SEC-008 (trusted IP) so we never report innocents.
+
+- **SECOPS-007** — Dev/Prod parity & AWS abstraction (**cross-cutting, governs all
+  SEC/SECOPS tickets**): every ticket runs in dev with no AWS + offline (mock backends:
+  DDB Local, mock KMS, GeoIP/ASN mock, mock LLM + AbuseIPDB clients) and in prod on AWS,
+  same code path, backend selected by `dev_mode`/flags; full test+E2E suite passes with
+  zero AWS creds and no internet.

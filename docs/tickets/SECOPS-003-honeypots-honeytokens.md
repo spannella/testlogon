@@ -31,3 +31,6 @@ pytest/E2E: hitting `/.env` or `/wp-login.php` emits `honeypot.hit` and (with au
 on) blocks the source; reading a canary record/using a canary token emits
 `honeytoken.used`; the hidden-field trap flags a submission; real users/flows never
 trip a honeypot (no false positives in the E2E suite).
+
+---
+**Dev/Prod parity**: must satisfy [SECOPS-007](SECOPS-007-dev-prod-parity-aws-abstraction.md) — runs in dev with no AWS/offline (mock backend) and in prod on AWS, same code path, backend chosen by flag.

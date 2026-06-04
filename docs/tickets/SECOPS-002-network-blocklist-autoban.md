@@ -41,3 +41,6 @@ Enforce blocking of malicious sources by **individual IP, CIDR range, ASN
 pytest: a blocked IP/CIDR/ASN/country → 403 + `netblock.denied`; allowlisted source is
 never blocked even if it matches; spoofed XFF cannot evade (uses trusted IP); auto-ban
 fires after threshold and expires via TTL; escalation IP→/24→ASN.
+
+---
+**Dev/Prod parity**: must satisfy [SECOPS-007](SECOPS-007-dev-prod-parity-aws-abstraction.md) — runs in dev with no AWS/offline (mock backend) and in prod on AWS, same code path, backend chosen by flag.

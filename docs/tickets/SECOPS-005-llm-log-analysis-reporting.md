@@ -40,3 +40,6 @@ pytest: analyzer produces schema-valid incidents from seeded events; a honeypot-
 source yields `block_ip` auto-applied; a permanent/AbuseIPDB recommendation is queued
 for approval (not auto-executed); an injected "ignore instructions" User-Agent does not
 change the verdict; alerts dedup per campaign.
+
+---
+**Dev/Prod parity**: must satisfy [SECOPS-007](SECOPS-007-dev-prod-parity-aws-abstraction.md) — runs in dev with no AWS/offline (mock backend) and in prod on AWS, same code path, backend chosen by flag.
