@@ -513,16 +513,12 @@ test.describe("Section 131: Message Compose Drag-and-Drop", () => {
       headers: { "x-csrf-token": getSessions()[ALICE_ID].csrf_token },
     });
 
-    // Navigate to messages and open the conversation
-    await alicePage.goto(`${BASE}/messages`, { waitUntil: "domcontentloaded" });
-    await alicePage.waitForTimeout(2000);
-
-    // Click on the Bob conversation in the sidebar list to open ConversationView
-    // Conversation list items show display names like "E2E Bob" or user IDs
-    const row = alicePage.getByRole("button").filter({ hasText: /bob/i }).first();
-    await expect(row).toBeVisible({ timeout: 10_000 });
-    await row.click();
-    await alicePage.waitForTimeout(1000);
+    // Deep-link directly to THIS conversation id instead of clicking the first
+    // "bob" sidebar row.  Under shard accumulation there are many Bob DMs and
+    // `.first()` can open an older/other conversation, leaving the drop zone for
+    // a different ConversationView (or none) and timing out below.
+    await alicePage.goto(`${BASE}/messages/${dmConvoId}`, { waitUntil: "domcontentloaded" });
+    await alicePage.waitForTimeout(1500);
 
     const dropZone = alicePage.locator("[data-testid='conversation-drop-zone']");
     await expect(dropZone).toBeAttached({ timeout: 10_000 });
@@ -1076,14 +1072,10 @@ test.describe("Section 139: Conversation Drop Zone", () => {
       headers: { "x-csrf-token": getSessions()[ALICE_ID].csrf_token },
     });
 
-    await alicePage.goto(`${BASE}/messages`, { waitUntil: "domcontentloaded" });
-    await alicePage.waitForTimeout(2000);
-
-    // Click on the Bob conversation in the sidebar list
-    const row = alicePage.getByRole("button").filter({ hasText: /bob/i }).first();
-    await expect(row).toBeVisible({ timeout: 10_000 });
-    await row.click();
-    await alicePage.waitForTimeout(1000);
+    // Deep-link directly to THIS conversation id instead of clicking the first
+    // "bob" sidebar row (which under shard accumulation may open a different DM).
+    await alicePage.goto(`${BASE}/messages/${dmConvoId}`, { waitUntil: "domcontentloaded" });
+    await alicePage.waitForTimeout(1500);
 
     const zone = alicePage.locator("[data-testid='conversation-drop-zone']");
     await expect(zone).toBeAttached({ timeout: 10_000 });

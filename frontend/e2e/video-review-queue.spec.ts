@@ -81,6 +81,16 @@ async function apiPost(
 }
 
 async function apiGet(page: Page, path: string, params?: Record<string, string>) {
+  // Retry on 429: under a shared-backend shard run the accumulated request
+  // volume from other specs can trip the global IP rate-limit window. Honor
+  // Retry-After (capped) and retry a few times so transient 429s don't fail
+  // assertions that expect 200.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const resp = await page.request.get(`${API}/${path}`, { params });
+    if (resp.status() !== 429) return resp;
+    const ra = Number(resp.headers()["retry-after"] || "1");
+    await new Promise((r) => setTimeout(r, Math.min(Math.max(ra, 1), 3) * 1000));
+  }
   return page.request.get(`${API}/${path}`, { params });
 }
 

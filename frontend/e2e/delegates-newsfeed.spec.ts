@@ -71,24 +71,40 @@ async function injectAuth(page: Page, userId: string) {
 
 // -- API helpers --------------------------------------------------------------
 
+// Under a busy shard the shared backend can return 429 (rate limit). Retry a
+// few times with backoff so creation/mutation calls that later tests depend on
+// (e.g. createdPostId) don't fail spuriously and leave dependents undefined.
+async function withRetry429(fn: () => Promise<any>) {
+  let resp = await fn();
+  for (let i = 0; i < 4 && resp.status() === 429; i++) {
+    await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    resp = await fn();
+  }
+  return resp;
+}
+
 async function apiPost(page: Page, userId: string, path: string, body: object) {
   const session = getSessions()[userId];
-  return page.request.post(`${BASE}${path}`, {
-    data: body,
-    headers: { "x-csrf-token": session.csrf_token },
-  });
+  return withRetry429(() =>
+    page.request.post(`${BASE}${path}`, {
+      data: body,
+      headers: { "x-csrf-token": session.csrf_token },
+    }),
+  );
 }
 
 async function apiGet(page: Page, path: string) {
-  return page.request.get(`${BASE}${path}`);
+  return withRetry429(() => page.request.get(`${BASE}${path}`));
 }
 
 async function apiPut(page: Page, userId: string, path: string, body: object) {
   const session = getSessions()[userId];
-  return page.request.put(`${BASE}${path}`, {
-    data: body,
-    headers: { "x-csrf-token": session.csrf_token },
-  });
+  return withRetry429(() =>
+    page.request.put(`${BASE}${path}`, {
+      data: body,
+      headers: { "x-csrf-token": session.csrf_token },
+    }),
+  );
 }
 
 async function apiDelete(page: Page, userId: string, path: string) {

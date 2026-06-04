@@ -63,23 +63,37 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   return page;
 }
 
+// On a busy shard the shared backend can return 429 (rate limit). Retry a few
+// times so idea-creation calls in beforeAll (whose ids dependent tests use) and
+// the assertions themselves don't fail spuriously.
+async function withRetry429(fn: () => Promise<any>) {
+  let resp = await fn();
+  for (let i = 0; i < 4 && resp.status() === 429; i++) {
+    await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    resp = await fn();
+  }
+  return resp;
+}
+
 async function apiPut(page: Page, identity: string, path: string, body?: unknown) {
   const sess = getSessions()[identity];
-  return page.request.put(`${API}/${path}`, {
-    data: body ?? {},
-    headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
-  });
+  return withRetry429(() =>
+    page.request.put(`${API}/${path}`, {
+      data: body ?? {},
+      headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
+    }),
+  );
 }
 
 async function apiPost(page: Page, identity: string, path: string, body?: unknown, csrf = true) {
   const sess = getSessions()[identity];
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (csrf) headers["x-csrf-token"] = sess.csrf_token;
-  return page.request.post(`${API}/${path}`, { data: body ?? {}, headers });
+  return withRetry429(() => page.request.post(`${API}/${path}`, { data: body ?? {}, headers }));
 }
 
 async function apiGet(page: Page, path: string, params?: Record<string, string>) {
-  return page.request.get(`${API}/${path}`, { params });
+  return withRetry429(() => page.request.get(`${API}/${path}`, { params }));
 }
 
 const TS = Date.now();

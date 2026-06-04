@@ -67,6 +67,19 @@ function csrfHeader(identity: string): Record<string, string> {
   return { "x-csrf-token": sessions[identity].csrf_token };
 }
 
+// Retry on 429: under a shared-backend shard run the accumulated request volume
+// from other specs can trip the global IP rate-limit window. Honor Retry-After
+// (capped) so a transient 429 doesn't fail an assertion expecting 2xx.
+async function retry429(fn: () => Promise<any>) {
+  let resp = await fn();
+  for (let attempt = 0; attempt < 4 && resp.status() === 429; attempt++) {
+    const ra = Number(resp.headers()["retry-after"] || "1");
+    await new Promise((r) => setTimeout(r, Math.min(Math.max(ra, 1), 3) * 1000));
+    resp = await fn();
+  }
+  return resp;
+}
+
 // ─── DDB Helpers ──────────────────────────────────────────────────────────────
 
 function ddbPut(table: string, item: Record<string, any>): void {
@@ -459,20 +472,21 @@ test.describe("133 · Gallery Browsing & Comments API", () => {
     await injectAuth(page, ALICE_ID);
 
     // Add a comment as Alice
-    const addResp = await page.request.post(
-      `${BASE}/ui/videos/${VIDEO_ID}/comments`,
-      {
+    const addResp = await retry429(() =>
+      page.request.post(`${BASE}/ui/videos/${VIDEO_ID}/comments`, {
         headers: csrfHeader(ALICE_ID),
         data: { text: `Alice comment ${TS}` },
-      },
+      }),
     );
     expect(addResp.status()).toBe(201);
     const comment = await addResp.json();
 
     // Delete it
-    const delResp = await page.request.delete(
-      `${BASE}/ui/videos/${VIDEO_ID}/comments/${comment.comment_id}`,
-      { headers: csrfHeader(ALICE_ID) },
+    const delResp = await retry429(() =>
+      page.request.delete(
+        `${BASE}/ui/videos/${VIDEO_ID}/comments/${comment.comment_id}`,
+        { headers: csrfHeader(ALICE_ID) },
+      ),
     );
     expect(delResp.status()).toBe(204);
     await ctx.close();

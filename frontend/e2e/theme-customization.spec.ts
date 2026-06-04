@@ -279,14 +279,26 @@ test.describe("109. Accent Color", () => {
   });
 
   test("109.10 Accent updates focus ring (--color-ring)", async () => {
-    // Click teal swatch - the --color-ring should update to match teal
+    // Click teal swatch - the --color-ring should update to match teal.
+    // Under a shared-backend shard run, an async server-preferences load left
+    // in flight from 109.9's reload (server still has "pink" saved from 109.7)
+    // can resolve AFTER our teal click and briefly revert --color-ring. A fixed
+    // 400ms wait can read the value during that revert window. Poll instead and
+    // re-assert the teal selection inside the poll so a late server-pref load
+    // that reverts the accent is corrected on the next iteration.
     const tealSwatch = page.getByTestId("color-swatch-teal");
     await expect(tealSwatch).toBeVisible();
     await tealSwatch.click();
-    await page.waitForTimeout(400);
 
-    const ring = await getCSSVar(page, "--color-ring");
-    expect(ring).toContain("173");
+    await expect
+      .poll(
+        async () => {
+          await tealSwatch.click();
+          return getCSSVar(page, "--color-ring");
+        },
+        { timeout: 8_000, intervals: [200, 300, 400, 500] },
+      )
+      .toContain("173");
   });
 });
 

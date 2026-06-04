@@ -71,6 +71,20 @@ async function injectAuth(page: Page, userId = ALICE_ID) {
   }, userId);
 }
 
+// Retry on 429: under a shared-backend shard run the accumulated request volume
+// from other specs can trip the global IP rate-limit window. Honor Retry-After
+// (capped) so a transient 429 doesn't silently drop a reaction/message POST
+// (which would leave the UI never rendering the expected badge).
+async function retry429(fn: () => Promise<any>) {
+  let resp = await fn();
+  for (let attempt = 0; attempt < 4 && resp.status() === 429; attempt++) {
+    const ra = Number(resp.headers()["retry-after"] || "1");
+    await new Promise((r) => setTimeout(r, Math.min(Math.max(ra, 1), 3) * 1000));
+    resp = await fn();
+  }
+  return resp;
+}
+
 // API helpers bound to a specific identity (carries that user's cookies + CSRF).
 async function reactAs(
   rc: APIRequestContext,
@@ -81,15 +95,17 @@ async function reactAs(
   action: "add" | "remove" = "add",
 ) {
   const s = getSessions()[identity];
-  return rc.post(
-    `${API}/messaging/conversations/${convoId}/messages/${msgId}/reactions`,
-    {
-      data: { emoji, action },
-      headers: {
-        "x-csrf-token": s.csrf_token,
-        Cookie: s.cookies.map((c) => `${c.name}=${c.value}`).join("; "),
+  return retry429(() =>
+    rc.post(
+      `${API}/messaging/conversations/${convoId}/messages/${msgId}/reactions`,
+      {
+        data: { emoji, action },
+        headers: {
+          "x-csrf-token": s.csrf_token,
+          Cookie: s.cookies.map((c) => `${c.name}=${c.value}`).join("; "),
+        },
       },
-    },
+    ),
   );
 }
 
@@ -138,9 +154,11 @@ async function getOrCreateDm(page: Page): Promise<string> {
 // Send a message as Alice; return its message_id.
 async function sendMessage(page: Page, convoId: string, text: string): Promise<string> {
   const s = getSessions()[ALICE_ID];
-  const resp = await page.request.post(
-    `${API}/messaging/conversations/${convoId}/messages`,
-    { data: { text }, headers: { "x-csrf-token": s.csrf_token } },
+  const resp = await retry429(() =>
+    page.request.post(`${API}/messaging/conversations/${convoId}/messages`, {
+      data: { text },
+      headers: { "x-csrf-token": s.csrf_token },
+    }),
   );
   if (!resp.ok()) throw new Error(`send failed: ${resp.status()}`);
   const body = await resp.json();
@@ -267,12 +285,48 @@ test.describe("734. Quick-react double-tap & animation", () => {
     const bubble = page.getByTestId("message-bubble").filter({ hasText: text }).last();
     await expect(bubble).toBeVisible({ timeout: 8000 });
 
-    await bubble.dblclick();
-    // Heart badge appears.
     const badge = bubble.getByTestId("reaction-badge-❤️");
-    await expect(badge).toBeVisible({ timeout: 6000 });
-    // Pop animation class is briefly applied on add.
-    await expect(badge).toHaveClass(/reaction-badge-enter/, { timeout: 2000 });
+    // The `reaction-badge-enter` pop class is applied for only ~320ms AFTER the
+    // reaction's network refetch lands. Under a shared-backend shard run that
+    // round-trip is slow, so the original one-shot dblclick + fixed-timeout
+    // `toHaveClass` assertion raced the 320ms window — by the time Playwright
+    // sampled the class it had already been removed. Instead, install a
+    // browser-side MutationObserver on the bubble BEFORE the dblclick that
+    // latches whether the class ever appeared, then trigger the dblclick.
+    // This deterministically catches the transient regardless of refetch
+    // latency (no polling-cadence race).
+    await bubble.evaluate((el: Element) => {
+      const w = window as unknown as { __popSeen?: boolean; __popObs?: MutationObserver };
+      w.__popSeen = false;
+      const check = () => {
+        if (el.querySelector(".reaction-badge-enter")) w.__popSeen = true;
+      };
+      const obs = new MutationObserver(check);
+      // childList+subtree: the badge node is *inserted* with the
+      // `reaction-badge-enter` class already on it (then the class is removed
+      // ~320ms later), so we must observe node insertion, not just attr changes.
+      obs.observe(el, { attributes: true, childList: true, subtree: true, attributeFilter: ["class"] });
+      w.__popObs = obs;
+      check();
+    });
+
+    await bubble.dblclick();
+    // Heart badge appears (durable outcome of the add).
+    await expect(badge).toBeVisible({ timeout: 8000 });
+    // The pop animation class fired at some point during/after the add.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => (window as unknown as { __popSeen?: boolean }).__popSeen === true,
+          ),
+        { timeout: 6000, intervals: [50, 100, 150, 200] },
+      )
+      .toBe(true);
+    await page.evaluate(() => {
+      const w = window as unknown as { __popObs?: MutationObserver };
+      w.__popObs?.disconnect();
+    });
   });
 
   test("734.2 Double-click again removes the heart reaction", async () => {
@@ -308,12 +362,28 @@ test.describe("735. Reaction-detail popover UI", () => {
   test("735.1 Clicking the details trigger opens the popover listing reactors", async ({ request }) => {
     const text = `popover-${TS}`;
     const msgId = await sendMessage(page, convoId, text);
-    await reactAs(request, ALICE_ID, convoId, msgId, "🚀");
+    // Confirm the reaction landed (not dropped by a shard-load 429) — otherwise
+    // the badge would never render and the trigger below would never appear.
+    const reactResp = await reactAs(request, ALICE_ID, convoId, msgId, "🚀");
+    expect(reactResp.status()).toBe(200);
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
 
     const bubble = page.getByTestId("message-bubble").filter({ hasText: text }).last();
     await expect(bubble).toBeVisible({ timeout: 8000 });
-    await expect(bubble.getByTestId("reaction-badge-🚀")).toBeVisible({ timeout: 6000 });
+    // The 🚀 reaction was added via API; under shard load the first `online`
+    // refetch may land before the reaction is committed/visible. Re-dispatch
+    // `online` until the badge appears (the refetch is idempotent).
+    const badge = bubble.getByTestId("reaction-badge-🚀");
+    await expect
+      .poll(
+        async () => {
+          await page.evaluate(() => window.dispatchEvent(new Event("online")));
+          return badge.count();
+        },
+        { timeout: 12_000, intervals: [400, 600, 800, 1000] },
+      )
+      .toBeGreaterThan(0);
+    await expect(badge).toBeVisible({ timeout: 6000 });
 
     await bubble.getByTestId("reaction-details-trigger").click();
     const popover = page.getByTestId("reaction-detail-popover");

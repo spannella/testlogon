@@ -383,9 +383,16 @@ test.describe("Section 70: Wallet UI", () => {
     // Navigate to billing ledger tab
     await alicePage.goto(`${BASE}/billing?tab=ledger`, { waitUntil: "load" });
     await alicePage.waitForTimeout(800);
-    // Should see wallet_withdrawal entries (from 70.4 above and section 69)
-    await expect(
-      alicePage.getByText("wallet_withdrawal").or(alicePage.getByText("wallet_deposit")).first()
-    ).toBeVisible({ timeout: 8000 });
+    // Under shard accumulation the ledger holds many rows; the Ledger UI fetches
+    // up to 200 entries sorted newest-first (the backend caps at 200) and the
+    // DataTable renders all of them, so the large DOM can be slow to paint.
+    // Match BOTH the raw `reason` text (wallet_withdrawal / wallet_deposit) and
+    // the capitalized `type` column rendering ("Wallet withdrawal" / "Wallet
+    // deposit"), scope with .first() to avoid strict-mode on repeated rows, and
+    // allow extra time for the heavy table to render.
+    const walletEntry = alicePage
+      .getByText(/wallet_withdrawal|wallet_deposit|Wallet withdrawal|Wallet deposit/)
+      .first();
+    await expect(walletEntry).toBeVisible({ timeout: 15000 });
   });
 });
