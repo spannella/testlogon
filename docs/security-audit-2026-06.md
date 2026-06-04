@@ -121,3 +121,55 @@ admin scopes-vs-capabilities (ADMIN-PERMS-001), rate-limit dev inflation (dev-on
 2. **Hardcoded `dev-*` secret fallbacks** create a "secure-only-if-env-set" trap.
 3. **SSRF guard exists but isn't applied uniformly** (link preview, UPS emit, webhook v1 path).
 4. **Dev/mock surfaces** rely on runtime gates rather than not-registering in prod.
+
+---
+
+# Wave 2 (deeper surfaces) — additional findings
+
+## New high-impact
+- 🌐 **XFF IP spoofing** — `app/core/normalize.py:client_ip_from_request` trusts the
+  first `X-Forwarded-For` with **no trusted-proxy check**. Used by rate-limit
+  middleware, audit logs, login-anomaly, device-trust, magic-link IP check → an
+  attacker rotates `X-Forwarded-For` to **bypass per-IP rate limits / brute-force
+  login+MFA**, **evade the IP blocklist**, **poison audit/forensics**, and bypass the
+  magic-link IP-match. (Root gate `root_network.py` is OK — it uses trusted-proxy
+  resolution; the generic helper does not. → **SEC-008**, Critical.)
+- 🌐 **SAML RelayState open redirect** — `app/routers/sso_saml.py:78,212` redirects to
+  the IdP-supplied `RelayState` unvalidated → post-auth phishing/token theft.
+  Host-header → eID callback URL (`kyc_eidv.py:87`). → **SEC-011**, High.
+- 🌐/👤 **Account-takeover via auth weaknesses** — OTP brute force (per-IP only +
+  `mfa/sms/begin` resets the per-challenge counter → unlimited 6-digit guesses,
+  `ui_mfa.py`/`rate_limit.py`); **device-trust cookie is an unbound random token**
+  (not HMAC(server_secret,user+device)) → stolen cookie = permanent MFA skip and
+  attacker can self-trust a device (`device_trust.py`); non-constant-time `!=` on
+  email/recovery codes; password reset **silently ignores** session-revocation
+  failures; **email/phone change doesn't verify the new address** before it becomes a
+  login/reset identity; recovery-code brute force (48-bit, no global lockout). →
+  **SEC-009**, Critical.
+- 🌐/👤 **Realtime-stream IDOR (SSE/WS)** — `GET /broadcast/sessions/{id}/stream` and
+  `/chat/stream` (`broadcast.py:717,1763`) and `watch_party/{id}/stream`
+  (`watch_party.py:262`) authenticate but **don't check the subscriber is a
+  participant** → stream another user's private broadcast/chat/party in real time;
+  chat stream calls `_chat_msg_out` **without `viewer_user_id`** → **locked/expired
+  message text leaks**. `mint_ws_token`/`verify_ws_token` minted but never verified.
+  → **SEC-010**, Critical.
+- 🌐 **Media pipeline SSRF/local-file-read** — ffmpeg inputs lack
+  `-protocol_whitelist`; `video_concatenator.py:338` uses `concat -safe 0` (allows
+  `file://`); watermark download accepts arbitrary `http(s)` (`169.254.169.254`).
+  → **SEC-012**, High.
+- 💸 **Economic/business-logic abuse** — affiliate commission **replay** (no
+  idempotency on `transaction_id`, `referrals.py:289`); **free-trial unlimited
+  re-subscribe** (`subscription_server.py:817`); promo per-user limit **race/TOCTOU**
+  (`promo_codes.py`); referral attribution **race** (no ConditionExpression);
+  view-once **re-read race**. → **SEC-013**, Critical/High.
+
+## Confirmed-good (wave 2)
+Mass-assignment privesc NOT found — profile/address/media updates use allowlisted
+models (`normalize_profile_payload`/`AddressIn`/`MediaPreferencesIn`); `extra="allow"`
+only on response models. Self-referral & self-tip blocked; cancelled subscriptions
+grant no access; image decompression-bomb limit + SVG reject present; browser-SSH WS
+authorizes per session owner; root network gate uses trusted-proxy IP resolution.
+
+## Note
+API keys created before scoped-capabilities default to **full scope** when
+`capabilities is None` (`api_keys.py:125`) — migrate legacy keys (tracked under SEC-005).
