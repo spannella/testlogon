@@ -76,21 +76,21 @@ export default function GroupSettingsPage() {
 
   const groupQuery = useQuery({
     queryKey: ["groups", groupId],
-    queryFn: () => getGroup(groupId!).then((r) => r.data),
+    queryFn: () => getGroup(groupId!),
     enabled: !!groupId,
     staleTime: 30_000,
   });
 
   const membersQuery = useQuery({
     queryKey: ["groups", groupId, "members"],
-    queryFn: () => listGroupMembers(groupId!).then((r) => r.data),
+    queryFn: () => listGroupMembers(groupId!),
     enabled: !!groupId,
     staleTime: 15_000,
   });
 
   const pendingQuery = useQuery({
     queryKey: ["groups", groupId, "pending"],
-    queryFn: () => listPendingMembers(groupId!).then((r) => r.data),
+    queryFn: () => listPendingMembers(groupId!),
     enabled: !!groupId && (groupQuery.data?.my_role === "admin" || groupQuery.data?.my_role === "moderator"),
     staleTime: 15_000,
   });

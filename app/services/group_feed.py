@@ -170,6 +170,11 @@ def list_group_feed(
     # the most recent `limit` posts. Feed-index records are ordered by recency
     # (SK = "{ts}#{post_id}"), so an old-but-pinned post would otherwise be
     # sliced off below before the pinned-first sort runs.
+    #
+    # Pinned state is read from the authoritative *post* items (see below), not
+    # from the feed-index `pinned` flag, which is maintained by a separate write
+    # and can drift out of sync. We therefore identify pinned posts via the post
+    # items themselves rather than trusting the index record's stale flag.
     if not cursor:
         seen_ids = {r.get("post_id") for r in index_records}
         for pinned_rec in _pinned_index_records(tbl, group_id):
@@ -181,17 +186,21 @@ def list_group_feed(
     if not is_member:
         index_records = [r for r in index_records if r.get("audience") == "public"]
 
-    # Take only requested limit
-    has_more = len(index_records) > limit or "LastEvaluatedKey" in resp
-    # Keep pinned records even when slicing to the page limit.
-    pinned_records = [r for r in index_records if r.get("pinned")]
-    other_records = [r for r in index_records if not r.get("pinned")]
-    index_records = (pinned_records + other_records)[: max(limit, len(pinned_records))]
-
-    # Batch fetch full posts
+    # Batch fetch full posts (authoritative source of the `pinned` flag).
     post_ids = [r["post_id"] for r in index_records]
     posts = _batch_get_posts(tbl, post_ids)
     post_map = {p["post_id"]: p for p in posts}
+
+    # Take only the requested limit, but always keep pinned posts (determined
+    # from the authoritative post item) even when slicing to the page limit.
+    has_more = len(index_records) > limit or "LastEvaluatedKey" in resp
+    pinned_records = [
+        r for r in index_records if bool(post_map.get(r["post_id"], {}).get("pinned"))
+    ]
+    other_records = [
+        r for r in index_records if not bool(post_map.get(r["post_id"], {}).get("pinned"))
+    ]
+    index_records = (pinned_records + other_records)[: max(limit, len(pinned_records))]
 
     # Build result sorted: pinned first by pinned_at desc, then by created_at desc
     result_posts = []
@@ -324,41 +333,13 @@ def _batch_get_posts(tbl, post_ids: List[str]) -> List[Dict[str, Any]]:
     return results
 
 
-def _count_pinned(tbl, group_id: str) -> int:
-    """Count pinned posts in a group (scan feed index with filter).
-
-    DynamoDB applies FilterExpression *after* reading a page (up to 1MB), so a
-    single query can miss matches on a busy feed. Loop on LastEvaluatedKey so
-    the pinned count is accurate regardless of how many posts the group has.
-    """
-    total = 0
-    start_key: Dict[str, Any] | None = None
-    while True:
-        kwargs: Dict[str, Any] = {
-            "KeyConditionExpression": Key("pk").eq(_pk_groupfeed(group_id)),
-            "FilterExpression": "pinned = :t",
-            "ExpressionAttributeValues": {":t": True},
-            "Select": "COUNT",
-        }
-        if start_key:
-            kwargs["ExclusiveStartKey"] = start_key
-        resp = tbl.query(**kwargs)
-        total += resp.get("Count", 0)
-        start_key = resp.get("LastEvaluatedKey")
-        if not start_key:
-            break
-    return total
-
-
-def _pinned_index_records(tbl, group_id: str) -> List[Dict[str, Any]]:
-    """Return all pinned feed-index records for a group (paginated)."""
+def _all_feed_index_records(tbl, group_id: str) -> List[Dict[str, Any]]:
+    """Return every feed-index record for a group (paginated)."""
     records: List[Dict[str, Any]] = []
     start_key: Dict[str, Any] | None = None
     while True:
         kwargs: Dict[str, Any] = {
             "KeyConditionExpression": Key("pk").eq(_pk_groupfeed(group_id)),
-            "FilterExpression": "pinned = :t",
-            "ExpressionAttributeValues": {":t": True},
         }
         if start_key:
             kwargs["ExclusiveStartKey"] = start_key
@@ -368,6 +349,30 @@ def _pinned_index_records(tbl, group_id: str) -> List[Dict[str, Any]]:
         if not start_key:
             break
     return records
+
+
+def _count_pinned(tbl, group_id: str) -> int:
+    """Count pinned posts in a group.
+
+    Pinned state is read from the authoritative *post* items, not the
+    feed-index `pinned` flag (which is maintained by a separate write and can
+    drift out of sync — leaving the count wrong and the pin-limit check leaky).
+    """
+    return len(_pinned_index_records(tbl, group_id))
+
+
+def _pinned_index_records(tbl, group_id: str) -> List[Dict[str, Any]]:
+    """Return feed-index records whose underlying post is pinned.
+
+    Determined from the authoritative post item rather than the index record's
+    own `pinned` flag, which can be stale.
+    """
+    index_records = _all_feed_index_records(tbl, group_id)
+    if not index_records:
+        return []
+    posts = _batch_get_posts(tbl, [r["post_id"] for r in index_records])
+    pinned_ids = {p["post_id"] for p in posts if bool(p.get("pinned"))}
+    return [r for r in index_records if r.get("post_id") in pinned_ids]
 
 
 def _update_feed_index_pinned(tbl, group_id: str, post_id: str, pinned: bool) -> None:

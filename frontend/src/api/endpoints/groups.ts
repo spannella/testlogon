@@ -32,6 +32,9 @@ export const deleteGroup = (groupId: string) =>
 export const listGroupMembers = (groupId: string) =>
   api.get<{ members: GroupMember[]; count: number }>(`/ui/groups/${groupId}/members`);
 
+export const listPendingMembers = (groupId: string) =>
+  api.get<GroupMember[]>(`/ui/groups/${groupId}/pending`);
+
 export const joinGroup = (groupId: string) =>
   api.post(`/ui/groups/${groupId}/join`);
 

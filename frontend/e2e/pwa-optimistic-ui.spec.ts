@@ -144,7 +144,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await page.getByRole("button", { name: "Send message" }).click();
 
     // Verify message appears
-    await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toBeVisible({ timeout: 5000 });
 
     // Verify pending badge
     await expect(page.getByText(/sending when online/i)).toBeVisible();
@@ -167,7 +167,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await page.getByRole("button", { name: "Send message" }).click();
 
     // Check opacity class on the message bubble
-    const bubble = page.locator("p").filter({ hasText: testMsg }).locator("xpath=ancestor::div[contains(@class,'rounded-2xl')]");
+    const bubble = page.getByTestId("message-text").filter({ hasText: testMsg }).locator("xpath=ancestor::div[contains(@class,'rounded-2xl')]");
     await expect(bubble.first()).toHaveClass(/opacity-7/);
 
     await page.context().setOffline(false);
@@ -198,7 +198,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await expect(page.getByText(/sending when online/i)).not.toBeVisible({ timeout: 15000 });
 
     // Message text should still be visible
-    await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible();
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toBeVisible();
   });
 
   test("102.4 multiple offline messages appear in order", async ({ page }) => {
@@ -221,7 +221,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     }
 
     // All three should appear
-    const bubbles = page.locator("p").filter({ hasText: new RegExp(`Order .+ ${ts}`) });
+    const bubbles = page.getByTestId("message-text").filter({ hasText: new RegExp(`Order .+ ${ts}`) });
     await expect(bubbles).toHaveCount(3);
     const texts = await bubbles.allTextContents();
     expect(texts[0]).toContain("first");
@@ -272,7 +272,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     // Then transition to completed
     await page.unroute("**/messaging/conversations/*/messages");
     await expect(page.getByText(/^Sending\.\.\.$/)).not.toBeVisible({ timeout: 15000 });
-    await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible();
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toBeVisible();
   });
 
   test("102.6 offline message hover toolbar is hidden", async ({ page }) => {
@@ -290,7 +290,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await page.getByRole("button", { name: "Send message" }).click();
 
     // Hover over the offline message
-    const bubble = page.locator("p").filter({ hasText: testMsg });
+    const bubble = page.getByTestId("message-text").filter({ hasText: testMsg });
     await expect(bubble).toBeVisible();
     await bubble.hover();
     await page.waitForTimeout(500);
@@ -327,7 +327,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await expect(composeInput).toHaveValue("");
 
     // But message should appear in conversation
-    await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible();
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toBeVisible();
 
     await page.context().setOffline(false);
   });
@@ -352,7 +352,7 @@ test.describe("102. Offline Message Optimistic Display", () => {
     await page.getByRole("button", { name: "Send message" }).click();
 
     // At least one message should appear (dedup may or may not catch it depending on timing)
-    await expect(page.locator("p").filter({ hasText: testMsg }).first()).toBeVisible();
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg }).first()).toBeVisible();
 
     await page.context().setOffline(false);
   });
@@ -398,7 +398,7 @@ test.describe("103. Failed Message UI", () => {
     await page.context().setOffline(true);
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible();
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toBeVisible();
 
     // Intercept message POST to return 400
     await page.route("**/messaging/conversations/*/messages", (route) => {
@@ -419,10 +419,10 @@ test.describe("103. Failed Message UI", () => {
     await expect(page.getByRole("button", { name: /discard/i })).toBeVisible();
 
     // Message text should still be visible
-    await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible();
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toBeVisible();
 
     // Bubble should have destructive ring
-    const bubble = page.locator("p").filter({ hasText: testMsg }).locator("xpath=ancestor::div[contains(@class,'rounded-2xl')]");
+    const bubble = page.getByTestId("message-text").filter({ hasText: testMsg }).locator("xpath=ancestor::div[contains(@class,'rounded-2xl')]");
     await expect(bubble.first()).toHaveClass(/ring-destructive/);
 
     await page.unroute("**/messaging/conversations/*/messages");
@@ -488,12 +488,12 @@ test.describe("103. Failed Message UI", () => {
     await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible({ timeout: 15000 });
 
     // Wait for the optimistic message to settle to a single bubble before discarding.
-    await expect(page.locator("p").filter({ hasText: testMsg })).toHaveCount(1, { timeout: 7000 });
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toHaveCount(1, { timeout: 7000 });
     // Click discard
     await page.getByRole("button", { name: /discard/i }).click();
 
     // Message should be removed
-    await expect(page.locator("p").filter({ hasText: testMsg })).toHaveCount(0, { timeout: 7000 });
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toHaveCount(0, { timeout: 7000 });
 
     // Toast should confirm
     await expect(page.getByText(/discarded/i)).toBeVisible({ timeout: 5000 });
@@ -836,7 +836,7 @@ test.describe("106. Group Chat Offline Optimistic", () => {
     await page.getByPlaceholder(/type a message/i).fill(testMsg);
     await page.getByRole("button", { name: "Send message" }).click();
 
-    await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible();
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toBeVisible();
     await expect(page.getByText(/sending when online/i)).toBeVisible();
 
     await page.context().setOffline(false);
@@ -862,6 +862,6 @@ test.describe("106. Group Chat Offline Optimistic", () => {
     await triggerRefetch(page);
 
     await expect(page.getByText(/sending when online/i)).not.toBeVisible({ timeout: 15000 });
-    await expect(page.locator("p").filter({ hasText: testMsg })).toBeVisible();
+    await expect(page.getByTestId("message-text").filter({ hasText: testMsg })).toBeVisible();
   });
 });
