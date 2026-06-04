@@ -157,7 +157,11 @@ test.describe("717. Emoji Picker UI", () => {
   test("717.2 Picker shows 9 category tabs", async () => {
     await page.getByTestId("emoji-button").click();
     await expect(page.getByTestId("emoji-picker")).toBeVisible({ timeout: 5000 });
-    const tabs = page.locator('[data-testid^="emoji-category-"]');
+    // 9 standard emoji categories. The picker also renders a separate "Custom"
+    // (favorites/recents) tab with testid emoji-category-custom — exclude it here.
+    const tabs = page.locator(
+      '[data-testid^="emoji-category-"]:not([data-testid="emoji-category-custom"])',
+    );
     await expect(tabs).toHaveCount(9);
     await page.keyboard.press("Escape");
   });

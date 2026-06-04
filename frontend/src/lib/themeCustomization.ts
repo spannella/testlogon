@@ -123,13 +123,20 @@ export function isDarkMode(mode: ThemeConfig["mode"]): boolean {
  */
 export function applyThemeConfig(
   config: ThemeConfig,
-  opts: { skipAccent?: boolean } = {},
+  opts: { skipAccent?: boolean; skipMode?: boolean } = {},
 ): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
 
-  // Mode → dark class
-  root.classList.toggle("dark", isDarkMode(config.mode));
+  // Mode → dark class.
+  // When `skipMode` is set the caller owns the `dark` class reactively (e.g.
+  // ThemeProvider's uiStore-driven theme effect, which is the single source of
+  // truth for light/dark). Toggling it here from an async server fetch would
+  // race against — and revert — the user's live preference (theme-switcher
+  // dark-mode regression), so we leave it untouched.
+  if (!opts.skipMode) {
+    root.classList.toggle("dark", isDarkMode(config.mode));
+  }
 
   // Accent → CSS variables.
   // When `skipAccent` is set the caller owns the accent vars reactively (e.g.

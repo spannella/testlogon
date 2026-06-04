@@ -520,6 +520,14 @@ def moderate_comment(
 
     key = {"pk": target["pk"], "sk": target["sk"]}
     ts = now_ts()
+    # Maps the input verb to the stored past-tense moderation_action value,
+    # which is also what the API returns to the caller.
+    stored_action = {
+        "delete": "deleted",
+        "hide": "hidden",
+        "pin": "pinned",
+        "unpin": "unpinned",
+    }[action]
 
     if action == "delete":
         tbl.update_item(
@@ -542,9 +550,10 @@ def moderate_comment(
         tbl.update_item(
             Key=key,
             UpdateExpression=(
-                "SET hidden = :t, moderated_by = :mod, "
+                "SET #hidden = :t, moderated_by = :mod, "
                 "moderation_action = :act, moderated_at = :ts"
             ),
+            ExpressionAttributeNames={"#hidden": "hidden"},
             ExpressionAttributeValues={
                 ":t": True,
                 ":mod": delegate_id,
@@ -593,7 +602,7 @@ def moderate_comment(
     return {
         "ok": True,
         "comment_id": comment_id,
-        "moderation_action": action,
+        "moderation_action": stored_action,
         "moderated_by": delegate_id,
         "moderated_at": ts,
     }

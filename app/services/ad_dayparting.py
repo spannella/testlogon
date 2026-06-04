@@ -193,7 +193,10 @@ def validate_flights(
                 "end_date": f_end,
                 "daily_budget_cents": budget,
                 "creative_ids": list(creative_ids),
-                "status": flight.get("status", "scheduled"),
+                # A flight's status defaults to "scheduled". The request model
+                # carries ``status: Optional[str] = None``, so ``.get`` returns
+                # an explicit ``None`` (not the default) — coalesce it here.
+                "status": flight.get("status") or "scheduled",
             }
         )
 

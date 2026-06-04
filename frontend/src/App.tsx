@@ -164,6 +164,9 @@ const EarningsPage = lazy(() => import("@/pages/earnings/EarningsPage"));
 const GroupSettingsPage = lazy(() => import("@/pages/groups/GroupSettingsPage"));
 const TargetingEditor = lazy(() => import("@/pages/ads/TargetingEditor"));
 const CreativeEditor = lazy(() => import("@/pages/ads/CreativeEditor"));
+const CreativeListPage = lazy(() => import("@/pages/ads/CreativeListPage"));
+const AdvertiserDashboard = lazy(() => import("@/pages/ads/AdvertiserDashboard"));
+const CampaignList = lazy(() => import("@/pages/ads/CampaignList"));
 const AdminCreativeReviewPage = lazy(() => import("@/pages/ads/AdminCreativeReviewPage"));
 const GroupPage = lazy(() => import("@/pages/groups/GroupPage"));
 const WebhookDashboard = lazy(() => import("@/pages/webhooks/WebhookDashboard"));
@@ -304,8 +307,10 @@ export default function App() {
           <Route path="billing/tax-forms" element={<TaxForm1099Page />} />
           <Route path="billing/disputes" element={<DisputesPage />} />
           <Route path="ads/billing" element={<AdBillingPage />} />
+          <Route path="ads/dashboard" element={<AdvertiserDashboard />} />
+          <Route path="ads/campaigns" element={<CampaignList />} />
           <Route path="ads/targeting" element={<TargetingEditor />} />
-          <Route path="ads/creatives" element={<CreativeEditor />} />
+          <Route path="ads/creatives" element={<CreativeListPage />} />
           <Route path="earnings" element={<EarningsPage />} />
           <Route path="ads/analytics" element={<AdAnalyticsDashboard />} />
           <Route path="ads/scheduling" element={<AdSchedulePage />} />

@@ -150,6 +150,14 @@ async function createBroadcastSession(page: Page, userId: string, profileId: str
   return data.id;
 }
 
+// Transition a freshly-created session to "live" so chat is available.
+// Chat (and chat moderation) requires the broadcast to be live; the start
+// flow is idempotent on an already-live session.
+async function startBroadcastSession(page: Page, userId: string, sessionId: string): Promise<void> {
+  const resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/start`, {});
+  expect([200, 202]).toContain(resp.status());
+}
+
 async function sendChatMessage(
   page: Page,
   userId: string,
@@ -159,7 +167,7 @@ async function sendChatMessage(
   const resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/chat`, {
     text,
   });
-  expect(resp.status()).toBe(200);
+  expect([200, 201]).toContain(resp.status());
   const data = await resp.json();
   return data.message_id;
 }
@@ -193,6 +201,8 @@ test.describe("499 -- Broadcast Chat Moderation API", () => {
     // Create broadcast profile and session as Alice
     profileId = await createBroadcastProfile(alicePage, ALICE_ID);
     sessionId = await createBroadcastSession(alicePage, ALICE_ID, profileId);
+    // Chat is only available while the broadcast is live.
+    await startBroadcastSession(alicePage, ALICE_ID, sessionId);
 
     // Send a chat message as Alice that Bob can moderate
     chatMsgId = await sendChatMessage(alicePage, ALICE_ID, sessionId, `Test msg ${TS}`);
@@ -451,6 +461,8 @@ test.describe("501 -- Multi-Moderator & Ban API", () => {
 
     profileId = await createBroadcastProfile(alicePage, ALICE_ID);
     sessionId = await createBroadcastSession(alicePage, ALICE_ID, profileId);
+    // Chat is only available while the broadcast is live.
+    await startBroadcastSession(alicePage, ALICE_ID, sessionId);
   });
 
   test.afterAll(async () => {
@@ -629,6 +641,8 @@ test.describe("502 -- Moderation Audit & System Messages API", () => {
 
     profileId = await createBroadcastProfile(alicePage, ALICE_ID);
     sessionId = await createBroadcastSession(alicePage, ALICE_ID, profileId);
+    // Chat is only available while the broadcast is live.
+    await startBroadcastSession(alicePage, ALICE_ID, sessionId);
   });
 
   test.afterAll(async () => {

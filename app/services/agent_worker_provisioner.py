@@ -267,7 +267,12 @@ def _provision_worker_dev(
                 instance_type=instance_type,
                 ami_id="ami-ubuntu-2404",
             )
-            compute_id = result["ec2_instance_id"]
+            # Store the launcher's internal instance_id (the DDB sort key used by
+            # get_instance/stop_instance/start_instance/terminate_instance), NOT
+            # the mock AWS ec2_instance_id. The lifecycle helpers look up via
+            # INSTANCE#{instance_id}; passing ec2_instance_id makes them raise
+            # InstanceNotFound (which the router doesn't catch -> 500 on stop).
+            compute_id = result["instance_id"]
             public_ip = result.get("public_ip", "")
         else:
             result = launch_pod(
@@ -275,7 +280,10 @@ def _provision_worker_dev(
                 label=f"agent-worker-{worker_id}",
                 image="ubuntu-ssh",
             )
-            compute_id = result.get("k8s_pod_name") or result.get("pod_name", "")
+            # Same as the ec2 path: store the launcher's internal pod_id (the DDB
+            # sort key POD#{pod_id} used by terminate_pod/get_pod), NOT the
+            # cluster-side k8s_pod_name, otherwise terminate raises PodNotFound.
+            compute_id = result.get("pod_id") or result.get("k8s_pod_name") or result.get("pod_name", "")
             public_ip = result.get("pod_ip", "")
 
         host_id = f"h_{uuid4().hex[:16]}"

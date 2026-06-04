@@ -60,9 +60,61 @@ function getSessions(): Record<string, SessionData> {
 
 // ─── Auth / page helpers ──────────────────────────────────────────────────────
 
+/**
+ * Prevent the server-side theme/preference fetches from clobbering the
+ * client-set theme these tests rely on.
+ *
+ * These tests assert pure *client-side* (localStorage / uiStore) theme
+ * persistence. Two product mechanisms otherwise override the local theme on a
+ * fresh page load:
+ *   - AppShell → loadServerPreferences() (`GET /ui/settings/preferences`)
+ *     writes the server's saved theme into the store.
+ *   - ThemeProvider → getThemeCustomization() (`GET /ui/theme`) applies the
+ *     server's saved mode.
+ * Because the whole suite shares the Alice user, earlier tests' debounced
+ * server syncs leave a stale theme on the server that would otherwise win.
+ * Stubbing both GETs to "no saved preference" makes the local-persistence
+ * assertions deterministic without changing product behavior.
+ */
+async function stubServerTheme(page: Page) {
+  await page.route("**/ui/settings/preferences", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ preferences: {} }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await page.route("**/ui/theme", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          theme: {
+            mode: "system",
+            accent_color: "blue",
+            custom_accent_hex: null,
+            font_scale: "default",
+            density: "comfortable",
+            preset: "default",
+            high_contrast: false,
+          },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+}
+
 async function injectAuth(page: Page, userId = ALICE_ID) {
   const session = getSessions()[userId];
   if (!session) throw new Error(`No session for ${userId}`);
+  await stubServerTheme(page);
   await page.context().addCookies(session.cookies);
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
   await page.evaluate((uid: string) => {

@@ -165,9 +165,13 @@ test.describe("82 — Mobile chrome", () => {
   test("82.5 tapping hamburger opens the slide-in nav drawer", async () => {
     const hamburger = page.getByRole("button", { name: "Open menu" });
     await hamburger.click();
-    // Scope to the Sheet dialog to avoid matching hidden desktop sidebar elements
+    // Scope to the Sheet dialog to avoid matching hidden desktop sidebar elements.
+    // Use an exact link match — plain getByText("Dashboard") also matches the
+    // "Fleet Dashboard" / "Project Dashboard" nav links (strict-mode violation).
     const drawer = page.getByRole("dialog");
-    await expect(drawer.getByText("Dashboard")).toBeVisible({ timeout: 5_000 });
+    await expect(
+      drawer.getByRole("link", { name: "Dashboard", exact: true }),
+    ).toBeVisible({ timeout: 5_000 });
     // Drawer should list navigation groups
     await expect(drawer.getByText("Messages")).toBeVisible();
   });

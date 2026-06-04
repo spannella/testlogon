@@ -479,8 +479,9 @@ function CreateBundlePlanDialog({ syndicateId }: { syndicateId: string }) {
         </DialogHeader>
         <div className="space-y-4">
           <div>
-            <label className="text-sm font-medium">Name</label>
+            <label htmlFor="bundle-plan-name" className="text-sm font-medium">Name</label>
             <Input
+              id="bundle-plan-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="All-Access Bundle"
@@ -497,8 +498,9 @@ function CreateBundlePlanDialog({ syndicateId }: { syndicateId: string }) {
             />
           </div>
           <div>
-            <label className="text-sm font-medium">Price (USD)</label>
+            <label htmlFor="bundle-plan-price" className="text-sm font-medium">Price (USD)</label>
             <Input
+              id="bundle-plan-price"
               type="number"
               value={priceDollars}
               onChange={(e) => setPriceDollars(e.target.value)}

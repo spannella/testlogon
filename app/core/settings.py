@@ -2140,7 +2140,7 @@ class Settings:
     # Admin Compute Dashboard (INFRA-012)
     compute_quotas_table_name: str = os.environ.get("COMPUTE_QUOTAS_TABLE_NAME", "compute_quotas")
     admin_compute_dashboard_enabled: bool = os.environ.get("ADMIN_COMPUTE_DASHBOARD_ENABLED", "1") not in ("0", "false", "False")
-    compute_quota_default_max_ec2: int = int(os.environ.get("COMPUTE_QUOTA_DEFAULT_MAX_EC2", "5"))
+    compute_quota_default_max_ec2: int = int(os.environ.get("COMPUTE_QUOTA_DEFAULT_MAX_EC2", "3"))
     compute_quota_default_max_k8s: int = int(os.environ.get("COMPUTE_QUOTA_DEFAULT_MAX_K8S", "5"))
     compute_quota_default_max_spend_cents: int = int(os.environ.get("COMPUTE_QUOTA_DEFAULT_MAX_SPEND_CENTS", "5000"))
     # Instance Templates & Presets (INFRA-007)

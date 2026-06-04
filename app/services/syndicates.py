@@ -151,6 +151,12 @@ def list_members(syndicate_id: str) -> List[Dict[str, Any]]:
     return resp.get("Items", [])
 
 
+def is_member(syndicate_id: str, user_id: str) -> bool:
+    """Return True if user_id is a current member of the syndicate."""
+    resp = T.syndicates.get_item(Key={"pk": f"SYND#{syndicate_id}", "sk": f"MEMBER#{user_id}"})
+    return bool(resp.get("Item"))
+
+
 def invite_member(
     *,
     syndicate_id: str,

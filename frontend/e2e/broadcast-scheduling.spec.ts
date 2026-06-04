@@ -41,6 +41,14 @@ async function injectAuth(page: Page, identity: string) {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  // Seed the auth store so browser navigation doesn't redirect to /login.
+  // API-only callers (page.request) don't need this, but UI tests that navigate
+  // in the browser rely on useAuthStore.isAuthenticated being true.
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 async function apiPost(
