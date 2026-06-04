@@ -257,7 +257,9 @@ export default function AgentMemoryPage() {
       {showContextPreview && (
         <Card>
           <CardHeader>
-            <CardTitle>Context Preview</CardTitle>
+            <CardTitle asChild>
+              <h2>Context Preview</h2>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             {contextQ.isLoading && <p>Loading context...</p>}
@@ -431,7 +433,9 @@ export default function AgentMemoryPage() {
       {/* Memory Entries Section */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Memory Entries</CardTitle>
+          <CardTitle asChild>
+            <h2>Memory Entries</h2>
+          </CardTitle>
           <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
             <DialogTrigger asChild>
               <Button size="sm">

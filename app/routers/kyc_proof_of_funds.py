@@ -94,7 +94,7 @@ def adjudicate(
     updated = kyc_proof_of_funds.adjudicate(
         submission_id,
         decision=body.decision,
-        reviewer_sub=session["user_sub"],
+        reviewer_sub=session.sub,
         reviewer_note=body.reviewer_note,
     )
     if not updated:

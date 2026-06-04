@@ -499,12 +499,58 @@ test.describe("429 — Dynamic Membership Access", () => {
 // ─── Section 430: Bundle Plan UI ──────────────────────────────────────────────
 
 test.describe("430 — Bundle Plan UI", () => {
+  // Self-contained syndicate so this block does not depend on module-level
+  // state set by earlier describe blocks. Playwright `retries: 1` can spawn a
+  // fresh worker, which resets module-level vars (e.g. `syndicateId`) to "" —
+  // navigating to `/syndicates//manage` then renders no Plans tab. Creating a
+  // dedicated syndicate in this block's beforeAll makes the UI tests retry-safe.
+  let uiSyndId = "";
+
+  test.beforeAll(async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await injectAuth(page, ALICE_ID);
+
+    const createResp = await apiPost(page, ALICE_ID, "/ui/syndicates", {
+      name: `BundleUISynd_${TS}`,
+      description: "Test syndicate for bundle plan UI",
+    });
+    expect(createResp.status()).toBe(201);
+    uiSyndId = (await createResp.json()).syndicate_id;
+    expect(uiSyndId).toBeTruthy();
+
+    // Invite Bob and have him accept so he is a non-admin member.
+    const invResp = await apiPost(page, ALICE_ID, `/ui/syndicates/${uiSyndId}/invite`, {
+      user_id: BOB_ID,
+    });
+    expect(invResp.status()).toBe(201);
+
+    const bobContext = await browser.newContext();
+    const bobPage = await bobContext.newPage();
+    await injectAuth(bobPage, BOB_ID);
+    const acceptResp = await apiPost(bobPage, BOB_ID, `/ui/syndicates/${uiSyndId}/invite/respond`, {
+      accept: true,
+    });
+    expect(acceptResp.status()).toBe(200);
+
+    // Seed an active plan so non-admin sees a Subscribe button (not Archive).
+    const planResp = await apiPost(page, ALICE_ID, `/ui/syndicates/${uiSyndId}/plans`, {
+      name: `UISeedPlan_${TS}`,
+      price_cents: 1000,
+      interval: "month",
+    });
+    expect(planResp.status()).toBe(201);
+
+    await bobContext.close();
+    await context.close();
+  });
+
   test("430.1 Bundle plans tab visible on syndicate page", async ({ browser }) => {
     const context = await browser.newContext();
     const page = await context.newPage();
     await injectAuth(page, ALICE_ID);
 
-    await page.goto(`${BASE}/syndicates/${syndicateId}/manage`);
+    await page.goto(`${BASE}/syndicates/${uiSyndId}/manage`);
     await expect(page.getByRole("tab", { name: "Plans" })).toBeVisible();
 
     await context.close();
@@ -515,13 +561,16 @@ test.describe("430 — Bundle Plan UI", () => {
     const page = await context.newPage();
     await injectAuth(page, ALICE_ID);
 
-    await page.goto(`${BASE}/syndicates/${syndicateId}/manage`);
+    await page.goto(`${BASE}/syndicates/${uiSyndId}/manage`);
 
-    // Click Plans tab
+    // Wait for the Plans tab to be ready before clicking.
+    await expect(page.getByRole("tab", { name: "Plans" })).toBeVisible();
     await page.getByRole("tab", { name: "Plans" }).click();
 
-    // Wait for the plans tab content to load
-    await expect(page.getByText("Bundle Plans")).toBeVisible();
+    // Wait for the plans tab content to load. Scope to the card title to avoid
+    // a strict-mode violation (the syndicate description and the "No bundle
+    // plans yet" empty-state both also contain the substring "Bundle Plans").
+    await expect(page.getByText("Bundle Plans", { exact: true })).toBeVisible();
 
     // Click Create Plan button
     await page.getByRole("button", { name: /Create Plan/i }).click();
@@ -560,7 +609,9 @@ test.describe("430 — Bundle Plan UI", () => {
     const page = await context.newPage();
     await injectAuth(page, BOB_ID);
 
-    await page.goto(`${BASE}/syndicates/${syndicateId}/manage`);
+    await page.goto(`${BASE}/syndicates/${uiSyndId}/manage`);
+    // Wait for the Plans tab to be ready before clicking.
+    await expect(page.getByRole("tab", { name: "Plans" })).toBeVisible();
     await page.getByRole("tab", { name: "Plans" }).click();
 
     // Wait for plans to load

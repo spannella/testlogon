@@ -170,9 +170,19 @@ async function sendChatMessage(
   sessionId: string,
   text: string,
 ): Promise<string> {
-  const resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/chat`, {
+  // Broadcast chat enforces a per-user/per-session minimum interval
+  // (BROADCAST_CHAT_RATE_LIMIT_MS=2000). Consecutive sends from the same
+  // user within 2s return 429. Wait the window out, and retry once if a
+  // residual limit from a prior send is still active.
+  let resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/chat`, {
     text,
   });
+  if (resp.status() === 429) {
+    await new Promise((r) => setTimeout(r, 2100));
+    resp = await apiPost(page, userId, `/broadcast/sessions/${sessionId}/chat`, {
+      text,
+    });
+  }
   expect([200, 201]).toContain(resp.status());
   const data = await resp.json();
   return data.message_id;

@@ -38,6 +38,13 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test.beforeAll(async ({ browser }) => {
     alicePage = await browser.newPage();
     await injectAuth(alicePage, "alice");
+    // Seed the client-side auth store so ProtectedRoute treats the page as
+    // authenticated (cookies alone only satisfy server-side API auth).
+    await alicePage.goto("/login", { waitUntil: "domcontentloaded" });
+    await alicePage.evaluate((uid: string) => {
+      const state = { userId: uid, accessToken: null, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    }, getSession("alice").user_sub);
     bobPage = await browser.newPage();
     await injectAuth(bobPage, "bob");
   });

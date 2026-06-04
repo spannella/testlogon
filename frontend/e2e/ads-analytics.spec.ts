@@ -423,11 +423,20 @@ test.describe("Ad Analytics (ADS-008)", () => {
     await expect(
       alicePage.getByRole("heading", { name: "Ad Analytics Dashboard" }),
     ).toBeVisible();
-    // KPI cards should appear
-    await expect(alicePage.getByText("Impressions")).toBeVisible({ timeout: 10_000 });
-    await expect(alicePage.getByText("Clicks")).toBeVisible();
-    await expect(alicePage.getByText("CTR")).toBeVisible();
-    await expect(alicePage.getByText("Spend")).toBeVisible();
+    // KPI cards should appear (scope to the card label paragraphs to avoid
+    // matching the analytics table column headers of the same name)
+    await expect(
+      alicePage.getByRole("paragraph").filter({ hasText: /^Impressions$/ }),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(
+      alicePage.getByRole("paragraph").filter({ hasText: /^Clicks$/ }),
+    ).toBeVisible();
+    await expect(
+      alicePage.getByRole("paragraph").filter({ hasText: /^CTR$/ }),
+    ).toBeVisible();
+    await expect(
+      alicePage.getByRole("paragraph").filter({ hasText: /^Spend$/ }),
+    ).toBeVisible();
   });
 
   test("378.2 — Date range selector is present", async () => {

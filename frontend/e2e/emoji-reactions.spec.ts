@@ -334,7 +334,9 @@ test.describe("735. Reaction-detail popover UI", () => {
     await expect(bubble).toBeVisible({ timeout: 8000 });
     await expect(bubble.getByTestId("reaction-badge-😎")).toBeVisible({ timeout: 6000 });
 
-    await bubble.getByTestId("reaction-details-trigger").click();
+    const trigger = bubble.getByTestId("reaction-details-trigger");
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
     await expect(page.getByTestId("reaction-detail-popover")).toBeVisible({ timeout: 5000 });
     // Press Escape to dismiss the popover.
     await page.keyboard.press("Escape");

@@ -318,12 +318,16 @@ test.describe("424 — Admin Ad Platform dashboard UI", () => {
   });
 
   test("424.2 Moderation tab shows queue", async () => {
+    await injectAuth(rootPage, ROOT_ID);
+    await rootPage.goto(`${BASE}/admin/ad-platform`, { waitUntil: "domcontentloaded" });
     await rootPage.getByRole("tab", { name: "Moderation" }).click();
-    await expect(rootPage.getByText("Pending Accounts")).toBeVisible();
+    await expect(rootPage.getByText("Pending Accounts", { exact: true })).toBeVisible();
   });
 
   test("424.3 Accounts tab shows advertiser accounts", async () => {
+    await injectAuth(rootPage, ROOT_ID);
+    await rootPage.goto(`${BASE}/admin/ad-platform`, { waitUntil: "domcontentloaded" });
     await rootPage.getByRole("tab", { name: "Accounts" }).click();
-    await expect(rootPage.getByText("Advertiser Accounts")).toBeVisible();
+    await expect(rootPage.getByText("Advertiser Accounts", { exact: true })).toBeVisible();
   });
 });

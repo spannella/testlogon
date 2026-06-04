@@ -38,8 +38,15 @@ export default function MessagesPage() {
   // Send presence heartbeat every 30s
   useHeartbeat(true);
 
-  // Reset active conversations when switching modes
+  // Reset active conversations when switching modes. Skip the initial mount so
+  // a conversation supplied via router state (e.g. the Contacts "Message"
+  // quick-action navigating with `openConversation`) is not immediately wiped.
+  const prevManagingCreatorIdRef = React.useRef(managingCreatorId);
   React.useEffect(() => {
+    if (prevManagingCreatorIdRef.current === managingCreatorId) {
+      return;
+    }
+    prevManagingCreatorIdRef.current = managingCreatorId;
     setActiveConvo(null);
     setActiveDelegateConvo(null);
     setMobileShowConvo(false);

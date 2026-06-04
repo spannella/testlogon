@@ -645,40 +645,28 @@ test.describe("PLATFORM-001: Rate Limiting", () => {
       // Should see the Rate Limit Dashboard heading
       await expect(
         uiRootPage.getByRole("heading", { name: "Rate Limit Dashboard" }),
-      ).toBeVisible();
+      ).toBeVisible({ timeout: 15_000 });
 
-      // Should see summary cards (use exact match to avoid strict-mode violations)
-      await expect(uiRootPage.getByText("429s (Last")).toBeVisible();
-      await expect(
-        uiRootPage.getByText("Top Offending IP", { exact: true }),
-      ).toBeVisible();
-      await expect(
-        uiRootPage.getByText("Top Offending User", { exact: true }),
-      ).toBeVisible();
-      await expect(uiRootPage.getByText("Most Limited Group")).toBeVisible();
+      // The live summary cards live on the "Live Dashboard" tab.
+      await uiRootPage.getByRole("tab", { name: "Live Dashboard" }).click();
+      await expect(uiRootPage.getByText(/Total Hits/)).toBeVisible({ timeout: 10_000 });
+      await expect(uiRootPage.getByText("Top Group", { exact: true })).toBeVisible();
+      await expect(uiRootPage.getByText("Top Source", { exact: true })).toBeVisible();
     });
 
     test("E18 -- Endpoint group config table renders", async () => {
       await uiRootPage.goto("/admin/rate-limits");
       await uiRootPage.waitForLoadState("domcontentloaded");
 
-      // Click Configure button to see config panel
-      await uiRootPage.getByRole("button", { name: "Configure" }).click();
+      // The "Rules" tab (default) shows the endpoint group configuration.
+      await uiRootPage.getByRole("tab", { name: "Rules" }).click();
 
-      // CardTitle renders as <div>, not <heading>, so use getByText
-      await expect(
-        uiRootPage.getByText("Rate Limit Configuration", { exact: true }),
-      ).toBeVisible();
+      // CardTitle renders as <div>, not <heading>, so use getByText.
       await expect(
         uiRootPage.getByText("Endpoint Group Configuration"),
-      ).toBeVisible();
-
-      // Go back to dashboard
-      await uiRootPage
-        .getByRole("button", { name: "Back to Dashboard" })
-        .click();
+      ).toBeVisible({ timeout: 10_000 });
       await expect(
-        uiRootPage.getByRole("heading", { name: "Rate Limit Dashboard" }),
+        uiRootPage.getByText("Global IP Rate Limit"),
       ).toBeVisible();
     });
 

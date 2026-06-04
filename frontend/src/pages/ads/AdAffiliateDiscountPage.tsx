@@ -84,7 +84,9 @@ export default function AdAffiliateDiscountPage() {
       <Card>
         <CardHeader className="flex flex-row items-center gap-2">
           <Tag className="h-6 w-6" />
-          <CardTitle>Ad Creative Affiliate Discounts</CardTitle>
+          <CardTitle asChild>
+            <h2>Ad Creative Affiliate Discounts</h2>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">

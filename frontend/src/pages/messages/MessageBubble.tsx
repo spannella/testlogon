@@ -515,13 +515,20 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
       const alreadyReacted = (message.my_reactions ?? []).includes(emoji);
       const action = alreadyReacted ? "remove" : "add";
       // MSG-011: play the pop animation only when adding a reaction.
-      if (action === "add") {
-        setAnimatingEmoji(emoji);
-        window.setTimeout(() => setAnimatingEmoji((cur) => (cur === emoji ? null : cur)), 320);
-      }
-      return reactToMessage(conversationId, message.message_id, emoji, action).then(() => {
-        void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+      const playPopAnimation = action === "add";
+      return reactToMessage(conversationId, message.message_id, emoji, action).then(async () => {
+        await queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
         void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+        // Start the pop animation only once the badge is actually rendered
+        // (i.e. after the refetch lands), otherwise the 320ms window expires
+        // during the network round-trip and the badge mounts without the class.
+        if (playPopAnimation) {
+          setAnimatingEmoji(emoji);
+          window.setTimeout(
+            () => setAnimatingEmoji((cur) => (cur === emoji ? null : cur)),
+            320,
+          );
+        }
       });
     },
     onError: (err: unknown) => {

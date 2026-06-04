@@ -80,7 +80,15 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
     { name: "ui_csrf", value: r.ui_csrf ?? "", domain: "localhost", path: "/" },
     { name: "ui_access_token", value: r.ui_access_token ?? "", domain: "localhost", path: "/" },
   ]);
-  return ctx.newPage();
+  const page = await ctx.newPage();
+  // Seed the client-side auth store so ProtectedRoute treats the page as
+  // authenticated (cookies alone only satisfy server-side API auth).
+  await page.goto("/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, r.user_sub);
+  return page;
 }
 
 function csrfHeaders(identity: string): Record<string, string> {

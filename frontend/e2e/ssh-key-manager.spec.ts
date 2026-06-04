@@ -409,6 +409,23 @@ test.describe("247 -- SSH Key Manager UI", () => {
     await alicePage.close();
   });
 
+  // Seed the key the table/delete tests rely on via the API so they are
+  // self-contained — they do not depend on the UI-generate test having run
+  // first, and survive a retry-worker reset of the module-level TS constant.
+  async function ensureUiGenKey() {
+    const resp = await apiGet(alicePage, "/ui/remote/ssh-keys");
+    if (resp.ok()) {
+      const data = await resp.json();
+      if ((data.keys || []).some((k: any) => k.label === `UI Gen Key ${TS}`)) {
+        return;
+      }
+    }
+    await apiPost(alicePage, ALICE_ID, "/ui/remote/ssh-keys/generate", {
+      label: `UI Gen Key ${TS}`,
+      key_type: "ed25519",
+    });
+  }
+
   test("SshKeyManagerPage shows empty state", async () => {
     await alicePage.goto(`${BASE}/remote/ssh-keys`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByText("SSH Keys")).toBeVisible();
@@ -433,11 +450,14 @@ test.describe("247 -- SSH Key Manager UI", () => {
     ).toBeVisible({ timeout: 15_000 });
 
     // Should show the public key dialog after generation
-    await expect(alicePage.getByText("Public Key")).toBeVisible();
+    await expect(
+      alicePage.getByRole("heading", { name: "Public Key" }),
+    ).toBeVisible();
     await expect(alicePage.getByText(/ssh-ed25519/)).toBeVisible();
   });
 
   test("Key appears in table with type badge", async () => {
+    await ensureUiGenKey();
     await alicePage.goto(`${BASE}/remote/ssh-keys`, { waitUntil: "domcontentloaded" });
     await expect(
       alicePage.locator("tr").filter({ hasText: `UI Gen Key ${TS}` })
@@ -446,6 +466,7 @@ test.describe("247 -- SSH Key Manager UI", () => {
   });
 
   test("Delete key removes from list", async () => {
+    await ensureUiGenKey();
     await alicePage.goto(`${BASE}/remote/ssh-keys`, { waitUntil: "domcontentloaded" });
     await expect(
       alicePage.locator("tr").filter({ hasText: `UI Gen Key ${TS}` })

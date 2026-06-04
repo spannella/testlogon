@@ -1284,7 +1284,20 @@ def run_mock_workflow(
             mark_ticket_qa_failed(
                 ticket_id=ticket_id, agent_sub=agent_sub, report=report, bug_ticket_ids=bug_ids
             )
-        # verdict == error: leave ticket in qa_in_progress (spec §7.1)
+        elif verdict == "error":
+            # Infrastructure error: the ticket is held by the QA agent and must
+            # not return to the eligible queue. If it is still in code_complete
+            # (e.g. execute-qa was invoked without an explicit prior claim),
+            # transition it to qa_in_progress so it is excluded from eligibility
+            # (spec §7.1).
+            if ticket.get("status") == "code_complete":
+                try:
+                    claim_qa_ticket(
+                        agent_run_id=run_id, ticket_id=ticket_id, agent_sub=agent_sub
+                    )
+                except ValueError:
+                    # Already claimed / status drifted — leave as-is.
+                    pass
     except LookupError:
         pass
     return output

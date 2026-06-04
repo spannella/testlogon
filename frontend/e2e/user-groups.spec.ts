@@ -302,26 +302,47 @@ test.describe("user-groups", () => {
   // ── Section 450: Groups UI ─────────────────────────────────────────
 
   test.describe("450 — Groups UI", () => {
+    // Self-seed a dedicated public group that Alice administers. This block must
+    // not rely on the module-level `GROUP_NAME`/`groupId` from section 447 —
+    // Playwright restarts the worker on a prior failure (and on retry of these
+    // very tests), which resets module state and regenerates the TS-derived
+    // GROUP_NAME, leaving `groupId` empty (settings route `/groups//settings`)
+    // and pointing GROUP_NAME at a group that was never created.
+    let uiGroupName = "";
+    let uiGroupId = "";
+    test.beforeAll(async () => {
+      uiGroupName = `E2E UI Group ${TS}`;
+      const resp = await apiPost(alicePage, ALICE_ID, "/ui/groups", {
+        name: uiGroupName,
+        description: "A test group for E2E UI",
+        visibility: "public",
+        topic: "testing",
+      });
+      uiGroupId = (await resp.json()).group_id;
+    });
+
     test("450.1 Groups list shows user's groups", async () => {
       await alicePage.goto(`${BASE}/groups`, { waitUntil: "domcontentloaded" });
       await expect(
         alicePage.locator("[data-testid='groups-list-page']"),
       ).toBeVisible();
       // Alice should see the public group she created
-      await expect(alicePage.getByText(GROUP_NAME)).toBeVisible({ timeout: 10_000 });
+      await expect(alicePage.getByText(uiGroupName)).toBeVisible({ timeout: 10_000 });
     });
 
     test("450.2 Discover tab shows public groups", async () => {
       await alicePage.goto(`${BASE}/groups`, { waitUntil: "domcontentloaded" });
       await alicePage.getByRole("tab", { name: "Discover" }).click();
-      // Wait for public groups to load
+      // Search for the seeded group so it isn't paginated off by accumulated
+      // test data, then assert it appears in the discover results.
+      await alicePage.getByPlaceholder("Search groups...").fill(uiGroupName);
       await expect(
-        alicePage.getByText(GROUP_NAME),
+        alicePage.getByText(uiGroupName),
       ).toBeVisible({ timeout: 10_000 });
     });
 
     test("450.3 Settings page allows admin edits", async () => {
-      await alicePage.goto(`${BASE}/groups/${groupId}/settings`, {
+      await alicePage.goto(`${BASE}/groups/${uiGroupId}/settings`, {
         waitUntil: "domcontentloaded",
       });
       await expect(
@@ -332,7 +353,7 @@ test.describe("user-groups", () => {
       await descInput.fill(`UI updated desc ${TS}`);
       await alicePage.getByRole("button", { name: /Save Changes/i }).click();
       // Verify via API
-      const resp = await apiGet(alicePage, `/ui/groups/${groupId}`);
+      const resp = await apiGet(alicePage, `/ui/groups/${uiGroupId}`);
       const body = await resp.json();
       expect(body.description).toBe(`UI updated desc ${TS}`);
     });

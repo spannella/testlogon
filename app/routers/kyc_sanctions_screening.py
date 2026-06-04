@@ -149,8 +149,17 @@ async def admin_rescreen_case(
             detail={"code": "kyc_case_not_found", "message": "Case not found."},
         )
     user_sub = str(existing[0].get("user_sub") or "")
+    # Re-use the subject identity that was originally screened. Without this the
+    # rescreen falls back to a profile lookup and loses the screened name,
+    # producing zero matches for a previously-matched subject.
+    prior = existing[0]
     results = STORE.rescreen_user(
-        case_id=case_id, user_sub=user_sub, trigger=TRIGGER_MANUAL
+        case_id=case_id,
+        user_sub=user_sub,
+        trigger=TRIGGER_MANUAL,
+        name=str(prior.get("screened_name") or "") or None,
+        dob=str(prior.get("screened_dob") or "") or None,
+        country=str(prior.get("screened_nationality") or "") or None,
     )
     matches = sum(1 for r in results if r["result"] != RESULT_CLEAR)
     return KycScreeningRescreenResponse(

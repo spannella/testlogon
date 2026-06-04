@@ -440,7 +440,7 @@ export default function App() {
           <Route path="admin/jobs" element={<JobDashboardPage />} />
           <Route path="admin/financials" element={<FinancialDashboard />} />
           <Route path="admin/payment-health" element={<PaymentHealthDashboard />} />
-          <Route path="admin/ads/creatives" element={<AdminCreativeReviewPage />} />
+          <Route path="admin/ads/creatives/review" element={<AdminCreativeReviewPage />} />
           <Route path="admin/ads/fraud" element={<AdFraudDashboard />} />
           <Route path="admin/ad-platform" element={<AdPlatformDashboard />} />
           <Route path="admin/audit-exports" element={<AuditExportPage />} />

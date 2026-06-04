@@ -223,10 +223,21 @@ test.describe("713 — KYC Status page", () => {
   const APPROVED_CASE = `kyc_apr_${TS}`;
   const NMI_CASE = `kyc_nmi_${TS}`;
 
-  test.beforeAll(() => {
+  test.beforeAll(async ({ browser }) => {
     seedCase({ caseId: ACTIVE_CASE, status: "under_review" });
     seedCase({ caseId: APPROVED_CASE, status: "approved", decidedAt: Math.floor(Date.now() / 1000) });
     seedCase({ caseId: NMI_CASE, status: "needs_more_info", reasonCodes: ["blurry_id"] });
+    // The re-upload (713.5) writes to /kyc/{caseId}/... via the file manager,
+    // which requires the parent folders to already exist (the backend does NOT
+    // auto-create them). Seed the folder tree for the needs_more_info case.
+    const page = await browser.newPage();
+    await injectAuth(page, "alice");
+    for (const path of ["/kyc", `/kyc/${NMI_CASE}`]) {
+      const resp = await apiPost(page, "alice", "/v1/fs/folder", { path });
+      // 200 = created, 409 = already exists — both fine.
+      expect([200, 409].includes(resp.status())).toBeTruthy();
+    }
+    await page.close();
   });
 
   test("713.1 status page shows an active case with a timeline", async ({ page }) => {

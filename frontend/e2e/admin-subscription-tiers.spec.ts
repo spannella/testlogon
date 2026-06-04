@@ -477,8 +477,13 @@ test.describe("550b. Tier manager UI", () => {
     await rootPage.getByLabel("Name").fill(uniqueName);
     await rootPage.getByLabel("Price (USD)").fill("14.99");
     await rootPage.getByRole("button", { name: "Save" }).click();
+    // The new tier renders as a card whose title (a div, not a heading) shows
+    // the tier name. Assert the tier card containing the name is visible.
     await expect(
-      rootPage.getByRole("heading", { name: uniqueName }),
+      rootPage
+        .getByTestId("tier-card")
+        .filter({ hasText: uniqueName })
+        .first(),
     ).toBeVisible({ timeout: 15_000 });
   });
 });

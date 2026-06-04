@@ -65,6 +65,13 @@ function sessions(): Record<string, SessionData> {
 async function identityPage(browser: Browser, identity: string): Promise<Page> {
   const page = await browser.newPage();
   await page.context().addCookies(sessions()[identity].cookies);
+  // Seed the client-side auth store so ProtectedRoute treats the page as
+  // authenticated (cookies alone only satisfy server-side API auth).
+  await page.goto("/login", { waitUntil: "domcontentloaded" });
+  await page.evaluate((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, sessions()[identity].user_sub);
   return page;
 }
 

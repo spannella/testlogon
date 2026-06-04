@@ -291,8 +291,11 @@ test.describe.serial("agent-llm-keys", () => {
     test("Add Key dialog shows provider selector", async () => {
       await alicePage.goto("/agents/llm-keys");
       await alicePage.getByRole("button", { name: /Add Key/i }).click();
-      // Verify provider cards
-      await expect(alicePage.getByText("OpenAI")).toBeVisible();
+      // Verify provider cards (scope the OpenAI card by its testid to avoid
+      // matching the "Custom (OpenAI-compatible)" card)
+      await expect(
+        alicePage.getByTestId("provider-card-openai").getByText("OpenAI"),
+      ).toBeVisible();
       await expect(alicePage.getByText("Anthropic (Claude)")).toBeVisible();
       await expect(alicePage.getByText("DeepSeek")).toBeVisible();
       await expect(alicePage.getByText("Google Gemini")).toBeVisible();

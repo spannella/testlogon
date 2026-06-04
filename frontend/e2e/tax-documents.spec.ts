@@ -262,9 +262,10 @@ test.describe("FIN-004 Consumer Tax Documents", () => {
   });
 
   test("551.4 Credits-only: debit (refund) excluded", async () => {
-    // Seed a debit in a fresh isolated year (2022) and confirm it's excluded.
-    seedLedger(ALICE_ID, [{ reason: "Refund to fan", amount_cents: 9999, year: 2022, type: "debit" }]);
-    const resp = await apiGet(alice, "/ui/tax-documents/summary", { year: "2022" });
+    // Seed a debit in a fresh isolated year (2026 — a valid, otherwise-empty
+    // year at/after the platform launch year) and confirm it's excluded.
+    seedLedger(ALICE_ID, [{ reason: "Refund to fan", amount_cents: 9999, year: 2026, type: "debit" }]);
+    const resp = await apiGet(alice, "/ui/tax-documents/summary", { year: "2026" });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
     expect(body.grand_total_cents).toBe(0);

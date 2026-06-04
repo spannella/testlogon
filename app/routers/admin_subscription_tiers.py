@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 
 from app.auth.deps import AuthenticatedUser
-from app.auth.policy import require_admin_or_root
+from app.auth.policy import require_admin_or_root, require_admin_or_root_csrf
 from app.models import (
     AdminSubscriptionTierAnalytics,
     AdminSubscriptionTierCreate,
@@ -31,7 +31,7 @@ admin_subscription_tiers_router = APIRouter(
 def create_subscription_tier(
     inp: AdminSubscriptionTierCreate,
     req: Request,
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ):
     out = svc.create_tier(
         creator_id=actor.sub,
@@ -68,7 +68,7 @@ def list_subscription_tiers(
 def reorder_subscription_tiers(
     inp: AdminSubscriptionTierReorder,
     req: Request,
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ):
     out = svc.reorder_tiers(creator_id=actor.sub, tier_ids=inp.tier_ids)
     audit_event(
@@ -118,7 +118,7 @@ def update_subscription_tier(
     tier_id: str,
     inp: AdminSubscriptionTierUpdate,
     req: Request,
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ):
     out = svc.update_tier(
         creator_id=actor.sub,
@@ -141,7 +141,7 @@ def update_subscription_tier(
 def archive_subscription_tier(
     tier_id: str,
     req: Request,
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ):
     out = svc.archive_tier(creator_id=actor.sub, tier_id=tier_id)
     audit_event(
@@ -160,7 +160,7 @@ def archive_subscription_tier(
 def unarchive_subscription_tier(
     tier_id: str,
     req: Request,
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ):
     out = svc.unarchive_tier(creator_id=actor.sub, tier_id=tier_id)
     audit_event(
@@ -177,7 +177,7 @@ def unarchive_subscription_tier(
 def delete_subscription_tier(
     tier_id: str,
     req: Request,
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ):
     out = svc.delete_tier(creator_id=actor.sub, tier_id=tier_id)
     audit_event(

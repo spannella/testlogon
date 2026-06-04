@@ -166,13 +166,27 @@ def list_group_feed(
     resp = tbl.query(**kwargs)
     index_records = resp.get("Items", [])
 
+    # On the first page, always include pinned posts even if they are older than
+    # the most recent `limit` posts. Feed-index records are ordered by recency
+    # (SK = "{ts}#{post_id}"), so an old-but-pinned post would otherwise be
+    # sliced off below before the pinned-first sort runs.
+    if not cursor:
+        seen_ids = {r.get("post_id") for r in index_records}
+        for pinned_rec in _pinned_index_records(tbl, group_id):
+            if pinned_rec.get("post_id") not in seen_ids:
+                index_records.append(pinned_rec)
+                seen_ids.add(pinned_rec.get("post_id"))
+
     # Filter by audience
     if not is_member:
         index_records = [r for r in index_records if r.get("audience") == "public"]
 
     # Take only requested limit
     has_more = len(index_records) > limit or "LastEvaluatedKey" in resp
-    index_records = index_records[:limit]
+    # Keep pinned records even when slicing to the page limit.
+    pinned_records = [r for r in index_records if r.get("pinned")]
+    other_records = [r for r in index_records if not r.get("pinned")]
+    index_records = (pinned_records + other_records)[: max(limit, len(pinned_records))]
 
     # Batch fetch full posts
     post_ids = [r["post_id"] for r in index_records]
@@ -311,14 +325,49 @@ def _batch_get_posts(tbl, post_ids: List[str]) -> List[Dict[str, Any]]:
 
 
 def _count_pinned(tbl, group_id: str) -> int:
-    """Count pinned posts in a group (scan feed index with filter)."""
-    resp = tbl.query(
-        KeyConditionExpression=Key("pk").eq(_pk_groupfeed(group_id)),
-        FilterExpression="pinned = :t",
-        ExpressionAttributeValues={":t": True},
-        Select="COUNT",
-    )
-    return resp.get("Count", 0)
+    """Count pinned posts in a group (scan feed index with filter).
+
+    DynamoDB applies FilterExpression *after* reading a page (up to 1MB), so a
+    single query can miss matches on a busy feed. Loop on LastEvaluatedKey so
+    the pinned count is accurate regardless of how many posts the group has.
+    """
+    total = 0
+    start_key: Dict[str, Any] | None = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(_pk_groupfeed(group_id)),
+            "FilterExpression": "pinned = :t",
+            "ExpressionAttributeValues": {":t": True},
+            "Select": "COUNT",
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        total += resp.get("Count", 0)
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return total
+
+
+def _pinned_index_records(tbl, group_id: str) -> List[Dict[str, Any]]:
+    """Return all pinned feed-index records for a group (paginated)."""
+    records: List[Dict[str, Any]] = []
+    start_key: Dict[str, Any] | None = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(_pk_groupfeed(group_id)),
+            "FilterExpression": "pinned = :t",
+            "ExpressionAttributeValues": {":t": True},
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        records.extend(resp.get("Items", []))
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return records
 
 
 def _update_feed_index_pinned(tbl, group_id: str, post_id: str, pinned: bool) -> None:
