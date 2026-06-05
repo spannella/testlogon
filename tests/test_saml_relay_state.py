@@ -39,6 +39,11 @@ def _mock_env(monkeypatch):
     monkeypatch.setenv("UI_ACCESS_TOKEN_SECRET", "test-secret")
     monkeypatch.setenv("API_KEY_PEPPER", "test-pepper")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://platform.example.com")
+    # The Settings singleton is already constructed at import time, so setenv above
+    # does not change S.public_base_url. _safe_relay_state reads S.public_base_url at
+    # call time, so patch the live singleton attribute the same-host case depends on.
+    from app.core.settings import S
+    monkeypatch.setattr(S, "public_base_url", "https://platform.example.com")
 
 
 # ---------------------------------------------------------------------------
