@@ -517,8 +517,10 @@ def submit_content(*, deal_id: str, creator_sub: str, content_id: str) -> Dict[s
 
     _verify_content_ownership(deal["content_type"], content_id, creator_sub)
 
-    # Brand name = advertiser account company name (fallback to advertiser sub).
-    brand_name = deal["advertiser_sub"]
+    # Brand name = advertiser account company name. Falls back to a safe generic
+    # label — never the raw advertiser Cognito sub (UUID), which would leak PII
+    # into the public FTC disclosure ("Paid partnership with <UUID>"). See GAP-0060.
+    brand_name = "a verified brand partner"
     try:
         from app.services.ad_accounts import get_ad_account
 

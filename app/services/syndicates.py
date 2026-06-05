@@ -459,8 +459,9 @@ def list_pending_invites(user_id: str) -> List[Dict[str, Any]]:
     return [i for i in items if i.get("status") == "pending"]
 
 
-def list_pending_requests(syndicate_id: str) -> List[Dict[str, Any]]:
-    """List pending join requests for a syndicate."""
+def list_pending_requests(syndicate_id: str, caller_sub: str) -> List[Dict[str, Any]]:
+    """List pending join requests for a syndicate (admin only)."""
+    _require_admin(syndicate_id, caller_sub)
     resp = T.syndicates.query(
         KeyConditionExpression=Key("pk").eq(f"SYND#{syndicate_id}") & Key("sk").begins_with("REQUEST#"),
     )

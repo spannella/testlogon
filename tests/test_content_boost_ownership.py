@@ -44,6 +44,36 @@ def _make_table(ddb, name):
     )
 
 
+def _make_boosts_table(ddb, name):
+    """content_boosts table WITH GSI2 (matches scripts/local-ddb-init.py). The
+    GAP-0059 duplicate guard in create_boost queries GSI2, so the fixture must
+    mirror the prod schema."""
+    return ddb.create_table(
+        TableName=name,
+        KeySchema=[
+            {"AttributeName": "pk", "KeyType": "HASH"},
+            {"AttributeName": "sk", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "pk", "AttributeType": "S"},
+            {"AttributeName": "sk", "AttributeType": "S"},
+            {"AttributeName": "GSI2PK", "AttributeType": "S"},
+            {"AttributeName": "GSI2SK", "AttributeType": "N"},
+        ],
+        GlobalSecondaryIndexes=[
+            {
+                "IndexName": "GSI2",
+                "KeySchema": [
+                    {"AttributeName": "GSI2PK", "KeyType": "HASH"},
+                    {"AttributeName": "GSI2SK", "KeyType": "RANGE"},
+                ],
+                "Projection": {"ProjectionType": "ALL"},
+            }
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
+
+
 @pytest.fixture
 def moto_tables(monkeypatch):
     """Stand up billing, content_boosts and newsfeed tables in moto and wire
@@ -52,7 +82,7 @@ def moto_tables(monkeypatch):
     with mock_aws():
         ddb = boto3.resource("dynamodb", region_name="us-east-1")
         billing = _make_table(ddb, "billing_test")
-        boosts = _make_table(ddb, "content_boosts_test")
+        boosts = _make_boosts_table(ddb, "content_boosts_test")
         feed = _make_table(ddb, "newsfeed_test")
 
         # Wire the table handles the service + router reach for. ``T`` is a

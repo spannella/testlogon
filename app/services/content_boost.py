@@ -49,6 +49,14 @@ _LEDGER_CHARGE_TYPE = "content_boost_charge"
 _LEDGER_REFUND_TYPE = "content_boost_refund"
 
 
+class DuplicateBoostError(ValueError):
+    """Raised when an active boost already exists for the same content (GAP-0059).
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep
+    working, while letting the router map it to HTTP 409 (Conflict).
+    """
+
+
 def _now(now: int | None) -> int:
     return now if now is not None else now_ts()
 
@@ -220,6 +228,17 @@ def create_boost(
     _verify_content_ownership(owner_sub, content_type, content_id)
 
     ts = _now(now)
+
+    # Duplicate active-boost guard (GAP-0059): reject a second live boost for the
+    # same content BEFORE any wallet money moves. Reuses the existing GSI2 read
+    # path; raises DuplicateBoostError (-> HTTP 409) if a live boost exists.
+    existing = active_boost_for_content(content_type, content_id, now=ts)
+    if existing is not None:
+        raise DuplicateBoostError(
+            "an active boost already exists for this content "
+            f"(boost_id={existing['boost_id']}, expires={existing['ends_at']})"
+        )
+
     bid = f"boost_{uuid.uuid4().hex[:12]}"
     ends_at = ts + duration_seconds
 
