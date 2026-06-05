@@ -1427,11 +1427,14 @@ class AdImpressionIn(BaseModel):
     slot_index: int = Field(ge=0)
     creative_id: str = ""
     event_type: str = Field(default="impression", pattern=r"^(impression|complete|skip)$")
+    # Fraud-signal: actual view duration reported by the player (GAP-0006).
+    view_time_ms: int = Field(default=0, ge=0)
 
 
 class AdImpressionOut(BaseModel):
     ok: bool
     event_id: str
+    blocked: bool = False
 
 
 class AdRevenueOut(BaseModel):
@@ -1471,6 +1474,7 @@ def get_video_ad_config(
 def record_ad_impression_endpoint(
     video_id: str,
     body: AdImpressionIn,
+    request: Request,
     user=Depends(require_ui_session),
 ):
     """Record an ad impression event (impression/complete/skip)."""
@@ -1487,8 +1491,16 @@ def record_ad_impression_endpoint(
         slot_index=body.slot_index,
         creative_id=body.creative_id,
         event_type=body.event_type,
+        # Fraud signals forwarded to the fraud gate (GAP-0006).
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", ""),
+        view_time_ms=body.view_time_ms,
     )
-    return AdImpressionOut(ok=result["ok"], event_id=result["event_id"])
+    return AdImpressionOut(
+        ok=result["ok"],
+        event_id=result["event_id"],
+        blocked=result.get("blocked", False),
+    )
 
 
 @router.get("/{video_id}/ad-stats", response_model=AdRevenueOut)

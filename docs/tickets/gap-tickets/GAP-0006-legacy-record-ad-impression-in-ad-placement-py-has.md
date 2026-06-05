@@ -1,6 +1,6 @@
 # GAP-0006: legacy record_ad_impression() in ad_placement.py has no fraud check
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: ADS-014 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: ADS-014 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-014.md`); see also `docs/tickets/writeups/ADS-014.md`
 
 ## Location

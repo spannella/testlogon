@@ -204,6 +204,13 @@ def test_key(user_id: str, key_id: str) -> Dict[str, Any]:
 
         api_key_raw = kms_decrypt(item["encrypted_api_key"]).decode("utf-8")
         base_url = item.get("base_url") or registry.get("base_url", "")
+        # SSRF protection (GAP-0009): re-validate the stored base_url before
+        # issuing the outbound request, in case a malicious value was persisted
+        # before this validation existed or by a path bypassing the model.
+        from app.services.webhook_ssrf import validate_webhook_url
+
+        if base_url:
+            validate_webhook_url(base_url)
         endpoint = registry.get("test_endpoint", "/models")
         url = f"{base_url.rstrip('/')}{endpoint}"
         headers: Dict[str, str] = {}
@@ -214,7 +221,7 @@ def test_key(user_id: str, key_id: str) -> Dict[str, Any]:
             headers[k] = v
 
         start = time.monotonic()
-        with httpx.Client(timeout=10) as client:
+        with httpx.Client(timeout=10, follow_redirects=False) as client:
             resp = client.get(url, headers=headers)
         latency_ms = int((time.monotonic() - start) * 1000)
 
@@ -231,7 +238,14 @@ def test_key(user_id: str, key_id: str) -> Dict[str, Any]:
             logger.info("llm_key_tested user_id=%s key_id=%s provider=%s ok=true latency_ms=%d", user_id, key_id, provider, latency_ms)
             return {"ok": True, "models": models, "error": "", "latency_ms": latency_ms}
         else:
-            error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            # SSRF protection (GAP-0009): never echo the raw provider response
+            # body back to the user — it may contain internal/SSRF-leaked data.
+            # Log the full body server-side for diagnostics only.
+            logger.debug(
+                "llm_key_test_http_error user_id=%s key_id=%s status=%d body=%s",
+                user_id, key_id, resp.status_code, resp.text[:500],
+            )
+            error_msg = f"HTTP {resp.status_code}: provider returned an error"
             ts = now_ts()
             T.llm_provider_keys.update_item(
                 Key={"pk": f"USER#{user_id}", "sk": f"KEY#{key_id}"},

@@ -238,16 +238,71 @@ def record_ad_impression(
     slot_index: int,
     creative_id: str = "",
     event_type: str = "impression",  # "impression" | "complete" | "skip"
+    # Fraud-signal fields (GAP-0006). Optional for backwards compatibility.
+    ip_address: str = "",
+    user_agent: str = "",
+    view_time_ms: int = 0,
+    campaign_id: str = "",
 ) -> Dict[str, Any]:
     """Record an ad impression/completion/skip event.
 
     Writes to AdImpressions table for tracking. On "complete" events,
     credits the creator with ad revenue based on CPM rate.
 
-    Returns {"ok": True, "event_id": str}
+    All events first pass through ad-fraud detection (GAP-0006 / ADS-014),
+    mirroring the server-side serving path (``ad_serving.track_ad_event``).
+    A flagged event is recorded in the fraud-events table and short-circuits
+    before any impression write or revenue credit. The fraud check fails open
+    (a fraud-service error never blocks a legitimate impression).
+
+    Returns {"ok": True, "event_id": str} on success, or
+    {"ok": False, "event_id": "", "blocked": True, "reason": "fraud_detected"}
+    when the event is blocked.
     """
     ts = now_ts()
     event_id = f"adimp_{uuid.uuid4().hex}"
+
+    # ── Fraud detection (GAP-0006) ──────────────────────────────────────
+    if getattr(S, "ad_fraud_detection_enabled", True):
+        try:
+            from app.services import ad_fraud_prevention as fraud
+
+            result = fraud.check_fraud(
+                user_id=user_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                creative_id=creative_id,
+                campaign_id=campaign_id,
+                view_time_ms=view_time_ms,
+                event_type=event_type,
+            )
+            if result.flagged:
+                fraud.record_fraud_event(
+                    event_id=event_id,
+                    user_id=user_id,
+                    ip_address=ip_address,
+                    account_id=user_id,
+                    campaign_id=campaign_id,
+                    creative_id=creative_id,
+                    event_type=event_type,
+                    fraud_result=result,
+                )
+                logger.info(
+                    "ad_impression_blocked video=%s user=%s score=%s",
+                    video_id, user_id, result.score,
+                )
+                return {
+                    "ok": False,
+                    "event_id": "",
+                    "blocked": True,
+                    "reason": "fraud_detected",
+                }
+        except Exception:
+            # Fail-open: a fraud-service outage must not block legitimate
+            # impressions (matches ad_serving.track_ad_event behaviour).
+            logger.warning(
+                "ad_fraud_check_failed video=%s user=%s", video_id, user_id
+            )
 
     # Write impression record
     try:

@@ -4205,6 +4205,19 @@ class LlmKeyCreateIn(BaseModel):
     rate_limit_rpm: int = Field(default=60, ge=1, le=10000)
     monthly_budget_cents: int = Field(default=0, ge=0)
 
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, v: str) -> str:
+        # SSRF protection (GAP-0009): reject non-HTTPS / private-range URLs.
+        # Reuses the existing webhook SSRF validator (blocks RFC-1918,
+        # loopback, link-local; allows http://localhost only in dev mode).
+        if not v:
+            return v
+        from app.services.webhook_ssrf import validate_webhook_url
+
+        validate_webhook_url(v)  # raises ValueError on disallowed URL
+        return v
+
 
 class LlmKeyRotateIn(BaseModel):
     new_api_key: str = Field(..., min_length=8, max_length=500)

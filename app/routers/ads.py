@@ -444,8 +444,11 @@ async def invoice_endpoint(account_id: str, month: str, ctx=Depends(require_ui_s
     return generate_invoice(account_id, month)
 
 
-@router.post("/internal/charge-impression")
-async def internal_charge_impression(body: dict, ctx=Depends(require_ui_session)):
+@admin_router.post("/internal/charge-impression")
+async def internal_charge_impression(
+    body: dict,
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
     from app.services.ad_billing import charge_impression
     return charge_impression(
         account_id=body["account_id"],
@@ -457,8 +460,11 @@ async def internal_charge_impression(body: dict, ctx=Depends(require_ui_session)
     )
 
 
-@router.post("/internal/charge-click")
-async def internal_charge_click(body: dict, ctx=Depends(require_ui_session)):
+@admin_router.post("/internal/charge-click")
+async def internal_charge_click(
+    body: dict,
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
     from app.services.ad_billing import charge_click
     return charge_click(
         account_id=body["account_id"],
@@ -470,8 +476,11 @@ async def internal_charge_click(body: dict, ctx=Depends(require_ui_session)):
     )
 
 
-@router.post("/internal/charge-conversion")
-async def internal_charge_conversion(body: dict, ctx=Depends(require_ui_session)):
+@admin_router.post("/internal/charge-conversion")
+async def internal_charge_conversion(
+    body: dict,
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
     from app.services.ad_billing import charge_conversion
     return charge_conversion(
         account_id=body["account_id"],
