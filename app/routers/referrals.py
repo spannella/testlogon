@@ -21,6 +21,7 @@ from app.services.referrals import (
     list_referrals,
     lookup_referral_code,
     record_affiliate_commission,
+    withdraw,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,23 @@ def commissions(
 ):
     _require_referral_enabled()
     return list_commissions(ctx["user_sub"], limit=limit, cursor=cursor)
+
+
+# ── Withdrawal (redeem available commission into wallet) ─────────
+
+class WithdrawBody(BaseModel):
+    amount_cents: int
+
+
+@router.post("/withdraw", status_code=200)
+def withdraw_commissions(body: WithdrawBody, ctx: dict = Depends(require_ui_session)):
+    _require_referral_enabled()
+    try:
+        return withdraw(ctx["user_sub"], body.amount_cents)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
 
 
 # ── Attribution (who referred me?) ───────────────────────────────

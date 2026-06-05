@@ -164,6 +164,10 @@ def get_decrypted_api_key(user_id: str, key_id: str) -> str:
     item = resp.get("Item")
     if not item:
         raise ValueError("Key not found")
+    # GAP-0076 defense-in-depth: refuse to hand out the decrypted key for any
+    # non-active key. This blocks budget_exceeded keys at agent-provisioning
+    # time, not just during usage recording, closing the race window where a
+    # caller might have read the key before record_usage flipped the status.
     if item.get("status") != "active":
         raise ValueError(f"Key is not active (status: {item['status']})")
     logger.debug("llm_key_decrypted user_id=%s key_id=%s", user_id, key_id)
@@ -356,19 +360,39 @@ def record_usage(
         budget = int(item.get("monthly_budget_cents", 0) or 0)
         current = int(item.get("current_month_usage_cents", 0) or 0)
         if budget > 0 and current >= budget and item.get("status") == "active":
-            T.llm_provider_keys.update_item(
-                Key={"pk": f"USER#{user_id}", "sk": f"KEY#{key_id}"},
-                UpdateExpression="SET #st = :exceeded",
-                ExpressionAttributeNames={"#st": "status"},
-                ExpressionAttributeValues={":exceeded": "budget_exceeded"},
-            )
-            logger.warning(
-                "llm_key_budget_exceeded user_id=%s key_id=%s budget_cents=%d usage_cents=%d",
-                user_id,
-                key_id,
-                budget,
-                current,
-            )
+            # GAP-0076: the status flip must be atomic. Without a
+            # ConditionExpression, concurrent record_usage callers can each
+            # observe status == "active" after the budget is already crossed
+            # and let further LLM requests through. Guarding the SET with
+            # "#st = :active" makes exactly one concurrent caller win the
+            # transition; all others get ConditionalCheckFailedException and
+            # silently skip (the status is already budget_exceeded).
+            try:
+                T.llm_provider_keys.update_item(
+                    Key={"pk": f"USER#{user_id}", "sk": f"KEY#{key_id}"},
+                    UpdateExpression="SET #st = :exceeded",
+                    ConditionExpression="#st = :active",
+                    ExpressionAttributeNames={"#st": "status"},
+                    ExpressionAttributeValues={
+                        ":exceeded": "budget_exceeded",
+                        ":active": "active",
+                    },
+                )
+                logger.warning(
+                    "llm_key_budget_exceeded user_id=%s key_id=%s budget_cents=%d usage_cents=%d",
+                    user_id,
+                    key_id,
+                    budget,
+                    current,
+                )
+            except T.llm_provider_keys.meta.client.exceptions.ConditionalCheckFailedException:
+                # Another concurrent caller already flipped the status to
+                # budget_exceeded — nothing more to do.
+                logger.debug(
+                    "llm_key_budget_exceeded_already_set user_id=%s key_id=%s",
+                    user_id,
+                    key_id,
+                )
 
 
 def assign_key_to_worker(user_id: str, key_id: str, worker_id: str) -> Optional[Dict[str, Any]]:

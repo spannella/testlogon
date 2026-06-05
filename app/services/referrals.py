@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 from app.core.settings import S
 
@@ -174,10 +175,10 @@ def attribute_referral(
         logger.warning("Self-referral blocked: %s", referrer_id)
         return None
 
-    # Check for existing attribution
-    existing = tbl.get_item(Key={"pk": f"REFERRAL#{referred_user_id}", "sk": "META"}).get("Item")
-    if existing:
-        return None
+    # Note: existence is enforced atomically by the ConditionExpression on the
+    # put_item below. A read-check here would be a TOCTOU race (GAP-0074):
+    # concurrent signups could both pass the check and both write, creating
+    # duplicate attributions that double-credit the referrer's commission.
 
     now = _now_iso()
     window_end = (
@@ -199,7 +200,22 @@ def attribute_referral(
         "GSI1PK": f"REFERRALS#{referrer_id}",
         "GSI1SK": f"{now}#REF#{referred_user_id}",
     }
-    tbl.put_item(Item=item)
+    try:
+        tbl.put_item(
+            Item=item,
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            # Another concurrent request already attributed this buyer.
+            # Treat as a no-op (same semantics as the prior existence check)
+            # rather than creating a duplicate attribution.
+            logger.info(
+                "attribute_referral: duplicate race blocked for %s", referred_user_id
+            )
+            return None
+        raise
+
     return item
 
 
@@ -347,6 +363,144 @@ def _to_int(val: Any) -> int:
     if isinstance(val, Decimal):
         return int(val)
     return int(val) if val else 0
+
+
+# ---------------------------------------------------------------------------
+# Withdrawal (GAP-0075) — redeem available commission into the user's wallet
+# ---------------------------------------------------------------------------
+
+
+def withdraw(user_id: str, amount_cents: int) -> Dict[str, Any]:
+    """Redeem *amount_cents* of available affiliate commission into the wallet.
+
+    Moves available commission earnings to the user's in-platform wallet:
+    marks commission rows ``paid`` (oldest-first), credits the wallet via the
+    shared billing helpers, and records an idempotent withdrawal audit row.
+
+    Reuses :func:`app.services.billing_shared.apply_wallet_delta` (atomic
+    balance update) and :func:`new_ledger_entry` (settled ledger entry) — the
+    same helpers used by the rest of the billing stack, so this works
+    identically in dev (DynamoDB Local) and prod (SECOPS-007 parity).
+
+    Raises:
+        ValueError: if *amount_cents* is non-positive, below the configured
+            minimum, or exceeds the available balance.
+        RuntimeError: if a concurrent withdrawal for the same instant is
+            already in progress.
+    """
+    from app.core.tables import T
+    from app.core.time import now_ts
+    from app.services.billing_shared import (
+        apply_wallet_delta,
+        new_ledger_entry,
+        user_pk,
+    )
+
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive")
+    if amount_cents < S.referral_min_withdrawal_cents:
+        raise ValueError(
+            f"Minimum withdrawal is ${S.referral_min_withdrawal_cents / 100:.2f}"
+        )
+
+    tbl = _tbl()
+
+    # 1. Compute current available balance from commission rows.
+    resp = tbl.query(KeyConditionExpression=Key("pk").eq(f"AFFILIATE#{user_id}"))
+    commissions = [
+        c for c in resp.get("Items", []) if str(c.get("sk", "")).startswith("COMMISSION#")
+    ]
+    paid = sum(
+        _to_int(c.get("commission_cents", 0))
+        for c in commissions
+        if c.get("status") == "paid"
+    )
+    earned = sum(
+        _to_int(c.get("commission_cents", 0))
+        for c in commissions
+        if c.get("status") in ("confirmed", "pending")
+    )
+    available = max(0, earned - paid)
+
+    if amount_cents > available:
+        raise ValueError(
+            f"Requested {amount_cents} exceeds available {available} cents"
+        )
+
+    # 2. Write the withdrawal audit row atomically (guards double-withdrawal).
+    now = _now_iso()
+    ts = now_ts()
+    withdrawal_id = f"wd_{secrets.token_hex(6)}"
+    withdrawal_sk = f"WITHDRAWAL#{ts}#{withdrawal_id}"
+    try:
+        tbl.put_item(
+            Item={
+                "pk": f"AFFILIATE#{user_id}",
+                "sk": withdrawal_sk,
+                "Entity": "AffiliateWithdrawal",
+                "withdrawal_id": withdrawal_id,
+                "user_id": user_id,
+                "amount_cents": amount_cents,
+                "status": "pending",
+                "created_at": now,
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except tbl.meta.client.exceptions.ConditionalCheckFailedException:
+        raise RuntimeError("Concurrent withdrawal detected; please retry")
+
+    # 3. Mark commission rows paid (oldest-first) up to amount_cents.
+    remaining = amount_cents
+    for comm in sorted(commissions, key=lambda c: c.get("created_at", "")):
+        if remaining <= 0:
+            break
+        if comm.get("status") not in ("pending", "confirmed"):
+            continue
+        comm_cents = _to_int(comm.get("commission_cents", 0))
+        if comm_cents <= 0:
+            continue
+        tbl.update_item(
+            Key={"pk": comm["pk"], "sk": comm["sk"]},
+            UpdateExpression="SET #s = :paid, withdrawal_id = :wid",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":paid": "paid", ":wid": withdrawal_id},
+        )
+        remaining -= comm_cents
+
+    # 4. Credit the wallet + write a settled ledger entry via shared helpers.
+    pk = user_pk(user_id)
+    apply_wallet_delta(T.billing, pk, amount_cents)
+    _sk, ledger_item = new_ledger_entry(
+        key_name="pk",
+        key_value=pk,
+        entry_type="affiliate_withdrawal_credit",
+        amount_cents=amount_cents,
+        state="settled",
+        reason="Affiliate commission withdrawal",
+        meta={"withdrawal_id": withdrawal_id},
+    )
+    T.billing.put_item(Item=ledger_item)
+
+    # 5. Mark the withdrawal row completed.
+    tbl.update_item(
+        Key={"pk": f"AFFILIATE#{user_id}", "sk": withdrawal_sk},
+        UpdateExpression="SET #s = :c, completed_at = :t",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":c": "completed", ":t": now},
+    )
+
+    logger.info(
+        "affiliate_withdrawal_completed user=%s withdrawal_id=%s amount_cents=%s",
+        user_id,
+        withdrawal_id,
+        amount_cents,
+    )
+    return {
+        "withdrawal_id": withdrawal_id,
+        "amount_cents": amount_cents,
+        "status": "completed",
+        "created_at": now,
+    }
 
 
 # ---------------------------------------------------------------------------
