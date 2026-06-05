@@ -2211,6 +2211,13 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # GAP-0020 / FIN-008: W-9 / TIN collection (KMS-encrypted TIN storage).
+        # Records: pk=USER#{user_sub} sk=TAX_INFO. All access by user PK; no GSI.
+        TableDef(
+            _resolve_table_name(S.tax_info_table_name, "tax_info"),
+            "pk",
+            "sk",
+        ),
         # Background Job Dashboard (PLATFORM-008): run history.
         # pk=job_name sk=RUN#{started_at}#{uuid}
         # GSI ByStartedAt: GSI_PK="JOBRUN" started_at(N) for cross-job recents.

@@ -30,8 +30,11 @@ from app.models import (
     TaxForm1099DownloadOut,
     TaxForm1099ListOut,
     TaxForm1099Out,
+    W9StatusOut,
+    W9SubmitIn,
 )
 from app.services import tax_form_1099 as svc
+from app.services import tax_info_w9
 from app.services.alerts import audit_event
 from app.services.sessions import require_ui_session
 
@@ -65,6 +68,48 @@ def _ensure_target_exists(target_user_sub: str) -> None:
         raise HTTPException(
             status_code=404, detail={"code": "user_not_found", "message": "User not found"}
         )
+
+
+# ---------------------------------------------------------------------------
+# W-9 / TIN collection (GAP-0020)
+# ---------------------------------------------------------------------------
+
+@tax_form_1099_router.post("/w9", response_model=W9StatusOut, summary="Submit W-9 tax information")
+def submit_w9(
+    body: W9SubmitIn,
+    session: Dict[str, str] = Depends(require_ui_session),
+) -> W9StatusOut:
+    """Collect and KMS-encrypt the creator's TIN. Required before 1099 generation.
+
+    The raw TIN is never stored in plaintext, logged, or returned — the response
+    exposes the masked last-4 only.
+    """
+    _ensure_enabled()
+    try:
+        result = tax_info_w9.submit_tax_info(
+            user_sub=session["user_sub"],
+            **body.model_dump(),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": "invalid_tin", "message": str(exc)}
+        )
+    return W9StatusOut(**result)
+
+
+@tax_form_1099_router.get("/w9", response_model=W9StatusOut, summary="Get W-9 status")
+def get_w9_status(
+    session: Dict[str, str] = Depends(require_ui_session),
+) -> W9StatusOut:
+    """Return the masked W-9 status for the current user (never the raw TIN)."""
+    _ensure_enabled()
+    result = tax_info_w9.get_tax_info(session["user_sub"])
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "not_found", "message": "No W-9 on file"},
+        )
+    return W9StatusOut(**result)
 
 
 # ---------------------------------------------------------------------------

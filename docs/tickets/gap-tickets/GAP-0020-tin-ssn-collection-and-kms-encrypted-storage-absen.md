@@ -1,6 +1,6 @@
 # GAP-0020: TIN/SSN collection and KMS-encrypted storage absent
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: FIN-008 · **Effort**: L
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: FIN-008 · **Effort**: L
 **From**: gap audit (`docs/tickets/gaps/FIN-008.md`); see also `docs/tickets/writeups/FIN-008.md`
 
 ## Location

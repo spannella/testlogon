@@ -289,6 +289,7 @@ class Tables:
     invoices: Any
     tax_documents: Any
     tax_forms_1099: Any
+    tax_info: Any
     financial_rollups: Any
     payment_provider_health: Any
     ssh_session_recordings: Any
@@ -524,6 +525,7 @@ T = Tables(
     invoices=_safe_table(S.invoices_table_name),
     tax_documents=_safe_table(S.tax_documents_table_name),
     tax_forms_1099=_safe_table(S.tax_forms_1099_table_name),
+    tax_info=_safe_table(S.tax_info_table_name),
     financial_rollups=_safe_table(S.platform_financial_dashboard_rollups_table_name),
     payment_provider_health=_safe_table(S.payment_provider_health_table_name),
     ssh_session_recordings=_safe_table(S.ssh_session_recordings_table_name),

@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.settings import S
 from app.core.time import now_ts
+from app.services.vod_s3_downloader import download_source_to_scratch
 from app.services.transcode_job_store import (
     claim_job,
     complete_job,
@@ -100,6 +101,11 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         renditions: List[Dict[str, Any]] = job.get("renditions", [])
         source_uri = job.get("source_uri", "")
         watermark = job.get("watermark", {})
+
+        # Download source to local scratch before passing to FFmpeg.
+        # Standard FFmpeg builds do not support the s3:// protocol natively,
+        # so ffmpeg must receive a local file path as its -i input.
+        source_uri = str(download_source_to_scratch(source_uri, scratch_dir))
 
         completed_renditions: List[str] = []
         total = len(renditions)

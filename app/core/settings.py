@@ -2339,6 +2339,12 @@ class Settings:
     tax_form_1099_min_reportable_cents: int = int(
         os.environ.get("TAX_FORM_1099_MIN_REPORTABLE_CENTS", "60000")
     )
+    # GAP-0020 / FIN-008: W-9 / TIN collection table (KMS-encrypted TIN storage).
+    # Records: pk=USER#{user_sub} sk=TAX_INFO. All access by user PK; no GSI.
+    tax_info_table_name: str = os.environ.get("TAX_INFO_TABLE_NAME", "tax_info")
+    # Platform's own EIN, printed as the Payer TIN on every 1099-NEC. Populated
+    # from prod secrets; never logged. Empty in dev unless set in .env.local.
+    platform_ein: str = os.environ.get("PLATFORM_EIN", "")
     # FIN-014: Payment Provider Health monitoring. Records per-provider
     # success/failure/latency of payment operations, computes health status,
     # error rates, and a recent-incident timeline.

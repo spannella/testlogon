@@ -4639,6 +4639,23 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep):
             extra_meta={"post_id": post_id},
         ))
 
+    # GAP-0026: Best-effort license revenue split for tipped post.
+    # Wrapped in try/except so a split failure never breaks the tip transaction.
+    try:
+        from app.services import license_revenue as _lr_svc
+        _lr_svc.process_revenue_split(
+            content_id=post_id,
+            licensee_id=user_id,
+            source_type="post_tip",
+            source_amount_cents=req.amount_cents,
+            source_txn_id=pi["payment_intent_id"],
+            currency=str(req.currency or "usd").lower(),
+        )
+    except Exception:
+        logger.warning(
+            "license revenue split failed for post tip on post %s", post_id
+        )
+
     author = post.get("user_id")
     if author:
         put_notification(
@@ -5983,6 +6000,23 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
             })
         except Exception:
             pass  # Best-effort; do not fail the unlock if billing write fails
+
+    # GAP-0026: Best-effort license revenue split for unlocked post.
+    # Wrapped in try/except so a split failure never breaks the unlock transaction.
+    try:
+        from app.services import license_revenue as _lr_svc
+        _lr_svc.process_revenue_split(
+            content_id=req.post_id,
+            licensee_id=user_id,
+            source_type="post_unlock",
+            source_amount_cents=price,
+            source_txn_id=pi.get("payment_intent_id") or "",
+            currency="usd",
+        )
+    except Exception:
+        logger.warning(
+            "license revenue split failed for post unlock on post %s", req.post_id
+        )
 
     author = post.get("user_id")
     if author and author != user_id:

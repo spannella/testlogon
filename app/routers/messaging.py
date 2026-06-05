@@ -13553,6 +13553,23 @@ def send_message_tip(
             currency=str(inp.currency or "usd").lower(),
         )
 
+    # GAP-0026: Best-effort license revenue split for tipped message.
+    # Wrapped in try/except so a split failure never breaks the tip transaction.
+    try:
+        from app.services import license_revenue as _lr_svc
+        _lr_svc.process_revenue_split(
+            content_id=message_id,
+            licensee_id=user_id,
+            source_type="tip",
+            source_amount_cents=inp.amount_cents,
+            source_txn_id=tip_payment_id,
+            currency=str(inp.currency or "usd").lower(),
+        )
+    except Exception:
+        logger.warning(
+            "license revenue split failed for tip on message %s", message_id
+        )
+
     fanout_event_to_conversation(
         conversation_id=conversation_id,
         sender_id=user_id,
@@ -13692,6 +13709,23 @@ def unlock_message(
             })
     except Exception:
         pass  # Best-effort ledger write
+
+    # GAP-0026: Best-effort license revenue split for unlocked message.
+    # Wrapped in try/except so a split failure never breaks the unlock transaction.
+    try:
+        from app.services import license_revenue as _lr_svc
+        _lr_svc.process_revenue_split(
+            content_id=message_id,
+            licensee_id=user_id,
+            source_type="unlock",
+            source_amount_cents=amount_cents,
+            source_txn_id=unlock_payment_id,
+            currency="usd",
+        )
+    except Exception:
+        logger.warning(
+            "license revenue split failed for unlock on message %s", message_id
+        )
 
     # FIN-001: generate an invoice for the unlock (best-effort)
     try:

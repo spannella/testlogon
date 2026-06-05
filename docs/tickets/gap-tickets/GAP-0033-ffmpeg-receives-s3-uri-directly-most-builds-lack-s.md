@@ -1,6 +1,6 @@
 # GAP-0033: FFmpeg receives s3:// URI directly; most builds lack S3 protocol support
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: VOD-004 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: VOD-004 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/VOD-004.md`); see also `docs/tickets/writeups/VOD-004.md`
 
 ## Location

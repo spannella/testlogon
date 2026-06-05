@@ -10318,6 +10318,43 @@ class BatchGenerateTaxForm1099Out(BaseModel):
     errors: int = 0
 
 
+class W9SubmitIn(BaseModel):
+    """W-9 / tax-info submission (GAP-0020 / FIN-008).
+
+    The raw ``tin`` is KMS-encrypted at the service layer and NEVER stored in
+    plaintext, logged, or echoed back in any API response.
+    """
+
+    legal_name: str = Field(..., min_length=1, max_length=200)
+    tin: str = Field(
+        ...,
+        description="Raw SSN (XXX-XX-XXXX) or EIN (XX-XXXXXXX). Never stored in plaintext.",
+        min_length=9,
+        max_length=11,
+    )
+    tin_type: Literal["ssn", "ein"]
+    address_line1: str = Field(..., min_length=1, max_length=200)
+    city: str = Field(..., min_length=1, max_length=100)
+    state: str = Field(..., min_length=2, max_length=2)
+    zip_code: str = Field(..., min_length=5, max_length=10)
+    certified: bool
+
+
+class W9StatusOut(BaseModel):
+    """Safe view of stored tax info — never includes ``tin_encrypted``."""
+
+    legal_name: str = ""
+    tin_last4: str = ""
+    tin_type: str = ""
+    address_line1: str = ""
+    city: str = ""
+    state: str = ""
+    zip_code: str = ""
+    certified: bool = False
+    certified_at: Optional[int] = None
+    updated_at: int = 0
+
+
 # ── Admin Ad Platform Management (ADS-018) ──────────────────────────────────
 
 class AdminAdAccountOut(BaseModel):

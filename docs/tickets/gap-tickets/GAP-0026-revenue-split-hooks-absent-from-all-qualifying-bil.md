@@ -1,6 +1,6 @@
 # GAP-0026: Revenue split hooks absent from all qualifying billing flows
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: LICENSE-003 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: LICENSE-003 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/LICENSE-003.md`); see also `docs/tickets/writeups/LICENSE-003.md`
 
 ## Location
