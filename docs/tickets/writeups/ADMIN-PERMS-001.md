@@ -265,3 +265,25 @@ All proposed changes operate on DynamoDB user records via `T.users` handle — D
 **Effort estimate**: M (CLI changes ~100 lines; frontend type/UI changes ~5 lines; migration script ~50 lines; tests ~150 lines).
 
 **Risks**: The migration mapping from capability names to scope names is imprecise (e.g., `file_metadata` → `content_moderation` is a stretch). In practice, if `ROOTCTL_ADMIN_CAPABILITIES_ENABLED` has never been set to `1` in production, there are likely no `admin_capabilities` records to migrate. Confirm with a DynamoDB scan before investing in migration logic.
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] `AdminScope` enum at `app/auth/roles.py:14-18` with all four values including `CONTENT_MODERATION_SENIOR` — confirmed
+- [Confirmed] `CANONICAL_ADMIN_SCOPES` tuple at `app/auth/roles.py:26-31` — confirmed
+- [Confirmed] `ADMIN_CAPABILITIES` set at `app/cli/rootctl.py:51-58` with six entries (`billing_ops`, `billing_read`, `file_metadata`, `file_content`, `user_support`, `impersonation`) — confirmed; zero overlap with `AdminScope` values
+- [Confirmed] `ADMIN_CAPABILITY_FEATURE_FLAG` at `app/cli/rootctl.py:50`, `_admin_capabilities_enabled()` at line 61 — confirmed
+- [Corrected] function names: writeup calls them `_admin_capabilities_set_command` (~line 1658) and `_admin_capabilities_list_command` (~line 1748), but actual names are `_admin_permissions_set_command` (line 1657) and `_admin_permissions_list_command` (line 1747)
+- [Confirmed] `_admin_permissions_set_command` writes `admin_capabilities` DDB attribute at line 1703 — confirmed
+- [Confirmed] `_admin_permissions_list_command` reads `item.get("admin_capabilities", [])` at line 1759 — confirmed
+- [Confirmed] `admin_capabilities` has zero references in `app/` excluding CLI — full-text grep returns no results in `app/` (excluding `app/cli/rootctl.py`); dead code claim confirmed
+- [Confirmed] `_admin_grant_command` at `app/cli/rootctl.py:1303` writes only `SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason` (line 1350) — no `admin_profile` in UpdateExpression; confirmed
+- [Confirmed] `normalize_admin_profile` falls back to `AdminProfile(type=AdminProfileType.GENERAL)` at `app/auth/roles.py:104-105` when profile_type is not SCOPED — confirmed
+- [Confirmed] `require_admin_scope` at `app/auth/policy.py:122-169` — confirmed (function at 122, returns at 169)
+- [Confirmed] `AdminScope` TypeScript type at `frontend/src/api/endpoints/adminRoles.ts:4` missing `content_moderation_senior` — confirmed (`export type AdminScope = "auth_support" | "billing_support" | "content_moderation"`)
+- [Confirmed] `ADMIN_SCOPE_OPTIONS` array at `frontend/src/pages/admin/RootRoleManagementPage.tsx:26-30` has only 3 entries, no `content_moderation_senior` — confirmed
+- [Confirmed] `admin_moderation.py:36` for `require_content_moderation_admin`, line 47 for `CONTENT_MODERATION_SENIOR` check — confirmed
+- [Confirmed] `admin_dmca.py:41`, `admin_impersonation.py:25`, `admin_appeals.py:37`, `admin_entitlements.py:21`, `admin_video_review.py:35`, `billing.py:105`, `billing.py:445` — all confirmed
+- [Confirmed] `_extract_admin_profile_from_claims` at `app/auth/deps.py:148-149` — confirmed
+- [Confirmed] `X-User-Admin-Profile` header fallback at `app/auth/deps.py:258` — confirmed (line 258 starts the fallback block)

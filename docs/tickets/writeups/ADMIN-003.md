@@ -220,3 +220,22 @@ One parity note: in dev the blocklist `is_blocked(ip)` check uses DynamoDB Local
 ### Acceptance criteria verification
 
 All 10 existing endpoints and 2 new endpoints (`/live-summary`, `/events/export`) are present in the router. The frontend page has all five tabs. The only broken functionality as of this investigation is the DELETE operations for blocklist and allowlist entries (wrong URL prefix in `adminRateLimits.ts`). Config reset requires a new backend endpoint. Self-block prevention and export range guard are defensive hardening items not yet present.
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] `GET /live-summary` at `app/routers/admin_rate_limits.py:313` and `GET /events/export` at line 330 — both confirmed
+- [Confirmed] `_live_summary` internal function at line 246 — confirmed
+- [Already-fixed] `removeFromBlocklist` and `removeFromAllowlist` wrong `/v1/` prefix — `frontend/src/api/endpoints/adminRateLimits.ts:127-134` now uses `/ui/admin/rate-limits/blocklist/${entryId}` and `/ui/admin/rate-limits/allowlist/${encodeURIComponent(entryId)}`; the bug is already fixed
+- [Already-fixed] missing `DELETE /config/{group}` reset endpoint — `app/routers/admin_rate_limits.py:284` now implements `DELETE /config/{group}` (`reset_config` function); it deletes the DynamoDB override item directly (not via a service function) and busts the in-process cache; gap is resolved without a separate `delete_group_override` service function
+- [Confirmed] self-block prevention not implemented — `app/services/rate_limit_store.py:129-147` (`add_to_blocklist`) has no check against requester IP; gap is open
+- [Corrected] event export has no time-range guard — `app/routers/admin_rate_limits.py:332` uses `hours: int = Query(default=24, ge=1, le=168)` capping at 168 hours (7 days), not an unbounded range; the gap description said "no time-range maximum is enforced" which is incorrect; the `le=168` cap provides a built-in guard; the writeup's proposed `MAX_EXPORT_DAYS=30` stricter guard is still worth adding but the "no guard" claim is wrong
+- [Corrected] router line numbers for existing 10 endpoints are all off by 4: `GET /config` is at line 67 (claimed 63), `PUT /config` at 97 (claimed 93), `GET /events` at 136 (claimed 132), `GET /top-offenders` at 151 (claimed 147), `POST /blocklist` at 164 (claimed 160), `DELETE /blocklist` at 183 (claimed 179), `POST /allowlist` at 193 (claimed 189), `DELETE /allowlist` at 210 (claimed 206), `GET /blocklist` at 220 (claimed 216), `GET /allowlist` at 226 (claimed 222)
+- [Corrected] `RateLimitDashboard.tsx` is 646 lines (claimed 544), `adminRateLimits.ts` is 178 lines (claimed 122)
+- [Corrected] `getRateLimitLiveSummary` is at `adminRateLimits.ts:149` (claimed 150), `exportRateLimitEvents` at line 159 (claimed 162)
+- [Confirmed] router prefix `/ui/admin/rate-limits` — confirmed (line 37, not 32 as implied by the endpoint line-number pattern)
+- [Confirmed] registered in `app/main.py` at import line 159, `include_router` at line 623 — confirmed
+- [Confirmed] App.tsx lazy import at line 111, Route at line 433 — confirmed
+- [Confirmed] `require_root` at `app/auth/policy.py:63` — confirmed
+- [Confirmed] `PUT /config` uses PutItem overwrite — confirmed from `rate_limit_config.py:177` (`save_group_override` does a PutItem); race condition gap is open

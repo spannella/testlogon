@@ -3,3 +3,11 @@
 - [MED] self-block prevention not implemented — `app/services/rate_limit_store.py:129` — add_to_blocklist does not check if the IP being blocked is the requesting admin's own IP; admin could lock themselves out of the console — Fix: compare blocked IP against client IP from request and raise 400 if equal — Effort: S
 - [MED] event export has no time-range guard — `app/routers/admin_rate_limits.py:330` — GET /events/export queries up to 10000 events with no maximum time-range enforcement; large exports consume many DDB read units and can take multiple seconds — Fix: add 400 error if end - start exceeds 30 days — Effort: S
 - [LOW] PUT /config uses PutItem overwrite — `app/routers/admin_rate_limits.py:93` — concurrent admin config updates silently clobber each other; no ConditionExpression or optimistic lock — Fix: use conditional UpdateExpression or add version field — Effort: S
+
+## Second-pass verification (2026-06-05)
+
+- [Already-fixed] removeFromBlocklist and removeFromAllowlist use wrong /v1/ URL prefix — `frontend/src/api/endpoints/adminRateLimits.ts:127-134` — both functions now use `/ui/admin/rate-limits/` prefix; bug is resolved; no action needed
+- [Already-fixed] no DELETE /config/{group} reset endpoint — `app/routers/admin_rate_limits.py:284` — endpoint `reset_config` exists and deletes the override item directly without a separate service function; gap is resolved
+- [Confirmed] self-block prevention not implemented — `app/services/rate_limit_store.py:129` — `add_to_blocklist` has no IP-self-check; gap is open
+- [Corrected] event export has no time-range guard — actual endpoint at `app/routers/admin_rate_limits.py:330` uses `hours: int = Query(default=24, ge=1, le=168)` which caps at 168 hours (7 days); the gap description "no maximum time-range enforcement" is inaccurate; a stricter cap (e.g. 30 days) is still advisable but the claim of zero enforcement is wrong; severity should be reduced to LOW
+- [Corrected] PUT /config line reference — `app/routers/admin_rate_limits.py:97` (claimed 93); `save_group_override` in `app/services/rate_limit_config.py:177` does the PutItem overwrite; gap is open

@@ -235,3 +235,23 @@ Backend endpoints are already live (all admin routers registered in `app/main.py
 | Dev log endpoints | Returns in-process captured log | Returns 404 (not available) |
 
 No new AWS credentials or service accounts are required beyond what is already configured in `.env.local` / `.env`.
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] email service functions exist at stated lines: `suppress_email` line 175, `is_suppressed` 193, `remove_suppression` 205, `get_delivery_stats` 221, `list_deliveries` 284, `list_bounces` 316, `list_complaints` 337, `get_suppression_list` 358, `read_dev_email_log` 477 — all confirmed in `app/services/email_delivery.py`
+- [Corrected] SMS service line numbers are wrong throughout: actual lines are `suppress_sms` 269 (claimed 148), `remove_sms_suppression` 300 (claimed 179), `get_sms_delivery_stats` 347 (claimed 226), `list_sms_deliveries` 423 (claimed 302), `list_sms_failures` 445 (claimed 324), `get_suppression_list` 452 (claimed 331), `get_dev_sms_log` 561 (claimed 344) — in `app/services/sms_delivery.py`
+- [Confirmed] `POST /suppressed` endpoint exists in admin_email.py at line 189 — confirmed
+- [Confirmed] admin_email router prefix `/ui/admin/email` at line 32, registered in `app/main.py` import 221, include_router 627 — confirmed
+- [Confirmed] admin_sms router prefix `/ui/admin/sms` at line 32, registered in `app/main.py` import 220, include_router 626 — confirmed
+- [Corrected] admin_email.py dashboard endpoint paths: writeup says `/dashboard-stats`, `/dashboard-timeseries`, `/bounce-domains` but actual paths are `/dashboard/stats` (line 139), `/dashboard/timeseries` (line 168), `/dashboard/bounce-domains` (line 178) — note slash vs hyphen difference
+- [Corrected] admin_sms.py `GET /dev-log` at line 94 (claimed) — actual line is 126; `POST /suppressed` is at line 142 (not mentioned in the endpoint list); additional endpoints exist that were not listed: `POST /send-test` (line 105), `GET /dashboard/stats` (line 158), `GET /dashboard/timeseries` (line 183), `GET /dashboard/failure-types` (line 193)
+- [Already-fixed] dev-log endpoint guards claimed as absent in gap §3.3 — both `admin_email.py:128` and `admin_sms.py:131` already have `if not S.dev_mode: raise HTTPException(status_code=404, ...)` guards; the gap is moot
+- [Already-fixed] `seed_default_templates()` startup hook — `app/main.py` lines 498-526 call `seed_default_templates()` via a startup handler; the gap concern about "verify main.py calls the seed function" is resolved
+- [Confirmed] notification_templates.py function lines: `seed_default_templates` 102, `_VAR_RE` 23, `_test_send_log` 26, `_DEFAULT_TEMPLATES` 33, `list_templates` 145, `get_template` 171, `update_template` 186, `preview_template` 263, `test_send_allowed` 289, `test_send` 302 — all confirmed
+- [Confirmed] `admin_messaging_templates` table at `app/core/tables.py:440` — confirmed (line 204 for field declaration, 440 for the assignment); `scripts/local-ddb-init.py:1362` — confirmed
+- [Confirmed] admin_notifications router prefix `/ui/admin/notifications`, registered `app/main.py` import 222, include_router 628 — confirmed
+- [Confirmed] CSRF gap: all endpoints in `app/routers/admin_notifications.py` use `require_admin_or_root` (not `require_admin_or_root_csrf`), including PATCH and POST endpoints — confirmed, gap is not fixed
+- [Confirmed] `adminMessagingDashboards.ts` exists at `frontend/src/api/endpoints/adminMessagingDashboards.ts` (133 lines); no `adminCommunications.ts` file exists — confirmed
+- [Confirmed] `EmailSmsDashboardPage` at `frontend/src/App.tsx:114` (lazy import) and `438` (Route) — confirmed

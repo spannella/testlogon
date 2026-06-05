@@ -162,3 +162,25 @@ Because no feature flag currently gates the endpoint, the feature is live immedi
 **Risks**: the analytics function cross-queries `T.subscriptions` without a GSI keyed on `creator_id + tier_id`. For creators with thousands of subscribers, `get_tier_analytics` will perform a full scan filtered by `creator_id`. Add a GSI `GSI_creator_id` on `T.subscriptions` or denormalise subscriber counts more aggressively if p95 analytics latency exceeds the 2s target.
 
 **Effort**: S (already implemented, only flag + E2E consolidation + analytics GSI remain).
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] service file is 409 lines — `app/services/admin_subscription_tiers.py` (wc -l = 409)
+- [Confirmed] router file is 190 lines — `app/routers/admin_subscription_tiers.py` (wc -l = 190)
+- [Confirmed] frontend page is 356 lines — `frontend/src/pages/admin/SubscriptionTierManagerPage.tsx` (wc -l = 356)
+- [Confirmed] API wrappers file is 55 lines — `frontend/src/api/endpoints/adminSubscriptionTiers.ts` (wc -l = 55)
+- [Confirmed] `create_tier` at line 118, `update_tier` at 174, `archive_tier` at 211, `unarchive_tier` at 231, `delete_tier` at 244, `list_tiers` at 272, `reorder_tiers` at 282, `get_tier_subscriber_count` at 340, `get_tier_analytics` at 346, `preview_tiers` at 393 — all match
+- [Confirmed] `_active_subscriptions_for_creator` at line 309, scan loop uses `FilterExpression` with `LastEvaluatedKey` loop — matches description
+- [Confirmed] `growth_series: []` stub at line 389 — confirmed
+- [Confirmed] settings key `admin_subscription_tiers_table_name` at `app/core/settings.py:2276` — confirmed
+- [Confirmed] table handle at `app/core/tables.py:519` — confirmed (line 519)
+- [Confirmed] table registered in `scripts/local-ddb-init.py:2111` — confirmed
+- [Confirmed] router registered in `app/main.py` at import line 74, `include_router` at line 539 — confirmed
+- [Confirmed] route in `frontend/src/App.tsx` at lines 157 (lazy import) and 452 (Route) — confirmed
+- [Confirmed] auth uses `require_admin_or_root` (read) and `require_admin_or_root_csrf` (mutate) — confirmed
+- [Confirmed] `require_admin_or_root` at `app/auth/policy.py:67`, `require_admin_or_root_csrf` at line 100 — confirmed
+- [Corrected] "No feature flag in the implementation" — a feature flag `admin_subscription_tiers_enabled` DOES exist at `app/core/settings.py:2279-2281` (env var `ADMIN_SUBSCRIPTION_TIERS_ENABLED`), but it is NOT checked in the router — the gap is that the flag exists but is not wired to the router, not that the flag is absent entirely
+- [Corrected] `tier-manager.spec.ts` — the writeup says this spec "targets the stale `/v1/subscriptions/tiers` prefix from the ticket document" and "would fail against the current backend." In reality, `frontend/e2e/tier-manager.spec.ts` covers BILLING-003 (creator-facing subscription tier editor), not admin tier management at all. It uses the subscriptions API (`/api/creators/{id}/plans`), not `/v1/subscriptions/tiers`. The spec is not stale/broken; it tests a different feature. There is no naming or coverage conflict with `admin-subscription-tiers.spec.ts`.
+- [Confirmed] all ten router endpoints present (POST create, GET list, PUT reorder, GET analytics, GET preview, GET single, PATCH update, POST archive, POST unarchive, DELETE) — confirmed by `grep -n "^@admin_subscription_tiers_router"` on the router

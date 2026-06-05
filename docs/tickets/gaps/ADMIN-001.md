@@ -5,3 +5,13 @@
 - [LOW] stale tier-manager.spec.ts targets wrong URL prefix — `frontend/e2e/tier-manager.spec.ts:1` — spec uses /v1/subscriptions/tiers (ticket-proposed) not /ui/admin/subscription-tiers (implemented); tests would fail against current backend — Fix: delete or reassign tier-manager.spec.ts sections to cover user-facing TierManager.tsx at /subscriptions/manage — Effort: S
 - [LOW] archive_tier / unarchive_tier no-op guard is Python-side only — `app/services/admin_subscription_tiers.py:211` — concurrent archive by two admins silently succeeds for both; no DynamoDB ConditionExpression guard unlike delete_tier — Fix: add ConditionExpression attribute_exists + status check on the PutItem call — Effort: S
 - [LOW] root user managing tiers keyed to root sub — `app/routers/admin_subscription_tiers.py:1` — creator_id = actor.sub; root users' tiers are keyed to root sub; no way for root to manage arbitrary creators' tiers — Fix: add optional creator_id query param for root-role callers — Effort: S
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] growth_series always returns empty list — `app/services/admin_subscription_tiers.py:389` — confirmed `"growth_series": []`
+- [Confirmed] subscriber_count denormalised but never auto-updated — service initialises to 0 at create (line 150), no lifecycle hook increments it — confirmed
+- [Corrected] "no feature flag gates the endpoint" — flag `admin_subscription_tiers_enabled` EXISTS at `app/core/settings.py:2279` (env `ADMIN_SUBSCRIPTION_TIERS_ENABLED`) but is NOT referenced in the router; severity stands but description should say "flag exists in settings but not wired to router"
+- [Confirmed] scan-based analytics costly at scale — `app/services/admin_subscription_tiers.py:309` — `_active_subscriptions_for_creator` uses `T.subscriptions.scan()` with FilterExpression — confirmed
+- [Corrected] "stale tier-manager.spec.ts targets wrong URL prefix" — `frontend/e2e/tier-manager.spec.ts` covers BILLING-003 (creator-facing plan editor via `/api/creators/{id}/plans`), not admin tier management at all; the spec is NOT broken and does NOT reference `/v1/subscriptions/tiers`; no consolidation needed between the two specs
+- [Confirmed] archive_tier / unarchive_tier no-op guard is Python-side only — `app/services/admin_subscription_tiers.py:211` — uses PutItem overwrite without ConditionExpression — confirmed
+- [Confirmed] root user managing tiers keyed to root sub — `app/routers/admin_subscription_tiers.py` — `creator_id=actor.sub` with no override param — confirmed

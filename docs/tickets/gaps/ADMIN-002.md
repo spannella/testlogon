@@ -4,3 +4,12 @@
 - [MED] template preview rendered HTML not sandboxed — `frontend/src/pages/admin/MessagingTemplatesPanel.tsx:1` — rendered_body HTML displayed directly in admin browser; <img onerror=...> style payloads not blocked by current <script> strip-only sanitisation — Fix: render preview inside <iframe sandbox=""> to block all scripts and form submissions — Effort: S
 - [LOW] adminCommunications.ts filename inconsistency — `frontend/src/api/endpoints/adminMessagingDashboards.ts:1` — ticket specified adminCommunications.ts; actual file is adminMessagingDashboards.ts; code organisation inconsistency — Fix: document the aliasing or create a re-export file — Effort: S
 - [LOW] test-send recipient unrestricted — `app/services/notification_templates.py:302` — test-send can target any email/phone address; insider abuse sends unsolicited notifications — Fix: restrict test-send recipient to admin-owned domain or requester's own email in production — Effort: S
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] missing CSRF on template mutation endpoints — `app/routers/admin_notifications.py` — all five endpoints still use `require_admin_or_root`; no endpoint uses `require_admin_or_root_csrf`; gap is open
+- [Already-fixed] dev-log endpoints not guarded for production — `app/routers/admin_email.py:128` and `app/routers/admin_sms.py:131` both have `if not S.dev_mode: raise HTTPException(status_code=404)` guards already implemented; this gap is resolved
+- [Confirmed] in-memory test-send rate limiter not process-safe — `app/services/notification_templates.py:26` (`_test_send_log: Dict[str, List[int]] = {}`) — confirmed process-local dict, no DDB backing
+- [Confirmed] template preview rendered HTML not sandboxed — gap open; `require_admin_or_root_csrf` fix needed first, but preview sandboxing is an independent frontend concern
+- [Confirmed] adminCommunications.ts filename inconsistency — `frontend/src/api/endpoints/adminMessagingDashboards.ts` is the actual file (133 lines); no `adminCommunications.ts` exists
+- [Confirmed] test-send recipient unrestricted — `app/services/notification_templates.py:302` — no recipient restriction in current implementation
