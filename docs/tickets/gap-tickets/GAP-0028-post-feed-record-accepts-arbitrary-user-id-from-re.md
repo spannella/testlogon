@@ -1,6 +1,6 @@
 # GAP-0028: `POST /feed/record` accepts arbitrary `user_id` from request body (SEC-005 cross-ref)
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: PLATFORM-012 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: PLATFORM-012 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/PLATFORM-012.md`); see also `docs/tickets/writeups/PLATFORM-012.md`
 
 ## Location

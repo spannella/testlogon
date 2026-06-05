@@ -11672,9 +11672,12 @@ class ContentAdOverrideOut(BaseModel):
 
 
 class RevenueShareIn(BaseModel):
-    """Negotiated revenue share in basis points (0-10000)."""
+    """Creator self-service revenue share in basis points (0-7000 max).
 
-    revenue_share_bps: int = Field(ge=0, le=10000)
+    Capped at the platform ceiling (70%); the platform retains at least a 30% floor.
+    """
+
+    revenue_share_bps: int = Field(ge=0, le=7000)
 
 
 class AdRevenueBreakdownContentOut(BaseModel):

@@ -1,6 +1,6 @@
 # GAP-0032: Admin can disburse treasury funds to their own wallet, violating the core no-admin-withdrawal constraint
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: SYND-004 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: SYND-004 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/SYND-004.md`); see also `docs/tickets/writeups/SYND-004.md`
 
 ## Location

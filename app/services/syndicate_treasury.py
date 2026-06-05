@@ -249,6 +249,14 @@ def disburse(
     # Admin-only.
     syndicate_svc._require_admin(syndicate_id, admin_sub)
 
+    # SECURITY: No-withdrawal constraint (SYND-004 / GAP-0032).
+    # The admin must not be able to disburse treasury funds to themselves.
+    if admin_sub == recipient_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Admin cannot disburse treasury funds to themselves",
+        )
+
     if amount_cents <= 0:
         raise HTTPException(status_code=400, detail="Disbursement amount must be positive")
 
