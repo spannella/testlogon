@@ -308,3 +308,19 @@ When ROOTCTL-001 is implemented and adds a break-glass secret requirement, the t
 **Total: M (1–2 days)**
 
 **Rollback**: Remove the endpoint from `internal_devtools.py` and the panel from `DevToolsLogUiPage.tsx`. No DDB schema changes, no persistent state added.
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] `frontend/src/devtools-main.tsx:1–26` renders only `<DevToolsLogUiPage />` — file is 26 lines, confirmed at `devtools-main.tsx:4,20`
+- [Confirmed] `app/routers/internal_devtools.py` registered at `app/main.py:98,559` — import at line 98, `app.include_router` at line 559
+- [Confirmed] Four existing dev-tools endpoints at `internal_devtools.py:78,101,120,144` (`/email/messages`, `/sms/conversations`, `/billing/ledger`, `/billing/summary`)
+- [Corrected] `_require_devtools_enabled()` cited as lines `27–33` — actual function starts at **line 28** (`internal_devtools.py:28–33`)
+- [Corrected] `rootctl.py` described as "2453 lines" — actual line count is **2452** (`wc -l` output)
+- [Confirmed] `build_parser()` at `rootctl.py:2386`, `main(argv=None)` at `rootctl.py:2442`, `_run_with_args` at `rootctl.py:2408`
+- [Confirmed] `_validate_preflight` enforces `--actor-sub` non-empty at `rootctl.py:2006–2008`; `requires_root` check at `rootctl.py:2010–2018`
+- [Confirmed] `ExitCode` enum at `rootctl.py:29–33`, `_shared_opts` at `rootctl.py:103`
+- [Corrected] `audit_event(..., cli=True)` citation `app/services/alerts.py:634–638` — `audit_event` function **starts at line 631**; `event_source: "rootctl"` default is at line 634; the full relevant block is `alerts.py:631–638`
+- [Confirmed] No `/internal/dev-tools/rootctl` endpoint exists anywhere in `app/`
+- [Confirmed] No `RootctlTerminalPanel` component exists in `frontend/src/pages/devtools/`

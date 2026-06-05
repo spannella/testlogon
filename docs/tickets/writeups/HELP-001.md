@@ -177,3 +177,20 @@ Sections:
 **Rollback**: set all new flags to off; the background sweep does nothing; existing behavior restored.
 
 **Effort**: M (backend sweep + settings + ticket linkage + queue position endpoint = ~3 days; frontend banner updates = ~1 day; E2E = ~1 day)
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] `app/routers/messaging.py:5877` sets `routing_state="awaiting_agent"` when `routing_mode == "helpdesk_bridge"` — confirmed
+- [Confirmed] `fanout_helpdesk_alert()` at `app/routers/messaging.py:5354` — confirmed
+- [Confirmed] `app/services/messaging_routing.py:168` — `to_state = "paused_no_agents_online"` — confirmed
+- [Confirmed] `_emit_no_agents_online_notice()` at `app/routers/messaging.py:5401` — confirmed
+- [Confirmed] `NO_AGENTS_NOTICE_THROTTLE_SEC = 600` at `messaging.py:1266` — confirmed
+- [Confirmed] `_handle_helpdesk_presence_event()` at `app/routers/messaging.py:5264` — confirmed; scans via `_paused_helpdesk_conversations_for_groups()` at `messaging.py:5238`
+- [Confirmed] `tbl_convos.scan(FilterExpression=..., Limit=200)` at `messaging.py:5246` — confirmed (inside `_paused_helpdesk_conversations_for_groups`)
+- [Confirmed] `RoutingState` type at `app/services/messaging_routing.py:7` — confirmed
+- [Confirmed] `routing_state_group_sk` is `conversation_id` — confirmed at `messaging_routing.py:129,158,181,201,241`
+- [Confirmed] `frontend/src/pages/messages/ConversationView.tsx:1484-1502` renders awaiting_agent / paused_no_agents_online banners — confirmed
+- [Corrected] `created_at` cited as "at `line:5916` via the common conversation creation path" — **actual assignment is `created_at = now_ts()` at `messaging.py:5874`**; line 5916 is `"routing_state": routing_state` in the `convo_item` dict
+- [Confirmed] `app/services/tickets.py` `create_ticket` (at `tickets.py:254`) has no `source_conversation_id` parameter — confirmed

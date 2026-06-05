@@ -298,3 +298,20 @@ No feature flag needed for BILLING-004 itself — it is guarded by `S.dev_mode` 
 2. The synthetic `pi_dev_{uuid}` IDs will not exist in Stripe's dashboard. If dev ledger entries are ever inspected by Stripe tooling, these IDs will appear invalid. This is expected and acceptable for a dev-only environment.
 
 **Effort estimate**: S (2-3 hours — the change is approximately 20 lines in `billing.py` plus test updates).
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] Feature still unimplemented — `wallet_deposit` at `billing.py:2315` has no `if S.dev_mode:` bypass block; always calls Stripe and always returns `wallet_balance_cents=0` in dev
+- [Confirmed] `wallet_deposit` function at `billing.py:2316`; `ensure_stripe_configured()` first line at 2317; `_billing_write_user_context()` at 2318 ✓
+- [Confirmed] `_billing_write_user_context()` defined at `billing.py:468`; calls `_require_billing_support_actor()` at line 475 ✓
+- [Confirmed] `ensure_stripe_configured()` defined at `billing.py:513` ✓
+- [Confirmed] `pi.get("status") == "succeeded"` branch at `billing.py:2359`; `apply_wallet_delta` at 2360; `settle_or_reverse_ledger` at 2361 ✓
+- [Confirmed] `list_subscriptions` dev_mode short-circuit at `billing.py:2293-2295` ✓
+- [Confirmed] `billing_shared.py` — `new_ledger_entry` at line 224 ✓, `apply_wallet_delta` at line 185 ✓, `ensure_balance_row` at line 69 ✓
+- [Corrected] `billing_shared.py` — `settle_or_reverse_ledger` is at line **258** (not 248 as cited in design §4.1)
+- [Corrected] `WalletDepositReq` is at `app/models.py:1630` (not 1633 as cited)
+- [Confirmed] `Wallet.tsx` deposit mutation at lines 46-60; toast check `data.wallet_balance_cents > 0` at line 54 ✓
+- [Confirmed] `billing-wallet.spec.ts` — Stripe mock comment at lines 11-14 (not 13-16 as cited); `injectWalletBalance()` at line 151 ✓; note comment at line 263 ✓; `injectWalletBalance` calls at lines 301 and 382 ✓
+- [Confirmed] `ensure_balance_row` is used at `billing.py:1488` (dispute handler) ✓

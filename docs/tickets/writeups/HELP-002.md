@@ -163,3 +163,15 @@ No table migrations. The two new nullable fields default to `None` / absent; exi
 3. `frontend/src/pages/support/SupportHub.tsx` + route
 4. E2E spec
 5. Redirect old `/helpdesk` → `/support`
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Corrected] Section 2.1 cites helpdesk endpoint paths as `/ui/messaging/helpdesk/conversations` (create), `/ui/messaging/helpdesk/conversations/{id}/claim` (claim), `/ui/messaging/helpdesk/queue` (queue) — **none of these paths have a `/ui/` prefix**. The messaging router uses `prefix="/messaging"` and is included without a `/ui` prefix in `app/main.py:457`. Actual routes: `POST /messaging/conversations` (with `routing_mode=helpdesk_bridge`), `POST /messaging/helpdesk/conversations/{conversation_id}/claim` (`messaging.py:6696`), `GET /messaging/helpdesk/queue` (`messaging.py:6657`)
+- [Corrected] Section 2.1 cites `app/services/messaging_routing.py` as containing `route_new_helpdesk_conversation()` and `claim_helpdesk_conversation()` — **neither function exists in `messaging_routing.py`**. That file's only public function is `transition_helpdesk_routing()` at `messaging_routing.py:77`. `claim_helpdesk_conversation` exists in `app/routers/messaging.py:6697` (calling `_claim_helpdesk_conversation_internal` at `messaging.py:6503`); no `route_new_helpdesk_conversation` function exists anywhere
+- [Corrected] Section 2.3 says "`app/services/kyc_cases.py:84` — `KycCase` dataclass has a `ticket_id: str | None` field" — **there is no `KycCase` dataclass**; `KycCaseStore` is the class at `kyc_cases.py:107`; line 84 is `"ticket_id": None` inside the `_empty_review_ref()` helper dict at `kyc_cases.py:82–91`; `ticket_id` is a field of the nested review dict, not a top-level case field
+- [Corrected] Section 2.3 says "`app/services/kyc_cases.py:300-316` — `create_kyc_ticket()` creates a ticket" — **no `create_kyc_ticket()` function exists** in `kyc_cases.py`; lines 300–316 are part of the `update_case()` method which accepts `review_ticket_id: str | None = None` as a parameter; the ticket must be created externally and the resulting ID passed in
+- [Confirmed] `app/services/kyc_cases.py:420-428` — `sync_from_ticket_event()` method exists (signature at `kyc_cases.py:420–432`); propagates ticket status back to KYC case review dict
+- [Confirmed] No `app/services/support_hub.py`, no `app/routers/support.py`, no `/ui/support` endpoints, no `frontend/src/pages/support/` directory, no `/support` route in `frontend/src/App.tsx`
+- [Confirmed] `HelpdeskPage.tsx` exists at `frontend/src/pages/helpdesk/HelpdeskPage.tsx` — shows user's helpdesk conversations only, no tickets/KYC tab
