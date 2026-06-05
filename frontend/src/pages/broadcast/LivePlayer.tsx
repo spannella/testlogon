@@ -136,15 +136,16 @@ export default function LivePlayer() {
   }, [sessionId, isAuthenticated]);
 
   useEffect(() => {
-    if (!session || !isAuthenticated) return;
+    if (!sessionId || !isAuthenticated) return;
     adJoinMutation.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  }, [sessionId, isAuthenticated]);
 
   useEffect(() => {
-    if (!session || !isAuthenticated) return;
+    if (!sessionId || !isAuthenticated) return;
     playbackMutation.mutate();
-  }, [session]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, isAuthenticated]);
 
   // ─── Cleanup timers ───────────────────────────────────────────
 

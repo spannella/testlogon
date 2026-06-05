@@ -1,6 +1,6 @@
 # GAP-0071: record_ad_event does not write to ad_billing, ad_fraud_prevention, or ad_analytics
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-020 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-020 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/ADS-020.md`); see also `docs/tickets/writeups/ADS-020.md`
 
 ## Location

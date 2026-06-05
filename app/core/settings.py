@@ -539,6 +539,10 @@ class Settings:
     broadcast_preroll_enabled: bool = os.environ.get("BROADCAST_PREROLL_ENABLED", "1") not in ("0", "false", "False")
     broadcast_midroll_enabled: bool = os.environ.get("BROADCAST_MIDROLL_ENABLED", "1") not in ("0", "false", "False")
     broadcast_ad_events_table_name: str = os.environ.get("DDB_BROADCAST_AD_EVENTS", "BroadcastAdEvents")
+    # Broadcast ad billing (ADS-020) — guards charge_impression + creator revenue
+    # split for broadcast ad events. Default off (money-moving code; keeps dev/test
+    # deterministic). Enable explicitly in production after smoke testing.
+    broadcast_ads_billing_enabled: bool = os.environ.get("BROADCAST_ADS_BILLING_ENABLED", "0") not in ("0", "false", "False")
     # Broadcast Q&A (ENGAGE-003)
     broadcast_qa_enabled: bool = os.environ.get("BROADCAST_QA_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     broadcast_qa_questions_table_name: str = os.environ.get("DDB_BROADCAST_QA_QUESTIONS", "broadcast_qa_questions")

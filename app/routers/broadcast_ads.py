@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.settings import S
@@ -97,6 +97,7 @@ class AdEventOut(BaseModel):
     ok: bool = True
     event_id: str
     event_type: str
+    fraud_flagged: bool = False
 
 
 def _config_out(session) -> BroadcastAdConfigOut:
@@ -252,16 +253,34 @@ def end_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
 def track_ad_event_route(
     session_id: str,
     creative_id: str,
+    request: Request,
     event: str = Query(default="impression"),
     slot_type: str = Query(default=""),
+    account_id: str = Query(default=""),
+    campaign_id: str = Query(default=""),
+    creator_id: str = Query(default=""),
+    bid_cpm_cents: int = Query(default=0),
+    view_time_ms: int = Query(default=0),
     ctx: dict = Depends(_ctx),
 ):
-    """Record an ad event (impression/skip/complete/click) for a broadcast creative."""
+    """Record an ad event (impression/skip/complete/click) for a broadcast creative.
+
+    Billing context (``account_id`` / ``campaign_id`` / ``creator_id`` /
+    ``bid_cpm_cents``) drives advertiser charging + creator revenue split when
+    ``broadcast_ads_billing_enabled`` is on; fraud detection always runs.
+    """
     result = record_ad_event(
         session_id=session_id,
         creative_id=creative_id,
         user_id=ctx["user_sub"],
         event_type=event,
         slot_type=slot_type,
+        account_id=account_id,
+        campaign_id=campaign_id,
+        creator_id=creator_id,
+        bid_cpm_cents=bid_cpm_cents,
+        view_time_ms=view_time_ms,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", ""),
     )
     return AdEventOut(**result)

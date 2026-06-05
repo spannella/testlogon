@@ -1,6 +1,6 @@
 # GAP-0073: LivePlayer.tsx adJoinMutation triggered by session state instead of sessionId
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-020 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-020 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-020.md`); see also `docs/tickets/writeups/ADS-020.md`
 
 ## Location
