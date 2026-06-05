@@ -1329,6 +1329,8 @@ def _admin_grant_command(args: argparse.Namespace) -> Dict[str, Any]:
             details={"code": "root_immutable", "target_user_sub": target_user_sub},
         )
 
+    new_caps = _parse_capabilities(list(getattr(args, "capability", []) or []))
+
     if bool(shared.dry_run):
         return {
             "ok": True,
@@ -1340,23 +1342,48 @@ def _admin_grant_command(args: argparse.Namespace) -> Dict[str, Any]:
             "previous_role": current_role.value,
             "new_role": Role.ADMIN.value,
             "reason": reason,
+            "new_capabilities": new_caps,
             "request_id": shared.request_id,
             "correlation_id": shared.correlation_id,
-            "message": "dry-run: user would be granted admin role",
+            "message": (
+                "dry-run: user would be granted admin role (general)"
+                if not new_caps
+                else f"dry-run: user would be granted admin role (scoped: {new_caps})"
+            ),
         }
 
     ts = now_ts()
-    T.users.update_item(
-        Key={"user_sub": target_user_sub},
-        UpdateExpression="SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
-        ExpressionAttributeNames={"#role": "role"},
-        ExpressionAttributeValues={
-            ":role": Role.ADMIN.value,
-            ":ts": ts,
-            ":by": actor_sub,
-            ":reason": reason,
-        },
-    )
+    if new_caps:
+        # Scoped admin: persist the capability list so the token-minting layer
+        # (GAP-0037 bridge) can build a restricted admin_profile.
+        T.users.update_item(
+            Key={"user_sub": target_user_sub},
+            UpdateExpression=(
+                "SET #role=:role, role_updated_at=:ts, role_updated_by=:by, "
+                "role_reason=:reason, admin_capabilities=:caps"
+            ),
+            ExpressionAttributeNames={"#role": "role"},
+            ExpressionAttributeValues={
+                ":role": Role.ADMIN.value,
+                ":ts": ts,
+                ":by": actor_sub,
+                ":reason": reason,
+                ":caps": new_caps,
+            },
+        )
+    else:
+        # General admin: write role only (no admin_capabilities = GENERAL profile).
+        T.users.update_item(
+            Key={"user_sub": target_user_sub},
+            UpdateExpression="SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
+            ExpressionAttributeNames={"#role": "role"},
+            ExpressionAttributeValues={
+                ":role": Role.ADMIN.value,
+                ":ts": ts,
+                ":by": actor_sub,
+                ":reason": reason,
+            },
+        )
     event = _persist_role_assignment_event_cli(
         actor_sub=actor_sub,
         target_user_sub=target_user_sub,
@@ -1377,6 +1404,7 @@ def _admin_grant_command(args: argparse.Namespace) -> Dict[str, Any]:
         role=Role.ADMIN.value,
         previous_role=current_role.value,
         reason=reason,
+        new_capabilities=new_caps,
         role_audit_event_id=event["event_id"],
         request_id=shared.request_id,
         correlation_id=shared.correlation_id,
@@ -1392,6 +1420,7 @@ def _admin_grant_command(args: argparse.Namespace) -> Dict[str, Any]:
         "previous_role": current_role.value,
         "new_role": Role.ADMIN.value,
         "reason": reason,
+        "new_capabilities": new_caps,
         "event_id": event["event_id"],
         "request_id": shared.request_id,
         "correlation_id": shared.correlation_id,
@@ -1446,7 +1475,10 @@ def _admin_revoke_command(args: argparse.Namespace) -> Dict[str, Any]:
     ts = now_ts()
     T.users.update_item(
         Key={"user_sub": target_user_sub},
-        UpdateExpression="SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
+        UpdateExpression=(
+            "SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason "
+            "REMOVE admin_capabilities"
+        ),
         ExpressionAttributeNames={"#role": "role"},
         ExpressionAttributeValues={
             ":role": Role.USER.value,
@@ -2352,6 +2384,17 @@ def _add_group_commands(group_name: str, group_parser: argparse.ArgumentParser) 
         _add_mutation_guard_options(grant)
         grant.add_argument("--target-user-sub", required=True, help="Target user subject")
         grant.add_argument("--role", default="admin", choices=("admin", "root"), help="Role to grant")
+        grant.add_argument(
+            "--capability",
+            action="append",
+            default=[],
+            metavar="CAPABILITY",
+            help=(
+                "Admin capability to assign (repeatable). Allowed: "
+                + ", ".join(sorted(ADMIN_CAPABILITIES))
+                + ". Omit to create a general (full-access) admin."
+            ),
+        )
         grant.set_defaults(
             handler=_admin_grant_command,
             group=group_name,

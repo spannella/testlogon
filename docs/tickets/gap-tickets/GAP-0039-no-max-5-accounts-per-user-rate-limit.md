@@ -1,6 +1,6 @@
 # GAP-0039: no max-5-accounts-per-user rate limit
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-001 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-001 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-001.md`); see also `docs/tickets/writeups/ADS-001.md`
 
 ## Location

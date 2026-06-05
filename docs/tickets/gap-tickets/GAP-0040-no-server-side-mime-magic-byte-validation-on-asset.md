@@ -1,6 +1,6 @@
 # GAP-0040: no server-side MIME magic-byte validation on asset upload
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-002 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-002 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-002.md`); see also `docs/tickets/writeups/ADS-002.md`
 
 ## Location
