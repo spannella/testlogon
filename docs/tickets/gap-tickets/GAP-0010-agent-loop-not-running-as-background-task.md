@@ -1,6 +1,6 @@
 # GAP-0010: agent loop not running as background task
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: AGENT-003 · **Effort**: L
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: AGENT-003 · **Effort**: L
 **From**: gap audit (`docs/tickets/gaps/AGENT-003.md`); see also `docs/tickets/writeups/AGENT-003.md`
 
 ## Location

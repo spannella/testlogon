@@ -30,6 +30,9 @@ class Settings:
     root_login_allowed_ips: str = os.environ.get("ROOT_LOGIN_ALLOWED_IPS", "")
     root_login_local_only: bool = os.environ.get("ROOT_LOGIN_LOCAL_ONLY", "false").lower() in ("1", "true", "yes", "on")
     trusted_proxy_cidrs: str = os.environ.get("TRUSTED_PROXY_CIDRS", "")
+    # Break-glass secret for rootctl mutating CLI commands (prod: from Secrets Manager
+    # injected into env; dev: well-known value in .env.local). Same code path either way.
+    rootctl_break_glass_secret: str = os.environ.get("ROOTCTL_BREAK_GLASS_SECRET", "")
 
     # DynamoDB tables
     ddb_sessions_table: str = os.environ.get("DDB_SESSIONS_TABLE", "")

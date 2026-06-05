@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hmac
 import json
 import os
 import re
@@ -1977,6 +1978,68 @@ def _placeholder_mutation_command(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+_BREAK_GLASS_ENV = "ROOTCTL_BREAK_GLASS_SECRET"
+_BREAK_GLASS_TOKEN_ENV = "ROOTCTL_BREAK_GLASS_TOKEN"
+
+
+def _break_glass_expected_secret() -> str:
+    """Resolve the configured break-glass secret.
+
+    Prefers the live environment variable (prod injects it from Secrets Manager
+    immediately before the command; same code path applies in dev where it is a
+    well-known value in .env.local). Falls back to the Settings singleton so
+    callers that load config through Settings stay consistent.
+    """
+    value = (os.environ.get(_BREAK_GLASS_ENV, "") or "").strip()
+    if value:
+        return value
+    try:
+        from app.core.settings import S
+
+        return (getattr(S, "rootctl_break_glass_secret", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _require_break_glass_auth() -> None:
+    """Verify the break-glass secret before any mutating CLI command.
+
+    The expected secret is read from ROOTCTL_BREAK_GLASS_SECRET (env/settings).
+    The operator-supplied token is read from ROOTCTL_BREAK_GLASS_TOKEN (env, for
+    non-interactive CI/CD) or prompted interactively via getpass. Comparison uses
+    hmac.compare_digest to avoid timing leaks. This is additive: it runs in
+    addition to (not instead of) the existing reason/ticket/confirm/actor guards.
+    """
+    expected = _break_glass_expected_secret()
+    if not expected:
+        raise CliPolicyError(
+            f"{_BREAK_GLASS_ENV} is not configured; CLI mutations are disabled. "
+            "Set the environment variable to enable break-glass operations.",
+            details={"code": "break_glass_unconfigured"},
+        )
+
+    provided = (os.environ.get(_BREAK_GLASS_TOKEN_ENV, "") or "").strip()
+    if not provided:
+        try:
+            provided = getpass.getpass(
+                "Break-glass secret (or set ROOTCTL_BREAK_GLASS_TOKEN): "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            provided = ""
+
+    if not provided:
+        raise CliPolicyError(
+            "break-glass authentication failed: no token provided",
+            details={"code": "break_glass_no_token"},
+        )
+
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+        raise CliPolicyError(
+            "break-glass authentication failed: invalid token",
+            details={"code": "break_glass_auth_failed"},
+        )
+
+
 def _validate_preflight(args: argparse.Namespace) -> str:
     try:
         root_sub = validate_root_user_sub_config()
@@ -1985,6 +2048,8 @@ def _validate_preflight(args: argparse.Namespace) -> str:
 
     if not bool(getattr(args, "mutating", False)):
         return root_sub
+
+    _require_break_glass_auth()
 
     reason = str(getattr(args, "reason", "") or "").strip()
     if not reason:

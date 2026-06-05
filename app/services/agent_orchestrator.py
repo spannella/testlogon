@@ -7,6 +7,7 @@ heartbeat monitoring.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from decimal import Decimal
@@ -702,11 +703,132 @@ def update_ticket_filter(
 # Agent Loop Control
 # ---------------------------------------------------------------------------
 
-def start_agent_loop(user_id: str, worker_id: str) -> Dict[str, Any]:
-    """Mark the agent loop as started.
+# Default poll interval between loop iterations (seconds). Overridable for
+# tests via monkeypatching this module-level constant.
+AGENT_LOOP_POLL_INTERVAL_SECONDS = 30
 
-    The actual background task loop (run_agent_loop) is managed by
-    AGENT-006. This function initializes state and marks the loop running.
+
+async def _dispatch_ticket(
+    user_id: str,
+    worker_id: str,
+    ticket: Dict[str, Any],
+    context: str,
+) -> None:
+    """Dispatch a claimed ticket to the agent execution layer.
+
+    This is intentionally a safe no-op stub. Real agent execution
+    (terminal session injection / Claude invocation, AGENT-004/006) is
+    flag-gated and must NOT be triggered from this loop until wired up
+    deliberately. The loop's responsibility here is limited to discovering
+    and claiming eligible tickets; actual work dispatch is a follow-on.
+    """
+    logger.info(
+        "agent.loop.ticket_dispatched worker_id=%s ticket_id=%s (no-op stub)",
+        worker_id,
+        ticket.get("ticket_id", ""),
+    )
+
+
+async def run_agent_loop(user_id: str, worker_id: str) -> None:
+    """Autonomous agent loop: poll for eligible tickets and work them.
+
+    Runs as an asyncio background task until the worker_id is removed from
+    ``_running_loops`` (by ``stop_agent_loop``) or the worker record
+    disappears. Each iteration honours pause/error state, refreshes the
+    heartbeat, finds the next eligible ticket, claims it atomically
+    (tolerating claim races), injects context, and hands off to the
+    (currently no-op) dispatch stub.
+
+    NOTE (SECOPS-007 / AGENT-003): ``_running_loops`` is an in-process dict.
+    This is correct ONLY for single-process deployments (uvicorn
+    ``--workers 1``, as required in dev by the moto constraint). For
+    multi-process / multi-instance deployments a distributed lock
+    (e.g. a DynamoDB conditional write or SQS visibility timeout) must
+    replace this dict before horizontal scaling.
+    """
+    logger.info("agent.loop.running worker_id=%s user_id=%s", worker_id, user_id)
+    try:
+        while worker_id in _running_loops:
+            poll_interval = AGENT_LOOP_POLL_INTERVAL_SECONDS
+
+            # 1. Re-fetch worker state -- honour pause/stop/error signals.
+            worker = _get_worker_item(user_id, worker_id)
+            if not worker:
+                logger.warning("agent.loop.worker_missing worker_id=%s", worker_id)
+                break
+            state = worker.get("agent_state", "idle")
+            if state in ("paused", "error", "working", "claiming", "completing"):
+                # Already busy (or paused/error) -- don't start new work.
+                await asyncio.sleep(poll_interval)
+                continue
+
+            # 2. Refresh heartbeat (best-effort).
+            try:
+                T.agent_workers.update_item(
+                    Key={"pk": f"USER#{user_id}", "sk": f"WORKER#{worker_id}"},
+                    UpdateExpression="SET heartbeat_at = :hb",
+                    ExpressionAttributeValues={":hb": now_ts()},
+                )
+            except Exception:
+                logger.warning("agent.loop.heartbeat_failed worker_id=%s", worker_id)
+
+            # 3. Find next eligible ticket.
+            ticket = find_next_ticket(user_id, worker_id)
+            if not ticket:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            ticket_id = ticket["ticket_id"]
+
+            # 4. Claim it (atomic -- tolerate races with other workers).
+            try:
+                transition_agent_state(user_id, worker_id, "claiming")
+                claim_ticket(user_id, worker_id, ticket_id)
+            except ValueError as exc:
+                logger.info(
+                    "agent.loop.claim_lost worker_id=%s ticket_id=%s reason=%s",
+                    worker_id, ticket_id, exc,
+                )
+                try:
+                    transition_agent_state(user_id, worker_id, "idle")
+                except ValueError:
+                    pass
+                await asyncio.sleep(poll_interval)
+                continue
+
+            # 5. Inject context and hand off to the dispatch stub.
+            try:
+                context = inject_ticket_context(user_id, worker_id, ticket_id)
+                logger.info(
+                    "agent.loop.ticket_claimed worker_id=%s ticket_id=%s",
+                    worker_id, ticket_id,
+                )
+                await _dispatch_ticket(user_id, worker_id, ticket, context)
+            except Exception:
+                logger.exception(
+                    "agent.loop.dispatch_error worker_id=%s ticket_id=%s",
+                    worker_id, ticket_id,
+                )
+                try:
+                    release_ticket(user_id, worker_id, ticket_id, reason="error")
+                except Exception:
+                    pass
+
+            await asyncio.sleep(poll_interval)
+    finally:
+        _running_loops.pop(worker_id, None)
+        logger.info("agent.loop.exited worker_id=%s", worker_id)
+
+
+def start_agent_loop(user_id: str, worker_id: str) -> Dict[str, Any]:
+    """Mark the agent loop as started and schedule the background coroutine.
+
+    Schedules ``run_agent_loop`` on the running asyncio event loop. The
+    FastAPI/uvicorn endpoint that calls this is ``async def`` and therefore
+    runs on the event loop, so ``asyncio.create_task`` is safe. If no event
+    loop is running (e.g. a purely synchronous caller/test), the loop flag
+    is still set but no task is scheduled -- callers in that case are
+    responsible for awaiting ``run_agent_loop`` directly.
     """
     worker = _get_worker_item(user_id, worker_id)
     if not worker:
@@ -726,6 +848,29 @@ def start_agent_loop(user_id: str, worker_id: str) -> Dict[str, Any]:
         )
 
     _running_loops[worker_id] = True
+
+    # Schedule the autonomous loop on the running event loop, if any.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        task = loop.create_task(run_agent_loop(user_id, worker_id))
+        # asyncio.create_task swallows exceptions that are never awaited;
+        # surface any uncaught error from the loop coroutine.
+        task.add_done_callback(
+            lambda t: (
+                t.exception()
+                and logger.error(
+                    "agent.loop.uncaught_exception worker_id=%s",
+                    worker_id,
+                    exc_info=t.exception(),
+                )
+            )
+            if not t.cancelled()
+            else None
+        )
+
     logger.info("agent.loop.started worker_id=%s user_id=%s", worker_id, user_id)
 
     return {

@@ -1,6 +1,6 @@
 # GAP-0011: respond_to_feedback does not inject response or resume agent
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: AGENT-006 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: AGENT-006 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/AGENT-006.md`); see also `docs/tickets/writeups/AGENT-006.md`
 
 ## Location

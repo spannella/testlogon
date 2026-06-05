@@ -262,6 +262,29 @@ def respond_to_feedback(
         "Responded to feedback %s for worker %s",
         request_id, worker_id,
     )
+
+    # Inject the response into the worker's terminal buffer so subsequent
+    # pattern-matching rounds (and any live terminal viewers) have context.
+    buf = get_or_create_buffer(worker_id)
+    buf.append(f"\n[User response]: {response_text}\n")
+
+    # Transition the agent back to "working" so it resumes instead of staying
+    # stuck in "awaiting_feedback". The worker may have been manually
+    # transitioned or deleted in the meantime; log and continue if so.
+    from app.services import agent_orchestrator
+    try:
+        agent_orchestrator.transition_agent_state(user_id, worker_id, "working")
+        logger.info(
+            "Agent %s transitioned to working after feedback response %s",
+            worker_id, request_id,
+        )
+    except (ValueError, LookupError) as exc:
+        logger.warning(
+            "Could not transition worker %s to working after feedback "
+            "response %s: %s",
+            worker_id, request_id, exc,
+        )
+
     return get_feedback_request(worker_id, request_id)
 
 
