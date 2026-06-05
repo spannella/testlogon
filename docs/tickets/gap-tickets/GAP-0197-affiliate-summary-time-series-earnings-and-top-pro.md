@@ -1,0 +1,18 @@
+# GAP-0197: Affiliate summary, time-series, earnings, and top-products backend endpoints absent
+
+**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: FIN-010 · **Effort**: M
+**From**: gap audit (`docs/tickets/gaps/FIN-010.md`); see also `docs/tickets/writeups/FIN-010.md`
+
+## Location
+`app/services/affiliate_links.py`
+
+## Problem / Impact
+Creators cannot see aggregate stats, click trends, or earnings breakdown; four out of five new dashboard endpoints specified in the ticket are missing
+
+## Fix
+add four service functions + router endpoints + `AffiliateSummaryOut`/`AffiliateClickTimeSeriesOut`/`AffiliateEarningsBreakdownOut`/`AffiliateTopProductsOut` models
+
+## Notes
+This gap was identified by the second-pass as-built review of FIN-010. Apply the dev/prod
+parity rules in SECOPS-007 if the fix touches AWS-backed paths. Add a regression test
+(pytest offline / Playwright) that fails before the fix and passes after.

@@ -1,65 +1,9 @@
-# Write-up Progress
+# Write-up / Gap-audit Progress — COMPLETE
 
-Done: 60 / 326
+- Tickets covered: 326 / 326 (all)
+- Full deep-dive write-ups (`writeups/`): 164  (SEC/SECOPS + all UNBUILT features + early feature waves)
+- Per-ticket gap files (`gaps/`): 294
+- Consolidated plan: `docs/tickets/GAPS.md`
+- Actionable GAP tickets (CRIT+HIGH): 384  (`docs/tickets/gap-tickets/`)
 
-## Completed
-- AGENT-001
-- AGENT-002
-- AGENT-003
-- AGENT-004
-- AGENT-005
-- AGENT-006
-- KYC-001
-- KYC-002
-- KYC-003
-- KYC-004
-- KYC-005
-- KYC-006
-- KYC-007
-- KYC-008
-- KYC-009
-- KYC-010
-- PLATFORM-001
-- PLATFORM-002
-- PLATFORM-003
-- PLATFORM-004
-- PLATFORM-005
-- PLATFORM-006
-- SEC-001
-- SEC-002
-- SEC-003
-- SEC-004
-- SEC-005
-- SEC-006
-- SEC-007
-- SEC-008
-- SEC-009
-- SEC-010
-- SEC-011
-- SEC-012
-- SEC-013
-- SEC-014
-- SEC-015
-- SEC-016
-- SEC-017
-- SEC-018
-- SEC-019
-- SEC-020
-- SEC-021
-- SEC-022
-- SEC-023
-- SEC-024
-- SEC-025
-- SECOPS-001
-- SECOPS-002
-- SECOPS-003
-- SECOPS-004
-- SECOPS-005
-- SECOPS-006
-- SECOPS-007
-- VOD-001
-- VOD-002
-- VOD-003
-- VOD-004
-- VOD-005
-- VOD-006
+Severity tally: CRIT 34 · HIGH 350 · MED 572 · LOW 454 · UNBUILT 18
