@@ -1586,6 +1586,11 @@ class Settings:
     ad_frequency_cap_hourly: int = int(os.environ.get("AD_FREQUENCY_CAP_HOURLY", "3"))
     ad_frequency_cap_daily: int = int(os.environ.get("AD_FREQUENCY_CAP_DAILY", "10"))
     ad_frequency_caps_table_name: str = os.environ.get("DDB_AD_FREQUENCY_CAPS", "AdFrequencyCaps")
+    # Minutes between ad-analytics hourly-rollup ticks. Default 60 (top of each
+    # clock hour); set lower in dev to see rollup data populate quickly.
+    ad_analytics_rollup_interval_minutes: int = int(
+        os.environ.get("AD_ANALYTICS_ROLLUP_INTERVAL_MINUTES", "60")
+    )
 
     # Subscription-Gated VOD (MON-005)
     vod_subscription_gating_enabled: bool = os.environ.get("VOD_SUBSCRIPTION_GATING_ENABLED", "1") not in ("0", "false", "False")

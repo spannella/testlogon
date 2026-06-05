@@ -1,6 +1,6 @@
 # GAP-0052: min-CPM floor never checked in ad serving engine
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-010 · **Effort**: S
+**Status**: No change needed (covered by GAP-0042, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-010 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-010.md`); see also `docs/tickets/writeups/ADS-010.md`
 
 ## Location
