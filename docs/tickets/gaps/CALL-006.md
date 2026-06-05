@@ -1,0 +1,6 @@
+# CALL-006 Gaps
+
+- [MED] No unit tests for three core hooks — `useRtcPeerConnection.test.ts`, `useMediaCapture.test.ts`, `useMediaDevices.test.ts` do not exist — hook logic (ICE buffer, error handling, teardown idempotency) only covered by slow E2E runs (~10-15s per test) — Fix: create all three test files (~700 lines total) per §4.1/4.2 — Effort: M
+- [MED] No isolated signaling relay E2E spec — `frontend/e2e/webrtc-signaling.spec.ts` does not exist — IDOR, replay detection, state-gate, stale timestamp, and rate-limit scenarios are not covered by any Playwright test — Fix: create focused spec (~120 lines) per §4.3 — Effort: S
+- [LOW] DOM-level `<video>` rendering not asserted in E2E — `webrtc-media.spec.ts` sections 78-79 assert track `readyState` but not `videoWidth > 0`; a regression in `VideoRenderer.srcObject` assignment would not be caught — Fix: add `videoWidth`/`videoHeight` assertions to sections 78-79 per §4.4 — Effort: S
+- [LOW] Reconnection test (section 82) is slow and flaky — uses fixed wait for ICE failure detection which varies under CI load — Fix: replace fixed wait with `page.waitForFunction` polling `iceConnectionState` and set `test.setTimeout(90_000)` per §4.5 — Effort: S

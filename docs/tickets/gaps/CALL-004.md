@@ -1,0 +1,6 @@
+# CALL-004 Gaps
+
+- [MED] No dedicated DOM-level media E2E spec — `frontend/e2e/webrtc-call-media.spec.ts` does not exist — `<video>` element dimensions, `srcObject` assignment, PiP visibility, audio play state, and dialog expansion ratio are untested at DOM level — Fix: create spec (~150 lines) per §4.1 — Effort: S
+- [LOW] `autoPlay` fallback missing on iOS — `AudioRenderer` and `VideoRenderer` (`CallSessionOverlay.tsx:90,117`) use `autoPlay` without a `.play().catch()` fallback; mobile browsers (iOS Safari) block autoPlay without user interaction — Fix: add `ref.current.play().catch(()=>{})` in `srcObject` effect per §4.2 — Effort: S
+- [LOW] Double screen-reader announcement on video dialog — `CallSessionOverlay.tsx` video layout has both `aria-label="Video call"` on `DialogContent` and a `sr-only` `<DialogTitle>`; screen readers announce the call twice — Fix: remove the `aria-label` attribute and rely solely on `DialogTitle` per §4.4 — Effort: S
+- [LOW] `<audio>` element missing `aria-hidden` — `AudioRenderer` (`CallSessionOverlay.tsx:117`) is `className="hidden"` but lacks `aria-hidden="true"`; screen readers may announce the decorative audio element — Fix: add `aria-hidden="true"` to `AudioRenderer` render per §5.3 — Effort: S

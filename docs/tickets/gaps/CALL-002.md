@@ -1,0 +1,6 @@
+# CALL-002 Gaps
+
+- [MED] Unit test file missing for core hook — `frontend/src/hooks/useRtcPeerConnection.test.ts` does not exist — caller/callee paths, ICE buffer flush, teardown idempotency, and TURN fallback are untested at unit level; regressions only caught by slow E2E — Fix: create `renderHook`-based test file (~200 lines) per §4.1 — Effort: S
+- [LOW] TURN credential fetch-fail is silent in dev — when `fetchTurnCredentials` returns 503 (TURN disabled), hook must explicitly log a warning before falling back to STUN-only config; current fallback may swallow the error silently — Fix: add explicit `console.warn` in the catch block per §4.2 — Effort: S
+- [LOW] Screen-share signal types not in `SignalingPayload.type` — `messaging.ts:1025` — union missing `"webrtc.screen_share_start" | "webrtc.screen_share_stop"`; TypeScript errors will appear when CALL-013 passes those types to the hook — Fix: extend union when CALL-013 merges per §4.3 — Effort: S
+- [LOW] Double-close risk on concurrent teardown — `callStateMachine.ts:199` `teardownCallResources` and hook cleanup effect can both call `peerConnection.close()` on component unmount — guarded by `cleanedUp` flag but hook cleanup should add its own guard — Fix: add idempotency guard in hook cleanup path per §3.5 — Effort: S
