@@ -1,6 +1,6 @@
 # GAP-0086: create_feedback_request does not pause agent
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-006 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-006 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AGENT-006.md`); see also `docs/tickets/writeups/AGENT-006.md`
 
 ## Location

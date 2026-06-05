@@ -1,6 +1,6 @@
 # GAP-0088: live GitHub API not wired
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-007 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-007 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AGENT-007.md`); see also `docs/tickets/writeups/AGENT-007.md`
 
 ## Location

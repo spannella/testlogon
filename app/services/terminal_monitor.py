@@ -19,6 +19,37 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_FEEDBACK_TIMEOUT_SECONDS = 14400  # 4 hours
 
+# ─── ReDoS guards for user-supplied patterns (GAP-0087) ─────────────────────
+# User-submitted regexes are validated only for syntax by re.compile, which does
+# not catch catastrophic backtracking (e.g. "(a+)+$" or "(x+x+)+y"). A
+# pathological pattern would later pin a CPU core and hang the single-worker
+# monitoring loop on live terminal output.
+#
+# Guard at write time with (1) a length cap and (2) a static structural check
+# that rejects nested unbounded quantifiers — the canonical catastrophic shape
+# where a quantifier (+, *, {n,}) is applied to a group whose body itself
+# contains an unbounded quantifier. The structural check NEVER executes the
+# candidate regex, so a malicious pattern cannot pin a CPU core or starve the
+# GIL even during validation. Pure-Python, no AWS dependency, identical in dev
+# and prod (SECOPS-007).
+_PATTERN_MAX_LEN = 500
+
+# Matches a group "(...)" whose body contains an unbounded quantifier (+ or *),
+# immediately followed by another quantifier (+, *, ?, or {). This catches
+# (a+)+, (a*)*, (x+x+)+, ([0-9]+)+, (a+){2,}, etc., while leaving simple
+# anchored/keyword patterns and bounded quantifiers untouched.
+_NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)[+*?{]")
+
+
+def _is_safe_pattern(pattern: str) -> bool:
+    """Return False if *pattern* exhibits the canonical catastrophic-
+    backtracking shape (a nested unbounded quantifier).
+
+    Performed by static inspection of the pattern source — the candidate regex
+    is never run, so this guard cannot itself be used as a DoS vector.
+    """
+    return not _NESTED_QUANTIFIER.search(pattern)
+
 # ─── Default patterns ───────────────────────────────────────────────────────
 
 DEFAULT_PATTERNS: List[Dict[str, str]] = [
@@ -264,6 +295,27 @@ def create_feedback_request(
     }
     T.agent_feedback.put_item(Item=item)
 
+    # Pause the agent so it stops processing until the human responds. Mirrors
+    # the symmetric "working" resume in respond_to_feedback (GAP-0011). The
+    # worker may already be in awaiting_feedback (duplicate signal), in a
+    # terminal state, or deleted in the meantime; log and continue so the
+    # feedback record is still returned to the caller. (GAP-0086)
+    from app.services import agent_orchestrator
+    try:
+        agent_orchestrator.transition_agent_state(
+            user_id, worker_id, "awaiting_feedback"
+        )
+        logger.info(
+            "Agent %s transitioned to awaiting_feedback for request %s",
+            worker_id, request_id,
+        )
+    except (ValueError, LookupError) as exc:
+        logger.warning(
+            "Could not transition worker %s to awaiting_feedback for "
+            "request %s: %s",
+            worker_id, request_id, exc,
+        )
+
     logger.info(
         "Created feedback request %s for worker %s (ticket %s)",
         request_id, worker_id, ticket_id,
@@ -487,6 +539,22 @@ def update_pattern_config(
         if len(pattern_list) > 50:
             raise ValueError(f"Too many patterns in category {category} (max 50)")
         for p in pattern_list:
+            # Length cap — reject absurdly long patterns outright (GAP-0087).
+            if len(p) > _PATTERN_MAX_LEN:
+                raise ValueError(
+                    f"Pattern too long (max {_PATTERN_MAX_LEN} chars): "
+                    f"'{p[:80]}...'"
+                )
+            # ReDoS safety check — reject catastrophic backtracking before
+            # compiling/storing (GAP-0087). Done first so a pathological
+            # pattern is never executed.
+            if not _is_safe_pattern(p):
+                raise ValueError(
+                    f"Pattern '{p}' rejected by safety check "
+                    f"(possible catastrophic backtracking from nested "
+                    f"quantifiers). Use a simpler pattern."
+                )
+            # Syntax check.
             try:
                 re.compile(p)
             except re.error as exc:
