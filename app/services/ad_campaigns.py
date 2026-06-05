@@ -51,6 +51,7 @@ def create_campaign(account_id: str, data: CampaignCreateIn) -> dict:
         "lifetime_spent_cents": 0,
         "status": "draft",
         "category": data.category,
+        "bid_cpm_cents": data.bid_cpm_cents,
         "created_at": ts,
         "updated_at": ts,
     }

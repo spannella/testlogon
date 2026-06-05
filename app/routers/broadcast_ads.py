@@ -30,6 +30,7 @@ from app.services.broadcast_ads import (
     start_ad_break,
 )
 from app.services.sessions import require_ui_session
+from app.auth.roles import Role
 
 router = APIRouter(prefix="/broadcast", tags=["broadcast-ads"])
 
@@ -124,7 +125,7 @@ def get_ad_config_route(session_id: str, ctx: dict = Depends(_ctx)):
 def update_ad_config_route(session_id: str, body: BroadcastAdConfigIn, ctx: dict = Depends(_ctx)):
     """Update ad configuration (broadcaster only)."""
     session = get_session(session_id)
-    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {"admin", "root"}:
+    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {Role.ADMIN, Role.ROOT}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_BROADCASTER", "detail": "Only the broadcaster can update ad config"},
@@ -185,7 +186,7 @@ def ad_join_route(session_id: str, ctx: dict = Depends(_ctx)):
 async def trigger_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
     """Broadcaster triggers a mid-roll ad break for all viewers."""
     session = get_session(session_id)
-    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {"admin", "root"}:
+    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {Role.ADMIN, Role.ROOT}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_BROADCASTER", "detail": "Only the broadcaster can trigger ad breaks"},
@@ -222,7 +223,7 @@ async def trigger_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
 def end_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
     """Broadcaster manually ends an ad break early."""
     session = get_session(session_id)
-    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {"admin", "root"}:
+    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {Role.ADMIN, Role.ROOT}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_BROADCASTER", "detail": "Only the broadcaster can end ad breaks"},

@@ -2484,6 +2484,20 @@ def main() -> None:
         )
     except Exception:
         pass
+    # ADS-005 / GAP-0045: Enable TTL on billing table for ad_feedback record expiry.
+    # The TTL attribute is "expires_at" (Unix epoch seconds), written only on
+    # AD_FEEDBACK# items. Other billing table item types do not write expires_at
+    # and are unaffected by TTL enablement.
+    _billing_table = _resolve_table_name(S.billing_table_name, "billing")
+    try:
+        client = ddb.meta.client
+        _retry_transient_ddb_call(
+            client.update_time_to_live,
+            TableName=_billing_table,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
+        )
+    except Exception:
+        pass
     print(f"Ensured {len(created)} DynamoDB tables exist.")
 
 

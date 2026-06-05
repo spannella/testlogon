@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 VALID_FEEDBACK_TYPES = {"hide", "not_relevant", "repetitive", "offensive"}
 
+# ADS-005 / GAP-0045: ad feedback records carry a 90-day TTL so they do not
+# accumulate unbounded in the billing table. DynamoDB expires items whose
+# "expires_at" attribute (Unix epoch seconds) is in the past.
+_FEEDBACK_TTL_DAYS = 90
+
 
 def record_ad_feedback(
     user_id: str,
@@ -33,6 +38,7 @@ def record_ad_feedback(
         )
 
     ts = now_ts()
+    expires_at = ts + _FEEDBACK_TTL_DAYS * 86400
     T.billing.put_item(Item={
         "pk": f"USER#{user_id}",
         "sk": f"AD_FEEDBACK#{creative_id}#{ts}",
@@ -41,6 +47,7 @@ def record_ad_feedback(
         "feedback_type": feedback_type,
         "reason": reason,
         "created_at": ts,
+        "expires_at": expires_at,
     })
     logger.info(
         "sponsored_hidden",

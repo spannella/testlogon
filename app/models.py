@@ -4306,6 +4306,14 @@ class AdAccountCreateIn(BaseModel):
     billing_email: str = Field(..., min_length=3, max_length=320)
 
 
+# Reasonable bid bounds (in cents):
+# Floor: $0.50 CPM = 50 cents
+# Ceiling: $200 CPM = 20000 cents
+_BID_CPM_MIN = 50
+_BID_CPM_MAX = 20_000
+_BID_CPM_DEFAULT = 500  # $5.00 CPM default
+
+
 class CampaignCreateIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     objective: str = Field(..., pattern=r"^(awareness|traffic|conversions)$")
@@ -4313,6 +4321,12 @@ class CampaignCreateIn(BaseModel):
     budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
     start_date: Optional[int] = None  # Unix timestamp
     end_date: Optional[int] = None    # Unix timestamp
+    # Auction bid (GAP-0044): CPM bid in cents used by the serving engine to
+    # rank candidates. Defaults to $5.00 so existing clients that omit the field
+    # keep working; bounded to a sane range to prevent garbage bids.
+    bid_cpm_cents: int = Field(
+        default=_BID_CPM_DEFAULT, ge=_BID_CPM_MIN, le=_BID_CPM_MAX
+    )
     # Ad category for the campaign. Validated against the same VALID_AD_CATEGORIES
     # taxonomy that creators use for allowed_ad_categories (see CreatorAdSettingsIn)
     # so the serving-engine whitelist comparison is meaningful. "general" is the
@@ -4345,6 +4359,9 @@ class CampaignOut(BaseModel):
     created_at: int
     updated_at: int
     category: str = "general"
+    # GAP-0044: surface the auction bid so advertisers can audit their CPM.
+    # Defaults to $5.00 for legacy items written before this attribute existed.
+    bid_cpm_cents: int = _BID_CPM_DEFAULT
 
 
 # -- Delegates (DELEGATE-001) --
@@ -4648,7 +4665,10 @@ class CampaignUpdateIn(BaseModel):
     budget_cents: Optional[int] = None
     budget_type: Optional[str] = None
     status: Optional[str] = None
-    bid_cpm_cents: Optional[int] = None
+    # GAP-0044: bound the bid range on update to match creation validation.
+    bid_cpm_cents: Optional[int] = Field(
+        default=None, ge=_BID_CPM_MIN, le=_BID_CPM_MAX
+    )
 
 
 class CampaignReviewIn(BaseModel):

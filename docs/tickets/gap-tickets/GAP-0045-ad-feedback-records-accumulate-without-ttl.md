@@ -1,6 +1,6 @@
 # GAP-0045: ad_feedback records accumulate without TTL
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-005 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-005 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-005.md`); see also `docs/tickets/writeups/ADS-005.md`
 
 ## Location

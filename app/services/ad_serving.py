@@ -133,6 +133,14 @@ def serve_ad(
             continue
 
         # Score: bid_cpm * relevance (mock relevance = 1.0)
+        # GAP-0044: campaigns now persist bid_cpm_cents at creation. The 500
+        # fallback is a last-resort guard for legacy items written before the
+        # attribute existed; warn so these can be back-filled.
+        if campaign.get("bid_cpm_cents") is None:
+            logger.warning(
+                "ad_serve_missing_bid_cpm campaign_id=%s; using default 500",
+                campaign.get("campaign_id"),
+            )
         bid_cpm = int(campaign.get("bid_cpm_cents", 500))
         score = bid_cpm * 1.0
 
