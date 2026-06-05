@@ -1,6 +1,6 @@
 # GAP-0069: account suspension does not cascade to pause active campaigns
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-018 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-018 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-018.md`); see also `docs/tickets/writeups/ADS-018.md`
 
 ## Location

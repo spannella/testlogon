@@ -9,6 +9,8 @@ import {
   getTopSpenders,
   moderateAccount,
   moderateCreative,
+  getKillSwitchState,
+  toggleKillSwitch,
 } from "@/api/endpoints/adminAdPlatform";
 import type { AdminAdModerationAction } from "@/api/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,8 +26,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Megaphone, Check, X, Ban, RefreshCw } from "lucide-react";
+import { Megaphone, Check, X, Ban, RefreshCw, AlertTriangle, Power } from "lucide-react";
 import { toast } from "sonner";
+import { useAuthStore } from "@/stores/authStore";
+import { canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 
 function money(cents: number): string {
   return `$${((cents || 0) / 100).toFixed(2)}`;
@@ -41,6 +45,10 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
 export default function AdPlatformDashboard() {
   const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("");
+  // The kill-switch toggle is ROOT-only (enforced server-side); only surface the
+  // Emergency Controls tab to ROOT operators to avoid a confusing 403.
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const isRoot = canSeeRootRoleManagement(accessToken);
 
   const metricsQ = useQuery({
     queryKey: ["adPlatform", "metrics"],
@@ -110,6 +118,7 @@ export default function AdPlatformDashboard() {
           <TabsTrigger value="moderation">Moderation</TabsTrigger>
           <TabsTrigger value="accounts">Accounts</TabsTrigger>
           <TabsTrigger value="creatives">Creatives</TabsTrigger>
+          {isRoot && <TabsTrigger value="controls">Emergency Controls</TabsTrigger>}
         </TabsList>
 
         {/* ── Revenue ──────────────────────────────────────────────── */}
@@ -458,7 +467,131 @@ export default function AdPlatformDashboard() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* ── Emergency Controls (ROOT only) ───────────────────────── */}
+        {isRoot && (
+          <TabsContent value="controls" className="space-y-4">
+            <KillSwitchPanel />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
+  );
+}
+
+/**
+ * Platform-wide ad serving kill switch. ROOT operators can halt or resume all
+ * ad serving in an emergency. Backed by GAP-0068's
+ * GET/POST /ui/admin/ad-platform/kill-switch endpoints.
+ */
+function KillSwitchPanel() {
+  const qc = useQueryClient();
+  const [reason, setReason] = useState("");
+  const [confirming, setConfirming] = useState(false);
+
+  const ksQ = useQuery({
+    queryKey: ["adPlatform", "kill-switch"],
+    queryFn: () => getKillSwitchState(),
+    refetchInterval: 10_000, // poll so the dashboard reflects another operator's toggle
+  });
+
+  const toggleMut = useMutation({
+    mutationFn: (data: { enabled: boolean; reason: string }) => toggleKillSwitch(data),
+    onSuccess: (r) => {
+      if (r.active) {
+        toast.error("Ad serving HALTED");
+      } else {
+        toast.success("Ad serving RESUMED");
+      }
+      qc.invalidateQueries({ queryKey: ["adPlatform", "kill-switch"] });
+      setReason("");
+      setConfirming(false);
+    },
+    onError: () => toast.error("Kill switch action failed"),
+  });
+
+  const ks = ksQ.data;
+  const isActive = ks?.active ?? false;
+
+  return (
+    <Card className={isActive ? "border-destructive" : ""} data-testid="ks-panel">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <AlertTriangle
+            className={`h-5 w-5 ${isActive ? "text-destructive" : "text-muted-foreground"}`}
+          />
+          Platform-Wide Ad Kill Switch
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="rounded border p-3 text-sm">
+          <div className="flex items-center justify-between">
+            <span>Status</span>
+            <Badge variant={isActive ? "destructive" : "default"} data-testid="ks-status">
+              {isActive ? "ACTIVE — All serving halted" : "Inactive — Serving normally"}
+            </Badge>
+          </div>
+          {ks?.toggled_by && (
+            <div className="mt-2 flex justify-between text-muted-foreground">
+              <span>Last toggled by</span>
+              <span>{ks.toggled_by}</span>
+            </div>
+          )}
+          {ks?.reason && (
+            <div className="mt-1 flex justify-between gap-4 text-muted-foreground">
+              <span>Reason</span>
+              <span className="max-w-xs text-right">{ks.reason}</span>
+            </div>
+          )}
+        </div>
+
+        {!confirming ? (
+          <Button
+            variant={isActive ? "default" : "destructive"}
+            onClick={() => setConfirming(true)}
+            data-testid="ks-toggle-btn"
+          >
+            <Power className="mr-2 h-4 w-4" />
+            {isActive ? "Resume Ad Serving" : "Halt All Ad Serving"}
+          </Button>
+        ) : (
+          <div className="space-y-2 rounded border border-destructive p-3">
+            <p className="text-sm font-medium text-destructive">
+              {isActive
+                ? "Confirm: resume all ad serving?"
+                : "Confirm: HALT ALL AD SERVING platform-wide?"}
+            </p>
+            {!isActive && (
+              <div>
+                <label htmlFor="ks-reason" className="text-sm">
+                  Reason (required)
+                </label>
+                <Input
+                  id="ks-reason"
+                  className="mt-1"
+                  placeholder="Describe the reason for halting ad serving…"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  data-testid="ks-reason-input"
+                />
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Button
+                variant={isActive ? "default" : "destructive"}
+                disabled={(!isActive && !reason.trim()) || toggleMut.isPending}
+                onClick={() => toggleMut.mutate({ enabled: !isActive, reason })}
+                data-testid="ks-confirm-btn"
+              >
+                Confirm
+              </Button>
+              <Button variant="outline" onClick={() => setConfirming(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

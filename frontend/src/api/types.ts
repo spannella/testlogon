@@ -9636,6 +9636,19 @@ export interface AdminAdModerationQueue {
   creative_count: number;
 }
 
+// Platform-wide ad serving kill switch (GAP-0068 backend / GAP-0070 UI).
+export interface AdminAdKillSwitchState {
+  active: boolean;
+  toggled_by: string;
+  reason: string;
+  updated_at: number;
+}
+
+export interface AdminAdKillSwitchToggleIn {
+  enabled: boolean;
+  reason: string;
+}
+
 // ── Multi-Hop SSH Bastion (INFRA-011) ──────────────────────────────
 
 export interface SshBastionHopIn {

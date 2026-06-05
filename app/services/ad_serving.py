@@ -64,6 +64,14 @@ def serve_ad(
         "creator_id": creator_id,
     })
 
+    # 0. Platform-wide kill switch (admin emergency halt, GAP-0068). Checked
+    #    before any per-campaign logic so an incident can stop all paid serving
+    #    within one cache-TTL window. Lazy import avoids a circular import
+    #    (admin_ad_platform does not import ad_serving).
+    from app.services.admin_ad_platform import is_kill_switch_active
+    if is_kill_switch_active():
+        return _empty_response("platform_kill_switch_active")
+
     # 1. Check creator allows ads
     creator_settings = get_creator_ad_settings(creator_id)
     if not creator_settings.get("allow_ads", True):
