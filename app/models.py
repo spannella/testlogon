@@ -4313,6 +4313,20 @@ class CampaignCreateIn(BaseModel):
     budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
     start_date: Optional[int] = None  # Unix timestamp
     end_date: Optional[int] = None    # Unix timestamp
+    # Ad category for the campaign. Validated against the same VALID_AD_CATEGORIES
+    # taxonomy that creators use for allowed_ad_categories (see CreatorAdSettingsIn)
+    # so the serving-engine whitelist comparison is meaningful. "general" is the
+    # default for campaigns that do not declare a category (treated as
+    # uncategorized — only served when a creator imposes no whitelist).
+    category: str = Field(default="general")
+
+    @field_validator("category")
+    @classmethod
+    def _validate_category(cls, v: str) -> str:
+        from app.models import VALID_AD_CATEGORIES  # forward ref (defined above)
+        if v != "general" and v not in VALID_AD_CATEGORIES:
+            raise ValueError(f"Unknown ad category: {v}")
+        return v
 
 
 class CampaignOut(BaseModel):
@@ -4330,6 +4344,7 @@ class CampaignOut(BaseModel):
     end_date: Optional[int] = None
     created_at: int
     updated_at: int
+    category: str = "general"
 
 
 # -- Delegates (DELEGATE-001) --

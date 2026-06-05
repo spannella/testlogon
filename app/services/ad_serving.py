@@ -91,6 +91,23 @@ def serve_ad(
         if is_advertiser_blocked(creator_id, account_id):
             continue
 
+        # Category whitelist check (ADS-003): when the creator has configured
+        # an allowed_ad_categories whitelist, skip campaigns whose category is
+        # not in it. An empty list means "no restriction" (the default).
+        allowed_categories = creator_settings.get("allowed_ad_categories") or []
+        if allowed_categories:
+            campaign_category = campaign.get("category", "general")
+            if campaign_category not in allowed_categories:
+                continue
+
+        # Min CPM floor check (ADS-003): skip campaigns bidding below the
+        # creator's configured minimum CPM.
+        creator_min_cpm = int(creator_settings.get("min_cpm_cents", 0) or 0)
+        if creator_min_cpm > 0:
+            campaign_bid = int(campaign.get("bid_cpm_cents", 500))
+            if campaign_bid < creator_min_cpm:
+                continue
+
         # Budget check
         if not _has_budget(campaign):
             continue

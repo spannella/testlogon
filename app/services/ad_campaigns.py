@@ -50,6 +50,7 @@ def create_campaign(account_id: str, data: CampaignCreateIn) -> dict:
         "spent_today_cents": 0,
         "lifetime_spent_cents": 0,
         "status": "draft",
+        "category": data.category,
         "created_at": ts,
         "updated_at": ts,
     }
@@ -77,13 +78,31 @@ def list_campaigns(account_id: str) -> list[dict]:
     return resp.get("Items", [])
 
 
-def list_campaigns_by_status(status: str) -> list[dict]:
-    resp = T.ad_campaigns.query(
-        IndexName="ByStatusCreatedAt",
-        KeyConditionExpression=Key("status").eq(status),
-        ScanIndexForward=False,
-    )
-    return resp.get("Items", [])
+def list_campaigns_by_status(status: str, limit: int = 2000) -> list[dict]:
+    """Return all campaigns with the given status, paginating through all DynamoDB pages.
+
+    A single ``query()`` call returns only the first DynamoDB page (up to 1 MB),
+    silently dropping campaigns on subsequent pages. This loops over
+    ``LastEvaluatedKey`` so the ad-serving engine sees every eligible campaign.
+
+    Args:
+        status: Campaign status to filter by (e.g. "active").
+        limit: Hard cap on total items returned to bound memory use. Default 2000.
+    """
+    items: list[dict] = []
+    kwargs: dict = {
+        "IndexName": "ByStatusCreatedAt",
+        "KeyConditionExpression": Key("status").eq(status),
+        "ScanIndexForward": False,
+    }
+    while True:
+        resp = T.ad_campaigns.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key or len(items) >= limit:
+            break
+        kwargs["ExclusiveStartKey"] = last_key
+    return items[:limit]
 
 
 def update_campaign(account_id: str, campaign_id: str, data: CampaignUpdateIn) -> dict:

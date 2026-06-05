@@ -1,6 +1,6 @@
 # GAP-0043: list_campaigns_by_status does not use ByStatusCreatedAt GSI
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-004 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-004 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-004.md`); see also `docs/tickets/writeups/ADS-004.md`
 
 ## Location
