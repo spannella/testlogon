@@ -157,8 +157,12 @@ def serve_ad(
     candidates.sort(key=lambda c: c["score"], reverse=True)
     winner = candidates[0]
 
-    # 5. Select creative (weighted random by rotation_weight)
-    creative = _weighted_random_creative(winner["creatives"])
+    # 5. Select creative — prefer campaign-level creative_weights (set by
+    # reallocate_budget recommendations) then fall back to per-creative
+    # rotation_weight.
+    creative = _weighted_random_creative(
+        winner["creatives"], campaign_weights=winner["campaign"].get("creative_weights") or {}
+    )
 
     # 6. Build tracking URLs
     tracking_base = "/ui/ads/track"
@@ -417,10 +421,32 @@ def _increment_frequency_cap(user_id: str, campaign_id: str) -> None:
                            user_id, campaign_id, window)
 
 
-def _weighted_random_creative(creatives: list[dict]) -> dict:
+def _weighted_random_creative(
+    creatives: list[dict],
+    campaign_weights: dict | None = None,
+) -> dict:
+    """Select a creative using weighted random sampling.
+
+    If the campaign has a ``creative_weights`` dict (written by a
+    ``reallocate_budget`` optimisation recommendation), those values take
+    precedence over the per-creative ``rotation_weight`` field.
+
+    Args:
+        creatives: list of approved creative dicts for the winning campaign.
+        campaign_weights: optional ``{creative_id: int}`` map from the campaign
+            record (``campaign.get("creative_weights")``). A missing entry falls
+            back to the creative's own ``rotation_weight``.
+    """
     if len(creatives) == 1:
         return creatives[0]
-    weights = [int(c.get("rotation_weight", 50)) for c in creatives]
+    cw = campaign_weights or {}
+    weights: list[int] = []
+    for c in creatives:
+        cid = c.get("creative_id", "")
+        if cid in cw:
+            weights.append(max(1, int(cw[cid])))  # campaign-level override
+        else:
+            weights.append(int(c.get("rotation_weight", 50)))
     total = sum(weights)
     if total == 0:
         return random.choice(creatives)

@@ -1,6 +1,6 @@
 # GAP-0065: unit tests absent
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-016 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-016 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-016.md`); see also `docs/tickets/writeups/ADS-016.md`
 
 ## Location

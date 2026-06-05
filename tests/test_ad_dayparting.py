@@ -186,3 +186,38 @@ def test_budget_pacing_inactive_day_zero():
     )
     assert pacing["active_hours_today"] == 0
     assert pacing["remaining_budget_cents"] == 0
+
+
+# ── Named schedule templates (GAP-0065 residual) ─────────────────────
+
+
+def test_template_always_covers_all_hours():
+    """``always`` template should cover all 24 hours every day."""
+    t = dp.SCHEDULE_TEMPLATES["always"]
+    for day in dp.VALID_DAYS:
+        assert t[day] == list(range(24))
+
+
+def test_template_weekdays_business():
+    """``weekdays_business``: Mon-Fri hours 9-17, Sat/Sun empty."""
+    t = dp.SCHEDULE_TEMPLATES["weekdays_business"]
+    for day in dp.VALID_DAYS[:5]:
+        assert t[day] == list(range(9, 18))
+    assert t["saturday"] == []
+    assert t["sunday"] == []
+
+
+def test_template_evenings():
+    """``evenings``: hours 18-23 every day."""
+    t = dp.SCHEDULE_TEMPLATES["evenings"]
+    for day in dp.VALID_DAYS:
+        assert t[day] == list(range(18, 24))
+
+
+def test_template_weekends():
+    """``weekends``: Sat/Sun all 24 hours, weekdays empty."""
+    t = dp.SCHEDULE_TEMPLATES["weekends"]
+    for day in dp.VALID_DAYS[:5]:
+        assert t[day] == []
+    assert t["saturday"] == list(range(24))
+    assert t["sunday"] == list(range(24))
