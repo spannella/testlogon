@@ -292,12 +292,20 @@ def _count_eligible_tickets(user_id: str) -> int:
     no current agent claim.
     """
     try:
-        resp = T.tickets.scan(
-            FilterExpression="agent_eligible = :yes AND attribute_not_exists(agent_claimed_by)",
-            ExpressionAttributeValues={":yes": "yes"},
-            Select="COUNT",
-        )
-        return resp.get("Count", 0)
+        total = 0
+        kwargs: dict = {
+            "FilterExpression": "agent_eligible = :yes AND attribute_not_exists(agent_claimed_by)",
+            "ExpressionAttributeValues": {":yes": "yes"},
+            "Select": "COUNT",
+        }
+        while True:
+            resp = T.tickets.scan(**kwargs)
+            total += resp.get("Count", 0)
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            kwargs["ExclusiveStartKey"] = last_key
+        return total
     except Exception:
         logger.debug("fleet._count_eligible_tickets failed, returning 0")
         return 0
@@ -306,15 +314,20 @@ def _count_eligible_tickets(user_id: str) -> int:
 def _count_eligible_by_type(user_id: str) -> Dict[str, int]:
     """Count eligible tickets grouped by type."""
     try:
-        resp = T.tickets.scan(
-            FilterExpression="agent_eligible = :yes AND attribute_not_exists(agent_claimed_by)",
-            ExpressionAttributeValues={":yes": "yes"},
-        )
-        items = resp.get("Items", [])
         by_type: Dict[str, int] = {}
-        for item in items:
-            t = item.get("type", "untyped")
-            by_type[t] = by_type.get(t, 0) + 1
+        kwargs: dict = {
+            "FilterExpression": "agent_eligible = :yes AND attribute_not_exists(agent_claimed_by)",
+            "ExpressionAttributeValues": {":yes": "yes"},
+        }
+        while True:
+            resp = T.tickets.scan(**kwargs)
+            for item in resp.get("Items", []):
+                t = item.get("type", "untyped")
+                by_type[t] = by_type.get(t, 0) + 1
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            kwargs["ExclusiveStartKey"] = last_key
         return by_type
     except Exception:
         logger.debug("fleet._count_eligible_by_type failed, returning empty")

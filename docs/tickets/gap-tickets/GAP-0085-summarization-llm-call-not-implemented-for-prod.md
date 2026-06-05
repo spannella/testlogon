@@ -1,6 +1,6 @@
 # GAP-0085: summarization LLM call not implemented for prod
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-005 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-005 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/AGENT-005.md`); see also `docs/tickets/writeups/AGENT-005.md`
 
 ## Location

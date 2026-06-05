@@ -1,6 +1,6 @@
 # GAP-0084: memory content prompt injection
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-005 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-005 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AGENT-005.md`); see also `docs/tickets/writeups/AGENT-005.md`
 
 ## Location
