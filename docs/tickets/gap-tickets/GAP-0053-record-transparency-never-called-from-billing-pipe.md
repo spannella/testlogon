@@ -1,6 +1,6 @@
 # GAP-0053: record_transparency() never called from billing pipeline
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-010 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-010 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-010.md`); see also `docs/tickets/writeups/ADS-010.md`
 
 ## Location

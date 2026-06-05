@@ -1,6 +1,6 @@
 # GAP-0054: dynamic per-creator revenue share not connected to billing engine
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-010 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-010 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/ADS-010.md`); see also `docs/tickets/writeups/ADS-010.md`
 
 ## Location

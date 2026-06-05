@@ -37,10 +37,15 @@ class TestSplitRevenuePlatformEntry:
         assert item["state"] == "settled"
 
     def test_platform_share_calculation(self):
-        """Platform gets exactly 30% (integer division, rounded down)."""
+        """Platform gets the remainder after the creator's floored BPS share.
+
+        After GAP-0054 the creator share is floored (333 * 7000 // 10000 = 233)
+        and the platform gets the remainder (333 - 233 = 100), rather than the
+        old platform-floored 333 * 30 // 100 = 99.
+        """
         mock_ad_billing = self._run_split(charge_cents=333)
         item = mock_ad_billing.put_item.call_args[1]["Item"]
-        assert item["amount_cents"] == 99  # 333 * 30 // 100 = 99
+        assert item["amount_cents"] == 100  # 333 - (333 * 7000 // 10000)
 
     def test_creator_share_correct(self):
         """Creator gets charge_cents minus platform_share."""
@@ -71,10 +76,14 @@ class TestSplitRevenuePlatformEntry:
         assert item["meta"]["charge_cents"] == 100
         assert item["meta"]["platform_share_pct"] == 30
 
-    def test_no_platform_entry_when_share_zero(self):
-        """Tiny charges where 30% rounds to 0 write no platform entry."""
-        mock_ad_billing = self._run_split(charge_cents=1)  # 1 * 30 // 100 == 0
-        mock_ad_billing.put_item.assert_not_called()
+    def test_tiny_charge_platform_gets_remainder(self):
+        """After GAP-0054 the creator share is floored: a 1-cent charge floors
+        the creator share to 0 (1 * 7000 // 10000 == 0), so the platform receives
+        the whole remaining cent and a platform entry IS written."""
+        mock_ad_billing = self._run_split(charge_cents=1)
+        mock_ad_billing.put_item.assert_called_once()
+        item = mock_ad_billing.put_item.call_args[1]["Item"]
+        assert item["amount_cents"] == 1
 
     def test_platform_entry_failure_does_not_raise(self):
         """A DynamoDB error on platform write is swallowed (warning logged)."""

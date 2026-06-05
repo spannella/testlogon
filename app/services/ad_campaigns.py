@@ -133,7 +133,43 @@ def update_campaign(account_id: str, campaign_id: str, data: CampaignUpdateIn) -
         ExpressionAttributeNames=attr_names,
         ExpressionAttributeValues=attr_values,
     )
+
+    # Webhook: campaign status transition (ADS-011 / GAP-0055). Best-effort.
+    if "status" in updates:
+        _emit_status_webhook(account_id, campaign_id, str(updates["status"]))
+
     return {"ok": True}
+
+
+def _emit_status_webhook(account_id: str, campaign_id: str, new_status: str) -> None:
+    """Dispatch an ad.* webhook for a campaign status transition. Never raises."""
+    event_map = {
+        "paused": "ad.campaign.paused",
+        "active": "ad.campaign.resumed",
+        "completed": "ad.campaign.completed",
+    }
+    event_type = event_map.get(new_status)
+    if not event_type:
+        return
+    try:
+        from app.services.ad_accounts import get_ad_account
+        from app.services.ad_webhooks import emit_ad_event
+
+        acct = get_ad_account(account_id)
+        owner_sub = acct.get("owner_sub", "") if acct else ""
+        if not owner_sub:
+            return
+        emit_ad_event(
+            event_type,
+            owner_sub,
+            {
+                "account_id": account_id,
+                "campaign_id": campaign_id,
+                "new_status": new_status,
+            },
+        )
+    except Exception:
+        pass
 
 
 def submit_campaign_for_review(account_id: str, campaign_id: str) -> dict:
@@ -172,4 +208,29 @@ def review_campaign(
             ":u": now_ts(),
         },
     )
+
+    # Webhook: creative moderation decision (ADS-011 / GAP-0055). Best-effort.
+    try:
+        from app.services.ad_accounts import get_ad_account
+        from app.services.ad_webhooks import emit_ad_event
+
+        account_id = str(item.get("pk", "")).removeprefix("ACCT#")
+        owner_sub = str(item.get("owner_sub", "") or "")
+        if not owner_sub and account_id:
+            acct = get_ad_account(account_id)
+            owner_sub = acct.get("owner_sub", "") if acct else ""
+        if owner_sub:
+            emit_ad_event(
+                "ad.creative.approved" if decision == "approve" else "ad.creative.rejected",
+                owner_sub,
+                {
+                    "account_id": account_id,
+                    "campaign_id": campaign_id,
+                    "decision": decision,
+                    "notes": notes,
+                },
+            )
+    except Exception:
+        pass
+
     return {"ok": True, "status": new_status}

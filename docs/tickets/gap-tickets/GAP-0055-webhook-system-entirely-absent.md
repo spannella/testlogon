@@ -1,6 +1,6 @@
 # GAP-0055: webhook system entirely absent
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-011 · **Effort**: L
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-011 · **Effort**: L
 **From**: gap audit (`docs/tickets/gaps/ADS-011.md`); see also `docs/tickets/writeups/ADS-011.md`
 
 ## Location

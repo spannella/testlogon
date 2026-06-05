@@ -15,8 +15,15 @@ from app.services.billing_shared import new_ledger_entry, user_pk
 
 logger = logging.getLogger(__name__)
 
-# Revenue share: platform takes this percentage, creator gets remainder
+# Revenue share: platform takes this percentage, creator gets remainder.
+# PLATFORM_REVENUE_SHARE_PCT is retained as a legacy default (percent) for the
+# admin reporting module (admin_ad_platform.py) and as a fallback. The actual
+# per-charge split is driven by the creator's negotiated basis-points rate
+# resolved at billing time (GAP-0054).
 PLATFORM_REVENUE_SHARE_PCT = 30
+# Default creator revenue share in basis points (7000 bps = 70% to creator),
+# matching content_ad_controls.DEFAULT_REVENUE_SHARE_BPS.
+DEFAULT_CREATOR_REVENUE_SHARE_BPS = 7000
 MIN_DEPOSIT_CENTS = 5000  # $50 minimum deposit
 
 
@@ -139,7 +146,10 @@ def _process_charge(
     )
 
     # 4. Revenue split
-    _split_revenue(charge_cents=charge_cents, creator_id=creator_id, meta=meta, ts=ts)
+    _split_revenue(
+        charge_cents=charge_cents, creator_id=creator_id,
+        account_id=account_id, meta=meta, ts=ts,
+    )
 
     # 5. Budget check + spending alerts
     _check_budget_and_alert(account_id, campaign_id)
@@ -147,10 +157,32 @@ def _process_charge(
     return {"ok": True, "entry_id": entry_id, "charge_cents": charge_cents}
 
 
-def _split_revenue(*, charge_cents: int, creator_id: str, meta: dict, ts: int) -> None:
-    """Split ad revenue between platform and creator."""
-    platform_share = max(0, (charge_cents * PLATFORM_REVENUE_SHARE_PCT) // 100)
-    creator_share = charge_cents - platform_share
+def _split_revenue(
+    *, charge_cents: int, creator_id: str, meta: dict, ts: int, account_id: str = "",
+) -> None:
+    """Split ad revenue between platform and creator.
+
+    Uses the creator's negotiated per-creator revenue share (basis points) rather
+    than a hardcoded platform percentage (GAP-0054). Records an advertiser
+    transparency entry after the creator credit so the transparency log is
+    populated (GAP-0053). Preserves the platform-revenue ledger write (GAP-0049).
+    """
+    # Resolve per-creator revenue share in basis points (GAP-0054). Falls back to
+    # the platform default if unset or if the lookup fails — billing must never
+    # break because of a transparency/revenue-share read.
+    creator_bps = DEFAULT_CREATOR_REVENUE_SHARE_BPS
+    if creator_id:
+        try:
+            from app.services.content_ad_controls import get_creator_revenue_share_bps
+            creator_bps = get_creator_revenue_share_bps(creator_id)
+        except Exception:
+            logger.warning("revenue_share_bps_lookup_failed", extra={"creator_id": creator_id})
+
+    creator_share = max(0, (charge_cents * creator_bps) // 10000)
+    platform_share = charge_cents - creator_share
+    platform_share_pct = (
+        (platform_share * 100) // charge_cents if charge_cents > 0 else PLATFORM_REVENUE_SHARE_PCT
+    )
 
     # Credit creator via existing billing ledger
     if creator_share > 0 and creator_id:
@@ -162,13 +194,46 @@ def _split_revenue(*, charge_cents: int, creator_id: str, meta: dict, ts: int) -
                 amount_cents=creator_share,
                 state="settled",
                 reason="Ad revenue share",
-                meta={**meta, "platform_share_pct": PLATFORM_REVENUE_SHARE_PCT},
+                meta={
+                    **meta,
+                    "platform_share_pct": platform_share_pct,
+                    "revenue_share_bps": creator_bps,
+                },
             )
             T.billing.put_item(Item=credit_item)
         except Exception:
             logger.warning("ad_revenue_creator_credit_failed", extra={"creator_id": creator_id})
 
-    # Write platform revenue record to ad_billing table so the platform's 30%
+    # Record advertiser transparency (GAP-0053 / ADS-010) — best-effort. This
+    # populates the per-advertiser transparency log read by
+    # get_advertiser_transparency, which was previously always empty because
+    # record_transparency had no call site.
+    if creator_id and account_id:
+        try:
+            from app.services.ad_accounts import get_ad_account
+            from app.services.content_ad_controls import record_transparency
+
+            month = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
+            model = meta.get("model", "")
+            acct = get_ad_account(account_id)
+            company_name = acct.get("company_name", "") if acct else ""
+
+            record_transparency(
+                creator_sub=creator_id,
+                account_id=account_id,
+                company_name=company_name,
+                month=month,
+                impressions=1 if model == "cpm" else 0,
+                clicks=1 if model == "cpc" else 0,
+                revenue_cents=creator_share,
+            )
+        except Exception:
+            logger.warning(
+                "transparency_record_failed",
+                extra={"creator_id": creator_id, "account_id": account_id},
+            )
+
+    # Write platform revenue record to ad_billing table so the platform's
     # share is durably recorded for audit/reconciliation (GAP-0049).
     if platform_share > 0:
         try:
@@ -181,13 +246,14 @@ def _split_revenue(*, charge_cents: int, creator_id: str, meta: dict, ts: int) -
                 "entry_type": "platform_revenue_credit",
                 "amount_cents": platform_share,
                 "state": "settled",
-                "reason": "Platform ad revenue share (30%)",
+                "reason": f"Platform ad revenue share ({platform_share_pct}%)",
                 "meta": {
                     **meta,
                     "creator_id": creator_id,
                     "creator_share_cents": creator_share,
                     "charge_cents": charge_cents,
-                    "platform_share_pct": PLATFORM_REVENUE_SHARE_PCT,
+                    "platform_share_pct": platform_share_pct,
+                    "revenue_share_bps": creator_bps,
                 },
                 "month_key": month_key,
                 "created_at": ts,
@@ -246,11 +312,29 @@ def _check_budget_and_alert(account_id: str, campaign_id: str) -> None:
                     )
                 except Exception:
                     pass
+                # Webhook: budget spend threshold crossed (ADS-011 / GAP-0055).
+                # Inside the conditional-write block so it fires once per threshold.
+                try:
+                    from app.services.ad_webhooks import emit_ad_event
+                    emit_ad_event(
+                        "ad.billing.budget_alert",
+                        owner_sub,
+                        {
+                            "account_id": account_id,
+                            "campaign_id": campaign_id,
+                            "threshold_pct": threshold,
+                            "budget_cents": budget,
+                            "spent_cents": spent,
+                        },
+                    )
+                except Exception:
+                    pass
             except Exception:
                 pass  # Alert already sent or write failed
 
     # Auto-pause if budget exhausted
     if pct >= 100:
+        completed = False
         try:
             T.ad_campaigns.update_item(
                 Key={"pk": f"ACCT#{account_id}", "sk": f"CAMPAIGN#{campaign_id}"},
@@ -259,8 +343,26 @@ def _check_budget_and_alert(account_id: str, campaign_id: str) -> None:
                 ExpressionAttributeValues={":completed": "completed"},
                 ConditionExpression="#s <> :completed",
             )
+            completed = True
         except Exception:
             pass  # Already paused/completed
+        # Webhook: campaign auto-completed on budget exhaustion. Gated on the
+        # conditional write succeeding so it fires only on the transition.
+        if completed:
+            try:
+                from app.services.ad_webhooks import emit_ad_event
+                emit_ad_event(
+                    "ad.campaign.completed",
+                    owner_sub,
+                    {
+                        "account_id": account_id,
+                        "campaign_id": campaign_id,
+                        "budget_cents": budget,
+                        "spent_cents": spent,
+                    },
+                )
+            except Exception:
+                pass
 
 
 def get_billing_history(account_id: str, limit: int = 50) -> list[dict]:
