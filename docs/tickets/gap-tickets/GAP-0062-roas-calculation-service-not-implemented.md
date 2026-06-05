@@ -1,6 +1,6 @@
 # GAP-0062: ROAS calculation service not implemented
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-015 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-015 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/ADS-015.md`); see also `docs/tickets/writeups/ADS-015.md`
 
 ## Location

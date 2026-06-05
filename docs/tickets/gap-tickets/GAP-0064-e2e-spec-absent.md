@@ -1,6 +1,6 @@
 # GAP-0064: E2E spec absent
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-016 · **Effort**: M
+**Status**: No change needed (verified artifacts already exist, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-016 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/ADS-016.md`); see also `docs/tickets/writeups/ADS-016.md`
 
 ## Location

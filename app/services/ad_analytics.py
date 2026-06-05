@@ -42,7 +42,7 @@ def get_summary(
     prev_clicks = sum(int(r.get("clicks", 0)) for r in prev_rollups)
     prev_spend = sum(int(r.get("spend_cents", 0)) for r in prev_rollups)
 
-    return {
+    summary = {
         "impressions": total_impressions,
         "clicks": total_clicks,
         "ctr_pct": round(ctr, 2),
@@ -64,6 +64,19 @@ def get_summary(
         "spend_change_pct": _pct_change(prev_spend, total_spend),
         "days": days,
     }
+
+    # Enrich with real ROAS so optimization alerts (ad_optimization) stop
+    # reading roas=0 (GAP-0062). Gated behind a flag for safe rollout.
+    if campaign_id and S.roas_in_summary_enabled:
+        from app.services.ad_roas import conversion_revenue_for_campaign
+
+        revenue_cents, _count = conversion_revenue_for_campaign(campaign_id, days=days)
+        summary["conversion_revenue_cents"] = revenue_cents
+        summary["roas"] = (
+            round(revenue_cents / total_spend, 4) if total_spend > 0 else 0.0
+        )
+
+    return summary
 
 
 def get_timeseries(

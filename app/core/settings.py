@@ -1913,6 +1913,10 @@ class Settings:
     ad_creative_affiliate_enabled: bool = os.environ.get("AD_CREATIVE_AFFILIATE_ENABLED", "1") not in ("0", "false", "False")
     ad_creative_affiliate_promo_cookie_max_age: int = int(os.environ.get("AD_CREATIVE_AFFILIATE_PROMO_COOKIE_MAX_AGE", "86400"))
     ad_creative_affiliates_table_name: str = os.environ.get("DDB_AD_CREATIVE_AFFILIATES", "AdCreativeAffiliates")
+    # When enabled, ad_analytics.get_summary enriches campaign summaries with a
+    # real ROAS value (from conversion attribution) so optimization alerts stop
+    # reading roas=0 (GAP-0062 / ADS-015).
+    roas_in_summary_enabled: bool = os.environ.get("ROAS_IN_SUMMARY_ENABLED", "1") not in ("0", "false", "False")
 
     # Achievements & Gamification (ENGAGE-001)
     achievements_enabled: bool = os.environ.get("ACHIEVEMENTS_ENABLED", "0") not in ("0", "false", "False")
