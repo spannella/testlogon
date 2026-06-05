@@ -482,6 +482,14 @@ def dissolve_group(
     if meta.get("status") == "dissolved":
         raise HTTPException(status_code=410, detail="This group has been dissolved")
 
+    # Distribute treasury funds BEFORE marking the group dissolved and before
+    # deleting member records, so contributor amounts are still intact at the
+    # time of the pro-rata refund calculation. Lazy import avoids the circular
+    # dependency (group_treasury imports user_groups at module load).
+    from app.services import group_treasury as _treasury_svc
+
+    treasury_result = _treasury_svc.dissolve_treasury(group_id)
+
     ts = now_ts()
     T.user_groups.update_item(
         Key={"pk": f"GROUP#{group_id}", "sk": "META"},
@@ -497,8 +505,11 @@ def dissolve_group(
         T.user_groups.delete_item(Key={"pk": f"GROUP#{group_id}", "sk": f"MEMBER#{uid}"})
         _remove_user_group_index(group_id, uid)
 
-    logger.info("group.dissolved", extra={"group_id": group_id, "admin": admin_id})
-    return {"ok": True, "status": "dissolved"}
+    logger.info(
+        "group.dissolved",
+        extra={"group_id": group_id, "admin": admin_id, "treasury": treasury_result},
+    )
+    return {"ok": True, "status": "dissolved", "treasury": treasury_result}
 
 
 # ---------------------------------------------------------------------------

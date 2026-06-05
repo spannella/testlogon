@@ -1,6 +1,6 @@
 # GAP-0018: Unvalidated `RelayState` redirect
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: ENTERPRISE-002 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: ENTERPRISE-002 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ENTERPRISE-002.md`); see also `docs/tickets/writeups/ENTERPRISE-002.md`
 
 ## Location

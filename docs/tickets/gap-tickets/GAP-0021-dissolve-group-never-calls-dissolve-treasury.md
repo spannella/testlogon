@@ -1,6 +1,6 @@
 # GAP-0021: `dissolve_group()` never calls `dissolve_treasury()`
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: GROUP-004 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: GROUP-004 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/GROUP-004.md`); see also `docs/tickets/writeups/GROUP-004.md`
 
 ## Location

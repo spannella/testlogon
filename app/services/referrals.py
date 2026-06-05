@@ -22,7 +22,6 @@ import boto3
 from boto3.dynamodb.conditions import Key
 
 from app.core.settings import S
-from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
 
@@ -267,12 +266,14 @@ def record_affiliate_commission(
     rate_bps = S.referral_standard_rate_bps if tier == "standard" else S.referral_premium_rate_bps
 
     commission_cents = max(1, (net_amount * rate_bps) // 10000)
-    ts = now_ts()
     now = _now_iso()
 
     entry: Dict[str, Any] = {
         "pk": f"AFFILIATE#{referrer_id}",
-        "sk": f"COMMISSION#{ts}#{transaction_id}",
+        # Deterministic SK keyed on transaction_id (no wall-clock component) so a
+        # retried / redelivered billing event for the same transaction can't
+        # create a second commission item (GAP-0008 replay guard).
+        "sk": f"COMMISSION#{transaction_id}",
         "Entity": "AffiliateCommission",
         "referrer_user_id": referrer_id,
         "referred_user_id": referred_user_id,
@@ -286,7 +287,20 @@ def record_affiliate_commission(
         "status": "pending",
         "created_at": now,
     }
-    tbl.put_item(Item=entry)
+    try:
+        tbl.put_item(
+            Item=entry,
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except tbl.meta.client.exceptions.ConditionalCheckFailedException:
+        # Duplicate transaction_id — commission already recorded. Swallow as a
+        # successful no-op so callers treat replays idempotently.
+        logger.info(
+            "commission_duplicate_ignored referrer=%s transaction_id=%s",
+            referrer_id,
+            transaction_id,
+        )
+        return None
     return entry
 
 

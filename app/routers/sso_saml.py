@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import logging
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -38,6 +39,54 @@ from app.services.sso_saml_roles import map_groups_to_role
 from app.services.sso_saml_sp import MockSamlAuth, build_saml_settings, prepare_request_data
 
 logger = logging.getLogger(__name__)
+
+# Maximum accepted RelayState length; longer values are treated as hostile/oversized.
+_MAX_RELAY_STATE_LEN = 2048
+
+
+def _safe_relay_state(value: str | None) -> str:
+    """Return ``value`` only if it is a safe same-origin redirect target (CWE-601).
+
+    Permits:
+      - Empty / ``None`` -> ``"/"``
+      - Relative paths starting with a single ``"/"`` (but not ``"//"``)
+      - Absolute http(s) URLs whose host matches ``S.public_base_url``
+
+    Rejects (falls back to ``"/"``):
+      - Protocol-relative URLs (``"//evil.example/..."``)
+      - Absolute URLs on a foreign host
+      - Non-http(s) schemes (``javascript:``, ``data:``, ``file:``, etc.)
+      - Oversized input or input containing non-printable / control characters
+      - Anything that raises during parsing
+    """
+    if not value:
+        return "/"
+    try:
+        rs = str(value).strip()
+    except Exception:
+        return "/"
+    if not rs:
+        return "/"
+    # Oversized or non-printable (control chars, newlines used for header injection).
+    if len(rs) > _MAX_RELAY_STATE_LEN or not rs.isprintable():
+        return "/"
+    # Protocol-relative URL ("//host/...") -> always external.
+    if rs.startswith("//"):
+        return "/"
+    # Safe relative path.
+    if rs.startswith("/"):
+        return rs
+    # Absolute URL: only same-origin http(s) targets are allowed.
+    try:
+        parsed = urlparse(rs)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return "/"
+        allowed = urlparse(S.public_base_url)
+        if parsed.netloc != allowed.netloc:
+            return "/"
+    except Exception:
+        return "/"
+    return rs
 
 router = APIRouter(tags=["sso-saml"])
 
@@ -209,7 +258,7 @@ async def saml_acs(request: Request):
     )
 
     # Set session cookies on the redirect response
-    redirect = RedirectResponse(url=str(relay_state or "/"), status_code=303)
+    redirect = RedirectResponse(url=_safe_relay_state(relay_state), status_code=303)
     set_session_cookies(redirect, session)
 
     # Update login stats
@@ -565,7 +614,7 @@ async def _dev_bypass_acs(
 
     # Create session
     session = create_real_session(request, user_sub)
-    redirect = RedirectResponse(url=relay_state or "/", status_code=303)
+    redirect = RedirectResponse(url=_safe_relay_state(relay_state), status_code=303)
     set_session_cookies(redirect, session)
 
     audit_event(
