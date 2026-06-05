@@ -353,3 +353,26 @@ These dev-only endpoints are gated by `if not S.dev_mode: raise HTTPException(40
 ### 5.6 Effort estimate
 
 **Large** (~12 days, including SECOPS-001/002/003 as sequential prerequisites): 2 days for `threat_scoring.py`; 1 day for `security_alert_dispatch.py`; 1.5 days for `security_monitoring.py` router (all endpoints); 3 days for `SecurityMonitoringPage.tsx` (all tabs, queries, mutations); 1 day for metrics additions; 0.5 day for dev panel; 2 days for tests; 1 day for QA. Parallelizable with SECOPS-003 after SECOPS-001 is done.
+
+---
+
+## Second-pass verification (2026-06-05)
+
+Verified against current codebase. All cited existing infrastructure confirmed unless noted.
+
+- [Confirmed] `ALERT_CATEGORIES["security"]` set at `alerts.py:35–38` (cited as `alerts.py:36–38`; actual key starts line 35) includes `"security_event"` — confirmed.
+- [Confirmed] `"security_event"` mapped to `URGENT` priority in `app/services/alert_priority.py:28` — confirmed at line 28.
+- [Corrected] `send_alert` called with `event="security_event"` — the public function for delivering an alert is `write_alert()` at `alerts.py:355`, not `send_alert`. There is no top-level `send_alert` function in `alerts.py`; there are only `send_alert_email` (line 458), `send_alert_sms` (line 481), `send_alert_webhook` (line 536). The correct call pattern used by the codebase is `write_alert(user_sub, event="security_event", ...)` followed by `send_push_for_alert(...)` — as done in `audit_event()` at `alerts.py:698`. SECOPS-004 section 4.2 should call `write_alert(...)` not `send_alert(...)`.
+- [Confirmed] `create_alert` does not exist in `alerts.py` — only `write_alert`. SECOPS-005 section 2.2 incorrectly names it `create_alert` (see SECOPS-005 verification).
+- [Confirmed] `app/services/alert_email_templates.py:140` maps `"security_event"` to `_template_security_alert` — confirmed at line 140.
+- [Confirmed] `can_send_alert_channel` from `app/services/rate_limit.py:321–337` — confirmed at lines 321–337.
+- [Confirmed] `RiskDashboardPage.tsx` uses `useQuery`, `useMutation`, `Badge`, `Table`, `Dialog`, `TierBadge`, `ScoreGauge` — all confirmed present at lines 1–80 and throughout file.
+- [Confirmed] `RateLimitDashboard.tsx` imports `getBlocklist`, `addToBlocklist`, `removeFromBlocklist`, `addToAllowlist`, `removeFromAllowlist` — confirmed at `RateLimitDashboard.tsx:6–11`.
+- [Confirmed] `app/metrics.py:13–15` gates metrics on `APP_ENV in {"prod","production"}` — confirmed at lines 13–15.
+- [Confirmed] `metrics_middleware` at `metrics.py:1111` — confirmed at line 1111.
+- [Confirmed] `ADMIN_SCOPE_DENIED` counter at `metrics.py:719` — confirmed.
+- [Confirmed] `rate_limit_dashboard.py:23` — `log_rate_limit_event` with `pk = f"DATE#{date_str}"` and `sk = f"{ts}#{event_id}"` pattern — confirmed at lines 23–58; query pattern described correctly.
+- [Confirmed] Neither `app/services/threat_scoring.py` nor `app/routers/security_monitoring.py` exists — confirmed absent.
+- [Confirmed] No `SecurityMonitoringPage.tsx` in `frontend/src/pages/admin/` — confirmed absent (only `RiskDashboardPage.tsx` security-adjacent page exists).
+- [Confirmed] `app/auth/deps.py` `require_admin_session` and `require_root_session` exist — confirmed by project architecture (used throughout routers).
+- [Confirmed] Dev Tools app at port 3001 exists (per CLAUDE.md and project layout) — referenced correctly.

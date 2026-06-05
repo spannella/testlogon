@@ -255,3 +255,32 @@ The emitter is fire-and-forget — any DDB write failure is logged and swallowed
 ### 5.6 Effort estimate
 
 **Medium** (~5 days): 1 day for `security_events.py` + table + settings; 1 day for ASN extension to `geoip.py`; 1.5 days for instrumentation across all call sites; 1 day for tests; 0.5 day for metrics additions. Sequentially after SEC-008 (adds ~2 more days for trusted IP).
+
+---
+
+## Second-pass verification (2026-06-05)
+
+Verified against current codebase. All cited existing infrastructure confirmed unless noted.
+
+- [Confirmed] `app/metrics.py` `LOGIN_SUCCESSES`/`LOGIN_FAILURES`/`MFA_SUCCESSES`/`MFA_FAILURES` counters exist — `metrics.py:62–77` (actual lines 62–77 match exactly).
+- [Confirmed] `record_auth_event(alert_type)` at `app/metrics.py:1076` — confirmed at line 1076.
+- [Confirmed] `_NoopMetric` at `app/metrics.py:26–55` — confirmed; gated on `_APP_ENV in {"prod","production"}` at `metrics.py:14–15` (not `APP_ENV != "prod"` as written, but semantically identical).
+- [Corrected] `ALERT_CATEGORIES["security"]` cited at `alerts.py:36–38` — actual span is `alerts.py:35–38` (key `"security"` is on line 35, closing brace on 38).
+- [Confirmed] `ALERT_EVENT_TYPES` at `alerts.py:133–147` — confirmed exact lines.
+- [Confirmed] `alerts` DynamoDB table wired at `app/core/tables.py:314` — confirmed.
+- [Confirmed] `log_rate_limit_event()` at `rate_limit_dashboard.py:23` — confirmed (function definition on line 23).
+- [Confirmed] `client_ip_from_request(req)` at `app/core/normalize.py:9` — confirmed; XFF logic on lines 9–18 trusts the first XFF segment without proxy validation.
+- [Confirmed] `_get_client_ip(request)` at `app/services/geo_check.py:109` — confirmed at line 109; identical XFF-trust logic.
+- [Confirmed] `app/core/settings.py:32` has `trusted_proxy_cidrs: str = os.environ.get("TRUSTED_PROXY_CIDRS", "")` — confirmed at line 32; no code currently consumes it.
+- [Confirmed] `geoip.py` cache TTL/size settings via `S.geo_cache_ttl_seconds` / `S.geo_cache_max_size` at `geoip.py:41–42` — confirmed; settings defined at `app/core/settings.py:1764–1765`.
+- [Corrected] Cited `geoip.py:72–79` for `geoip2.database.Reader` — actual reader is in `_lookup_maxmind` at `geoip.py:71–79`; the Reader instantiation is on line 74, not 72.
+- [Corrected] Cited `geoip.py:67–68` for dev fail-open — actual fail-open `return None` is at `geoip.py:65–68` inside `_lookup_country_uncached`; the check is `if maxmind_db_path: ... return None` (lines 63–68).
+- [Confirmed] No ASN reader in `geoip.py` — only `lookup_country`, `set_mock_country`, `get_mock_country`, `clear_mock_countries`. No `lookup_asn` or ASN cache exists.
+- [Corrected] Cited `set_mock_country` at `geoip.py:95–109` — actual range is `geoip.py:95–110` (`set_mock_country` line 95, `clear_mock_countries` line 100, `get_mock_country` line 107, closing line 109; function body ends at 110 with the `return` statement).
+- [Confirmed] GeoIP returns `None` for private IPs — `geoip.py:36` checks `addr.is_private or addr.is_loopback or addr.is_link_local`. Cited as `geoip.py:32–39` — actual block is lines 33–39 (import on 35, check on 36, return on 37).
+- [Confirmed] Middleware chain order at `app/main.py:412–420` — confirmed: CORSMiddleware (412), TenantMiddleware conditional (413–415), rate_limit_middleware_factory (416), _api_usage_metering_middleware (417), _playback_entitlement_middleware (418), metrics_middleware conditional (419–421). No `security_block_middleware` present.
+- [Confirmed] `_security_headers_middleware` defined at `main.py:348` and never registered — confirmed; only `app.add_middleware` / `app.middleware("http")` calls in `create_app()` are CORS, Tenant, rate_limit, metering, playback, metrics. No registration of `_security_headers_middleware`.
+- [Confirmed] `app/services/alerts.py:17` imports `client_ip_from_request` from `app/core/normalize` — confirmed at `alerts.py:17`.
+- [Confirmed] `record_auth_event` imported from `app.metrics` in `alerts.py` — confirmed at `alerts.py:21`.
+- [Confirmed] `security_events` table does NOT exist in `scripts/local-ddb-init.py` or `app/core/tables.py` — confirmed absent.
+- [Confirmed] `security_events.py` service does NOT exist in `app/services/` — confirmed absent.

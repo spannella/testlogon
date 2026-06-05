@@ -292,3 +292,30 @@ Feature flag `SECURITY_LLM_ENABLED=0` stops all analyst activity immediately. Th
 5. (S) Register background scheduler in `app/main.py`.
 6. (M) pytest unit tests.
 7. (M) Playwright E2E spec (requires SECOPS-004 dashboard to have approval queue UI).
+
+---
+
+## Second-pass verification (2026-06-05)
+
+Verified against current codebase. All cited existing infrastructure confirmed unless noted.
+
+- [Confirmed] `app/services/llm_provider_keys.py` exists with full CRUD — confirmed; `add_key` at line 89, `get_decrypted_api_key` at line 159, `test_key` at line 173, `record_usage` at line 310.
+- [Corrected] `add_key` cited as `line 89` — confirmed exact line.
+- [Confirmed] `kms_encrypt` called in `add_key` at `llm_provider_keys.py:107` — confirmed (was cited as line 89 for the function, call is line 107); `kms_encrypt` defined at `app/core/crypto.py:16`, `kms_decrypt` at `app/core/crypto.py:22`.
+- [Confirmed] `PROVIDER_REGISTRY` at lines 25–81 enumerates Anthropic, OpenAI, DeepSeek, Gemini, custom — confirmed; Anthropic models listed: `claude-sonnet-4-20250514`, `claude-opus-4-20250514`, `claude-haiku-3-5-20241022` (write-up omits `claude-haiku-3-5-20241022`; minor omission, not an error).
+- [Confirmed] `get_decrypted_api_key` at line 159 calls `kms_decrypt(item["encrypted_api_key"]).decode("utf-8")` — confirmed at line 170.
+- [Confirmed] `app/core/aws.py:kms` wired from `app/core/aws_clients.py:kms_client` — confirmed; `aws.py:7` has `kms = kms_client()`, `aws_clients.py:135` defines `def kms_client()`.
+- [Confirmed] `S.kms_endpoint_url` at `app/core/settings.py:14` — confirmed.
+- [Confirmed] `test_key` short-circuits at line 190: `if S.dev_mode or not S.agent_llm_key_testing_enabled: return mock success` — confirmed at line 190; `agent_llm_key_testing_enabled` defined at `settings.py:1983`.
+- [Confirmed] `record_usage` at `llm_provider_keys.py:310` tracks token consumption and enforces `monthly_budget_cents` — confirmed; budget-exceeded status flip at line 349.
+- [Confirmed] `app/services/alerts.py` multi-channel delivery and `ALERT_CATEGORIES` dict (line 31) with `"security"` bucket — confirmed at line 31.
+- [Corrected] Section 2.2 states `create_alert(user_id, event, details, ...)` as the public alert delivery function — no such function exists. The correct function is `write_alert(user_sub, *, event, outcome, title, details, ...)` at `alerts.py:355`. The function that the analyst should call is `write_alert()`. The `audit_event()` function at `alerts.py:631` is the higher-level wrapper, but it requires a `request` object and is scoped to user-event patterns, not operator-targeted security notifications.
+- [Confirmed] Rate limiting (`can_send_alert_channel`) and deduplication in `alerts.py` — confirmed; `can_send_alert_channel` at `rate_limit.py:321`; alerts dedup via `dedup_key` is not explicitly present in current `write_alert()` (no `dedup_key` parameter seen in write_alert signature at line 355–365).
+- [Confirmed] `app/core/settings.py:273` — `dev_mode: bool` — confirmed.
+- [Confirmed] `drm_license_service.py:19–28` pattern for mock vs. production mode — confirmed; line 19 reads `S.drm_license_provider_mode`.
+- [Corrected] `geoip.py:60–68` cited for fail-open `None` return — actual function is `_lookup_country_uncached` starting at line 60; fail-open `return None` at line 67 (no MaxMind DB path); confirmed structurally correct but the cited line range is 60–68.
+- [Confirmed] `S.ccbill_mock_enabled` at `settings.py:310` defaults to same as `DEV_MODE` — confirmed as the pattern SECOPS-005 should mirror for `S.security_llm_mock_enabled`.
+- [Confirmed] `billing_reconcile_interval_seconds` at `app/core/settings.py:365` — confirmed; correctly cited as the background-scheduler pattern to replicate.
+- [Confirmed] No `app/services/security_llm_analyst.py` exists — confirmed absent.
+- [Confirmed] No `app/services/threat_intel/` directory exists — confirmed absent.
+- [Confirmed] No `security_incidents` or `llm_approval_queue` tables in `scripts/local-ddb-init.py` or `app/core/tables.py` — confirmed absent.

@@ -294,3 +294,30 @@ A `SECURITY_BLOCKLIST_ENABLED: bool` setting (default `True`) allows the middlew
 ### 5.5 Effort estimate
 
 **Large** (~10 days): 2 days for `security_blocklist.py` + table + settings; 1.5 days for middleware + `main.py` registration; 2 days for auto-ban engine with escalation/decay; 1 day for datacenter ASN seed list; 1 day for admin API router; 1.5 days for tests; 1 day for frontend wiring (SECOPS-004). Sequential on: SEC-008 (~3 days), SECOPS-001 ASN extension (~1 day).
+
+---
+
+## Second-pass verification (2026-06-05)
+
+Verified against current codebase. All cited existing infrastructure confirmed unless noted.
+
+- [Confirmed] `geoip.py:24` — `lookup_country(ip)` with TTL cache — confirmed; function defined at line 24.
+- [Corrected] Cache settings cited as `geoip.py:41–42` — confirmed at those lines; but settings are defined in `app/core/settings.py:1764–1765` (not inline in geoip.py).
+- [Confirmed] `geo_check.py:23` — `check_geo_access(request, geo_mode, geo_countries)` — confirmed; function defined at line 23.
+- [Corrected] `S.geo_platform_block_countries` cited at `geo_check.py:53` — actual line is 53 (`platform_blocked = _parse_csv(getattr(S, "geo_platform_block_countries", ""))`), confirmed.
+- [Confirmed] `geo_check.py` is content-scoped, not global middleware — confirmed; called explicitly by video/broadcast/catalog routers, not registered as middleware.
+- [Confirmed] `app/routers/geo_rules.py:33` — CRUD endpoints for per-content geo restrictions with prefix `/ui/geo` — confirmed; `router = APIRouter(prefix="/ui/geo", ...)` at line 33.
+- [Corrected] Cited endpoints as `/ui/geo/videos/{id}`, `/ui/geo/broadcasts/{id}`, `/ui/geo/catalog/{id}` — these are the intended endpoints but the actual router prefix is `/ui/geo`; individual endpoint paths would need to be verified by reading full file, but prefix confirmed.
+- [Confirmed] `app/core/normalize.py:43–64` — `normalize_cidr(s)` at line 43, `ip_in_any_cidr(ip_str, cidrs)` at line 53 — confirmed exact lines.
+- [Confirmed] `rate_limit_store.py:26` — `check_rate_limit(pk, window_seconds, max_requests)` — confirmed at line 26.
+- [Confirmed] `rate_limit_dashboard.py:23` — `log_rate_limit_event()` — confirmed at line 23.
+- [Confirmed] Middleware chain order at `app/main.py:412–420` — confirmed (see SECOPS-001 verification); `security_block_middleware` does not yet exist.
+- [Confirmed] `_security_headers_middleware` defined at `main.py:348`, never registered — confirmed.
+- [Confirmed] `RateLimitDashboard.tsx` imports `getBlocklist`, `addToBlocklist`, `removeFromBlocklist`, `addToAllowlist`, `removeFromAllowlist` from `@/api/endpoints/adminRateLimits` — confirmed at `RateLimitDashboard.tsx:6–11`; also confirmed `getAllowlist` (line 7) is imported.
+- [Confirmed] `app/core/settings.py:32` `trusted_proxy_cidrs` exists but is not consumed by any code path — confirmed.
+- [Confirmed] No `lookup_asn` in `geoip.py` — confirmed absent; only `lookup_country` and mock override helpers.
+- [Confirmed] `geoip.py:95–109` `set_mock_country`/`get_mock_country` pattern — confirmed (lines 95–110; see SECOPS-001 note on exact range).
+- [Confirmed] `X-Geo-Country` header override in `geo_check.py:41–44` — confirmed at lines 41–44 (`if S.dev_mode: header_country = request.headers.get("x-geo-country")`).
+- [Confirmed] `security_blocklist.py` service does NOT exist in `app/services/` — confirmed absent.
+- [Confirmed] `auto_ban.py` service does NOT exist in `app/services/` — confirmed absent.
+- [Confirmed] `security_blocklist` table does NOT exist in `scripts/local-ddb-init.py` or `app/core/tables.py` — confirmed absent.

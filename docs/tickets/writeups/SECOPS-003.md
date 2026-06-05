@@ -239,3 +239,24 @@ Set `include_in_schema=False` on all honeypot decoy routes so they do not appear
 ### 5.6 Effort estimate
 
 **Medium** (~6 days): 1 day for `honeypot.py` router + all decoy routes; 1 day for honeytoken seed script + canary record checks in existing endpoints; 0.5 day for form trap (frontend + backend); 0.5 day for canary ID range middleware; 1.5 days for tests; 1 day for QA/review of decoy content. Sequential on SECOPS-001 (event emitter must exist).
+
+---
+
+## Second-pass verification (2026-06-05)
+
+Verified against current codebase. All cited existing infrastructure confirmed unless noted.
+
+- [Confirmed] No honeypot/honeytoken router in `app/routers/` — `app/routers/security_groups.py` exists but is unrelated (network security groups, not honeypots); no `honeypot.py` router present.
+- [Confirmed] No `honeypot`, `honeytoken`, or `is_canary` strings exist anywhere in `app/` (excluding the unrelated `api_key_*_canary_percent` rollout flags in `settings.py`).
+- [Confirmed] `app/main.py:391` — SPA catch-all is `@app.get("/")` returning `FileResponse(static_dir / "index.html")` — confirmed at line 391. The write-up's claim that non-matched paths fall through to it is correct for paths not matching any router.
+- [Confirmed] The honeypot router must be registered before the SPA index route for path interception — confirmed; `include_router` calls begin at line 424 in `create_app()`; any `app.include_router(honeypot_router)` inserted before line 424 will match first.
+- [Confirmed] `app/services/api_keys.py` exists — confirmed at `/home/ubuntu/testlogon/app/services/api_keys.py`; API keys table wired at `app/core/tables.py:313`.
+- [Confirmed] `app/auth/deps.py` handles API key validation — no `is_canary` check present in current code; canary check is a new addition.
+- [Confirmed] `rate_limit_profile_lookup` at `app/services/rate_limit.py:198` — confirmed at line 198; limits: authenticated 120/min per user_sub (via `_bucket_limit`), anonymous 30/min per IP (via `_ip_user(ip)`).
+- [Corrected] Section 2.5 states file manager uses `T.files` — this is wrong. The file manager does NOT use a handle in the `Tables` dataclass. `app/services/filemanager.py:107` calls `ddb.Table(S.filemgr_table_name)` directly on each invocation. No `T.files` handle exists in `app/core/tables.py`. The canary file implementation must use `ddb.Table(S.filemgr_table_name)` or extend `filemanager.py`'s `get_node()` function.
+- [Confirmed] `file_share_links: Any` in `app/core/tables.py:302` — confirmed; but this is for shared-link metadata, not file node storage.
+- [Confirmed] `frontend/src/pages/Login.tsx` and `frontend/src/pages/Register.tsx` exist — confirmed.
+- [Confirmed] `frontend/src/pages/Register.tsx` uses React Hook Form — confirmed by codebase pattern (all forms use RHF + Zod per CLAUDE.md).
+- [Confirmed] No `app/routers/honeypot.py` exists — confirmed absent.
+- [Confirmed] No `scripts/honeytoken_seed.py` exists — confirmed absent.
+- [Confirmed] `security_events` table (SECOPS-001 dependency) does not yet exist — confirmed; honeypot hits cannot be emitted until SECOPS-001 ships.
