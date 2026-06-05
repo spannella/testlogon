@@ -1,0 +1,7 @@
+# SYND-002 Gaps — Bundled Subscription Plans
+
+- [MED] Cancelled bundle subscription BUNDLE_SUB entitlement index is marked "cancelled" immediately on cancel rather than expiring at period_end — `app/services/syndicate_subscriptions.py:289-298` — `_has_active_bundle_entitlement` correctly handles this by re-reading `current_period_end` from the subscription record, but doing so requires an extra get_item lookup per access check after cancellation; under high traffic this becomes two DDB reads instead of one — Fix: leave BUNDLE_SUB status as "active" and instead write `period_end` onto the index item, then `_has_active_bundle_entitlement` can skip the subscription re-read — Effort: M
+
+- [MED] list_bundle_plans returns plans regardless of status (including archived plans) — `app/services/syndicate_subscriptions.py` — the listing query has no `FilterExpression` for `status=active`; callers see archived plans and may attempt to subscribe to them — Fix: filter `status != "archived"` in `list_bundle_plans`, or add status parameter — Effort: S
+
+- [LOW] subscribe_to_bundle writes no billing ledger debit entry for the subscriber — `app/services/syndicate_subscriptions.py:196-244` — the payment_method_id is accepted but only the execute_split credit side is written; no debit entry records the subscriber's payment on their ledger — Fix: write a billing debit entry (`USER#{subscriber_id}`, `LEDGER#...`, `type=debit`, `reason="Syndicate bundle subscription"`) after successful subscription creation — Effort: S
