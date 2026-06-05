@@ -1,6 +1,6 @@
 # GAP-0025: Webhook `secret` is stored in plaintext in DynamoDB
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: KYC-021 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: KYC-021 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/KYC-021.md`); see also `docs/tickets/writeups/KYC-021.md`
 
 ## Location

@@ -80,6 +80,7 @@ class Settings:
 
     # TTL
     ddb_ttl_attr: str = os.environ.get("DDB_TTL_ATTR", "ttl_epoch")
+    registration_pending_ttl_days: int = int(os.environ.get("REGISTRATION_PENDING_TTL_DAYS", "7"))
 
     # Sessions
     ui_session_ttl_seconds: int = int(os.environ.get("UI_SESSION_TTL_SECONDS", str(30 * 24 * 3600)))

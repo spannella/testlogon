@@ -68,6 +68,7 @@ def create_user_record(
 
     password_hash = _hash_password(password)
     created_at = now_ts()
+    pending_ttl = created_at + S.registration_pending_ttl_days * 86400
     item = {
         "user_sub": user_sub,
         "email": user_sub,
@@ -75,6 +76,10 @@ def create_user_record(
         "password_hash": password_hash,
         "created_at": created_at,
     }
+    # Attach a TTL to unverified records so abandoned registrations self-clean
+    # and never permanently block re-use of the email address.
+    if verification_required:
+        item = with_ttl(item, ttl_epoch=pending_ttl)
     try:
         T.users.put_item(
             Item=item,
@@ -91,7 +96,13 @@ def create_user_record(
     save_profile(user_sub, profile, audit_entries=[{"event": "register_start", "at": created_at}])
 
     status = "pending_verification" if verification_required else "active"
-    set_account_state(user_sub, status, reason="initial_registration", requested_by=user_sub)
+    set_account_state(
+        user_sub,
+        status,
+        reason="initial_registration",
+        requested_by=user_sub,
+        ttl_epoch=pending_ttl if verification_required else None,
+    )
     return {"user_sub": user_sub}
 
 
@@ -201,5 +212,15 @@ def mark_user_verified(user_sub: str) -> Dict[str, str]:
     normalized = normalize_email(user_sub)
     if not _user_exists(normalized):
         raise HTTPException(404, "User not found")
+    # Clear the pending-registration TTL so a verified account never expires.
+    # set_account_state below rewrites the account_state item without a TTL
+    # attribute; the users item needs an explicit REMOVE.
+    try:
+        T.users.update_item(
+            Key={"user_sub": normalized},
+            UpdateExpression=f"REMOVE {S.ddb_ttl_attr}",
+        )
+    except Exception:
+        pass
     set_account_state(normalized, "active", reason="email_verified", requested_by=normalized)
     return {"user_sub": normalized}

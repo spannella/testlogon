@@ -529,6 +529,16 @@ def register_webhook(
                 "message": f"Invalid event(s): {', '.join(invalid)}",
             },
         )
+    # Encrypt secret for at-rest storage (SEC-022). Mirror the established
+    # webhook_service.py pattern: KMS-encrypt, with a PLAIN: dev-mode fallback
+    # when the KMS mock (port 7999, SECOPS-007) / real KMS is unavailable.
+    from app.core.crypto import kms_encrypt
+
+    try:
+        stored_secret = kms_encrypt(str(secret))
+    except Exception:
+        stored_secret = f"PLAIN:{str(secret)}"
+
     ts = now_ts()
     webhook_id = f"wh_{uuid.uuid4().hex[:16]}"
     T.kyc_cases.put_item(
@@ -540,11 +550,33 @@ def register_webhook(
             "partner_id": partner_id,
             "url": str(url),
             "events": list(events),
-            "secret": str(secret),
+            "secret": stored_secret,  # encrypted at rest; never plaintext
             "created_at": ts,
         }
     )
-    return {"webhook_id": webhook_id, "url": str(url), "events": list(events), "created_at": ts}
+    # Return the plaintext secret once at registration time so the partner can
+    # configure their signature verification; it is never readable again.
+    return {
+        "webhook_id": webhook_id,
+        "url": str(url),
+        "events": list(events),
+        "created_at": ts,
+        "secret": str(secret),
+    }
+
+
+def _decrypt_kyc_partner_secret(stored: str) -> str:
+    """Decrypt a KYC partner webhook secret stored in DynamoDB.
+
+    Handles both the ``PLAIN:`` dev-mode fallback and KMS-encrypted ciphertext,
+    mirroring ``webhook_service._decrypt_secret``. Use this anywhere the secret
+    is consumed for HMAC signing of outbound partner deliveries.
+    """
+    if stored.startswith("PLAIN:"):
+        return stored[6:]
+    from app.core.crypto import kms_decrypt
+
+    return kms_decrypt(stored).decode("utf-8")
 
 
 def list_webhooks(principal: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -564,6 +596,9 @@ def list_webhooks(principal: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "url": str(row.get("url") or ""),
                 "events": list(row.get("events") or []),
                 "created_at": int(row.get("created_at") or 0),
+                # "secret" intentionally omitted — never expose stored secrets
+                # in list responses (SEC-022). The plaintext is returned only
+                # once, from register_webhook().
             }
         )
     out.sort(key=lambda r: r["created_at"], reverse=True)

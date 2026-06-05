@@ -1,6 +1,6 @@
 # GAP-0029: Old `POST /ui/delete-account` endpoint skips production password verification
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: PLATFORM-018 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: PLATFORM-018 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/PLATFORM-018.md`); see also `docs/tickets/writeups/PLATFORM-018.md`
 
 ## Location

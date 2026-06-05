@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from app.core.tables import T
 from app.core.time import now_ts
+from app.services.ttl import with_ttl
 
 DEFAULT_STATE = {
     "status": "active",
@@ -25,7 +26,14 @@ def get_account_state(user_sub: str) -> Dict[str, Any]:
     }
 
 
-def set_account_state(user_sub: str, status: str, *, reason: str = "", requested_by: str = "") -> Dict[str, Any]:
+def set_account_state(
+    user_sub: str,
+    status: str,
+    *,
+    reason: str = "",
+    requested_by: str = "",
+    ttl_epoch: Optional[int] = None,
+) -> Dict[str, Any]:
     ts = now_ts()
     item = {
         "user_sub": user_sub,
@@ -34,5 +42,7 @@ def set_account_state(user_sub: str, status: str, *, reason: str = "", requested
         "reason": reason,
         "requested_by": requested_by,
     }
+    if ttl_epoch is not None:
+        item = with_ttl(item, ttl_epoch=ttl_epoch)
     T.account_state.put_item(Item=item)
     return get_account_state(user_sub)

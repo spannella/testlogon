@@ -36,6 +36,7 @@ from app.services.gdpr_service import (
     process_export,
     _item_to_out,
 )
+from app.services import cognito_auth
 from app.services.sessions import require_ui_session
 
 logger = logging.getLogger(__name__)
@@ -141,14 +142,16 @@ def request_deletion(
     if has_pending_deletion(user_sub):
         raise HTTPException(status_code=409, detail="Pending deletion request already exists")
 
-    # Password verification (in dev mode, accept any non-empty password)
+    # Password re-verification (GAP-0029). verify_user_password handles the
+    # dev/prod split internally: empty password is always rejected; in dev mode
+    # (or when Cognito is unconfigured) any non-empty password is accepted; in
+    # production it re-authenticates against Cognito (AdminInitiateAuth).
     if not body.password:
         raise HTTPException(status_code=401, detail="Password required")
 
-    if not S.dev_mode:
-        # In production, verify against Cognito
-        # For now, this is a placeholder
-        pass
+    if not cognito_auth.verify_user_password(user_sub, body.password):
+        logger.warning("privacy.password_verification_failed user=%s", user_sub)
+        raise HTTPException(status_code=401, detail="Invalid password")
 
     item = create_deletion_request(user_sub, reason=body.reason)
     return DataRequestOut(**_item_to_out(item))
