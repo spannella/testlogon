@@ -60,15 +60,41 @@ def serve_broadcast_ad(
     slot_type: str,
     user_id: str,
 ) -> Dict[str, Any]:
-    """Select an ad for a broadcast surface.
+    """Select an ad for a broadcast surface via the ADS-004 serving engine.
 
-    NOTE: ADS-004 (ad serving engine) and ADS-002 (video creatives) are not yet
-    implemented. This returns a deterministic stub "house" creative so the rest of
-    the flow (overlay, tracking, skip) is exercisable end-to-end. When ADS-004 lands
-    this function should delegate to ``app.services.ad_serving.serve_ad``.
+    Delegates to ``app.services.ad_serving.serve_ad`` for targeting, frequency
+    caps, and budget enforcement. Falls back to the deterministic house creative
+    when the engine raises (e.g. DDB error) or returns an unfilled result, so a
+    transient engine failure or empty inventory never breaks broadcast playback.
 
     Returns a dict with ``filled`` plus creative metadata + tracking URLs.
     """
+    try:
+        from app.services.ad_serving import serve_ad
+
+        result = serve_ad(
+            surface=surface,
+            content_type="broadcast",
+            creator_id=creator_id,
+            content_id=content_id,
+            slot_type=slot_type,
+            user_id=user_id,
+        )
+        if result.get("filled"):
+            return result
+    except Exception:  # graceful degradation — never break playback on engine error
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "serve_broadcast_ad: engine failed, falling back to house creative "
+            "(creator=%s content=%s slot=%s)",
+            creator_id,
+            content_id,
+            slot_type,
+            exc_info=True,
+        )
+
+    # Fallback: deterministic house creative (engine unfilled or errored).
     creative_id = f"bcast_house_{slot_type}"
     return {
         "filled": True,

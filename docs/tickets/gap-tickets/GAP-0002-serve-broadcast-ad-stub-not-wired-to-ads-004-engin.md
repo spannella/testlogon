@@ -1,6 +1,6 @@
 # GAP-0002: serve_broadcast_ad stub not wired to ADS-004 engine
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: ADS-006 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: ADS-006 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-006.md`); see also `docs/tickets/writeups/ADS-006.md`
 
 ## Location

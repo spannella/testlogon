@@ -1,6 +1,6 @@
 # GAP-0001: no daily spent_today_cents reset task
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: ADS-004 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: ADS-004 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/ADS-004.md`); see also `docs/tickets/writeups/ADS-004.md`
 
 ## Location

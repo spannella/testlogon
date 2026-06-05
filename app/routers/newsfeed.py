@@ -5134,6 +5134,16 @@ def view_feed(
         feed_items = ordered[:limit]
         if not author_filter:  # Only inject in the main feed, not author-filtered views
             feed_items = _inject_sponsored_posts(feed_items, user_id)
+            # ADS-012 (GAP-0005): Elevate actively-boosted posts in the feed.
+            # CRITICAL: newsfeed post dicts carry the id as "post_id", not the
+            # default "content_id" — passing id_key explicitly is mandatory or
+            # elevation silently no-ops.
+            from app.services.content_boost import elevate_feed_items
+            feed_items = elevate_feed_items(
+                feed_items,
+                content_type="post",
+                id_key="post_id",
+            )
 
         out = {"items": feed_items, "next_cursor": encode_cursor(next_eks)}
         _emit_feed_filter_usage_metrics(mode=mode, q=normalized_q, from_ts=from_ts, to_ts=to_ts, has_media=has_media)

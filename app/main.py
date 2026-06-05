@@ -181,6 +181,7 @@ from app.routers.media_preferences import router as media_preferences_router
 from app.middleware.rate_limit import rate_limit_middleware_factory
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
+from app.services.ad_daily_reset import start_ad_daily_reset_task
 from app.services.filemanager import start_filemgr_purge_task
 from app.services.api_usage_metering import record_api_usage_from_response, enforce_account_quota_pre_request
 from app.services.api_metering_policy import build_limit_denial_headers
@@ -520,6 +521,7 @@ def create_app() -> FastAPI:
 
     app.add_event_handler("startup", newsfeed_startup)
     app.add_event_handler("startup", start_billing_dunning_task)
+    app.add_event_handler("startup", start_ad_daily_reset_task)
     app.add_event_handler("startup", start_filemgr_purge_task)
     app.add_event_handler("startup", start_scheduled_messages_task)
     app.add_event_handler("startup", start_broadcast_scheduler_task)
