@@ -6,6 +6,8 @@ LLM API keys for use by autonomous agent workers.
 
 from __future__ import annotations
 
+import asyncio
+import datetime
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -17,6 +19,21 @@ from app.core.tables import T
 from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
+
+
+def _next_reset_at(from_ts: int) -> int:
+    """Return the Unix timestamp of the first second of the next calendar month.
+
+    Used to schedule the monthly budget reset (GAP-0077). A key whose
+    ``usage_reset_at`` has passed is eligible for a monthly counter reset.
+    """
+    dt = datetime.datetime.fromtimestamp(from_ts, datetime.timezone.utc)
+    if dt.month == 12:
+        next_month = datetime.datetime(dt.year + 1, 1, 1, tzinfo=datetime.timezone.utc)
+    else:
+        next_month = datetime.datetime(dt.year, dt.month + 1, 1, tzinfo=datetime.timezone.utc)
+    return int(next_month.timestamp())
+
 
 # ---------------------------------------------------------------------------
 # Provider registry
@@ -123,7 +140,9 @@ def add_key(
         "rate_limit_rpm": rate_limit_rpm,
         "monthly_budget_cents": monthly_budget_cents,
         "current_month_usage_cents": 0,
-        "usage_reset_at": 0,
+        # GAP-0077: schedule the first monthly reset so budget-exceeded keys
+        # automatically renew. Unlimited keys (budget == 0) need no reset.
+        "usage_reset_at": _next_reset_at(ts) if monthly_budget_cents > 0 else 0,
         "total_requests": 0,
         "total_tokens_used": 0,
         "status": "active",
@@ -436,6 +455,131 @@ def list_all_keys_admin() -> List[Dict[str, Any]]:
         resp = T.llm_provider_keys.scan(ExclusiveStartKey=resp["LastEvaluatedKey"])
         items.extend(resp.get("Items", []))
     return [_safe_out(item) for item in items if item.get("sk", "").startswith("KEY#")]
+
+
+# ---------------------------------------------------------------------------
+# Monthly usage reset (GAP-0077)
+# ---------------------------------------------------------------------------
+
+# Run hourly; a reset only fires when a key's usage_reset_at is due, so the
+# loop interval just bounds how soon after the month boundary the reset lands.
+_RESET_INTERVAL_SECONDS = 3600
+
+
+def _run_reset_pass() -> int:
+    """Scan keys whose ``usage_reset_at`` is due and reset monthly counters.
+
+    For each due key with a positive budget, zero ``current_month_usage_cents``,
+    advance ``usage_reset_at`` to the next month boundary, and reactivate keys in
+    ``budget_exceeded`` status. The update is guarded by a ConditionExpression
+    so concurrent passes are idempotent and so suspended/revoked/invalid keys are
+    never silently reactivated. Returns the number of keys reset.
+    """
+    now = now_ts()
+    reset_count = 0
+
+    scan_kwargs: Dict[str, Any] = {
+        "FilterExpression": "usage_reset_at > :zero AND usage_reset_at <= :now",
+        "ExpressionAttributeValues": {":zero": 0, ":now": now},
+    }
+    resp = T.llm_provider_keys.scan(**scan_kwargs)
+
+    while True:
+        for item in resp.get("Items", []):
+            sk = item.get("sk", "")
+            if not sk.startswith("KEY#"):
+                continue
+            budget = int(item.get("monthly_budget_cents", 0) or 0)
+            if budget <= 0:
+                continue  # no budget set — nothing to reset
+
+            pk = item["pk"]
+            new_reset_at = _next_reset_at(now)
+            try:
+                T.llm_provider_keys.update_item(
+                    Key={"pk": pk, "sk": sk},
+                    UpdateExpression=(
+                        "SET current_month_usage_cents = :zero, "
+                        "#st = :active, "
+                        "usage_reset_at = :next_reset, "
+                        "updated_at = :now"
+                    ),
+                    # Only reset keys that are still due AND budget_exceeded —
+                    # leaves suspended/revoked/invalid keys untouched and makes
+                    # concurrent passes idempotent.
+                    ConditionExpression="usage_reset_at <= :now AND #st = :exceeded",
+                    ExpressionAttributeNames={"#st": "status"},
+                    ExpressionAttributeValues={
+                        ":zero": 0,
+                        ":active": "active",
+                        ":exceeded": "budget_exceeded",
+                        ":now": now,
+                        ":next_reset": new_reset_at,
+                    },
+                )
+                reset_count += 1
+                logger.info(
+                    "llm_key_monthly_reset pk=%s sk=%s next_reset_at=%d",
+                    pk, sk, new_reset_at,
+                )
+            except T.llm_provider_keys.meta.client.exceptions.ConditionalCheckFailedException:
+                # Already reset by a concurrent pass, or the key is not in
+                # budget_exceeded status (e.g. an active key that simply
+                # rolled past its reset date). Advance usage_reset_at for
+                # active keys so they don't get re-scanned every pass.
+                if item.get("status") == "active":
+                    try:
+                        T.llm_provider_keys.update_item(
+                            Key={"pk": pk, "sk": sk},
+                            UpdateExpression=(
+                                "SET current_month_usage_cents = :zero, "
+                                "usage_reset_at = :next_reset, updated_at = :now"
+                            ),
+                            ConditionExpression="usage_reset_at <= :now AND #st = :active",
+                            ExpressionAttributeNames={"#st": "status"},
+                            ExpressionAttributeValues={
+                                ":zero": 0,
+                                ":active": "active",
+                                ":now": now,
+                                ":next_reset": new_reset_at,
+                            },
+                        )
+                        reset_count += 1
+                        logger.info(
+                            "llm_key_monthly_reset_active pk=%s sk=%s next_reset_at=%d",
+                            pk, sk, new_reset_at,
+                        )
+                    except T.llm_provider_keys.meta.client.exceptions.ConditionalCheckFailedException:
+                        pass
+
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        resp = T.llm_provider_keys.scan(ExclusiveStartKey=last_key, **scan_kwargs)
+
+    if reset_count:
+        logger.info("llm_usage_reset_pass reset_count=%d", reset_count)
+    return reset_count
+
+
+async def _reset_loop() -> None:
+    while True:
+        try:
+            _run_reset_pass()
+        except Exception:
+            logger.exception("llm_usage_reset loop error")
+        await asyncio.sleep(_RESET_INTERVAL_SECONDS)
+
+
+def start_llm_usage_reset_task() -> None:
+    """Register the monthly LLM usage reset loop as a startup background task.
+
+    Mirrors the other periodic startup tasks (e.g. start_billing_dunning_task).
+    Uses ``T.llm_provider_keys`` which resolves to DynamoDB Local in dev and
+    real DynamoDB in prod — no new AWS services, dev/prod parity (SECOPS-007).
+    """
+    asyncio.create_task(_reset_loop())
+    logger.info("llm_usage_reset_task started")
 
 
 # ---------------------------------------------------------------------------

@@ -5321,6 +5321,13 @@ class Ec2InstanceTypeInfo(BaseModel):
 
 # -- Agent Worker Provisioning (AGENT-002) --
 
+# GAP-0078: shell metacharacters that must never appear in user-supplied worker
+# install/verify commands (they would enable command injection once a prod
+# provisioner embeds them in a shell / cloud-init script).
+_WORKER_SHELL_METACHARS = re.compile(r"[;&|`$()<>\n\r]")
+_WORKER_MAX_CUSTOM_CMDS = 20
+
+
 class CreateWorkerIn(BaseModel):
     label: str = Field(..., min_length=1, max_length=200)
     agent_type: str = Field(..., pattern=r"^(coder|qa|reviewer|devops|custom)$")
@@ -5335,6 +5342,45 @@ class CreateWorkerIn(BaseModel):
     custom_install_commands: Optional[List[str]] = None
     custom_env_var: str = Field(default="", max_length=100)
     custom_verify_command: str = Field(default="", max_length=500)
+
+    # GAP-0078: these fields feed a (future) provisioner that may embed them in a
+    # shell / cloud-init script. Reject shell metacharacters so arbitrary command
+    # strings (`;`, `|`, `&`, backtick, `$()`, newline, redirects) can never be
+    # stored, even though the current dev provisioner does not execute them.
+    @field_validator("custom_install_commands")
+    @classmethod
+    def _validate_custom_install_commands(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        if len(v) > _WORKER_MAX_CUSTOM_CMDS:
+            raise ValueError(f"At most {_WORKER_MAX_CUSTOM_CMDS} install commands allowed")
+        for cmd in v:
+            if _WORKER_SHELL_METACHARS.search(cmd):
+                raise ValueError(
+                    f"Install command contains forbidden shell metacharacters: {cmd[:40]!r}"
+                )
+        return v
+
+    @field_validator("custom_verify_command")
+    @classmethod
+    def _validate_custom_verify_command(cls, v: str) -> str:
+        if v and _WORKER_SHELL_METACHARS.search(v):
+            raise ValueError(
+                f"Verify command contains forbidden shell metacharacters: {v[:40]!r}"
+            )
+        return v
+
+    @field_validator("custom_env_var")
+    @classmethod
+    def _validate_custom_env_var(cls, v: str) -> str:
+        # Name of an env var only — no value/assignment/injection. Must be a
+        # valid POSIX-ish shell identifier.
+        if v and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError(
+                "custom_env_var must be a valid environment variable name "
+                "([A-Za-z_][A-Za-z0-9_]*)"
+            )
+        return v
 
 
 class ProvisionStepOut(BaseModel):

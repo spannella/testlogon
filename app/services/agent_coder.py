@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 from typing import Any, Dict, List, Optional
 
 from botocore.exceptions import ClientError
@@ -27,6 +28,7 @@ from app.core.aws import ddb
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.core.validate_url import validate_repo_url
 from app.services import tickets as tickets_svc
 
 logger = logging.getLogger("app.agent_coder")
@@ -535,7 +537,9 @@ def build_coder_workflow(
     safe to use for dry-run preview and as the basis for the mock state machine.
     """
     cfg = _normalize_config(config)
-    repo_url = cfg.get("repo_url", "")
+    # GAP-0079 / SEC-021: reject shell-injecting repo URLs before they are
+    # f-stringed into the clone_repo shell command below.
+    repo_url = validate_repo_url(cfg.get("repo_url", ""))
     base_branch = cfg.get("repo_branch_base", "main")
     pr_base = cfg.get("pr_base_branch", "main")
     ticket_id = ticket.get("ticket_id", "")
@@ -575,7 +579,7 @@ def build_coder_workflow(
         {
             "step_id": 1,
             "type": "clone_repo",
-            "command": f"git clone {repo_url} /workspace && cd /workspace && git fetch origin",
+            "command": f"git clone -- {shlex.quote(repo_url)} /workspace && cd /workspace && git fetch origin",
             "timeout_seconds": 120,
             "on_failure": "escalate",
         },

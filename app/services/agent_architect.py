@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import shlex
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -34,6 +36,7 @@ from app.core.aws import ddb
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.core.validate_url import validate_repo_url
 from app.services import agent_coder as coder_svc
 from app.services import tickets as tickets_svc
 
@@ -1119,13 +1122,28 @@ WORKFLOW_STEP_TYPES = (
 )
 
 
+def _sanitize_branch(branch: str) -> str:
+    """Sanitize a branch name to git-safe chars (GAP-0079).
+
+    Mirrors the branch sanitization in ``agent_coder.generate_branch_name``:
+    only ``[A-Za-z0-9_/-]`` survive, runs of ``-`` are collapsed, length capped.
+    """
+    name = re.sub(r"[^a-zA-Z0-9_/\-]", "-", branch or "main")
+    name = re.sub(r"-{2,}", "-", name).strip("-/")
+    if len(name) > 80:
+        name = name[:80].rstrip("-/")
+    return name or "main"
+
+
 def build_architect_workflow(
     *, agent_run_id: str, config: Dict[str, Any], ticket: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Generate ordered workflow steps. Pure / no I/O (safe for dry-run preview)."""
     cfg = _normalize_config(config)
-    repo_url = cfg.get("repo_url", "")
-    branch = cfg.get("repo_branch", "main")
+    # GAP-0079 / SEC-021: validate the repo URL and sanitize the branch name to
+    # git-safe chars before either is f-stringed into the clone_repo shell command.
+    repo_url = validate_repo_url(cfg.get("repo_url", ""))
+    branch = _sanitize_branch(cfg.get("repo_branch", "main"))
     reference_docs = cfg.get("reference_docs", [])
     scan_paths = cfg.get("scan_paths", [])
     max_time = int(cfg.get("max_analysis_time_seconds", 900))
@@ -1150,7 +1168,7 @@ def build_architect_workflow(
     half = max_time // 2
     steps: List[Dict[str, Any]] = [
         {"step_id": 1, "type": "clone_repo",
-         "command": f"git clone --depth 1 -b {branch} {repo_url} /workspace",
+         "command": f"git clone --depth 1 -b {shlex.quote(branch)} -- {shlex.quote(repo_url)} /workspace",
          "timeout_seconds": 120, "on_failure": "escalate"},
         {"step_id": 2, "type": "read_reference_docs",
          "command": "cat " + " ".join(reference_docs) if reference_docs else None,

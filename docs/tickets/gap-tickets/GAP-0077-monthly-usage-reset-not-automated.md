@@ -1,6 +1,6 @@
 # GAP-0077: monthly usage reset not automated
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-001 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-001 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AGENT-001.md`); see also `docs/tickets/writeups/AGENT-001.md`
 
 ## Location
