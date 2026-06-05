@@ -1,6 +1,6 @@
 # GAP-0058: no content ownership validation at boost creation
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-012 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-012 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-012.md`); see also `docs/tickets/writeups/ADS-012.md`
 
 ## Location

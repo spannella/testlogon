@@ -336,6 +336,7 @@ export interface ApiKey {
   prefix?: string;
   allow_cidrs?: string[];
   deny_cidrs?: string[];
+  capabilities?: string[];
 }
 
 export interface ApiKeyCreated extends ApiKey {
@@ -345,6 +346,7 @@ export interface ApiKeyCreated extends ApiKey {
 export interface CreateApiKeyReq {
   label?: string;
   expires_in_days?: number;
+  capabilities?: string[];
 }
 
 export interface RevokeApiKeyReq {

@@ -140,6 +140,55 @@ def _effective_status(item: dict[str, Any], *, now: int | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Ownership verification (GAP-0058)
+# ---------------------------------------------------------------------------
+
+
+def _verify_content_ownership(owner_sub: str, content_type: str, content_id: str) -> None:
+    """Verify ``owner_sub`` actually owns the content before any money moves.
+
+    Raises ``ValueError`` (message contains "not found") if the content does not
+    exist, and ``PermissionError`` if the caller does not own it. Covers all
+    members of ``ALLOWED_CONTENT_TYPES`` (post / video / broadcast). Mirrors the
+    best-effort try/except pattern in ``sponsorship_deals._verify_content_ownership``
+    so a DDB connectivity blip surfaces as "not found" rather than a 500.
+    """
+    if content_type == "post":
+        try:
+            from app.routers.newsfeed import tbl as feed_tbl, pk_post, sk_post
+
+            item = feed_tbl.get_item(Key={"pk": pk_post(content_id), "sk": sk_post()}).get("Item")
+        except Exception:
+            item = None
+        if not item:
+            raise ValueError(f"post '{content_id}' not found")
+        if str(item.get("user_id", "")) != owner_sub:
+            raise PermissionError("you do not own this content")
+
+    elif content_type == "video":
+        try:
+            item = T.video_metadata.get_item(Key={"video_id": content_id}).get("Item")
+        except Exception:
+            item = None
+        if not item:
+            raise ValueError(f"video '{content_id}' not found")
+        if str(item.get("owner_user_id", "")) != owner_sub:
+            raise PermissionError("you do not own this content")
+
+    elif content_type == "broadcast":
+        try:
+            item = T.broadcast_sessions.get_item(Key={"session_id": content_id}).get("Item")
+        except Exception:
+            item = None
+        if not item:
+            raise ValueError(f"broadcast '{content_id}' not found")
+        if str(item.get("created_by", "")) != owner_sub:
+            raise PermissionError("you do not own this content")
+    # Content types outside ALLOWED_CONTENT_TYPES are rejected by the caller's
+    # earlier guard before this helper is reached.
+
+
+# ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------
 
@@ -165,6 +214,10 @@ def create_boost(
         raise ValueError("budget_cents must be positive")
     if duration_seconds <= 0:
         raise ValueError("duration_seconds must be positive")
+
+    # Ownership verification (GAP-0058): the caller must own the content before
+    # any wallet money moves. Raises ValueError ("not found") or PermissionError.
+    _verify_content_ownership(owner_sub, content_type, content_id)
 
     ts = _now(now)
     bid = f"boost_{uuid.uuid4().hex[:12]}"

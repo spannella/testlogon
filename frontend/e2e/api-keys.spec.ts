@@ -486,3 +486,65 @@ test.describe("7. REST API — /ui/api_keys", () => {
     expect(data.deny_cidrs).toContain("172.16.0.0/12");
   });
 });
+
+// ─── 8. Capability scopes (GAP-0057) ───────────────────────────────────────────
+
+test.describe("8. Capability scopes", () => {
+  let page: Page;
+  const LABEL = "E2E Scopes Test";
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page);
+    await revokeAllKeys(page);
+    await page.goto(`${BASE}/security`, { waitUntil: "load" });
+    await page.waitForTimeout(600);
+    await page.getByRole("tab", { name: "API Keys" }).click();
+    await page.waitForTimeout(400);
+  });
+
+  test.afterAll(async () => page?.close());
+
+  test("create dialog exposes a grouped scope selector with ads checkboxes", async () => {
+    await page.getByRole("button", { name: "Create Key" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 4000 });
+    await expect(dialog.getByText("Advertising")).toBeVisible();
+    await expect(dialog.getByRole("checkbox", { name: "ads:read" })).toBeVisible();
+    await expect(dialog.getByRole("checkbox", { name: "ads:manage" })).toBeVisible();
+  });
+
+  test("creating a key with only ads:read shows that scope (and not others) in details", async () => {
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Label (optional)").fill(LABEL);
+    await dialog.getByRole("checkbox", { name: "ads:read" }).check();
+    await dialog.getByRole("button", { name: "Create Key" }).click();
+    await expect(dialog).toContainText("API Key Created", { timeout: 8000 });
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+
+    // Open the new key's details dialog and verify the scope badge.
+    const panel = page.getByRole("tabpanel", { name: "API Keys" });
+    await expect(panel.getByText(LABEL)).toBeVisible({ timeout: 5000 });
+    await page.getByRole("button", { name: "View key details" }).first().click();
+    const details = page.getByRole("dialog");
+    await expect(details).toBeVisible({ timeout: 3000 });
+    await expect(details.getByText("Scopes")).toBeVisible();
+    await expect(details.getByText("ads:read")).toBeVisible();
+    await expect(details.getByText("ads:manage")).not.toBeVisible();
+    await details.getByRole("button", { name: "Close" }).click();
+  });
+
+  test("POST /ui/api_keys honours a scoped capabilities list", async () => {
+    const resp = await apiPost(page, "/ui/api_keys", {
+      label: "scoped api key",
+      capabilities: ["ads:read"],
+    });
+    expect(resp.ok()).toBe(true);
+    const data = await resp.json();
+    expect(Array.isArray(data.capabilities)).toBe(true);
+    expect(data.capabilities).toContain("ads:read");
+    expect(data.capabilities).not.toContain("ads:manage");
+    expect(data.capabilities).not.toContain("kyc:admin");
+  });
+});

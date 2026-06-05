@@ -1,6 +1,6 @@
 # GAP-0057: ads:* scopes not surfaced in frontend API key creation UI
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-011 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-011 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-011.md`); see also `docs/tickets/writeups/ADS-011.md`
 
 ## Location
