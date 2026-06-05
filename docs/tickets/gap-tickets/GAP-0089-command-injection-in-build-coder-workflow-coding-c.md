@@ -1,6 +1,6 @@
 # GAP-0089: command injection in build_coder_workflow coding_cmd
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-008 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-008 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/AGENT-008.md`); see also `docs/tickets/writeups/AGENT-008.md`
 
 ## Location
