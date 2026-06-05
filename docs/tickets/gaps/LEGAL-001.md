@@ -1,0 +1,1 @@
+- [UNBUILT] Unified per-user legal investigation dump not implemented — see writeups/LEGAL-001.md
