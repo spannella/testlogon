@@ -399,6 +399,43 @@ def are_required_signers_completed(packet_id: str) -> bool:
     return all(str(signer.get("status") or "") == SignatureSignerStatus.COMPLETED.value for signer in required_signers)
 
 
+def add_packet_signer(
+    *,
+    packet_id: str,
+    signer_id: str,
+    email: Optional[str] = None,
+    required: bool = True,
+) -> Dict[str, Any]:
+    """Add a signer record to a DRAFT packet.
+
+    Raises ``ValueError`` ("packet_not_found" / "packet_not_draft" / "packet_immutable")
+    via ``_ensure_packet_draft`` when the packet is missing or no longer editable.
+    """
+    require_signature_pdf_enabled()
+    _ensure_packet_draft(packet_id)
+    now = datetime.now(timezone.utc).isoformat()
+    item: Dict[str, Any] = {
+        "packet_id": packet_id,
+        "signer_id": signer_id,
+        "status": SignatureSignerStatus.PENDING.value,
+        "status_key": signer_status_sort_key(SignatureSignerStatus.PENDING, packet_id),
+        "required": bool(required),
+        "added_at": now,
+        "updated_at": now,
+    }
+    if email:
+        item["email"] = email
+    T.signature_packet_signers.put_item(Item=item)
+    return item
+
+
+def remove_packet_signer(*, packet_id: str, signer_id: str) -> None:
+    """Remove a signer record from a DRAFT packet."""
+    require_signature_pdf_enabled()
+    _ensure_packet_draft(packet_id)
+    T.signature_packet_signers.delete_item(Key={"packet_id": packet_id, "signer_id": signer_id})
+
+
 def mark_packet_completed(packet_id: str) -> Optional[Dict[str, Any]]:
     require_signature_pdf_enabled()
     now = datetime.now(timezone.utc).isoformat()

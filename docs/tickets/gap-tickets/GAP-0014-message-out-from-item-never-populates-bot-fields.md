@@ -1,6 +1,6 @@
 # GAP-0014: `_message_out_from_item` never populates bot fields
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: BOT-001 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: BOT-001 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BOT-001.md`); see also `docs/tickets/writeups/BOT-001.md`
 
 ## Location

@@ -2,17 +2,26 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from app.core.aws import ddb
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
+
+# Messages / Conversations table handles. These live in app/routers/messaging.py
+# (as tbl_msgs / tbl_convos) which would create a circular import if imported
+# here, so we resolve them directly from the boto3 resource using the same env
+# var names the messaging router uses (GAP-0015).
+_tbl_messages = ddb.Table(os.getenv("DDB_MESSAGES", "Messages"))
+_tbl_conversations = ddb.Table(os.getenv("DDB_CONVERSATIONS", "Conversations"))
 
 # ---------------------------------------------------------------------------
 # Bot CRUD
@@ -287,29 +296,79 @@ def send_bot_message(
     text: str,
     kind: str = "text",
 ) -> dict | None:
-    """Send a message as a bot. Returns message dict or None if bot not active."""
+    """Send a message as a bot.
+
+    Writes the message to the Messages table so it actually appears in the
+    conversation, updates the conversation's last-message metadata (as ordinary
+    sends do), increments the bot's cosmetic message_count, and returns the full
+    stored item dict (including ``message_id``). Returns None if the bot is not
+    active. (GAP-0015)
+    """
     bot = get_bot(bot_id=bot_id)
     if not bot or bot["status"] != "active":
         return None
 
-    # Increment message count
+    ts = now_ts()
+    message_id = "m_" + uuid4().hex
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "sender_id": f"bot:{bot_id}",
+        "sender_type": "bot",
+        "bot_id": bot_id,
+        "bot_name": bot["name"],
+        "bot_avatar_url": bot.get("avatar_url"),
+        "text": text,
+        "kind": kind,
+        "created_at": ts,
+        "is_encrypted": False,
+        "reactions": {},
+    }
+    quick_replies = _bot_quick_replies(creator_id=bot["creator_id"], bot_id=bot_id)
+    if quick_replies:
+        item["quick_replies"] = quick_replies
+
+    # Write the message to the Messages table so it surfaces in the conversation.
+    _tbl_messages.put_item(Item=item)
+
+    # Update the conversation's last-message metadata (best-effort).
+    try:
+        _tbl_conversations.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression=(
+                "SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid"
+            ),
+            ExpressionAttributeValues={":ts": ts, ":p": text[:140], ":mid": message_id},
+        )
+    except ClientError:
+        pass  # Non-critical; conversation metadata is best-effort.
+
+    # Increment message count on the bot record (existing behaviour, preserved).
     try:
         T.chat_bots.update_item(
             Key={"pk": f"CREATOR#{bot['creator_id']}", "sk": f"BOT#{bot_id}"},
             UpdateExpression="SET message_count = if_not_exists(message_count, :zero) + :one, updated_at = :ua",
-            ExpressionAttributeValues={":zero": 0, ":one": 1, ":ua": now_ts()},
+            ExpressionAttributeValues={":zero": 0, ":one": 1, ":ua": ts},
         )
     except ClientError:
         pass  # Non-critical
 
-    return {
-        "bot_id": bot_id,
-        "bot_name": bot["name"],
-        "bot_avatar_url": bot.get("avatar_url"),
-        "sender_type": "bot",
-        "text": text,
-        "kind": kind,
-    }
+    return item
+
+
+def _bot_quick_replies(*, creator_id: str, bot_id: str) -> list | None:
+    """Read the bot's configured quick_replies from its raw record (best-effort).
+
+    ``_bot_dict`` drops quick_replies, so fetch the raw item directly.
+    """
+    try:
+        resp = T.chat_bots.get_item(Key={"pk": f"CREATOR#{creator_id}", "sk": f"BOT#{bot_id}"})
+    except ClientError:
+        return None
+    item = resp.get("Item") or {}
+    qr = item.get("quick_replies")
+    return qr if qr else None
 
 
 # ---------------------------------------------------------------------------

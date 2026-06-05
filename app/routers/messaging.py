@@ -4227,6 +4227,11 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         lock_price_cents=int(merged_item["lock_price_cents"]) if merged_item.get("lock_price_cents") else None,
         lock_description=merged_item.get("lock_description"),
         is_unlocked=is_unlocked,
+        sender_type=merged_item.get("sender_type"),
+        bot_id=merged_item.get("bot_id"),
+        bot_name=merged_item.get("bot_name"),
+        bot_avatar_url=merged_item.get("bot_avatar_url"),
+        quick_replies=merged_item.get("quick_replies") or None,
     )
 
 

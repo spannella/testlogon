@@ -1,6 +1,6 @@
 # GAP-0015: `send_bot_message()` returns a dict but never writes to DynamoDB
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: BOT-001 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: BOT-001 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/BOT-001.md`); see also `docs/tickets/writeups/BOT-001.md`
 
 ## Location
