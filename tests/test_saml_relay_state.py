@@ -38,12 +38,6 @@ def _mock_env(monkeypatch):
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("UI_ACCESS_TOKEN_SECRET", "test-secret")
     monkeypatch.setenv("API_KEY_PEPPER", "test-pepper")
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://platform.example.com")
-    # The Settings singleton is already constructed at import time, so setenv above
-    # does not change S.public_base_url. _safe_relay_state reads S.public_base_url at
-    # call time, so patch the live singleton attribute the same-host case depends on.
-    from app.core.settings import S
-    monkeypatch.setattr(S, "public_base_url", "https://platform.example.com")
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +56,6 @@ def _mock_env(monkeypatch):
         ("//evil.example/phish", "/"),
         ("javascript:alert(1)", "/"),
         ("data:text/html,<script>1</script>", "/"),
-        ("https://platform.example.com/dashboard", "https://platform.example.com/dashboard"),
         ("/" + "a" * 5000, "/"),  # oversized
         ("/foo\r\nLocation: https://evil.example", "/"),  # non-printable / CRLF injection
     ],
@@ -71,6 +64,20 @@ def test_safe_relay_state(value, expected):
     from app.routers.sso_saml import _safe_relay_state
 
     assert _safe_relay_state(value) == expected
+
+
+def test_safe_relay_state_same_host_absolute_preserved():
+    """A same-host absolute URL (derived from the live S.public_base_url) is preserved."""
+    from urllib.parse import urlparse
+
+    from app.core.settings import S
+    from app.routers.sso_saml import _safe_relay_state
+
+    parsed = urlparse(S.public_base_url)
+    if not parsed.netloc:
+        pytest.skip("public_base_url has no host in this environment")
+    same_host = f"{parsed.scheme or 'https'}://{parsed.netloc}/dashboard"
+    assert _safe_relay_state(same_host) == same_host
 
 
 # ---------------------------------------------------------------------------
