@@ -13,12 +13,42 @@ import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+import boto3
 from botocore.exceptions import ClientError
 
 from app.core.tables import T
 from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
+
+
+def _ddb_lowlevel_client() -> Any:
+    """Return a low-level DynamoDB client for ``transact_write_items``.
+
+    The boto3 *resource*-attached client (``Table.meta.client``) applies the
+    high-level resource transforms, which mangle the explicitly attribute-typed
+    items required by ``transact_write_items`` (observed against both moto and
+    DynamoDB Local: ``Invalid attribute value type`` / unhashable dict). A
+    fresh low-level client built from the same endpoint/region/credentials as
+    the project ``ddb`` resource avoids that and keeps dev/prod parity
+    (SECOPS-007) -- it inherits the local-stack endpoint in dev and real AWS
+    config in prod from the shared resource meta. Resolved lazily so test
+    patches of the resource take effect.
+    """
+    from app.core.aws import ddb  # local import: honors monkeypatched resource
+
+    meta = ddb.meta.client.meta
+    creds = getattr(ddb.meta.client._request_signer, "_credentials", None)
+    kwargs: Dict[str, Any] = {
+        "region_name": meta.region_name,
+        "endpoint_url": meta.endpoint_url,
+    }
+    if creds is not None:
+        kwargs["aws_access_key_id"] = creds.access_key
+        kwargs["aws_secret_access_key"] = creds.secret_key
+        if creds.token:
+            kwargs["aws_session_token"] = creds.token
+    return boto3.client("dynamodb", **kwargs)
 
 # ---------------------------------------------------------------------------
 # Agent state transitions
@@ -75,6 +105,41 @@ def _get_worker_item(user_id: str, worker_id: str) -> Optional[Dict[str, Any]]:
         Key={"pk": f"USER#{user_id}", "sk": f"WORKER#{worker_id}"}
     )
     return resp.get("Item")
+
+
+# Control sentinels the terminal monitoring loop scans for as agent state
+# transitions. They MUST NOT appear verbatim in user-controlled ticket content
+# (GAP-0082: prompt injection — a forged token would fire a false completion or
+# freeze the worker awaiting non-existent feedback).
+_SIGNAL_TOKENS = (
+    "[AGENT_COMPLETE]",
+    "[AGENT_FEEDBACK_NEEDED]",
+)
+
+# Max length for any single injected user-controlled field. Caps the blast
+# radius of oversized ticket content flooding the injected context.
+_TICKET_FIELD_MAX_LEN = 4000
+
+
+def _sanitize_ticket_field(value: Any) -> str:
+    """Neutralize agent signal tokens in user-supplied ticket content.
+
+    Replaces the literal control sentinels with a visually similar but
+    non-functional fullwidth-bracket form so they render clearly to a human
+    reviewer yet are never matched by the monitoring loop. Also caps the field
+    length. Applied to every user-controlled field before it is interpolated
+    into the agent context (defense at read-time; runs identically in dev and
+    prod per SECOPS-007).
+    """
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    for token in _SIGNAL_TOKENS:
+        safe = token.replace("[", "［").replace("]", "］")
+        text = text.replace(token, safe)
+    if len(text) > _TICKET_FIELD_MAX_LEN:
+        text = text[:_TICKET_FIELD_MAX_LEN] + "… [truncated]"
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +330,12 @@ def claim_ticket(
     """
     ts = now_ts()
 
-    # 1. Write claim record with condition: no existing claim at this PK/SK
+    # The claim record + the ticket-META update must commit atomically.
+    # GAP-0081: two sequential writes left an orphaned AGENT_CLAIM# record if
+    # the process crashed (SIGKILL/OOM) or write-2 failed for a reason other
+    # than ClientError (the old compensating delete only fired on ClientError).
+    # TransactWriteItems is all-or-nothing: a crash before/within the call
+    # commits neither write, and concurrent claimers can never both win.
     claim_item = {
         "pk": f"AGENT_CLAIM#{ticket_id}",
         "sk": f"CLAIM#{worker_id}",
@@ -275,40 +345,64 @@ def claim_ticket(
         "status": "active",
         "checkpoint": "",
     }
-    try:
-        T.tickets.put_item(
-            Item=claim_item,
-            ConditionExpression="attribute_not_exists(pk)",
-        )
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            raise ValueError(f"Ticket {ticket_id} already claimed by another agent")
-        raise
 
-    # 2. Update ticket with agent_worker_id
+    # table_name resolves through the _FloatSafeTable proxy's __getattr__
+    # delegation to the wrapped boto3 Table. The low-level client is built
+    # fresh (see _ddb_lowlevel_client) because the resource-attached client
+    # cannot handle transact_write_items' typed items. Identical code path in
+    # dev (DynamoDB Local) and prod (SECOPS-007); both support transactions.
+    client = _ddb_lowlevel_client()
+    table_name = T.tickets.table_name
+
     try:
-        T.tickets.update_item(
-            Key={"pk": f"TICKET#{ticket_id}", "sk": "META"},
-            UpdateExpression=(
-                "SET agent_worker_id = :wid, agent_claimed_at = :ts, "
-                "agent_state = :as_val"
-            ),
-            ConditionExpression=(
-                "attribute_not_exists(agent_worker_id) OR agent_worker_id = :empty"
-            ),
-            ExpressionAttributeValues={
-                ":wid": worker_id,
-                ":ts": ts,
-                ":as_val": "claimed",
-                ":empty": "",
-            },
+        client.transact_write_items(
+            TransactItems=[
+                {
+                    "Put": {
+                        "TableName": table_name,
+                        "Item": {
+                            "pk": {"S": f"AGENT_CLAIM#{ticket_id}"},
+                            "sk": {"S": f"CLAIM#{worker_id}"},
+                            "worker_id": {"S": worker_id},
+                            "user_id": {"S": user_id},
+                            "claimed_at": {"N": str(ts)},
+                            "status": {"S": "active"},
+                            "checkpoint": {"S": ""},
+                        },
+                        "ConditionExpression": "attribute_not_exists(pk)",
+                    }
+                },
+                {
+                    "Update": {
+                        "TableName": table_name,
+                        "Key": {
+                            "pk": {"S": f"TICKET#{ticket_id}"},
+                            "sk": {"S": "META"},
+                        },
+                        "UpdateExpression": (
+                            "SET agent_worker_id = :wid, agent_claimed_at = :ts, "
+                            "agent_state = :as_val"
+                        ),
+                        "ConditionExpression": (
+                            "attribute_not_exists(agent_worker_id) "
+                            "OR agent_worker_id = :empty"
+                        ),
+                        "ExpressionAttributeValues": {
+                            ":wid": {"S": worker_id},
+                            ":ts": {"N": str(ts)},
+                            ":as_val": {"S": "claimed"},
+                            ":empty": {"S": ""},
+                        },
+                    }
+                },
+            ]
         )
     except ClientError as e:
-        # Rollback claim if ticket update fails
-        T.tickets.delete_item(
-            Key={"pk": f"AGENT_CLAIM#{ticket_id}", "sk": f"CLAIM#{worker_id}"}
-        )
-        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+        code = e.response["Error"]["Code"]
+        # A failed condition on either item means another worker already holds
+        # the claim or the ticket META. The transaction committed nothing, so
+        # there is no orphaned claim record to roll back.
+        if code in ("TransactionCanceledException", "ConditionalCheckFailedException"):
             raise ValueError(f"Ticket {ticket_id} already claimed by another agent")
         raise
 
@@ -612,17 +706,29 @@ def inject_ticket_context(
     if not ticket:
         raise ValueError(f"Ticket {ticket_id} not found")
 
-    context = f"""--- TICKET: {ticket.get('subject', ticket.get('title', 'Untitled'))} ---
+    # Sanitize user-controlled fields before interpolation so a malicious
+    # ticket cannot forge the agent control sentinels (GAP-0082). The
+    # [AGENT_COMPLETE] / [AGENT_FEEDBACK_NEEDED] literals in the INSTRUCTIONS
+    # block below are platform-authored and intentionally kept verbatim.
+    subject = _sanitize_ticket_field(
+        ticket.get("subject", ticket.get("title", "Untitled"))
+    )
+    description = _sanitize_ticket_field(ticket.get("description", ""))
+    acceptance = _sanitize_ticket_field(
+        ticket.get("acceptance_criteria", "None specified")
+    )
+
+    context = f"""--- TICKET: {subject} ---
 ID: {ticket_id}
 Priority: {ticket.get('priority', 'medium')}
 Status: {ticket.get('status', 'open')}
 Type: {ticket.get('type', ticket.get('category', 'task'))}
 
 DESCRIPTION:
-{ticket.get('description', '')}
+{description}
 
 ACCEPTANCE CRITERIA:
-{ticket.get('acceptance_criteria', 'None specified')}
+{acceptance}
 
 INSTRUCTIONS:
 1. Create a feature branch: agent/{worker_id}/{ticket_id}

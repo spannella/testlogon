@@ -6,6 +6,7 @@ injects LLM API keys, and registers workers for orchestration.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -459,9 +460,103 @@ def get_provision_log(user_id: str, worker_id: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _maybe_stop_idle_worker(item: Dict[str, Any], now: int) -> bool:
+    """Stop a worker if it has been idle longer than its idle_timeout_seconds.
+
+    Returns True if the worker was stopped, False otherwise.
+
+    Activity time is taken from ``last_activity_at`` (set when the worker runs a
+    job); for workers that have never run a job (``last_activity_at == 0``) we
+    fall back to ``started_at`` so a worker that has been sitting "ready" past
+    its timeout without ever doing work is still reclaimed.
+    """
+    worker_id = item.get("worker_id", "")
+    user_id = item.get("user_id", "")
+    status = item.get("worker_status", "")
+    timeout = int(item.get("idle_timeout_seconds", 7200) or 7200)
+    # Use last_activity_at; fall back to started_at for workers that never ran.
+    activity = int(item.get("last_activity_at", 0) or 0)
+    if activity == 0:
+        activity = int(item.get("started_at", 0) or 0)
+
+    # Only ready/running workers consume compute and can be stopped.
+    if status not in ("ready", "running"):
+        return False
+    # No activity reference yet (never started) — leave for provisioning timeout.
+    if activity == 0:
+        return False
+    if (now - activity) < timeout:
+        return False
+
+    logger.info(
+        "idle_worker_detected worker_id=%s user_id=%s idle_seconds=%d timeout=%d",
+        worker_id, user_id, now - activity, timeout,
+    )
+    try:
+        stop_worker(user_id, worker_id)
+        return True
+    except ValueError as e:
+        logger.warning("idle_worker stop_failed worker_id=%s error=%s", worker_id, e)
+        return False
+
+
 def check_idle_workers() -> int:
-    """Background task: find and stop workers where
-    now() - last_activity_at > idle_timeout_seconds.
-    Returns count of workers stopped."""
-    # Simplified implementation — in production this would scan all users
-    return 0
+    """Background task: find and stop workers idle beyond their
+    ``idle_timeout_seconds`` threshold. Returns count of workers stopped.
+
+    The agent_workers table's GSIs are all partitioned by ``pk`` (= the per-user
+    key), so there is no cross-user index to query. We scan with a server-side
+    FilterExpression restricting results to ready/running workers (the only
+    states that consume compute), paginating via LastEvaluatedKey so a busy
+    table beyond the first 1MB page is fully covered.
+    """
+    now = now_ts()
+    stopped_count = 0
+    start_key: Optional[Dict[str, Any]] = None
+
+    while True:
+        kwargs: Dict[str, Any] = {
+            "FilterExpression": "worker_status IN (:ready, :running)",
+            "ExpressionAttributeValues": {":ready": "ready", ":running": "running"},
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        try:
+            resp = T.agent_workers.scan(**kwargs)
+        except Exception:
+            logger.exception("check_idle_workers scan failed")
+            return stopped_count
+
+        for item in resp.get("Items", []):
+            try:
+                if _maybe_stop_idle_worker(item, now):
+                    stopped_count += 1
+            except Exception:
+                logger.exception(
+                    "check_idle_workers error processing worker_id=%s",
+                    item.get("worker_id"),
+                )
+
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+
+    if stopped_count:
+        logger.info("idle_workers_stopped count=%d", stopped_count)
+    return stopped_count
+
+
+async def run_idle_worker_checker(*, poll_interval: int = 300) -> None:
+    """Background task: every ``poll_interval`` seconds stop idle workers."""
+    while True:
+        try:
+            check_idle_workers()
+        except Exception:
+            logger.exception("idle_worker_checker error")
+        await asyncio.sleep(poll_interval)
+
+
+def start_idle_worker_checker_task() -> None:
+    """Register the idle-worker checker background task at app startup."""
+    asyncio.ensure_future(run_idle_worker_checker())
+    logger.info("agent idle worker checker started")
