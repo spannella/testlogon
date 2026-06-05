@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin, Phone, Video, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
@@ -51,6 +51,8 @@ import { callStateReducer, createInitialCallMachineState, teardownCallResources,
 import { useRtcPeerConnection } from "@/hooks/useRtcPeerConnection";
 import { useMediaCapture } from "@/hooks/useMediaCapture";
 import { useCallRecording } from "@/hooks/useCallRecording";
+import { useCallBillingHeartbeat } from "@/hooks/useCallBillingHeartbeat";
+import { getCallRate } from "@/api/endpoints/callBilling";
 import { isCallRecordingEnabled, isGroupCallsEnabled } from "@/lib/featureFlags";
 import {
   DropdownMenu,
@@ -736,6 +738,17 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     }
   }, [callRecording.recordingState, callRecording.error]);
 
+  // ── Paid-call billing heartbeat (GAP-0016) ─────────────────────
+  // Look up the DM partner's call rate so we know whether this is a paid call.
+  const callPartnerId = dmPartner?.user_id;
+  const { data: callRate } = useQuery({
+    queryKey: ["call-rate", callPartnerId],
+    queryFn: () => getCallRate(callPartnerId as string),
+    enabled: callsEnabled && !!callPartnerId,
+    staleTime: 5 * 60_000,
+  });
+  const isPaidCall = !!callRate?.enabled && (callRate?.rate_cents_per_minute ?? 0) > 0;
+
   const clearCallTimeout = React.useCallback(() => {
     if (callTimeoutRef.current) {
       window.clearTimeout(callTimeoutRef.current);
@@ -775,6 +788,28 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       if (args.action === "decline") return declineCallInvite(args.callId, { reason: "declined", idempotency_key: `ui-decline-${Date.now()}` });
       return endCall(args.callId, { reason: "ended", idempotency_key: `ui-end-${Date.now()}` });
     },
+  });
+
+  // Drive billing heartbeats while a paid call is connected (GAP-0016).
+  useCallBillingHeartbeat({
+    callId: callMachine.callId,
+    enabled: callMachine.phase === "connected" && isPaidCall,
+    onEndCall: () => {
+      if (!callMachine.callId) {
+        dispatchCall({ type: "END_LOCAL" });
+        return;
+      }
+      callActionMutation.mutate(
+        { action: "end", callId: callMachine.callId },
+        {
+          onSuccess: () => dispatchCall({ type: "END_REMOTE" }),
+          onError: () => dispatchCall({ type: "FAIL" }),
+        },
+      );
+      toast.error("Call ended: insufficient balance.");
+    },
+    onLowBalance: (mins) =>
+      toast.warning(`Low balance — about ${mins} minute(s) of call time remaining.`),
   });
 
   const extractCallErrorCode = (err: unknown): string => {

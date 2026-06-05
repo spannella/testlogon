@@ -202,13 +202,48 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         )
         logger.info("Transcode job %s completed successfully", job_id)
 
-        # Transition video to published if video_metadata store is available
+        # Transition video to published if video_metadata store is available.
+        # GAP-0034: also persist the playback URL, thumbnail, and rendition
+        # metadata so the listing/playback APIs (which gate on hls_manifest_url)
+        # expose a playable video.
         try:
+            from app.models_video import VideoRendition
             from app.services.video_metadata_store import transition_video_status
 
-            transition_video_status(video_id=job["video_id"], to_status="published")
+            # Prefer the signed CDN playback URL over the raw s3:// manifest URI.
+            manifest_url = playback_url.url if playback_url else None
+            thumb_url = playback_url.thumbnail_url if playback_url else None
+            if not thumb_url and upload_result and upload_result.thumbnail_s3_keys:
+                thumb_url = upload_result.thumbnail_s3_keys[0]
+
+            # Build VideoRendition records from the completed job rendition profiles.
+            rendition_list: List[VideoRendition] = []
+            for r in renditions:
+                name = r.get("name")
+                if not name:
+                    continue
+                rendition_list.append(
+                    VideoRendition(
+                        label=str(name),
+                        width=int(r.get("width", 1)),
+                        height=int(r.get("height", 1)),
+                        bitrate_kbps=int(r.get("video_bitrate_kbps", 1)),
+                    )
+                )
+
+            transition_video_status(
+                video_id=job["video_id"],
+                to_status="published",
+                hls_manifest_url=manifest_url,
+                thumbnail_url=thumb_url,
+                renditions=rendition_list or None,
+            )
         except Exception:
-            logger.warning("Could not transition video %s to published", job["video_id"])
+            logger.warning(
+                "Could not transition video %s to published",
+                job["video_id"],
+                exc_info=True,
+            )
 
         # VOD-014: Auto-link to file manager
         try:

@@ -1,6 +1,6 @@
 # GAP-0034: VideoMetadata.hls_manifest_url never populated after transcoding
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: VOD-005 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: VOD-005 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/VOD-005.md`); see also `docs/tickets/writeups/VOD-005.md`
 
 ## Location

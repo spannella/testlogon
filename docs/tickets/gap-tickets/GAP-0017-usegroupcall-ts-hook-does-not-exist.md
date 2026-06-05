@@ -1,6 +1,6 @@
 # GAP-0017: `useGroupCall.ts` hook does not exist
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: CALL-012 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: CALL-012 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/CALL-012.md`); see also `docs/tickets/writeups/CALL-012.md`
 
 ## Location

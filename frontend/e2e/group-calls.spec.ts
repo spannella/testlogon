@@ -675,3 +675,115 @@ test.describe("D. Group Call UI", () => {
     await page.close();
   });
 });
+
+// ─── Section E: WebRTC Mode Selection (GAP-0017) ────────────────────────────
+//
+// Regression coverage for GAP-0017: the join response's topology `mode`
+// ("mesh" | "sfu") and ICE servers were previously read and discarded, and no
+// RTCPeerConnection was ever created. The `useGroupCall` hook now consumes the
+// join response and drives the peer setup; the overlay surfaces the resolved
+// mode via the `call-mode-indicator` test id and exposes the live peer map on
+// `window.__groupCallPeers` / `window.__groupCallMode` in dev mode.
+
+test.describe("E. WebRTC Mode Selection (GAP-0017)", () => {
+  /**
+   * Opens the group-call overlay for a conversation by deep-linking to it and
+   * clicking the Start Call button. Returns once the overlay is visible.
+   */
+  async function openOverlay(page: Page, convoId: string) {
+    await page.goto(`${BASE}/messages/${convoId}`, { waitUntil: "load" });
+    await page.waitForTimeout(1500);
+    const startBtn = page.locator('[data-testid="start-group-call"]');
+    await expect(startBtn).toBeVisible({ timeout: 10_000 });
+    await startBtn.click();
+    await expect(page.locator('[data-testid="group-call-overlay"]')).toBeVisible({
+      timeout: 10_000,
+    });
+  }
+
+  test("E1 — mode is selected from the join response and drives setup", async ({
+    browser,
+    request,
+  }) => {
+    const page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    const convoId = await createFreshGroup(page, request, `GC-E1 ${Date.now()}`);
+
+    // Intercept the join endpoint to force a deterministic topology + ICE config.
+    await page.route("**/ui/calls/group/*/join", async (route) => {
+      const orig = await route.fetch();
+      const body = await orig.json().catch(() => ({}));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...body,
+          mode: "mesh",
+          signaling: {
+            mode: "mesh",
+            ice_servers: [{ urls: "stun:stun.example.com:3478" }],
+          },
+        }),
+      });
+    });
+
+    await openOverlay(page, convoId);
+
+    // After the fix: the overlay surfaces the resolved topology mode.
+    await expect(page.locator('[data-testid="call-mode-indicator"]')).toHaveText("mesh", {
+      timeout: 10_000,
+    });
+
+    // And the hook stored the resolved mode (proving the join response is no
+    // longer discarded). The peer map exists once join + media setup ran.
+    const storedMode = await page.evaluate(
+      () => (window as unknown as { __groupCallMode?: string }).__groupCallMode,
+    );
+    expect(storedMode).toBe("mesh");
+
+    // Best-effort cleanup (camera may be unavailable in headless — that's fine,
+    // the hook proceeds receive-only and still stores the mode).
+    await cleanupActiveCall(page, convoId);
+    await page.close();
+  });
+
+  test("E2 — SFU mode is selected when the join response says sfu", async ({
+    browser,
+    request,
+  }) => {
+    const page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    const convoId = await createFreshGroup(page, request, `GC-E2 ${Date.now()}`);
+
+    await page.route("**/ui/calls/group/*/join", async (route) => {
+      const orig = await route.fetch();
+      const body = await orig.json().catch(() => ({}));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...body,
+          mode: "sfu",
+          signaling: {
+            mode: "sfu",
+            ice_servers: [{ urls: "stun:stun.example.com:3478" }],
+          },
+        }),
+      });
+    });
+
+    await openOverlay(page, convoId);
+
+    await expect(page.locator('[data-testid="call-mode-indicator"]')).toHaveText("sfu", {
+      timeout: 10_000,
+    });
+
+    const storedMode = await page.evaluate(
+      () => (window as unknown as { __groupCallMode?: string }).__groupCallMode,
+    );
+    expect(storedMode).toBe("sfu");
+
+    await cleanupActiveCall(page, convoId);
+    await page.close();
+  });
+});
