@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.auth.deps import AuthenticatedUser
-from app.auth.policy import require_admin_or_root
+from app.auth.policy import require_admin_or_root, require_admin_or_root_csrf
 from app.core.settings import S
 from app.models import (
     NotificationTemplateOut,
@@ -51,7 +51,7 @@ async def get_notification_template(
 async def update_notification_template(
     template_id: str,
     payload: NotificationTemplateUpdate = Body(...),
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> NotificationTemplateOut:
     """Update editable template fields (subject, body, active)."""
     if not S.admin_messaging_dashboard_template_edit_enabled:
@@ -75,7 +75,7 @@ async def update_notification_template(
 async def preview_notification_template(
     template_id: str,
     payload: NotificationTemplatePreviewRequest = Body(default=NotificationTemplatePreviewRequest()),
-    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+    _actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> NotificationTemplatePreviewOut:
     """Render a template with sample variables for preview."""
     rendered = svc.preview_template(template_id, sample_vars=payload.sample_vars)
@@ -88,7 +88,7 @@ async def preview_notification_template(
 async def test_send_notification_template(
     template_id: str,
     payload: NotificationTemplateTestSend = Body(...),
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ):
     """Send a test notification using the template's channel."""
     if not S.admin_messaging_dashboard_test_send_enabled:

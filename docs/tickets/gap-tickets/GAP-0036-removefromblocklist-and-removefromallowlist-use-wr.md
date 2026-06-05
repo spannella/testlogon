@@ -1,6 +1,6 @@
 # GAP-0036: removeFromBlocklist and removeFromAllowlist use wrong /v1/ URL prefix
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADMIN-003 · **Effort**: S
+**Status**: No change needed (verified already-correct, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADMIN-003 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADMIN-003.md`); see also `docs/tickets/writeups/ADMIN-003.md`
 
 ## Location

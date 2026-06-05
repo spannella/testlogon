@@ -165,11 +165,54 @@ def is_real_ui_session_id(session_id: str) -> bool:
         return False
     return len(session_id) == 36 and session_id.count("-") == 4
 
+# Bridge from rootctl `admin_capabilities` (DDB) to enforced `AdminScope` values.
+# Without this map an admin user's stored capabilities never reach the JWT, so
+# `normalize_admin_profile(None)` falls back to GENERAL (full access) — GAP-0037.
+_CAPABILITY_TO_SCOPE = {
+    "billing_ops": "billing_support",
+    "billing_read": "billing_support",
+    "user_support": "auth_support",
+    "impersonation": "auth_support",
+    "file_content": "content_moderation",
+    "file_metadata": "content_moderation",
+}
+
+
+def _build_admin_profile_claim(user_sub: str, user_item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the admin_profile JWT claim for admin users, or None for root/user.
+
+    - Root and non-admin users get no claim (root bypasses scope checks; users
+      have no admin profile).
+    - Admins with no capabilities set keep the historical GENERAL (full-access)
+      behavior so existing accounts are unaffected.
+    - Admins with capabilities receive a SCOPED profile mapped to canonical
+      AdminScope values, making the rootctl capability system actually enforced.
+    """
+    if _is_root_user(user_sub):
+        return None
+    role = normalize_role(user_item.get("role"))
+    if role is not Role.ADMIN:
+        return None
+    caps = user_item.get("admin_capabilities") or []
+    if not isinstance(caps, (list, tuple, set)):
+        caps = []
+    scopes = sorted({_CAPABILITY_TO_SCOPE[c] for c in caps if c in _CAPABILITY_TO_SCOPE})
+    if not scopes:
+        # No (recognized) capabilities → general admin (full access).
+        return {"type": "general"}
+    return {"type": "scoped", "scopes": scopes}
+
+
 def mint_access_token(user_sub: str, session_id: str) -> str:
     if not S.ui_access_token_secret:
         return ""
     access_ttl = _access_ttl_seconds_for_user(user_sub)
-    role = "root" if _is_root_user(user_sub) else "user"
+    try:
+        user_item = T.users.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+    except Exception:
+        user_item = {}
+    role_str = (user_item.get("role") or "").strip().lower()
+    role = "root" if _is_root_user(user_sub) else (role_str if role_str in ("admin", "user") else "user")
     auth_level = "high" if role == "root" else "standard"
     payload = {
         "sub": user_sub,
@@ -179,6 +222,9 @@ def mint_access_token(user_sub: str, session_id: str) -> str:
         "exp": now_ts() + access_ttl,
         "iat": now_ts(),
     }
+    admin_profile = _build_admin_profile_claim(user_sub, user_item)
+    if admin_profile is not None:
+        payload["admin_profile"] = admin_profile
     return jwt.encode(payload, S.ui_access_token_secret, algorithm="HS256")
 
 def _issue_refresh_token(response: Response, session_id: str, user_sub: str, *, refresh_ttl_seconds: Optional[int] = None) -> None:

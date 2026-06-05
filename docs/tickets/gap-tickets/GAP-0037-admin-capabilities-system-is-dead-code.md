@@ -1,6 +1,6 @@
 # GAP-0037: admin_capabilities system is dead code
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADMIN-PERMS-001 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADMIN-PERMS-001 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/ADMIN-PERMS-001.md`); see also `docs/tickets/writeups/ADMIN-PERMS-001.md`
 
 ## Location

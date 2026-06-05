@@ -1,6 +1,6 @@
 # GAP-0035: missing CSRF on template mutation endpoints
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADMIN-002 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADMIN-002 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADMIN-002.md`); see also `docs/tickets/writeups/ADMIN-002.md`
 
 ## Location
