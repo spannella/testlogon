@@ -1,6 +1,6 @@
 # GAP-0047: BROADCAST_PREROLL_ENABLED and BROADCAST_MIDROLL_ENABLED flags absent
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-006 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-006 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-006.md`); see also `docs/tickets/writeups/ADS-006.md`
 
 ## Location

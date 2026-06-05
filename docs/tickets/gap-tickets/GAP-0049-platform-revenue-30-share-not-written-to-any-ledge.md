@@ -1,6 +1,6 @@
 # GAP-0049: platform revenue (30% share) not written to any ledger
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-007 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-007 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/ADS-007.md`); see also `docs/tickets/writeups/ADS-007.md`
 
 ## Location

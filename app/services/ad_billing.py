@@ -168,6 +168,33 @@ def _split_revenue(*, charge_cents: int, creator_id: str, meta: dict, ts: int) -
         except Exception:
             logger.warning("ad_revenue_creator_credit_failed", extra={"creator_id": creator_id})
 
+    # Write platform revenue record to ad_billing table so the platform's 30%
+    # share is durably recorded for audit/reconciliation (GAP-0049).
+    if platform_share > 0:
+        try:
+            entry_id = f"rev_{uuid.uuid4().hex[:12]}"
+            month_key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
+            T.ad_billing.put_item(Item={
+                "pk": "PLATFORM#revenue",
+                "sk": f"LEDGER#{ts}#{entry_id}",
+                "entry_id": entry_id,
+                "entry_type": "platform_revenue_credit",
+                "amount_cents": platform_share,
+                "state": "settled",
+                "reason": "Platform ad revenue share (30%)",
+                "meta": {
+                    **meta,
+                    "creator_id": creator_id,
+                    "creator_share_cents": creator_share,
+                    "charge_cents": charge_cents,
+                    "platform_share_pct": PLATFORM_REVENUE_SHARE_PCT,
+                },
+                "month_key": month_key,
+                "created_at": ts,
+            })
+        except Exception:
+            logger.warning("ad_revenue_platform_credit_failed", extra={"charge_cents": charge_cents})
+
 
 def _check_budget_and_alert(account_id: str, campaign_id: str) -> None:
     """Check if campaign budget thresholds are crossed; send alerts + auto-pause."""

@@ -20,6 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.settings import S
 from app.services.broadcast_store import get_session, update_session_fields
 from app.services.broadcast_ads import (
     ALLOWED_MIDROLL_DURATIONS,
@@ -130,6 +131,11 @@ def update_ad_config_route(session_id: str, body: BroadcastAdConfigIn, ctx: dict
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_BROADCASTER", "detail": "Only the broadcaster can update ad config"},
         )
+    if body.pre_roll_enabled is True and not S.broadcast_preroll_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "PREROLL_DISABLED", "detail": "Pre-roll ads are not enabled on this platform"},
+        )
     updates = {}
     if body.pre_roll_enabled is not None:
         updates["pre_roll_enabled"] = body.pre_roll_enabled
@@ -190,6 +196,13 @@ async def trigger_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_BROADCASTER", "detail": "Only the broadcaster can trigger ad breaks"},
+        )
+
+    # Global platform kill-switch for mid-roll (BROADCAST_MIDROLL_ENABLED).
+    if not S.broadcast_midroll_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "MIDROLL_DISABLED", "detail": "Mid-roll ad breaks are not enabled on this platform"},
         )
     if session.status != "live":
         raise HTTPException(

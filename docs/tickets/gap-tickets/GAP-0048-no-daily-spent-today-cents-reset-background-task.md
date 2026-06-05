@@ -1,6 +1,6 @@
 # GAP-0048: no daily spent_today_cents reset background task
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ADS-007 · **Effort**: M
+**Status**: No change needed (covered by GAP-0001, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ADS-007 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/ADS-007.md`); see also `docs/tickets/writeups/ADS-007.md`
 
 ## Location

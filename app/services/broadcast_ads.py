@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
+from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.broadcast_store import get_session, update_session_fields
@@ -116,6 +117,10 @@ def build_pre_roll(session, viewer_id: str) -> Dict[str, Any]:
     """
     # Ad-free subscribers (and the broadcaster) skip pre-roll entirely.
     if is_ad_free(viewer_id, session.created_by):
+        return {"pre_roll": None, "ad_free": True}
+
+    # Global platform kill-switch for pre-roll (BROADCAST_PREROLL_ENABLED).
+    if not S.broadcast_preroll_enabled:
         return {"pre_roll": None, "ad_free": True}
 
     if not session.pre_roll_enabled:
