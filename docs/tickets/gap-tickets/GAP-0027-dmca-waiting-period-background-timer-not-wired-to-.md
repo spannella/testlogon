@@ -1,6 +1,6 @@
 # GAP-0027: DMCA waiting-period background timer not wired to startup
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: MOD-002 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: MOD-002 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/MOD-002.md`); see also `docs/tickets/writeups/MOD-002.md`
 
 ## Location

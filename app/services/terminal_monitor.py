@@ -185,6 +185,47 @@ class PatternMatcher:
         return None
 
 
+# ─── Integration: output → buffer → pattern match ───────────────────────────
+
+
+def get_default_patterns_for_worker(worker_id: str) -> Dict[str, List[str]]:
+    """Return per-worker pattern config, falling back to defaults.
+
+    If a custom pattern config has been stored for the worker, use it;
+    otherwise fall back to the built-in defaults.
+    """
+    custom = get_worker_pattern_config(worker_id)
+    return custom or DEFAULT_FEEDBACK_PATTERNS
+
+
+def process_terminal_output(
+    worker_id: str,
+    chunk: str,
+) -> Optional[Dict[str, str]]:
+    """Feed a chunk of terminal output through the buffer and pattern matcher.
+
+    Appends *chunk* to the worker's ring buffer, then runs the PatternMatcher
+    against the most recent 2000 characters of buffered output.
+
+    Returns a signal dict ``{"signal": <category>, "pattern": ..., "match": ...}``
+    if a pattern fires, else ``None``. This is the integration point the SSH
+    WebSocket output forwarding loop taps into so live agent terminal output
+    flows through the AGENT-006 detection pipeline.
+    """
+    buf = get_or_create_buffer(worker_id)
+    buf.append(chunk)
+    recent = buf.get_recent(2000)
+    patterns = get_default_patterns_for_worker(worker_id)
+    matcher = PatternMatcher(patterns)
+    signal = matcher.match(recent)
+    if signal:
+        logger.info(
+            "Terminal signal '%s' detected for worker %s",
+            signal["signal"], worker_id,
+        )
+    return signal
+
+
 # ─── Feedback CRUD ───────────────────────────────────────────────────────────
 
 

@@ -1,6 +1,6 @@
 # GAP-0019: Implementation aggregates creator EARNINGS (credits) but spec requires consumer SPENDING (debits)
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: FIN-004 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: FIN-004 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/FIN-004.md`); see also `docs/tickets/writeups/FIN-004.md`
 
 ## Location

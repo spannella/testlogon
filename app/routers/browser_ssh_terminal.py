@@ -24,6 +24,7 @@ from app.metrics import (
     record_browser_ssh_session_lifecycle,
     set_browser_ssh_active_sessions,
 )
+from app.services import terminal_monitor
 from app.services.alerts import audit_event
 from app.services.sessions import require_ui_session
 
@@ -712,6 +713,60 @@ def _validate_connect_payload(payload: Any) -> tuple[bool, dict[str, Any] | None
     }, None
 
 
+async def _dispatch_terminal_signal(
+    *,
+    signal: dict[str, Any],
+    worker_id: str,
+    user_id: str | None,
+    websocket: WebSocket,
+) -> None:
+    """Dispatch an agent terminal signal detected in the SSH output stream.
+
+    Creates a feedback request on ``feedback_needed`` and notifies the browser
+    for completion/error signals. Best-effort: any failure is logged and
+    swallowed so terminal forwarding is never interrupted.
+    """
+    category = signal.get("signal")
+    match_text = signal.get("match", "")
+    detected_pattern = signal.get("pattern", "")
+    buf = terminal_monitor.get_or_create_buffer(worker_id)
+    context = buf.get_recent(2000)
+
+    if category == "feedback_needed":
+        try:
+            req = terminal_monitor.create_feedback_request(
+                user_id=user_id or "",
+                worker_id=worker_id,
+                ticket_id="",
+                question=match_text,
+                terminal_context=context,
+                detected_pattern=detected_pattern,
+            )
+            await websocket.send_json(
+                {
+                    "type": "feedback_request",
+                    "payload": {"request_id": req["request_id"], "question": match_text},
+                }
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "Failed to create feedback request for worker %s: %s",
+                worker_id, exc,
+            )
+    elif category == "completion":
+        try:
+            await websocket.send_json({"type": "agent_complete", "payload": {}})
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to send agent_complete for worker %s: %s", worker_id, exc)
+    elif category == "error":
+        try:
+            await websocket.send_json(
+                {"type": "agent_error", "payload": {"match": match_text}}
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to send agent_error for worker %s: %s", worker_id, exc)
+
+
 @router.websocket("/ws")
 async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
     import asyncio
@@ -738,6 +793,7 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
     connected_started_at: float | None = None
     session_host: str | None = None
     session_port: int | None = None
+    session_worker_id: str | None = None
     end_outcome = "disconnected"
     end_reason = "websocket_closed"
 
@@ -776,6 +832,21 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
                 if output:
                     session_last_activity_at = now
                     await websocket.send_json({"type": "output", "payload": {"data": output}})
+                    # Tap into the monitoring pipeline only for agent-tracked
+                    # sessions (worker_id present in the connect payload). Normal
+                    # interactive terminals leave session_worker_id None and are
+                    # entirely unaffected.
+                    if session_worker_id:
+                        signal = terminal_monitor.process_terminal_output(
+                            session_worker_id, output
+                        )
+                        if signal:
+                            await _dispatch_terminal_signal(
+                                signal=signal,
+                                worker_id=session_worker_id,
+                                user_id=session_user_sub,
+                                websocket=websocket,
+                            )
 
             try:
                 raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=0.05)
@@ -833,6 +904,11 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
 
                 session_host = str(normalized["host"])
                 session_port = int(normalized["port"])
+                # Optional agent linkage: when the Worker Fleet UI launches an
+                # agent terminal it includes a worker_id so output flows into
+                # the monitoring pipeline. Absent for normal terminals.
+                wid = payload.get("worker_id") if isinstance(payload, dict) else None
+                session_worker_id = wid.strip() if isinstance(wid, str) and wid.strip() else None
                 now = time.time()
                 if not _consume_connect_rate_limit(session_user_sub, now):
                     record_browser_ssh_connect_throttled(reason="connect_rate_limit")

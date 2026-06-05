@@ -656,3 +656,43 @@ def process_expired_dmca_waiting_periods() -> int:
             break
 
     return processed
+
+
+async def _dmca_timer_loop() -> None:
+    """Periodically auto-resolve expired DMCA waiting periods (17 U.S.C. 512(g)).
+
+    Disabled by default in dev/test (``S.dmca_timer_enabled``) to keep test runs
+    deterministic. Never raises out of the loop.
+    """
+    import asyncio
+
+    if not S.dmca_timer_enabled:
+        logger.info("DMCA waiting-period timer disabled")
+        return
+    interval = max(60, int(S.dmca_timer_interval_seconds))
+    logger.info("DMCA waiting-period timer started (interval=%ds)", interval)
+    while True:
+        try:
+            processed = process_expired_dmca_waiting_periods()
+            if processed:
+                logger.info(
+                    "dmca_timer: auto-resolved %d expired waiting period(s)",
+                    processed,
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("dmca_timer: unhandled error during sweep")
+        await asyncio.sleep(interval)
+
+
+def start_dmca_timer_task() -> None:
+    """FastAPI startup hook: launch the DMCA waiting-period timer if enabled."""
+    import asyncio
+
+    if not S.dmca_timer_enabled:
+        logger.info("DMCA waiting-period timer not started (disabled)")
+        return
+    try:
+        asyncio.get_event_loop().create_task(_dmca_timer_loop())
+    except RuntimeError:
+        # No running loop yet -- schedule on the current loop policy.
+        asyncio.ensure_future(_dmca_timer_loop())

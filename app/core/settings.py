@@ -1481,6 +1481,12 @@ class Settings:
     # DMCA (MOD-002)
     dmca_strike_threshold: int = int(os.environ.get("DMCA_STRIKE_THRESHOLD", "3"))
     dmca_strike_lookback_days: int = int(os.environ.get("DMCA_STRIKE_LOOKBACK_DAYS", "365"))
+    dmca_timer_enabled: bool = os.environ.get(
+        "DMCA_TIMER_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    dmca_timer_interval_seconds: int = int(
+        os.environ.get("DMCA_TIMER_INTERVAL_SECONDS", "3600")
+    )
 
     # Appeals (MOD-003)
     appeals_table_name: str = os.environ.get("DDB_APPEALS", "Appeals")
