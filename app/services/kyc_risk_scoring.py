@@ -332,8 +332,11 @@ class KycRiskScoringService:
     def _compute_country_risk(self, *, case_id: str, user_sub: str) -> dict:
         """Score based on user's country."""
         try:
-            resp = T.users.get_item(Key={"pk": f"USER#{user_sub}", "sk": "PROFILE"})
-            profile = resp.get("Item", {})
+            # country / nationality live at the top level of the users table item
+            # (written by external KYC processes, e.g. kyc_sanctions_screening),
+            # keyed by the simple "user_sub" partition key.
+            resp = T.users.get_item(Key={"user_sub": user_sub})
+            profile = resp.get("Item", {}) or {}
             country = str(profile.get("country", "") or profile.get("nationality", "") or "").upper().strip()
         except Exception:
             country = ""
@@ -429,10 +432,18 @@ class KycRiskScoringService:
 
     def _compute_profile_completeness(self, *, case_id: str, user_sub: str) -> dict:
         """Score based on how many critical profile fields are populated."""
-        critical_fields = ["first_name", "last_name", "date_of_birth", "email"]
+        # first_name / last_name / birthday live in the profile table (nested under
+        # the "profile" sub-document); email lives at the top level of the users
+        # table. The profile table stores the date of birth as "birthday", not
+        # "date_of_birth".
+        critical_fields = ["first_name", "last_name", "birthday", "email"]
         try:
-            resp = T.users.get_item(Key={"pk": f"USER#{user_sub}", "sk": "PROFILE"})
-            profile = resp.get("Item", {})
+            from app.services.profile import get_profile
+
+            profile = dict(get_profile(user_sub) or {})
+            users_item = T.users.get_item(Key={"user_sub": user_sub}).get("Item", {}) or {}
+            if not profile.get("email"):
+                profile["email"] = users_item.get("email")
             missing = 0
             for field in critical_fields:
                 val = profile.get(field)
@@ -448,8 +459,10 @@ class KycRiskScoringService:
     def _compute_account_age(self, *, case_id: str, user_sub: str) -> dict:
         """Score: newer accounts are higher risk."""
         try:
-            resp = T.users.get_item(Key={"pk": f"USER#{user_sub}", "sk": "PROFILE"})
-            profile = resp.get("Item", {})
+            # created_at is written by registration.py at the top level of the
+            # users table item, keyed by the simple "user_sub" partition key.
+            resp = T.users.get_item(Key={"user_sub": user_sub})
+            profile = resp.get("Item", {}) or {}
             created_at = profile.get("created_at")
             if not created_at:
                 return {"score": 60, "raw_value": "unknown", "description": "Account creation date unknown"}

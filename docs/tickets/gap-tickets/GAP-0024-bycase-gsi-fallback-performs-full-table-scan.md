@@ -1,6 +1,6 @@
 # GAP-0024: `ByCase` GSI fallback performs full table scan
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: KYC-010 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: KYC-010 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/KYC-010.md`); see also `docs/tickets/writeups/KYC-010.md`
 
 ## Location

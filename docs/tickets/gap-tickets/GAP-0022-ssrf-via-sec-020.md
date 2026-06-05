@@ -1,6 +1,6 @@
 # GAP-0022: SSRF via SEC-020
 
-**Status**: Open · **Severity**: CRIT (Critical) · **Source ticket**: INFRA-011 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: CRIT (Critical) · **Source ticket**: INFRA-011 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/INFRA-011.md`); see also `docs/tickets/writeups/INFRA-011.md`
 
 ## Location

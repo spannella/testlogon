@@ -61,12 +61,31 @@ _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$"
 )
 
+# Private/reserved IP ranges that must not be used as bastion hops (SSRF guard,
+# GAP-0022). Mirrors the denylist in ``app/services/webhook_ssrf.py`` so that a
+# hop cannot target the AWS instance metadata endpoint (169.254.169.254),
+# loopback, or any internal RFC-1918 / CGNAT / link-local address.
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / AWS IMDS metadata
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),   # CGNAT / shared address space
+    ipaddress.ip_network("::1/128"),          # IPv6 loopback
+    ipaddress.ip_network("fe80::/10"),        # IPv6 link-local
+    ipaddress.ip_network("fc00::/7"),         # IPv6 unique local
+]
+
 
 def validate_host(host: str) -> str:
     """Validate and normalize a hop hostname or IP address.
 
     Accepts IPv4 / IPv6 literals (normalized via ``ipaddress``) and RFC-1123
-    hostnames. Raises :class:`InvalidHop` for anything else.
+    hostnames. Rejects IP literals in private / loopback / link-local / CGNAT /
+    metadata ranges to prevent SSRF (GAP-0022). Raises :class:`InvalidHop` for
+    anything else.
     """
     host = (host or "").strip()
     if not host:
@@ -75,9 +94,16 @@ def validate_host(host: str) -> str:
         raise InvalidHop("hostname too long")
     # Try IP literal first.
     try:
-        return str(ipaddress.ip_address(host))
+        addr = ipaddress.ip_address(host)
     except ValueError:
-        pass
+        addr = None
+    if addr is not None:
+        for net in _BLOCKED_NETWORKS:
+            if addr in net:
+                raise InvalidHop(
+                    f"hop targets a private or reserved address: {host}"
+                )
+        return str(addr)
     if _HOSTNAME_RE.match(host):
         return host.lower()
     raise InvalidHop(f"invalid hostname or IP: {host}")

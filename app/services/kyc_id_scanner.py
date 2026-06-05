@@ -621,10 +621,13 @@ class KycIdScannerStore:
             )
             return list(resp.get("Items", []))
         except Exception:
-            resp = self._table.scan()
-            items = [i for i in resp.get("Items", []) if i.get("case_id") == case_id]
-            items.sort(key=lambda i: _coerce_int(i.get("created_at")), reverse=True)
-            return items
+            # Fail closed: never fall back to a full table scan, which would load
+            # every user's scan records into memory (cross-user PII exposure).
+            logger.exception(
+                "kyc_id_scanner.list_scans_for_case: ByCase GSI query failed for case_id=%s",
+                case_id,
+            )
+            return []
 
     def list_by_status(self, status: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """List scans by status via the ByStatus GSI (PK=status, SK=created_at)."""
