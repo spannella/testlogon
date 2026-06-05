@@ -1,0 +1,6 @@
+# BCAST-013 Gap List
+
+- [MED] Goal over-fill race condition — `broadcast_tip_goals.py:~115` — two concurrent tips can both pass `capacity > 0` pre-check and together exceed `target_cents`; atomic `ADD` prevents corruption but allows 130%+ fill — Fix: use conditional `update_item` with `ConditionExpression=Attr("current_cents").lt(target_cents)`; skip on `ConditionalCheckFailedException` — Effort: S
+- [MED] `_query_tip_messages()` is O(total_messages) not O(tip_count) — `broadcast_tip_store.py:~280` — `FilterExpression(kind="tip")` on full session partition; 50k messages + 200 tips = 50MB DDB scan — Fix: add `TipsBySession` GSI to `BroadcastChatMessages` with `tip_created_at` sparse attribute set only on tip items — Effort: S
+- [LOW] SEC-025 — creator ownership checks not centralized for tip config/goal endpoints — `broadcast.py` — inline `created_by` checks on `PATCH /tips/config` and goal CRUD rather than `_require_session_owner` helper — Fix: use `_require_session_owner(ctx, session)` per SEC-025 design — Effort: S
+- [LOW] No platform-level `broadcast_tipping_enabled` kill switch — `app/core/settings.py` — per-session `tip_enabled` exists but no global platform flag to disable tipping — Fix: add `broadcast_tipping_enabled: bool` to settings and gate tip endpoint — Effort: S

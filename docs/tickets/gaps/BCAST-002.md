@@ -1,0 +1,7 @@
+# BCAST-002 Gap List
+
+- [HIGH] SEC-010 IDOR — SSE event stream lacks viewer access check — `broadcast.py:717` — any authenticated user can subscribe to private/subscriber-gated session SSE stream (viewer count, health, ad-break signals) — Fix: call `check_viewer_access(session_id, ctx["user_sub"], ...)` before subscribing — Effort: S
+- [HIGH] SEC-010 IDOR — chat stream lacks viewer access check — `broadcast.py:1763` — any authenticated user can subscribe to private session chat stream; `ctx` is discarded (`_ = ctx`) — Fix: call `check_viewer_access` and pass `viewer_user_id=ctx["user_sub"]` to `_chat_msg_out` — Effort: S
+- [HIGH] SEC-010 — `_chat_msg_out` missing `viewer_user_id` in chat stream — `broadcast.py:1806` — locked message text delivered in clear to all SSE subscribers regardless of unlock status — Fix: pass `viewer_user_id=ctx["user_sub"]` to `_chat_msg_out(msg, viewer_user_id=ctx["user_sub"])` — Effort: S
+- [MED] `playback_entitlement_secret` not validated at startup — `app/core/settings.py` — empty secret produces trivially forgeable HMAC entitlement tokens — Fix: add startup validator raising `ValueError` in prod when secret is empty (mirror `UI_ACCESS_TOKEN_SECRET` pattern) — Effort: S
+- [MED] DRM key path traversal — `broadcast_local_drm.py` — `stream_key` not re-validated before constructing file path; `..` segments could escape key root — Fix: validate `_SK_PATTERN` and `os.path.realpath` containment check in `load_local_drm_key` — Effort: S

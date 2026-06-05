@@ -1,0 +1,7 @@
+# BCAST-009 Gap List
+
+- [MED] `GET /sessions/upcoming` exposes private broadcast metadata — `broadcast.py:334` — scheduled private broadcasts appear in the global upcoming list (name, time) without visibility check — Fix: filter `items` to `broadcast_privacy_visibility == "public"` before returning — Effort: S
+- [MED] `broadcast_schedule_min_lead_time_seconds` default too short — `app/core/settings.py:1512` — default is 300s (5 min), ticket spec requires 900s (15 min); too short for viewers to receive reminders before auto-start — Fix: change default to 900s or align ticket requirement — Effort: S
+- [LOW] Single reminder interval per user per session — `broadcast_reminders.py` — `SK = USER#{user_id}` allows only one reminder per user per session; spec proposed 15min/1hr/24hr multi-interval support — Fix: change SK to `USER#{user_id}#{interval}` to allow multiple subscriptions — Effort: S
+- [LOW] Reminder subscription has no rate limit or per-session quota — `broadcast.py` near line 2490 — any authenticated user can spam reminder registrations — Fix: add per-user per-session reminder quota (e.g., max 3 intervals) — Effort: S
+- [LOW] iCal response missing `Content-Disposition` header — `broadcast.py:2519` — browsers may display iCal content inline instead of prompting download — Fix: add `Content-Disposition: attachment; filename="broadcast-<session_id>.ics"` to the `Response` — Effort: S

@@ -1,0 +1,6 @@
+# BCAST-003 Gap List
+
+- [LOW] Missing `broadcast_aws_teardown_timeout_seconds` setting — `broadcast_provider.py:400` — teardown stop-before-delete hard-codes 90s; inconsistent with configurable start/stop timeouts — Fix: add `broadcast_aws_teardown_timeout_seconds` to `settings.py`; use in `AwsBroadcastProvider.teardown` — Effort: S
+- [LOW] `STOPPING` channel state not handled before delete in teardown — `broadcast_provider.py` — `delete_channel` on a `STOPPING` channel raises `ConflictException` (not `NotFoundException`), causing partial failure — Fix: add `STOPPING` to the states that trigger a poll-to-IDLE before deletion attempt — Effort: S
+- [LOW] `RequestLimitExceeded` missing from `_TRANSIENT_CODES` — `broadcast_provider.py` — batch provisioning may fail permanently on `RequestLimitExceeded` instead of retrying — Fix: add `"RequestLimitExceeded"` to `_TRANSIENT_CODES` set — Effort: S
+- [LOW] Reconciler drift detection emits no structured log — `broadcast_reconciler.py` — drift incidents increment a counter but have no log correlation ID for CloudWatch/grep debugging — Fix: add `logger.warning("broadcast_drift_detected", extra={session_id, desired, actual, provider})` — Effort: S
