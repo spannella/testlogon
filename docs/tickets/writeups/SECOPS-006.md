@@ -304,3 +304,20 @@ Structured log lines: `abuseipdb_report_submitted`, `abuseipdb_report_blocked` (
 5. (S) `abuseipdb_enricher.py` — `check_ip` + `sync_blacklist` with SECOPS-002 write-through.
 6. (M) pytest unit tests (all offline).
 7. (S) Playwright E2E spec (requires SECOPS-004 dashboard queue UI).
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] `geoip.py:lookup_country` at line 24 — `app/services/geoip.py:24`
+- [Confirmed] `_lookup_country_uncached` at lines 60–68 — `app/services/geoip.py:60–68`
+- [Corrected] Cache pattern cited as "lines 44–57": cache TTL/max setup actually begins at line 41 (`cache_ttl = getattr(...)`); cache write is at line 56. Correct range is lines 41–56. — `app/services/geoip.py:41–56`
+- [Confirmed] `set_mock_country` / `get_mock_country` at lines 95–109 — `app/services/geoip.py:95`, `app/services/geoip.py:107`
+- [Corrected] Settings cited as "lines 1760–1766": line 1760 is the comment `# Geo-blocking (GEO-001)`, not a setting field. The four geo settings (`geo_blocking_enabled`, `geo_maxmind_db_path`, `geo_cache_ttl_seconds`, `geo_cache_max_size`) begin at line 1761. Correct range is lines 1761–1766. — `app/core/settings.py:1761–1766`
+- [Confirmed] `kms_encrypt` at `app/core/crypto.py:16`, `kms_decrypt` at `app/core/crypto.py:22`
+- [Confirmed] `S.kms_endpoint_url` read in `app/core/aws_clients.py:90–91` (`_kms_endpoint_url` function)
+- [Confirmed] `alerts.py:31–43` defines `ALERT_CATEGORIES` including `"security"` bucket with `"security_event"` — `app/services/alerts.py:31–43`
+- [Confirmed] `write_alert` at `app/services/alerts.py:355`
+- [Confirmed] `ccbill_mock_enabled` at `app/core/settings.py:310`
+- [Confirmed] `llm_provider_keys.py:159–170` for `get_decrypted_api_key` with `kms_decrypt` — `app/services/llm_provider_keys.py:159–170`
+- [Confirmed] No `app/services/threat_intel/` package, no `AbuseIPDBClient`, no `abuseipdb_reports` table, no `threat_intel_cache` table, no AbuseIPDB settings fields — all "does not exist yet" claims hold

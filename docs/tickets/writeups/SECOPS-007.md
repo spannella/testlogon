@@ -332,3 +332,19 @@ SECOPS-007 is a governance document and pattern library; it has no runtime footp
 5. Add all new settings fields and `.env.local.example` documentation.
 6. Run `just test` in a network-isolated environment to confirm the offline guarantee.
 7. Create `docs/prod-readiness.md` checklist.
+
+---
+
+## Second-pass verification (2026-06-05)
+
+- [Confirmed] `dev_mode` at `app/core/settings.py:273`
+- [Confirmed] `ddb_resource` at `app/core/aws_clients.py:104`; `_ddb_endpoint_url()` at line 74
+- [Confirmed] `_local_credentials_kwargs` at `app/core/aws_clients.py:62`
+- [Corrected] Section 2.3 says "The key design decision in `app/core/aws_clients.py:s3_client` (lines 78–83)": lines 78–83 are `_s3_endpoint_url()`, not `s3_client`. `s3_client` is at line 114. The code block shown is correct and the line range is accurate, but the function name in the citation is wrong. Correct cite: `app/core/aws_clients.py:_s3_endpoint_url` (lines 78–83); `s3_client` is at `app/core/aws_clients.py:114`
+- [Confirmed] `dev_s3.py:start_s3_mock` at line 20 — `app/core/dev_s3.py:20`
+- [Confirmed] `_kms_endpoint_url()` at `app/core/aws_clients.py:90`; `kms_client` at line 135
+- [Confirmed] `llm_provider_keys.py:107` calls `kms_encrypt`; line 170 calls `kms_decrypt` — `app/services/llm_provider_keys.py:107`, `app/services/llm_provider_keys.py:170`
+- [Confirmed] `PROVIDER_REGISTRY` Anthropic models list at `llm_provider_keys.py:45–49` (lines 44–49 are the `"models"` key and its Claude model entries) — `app/services/llm_provider_keys.py:44–49`
+- [Corrected] `drm_license_service.py` mode-check block described with correct code, but the file is only 29 lines total; the block is at lines 19–28, not in the 96–104 range that the surrounding narrative implies. Correct cite: `app/services/drm_license_service.py:19–28`
+- [Confirmed] `settings.py:386` for `drm_license_provider_mode`; `settings.py:310` for `ccbill_mock_enabled`; `settings.py:427` for `jira_mock_enabled`; `settings.py:458` for `google_calendar_mock_enabled`; `settings.py:132` for `apple_caldav_mock_enabled`; `settings.py:365` for `billing_reconcile_interval_seconds`; `settings.py:2043` for `ec2_mock_enabled`; `settings.py:2117` for `k8s_mock_enabled`; `settings.py:338` for `stripe_api_base`; `settings.py:234` for `siem_webhook_enabled`
+- [Confirmed] No `app/services/threat_intel/` package exists — all "new" claims hold
