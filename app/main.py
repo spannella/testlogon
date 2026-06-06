@@ -753,9 +753,11 @@ def create_app() -> FastAPI:
     from app.routers.group_fundraising import (
         group_fundraising_router,
         public_group_fundraising_router,
+        fundraising_internal_router,
     )
     app.include_router(group_fundraising_router)
     app.include_router(public_group_fundraising_router)
+    app.include_router(fundraising_internal_router)
 
     app.include_router(agent_orchestrator_router)
     app.include_router(ads_router)

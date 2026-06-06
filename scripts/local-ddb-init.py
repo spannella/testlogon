@@ -2317,6 +2317,14 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N"},
         ),
+        # GAP-0217 (GEO-001): platform-level geo block list. Single record
+        # pk="PLATFORM", sk="GEO_BLOCK" holds the runtime-mutable blocked-country
+        # list so ROOT can update it without a backend restart (dev/prod parity).
+        TableDef(
+            _resolve_table_name(S.geo_rules_table_name, "geo_rules"),
+            "pk",
+            "sk",
+        ),
     ]
 
 

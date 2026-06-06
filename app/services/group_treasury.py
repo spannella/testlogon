@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.types import TypeSerializer
 from fastapi import HTTPException
 
 from app.core.tables import T
@@ -28,9 +29,28 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_SPEND_CATEGORIES = {"ad_spend", "event", "premium_feature", "other"}
 
+# DynamoDB TransactWriteItems is capped at 25 items per call. A contributor
+# refund costs 3 items (wallet credit + personal ledger + treasury ledger), so
+# 8 contributors (24 items) is the largest count that fits in a single
+# transaction while leaving room for the final balance-zero / escrow writes.
+_TRANSACT_MAX_ITEMS = 25
+_CONTRIB_ITEMS = 3
+_CONTRIB_BATCH_SIZE = 8  # 8 * 3 = 24 items, leaves headroom under the 25 cap
+
+_serializer = TypeSerializer()
+
 
 def _group_pk(group_id: str) -> str:
     return f"GROUP#{group_id}"
+
+
+def _to_ddb_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Serialize a plain dict into a low-level DDB AttributeValue map.
+
+    Used for ``transact_write_items`` (low-level client API), mirroring the
+    pattern in ``app/routers/newsfeed.py``.
+    """
+    return {k: _serializer.serialize(v) for k, v in item.items() if v is not None}
 
 
 # ---------------------------------------------------------------------------
@@ -484,12 +504,265 @@ def set_fundraising_goal(
 # ---------------------------------------------------------------------------
 
 
+def _begin_dissolution(pk_group: str, ts: int) -> str:
+    """Mark dissolution as in-progress with a conditional write (GAP-0219).
+
+    Returns the ``dissolution_id`` for saga tracking. Raises ``HTTPException(409)``
+    if a dissolution is already in progress or complete for this treasury. This
+    is the idempotency guard that prevents a second concurrent or retried call
+    from re-running the distribution and double-crediting contributors.
+
+    Backward compatible: legacy treasury records have no ``dissolution_state``
+    attribute, so ``attribute_not_exists`` lets a first dissolution proceed.
+    """
+    dissolution_id = ulidish()
+    try:
+        T.billing.update_item(
+            Key={"pk": pk_group, "sk": WALLET_SK},
+            UpdateExpression=(
+                "SET dissolution_state = :state, dissolution_id = :did, "
+                "dissolution_started_at = :t"
+            ),
+            ConditionExpression=(
+                "attribute_not_exists(dissolution_state) OR dissolution_state = :none_val"
+            ),
+            ExpressionAttributeValues={
+                ":state": "in_progress",
+                ":did": dissolution_id,
+                ":t": ts,
+                ":none_val": "none",
+            },
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            raise HTTPException(409, "Dissolution already in progress or complete.")
+        raise
+    return dissolution_id
+
+
+def _record_progress(pk_group: str, completed_uids: List[str], ts: int) -> None:
+    """Checkpoint the set of contributors already refunded (saga marker)."""
+    T.billing.update_item(
+        Key={"pk": pk_group, "sk": WALLET_SK},
+        UpdateExpression=(
+            "SET dissolution_completed_user_ids = :uids, updated_at = :t"
+        ),
+        ExpressionAttributeValues={":uids": list(completed_uids), ":t": ts},
+    )
+
+
+def _contributor_transact_items(
+    pk_user: str,
+    pk_group: str,
+    share: int,
+    uid: str,
+    ts: int,
+    group_id: str,
+) -> List[Dict[str, Any]]:
+    """Build the 3 atomic TransactItems for one contributor refund.
+
+    Wallet credit + personal ledger credit + treasury ledger debit are written
+    in the same transaction: either all three commit or none do. The ledger
+    ``Put`` operations are made idempotent with ``attribute_not_exists(sk)`` so a
+    replay with the same entry_id fails cleanly rather than duplicating.
+    """
+    credit_entry_id = ulidish()
+    debit_entry_id = ulidish()
+    table_name = T.billing.name
+    return [
+        {
+            "Update": {
+                "TableName": table_name,
+                "Key": _to_ddb_item({"pk": pk_user, "sk": WALLET_SK}),
+                "UpdateExpression": (
+                    "SET wallet_balance_cents = if_not_exists(wallet_balance_cents, :z) + :share, "
+                    "currency = if_not_exists(currency, :c), updated_at = :t"
+                ),
+                "ExpressionAttributeValues": _to_ddb_item(
+                    {":z": 0, ":share": share, ":c": "usd", ":t": ts}
+                ),
+            }
+        },
+        {
+            "Put": {
+                "TableName": table_name,
+                "Item": _to_ddb_item({
+                    "pk": pk_user,
+                    "sk": ledger_sk(ts, credit_entry_id),
+                    "entry_id": credit_entry_id,
+                    "ts": ts,
+                    "type": "dissolution_refund",
+                    "amount_cents": share,
+                    "state": "settled",
+                    "reason": "Group dissolution refund",
+                    "direction": "credit",
+                    "category": "refund",
+                    "group_id": group_id,
+                    "currency": "usd",
+                    "created_at": ts,
+                }),
+                "ConditionExpression": "attribute_not_exists(sk)",
+            }
+        },
+        {
+            "Put": {
+                "TableName": table_name,
+                "Item": _to_ddb_item({
+                    "pk": pk_group,
+                    "sk": ledger_sk(ts, debit_entry_id),
+                    "entry_id": debit_entry_id,
+                    "ts": ts,
+                    "type": "dissolution_return",
+                    "amount_cents": share,
+                    "state": "settled",
+                    "reason": f"Dissolution refund to {uid}",
+                    "direction": "debit",
+                    "category": "dissolution_return",
+                    "actor_user_id": uid,
+                    "currency": "usd",
+                    "created_at": ts,
+                }),
+                "ConditionExpression": "attribute_not_exists(sk)",
+            }
+        },
+    ]
+
+
+def _escrow_transact_items(
+    pk_group: str, escrow_amount: int, group_id: str, ts: int
+) -> List[Dict[str, Any]]:
+    """Build the 3 atomic TransactItems for the escrow transfer."""
+    credit_entry_id = ulidish()
+    debit_entry_id = ulidish()
+    table_name = T.billing.name
+    return [
+        {
+            "Update": {
+                "TableName": table_name,
+                "Key": _to_ddb_item({"pk": "PLATFORM#ESCROW", "sk": WALLET_SK}),
+                "UpdateExpression": (
+                    "SET wallet_balance_cents = if_not_exists(wallet_balance_cents, :z) + :amt, "
+                    "currency = if_not_exists(currency, :c), updated_at = :t"
+                ),
+                "ExpressionAttributeValues": _to_ddb_item(
+                    {":z": 0, ":amt": escrow_amount, ":c": "usd", ":t": ts}
+                ),
+            }
+        },
+        {
+            "Put": {
+                "TableName": table_name,
+                "Item": _to_ddb_item({
+                    "pk": "PLATFORM#ESCROW",
+                    "sk": ledger_sk(ts, credit_entry_id),
+                    "entry_id": credit_entry_id,
+                    "ts": ts,
+                    "type": "escrow_deposit",
+                    "amount_cents": escrow_amount,
+                    "state": "settled",
+                    "reason": f"Escrow from dissolved group {group_id}",
+                    "direction": "credit",
+                    "category": "escrow_transfer",
+                    "group_id": group_id,
+                    "currency": "usd",
+                    "created_at": ts,
+                }),
+                "ConditionExpression": "attribute_not_exists(sk)",
+            }
+        },
+        {
+            "Put": {
+                "TableName": table_name,
+                "Item": _to_ddb_item({
+                    "pk": pk_group,
+                    "sk": ledger_sk(ts, debit_entry_id),
+                    "entry_id": debit_entry_id,
+                    "ts": ts,
+                    "type": "escrow_transfer",
+                    "amount_cents": escrow_amount,
+                    "state": "settled",
+                    "reason": "Donation share transferred to platform escrow",
+                    "direction": "debit",
+                    "category": "escrow_transfer",
+                    "currency": "usd",
+                    "created_at": ts,
+                }),
+                "ConditionExpression": "attribute_not_exists(sk)",
+            }
+        },
+    ]
+
+
+def _treasury_zero_item(pk_group: str, ts: int, dissolution_id: str) -> Dict[str, Any]:
+    """Build the TransactItem that zeroes the treasury and marks completion."""
+    return {
+        "Update": {
+            "TableName": T.billing.name,
+            "Key": _to_ddb_item({"pk": pk_group, "sk": WALLET_SK}),
+            "UpdateExpression": (
+                "SET wallet_balance_cents = :z, updated_at = :t, "
+                "dissolution_state = :done"
+            ),
+            # Only zero if THIS dissolution owns the in-progress marker. Guards
+            # against a stale/concurrent attempt completing on top of another.
+            "ConditionExpression": "dissolution_id = :did",
+            "ExpressionAttributeValues": _to_ddb_item(
+                {":z": 0, ":t": ts, ":done": "complete", ":did": dissolution_id}
+            ),
+        }
+    }
+
+
+def _transact_client():
+    """Return a low-level DynamoDB client for ``transact_write_items``.
+
+    We build the items as raw AttributeValue maps (``_to_ddb_item``), so they
+    must go through a *plain* low-level client. The boto3 resource's
+    ``.meta.client`` carries the high-level document transform injector, which
+    would re-serialize already-serialized values. Constructed lazily from the
+    resource client's endpoint/region/credentials so it inherits the dev
+    (DynamoDB Local) or prod (AWS) target with no ``S.dev_mode`` branch
+    (SECOPS-007 parity).
+    """
+    import boto3
+
+    resource_client = T.billing.meta.client
+    endpoint = resource_client.meta.endpoint_url
+    region = resource_client.meta.region_name
+    creds = resource_client._request_signer._credentials
+    kwargs: Dict[str, Any] = {"region_name": region, "endpoint_url": endpoint}
+    if creds is not None:
+        frozen = creds.get_frozen_credentials()
+        kwargs["aws_access_key_id"] = frozen.access_key
+        kwargs["aws_secret_access_key"] = frozen.secret_key
+        if frozen.token:
+            kwargs["aws_session_token"] = frozen.token
+    return boto3.client("dynamodb", **kwargs)
+
+
+def _batch_transact(items: List[Dict[str, Any]]) -> None:
+    """Commit up to 25 DDB put/update items atomically."""
+    if not items:
+        return
+    if len(items) > _TRANSACT_MAX_ITEMS:
+        raise ValueError(
+            f"TransactWriteItems limit is {_TRANSACT_MAX_ITEMS}, got {len(items)}"
+        )
+    _transact_client().transact_write_items(TransactItems=items)
+
+
 def dissolve_treasury(group_id: str) -> Dict[str, Any]:
-    """Distribute remaining funds on group dissolution.
+    """Distribute remaining funds on group dissolution (atomic — GAP-0219).
 
     - Contributions returned pro-rata to contributors
     - Donations sent to PLATFORM#ESCROW
     - Treasury zeroed
+
+    All money movement is grouped into DynamoDB ``TransactWriteItems`` batches so
+    each contributor's wallet credit and both ledger entries commit atomically.
+    A conditional ``dissolution_state`` marker guards against double-runs, and a
+    saga checkpoint (``dissolution_completed_user_ids``) lets large contributor
+    lists resume idempotently after a partial failure without double-crediting.
     """
     balance_info = get_treasury_balance(group_id)
     remaining = balance_info["balance_cents"]
@@ -504,14 +777,21 @@ def dissolve_treasury(group_id: str) -> Dict[str, Any]:
     if total_pool == 0:
         # Edge case: balance exists but no tracked sources
         contribution_remaining = remaining
-        donation_remaining = 0
     else:
         contribution_remaining = (remaining * total_contributed) // total_pool
-        donation_remaining = remaining - contribution_remaining
 
     pk_group = _group_pk(group_id)
     ts = now_ts()
     total_refunded = 0
+
+    # Idempotency guard: conditional marker — raises 409 if already dissolving.
+    dissolution_id = _begin_dissolution(pk_group, ts)
+
+    # Resume support: skip contributors already refunded by a prior partial run.
+    wallet_resp = T.billing.get_item(Key={"pk": pk_group, "sk": WALLET_SK})
+    completed_uids = set(
+        wallet_resp.get("Item", {}).get("dissolution_completed_user_ids", []) or []
+    )
 
     # Get all contributors
     contrib_resp = T.billing.query(
@@ -519,8 +799,24 @@ def dissolve_treasury(group_id: str) -> Dict[str, Any]:
     )
     contributors = contrib_resp.get("Items", [])
 
-    # Pro-rata refund to each contributor
+    refunded_count = 0
+
+    # Pro-rata refund to each contributor, committed in atomic batches.
     if contribution_remaining > 0 and contributors and total_contributed > 0:
+        pending: List[Dict[str, Any]] = []
+        pending_uids: List[str] = []
+
+        def _flush() -> None:
+            nonlocal pending, pending_uids
+            if not pending:
+                return
+            _batch_transact(pending)
+            for u in pending_uids:
+                completed_uids.add(u)
+            _record_progress(pk_group, list(completed_uids), ts)
+            pending = []
+            pending_uids = []
+
         for contributor in contributors:
             their_total = int(contributor.get("total_contributed_cents", 0))
             if their_total <= 0:
@@ -531,95 +827,33 @@ def dissolve_treasury(group_id: str) -> Dict[str, Any]:
                 continue
 
             uid = contributor.get("user_id", "")
-            pk_user = user_pk(uid)
+            if uid in completed_uids:
+                # Already refunded by an earlier partial run — skip (no double credit).
+                refunded_count += 1
+                total_refunded += share
+                continue
 
-            # Credit contributor's personal wallet
-            apply_wallet_delta(T.billing, pk_user, share)
-
-            # Write personal ledger (credit)
-            entry_id = ulidish()
-            T.billing.put_item(Item={
-                "pk": pk_user,
-                "sk": ledger_sk(ts, entry_id),
-                "entry_id": entry_id,
-                "ts": ts,
-                "type": "dissolution_refund",
-                "amount_cents": share,
-                "state": "settled",
-                "reason": "Group dissolution refund",
-                "direction": "credit",
-                "category": "refund",
-                "group_id": group_id,
-                "currency": "usd",
-                "created_at": ts,
-            })
-
-            # Write treasury ledger (debit)
-            t_entry_id = ulidish()
-            T.billing.put_item(Item={
-                "pk": pk_group,
-                "sk": ledger_sk(ts, t_entry_id),
-                "entry_id": t_entry_id,
-                "ts": ts,
-                "type": "dissolution_return",
-                "amount_cents": share,
-                "state": "settled",
-                "reason": f"Dissolution refund to {uid}",
-                "direction": "debit",
-                "category": "dissolution_return",
-                "actor_user_id": uid,
-                "currency": "usd",
-                "created_at": ts,
-            })
-
+            pending.extend(
+                _contributor_transact_items(user_pk(uid), pk_group, share, uid, ts, group_id)
+            )
+            pending_uids.append(uid)
             total_refunded += share
+            refunded_count += 1
 
-    # Remaining (donation share + rounding) -> PLATFORM#ESCROW
+            if len(pending_uids) >= _CONTRIB_BATCH_SIZE:
+                _flush()
+
+        _flush()
+
+    # Final batch: escrow transfer (if any) + treasury-zero, committed atomically.
     escrow_amount = remaining - total_refunded
+    final_batch: List[Dict[str, Any]] = []
     if escrow_amount > 0:
-        apply_wallet_delta(T.billing, "PLATFORM#ESCROW", escrow_amount)
+        final_batch.extend(_escrow_transact_items(pk_group, escrow_amount, group_id, ts))
+    final_batch.append(_treasury_zero_item(pk_group, ts, dissolution_id))
+    _batch_transact(final_batch)
 
-        entry_id = ulidish()
-        T.billing.put_item(Item={
-            "pk": "PLATFORM#ESCROW",
-            "sk": ledger_sk(ts, entry_id),
-            "entry_id": entry_id,
-            "ts": ts,
-            "type": "escrow_deposit",
-            "amount_cents": escrow_amount,
-            "state": "settled",
-            "reason": f"Escrow from dissolved group {group_id}",
-            "direction": "credit",
-            "category": "escrow_transfer",
-            "group_id": group_id,
-            "currency": "usd",
-            "created_at": ts,
-        })
-
-        t_entry_id = ulidish()
-        T.billing.put_item(Item={
-            "pk": pk_group,
-            "sk": ledger_sk(ts, t_entry_id),
-            "entry_id": t_entry_id,
-            "ts": ts,
-            "type": "escrow_transfer",
-            "amount_cents": escrow_amount,
-            "state": "settled",
-            "reason": "Donation share transferred to platform escrow",
-            "direction": "debit",
-            "category": "escrow_transfer",
-            "currency": "usd",
-            "created_at": ts,
-        })
-
-    # Zero out treasury balance
-    T.billing.update_item(
-        Key={"pk": pk_group, "sk": WALLET_SK},
-        UpdateExpression="SET wallet_balance_cents = :z, updated_at = :t",
-        ExpressionAttributeValues={":z": 0, ":t": ts},
-    )
-
-    logger.info("treasury.dissolution", extra={
+    logger.info("treasury.dissolution_complete", extra={
         "group_id": group_id,
         "remaining_balance": remaining,
         "contributor_count": len(contributors),
@@ -629,7 +863,7 @@ def dissolve_treasury(group_id: str) -> Dict[str, Any]:
 
     return {
         "ok": True,
-        "refunded_count": len([c for c in contributors if int(c.get("total_contributed_cents", 0)) > 0]),
+        "refunded_count": refunded_count,
         "total_refunded_cents": total_refunded,
         "escrow_cents": escrow_amount,
     }

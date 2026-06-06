@@ -1810,6 +1810,12 @@ class Settings:
     # Geo-blocking (GEO-001)
     geo_blocking_enabled: bool = os.environ.get("GEO_BLOCKING_ENABLED", "1") not in ("0", "false", "False")
     geo_platform_block_countries: str = os.environ.get("GEO_PLATFORM_BLOCK_COUNTRIES", "")
+    # GAP-0217 (GEO-001): DDB-backed, hot-reloadable platform block list. The env-var
+    # above stays as a bootstrap override and is unioned with the DDB record. The table
+    # holds a single record (pk="PLATFORM", sk="GEO_BLOCK"); the in-process cache below
+    # bounds DDB reads so check_geo_access stays fast.
+    geo_rules_table_name: str = os.environ.get("GEO_RULES_TABLE_NAME", "geo_rules")
+    geo_platform_block_cache_ttl_seconds: int = int(os.environ.get("GEO_PLATFORM_BLOCK_CACHE_TTL_SECONDS", "60"))
     geo_maxmind_db_path: str = os.environ.get("GEO_MAXMIND_DB_PATH", "")
     geo_cache_ttl_seconds: int = int(os.environ.get("GEO_CACHE_TTL_SECONDS", "3600"))
     geo_cache_max_size: int = int(os.environ.get("GEO_CACHE_MAX_SIZE", "50000"))

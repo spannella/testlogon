@@ -303,6 +303,7 @@ class Tables:
     image_optimizations: Any
     file_share_links: Any
     host_inventory: Any
+    geo_rules: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -541,4 +542,5 @@ T = Tables(
     file_share_links=_safe_table(S.ddb_file_share_links_table),
     host_inventory=_safe_table(S.ddb_host_inventory_table),
     kyc_document_templates=_safe_table(S.kyc_document_templates_table_name),
+    geo_rules=_safe_table(S.geo_rules_table_name),
 )
