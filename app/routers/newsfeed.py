@@ -3635,6 +3635,13 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         except Exception:
             logger.exception("Fan-out failed for post %s by %s", post_id, user_id)
         _meter_newsfeed_post_publish(user_id=user_id, post_id=post_id)
+        # GAP-0162: achievement progress hooks (no-op unless ACHIEVEMENTS_ENABLED)
+        try:
+            from app.services.achievement_progress import advance_progress, update_streak
+            advance_progress(user_id, "post_count")
+            update_streak(user_id, "posting_streak")
+        except Exception:
+            logger.debug("achievement hook: post_count/posting_streak", exc_info=True)
     else:
         record_newsfeed_schedule_operation(operation="create", outcome="success")
         _write_scheduled_post_ref(
@@ -4670,6 +4677,13 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep):
             },
         )
 
+    # GAP-0162: achievement progress hook (no-op unless ACHIEVEMENTS_ENABLED)
+    try:
+        from app.services.achievement_progress import advance_progress
+        advance_progress(user_id, "tip_count")
+    except Exception:
+        logger.debug("achievement hook: tip_count", exc_info=True)
+
     return {"ok": True, "tip_total_cents": int(updated.get("tip_total_cents", 0))}
 
 
@@ -4726,6 +4740,12 @@ def add_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
         expr_vals={":r": reactions},
         return_values="NONE",
     )
+    # GAP-0162: achievement progress hook (no-op unless ACHIEVEMENTS_ENABLED)
+    try:
+        from app.services.achievement_progress import advance_progress
+        advance_progress(user_id, "reaction_count")
+    except Exception:
+        logger.debug("achievement hook: reaction_count", exc_info=True)
     return {"ok": True}
 
 
@@ -5421,6 +5441,13 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         expr_vals={":z": 0, ":one": 1},
     )
 
+    # GAP-0162: achievement progress hook (no-op unless ACHIEVEMENTS_ENABLED)
+    try:
+        from app.services.achievement_progress import advance_progress
+        advance_progress(user_id, "comment_count")
+    except Exception:
+        logger.debug("achievement hook: comment_count", exc_info=True)
+
     if post_author and post_author != user_id and parent is None:
         put_notification(
             recipient_user_id=post_author,
@@ -6031,6 +6058,13 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
                 "created_at": now_iso(),
             },
         )
+
+    # GAP-0162: achievement progress hook (no-op unless ACHIEVEMENTS_ENABLED)
+    try:
+        from app.services.achievement_progress import advance_progress
+        advance_progress(user_id, "unlock_count")
+    except Exception:
+        logger.debug("achievement hook: unlock_count", exc_info=True)
 
     return UnlockPostResponse(post_id=req.post_id, payment_intent=pi)
 

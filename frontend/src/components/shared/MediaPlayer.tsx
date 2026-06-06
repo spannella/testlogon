@@ -79,6 +79,10 @@ export interface MediaPlayerProps {
   drmKeyUrl?: string;
   /** Subtitle tracks to render as <track> elements */
   subtitleTracks?: SubtitleTrackInfo[];
+  /** Called when video playback ends naturally */
+  onEnded?: () => void;
+  /** Called during playback with watch percentage (0-100); throttled to ≥5% increments */
+  onProgress?: (watchPct: number) => void;
 }
 
 interface QualityLevel {
@@ -190,6 +194,8 @@ export function MediaPlayer({
   controls,
   drmKeyUrl,
   subtitleTracks,
+  onEnded,
+  onProgress,
 }: MediaPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -410,13 +416,23 @@ export function MediaPlayer({
     const onPause = () => setPlayerState("paused");
     const onWaiting = () => setPlayerState("buffering");
     const onPlaying = () => setPlayerState("playing");
+    let lastReportedPct = -1;
+    const REPORT_THRESHOLD_PCT = 5; // only notify parent on ≥5% increments
     const onTimeUpdate = () => {
       setCurrentTime(video.currentTime);
       setDuration(video.duration || 0);
+      if (onProgress && video.duration) {
+        const pct = Math.floor((video.currentTime / video.duration) * 100);
+        if (Math.abs(pct - lastReportedPct) >= REPORT_THRESHOLD_PCT) {
+          lastReportedPct = pct;
+          onProgress(pct);
+        }
+      }
     };
     const onLoadedMetadata = () => {
       setDuration(video.duration || 0);
     };
+    const onEndedHandler = () => onEnded?.();
 
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
@@ -424,6 +440,7 @@ export function MediaPlayer({
     video.addEventListener("playing", onPlaying);
     video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("loadedmetadata", onLoadedMetadata);
+    video.addEventListener("ended", onEndedHandler);
 
     return () => {
       video.removeEventListener("play", onPlay);
@@ -432,8 +449,10 @@ export function MediaPlayer({
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("loadedmetadata", onLoadedMetadata);
+      video.removeEventListener("ended", onEndedHandler);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onEnded, onProgress]);
 
   // ─── Fullscreen change listener ─────────────────────────────────────────
 

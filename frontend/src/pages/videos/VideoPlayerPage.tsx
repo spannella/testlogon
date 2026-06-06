@@ -5,7 +5,7 @@
  * metadata display, share functionality, and comprehensive error states.
  */
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -32,6 +32,7 @@ import { Separator } from "@/components/ui/separator";
 import { MediaPlayer, type MediaError, type SubtitleTrackInfo } from "@/components/shared/MediaPlayer";
 import { getVideoDetail, getVideoDownload, type VideoDetail } from "@/api/endpoints/videos";
 import { listSubtitles, uploadSubtitle, deleteSubtitle } from "@/api/endpoints/subtitles";
+import { recordEngagement } from "@/api/endpoints/recommendations";
 import ClipDialog from "@/components/shared/ClipDialog";
 import VodWatermarkDownloadButton from "./VodWatermarkDownloadButton";
 import { useAuthStore } from "@/stores/authStore";
@@ -384,6 +385,35 @@ export default function VideoPlayerPage() {
     });
   }, []);
 
+  // ─── Recommendation engagement signals (GAP-0160) ───────────────────────
+  // Records watch signals so compute_affinity_scores has data to work with.
+  // Fire-and-forget: failures must never affect playback UX.
+  const engagementMutation = useMutation({
+    mutationFn: recordEngagement,
+  });
+  // Guard so the 30% milestone signal fires at most once per video.
+  const milestoneFiredRef = useRef(false);
+  useEffect(() => {
+    milestoneFiredRef.current = false;
+  }, [videoId]);
+
+  const handleVideoEnded = useCallback(() => {
+    if (!videoId) return;
+    engagementMutation.mutate({ video_id: videoId, watch_pct: 100 });
+  }, [videoId, engagementMutation]);
+
+  const handleVideoProgress = useCallback(
+    (watchPct: number) => {
+      if (!videoId) return;
+      // Fire once when the viewer crosses the ~30% watch milestone.
+      if (watchPct >= 30 && !milestoneFiredRef.current) {
+        milestoneFiredRef.current = true;
+        engagementMutation.mutate({ video_id: videoId, watch_pct: watchPct });
+      }
+    },
+    [videoId, engagementMutation],
+  );
+
   const handleRetry = useCallback(() => {
     setPlayerError(null);
     refetch();
@@ -485,6 +515,8 @@ export default function VideoPlayerPage() {
                 poster={video.thumbnail_url ?? undefined}
                 title={video.title}
                 onError={handleMediaError}
+                onEnded={handleVideoEnded}
+                onProgress={handleVideoProgress}
                 subtitleTracks={subtitleTracksForPlayer.length > 0 ? subtitleTracksForPlayer : undefined}
               />
             </div>
