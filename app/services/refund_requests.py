@@ -13,6 +13,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
@@ -29,6 +30,14 @@ from app.services.billing_shared import (
 from app.services.alerts import audit_event, write_alert
 
 logger = logging.getLogger(__name__)
+
+_ddb_serializer = TypeSerializer()
+
+
+def _serialize_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a resource-level item dict to low-level DynamoDB AttributeValue
+    form for use with the client-level transact_write_items API."""
+    return {k: _ddb_serializer.serialize(v) for k, v in item.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -218,9 +227,31 @@ def approve_request(
 
     ts = now_ts()
     user_id = item["requester_user_id"]
+    currency = item.get("currency", "usd").lower()
+    transaction_entry_id = item.get("transaction_entry_id", "")
 
     # Create a credit ledger entry for the buyer
     pk = user_pk(user_id)
+
+    # GAP-0132: For marketplace transactions (tip/unlock), the original purchase
+    # wrote a paired debit (buyer) + credit (seller). Refunding only credits the
+    # buyer; without a matching seller debit the ledger no longer balances and the
+    # seller keeps the funds (double-enrichment). Recover the seller from the
+    # original buyer-debit ledger entry's meta so we can reverse their credit too.
+    seller_user_id: Optional[str] = None
+    if transaction_entry_id:
+        for entry in T.billing.query(
+            KeyConditionExpression="pk = :pk",
+            ExpressionAttributeValues={":pk": pk},
+        ).get("Items", []):
+            if str(entry.get("sk", "")).startswith("LEDGER#") and entry.get("entry_id") == transaction_entry_id:
+                meta = entry.get("meta") or {}
+                candidate = meta.get("recipient_user_id")
+                # Only a real peer recipient (not a self-transaction) is reversible.
+                if candidate and candidate != user_id:
+                    seller_user_id = candidate
+                break
+
     led_sk, led_item = new_ledger_entry(
         key_name="pk",
         key_value=pk,
@@ -228,12 +259,61 @@ def approve_request(
         amount_cents=amount,
         state="settled",
         reason="Refund approved",
-        meta={"refund_request_id": request_id, "admin_notes": notes or ""},
+        meta={
+            "refund_request_id": request_id,
+            "admin_notes": notes or "",
+            "original_entry_id": transaction_entry_id,
+        },
     )
-    ddb_put(T.billing, led_item)
+
+    # GAP-0132: write the buyer credit and (when this is a marketplace
+    # transaction with an identifiable seller) the matching seller debit so the
+    # ledger can never be left half-reversed.
+    if seller_user_id:
+        seller_pk = user_pk(seller_user_id)
+        _, seller_debit_item = new_ledger_entry(
+            key_name="pk",
+            key_value=seller_pk,
+            entry_type="refund_debit",
+            amount_cents=amount,
+            state="settled",
+            reason="Refund clawback",
+            meta={
+                "refund_request_id": request_id,
+                "buyer_user_id": user_id,
+                "original_entry_id": transaction_entry_id,
+            },
+        )
+        # Prefer an atomic two-item transaction so the buyer credit and seller
+        # debit either both land or neither does. Fall back to sequential puts
+        # if the transactional API is unavailable in the current environment;
+        # behaviour is identical on real DynamoDB (dev/prod parity, SECOPS-007).
+        try:
+            T.billing.meta.client.transact_write_items(
+                TransactItems=[
+                    {"Put": {"TableName": T.billing.name, "Item": _serialize_item(led_item)}},
+                    {"Put": {"TableName": T.billing.name, "Item": _serialize_item(seller_debit_item)}},
+                ]
+            )
+        except (ClientError, TypeError):
+            ddb_put(T.billing, led_item)
+            ddb_put(T.billing, seller_debit_item)
+        # Reverse the seller's earned credit on their balance row.
+        apply_balance_delta(T.billing, seller_pk, {"owed_settled_cents": -amount}, currency=currency)
+        logger.info(
+            "refund_seller_debit_written request_id=%s seller_user_id=%s amount_cents=%s",
+            request_id, seller_user_id, amount,
+        )
+    else:
+        ddb_put(T.billing, led_item)
+        logger.info(
+            "refund_seller_not_found request_id=%s transaction_entry_id=%s "
+            "(no seller debit written; non-marketplace transaction)",
+            request_id, transaction_entry_id,
+        )
 
     # Apply balance delta (credit back)
-    apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=item.get("currency", "usd").lower())
+    apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=currency)
 
     # Update refund request status
     T.refund_requests.update_item(

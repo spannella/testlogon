@@ -7853,6 +7853,66 @@ def search_messages_all_conversations(
     return out
 
 
+def _run_bot_trigger_evaluation(*, conversation_id: str, message_item: dict) -> None:
+    """Evaluate chat-bot triggers for a freshly delivered message and dispatch
+    any matching bot replies (GAP-0133).
+
+    Called best-effort after a non-scheduled, non-encrypted text message has been
+    persisted and fanned out. Any failure here must never break the user's send,
+    so the whole body is wrapped in a broad try/except. Bots cannot read
+    ciphertext, so encrypted messages are excluded by the caller.
+
+    Reuses the existing bot subsystem unchanged:
+      - chat_bot.get_bots_for_conversation: active bots assigned to the convo
+      - chat_bot.evaluate_triggers: returns the matching response_template_id
+      - bot_template.get_template / render_template: resolve the reply text
+      - chat_bot.send_bot_message: persists the bot reply (GAP-0015) + fan-out meta
+    """
+    try:
+        from app.services.chat_bot import (
+            evaluate_triggers,
+            get_bots_for_conversation,
+            send_bot_message,
+        )
+        from app.services.bot_template import get_template, render_template
+
+        bots = get_bots_for_conversation(conversation_id=conversation_id)
+        for bot in bots:
+            try:
+                template_id = evaluate_triggers(
+                    bot=bot,
+                    conversation_id=conversation_id,
+                    incoming_message=message_item,
+                    event_type="message",
+                )
+                if not template_id:
+                    continue
+                template = get_template(bot_id=bot["bot_id"], template_id=template_id)
+                if not template:
+                    continue
+                rendered = render_template(
+                    template=template,
+                    creator_id=bot.get("creator_id"),
+                    bot=bot,
+                    conversation_id=conversation_id,
+                )
+                send_bot_message(
+                    bot_id=bot["bot_id"],
+                    conversation_id=conversation_id,
+                    text=rendered["rendered_text"],
+                )
+            except Exception:  # noqa: BLE001 - one bot failing must not block others
+                logger.exception(
+                    "bot_trigger_evaluation_bot_failed conversation_id=%s bot_id=%s",
+                    conversation_id,
+                    bot.get("bot_id"),
+                )
+    except Exception:  # noqa: BLE001 - bot evaluation must never break the send path
+        logger.exception(
+            "bot_trigger_evaluation_failed conversation_id=%s", conversation_id
+        )
+
+
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageOut)
 def send_text_message(
     conversation_id: str,
@@ -8056,6 +8116,13 @@ def send_text_message(
             },
             respect_mute=False,
         )
+
+    # GAP-0133: evaluate chat-bot triggers for live (non-scheduled) plaintext
+    # messages and dispatch matching bot replies. Best-effort; never breaks the
+    # send. Scheduled messages fire triggers at delivery time, not queue time;
+    # encrypted messages are skipped because bots cannot read ciphertext.
+    if not is_scheduled and not is_encrypted:
+        _run_bot_trigger_evaluation(conversation_id=conversation_id, message_item=item)
 
     audit_event(
         "messaging_message_sent",

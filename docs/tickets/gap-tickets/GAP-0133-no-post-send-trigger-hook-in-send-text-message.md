@@ -1,6 +1,6 @@
 # GAP-0133: No post-send trigger hook in `send_text_message()`
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BOT-001 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BOT-001 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/BOT-001.md`); see also `docs/tickets/writeups/BOT-001.md`
 
 ## Location

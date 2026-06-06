@@ -1,6 +1,6 @@
 # GAP-0132: Marketplace refund missing seller-side debit
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BILLING-001 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BILLING-001 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/BILLING-001.md`); see also `docs/tickets/writeups/BILLING-001.md`
 
 ## Location

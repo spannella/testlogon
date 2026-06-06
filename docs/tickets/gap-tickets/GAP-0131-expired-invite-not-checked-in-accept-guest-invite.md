@@ -1,6 +1,6 @@
 # GAP-0131: Expired invite not checked in `accept_guest_invite()`
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BCAST-016 · **Effort**: S
+**Status**: No change needed (verified already-fixed, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BCAST-016 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BCAST-016.md`); see also `docs/tickets/writeups/BCAST-016.md`
 
 ## Location
