@@ -137,8 +137,12 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": S.kyc_cases_status_index_name, "partition_key": "gsi_status_pk", "sort_key": "gsi_status_sk"},
                 # KYC-023: PII access audit log, queryable by accessor (newest first).
                 {"index_name": S.kyc_pii_audit_accessor_index_name, "partition_key": "gsi_pii_accessor_pk", "sort_key": "gsi_pii_accessor_sk"},
+                # GAP-0282 (KYC-019): sparse index over admin availability records
+                # (only items carrying both entity_type + admin_sub are projected),
+                # so workload lookups Query instead of full-table Scanning.
+                {"index_name": S.kyc_cases_entity_type_index_name, "partition_key": "entity_type", "sort_key": "admin_sub"},
             ],
-            attr_types={"gsi_pii_accessor_sk": "N"},
+            attr_types={"gsi_pii_accessor_sk": "N", "entity_type": "S", "admin_sub": "S"},
         ),
         TableDef(
             _resolve_table_name(S.kyc_business_cases_table_name, "kyc_business_cases"),

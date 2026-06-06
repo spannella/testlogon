@@ -45,6 +45,22 @@ SCREENING_SENSITIVE_PROFILE_FIELDS = frozenset(
 )
 
 
+# KYC case statuses whose address verification must be invalidated when the user
+# changes their mailing address (GAP-0280 / KYC-018 §4.7). Terminal statuses
+# (rejected, expired) are excluded — they need no re-verification. "approved" is
+# included so a post-approval address change resets the verified status, closing
+# the stale-verified tier-2 bypass.
+_ADDRESS_INVALIDATION_STATUSES = frozenset(
+    {
+        "draft",
+        "submitted",
+        "under_review",
+        "needs_more_info",
+        "approved",
+    }
+)
+
+
 PROFILE_VISIBILITY_LEVELS = ("public", "member", "private")
 PROFILE_AUDIENCES = ("owner", "member", "public")
 PROFILE_READ_NOT_FOUND_DETAIL = "Profile not found"
@@ -311,6 +327,7 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
 
     audit_entries: List[Dict[str, Any]] = []
     ts = now_ts()
+    address_changed = False
     for field in PROFILE_FIELDS:
         if current.get(field) != updated.get(field):
             audit_entries.append({
@@ -319,9 +336,61 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
                 "from": current.get(field),
                 "to": updated.get(field),
             })
+            if field == "mailing_address":
+                address_changed = True
 
     save_profile(user_sub, updated, audit_entries)
+
+    # GAP-0280 (KYC-018 §4.7): when the user's mailing address changes, any active
+    # KYC case's address verification must be invalidated so a stale "verified"
+    # status cannot pass tier-2 readiness with an outdated address. Best-effort:
+    # the profile write above is already committed and must never be rolled back.
+    if address_changed:
+        _invalidate_address_verification_for_user(user_sub)
+
     return updated
+
+
+def _invalidate_address_verification_for_user(user_sub: str) -> None:
+    """Invalidate address verification for the user's active KYC cases.
+
+    Called after a successful profile save when a mailing-address field changed.
+    Never raises — failures are logged and suppressed so a legitimate profile
+    update is never blocked by a cross-service KYC error. Imports are lazy to
+    avoid a circular dependency (kyc_cases / kyc_address_verification import
+    table handles that the profile service does not need at module load).
+
+    Runs identically in dev and prod (SECOPS-007): both stores write to the same
+    DynamoDB tables in either environment, and invalidate_verification exits
+    silently when no verification record exists.
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    try:
+        from app.services.kyc_cases import STORE as _case_store
+        from app.services.kyc_address_verification import STORE as _address_store
+
+        cases = _case_store.list_cases_by_owner(user_sub=user_sub, limit=25)
+        for case in cases:
+            if str(case.get("status", "")) not in _ADDRESS_INVALIDATION_STATUSES:
+                continue
+            case_id = str(case.get("kyc_case_id") or "")
+            if not case_id:
+                continue
+            _address_store.invalidate_verification(
+                case_id=case_id,
+                reason="address_changed",
+            )
+            _log.info(
+                "kyc.address.invalidated_on_profile_update user_sub=%s case_id=%s",
+                user_sub,
+                case_id,
+            )
+    except Exception:  # pragma: no cover - defensive; must never block profile save
+        _log.exception(
+            "kyc.address.profile_invalidation_error user_sub=%s", user_sub
+        )
 
 
 def store_profile_photo(

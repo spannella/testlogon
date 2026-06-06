@@ -1203,6 +1203,9 @@ class Settings:
     kyc_cases_table_name: str = os.environ.get("KYC_CASES_TABLE_NAME", "kyc_cases")
     kyc_cases_owner_index_name: str = os.environ.get("KYC_CASES_OWNER_INDEX_NAME", "owner-updated-index")
     kyc_cases_status_index_name: str = os.environ.get("KYC_CASES_STATUS_INDEX_NAME", "status-updated-index")
+    # GAP-0282 (KYC-019): sparse GSI on entity_type+admin_sub so admin availability
+    # records are fetched with a targeted Query instead of a full-table Scan.
+    kyc_cases_entity_type_index_name: str = os.environ.get("KYC_CASES_ENTITY_TYPE_INDEX_NAME", "entity-type-index")
     # KYC-023: PII field-level encryption & audited decryption
     kyc_encryption_enabled: bool = os.environ.get("KYC_ENCRYPTION_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     kyc_encryption_audit_enabled: bool = os.environ.get("KYC_ENCRYPTION_AUDIT_ENABLED", "true").lower() in ("1", "true", "yes", "on")

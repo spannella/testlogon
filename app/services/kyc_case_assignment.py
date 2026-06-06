@@ -159,16 +159,34 @@ class KycCaseAssignmentService:
     # ── admin availability ──────────────────────────────────────────
 
     def _scan_availability_items(self) -> list[dict[str, Any]]:
+        """Return every admin availability record.
+
+        GAP-0282 (KYC-019): admin availability records live on the shared
+        ``kyc_cases`` table keyed ``ADMIN#{sub}`` / ``AVAILABILITY``. They cannot
+        be selected via a ``KeyConditionExpression`` (``begins_with`` on a
+        partition key is only valid as a ``FilterExpression``), so the previous
+        implementation issued a full-table ``Scan`` — O(N-table), reading and
+        discarding every case/audit/SLA row before the filter ran.
+
+        Each availability item carries ``entity_type="kyc_admin_availability"``
+        plus a top-level ``admin_sub``; no other entity on the table writes both
+        attributes, so the sparse ``entity-type-index`` GSI (PK ``entity_type``,
+        SK ``admin_sub``) projects only availability rows. Querying it turns the
+        cost into O(A), bounded by the (small) number of admins. The
+        ``LastEvaluatedKey`` loop still drains every page so the result is
+        complete regardless of admin-fleet size.
+        """
         out: list[dict[str, Any]] = []
         ekey: dict[str, Any] | None = None
         while True:
             kwargs: dict[str, Any] = {
-                "FilterExpression": "begins_with(pk, :p) AND sk = :s",
-                "ExpressionAttributeValues": {":p": "ADMIN#", ":s": "AVAILABILITY"},
+                "IndexName": S.kyc_cases_entity_type_index_name,
+                "KeyConditionExpression": "entity_type = :et",
+                "ExpressionAttributeValues": {":et": "kyc_admin_availability"},
             }
             if ekey:
                 kwargs["ExclusiveStartKey"] = ekey
-            resp = self._table.scan(**kwargs)
+            resp = self._table.query(**kwargs)
             out.extend(resp.get("Items", []))
             ekey = resp.get("LastEvaluatedKey")
             if not ekey:

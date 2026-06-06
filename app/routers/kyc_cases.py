@@ -397,6 +397,35 @@ def _readiness_for_case(case: dict) -> dict:
         )
         residency_verified = len(verified_docs) > 0
 
+    # GAP-0281 (KYC-018 §4.8): tier_2 and tier_3 cases must have a verified (or
+    # partial_match) address before submission. tier_for_case maps the coarse
+    # risk band (from intake_profile) to tier_1/tier_2/tier_3; only tier_2/tier_3
+    # require the address gate. Gated behind KYC_ADDRESS_VERIFICATION_ENABLED so
+    # dev/e2e (flag off, or no verification record) is unaffected. The whole
+    # check fails open on service/store error so an outage cannot block submit.
+    from app.services.kyc_case_assignment import tier_for_case as _tier_for_case
+
+    require_address = (
+        S.kyc_address_verification_enabled
+        and _tier_for_case(case) in {"tier_2", "tier_3"}
+    )
+    address_verified = False
+    if require_address:
+        try:
+            from app.services.kyc_address_verification import STORE as ADDRESS_STORE
+
+            latest_av = ADDRESS_STORE.get_latest(str(case.get("kyc_case_id") or ""))
+            av_status = str((latest_av or {}).get("status") or "").strip().lower()
+            address_verified = av_status in {"verified", "partial_match"}
+        except Exception:
+            logger.exception(
+                "kyc.readiness.address_check_error kyc_case_id=%s",
+                case.get("kyc_case_id"),
+            )
+            # Fail open: do not block submission on an address-store outage.
+            require_address = False
+            address_verified = False
+
     checks = {
         "questionnaire_submitted": bool(questionnaire.get("submitted")),
         "required_files": bool(files.get("ready_for_submit_gate")),
@@ -406,6 +435,10 @@ def _readiness_for_case(case: dict) -> dict:
         checks["residency_verified"] = residency_verified
     if require_templates:
         checks["templates_signed"] = templates_signed
+    if require_address:
+        # check value is True-when-ready (gates all(checks.values())); the
+        # missing_requirements entry is surfaced as "address_not_verified".
+        checks["address_verified"] = address_verified
     hint_map = {
         "questionnaire_submitted": "Submit the linked questionnaire to continue.",
         "required_files": "Attach all required identity files: selfie, id_front, id_back.",
@@ -418,6 +451,10 @@ def _readiness_for_case(case: dict) -> dict:
         "templates_signed": (
             "Sign all required document templates: "
             + (", ".join(unsigned_template_slugs) or "see admin for details")
+        ),
+        "address_not_verified": (
+            "Address verification is required for your account type. "
+            "Please complete address verification before submitting."
         ),
     }
 
@@ -480,6 +517,21 @@ def _readiness_for_case(case: dict) -> dict:
                 "missing": [f"unsigned_templates:{s}" for s in unsigned_template_slugs],
                 "hint": hint_map["templates_signed"],
                 "refs": {"unsigned_slugs": ",".join(unsigned_template_slugs)},
+            }
+        )
+    # GAP-0281: address-verification requirement appended after the base (0..2)
+    # and any optional residency/template requirements, so submit_kyc_case's
+    # positional reads of requirements[0..2] for evidence_snapshot stay stable.
+    # The requirement key is "address_not_verified" so missing_requirements
+    # surfaces exactly that token per KYC-018 §4.8.
+    if require_address:
+        requirements.append(
+            {
+                "key": "address_not_verified",
+                "ready": address_verified,
+                "missing": ([] if address_verified else ["address_not_verified"]),
+                "hint": hint_map["address_not_verified"],
+                "refs": {},
             }
         )
     missing_requirements = [item["key"] for item in requirements if not item["ready"]]
