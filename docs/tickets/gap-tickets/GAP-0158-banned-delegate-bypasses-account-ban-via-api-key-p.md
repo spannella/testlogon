@@ -16,3 +16,8 @@ add is_user_currently_banned(item["owner_sub"]) check after delegation relations
 This gap was identified by the second-pass as-built review of DELEGATE-005. Apply the dev/prod
 parity rules in SECOPS-007 if the fix touches AWS-backed paths. Add a regression test
 (pytest offline / Playwright) that fails before the fix and passes after.
+
+
+## Implemented (branch impl/crit-batch-1, 2026-06-06)
+
+Fix landed; see commit on impl/crit-batch-1. Regression test added.

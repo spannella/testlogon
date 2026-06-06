@@ -114,6 +114,29 @@ def set_mute(session_id: str, user_id: str, duration_seconds: int, actor: str) -
     }
 
 
+def _enforce_chat_ban(session_id: str, user_id: str) -> None:
+    """Raise 403 if the viewer is banned from this broadcast session (GAP-0157).
+
+    The per-session ban is written by ``ban_viewer`` in
+    ``app/services/delegate_broadcast.py`` to ``T.broadcast_moderation`` keyed by
+    ``SESSION#{session_id}`` / ``BAN#{user_id}``. It is consulted here so that a
+    banned viewer cannot continue posting chat messages. The import is deferred
+    to avoid a circular import (``delegate_broadcast`` imports from this module).
+    """
+    from app.services.delegate_broadcast import is_viewer_banned
+
+    if is_viewer_banned(session_id, user_id):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "BROADCAST_CHAT_BANNED",
+                "message": "You have been banned from this broadcast.",
+            },
+        )
+
+
 def _enforce_chat_mute(session_id: str, user_id: str) -> None:
     """Raise 403 if user is muted."""
     muted_until = get_mute_status(session_id, user_id)
@@ -155,6 +178,7 @@ def send_chat_message(
     """
     from fastapi import HTTPException
 
+    _enforce_chat_ban(session_id, user_id)
     _enforce_chat_mute(session_id, user_id)
     if not skip_rate_limit:
         _enforce_chat_rate_limit(session_id, user_id)
@@ -223,6 +247,7 @@ def send_product_link_message(
     product_link: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Send a product link card into broadcast chat. Enforces separate rate limit."""
+    _enforce_chat_ban(session_id, user_id)
     _enforce_chat_mute(session_id, user_id)
     _enforce_product_link_rate_limit(session_id, user_id)
 
