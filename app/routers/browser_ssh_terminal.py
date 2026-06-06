@@ -26,7 +26,9 @@ from app.metrics import (
 )
 from app.services import terminal_monitor
 from app.services.alerts import audit_event
+from app.services.host_inventory import record_connection
 from app.services.sessions import require_ui_session
+from app.services.ssh_key_manager import get_decrypted_private_key, get_key_metadata
 
 router = APIRouter(prefix="/api/browser-ssh", tags=["browser-ssh-terminal"])
 logger = logging.getLogger(__name__)
@@ -521,7 +523,7 @@ def browser_ssh_terminal_protocol() -> dict[str, object]:
         "client_messages": {
             "connect": {
                 "required": ["host", "port", "username", "authType"],
-                "authType": ["password", "private_key"],
+                "authType": ["password", "private_key", "stored_key"],
                 "example": {
                     "type": "connect",
                     "payload": {
@@ -530,6 +532,16 @@ def browser_ssh_terminal_protocol() -> dict[str, object]:
                         "username": "alice",
                         "authType": "password",
                         "password": "***",
+                    },
+                },
+                "example_stored_key": {
+                    "type": "connect",
+                    "payload": {
+                        "host": "example.internal",
+                        "port": 22,
+                        "username": "alice",
+                        "authType": "stored_key",
+                        "keyId": "key_abc123",
                     },
                 },
             },
@@ -585,6 +597,9 @@ def _redact_connect_payload(payload: dict[str, Any]) -> dict[str, Any]:
         redacted["privateKey"] = f"***REDACTED***({len(key_text)} chars)"
     if "passphrase" in redacted:
         redacted["passphrase"] = "***REDACTED***"
+    if "keyId" in redacted and redacted.get("keyId"):
+        key_id = str(redacted.get("keyId") or "")
+        redacted["keyId"] = f"***REDACTED***({len(key_id)} chars)"
     return redacted
 
 
@@ -664,10 +679,10 @@ def _validate_connect_payload(payload: Any) -> tuple[bool, dict[str, Any] | None
             message="username is required",
             request_type="connect",
         )
-    if auth_type not in {"password", "private_key"}:
+    if auth_type not in {"password", "private_key", "stored_key"}:
         return False, None, _error_payload(
             code="invalid_auth_type",
-            message="authType must be one of: password, private_key",
+            message="authType must be one of: password, private_key, stored_key",
             request_type="connect",
         )
 
@@ -677,6 +692,17 @@ def _validate_connect_payload(payload: Any) -> tuple[bool, dict[str, Any] | None
             return False, None, _error_payload(
                 code="invalid_password",
                 message="password is required for password auth",
+                request_type="connect",
+            )
+    elif auth_type == "stored_key":
+        # The browser sends only an opaque keyId; the private key never leaves
+        # the server. The PEM is resolved server-side in the connect handler via
+        # ssh_key_manager.get_decrypted_private_key.
+        key_id = payload.get("keyId")
+        if not isinstance(key_id, str) or not key_id.strip():
+            return False, None, _error_payload(
+                code="invalid_key_id",
+                message="keyId is required for stored_key auth",
                 request_type="connect",
             )
     else:
@@ -709,6 +735,7 @@ def _validate_connect_payload(payload: Any) -> tuple[bool, dict[str, Any] | None
         "authType": auth_type,
         "password": payload.get("password"),
         "privateKey": payload.get("privateKey"),
+        "keyId": payload.get("keyId"),
         "passphrase": passphrase,
     }, None
 
@@ -951,6 +978,36 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
                         session_slot_acquired = False
                     continue
 
+                # stored_key auth: the browser only sent an opaque keyId. Resolve
+                # the KMS-encrypted private key server-side so the PEM never
+                # reaches the browser. We preserve the original auth type + keyId
+                # for post-connect host bookkeeping, then normalise to the
+                # existing private_key bridge path.
+                session_stored_key_auth = normalized["authType"] == "stored_key"
+                session_stored_key_id = ""
+                if session_stored_key_auth:
+                    session_stored_key_id = str(normalized.get("keyId") or "")
+                    pem = get_decrypted_private_key(session_user_sub, session_stored_key_id)
+                    if pem is None:
+                        record_browser_ssh_connect_denied(reason="key_not_found")
+                        record_browser_ssh_session_lifecycle(event="connect", outcome="failure")
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "payload": _error_payload(
+                                    code="key_not_found",
+                                    message="SSH key not found or access denied.",
+                                    request_type="connect",
+                                ),
+                            }
+                        )
+                        if session_slot_acquired:
+                            _release_user_session_slot(session_user_sub)
+                            session_slot_acquired = False
+                        continue
+                    normalized["privateKey"] = pem
+                    normalized["authType"] = "private_key"
+
                 if ssh_bridge:
                     ssh_bridge.close()
                     ssh_bridge = None
@@ -1017,6 +1074,24 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
                     started_at=session_started_at,
                     outcome="success",
                 )
+                # For stored_key connections against managed hosts, record the
+                # connection so the host inventory's last_connected_at / history
+                # audit trail stays accurate. Best-effort: never break the session.
+                if session_stored_key_auth and session_stored_key_id:
+                    try:
+                        key_meta = get_key_metadata(session_user_sub, session_stored_key_id)
+                        for associated_host_id in (key_meta or {}).get("associated_hosts", []) or []:
+                            record_connection(session_user_sub, associated_host_id)
+                    except Exception:
+                        logger.warning(
+                            "browser_ssh stored_key record_connection failed",
+                            extra=_session_log_context(
+                                session_id=ws_session_id,
+                                user_sub=session_user_sub,
+                                host=session_host,
+                                port=session_port,
+                            ),
+                        )
                 logger.info(
                     "browser_ssh connect success",
                     extra=_session_log_context(

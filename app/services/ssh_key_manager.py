@@ -26,6 +26,22 @@ from app.core.time import now_ts
 logger = logging.getLogger(__name__)
 
 
+def _audit(event: str, user_sub: str, **fields: Any) -> None:
+    """Forward an SSH key lifecycle event to the platform audit trail.
+
+    Mirrors the ``_audit`` wrapper in ``app/services/host_inventory.py``: it is
+    fire-and-forget and never raises, so an audit/telemetry failure can never
+    break the underlying key operation. The import is local to avoid a circular
+    import with ``app.services.alerts``.
+    """
+    try:
+        from app.services.alerts import audit_event
+
+        audit_event(event, user_sub, **fields)
+    except Exception:  # pragma: no cover - audit must never break the caller
+        logger.debug("audit_event failed for %s", event, exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -182,6 +198,7 @@ def generate_key(
     T.ssh_keys.put_item(Item=item)
 
     logger.info("key_generated user_sub=%s key_id=%s key_type=%s bits=%d", user_sub, key_id, key_type, bits)
+    _audit("ssh_key.generate", user_sub, key_id=key_id, key_type=key_type, key_bits=bits)
 
     return _item_to_metadata(item)
 
@@ -233,6 +250,10 @@ def upload_key(
         "key_uploaded user_sub=%s key_id=%s key_type=%s bits=%d passphrase_protected=%s",
         user_sub, key_id, key_type, bits, passphrase is not None,
     )
+    _audit(
+        "ssh_key.upload", user_sub, key_id=key_id, key_type=key_type,
+        key_bits=bits, passphrase_protected=passphrase is not None,
+    )
 
     return _item_to_metadata(item)
 
@@ -265,6 +286,7 @@ def delete_key(user_sub: str, key_id: str) -> bool:
     T.ssh_keys.delete_item(Key={"user_sub": user_sub, "sk": f"KEY#{key_id}"})
 
     logger.info("key_deleted user_sub=%s key_id=%s", user_sub, key_id)
+    _audit("ssh_key.delete", user_sub, key_id=key_id)
     return True
 
 
@@ -293,6 +315,7 @@ def get_decrypted_private_key(user_sub: str, key_id: str) -> Optional[str]:
     )
 
     logger.info("key_decrypted user_sub=%s key_id=%s", user_sub, key_id)
+    _audit("ssh_key.decrypt", user_sub, key_id=key_id)
     return pem_str
 
 
@@ -314,6 +337,7 @@ def associate_key_with_host(user_sub: str, key_id: str, host_id: str) -> bool:
     )
 
     logger.info("key_associated user_sub=%s key_id=%s host_id=%s", user_sub, key_id, host_id)
+    _audit("ssh_key.associate", user_sub, key_id=key_id, host_id=host_id)
     return True
 
 
@@ -332,6 +356,7 @@ def disassociate_key_from_host(user_sub: str, key_id: str, host_id: str) -> bool
     )
 
     logger.info("key_disassociated user_sub=%s key_id=%s host_id=%s", user_sub, key_id, host_id)
+    _audit("ssh_key.disassociate", user_sub, key_id=key_id, host_id=host_id)
     return True
 
 

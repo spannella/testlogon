@@ -110,6 +110,74 @@ _mock_store = _MockEc2Store()
 
 
 # ---------------------------------------------------------------------------
+# Real AWS EC2 helpers (production path only — gated on `not S.ec2_mock_enabled`)
+# ---------------------------------------------------------------------------
+
+def _resolve_real_ami(platform_ami_id: str) -> str:
+    """Map a curated platform AMI alias to a real AWS AMI ID via settings.
+
+    Read from `S` at call time so per-environment overrides (and tests) take
+    effect without re-importing this module.
+    """
+    real_ami_map = {
+        "ami-ubuntu-2204": S.ec2_real_ami_ubuntu_2204,
+        "ami-ubuntu-2404": S.ec2_real_ami_ubuntu_2404,
+        "ami-amzn2": S.ec2_real_ami_amzn2,
+        "ami-windows-2022": S.ec2_real_ami_windows_2022,
+    }
+    real = real_ami_map.get(platform_ami_id, "")
+    if not real:
+        raise ValueError(
+            f"No real AWS AMI ID configured for alias '{platform_ami_id}'. "
+            "Set the matching EC2_REAL_AMI_* environment variable."
+        )
+    return real
+
+
+def _real_ec2_launch(
+    *,
+    instance_type: str,
+    ami_id: str,
+    startup_script: str = "",
+    ssh_key_name: str | None = None,
+    security_group_id: str | None = None,
+) -> Dict[str, Any]:
+    """Call the real AWS EC2 RunInstances API.
+
+    Returns a dict shaped like `_MockEc2Store.launch()` so the rest of
+    `launch_instance` stays unchanged.
+    """
+    from app.core.aws import ec2_client
+
+    real_ami_id = _resolve_real_ami(ami_id)
+
+    kwargs: Dict[str, Any] = {
+        "ImageId": real_ami_id,
+        "InstanceType": instance_type,
+        "MinCount": 1,
+        "MaxCount": 1,
+    }
+    if startup_script:
+        import base64
+        kwargs["UserData"] = base64.b64encode(startup_script.encode()).decode()
+    if ssh_key_name:
+        kwargs["KeyName"] = ssh_key_name
+    if security_group_id:
+        kwargs["SecurityGroupIds"] = [security_group_id]
+
+    resp = ec2_client().run_instances(**kwargs)
+    inst = resp["Instances"][0]
+    return {
+        "ec2_instance_id": inst["InstanceId"],
+        "instance_type": instance_type,
+        "ami_id": ami_id,
+        "status": inst.get("State", {}).get("Name", "pending"),
+        "public_ip": inst.get("PublicIpAddress", ""),
+        "private_ip": inst.get("PrivateIpAddress", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -181,8 +249,13 @@ def launch_instance(
             user_data=startup_script,
         )
     else:
-        # Real EC2 launch would go here
-        raise NotImplementedError("Real EC2 launch not implemented yet")
+        result = _real_ec2_launch(
+            instance_type=instance_type,
+            ami_id=ami_id,
+            startup_script=startup_script,
+            ssh_key_name=None,  # key injection handled via startup_script / SSM
+            security_group_id=resolved_sg_id or None,
+        )
 
     # 5. Store in DDB
     now = now_ts()
@@ -272,6 +345,9 @@ def stop_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     ec2_id = item["ec2_instance_id"]
     if S.ec2_mock_enabled:
         _mock_store.stop(ec2_id)
+    else:
+        from app.core.aws import ec2_client
+        ec2_client().stop_instances(InstanceIds=[ec2_id])
 
     now = now_ts()
     T.ec2_instances.update_item(
@@ -301,6 +377,9 @@ def start_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     ec2_id = item["ec2_instance_id"]
     if S.ec2_mock_enabled:
         _mock_store.start(ec2_id)
+    else:
+        from app.core.aws import ec2_client
+        ec2_client().start_instances(InstanceIds=[ec2_id])
 
     now = now_ts()
     T.ec2_instances.update_item(
@@ -331,6 +410,9 @@ def terminate_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     ec2_id = item["ec2_instance_id"]
     if S.ec2_mock_enabled:
         _mock_store.terminate(ec2_id)
+    else:
+        from app.core.aws import ec2_client
+        ec2_client().terminate_instances(InstanceIds=[ec2_id])
 
     now = now_ts()
     T.ec2_instances.update_item(
@@ -369,6 +451,9 @@ def reboot_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     ec2_id = item["ec2_instance_id"]
     if S.ec2_mock_enabled:
         _mock_store.reboot(ec2_id)
+    else:
+        from app.core.aws import ec2_client
+        ec2_client().reboot_instances(InstanceIds=[ec2_id])
 
     now = now_ts()
     T.ec2_instances.update_item(

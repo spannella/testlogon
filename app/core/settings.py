@@ -2106,6 +2106,11 @@ class Settings:
     ec2_mock_enabled: bool = os.environ.get("EC2_MOCK_ENABLED", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")
     ec2_max_instances_per_user: int = int(os.environ.get("EC2_MAX_INSTANCES_PER_USER", "5"))
     ec2_auto_terminate_enabled: bool = os.environ.get("EC2_AUTO_TERMINATE_ENABLED", "1") not in ("0", "false", "False")
+    # Real AWS AMI IDs per platform alias — required only when ec2_mock_enabled is False (prod).
+    ec2_real_ami_ubuntu_2204: str = os.environ.get("EC2_REAL_AMI_UBUNTU_2204", "")
+    ec2_real_ami_ubuntu_2404: str = os.environ.get("EC2_REAL_AMI_UBUNTU_2404", "")
+    ec2_real_ami_amzn2: str = os.environ.get("EC2_REAL_AMI_AMZN2", "")
+    ec2_real_ami_windows_2022: str = os.environ.get("EC2_REAL_AMI_WINDOWS_2022", "")
 
     # Instance Monitoring & Health (INFRA-008)
     instance_monitoring_enabled: bool = os.environ.get("INSTANCE_MONITORING_ENABLED", "true").lower() not in ("0", "false", "no")
