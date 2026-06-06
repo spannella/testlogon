@@ -20,6 +20,28 @@ from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
 
+
+def _record_timeline(
+    user_sub: str, instance_id: str, event_type: str, *, detail: dict | None = None
+) -> None:
+    """Best-effort EC2 lifecycle timeline write (GAP-0231).
+
+    Imported lazily to avoid a circular import (instance_monitoring imports this
+    module). Backend-agnostic — writes only to DynamoDB, so it runs identically
+    on the mock and real EC2 paths (SECOPS-007).
+    """
+    try:
+        from app.services.instance_monitoring import record_timeline_event
+        record_timeline_event(
+            user_sub, instance_id, event_type, resource_type="ec2", detail=detail
+        )
+    except Exception:
+        logger.exception(
+            "ec2_timeline_write_failed user_sub=%s instance_id=%s event=%s",
+            user_sub, instance_id, event_type,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Instance type allowlist with cost metadata (cents per minute)
 # ---------------------------------------------------------------------------
@@ -334,6 +356,12 @@ def launch_instance(
                 user_sub, instance_id,
             )
 
+    # Lifecycle timeline (GAP-0231). Best-effort; never blocks the launch.
+    _record_timeline(
+        user_sub, instance_id, "launched",
+        detail={"instance_type": instance_type, "ami_id": ami_id, "label": label},
+    )
+
     logger.info(
         "ec2_launched user_sub=%s instance_id=%s type=%s ami=%s",
         user_sub, instance_id, instance_type, ami_id,
@@ -399,6 +427,7 @@ def stop_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
 
     item["status"] = "stopped"
     item["stopped_at"] = now
+    _record_timeline(user_sub, instance_id, "stopped")
     logger.info("ec2_stopped user_sub=%s instance_id=%s", user_sub, instance_id)
     return item
 
@@ -432,6 +461,7 @@ def start_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     item["status"] = "running"
     item["started_at"] = now
     item["last_activity_at"] = now
+    _record_timeline(user_sub, instance_id, "started")
     logger.info("ec2_started user_sub=%s instance_id=%s", user_sub, instance_id)
     return item
 
@@ -503,6 +533,7 @@ def terminate_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
 
     item["status"] = "terminated"
     item["terminated_at"] = now
+    _record_timeline(user_sub, instance_id, "terminated")
     logger.info("ec2_terminated user_sub=%s instance_id=%s", user_sub, instance_id)
     return item
 
@@ -533,6 +564,7 @@ def reboot_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     )
 
     item["last_activity_at"] = now
+    _record_timeline(user_sub, instance_id, "rebooted")
     logger.info("ec2_rebooted user_sub=%s instance_id=%s", user_sub, instance_id)
     return item
 
@@ -559,6 +591,10 @@ def check_idle_instances() -> int:
         if last_activity > 0 and (now - last_activity) > threshold:
             try:
                 terminate_instance(item["user_sub"], item["instance_id"])
+                _record_timeline(
+                    item["user_sub"], item["instance_id"], "auto_terminated",
+                    detail={"idle_seconds": now - last_activity},
+                )
                 terminated += 1
                 logger.info(
                     "ec2_auto_terminated user_sub=%s instance_id=%s idle_seconds=%d",

@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 
 from boto3.dynamodb.conditions import Key
 
+from app.core.crypto import kms_decrypt, kms_encrypt
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
@@ -50,6 +51,9 @@ logger = logging.getLogger(__name__)
 _VALID_AUTH_METHODS = {"key", "key_ref", "password"}
 _VALID_COLOR_SCHEMES = {"dark", "light", "monokai", "solarized", "dracula"}
 _VALID_PROTOCOLS = {"ssh", "vnc"}
+
+# Maximum length of a stored VNC/SSH password (plaintext, pre-encryption).
+_MAX_PASSWORD_LEN = 256
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +146,9 @@ def _item_to_profile(item: Dict[str, Any]) -> Dict[str, Any]:
         "port": _coerce_int(item.get("port"), 22),
         "username": item.get("username", "") or "",
         "auth_method": item.get("auth_method", "key_ref"),
+        # SEC-022: never expose the encrypted blob (``password_enc``) or any
+        # plaintext password — only whether a password is stored.
+        "has_password": bool(item.get("password_enc", "")),
         "ssh_key_id": item.get("ssh_key_id", "") or "",
         "bastion_path_id": item.get("bastion_path_id", "") or "",
         "terminal_cols": _coerce_int(item.get("terminal_cols"), 80),
@@ -161,6 +168,29 @@ def _item_to_profile(item: Dict[str, Any]) -> Dict[str, Any]:
 # CRUD
 # ---------------------------------------------------------------------------
 
+def _encrypt_password(raw_password: str) -> str:
+    """KMS-encrypt a plaintext password for at-rest storage (SEC-022).
+
+    Returns the base64 ciphertext, or "" for an empty password. Validates the
+    length and surfaces a user-friendly error if KMS is not configured rather
+    than silently storing plaintext.
+    """
+    if not raw_password:
+        return ""
+    if len(raw_password) > _MAX_PASSWORD_LEN:
+        raise ProfileValidationError(
+            f"password too long (max {_MAX_PASSWORD_LEN} characters)"
+        )
+    # SECOPS-007: KMS works identically in dev (mock KMS server) and prod (CMK).
+    # Guard against a missing key so we fail with a 4xx instead of storing
+    # plaintext or surfacing an opaque 500 deep in the write path.
+    if not S.kms_key_id:
+        raise ProfileValidationError(
+            "Password authentication requires KMS to be configured"
+        )
+    return kms_encrypt(raw_password)
+
+
 def _get_item(user_sub: str, profile_id: str) -> Optional[Dict[str, Any]]:
     resp = T.connection_profiles.get_item(
         Key={"user_sub": user_sub, "sk": f"PROFILE#{profile_id}"}
@@ -178,6 +208,8 @@ def create_profile(
     port: Any = 22,
     username: str = "",
     auth_method: str = "key_ref",
+    vnc_password: str = "",
+    ssh_password: str = "",
     ssh_key_id: str = "",
     bastion_path_id: str = "",
     terminal_cols: Any = 80,
@@ -244,6 +276,13 @@ def create_profile(
     _assert_key_owned(user_sub, ssh_key_id)
     _assert_bastion_owned(user_sub, bastion_path_id)
 
+    # SEC-022: resolve the applicable password (protocol-specific) and store it
+    # KMS-encrypted only. An empty password is allowed (deferred entry) — the
+    # profile is created with has_password=False.
+    raw_password = vnc_password if protocol == "vnc" else ssh_password
+    raw_password = raw_password or vnc_password or ssh_password or ""
+    password_enc = _encrypt_password(raw_password)
+
     # Enforce per-user limit.
     existing = list_profiles(user_sub)
     if len(existing) >= S.connection_profiles_max_per_user:
@@ -264,6 +303,7 @@ def create_profile(
         "port": port,
         "username": username,
         "auth_method": auth_method,
+        "password_enc": password_enc,
         "ssh_key_id": ssh_key_id,
         "bastion_path_id": bastion_path_id,
         "terminal_cols": cols,
@@ -320,6 +360,8 @@ def update_profile(
     port: Optional[Any] = None,
     username: Optional[str] = None,
     auth_method: Optional[str] = None,
+    password: Optional[str] = None,
+    clear_password: bool = False,
     ssh_key_id: Optional[str] = None,
     bastion_path_id: Optional[str] = None,
     terminal_cols: Optional[Any] = None,
@@ -389,6 +431,16 @@ def update_profile(
             raise ProfileValidationError("auth_method must be key, key_ref, or password")
         sets.append("auth_method = :am")
         values[":am"] = auth_method
+
+    # SEC-022: password rotation / clearing. ``clear_password`` removes any
+    # stored password; otherwise a non-None ``password`` is KMS-encrypted and
+    # stored. Plaintext is never persisted or returned.
+    if clear_password:
+        sets.append("password_enc = :pe")
+        values[":pe"] = ""
+    elif password is not None:
+        sets.append("password_enc = :pe")
+        values[":pe"] = _encrypt_password(password)
 
     if ssh_key_id is not None:
         ssh_key_id = ssh_key_id.strip()
@@ -488,6 +540,22 @@ def quick_connect(user_sub: str, profile_id: str) -> Dict[str, Any]:
     if profile["protocol"] == "ssh" and not profile["username"]:
         raise ProfileValidationError("No username configured for this profile")
 
+    # SEC-022: decrypt the stored password for the in-process terminal/session
+    # layer only. ``password_resolved`` MUST be stripped by the router before
+    # the descriptor is serialized into an HTTP response (see QuickConnectOut,
+    # which has no password field).
+    password_resolved = ""
+    password_enc = item.get("password_enc", "")
+    if password_enc and profile["auth_method"] == "password":
+        try:
+            password_resolved = kms_decrypt(password_enc).decode("utf-8")
+        except Exception:
+            logger.exception(
+                "connection_profiles.password_decrypt_failed profile_id=%s",
+                profile_id,
+            )
+            raise ProfileValidationError("Failed to decrypt stored password")
+
     # Chain the bastion path if referenced.
     bastion: Optional[Dict[str, Any]] = None
     if profile["bastion_path_id"]:
@@ -536,6 +604,10 @@ def quick_connect(user_sub: str, profile_id: str) -> Dict[str, Any]:
         "port": profile["port"],
         "username": profile["username"],
         "auth_method": profile["auth_method"],
+        "has_password": bool(password_enc),
+        # Internal use only — the router must NOT serialize this into the HTTP
+        # response. QuickConnectOut deliberately has no password field.
+        "password_resolved": password_resolved,
         "ssh_key_id": profile["ssh_key_id"],
         "bastion_path_id": profile["bastion_path_id"],
         "bastion": bastion,

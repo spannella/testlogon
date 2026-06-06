@@ -2119,6 +2119,11 @@ class Settings:
     instance_monitoring_max_query_points: int = int(os.environ.get("INSTANCE_MONITORING_MAX_QUERY_POINTS", "200"))
     instance_monitoring_ttl_seconds: int = int(os.environ.get("INSTANCE_MONITORING_TTL_SECONDS", "604800"))
     instance_monitoring_alerts_enabled: bool = os.environ.get("INSTANCE_MONITORING_ALERTS_ENABLED", "true").lower() not in ("0", "false", "no")
+    # Auto-restart policy (GAP-0230). Default OFF so dev/test never auto-restarts;
+    # must be explicitly enabled in prod (SECOPS-007).
+    instance_monitoring_auto_restart_enabled: bool = os.environ.get(
+        "INSTANCE_MONITORING_AUTO_RESTART_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
     # Health thresholds (percent). At-or-above warning -> warning; at-or-above critical -> critical.
     instance_monitoring_cpu_warning_pct: int = int(os.environ.get("INSTANCE_MONITORING_CPU_WARNING_PCT", "75"))
     instance_monitoring_cpu_critical_pct: int = int(os.environ.get("INSTANCE_MONITORING_CPU_CRITICAL_PCT", "90"))

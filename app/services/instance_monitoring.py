@@ -20,7 +20,8 @@ ingest endpoint, or are deterministically seeded for tests.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
 
@@ -60,6 +61,33 @@ def require_owned_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     if not item:
         raise InstanceNotOwned(f"Instance {instance_id} not found for this user")
     return item
+
+
+def resolve_owned_resource(
+    user_sub: str, resource_id: str
+) -> Tuple[Dict[str, Any], str]:
+    """Resolve a compute resource owned by ``user_sub`` as either EC2 or K8s.
+
+    Returns ``(item, resource_type)`` where ``resource_type`` is ``"ec2"`` or
+    ``"k8s"``. EC2 is checked first (keyed ``INSTANCE#``), then K8s (``POD#``).
+    Raises ``InstanceNotOwned`` if neither table holds an item for this owner.
+
+    This is the shared ownership boundary for the restart-policy and timeline
+    endpoints, which must work for both EC2 instances and K8s pods (GAP-0230,
+    GAP-0231).
+    """
+    ec2 = get_instance(user_sub, resource_id)
+    if ec2:
+        return ec2, "ec2"
+
+    # Lazy import so the kubernetes-less / EC2-only paths stay light.
+    from app.services.k8s_launcher import get_pod
+
+    pod = get_pod(user_sub, resource_id)
+    if pod:
+        return pod, "k8s"
+
+    raise InstanceNotOwned(f"Resource {resource_id} not found for this user")
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +258,21 @@ def ingest_datapoint(
     ):
         _maybe_alert(user_sub, instance, health)
 
+    # GAP-0230: when a critical datapoint arrives and auto-restart is enabled
+    # both globally (flag) and per-instance, evaluate the restart policy. Gated
+    # OFF by default so dev/test never auto-restarts (SECOPS-007).
+    if (
+        S.instance_monitoring_auto_restart_enabled
+        and health["health_status"] == HEALTH_CRITICAL
+    ):
+        try:
+            _check_restart_policy(user_sub, instance, health, resource_type="ec2")
+        except Exception:
+            logger.exception(
+                "instance_restart_policy_check_failed user_sub=%s instance_id=%s",
+                user_sub, instance_id,
+            )
+
     logger.info(
         "instance_monitoring_ingest user_sub=%s instance_id=%s health=%s cpu=%d mem=%d disk=%d",
         user_sub, instance_id, health["health_status"], cpu_pct, mem_pct, disk_pct,
@@ -359,6 +402,257 @@ def get_health(user_sub: str, instance_id: str) -> Dict[str, Any]:
         "checked_at": now_ts(),
         "thresholds": th,
     }
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle event timeline (GAP-0231)
+#
+# Timeline items live in the SAME table as the resource they describe
+# (ec2_instances / k8s_pods), under a TIMELINE# sort-key prefix on the owner's
+# partition. This is the single-table pattern called for by INFRA-008:
+#     PK: user_sub
+#     SK: TIMELINE#{resource_id}#{ts:010d}#{event_id}
+# The zero-padded ts makes the lexical SK order match chronological order, so a
+# ScanIndexForward=False query returns events newest-first with no client sort.
+# ---------------------------------------------------------------------------
+
+def _timeline_table(resource_type: str):
+    return T.k8s_pods if resource_type == "k8s" else T.ec2_instances
+
+
+def record_timeline_event(
+    user_sub: str,
+    resource_id: str,
+    event_type: str,
+    *,
+    resource_type: str = "ec2",
+    detail: Optional[Dict[str, Any]] = None,
+    ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Write one TIMELINE item recording a lifecycle event (best-effort).
+
+    Timeline writes must NEVER block or roll back the lifecycle operation that
+    triggered them, so all exceptions are swallowed (logged). Returns the item
+    that was written (or attempted).
+    """
+    event_ts = int(ts) if ts is not None else now_ts()
+    event_id = uuid.uuid4().hex[:12]
+    item = {
+        "user_sub": user_sub,
+        "sk": f"TIMELINE#{resource_id}#{event_ts:010d}#{event_id}",
+        "resource_id": resource_id,
+        "resource_type": resource_type,
+        "event_type": event_type,
+        "ts": event_ts,
+        "event_id": event_id,
+        "detail": detail or {},
+    }
+    try:
+        _timeline_table(resource_type).put_item(Item=item)
+        logger.info(
+            "instance_timeline_event user_sub=%s resource_id=%s type=%s event_id=%s",
+            user_sub, resource_id, event_type, event_id,
+        )
+    except Exception:
+        logger.exception(
+            "instance_timeline_write_failed user_sub=%s resource_id=%s type=%s",
+            user_sub, resource_id, event_type,
+        )
+    return item
+
+
+def list_timeline_events(
+    user_sub: str,
+    resource_id: str,
+    *,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Return lifecycle events for an owned resource, newest first.
+
+    Resolves the resource (EC2 or K8s) to enforce the ownership boundary, then
+    queries the owning table for the TIMELINE# SK prefix.
+    """
+    _, resource_type = resolve_owned_resource(user_sub, resource_id)
+    eff_limit = max(1, min(int(limit), 200))
+    resp = _timeline_table(resource_type).query(
+        KeyConditionExpression=Key("user_sub").eq(user_sub)
+        & Key("sk").begins_with(f"TIMELINE#{resource_id}#"),
+        ScanIndexForward=False,  # newest first (ts is zero-padded in the SK)
+        Limit=eff_limit,
+    )
+    out: List[Dict[str, Any]] = []
+    for it in resp.get("Items", []):
+        out.append({
+            "event_id": str(it.get("event_id", "")),
+            "event_type": str(it.get("event_type", "")),
+            "ts": int(it.get("ts", 0)),
+            "detail": dict(it.get("detail", {}) or {}),
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Auto-restart policy (GAP-0230)
+# ---------------------------------------------------------------------------
+
+def _sk_for(resource_type: str, resource_id: str) -> str:
+    return f"POD#{resource_id}" if resource_type == "k8s" else f"INSTANCE#{resource_id}"
+
+
+def update_restart_policy(
+    user_sub: str,
+    resource_id: str,
+    *,
+    auto_restart_enabled: Optional[bool] = None,
+    max_restarts: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Set the auto-restart policy for an owned EC2 instance or K8s pod."""
+    instance, resource_type = resolve_owned_resource(user_sub, resource_id)
+
+    sets: List[str] = []
+    values: Dict[str, Any] = {}
+    if auto_restart_enabled is not None:
+        sets.append("auto_restart_enabled = :are")
+        values[":are"] = bool(auto_restart_enabled)
+    if max_restarts is not None:
+        if max_restarts < 0 or max_restarts > 10:
+            raise ValueError("max_restarts must be 0-10")
+        sets.append("max_restarts = :mr")
+        values[":mr"] = int(max_restarts)
+
+    table = _timeline_table(resource_type)
+    sk = _sk_for(resource_type, resource_id)
+
+    if sets:
+        table.update_item(
+            Key={"user_sub": user_sub, "sk": sk},
+            UpdateExpression="SET " + ", ".join(sets),
+            ExpressionAttributeValues=values,
+        )
+        logger.info(
+            "instance_restart_policy_updated user_sub=%s resource_id=%s type=%s",
+            user_sub, resource_id, resource_type,
+        )
+
+    fresh = table.get_item(Key={"user_sub": user_sub, "sk": sk}).get("Item") or instance
+    return {
+        "instance_id": resource_id,
+        "resource_type": resource_type,
+        "auto_restart_enabled": bool(fresh.get("auto_restart_enabled", False)),
+        "max_restarts": int(fresh.get("max_restarts", 3)),
+        "restart_count": int(fresh.get("restart_count", 0)),
+        "last_restart_at": int(fresh.get("last_restart_at", 0)),
+    }
+
+
+def _increment_restart_count(
+    user_sub: str, resource_type: str, resource_id: str
+) -> None:
+    _timeline_table(resource_type).update_item(
+        Key={"user_sub": user_sub, "sk": _sk_for(resource_type, resource_id)},
+        UpdateExpression=(
+            "SET restart_count = if_not_exists(restart_count, :z) + :one, "
+            "last_restart_at = :ts"
+        ),
+        ExpressionAttributeValues={":z": 0, ":one": 1, ":ts": now_ts()},
+    )
+
+
+def _perform_restart(
+    user_sub: str, instance: Dict[str, Any], resource_type: str
+) -> None:
+    """Trigger the appropriate restart action for the resource type.
+
+    Both branches go through the existing launcher functions, so they honour the
+    dev mock paths (S.ec2_mock_enabled / S.k8s_mock_enabled) unchanged
+    (SECOPS-007). K8s pods cannot be stopped/started, so a restart is a
+    terminate + fresh launch.
+    """
+    if resource_type == "k8s":
+        from app.services.k8s_launcher import terminate_pod, launch_pod
+        pod_id = instance.get("pod_id") or instance.get("instance_id", "")
+        terminate_pod(user_sub, pod_id)
+        launch_pod(
+            user_sub,
+            label=instance.get("label", "Restarted Pod"),
+            image=instance.get("image", "ubuntu-ssh"),
+            preset=instance.get("preset", "small"),
+            ttl_seconds=int(instance.get("ttl_seconds", 14400)),
+        )
+    else:
+        from app.services.ec2_launcher import stop_instance, start_instance
+        instance_id = instance.get("instance_id", "")
+        stop_instance(user_sub, instance_id)
+        start_instance(user_sub, instance_id)
+
+
+def _check_restart_policy(
+    user_sub: str,
+    instance: Dict[str, Any],
+    health: Dict[str, Any],
+    *,
+    resource_type: str = "ec2",
+) -> bool:
+    """Evaluate the auto-restart policy for a resource in critical health.
+
+    Returns True if a restart was initiated and completed, False otherwise. All
+    decisions and outcomes are written to the lifecycle timeline (GAP-0231).
+    """
+    if health.get("health_status") != HEALTH_CRITICAL:
+        return False
+    if not instance.get("auto_restart_enabled", False):
+        return False
+
+    resource_id = instance.get("instance_id") or instance.get("pod_id", "")
+    max_restarts = int(instance.get("max_restarts", 3))
+    restart_count = int(instance.get("restart_count", 0))
+
+    if restart_count >= max_restarts:
+        logger.warning(
+            "instance_restart_limit_reached resource_id=%s restart_count=%d max=%d",
+            resource_id, restart_count, max_restarts,
+        )
+        record_timeline_event(
+            user_sub, resource_id, "restart_limit_reached",
+            resource_type=resource_type,
+            detail={"restart_count": restart_count, "max_restarts": max_restarts},
+        )
+        return False
+
+    record_timeline_event(
+        user_sub, resource_id, "auto_restart_initiated",
+        resource_type=resource_type,
+        detail={
+            "restart_count": restart_count + 1,
+            "max_restarts": max_restarts,
+            "health_reasons": health.get("reasons", []),
+        },
+    )
+
+    try:
+        _perform_restart(user_sub, instance, resource_type)
+        _increment_restart_count(user_sub, resource_type, resource_id)
+        record_timeline_event(
+            user_sub, resource_id, "auto_restart_completed",
+            resource_type=resource_type,
+            detail={"restart_count": restart_count + 1},
+        )
+        logger.info(
+            "instance_auto_restarted user_sub=%s resource_id=%s restart_count=%d",
+            user_sub, resource_id, restart_count + 1,
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "instance_auto_restart_failed user_sub=%s resource_id=%s",
+            user_sub, resource_id,
+        )
+        record_timeline_event(
+            user_sub, resource_id, "auto_restart_failed",
+            resource_type=resource_type,
+            detail={"error": "restart exception (see logs)"},
+        )
+        return False
 
 
 # ---------------------------------------------------------------------------

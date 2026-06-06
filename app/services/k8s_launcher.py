@@ -33,6 +33,28 @@ from app.services.host_inventory import (  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+
+def _record_timeline(
+    user_sub: str, pod_id: str, event_type: str, *, detail: dict | None = None
+) -> None:
+    """Best-effort K8s pod lifecycle timeline write (GAP-0231).
+
+    Imported lazily to avoid a circular import (instance_monitoring imports the
+    EC2 launcher, which makes this a sibling). Writes only to DynamoDB, so it
+    runs identically on the mock and real K8s paths (SECOPS-007).
+    """
+    try:
+        from app.services.instance_monitoring import record_timeline_event
+        record_timeline_event(
+            user_sub, pod_id, event_type, resource_type="k8s", detail=detail
+        )
+    except Exception:
+        logger.exception(
+            "k8s_timeline_write_failed user_sub=%s pod_id=%s event=%s",
+            user_sub, pod_id, event_type,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Resource presets
 # ---------------------------------------------------------------------------
@@ -397,6 +419,12 @@ def launch_pod(
             user_sub, pod_id,
         )
 
+    # Lifecycle timeline (GAP-0231). Best-effort; never blocks the launch.
+    _record_timeline(
+        user_sub, pod_id, "launched",
+        detail={"image": image, "preset": preset, "ttl_seconds": ttl_seconds, "label": label},
+    )
+
     logger.info(
         "k8s_pod_launched user_sub=%s pod_id=%s image=%s preset=%s ttl=%d host_id=%s",
         user_sub, pod_id, image, preset, ttl_seconds, item.get("host_id", ""),
@@ -526,6 +554,7 @@ def terminate_pod(user_sub: str, pod_id: str) -> Dict[str, Any]:
                 user_sub, pod_id, host_id,
             )
 
+    _record_timeline(user_sub, pod_id, "terminated")
     logger.info("k8s_pod_terminated user_sub=%s pod_id=%s", user_sub, pod_id)
     return item
 
@@ -551,6 +580,10 @@ def check_expired_pods() -> int:
         if expires_at > 0 and now > expires_at:
             try:
                 terminate_pod(item["user_sub"], item["pod_id"])
+                _record_timeline(
+                    item["user_sub"], item["pod_id"], "ttl_expired",
+                    detail={"expires_at": expires_at},
+                )
                 terminated += 1
                 logger.info(
                     "k8s_pod_ttl_expired user_sub=%s pod_id=%s",

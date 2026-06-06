@@ -10373,6 +10373,37 @@ class InstanceMonitoringIngestOut(BaseModel):
     ts: int
     health_status: str
     stored: bool = True
+
+
+# -- Auto-restart policy (GAP-0230, INFRA-008) --
+
+class RestartPolicyIn(BaseModel):
+    auto_restart_enabled: Optional[bool] = None
+    max_restarts: Optional[int] = Field(default=None, ge=0, le=10)
+
+
+class RestartPolicyOut(BaseModel):
+    instance_id: str
+    resource_type: str = "ec2"  # "ec2" | "k8s"
+    auto_restart_enabled: bool = False
+    max_restarts: int = 3
+    restart_count: int = 0
+    last_restart_at: int = 0
+
+
+# -- Lifecycle event timeline (GAP-0231, INFRA-008) --
+
+class TimelineEventOut(BaseModel):
+    event_id: str
+    event_type: str
+    ts: int
+    detail: Dict[str, Any] = Field(default_factory=dict)
+
+
+class InstanceTimelineOut(BaseModel):
+    instance_id: str
+    resource_type: str = "ec2"  # "ec2" | "k8s"
+    events: List[TimelineEventOut] = Field(default_factory=list)
 # -- Consumer Tax Documents (FIN-004) --
 
 class SpendingCategoryOut(BaseModel):
@@ -11022,6 +11053,10 @@ class CreateConnectionProfileIn(BaseModel):
     port: int = Field(default=22, ge=1, le=65535)
     username: Optional[str] = Field(default="", max_length=64)
     auth_method: Literal["key", "key_ref", "password"] = "key_ref"
+    # SEC-022: optional plaintext password (KMS-encrypted at rest by the
+    # service; never echoed back — responses expose only ``has_password``).
+    vnc_password: Optional[str] = Field(default=None, max_length=256)
+    ssh_password: Optional[str] = Field(default=None, max_length=256)
     ssh_key_id: Optional[str] = Field(default="", max_length=128)
     bastion_path_id: Optional[str] = Field(default="", max_length=128)
     terminal_cols: int = Field(default=80, ge=40, le=300)
@@ -11039,6 +11074,10 @@ class UpdateConnectionProfileIn(BaseModel):
     port: Optional[int] = Field(default=None, ge=1, le=65535)
     username: Optional[str] = Field(default=None, max_length=64)
     auth_method: Optional[Literal["key", "key_ref", "password"]] = None
+    # SEC-022: rotate (``password``) or remove (``clear_password``) the stored
+    # password. KMS-encrypted at rest; never echoed back.
+    password: Optional[str] = Field(default=None, max_length=256)
+    clear_password: bool = False
     ssh_key_id: Optional[str] = Field(default=None, max_length=128)
     bastion_path_id: Optional[str] = Field(default=None, max_length=128)
     terminal_cols: Optional[int] = Field(default=None, ge=40, le=300)
@@ -11058,6 +11097,7 @@ class ConnectionProfileOut(BaseModel):
     port: int = 22
     username: str = ""
     auth_method: str = "key_ref"
+    has_password: bool = False
     ssh_key_id: str = ""
     bastion_path_id: str = ""
     terminal_cols: int = 80
@@ -11092,6 +11132,7 @@ class QuickConnectOut(BaseModel):
     port: int
     username: str
     auth_method: str
+    has_password: bool = False
     ssh_key_id: str = ""
     bastion_path_id: str = ""
     bastion: Optional[QuickConnectBastionOut] = None
