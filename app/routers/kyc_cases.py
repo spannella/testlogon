@@ -1080,6 +1080,23 @@ def submit_kyc_case(
         logger.exception(
             "kyc.screening.submission_hook_failed case_id=%s", case_id
         )
+    # KYC-008 / GAP-0266: compute the risk score on every submission so the
+    # reviewer queue has a risk tier and auto-approve / auto-escalate can fire.
+    # Runs after screening above so the screening_result factor reflects the
+    # fresh screening summary. Best-effort: a scoring failure must NEVER block
+    # the submission (fail open), mirroring the screening hook pattern.
+    try:
+        from app.services.kyc_risk_scoring import KycRiskScoringService
+
+        KycRiskScoringService().compute_score(
+            case_id=case_id,
+            user_sub=user.sub,
+            trigger="submission",
+        )
+    except Exception:
+        logger.exception(
+            "kyc.risk.submission_hook_failed case_id=%s", case_id
+        )
     _audit_state_transition(
         event_name="kyc_submitted",
         actor_sub=user.sub,

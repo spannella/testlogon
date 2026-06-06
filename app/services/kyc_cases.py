@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import base64
 import hashlib
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -12,6 +13,8 @@ from botocore.exceptions import ClientError
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+
+logger = logging.getLogger(__name__)
 
 
 def _emit_kyc_event_safe(*, event: str, user_sub: str, **kw: Any) -> None:
@@ -653,6 +656,71 @@ class KycCaseStore:
         except ClientError as exc:
             if _is_conditional_conflict(exc):
                 raise KycCaseConflictError("kyc_case_update_conflict") from exc
+            raise
+        return self.get_case(case_id)
+
+    def escalate_case(
+        self,
+        *,
+        case_id: str,
+        score: int,
+        reason: str,
+        actor_sub: str = "system_auto_escalate",
+    ) -> dict[str, Any] | None:
+        """Flag a case as escalated for senior review (GAP-0265 / KYC-008).
+
+        Writes ``review.escalated``, ``review.escalation_reason``,
+        ``review.escalated_at`` and ``review.escalated_by`` to the case META
+        item. Does not change case status and does not bump ``version`` — the
+        escalation flag is an administrative annotation, not a user-visible
+        state transition, so it must not invalidate concurrent draft edits or
+        the optimistic-concurrency checks used by user-facing mutations.
+
+        No-op (returns the existing case unchanged) when the case is already in
+        a terminal decision state (``approved`` / ``rejected``). Returns
+        ``None`` when the case does not exist.
+        """
+        existing = self.get_case(case_id)
+        if not existing:
+            return None
+
+        current_status = str(existing.get("status") or "")
+        if current_status not in {"submitted", "under_review", "needs_more_info"}:
+            # Terminal or pre-submission state — nothing to escalate.
+            return existing
+
+        ts = now_ts()
+        review = dict(existing.get("review") or _empty_review_ref())
+        review["escalated"] = True
+        review["escalation_reason"] = str(reason)
+        review["escalated_at"] = ts
+        review["escalated_by"] = actor_sub
+
+        try:
+            self._table.update_item(
+                Key={"pk": _case_pk(case_id), "sk": "META"},
+                UpdateExpression="SET review=:review, updated_at=:updated_at",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":review": review,
+                    ":updated_at": ts,
+                    ":submitted": "submitted",
+                    ":under_review": "under_review",
+                    ":needs_more_info": "needs_more_info",
+                },
+                ConditionExpression=(
+                    "attribute_exists(pk) AND "
+                    "(#status = :submitted OR #status = :under_review OR #status = :needs_more_info)"
+                ),
+            )
+        except ClientError as exc:
+            if _is_conditional_conflict(exc):
+                # Status changed concurrently (e.g. decided just now); accept gracefully.
+                logger.warning(
+                    "kyc.escalate_case: condition failed for case %s (status changed?)",
+                    case_id,
+                )
+                return self.get_case(case_id)
             raise
         return self.get_case(case_id)
 

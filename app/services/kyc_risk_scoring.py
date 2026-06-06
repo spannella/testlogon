@@ -575,10 +575,37 @@ class KycRiskScoringService:
             return "none"
 
         if tier == "critical" and score >= S.kyc_risk_auto_escalate_min_score:
-            # Auto-escalate
+            if not S.kyc_risk_auto_escalate_enabled:
+                return "none"
+            # Auto-escalate: flag the case for senior review and persist the
+            # escalation marker to DynamoDB (GAP-0265). Without the DDB write the
+            # escalation is invisible to admins, dashboards and audit trails.
             try:
-                logger.warning("kyc.risk.auto_escalated case_id=%s score=%s tier=%s", case_id, score, tier)
-                return "auto_escalated"
+                from app.services.kyc_cases import STORE
+                reason = f"Critical risk score: {score} (tier: {tier})"
+                escalated = STORE.escalate_case(
+                    case_id=case_id,
+                    score=score,
+                    reason=reason,
+                )
+                if escalated and (escalated.get("review") or {}).get("escalated"):
+                    try:
+                        from app.services.alerts import audit_event
+                        audit_event(
+                            "kyc_auto_escalated",
+                            "system_auto_escalate",
+                            None,
+                            outcome="success",
+                            kyc_case_id=case_id,
+                            score=score,
+                            tier=tier,
+                        )
+                    except Exception:
+                        logger.exception("Auto-escalate audit_event failed for case %s", case_id)
+                    logger.warning(
+                        "kyc.risk.auto_escalated case_id=%s score=%s tier=%s", case_id, score, tier
+                    )
+                    return "auto_escalated"
             except Exception:
                 logger.exception("Auto-escalate failed for case %s", case_id)
             return "none"
