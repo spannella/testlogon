@@ -26,7 +26,7 @@ from app.metrics import (
 )
 from app.services import terminal_monitor
 from app.services.alerts import audit_event
-from app.services.host_inventory import record_connection
+from app.services.host_inventory import _should_record, record_connection
 from app.services.sessions import require_ui_session
 from app.services.ssh_key_manager import get_decrypted_private_key, get_key_metadata
 
@@ -737,6 +737,9 @@ def _validate_connect_payload(payload: Any) -> tuple[bool, dict[str, Any] | None
         "privateKey": payload.get("privateKey"),
         "keyId": payload.get("keyId"),
         "passphrase": passphrase,
+        # Optional registered host reference (host inventory). Used post-connect
+        # to resolve the per-host record_sessions flag (INFRA-010 / GAP-0234).
+        "host_id": str(payload.get("host_id") or "").strip(),
     }, None
 
 
@@ -821,6 +824,9 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
     session_host: str | None = None
     session_port: int | None = None
     session_worker_id: str | None = None
+    # INFRA-010 (GAP-0233/GAP-0234): server-side SSH session recording state.
+    recording_id: str | None = None
+    recording_start_time: float | None = None
     end_outcome = "disconnected"
     end_reason = "websocket_closed"
 
@@ -859,6 +865,25 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
                 if output:
                     session_last_activity_at = now
                     await websocket.send_json({"type": "output", "payload": {"data": output}})
+                    # INFRA-010 (GAP-0233): server-side recording capture. Append
+                    # each output chunk in asciicast [elapsed, "o", data] form.
+                    # Best-effort: a recording failure must NEVER interrupt the
+                    # live terminal stream.
+                    if recording_id is not None and recording_start_time is not None:
+                        elapsed = round(time.time() - recording_start_time, 6)
+                        try:
+                            from app.services.ssh_session_recording import append_events
+
+                            append_events(
+                                session_user_sub,
+                                recording_id,
+                                [[elapsed, "o", output]],
+                            )
+                        except Exception:
+                            logger.exception(
+                                "browser_ssh recording_append_failed recording_id=%s",
+                                recording_id,
+                            )
                     # Tap into the monitoring pipeline only for agent-tracked
                     # sessions (worker_id present in the connect payload). Normal
                     # interactive terminals leave session_worker_id None and are
@@ -1092,6 +1117,52 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
                                 port=session_port,
                             ),
                         )
+                # INFRA-010 (GAP-0233/GAP-0234): start server-side session
+                # recording when the global flag is on AND either the per-host
+                # record_sessions flag is set or the always-record override is
+                # enabled. Best-effort: recording failures never abort the
+                # session (recording_id stays None → output loop skips capture).
+                connect_host_id = str(normalized.get("host_id") or "").strip()
+                auto_record = (
+                    _should_record(session_user_sub, connect_host_id)
+                    or S.ssh_session_recording_always_record
+                )
+                logger.info(
+                    "browser_ssh auto_record_decision auto_record=%s host_id=%s",
+                    auto_record, connect_host_id or "(none)",
+                )
+                if auto_record and S.ssh_session_recording_enabled:
+                    try:
+                        from app.services.ssh_session_recording import start_recording
+
+                        rec = start_recording(
+                            session_user_sub,
+                            hostname=str(session_host or ""),
+                            port=int(session_port or 0),
+                            username=str(normalized.get("username") or ""),
+                            terminal_cols=int(session_size.get("cols") or 80),
+                            terminal_rows=int(session_size.get("rows") or 24),
+                            host_id=connect_host_id,
+                            session_id=ws_session_id,
+                        )
+                        recording_id = rec["recording_id"]
+                        recording_start_time = time.time()
+                        logger.info(
+                            "browser_ssh recording_started recording_id=%s",
+                            recording_id,
+                            extra=_session_log_context(
+                                session_id=ws_session_id,
+                                user_sub=session_user_sub,
+                                host=session_host,
+                                port=session_port,
+                            ),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "browser_ssh recording_start_failed session_id=%s",
+                            ws_session_id,
+                        )
+                        recording_id = None
                 logger.info(
                     "browser_ssh connect success",
                     extra=_session_log_context(
@@ -1244,6 +1315,20 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
     finally:
         if ssh_bridge:
             ssh_bridge.close()
+        # INFRA-010 (GAP-0233): finalize the server-side recording. Best-effort.
+        if recording_id is not None:
+            try:
+                from app.services.ssh_session_recording import stop_recording
+
+                stop_recording(session_user_sub, recording_id)
+                logger.info(
+                    "browser_ssh recording_finished recording_id=%s", recording_id
+                )
+            except Exception:
+                logger.exception(
+                    "browser_ssh recording_finish_failed recording_id=%s",
+                    recording_id,
+                )
         if connected_started_at is not None:
             elapsed = time.time() - connected_started_at
             record_browser_ssh_session_duration(outcome=end_outcome, elapsed_seconds=elapsed)

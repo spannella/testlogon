@@ -2146,6 +2146,10 @@ class Settings:
     ssh_session_recording_retention_days: int = int(os.environ.get("SSH_SESSION_RECORDING_RETENTION_DAYS", "90"))
     ssh_session_recording_max_events: int = int(os.environ.get("SSH_SESSION_RECORDING_MAX_EVENTS", "50000"))
     ssh_session_recording_max_bytes: int = int(os.environ.get("SSH_SESSION_RECORDING_MAX_BYTES", "5242880"))
+    # INFRA-010 / GAP-0234: optional global override — record EVERY browser SSH
+    # session regardless of the per-host record_sessions flag. Defaults False so
+    # per-host opt-in remains the controlling mechanism.
+    ssh_session_recording_always_record: bool = os.environ.get("SSH_SESSION_RECORDING_ALWAYS_RECORD", "false").lower() not in ("0", "false", "no")
 
     # Multi-Hop SSH Bastion (INFRA-011)
     ssh_bastion_paths_table_name: str = os.environ.get("SSH_BASTION_PATHS_TABLE_NAME", "ssh_bastion_paths")

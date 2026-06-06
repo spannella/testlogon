@@ -13326,6 +13326,7 @@ class CreateHostIn(BaseModel):
     tags: List[str] = Field(default_factory=list, max_length=20)
     group: str = Field(default="", max_length=50)
     os_type: Literal["linux", "windows", "macos", "unknown"] = "unknown"
+    record_sessions: bool = False
 
 
 class UpdateHostIn(BaseModel):
@@ -13339,6 +13340,7 @@ class UpdateHostIn(BaseModel):
     group: Optional[str] = Field(default=None, max_length=50)
     os_type: Optional[Literal["linux", "windows", "macos", "unknown"]] = None
     is_pinned: Optional[bool] = None
+    record_sessions: Optional[bool] = None
 
 
 class HostOut(BaseModel):
@@ -13359,6 +13361,7 @@ class HostOut(BaseModel):
     status: str = "unknown"
     is_pinned: bool = False
     source: str = "manual"
+    record_sessions: bool = False
 
 
 class HostListOut(BaseModel):
