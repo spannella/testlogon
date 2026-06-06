@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.services.sessions import require_ui_session
 from app.models import (
@@ -98,8 +98,17 @@ def register(
 
 
 @syndicate_open_licensing_router.get("/{syndicate_id}/content")
-def list_content(syndicate_id: str, session: Dict[str, Any] = Depends(require_ui_session)):
-    items = svc.list_syndicate_content(syndicate_id=syndicate_id)
+def list_content(
+    syndicate_id: str,
+    creator_id: Optional[str] = Query(default=None),
+    include_exempt: bool = Query(default=True),
+    session: Dict[str, Any] = Depends(require_ui_session),
+):
+    items = svc.list_syndicate_content(
+        syndicate_id=syndicate_id,
+        creator_id=creator_id,
+        include_exempt=include_exempt,
+    )
     return {"items": [SyndicateOpenLicensingContentOut(**i) for i in items]}
 
 
