@@ -5,9 +5,10 @@ milestone: M5
 epic: E28
 priority: P0
 size: M
-status: draft
 depends_on: [AND-027]
 blocks: [AND-205, AND-206, AND-207, AND-208]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-204 — Catalog API + DTOs
@@ -73,34 +74,53 @@ verb/path/query/decoding.
   All catalog endpoints in this ticket are **idempotent GETs**. OpenAPI at
   `/openapi.json` is authoritative for shapes and `required` arrays.
 - **Web reference (authoritative for field names / paths):** the catalog endpoint
-  layer in `frontend/src/api/endpoints/` (expected `catalog.ts` / `shop.ts`) and
-  shared types in `frontend/src/api/types.ts`. The web client uses routes of the
-  form `shop/:categoryId/:itemId` (cf. AND-206), confirming a `shop`/`catalog`
-  path family. Mirror those names; do **not** invent camelCase wire keys — the
-  backend is snake_case.
+  layer is in `frontend/src/api/endpoints/cart.ts` (NOT a `catalog.ts`/`shop.ts`
+  file — catalog calls live alongside cart calls), and shared types in
+  `frontend/src/api/types.ts`. **CORRECTED:** the web React *route* `shop/...` is a
+  client-side route, not the API path. The actual REST prefix is **`ui/catalog/`**
+  for every endpoint (verified: `cart.ts: getCategories/getCategoryItems/
+  searchCatalogItems` call `/ui/catalog/categories`, `/ui/catalog/categories/
+  {id}/items`, `/ui/catalog/items/search`; OpenAPI index lines 1308/1311/1321).
+  Mirror the snake_case wire keys from `types.ts`/OpenAPI — do **not** invent
+  camelCase wire keys; the backend is snake_case.
 
 ## 3. Functional Requirements
 
-FR-1. Define request/response **DTOs** in `core-model.catalog` covering: a
-category, a paged category list, a catalog item summary (list/grid card), a full
-item detail (product page), a paged item list, an item media asset, a money/price
-value, and a paged search-result envelope.
+FR-1. Define response **DTOs** in `core-model.catalog` covering: a category
+(`CatalogCategoryDto`), a paged category list (`CatalogCategoryListDto`), a catalog
+item (`CatalogItemDto` — **one shape serves both list and detail**, verified), and
+a paged item list / search envelope (`CatalogItemListDto`). **CORRECTED:** there is
+no separate item-summary vs item-detail shape (both are `CatalogItemOut`), no
+nested `MediaAssetDto` (media is a flat `image_urls: List<String>`), and no nested
+money/`PriceDto` value object (price is two flat sibling fields `price_cents` +
+`currency` on the item).
 
 FR-2. Define a single Retrofit interface **`CatalogApi`** in `core-network.catalog`
-exposing exactly: `listCategories`, `getCategory`, `listItems` (by category,
-paged), `getItem` (detail), and `searchCatalog` (full-text, paged).
+exposing exactly: `listCategories`, `listItems` (by category, paged), and
+`searchCatalog` (full-text, paged). **CORRECTED:** the originally-proposed
+`getCategory` (single category) and `getItem` (single item detail) endpoints **do
+not exist** in the backend — there is no `GET /ui/catalog/categories/{id}` and no
+`GET /ui/catalog/items/{id}`. The web client obtains a single item by *filtering
+the category-items list* client-side (`ProductDetail.tsx`:
+`items.find((i) => i.item_id === itemId)`), and the list payload carries the full
+item shape (`CatalogItemOut` is used for both list and detail). Product detail
+(AND-206) and category metadata (AND-205/206) must therefore be derived from
+`listItems`/`listCategories` results downstream, not from dedicated detail GETs.
 
 FR-3. All `CatalogApi` methods are `suspend` functions returning the typed DTO
 body. All are HTTP **GET** (catalog is read-only at this layer; cart mutation is
 AND-210). Paths are relative with **no leading slash** (AND-010 convention) so
-they append to the normalized base URL.
+they append to the normalized base URL — i.e. `ui/catalog/categories`, not
+`/ui/catalog/categories`.
 
-FR-4. Paging is offset/limit (or cursor) via `@Query` params: `listItems` and
-`searchCatalog` accept `page`/`limit` (or `cursor`/`limit`) and return a paged
-envelope carrying `items`, `total`, and a next-page indicator. The exact param
-names and envelope keys are confirmed against `/openapi.json`/web reference before
-coding (Q-1) and modeled in a reusable `Paged<T>` generic where Moshi permits, or
-per-type envelopes otherwise.
+FR-4. **CORRECTED — paging is token/cursor-based, not offset/limit.** Verified
+against OpenAPI and `cart.ts`: `listCategories`, `listItems`, and `searchCatalog`
+accept `@Query("page_size") pageSize` and `@Query("next_token") nextToken`
+(nullable). The paged envelope carries exactly `{ items, next_token }` — there is
+**no** `total`, `page`, `limit`, or `has_more` field. Both `CatalogCategoryListOut`
+and `CatalogItemListOut` have this identical 2-field shape (only `items` is
+`required`; `next_token` is nullable). The web client's `searchCatalogItems` does
+not even send `next_token`. End-of-pages is signalled by `next_token == null`.
 
 FR-5. Every DTO field maps to the backend's snake_case name via `@Json(name=…)`
 when the Kotlin property is camelCase. Unknown/extra JSON keys are tolerated
@@ -110,9 +130,12 @@ FR-6. Required vs optional fidelity: required fields are non-null and their
 absence surfaces as a `JsonDataException` (fail fast); optional fields are
 Kotlin-nullable with a `null`/empty default per `/openapi.json` `required` arrays.
 
-FR-7. Prices/money are modeled losslessly: the minor-unit integer amount plus the
-ISO-4217 currency code are preserved exactly (no float rounding). A formatted
-display string, if the backend supplies one, is kept verbatim as a `String`.
+FR-7. Prices/money are modeled losslessly: **CORRECTED** — the wire fields are flat
+on the item, `price_cents` (integer minor units) and `currency` (ISO-4217 string,
+default `"USD"`), preserved exactly (no float rounding). There is **no** backend
+`display` string and **no** nested price object, so no `display` field is modeled.
+`price_cents` is `Long` to avoid any float drift; locale formatting is downstream
+(`NumberFormat.getCurrencyInstance`).
 
 FR-8. All DTOs are immutable `data class`es; collections are exposed as read-only
 `List<T>` with safe defaults (`emptyList()`).
@@ -137,161 +160,143 @@ DTOs land in
 All DTOs are `@JsonClass(generateAdapter = true)` so Moshi codegen (KSP) emits
 adapters at build time (no reflection adapter added for these types).
 
+**CORRECTED — the block below now mirrors the verified `CatalogCategoryOut`,
+`CatalogItemOut`, `CatalogCategoryListOut`, and `CatalogItemListOut` schemas
+(OpenAPI components.schemas) and `frontend/src/api/types.ts` (`CatalogCategory`,
+`CatalogItem`, `PaginatedList<T>`).**
+
 ```kotlin
 package com.testlogon.android.core.model.catalog
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
-/** A storefront category. Children optional (flat catalogs omit them). */
+/**
+ * A storefront category (schema CatalogCategoryOut).
+ * required: category_id, name, created_at.
+ * NOTE: no slug / image_url / item_count / parent_id on the wire.
+ */
 @JsonClass(generateAdapter = true)
-data class CategoryDto(
-    val id: String,
+data class CatalogCategoryDto(
+    @Json(name = "category_id") val categoryId: String,
     val name: String,
-    val slug: String? = null,
+    @Json(name = "created_at") val createdAt: String,        // ISO-8601, kept as String
     val description: String? = null,
-    @Json(name = "image_url") val imageUrl: String? = null,
-    @Json(name = "item_count") val itemCount: Int? = null,
-    @Json(name = "parent_id") val parentId: String? = null,
+    @Json(name = "creator_id") val creatorId: String? = null,
 )
 
+/** Paged category list (schema CatalogCategoryListOut): { items, next_token }. */
 @JsonClass(generateAdapter = true)
-data class CategoryListDto(
-    val categories: List<CategoryDto> = emptyList(),
+data class CatalogCategoryListDto(
+    val items: List<CatalogCategoryDto> = emptyList(),
+    @Json(name = "next_token") val nextToken: String? = null,
 )
 
-/** Money kept lossless: minor units + ISO-4217 code; display string verbatim. */
+/**
+ * A catalog item — ONE shape for both list and detail (schema CatalogItemOut).
+ * required: category_id, item_id, name, price_cents, currency, image_urls,
+ *           attributes, created_at, updated_at.
+ * Money is flat: price_cents (Long minor units) + currency. Media is image_urls.
+ * No sku / in_stock-bool / nested price / nested media / display string.
+ */
 @JsonClass(generateAdapter = true)
-data class PriceDto(
-    @Json(name = "amount_minor") val amountMinor: Long,
-    val currency: String,                       // e.g. "USD"
-    @Json(name = "display") val display: String? = null, // e.g. "$19.99"
-)
-
-@JsonClass(generateAdapter = true)
-data class MediaAssetDto(
-    val url: String,
-    val type: String? = null,                   // "image" | "video"
-    @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
-    val alt: String? = null,
-)
-
-/** Card/summary shape used in grids and search results. */
-@JsonClass(generateAdapter = true)
-data class ItemSummaryDto(
-    val id: String,
+data class CatalogItemDto(
+    @Json(name = "category_id") val categoryId: String,
+    @Json(name = "item_id") val itemId: String,
     val name: String,
-    val sku: String? = null,
-    @Json(name = "category_id") val categoryId: String? = null,
-    val price: PriceDto,
-    @Json(name = "image_url") val imageUrl: String? = null,
-    @Json(name = "in_stock") val inStock: Boolean = true,
-)
-
-/** Full product-detail shape (AND-206 consumer). */
-@JsonClass(generateAdapter = true)
-data class ItemDetailDto(
-    val id: String,
-    val name: String,
-    val sku: String? = null,
-    @Json(name = "category_id") val categoryId: String? = null,
+    @Json(name = "price_cents") val priceCents: Long,       // minor units, lossless
+    val currency: String,                                   // ISO-4217, e.g. "USD"
+    @Json(name = "image_urls") val imageUrls: List<String> = emptyList(),
+    val attributes: Map<String, Any?> = emptyMap(),         // additionalProperties:true
+    @Json(name = "created_at") val createdAt: String,
+    @Json(name = "updated_at") val updatedAt: String,
     val description: String? = null,
-    val price: PriceDto,
-    val media: List<MediaAssetDto> = emptyList(),
-    @Json(name = "in_stock") val inStock: Boolean = true,
-    @Json(name = "stock_qty") val stockQty: Int? = null,
-    val attributes: Map<String, String> = emptyMap(),
+    @Json(name = "creator_id") val creatorId: String? = null,
+    val position: Int? = null,
+    @Json(name = "stock_count") val stockCount: Int? = null,
+    @Json(name = "stock_status") val stockStatus: String = "unlimited",  // default
+    @Json(name = "low_stock_threshold") val lowStockThreshold: Int = 5,  // default
+    @Json(name = "stock_updated_at") val stockUpdatedAt: String? = null,
 )
 
-/** Paged envelope for item lists and search. */
+/**
+ * Paged item list AND search envelope (schema CatalogItemListOut):
+ * { items, next_token }. Search returns this same shape — there is no distinct
+ * SearchResultDto, no query/total/page/limit/has_more fields.
+ */
 @JsonClass(generateAdapter = true)
-data class ItemPageDto(
-    val items: List<ItemSummaryDto> = emptyList(),
-    val total: Int = 0,
-    val page: Int = 1,
-    val limit: Int = DEFAULT_PAGE_LIMIT,
-    @Json(name = "has_more") val hasMore: Boolean = false,
-    @Json(name = "next_cursor") val nextCursor: String? = null,
-) {
-    companion object { const val DEFAULT_PAGE_LIMIT = 20 }
-}
-
-@JsonClass(generateAdapter = true)
-data class SearchResultDto(
-    val query: String? = null,
-    val items: List<ItemSummaryDto> = emptyList(),
-    val total: Int = 0,
-    val page: Int = 1,
-    val limit: Int = 20,
-    @Json(name = "has_more") val hasMore: Boolean = false,
+data class CatalogItemListDto(
+    val items: List<CatalogItemDto> = emptyList(),
+    @Json(name = "next_token") val nextToken: String? = null,
 )
 ```
 
 Design notes:
-- `ItemPageDto` and `SearchResultDto` are kept as concrete envelopes (rather than a
-  generic `Paged<ItemSummaryDto>`) because Moshi codegen on generic types requires
-  a parameterized `Types.newParameterizedType(...)` adapter lookup; concrete
-  envelopes keep codegen total and the test surface simple. If `/openapi.json`
-  shows identical envelopes for both, `SearchResultDto` may be collapsed into
-  `ItemPageDto` during implementation (Q-2).
-- `attributes` is `Map<String,String>`; if the backend returns typed/structured
-  attributes, this becomes `List<AttributeDto>` (resolved against OpenAPI, Q-3).
-- ISO-8601 timestamps, if present, are kept as `String` (parsing deferred to the
-  domain-mapping layer, consistent with AND-026 §6). No catalog timestamps are
-  modeled here unless `/openapi.json` requires them.
+- **CORRECTED:** `CatalogCategoryListDto` and `CatalogItemListDto` are intentionally
+  the only two envelopes; search reuses `CatalogItemListDto`. They are structurally
+  identical to a hypothetical `Paged<T>` but are kept concrete so Moshi codegen
+  stays total (no `Types.newParameterizedType` lookup). A generic
+  `PagedDto<T>(items, nextToken)` is an acceptable equivalent if codegen for the
+  parameterized adapter is wired; either passes the round-trip tests.
+- **CORRECTED:** `attributes` is `Map<String, Any?>` because the OpenAPI schema is
+  `additionalProperties: true` (arbitrary JSON values, not guaranteed `String`).
+  `Map<String,String>` would throw `JsonDataException` on a non-string value; if
+  the domain layer only needs strings it coerces downstream.
+- ISO-8601 timestamps (`created_at`, `updated_at`, `stock_updated_at`) are required
+  on items per the schema and kept as `String` (parsing deferred to domain mapping,
+  consistent with AND-026 §6).
+- `image_urls` and `attributes` are `required` on `CatalogItemOut` but defaulted to
+  `emptyList()`/`emptyMap()` here for resilience; a conformant server always sends
+  them (possibly empty).
 
 ### 4.2 `CatalogApi` interface (`core-network.catalog`)
+
+**CORRECTED** — paths are `ui/catalog/...`, paging is `page_size`/`next_token`,
+search returns `CatalogItemListDto`, and the non-existent `getCategory`/`getItem`
+methods are removed.
 
 ```kotlin
 package com.testlogon.android.core.network.catalog
 
-import com.testlogon.android.core.model.catalog.CategoryDto
-import com.testlogon.android.core.model.catalog.CategoryListDto
-import com.testlogon.android.core.model.catalog.ItemDetailDto
-import com.testlogon.android.core.model.catalog.ItemPageDto
-import com.testlogon.android.core.model.catalog.SearchResultDto
+import com.testlogon.android.core.model.catalog.CatalogCategoryListDto
+import com.testlogon.android.core.model.catalog.CatalogItemListDto
 import retrofit2.http.GET
 import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface CatalogApi {
 
-    /** All top-level categories. Idempotent GET (AND-016 retry-eligible). */
-    @GET("catalog/categories")
-    suspend fun listCategories(): CategoryListDto
+    /** All categories, token-paged. Idempotent GET (AND-016 retry-eligible). */
+    @GET("ui/catalog/categories")
+    suspend fun listCategories(
+        @Query("page_size") pageSize: Int = 50,
+        @Query("next_token") nextToken: String? = null,
+    ): CatalogCategoryListDto
 
-    /** A single category by id. */
-    @GET("catalog/categories/{categoryId}")
-    suspend fun getCategory(@Path("categoryId") categoryId: String): CategoryDto
-
-    /** Paged items within a category. */
-    @GET("catalog/categories/{categoryId}/items")
+    /** Token-paged items within a category. */
+    @GET("ui/catalog/categories/{categoryId}/items")
     suspend fun listItems(
         @Path("categoryId") categoryId: String,
-        @Query("page") page: Int = 1,
-        @Query("limit") limit: Int = 20,
-    ): ItemPageDto
+        @Query("page_size") pageSize: Int = 50,
+        @Query("next_token") nextToken: String? = null,
+    ): CatalogItemListDto
 
-    /** Full item/product detail. */
-    @GET("catalog/items/{itemId}")
-    suspend fun getItem(@Path("itemId") itemId: String): ItemDetailDto
-
-    /** Full-text catalog search over name/description/SKU (AND-207). */
-    @GET("catalog/search")
+    /** Full-text catalog search (AND-207). Returns the same list envelope. */
+    @GET("ui/catalog/items/search")
     suspend fun searchCatalog(
         @Query("q") query: String,
-        @Query("page") page: Int = 1,
-        @Query("limit") limit: Int = 20,
-    ): SearchResultDto
+        @Query("page_size") pageSize: Int = 50,
+        @Query("next_token") nextToken: String? = null,
+    ): CatalogItemListDto
 }
 ```
 
 Path/verb conventions: relative paths, no leading slash, resolve against base
-`http://18.222.237.167:8000/` → e.g. `…/catalog/categories/{id}/items`. The
-concrete `catalog/…` prefix is confirmed against `/openapi.json` and the web
-reference before coding (Q-1) — the web route family is `shop/:categoryId/:itemId`,
-so the prefix may be `shop` rather than `catalog`; if so, every annotation path is
-updated consistently and the tests track the confirmed paths.
+`http://18.222.237.167:8000/` → e.g. `…/ui/catalog/categories/{id}/items`. The
+`ui/catalog/…` prefix is **verified** (OpenAPI index lines 1308/1311/1321;
+`frontend/src/api/endpoints/cart.ts`). `page_size` defaults to 50 to match the web
+client; a nullable `next_token` is omitted from the query string by Retrofit when
+`null` (matching the web `searchCatalogItems`, which never sends `next_token`).
 
 ### 4.3 Hilt provider
 
@@ -331,78 +336,72 @@ fixtures only.
 
 ## 5. API Contract
 
-Base path (`dev`): `http://18.222.237.167:8000/`. All responses are JSON; all
-endpoints are idempotent GETs requiring the session cookie (set by the auth flow)
-and tolerating the AND-013 401-refresh-once behavior.
+Base path (`dev`): `http://18.222.237.167:8000/`. All responses are JSON; all three
+endpoints are idempotent GETs. **CORRECTED auth note:** the web client authenticates
+with `Authorization: Bearer <accessToken>` (from the auth store) **plus** cookies
+(`credentials: "include"`) **plus** an `X-CSRF-Token` header sourced from the
+`ui_csrf` cookie on mutating verbs (`client.ts`). The OpenAPI also documents
+`X-SESSION-ID`, `X-IMPERSONATION-TOKEN`, and `X-API-Key` params on these routes.
+The transport stack (AND-027/AND-009..AND-013) attaches whatever is required; this
+layer declares no manual headers. CSRF is irrelevant to these GETs.
 
-### GET `catalog/categories`
-Response `200`:
-```json
-{
-  "categories": [
-    { "id": "cat_apparel", "name": "Apparel", "slug": "apparel",
-      "image_url": "http://.../apparel.png", "item_count": 42, "parent_id": null }
-  ]
-}
-```
-
-### GET `catalog/categories/{categoryId}`
-Response `200`: a single `CategoryDto`. `404` if unknown.
-```json
-{ "id": "cat_apparel", "name": "Apparel", "slug": "apparel",
-  "description": "Shirts, hats, more", "item_count": 42 }
-```
-
-### GET `catalog/categories/{categoryId}/items?page=1&limit=20`
-Response `200`:
+### GET `ui/catalog/categories?page_size=50&next_token=...`
+Response `200` (schema `CatalogCategoryListOut`):
 ```json
 {
   "items": [
-    { "id": "itm_001", "name": "Logo Tee", "sku": "TEE-001",
-      "category_id": "cat_apparel",
-      "price": { "amount_minor": 1999, "currency": "USD", "display": "$19.99" },
-      "image_url": "http://.../tee.png", "in_stock": true }
+    { "category_id": "cat_apparel", "name": "Apparel",
+      "description": "Shirts, hats, more", "creator_id": "usr_1",
+      "created_at": "2026-01-02T10:00:00Z" }
   ],
-  "total": 42, "page": 1, "limit": 20, "has_more": true, "next_cursor": null
+  "next_token": "eyJwayI6..."
 }
 ```
 
-### GET `catalog/items/{itemId}`
-Response `200`:
+### GET `ui/catalog/categories/{categoryId}/items?page_size=50&next_token=...`
+Response `200` (schema `CatalogItemListOut`):
 ```json
 {
-  "id": "itm_001", "name": "Logo Tee", "sku": "TEE-001",
-  "category_id": "cat_apparel", "description": "100% cotton logo tee.",
-  "price": { "amount_minor": 1999, "currency": "USD", "display": "$19.99" },
-  "media": [
-    { "url": "http://.../tee_1.png", "type": "image",
-      "thumbnail_url": "http://.../tee_1_thumb.png", "alt": "Front" }
-  ],
-  "in_stock": true, "stock_qty": 120,
-  "attributes": { "color": "black", "size": "M" }
-}
-```
-`404` if the item id is unknown.
-
-### GET `catalog/search?q=tee&page=1&limit=20`
-Response `200`:
-```json
-{
-  "query": "tee", "total": 3, "page": 1, "limit": 20, "has_more": false,
   "items": [
-    { "id": "itm_001", "name": "Logo Tee", "sku": "TEE-001",
-      "category_id": "cat_apparel",
-      "price": { "amount_minor": 1999, "currency": "USD" }, "in_stock": true }
-  ]
+    { "category_id": "cat_apparel", "item_id": "itm_001", "name": "Logo Tee",
+      "description": "100% cotton logo tee.",
+      "price_cents": 1999, "currency": "USD",
+      "image_urls": ["http://.../tee_1.png", "http://.../tee_2.png"],
+      "attributes": { "color": "black", "size": "M" },
+      "creator_id": "usr_1", "position": 0,
+      "stock_count": 120, "stock_status": "in_stock", "low_stock_threshold": 5,
+      "stock_updated_at": "2026-05-01T00:00:00Z",
+      "created_at": "2026-01-02T10:00:00Z", "updated_at": "2026-05-01T00:00:00Z" }
+  ],
+  "next_token": null
 }
 ```
 
-**Error envelope (all endpoints):** FastAPI `detail` union
-(`string | [{msg,type,loc}] | {code,...}`). Mapping to a typed `ApiError` is owned
-by **AND-015**; this ticket lets non-2xx surface as `retrofit2.HttpException` so
-AND-015/AND-018 can map it. Exact path prefix (`catalog` vs `shop`), pagination
-param names (`page`/`limit` vs `offset`/`cursor`), and `required` arrays are
-confirmed against `/openapi.json` before coding (Q-1).
+### GET `ui/catalog/items/search?q=tee&page_size=50`
+Response `200` (schema `CatalogItemListOut` — same envelope as item list; **no**
+`query`/`total`/`page`/`limit`/`has_more` fields):
+```json
+{
+  "items": [
+    { "category_id": "cat_apparel", "item_id": "itm_001", "name": "Logo Tee",
+      "price_cents": 1999, "currency": "USD",
+      "image_urls": ["http://.../tee_1.png"], "attributes": {},
+      "created_at": "2026-01-02T10:00:00Z", "updated_at": "2026-05-01T00:00:00Z" }
+  ],
+  "next_token": null
+}
+```
+
+**Error envelope (all endpoints) — CORRECTED.** The documented error responses are
+`422` (`HTTPValidationError`) on all three reads, plus `400/401/403/429` on the
+read routes (OpenAPI). There is **no `404`** documented for any catalog read (no
+single-resource GET exists). `HTTPValidationError` is `{ "detail":
+[{ "loc": [...], "msg": "...", "type": "..." }] }` (`ValidationError`; `loc/msg/type`
+all required). The web `client.ts` additionally tolerates a `detail` object
+carrying a `code` for authorization errors, so the practical `detail` union is
+`[{loc,msg,type}] | {code,...} | string`. Mapping to a typed `ApiError` is owned by
+**AND-015**; this ticket lets non-2xx surface as `retrofit2.HttpException` so
+AND-015/AND-018 can map it.
 
 ## 6. Data & State Management
 
@@ -419,13 +418,14 @@ confirmed against `/openapi.json` before coding (Q-1).
   `CatalogApi` neither reads nor writes cookies. CSRF (`ui_csrf` → `X-CSRF-Token`)
   is irrelevant to these GETs (CSRF applies to mutating verbs) but is handled
   globally regardless.
-- **Pagination state** (current page/cursor, accumulation) is owned by the Paging 3
-  layer downstream; the DTOs only carry the per-response page metadata (`page`,
-  `limit`, `total`, `has_more`, `next_cursor`).
+- **Pagination state** (cursor accumulation) is owned by the Paging 3 layer
+  downstream; the DTOs only carry the single page-metadata field that exists on the
+  wire — **`next_token`** (nullable; CORRECTED — there is no `page`/`limit`/`total`/
+  `has_more`/`next_cursor`). End-of-pages is `next_token == null`.
 - **Serialization** uses the shared Moshi codegen adapters via the AND-010
   converter; unknown keys are ignored, absent optional fields fall back to Kotlin
-  defaults. ISO-4217 currency and minor-unit amounts are preserved exactly (`Long`,
-  never `Double`).
+  defaults. ISO-4217 `currency` and `price_cents` minor-unit amounts are preserved
+  exactly (`Long`, never `Double`).
 - **Threading:** suspend methods are invoked from an IO-dispatcher coroutine at the
   repository layer; this ticket imposes no dispatcher.
 
@@ -434,34 +434,39 @@ confirmed against `/openapi.json` before coding (Q-1).
 Responsibilities here are narrow: declare endpoints and DTOs so failures propagate
 cleanly and deserialization is robust.
 
-- **Non-2xx** (`404` unknown category/item, `422` bad query) surfaces as
+- **Non-2xx** (`422` validation, plus documented `400/401/403/429`) surfaces as
   `retrofit2.HttpException` carrying the raw error body for AND-015 to decode the
-  FastAPI `detail`. Nothing is swallowed here.
+  FastAPI `detail`. Nothing is swallowed here. **CORRECTED:** no `404` is documented
+  for catalog reads (no single-resource GET exists); an unknown `categoryId` returns
+  `422`/empty per the backend, not `404`.
 - **`401`** on any catalog call is intercepted by the AND-013 `Authenticator`,
   which calls `sessionRefresh()` once and retries; only a second `401` propagates,
   which the consumer routes to login (AND-025).
 - **Transport failures** (`SocketTimeoutException`, `UnknownHostException`,
   `IOException`) propagate unchanged. The ~20s timeouts and **bounded backoff for
-  idempotent GETs** are owned by AND-009/AND-016 on the shared client — all five
+  idempotent GETs** are owned by AND-009/AND-016 on the shared client — all **three**
   catalog methods are GETs and are therefore retry-eligible there.
 - **Deserialization robustness (DTO layer):**
-  - Missing **required** field (e.g. `id`, `name`, `price`) → `JsonDataException`
-    (desired fail-fast; asserted in tests).
+  - Missing **required** field (e.g. `item_id`, `name`, `price_cents`, `currency`,
+    `created_at`) → `JsonDataException` (desired fail-fast; asserted in tests).
   - Unknown/extra JSON keys → skipped silently (additive backend evolution safe).
   - `null` for a nullable field → tolerated; `null` for a non-null field →
     `JsonDataException`.
   - Empty arrays/objects → modeled via `emptyList()`/`emptyMap()` defaults so a
     sparse category/search response never produces nulls.
-- **Money safety:** `amount_minor` is `Long`; a non-integer/overflowing value
+- **Money safety:** `price_cents` is `Long`; a non-integer/overflowing value
   surfaces as `JsonDataException` rather than silent float truncation.
 - This ticket maps **no** errors itself and applies **no** retry policy — those are
   AND-015 (`ApiError`), AND-018 (`ApiResult`), and AND-009/AND-016 (client retry).
 
 ## 8. Security & Privacy
 
-- **Auth:** catalog endpoints require the cookie-based session; the shared client
-  attaches cookies/CSRF transparently. `CatalogApi` declares no manual
-  `Cookie`/`Authorization`/`X-CSRF-Token` headers.
+- **Auth:** catalog endpoints require the authenticated session. **CORRECTED:** the
+  web client sends both a `Bearer` access token (`Authorization`) and cookies
+  (`credentials: "include"`), not cookies alone; the OpenAPI also lists
+  `X-SESSION-ID`/`X-IMPERSONATION-TOKEN`/`X-API-Key` params. The shared client
+  (AND-027) attaches whatever the transport requires transparently. `CatalogApi`
+  declares no manual `Cookie`/`Authorization`/`X-CSRF-Token`/`X-SESSION-ID` headers.
 - **Transport:** on `dev` these ride plaintext HTTP (`http://18.222.237.167:8000`)
   — a known dev-only risk permitted by the scoped cleartext config (AND-006);
   `staging`/`prod` are HTTPS-only.
@@ -478,13 +483,14 @@ cleanly and deserialization is robust.
 Not applicable as a UI surface — this is a headless transport + DTO layer with no
 Compose UI and no `strings.xml` entries. Two pass-through constraints are recorded
 for downstream consumers (AND-205/AND-206):
-- `MediaAssetDto.alt` is preserved verbatim so the product/gallery UI can supply
-  Compose `contentDescription` for images.
-- `PriceDto` exposes `amountMinor` + `currency` (not just a pre-formatted
-  `display`) so the UI/domain layer can apply locale-aware currency formatting
-  (`NumberFormat.getCurrencyInstance(locale)`); the backend `display` string is a
-  fallback, not the canonical render. Localization of catalog UI text is owned by
-  the catalog feature tickets.
+- **CORRECTED:** there is no `MediaAssetDto`/`alt` on the wire — media is a flat
+  `image_urls: List<String>` with no per-image alt text. The product/gallery UI
+  (AND-206) must synthesize Compose `contentDescription` from the item `name`/index,
+  since the backend supplies no alt text.
+- `CatalogItemDto` exposes `priceCents` + `currency` (no pre-formatted display
+  string exists on the wire) so the UI/domain layer applies locale-aware currency
+  formatting (`NumberFormat.getCurrencyInstance(locale)`). Localization of catalog
+  UI text is owned by the catalog feature tickets.
 
 ## 10. Telemetry & Logging
 
@@ -512,16 +518,18 @@ Captured samples live at
   is non-null and equals the expected object; re-serializing yields JSON whose
   parsed tree equals the original parsed tree (compare as Moshi `Map`/`JSONObject`
   to ignore key order/whitespace).
-- **Snake_case mapping.** Serialized `ItemSummaryDto` contains `"category_id"` and
-  `"in_stock"`, never `"categoryId"`/`"inStock"`.
-- **Required-field failure.** Removing `id` from an `ItemDetailDto` sample (or
-  `amount_minor` from `PriceDto`) causes `fromJson` to throw `JsonDataException`.
+- **Snake_case mapping.** Serialized `CatalogItemDto` contains `"category_id"`,
+  `"item_id"`, `"price_cents"`, and `"image_urls"`, never the camelCase forms.
+- **Required-field failure.** Removing `item_id` from a `CatalogItemDto` sample (or
+  `price_cents`, `currency`, `created_at`) causes `fromJson` to throw
+  `JsonDataException`.
 - **Unknown-key tolerance.** A sample with an extra `"server_time"` /
   `"experimental_flag"` key deserializes without error.
-- **Money fidelity.** `amount_minor: 1999` deserializes to `Long` `1999`; a value
-  with cents preserved through round-trip (no float drift).
-- **Defaults.** A category response with `"categories": []` yields an empty list,
-  not null; an item with no `media` yields `emptyList()`.
+- **Money fidelity.** `price_cents: 1999` deserializes to `Long` `1999`, preserved
+  through round-trip (no float drift).
+- **Defaults.** A list response with `"items": []` yields an empty list, not null;
+  an item with empty `image_urls`/`attributes` yields `emptyList()`/`emptyMap()`;
+  a `null`/absent `next_token` yields `null`.
 
 ### 11.2 MockWebServer endpoint tests (`core-network`)
 Harness mirrors the AND-027 pattern:
@@ -536,40 +544,45 @@ private fun api(server: MockWebServer): CatalogApi {
 }
 ```
 
-- **T-1 `listCategories`** — asserts `GET /catalog/categories`, decodes
-  `CategoryListDto` with N categories.
-- **T-2 `getCategory`** — asserts `GET /catalog/categories/cat_apparel` (path param
-  interpolated), decodes `CategoryDto`.
-- **T-3 `listItems`** — asserts `GET /catalog/categories/cat_apparel/items?page=2&limit=10`
-  (path + query params present and correct), decodes `ItemPageDto` including
-  `total`/`has_more`.
+**CORRECTED** — three endpoints (not five); no `getCategory`/`getItem`; paths are
+`ui/catalog/...`; paging is `page_size`/`next_token`; error code is `422` not `404`.
+
+- **T-1 `listCategories`** — asserts `GET /ui/catalog/categories?page_size=50`,
+  decodes `CatalogCategoryListDto` with N categories and `next_token`.
+- **T-2 `listItems`** — asserts
+  `GET /ui/catalog/categories/cat_apparel/items?page_size=10&next_token=abc`
+  (path + query params present and correct), decodes `CatalogItemListDto`.
   ```kotlin
   @Test fun listItems_sendsPagingQueryAndDecodes() = runTest {
       val server = MockWebServer().apply {
-          enqueue(MockResponse().setBody(loadFixture("catalog/item_page.json"))); start()
+          enqueue(MockResponse().setBody(loadFixture("catalog/item_list.json"))); start()
       }
-      val page = api(server).listItems("cat_apparel", page = 2, limit = 10)
+      val page = api(server).listItems("cat_apparel", pageSize = 10, nextToken = "abc")
       val req = server.takeRequest()
       assertEquals("GET", req.method)
-      assertEquals("/catalog/categories/cat_apparel/items?page=2&limit=10", req.path)
-      assertEquals(42, page.total)
-      assertTrue(page.hasMore)
-      assertEquals(1999L, page.items.first().price.amountMinor)
+      assertEquals(
+          "/ui/catalog/categories/cat_apparel/items?page_size=10&next_token=abc",
+          req.path,
+      )
+      assertEquals(1999L, page.items.first().priceCents)
+      assertEquals("USD", page.items.first().currency)
+      assertNull(page.nextToken)   // fixture has next_token: null → end of pages
       server.shutdown()
   }
   ```
-- **T-4 `getItem`** — asserts `GET /catalog/items/itm_001`, decodes `ItemDetailDto`
-  including nested `media` and `attributes`.
-- **T-5 `searchCatalog`** — asserts `GET /catalog/search?q=tee&page=1&limit=20`
-  (`q` URL-encoded), decodes `SearchResultDto`.
-- **T-6 error propagation** — a `404` from `getItem` throws `retrofit2.HttpException`
-  with `code() == 404` (confirms non-2xx not swallowed, leaving room for AND-015).
-- **T-7 Hilt provider** — `@HiltAndroidTest` (or minimal `core-testing` harness)
+- **T-3 `searchCatalog`** — asserts `GET /ui/catalog/items/search?q=tee&page_size=50`
+  (`q` URL-encoded), decodes `CatalogItemListDto` (same envelope as item list).
+- **T-4 nullable `next_token` omission** — `listCategories(nextToken = null)` sends
+  a path with **no** `next_token` query param (Retrofit drops null `@Query`).
+- **T-5 error propagation** — a `422` (`{"detail":[{"loc":["query","q"],"msg":...,
+  "type":...}]}`) from `searchCatalog` throws `retrofit2.HttpException` with
+  `code() == 422`, body intact (non-2xx not swallowed, leaving room for AND-015).
+- **T-6 Hilt provider** — `@HiltAndroidTest` (or minimal `core-testing` harness)
   injects `CatalogApi`, asserts non-null `@Singleton` built on the shared Retrofit
   (same instance on repeated injection).
 
 Coverage target: ≥90% on the new surface (DTOs + interface binding + provider);
-each of the five endpoints has at least one verb/path/query assertion; every DTO
+each of the three endpoints has at least one verb/path/query assertion; every DTO
 has at least one round-trip test and committed fixture.
 
 ## 12. Dependencies & Sequencing
@@ -587,8 +600,11 @@ GETs) applies to these endpoints once present but is not a compile dependency.
 
 **Downstream (this ticket blocks):**
 - **AND-205** (Catalog / category browse) — consumes `listCategories`/`listItems`
-  via a repository + Paging 3.
-- **AND-206** (Product detail) — consumes `getItem`/`getCategory`.
+  via a repository + Paging 3 (token/`next_token` cursor).
+- **AND-206** (Product detail) — **CORRECTED:** since no single-item/single-category
+  GET exists, AND-206 must derive item detail by locating the item in a
+  `listItems(categoryId)` result (mirroring web `ProductDetail.tsx`), or via a
+  repository cache keyed on `item_id`. It does NOT consume a `getItem`/`getCategory`.
 - **AND-207** (Catalog search) — consumes `searchCatalog`.
 - **AND-208** (Catalog ViewModels) — wraps the repository in `ApiResult`/`UiState`.
 - (AND-209 catalog tests transitively depend on this surface.)
@@ -597,62 +613,65 @@ GETs) applies to these endpoints once present but is not a compile dependency.
 `required` arrays against `/openapi.json` + web reference (Q-1..Q-3); (2) define
 DTOs in `core-model.catalog` + commit fixtures; (3) write
 `CatalogDtoRoundTripTest`; (4) declare `CatalogApi`; (5) add `CatalogApiModule`;
-(6) write MockWebServer tests T-1..T-7.
+(6) write MockWebServer tests T-1..T-6.
 
 ## 13. Risks & Open Questions
 
-- **R-1 Path-prefix ambiguity.** Endpoints may be under `shop/…` (web route family
-  `shop/:categoryId/:itemId`) rather than `catalog/…`. Mitigation: confirm via
-  `/openapi.json` + `frontend/src/api/endpoints/`; update all annotation paths and
-  test assertions consistently. Guarded by T-1..T-5.
-- **R-2 Pagination contract.** `page`/`limit` vs `offset`/`limit` vs
-  `cursor`/`limit`, and bare-array vs enveloped responses, are unconfirmed.
-  Mitigation: match the live contract; if cursor-based, `listItems`/`searchCatalog`
-  take `@Query("cursor") cursor: String?` and the envelope exposes `next_cursor`
-  (already modeled). Guarded by T-3/T-5.
-- **R-3 Item summary vs detail divergence.** The list/grid item shape may differ
-  from the detail shape (e.g. detail-only fields). Modeled as separate
-  `ItemSummaryDto`/`ItemDetailDto`; if identical, collapse during implementation.
-- **R-4 Money representation.** Backend may send a decimal string (`"19.99"`) or
-  float rather than `amount_minor`. Mitigation: confirm via OpenAPI; if decimal
-  string, `PriceDto` keeps `amount` as `String` and parsing to minor units moves to
-  the domain layer (no float). Guarded by the money-fidelity test.
-- **R-5 Attributes shape.** `attributes` may be structured rather than
-  `Map<String,String>`. Mitigation: confirm; switch to `List<AttributeDto>` if so.
-- **Q-1** Exact path prefix + pagination param names? *Proposed:* `catalog/…` with
-  `page`/`limit`; confirm against `/openapi.json`/web reference before coding.
-- **Q-2** Is search's envelope identical to item-list's? *Proposed:* keep both;
-  collapse `SearchResultDto` into `ItemPageDto` if identical.
-- **Q-3** Are `ItemDetailDto.attributes` flat key/value or structured? *Proposed:*
-  flat `Map<String,String>`; revisit per OpenAPI.
+All of the prior open risks/questions were **RESOLVED during this review** against
+OpenAPI + `cart.ts`/`types.ts`; recorded here with their resolution.
+
+- **R-1 Path-prefix ambiguity — RESOLVED.** Prefix is `ui/catalog/` (not `catalog/`
+  nor `shop/`; `shop/...` is only a client-side React route). Guarded by T-1..T-3.
+- **R-2 Pagination contract — RESOLVED.** Token-based: `page_size` + `next_token`;
+  enveloped `{ items, next_token }` only. No `page`/`limit`/`offset`/`total`/
+  `has_more`. Guarded by T-2/T-3/T-4.
+- **R-3 Item summary vs detail divergence — RESOLVED.** One shape (`CatalogItemOut`)
+  serves both list and (client-derived) detail; a single `CatalogItemDto` is used.
+- **R-4 Money representation — RESOLVED.** Flat `price_cents` (integer) + `currency`
+  (string), not a decimal string and not a nested object. `Long` `price_cents`.
+  Guarded by the money-fidelity test.
+- **R-5 Attributes shape — RESOLVED.** `attributes` is `additionalProperties: true`
+  (arbitrary JSON values), modeled as `Map<String, Any?>` (not `Map<String,String>`,
+  which would throw on non-string values).
+- **R-6 No single-resource GET — NEW (RESOLVED).** There is no
+  `GET /ui/catalog/categories/{id}` or `GET /ui/catalog/items/{id}`; `getCategory`/
+  `getItem` were removed and downstream detail is derived from list results.
+- **Q-1** Path prefix + pagination params? → **Answered:** `ui/catalog/…`,
+  `page_size`/`next_token`.
+- **Q-2** Is search's envelope identical to item-list's? → **Answered:** yes,
+  identical (`CatalogItemListOut`); a single `CatalogItemListDto` is reused.
+- **Q-3** Are item `attributes` flat key/value or structured? → **Answered:**
+  free-form (`additionalProperties: true`) → `Map<String, Any?>`.
 
 ## 14. Acceptance Criteria
 
-- **AC-1 (backlog).** Catalog DTOs (`CategoryDto`, `CategoryListDto`, `PriceDto`,
-  `MediaAssetDto`, `ItemSummaryDto`, `ItemDetailDto`, `ItemPageDto`,
-  `SearchResultDto`) exist in `com.testlogon.android.core.model.catalog` as
-  immutable `@JsonClass(generateAdapter=true)` data classes.
+- **AC-1 (backlog).** Catalog DTOs (`CatalogCategoryDto`, `CatalogCategoryListDto`,
+  `CatalogItemDto`, `CatalogItemListDto`) exist in
+  `com.testlogon.android.core.model.catalog` as immutable
+  `@JsonClass(generateAdapter=true)` data classes mirroring `CatalogCategoryOut`,
+  `CatalogItemOut`, `CatalogCategoryListOut`, `CatalogItemListOut`.
 - **AC-2 (backlog).** Catalog + item payloads **map (tested)**: every documented
   payload in Sections 4–5 (de)serializes the documented JSON exactly, proven by
   `CatalogDtoRoundTripTest` against committed fixtures (parsed-tree equality,
   snake_case keys verified).
-- **AC-3.** `CatalogApi` declares all five operations (`listCategories`,
-  `getCategory`, `listItems`, `getItem`, `searchCatalog`); the module compiles
-  against the catalog DTOs.
+- **AC-3.** `CatalogApi` declares the three operations (`listCategories`,
+  `listItems`, `searchCatalog`) — and **no** `getCategory`/`getItem` (no such
+  endpoint exists); the module compiles against the catalog DTOs.
 - **AC-4.** Each endpoint is callable and its **verb + resolved path + query
-  params** match Section 5, asserted with MockWebServer (T-1..T-5), including
-  `listItems` paging query and URL-encoded `searchCatalog` `q`.
-- **AC-5.** Required-field absence (e.g. `id`, `amount_minor`) throws
-  `JsonDataException`; unknown JSON keys are tolerated; empty collections default to
-  `emptyList()`/`emptyMap()`.
-- **AC-6.** Money is lossless: `amount_minor` decodes to `Long` and survives
+  params** match Section 5 (`ui/catalog/...`, `page_size`/`next_token`), asserted
+  with MockWebServer (T-1..T-4), including `listItems` paging query, null-token
+  omission, and URL-encoded `searchCatalog` `q`.
+- **AC-5.** Required-field absence (e.g. `item_id`, `price_cents`, `currency`,
+  `created_at`) throws `JsonDataException`; unknown JSON keys are tolerated; empty
+  collections default to `emptyList()`/`emptyMap()`; absent `next_token` is `null`.
+- **AC-6.** Money is lossless: `price_cents` decodes to `Long` and survives
   round-trip with no float drift.
-- **AC-7.** Non-2xx (e.g. `404` from `getItem`) surfaces as `HttpException` and is
-  not swallowed (T-6).
+- **AC-7.** Non-2xx (e.g. `422` from `searchCatalog`) surfaces as `HttpException`
+  with the body intact and is not swallowed (T-5).
 - **AC-8.** `CatalogApi` is Hilt-provided as a `@Singleton` built on the shared
   `Retrofit`; repeated injection yields the same instance; no new
   `OkHttpClient`/`Retrofit`/`Moshi` is constructed and no per-method cookie/CSRF
-  headers are declared (T-7).
+  headers are declared (T-6).
 - **AC-9.** All tests pass in CI; modules build clean under AGP 8.7.3 / Gradle 8.9
   / JDK 17 with KSP-generated adapters present and no new lint/detekt regressions.
 
@@ -662,11 +681,12 @@ DTOs in `core-model.catalog` + commit fixtures; (3) write
   `CatalogApiModule` (`com.testlogon.android.core.network.catalog[.di]`) are
   implemented under `core-model`/`core-network`, package base
   `com.testlogon.android`; no DTOs redefined elsewhere.
-- Open questions Q-1/Q-2/Q-3 (and risks R-1/R-2/R-4/R-5) are resolved against
-  `/openapi.json` and the web reference, and the interface paths/query params and
-  DTO shapes reflect the confirmed contract.
+- Open questions Q-1/Q-2/Q-3 and risks R-1..R-6 are **resolved** (see §13 and §16)
+  against `/openapi.json` and the web reference, and the interface paths/query
+  params and DTO shapes reflect the confirmed contract (`ui/catalog/...`,
+  `page_size`/`next_token`, flat `price_cents`/`currency`, `image_urls`).
 - `CatalogDtoRoundTripTest` (with committed fixtures under
-  `core-model/src/test/resources/catalog/`) and the MockWebServer tests T-1..T-7
+  `core-model/src/test/resources/catalog/`) and the MockWebServer tests T-1..T-6
   are implemented and green in CI; ≥90% line coverage on the new surface; every
   endpoint has a verb/path/query assertion and every DTO has a round-trip test.
 - No second `OkHttpClient`/`Retrofit`/`Moshi`; no manual cookie/CSRF/auth headers
@@ -680,3 +700,250 @@ DTOs in `core-model.catalog` + commit fixtures; (3) write
 - A one-line note in the `core-network` README (owned by AND-007) records the
   `CatalogApi` path/verb/query map and the delegation of cookie/CSRF/refresh/retry
   to AND-011/AND-012/AND-013/AND-016.
+
+## 16. Citations & Assumption Audit
+
+Every concrete API/transport claim, with verdict and an exact source pointer.
+Sources: **OpenAPI index** = `reference/openapi.index.txt`; **OpenAPI spec** =
+`reference/openapi.pretty.json` (components.schemas); **FE** = `reference/src/...`.
+
+1. **Path prefix is `ui/catalog/` (not `catalog/`, not `shop/`).**
+   VERDICT: **Corrected** (spec originally guessed `catalog/`/`shop/`).
+   SOURCE: OpenAPI `GET /ui/catalog/categories` (index L1308),
+   `GET /ui/catalog/categories/{category_id}/items` (L1311),
+   `GET /ui/catalog/items/search` (L1321); FE `src/api/endpoints/cart.ts:
+   getCategories/getCategoryItems/searchCatalogItems`.
+2. **`listCategories` = `GET /ui/catalog/categories` → `CatalogCategoryListOut`.**
+   VERDICT: **Verified.** SOURCE: OpenAPI index L1308; spec `CatalogCategoryListOut`.
+3. **`listItems` = `GET /ui/catalog/categories/{category_id}/items` →
+   `CatalogItemListOut`.** VERDICT: **Verified.** SOURCE: index L1311.
+4. **`searchCatalog` = `GET /ui/catalog/items/search?q=...` → `CatalogItemListOut`.**
+   VERDICT: **Verified.** SOURCE: index L1321; FE `cart.ts: searchCatalogItems`.
+5. **No single-category GET and no single-item-detail GET exist.**
+   VERDICT: **Corrected** (spec defined `getCategory`/`getItem`). SOURCE: OpenAPI
+   index — `/ui/catalog/categories/{category_id}` only has DELETE (L1310);
+   `/ui/catalog/items/{item_id}/...` only exposes `/reviews` (L1322) and `/stock`
+   (L1325), no bare-item GET; FE `src/pages/shop/ProductDetail.tsx` derives the item
+   via `items.find((i) => i.item_id === itemId)`, not a detail call.
+6. **All catalog reads are HTTP GET / idempotent.** VERDICT: **Verified.**
+   SOURCE: OpenAPI index L1308/L1311/L1321 (METHOD = GET).
+7. **Pagination params are `page_size` + `next_token` (token/cursor), not
+   `page`/`limit`.** VERDICT: **Corrected.** SOURCE: OpenAPI index params on
+   L1308/L1311/L1321 (`page_size,next_token`); FE `cart.ts` (`page_size`,
+   `next_token`); spec `PaginatedList<T>` in `src/api/types.ts`.
+8. **List envelope shape is exactly `{ items, next_token }` — no `total`, `page`,
+   `limit`, `has_more`, `next_cursor`.** VERDICT: **Corrected.** SOURCE: spec
+   `CatalogCategoryListOut` (openapi.pretty.json L14782) and `CatalogItemListOut`
+   (L14939); FE `types.ts: PaginatedList<T> { items; next_token? }`.
+9. **`CatalogCategoryOut` fields: required `category_id, name, created_at`; optional
+   `description, creator_id`. No `slug`/`image_url`/`item_count`/`parent_id`/`id`.**
+   VERDICT: **Corrected** (spec invented `id`/`slug`/`image_url`/`item_count`/
+   `parent_id`). SOURCE: openapi.pretty.json `CatalogCategoryOut` L14809–14853;
+   FE `types.ts: CatalogCategory`.
+10. **`CatalogItemOut` required: `category_id, item_id, name, price_cents, currency,
+    image_urls, attributes, created_at, updated_at`; optional `description,
+    creator_id, position, stock_count, stock_status(=unlimited), low_stock_threshold
+    (=5), stock_updated_at`.** VERDICT: **Corrected.** SOURCE: openapi.pretty.json
+    `CatalogItemOut` L14966–15087; FE `types.ts: CatalogItem`.
+11. **Money is flat `price_cents` (integer) + `currency` (string), NOT a nested
+    `price{amount_minor,currency,display}` object.** VERDICT: **Corrected.** SOURCE:
+    `CatalogItemOut.price_cents`/`currency` (L15038/L14992); FE
+    `src/pages/shop/Catalog.tsx`: `formatPrice(item.price_cents, item.currency)`.
+12. **Media is a flat `image_urls: string[]`, NOT a `media: MediaAssetDto[]` list,
+    and there is no per-image `alt`.** VERDICT: **Corrected.** SOURCE:
+    `CatalogItemOut.image_urls` (L15007); FE `ProductDetail.tsx`
+    `item.image_urls[activeImageIndex]`.
+13. **No item `sku` and no `in_stock` boolean (stock is `stock_count`/
+    `stock_status`).** VERDICT: **Corrected** (spec invented `sku`/`in_stock`).
+    SOURCE: `CatalogItemOut` property set (L14966–15087) — no `sku`/`in_stock`.
+14. **`attributes` is free-form (`additionalProperties: true`) → modeled as
+    `Map<String, Any?>`, not `Map<String,String>`.** VERDICT: **Corrected.**
+    SOURCE: `CatalogItemOut.attributes` L14968 (`additionalProperties: true`).
+15. **Search envelope is identical to item-list (`CatalogItemListOut`); no separate
+    `SearchResultDto`/`query`/`total`.** VERDICT: **Corrected.** SOURCE: OpenAPI
+    L1321 (`resp=200:CatalogItemListOut`); FE `searchCatalogItems` returns
+    `PaginatedList<CatalogItem>`.
+16. **Error responses: `422` (`HTTPValidationError`) on all reads, plus
+    `400/401/403/429` on the read routes; no `404`.** VERDICT: **Corrected** (spec
+    asserted `404` from `getItem`/unknown ids). SOURCE: OpenAPI index L1308/L1311/
+    L1321 (`resp=...;422:HTTPValidationError;400;401;403;429`).
+17. **`HTTPValidationError` = `{ "detail": [ { loc, msg, type } ] }`
+    (`ValidationError`, all three required).** VERDICT: **Verified.** SOURCE:
+    openapi.pretty.json `HTTPValidationError` L37133, `ValidationError` L80337.
+18. **Auth: web client sends `Authorization: Bearer <token>` + cookies
+    (`credentials:"include"`) + `X-CSRF-Token` (from `ui_csrf` cookie); routes also
+    list `X-SESSION-ID`/`X-IMPERSONATION-TOKEN`/`X-API-Key`.** VERDICT: **Corrected**
+    (spec called it "cookie-based session" only). SOURCE: FE `src/api/client.ts`
+    (`Authorization` Bearer, `getCookie("ui_csrf")` → `X-CSRF-Token`,
+    `credentials:"include"`); OpenAPI index params on L1308/L1311/L1321.
+19. **CSRF (`ui_csrf` → `X-CSRF-Token`) applies to mutating verbs and is irrelevant
+    to these GETs.** VERDICT: **Verified.** SOURCE: FE `client.ts` sets
+    `X-CSRF-Token` from `ui_csrf`; GETs are read-only.
+20. **`@Query` URL-encoding for the `q` search term (no manual concatenation).**
+    VERDICT: **Verified (framework ref).** SOURCE: Retrofit `@Query` encodes by
+    default — https://square.github.io/retrofit/2.x/retrofit/retrofit2/http/Query.html
+21. **Retrofit drops a `null` `@Query` parameter from the URL.** VERDICT:
+    **Verified (framework ref).** SOURCE: Retrofit `@Query` Javadoc (null values
+    omitted) — https://square.github.io/retrofit/2.x/retrofit/retrofit2/http/Query.html
+22. **Moshi codegen ignores unknown JSON keys and throws `JsonDataException` on a
+    missing non-null required field.** VERDICT: **Verified (framework ref).**
+    SOURCE: Moshi codegen behavior — https://github.com/square/moshi#codegen
+23. **Hilt `@Provides @Singleton` on the shared `Retrofit` yields one instance.**
+    VERDICT: **Verified (framework ref).** SOURCE: Dagger Hilt scoping —
+    https://developer.android.com/training/dependency-injection/hilt-android#scoping
+
+### Corrections made
+- **C-1** Path prefix `catalog/`/`shop/` → **`ui/catalog/`** (items 1, FR-3, §2,
+  §4.2, §5, T-1..T-3).
+- **C-2** Removed non-existent `getCategory`/`getItem` endpoints and their DTO
+  consumers; downstream detail now derived from list results (items 5, FR-2, §4.2,
+  §12 AND-206).
+- **C-3** Pagination `page`/`limit`/`has_more`/`next_cursor` → **`page_size`/
+  `next_token`**; envelope reduced to `{ items, next_token }` (items 7–8, FR-4, §6).
+- **C-4** Money: nested `PriceDto{amount_minor,currency,display}` → flat
+  `price_cents: Long` + `currency: String`; no `display` (items 11, FR-1/FR-7).
+- **C-5** Media: `media: List<MediaAssetDto>` (+`alt`) → `image_urls: List<String>`;
+  removed `MediaAssetDto` (items 12, FR-1, §9).
+- **C-6** Removed invented item fields `sku`/`in_stock`; added real
+  `stock_count`/`stock_status`/`low_stock_threshold`/`position`/timestamps
+  (items 10, 13).
+- **C-7** `attributes` `Map<String,String>` → `Map<String, Any?>` (item 14).
+- **C-8** Search: removed separate `SearchResultDto`/`query`/`total`; reuse
+  `CatalogItemListDto` (item 15).
+- **C-9** DTO renames: `CategoryDto`→`CatalogCategoryDto`, `CategoryListDto`→
+  `CatalogCategoryListDto`, `ItemSummaryDto`/`ItemDetailDto`→`CatalogItemDto`,
+  `ItemPageDto`→`CatalogItemListDto`; category field `id`→`category_id` etc.
+- **C-10** Error model: `404` claim → **`422`** (+`400/401/403/429`); documented the
+  real `HTTPValidationError`/`ValidationError` shape (items 16–17, §5, §7, AC-7).
+- **C-11** Auth description: "cookie-based session" → Bearer token + cookies +
+  CSRF + session/impersonation/api-key headers (item 18, §5, §8).
+- **C-12** Test plan reduced from five endpoints (T-1..T-7 incl. getCategory/getItem)
+  to three (T-1..T-6), with corrected paths/queries/error code.
+
+### Open assumptions
+- **OA-1** Base URL `http://18.222.237.167:8000/` and the dev host's
+  ~20s-timeout/unreliability are taken from the spec/AND-006 and were **not** present
+  in the supplied reference sources — *unverified assumption* (no env/config file in
+  `reference/`).
+- **OA-2** The shared transport's exact auth mechanism for Android (cookie jar vs
+  Bearer vs `X-SESSION-ID`) is owned by **AND-027** and not re-derived here; the web
+  client uses all three, so the Android side is assumed to attach whatever the
+  backend requires — *unverified for Android* (depends on AND-027 implementation).
+- **OA-3** `stock_status` enum values (e.g. `"unlimited"`/`"in_stock"`/`"out"`) are
+  free-form `String` on the wire (schema gives only the default `"unlimited"`); exact
+  value set is *unverified* — modeled as `String`, not an enum.
+- **OA-4** Whether an unknown `categoryId` returns `422`, an empty list, or another
+  code is *unverified* (no example in sources); only the documented response set is
+  cited. Tests assert behavior for documented codes only.
+- **OA-5** `next_token` opacity/format (e.g. base64 DynamoDB key) is *unverified*;
+  treated as an opaque `String` round-tripped verbatim.
+
+## 17. Test Plan
+
+IDs `TC-AND-204-NN`. Targets: **JVM** (local Robolectric/unit, no device);
+**emulator** = AVD `test35` (x86_64, API 35); **device** = Samsung Galaxy A15 5G
+(SM-A156U, API 34, arm64-v8a). This ticket is a headless transport + DTO layer:
+the substantive logic (Moshi (de)serialization, Retrofit path/query building,
+`HttpException` propagation, Hilt provision) is pure-JVM and runs as **unit /
+contract (MockWebServer)** tests — no device is required for any functional case.
+Device/emulator cases below exist only to satisfy the review's hardware/ABI and
+"instrumented build" coverage requirements.
+
+- **TC-AND-204-01** — Type: **contract/MockWebServer** (JVM).
+  Target: JVM. Precond: MockWebServer enqueues `catalog/category_list.json`
+  (`{items:[...], next_token:"..."}`). Steps: call `listCategories(pageSize=50)`;
+  read `takeRequest()`. Expected: method `GET`, path
+  `/ui/catalog/categories?page_size=50`; decodes `CatalogCategoryListDto` with N
+  `CatalogCategoryDto` (correct `categoryId`/`name`/`createdAt`) and `nextToken`.
+  Traces: AC-3, AC-4.
+- **TC-AND-204-02** — Type: **contract/MockWebServer** (JVM).
+  Target: JVM. Precond: enqueue `catalog/item_list.json` with `next_token:null`.
+  Steps: `listItems("cat_apparel", pageSize=10, nextToken="abc")`. Expected: path
+  `/ui/catalog/categories/cat_apparel/items?page_size=10&next_token=abc`; decodes
+  `CatalogItemListDto`; `items[0].priceCents == 1999L`, `currency=="USD"`,
+  `imageUrls` non-empty, `nextToken == null`. Traces: AC-4, AC-6.
+- **TC-AND-204-03** — Type: **contract/MockWebServer** (JVM).
+  Target: JVM. Precond: enqueue `catalog/item_list.json`. Steps:
+  `searchCatalog(query="tee & hats", pageSize=50)`. Expected: path
+  `/ui/catalog/items/search?q=tee%20%26%20hats&page_size=50` (`q` URL-encoded);
+  decodes `CatalogItemListDto`. Traces: AC-4 (security: injection-safe `@Query`).
+- **TC-AND-204-04** — Type: **contract/MockWebServer** (JVM).
+  Target: JVM. Precond: enqueue any 200 body. Steps: `listCategories(nextToken=null)`.
+  Expected: request path is `/ui/catalog/categories?page_size=50` with **no**
+  `next_token` query param (Retrofit drops null `@Query`). Traces: AC-4.
+- **TC-AND-204-05** — Type: **unit (round-trip)** (JVM).
+  Target: JVM (`CatalogDtoRoundTripTest`). Precond: fixtures
+  `catalog/category.json`, `catalog/item.json`. Steps: `fromJson` then `toJson` each
+  DTO; compare parsed trees. Expected: equal trees; serialized item carries
+  `category_id`/`item_id`/`price_cents`/`image_urls` (snake_case), never camelCase.
+  Traces: AC-1, AC-2.
+- **TC-AND-204-06** — Type: **unit (round-trip)** (JVM).
+  Target: JVM. Precond: an item fixture with `price_cents: 9007199254740993`
+  (> 2^53) and a normal `1999`. Steps: deserialize. Expected: decodes to `Long`
+  exactly (no float drift / precision loss); round-trips identically. Traces: AC-6.
+- **TC-AND-204-07** — Type: **unit (round-trip / validation)** (JVM).
+  Target: JVM. Precond: item fixture with `item_id` (or `price_cents`/`currency`/
+  `created_at`) removed. Steps: `adapter.fromJson(body)`. Expected: throws
+  `JsonDataException` (fail-fast on missing required field). Traces: AC-5.
+- **TC-AND-204-08** — Type: **unit (round-trip)** (JVM).
+  Target: JVM. Precond: item fixture with extra `"server_time"`/`"experimental_flag"`
+  keys, empty `image_urls`/`attributes`, and absent `next_token` at the envelope.
+  Steps: deserialize. Expected: no error; unknown keys ignored; `imageUrls`/
+  `attributes` are empty (not null); `nextToken == null`. Traces: AC-5.
+- **TC-AND-204-09** — Type: **unit (round-trip)** (JVM).
+  Target: JVM. Precond: item fixture with mixed-type `attributes`
+  (`{"color":"black","featured":true,"rank":3}`). Steps: deserialize into
+  `Map<String,Any?>`. Expected: succeeds (free-form values preserved); a
+  `Map<String,String>` model would have thrown — guards the C-7 correction.
+  Traces: AC-1, AC-5.
+- **TC-AND-204-10** — Type: **contract/MockWebServer (error)** (JVM).
+  Target: JVM. Precond: enqueue `422` with body
+  `{"detail":[{"loc":["query","q"],"msg":"field required","type":"missing"}]}`.
+  Steps: `searchCatalog("")` and catch. Expected: throws `retrofit2.HttpException`
+  with `code()==422` and `response().errorBody()` intact (not swallowed), so AND-015
+  can decode the `detail` list. Traces: AC-7.
+- **TC-AND-204-11** — Type: **integration / offline-resilience (MockWebServer)** (JVM).
+  Target: JVM. Precond: MockWebServer with
+  `SocketPolicy.NO_RESPONSE`/`DISCONNECT_AT_START` simulating the flaky dev host.
+  Steps: call `listCategories()`. Expected: a transport exception
+  (`SocketTimeoutException`/`IOException`) propagates unchanged (this layer adds no
+  retry/swallow; backoff is AND-009/AND-016). Traces: AC-7 (resilience boundary).
+- **TC-AND-204-12** — Type: **instrumented (Hilt)** — emulator.
+  Target: **emulator `test35`** (API 35). Precond: `@HiltAndroidTest` app with the
+  shared `NetworkModule` + `CatalogApiModule`. Steps: inject `CatalogApi` twice.
+  Expected: non-null; both injections are the same `@Singleton` instance; no second
+  `Retrofit`/`OkHttpClient`/`Moshi` constructed. MUST run on emulator/device (needs
+  Android runtime + Hilt). Traces: AC-8.
+- **TC-AND-204-13** — Type: **instrumented / ABI build** — physical device.
+  Target: **physical device A15 (arm64-v8a, API 34)**. Precond: assembled
+  `androidTest` APK installed via adb on serial `R5CX821TA9R`. Steps: run the Hilt
+  injection + one MockWebServer decode on-device. Expected: KSP-generated Moshi
+  adapters load and decode identically on **arm64-v8a / API 34** as on emulator
+  x86_64 / API 35 (guards the ABI/API-level difference; codegen is the only
+  build-time surface this ticket adds). MUST run on the physical device (this is the
+  only arm64 + API-34 target). Traces: AC-9.
+- **TC-AND-204-14** — Type: **manual / CI gate** (JVM build).
+  Target: JVM/CI. Precond: clean checkout. Steps: run
+  `./gradlew :core-model:testDebugUnitTest :core-network:assemble
+  :core-network:testDebugUnitTest`. Expected: builds clean under AGP 8.7.3 / Gradle
+  8.9 / JDK 17, KSP adapters generated for all four DTOs, ≥90% coverage on the new
+  surface, no new lint/detekt violations. Traces: AC-9.
+
+Note on accessibility & permissions: this ticket exposes **no Compose UI** and
+declares **no runtime permissions or manual headers**, so dedicated Compose-UI a11y
+and permission cases are **N/A**; the two downstream a11y constraints (synthesizing
+`contentDescription` from `image_urls`, locale price formatting from
+`priceCents`/`currency` — §9) are owned by AND-205/AND-206 and tested there.
+
+### Coverage matrix
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (DTOs exist, immutable, codegen) | TC-05, TC-09 |
+| AC-2 (payloads map / round-trip) | TC-05, TC-06 |
+| AC-3 (three ops declared; no getItem/getCategory) | TC-01 |
+| AC-4 (verb + path + query per §5) | TC-01, TC-02, TC-03, TC-04 |
+| AC-5 (required-fail / unknown-tolerant / defaults) | TC-07, TC-08, TC-09 |
+| AC-6 (money lossless `Long`) | TC-02, TC-06 |
+| AC-7 (non-2xx → `HttpException`, not swallowed) | TC-10, TC-11 |
+| AC-8 (Hilt `@Singleton` on shared Retrofit) | TC-12 |
+| AC-9 (CI build clean / KSP / coverage / ABI) | TC-13, TC-14 |

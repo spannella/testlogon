@@ -5,7 +5,8 @@ milestone: M4
 epic: E27
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-199]
 blocks: []
 ---
@@ -38,12 +39,17 @@ where relevant below.
 
 - **Module:** `feature-stories` (depends on `core-data`, `core-network`,
   `core-model`, `core-ui`). Namespace `com.testlogon.android.feature.stories`.
-- **Web reference:** `frontend/src/api/endpoints/stories.ts` (the `stories.ts`
-  named in AND-199 scope) and shared types in `frontend/src/api/types.ts`.
-  The web app records views via `POST /ui/stories/{id}/view` and sends story
-  reactions/replies through the messaging/DM endpoints — there is **no**
-  dedicated `/ui/stories/{id}/react` route in the backend OpenAPI
-  (`/openapi.json`). Android mirrors this.
+- **Web reference:** `src/api/endpoints/stories.ts` (the `stories.ts`
+  named in AND-199 scope) and shared types in `src/api/types.ts`; the viewer
+  screen is `src/pages/feed/StoryViewer.tsx`.
+  The web app records views via `POST /ui/stories/{story_id}/view` (verified).
+  **CORRECTION (was wrong):** the web app does **not** send story reactions or
+  replies at all — `StoryViewer.tsx` exposes only progress bars, prev/pause/next
+  tap zones, and (for owners) a view-count + viewers panel. There is **no**
+  dedicated `/ui/stories/{id}/react` route in the backend OpenAPI (verified). The
+  reaction/reply composer in this ticket is therefore an **Android-original**
+  feature with **no web precedent** — its wire contract is an unverified
+  assumption (see §16 / OQ-1), not a mirror of the web client.
 - **Predecessor:** AND-199 (Stories tray + viewer) owns `StoryRepository`,
   `StoryViewerScreen`, `StoryViewerViewModel`, `StoryUiModel`, `StorySegment`,
   and the auto-advance timer. AND-200 extends these types.
@@ -222,33 +228,60 @@ long-press is held.
 
 ```
 POST /ui/stories/{story_id}/view
-Headers: X-CSRF-Token: <ui_csrf>, Cookie: <session>
-Body: (none)
-200 -> {} (untyped; ignored)
+Headers: X-CSRF-Token: <ui_csrf>, Cookie: <session>, Authorization: Bearer <token>
+Body: (none — OpenAPI req= empty)
+200 -> StoryViewResp { ok: boolean, already_viewed: boolean }   (422 -> HTTPValidationError)
 ```
+
+**CORRECTION (was wrong):** the 200 body is **not** an untyped `{}`. Per
+`src/api/types.ts: StoryViewResp` it is `{ ok, already_viewed }`. The client may
+ignore it for fire-and-forget, but `already_viewed` is a real server-side
+de-dupe signal that complements the in-session client de-dupe (FR-6).
 
 `StoryApi.recordView(storyId): ApiResult<Unit>` — fire-and-forget; not retried.
 
 ### 5.2 Reactions & replies (FR-7 / FR-8)
 
-There is **no** `/ui/stories/{id}/react` endpoint in `/openapi.json`. Per the
-web reference, story reactions/replies are author-directed messages sent over
-the messaging (DM) channel keyed by the story. The Android client routes both
-through a single repository method that posts a DM referencing the story:
+There is **no** `/ui/stories/{id}/react` endpoint in the OpenAPI (verified).
+There is also **no web precedent** for story reactions/replies — the web viewer
+does not implement them (see §2 correction). The "send via messaging DM" design
+is an Android-original choice; its body shape below is an **unverified assumption**
+gated by OQ-1, **not** a confirmed contract.
+
+The plan routes both through a single repository method that (1) resolves or
+creates the DM with the author, then (2) posts a message. The **verified** primitives are:
 
 ```
+# 1. Resolve / create the author DM (verified):
+POST /messaging/conversations/dm/find-or-create
+  req  = FindOrCreateDmIn { user_id: "<author_id>" }      # only field; required
+  200 -> ConversationOut   (422 -> HTTPValidationError)
+  Headers: X-CSRF-Token, Cookie, Authorization: Bearer
+
+# 2a. Reply = a normal text message (verified endpoint + schema):
 POST /messaging/conversations/{conversation_id}/messages
-Headers: X-CSRF-Token, Cookie
-Body (reply):    { "text": "<reply>", "context": { "story_id": "<id>" } }
-Body (reaction): { "text": "<emoji>", "context": { "story_id": "<id>",
-                                                    "is_reaction": true } }
-200 -> { "message_id": "...", "created_at": "..." } (shape per messaging API)
+  req  = SendTextMessageIn { text: "<reply>" (1..4000) }   # see CORRECTION below
+  200 -> MessageOut { message_id, conversation_id, sender_id, created_at, kind, text, ... }
+
+# 2b. Reaction — TWO candidate mechanisms, neither story-scoped (OQ-1 must pick one):
+#   (i)  send the emoji as a text message  -> SendTextMessageIn { text: "🔥" }
+#   (ii) react to an existing message      -> POST .../messages/{message_id}/reactions
+#        req = ReactIn { emoji: "🔥" (1..64), action: "add"|"remove" (default add) }
+#        (note: reacts to a *message*, not to a story — there is no story-react route)
 ```
+
+**CORRECTION (was wrong):** `SendTextMessageIn` has **no** `context` object and
+**no** `is_reaction` field (verified against the schema). The previously specced
+body `{ text, context: { story_id, is_reaction } }` is fabricated and will 422 /
+silently drop those keys. The real schema fields are `text` (1..4000), `body`,
+`reply_to_message_id`, `parent_message_id`, `thread_id`, `view_once`, etc. — none
+carries story context. Consequently the story↔message linkage (how the author
+knows a reply pertains to a given story) is **unresolved** and is the core of
+OQ-1; do not ship §5.2 until the backend confirms a real mechanism.
 
 If the messaging conversation with the author does not yet exist the repository
-resolves/creates it first (existing `core-data` messaging helper). **Open
-question OQ-1** confirms the exact body contract against the live messaging API
-before implementation; until then the repository exposes:
+resolves/creates it first via `dm/find-or-create` (above). Until OQ-1 is
+resolved the repository exposes:
 
 ```kotlin
 suspend fun reactToStory(storyId: String, authorId: String, emoji: String): ApiResult<Unit>
@@ -261,17 +294,31 @@ The viewer depends only on these two methods, so the wire detail is isolated to
 ### 5.3 ApiResult mapping
 
 All calls return `ApiResult<T>` (core-network). FastAPI `detail` is mapped by
-the shared interceptor: `string` -> message; `[{msg}]` -> first `msg`;
-`{code,...}` -> coded error. 401 triggers the single
-`POST /ui/session/refresh` + retry already implemented in the OkHttp
-authenticator (shared infra).
+the shared interceptor exactly as the web `normalizeErrorDetail`
+(`src/api/client.ts`): `string` -> message; `[{msg}]` -> joined `msg` values;
+`{code,...}` -> coded error (e.g. `role_required`, `geo_blocked`). 401 triggers
+the single `POST /ui/session/refresh` + retry already implemented in the OkHttp
+authenticator (shared infra) — verified against `client.ts` (`refreshSession`,
+single in-flight `refreshPromise`, one retry, logout on second 401).
+
+Note: the web client additionally sends `Authorization: Bearer <accessToken>`
+alongside the cookie + `X-CSRF-Token` (`client.ts` lines 158-171); the messaging
+endpoints list `authorization` + `X-SESSION-ID` params in the OpenAPI index, so
+the Android messaging calls (§5.2) should attach the bearer token too, not rely
+on the cookie alone.
 
 ## 6. Data & State Management
 
 - **Source of truth:** `StoryViewerViewModel.uiState: StateFlow<StoryViewerUiState>`.
 - **Models (extend AND-199):** `StorySegment(storyId, mediaUrl, mediaType,
   durationMs)`; `StoryAuthorUiModel(authorId, displayName, avatarUrl,
-  segments, isOwner, viewerCount)`.
+  segments, isOwner, viewerCount)`. Verified field mapping from
+  `src/api/types.ts: Story`: `storyId<-story_id`, `mediaUrl<-media_url`,
+  `mediaType<-media_type ("image"|"video")`, `durationMs<-duration_seconds*1000`.
+  `viewerCount` is per-segment on the server (`Story.view_count`), not per-author;
+  the owner affordance shows the **active segment's** `view_count`, matching the
+  web (`StoryViewer.tsx` shows `currentStory.view_count`). `isOwner` is derived by
+  comparing `Story.author_id` to the current user (web compares to `authStore.userId`).
 - **View de-dupe:** `viewedStoryIds: MutableSet<String>` held in the ViewModel
   for session-scoped de-dupe (FR-6). No persistence required — re-viewing
   across app restarts may re-POST and that is acceptable (server is idempotent
@@ -390,10 +437,15 @@ present and POSTs are not retried on 5xx.
   `context.is_reaction`) against the live messaging API before wiring §5.2. The
   `feature-stories` interface (`reactToStory`/`replyToStory`) insulates the UI
   regardless of outcome.
-- **OQ-2:** image segment default duration — backend `CreateStoryRequest`
-  allows `duration_seconds` (1–300). Default to 5s when null; confirm the
-  `/ui/stories/...` GET actually returns per-story duration in its (untyped)
-  response so the bar timing matches the author's intent.
+- **OQ-2 (mostly resolved):** segment duration. **Verified** against
+  `src/pages/feed/StoryViewer.tsx` + `src/api/types.ts: Story`: the GET response
+  is typed (`Story.duration_seconds?: number`), and the web viewer uses
+  `duration_seconds * 1000` **only for `media_type === "video"`**, otherwise a
+  fixed `SLIDE_DURATION_MS = 5000` (so images always run 5s on web even if
+  `duration_seconds` is set). Android should match this rule, or deliberately
+  honor `duration_seconds` for images too — that single behavioral choice is the
+  only open part of OQ-2. `CreateStoryReq.duration_seconds` is the create-side
+  field; range bound (1–300) is not enforced in `types.ts` and is unverified here.
 - **R-1:** unreliable dev host may make author-switch loads slow; mitigated by
   the indeterminate-bar/pause-until-ready behavior (§7).
 - **R-2:** frame-clock progress + ExoPlayer position must not double-drive the
@@ -447,3 +499,323 @@ Backlog acceptance ("Progress + reactions work") is satisfied by AC-1–AC-8.
 - OQ-1 resolved (reaction/reply wire contract confirmed) and §5.2 updated to
   match before merge; OQ-2 noted in code if unresolved.
 - Strings externalized; TalkBack pass on the viewer; RTL spot-checked.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **`POST /ui/stories/{story_id}/view` records a view** — **Verified.**
+   OpenAPI `POST /ui/stories/{story_id}/view`
+   (op `record_view_endpoint_ui_stories__story_id__view_post`, req empty,
+   resp `200`/`422:HTTPValidationError`); frontend
+   `src/api/endpoints/stories.ts: recordStoryView`.
+
+2. **The view 200 body is untyped `{}`** — **Corrected.** It is
+   `src/api/types.ts: StoryViewResp { ok: boolean, already_viewed: boolean }`.
+   Spec §5.1 corrected.
+
+3. **View de-dupe is a session-scoped client `Set<story_id>`, fire-and-forget** —
+   **Verified.** `src/pages/feed/StoryViewer.tsx` (`viewedSetRef = useRef(new
+   Set<string>())`, `viewMut.mutate` with no error UI).
+
+4. **There is no `/ui/stories/{id}/react` route** — **Verified.** Absent from
+   `reference/openapi.index.txt` (only `/view`, `/viewers`, `/highlight`,
+   `/highlights/*`, CRUD exist, lines 1899-1910).
+
+5. **The web app sends story reactions/replies via messaging DMs** —
+   **Corrected (was false).** The web viewer `src/pages/feed/StoryViewer.tsx`
+   implements **no** reactions and **no** replies — only progress, prev/pause/next
+   tap zones, owner view-count, and a viewers panel. Reactions/replies are an
+   Android-original feature with no web precedent.
+
+6. **Reaction/reply message body `{ text, context:{ story_id, is_reaction } }`** —
+   **Corrected → Unverified-assumption.** OpenAPI
+   `components.schemas.SendTextMessageIn` has **no** `context` and **no**
+   `is_reaction` fields (fields are `text` 1..4000, `body`, `reply_to_message_id`,
+   `parent_message_id`, `thread_id`, `view_once`, …). The story↔message linkage is
+   unresolved (OQ-1).
+
+7. **`POST /messaging/conversations/{conversation_id}/messages` is the send-text
+   endpoint** — **Verified.** OpenAPI line 333
+   (op `send_text_message_...`, req `SendTextMessageIn`, resp `200:MessageOut`).
+
+8. **DM is resolved/created before messaging** — **Verified primitive.** OpenAPI
+   `POST /messaging/conversations/dm/find-or-create`
+   (req `FindOrCreateDmIn { user_id }`, resp `200:ConversationOut`, line 314).
+   That this is the right call *for stories* is an assumption (OQ-1).
+
+9. **Message-reaction alternative `ReactIn`** — **Verified primitive.** OpenAPI
+   `POST /messaging/conversations/{conversation_id}/messages/{message_id}/reactions`
+   (req `ReactIn { emoji 1..64, action add|remove }`, line 358). Reacts to a
+   *message*, not a story.
+
+10. **`MessageOut` carries `message_id` + `created_at`** — **Verified.**
+    `components.schemas.MessageOut` required:
+    `conversation_id, message_id, sender_id, created_at, kind` (+ `text`).
+
+11. **Auth: session cookie + `X-CSRF-Token` from `ui_csrf` cookie** —
+    **Verified.** `src/api/client.ts` (`getCookie("ui_csrf")` →
+    `headers.set("X-CSRF-Token", …)`, `credentials: "include"`). Note the web
+    client **also** sends `Authorization: Bearer <accessToken>`; messaging
+    endpoints list `authorization`/`X-SESSION-ID` params — §5.3 updated.
+
+12. **401 → single `POST /ui/session/refresh` then one retry** — **Verified.**
+    `src/api/client.ts` (`refreshSession()` POSTs `/ui/session/refresh`; single
+    in-flight `refreshPromise`; retries once; `logout` on second 401).
+
+13. **FastAPI `detail` mapping (string / `[{msg}]` / coded `{code}`)** —
+    **Verified.** `src/api/client.ts: normalizeErrorDetail` + `mapAuthorizationError`.
+
+14. **Validation errors are `422:HTTPValidationError`** — **Verified.** All
+    `/ui/stories/*` and `/messaging/.../messages` rows in the index include
+    `422:HTTPValidationError`.
+
+15. **Image segment default duration = 5000 ms; video uses `duration_seconds`** —
+    **Verified.** `src/pages/feed/StoryViewer.tsx` (`SLIDE_DURATION_MS = 5000`;
+    `media_type === "video" && duration_seconds ? duration_seconds*1000 : 5000`).
+    `src/api/types.ts: Story.duration_seconds?: number`.
+
+16. **`Story` model fields used by segments** — **Verified.**
+    `src/api/types.ts: Story` (`story_id, author_id, media_type "image"|"video",
+    media_url, duration_seconds?, view_count, …`).
+
+17. **Owner detection / owner-only view count** — **Verified.**
+    `src/pages/feed/StoryViewer.tsx` (`isOwn = currentStory.author_id ===
+    currentUser`; owner UI shows `currentStory.view_count` + `ViewersPanel` via
+    `getStoryViewers`). Spec FR-9 "viewers list is a future ticket" is an Android
+    scoping choice (the route `GET /ui/stories/{story_id}/viewers` exists, line 1910).
+
+18. **Web tap zones are prev / pause / next (3 equal thirds), pause = middle tap** —
+    **Verified.** `src/pages/feed/StoryViewer.tsx` (three `w-1/3` buttons:
+    `goPrev`, toggle pause, `goNext`). Android's choice of left/right thirds + long-
+    press-to-pause + swipe-to-dismiss differs from web; this is an intentional
+    mobile-native deviation (unverified-assumption as a UX claim, not a contract).
+
+19. **Compose / Media3 / Coil / Hilt framework choices** —
+    **Unverified-assumption (framework ref).** Not derivable from backend or web
+    sources; standard Android stack. Refs: Media3 ExoPlayer
+    https://developer.android.com/media/media3/exoplayer ; Compose pointerInput /
+    `detectTapGestures` https://developer.android.com/develop/ui/compose/touch-input/pointer-input/tap-and-press ;
+    `withFrameNanos` https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#withFrameNanos ;
+    `SavedStateHandle` https://developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate ;
+    `progressSemantics` https://developer.android.com/reference/kotlin/androidx/compose/foundation/package-summary#(androidx.compose.ui.Modifier).progressSemantics(kotlin.Float,kotlin.ranges.ClosedFloatingPointRange,kotlin.Int) .
+
+20. **Dev host `http://18.222.237.167:8000`, plaintext HTTP, ~20s timeouts** —
+    **Unverified-assumption.** Carried from AND-199 / project infra; not present in
+    the OpenAPI/frontend sources provided.
+
+### Corrections made
+
+- **§2** — removed the false claim that the web app sends story reactions/replies
+  via messaging DMs; clarified the web viewer has no such feature and that the
+  composer is Android-original. Fixed frontend paths (`src/...` not `frontend/src/...`).
+- **§5.1** — view response corrected from untyped `{}` to
+  `StoryViewResp { ok, already_viewed }`; added `Authorization: Bearer`.
+- **§5.2** — removed the fabricated `SendTextMessageIn` body (`context`,
+  `is_reaction` do not exist); replaced with verified primitives
+  (`dm/find-or-create` → `FindOrCreateDmIn`; `messages` → `SendTextMessageIn`;
+  message reactions → `ReactIn`) and flagged the story↔message linkage as the
+  unresolved core of OQ-1.
+- **§5.3** — tied error mapping to `normalizeErrorDetail`; noted the bearer token.
+- **§6** — added verified `Story`→model field mapping; clarified `viewerCount`
+  comes from per-segment `Story.view_count` and `isOwner` from `author_id`.
+- **§13 OQ-2** — marked mostly-resolved: duration is typed and the web rule
+  (5s images / `duration_seconds` for video) is verified.
+
+### Open assumptions
+
+- **OQ-1 (blocking):** the entire reaction/reply wire contract. No web precedent,
+  no story-context field in `SendTextMessageIn`, no story-react route. How a
+  reply/reaction is associated with a story server-side is unknown and must be
+  confirmed with the backend before §5.2 ships.
+- **Reaction mechanism choice:** text-message emoji vs. `ReactIn` on a message —
+  both exist but neither is story-scoped; backend must specify.
+- **Image-duration policy:** match web (force 5s for images) vs. honor
+  `duration_seconds` for images — product decision, not a contract.
+- **Android UX gestures** (left/right thirds, long-press pause, swipe-dismiss)
+  deviate from the web's prev/pause/next thirds — intentional, unverifiable from sources.
+- **Framework stack & dev-host/transport** facts (§19, §20 above) are not in the
+  provided authoritative sources.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** =
+headless emulator AVD `test35` (x86_64, API 35); **A15** = physical Samsung Galaxy
+A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). Prefer **A15** for real
+hardware/playback/biometric behavior; **emu35** is fine for fast Compose/UI suites.
+
+### TC-AND-200-01 — Progress loop advances and auto-advances (happy path)
+- **Type:** unit (Turbine + coroutines-test virtual clock). **Target:** JVM.
+- **Preconditions:** ViewModel seeded with one author, 3 image segments
+  (`durationMs=5000`), not paused.
+- **Steps:** Start progress loop; advance virtual time by `durationMs` for segment 0.
+- **Expected:** `progress` rises 0→1 then `next()` fires; `segmentIndex` becomes 1,
+  `progress` resets to 0. After the last segment of the last author a `Dismiss`
+  transient is emitted.
+- **Traces:** AC-1.
+
+### TC-AND-200-02 — Tap navigation incl. author-boundary crossing
+- **Type:** unit. **Target:** JVM.
+- **Preconditions:** Two authors, 2 segments each; positioned at author0/segment0.
+- **Steps:** Call `previous()` (first-of-first); then `next()` ×2 to cross into
+  author1; then `previous()` from author1/segment0.
+- **Expected:** first `previous()` restarts segment0 (no author change); crossing
+  forward moves to author1/segment0; backward from author1/segment0 lands on
+  author0's **last** segment.
+- **Traces:** AC-2.
+
+### TC-AND-200-03 — Pause halts progress (long-press and reactions-expanded)
+- **Type:** unit. **Target:** JVM.
+- **Preconditions:** Running progress loop mid-segment.
+- **Steps:** `setPaused(true)`; advance virtual clock; assert no progress change;
+  `setPaused(false)`; separately set `reactionsExpanded=true` and advance clock.
+- **Expected:** progress is frozen in both paused and `reactionsExpanded` states
+  and resumes from the same value on release; video playback paused too.
+- **Traces:** AC-3, AC-6 (pause-while-expanded).
+
+### TC-AND-200-04 — View recorded exactly once per story_id per session
+- **Type:** contract/MockWebServer. **Target:** JVM.
+- **Preconditions:** MockWebServer returns `200 {"ok":true,"already_viewed":false}`
+  for `POST /ui/stories/{id}/view`.
+- **Steps:** `onSegmentDisplayed()` for story A; navigate away and back to A;
+  call again.
+- **Expected:** exactly **one** `POST /ui/stories/A/view` is issued; request carries
+  `X-CSRF-Token`; second display is a no-op (`viewedStoryIds` de-dupe). Response
+  body parses to `StoryViewResp` but is ignored.
+- **Traces:** AC-5.
+
+### TC-AND-200-05 — View failure is silent and not retried
+- **Type:** contract/MockWebServer. **Target:** JVM.
+- **Preconditions:** MockWebServer returns `500` then would return `200`.
+- **Steps:** `onSegmentDisplayed()`; observe requests and UI state.
+- **Expected:** exactly **one** POST (no auto-retry); no error surfaced to UI;
+  failure logged at DEBUG only; playback continues.
+- **Traces:** AC-5.
+
+### TC-AND-200-06 — Reply happy path: DM resolve then send (contract)
+- **Type:** contract/MockWebServer. **Target:** JVM.
+- **Preconditions:** MockWebServer: `POST /messaging/conversations/dm/find-or-create`
+  → `200 ConversationOut{conversation_id:"c1"}`; `POST
+  /messaging/conversations/c1/messages` → `200 MessageOut{message_id,created_at,...}`.
+- **Steps:** `replyToStory(storyId, authorId, "hi")`.
+- **Expected:** request 1 body = `{"user_id":"<authorId>"}` (FindOrCreateDmIn);
+  request 2 body contains `text:"hi"` (1..4000) and **no** `context`/`is_reaction`
+  keys; both carry `X-CSRF-Token` (+ bearer); returns `ApiResult.Success`;
+  optimistic "Sent" then resume.
+- **Traces:** AC-7.
+
+### TC-AND-200-07 — Reply/reaction validation + error-shape mapping & rollback
+- **Type:** contract/MockWebServer. **Target:** JVM.
+- **Preconditions:** Cases: (a) `422` body
+  `{"detail":[{"msg":"text too long","loc":[...]}]}`; (b) `403`
+  `{"detail":{"code":"role_required"}}`; (c) whitespace-only reply.
+- **Steps:** Attempt send for each.
+- **Expected:** (a) maps to "text too long" via `[{msg}]` rule; (b) maps the coded
+  message; both roll back optimistic confirmation and set `composer.sendError`,
+  restoring reply text for resend; (c) is rejected client-side with **no** network
+  call (empty/whitespace disabled).
+- **Traces:** AC-6, AC-7.
+
+### TC-AND-200-08 — POSTs are never auto-retried (no duplicate sends)
+- **Type:** contract/MockWebServer. **Target:** JVM.
+- **Preconditions:** `messages` endpoint returns `503`.
+- **Steps:** `replyToStory(...)` once; rapid double-tap a reaction while
+  `composer.sending`.
+- **Expected:** exactly one `messages` POST per user action (no GET-style backoff
+  on POST); the second rapid reaction tap is debounced (R-3).
+- **Traces:** AC-6, AC-7.
+
+### TC-AND-200-09 — 401 refresh-then-retry once
+- **Type:** contract/MockWebServer. **Target:** JVM.
+- **Preconditions:** `messages` returns `401`, then `POST /ui/session/refresh`
+  → `200`, then retried `messages` → `200`.
+- **Steps:** `replyToStory(...)`.
+- **Expected:** exactly one refresh call; original request retried once and
+  succeeds; on a second consecutive `401` the call returns `ApiResult.Error` and
+  the reply path shows the retry affordance (view path would stay silent).
+- **Traces:** AC-5, AC-6, AC-7.
+
+### TC-AND-200-10 — Own-story suppresses composer, shows view count
+- **Type:** Compose-UI. **Target:** emu35.
+- **Preconditions:** Fake VM state `isOwner=true`, `viewerCount=42`.
+- **Steps:** Render `StoryComposer`/viewer; attempt to find reaction row & reply
+  field.
+- **Expected:** no reply field / reaction row; a "42 views" affordance is shown;
+  `sendReaction`/`sendReply` are never invokable. (Matches web owner UI.)
+- **Traces:** AC-8.
+
+### TC-AND-200-11 — Gestures: tap zones, long-press pause/chrome, swipe-dismiss
+- **Type:** Compose-UI. **Target:** emu35.
+- **Preconditions:** Fake VM capturing callbacks.
+- **Steps:** Tap right third; tap left third; long-press media then release; drag
+  down past 120 dp.
+- **Expected:** right→`next`, left→`previous`; long-press sets paused + hides
+  chrome (bar + composer) via `AnimatedVisibility`, release resumes; downward drag
+  past threshold emits `Dismiss`.
+- **Traces:** AC-2, AC-3, AC-4.
+
+### TC-AND-200-12 — Reaction & reply UI feedback
+- **Type:** Compose-UI. **Target:** emu35.
+- **Preconditions:** Fake VM, online.
+- **Steps:** Expand reaction row (asserts pause), tap ❤️; type a reply and send.
+- **Expected:** reaction shows optimistic floating-emoji + brief confirmation then
+  collapses; reply send clears field, shows "Sent", pauses then resumes; empty
+  reply's send button is disabled.
+- **Traces:** AC-6, AC-7.
+
+### TC-AND-200-13 — Accessibility: semantics & content descriptions
+- **Type:** Compose-UI (TalkBack/semantics assertions). **Target:** emu35.
+- **Preconditions:** Viewer rendered with N segments.
+- **Steps:** Assert semantics tree.
+- **Expected:** progress bar exposes `progressSemantics` + "Story segment {n} of
+  {N}"; explicit `Role.Button` actions "Next segment"/"Previous segment"/"Pause
+  story"; reaction emojis have content descriptions; reply field is labelled with a
+  discrete send button. With `ANIMATOR_DURATION_SCALE==0` the bar still advances
+  but skips the floating-emoji animation.
+- **Traces:** AC-3, AC-6, AC-7, AC-10.
+
+### TC-AND-200-14 — State preservation across rotation & process death
+- **Type:** instrumented/e2e. **Target:** emu35.
+- **Preconditions:** Viewer at author1/segment2.
+- **Steps:** Rotate device; then simulate process death/restore
+  (`SavedStateHandle`).
+- **Expected:** `authorIndex`/`segmentIndex` preserved; `progress` resets to 0
+  (segment replays from start, per design); composer draft is **not** persisted
+  (in-memory only, security §8).
+- **Traces:** AC-9.
+
+### TC-AND-200-15 — Offline path: composer disabled, playback continues
+- **Type:** instrumented/e2e. **Target:** **A15** (real radio toggle).
+- **Preconditions:** A current segment already loaded; toggle airplane mode on.
+- **Steps:** Attempt reaction and reply while offline; then restore network.
+- **Expected:** reaction/reply disabled with "You're offline" helper and **no**
+  network attempt; visible segment keeps playing; on reconnect, sending works.
+  Run on A15 because real connectivity-loss/restore (and arm64/API-34 behavior)
+  differs from the emulator's simulated network.
+- **Traces:** AC-6, AC-7 (offline error path), AC-1 (playback continuity).
+
+### TC-AND-200-16 — Real video segment progress source (ExoPlayer position)
+- **Type:** instrumented/e2e. **Target:** **A15** (real Media3 playback).
+- **Preconditions:** Author with a video segment (`media_type="video"`,
+  `duration_seconds` set).
+- **Steps:** Play the video segment to completion on the physical device.
+- **Expected:** the bar is driven by the **player position** (not the wall-clock
+  frame loop) for video; exactly one progress source is active (R-2); auto-advance
+  fires at media end; image segments still use the 5s frame loop. Must run on A15
+  to exercise real arm64 Media3 decode/timing rather than emulated playback.
+- **Traces:** AC-1, AC-3.
+
+### Coverage matrix (§14 AC → TCs)
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (progress + auto-advance + final dismiss) | TC-01, TC-15, TC-16 |
+| AC-2 (tap navigation incl. author boundaries) | TC-02, TC-11 |
+| AC-3 (long-press pause + hide chrome + resume) | TC-03, TC-11, TC-13, TC-16 |
+| AC-4 (swipe-to-dismiss) | TC-11 |
+| AC-5 (view once per story_id; silent failure) | TC-04, TC-05, TC-09 |
+| AC-6 (reaction optimistic + rollback/retry) | TC-03, TC-07, TC-08, TC-09, TC-12, TC-13, TC-15 |
+| AC-7 (reply send/clear/Sent; empty disabled) | TC-06, TC-07, TC-08, TC-09, TC-12, TC-13, TC-15 |
+| AC-8 (own-story: view count, no composer) | TC-10 |
+| AC-9 (rotation + process-death restore) | TC-14 |
+| AC-10 (test suites pass; correct package) | TC-13 + all unit/UI suites (TC-01–TC-13) |

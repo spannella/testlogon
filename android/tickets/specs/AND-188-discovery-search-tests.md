@@ -5,7 +5,8 @@ milestone: M4
 epic: E25
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-187, AND-186, AND-185, AND-182]
 blocks: []
 ---
@@ -175,10 +176,14 @@ then drive virtual time with `advanceTimeBy`/`advanceUntilIdle` and assert
 Paging assertions use `paging-testing` to snapshot the differ:
 
 ```kotlin
-@Test fun search_users_tab_pages() = runTest(main.dispatcher) {
-    val flow = repo.searchPaged(query = "kotlin", tab = SearchTab.USERS)
-    val snapshot = flow.asSnapshot { scrollTo(index = 40) }
-    assertThat(snapshot).hasSize(60)   // two pages of 30
+// Cursor paging applies to the DISCOVER endpoints (DiscoverySearchResponse),
+// not to /ui/search. Page size follows the discover `limit` param (web default
+// 20 for trending/search, 12 for suggested); fixtures set next_cursor to drive
+// a second page and null to end pagination.
+@Test fun discover_search_pages() = runTest(main.dispatcher) {
+    val flow = repo.discoverSearchPaged(query = "kotlin", limit = 20)
+    val snapshot = flow.asSnapshot { scrollTo(index = 25) }
+    assertThat(snapshot).hasSize(40)   // two pages of 20 (next_cursor then null)
 }
 ```
 
@@ -208,47 +213,93 @@ change): `discover_grid`, `discover_loading`, `discover_error`,
 ## 5. API Contract
 
 This is a test ticket; it defines no new endpoints. It asserts against the
-contracts owned by AND-185 (`/ui/search`) and AND-182 (`/ui/discovery`), which
-the tests reproduce as MockWebServer fixtures. The canonical shapes the
-repository tests assert on:
+contracts owned by AND-185 (`/ui/search`) and AND-182 (the `/ui/discover/*`
+family), which the tests reproduce as MockWebServer fixtures. The canonical
+shapes below were VERIFIED against the backend OpenAPI index and the web
+client's `src/api/endpoints/{search,discovery}.ts`; the original draft shapes
+were inaccurate and have been corrected (see §16).
 
-Search (multi-entity), `GET /ui/search?q={q}&type={users|content|...}&cursor={c}`:
+Search (multi-entity), `GET /ui/search?q={q}&types={csv}&limit={n}`
+(op `global_search_ui_search_get`). NOTE: the real query params are
+`q`, `types` (comma-separated string, optional) and `limit` (default 5 in the
+web client, which uses 10 on the Search page); there is **no** `type` (singular)
+param and **no** `cursor` on `/ui/search` — search is a single bounded fetch, not
+cursor-paged. The response is `GlobalSearchResponse`: a fixed map of named
+sections, each a `SearchResultSection { items, total_estimate, has_more }`.
+Tabs in the UI are client-side filters over these sections, not per-tab network
+calls:
 
 ```json
 {
   "query": "kotlin",
   "results": {
-    "users":   { "items": [ {"id":"u1","handle":"…","display_name":"…"} ], "next_cursor": "c2" },
-    "content": { "items": [ {"id":"c1","title":"…","thumb_url":"…"} ],     "next_cursor": null }
+    "users":   { "items": [ {"type":"user","id":"u1","title":"…","snippet":"…","thumbnail_url":"…","url":"…","meta":{}} ], "total_estimate": 12, "has_more": true },
+    "posts":   { "items": [ {"type":"post","id":"p1","title":"…","snippet":"…","url":"…"} ], "total_estimate": 3, "has_more": false },
+    "catalog": { "items": [], "total_estimate": 0, "has_more": false },
+    "files":   { "items": [], "total_estimate": 0, "has_more": false }
   },
-  "total": 42
+  "partial": false
 }
 ```
 
-Discovery, `GET /ui/discovery`:
+Each `SearchResultItem` carries `type` (one of `user|post|catalog|file|message|
+ticket|contact|video|calendar`), `id`, `title`, `snippet`, `url`, optional
+`thumbnail_url`, and optional `meta`. Section keys `users|posts|catalog|files`
+are always present; `messages|tickets|contacts|videos|calendar` are optional.
+There is no top-level `total` field (use per-section `total_estimate`); there are
+no `handle`/`display_name`/`content`/`thumb_url`/`next_cursor` fields on search
+items — those were errors in the original draft.
+
+Discovery does NOT have a single `GET /ui/discovery` returning `sections[]`
+(that endpoint does not exist). It is a family of cursor-paged user/creator
+endpoints (op prefix `discover_*`):
+- `GET /ui/discover/search?q&limit&cursor` → `DiscoverySearchResponse`
+- `GET /ui/discover/suggested?limit` → `DiscoverySearchResponse`
+- `GET /ui/discover/trending?limit` → `DiscoverySearchResponse`
+- `GET /ui/discover/creators?limit` → `CreatorSuggestionsResponse`
+- `GET /ui/discover/trending-tags?limit` → `TrendingTagsResponse`
+- `GET /ui/discover/tags/{tag}?limit&cursor` → `TagDiscoverResponse`
+- `GET /ui/discover/profile/{user_id}` → `DiscoveryProfile`
+- `POST /ui/discover/reindex`
+
+`DiscoverySearchResponse` (used by search/suggested/trending) is the cursor-paged
+shape — cursor pagination lives on **discovery**, not on `/ui/search`:
 
 ```json
 {
-  "sections": [
-    { "id": "trending", "title": "Trending", "items": [ {"id":"c1","title":"…","thumb_url":"…"} ] },
-    { "id": "for_you",  "title": "For You",  "items": [] }
-  ]
+  "items": [ {"user_id":"u1","display_name":"…","profile_photo_url":"…","follower_count":120,"is_following":false,"is_followed_by":false,"is_mutual":false} ],
+  "next_cursor": "c2",
+  "total_estimate": 42
 }
 ```
 
+End-of-pagination is `next_cursor` absent/null (the field is optional).
+`CreatorSuggestionsResponse` is `{ creators: CreatorSuggestionItem[], source }`
+(not paged); `TrendingTagsResponse` is `{ tags: [{tag,count,last_used_at}] }`.
+
 Polymorphic error body asserted in all three forms (string, list-of-`{msg}`,
-object-with-`code`):
+object-with-`code`). VERIFIED: the OpenAPI `422` schema `HTTPValidationError`
+is strictly `{"detail": [ValidationError]}` where `ValidationError = {loc, msg,
+type}` — i.e. the list-of-`{msg}` form. The bare-string and object-with-`code`
+forms are produced by FastAPI `HTTPException`/custom handlers (not the 422
+schema) and are handled by the web client's `normalizeErrorDetail`
+(`src/api/client.ts`), which the Android `core-network` mapper mirrors. The
+object form's `code` keys observed in the web client are authorization codes
+(`role_required`, `geo_blocked`, etc.), not `SEARCH_UNAVAILABLE`; the fixture
+value is illustrative only:
 
 ```json
 {"detail": "rate limited"}
 {"detail": [{"loc":["query","q"],"msg":"too short","type":"value_error"}]}
-{"detail": {"code":"SEARCH_UNAVAILABLE","message":"backend down"}}
+{"detail": {"code":"role_required","message":"…"}}
 ```
 
 Tests assert each maps to `ApiResult.Error` with the human-facing message
-extracted per the `core-network` error mapper, and that a 401 triggers exactly
-one `POST /ui/session/refresh` + retry (verified via MockWebServer
-`takeRequest()` ordering) — the refresh-once behavior owned by core-network is
+extracted per the `core-network` error mapper (mirroring `normalizeErrorDetail`),
+and that a 401 triggers exactly one `POST /ui/session/refresh` (op
+`ui_session_refresh_ui_session_refresh_post`, VERIFIED) + retry of the original
+request (verified via MockWebServer `takeRequest()` ordering) — the refresh-once
+behavior owned by core-network, mirroring `src/api/client.ts:refreshSession`, is
 re-asserted here at the repository boundary.
 
 ## 6. Data & State Management
@@ -280,14 +331,23 @@ Asserted transitions:
 - Search: `Idle → Loading → Content` (results present); `Idle → Loading →
   NoResults` (empty payload, non-blank query); `Loading → Error` (mapped
   failure); `Error → Loading → Content` on retry; tab switch preserves query and
-  swaps the active `PagingData` stream without re-issuing the network call when
-  cached.
+  swaps the displayed section without re-issuing the network call (per the web
+  reference, `/ui/search` returns all sections in one call and tabs filter
+  client-side — see §5/§16; if the Android port instead paginates per tab,
+  re-confirm before asserting a cached-stream swap).
 - Discover: `Loading → Content(isStale=false)` on fresh network;
   `Content(isStale=true)` when only the Room cache resolves (offline);
   `Loading → Error` on cold failure with empty cache; `Loading → Empty` when all
   sections are empty.
-- Recent searches persisted via DataStore: tests inject a fake `RecentSearches`
-  store and assert add-on-submit, dedupe, and bounded size (e.g., last 10).
+- Recent searches: CORRECTION — the web reference persists search history
+  **server-side** via `GET/POST/DELETE /ui/search/history`
+  (`src/api/endpoints/search.ts`: `getSearchHistory`, `recordSearchHistory`,
+  `deleteSearchHistoryItem`, `clearSearchHistory`), recording on submit when the
+  query length ≥ 2 (`SearchPage.tsx`). Whether the Android port mirrors this
+  server-backed model or adds a local DataStore cache is an AND-186 decision
+  (see §16 Open assumptions). Tests should assert against whichever store
+  AND-186 ships: add-on-submit, dedupe, bounded size, and clear-all, using a
+  fake that stands in for the chosen backing (server repo and/or DataStore).
 - `SavedStateHandle` round-trip: query and active tab survive process death
   (tests reconstruct the ViewModel from a populated `SavedStateHandle`).
 
@@ -319,10 +379,15 @@ Resilience behaviors asserted:
 No new attack surface. Test-specific requirements: fixtures use synthetic
 usernames/handles and dummy content only — no real user PII and no production
 credentials. The CSRF/cookie behavior is exercised with a `FakeCsrfStore`
-returning a fixed token; tests assert the repository attaches the
-`X-CSRF-Token` header on state-changing calls (none expected for read-only
-search/discovery, so the assertion is that GETs carry cookies but require no
-CSRF header, matching the cookie-based auth model). No secrets are committed;
+returning a fixed token. CORRECTION: the web client (`src/api/client.ts`)
+attaches `X-CSRF-Token` (read from the `ui_csrf` cookie) on **every** request
+when the cookie is present — including GETs — not only on state-changing calls,
+and also sends a `Bearer` Authorization header from the auth store plus
+`credentials: include` cookies. The earlier assumption that read-only GETs carry
+no CSRF header was wrong; tests should assert that GET search/discovery requests
+carry the `X-CSRF-Token` header and cookies when a token is present (and behave
+correctly when it is absent). State-changing search-history calls
+(`POST/DELETE /ui/search/history`) likewise carry the header. No secrets are committed;
 MockWebServer issues ephemeral loopback ports. Logs emitted during tests must
 not contain raw query strings beyond what telemetry (§10) sanitizes.
 
@@ -370,8 +435,11 @@ Repository (JVM, MockWebServer) — `SearchRepositoryTest`,
 4. 500 → bounded retry then error; request count asserted.
 5. 401 → single refresh + retry success; and 401→401 terminal.
 6. timeout (delayed body, virtual time) → retryable error.
-7. paging source: `load()` returns `Page` with correct `nextKey`/`prevKey`;
-   end of pagination when `next_cursor == null`.
+7. paging source (DISCOVER endpoints only — `/ui/search` is single-fetch):
+   `load()` returns `Page` with correct `nextKey`/`prevKey` from
+   `DiscoverySearchResponse.next_cursor`; end of pagination when `next_cursor`
+   is absent/null. Plus a `/ui/search` one-shot test asserting all sections and
+   per-section `has_more`/`total_estimate` are parsed.
 8. Discovery cache-then-network: stale cache emitted, then fresh overwrites.
 
 ViewModel (JVM/Robolectric) — `SearchViewModelTest`, `DiscoverViewModelTest`:
@@ -428,12 +496,19 @@ should be coordinated with AND-186 to avoid merge conflicts.
 - R3: Paging 3 test ergonomics (`asSnapshot`) require `paging-testing`
   artifact; ensure it is added to `feature-discovery` and `core-data`
   test configurations.
-- Q1: Is `search_performed` debounce window 300ms (assumed) or another value?
-  Confirm against AND-187 implementation before asserting timing.
-- Q2: Recent-searches max size and dedupe rule — confirm bound (assumed 10) and
-  storage (DataStore) with AND-186.
-- Q3: Does Discover use Paging or a single sectioned fetch? Affects which
-  paging assertions apply to Discover vs Search only.
+- Q1: Debounce window — RESOLVED for the web reference: `SearchPage.tsx` uses
+  `useDebounce(inputValue, 300)`, i.e. **300ms**, and fetches when query length
+  ≥ 1 (history recorded at length ≥ 2). Android timing should match unless
+  AND-187 deliberately diverges; confirm the AND-187 constant equals 300ms.
+- Q2: Recent-searches max size and dedupe rule — the web reference stores history
+  **server-side** via `/ui/search/history` (no client max enforced there;
+  `getSearchHistory` defaults to limit 20). Confirm any client-side bound/dedupe
+  and whether the Android port adds a DataStore cache with AND-186.
+- Q3: RESOLVED — discovery is the cursor-paged surface
+  (`DiscoverySearchResponse.next_cursor`); `/ui/search` is a single bounded
+  multi-section fetch (no cursor). So Paging-3 cursor assertions apply to the
+  **discover** endpoints (search/suggested/trending/tags), while `/ui/search`
+  is asserted as a one-shot fetch with per-section `has_more`/`total_estimate`.
 
 ## 14. Acceptance Criteria
 
@@ -472,3 +547,359 @@ AC-10. Tests run green in CI on the `android-port` branch with no flake across
 - No reference to the unreliable dev backend; MockWebServer only.
 - PR on `android-port` reviewed and merged; CI 3× flake-free; ticket links the
   upstream AND-182/185/186/187 PRs it validates.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **`GET /ui/search` exists with params `q`, `types`, `limit`.** VERIFIED.
+   OpenAPI `GET /ui/search` (op `global_search_ui_search_get`, `params=q,types,
+   limit,user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`); frontend
+   `src/api/endpoints/search.ts: globalSearch` (`api.get("/ui/search", {q,
+   limit, types?})`).
+2. **Original draft used a `type` (singular) param and a `cursor` on
+   `/ui/search`.** CORRECTED → no such params; the real params are `q`, `types`
+   (CSV string), `limit`. Source: same as (1). `/ui/search` is not cursor-paged.
+3. **Search response shape `GlobalSearchResponse` = `{query, results:{users,
+   posts,catalog,files,...}, partial?}`, each section
+   `SearchResultSection {items, total_estimate, has_more}`.** VERIFIED via
+   `src/api/endpoints/search.ts: GlobalSearchResponse / SearchResultSection /
+   SearchResultItem`.
+4. **Original draft search items had `handle`/`display_name`/`thumb_url`,
+   sections had `next_cursor`, top-level `total`, and a `content` section.**
+   CORRECTED → items are `SearchResultItem {type,id,title,snippet,url,
+   thumbnail_url?,meta?}`; sections use `total_estimate`/`has_more` (no
+   `next_cursor`); no top-level `total`; the section is `catalog`/`posts`/
+   `files`, not `content`. Source: `src/api/endpoints/search.ts`.
+5. **A single `GET /ui/discovery` returning `sections[]` exists.** CORRECTED →
+   does NOT exist. Discovery is the `/ui/discover/*` family. Source: OpenAPI
+   index lines for `/ui/discover/search|suggested|trending|creators|trending-
+   tags|tags/{tag}|profile/{user_id}|reindex`; `src/api/endpoints/discovery.ts`.
+6. **`DiscoverySearchResponse = {items: DiscoveryUser[], next_cursor?,
+   total_estimate}` with cursor paging.** VERIFIED.
+   `src/api/endpoints/discovery.ts: DiscoverySearchResponse / DiscoveryUser`;
+   OpenAPI `GET /ui/discover/search` (`params=q,limit,cursor`),
+   `/ui/discover/tags/{tag}` (`params=tag,limit,cursor`).
+7. **`GET /ui/discover/creators` returns `CreatorSuggestionsResponse {creators,
+   source}`.** VERIFIED. OpenAPI `GET /ui/discover/creators`
+   (`resp=200:CreatorSuggestionsResponse`); schema
+   `components.schemas.CreatorSuggestionsResponse` in openapi.pretty.json.
+8. **Debounce window is 300ms.** VERIFIED (was an open question Q1).
+   `src/pages/search/SearchPage.tsx: useDebounce(inputValue, 300)`.
+9. **Search fetch min-query-length threshold.** VERIFIED = 1 char in the web
+   reference (`SearchPage.tsx: enabled: debouncedQuery.length >= 1`); history is
+   recorded only when length ≥ 2. The Android threshold is an AND-187 choice
+   (treat a stricter threshold as an assumption until confirmed).
+10. **Recent searches persisted via DataStore.** CORRECTED → the web reference
+    persists **server-side** via `GET/POST/DELETE /ui/search/history`. OpenAPI
+    `GET/POST /ui/search/history`, `DELETE /ui/search/history`,
+    `DELETE /ui/search/history/{item_id}`; `src/api/endpoints/search.ts:
+    getSearchHistory/recordSearchHistory/clearSearchHistory/
+    deleteSearchHistoryItem`. Any DataStore cache on Android is an AND-186
+    assumption.
+11. **Tabs are per-tab network calls / per-tab `PagingData` streams for
+    search.** CORRECTED → tabs are client-side filters over the one
+    multi-section `/ui/search` response. `SearchPage.tsx`
+    (`sectionCount(tab.value)`, single `globalSearch(...)` query).
+12. **401 → exactly one `POST /ui/session/refresh` → retry original request;
+    401-after-refresh is terminal (no loop).** VERIFIED. OpenAPI
+    `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`);
+    `src/api/client.ts: refreshSession` + single-flight `refreshPromise` guard
+    and one retry, then `logout("session_expired")` on a second 401.
+13. **CSRF: `X-CSRF-Token` attached only on state-changing calls.** CORRECTED →
+    attached on **every** request when the `ui_csrf` cookie is present (incl.
+    GETs), alongside a `Bearer` token and `credentials: include` cookies.
+    `src/api/client.ts` (header set unconditionally from `getCookie("ui_csrf")`).
+14. **422 error body schema.** VERIFIED. `components.schemas.HTTPValidationError
+    = {detail: ValidationError[]}`, `ValidationError = {loc, msg, type}`
+    (openapi.pretty.json). The bare-string and `{code,...}` object `detail`
+    forms come from `HTTPException`/custom handlers and are normalized by
+    `src/api/client.ts: normalizeErrorDetail`; all three forms are real and must
+    map to `ApiResult.Error` with a non-empty message.
+15. **Dev host `18.222.237.167` is plaintext/unreliable; tests must be
+    hermetic.** Per spec §2/§7 (project convention, not independently verifiable
+    from OpenAPI/frontend); retained as a project constraint.
+16. **Android test stack (JUnit4, coroutines-test, Turbine, MockWebServer,
+    paging-testing, Robolectric, compose ui-test).** framework ref — standard
+    AndroidX testing libraries: Paging testing
+    https://developer.android.com/topic/libraries/architecture/paging/test ;
+    Compose testing
+    https://developer.android.com/develop/ui/compose/testing ;
+    coroutines test
+    https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/ .
+    Versions/choices are an implementation assumption, not contract-bound.
+
+### Corrections made
+
+- §5: replaced the inaccurate `/ui/search` URL/params (removed `type`, `cursor`)
+  and corrected the response to `GlobalSearchResponse` with
+  `SearchResultSection {items,total_estimate,has_more}` and proper
+  `SearchResultItem` fields; removed `total`/`next_cursor`/`content`.
+- §5: replaced the nonexistent `GET /ui/discovery` `sections[]` model with the
+  real `/ui/discover/*` family and `DiscoverySearchResponse` cursor shape;
+  clarified cursor paging belongs to discovery, not search.
+- §5: corrected the error-body note (422 is list-only per schema; string/object
+  forms are HTTPException-derived; example `code` made realistic).
+- §6/§11/§13: corrected search "per-tab paging stream" to client-side section
+  filtering; moved cursor-paging assertions to the discover endpoints; corrected
+  the paging snapshot example.
+- §6/§13: corrected recent-searches storage from "DataStore" to the
+  server-backed `/ui/search/history` model (with DataStore noted as an
+  unconfirmed Android-side addition).
+- §8: corrected CSRF behavior — `X-CSRF-Token` is sent on all requests when the
+  cookie is present, not only state-changing ones.
+- §13: resolved Q1 (300ms) and Q3 (discovery is the paged surface).
+- Frontmatter: `status: reviewed`, added `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **Android `UiState`/ViewModel signatures (§6)** are expected-not-guaranteed
+  until AND-187 merges; the audited contracts are the *backend/web* contracts,
+  which the Android code must mirror. Why unverifiable: the Android source does
+  not yet exist in the provided references.
+- **Android-side recent-search storage (DataStore vs server-backed vs both)**
+  and any client max/dedupe bound — AND-186 decision; web uses server history
+  with no client max. Why: not in provided sources.
+- **Android debounce constant and min-query threshold** — assumed to match the
+  web's 300ms / length≥1; AND-187 may diverge. Why: Android constants not in
+  references.
+- **`X-CSRF-Token` on Android** — the web sends it from a cookie on all calls;
+  whether the Android port also sends CSRF on read-only GETs is an AND-185/187
+  transport decision (recommended to mirror the web). Why: Android transport not
+  in references.
+- **Read-timeout (~20s) and bounded-retry counts** — quoted in §7 as configured
+  values; the exact numbers are core-network config, not in the provided
+  sources. Why: Android config not in references.
+- **JaCoCo 80% floor (FR-7/AC-9)** — a project policy assumption, not contract.
+
+## 17. Test Plan
+
+IDs `TC-AND-188-NN`. "AC-#" trace to §14 Acceptance Criteria. Unless a case is
+marked PHYSICAL DEVICE, JVM/Robolectric cases run locally with no device and
+instrumented Compose cases run on the headless emulator AVD `test35`
+(API 35). MockWebServer binds loopback only.
+
+**TC-AND-188-01 — Search success maps multi-section payload**
+- Type: contract/MockWebServer (JVM)
+- Target: `SearchRepositoryTest` (`DefaultSearchRepository` + Retrofit/Moshi).
+- Preconditions: MockWebServer enqueues 200 with a `GlobalSearchResponse`
+  fixture (`users`/`posts`/`catalog`/`files` populated; `has_more`/
+  `total_estimate` set; `partial:false`).
+- Steps: call `repo.search(q="kotlin", types=null, limit=10)`; inspect result
+  and `server.takeRequest()`.
+- Expected: `ApiResult.Success`; sections parsed into domain results with each
+  item's `type,id,title,snippet,url,thumbnail_url,meta`; per-section `has_more`/
+  `total_estimate` preserved; request path is `/ui/search?q=kotlin&limit=10`
+  with NO `cursor`/`type` params; no top-level `total` expected.
+- Traces: AC-1.
+
+**TC-AND-188-02 — Empty search payload → empty domain (drives NoResults)**
+- Type: contract/MockWebServer (JVM)
+- Target: `SearchRepositoryTest`.
+- Preconditions: 200 with all sections `items:[] , has_more:false,
+  total_estimate:0`, non-blank query.
+- Steps: call `repo.search("zzzzz")`.
+- Expected: `ApiResult.Success` with zero items across all sections (consumed
+  upstream as `NoResults`, distinct from `Idle`).
+- Traces: AC-1, AC-7.
+
+**TC-AND-188-03 — Three `detail` error forms → `ApiResult.Error`**
+- Type: contract/MockWebServer (JVM)
+- Target: `SearchRepositoryTest` + core-network mapper.
+- Preconditions: three enqueued responses: `400 {"detail":"rate limited"}`,
+  `422 {"detail":[{"loc":["query","q"],"msg":"too short","type":"value_error"}]}`,
+  `403 {"detail":{"code":"role_required","message":"…"}}`.
+- Steps: issue a search per response; capture each `ApiResult`.
+- Expected: each → `ApiResult.Error` with a non-empty user-facing message
+  matching `normalizeErrorDetail` semantics (string passthrough; list → joined
+  `msg`s; object → mapped/`message`).
+- Traces: AC-4.
+
+**TC-AND-188-04 — 401 → single refresh → retry success**
+- Type: contract/MockWebServer (JVM)
+- Target: `SearchRepositoryTest` (core-network refresh-once at repo boundary).
+- Preconditions: queue `401`, then expect `POST /ui/session/refresh` `200`,
+  then `200` for the retried search.
+- Steps: call `repo.search("kotlin")`; assert via `takeRequest()` ordering.
+- Expected: exactly one `POST /ui/session/refresh`; original request retried
+  once; final `ApiResult.Success`. No duplicate refreshes.
+- Traces: AC-5.
+
+**TC-AND-188-05 — 401 → refresh → 401 is terminal (no loop)**
+- Type: contract/MockWebServer (JVM)
+- Target: `SearchRepositoryTest`.
+- Preconditions: queue `401`, refresh `200`, retried request `401`.
+- Steps: call `repo.search(...)`; count requests.
+- Expected: terminal `ApiResult.Error` (auth); exactly one refresh; no infinite
+  retry; session-expired/logout signal emitted once.
+- Traces: AC-5.
+
+**TC-AND-188-06 — Read timeout (virtual clock) → retryable error**
+- Type: contract/MockWebServer (JVM)
+- Target: `SearchRepositoryTest`.
+- Preconditions: MockWebServer `setBodyDelay` beyond the configured read
+  timeout; virtual time advanced via the test dispatcher (no wall-clock sleep).
+- Steps: call `repo.search(...)`; advance time past timeout.
+- Expected: `ApiResult.Error(retryable=true)`; no `Thread.sleep` used.
+- Traces: AC-1, AC-8.
+
+**TC-AND-188-07 — Discover cursor paging + end-of-pagination**
+- Type: contract/MockWebServer + paging-testing (JVM)
+- Target: `DiscoveryRepositoryTest` (`/ui/discover/search|trending|suggested`
+  PagingSource over `DiscoverySearchResponse`).
+- Preconditions: page 1 → `{items:[20], next_cursor:"c2", total_estimate:40}`;
+  page 2 → `{items:[20], next_cursor:null}`.
+- Steps: `flow.asSnapshot { scrollTo(index=25) }`; verify the two requests'
+  `cursor` params (`absent`, then `c2`).
+- Expected: snapshot size 40; `nextKey` from `next_cursor`; end-of-pagination
+  when `next_cursor` null; `/ui/search` is NOT used for paging.
+- Traces: AC-6.
+
+**TC-AND-188-08 — Discover offline → stale cache; cold failure → error**
+- Type: integration (JVM/Robolectric, Room in-memory)
+- Target: `DiscoveryRepositoryTest` + `DiscoverViewModelTest`.
+- Preconditions: (a) network fake throws `IOException` with a primed Room cache;
+  (b) same but empty cache.
+- Steps: trigger discover load in each case.
+- Expected: (a) `Content(isStale=true)` from cache; (b) `Error`. Idle/Empty not
+  conflated with stale.
+- Traces: AC-7.
+
+**TC-AND-188-09 — Debounce collapses keystrokes; min-length gating**
+- Type: unit (JVM, coroutines virtual time + Turbine)
+- Target: `SearchViewModelTest`.
+- Preconditions: `FakeSearchRepository` counting calls; debounce window per
+  AND-187 (web reference = 300ms).
+- Steps: emit "a","ab","abc" rapidly; `advanceTimeBy(299)` then `+1` &
+  `advanceUntilIdle`; separately emit a sub-threshold/empty query.
+- Expected: exactly one repository call for the debounced burst with
+  `lastQuery=="abc"`; zero calls for the gated (empty/below-threshold) query.
+- Traces: AC-3.
+
+**TC-AND-188-10 — Tab switch filters client-side, preserves query, no refetch**
+- Type: unit (JVM + Turbine)
+- Target: `SearchViewModelTest`.
+- Preconditions: `FakeSearchRepository` returns a populated multi-section
+  result; call count tracked.
+- Steps: perform a search (1 call), then switch tabs users→posts→all.
+- Expected: query preserved; displayed section changes; no additional repository
+  calls on tab switch (matches web client-side filtering).
+- Traces: AC-1, AC-7.
+
+**TC-AND-188-11 — Error → retry → content recovery; `search_error` emitted once**
+- Type: unit (JVM + Turbine, `FakeAnalytics`)
+- Target: `SearchViewModelTest`.
+- Preconditions: fake returns Error then Success; `FakeAnalytics` injected.
+- Steps: drive `Loading→Error`; invoke retry; observe `Error→Loading→Content`.
+- Expected: state recovers to `Content`; `search_error{code,retryable}` emitted
+  on the failure; `search_performed` carries `query_len` (never raw query).
+- Traces: AC-1.
+
+**TC-AND-188-12 — SavedStateHandle restore (query + tab survive process death)**
+- Type: unit (JVM/Robolectric)
+- Target: `SearchViewModelTest`.
+- Preconditions: reconstruct ViewModel from a populated `SavedStateHandle`.
+- Steps: set query/tab, simulate recreate from saved state.
+- Expected: restored query and active tab; restores to `Content`/`Idle`
+  appropriately without an extra network call when results are cached.
+- Traces: AC-1, AC-7.
+
+**TC-AND-188-13 — Recent searches add/dedupe/bound/clear against chosen store**
+- Type: unit (JVM)
+- Target: `SearchViewModelTest` with a fake recent-search store standing in for
+  the AND-186 backing (server `/ui/search/history` and/or DataStore).
+- Preconditions: store seeded empty; record threshold per web reference
+  (length ≥ 2).
+- Steps: submit several queries incl. duplicates and a sub-threshold one;
+  invoke clear-all and single-delete.
+- Expected: add-on-submit (only at/above threshold), dedupe, bounded size,
+  clear-all and delete-one behave as configured. (If server-backed, assert the
+  `POST/DELETE /ui/search/history` calls via the fake repo.)
+- Traces: AC-1.
+
+**TC-AND-188-14 — Compose: each search state renders its tagged node + a11y**
+- Type: Compose-UI (Robolectric `@Config(sdk=[34])` or emulator `test35`)
+- Target: `SearchScreenTest` (stateless `SearchScreen` fed hand-built
+  `SearchUiState`).
+- Preconditions: `createComposeRule()`; feed Idle/Loading/Content/NoResults/
+  Error states in turn.
+- Steps: assert tagged nodes (`search_loading`,`search_results`,`search_empty`,
+  `search_no_results`,`search_error`,`recent_searches`); for NoResults assert
+  copy via `stringResource` (not a hard-coded literal); assert tabs expose
+  `Role.Tab` + `assertIsSelected()`, filter chips `assertIsOn()/assertIsOff()`,
+  and the search field has a content description; error/empty present readable
+  text (TalkBack).
+- Expected: each state shows its node; a11y semantics present; no icon-only
+  empty/error.
+- Traces: AC-2, AC-7.
+
+**TC-AND-188-15 — Compose: search interaction callbacks**
+- Type: Compose-UI (Robolectric or emulator `test35`)
+- Target: `SearchScreenTest`.
+- Preconditions: capture `onEvent` via a recording lambda.
+- Steps: type into field; tap a result; select a tab; toggle a filter chip; tap
+  a recent search; tap retry on the Error state.
+- Expected: `QueryChanged`, `NavigateTo…`, tab-select, filter-toggle,
+  recent-tap, and retry events emitted with correct payloads.
+- Traces: AC-2.
+
+**TC-AND-188-16 — Compose: Discover states + section a11y**
+- Type: Compose-UI (Robolectric or emulator `test35`)
+- Target: `DiscoverScreenTest`.
+- Preconditions: feed `Loading`,`Content(isStale=false/true)`,`Empty`,`Error`.
+- Steps: assert `discover_loading`/`discover_grid`/`discover_error` nodes;
+  stale banner visible when `isStale=true`; item tap emits
+  `onEvent(NavigateTo…)`; section header text resolvable; readable empty/error.
+- Expected: distinct rendering per state incl. stale; navigation + retry
+  callbacks fire; a11y text present.
+- Traces: AC-2, AC-7.
+
+**TC-AND-188-17 — Hermeticity guard (no dev host, no sleeps)**
+- Type: unit (JVM, static/lint assertion)
+- Target: a `HermeticityGuardTest` (or Gradle/lint rule) scanning test fixtures.
+- Preconditions: scans test sources/fixtures for `18.222.237.167`,
+  non-loopback URLs, and `Thread.sleep`.
+- Steps: run the guard over the discovery/search test source set.
+- Expected: zero matches; all `MockWebServer` URLs are `127.0.0.1`/loopback.
+- Traces: AC-8.
+
+**TC-AND-188-18 — Coverage floor enforced**
+- Type: unit/integration (JaCoCo verification task)
+- Target: Gradle `jacoco` verification on `com.testlogon.android.feature.
+  discovery`.
+- Preconditions: full discovery/search suite run with coverage.
+- Steps: execute the coverage verification task in CI.
+- Expected: line coverage ≥ 80%; build fails below the floor.
+- Traces: AC-9.
+
+**TC-AND-188-19 — Real-network smoke on physical device (negative/offline)**
+- Type: instrumented/e2e — PHYSICAL DEVICE REQUIRED (Samsung Galaxy A15 5G,
+  SM-A156U, API 34, arm64-v8a, serial R5CX821TA9R)
+- Target: `SearchScreenTest`/`DiscoverScreenTest` instrumented smoke that
+  exercises the airplane-mode/offline path and arm64 API-34 behavior the
+  emulator (x86_64 API 35) cannot represent.
+- Preconditions: app installed on device; MockWebServer or a local stub still
+  used for HTTP (the dev host stays untouched); device toggled offline for the
+  offline leg.
+- Steps: launch Discover offline with a primed cache → expect stale content;
+  go online → expect refresh to fresh content; run the same on the emulator and
+  compare for ABI/API-level regressions.
+- Expected: stale→fresh transition works on real arm64/API-34 hardware;
+  no crash/ANR; behavior matches emulator. MUST run on the physical device
+  because it validates arm64-v8a + API-34 vs the emulator's x86_64 + API-35.
+- Traces: AC-2, AC-7, AC-10.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 | TC-01, TC-02, TC-06, TC-10, TC-11, TC-12, TC-13 |
+| AC-2 | TC-14, TC-15, TC-16, TC-19 |
+| AC-3 | TC-09 |
+| AC-4 | TC-03 |
+| AC-5 | TC-04, TC-05 |
+| AC-6 | TC-07 |
+| AC-7 | TC-02, TC-08, TC-10, TC-12, TC-14, TC-16, TC-19 |
+| AC-8 | TC-06, TC-17 |
+| AC-9 | TC-18 |
+| AC-10 | TC-19 (+ all cases run 3× flake-free in CI) |

@@ -5,7 +5,8 @@ milestone: M4
 epic: E25
 priority: P0
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-027]
 blocks: []
 ---
@@ -40,14 +41,25 @@ contract verified against `/openapi.json`.
   shape, query params, entity categories), shared types in
   `frontend/src/api/types.ts`.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000`
-  (PLAINTEXT HTTP, unreliable). Contract of record is `/openapi.json` — confirm
-  the exact search path and category enum before implementation; this spec assumes
-  `GET /ui/search` returning a categorized payload (see §5).
+  (PLAINTEXT HTTP, unreliable). Contract of record is `/openapi.json`. VERIFIED:
+  the endpoint is `GET /ui/search` (op `global_search_ui_search_get`) with query
+  params `q` (required, 1–500 chars), `types` (CSV, optional), `limit` (default 5,
+  max 20), plus `user_sub` query and `X-SESSION-ID`/`X-IMPERSONATION-TOKEN` headers.
+  NOTE: the OpenAPI `200` response schema is empty (`{}`), so the authoritative
+  response shape comes from the web client `search.ts` (see §5, corrected). The
+  category set is NOT an open enum — it is a fixed keyed object of nine sections
+  (users, posts, catalog, files, messages, tickets, contacts, videos, calendar).
 - **Dependency AND-027 (AuthApi / session endpoints):** establishes the
-  cookie-based session, persistent cookie jar, `ui_csrf` → `X-CSRF-Token`
-  handling, and the single-shot `POST /ui/session/refresh`-then-retry-on-401
-  behavior in `core-network`. Global search is an authenticated call and reuses
-  that OkHttp stack and `ApiResult<T>` mapping. AND-185 must not re-implement auth.
+  transport that AND-185 reuses. VERIFIED against `src/api/client.ts`: the web
+  client sends `Authorization: Bearer <accessToken>` (from the auth store) as the
+  PRIMARY credential, AND includes cookies (`credentials: "include"`), AND attaches
+  `X-CSRF-Token` from the `ui_csrf` cookie, plus an optional `X-IMPERSONATION-TOKEN`
+  when impersonating. The OpenAPI additionally documents an `X-SESSION-ID` header
+  and a `user_sub` query param on this route. On `401` (only when already
+  authenticated) it performs a single `POST /ui/session/refresh` and retries once;
+  on refresh failure it logs out. AND-185 reuses that OkHttp stack and `ApiResult<T>`
+  mapping and must not re-implement auth. (Correction: the prior draft described
+  this as a purely "cookie-based session" — the bearer token is the main credential.)
 - **Module layering:** `app -> feature-search -> core-network, core-model,
   core-ui, core-data, core-testing`. ViewModels expose `StateFlow<UiState>`.
 - **Detail destinations** (user profile, content detail) are owned by their
@@ -66,6 +78,10 @@ first composition.
 
 FR-3. Input is debounced (300 ms) and trimmed. Queries shorter than 2 characters
 do not trigger a network call; the screen shows a neutral "Type to search" prompt.
+(Divergence note: the web enables the query at `length >= 1` but only records
+history at `>= 2`; the backend accepts `q` of min length 1. The 2-char threshold
+here is an intentional Android choice to cut chatter against the unreliable dev
+backend — verified-divergence, see §16.)
 
 FR-4. A query of length ≥ 2 issues exactly one multi-entity search request. While
 in flight, a loading indicator is shown; superseded requests are cancelled (latest
@@ -80,9 +96,11 @@ default 3, with a "See all N" affordance that switches to that category's tab).
 Per-category tabs render the full result list for that category, paged if the
 backend returns pagination (Paging 3) — see §6.
 
-FR-7. Each result row renders an entity-appropriate cell: avatar/title/subtitle for
-users; thumbnail/title/snippet for content. Tapping a row navigates to that
-entity's detail route.
+FR-7. Each result row renders a cell from the uniform item fields (`title`,
+`snippet`, optional `thumbnail_url`) with a leading type icon chosen by `type`
+(the web maps each of the nine types to a distinct icon; see `resultIcon` in
+SearchPage.tsx). Tapping a row navigates using the server-provided `url` (§4).
+(Correction: there are no per-type fields such as `username`/`avatar_url`.)
 
 FR-8. Empty query state, zero-results state ("No results for \"<q>\""), error
 state (with Retry), and offline/stale state are visually distinct.
@@ -105,10 +123,15 @@ Navigation contract (consumed, not defined here):
 const val SEARCH_ROUTE = "search?q={q}"
 fun NavController.navigateToSearch(query: String? = null)
 
-// Destinations AND-185 routes into (provided by other feature modules):
+// Destinations AND-185 routes into (provided by other feature modules).
+// CORRECTION (verified vs SearchPage.tsx handleItemClick → navigate(item.url)):
+// the web client does NOT construct routes from (type, id); it navigates to the
+// server-provided `item.url`. The Android navigator must therefore resolve
+// `SearchResult.url` to an in-app destination (parse the path and map to the
+// owning feature route), falling back to type+id only if a url is absent.
 interface SearchNavigator {
-    fun openUser(navController: NavController, userId: String)
-    fun openContent(navController: NavController, contentId: String)
+    // Resolve a server-provided deep-link URL to an in-app destination.
+    fun open(navController: NavController, result: SearchResult)
 }
 ```
 
@@ -151,7 +174,12 @@ sealed interface SearchUiState {
     data class Error(val message: String, val retryable: Boolean) : SearchUiState
 }
 
-enum class SearchEntityType { USER, CONTENT, OTHER }
+// CORRECTION (verified vs search.ts: SearchResultType + GlobalSearchResponse):
+// the backend exposes a FIXED set of nine sections, not USER/CONTENT. OTHER is
+// retained only as a forward-compat fallback for an unrecognized `type` string.
+enum class SearchEntityType {
+    USER, POST, CATALOG, FILE, MESSAGE, TICKET, CONTACT, VIDEO, CALENDAR, OTHER
+}
 
 data class SearchCategory(
     val type: SearchEntityType,
@@ -160,13 +188,20 @@ data class SearchCategory(
     val items: List<SearchResult>,
 )
 
-sealed interface SearchResult {
-    val id: String
-    data class User(override val id: String, val displayName: String,
-                    val username: String, val avatarUrl: String?) : SearchResult
-    data class Content(override val id: String, val title: String,
-                       val snippet: String?, val thumbnailUrl: String?) : SearchResult
-}
+// CORRECTION (verified vs src/api/endpoints/search.ts: SearchResultItem): the
+// backend returns a UNIFORM item shape for every entity type — there is no
+// per-type field set. Every item is {type, id, title, snippet, thumbnail_url?,
+// url, meta?}. The domain model must mirror this; type-specific rendering is a
+// presentation concern keyed off `type`, not separate DTO classes.
+data class SearchResult(
+    val id: String,
+    val type: SearchEntityType,
+    val title: String,
+    val snippet: String?,        // web suppresses snippet when it equals title
+    val thumbnailUrl: String?,   // JSON: thumbnail_url
+    val url: String,             // server-provided deep link target (see §4 nav note)
+    val meta: Map<String, Any?> = emptyMap(),
+)
 
 sealed interface SearchTab {
     data object All : SearchTab
@@ -209,56 +244,77 @@ tests and previews per state.
 
 ## 5. API Contract
 
-Authoritative source is `/openapi.json`; confirm the path and category enum before
-coding. Expected contract (mirrors `search.ts`):
+Authoritative sources: OpenAPI `global_search_ui_search_get` for the request, and
+`src/api/endpoints/search.ts` for the response shape (the OpenAPI `200` schema is
+empty `{}`, so the web DTO is the contract of record for the body).
+
+VERIFIED contract (mirrors `search.ts`):
 
 ```kotlin
 interface SearchApi {
     @GET("ui/search")
     suspend fun search(
-        @Query("q") query: String,
-        @Query("types") types: String? = null,   // CSV, e.g. "user,content"; null = all
-        @Query("limit") limit: Int = 20,
+        @Query("q") query: String,                // required, 1..500 chars
+        @Query("types") types: String? = null,    // CSV, e.g. "users,posts"; null = all
+        @Query("limit") limit: Int = 5,           // backend default 5, MAX 20 (web sends 10)
     ): Response<SearchResponseDto>
 }
 ```
 
-Request: `GET /ui/search?q=jane&limit=20` with session cookies and
-`X-CSRF-Token` header injected by the shared OkHttp interceptor from AND-027.
+Request: `GET /ui/search?q=jane&limit=10` carrying `Authorization: Bearer …`
+(primary credential), session cookies, `X-CSRF-Token` (from `ui_csrf`), and an
+optional `X-IMPERSONATION-TOKEN` — all injected by the shared OkHttp interceptor
+from AND-027. (Correction: prior draft sent `limit=20` and described auth as
+cookie-only; the documented default is 5/max 20 and the bearer token is primary.)
 
-Response `200` (Moshi DTO):
+Response `200` — CORRECTED to the real shape. The body is `{query, results, partial?}`
+where `results` is a KEYED OBJECT of nine optional sections (not a `categories`
+array, and there is NO top-level `total`). Each section is
+`{items, total_estimate, has_more}`, and every item shares ONE uniform shape:
 
 ```json
 {
   "query": "jane",
-  "total": 12,
-  "categories": [
-    {
-      "type": "user",
-      "label": "Users",
-      "count": 8,
+  "partial": false,
+  "results": {
+    "users": {
+      "total_estimate": 8,
+      "has_more": true,
       "items": [
-        { "id": "u_123", "display_name": "Jane Doe",
-          "username": "jdoe", "avatar_url": "https://…/a.jpg" }
+        { "type": "user", "id": "u_123", "title": "Jane Doe",
+          "snippet": "@jdoe", "thumbnail_url": "https://…/a.jpg",
+          "url": "/users/u_123", "meta": { } }
       ]
     },
-    {
-      "type": "content",
-      "label": "Content",
-      "count": 4,
+    "posts": {
+      "total_estimate": 4,
+      "has_more": false,
       "items": [
-        { "id": "c_987", "title": "Jane's stream",
-          "snippet": "…", "thumbnail_url": "https://…/t.jpg" }
+        { "type": "post", "id": "c_987", "title": "Jane's stream",
+          "snippet": "…", "thumbnail_url": "https://…/t.jpg",
+          "url": "/posts/c_987" }
       ]
     }
-  ]
+    // ...catalog, files, messages?, tickets?, contacts?, videos?, calendar?
+  }
 }
 ```
 
-DTOs use `@Json(name = "...")` for snake_case mapping and a `SearchItemDto`
-discriminated by `type`; unknown `type` values map to `SearchEntityType.OTHER` and
-render a generic cell (forward-compatibility). DTO→domain mapping lives in a pure
-`SearchMapper` for unit testing.
+Notes on the corrected shape:
+- Per-tab "count" comes from each section's `items.size` (what the web renders) and
+  `total_estimate` is the backend's estimate of the full count; `has_more` signals
+  truncation. The web `total` for the "All" tab is the SUM of `items.length` across
+  sections (see `SearchPage.tsx`), computed client-side — there is no server `total`.
+- Items are uniform: `{type, id, title, snippet, thumbnail_url?, url, meta?}`. There
+  are NO `display_name`/`username`/`avatar_url` fields. The web suppresses `snippet`
+  when it equals `title`.
+
+DTOs use `@Json(name = "...")` for snake_case mapping. Model `results` as a DTO with
+nine nullable section fields (or a `Map<String, SectionDto>` to tolerate added keys),
+each `SectionDto {items, total_estimate, has_more}`. A single `SearchItemDto`
+(uniform fields) maps to domain; an unrecognized `type` string maps to
+`SearchEntityType.OTHER` and renders a generic cell (forward-compatibility).
+DTO→domain mapping lives in a pure `SearchMapper` for unit testing.
 
 Errors follow the FastAPI `detail` convention handled centrally in `core-network`
 (`detail` may be `string | [{msg}] | {code,...}`); the repository surfaces them as
@@ -273,10 +329,17 @@ the single `POST /ui/session/refresh`-on-401 retry defined by AND-027.
 - **Restoration:** `query` and `selectedTab` are persisted in `SavedStateHandle`
   so rotation and process death restore the screen (FR-10). The `q` nav argument
   seeds the initial value.
-- **Pagination:** when a category's `count` exceeds the returned `items.size`, the
-  per-category tab uses Paging 3 (`Pager` + `PagingSource<Int, SearchResult>`
-  keyed by `(query, type, offset)`) to load further pages via `limit`/`offset`
-  params. The "All" tab is non-paged (capped slice only).
+- **Pagination:** CORRECTION — `GET /ui/search` exposes NO `offset`/`cursor`/`page`
+  param (verified: its only query params are `q`, `types`, `limit`, `user_sub`).
+  `limit` is capped at 20. Therefore per-section results cannot be paged through this
+  endpoint; the previously-planned Paging 3 `(query, type, offset)` source is
+  unsupported by the contract. Each section instead returns up to `limit` items plus
+  `has_more`/`total_estimate`; when `has_more` is true, the per-category tab shows a
+  truncation hint (e.g. "Showing first N of ~M") and, where a richer per-entity
+  search endpoint exists (e.g. `GET /ui/catalog/items/search` with `next_token`,
+  `GET /ui/alerts/search` with `cursor`), deep-dive paging is delegated to that
+  entity's own feature/route — out of scope for AND-185. The "All" tab remains a
+  capped slice. (Open question moved to §13.)
 - **Caching (stale state):** the most recent successful `SearchResponse` per query
   is held in an in-memory LRU (size 16) in the repository so back-navigation is
   instant. Optional Room persistence is out of scope for AND-185 (results are
@@ -285,6 +348,13 @@ the single `POST /ui/session/refresh`-on-401 retry defined by AND-027.
 - **Recent queries:** `RecentQueriesStore` backed by DataStore Preferences (key
   `recent_search_queries`, JSON-encoded ordered list, max 8, de-duplicated,
   most-recent-first). Persisted on a successful non-empty search.
+  DIVERGENCE NOTE (verified vs `SearchPage.tsx` + `search.ts`): the WEB client stores
+  recents SERVER-SIDE via `POST /ui/search/history` (record), `GET /ui/search/history`
+  (list, items `{id, query, ts, result_count}`), `DELETE /ui/search/history/{item_id}`,
+  and `DELETE /ui/search/history` (clear all). AND-185 deliberately chooses local
+  DataStore instead (privacy + offline + no server round-trip). This is an intentional
+  product divergence, not a bug; if cross-device parity is later required, wire the
+  four `/ui/search/history` endpoints. Tracked in §13/§16 Open assumptions.
 
 ## 7. Error Handling & Resilience
 
@@ -414,9 +484,9 @@ AC-1. A non-empty query (≥ 2 chars) returns categorized results, grouped into 
 non-"All" tab header showing a count equal to its rendered/declared item count.
 (Directly satisfies the source acceptance bullet.)
 
-AC-2. Results are correctly bucketed: a user result appears only under Users (and
-"All"); a content result only under Content (and "All"); unknown types render
-under a generic cell and do not crash.
+AC-2. Results are correctly bucketed: each item appears only under its own section
+tab (e.g. a `user` under Users, a `post` under Posts) and in "All"; an unrecognized
+`type` maps to OTHER, renders a generic cell, and does not crash.
 
 AC-3. Input is debounced; rapid typing of a final query issues exactly one request
 and the latest query's results are shown (no stale overwrite).
@@ -424,7 +494,8 @@ and the latest query's results are shown (no stale overwrite).
 AC-4. Queries < 2 chars and the empty field show non-network states (Idle/recents),
 and a `200`-with-zero-results shows the Empty state, not an error.
 
-AC-5. Tapping a result navigates to the correct detail route with the correct id.
+AC-5. Tapping a result navigates to the destination resolved from the item's
+server-provided `url` (mapped to the owning feature route).
 
 AC-6. Loading, Empty, Error (with working Retry), and offline/stale states are
 each rendered and visually distinct.
@@ -453,3 +524,246 @@ requirement in the source acceptance bullet).
   TalkBack on the search field, tabs, and result rows.
 - Code reviewed and merged to the `android-port` branch; ktlint/detekt clean; no new
   Compose stability/recomposition warnings on the result lists.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its verdict and an exact source pointer.
+
+1. **Endpoint is `GET /ui/search`.** VERIFIED.
+   Source: OpenAPI `GET /ui/search` (op `global_search_ui_search_get`); frontend
+   `src/api/endpoints/search.ts: globalSearch` (`api.get("/ui/search", ...)`).
+2. **Query params are `q` (required), `types` (CSV, optional), `limit`.** VERIFIED.
+   Source: OpenAPI `GET /ui/search` params; `src/api/endpoints/search.ts: globalSearch`.
+3. **`q` length bounds 1–500; `limit` default 5, max 20.** CORRECTED (draft said
+   default 20). Source: OpenAPI `global_search_ui_search_get` parameter schemas
+   (`q` minLength 1/maxLength 500; `limit` default 5/min 1/max 20). Web sends
+   `limit=10` (`SearchPage.tsx: globalSearch(debouncedQuery, undefined, 10)`).
+4. **`types` default value.** VERIFIED. OpenAPI default
+   `"calendar,catalog,contacts,files,messages,posts,tickets,users,videos"`.
+   Source: OpenAPI `GET /ui/search` `types` schema default.
+5. **Response is `{query, results, partial?}` with a KEYED `results` object of nine
+   sections, each `{items, total_estimate, has_more}`; NO top-level `total`; NO
+   `categories` array.** CORRECTED (draft had `{query,total,categories:[...]}`).
+   Source: `src/api/endpoints/search.ts: GlobalSearchResponse` + `SearchResultSection`.
+   (OpenAPI `200` schema is empty `{}`, so the frontend type is authoritative.)
+6. **Item shape is uniform `{type, id, title, snippet, thumbnail_url?, url, meta?}`
+   for all types.** CORRECTED (draft used per-type `display_name`/`username`/
+   `avatar_url`). Source: `src/api/endpoints/search.ts: SearchResultItem`.
+7. **Entity `type` set = user, post, catalog, file, message, ticket, contact, video,
+   calendar (9), not USER/CONTENT.** CORRECTED. Source:
+   `src/api/endpoints/search.ts: SearchResultType` and `SEARCH_TABS` in
+   `src/pages/search/SearchPage.tsx`.
+8. **"All"/per-tab counts are client-computed from `items.length` (sum across
+   sections for All).** VERIFIED. Source: `src/pages/search/SearchPage.tsx`
+   (`totalItems`, `sectionCount`).
+9. **Navigation uses the server-provided `item.url`, not client-built (type,id)
+   routes.** CORRECTED. Source: `src/pages/search/SearchPage.tsx: handleItemClick`
+   (`navigate(item.url)`).
+10. **Auth: primary credential is `Authorization: Bearer <accessToken>`, plus cookies
+    (`credentials: "include"`), plus `X-CSRF-Token` from the `ui_csrf` cookie, plus
+    optional `X-IMPERSONATION-TOKEN`.** CORRECTED (draft described cookie-only).
+    Source: `src/api/client.ts` (lines ~157–171 for Authorization/impersonation/CSRF;
+    `credentials: "include"` ~183). OpenAPI also lists `X-SESSION-ID` header and
+    `user_sub` query param on the route.
+11. **`X-CSRF-Token` is derived from the `ui_csrf` cookie.** VERIFIED.
+    Source: `src/api/client.ts: getCookie("ui_csrf") → headers.set("X-CSRF-Token", …)`.
+12. **401 handling = single `POST /ui/session/refresh` then one retry; logout on
+    refresh failure.** VERIFIED. Source: `src/api/client.ts: refreshSession` +
+    the 401 branch (single-flight `refreshPromise`, one retry, `logout`).
+13. **FastAPI error `detail` may be `string | [{msg}] | {code,...}`.** VERIFIED.
+    Source: `src/api/client.ts: normalizeErrorDetail` + `mapAuthorizationError`;
+    OpenAPI `422 → HTTPValidationError`.
+14. **Network/offline error path.** VERIFIED. Source: `src/api/client.ts` fetch
+    catch block → `ApiError(0, "Network error")`.
+15. **Debounce is 300 ms.** VERIFIED. Source: `src/pages/search/SearchPage.tsx`
+    (`useDebounce(inputValue, 300)`).
+16. **Server-side search history endpoints exist (`/ui/search/history` GET/POST,
+    `/ui/search/history/{item_id}` DELETE, `/ui/search/history` DELETE).** VERIFIED;
+    AND-185 intentionally uses local DataStore instead (DIVERGENCE). Source: OpenAPI
+    `GET/POST /ui/search/history`, `DELETE /ui/search/history`, `DELETE
+    /ui/search/history/{item_id}`; `src/api/endpoints/search.ts`
+    (`recordSearchHistory`, `getSearchHistory`, `deleteSearchHistoryItem`,
+    `clearSearchHistory`).
+17. **No pagination param on `/ui/search` (no offset/cursor/page); `has_more`/
+    `total_estimate` only.** CORRECTED (draft planned Paging 3 by `offset`). Source:
+    OpenAPI `GET /ui/search` params (only `q,types,limit,user_sub` + headers);
+    `SearchResultSection.has_more/total_estimate` in `search.ts`.
+18. **Min-query threshold of 2 chars is an Android divergence.** VERIFIED-DIVERGENCE
+    (web enables at `>=1`, records history at `>=2`; backend min length 1). Source:
+    `src/pages/search/SearchPage.tsx` (`enabled: debouncedQuery.length >= 1`;
+    history effect guards `length >= 2`).
+19. **Compose Material 3 `PrimaryScrollableTabRow`, Coil `AsyncImage`, Paging 3,
+    DataStore, Hilt/KSP, `StateFlow`/`flatMapLatest`/`debounce` choices.** Framework
+    refs (Android), not backend-verifiable:
+    - Material 3 tabs: https://developer.android.com/develop/ui/compose/components/tabs (framework ref)
+    - Coil AsyncImage: https://coil-kt.github.io/coil/compose/ (framework ref)
+    - Kotlin Flow operators (debounce/flatMapLatest): https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/ (framework ref)
+    - DataStore: https://developer.android.com/topic/libraries/architecture/datastore (framework ref)
+    - SavedStateHandle/process death: https://developer.android.com/topic/libraries/architecture/saved-state (framework ref)
+    - App backup exclusion (`dataExtractionRules`): https://developer.android.com/guide/topics/data/autobackup (framework ref)
+    Note: `limit`/`offset` Paging 3 design is NOT applicable (claim 17).
+
+### Corrections made
+
+- C1. `limit` default fixed 20 → 5 (max 20); §2, §5 (claim 3).
+- C2. Response shape rewritten: keyed `results` object of nine `{items,
+  total_estimate, has_more}` sections; removed top-level `total` and `categories`
+  array; §2, §5 (claim 5).
+- C3. Item model unified to `{type, id, title, snippet, thumbnail_url?, url, meta?}`;
+  removed per-type `display_name`/`username`/`avatar_url`; §4, §5, §3 FR-7 (claim 6).
+- C4. `SearchEntityType` expanded to the nine real types + OTHER fallback (was
+  USER/CONTENT/OTHER); §4 (claim 7).
+- C5. Navigation changed to resolve `item.url` instead of `openUser(id)`/
+  `openContent(id)`; §4 `SearchNavigator`, FR-7, AC-5 (claim 9).
+- C6. Auth description corrected from "cookie-only" to bearer-token-primary + cookies
+  + CSRF + optional impersonation (+ documented `X-SESSION-ID`/`user_sub`); §2, §5
+  (claim 10).
+- C7. Pagination claim corrected: endpoint has no offset/cursor param; Paging 3
+  removed for `/ui/search`; §6, §13 (claim 17).
+- C8. AC-2 reworded away from a "Content" tab to the real per-section bucketing.
+
+### Open assumptions
+
+- OA1. **Response body shape relies on the web type, not OpenAPI.** The OpenAPI `200`
+  schema for `global_search_ui_search_get` is empty (`{}`), so the exact wire JSON
+  (field nullability, presence of `partial`, `meta` contents) is taken from
+  `search.ts`. Unverifiable from OpenAPI; confirm against a live dev response before
+  freezing the Moshi DTOs. (Why: schema is untyped on the server side.)
+- OA2. **Local DataStore recents vs server `/ui/search/history`.** Intentional
+  product divergence (claim 16); needs product sign-off if cross-device parity is
+  desired. (Why: a deliberate design choice, not derivable from sources.)
+- OA3. **2-char min-query threshold** (claim 18) differs from the web's 1-char enable;
+  needs product confirmation. (Why: product/UX decision.)
+- OA4. **In-app resolution of `item.url`.** The web treats `url` as a router path; the
+  mapping of each server path prefix (e.g. `/users/…`, `/posts/…`) to an Android
+  feature route is not in the sources and must be defined with the owning feature
+  teams. (Why: cross-feature contract not documented in backend/frontend refs.)
+- OA5. **`has_more` deep-dive delegation.** Whether truncated sections route to a
+  per-entity search route (catalog/alerts have their own paged endpoints) is an
+  app-level decision out of scope here. (Why: no global "page section" mechanism.)
+- OA6. **Stale/offline cache + bounded-GET retry** are AND-027/app-policy behaviors
+  not observable in the web client (which has no offline cache); assumed to exist per
+  AND-027. (Why: defined in a dependency, not re-verifiable from these sources.)
+
+## 17. Test Plan
+
+Test targets: **JVM** (local JVM/Robolectric, no device); **emu35** (headless AVD
+`test35`, x86_64, API 35, CI); **deviceA15** (physical Samsung Galaxy A15 5G,
+SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). Most cases run on JVM or emu35;
+physical-device-only cases are flagged explicitly.
+
+- **TC-AND-185-01 — Happy path: multi-entity query returns categorized results.**
+  Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: MockWebServer
+  enqueues the §5 corrected JSON (users + posts + files sections). Steps: call
+  `SearchApi.search("jane", null, 10)` through the real OkHttp/Moshi stack; map via
+  `SearchMapper`. Expected: request path `/ui/search`, method GET, query `q=jane` &
+  `limit=10`; parsed domain has one `SearchCategory` per non-empty section with
+  `count == items.size`; uniform item fields populated; `url` preserved.
+  Traces: AC-1, AC-8, AC-9.
+
+- **TC-AND-185-02 — Mapper: uniform items, nine types, OTHER fallback.** Type: unit.
+  Target: JVM. Preconditions: fixture JSON containing each of the nine `type` values
+  plus one unknown type (`"widget"`). Steps: run `SearchMapper` on the payload.
+  Expected: each known type maps to its `SearchEntityType`; unknown maps to `OTHER`;
+  no crash; per-section counts preserved; "All" total == sum of section item counts.
+  Traces: AC-2, AC-9.
+
+- **TC-AND-185-03 — Debounce coalescing + latest-wins cancellation.** Type: unit
+  (Turbine + TestDispatcher). Target: JVM. Preconditions: fake repository recording
+  invocations, controllable virtual time. Steps: emit `j`,`ja`,`jan`,`jane` within
+  the 300 ms window, advance time. Expected: exactly ONE repository call, for
+  `"jane"`; `uiState` transitions Idle→Loading→Success; superseded queries cancelled
+  (`flatMapLatest`). Traces: AC-3.
+
+- **TC-AND-185-04 — Sub-threshold and empty stay non-network.** Type: unit. Target:
+  JVM. Preconditions: spy repository. Steps: set query to `""` then `"j"`. Expected:
+  no network call; `uiState == Idle`; recents surface when field empty. Traces: AC-4.
+
+- **TC-AND-185-05 — 200 with all-empty sections → Empty, not Error.** Type:
+  contract/MockWebServer. Target: JVM. Preconditions: enqueue `{query, results:{}}`
+  (or all sections empty). Steps: search `"zzzz"`. Expected: `ApiResult` success
+  maps to `SearchUiState.Empty("zzzz")`; never `Error`. Traces: AC-4, AC-6.
+
+- **TC-AND-185-06 — FastAPI 422 validation error mapping.** Type: contract/
+  MockWebServer. Target: JVM. Preconditions: enqueue 422 with HTTPValidationError
+  body `{"detail":[{"loc":["query","q"],"msg":"field required","type":"value_error"}]}`.
+  Steps: search. Expected: `ApiResult.Error` carrying the `msg` text via the shared
+  `detail` normalizer; `uiState = Error(retryable=…)`. Traces: AC-6, AC-8.
+
+- **TC-AND-185-07 — 401 → single refresh → retry succeeds.** Type: contract/
+  MockWebServer. Target: JVM. Preconditions: enqueue 401, then expect a
+  `POST /ui/session/refresh` (200), then the original GET retried (200 with results).
+  Steps: search while "authenticated". Expected: exactly one refresh POST; original
+  request retried once; final state Success; if refresh returns non-2xx, state is an
+  auth Error and re-auth is signaled. Traces: AC-8, AC-6.
+
+- **TC-AND-185-08 — Request carries auth + CSRF + limit cap.** Type: contract/
+  MockWebServer. Target: JVM. Preconditions: interceptor stack from AND-027 with a
+  bearer token and `ui_csrf` cookie present. Steps: search `"jane"` with limit 25.
+  Expected: recorded request has `Authorization: Bearer …` and `X-CSRF-Token`
+  headers; `limit` clamped to ≤ 20 before send; `q` URL-encoded. Traces: AC-8.
+
+- **TC-AND-185-09 — Offline → stale cache banner; offline with no cache → Error.**
+  Type: unit/integration. Target: JVM. Preconditions: repository LRU pre-seeded for
+  `"jane"`; network layer throws connectivity failure (`ApiError(0)`). Steps:
+  (a) search `"jane"` offline; (b) search `"kate"` offline (no cache). Expected:
+  (a) `Success(stale=true)` + banner; (b) `Error("You're offline", retryable=true)`.
+  Traces: AC-6.
+
+- **TC-AND-185-10 — Compose: each UiState renders its distinct surface + counts.**
+  Type: Compose-UI. Target: emu35. Preconditions: stateless `SearchContent` driven
+  by injected state. Steps: render Idle, Loading, Success(3 sections), Empty, Error.
+  Expected: Idle shows recents/prompt; Loading shows indicator; Success shows All +
+  one tab per section with header counts == rendered rows; Empty shows
+  `No results for "<q>"`; Error shows message + enabled Retry. Traces: AC-1, AC-6.
+
+- **TC-AND-185-11 — Compose: row tap resolves `url` to navigation callback.** Type:
+  Compose-UI. Target: emu35. Preconditions: fake `SearchNavigator` capturing calls;
+  Success state with a `user` item whose `url == "/users/u_123"`. Steps: tap the row.
+  Expected: navigator invoked once with that `SearchResult` (url `/users/u_123`);
+  "See all" on a section switches to that section's tab. Traces: AC-5, AC-1.
+
+- **TC-AND-185-12 — Rotation & process-death restoration.** Type: instrumented.
+  Target: emu35. Preconditions: query `"jane"`, Posts tab selected. Steps: rotate;
+  then simulate process death via `SavedStateHandle`/`StateRestorationTester`.
+  Expected: query text and selected tab restored; the `q` nav arg seeds initial
+  value on a fresh deep link. Traces: AC-7.
+
+- **TC-AND-185-13 — Accessibility semantics (TalkBack).** Type: Compose-UI/
+  instrumented. Target: emu35. Preconditions: Success state. Steps: assert semantics
+  for search field label "Search", clear button "Clear search", tab headers exposing
+  count (e.g. "Users, 8 results"), rows as single ≥48dp targets with merged label +
+  "Open" action, and the results `liveRegion` announcing count. Expected: all present;
+  touch targets ≥ 48dp; dynamic font scale and RTL respected. Traces: AC-6 (and
+  cross-cutting on AC-1/AC-5).
+
+- **TC-AND-185-14 — Security: no cleartext in release; query not logged; recents
+  excluded from backup.** Type: unit + manual. Target: JVM (config asserts) +
+  deviceA15 (backup behavior). Preconditions: release build variant config. Steps:
+  (a) assert network-security-config forbids cleartext for non-dev variants;
+  (b) assert release Timber tree redacts raw query (logs `query_length` only);
+  (c) on deviceA15 run `adb backup`/auto-backup and confirm the
+  `recent_search_queries` key is excluded via `dataExtractionRules`. Expected: all
+  hold. MUST run the backup-exclusion check on a physical device (deviceA15) for real
+  Auto Backup/D2D behavior. Traces: AC-6 (security), DoD.
+
+- **TC-AND-185-15 — ABI/API parity smoke (arm64 API 34 vs x86_64 API 35).** Type:
+  e2e. Target: deviceA15 AND emu35. Preconditions: seeded dev backend reachable.
+  Steps: run the happy-path search e2e on both targets. Expected: identical
+  categorized results and rendering; no arm64-specific Coil/image or Moshi codegen
+  regressions. MUST include the physical device (deviceA15) to catch arm64-vs-x86 and
+  API-34-vs-35 differences. Traces: AC-1, AC-2, AC-9.
+
+### Coverage matrix
+
+| AC   | Covered by |
+|------|------------|
+| AC-1 | TC-01, TC-10, TC-11, TC-15 |
+| AC-2 | TC-02, TC-15 |
+| AC-3 | TC-03 |
+| AC-4 | TC-04, TC-05 |
+| AC-5 | TC-11, TC-13 |
+| AC-6 | TC-05, TC-06, TC-07, TC-09, TC-10, TC-13, TC-14 |
+| AC-7 | TC-12 |
+| AC-8 | TC-01, TC-06, TC-07, TC-08 |
+| AC-9 | TC-01, TC-02, TC-15 |

@@ -5,9 +5,10 @@ milestone: M4
 epic: E25
 priority: P2
 size: M
-status: draft
 depends_on: [AND-182]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-184 — Recommendations
@@ -15,13 +16,22 @@ blocks: []
 ## 1. Overview & Goal
 
 Add personalized **Recommendations** rows to the Discover surface of the TestLogon
-native Android app. The web reference app exposes a `recommendations.ts` API module
-that returns one or more *rows* (named, ordered carousels) of recommended items
-tailored to the authenticated user. This ticket ports that capability: fetch the
-recommendation rows from the backend, model them in `core-model`, expose them through
-a Repository + ViewModel in the `feature-discover` module, and render them as
-horizontally scrolling carousels above/within the existing Discover grid built in
-**AND-182**.
+native Android app. The web reference app exposes a `recommendations.ts` API module.
+**CORRECTION (verified against `recommendations.ts` + OpenAPI):** the primary
+recommendations surface is **not** a set of nested titled "rows". The web `ForYouTab`
+calls `GET /ui/videos/gallery/for-you` and renders a **single flat, cursor-paginated
+grid** of `RecommendedVideo` items (`ForYouResponse { videos[], next_cursor?, source }`).
+"Similar Videos" and "Creator Suggestions" are *separate* single-section calls
+(`/ui/videos/{id}/similar`, `/ui/discover/creators`), each rendered as one titled block —
+again, not a server-driven list of rows. The "rows / carousels" framing throughout this
+spec is a **planning abstraction**, not a backend contract: the Android implementation
+may compose For-You / Similar / Creators as up to three client-defined sections, but the
+backend returns flat per-feed lists, and each section maps to a distinct endpoint. This
+ticket ports that capability: fetch the For-You feed (and optionally the Similar/Creators
+feeds) from the backend, model them in `core-model`, expose them through a Repository +
+ViewModel in the `feature-discover` module, and render them above/within the existing
+Discover grid built in **AND-182**. Wherever this spec says "row(s)" below, read it as
+"client-composed recommendation section(s)" unless a server field is explicitly named.
 
 The goal is a working, testable Recommendations experience: when the user opens
 Discover, their recommended rows render with title, poster art, and tap-through
@@ -35,11 +45,20 @@ without blocking the rest of the Discover screen.
 
 ## 2. Context & References
 
-- **Web reference:** `frontend/src/api/endpoints/recommendations.ts` (authoritative
-  request/response shape), `frontend/src/api/types.ts` (shared `RecommendationRow`,
-  `MediaItem` types), and the Discover page that consumes it.
-- **OpenAPI:** `http://18.222.237.167:8000/openapi.json` — confirm the live
-  `/ui/recommendations` path, query params, and `detail` error envelope before coding.
+- **Web reference:** `src/api/endpoints/recommendations.ts` is the authoritative
+  request/response source. **CORRECTION (verified):** the DTO types live *inside*
+  `recommendations.ts` itself (`RecommendedVideo`, `ForYouResponse`,
+  `SimilarVideosResponse`, `CreatorSuggestionsResponse`) — there is **no**
+  `RecommendationRow`/`MediaItem` type in `src/api/types.ts`. The consuming screens are
+  `src/pages/videos/ForYouTab.tsx`, `SimilarVideos.tsx`, and `CreatorSuggestions.tsx`.
+- **OpenAPI:** `http://18.222.237.167:8000/openapi.json`. **CORRECTION (verified):** there
+  is **no** `GET /ui/recommendations` endpoint. The recommendation feed the web app calls
+  is `GET /ui/videos/gallery/for-you` (`op=for_you_endpoint…`, `resp=200:ForYouResponse`).
+  Related endpoints: `GET /ui/videos/{video_id}/similar` (`SimilarVideosResponse`),
+  `GET /ui/discover/creators` (`CreatorSuggestionsResponse`),
+  `POST /ui/recommendations/engagement` (`req=EngagementIn`), and the internal
+  `POST /internal/recommendations/refresh`. The `detail` error envelope is the standard
+  FastAPI `HTTPValidationError` (422) shape — see §16.
 - **Depends on AND-182 (Discover screen):** provides `feature-discover`, the Discover
   `Screen`/`ViewModel`/route, the reusable `MediaCard` composable, image loading via
   Coil, and the navigation contract to the media detail route. AND-184 *adds* rows to
@@ -62,9 +81,13 @@ FR-2. Each row displays its server-provided `title` and a horizontally scrollabl
 FR-3. Rows render in the server-provided order. Within a row, items render in
 server-provided order. An empty row (zero items) is dropped, not rendered as a blank label.
 
-FR-4. Tapping a card navigates to the media detail route
-(`media/{mediaId}`) via the navigation contract established in AND-182. AND-184 only
-emits the navigation event; it does not own the detail screen.
+FR-4. Tapping a card navigates to the media detail route via the navigation contract
+established in AND-182, passing the item's `video_id`. **NOTE (unverified):** the exact
+Android route name (`media/{mediaId}` as written, vs. the web route `/gallery/{video_id}`)
+is owned by AND-182 and could not be confirmed from the reference (no `media/` route exists
+in the web app; the web uses `/gallery/{video_id}`). Use whatever route AND-182 actually
+exposes; AND-184 only emits the navigation event with the `video_id` and does not own the
+detail screen.
 
 FR-5. Recommendations load **independently** of the Discover grid. A failure or slow
 response in recommendations must not block the grid, and vice versa. The two compose
@@ -106,12 +129,16 @@ data class RecommendationRow(
 )
 
 data class RecommendationItem(
-    val id: String,            // mediaId used for navigation
+    val id: String,            // == server `video_id`; used for navigation
     val title: String,
-    val posterUrl: String?,    // nullable -> placeholder art
-    val kind: MediaKind,       // VIDEO, SERIES, etc. (reused enum from AND-182)
+    val posterUrl: String?,    // == server `thumbnail_url`; nullable -> placeholder art
+    val reason: String?,       // == server `recommendation_reason` (CORRECTED: this field
+                               // exists; resolves OQ1). Optional subtitle.
 )
 ```
+**CORRECTION:** the earlier `kind: MediaKind` field is removed — the backend
+`RecommendedVideoItem` has **no** `kind` field (verified). All recommended items are
+videos; navigation uses `video_id`. Drop the OQ2 assumption about a `kind` enum.
 
 ### 4.3 Repository (`core-data`)
 ```kotlin
@@ -187,78 +214,115 @@ card component is introduced.
 
 ## 5. API Contract
 
-**Endpoint:** `GET /ui/recommendations`
+**Primary endpoint (CORRECTED — verified against OpenAPI + `recommendations.ts`):**
+`GET /ui/videos/gallery/for-you` (op `for_you_endpoint_ui_videos_gallery_for_you_get`,
+`resp=200:ForYouResponse;422:HTTPValidationError`). The previously-assumed
+`GET /ui/recommendations` **does not exist** and has been removed.
 
-Cookie-authenticated (session cookies + `X-CSRF-Token` echoed from the `ui_csrf`
-cookie). This is an idempotent GET, so it is eligible for the bounded-backoff retry
-policy (§7). Verify exact path/params against `/openapi.json` and
-`frontend/src/api/endpoints/recommendations.ts` before implementation; if the live path
-differs (e.g. `/ui/discover/recommendations`), update `RecommendationsService` only.
+Optional secondary endpoints (only if this ticket also surfaces those sections):
+- `GET /ui/videos/{video_id}/similar` → `SimilarVideosResponse` (params `video_id`, `limit`).
+- `GET /ui/discover/creators` → `CreatorSuggestionsResponse` (param `limit`).
 
-**Optional query params:** `limit` (max rows), `row_limit` (max items per row) if exposed
-by OpenAPI; otherwise omit and accept server defaults.
+Auth (CORRECTED — verified in `src/api/client.ts`): the web client sends **both** the
+session cookie jar **and** an `Authorization: Bearer <accessToken>` header **and**
+`X-CSRF-Token` echoed from the `ui_csrf` cookie (plus `X-IMPERSONATION-TOKEN` when
+impersonating). The original "cookie-authenticated only" claim was incomplete. The Android
+core-network layer must attach the Bearer token (from AND-027 auth store) in addition to
+cookies + CSRF. This is an idempotent GET, eligible for the bounded-backoff retry
+policy (§7).
+
+**Query params (CORRECTED):** `limit` (max items) and `cursor` (opaque pagination cursor).
+There is **no** `row_limit` param — that was an unverified assumption and is removed.
+Web `ForYouTab` calls with `limit=24`.
 
 **Retrofit service (`core-network`):**
 ```kotlin
 interface RecommendationsService {
-    @GET("ui/recommendations")
-    suspend fun getRecommendations(
+    @GET("ui/videos/gallery/for-you")
+    suspend fun getForYou(
         @Query("limit") limit: Int? = null,
-    ): Response<RecommendationsResponseDto>
+        @Query("cursor") cursor: String? = null,
+    ): Response<ForYouResponseDto>
+
+    // Optional, if Similar / Creators sections are in scope:
+    @GET("ui/videos/{videoId}/similar")
+    suspend fun getSimilar(
+        @Path("videoId") videoId: String,
+        @Query("limit") limit: Int? = null,
+    ): Response<SimilarVideosResponseDto>
 }
 ```
 
-**Response (200) — expected JSON shape** (confirm field names against web types):
+**Response (200) — actual JSON shape** (verified: schema `ForYouResponse`, items
+`RecommendedVideoItem`; only `videos` is required, `source` defaults to `"for_you"`):
 ```json
 {
-  "rows": [
+  "videos": [
     {
-      "id": "rec_continue",
-      "title": "Recommended for you",
-      "items": [
-        {
-          "id": "med_8sd9",
-          "title": "Sample Title",
-          "poster_url": "http://18.222.237.167:8000/media/med_8sd9/poster.jpg",
-          "kind": "video"
-        }
-      ]
+      "video_id": "med_8sd9",
+      "title": "Sample Title",
+      "description": "optional",
+      "thumbnail_url": "http://18.222.237.167:8000/media/med_8sd9/thumb.jpg",
+      "duration_seconds": 212.0,
+      "creator_id": "usr_123",
+      "creator_name": "Jane",
+      "view_count": 4210,
+      "like_count": 88,
+      "category": "tech",
+      "created_at": 1717000000,
+      "recommendation_reason": "Because you watched …"
     }
-  ]
+  ],
+  "next_cursor": null,
+  "source": "for_you"
 }
 ```
+Note `source` can be `"trending_fallback"` for new/cold-start users (web shows a
+"Showing trending videos…" notice — this answers R3, see §13). `recommendation_reason`
+**does** exist on the item (answers OQ1). There is **no** `kind`, `id`, or `poster_url`
+field — the item id is `video_id` and the image field is `thumbnail_url`.
 
-**DTOs + mapper (`core-network`):**
+**DTOs + mapper (`core-network`) — CORRECTED to the real field names:**
 ```kotlin
 @JsonClass(generateAdapter = true)
-data class RecommendationsResponseDto(val rows: List<RecommendationRowDto> = emptyList())
-
-@JsonClass(generateAdapter = true)
-data class RecommendationRowDto(
-    val id: String,
-    val title: String,
-    val items: List<RecommendationItemDto> = emptyList(),
+data class ForYouResponseDto(
+    val videos: List<RecommendedVideoDto> = emptyList(),
+    @Json(name = "next_cursor") val nextCursor: String? = null,
+    val source: String = "for_you",
 )
 
 @JsonClass(generateAdapter = true)
-data class RecommendationItemDto(
-    val id: String,
-    val title: String,
-    @Json(name = "poster_url") val posterUrl: String? = null,
-    val kind: String? = null,
+data class RecommendedVideoDto(
+    @Json(name = "video_id") val videoId: String,          // only required field
+    val title: String = "",
+    val description: String? = null,
+    @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
+    @Json(name = "duration_seconds") val durationSeconds: Double? = null,
+    @Json(name = "creator_id") val creatorId: String = "",
+    @Json(name = "creator_name") val creatorName: String = "",
+    @Json(name = "view_count") val viewCount: Long = 0,
+    @Json(name = "like_count") val likeCount: Long = 0,
+    val category: String? = null,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "recommendation_reason") val recommendationReason: String? = null,
 )
 
-fun RecommendationRowDto.toDomain() = RecommendationRow(
-    id = id,
+fun RecommendedVideoDto.toDomain() = RecommendationItem(
+    id = videoId,                  // video_id is the nav id
     title = title,
-    items = items.map { it.toDomain() }.filter { it.id.isNotBlank() },
+    posterUrl = thumbnailUrl,      // server field is thumbnail_url
+    reason = recommendationReason,
 )
 ```
+(There is no nested-row DTO because the backend returns a flat `videos` list per feed; the
+"row" grouping, if any, is composed client-side per endpoint — see §1/§4 corrections.)
 
-**Error envelope (FastAPI `detail`):** map `detail` per the project-wide convention —
-`string` | `[{msg}]` | `{code,...}` — through the shared `ApiResult` error mapper from
-AND-027. A `401` triggers the single `POST /ui/session/refresh` + retry path owned by
-the auth interceptor; AND-184 does not implement refresh itself.
+**Error envelope (FastAPI):** the 422 response is `HTTPValidationError`
+(`{ "detail": [ { "loc": [...], "msg": "...", "type": "..." } ] }`). The shared
+`ApiResult` error mapper from AND-027 already normalizes `detail` (string |
+`[{loc,msg,type}]` | `{...}`). A `401` triggers the single `POST /ui/session/refresh`
+(verified: `op=ui_session_refresh…`, POST, no request body) + retry path owned by the auth
+interceptor; AND-184 does not implement refresh itself.
 
 ## 6. Data & State Management
 
@@ -272,7 +336,7 @@ the auth interceptor; AND-184 does not implement refresh itself.
       @PrimaryKey val id: String,
       val title: String,
       val position: Int,
-      val itemsJson: String,        // Moshi-serialized List<RecommendationItemDto>
+      val itemsJson: String,        // Moshi-serialized List<RecommendedVideoDto>
       val fetchedAtEpochMs: Long,
   )
 
@@ -389,27 +453,35 @@ Target: ≥ 80% line coverage on new repo/VM/mapper code.
 
 ## 13. Risks & Open Questions
 
-- **R1 — API shape uncertainty:** exact path (`/ui/recommendations` vs nested under
-  discover) and field names (`rows`/`items`/`poster_url`) must be confirmed from
-  `/openapi.json` + `recommendations.ts`. Mitigation: isolate in DTOs + service; adjust in
-  one place.
+- **R1 — API shape (RESOLVED in review):** path and fields are now confirmed —
+  `GET /ui/videos/gallery/for-you` returning `ForYouResponse { videos[], next_cursor,
+  source }`, items `RecommendedVideoItem` with `video_id`/`thumbnail_url`/
+  `recommendation_reason` (no `rows`/`poster_url`/`kind`). DTOs in §5 reflect this. Residual
+  risk is low; keep the DTO/service isolation so server changes stay contained.
 - **R2 — Unreliable dev host:** flaky/plaintext backend makes manual acceptance noisy.
   Mitigation: Room stale cache + MockWebServer-driven CI tests as the source of truth.
-- **R3 — Empty personalization for new users:** backend may return 0 rows; handled by FR-7
-  `Empty` (section collapses). Open question: should we fall back to a generic/popular row?
-  Out of scope for AND-184 — track separately.
-- **OQ1:** Does the row payload include an explanation/`reason` string ("Because you
-  watched…")? If present, surface as a secondary row subtitle; if absent, omit. Confirm in
-  web types.
-- **OQ2:** Are item `kind` values an enumerable set matching AND-182's `MediaKind`? Unknown
-  values map to a safe default and still navigate.
+- **R3 — Empty personalization for new users (PARTIALLY RESOLVED):** verified — the backend
+  **already** handles cold-start server-side by returning `source: "trending_fallback"`
+  with a populated `videos` list (the web shows a "Showing trending videos…" notice). So a
+  truly empty (0-item) response is rare. Android should: (a) when `source ==
+  "trending_fallback"`, show an equivalent non-blocking notice; (b) only when `videos` is
+  empty, collapse the section per FR-7. The "generic/popular fallback" question is therefore
+  largely answered by the backend; no extra client fallback needed.
+- **OQ1 (RESOLVED):** Yes — the item payload includes `recommendation_reason` (verified in
+  `RecommendedVideoItem` / `recommendations.ts`). Surface it as an optional per-item
+  subtitle (mapped to `RecommendationItem.reason`).
+- **OQ2 (RESOLVED):** There is **no** `kind` field on the item — all recommended items are
+  videos. The `MediaKind` enum is not needed here; navigation uses `video_id`.
 
 ## 14. Acceptance Criteria
 
-AC-1. (Source) **Recommended items render.** On Discover, recommendation rows fetched from
-`GET /ui/recommendations` render as titled horizontal carousels of media cards (poster +
-title) in server order.
-AC-2. Tapping a recommended item navigates to `media/{mediaId}` for that item.
+AC-1. (Source) **Recommended items render.** On Discover, recommendation items fetched from
+`GET /ui/videos/gallery/for-you` (CORRECTED from `GET /ui/recommendations`) render as
+media cards (thumbnail + title) in server order, grouped into the client-composed
+recommendation section(s) (For-You, and optionally Similar/Creators).
+AC-2. Tapping a recommended item navigates to the AND-182 media detail route, passing the
+item's `video_id` (CORRECTED from the unverified `media/{mediaId}` literal — route name is
+owned by AND-182).
 AC-3. Loading shows skeleton placeholders; success replaces them with content.
 AC-4. Zero rows → the Recommendations section renders nothing; the Discover grid still shows.
 AC-5. Network failure **with** cache → cached rows render with a stale indicator; **without**
@@ -436,3 +508,206 @@ stale/error/parse-failure paths and pass in CI.
   divergence reflected only in the DTO/service layer.
 - Failure isolation confirmed: a recommendations failure never blocks or hides the Discover
   grid.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Recommendations endpoint is `GET /ui/recommendations`.** VERDICT: **Corrected** — no
+   such endpoint exists. The real feed endpoint is `GET /ui/videos/gallery/for-you`.
+   SOURCE: OpenAPI `GET /ui/videos/gallery/for-you`
+   (`op=for_you_endpoint_ui_videos_gallery_for_you_get`, `resp=200:ForYouResponse`);
+   `src/api/endpoints/recommendations.ts: getForYou` (`api.get("/ui/videos/gallery/for-you")`).
+2. **Response is `{ rows: [{ id, title, items[] }] }`.** VERDICT: **Corrected** — the
+   response is a flat `ForYouResponse { videos: RecommendedVideoItem[], next_cursor?, source }`;
+   there is no nested "rows" concept. SOURCE: OpenAPI schema `components.schemas.ForYouResponse`
+   (required: `videos`; `source` default `"for_you"`); `src/api/endpoints/recommendations.ts: ForYouResponse`.
+3. **Item fields are `id`, `title`, `poster_url`, `kind`.** VERDICT: **Corrected** — the item
+   schema `RecommendedVideoItem` has `video_id` (only required), `title`, `description`,
+   `thumbnail_url`, `duration_seconds`, `creator_id`, `creator_name`, `view_count`,
+   `like_count`, `category`, `created_at`, `recommendation_reason`. No `id`, `poster_url`, or
+   `kind`. SOURCE: OpenAPI schema `components.schemas.RecommendedVideoItem`;
+   `src/api/endpoints/recommendations.ts: RecommendedVideo`.
+4. **Query params `limit` and `row_limit`.** VERDICT: **Corrected** — params are `limit` and
+   `cursor`; there is no `row_limit`. Web calls with `limit=24`. SOURCE: OpenAPI
+   `GET /ui/videos/gallery/for-you | params=limit,cursor,…`;
+   `src/api/endpoints/recommendations.ts: getForYou`; `src/pages/videos/ForYouTab.tsx` (`limit: 24`).
+5. **HTTP method is GET (idempotent, retry-eligible).** VERDICT: **Verified.** SOURCE: OpenAPI
+   `GET /ui/videos/gallery/for-you`.
+6. **Auth is cookie-only (session cookies + `X-CSRF-Token` from `ui_csrf`).** VERDICT:
+   **Corrected (incomplete)** — CSRF claim is right, but the web client also sends
+   `Authorization: Bearer <accessToken>` and (when impersonating) `X-IMPERSONATION-TOKEN`.
+   SOURCE: `src/api/client.ts` (lines ~157–171: `Authorization: Bearer`, `X-IMPERSONATION-TOKEN`,
+   `X-CSRF-Token` from `getCookie("ui_csrf")`; `credentials: "include"`).
+7. **`X-CSRF-Token` is echoed from the `ui_csrf` cookie.** VERDICT: **Verified.** SOURCE:
+   `src/api/client.ts: getCookie("ui_csrf") -> headers.set("X-CSRF-Token", csrf)`.
+8. **401 triggers a single `POST /ui/session/refresh` + retry, owned by the interceptor.**
+   VERDICT: **Verified.** SOURCE: `src/api/client.ts: refreshSession()` (POST
+   `/ui/session/refresh`, single-flight via `refreshPromise`, one retry then `logout`);
+   OpenAPI `POST /ui/session/refresh` (`op=ui_session_refresh…`, no request body).
+9. **Error envelope is FastAPI `detail` (string | `[{msg}]` | `{code,…}`).** VERDICT:
+   **Verified (refined)** — the 422 schema is `HTTPValidationError` with
+   `detail: [{loc, msg, type}]`. SOURCE: OpenAPI `resp=…;422:HTTPValidationError` on the feed
+   endpoint; `components.schemas.HTTPValidationError`; `src/api/client.ts: normalizeErrorDetail`.
+10. **Item payload contains an explanation/reason string (OQ1).** VERDICT: **Verified (present)** —
+    field `recommendation_reason`. SOURCE: OpenAPI `RecommendedVideoItem.recommendation_reason`;
+    `src/api/endpoints/recommendations.ts: RecommendedVideo.recommendation_reason`.
+11. **Item `kind` enum matching AND-182 `MediaKind` (OQ2).** VERDICT: **Corrected** — no `kind`
+    field exists; all items are videos. SOURCE: OpenAPI `RecommendedVideoItem` (no `kind`).
+12. **Image field on the item.** VERDICT: **Corrected** — it is `thumbnail_url`, not
+    `poster_url`. SOURCE: OpenAPI `RecommendedVideoItem.thumbnail_url`;
+    `src/pages/videos/SimilarVideos.tsx` (renders `v.thumbnail_url`, fallback "No thumbnail").
+13. **Navigation route is `media/{mediaId}`.** VERDICT: **Unverified-assumption / likely wrong** —
+    no `media/` route exists in the reference; the web detail route is `/gallery/{video_id}`.
+    The Android route name is owned by AND-182 and not present in these sources; pass `video_id`.
+    SOURCE: `src/pages/gallery/GalleryVideoCard.tsx` (`to={/gallery/${video.video_id}}`);
+    `src/pages/videos/SimilarVideos.tsx` (`to={/gallery/${v.video_id}}`); grep for `media/` route → no match.
+14. **Empty state behavior (0 items → collapse / "No recommendations yet").** VERDICT:
+    **Verified.** SOURCE: `src/pages/videos/ForYouTab.tsx` (videos.length === 0 → "No
+    recommendations yet" empty block).
+15. **Cold-start fallback exists server-side.** VERDICT: **Verified** — `source ==
+    "trending_fallback"` drives a "Showing trending videos…" notice with populated videos.
+    SOURCE: `src/pages/videos/ForYouTab.tsx` (`source === "trending_fallback"` branch);
+    OpenAPI `ForYouResponse.source` (default `"for_you"`).
+16. **Engagement signal endpoint (telemetry-adjacent).** VERDICT: **Verified** —
+    `POST /ui/recommendations/engagement` with body `EngagementIn { video_id (req), watch_pct?
+    (0–100 int), liked? }`. SOURCE: OpenAPI `POST /ui/recommendations/engagement`
+    (`req=EngagementIn`); `components.schemas.EngagementIn`; `src/api/endpoints/recommendations.ts: recordEngagement`.
+17. **Web client list rendering is a flat grid, not server-driven titled rows.** VERDICT:
+    **Verified.** SOURCE: `src/pages/videos/ForYouTab.tsx` (single `grid` of `GalleryVideoCard`);
+    `SimilarVideos.tsx` / `CreatorSuggestions.tsx` are separate single-section components.
+18. **`react-query` caches the feed with a `staleTime` (informs the Android cache-TTL design).**
+    VERDICT: **Verified (web behavior).** SOURCE: `src/pages/videos/ForYouTab.tsx`
+    (`staleTime: 5 * 60_000`); `SimilarVideos.tsx` (`staleTime: 10 * 60_000`). NOTE: the Android
+    spec's 6-hour Room TTL (§6) is an Android-side design choice, not derived from the web value.
+19. **Compose `collectAsStateWithLifecycle`, Hilt/KSP, Coil, Paging-not-used.** VERDICT:
+    **Unverified-assumption (framework choices)** — reasonable Android stack decisions; not
+    verifiable from backend/frontend sources. SOURCE: framework ref —
+    https://developer.android.com/jetpack/compose/state and
+    https://developer.android.com/develop/ui/compose/libraries (lifecycle/Hilt). Cursor pagination
+    *is* supported by the API (`next_cursor`/`cursor`), so "Paging N/A" is a scope decision, not a
+    contract limit.
+
+### Corrections made
+- Endpoint `GET /ui/recommendations` → `GET /ui/videos/gallery/for-you` (and named the real
+  secondary endpoints) in §1, §2, §5, §13, AC-1.
+- Response model `{rows:[{id,title,items}]}` → flat `ForYouResponse {videos[], next_cursor,
+  source}`; rewrote DTOs/mapper in §5 and the entity comment in §6.
+- Item fields: `id`→`video_id`, `poster_url`→`thumbnail_url`, removed `kind`, added
+  `recommendation_reason` (§4.2, §5).
+- Query params: removed non-existent `row_limit`; added `cursor` (§5).
+- Auth: noted the additional `Authorization: Bearer` (+ `X-IMPERSONATION-TOKEN`) headers
+  beyond cookies/CSRF (§5).
+- Navigation: flagged `media/{mediaId}` as unverified (web uses `/gallery/{video_id}`); pass
+  `video_id` (§FR-4, AC-2).
+- Resolved OQ1 (reason present), OQ2 (no kind), and refined R1/R3 with verified facts.
+
+### Open assumptions
+- **Android detail route name** (`media/{mediaId}` vs other): owned by AND-182; not present in
+  these sources. Must be confirmed against the AND-182 implementation when wiring navigation.
+- **6-hour Room cache TTL** (§6): an Android design choice; the backend/web give no TTL contract
+  (web uses react-query `staleTime` of 5–10 min, a different layer). Tunable.
+- **Telemetry event names (`rec_*`)** (§10): internal to the Android analytics layer; not
+  derivable from the reference. The only server-facing signal is `POST
+  /ui/recommendations/engagement` (claim 16).
+- **Whether AND-184 surfaces Similar/Creators sections at all**: ticket scope says "rows render";
+  the For-You feed alone satisfies AC-1. Similar/Creators are optional and gated on product
+  decision; DTOs/endpoints are documented for that case.
+- **Framework stack choices** (Compose/Hilt/Coil/dispatcher injection): standard Android
+  practice; framework refs only (see claim 19).
+
+## 17. Test Plan
+
+Test-case IDs `TC-AND-184-NN`. Targets: JVM/Robolectric (local), emulator AVD `test35`
+(API 35 x86_64), or the physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34
+arm64). Recommendations is a network-list + Compose feature with no camera/biometrics/WebRTC,
+so most cases run JVM or on the emulator; the physical device is reserved for real-flaky-network
+and arm64/API-34 verification.
+
+- **TC-AND-184-01 — Happy path mapping (For-You).** Type: unit (JVM). Target: JVM unit.
+  Preconditions: a captured `ForYouResponse` JSON fixture (videos with `video_id`,
+  `thumbnail_url`, `recommendation_reason`). Steps: deserialize with Moshi → call
+  `RecommendedVideoDto.toDomain()`. Expected: `RecommendationItem(id=video_id,
+  posterUrl=thumbnail_url, reason=recommendation_reason)`; required-only payload (just
+  `video_id`) maps with safe defaults. Traces: AC-1, AC-6.
+- **TC-AND-184-02 — Contract: 200 happy path over MockWebServer.** Type: contract/MockWebServer.
+  Target: JVM unit. Preconditions: MockWebServer returns 200 `ForYouResponse` (3 videos),
+  `source:"for_you"`. Steps: `RecommendationsService.getForYou(limit=24)`; assert request path
+  `/ui/videos/gallery/for-you?limit=24`, then map. Expected: 3 items in server order; verify the
+  request carried cookie + `X-CSRF-Token` + `Authorization: Bearer` headers. Traces: AC-1.
+- **TC-AND-184-03 — Trending fallback notice.** Type: unit + Compose-UI. Target: emulator
+  `test35`. Preconditions: response `source:"trending_fallback"` with videos. Steps: drive
+  `RecommendationsViewModel`→`Content`; render `RecommendationsSection`. Expected: items render
+  AND a non-blocking "Showing trending videos…"-style notice appears; section does not collapse.
+  Traces: AC-1, AC-3.
+- **TC-AND-184-04 — Empty feed collapses.** Type: Compose-UI. Target: emulator `test35`.
+  Preconditions: 200 with `videos: []`. Steps: render section in resulting `Empty` state inside a
+  host that also renders a stub Discover grid. Expected: Recommendations section renders nothing
+  (collapses); the stub grid remains visible. Traces: AC-4.
+- **TC-AND-184-05 — Validation/error response (422).** Type: contract/MockWebServer. Target: JVM
+  unit. Preconditions: MockWebServer returns 422 `HTTPValidationError`
+  (`detail:[{loc,msg,type}]`). Steps: call service; run through AND-027 `ApiResult` mapper; no
+  cache present. Expected: maps to `ApiResult` error → ViewModel `Error("Couldn't load
+  recommendations")`; `detail` array normalized to a message; no crash. Traces: AC-5, AC-8.
+- **TC-AND-184-06 — Malformed/partial JSON is defensively dropped.** Type: unit
+  (Moshi/MockWebServer). Target: JVM unit. Preconditions: response where one video object is
+  malformed/missing `video_id` and another is valid. Steps: parse + map with the defensive
+  filter. Expected: bad item dropped, valid item retained; if all fail → `Empty`, not a thrown
+  error. Traces: AC-6, AC-8.
+- **TC-AND-184-07 — Null thumbnail → placeholder.** Type: Compose-UI. Target: emulator `test35`.
+  Preconditions: item with `thumbnail_url: null`. Steps: render `MediaCard` via the section.
+  Expected: Coil placeholder shown; no crash; `contentDescription` still set to the title.
+  Traces: AC-6, AC-9 (a11y).
+- **TC-AND-184-08 — Cached-then-fresh emission.** Type: unit (Turbine). Target: JVM/Robolectric.
+  Preconditions: Room cache pre-populated; MockWebServer returns fresh 200. Steps: collect
+  `repo.recommendations()`. Expected: emits cached `Content(isStale=true)` first, then network
+  `Content(isStale=false)`; `replaceAll` called exactly once on success. Traces: AC-5, AC-8.
+- **TC-AND-184-09 — Offline with cache → stale banner.** Type: integration (Robolectric +
+  MockWebServer). Target: JVM/Robolectric. Preconditions: cache present; network forced to
+  `IOException`/timeout (MockWebServer `NO_RESPONSE`/disconnect). Steps: trigger fetch. Expected:
+  state stays `Content(isStale=true)`; UI shows "Showing saved recommendations" banner; no
+  `Error`. Traces: AC-5.
+- **TC-AND-184-10 — Real flaky/offline network on device.** Type: instrumented/e2e. Target:
+  **PHYSICAL DEVICE (SM-A156U)** — MUST run on hardware: toggle real Wi-Fi/airplane mode against
+  the plaintext dev host `http://18.222.237.167:8000` to exercise genuine DNS/timeout flakiness
+  that the emulator's NAT masks. Preconditions: app logged in, cache previously warmed. Steps:
+  open Discover online (rows load), enable airplane mode, re-enter Discover / pull-to-refresh.
+  Expected: cached rows render with stale banner offline; on reconnect, fresh content replaces
+  them; Discover grid never blocked. Traces: AC-5, AC-7.
+- **TC-AND-184-11 — 401 → single refresh → retry success.** Type: contract/MockWebServer.
+  Target: JVM unit. Preconditions: authenticated; queue 401, then `POST /ui/session/refresh`
+  200, then feed 200. Steps: call through the auth interceptor. Expected: exactly one refresh,
+  one retry, final success; on refresh failure → auth `Error` with working Retry. Traces: AC-5.
+- **TC-AND-184-12 — Tap navigates with correct video_id.** Type: Compose-UI. Target: emulator
+  `test35`. Preconditions: section in `Content` with known `video_id`. Steps: tap a card; capture
+  `onItemClick`. Expected: `onItemClick(video_id)` invoked with the exact server `video_id`
+  (verifies the `video_id`, not `poster_url`/`kind`, drives nav). Traces: AC-2.
+- **TC-AND-184-13 — Failure isolation from Discover grid.** Type: integration/Compose-UI. Target:
+  emulator `test35`. Preconditions: host renders AND-182 grid (stub Success) + Recommendations in
+  `Error`. Steps: render combined Discover. Expected: inline section-scoped error + Retry shown;
+  grid fully visible/scrollable; tapping Retry calls `viewModel.refresh(force=true)`. Traces:
+  AC-5, AC-7.
+- **TC-AND-184-14 — Accessibility: TalkBack traversal & touch targets.** Type: instrumented
+  (a11y). Target: **PHYSICAL DEVICE (SM-A156U)** preferred (real TalkBack engine), emulator
+  acceptable as fallback. Preconditions: section in `Content`. Steps: enable TalkBack; traverse
+  the section. Expected: each card announces its title `contentDescription`; section/row title is
+  a `heading()`; shimmer placeholders are not focusable; touch targets ≥ 48 dp. Traces: AC-9-class
+  a11y requirements (§9), supports AC-1.
+- **TC-AND-184-15 — Security: no PII/payload in logs; cache cleared on logout.** Type:
+  instrumented. Target: emulator `test35`. Preconditions: logged-in session with cached rows.
+  Steps: capture logcat during fetch; then log out. Expected: Timber logs contain only counts /
+  error-kinds (no titles, no `thumbnail_url`, no `video_id` payloads); after logout the
+  `recommendation_rows` Room table is empty (app-private storage). Traces: §8 security,
+  supports AC-8.
+
+### Coverage matrix
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (items render in order) | TC-01, TC-02, TC-03, TC-14 |
+| AC-2 (tap → detail w/ video_id) | TC-12 |
+| AC-3 (loading → content) | TC-03 (and Loading state exercised in TC-04/TC-13 setups) |
+| AC-4 (zero rows → collapse, grid shows) | TC-04 |
+| AC-5 (failure: stale w/ cache, inline error w/o, grid unaffected) | TC-05, TC-08, TC-09, TC-10, TC-11, TC-13 |
+| AC-6 (malformed/empty filtered, null poster → placeholder) | TC-01, TC-06, TC-07 |
+| AC-7 (pull-to-refresh re-fetches) | TC-10, TC-13 |
+| AC-8 (unit+Compose cover happy/empty/stale/error/parse) | TC-01, TC-05, TC-06, TC-08, TC-15 (+ all above) |

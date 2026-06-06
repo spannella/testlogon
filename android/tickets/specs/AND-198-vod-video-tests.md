@@ -5,9 +5,10 @@ milestone: M4
 epic: E26
 priority: P2
 size: M
-status: draft
 depends_on: [AND-197]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-198 — VOD/video tests
@@ -60,8 +61,12 @@ than asserting against wall-clock or real network behavior.
   models in those specs are the source of truth for the assertions written here.
 - **Backend:** FastAPI + DynamoDB; dev host `http://18.222.237.167:8000`
   (plaintext HTTP, unreliable). Tests **must not** hit this host. The wire
-  contract (`/videos/{id}`, VOD catalog/detail, FastAPI `detail` error shapes) is
-  reproduced as canned JSON fixtures served from MockWebServer.
+  contract (`GET /ui/videos/{video_id}` → `VideoDetailOut`, the `/ui/videos`
+  cursor-paged list, FastAPI `detail` error shapes) is reproduced as canned JSON
+  fixtures served from MockWebServer. **[Corrected]** The detail path is
+  `/ui/videos/{video_id}` (not `/videos/{id}`) and the response schema is
+  `VideoDetailOut` (not `VideoDetailDto`); verified against OpenAPI
+  `GET /ui/videos/{video_id}` and `src/api/endpoints/videos.ts: getVideoDetail`.
 - **Stack under test:** Kotlin 2.0.21, Compose + Material 3, Navigation-Compose,
   Hilt (KSP), Coroutines/Flow, Retrofit 2.11 / OkHttp 4.12 / Moshi 1.15, Room 2.6,
   DataStore, Coil, Media3/ExoPlayer 1.4 (HLS), Paging 3. minSdk 24 / target 35,
@@ -241,34 +246,65 @@ module replacing the production `RepositoryModule`.
 This ticket introduces **no new endpoints**. It exercises the existing,
 already-specified contracts owned by AND-197/AND-190/AND-191:
 
-- `GET /videos/{id}` → `VideoDetailDto` (see AND-190 §5).
-- VOD catalog (paged) + `GET` VOD detail → VOD DTOs (see AND-191 §5).
+- `GET /ui/videos/{video_id}` → `VideoDetailOut` (see AND-190 §5).
+  **[Corrected]** was `GET /videos/{id}` → `VideoDetailDto`; the real path is
+  prefixed `/ui` and the schema is `VideoDetailOut`. Verified: OpenAPI
+  `GET /ui/videos/{video_id}` (op `get_video_detail_...`, resp `200:VideoDetailOut`)
+  and `src/api/endpoints/videos.ts: getVideoDetail`.
+- VOD catalog is **cursor-paged** (`items[] + cursor`, e.g. `GET /ui/videos`,
+  `GET /ui/videos/public`, `GET /ui/videos/gallery`) — **not** page-numbered;
+  `GET /ui/videos/{video_id}` returns the same `VideoDetailOut` for detail
+  (see AND-191 §5). Verified: OpenAPI `GET /ui/videos` → `VideoListOut`,
+  `src/api/endpoints/videos.ts: listMyVideos`/`VideoListResponse { items, cursor }`.
 
 The contract obligation here is **fidelity of fixtures**: the canned JSON served
 by `MockBackend` must match the live `/openapi.json` shapes (snake_case keys,
 optionality). Representative detail fixture used across tests:
 
+**[Corrected fixture]** keyed to `VideoDetailOut` (verified against OpenAPI
+`components.schemas.VideoDetailOut` and `src/api/endpoints/videos.ts: VideoDetail`):
+the id key is `video_id`; the HLS URL is `hls_manifest_url` (with `playback_token`
+/ `playback_expires_at`), not `playback_url`; timestamps (`created_at`,
+`updated_at`, `published_at`) are **epoch integers**, not ISO strings; there is no
+`view_count` or `tags` field (`purchase_count` exists instead). Required keys:
+`video_id, owner_user_id, title, status, visibility, created_at, updated_at`.
+
 ```json
 {
-  "id": "vid_123",
+  "video_id": "vid_123",
+  "owner_user_id": "usr_42",
   "title": "Intro to TestLogon",
   "description": "Walkthrough of the login flow.",
+  "status": "ready",
+  "visibility": "public",
+  "created_at": 1746100800,
+  "updated_at": 1746100800,
+  "published_at": 1746100800,
   "duration_seconds": 372,
   "thumbnail_url": "https://cdn.example/poster.jpg",
-  "playback_url": "https://cdn.example/vid_123/master.m3u8",
-  "published_at": "2026-05-01T12:00:00Z",
-  "view_count": 1042,
-  "tags": ["auth", "demo"]
+  "hls_manifest_url": "https://cdn.example/vid_123/master.m3u8",
+  "playback_token": "pt_abc",
+  "playback_expires_at": 1746104400,
+  "renditions": [],
+  "purchase_count": 1042
 }
 ```
 
-Error fixtures cover all three FastAPI `detail` shapes:
+Error fixtures cover all three FastAPI `detail` shapes (all verified against
+`src/api/client.ts: normalizeErrorDetail`/`mapAuthorizationError`; the array shape
+is FastAPI's `HTTPValidationError` returned with **HTTP 422**, items match
+`components.schemas.ValidationError` = `{loc[], msg, type}`):
 
 ```json
 {"detail": "Not found"}
-{"detail": [{"loc": ["path","id"], "msg": "invalid id", "type": "value_error"}]}
+{"detail": [{"loc": ["path","video_id"], "msg": "invalid id", "type": "value_error"}]}
 {"detail": {"code": "video_unavailable", "message": "Video not available"}}
 ```
+
+Note the object shape `{code, message}` is real and meaningful: the web client
+special-cases `code == "geo_blocked"` on **403** (renders a geo-blocked page) and
+maps `role_required*`/`helpdesk_*` codes to friendly text. The `loc` entry uses
+the parameter name `video_id` (corrected from `id`).
 
 A "minimal" fixture (only required keys, all optionals omitted) and a
 "forward-compatible" fixture (extra unknown keys present) are also included to
@@ -495,3 +531,299 @@ device / emulator in CI) for instrumented.
   blanket retries).
 - README/CI docs updated with the commands to run the VOD/video suites locally;
   no regressions to existing `feature-vod`/`feature-videos` suites.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources:
+OpenAPI index (`reference/openapi.index.txt`), OpenAPI spec
+(`reference/openapi.pretty.json`, `components.schemas.*`), and frontend
+(`reference/src/...`).
+
+1. **Video detail endpoint is `GET /videos/{id}`.** VERDICT: **Corrected** → the
+   real path is `GET /ui/videos/{video_id}`. SOURCE: OpenAPI
+   `GET /ui/videos/{video_id}` (op `get_video_detail_ui_videos__video_id__get`);
+   `src/api/endpoints/videos.ts: getVideoDetail`.
+2. **Detail response schema is `VideoDetailDto`.** VERDICT: **Corrected** → the
+   backend schema is `VideoDetailOut`; the web DTO is `VideoDetail` /
+   `VideoDetailResponse`. SOURCE: OpenAPI `resp=200:VideoDetailOut` for the above
+   op; `components.schemas.VideoDetailOut`; `src/api/endpoints/videos.ts: VideoDetail`,
+   `src/api/endpoints/vod.ts: VideoDetailResponse`.
+3. **HLS/playback URL field is `playback_url`.** VERDICT: **Corrected** → the
+   field is `hls_manifest_url` (with companion `playback_token` and
+   `playback_expires_at`). SOURCE: `components.schemas.VideoDetailOut.hls_manifest_url`
+   / `.playback_token` / `.playback_expires_at`; `src/api/endpoints/vod.ts:
+   VideoDetailResponse.hls_manifest_url`.
+4. **Id field is `id`.** VERDICT: **Corrected** → the wire field is `video_id`.
+   SOURCE: `components.schemas.VideoDetailOut.video_id` (also in `required`);
+   `src/api/endpoints/videos.ts: VideoDetail.video_id`.
+5. **Timestamps (`published_at`, `created_at`) are ISO-8601 strings.** VERDICT:
+   **Corrected** → they are **epoch integers**. SOURCE:
+   `components.schemas.VideoDetailOut.created_at`/`.updated_at`/`.published_at`
+   (`type: integer`); `src/api/endpoints/videos.ts: VideoDetail.created_at: number`.
+6. **`view_count` and `tags` fields exist on the detail DTO.** VERDICT:
+   **Corrected** → neither exists in `VideoDetailOut`; the closest is
+   `purchase_count` (integer, default 0). SOURCE:
+   `components.schemas.VideoDetailOut` property list (no `view_count`/`tags`).
+7. **VOD catalog is page-numbered (Paging 3 over numeric pages).** VERDICT:
+   **Corrected (partial)** → the backend list contract is **cursor-based**
+   (`items[] + cursor`); a Paging 3 `PagingSource` is a valid Android design but
+   must use `cursor`, not page indices. SOURCE: OpenAPI `GET /ui/videos` →
+   `VideoListOut`, `GET /ui/videos/public` → `VideoListOut`;
+   `src/api/endpoints/videos.ts: VideoListResponse { items, cursor }`,
+   `listMyVideos`/`listPublicVideos`.
+8. **FastAPI `detail` has three shapes: string, `[{...msg...}]`, `{code,...}`.**
+   VERDICT: **Verified.** The array shape is `HTTPValidationError` (HTTP 422) with
+   items = `{loc[], msg, type}`; the object shape with `code` is handled
+   explicitly (e.g. `geo_blocked`, `role_required*`). SOURCE:
+   `components.schemas.HTTPValidationError` + `components.schemas.ValidationError`;
+   `src/api/client.ts: normalizeErrorDetail` and `mapAuthorizationError`.
+9. **`401` triggers a single session refresh then one retry.** VERDICT:
+   **Verified.** Refresh is `POST /ui/session/refresh`, single-flight via a shared
+   `refreshPromise`, retried exactly once; a second `401` logs out
+   (`session_expired`). An *unauthenticated* `401` propagates without refresh.
+   SOURCE: `src/api/client.ts: refreshSession` / 401 branch (lines ~119–237).
+10. **Auth/CSRF transport: cookie session + `Authorization: Bearer` +
+    `X-CSRF-Token`.** VERDICT: **Verified.** `credentials: "include"` (cookies);
+    `Authorization: Bearer <accessToken>`; CSRF read from the `ui_csrf` cookie and
+    sent as header `X-CSRF-Token`; impersonation via `X-IMPERSONATION-TOKEN`.
+    SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")`, `X-CSRF-Token`,
+    `Authorization`, `credentials: "include"`).
+11. **Retry/backoff on transient `5xx`/`IOException`/timeout for idempotent GET.**
+    VERDICT: **Unverified-assumption.** The *web* client performs **no** generic
+    5xx/timeout retry (only the 401-refresh-once path). This is an Android-side
+    resilience design (OkHttp interceptor) not reflected in the reference client.
+    SOURCE (counter-evidence): `src/api/client.ts` has no retry loop for non-401
+    errors. Treat as an AND-197 design decision to confirm.
+12. **404 maps to UI message "Video not available".** VERDICT:
+    **Unverified-assumption** (Android UI-string mapping). The backend may return
+    404 with a string `detail` or the `{code:"video_unavailable", message:...}`
+    object, but the specific Android copy is not in the sources. SOURCE:
+    `src/api/client.ts: normalizeErrorDetail` returns the server `detail`/fallback;
+    the exact string is an app resource owned by AND-190/AND-197.
+13. **`ApiResult.Success/Error`, `ApiResult.Error(message, code)`, FastAPI error
+    mapper, cookie jar + CSRF interceptor.** VERDICT: **Unverified-assumption** —
+    these are Android-internal abstractions from the M-series network tickets
+    (e.g. AND-027), not present in the reference sources. The error-mapper inputs
+    (the three `detail` shapes) are verified (see #8); the wrapper type is not.
+14. **Analytics events `video_detail_viewed`, `video_playback_started`,
+    `video_playback_error`, `video_detail_load_error`, `video_detail_served_stale`
+    (+ payloads).** VERDICT: **Unverified-assumption** — no analytics contract is
+    visible in the reference frontend or OpenAPI; owned by AND-190/AND-191/AND-197.
+15. **Log redaction of cookie/`X-CSRF-Token`/URL query.** VERDICT:
+    **Unverified-assumption** — a privacy requirement asserted by the spec; not
+    expressible from the sources (no logging contract in the reference client).
+16. **State models `VideoDetailUiState`, `playbackRetryToken`, `isStale`,
+    `VodCatalog*`/`VodDetail*` UI states; `ExoPlayerFactory`/`PlayerController`
+    seams; injectable `Clock`.** VERDICT: **Unverified-assumption** — Android
+    implementation details defined in AND-190/AND-191/AND-197, not in the
+    backend/frontend sources. These are correctly framed by the spec as contracts
+    inherited from those tickets.
+17. **Media3/ExoPlayer 1.4 for HLS; Compose UI test via `createComposeRule`;
+    `paging-testing asSnapshot`; Turbine; `kotlinx-coroutines-test`.** VERDICT:
+    **Unverified-assumption (framework ref)** — standard Android tooling choices,
+    not derivable from this repo's sources. Framework refs:
+    https://developer.android.com/media/media3/exoplayer/hls ,
+    https://developer.android.com/develop/ui/compose/testing ,
+    https://developer.android.com/topic/libraries/architecture/paging/test .
+
+### Corrections made
+
+- §2 and §5: detail endpoint corrected from `GET /videos/{id}` to
+  `GET /ui/videos/{video_id}`; response schema corrected from `VideoDetailDto` to
+  `VideoDetailOut`.
+- §5 representative fixture rewritten to match `VideoDetailOut`: `id`→`video_id`,
+  `playback_url`→`hls_manifest_url` (+ `playback_token`/`playback_expires_at`),
+  ISO timestamps→epoch integers, removed non-existent `view_count`/`tags`, added
+  the required keys (`owner_user_id`, `status`, `visibility`, `created_at`,
+  `updated_at`) and `purchase_count`.
+- §5: VOD catalog clarified as cursor-paged (`items[] + cursor`), not
+  page-numbered; the validation-error `detail` example now uses HTTP 422 and the
+  `loc` parameter name `video_id`; noted the `{code,...}` object shape is real
+  (e.g. 403 `geo_blocked`).
+- These are surgical corrections; assertion logic, state-transition coverage, and
+  test infrastructure described in §3/§4/§6–§13 remain unchanged where they were
+  already framework- or AND-197-contract-based.
+
+### Open assumptions
+
+- **Generic 5xx/timeout retry/backoff (§3.5, §7, AC-4):** not present in the web
+  client; an Android-only design. Confirm the OkHttp retry policy and bounds with
+  AND-197 before asserting exact retry counts.
+- **UI error strings (e.g. "Video not available", §3.4, §9):** app resources owned
+  by AND-190/AND-197; tests should assert via `R.string.*`, not literals.
+- **`ApiResult` wrapper and error-mapper type, telemetry events, log-redaction
+  contract, all `UiState`/seam types:** Android-internal contracts from
+  AND-027/AND-190/AND-191/AND-197; not verifiable from backend/frontend sources.
+- **Whether CI provides an emulator/Gradle-managed device vs Robolectric for
+  instrumented Compose tests (§13.3):** infra question, unresolved here.
+- **Fixture drift vs live `/openapi.json`:** mitigated by an optional,
+  network-gated contract check; fixtures in this spec were aligned to the OpenAPI
+  snapshot in `reference/` as of this review.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-198-NN`. "Traces" links to §14 Acceptance Criteria (AC-1..AC-10).
+Targets: **JVM** (local JUnit/Robolectric), **emu test35** (headless x86_64 AVD,
+API 35), **device A15** (physical Samsung Galaxy A15 5G, SM-A156U, API 34,
+arm64-v8a). Since this ticket's product-under-test is a fake-player /
+MockWebServer deterministic suite, most cases run on **JVM** or **emu test35**;
+only the real-HLS smoke case needs the **physical device**.
+
+- **TC-AND-198-01 — Repository success maps `VideoDetailOut`→domain.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: `MockBackend` started; Retrofit/Moshi built against `baseUrl()`
+  with the production converter + error mapper.
+  Steps: enqueue 200 with the §5 corrected fixture; call
+  `repository.observeVideo("vid_123")`; collect with Turbine.
+  Expected: emits `ApiResult.Success`; domain `id == "vid_123"`,
+  `playbackUrl == hls_manifest_url`, `durationSeconds == 372`, timestamps parsed
+  from epoch integers; exactly one request to `/ui/videos/vid_123`.
+  Traces: AC-2.
+
+- **TC-AND-198-02 — DTO↔domain mapping: snake_case, optionals, unknown fields.**
+  Type: unit (JVM). Target: JVM.
+  Preconditions: fixed `Clock`/`Locale`/timezone.
+  Steps: map (a) full fixture, (b) "minimal" fixture (only the 7 required keys),
+  (c) "forward-compatible" fixture (extra unknown keys).
+  Expected: required keys map; omitted optionals → `null`/defaults
+  (`purchase_count`→0, `hls_manifest_url`→null); unknown keys ignored (no throw);
+  epoch `published_at` → expected `Instant`.
+  Traces: AC-3.
+
+- **TC-AND-198-03 — Error mapping: all three FastAPI `detail` shapes + statuses.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: `MockBackend` started.
+  Steps: enqueue, in turn, `{"detail":"Not found"}` (404),
+  `{"detail":[{"loc":["path","video_id"],"msg":"invalid id","type":"value_error"}]}`
+  (422), `{"detail":{"code":"video_unavailable","message":"Video not available"}}`
+  (403/404), and a `500`.
+  Expected: mapper yields `ApiResult.Error(message, code)` with the normalized
+  message per `normalizeErrorDetail` semantics (string passthrough; array→joined
+  `msg`; object→`message`/code-mapped); 404→the documented "Video not available"
+  UI string (see Open assumption #12).
+  Traces: AC-3, AC-2.
+
+- **TC-AND-198-04 — Cache-first then stale-on-refresh-failure.**
+  Type: integration (JVM/Robolectric, in-memory Room). Target: JVM.
+  Preconditions: in-memory Room seeded with a cached `vid_123`.
+  Steps: enqueue a `503` for the refresh; observe the flow.
+  Expected: cached content emitted first; after refresh failure the cached content
+  is preserved and `isStale == true` (no error surfaced over cached data).
+  Traces: AC-2.
+
+- **TC-AND-198-05 — Retry on transient 5xx/timeout; no retry on 4xx.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: bounded-retry policy configured (per AND-197 — see Open
+  assumption; if no retry policy exists, this case asserts a single attempt).
+  Steps: (a) `failThenSucceed(2, fixture)` → expect success with
+  `requestCount == 3`; (b) enqueue `400` then `200` → expect failure with
+  `requestCount == 1` (no retry on 4xx); use `runTest` virtual time for backoff.
+  Expected: as above; backoff advanced via `advanceUntilIdle()`, no `Thread.sleep`.
+  Traces: AC-4.
+
+- **TC-AND-198-06 — 401 → single `/ui/session/refresh` → retry once.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: authenticated test session; auth interceptor pointed at
+  `MockBackend`.
+  Steps: enqueue `401` for `/ui/videos/vid_123`, `200` for
+  `POST /ui/session/refresh`, `200` retry of the original; then a separate case
+  enqueues `401`→refresh `200`→`401` again.
+  Expected: first case: exactly one refresh, original call succeeds; second case:
+  re-auth/logout surface signaled (`session_expired`), no infinite loop. Assert
+  request order and that `X-CSRF-Token` header is present on mutating refresh.
+  Traces: AC-4.
+
+- **TC-AND-198-07 — ViewModel state transitions (Turbine).**
+  Type: unit (JVM, `MainDispatcherRule`). Target: JVM.
+  Preconditions: ViewModel constructed with fakes; `StandardTestDispatcher`.
+  Steps: drive success, stale, no-cache-error, `retryDetail()`, `onPlaybackError`,
+  `retryPlayback()`.
+  Expected: `Loading → Content`; `Content(isStale=true)`; `detailError` when no
+  cache; `retryDetail()` re-issues the fetch; `playbackError` set on error;
+  `retryPlayback()` increments `playbackRetryToken`.
+  Traces: AC-5.
+
+- **TC-AND-198-08 — VOD catalog Paging (cursor) source.**
+  Type: unit (JVM, `paging-testing`). Target: JVM.
+  Preconditions: `FakeVodRepository`/MockWebServer serving cursor pages.
+  Steps: `asSnapshot { scrollTo(...) }`; force an error page; force an empty page.
+  Expected: pages load with correct **cursor** keys; `LoadState.Error` surfaced on
+  failure; empty → empty snapshot + end-of-pagination (`endOfPaginationReached`).
+  Traces: AC-6.
+
+- **TC-AND-198-09 — Compose catalog screen states + navigation.**
+  Type: Compose-UI (instrumented). Target: emu test35 (CI); JVM/Robolectric
+  acceptable as fallback.
+  Preconditions: `createComposeRule`; animations disabled.
+  Steps: render loading skeleton → grid; render empty; render error + click
+  "Retry"; render offline/stale banner; click an item.
+  Expected: each state visible; Retry invokes callback; item click emits
+  navigation with the right `video_id`. Strings asserted via `R.string.*`.
+  Traces: AC-7.
+
+- **TC-AND-198-10 — Compose detail screen: metadata, play-gating, errors,
+  rotation.**
+  Type: Compose-UI (instrumented). Target: emu test35.
+  Preconditions: `createComposeRule` / `StateRestorationTester`.
+  Steps: skeleton → metadata; assert play control enabled **only** when
+  `playbackUrl != null` (i.e. `hls_manifest_url` present); detail error + Retry;
+  playback error + Retry; rotate (state restoration) and assert playback position
+  preserved.
+  Expected: as described; restoration retains position.
+  Traces: AC-7, AC-5.
+
+- **TC-AND-198-11 — Player lifecycle with `FakePlayer`.**
+  Type: instrumented (Compose lifecycle) / JVM unit for the controller. Target:
+  emu test35 (lifecycle events) or JVM for the seam.
+  Preconditions: `FakePlayer` injected via `ExoPlayerFactory` seam.
+  Steps: drive `ON_PAUSE`, `ON_DESTROY`; recompose the player host.
+  Expected: `paused == true` on background; `released == true` on destroy (no
+  leak); no second player instantiated across recomposition.
+  Traces: AC-8.
+
+- **TC-AND-198-12 — Telemetry events + log redaction.**
+  Type: unit (JVM). Target: JVM.
+  Preconditions: `FakeAnalytics` injected; a signed `hls_manifest_url` with query
+  params; log capture.
+  Steps: exercise detail-view, playback-start/error, load-error, served-stale;
+  capture emitted log lines.
+  Expected: documented events fire with payloads (`videoId`, etc.); captured logs
+  contain no cookie, no `X-CSRF-Token`, and no URL query string. (Event names are
+  an Open assumption — assert against the AND-197 contract once fixed.)
+  Traces: AC-9.
+
+- **TC-AND-198-13 — Determinism / no-network / dev-host guard.**
+  Type: unit + CI lint (JVM). Target: JVM (lint runs in CI).
+  Preconditions: full suite + a source-scanning check.
+  Steps: run suites twice with shuffled order; run the guard that greps test +
+  fixture sources for `18.222.237.167`.
+  Expected: identical pass results regardless of order; no wall-clock/network use;
+  build **fails** if a hardcoded dev-host reference is found.
+  Traces: AC-10, AC-1.
+
+- **TC-AND-198-14 — Real-HLS playback smoke (manual gate).**
+  Type: instrumented/e2e + manual. Target: **physical device A15** (REQUIRED — real
+  Media3/ExoPlayer HLS decode, arm64-v8a, real network; emulator HLS/codec
+  behavior is not representative).
+  Preconditions: a known-good HLS master playlist; signed-in build.
+  Steps: open a video detail, start playback, observe ExoPlayer reaches
+  `STATE_READY` and renders; rotate; background/foreground.
+  Expected: playback starts and survives rotation/lifecycle; no crash/leak. This
+  is a smoke gate owned jointly with AND-197 and is **excluded from the
+  deterministic CI suite**.
+  Traces: AC-1 (and validates AC-7/AC-8 against real hardware).
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (tests pass green in CI) | TC-13, TC-14 (all TCs collectively) |
+| AC-2 (repo cache-first/success/stale/404·401·5xx) | TC-01, TC-03, TC-04 |
+| AC-3 (mapping: snake_case, optionals, unknown, 3 `detail` shapes) | TC-02, TC-03 |
+| AC-4 (retry on 5xx/timeout, no retry on 4xx, 401→refresh×1) | TC-05, TC-06 |
+| AC-5 (ViewModel Turbine transitions, playbackRetryToken) | TC-07, TC-10 |
+| AC-6 (Paging: load, error LoadState, empty/end-of-pagination) | TC-08 |
+| AC-7 (Compose: skeleton/grid/empty/error+Retry/stale/play-gate/rotation) | TC-09, TC-10 |
+| AC-8 (player lifecycle: pause/release/no-duplicate) | TC-11, TC-14 |
+| AC-9 (telemetry events + redaction) | TC-12 |
+| AC-10 (no dev backend/wall-clock; repeatable; dev-host guard) | TC-13 |

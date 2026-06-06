@@ -5,7 +5,8 @@ milestone: M4
 epic: E25
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-185]
 blocks: [AND-187]
 ---
@@ -39,13 +40,21 @@ Namespace `com.testlogon.android` is used everywhere a package appears.
 ## 2. Context & References
 
 - **Backend:** FastAPI + DynamoDB. Dev host `http://18.222.237.167:8000` (PLAINTEXT HTTP,
-  unreliable). OpenAPI at `/openapi.json`. The search endpoint's supported query
-  parameters (entity-type filter, sort, pagination) are the authoritative source for which
-  filters are real vs. client-side; confirm against `/openapi.json` and the web reference
-  before finalizing the filter model.
+  unreliable). OpenAPI at `/openapi.json`. **[VERIFIED]** The global search endpoint is
+  `GET /ui/search` (op `global_search_ui_search_get`) with query params **`q`** (required,
+  1–500 chars), **`types`** (a single comma-separated string; default
+  `calendar,catalog,contacts,files,messages,posts,tickets,users,videos`), and **`limit`**
+  (1–20, default 5). **[CORRECTED]** There is **no `sort` parameter** and **no `cursor`
+  parameter** on this endpoint — the entity-type filter is the only real server-side
+  refinement. Verify any new filter against `/openapi.json` before binding it to a control.
 - **Web reference:** `frontend/src/api/endpoints/search.ts` (the search surface AND-185
-  ports; defines the `type`/`sort` query parameters this ticket binds to UI controls),
-  `frontend/src/api/types.ts` (categorized result and entity DTO shapes).
+  ports; `globalSearch(q, types?, limit)` plus the server-backed search-history calls
+  `recordSearchHistory`/`getSearchHistory`/`deleteSearchHistoryItem`/`clearSearchHistory`).
+  The categorized result + item DTO shapes live in that same `search.ts`
+  (`GlobalSearchResponse`, `SearchResultSection`, `SearchResultItem`), **not** in
+  `frontend/src/api/types.ts`. **[VERIFIED]** The web client filters tabs **client-side**:
+  `SearchPage.tsx` calls `globalSearch(query, undefined, 10)` (never passing `types`) and
+  scopes per-tab over the already-fetched sectioned response.
 - **Upstream tickets:**
   - **AND-185** — Global search (multi-entity). Owns `SearchApi`, the result DTOs, the
     `SearchMapper`, and the categorized `SearchResults` model. This ticket consumes that
@@ -77,11 +86,14 @@ otherwise it filters the already-fetched categorized result set client-side. Whi
 used is determined at implementation time from `/openapi.json` (see §5).
 
 FR-3. The screen exposes a **filter control** (a filter icon opening a Material 3
-`ModalBottomSheet`) for refinements beyond entity type: at minimum a **sort** option
-(e.g. Relevance / Recent) and entity-type selection (mirroring tabs for explicit
-multi-select where the backend allows). Only filters backed by a real backend query
-parameter are functional; any client-only refinement is clearly bounded and noted. Applying
-filters re-runs the query with the new parameters and updates results.
+`ModalBottomSheet`) for refinements beyond the single-tab scope: entity-type selection
+(mirroring tabs, and supporting explicit multi-select since `types` is a comma-joined list).
+[CORRECTED] A **sort** option is NOT backed by any backend parameter (the search endpoint has
+no `sort`) and the web client offers no sort control — if a sort affordance ships at all it
+is **client-only**, clearly bounded and noted, and offered only for categories whose DTO
+exposes a sortable field (see §4.1, §5, R5). Only refinements backed by a real backend query
+parameter (`types`) re-issue the query; client-only refinements re-scope the held results.
+Applying filters updates the rendered results.
 
 FR-4. The active filter/tab selection is **visible**: the selected tab is highlighted, and
 a non-default filter state shows a badge/indicator on the filter icon plus removable filter
@@ -119,14 +131,27 @@ AND-185 establishes). This ticket adds the filter/tab/recent layer.
 ```kotlin
 // com.testlogon.android.feature.search.model
 
-/** Entity scope; mirrors the categories AND-185 returns. ALL = un-scoped. */
-enum class SearchEntityType { ALL, USERS, CONTENT /* + others from backend */ }
+/**
+ * Entity scope; mirrors the categories AND-185 returns. ALL = un-scoped.
+ * [CORRECTED] The backend exposes NINE result categories, not just users/content.
+ * Per `search.ts: SearchResultType` and the `types` default in `GET /ui/search`, the
+ * category set is: users, posts, catalog, files, messages, tickets, contacts, videos,
+ * calendar. The `types` query param uses the PLURAL/section keys
+ * (users, posts, catalog, files, messages, tickets, contacts, videos, calendar); the
+ * per-item `type` field uses the SINGULAR form (user, post, file, message, ...).
+ */
+enum class SearchEntityType {
+    ALL, USERS, POSTS, CATALOG, FILES, MESSAGES, TICKETS, CONTACTS, VIDEOS, CALENDAR
+}
 
-enum class SearchSort { RELEVANCE, RECENT }
+// [CORRECTED] No `sort` exists on the backend search endpoint and the web client offers
+// no sort control. A SearchSort enum is therefore an UNVERIFIED, client-only refinement.
+// If a sort UI ships, it MUST be implemented client-side over the fetched sections (and
+// only for categories whose DTO exposes a sortable field) and labelled as client-only —
+// it is NOT a server parameter. See §5 and §16. Default ordering is backend relevance.
 
 data class SearchFilters(
     val entityType: SearchEntityType = SearchEntityType.ALL,
-    val sort: SearchSort = SearchSort.RELEVANCE,
 ) {
     val isDefault: Boolean
         get() = this == SearchFilters()
@@ -198,7 +223,8 @@ class SearchFilterController @Inject constructor(
 }
 ```
 
-Selection is persisted to `savedState` under keys `query`, `entity_type`, `sort`.
+Selection is persisted to `savedState` under keys `query`, `entity_type` ([CORRECTED] the
+`sort` key is removed — there is no sort parameter; see §4.1/§5).
 `onTabSelected`/`applyFilters` recompute the request and re-issue via the repository,
 mapping `ApiResult` to `Content`/`NoResults`/`Error`/`Offline` exactly as §6/§7 specify.
 
@@ -208,6 +234,21 @@ mapping `ApiResult` to `Content`/`NoResults`/`Error`/`Offline` exactly as §6/§
 > debounce path attaches to `onQueryChange` in AND-187 without changing this surface.
 
 ### 4.3 Recent searches store
+
+> **[CORRECTED — contract mismatch]** The backend already provides a **server-side**
+> search-history API that the web client (`SearchPage.tsx`) uses as the source of truth:
+> `GET /ui/search/history` (`{ items: [{ id, query, ts, result_count }] }`, param `limit`,
+> default 20), `POST /ui/search/history` (body `RecordSearchHistoryReq {query, result_count}`),
+> `DELETE /ui/search/history/{item_id}`, and `DELETE /ui/search/history` (clear all). The web
+> app records history automatically after results arrive (`recordSearchHistory(query, count)`),
+> lists it, deletes a single item by `id`, and clears all. The local DataStore design below is
+> therefore a **deviation** from the web contract. **Recommended:** back `RecentSearchesStore`
+> with these endpoints (it then becomes the offline cache, not the source of truth) so recent
+> searches sync across devices like the web app, and so removal targets the server item `id`
+> rather than a raw string. If the local-only store is kept deliberately (e.g. for offline-first
+> on the unreliable dev host), record that decision in the PR. Either way, "remove" on the web
+> deletes by item `id`, not by query text — the `remove(query)` signature below diverges from
+> the backend `DELETE /ui/search/history/{item_id}` contract.
 
 ```kotlin
 interface RecentSearchesStore {
@@ -271,57 +312,70 @@ pinned first. Tapping a result emits a nav event consumed by `SearchRoute` and r
 
 This ticket does **not** introduce a new endpoint. It binds **existing query parameters**
 of the AND-185 search endpoint to the filter/tab UI. The endpoint, DTOs, and mapper are
-owned by AND-185; confirm parameter names against `/openapi.json` and `search.ts`.
+owned by AND-185; the following is **[VERIFIED]** against `/openapi.json` and `search.ts`.
 
-Representative search call as exercised by filters/tabs (final names per AND-185):
+**[CORRECTED] Endpoint and parameters** — the search endpoint is `GET /ui/search` (NOT a
+bare `search`), and the entity-type parameter is **`types`** (plural, a single
+comma-separated string), NOT `type`. There is **no `sort` and no `cursor`** parameter.
 
 ```kotlin
 interface SearchApi {              // owned by AND-185 — shown for the params this ticket drives
-    @GET("search")
+    @GET("ui/search")
     suspend fun search(
-        @Query("q") query: String,
-        @Query("type") type: String? = null,     // entity-type filter <- tabs / filter sheet
-        @Query("sort") sort: String? = null,     // <- filter sheet
-        @Query("cursor") cursor: String? = null, // <- AND-187 paging
-    ): Response<SearchResultsDto>
+        @Query("q") query: String,                 // required, 1..500 chars
+        @Query("types") types: String? = null,     // comma-joined section keys; omit = all 9
+        @Query("limit") limit: Int? = null,        // 1..20, default 5 (10 in the web client)
+    ): Response<GlobalSearchResponse>
 }
 ```
 
+Response shape (`search.ts: GlobalSearchResponse`): `{ query, results: { users, posts,
+catalog, files, messages?, tickets?, contacts?, videos?, calendar? }, partial? }` where each
+section is `SearchResultSection { items: SearchResultItem[], total_estimate, has_more }` and
+`SearchResultItem { type, id, title, snippet, thumbnail_url?, url, meta? }`.
+
 Filter-to-parameter mapping owned by this ticket:
 
-| UI control            | Request parameter        | Values                          |
-|-----------------------|--------------------------|---------------------------------|
-| Tab / entity filter   | `type`                   | omit for ALL; `users`,`content` |
-| Sort filter           | `sort`                   | `relevance` (default), `recent` |
+| UI control            | Request parameter        | Values                                                              |
+|-----------------------|--------------------------|--------------------------------------------------------------------|
+| Tab / entity filter   | `types`                  | omit for ALL (= server default of all 9); else section key(s), e.g. `users`, `posts`, `catalog`, `files`, `messages`, `tickets`, `contacts`, `videos`, `calendar`, comma-joined |
+| Sort                  | *(none — no server param)* | client-only if shipped (see §4.1); default = backend relevance ordering |
 
 ```kotlin
 // com.testlogon.android.feature.search
 fun SearchFilters.toQueryParams(): Map<String, String?> = mapOf(
-    "type" to entityType.toWireOrNull(),   // ALL -> null
-    "sort" to sort.toWire(),
+    "types" to entityType.toWireOrNull(),  // ALL -> null (omit); else section key
+    // [CORRECTED] no "sort" entry — backend exposes no sort parameter
 )
 ```
 
-**Decision rule (verify against `/openapi.json`):**
-- If the search endpoint accepts `type`/`sort`, tabs and filters re-issue the GET with
-  those params (server-side filtering) and rely on the AND-185 mapper.
-- If it does **not**, the All-query result is fetched once and tabs/sort are applied
-  **client-side** over the categorized `SearchResults` (sort applied per category by the
-  fields the DTO exposes). Either way the UI contract in §4 is unchanged.
+**[CORRECTED] Decision rule.** The `types` parameter **does** exist, so a server-side path
+is available. However, the **web reference filters tabs client-side**: `SearchPage.tsx`
+fetches once with `globalSearch(query, undefined, 10)` and scopes each tab over the fetched
+sections. To match the web contract (and avoid N requests on tab switches), the
+**recommended default is client-side tab filtering** over the single all-categories
+`GlobalSearchResponse`; use the `types` param only as an optimization (e.g. fetching a single
+heavy category on demand). Either way the UI contract in §4 is unchanged. Any sort control,
+if shipped, is **client-side only** (per category, over fields the DTO exposes) — there is no
+server sort.
 
-Error bodies use the FastAPI `detail` shape (string | `[{msg}]` | `{code,...}`) decoded by
-the shared error mapper (AND-015) into `ApiResult.Failure`. A `422` on an unsupported
-filter value is treated as a client bug (caught in tests), not a user-facing error.
+Error bodies use the FastAPI `HTTPValidationError` `detail` shape (`detail: [{loc, msg,
+type}]`) decoded by the shared error mapper (AND-015) into `ApiResult.Failure`. The endpoint
+documents only `200` and `422`. A `422` typically means `q` is missing/empty or out of the
+1–500 length bound, or `types` contains an unknown key — treated as a client bug (caught in
+tests), not a user-facing error.
 
 ## 6. Data & State Management
 
 - Single source of truth: `SearchFilterController.uiState: StateFlow<SearchUiState>`
   (becomes `SearchViewModel.uiState` in AND-187 with the same shape).
 - Filter/tab/query selection persisted in `SavedStateHandle` (keys `query`,
-  `entity_type`, `sort`) so it survives configuration change and process death (FR-7).
-- Recent searches persisted in DataStore via `RecentSearchesStore` (durable across app
-  restart); capped at N=10, de-duplicated case-insensitively, most-recent-first, cleared on
-  logout.
+  `entity_type`; [CORRECTED] no `sort` key — no sort parameter exists) so it survives
+  configuration change and process death (FR-7).
+- Recent searches: [CORRECTED] the authoritative source is the **server-side** history API
+  (`/ui/search/history`, see §4.3). If a local DataStore cache is kept, it is capped at
+  N=10, de-duplicated case-insensitively, most-recent-first, and cleared on logout; it must
+  be reconciled with the server list (the web app lists/records/deletes via the API).
 - Navigation modeled as one-shot effects via a `Channel`/`receiveAsFlow` so result taps are
   not re-fired on config change (same pattern as AND-182).
 - The categorized `SearchResults` is held only in the current `Content` state; switching
@@ -356,11 +410,17 @@ filter value is treated as a client bug (caught in tests), not a user-facing err
 ## 8. Security & Privacy
 
 - All search requests are authenticated via the persistent cookie jar (AND-011) +
-  `X-CSRF-Token` echo (AND-012); no credentials handled here.
-- **Recent searches are user content and potentially sensitive.** They are stored
-  unencrypted in app-private DataStore (acceptable for non-credential data), are **cleared
-  on logout** to prevent cross-account leakage, and are **never** sent to telemetry — only
-  aggregate counts/flags are logged, never the query text (see §10).
+  `X-CSRF-Token` echo (AND-012); no credentials handled here. [VERIFIED] The web client
+  (`client.ts`) reads the `ui_csrf` cookie and sends it as the `X-CSRF-Token` header on
+  requests. The CSRF header is required for the **mutating** history calls (`POST`/`DELETE
+  /ui/search/history`); the search `GET /ui/search` is a safe method but still rides the
+  authenticated session cookie.
+- **Recent searches are user content and potentially sensitive.** [CORRECTED] Note they are
+  also persisted **server-side** by the backend history API (`POST /ui/search/history`); the
+  web client records them automatically after results arrive. Any local cache is stored
+  unencrypted in app-private DataStore (acceptable for non-credential data), **cleared on
+  logout** to prevent cross-account leakage on a shared device, and **never** sent to
+  telemetry — only aggregate counts/flags are logged, never the query text (see §10).
 - Cleartext HTTP to the dev host is permitted only via the dev flavor's network-security
   config (AND-006/AND-009); release builds must not reach a cleartext host.
 - No query strings or result identifiers containing PII are written to logs at any level.
@@ -383,7 +443,8 @@ filter value is treated as a client bug (caught in tests), not a user-facing err
 
 - Events via the analytics facade (redacted per AND-052 — **never log query text**):
   - `search_tab_select` — `{ entity_type }`.
-  - `search_filter_apply` — `{ entity_type, sort, changed: [..] }`.
+  - `search_filter_apply` — `{ entity_type, changed: [..] }` ([CORRECTED] no `sort` field —
+    no sort parameter; include a `client_sort` flag only if a client-only sort ships).
   - `search_filter_clear` — `{}`.
   - `search_recent_run` — `{ position }` (index in the recent list; no text).
   - `search_recent_remove` / `search_recent_clear_all` — `{}`.
@@ -396,8 +457,9 @@ filter value is treated as a client bug (caught in tests), not a user-facing err
 ## 11. Testing Strategy
 
 - **Unit (core-testing + MockWebServer, AND-046):**
-  - `SearchFilters.toQueryParams`: ALL → null `type`; sort values map to wire strings;
-    `isDefault` correct.
+  - `SearchFilters.toQueryParams`: ALL → null/omitted `types`; non-ALL → the correct section
+    key (e.g. USERS → `users`, POSTS → `posts`); `isDefault` correct. [CORRECTED] No `sort`
+    entry is emitted (no server param).
   - `DataStoreRecentSearchesStore`: add trims/de-dups (case-insensitive) and moves to top;
     cap at N evicts oldest; blank queries ignored; remove/clear; survives a store reopen;
     cleared on logout hook.
@@ -521,3 +583,298 @@ AC-8. All §11 unit and Compose UI tests pass in CI (AND-050/AND-051).
   correctly.
 - Spec deviations (especially endpoint filter support) reconciled and documented in the PR;
   code reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources: OpenAPI
+`reference/openapi.index.txt` / `reference/openapi.pretty.json` (cited as `METHOD /path` and
+schema name), or frontend files under `reference/src/` (cited as `path: symbol`).
+
+1. **The global search endpoint is `GET /ui/search`.** VERDICT: **Corrected** (spec §5 said
+   `@GET("search")`). SOURCE: OpenAPI `GET /ui/search` (op `global_search_ui_search_get`);
+   `src/api/endpoints/search.ts: globalSearch` calls `api.get("/ui/search", ...)`.
+2. **The entity-type query parameter is `types` (plural, comma-separated string), not
+   `type`.** VERDICT: **Corrected**. SOURCE: OpenAPI `GET /ui/search` param `types`
+   (default `calendar,catalog,contacts,files,messages,posts,tickets,users,videos`);
+   `src/api/endpoints/search.ts: globalSearch(q, types?, limit)` → `params.types = types`.
+3. **The search endpoint has NO `sort` parameter.** VERDICT: **Corrected** (spec §5 bound a
+   `sort` filter to a `@Query("sort")`). SOURCE: OpenAPI `GET /ui/search` params are exactly
+   `q, types, limit, user_sub` (+ session/impersonation headers); no `sort`. No sort control
+   appears in `src/pages/search/SearchPage.tsx`.
+4. **The search endpoint has NO `cursor`/pagination parameter.** VERDICT: **Corrected** (spec
+   §5 showed `@Query("cursor")`). SOURCE: OpenAPI `GET /ui/search` param list (above). It
+   exposes `limit` (1–20, default 5) only. (The separate `GET /ui/discover/search` and
+   `GET /ui/alerts/search` do have `cursor`, but those are different endpoints.)
+5. **`q` is required, length 1–500; `limit` is 1–20 default 5.** VERDICT: **Verified**.
+   SOURCE: OpenAPI `GET /ui/search` schema (`q` minLength 1 / maxLength 500; `limit` min 1 /
+   max 20 / default 5). The web client passes `limit = 10` (`SearchPage.tsx: globalSearch(..., 10)`).
+6. **Response is a sectioned multi-category object `GlobalSearchResponse`.** VERDICT:
+   **Verified**. SOURCE: `src/api/endpoints/search.ts: GlobalSearchResponse` /
+   `SearchResultSection` / `SearchResultItem`. (OpenAPI `200` schema is empty `{}` — untyped —
+   so the frontend types are the authoritative shape.)
+7. **There are NINE result categories, not just users/content.** VERDICT: **Corrected** (spec
+   §4.1 enum was `ALL, USERS, CONTENT`). SOURCE: `src/api/endpoints/search.ts:
+   SearchResultType` = user|post|catalog|file|message|ticket|contact|video|calendar;
+   `SearchPage.tsx: SEARCH_TABS` = all, users, posts, catalog, files, messages, tickets,
+   contacts, videos, calendar; OpenAPI `types` default lists the same nine section keys.
+8. **Section keys (used in `types`) are plural; per-item `type` is singular.** VERDICT:
+   **Verified**. SOURCE: `GlobalSearchResponse.results` keys (`users`, `posts`, `files`, ...)
+   vs `SearchResultItem.type` values (`user`, `post`, `file`, ...) in `search.ts`.
+9. **The web client filters tabs CLIENT-SIDE (does not pass `types`).** VERDICT: **Verified /
+   Corrected** (spec §5 framed server-side as the primary/uncertain path). SOURCE:
+   `src/pages/search/SearchPage.tsx`: `globalSearch(debouncedQuery, undefined, 10)` and
+   per-tab scoping via `sectionCount`/`results[tab.value]`.
+10. **Recent searches are backed by a SERVER-SIDE history API, not just local storage.**
+    VERDICT: **Corrected** (spec §4.3/§6/§8 designed a local DataStore as source of truth).
+    SOURCE: OpenAPI `GET /ui/search/history`, `POST /ui/search/history`
+    (`req=RecordSearchHistoryReq`), `DELETE /ui/search/history/{item_id}`,
+    `DELETE /ui/search/history`; `src/api/endpoints/search.ts:
+    getSearchHistory/recordSearchHistory/deleteSearchHistoryItem/clearSearchHistory`;
+    `SearchPage.tsx: SearchHistorySidebar` consumes all four.
+11. **History record body is `{ query, result_count }` (query required, result_count default
+    0).** VERDICT: **Verified**. SOURCE: OpenAPI schema `RecordSearchHistoryReq`;
+    `search.ts: recordSearchHistory(query, result_count)`.
+12. **History items carry a server `id` and removal is by item id.** VERDICT: **Verified /
+    Corrected** (spec §4.3 `remove(query: String)` removes by text). SOURCE:
+    `search.ts: SearchHistoryItem { id, query, ts, result_count }` and
+    `deleteSearchHistoryItem(id)`; OpenAPI `DELETE /ui/search/history/{item_id}`.
+13. **Web records history automatically after results arrive (length≥2), with total result
+    count.** VERDICT: **Verified**. SOURCE: `SearchPage.tsx` effect on `data` →
+    `recordMut.mutate({ query, count: totalResults })`. (Spec FR-5 commits on successful
+    search — consistent.)
+14. **Web debounces query input at 300ms.** VERDICT: **Verified** (informational; debounce is
+    AND-187 scope per spec §4.2). SOURCE: `SearchPage.tsx: useDebounce(inputValue, 300)`.
+15. **Search query is enabled only when query length ≥ 1.** VERDICT: **Verified** (supports
+    FR-6 idle vs no-results). SOURCE: `SearchPage.tsx: useQuery({ enabled: debouncedQuery.length >= 1 })`.
+16. **Auth uses session cookie + `X-CSRF-Token` echoed from the `ui_csrf` cookie.** VERDICT:
+    **Verified**. SOURCE: `src/api/client.ts`: `getCookie("ui_csrf")` →
+    `headers.set("X-CSRF-Token", csrf)` with `credentials: "include"`. CSRF is required for
+    the mutating history POST/DELETE; `GET /ui/search` is a safe method.
+17. **Error bodies use the FastAPI `HTTPValidationError`/`detail` shape; endpoint declares
+    only 200 and 422.** VERDICT: **Verified**. SOURCE: OpenAPI `GET /ui/search` responses
+    `200` + `422:HTTPValidationError`; schema `HTTPValidationError { detail: [{loc,msg,type}] }`.
+18. **Material 3 `ScrollableTabRow` / `ModalBottomSheet` / `FilterChip` are the chosen
+    components; `selectableGroup()` and `liveRegion` for a11y.** VERDICT:
+    **Unverified-assumption** (Android framework choices — not derivable from backend/web
+    sources). SOURCE: framework ref —
+    https://developer.android.com/develop/ui/compose/components/tabs ,
+    https://developer.android.com/reference/kotlin/androidx/compose/material3/package-summary#ModalBottomSheet ,
+    https://developer.android.com/develop/ui/compose/accessibility .
+19. **`SavedStateHandle` survives configuration change and process death for the persisted
+    selection.** VERDICT: **Unverified-assumption** (framework behavior, reasonable). SOURCE:
+    framework ref — https://developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate .
+20. **Backend is FastAPI + DynamoDB on `http://18.222.237.167:8000`.** VERDICT:
+    **Unverified-assumption** (host/infra not confirmable from the provided sources; OpenAPI
+    confirms FastAPI-style schemas but not DynamoDB or the host). SOURCE: spec §2 only.
+
+### Corrections made
+
+- §2/§5: endpoint corrected `search` → `GET /ui/search`; entity param `type` → `types`
+  (plural, comma-joined); removed non-existent `sort` and `cursor` params; documented exact
+  param bounds (`q` 1–500, `limit` 1–20 default 5) and the `GlobalSearchResponse` shape.
+- §2: corrected DTO location — result/item types live in `search.ts`, not `types.ts`.
+- §4.1: expanded `SearchEntityType` from `ALL/USERS/CONTENT` to the nine real categories;
+  removed the `SearchSort` enum and the `sort` field from `SearchFilters` (no server backing);
+  documented plural section keys vs singular item `type`.
+- §4.2/§6: removed the `sort` `SavedStateHandle` key.
+- §4.3/§6/§8: flagged the local-DataStore recent-searches design as a deviation from the
+  server-side `/ui/search/history` API the web client uses; noted removal is by server item
+  `id`, not by query text.
+- §3 FR-3, §10, §11: removed/qualified `sort` as client-only/unbacked rather than a real
+  filter or telemetry field.
+- §5: corrected the decision rule — `types` exists, but the web reference filters tabs
+  client-side; client-side is the recommended default, server `types` is an optimization.
+- §8: noted CSRF (`ui_csrf` → `X-CSRF-Token`) applies to the mutating history calls.
+
+### Open assumptions
+
+- **Client-only sort fidelity (R5):** whether each category DTO exposes a field sufficient to
+  sort (e.g. recency) is unverifiable — the `200` response is untyped in OpenAPI and
+  `SearchResultItem.meta` is an opaque `Record<string, unknown>`. Offer sort only where the
+  data supports it, or omit it.
+- **Local vs server recent searches:** whether the Android port should make the server
+  `/ui/search/history` the source of truth (matching web) or keep a local-only store for
+  offline-first on the unreliable dev host is a product/architecture decision; not resolvable
+  from sources. Recommended: server-backed with local cache.
+- **Android UI/framework choices** (Material 3 components, `SavedStateHandle`, DataStore):
+  reasonable but not derivable from backend/web sources; cited as framework refs above.
+- **Backend infra/host** (DynamoDB, dev IP, cleartext policy): asserted by the spec, not
+  confirmable from the provided OpenAPI/frontend sources.
+- **`partial: true` semantics** (`GlobalSearchResponse.partial`): present in the DTO but its
+  exact meaning (degraded/timed-out category) is not documented; treat a `partial` response
+  as success-with-possibly-incomplete-sections and do not classify it as an error.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device); **MWS** =
+contract test with MockWebServer; **EMU(test35)** = headless emulator AVD `test35`
+(x86_64, Android 15 / API 35); **DEVICE** = physical Samsung Galaxy A15 5G (SM-A156U,
+serial `R5CX821TA9R`, Android 14 / API 34, arm64-v8a). UI/instrumented cases run on
+EMU(test35) by default; cases that must exercise real hardware or ABI/API-level differences
+note DEVICE explicitly. This ticket has no camera/biometrics/WebRTC/FCM/Telecom surface, so
+DEVICE is used only for ABI/API-34-vs-35 confidence and real-network/real-cleartext-host
+behavior against the flaky dev host.
+
+- **TC-AND-186-01 — `SearchFilters.toQueryParams` maps entity type to `types`, omits sort.**
+  Type: unit. Target: JVM. Preconditions: none.
+  Steps: (1) `SearchFilters()` (ALL) → params. (2) `SearchFilters(USERS)` → params.
+  (3) `SearchFilters(POSTS)` → params.
+  Expected: ALL yields `types` null/omitted; USERS yields `types="users"`; POSTS yields
+  `types="posts"`; the map never contains a `sort` key; `SearchFilters().isDefault == true`,
+  non-ALL `isDefault == false`.
+  Traces: AC-1, AC-3.
+
+- **TC-AND-186-02 — Search request hits `GET /ui/search` with correct params.**
+  Type: contract/MockWebServer. Target: JVM + MWS. Preconditions: MWS enqueues a valid
+  `GlobalSearchResponse`.
+  Steps: trigger `submitQuery()` for query `"alice"` with ALL scope; then with USERS scope.
+  Expected: recorded request path is `/ui/search`; query string has `q=alice`,
+  `limit` within 1..20; ALL omits `types`; USERS sends `types=users`; no `sort`/`cursor`
+  params present.
+  Traces: AC-1.
+
+- **TC-AND-186-03 — Successful multi-category response → `Content`; tab scoping is correct.**
+  Type: unit. Target: JVM (+ MWS for the fetch). Preconditions: response has items in
+  `users` and `posts`, empty elsewhere.
+  Steps: submit query; assert `Content`; call `onTabSelected(ALL)` then `onTabSelected(USERS)`
+  then `onTabSelected(POSTS)`.
+  Expected: ALL exposes all non-empty sections (sectioned); USERS exposes only user items as a
+  flat list; POSTS only post items; `selected` updates each time; no extra network call when
+  filtering client-side (per §5 recommended path).
+  Traces: AC-1, AC-2.
+
+- **TC-AND-186-04 — Empty response for current tab → `NoResults` (not Error), with correct
+  `filtersActive`.**
+  Type: unit. Target: JVM + MWS. Preconditions: response with all sections empty.
+  Steps: (1) submit query with default filters → assert `NoResults(filtersActive=false)`.
+  (2) apply a non-default entity filter, submit → assert `NoResults(filtersActive=true)`.
+  Expected: state is `NoResults` (zero results is not an error); `query` echoed;
+  `filtersActive` reflects whether filters are non-default.
+  Traces: AC-1, AC-5, AC-6.
+
+- **TC-AND-186-05 — Empty / whitespace query never issues a request and returns to
+  `Idle(recent)`.**
+  Type: unit. Target: JVM + MWS. Preconditions: MWS running; recent list non-empty.
+  Steps: `onQueryChange("")`; `onQueryChange("   ")`; `submitQuery()`.
+  Expected: no request recorded by MWS; state is `Idle(recent)`; recent list surfaced.
+  Traces: AC-5.
+
+- **TC-AND-186-06 — Validation 422 from `q` bounds / unknown `types` is handled as a client
+  bug, surfaced via the AND-015 detail mapper.**
+  Type: contract/MockWebServer. Target: JVM + MWS. Preconditions: MWS enqueues `422` with an
+  `HTTPValidationError` body `{ detail: [{loc, msg, type}] }`.
+  Steps: issue a search that produces a 422 (e.g. simulate an out-of-bounds `q` or bad
+  `types`).
+  Expected: `ApiResult.Failure` carries the mapped `detail` message; the controller does NOT
+  present it as a normal user-facing retryable error path for a malformed param (test asserts
+  it is caught/logged as a client error). No crash.
+  Traces: AC-1, AC-6.
+
+- **TC-AND-186-07 — Recent searches via server history API: list, record-on-success, delete
+  by id, clear all.**
+  Type: contract/MockWebServer. Target: JVM + MWS. Preconditions: MWS stubs
+  `GET/POST/DELETE /ui/search/history`.
+  Steps: (1) load idle → assert `GET /ui/search/history?limit=...`. (2) submit a successful
+  search → assert `POST /ui/search/history` with body `{query, result_count}`.
+  (3) remove one item → assert `DELETE /ui/search/history/{id}` with the server item id.
+  (4) clear all → assert `DELETE /ui/search/history`.
+  Expected: each call uses the correct method/path/body; de-dup moves a re-run query to top
+  on reload.
+  Traces: AC-4.
+
+- **TC-AND-186-08 — Mutating history calls carry `X-CSRF-Token`; search GET rides session
+  cookie.**
+  Type: contract/MockWebServer. Target: JVM + MWS. Preconditions: auth plumbing (AND-027)
+  active with a CSRF token available.
+  Steps: record a history item (POST) and delete one (DELETE); also perform a search (GET).
+  Expected: POST and DELETE requests include the `X-CSRF-Token` header; all three include the
+  session cookie; the search GET does not require CSRF.
+  Traces: AC-4, AC-7 (security).
+
+- **TC-AND-186-09 — Failure mapping: offline, stale-on-content, retryable error, transparent
+  401.**
+  Type: unit. Target: JVM + MWS. Preconditions: connectivity signal mockable (AND-017).
+  Steps: (1) no connectivity + no prior results → `Offline`. (2) `Content` shown, a tab
+  re-issue fails with timeout → keep `Content`, `isStale=true`, no blanking. (3) HTTP 500 →
+  `Error(retryable=true)`; `retry()` re-issues with current query+filters. (4) first 401 →
+  transparent refresh then success; second 401 → defers to global re-auth, not local error.
+  Expected: each mapping matches §7.
+  Traces: AC-6.
+
+- **TC-AND-186-10 — Rapid tab/filter switches cancel the in-flight request (latest wins).**
+  Type: unit. Target: JVM + MWS. Preconditions: MWS with a slow first response, fast second.
+  Steps: trigger a search, then immediately switch tabs/filters before the first completes.
+  Expected: only the latest selection's result is applied (`collectLatest`/job cancellation);
+  no flicker of stale results; prior request cancelled.
+  Traces: AC-1, AC-6.
+
+- **TC-AND-186-11 — Tab row renders nine derived tabs with All pinned first; selection scopes
+  the rendered list.**
+  Type: Compose-UI. Target: EMU(test35). Preconditions: `Content` state with mixed sections.
+  Steps: render `SearchScreen`; assert tab order (All, then categories); tap "Users".
+  Expected: All is first and highlighted initially; tapping invokes `onTabSelected(USERS)` and
+  the list scopes to user rows; selected tab visually indicated.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-186-12 — Filter sheet + active-filter badge/chips + Clear.**
+  Type: Compose-UI. Target: EMU(test35). Preconditions: `Content` state.
+  Steps: open `FilterSheet`; select a non-default entity filter and apply; observe badge +
+  `FilterChip`; tap chip ×; tap "Clear".
+  Expected: applying shows the filter badge and a removable chip; chip × and "Clear" both
+  reset to defaults (badge/chips disappear, `onClearFilters` invoked).
+  Traces: AC-3.
+
+- **TC-AND-186-13 — Idle vs No-results are distinct; recent searches interactions.**
+  Type: Compose-UI. Target: EMU(test35). Preconditions: provide both `Idle(recent=[...])`
+  and `NoResults` states.
+  Steps: render `Idle` → assert recent list shown, tap a row (invokes `onRunRecent`), tap
+  remove (×) and "Clear all". Render `NoResults` with `filtersActive=true` → assert searched
+  term echoed and both "Clear filters" and "Search everything" affordances; render with
+  `filtersActive=false` → assert "Clear filters" hidden.
+  Expected: idle and no-results are visually/behaviorally distinct per FR-6; affordances gated
+  on `filtersActive`.
+  Traces: AC-4, AC-5.
+
+- **TC-AND-186-14 — State restoration: rotate with active query+tab+filter.**
+  Type: instrumented (Compose). Target: EMU(test35). Preconditions: active query, non-All
+  tab, non-default filter.
+  Steps: trigger config change (rotation) and process-death restore.
+  Expected: query text, selected tab, and filter state restored from `SavedStateHandle`; no
+  re-fire of nav effects.
+  Traces: AC-2, AC-7.
+
+- **TC-AND-186-15 — Accessibility: tab selection, removable chips, badge, no-results live
+  region, touch targets.**
+  Type: Compose-UI (a11y). Target: EMU(test35) (TalkBack assertions via semantics).
+  Preconditions: `Content` with non-default filter and a `NoResults` render.
+  Steps: assert selected tab exposes selected-state semantics within a `selectableGroup`;
+  chips announce removable; filter badge announces "Filters active"; no-results region is an
+  Assertive live region and the stale banner Polite; tap targets (tabs, chip ×, recent remove)
+  ≥ 48dp; labels come from string resources.
+  Traces: AC-7 (a11y), AC-3, AC-5.
+
+- **TC-AND-186-16 — Real flaky dev host: cleartext, timeout/offline, and ABI/API-34 behavior
+  on hardware.**
+  Type: instrumented/e2e (manual-assisted). Target: **DEVICE** (must run on physical
+  SM-A156U; arm64-v8a, API 34, real cellular/Wi-Fi). Preconditions: dev flavor pointed at
+  `http://18.222.237.167:8000`.
+  Steps: (1) run a search over real network; verify cleartext is permitted only in the dev
+  flavor and results render. (2) toggle airplane mode mid-search → `Offline`/stale path per
+  §7. (3) repeat a previously-passing JVM/MWS flow to confirm no arm64-vs-x86 or
+  API-34-vs-35 regression.
+  Expected: search works against the real host; offline/stale handled gracefully; behavior
+  matches emulator results (no ABI/API-level divergence).
+  Traces: AC-1, AC-6.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (filters refine results) | TC-01, TC-02, TC-03, TC-04, TC-06, TC-10, TC-11, TC-16 |
+| AC-2 (tab row: All first, indicated, survives rotation) | TC-03, TC-11, TC-14 |
+| AC-3 (filter sheet, badge/chips, Clear) | TC-01, TC-12, TC-15 |
+| AC-4 (recent searches: list/run/remove/clear/dedup/persist/logout) | TC-07, TC-08, TC-13 |
+| AC-5 (idle vs no-results distinct; gated affordances) | TC-04, TC-05, TC-13 |
+| AC-6 (failure handling: offline/stale/error/401) | TC-04, TC-06, TC-09, TC-10, TC-16 |
+| AC-7 (no query text in telemetry/logs; restoration; a11y/security) | TC-08, TC-14, TC-15 |
+| AC-8 (all §11 unit + Compose UI tests green in CI) | TC-01…TC-15 (CI suite; TC-16 is on-device/manual) |
