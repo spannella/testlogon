@@ -3325,8 +3325,14 @@ class PromoValidateOut(BaseModel):
     code_id: Optional[str] = None
     discount_type: Optional[str] = None
     discount_cents: int = 0
+    discount_pct: Optional[int] = None
+    original_price_cents: int = 0
     final_price_cents: int = 0
     free_trial_days: int = 0
+    buy_x: Optional[int] = None
+    get_y: Optional[int] = None
+    free_item_description: Optional[str] = None
+    error_code: Optional[str] = None
     message: Optional[str] = None
 
 

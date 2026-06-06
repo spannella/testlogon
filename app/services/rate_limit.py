@@ -337,6 +337,51 @@ def can_send_alert_channel(user_sub: str, channel: str) -> bool:
     return True
 
 
+def rate_limit_share_link_download(link_id: str, ip: str) -> None:
+    """Enforce IP-based rate limits on the public share-link download endpoint.
+
+    Two independent limits (both via the existing DynamoDB-backed counter):
+    1. General per-IP download cap (default 10 req / 60s) — enumeration / DoS
+       protection across all links.
+    2. Per-(link, IP) attempt cap (default 5 / 60s) — password brute-force
+       protection for password-protected links.
+
+    Limits are configurable via env vars so dev/prod parity holds (SECOPS-007):
+    the same code path runs in both environments; no ``dev_mode`` bypass.
+    """
+    global_win = _env_int("SHARE_LINK_DOWNLOAD_WINDOW_SECONDS", 60)
+    global_max = _env_int("SHARE_LINK_DOWNLOAD_MAX_PER_WINDOW", 10)
+    pwd_win = _env_int("SHARE_LINK_PASSWORD_WINDOW_SECONDS", 60)
+    pwd_max = _env_int("SHARE_LINK_PASSWORD_MAX_PER_WINDOW", 5)
+
+    ip_key = _ip_user(ip)
+
+    # 1. General per-IP download limit.
+    if not _bucket_limit(ip_key, "rl#share_download", global_max, global_win):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "download_rate_limited",
+                "message": "Too many download requests; try again shortly",
+                "retry_after_seconds": global_win,
+            },
+            headers={"Retry-After": str(global_win)},
+        )
+
+    # 2. Per-(link, IP) attempt limit (hash link_id to keep the sort key short).
+    link_hash = sha256_str(link_id)[:16]
+    if not _bucket_limit(ip_key, f"rl#share_pwd#{link_hash}", pwd_max, pwd_win):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "password_attempt_rate_limited",
+                "message": "Too many attempts for this link; try again shortly",
+                "retry_after_seconds": pwd_win,
+            },
+            headers={"Retry-After": str(pwd_win)},
+        )
+
+
 def rate_limit_filemgr_mount_onboarding(user_sub: str, ip: str) -> None:
     sid = "rl#filemgr_mount_onboarding"
     max_n = int(getattr(S, "filemgr_mount_initiate_max_per_window", 5) or 5)

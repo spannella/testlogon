@@ -256,7 +256,13 @@ def create_share_link(
 
 
 def _get_link(link_id: str) -> Dict[str, Any]:
-    resp = _table().get_item(Key={"link_id": link_id, "sk": SK_META})
+    # GAP-0185: strongly consistent read closes the eventual-consistency window
+    # so a just-applied revocation/expiry is visible to the pre-flight checks in
+    # consume_share_link (the atomic ConditionExpression is the correctness gate,
+    # but the consistent read gives accurate fast-path error codes).
+    resp = _table().get_item(
+        Key={"link_id": link_id, "sk": SK_META}, ConsistentRead=True
+    )
     item = resp.get("Item")
     if not item:
         raise HTTPException(404, "link_not_found")

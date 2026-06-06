@@ -12,9 +12,10 @@ import logging
 from typing import Any, Dict
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
+from app.core.normalize import client_ip_from_request
 from app.models import (
     CreateShareLinkIn,
     ShareLinkDownloadIn,
@@ -23,6 +24,7 @@ from app.models import (
     ShareLinkPublicInfoOut,
 )
 from app.services import file_share_links as svc
+from app.services.rate_limit import rate_limit_share_link_download
 from app.services.sessions import require_ui_session
 
 logger = logging.getLogger(__name__)
@@ -94,13 +96,19 @@ def _download_response(result: Dict[str, Any]) -> Response:
 
 
 @public_router.post("/{link_id}/download")
-def download_share_link_endpoint(link_id: str, body: ShareLinkDownloadIn | None = None) -> Response:
+def download_share_link_endpoint(
+    link_id: str, req: Request, body: ShareLinkDownloadIn | None = None
+) -> Response:
+    rate_limit_share_link_download(link_id, client_ip_from_request(req))
     password = body.password if body else None
     result = svc.consume_share_link(link_id=link_id, password=password)
     return _download_response(result)
 
 
 @public_router.get("/{link_id}/download")
-def download_share_link_get_endpoint(link_id: str, password: str | None = None) -> Response:
+def download_share_link_get_endpoint(
+    link_id: str, req: Request, password: str | None = None
+) -> Response:
+    rate_limit_share_link_download(link_id, client_ip_from_request(req))
     result = svc.consume_share_link(link_id=link_id, password=password)
     return _download_response(result)
