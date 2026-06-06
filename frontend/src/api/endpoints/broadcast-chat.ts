@@ -2,6 +2,27 @@ import { api } from "@/api/client";
 
 // ─── Types ──────────────────────────────────────────────────────
 
+// Product link card payload (LCOM-002 / GAP-0289).
+// The HTTP `POST .../chat/product` response only carries the base fields
+// (item_id, category_id, name, description, price_cents, currency, image_url),
+// while the SSE `chat:product_link` event also carries the broadcast-pricing
+// snapshot. All pricing fields are therefore optional.
+export interface ChatProductLink {
+  item_id: string;
+  category_id?: string;
+  name: string;
+  description?: string | null;
+  price_cents: number;
+  currency: string;
+  image_url?: string | null;
+  // Broadcast-pricing snapshot (SSE path only)
+  broadcast_price_cents?: number | null;
+  broadcast_price_expires_at?: number | null;
+  effective_price_cents?: number | null;
+  is_broadcast_price?: boolean | null;
+  discount_pct?: number | null;
+}
+
 export interface ChatMessage {
   message_id: string;
   session_id: string;
@@ -10,6 +31,8 @@ export interface ChatMessage {
   text: string | null;
   kind?: string;
   lottery_id?: string | null;
+  // Product link card (LCOM-002 / GAP-0289)
+  product_link?: ChatProductLink | null;
   created_at: number;
   deleted: boolean;
   // Tip fields (BCAST-013)
@@ -111,6 +134,12 @@ export const unlockChatMessage = (
     amount_cents: number;
   }>(`/broadcast/sessions/${sessionId}/chat/${messageId}/unlock`, {
     payment_method_id: paymentMethodId,
+  });
+
+// Product link share (LCOM-002 / GAP-0289 + GAP-0290)
+export const sendChatProductLink = (sessionId: string, itemId: string) =>
+  api.post<ChatMessage>(`/broadcast/sessions/${sessionId}/chat/product`, {
+    item_id: itemId,
   });
 
 // --- Lottery endpoints (BCAST-014) -----------------------------------------
