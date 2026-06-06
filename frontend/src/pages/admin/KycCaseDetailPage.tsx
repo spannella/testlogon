@@ -12,6 +12,7 @@ import {
 import { PageHeader } from "@/components/shared/PageHeader";
 import { DocumentViewer } from "@/components/shared/DocumentViewer";
 import { ExtractionResultsPanel } from "@/components/shared/ExtractionResultsPanel";
+import { VerificationCallPanel } from "@/components/shared/VerificationCallPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
@@ -390,6 +391,9 @@ export default function KycCaseDetailPage() {
               </CardContent>
             </Card>
           )}
+
+          {/* Verification Call (KYC-003 / GAP-0250) */}
+          <VerificationCallPanel caseId={caseData.kyc_case_id} />
 
           {/* Timeline */}
           <CaseTimeline events={caseData.timeline} />

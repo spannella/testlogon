@@ -451,6 +451,18 @@ class KycResidencyStore:
             items.sort(key=lambda i: _coerce_int(i.get("created_at")), reverse=True)
             return items
 
+    def get_verified_docs_for_case(self, case_id: str) -> list[dict[str, Any]]:
+        """Return all residency documents with status=verified for the given case.
+
+        Queries the ByCase GSI (O(docs per case), typically 1-3 items) and
+        filters in Python for status=verified. This is intentionally NOT
+        implemented via the ByStatus GSI + FilterExpression, which would scan
+        the entire 'verified' partition (potentially tens of thousands of items)
+        to find the one or two documents for a specific case.
+        """
+        docs = self.list_documents_for_case(case_id)
+        return [d for d in docs if str(d.get("status") or "") == STATUS_VERIFIED]
+
     def list_by_status(self, status: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """List documents by status via the ByStatus GSI (PK=status, SK=created_at)."""
         st = str(status or "").strip()

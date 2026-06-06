@@ -246,15 +246,37 @@ def _readiness_for_case(case: dict) -> dict:
     files = _validate_file_requirements(case)
     signature = _signature_status_for_case(case)
 
+    # Enhanced/high-risk profiles require a verified proof-of-residency document
+    # before submission (AML/CDD enhanced due diligence). Standard/medium profiles
+    # are unaffected. Gated behind KYC_RESIDENCY_GATE_ENABLED for emergency rollback.
+    intake_profile = str(case.get("intake_profile") or "").strip().lower()
+    is_enhanced = intake_profile in {"enhanced", "high_risk"}
+    require_residency = is_enhanced and S.kyc_residency_gate_enabled
+    residency_verified = False
+    if require_residency:
+        from app.services.kyc_residency import STORE as RESIDENCY_STORE
+
+        verified_docs = RESIDENCY_STORE.get_verified_docs_for_case(
+            str(case.get("kyc_case_id") or "")
+        )
+        residency_verified = len(verified_docs) > 0
+
     checks = {
         "questionnaire_submitted": bool(questionnaire.get("submitted")),
         "required_files": bool(files.get("ready_for_submit_gate")),
         "signature_completed": bool(signature.get("ready_for_submit_gate")),
     }
+    if require_residency:
+        checks["residency_verified"] = residency_verified
     hint_map = {
         "questionnaire_submitted": "Submit the linked questionnaire to continue.",
         "required_files": "Attach all required identity files: selfie, id_front, id_back.",
         "signature_completed": "Complete the consent signature packet and wait for final PDF generation.",
+        "residency_verified": (
+            "Your account type requires a verified proof-of-residency document "
+            "(utility bill, bank statement, or similar). "
+            "Upload and complete residency verification before submitting."
+        ),
     }
 
     requirements: list[dict] = [
@@ -293,6 +315,18 @@ def _readiness_for_case(case: dict) -> dict:
             },
         },
     ]
+    # Append residency check as index 3 only when required, preserving the
+    # positional indices (0/1/2) that submit_kyc_case relies on for evidence_snapshot.
+    if require_residency:
+        requirements.append(
+            {
+                "key": "residency_verified",
+                "ready": checks["residency_verified"],
+                "missing": ([] if checks["residency_verified"] else ["residency_document_verified"]),
+                "hint": hint_map["residency_verified"],
+                "refs": {},
+            }
+        )
     missing_requirements = [item["key"] for item in requirements if not item["ready"]]
     missing_hints = [hint_map[key] for key in missing_requirements]
 

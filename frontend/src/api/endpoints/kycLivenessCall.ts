@@ -36,6 +36,13 @@ export const listKycLivenessCallsByStatus = (status: KycLivenessCallStatus, limi
 export const adminGetKycLivenessCall = (callId: string) =>
   api.get<KycLivenessCallOut>(`/ui/kyc/liveness-call/admin/${callId}`);
 
+// GAP-0251: admin per-case latest-call lookup. May not be deployed in every
+// environment yet; callers should fall back to listing by status on 404.
+export const adminGetKycLivenessCallForCase = (caseId: string) =>
+  api.get<KycLivenessCallStatusResponse>(
+    `/ui/kyc/liveness-call/admin/case/${caseId}`,
+  );
+
 export const conductKycLivenessCall = (callId: string) =>
   api.post<KycLivenessCallOut>(`/ui/kyc/liveness-call/admin/${callId}/conduct`);
 

@@ -212,6 +212,46 @@ class KycLivenessCallStore:
         items = self.list_calls_for_case(case_id)
         return items[0] if items else None
 
+    def get_call_for_case(self, case_id: str) -> dict[str, Any] | None:
+        """Return the most relevant liveness call for a case via the ByStatus GSI.
+
+        GAP-0251 (KYC-003): backs the admin ``GET /admin/case/{case_id}`` lookup so
+        reviewers no longer have to fan out a query per status partition and filter
+        client-side. Walks every status bucket of the ByStatus GSI
+        (``S.kyc_liveness_call_status_index_name``), keeps only rows for ``case_id``,
+        and returns the single most relevant call:
+
+        * an *active* (scheduled / in_progress) call wins over a terminal one, since
+          that is the call a reviewer needs to act on; among ties, the most recently
+          created row wins.
+        * if no active call exists, the most recently created terminal call is
+          returned (so panels still render the last outcome after pass/fail).
+
+        Returns ``None`` when no call exists for the case. Falls back to the
+        ``ByCase`` GSI / scan path (``list_calls_for_case``) only if the ByStatus
+        query path raises, preserving dev/prod parity (SECOPS-007).
+        """
+        cid = str(case_id or "").strip()
+        if not cid:
+            return None
+        try:
+            matches: list[dict[str, Any]] = []
+            for status in LISTABLE_STATUSES:
+                for item in self.list_by_status(status, limit=500):
+                    if str(item.get("case_id") or "") == cid:
+                        matches.append(item)
+        except Exception:  # pragma: no cover - degraded GSI fallback
+            matches = list(self.list_calls_for_case(cid))
+        if not matches:
+            return None
+
+        def _rank(item: dict[str, Any]) -> tuple[int, int]:
+            active = 1 if str(item.get("status") or "") in ACTIVE_STATUSES else 0
+            return (active, _coerce_int(item.get("created_at")))
+
+        matches.sort(key=_rank, reverse=True)
+        return matches[0]
+
     def list_calls_for_case(self, case_id: str) -> list[dict[str, Any]]:
         try:
             resp = self._table.query(

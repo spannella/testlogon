@@ -1241,6 +1241,9 @@ class Settings:
     # KYC tiered verification levels (KYC-009)
     kyc_tier_gating_enabled: bool = os.environ.get("KYC_TIER_GATING_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
+    # KYC enhanced/high-risk residency readiness gate (KYC-004 / GAP-0252)
+    kyc_residency_gate_enabled: bool = os.environ.get("KYC_RESIDENCY_GATE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
     # KYC Ongoing Monitoring & Periodic Review (KYC-016)
     kyc_review_schedule_table_name: str = os.environ.get("KYC_REVIEW_SCHEDULE_TABLE_NAME", "kyc_review_schedule")
     kyc_review_grace_period_days: int = int(os.environ.get("KYC_REVIEW_GRACE_PERIOD_DAYS", "30"))

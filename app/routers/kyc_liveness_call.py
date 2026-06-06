@@ -12,6 +12,7 @@ Owner endpoints (case owner, cookie + CSRF auth via ``require_ui_session``):
 Verifier/reviewer endpoints (``require_admin_or_root`` -- KYC_VERIFIER scope
 does NOT exist; admins/root act as verifiers):
     GET    /ui/kyc/liveness-call/admin/by-status         -> list by status (ByStatus GSI)
+    GET    /ui/kyc/liveness-call/admin/case/{case_id}     -> most relevant call for a case
     GET    /ui/kyc/liveness-call/admin/{call_id}          -> get one (verifier)
     POST   /ui/kyc/liveness-call/admin/{call_id}/conduct  -> mark in_progress
     POST   /ui/kyc/liveness-call/admin/{call_id}/result   -> record pass/fail outcome
@@ -152,6 +153,25 @@ async def admin_list_by_status(
         )
     items = STORE.list_by_status(status, limit=limit)
     return KycLivenessCallListResponse(calls=[_out(i) for i in items])
+
+
+@kyc_liveness_call_router.get(
+    "/admin/case/{case_id}", response_model=KycLivenessCallOut
+)
+async def admin_get_liveness_call_for_case(
+    case_id: str,
+    _user: AuthenticatedUser = Depends(require_admin_or_root),
+) -> KycLivenessCallOut:
+    """GAP-0251: return the most relevant liveness call for a KYC case (admin/root).
+
+    Direct case-level lookup so reviewers don't have to fan out the ByStatus GSI
+    across every status bucket and filter by ``case_id`` themselves. Declared
+    before ``/admin/{call_id}`` so ``case`` is never matched as a ``call_id``.
+    """
+    item = STORE.get_call_for_case(case_id)
+    if not item:
+        raise _not_found()
+    return _out(item)
 
 
 @kyc_liveness_call_router.get("/admin/{call_id}", response_model=KycLivenessCallOut)
