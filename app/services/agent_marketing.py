@@ -20,13 +20,14 @@ disabled the generation path is deterministic so tests are reproducible.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
 from app.core.aws import ddb
@@ -539,6 +540,97 @@ def publish_content(*, user_id: str, content_id: str) -> Optional[Dict[str, Any]
         content_id=content_id,
         status="published",
         extra={"published_at": now_ts()},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scheduled-publish background loop (GAP-0104)
+# ---------------------------------------------------------------------------
+
+# Poll interval for the scheduled-publish background loop, in seconds.
+_MARKETING_PUBLISH_INTERVAL_SECONDS = 30
+
+
+def publish_due_scheduled_content(*, now: Optional[int] = None) -> int:
+    """Scan for scheduled content whose publish time has passed and publish it.
+
+    Items written by :func:`schedule_content` carry ``status="scheduled"`` and a
+    ``scheduled_publish_at`` Unix timestamp. The ``GSI3PK`` partition key embeds
+    the ``user_id`` (``USER#{user_id}#SCHEDULED``), so there is no cross-user
+    range query available; a table scan with a ``FilterExpression`` is used. The
+    ``marketing_content`` table is expected to be small. Each due item is
+    promoted via :func:`publish_content`, which is the same status transition the
+    HTTP publish endpoint uses.
+
+    Returns the number of items promoted to ``status="published"``.
+    """
+    ensure_tables()
+    now_value = int(now if now is not None else now_ts())
+    promoted = 0
+    scan_kwargs: Dict[str, Any] = {
+        "FilterExpression": Attr("status").eq("scheduled")
+        & Attr("scheduled_publish_at").lte(now_value),
+    }
+    while True:
+        resp = T.marketing_content.scan(**scan_kwargs)
+        for item in resp.get("Items", []):
+            # ``user_id`` is stored explicitly on every content item; fall back
+            # to stripping the pk prefix defensively.
+            user_id = item.get("user_id") or str(item.get("pk", "")).replace("USER#", "")
+            content_id = item.get("content_id", "")
+            if not user_id or not content_id:
+                continue
+            try:
+                result = publish_content(user_id=user_id, content_id=content_id)
+                if result:
+                    promoted += 1
+                    logger.info(
+                        "Auto-published scheduled content content_id=%s user=%s",
+                        content_id,
+                        user_id,
+                    )
+            except PermissionError:
+                # Status changed between scan and update (e.g. already published);
+                # skip rather than fail the whole sweep.
+                pass
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error(
+                    "Failed to auto-publish content_id=%s: %s", content_id, exc
+                )
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        scan_kwargs["ExclusiveStartKey"] = lek
+    return promoted
+
+
+async def run_marketing_publish_loop() -> None:
+    """Background coroutine: promote due scheduled content every 30 seconds.
+
+    Active when the Marketing Agent execute gate is on, or in dev mode (so the
+    feature is exercisable end-to-end without enabling execute-commands). The
+    promotion itself only performs DynamoDB status transitions, so it is safe to
+    run in dev.
+    """
+    while True:
+        try:
+            if S.marketing_agent_execute_commands or S.dev_mode:
+                count = publish_due_scheduled_content()
+                if count:
+                    logger.info(
+                        "Scheduled-publish loop promoted %d marketing item(s)", count
+                    )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Scheduled-publish loop error: %s", exc)
+        await asyncio.sleep(_MARKETING_PUBLISH_INTERVAL_SECONDS)
+
+
+def start_marketing_publish_task() -> None:
+    """Register the scheduled-publish background loop as an asyncio task."""
+    asyncio.create_task(run_marketing_publish_loop())
+    logger.info(
+        "Marketing scheduled-publish background task started (interval=%ds)",
+        _MARKETING_PUBLISH_INTERVAL_SECONDS,
     )
 
 

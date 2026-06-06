@@ -1,6 +1,6 @@
 # GAP-0106: top_content view attribution bug
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: ANALYTICS-001 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: ANALYTICS-001 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/ANALYTICS-001.md`); see also `docs/tickets/writeups/ANALYTICS-001.md`
 
 ## Location

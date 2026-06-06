@@ -790,10 +790,12 @@ def create_app() -> FastAPI:
     app.include_router(agent_stylist_router)
     from app.routers.agent_marketing import agent_marketing_router
     app.include_router(agent_marketing_router)
+    from app.services.agent_marketing import start_marketing_publish_task
     from app.routers.agent_compliance import agent_compliance_router
     app.include_router(agent_compliance_router)
     from app.routers.agent_accountant import agent_accountant_router
     app.include_router(agent_accountant_router)
+    from app.services.agent_accountant import start_cost_collection_task
     from app.routers.invoices import invoices_router, invoices_admin_router
     app.include_router(invoices_router)
     app.include_router(invoices_admin_router)
@@ -814,6 +816,8 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_transcode_worker_task)
     app.add_event_handler("startup", start_webhook_dispatcher_task)
     app.add_event_handler("startup", start_cart_abandonment_task)
+    app.add_event_handler("startup", start_marketing_publish_task)
+    app.add_event_handler("startup", start_cost_collection_task)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:

@@ -1,6 +1,6 @@
 # GAP-0104: no scheduled-publish background loop
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-017 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-017 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AGENT-017.md`); see also `docs/tickets/writeups/AGENT-017.md`
 
 ## Location
