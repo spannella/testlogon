@@ -146,6 +146,8 @@ const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePa
 const BulkPayoutConsole = lazy(() => import("@/pages/admin/BulkPayoutConsole"));
 const DisputesPage = lazy(() => import("@/pages/billing/DisputesPage"));
 const AdminDisputeQueuePage = lazy(() => import("@/pages/admin/AdminDisputeQueuePage"));
+const AppealsPage = lazy(() => import("@/pages/appeals/AppealsPage"));
+const AppealReviewQueuePage = lazy(() => import("@/pages/admin/AppealReviewQueuePage"));
 const FraudReviewQueuePage = lazy(() => import("@/pages/admin/fraud/FraudReviewQueuePage"));
 const SavedPage = lazy(() => import("@/pages/saved/SavedPage"));
 const AffiliateDashboard = lazy(() => import("@/pages/affiliates/AffiliateDashboard"));
@@ -353,6 +355,7 @@ export default function App() {
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="activity" element={<ActivityFeedPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
+          <Route path="appeals" element={<AppealsPage />} />
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />
           <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
@@ -432,6 +435,7 @@ export default function App() {
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
           <Route path="admin/bulk-payouts" element={<BulkPayoutConsole />} />
           <Route path="admin/disputes" element={<AdminDisputeQueuePage />} />
+          <Route path="admin/appeals" element={<AppealReviewQueuePage />} />
           <Route path="admin/fraud" element={<FraudReviewQueuePage />} />
           <Route path="admin/kyc-workload" element={<KycWorkloadPage />} />
           <Route path="admin/kyc" element={<KycQueuePage />} />

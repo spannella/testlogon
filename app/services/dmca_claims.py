@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from boto3.dynamodb.conditions import Key
+from fastapi import HTTPException
 
 from app.core.cursor import decode_cursor, encode_cursor
 from app.core.settings import S
@@ -76,6 +77,51 @@ def _claim_out(item: Dict[str, Any]) -> Dict[str, Any]:
 # Core operations
 # ---------------------------------------------------------------------------
 
+def _check_claimant_rate_limit(claimant_email: str) -> None:
+    """Enforce a per-claimant daily cap on DMCA filings.
+
+    Queries the ``ByClaimantCreatedAt`` GSI (partition=claimant_email,
+    sort=created_at) for claims filed in the last 24h. If the count is at or
+    above ``S.dmca_max_claims_per_claimant_per_day``, raises HTTP 429.
+    """
+    if not claimant_email:
+        return
+    cap = int(S.dmca_max_claims_per_claimant_per_day)
+    if cap <= 0:
+        return
+
+    since = now_ts() - 86400
+    count = 0
+    exclusive_start_key = None
+
+    while True:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByClaimantCreatedAt",
+            "KeyConditionExpression": (
+                Key("claimant_email").eq(claimant_email) & Key("created_at").gte(since)
+            ),
+            "Select": "COUNT",
+        }
+        if exclusive_start_key:
+            kwargs["ExclusiveStartKey"] = exclusive_start_key
+
+        resp = T.dmca_claims.query(**kwargs)
+        count += int(resp.get("Count", 0))
+
+        if count >= cap:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"DMCA claim rate limit exceeded: a maximum of {cap} claims "
+                    "per claimant per 24 hours is allowed."
+                ),
+            )
+
+        exclusive_start_key = resp.get("LastEvaluatedKey")
+        if not exclusive_start_key:
+            break
+
+
 def file_dmca_claim(inp: Dict[str, Any], claimant_user_id: str) -> Dict[str, Any]:
     """File a new DMCA takedown claim.
 
@@ -88,6 +134,9 @@ def file_dmca_claim(inp: Dict[str, Any], claimant_user_id: str) -> Dict[str, Any
     6. Notify the content creator.
     7. Write audit log entry.
     """
+    # Enforce per-claimant daily filing cap before any writes.
+    _check_claimant_rate_limit(inp["claimant_email"])
+
     ts = now_ts()
     claim_id = f"dmca_{uuid4().hex}"
 

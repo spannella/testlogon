@@ -1576,6 +1576,9 @@ class Settings:
     dmca_timer_interval_seconds: int = int(
         os.environ.get("DMCA_TIMER_INTERVAL_SECONDS", "3600")
     )
+    dmca_max_claims_per_claimant_per_day: int = int(
+        os.environ.get("DMCA_MAX_CLAIMS_PER_CLAIMANT_PER_DAY", "20")
+    )
 
     # Appeals (MOD-003)
     appeals_table_name: str = os.environ.get("DDB_APPEALS", "Appeals")
