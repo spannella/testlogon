@@ -92,8 +92,8 @@ def my_clips_route(ctx: dict = Depends(_ctx)):
 
 @router.delete("/broadcast/clips/{clip_id}")
 def delete_clip_route(clip_id: str, ctx: dict = Depends(_ctx)):
-    """Delete a clip (creator or broadcaster)."""
-    return delete_clip(clip_id, actor=ctx["user_sub"])
+    """Delete a clip (creator, broadcaster, or platform admin/root)."""
+    return delete_clip(clip_id, actor=ctx["user_sub"], role=ctx.get("role"))
 
 
 @router.post("/broadcast/clips/{clip_id}/view")

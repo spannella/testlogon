@@ -267,19 +267,30 @@ def list_gallery(
     return items, next_cursor
 
 
-def delete_clip(clip_id: str, actor: str) -> Dict[str, Any]:
+def delete_clip(clip_id: str, actor: str, role: Any = None) -> Dict[str, Any]:
     """Delete a clip (soft delete).
 
-    Authorized for: clip creator, broadcaster, or admin.
+    Authorized for: clip creator, broadcaster, or platform admin/root.
+
+    GAP-0169: previously the authorization check only compared ``actor`` against
+    the stored creator/broadcaster IDs, so platform admins/root operators could
+    not moderate clips. ``role`` is normalized (accepts a ``Role`` enum or its
+    string value) and ADMIN/ROOT callers are permitted to delete any clip. The
+    parameter defaults to ``None`` (treated as USER) so existing callers that do
+    not pass a role remain restricted to creator/broadcaster.
     """
+    from app.auth.roles import Role, normalize_role
+
     resp = T.broadcast_clips.get_item(Key={"clip_id": clip_id})
     item = resp.get("Item")
     if not item:
         raise HTTPException(404, "Clip not found")
 
-    # Authorization
+    # Authorization: creator, broadcaster, or platform admin/root
+    is_admin = normalize_role(role) in (Role.ADMIN, Role.ROOT)
     if (
-        actor != item.get("creator_user_id")
+        not is_admin
+        and actor != item.get("creator_user_id")
         and actor != item.get("broadcaster_user_id")
     ):
         raise HTTPException(403, "Not authorized to delete this clip")
@@ -290,6 +301,13 @@ def delete_clip(clip_id: str, actor: str) -> Dict[str, Any]:
         ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={":deleted": "deleted"},
     )
+
+    if is_admin:
+        logger.info(
+            "clip: admin-moderated delete clip_id=%s actor=%s role=%s reason=moderation",
+            clip_id, actor, normalize_role(role).value,
+        )
+
     return {"ok": True, "clip_id": clip_id, "status": "deleted"}
 
 
