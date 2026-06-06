@@ -39,6 +39,8 @@ class KycCaseSignatureRef(BaseModel):
     packet_id: str | None = None
     status: str | None = None
     final_pdf_ref: str | None = None
+    # GAP-0264: list of template packets [{template_type, packet_id, version}].
+    template_packets: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class KycCaseReviewRef(BaseModel):
@@ -171,10 +173,37 @@ class KycSignatureStatusOut(BaseModel):
     legal_notice_version: str | None = None
     legal_notice_accepted: bool = False
     ready_for_submit_gate: bool = False
+    # GAP-0264: template-based KYC consent workflow stores one packet per
+    # required template. Backward-compatible: empty for legacy single-packet cases.
+    template_packets: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class KycSignatureStatusEnvelope(BaseModel):
     signature: KycSignatureStatusOut
+
+
+# GAP-0262: KYC signature-template / witness router contracts.
+class KycAddWitnessRequest(BaseModel):
+    packet_id: str = Field(..., min_length=1)
+    witness_sub: str | None = Field(
+        default=None,
+        description="Admin sub to add as witness. If None, uses calling user.",
+    )
+
+
+class KycTemplateStatusItem(BaseModel):
+    template_type: str
+    display_name: str
+    version: str
+    packet_id: str | None = None
+    packet_status: str | None = None
+    signed_by_applicant: bool = False
+    needs_version_migration: bool = False
+
+
+class KycTemplateStatusEnvelope(BaseModel):
+    templates: list[KycTemplateStatusItem]
+    version_migration_required: bool = False
 
 
 class KycAdminQueueItem(BaseModel):

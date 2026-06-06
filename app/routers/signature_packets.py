@@ -747,6 +747,8 @@ def fill_signature_packet_field(
         _raise_packet_error(status_code=403, code="signature_packet_field_not_assigned_to_signer", packet_id=packet_id, user_sub=user_sub, category="authorization", extra={"field_id": field_id})
 
     normalized = _normalize_field_value(str(field.get("field_type") or ""), inp)
+    stamp_payload = normalized.get("render_payload") or {}
+    is_notary = str(field.get("field_type") or "") == SignatureFieldType.NOTARY_STAMP.value
     try:
         updated = fill_packet_field(
             packet_id=packet_id,
@@ -755,6 +757,9 @@ def fill_signature_packet_field(
             filled_by_signer_id=user_sub,
             capture_mode=normalized.get("capture_mode"),
             render_payload=normalized.get("render_payload"),
+            stamp_image_ref=str(stamp_payload.get("stamp_image_ref") or "") if is_notary else None,
+            stamp_number=str(stamp_payload.get("stamp_number") or "") if is_notary else None,
+            stamp_expiry=str(stamp_payload.get("stamp_expiry") or "") if is_notary else None,
         )
     except ValueError as exc:
         if str(exc) == "packet_immutable":
