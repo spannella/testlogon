@@ -2508,6 +2508,14 @@ class Settings:
     kyc_document_templates_max_pdf_bytes: int = int(
         os.environ.get("KYC_DOCUMENT_TEMPLATES_MAX_PDF_BYTES", str(10 * 1024 * 1024))
     )
+    # GAP-0279 (KYC-017 §3.6): gate KYC case submission on all tier-required
+    # document templates being signed. Defaults ON for dev/prod parity
+    # (SECOPS-007); when no active templates exist the gate is a no-op, so it
+    # does not block dev/e2e. Set KYC_TEMPLATE_READINESS_GATE=false for an
+    # emergency rollback (e.g. retroactively unblocking in-progress cases).
+    kyc_template_readiness_gate_enabled: bool = os.environ.get(
+        "KYC_TEMPLATE_READINESS_GATE", "true"
+    ).lower() in ("1", "true", "yes", "on")
 
     # INFRA-001: Host Inventory Management
     ddb_host_inventory_table: str = os.environ.get(

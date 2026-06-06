@@ -297,10 +297,90 @@ def _signature_status_for_case(case: dict) -> dict:
     }
 
 
+def _unsigned_required_template_slugs(case: dict) -> list[str]:
+    """Return tier-required document-template slugs (KYC-017) not yet signed.
+
+    GAP-0279: a case is only ready to submit once every document template that
+    is required for its target tier has a *completed* signature packet. The
+    required templates come from ``KycDocumentTemplateService`` (keyed by slug);
+    completion is determined from the case owner's signature packets, which are
+    created with ``origin_channel="kyc_document_template"`` and a deterministic
+    ``origin_ref`` of ``f"{case_id}:{slug}"`` (see
+    ``app/routers/kyc_document_templates.py``).
+
+    On any service/lookup error the gate fails open (returns ``[]``) so a
+    DynamoDB outage or template-table misconfiguration cannot lock applicants
+    out of submission — availability over strictness for the error path.
+    """
+    from app.services.kyc_document_templates import (
+        SERVICE as DOC_TEMPLATE_SERVICE,
+        template_tier_for_int,
+    )
+
+    case_id = str(case.get("kyc_case_id") or "")
+    owner_sub = str(case.get("user_sub") or "")
+
+    # Resolve target tier, mirroring app/routers/kyc_document_templates.py.
+    target_tier = case.get("target_tier")
+    if not (isinstance(target_tier, str) and target_tier.startswith("tier_")):
+        from app.services.kyc_tiers import get_user_kyc_tier
+
+        target_tier = template_tier_for_int(get_user_kyc_tier(owner_sub))
+
+    required = DOC_TEMPLATE_SERVICE.get_required_templates_for_tier(target_tier)
+    if not required:
+        return []
+
+    # Build the set of slugs that have a completed packet for this case.
+    signed_slugs: set[str] = set()
+    try:
+        from app.services.signature_packet_store import list_packets_by_sender
+
+        for packet in list_packets_by_sender(owner_sub, limit=200):
+            if str(packet.get("origin_channel") or "") != "kyc_document_template":
+                continue
+            origin_ref = str(packet.get("origin_ref") or "")
+            if not origin_ref.startswith(f"{case_id}:"):
+                continue
+            if str(packet.get("status") or "") != "completed":
+                continue
+            signed_slugs.add(origin_ref.split(":", 1)[1])
+    except Exception:
+        # If we cannot read packets we cannot prove anything is signed; treat
+        # all required templates as unsigned (gate stays closed) — handled by
+        # the caller's own try/except which fails the whole check open instead.
+        raise
+
+    return [
+        str(t.get("slug"))
+        for t in required
+        if str(t.get("slug")) not in signed_slugs
+    ]
+
+
 def _readiness_for_case(case: dict) -> dict:
     questionnaire = _questionnaire_status_for_case(case, include_submit_gate=False)
     files = _validate_file_requirements(case)
     signature = _signature_status_for_case(case)
+
+    # GAP-0279 (KYC-017 §3.6): all tier-required document templates must be
+    # signed before submission. Gated behind KYC_TEMPLATE_READINESS_GATE for
+    # emergency rollback; a no-op when no active templates exist (dev/e2e). The
+    # whole check fails open on service error so an outage cannot block submit.
+    unsigned_template_slugs: list[str] = []
+    require_templates = (
+        S.kyc_template_readiness_gate_enabled and S.kyc_document_templates_enabled
+    )
+    if require_templates:
+        try:
+            unsigned_template_slugs = _unsigned_required_template_slugs(case)
+        except Exception:
+            logger.exception(
+                "kyc.readiness.template_check_error kyc_case_id=%s",
+                case.get("kyc_case_id"),
+            )
+            unsigned_template_slugs = []
+    templates_signed = len(unsigned_template_slugs) == 0
 
     # Enhanced/high-risk profiles require a verified proof-of-residency document
     # before submission (AML/CDD enhanced due diligence). Standard/medium profiles
@@ -324,6 +404,8 @@ def _readiness_for_case(case: dict) -> dict:
     }
     if require_residency:
         checks["residency_verified"] = residency_verified
+    if require_templates:
+        checks["templates_signed"] = templates_signed
     hint_map = {
         "questionnaire_submitted": "Submit the linked questionnaire to continue.",
         "required_files": "Attach all required identity files: selfie, id_front, id_back.",
@@ -332,6 +414,10 @@ def _readiness_for_case(case: dict) -> dict:
             "Your account type requires a verified proof-of-residency document "
             "(utility bill, bank statement, or similar). "
             "Upload and complete residency verification before submitting."
+        ),
+        "templates_signed": (
+            "Sign all required document templates: "
+            + (", ".join(unsigned_template_slugs) or "see admin for details")
         ),
     }
 
@@ -383,8 +469,27 @@ def _readiness_for_case(case: dict) -> dict:
                 "refs": {},
             }
         )
+    # GAP-0279: template-signing check appended after the base (0..2) and the
+    # optional residency requirement, so submit_kyc_case's positional reads of
+    # requirements[0..2] for evidence_snapshot remain stable.
+    if require_templates:
+        requirements.append(
+            {
+                "key": "templates_signed",
+                "ready": templates_signed,
+                "missing": [f"unsigned_templates:{s}" for s in unsigned_template_slugs],
+                "hint": hint_map["templates_signed"],
+                "refs": {"unsigned_slugs": ",".join(unsigned_template_slugs)},
+            }
+        )
     missing_requirements = [item["key"] for item in requirements if not item["ready"]]
-    missing_hints = [hint_map[key] for key in missing_requirements]
+    # GAP-0279 (KYC-017 §3.6): surface each unsigned template slug as an explicit
+    # "unsigned_templates:<slug>" entry in missing_requirements (in addition to
+    # the "templates_signed" key) so callers can identify the specific slugs.
+    missing_requirements.extend(
+        f"unsigned_templates:{s}" for s in unsigned_template_slugs
+    )
+    missing_hints = [hint_map[key] for key in missing_requirements if key in hint_map]
 
     return {
         "kyc_case_id": case.get("kyc_case_id"),

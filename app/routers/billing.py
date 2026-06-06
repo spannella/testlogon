@@ -174,6 +174,48 @@ def _fraud_gate(
         )
 
 
+def _maybe_fire_large_transaction_trigger(
+    user_id: str,
+    amount_cents: int,
+    *,
+    purpose: str = "",
+    currency: str = "",
+    payment_intent_id: str = "",
+) -> None:
+    """Fire a KYC ``large_transaction`` trigger when a charge exceeds the threshold.
+
+    GAP-0277 / KYC-016: AML continuous monitoring requires recording a review
+    trigger when a settled payment meets or exceeds
+    ``S.kyc_large_transaction_threshold_cents``. Called on the success path of
+    the charge endpoints (after the payment is confirmed) so failed/declined
+    charges never produce a spurious trigger. Best-effort and fully wrapped in
+    try/except so a monitoring failure can never break the billing request. Same
+    in-process code path in dev and prod (SECOPS-007 parity).
+    """
+    try:
+        threshold = int(getattr(S, "kyc_large_transaction_threshold_cents", 0) or 0)
+        if threshold <= 0 or int(amount_cents) < threshold:
+            return
+        from app.services.kyc_monitoring import create_trigger_event
+
+        create_trigger_event(
+            user_sub=user_id,
+            trigger_type="large_transaction",
+            details={
+                "amount_cents": int(amount_cents),
+                "threshold_cents": threshold,
+                "purpose": purpose,
+                "currency": currency,
+                "payment_intent_id": payment_intent_id,
+            },
+            actor_sub="system",
+        )
+    except Exception:
+        logger.exception(
+            "kyc.monitoring.large_transaction_trigger_hook_failed user_id=%s", user_id
+        )
+
+
 _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE: "OrderedDict[str, float]" = OrderedDict()
 _PAYMENT_INCIDENT_WEBHOOK_REPLAY_LOCK = threading.Lock()
 
@@ -1123,6 +1165,13 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
         purchase_txn_id=purchase_txn_id,
         **admin_tags,
     )
+    _maybe_fire_large_transaction_trigger(  # GAP-0277
+        user_id,
+        amount,
+        purpose="pay_balance",
+        currency=billing.get("currency", "usd"),
+        payment_intent_id=pi.get("id", ""),
+    )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
@@ -1223,6 +1272,13 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
         ledger_sk=led_sk,
         purchase_txn_id=purchase_txn_id,
         **admin_tags,
+    )
+    _maybe_fire_large_transaction_trigger(  # GAP-0277
+        user_id,
+        int(body.amount_cents),
+        purpose="charge_once",
+        currency=billing.get("currency", "usd"),
+        payment_intent_id=pi.get("id", ""),
     )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
@@ -2510,6 +2566,13 @@ def wallet_deposit(body: WalletDepositReq, req: Request = None, ctx=Depends(requ
         status=pi.get("status"),
         ledger_sk=led_sk,
         **admin_tags,
+    )
+    _maybe_fire_large_transaction_trigger(  # GAP-0277
+        user_id,
+        int(body.amount_cents),
+        purpose="wallet_deposit",
+        currency=currency,
+        payment_intent_id=pi.get("id", ""),
     )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"], "wallet_balance_cents": wallet_balance_cents}
 

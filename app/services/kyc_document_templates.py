@@ -328,20 +328,34 @@ class KycDocumentTemplateService:
 
         Returns one row per template (the metadata placeholder), optionally
         filtered by status.
+
+        Queries the ``status-updated-index`` GSI (PK=status, SK=updated_at N)
+        instead of scanning the full table. When ``status`` is supplied only
+        that GSI partition is read; otherwise every known status partition is
+        queried (one cheap query each) and the results merged. Both paths
+        paginate via ``LastEvaluatedKey`` so the result set is complete and
+        bounded by the data — never by a scan heuristic.
         """
+        statuses_to_query = [status] if status else list(TEMPLATE_STATUSES)
         items: list[dict[str, Any]] = []
-        scan_kwargs: dict[str, Any] = {
-            "FilterExpression": Key("sk").eq(_sk(0)),
-        }
-        resp = self._table.scan(**scan_kwargs)
-        items.extend(resp.get("Items", []))
-        while "LastEvaluatedKey" in resp and len(items) < limit * 4:
-            resp = self._table.scan(
-                ExclusiveStartKey=resp["LastEvaluatedKey"], **scan_kwargs
-            )
-            items.extend(resp.get("Items", []))
-        if status:
-            items = [i for i in items if str(i.get("status")) == status]
+        for s in statuses_to_query:
+            start_key: dict[str, Any] | None = None
+            while True:
+                kwargs: dict[str, Any] = {
+                    "IndexName": S.kyc_document_templates_status_index,
+                    "KeyConditionExpression": Key("status").eq(s),
+                    "ScanIndexForward": False,  # newest updated_at first
+                }
+                if start_key:
+                    kwargs["ExclusiveStartKey"] = start_key
+                resp = self._table.query(**kwargs)
+                for item in resp.get("Items", []):
+                    # Only metadata placeholder rows (VERSION#0 / version == 0).
+                    if _coerce_int(item.get("version")) == 0:
+                        items.append(item)
+                start_key = resp.get("LastEvaluatedKey")
+                if not start_key:
+                    break
         items.sort(key=lambda i: _coerce_int(i.get("updated_at")), reverse=True)
         return items[:limit]
 
