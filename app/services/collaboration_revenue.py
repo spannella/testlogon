@@ -112,12 +112,62 @@ def get_content_assignment(collaboration_id: str, content_id: str) -> Optional[D
     return resp.get("Item")
 
 
+# Map collaboration content types (CollabContentAssignIn pattern: vod|post|
+# broadcast) onto the DMCA owner-resolution types (feed_post, feed_media,
+# video). ``broadcast`` has no first-class owner record source today, so it
+# falls through to graceful degradation. Native DMCA types are also accepted so
+# direct service callers / tests can pass them through unchanged.
+_CONTENT_TYPE_TO_DMCA = {
+    "post": "feed_post",
+    "vod": "video",
+    "feed_post": "feed_post",
+    "feed_media": "feed_media",
+    "video": "video",
+}
+
+
+def _resolve_content_owner(content_type: str, content_id: str) -> str:
+    """Return the owner user_id for a piece of content (GAP-0200 / SEC-004).
+
+    Maps the collaboration content types onto the DMCA owner-resolution helper
+    (feed_post, feed_media, video) and extends it to ``catalog_item``.
+
+    Returns "" if the content type is unknown or the lookup fails — callers
+    treat an empty result as "ownership unverifiable" (graceful degradation).
+    """
+    if not content_id:
+        return ""
+
+    from app.services.dmca_content_operations import resolve_content_owner as _base
+
+    dmca_type = _CONTENT_TYPE_TO_DMCA.get(content_type)
+    if dmca_type:
+        owner = _base(dmca_type, content_id)
+        if owner:
+            return owner
+
+    if content_type == "catalog_item":
+        try:
+            item = T.catalog.get_item(
+                Key={"PK": f"ITEM#{content_id}", "SK": f"ITEM#{content_id}"}
+            ).get("Item")
+            if item:
+                return str(item.get("creator_id") or item.get("user_id") or "")
+        except Exception:
+            logger.warning(
+                "catalog_item owner lookup failed for %s", content_id, exc_info=True
+            )
+
+    return ""
+
+
 def assign_content(
     collaboration_id: str,
     content_id: str,
     content_type: str,
     assigned_by: str,
     title: str = "",
+    skip_ownership_check: bool = False,
 ) -> Dict[str, Any]:
     """Assign a content item to a collaboration for automatic revenue splitting.
 
@@ -125,6 +175,9 @@ def assign_content(
       * Collaboration exists and is accepted (else NotActiveError).
       * Assigner is a participant (else PermissionError).
       * content_type is in the collaboration's allowed content_types.
+      * Assigner OWNS the content (else PermissionError("content_not_owned"));
+        GAP-0200 / SEC-004. Bypassed when ``skip_ownership_check`` is True
+        (admin-only escape hatch) or when ownership is unverifiable.
       * max_content_items limit not exceeded.
       * Content is not already assigned to another active collaboration
         (else AlreadyAssignedError).
@@ -144,6 +197,19 @@ def assign_content(
     existing = get_content_assignment(collaboration_id, content_id)
     if existing:
         return existing
+
+    # Ownership: the assigner must own the content being assigned (GAP-0200).
+    # Graceful degradation: when ownership is unverifiable (unknown content
+    # type or lookup failure -> owner == ""), allow but log for monitoring.
+    if not skip_ownership_check:
+        owner = _resolve_content_owner(content_type, content_id)
+        if owner == "":
+            logger.warning(
+                "assign_content: could not verify ownership for %s/%s by %s — skipping",
+                content_type, content_id, assigned_by,
+            )
+        elif owner != assigned_by:
+            raise PermissionError("content_not_owned")
 
     # Exclusivity: not assigned to any OTHER active collaboration.
     other = find_collaboration_for_content(content_id)
@@ -583,3 +649,30 @@ def list_disputes(
 
     items.sort(key=lambda x: _to_int(x.get("created_at", 0)), reverse=True)
     return items[: int(limit)]
+
+
+def get_dispute_global(dispute_id: str) -> Optional[Dict[str, Any]]:
+    """Look up a dispute by ``dispute_id`` across all collaborations (GAP-0199).
+
+    Iterates the ByDisputeStatus GSI partitions (one query per status) and
+    returns the first record whose ``dispute_id`` matches. Returns the full
+    dispute item (including its ``collaboration_id``) so admin arbitration can
+    resolve a dispute without knowing the collaboration ID. For admin use only.
+    """
+    for status_val in ("open", "counter", "admin_review", "resolved"):
+        try:
+            resp = T.collaboration_agreements.query(
+                IndexName="ByDisputeStatus",
+                KeyConditionExpression=Key("gsi_dispute_pk").eq(
+                    f"DISPUTE_STATUS#{status_val}"
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "get_dispute_global query failed for status %s", status_val, exc_info=True
+            )
+            continue
+        for item in resp.get("Items", []):
+            if item.get("dispute_id") == dispute_id:
+                return item
+    return None

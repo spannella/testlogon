@@ -152,6 +152,8 @@ from app.routers.tip_leaderboard import router as tip_leaderboard_router
 from app.routers.tip_leaderboard import internal_router as tip_leaderboard_internal_router
 from app.routers.creator_analytics import router as creator_analytics_router
 from app.routers.creator_analytics import public_router as creator_analytics_public_router
+from app.routers.creator_analytics import internal_router as creator_analytics_internal_router
+from app.services.engagement_rate import start_engagement_benchmark_task
 from app.routers.per_content_revenue import per_content_revenue_router
 from app.routers.creator_dashboard import router as creator_dashboard_router
 from app.routers.creator_payouts import router as creator_payouts_router
@@ -170,6 +172,7 @@ from app.routers.promo_codes import router as promo_codes_router
 from app.routers.affiliate_links import router as affiliate_links_router
 from app.routers.ad_creative_affiliate import ad_creative_affiliate_router
 from app.routers.collaborations import router as collaborations_router
+from app.routers.collaborations import admin_router as collaboration_admin_disputes_router
 from app.routers.orgs import router as orgs_router
 from app.routers.user_groups import router as user_groups_router
 from app.routers.group_feed import router as group_feed_router, public_group_feed_router
@@ -530,6 +533,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_llm_usage_reset_task)
     app.add_event_handler("startup", start_ad_daily_reset_task)
     app.add_event_handler("startup", start_ad_analytics_rollup_task)
+    app.add_event_handler("startup", start_engagement_benchmark_task)
     app.add_event_handler("startup", start_filemgr_purge_task)
     app.add_event_handler("startup", start_scheduled_messages_task)
     app.add_event_handler("startup", start_broadcast_scheduler_task)
@@ -628,6 +632,7 @@ def create_app() -> FastAPI:
     app.include_router(tip_leaderboard_internal_router)
     app.include_router(creator_analytics_router)
     app.include_router(creator_analytics_public_router)
+    app.include_router(creator_analytics_internal_router)
     app.include_router(per_content_revenue_router)
     app.include_router(creator_dashboard_router)
     app.include_router(creator_payouts_router)
@@ -658,6 +663,7 @@ def create_app() -> FastAPI:
     app.include_router(affiliate_links_router)
     app.include_router(ad_creative_affiliate_router)
     app.include_router(collaborations_router)
+    app.include_router(collaboration_admin_disputes_router)
     app.include_router(orgs_router)
     app.include_router(user_groups_router)
     app.include_router(group_feed_router)

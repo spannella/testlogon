@@ -12259,6 +12259,19 @@ class EngagementPublicOut(BaseModel):
     visible: bool = False
 
 
+class EngagementBenchmarksOut(BaseModel):
+    """Platform-wide engagement benchmarks with the caller's percentile (GAP-0201)."""
+
+    average_rate: float = 0.0
+    median_rate: float = 0.0
+    p25_rate: float = 0.0
+    p75_rate: float = 0.0
+    sample_size: int = 0
+    my_percentile: Optional[float] = None  # null when caller has no rollup data
+    computed_at: int = 0  # Unix timestamp of last benchmark compute
+    date: str = ""  # YYYY-MM-DD the benchmark covers
+
+
 
 
 # ─── KYC Webhooks & Notifications (KYC-011) ──────────────────────────────────
