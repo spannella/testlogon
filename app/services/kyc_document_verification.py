@@ -31,7 +31,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 
 from app.core.settings import S
 from app.core.tables import T
@@ -286,11 +286,28 @@ class KycDocumentVerificationStore:
             items.sort(key=lambda i: _coerce_int(i.get("created_at")), reverse=True)
             return items
 
-    def list_by_status(self, status: str, *, limit: int = 100) -> list[dict[str, Any]]:
-        """List documents by status using the ByStatus GSI (PK=status, SK=created_at)."""
+    def list_by_status(
+        self,
+        status: str,
+        *,
+        limit: int = 100,
+        case_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List documents by status using the ByStatus GSI (PK=status, SK=created_at).
+
+        When ``case_id`` is provided, a DynamoDB ``FilterExpression`` is applied so
+        only that case's documents (in the given status) are returned. The
+        ``FilterExpression`` is evaluated server-side *after* the 1 MB page read, so
+        it does not reduce read cost; the pagination loop below continues fetching
+        until ``limit`` matching items are collected (or the partition is exhausted).
+        Documents uploaded without a case are stored with the ``"_none"`` sentinel
+        (see ``upload_document``); a real ``case_id`` filter never matches that
+        sentinel, so case-less documents are correctly excluded.
+        """
         st = str(status or "").strip()
         if st not in LISTABLE_STATUSES:
             raise KycDocumentValidationError("invalid_status")
+        case = str(case_id).strip() if case_id else None
         items: list[dict[str, Any]] = []
         last_key: dict | None = None
         while True:
@@ -300,6 +317,8 @@ class KycDocumentVerificationStore:
                 "ScanIndexForward": False,
                 "Limit": min(limit, 500),
             }
+            if case:
+                kwargs["FilterExpression"] = Attr("case_id").eq(case)
             if last_key:
                 kwargs["ExclusiveStartKey"] = last_key
             resp = self._table.query(**kwargs)

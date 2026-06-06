@@ -11,6 +11,8 @@ import {
 
 import { PageHeader } from "@/components/shared/PageHeader";
 import { DocumentViewer } from "@/components/shared/DocumentViewer";
+import { ExtractionResultsPanel } from "@/components/shared/ExtractionResultsPanel";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
   CardContent,
@@ -284,6 +286,17 @@ export default function KycCaseDetailPage() {
         </Badge>
       </div>
 
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList>
+          <TabsTrigger value="overview" data-testid="tab-overview">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="extraction" data-testid="tab-extraction">
+            Document Extraction
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview">
       {/* Two-column layout */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         {/* Left: Document Viewer (60%) */}
@@ -382,6 +395,12 @@ export default function KycCaseDetailPage() {
           <CaseTimeline events={caseData.timeline} />
         </div>
       </div>
+        </TabsContent>
+
+        <TabsContent value="extraction">
+          <ExtractionResultsPanel caseId={caseData.kyc_case_id} />
+        </TabsContent>
+      </Tabs>
 
       {/* Approve Dialog */}
       <Dialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>

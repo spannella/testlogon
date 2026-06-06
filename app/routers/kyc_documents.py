@@ -91,11 +91,15 @@ async def list_my_documents(
 async def admin_list_by_status(
     status: str = Query(..., description="pending | extracted | failed | approved | rejected"),
     limit: int = Query(100, ge=1, le=500),
+    case_id: str | None = Query(
+        default=None,
+        description="Optional: restrict results to a single KYC case (filtered on the ByStatus GSI result).",
+    ),
     _user: AuthenticatedUser = Depends(require_admin_or_root),
 ) -> KycDocumentListResponse:
     if status not in LISTABLE_STATUSES:
         raise HTTPException(status_code=422, detail={"code": "invalid_status", "message": "Unknown status."})
-    items = STORE.list_by_status(status, limit=limit)
+    items = STORE.list_by_status(status, limit=limit, case_id=case_id)
     return KycDocumentListResponse(documents=[_out(i, include_match=True) for i in items])
 
 

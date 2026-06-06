@@ -495,3 +495,37 @@ def owner_call_view(item: dict[str, Any], *, now: Any = None) -> dict[str, Any]:
         "created_at": _coerce_int(item.get("created_at")),
         "updated_at": _coerce_int(item.get("updated_at")),
     }
+
+
+# -- background expiry task (GAP-0249 / KYC-003) ---------------------------
+
+_EXPIRY_INTERVAL_SECONDS = 60  # run every minute
+
+
+async def kyc_liveness_expiry_loop(interval_seconds: int = _EXPIRY_INTERVAL_SECONDS) -> None:
+    """Every ``interval_seconds``: expire scheduled liveness calls past their
+    window so missed calls don't remain ``scheduled`` forever (which blocks
+    re-scheduling and grows the ByStatus GSI). Never raises out of the loop."""
+    import asyncio
+
+    while True:
+        try:
+            expired = STORE.expire_due_calls()
+            if expired:
+                logger.info(
+                    "kyc.liveness_call.expiry_loop.expired count=%d call_ids=%s",
+                    len(expired),
+                    expired[:10],
+                )
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("kyc.liveness_call.expiry_loop.error")
+        await asyncio.sleep(max(5, int(interval_seconds)))
+
+
+def start_kyc_liveness_expiry_task() -> None:
+    """Register the KYC liveness-call expiry background task at app startup."""
+    import asyncio
+
+    if S.kyc_liveness_call_enabled:
+        asyncio.ensure_future(kyc_liveness_expiry_loop())
+        logger.info("KYC liveness-call expiry task started")
