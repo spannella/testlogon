@@ -678,3 +678,299 @@ test.describe("Section 104 - Product Shelf Manager UI - Broadcaster", () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ */
+/*  Section 106 - Broadcast Price Editor (GAP-0293)                     */
+/*                                                                      */
+/*  Covers the BroadcastPriceEditor component wired into                */
+/*  ProductShelfManager: the broadcaster sets/clears a broadcast-       */
+/*  exclusive price on a shelf item, the discount is computed, and a    */
+/*  non-broadcaster is rejected by the backend guard.                   */
+/* ------------------------------------------------------------------ */
+
+test.describe("Section 106 - Broadcast Price Editor (GAP-0293)", () => {
+  let priceSessionId: string;
+  let priceCategoryId: string;
+  let priceItemId: string;
+
+  test.beforeAll(async ({ browser }) => {
+    const ctx = await browser.newContext();
+    rootPage = await ctx.newPage();
+    await injectAuth(rootPage, "root");
+
+    const aliceCtx = await browser.newContext();
+    alicePage = await aliceCtx.newPage();
+    await injectAuth(alicePage, "alice");
+
+    // Profile + draft session (root is the creator/broadcaster).
+    const profResp = await apiPost(rootPage, "root", "/broadcast/profiles", {
+      name: `price-editor-profile-${TS}`,
+      region: "us-east-1",
+      rendition_preset: "720p",
+    });
+    const priceProfileId = (await profResp.json()).id;
+
+    const sessResp = await apiPost(rootPage, "root", "/broadcast/sessions", {
+      profile_id: priceProfileId,
+    });
+    priceSessionId = (await sessResp.json()).id;
+
+    // Catalog item at $20.00 so a $10.00 broadcast price is exactly 50% off.
+    const catResp = await apiPost(rootPage, "root", "/ui/catalog/categories", {
+      name: `price-editor-cat-${TS}`,
+    });
+    priceCategoryId = (await catResp.json()).category_id;
+
+    const itemResp = await apiPost(
+      rootPage,
+      "root",
+      `/ui/catalog/categories/${priceCategoryId}/items`,
+      {
+        name: `Flash Deal Widget ${TS}`,
+        price_cents: 2000,
+        currency: "USD",
+        description: "Twenty-dollar widget for price editor tests",
+      },
+    );
+    priceItemId = (await itemResp.json()).item_id;
+
+    // Add it to the shelf.
+    const addResp = await apiPost(
+      rootPage,
+      "root",
+      `/broadcast/sessions/${priceSessionId}/products`,
+      { item_id: priceItemId, category_id: priceCategoryId },
+    );
+    expect(addResp.status()).toBe(201);
+  });
+
+  test.afterAll(async () => {
+    await rootPage.context().close();
+    await alicePage.context().close();
+  });
+
+  test("105.1 Broadcaster sets a broadcast price (50% off)", async () => {
+    const resp = await apiPatch(
+      rootPage,
+      "root",
+      `/broadcast/sessions/${priceSessionId}/products/${priceItemId}/price`,
+      { broadcast_price_cents: 1000, expires_in_seconds: 300 },
+    );
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.broadcast_price_cents).toBe(1000);
+    expect(body.original_price_cents).toBe(2000);
+    expect(body.discount_pct).toBe(50);
+  });
+
+  test("105.2 Shelf list reflects the active broadcast price", async () => {
+    const resp = await apiGet(
+      rootPage,
+      `/broadcast/sessions/${priceSessionId}/products`,
+    );
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    const item = body.items.find(
+      (i: { item_id: string }) => i.item_id === priceItemId,
+    );
+    expect(item).toBeTruthy();
+    expect(item.is_broadcast_price).toBe(true);
+    expect(item.effective_price_cents).toBe(1000);
+    expect(item.discount_pct).toBe(50);
+  });
+
+  test("105.3 Broadcast price below catalog is enforced (>= catalog rejected)", async () => {
+    const resp = await apiPatch(
+      rootPage,
+      "root",
+      `/broadcast/sessions/${priceSessionId}/products/${priceItemId}/price`,
+      { broadcast_price_cents: 2000 },
+    );
+    expect(resp.status()).toBe(400);
+  });
+
+  test("105.4 Non-broadcaster cannot set a broadcast price", async () => {
+    const resp = await apiPatch(
+      alicePage,
+      "alice",
+      `/broadcast/sessions/${priceSessionId}/products/${priceItemId}/price`,
+      { broadcast_price_cents: 500 },
+    );
+    expect(resp.status()).toBe(403);
+  });
+
+  test("105.5 Broadcaster clears the broadcast price", async () => {
+    const resp = await apiDelete(
+      rootPage,
+      "root",
+      `/broadcast/sessions/${priceSessionId}/products/${priceItemId}/price`,
+    );
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.ok).toBe(true);
+    expect(body.item_id).toBe(priceItemId);
+
+    // Shelf list now reverts to the catalog price.
+    const listResp = await apiGet(
+      rootPage,
+      `/broadcast/sessions/${priceSessionId}/products`,
+    );
+    const item = (await listResp.json()).items.find(
+      (i: { item_id: string }) => i.item_id === priceItemId,
+    );
+    expect(item.is_broadcast_price).toBeFalsy();
+    expect(item.effective_price_cents ?? item.price_cents).toBe(2000);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Section 105 - BroadcastPrice viewer component (GAP-0292)           */
+/* ------------------------------------------------------------------ */
+
+test.describe("Section 105 - Broadcast Price Viewer (GAP-0292)", () => {
+  let page: Page;
+  let bpSessionId: string;
+  let bpItemId: string;
+  let bpCategoryId: string;
+
+  test.beforeAll(async ({ browser }) => {
+    // API-only context for setup.
+    const setupCtx = await browser.newContext();
+    const setupPage = await setupCtx.newPage();
+    await injectAuth(setupPage, "root");
+
+    const profResp = await apiPost(setupPage, "root", "/broadcast/profiles", {
+      name: `shelf-price-profile-${TS}`,
+      region: "us-east-1",
+      rendition_preset: "720p",
+    });
+    const bpProfileId = (await profResp.json()).id;
+
+    const sessResp = await apiPost(setupPage, "root", "/broadcast/sessions", {
+      profile_id: bpProfileId,
+    });
+    bpSessionId = (await sessResp.json()).id;
+
+    await apiPost(setupPage, "root", `/broadcast/sessions/${bpSessionId}/start`, {
+      reason: "e2e-shelf-price",
+    });
+
+    const catResp = await apiPost(setupPage, "root", "/ui/catalog/categories", {
+      name: `shelf-price-cat-${TS}`,
+    });
+    bpCategoryId = (await catResp.json()).category_id;
+
+    // $10.00 catalog item.
+    const itemResp = await apiPost(
+      setupPage,
+      "root",
+      `/ui/catalog/categories/${bpCategoryId}/items`,
+      {
+        name: `Deal Widget ${TS}`,
+        price_cents: 1000,
+        currency: "USD",
+      },
+    );
+    bpItemId = (await itemResp.json()).item_id;
+
+    await apiPost(
+      setupPage,
+      "root",
+      `/broadcast/sessions/${bpSessionId}/products`,
+      {
+        item_id: bpItemId,
+        category_id: bpCategoryId,
+        display_order: 0,
+      },
+    );
+
+    // Set a broadcast price of $5.00 (50% off, no expiry).
+    const priceResp = await apiPatch(
+      setupPage,
+      "root",
+      `/broadcast/sessions/${bpSessionId}/products/${bpItemId}/price`,
+      { broadcast_price_cents: 500 },
+    );
+    expect(priceResp.status()).toBe(200);
+    await setupCtx.close();
+
+    // UI page with full auth.
+    const ctx = await browser.newContext();
+    page = await ctx.newPage();
+    await injectAuthForUI(page, "root");
+  });
+
+  test.afterAll(async () => {
+    await page.context().close();
+  });
+
+  test("105.1 LIVE DEAL badge, effective + struck-through price visible", async () => {
+    await page.goto(`http://localhost:3000/live/${bpSessionId}`);
+    await expect(
+      page.locator('[data-testid="product-shelf-panel"]'),
+    ).toBeVisible({ timeout: 10_000 });
+
+    await expect(
+      page.locator('[data-testid="broadcast-price-effective"]'),
+    ).toHaveText("$5.00", { timeout: 10_000 });
+    await expect(
+      page.locator('[data-testid="broadcast-price-original"]'),
+    ).toHaveText("$10.00");
+    await expect(
+      page.locator('[data-testid="broadcast-price-badge"]'),
+    ).toContainText("LIVE DEAL 50% OFF");
+  });
+
+  test("105.2 expiry countdown shown when expires_in_seconds set", async ({
+    browser,
+  }) => {
+    const setupCtx = await browser.newContext();
+    const setupPage = await setupCtx.newPage();
+    await injectAuth(setupPage, "root");
+    const r = await apiPatch(
+      setupPage,
+      "root",
+      `/broadcast/sessions/${bpSessionId}/products/${bpItemId}/price`,
+      { broadcast_price_cents: 500, expires_in_seconds: 120 },
+    );
+    expect(r.status()).toBe(200);
+    await setupCtx.close();
+
+    await page.goto(`http://localhost:3000/live/${bpSessionId}`);
+    await expect(
+      page.locator('[data-testid="broadcast-price-countdown"]'),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page.locator('[data-testid="broadcast-price-countdown"]'),
+    ).toContainText("m");
+  });
+
+  test("105.3 shelf:price_update window event updates displayed price", async () => {
+    await page.goto(`http://localhost:3000/live/${bpSessionId}`);
+    await expect(
+      page.locator('[data-testid="broadcast-price-effective"]'),
+    ).toBeVisible({ timeout: 10_000 });
+
+    await page.evaluate((itemId: string) => {
+      window.dispatchEvent(
+        new CustomEvent("shelf:price_update", {
+          detail: {
+            item_id: itemId,
+            price_cents: 1000,
+            broadcast_price_cents: 300,
+            effective_price_cents: 300,
+            is_broadcast_price: true,
+            discount_pct: 70,
+          },
+        }),
+      );
+    }, bpItemId);
+
+    await expect(
+      page.locator('[data-testid="broadcast-price-effective"]'),
+    ).toHaveText("$3.00", { timeout: 5_000 });
+    await expect(
+      page.locator('[data-testid="broadcast-price-badge"]'),
+    ).toContainText("70% OFF");
+  });
+});

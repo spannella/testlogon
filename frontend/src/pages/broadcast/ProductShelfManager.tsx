@@ -25,6 +25,7 @@ import {
 import type { CatalogItem } from "@/api/types";
 import SortableList from "@/components/shared/SortableList";
 import { CatalogPickerDialog } from "./CatalogPickerDialog";
+import { BroadcastPriceEditor } from "./BroadcastPriceEditor";
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
@@ -225,13 +226,16 @@ export function ProductShelfManager({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{item.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {formatPrice(item.price_cents, item.currency)}
+                      {item.is_broadcast_price && item.effective_price_cents != null
+                        ? `${formatPrice(item.effective_price_cents, item.currency)} (broadcast) / ${formatPrice(item.price_cents, item.currency)} catalog`
+                        : formatPrice(item.price_cents, item.currency)}
                     </p>
                   </div>
 
                   {/* Controls */}
                   {canManage && (
                     <div className="flex items-center gap-1 shrink-0">
+                      <BroadcastPriceEditor sessionId={sessionId} item={item} />
                       <Button
                         variant="ghost"
                         size="icon"

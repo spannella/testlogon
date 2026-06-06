@@ -11,15 +11,7 @@ import {
   type ShelfItem,
 } from "@/api/endpoints/broadcast-shelf";
 import { createCart, addCartItem, getCarts } from "@/api/endpoints/cart";
-
-// ─── Helpers ──────────────────────────────────────────────────────
-
-function formatPrice(cents: number, currency = "USD"): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-  }).format(cents / 100);
-}
+import { BroadcastPrice } from "./BroadcastPrice";
 
 // ─── ProductShelfCard ─────────────────────────────────────────────
 
@@ -45,7 +37,7 @@ function ProductShelfCard({ item }: { item: ShelfItem }) {
         sku: item.item_id,
         name: item.name,
         quantity: 1,
-        unit_price_cents: item.price_cents,
+        unit_price_cents: item.effective_price_cents ?? item.price_cents,
         image_url: item.image_url ?? undefined,
         item_id: item.item_id,
         category_id: item.category_id,
@@ -82,9 +74,7 @@ function ProductShelfCard({ item }: { item: ShelfItem }) {
             <p className="text-sm font-medium truncate" title={item.name}>
               {item.name}
             </p>
-            <p className="text-sm font-semibold text-primary" aria-label={`Price: ${formatPrice(item.price_cents, item.currency)}`}>
-              {formatPrice(item.price_cents, item.currency)}
-            </p>
+            <BroadcastPrice item={item} />
             <Button
               variant="outline"
               size="sm"
@@ -149,14 +139,23 @@ export function ProductShelf({ sessionId, isVisible, onToggle }: ProductShelfPro
       setShelfItems(items);
     };
 
+    const handleShelfPriceUpdate = (e: Event) => {
+      const item = (e as CustomEvent<ShelfItem>).detail;
+      setShelfItems((prev) =>
+        prev.map((i) => (i.item_id === item.item_id ? { ...i, ...item } : i))
+      );
+    };
+
     window.addEventListener("shelf:add", handleShelfAdd);
     window.addEventListener("shelf:remove", handleShelfRemove);
     window.addEventListener("shelf:reorder", handleShelfReorder);
+    window.addEventListener("shelf:price_update", handleShelfPriceUpdate);
 
     return () => {
       window.removeEventListener("shelf:add", handleShelfAdd);
       window.removeEventListener("shelf:remove", handleShelfRemove);
       window.removeEventListener("shelf:reorder", handleShelfReorder);
+      window.removeEventListener("shelf:price_update", handleShelfPriceUpdate);
     };
   }, []);
 
