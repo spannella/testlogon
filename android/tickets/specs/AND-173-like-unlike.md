@@ -5,9 +5,10 @@ milestone: M4
 epic: E24
 priority: P0
 size: M
-status: draft
 depends_on: [AND-099]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-173 — Like / unlike
@@ -49,16 +50,25 @@ rendering surface (AND-099) nor the feed list/pager that hosts the items.
   model. This ticket adds a like affordance and `onLikeToggle` callback to that
   surface; the visual slot must be added to `PostItem` without regressing its
   existing render contract.
-- **Auth:** cookie-based session with `ui_csrf` cookie echoed as the
-  `X-CSRF-Token` header; persistent cookie jar; on 401 the network layer calls
-  `POST /ui/session/refresh` once then retries. Like is a **mutating** request,
-  so it is NOT eligible for the idempotent-GET backoff-retry policy.
+- **Auth:** [CORRECTED] cookie-based session with `ui_csrf` cookie echoed as the
+  `X-CSRF-Token` header AND an `Authorization: Bearer <accessToken>` header from
+  the auth store; persistent cookie jar; on 401 the network layer calls
+  `POST /ui/session/refresh` once then retries. Verified against
+  `src/api/client.ts` (the `api()` wrapper sets `Authorization`, `X-CSRF-Token`
+  from the `ui_csrf` cookie, optional `X-IMPERSONATION-TOKEN`, and refreshes the
+  session once on 401). Like is a **mutating** request, so it is NOT eligible
+  for the idempotent-GET backoff-retry policy. NOTE: the OpenAPI declares these
+  endpoints' auth inputs as a `user_sub` query param plus `X-SESSION-ID` /
+  `X-IMPERSONATION-TOKEN` headers; the live web client instead relies on the
+  Bearer token + session cookie + `X-CSRF-Token`. The Android client follows the
+  web client's transport.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000`
   (plaintext HTTP, unreliable; ~20s timeouts). OpenAPI at `/openapi.json`.
-  Web reference for the like endpoints: `frontend/src/api/endpoints/posts.ts`
-  and shared types in `frontend/src/api/types.ts`. The exact endpoint paths
-  below MUST be validated against `/openapi.json` before implementation
-  (see Open Questions).
+  [CORRECTED] Web reference for the like endpoints is
+  `src/api/endpoints/newsfeed.ts` (exports `likePost` / `unlikePost`); there is
+  no `posts.ts` endpoints file. The post DTO (`FeedPost`) lives in
+  `src/api/types.ts`. The endpoint paths and response shape below have now been
+  validated against `/openapi.json` and the web client (see §5 and §16).
 
 ## 3. Functional Requirements
 
@@ -72,9 +82,16 @@ decrements by 1. The count MUST never display below 0.
 FR-3. The optimistic change is visible within one frame of the tap (no spinner
 on the button itself; the button is never disabled during the request).
 
-FR-4. After the mutation completes, the repository reconciles local state to
-the server-returned `liked` and `like_count`. The server count, not the local
-arithmetic, is the source of truth on success.
+FR-4. [CORRECTED] After the mutation completes, the repository reconciles local
+state to the server. NOTE: the post like/unlike endpoints return only
+`{ "ok": true }` (empty/untyped 200 body in OpenAPI; `{ ok: boolean }` in the
+web client) — they do NOT return `liked`/`like_count`. Therefore reconciliation
+is NOT a body read. On success the optimistic `liked` is treated as confirmed
+and the durable truth for the count is obtained by re-reading the post (the web
+app does `invalidateQueries(["feed"])` after a successful like; the Android
+client should refetch the affected post / page or the feed to pick up the
+server's authoritative `like_count`). The optimistic arithmetic is only a
+short-lived placeholder until that refetch lands.
 
 FR-5. On mutation failure (network, timeout, non-2xx after a single refresh
 retry), the optimistic change is rolled back to the pre-tap state and a
@@ -105,36 +122,50 @@ data class LikeState(
 
 `Post` (from AND-099) already carries `id: String`, `liked: Boolean`, and
 `likeCount: Long`. This ticket does not add fields to `Post`; it mutates those
-two.
+two. NOTE [verified]: on the wire (`FeedPost` in `src/api/types.ts`) the
+corresponding fields are `liked_by_me?: boolean` and `like_count: number`, and
+the post identifier is `post_id`. The Android domain names (`liked`,
+`likeCount`) map from those via the feed DTO adapter owned by AND-099; the
+mapping `liked_by_me -> liked` must exist there.
 
 ### 4.2 Network service (core-network)
 
+[CORRECTED] The real paths are `POST /posts/{post_id}/like` and
+`POST /posts/{post_id}/unlike` (both **POST**, no `/ui` prefix; unlike is its
+own POST endpoint, NOT a `DELETE`). The 200 body is untyped/empty in OpenAPI and
+`{ ok: boolean }` in the web client — there is no `liked` / `like_count` field
+to deserialize.
+
 ```kotlin
 interface PostApiService {
-    @POST("ui/posts/{id}/like")
-    suspend fun like(@Path("id") postId: String): Response<LikeResponseDto>
+    @POST("posts/{postId}/like")
+    suspend fun like(@Path("postId") postId: String): Response<LikeAckDto>
 
-    @DELETE("ui/posts/{id}/like")
-    suspend fun unlike(@Path("id") postId: String): Response<LikeResponseDto>
+    @POST("posts/{postId}/unlike")
+    suspend fun unlike(@Path("postId") postId: String): Response<LikeAckDto>
 }
 
+// 200 body is just an acknowledgement; treat any 2xx as success.
 @JsonClass(generateAdapter = true)
-data class LikeResponseDto(
-    @Json(name = "liked") val liked: Boolean,
-    @Json(name = "like_count") val likeCount: Long,
+data class LikeAckDto(
+    @Json(name = "ok") val ok: Boolean? = null,
 )
 ```
 
-The `X-CSRF-Token` header and cookie jar are applied by the shared OkHttp
-interceptors (auth ticket), not here. Calls return raw `Response<…>` so the
-repository can branch on 401/4xx/5xx and map to `ApiResult<LikeState>`.
+The `Authorization` Bearer header, `X-CSRF-Token` header and cookie jar are
+applied by the shared OkHttp interceptors (auth ticket), not here. Calls return
+raw `Response<…>` so the repository can branch on 2xx vs 4xx/5xx and map to
+`ApiResult<LikeState>` — where the success `LikeState` is built from the
+optimistic `liked` plus the count carried forward (then corrected by a refetch),
+NOT from the response body.
 
 ### 4.3 Repository (core-data)
 
 ```kotlin
 interface PostInteractionRepository {
-    /** Applies the desired terminal liked state, reconciles, persists. */
-    suspend fun setLiked(postId: String, liked: Boolean): ApiResult<LikeState>
+    /** Applies the desired terminal liked state, persists, returns confirmed state.
+     *  [CORRECTED] takes desiredCount because the API returns no count. */
+    suspend fun setLiked(postId: String, liked: Boolean, desiredCount: Long): ApiResult<LikeState>
 }
 
 @Singleton
@@ -144,14 +175,21 @@ class PostInteractionRepositoryImpl @Inject constructor(
     @IoDispatcher private val io: CoroutineDispatcher,
 ) : PostInteractionRepository {
 
-    override suspend fun setLiked(postId: String, liked: Boolean): ApiResult<LikeState> =
+    // [CORRECTED] The response has no liked/like_count. On 2xx, persist the
+    // confirmed `liked` and the desired count (caller passes the optimistic
+    // count to carry forward), then trigger a refetch elsewhere to pick up the
+    // server-authoritative count. We do NOT read the body for state.
+    override suspend fun setLiked(
+        postId: String,
+        liked: Boolean,
+        desiredCount: Long,
+    ): ApiResult<LikeState> =
         withContext(io) {
             val resp = if (liked) api.like(postId) else api.unlike(postId)
             when {
-                resp.isSuccessful && resp.body() != null -> {
-                    val body = resp.body()!!
-                    val state = LikeState(body.liked, body.likeCount)
-                    dao.updateLike(postId, state.liked, state.likeCount) // reconcile cache
+                resp.isSuccessful -> {
+                    val state = LikeState(liked = liked, likeCount = desiredCount)
+                    dao.updateLike(postId, state.liked, state.likeCount) // confirm cache
                     ApiResult.Success(state)
                 }
                 else -> ApiResult.Error(resp.toApiError())
@@ -162,7 +200,10 @@ class PostInteractionRepositoryImpl @Inject constructor(
 
 `updateLike` is an `@Query("UPDATE posts SET liked = :liked,
 like_count = :count WHERE id = :id")` partial update so we never clobber the
-rest of the cached row.
+rest of the cached row. The interface signature in §4.3 becomes
+`suspend fun setLiked(postId: String, liked: Boolean, desiredCount: Long): ApiResult<LikeState>`.
+Because the count is not server-confirmed by this call, the canonical count is
+refreshed by a subsequent feed/post refetch (see FR-4).
 
 ### 4.4 ViewModel (feature-feed)
 
@@ -196,7 +237,7 @@ class FeedViewModel @Inject constructor(
 
         likeJobs.remove(post.id)?.cancel()                  // FR-6 supersede
         likeJobs[post.id] = viewModelScope.launch {
-            when (val r = interactions.setLiked(post.id, target)) {
+            when (val r = interactions.setLiked(post.id, target, optimistic.likeCount)) {
                 is ApiResult.Success ->                      // FR-4 reconcile
                     overrides.update { it + (post.id to r.value) }
                 is ApiResult.Error -> {                      // FR-5 rollback
@@ -240,40 +281,53 @@ The button itself is never in a loading/disabled state.
 
 ## 5. API Contract
 
-Two mutating endpoints (paths to be confirmed against `/openapi.json`):
+[CORRECTED against `/openapi.json` and `src/api/endpoints/newsfeed.ts`] Two
+mutating endpoints, both **POST**, no `/ui` prefix, path param `post_id`:
 
 **Like**
 ```
-POST /ui/posts/{id}/like
-Headers: X-CSRF-Token: <ui_csrf>; Cookie: <session>
+POST /posts/{post_id}/like
+Headers: Authorization: Bearer <accessToken>; X-CSRF-Token: <ui_csrf>; Cookie: <session>
 Body: (none)
 200 OK
-{ "liked": true, "like_count": 42 }
+{ "ok": true }            # untyped {} in OpenAPI; {ok:boolean} in web client.
+                          # NO liked / like_count in the body.
 ```
 
 **Unlike**
 ```
-DELETE /ui/posts/{id}/like
-Headers: X-CSRF-Token: <ui_csrf>; Cookie: <session>
+POST /posts/{post_id}/unlike
+Headers: Authorization: Bearer <accessToken>; X-CSRF-Token: <ui_csrf>; Cookie: <session>
+Body: (none)
 200 OK
-{ "liked": false, "like_count": 41 }
+{ "ok": true }
 ```
 
 Notable responses:
-- `401 Unauthorized` — handled by the shared interceptor: one
-  `POST /ui/session/refresh`, then a single retry of the original request. A
-  second 401 surfaces as an auth error and rollback.
-- `404 Not Found` — post deleted/unavailable; rollback + error.
-- `409 Conflict` (idempotency) — if the server reports the post is already in
-  the requested state, the body is still authoritative `LikeState`; treat as
-  Success and reconcile.
+- `200 OK` — success acknowledgement only; the new count must be obtained by a
+  refetch, not from this body (see FR-4).
+- `422 Unprocessable Entity` — the ONLY error response declared in OpenAPI for
+  these two endpoints. Body is `HTTPValidationError`:
+  `{ "detail": [ { "loc": [...], "msg": "...", "type": "..." } ] }` (verified:
+  `components.schemas.HTTPValidationError` -> `ValidationError`).
+- `401 Unauthorized` — [UNVERIFIED for these endpoints: not declared in OpenAPI]
+  handled by the shared `api()` wrapper as a cross-cutting concern: one
+  `POST /ui/session/refresh` (verified in `src/api/client.ts`), then a single
+  retry. A second 401 logs out / surfaces an auth error and rollback.
+- `404` / `409` — [CORRECTED] NOT declared in OpenAPI for like/unlike. The prior
+  spec's `404 Not Found` and `409 Conflict (idempotency, authoritative body)`
+  claims are removed: there is no 409 contract and no authoritative-state body to
+  reconcile from. Any unexpected non-2xx is mapped to `ApiResult.Error` ->
+  rollback, generically. Idempotency is still safe because like/unlike are
+  separate verbs and the count is corrected by the refetch.
 - FastAPI `detail` error shape (`string | [{msg}] | {code,...}`) is mapped by
-  the shared `Response.toApiError()` / `detail` mapper to a user message.
+  the shared `detail` normalizer (`normalizeErrorDetail` in `src/api/client.ts`,
+  mirrored by Android `Response.toApiError()`) to a user message.
 
-If `/openapi.json` reveals a single toggle endpoint (e.g.
-`POST /ui/posts/{id}/like/toggle`) or a `liked` boolean body instead of
-verb-by-method, the service collapses to one method; the repository contract
-(`setLiked(id, liked)`) is unaffected.
+There is a separate **video** like endpoint, `POST /ui/videos/{video_id}/like`,
+that DOES return a typed `LikeToggleOut` `{ liked, like_count }` body. That is a
+different resource and out of scope here; do not confuse its contract with the
+post endpoints. There is no `/ui/posts/{id}/like/toggle` endpoint.
 
 ## 6. Data & State Management
 
@@ -286,9 +340,11 @@ verb-by-method, the service collapses to one method; the repository contract
   Optimistic state lives in the `overrides: MutableStateFlow<Map<String,
   LikeState>>` and is applied via `PagingData.map`. This avoids invalidating
   the pager on every tap.
-- **Source-of-truth order:** server response > Room cache > optimistic
-  override. The override is a short-lived UI patch reconciled within one
-  request round-trip.
+- **Source-of-truth order:** [CORRECTED] refetched feed/post (server truth) >
+  Room cache > optimistic override. The like/unlike *response itself* is only an
+  ack and is NOT a source of truth for the count (it carries no count). The
+  override is a short-lived UI patch; the authoritative count arrives on the
+  next feed/post refetch.
 - **DataStore:** not used by this ticket.
 - **Consistency across screens:** because reconciliation persists to Room and
   the detail screen reads the same `PostDao` row, a like performed in the feed
@@ -307,9 +363,9 @@ verb-by-method, the service collapses to one method; the repository contract
 - Coalescing/superseding (FR-6): per-post `Job` is cancelled when a newer tap
   arrives; `CancellationException` is swallowed and never triggers rollback or
   a snackbar. The newest tap's request defines the terminal intent.
-- Idempotency: because the API is verb-by-method (or returns authoritative
-  state), a duplicate like/unlike is safe; the server count in the response
-  corrects any local drift.
+- Idempotency: [CORRECTED] because like and unlike are separate POST verbs, a
+  duplicate is safe server-side; local drift is corrected by the follow-up
+  feed/post refetch (NOT by a count in the like response, which has none).
 
 ## 8. Security & Privacy
 
@@ -352,10 +408,14 @@ verb-by-method, the service collapses to one method; the repository contract
 Acceptance is "Like persists + reconciles (tested)", so tests are mandatory.
 
 **Unit — repository (`core-data`, JUnit + MockWebServer or fake `PostApiService`):**
-- success like returns `LikeState` from body and calls `dao.updateLike` with
-  server values (reconcile assertion).
-- non-2xx -> `ApiResult.Error`, no `dao.updateLike` call (no cache write).
-- 409 with body -> treated as Success, cache reconciled.
+- [CORRECTED] success like (2xx ack `{ "ok": true }`, no count in body) returns
+  `LikeState(liked, desiredCount)` and calls `dao.updateLike` with the confirmed
+  liked + desired count.
+- non-2xx (incl. 422 `HTTPValidationError`) -> `ApiResult.Error`, no
+  `dao.updateLike` call (no cache write).
+- [CORRECTED] removed the fabricated "409 with authoritative body" case — the
+  endpoints declare no 409 and no count body. Replaced by: 422 validation error
+  maps through the `detail` normalizer to a user message.
 
 **Unit — ViewModel (Turbine over `overrides`/effects, `MainDispatcherRule`):**
 - tap when unliked -> override immediately shows liked=true, count+1
@@ -396,11 +456,12 @@ Coverage target for new repository + ViewModel logic >= 85% lines.
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (endpoint shape):** Confirm against `/openapi.json` whether like is
-  `POST`/`DELETE /ui/posts/{id}/like` vs a single toggle endpoint, and the
-  exact response field names (`like_count` vs `likes`). The web reference
-  `frontend/src/api/endpoints/posts.ts` should be cross-checked. Adapter and
-  service paths depend on this; repository contract does not.
+- **OQ-1 (endpoint shape):** [RESOLVED] Verified against `/openapi.json` and
+  `src/api/endpoints/newsfeed.ts`: like is `POST /posts/{post_id}/like`, unlike
+  is `POST /posts/{post_id}/unlike` (both POST, no `/ui`, no DELETE, no toggle
+  endpoint). The 200 body is an untyped ack (`{ ok: boolean }`) with NO
+  `liked`/`like_count`. Wire DTO fields are `liked_by_me` and `like_count`
+  (`FeedPost`). Adapter/service paths updated accordingly in §4/§5.
 - **OQ-2 (server count semantics):** Does the like response return the global
   authoritative count, or can it be eventually-consistent (DynamoDB) and lag a
   prior write? If lagging is possible, reconciliation could briefly show a stale
@@ -417,8 +478,10 @@ Coverage target for new repository + ViewModel logic >= 85% lines.
 AC-1. Tapping the like control on an unliked post immediately shows the liked
 state and count+1 without a spinner or disabled button (FR-2, FR-3).
 
-AC-2. On a successful response, the displayed `liked`/`like_count` match the
-server body, even when they differ from the optimistic arithmetic (FR-4),
+AC-2. [CORRECTED] On a successful like/unlike, the confirmed `liked` is retained
+and the displayed `like_count` reconciles to the server's authoritative count
+obtained via the follow-up feed/post refetch (the like response itself carries
+no count) — even when that count differs from the optimistic arithmetic (FR-4),
 verified by test.
 
 AC-3. The reconciled state is written to the Room `posts` row and is read back
@@ -442,9 +505,10 @@ authenticated OkHttp client, and send `X-CSRF-Token`; no new cleartext config.
 
 ## 15. Definition of Done
 
-- [ ] `PostInteractionRepository` + `Impl`, `PostApiService` like/unlike,
-      `LikeResponseDto`, `LikeState`, and `PostDao.updateLike` implemented in
-      the correct modules under `com.testlogon.android`.
+- [ ] `PostInteractionRepository` + `Impl`, `PostApiService` like/unlike
+      (`POST /posts/{post_id}/like` and `.../unlike`), `LikeAckDto`,
+      `LikeState`, and `PostDao.updateLike` implemented in the correct modules
+      under `com.testlogon.android`.
 - [ ] `FeedViewModel.onLikeToggle` with optimistic override, reconcile,
       rollback, and per-post supersede implemented.
 - [ ] `LikeButton` added to `PostItem` (AND-099) with no regression to existing
@@ -458,3 +522,210 @@ authenticated OkHttp client, and send `X-CSRF-Token`; no new cleartext config.
       :core-data:test` green on the `android-port` branch.
 - [ ] PR reviewed; spec acceptance criteria checked off; no hardcoded strings
       or logged PII.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Like endpoint is `POST /posts/{post_id}/like`** — VERDICT: Corrected (spec
+   said `POST /ui/posts/{id}/like`). SOURCE: OpenAPI `POST /posts/{post_id}/like`
+   (op `like_post_posts__post_id__like_post`); `src/api/endpoints/newsfeed.ts:
+   likePost` -> `api.post(`/posts/${postId}/like`)`.
+2. **Unlike endpoint is `POST /posts/{post_id}/unlike`** — VERDICT: Corrected
+   (spec said `DELETE /ui/posts/{id}/like`). SOURCE: OpenAPI
+   `POST /posts/{post_id}/unlike` (op `unlike_post_posts__post_id__unlike_post`);
+   `src/api/endpoints/newsfeed.ts: unlikePost`.
+3. **Like/unlike 200 body carries `{ liked, like_count }`** — VERDICT: Corrected
+   (false). The 200 body is untyped `{}` in OpenAPI and `{ ok: boolean }` in the
+   web client; there is no count in the response. SOURCE: OpenAPI
+   `POST /posts/{post_id}/like` responses.200.content.application/json.schema = {}
+   (openapi.pretty.json ~line 127997); `src/api/endpoints/newsfeed.ts: likePost`
+   typed as `api.post<{ ok: boolean }>`.
+4. **`LikeToggleOut { liked, like_count }` exists** — VERDICT: Verified but for a
+   DIFFERENT resource. It is the response of the **video** like toggle
+   `POST /ui/videos/{video_id}/like`, not posts. SOURCE: OpenAPI
+   `POST /ui/videos/{video_id}/like | resp=200:LikeToggleOut`;
+   `components.schemas.LikeToggleOut`.
+5. **Reconcile = read server `liked`/`like_count` from the like response** —
+   VERDICT: Corrected. Posts return no count; the web app reconciles by
+   `queryClient.invalidateQueries({ queryKey: ["feed"] })` after a successful
+   like. SOURCE: `src/pages/feed/PostCard.tsx: likeMutation.onSuccess`.
+6. **Post DTO field names are `liked`/`like_count`** — VERDICT: Corrected/clarified.
+   Wire fields are `liked_by_me?: boolean` and `like_count: number`, id is
+   `post_id`. SOURCE: `src/api/types.ts: FeedPost` (`like_count`, `liked_by_me`,
+   `post_id`).
+7. **Web reference file is `frontend/src/api/endpoints/posts.ts`** — VERDICT:
+   Corrected. No `posts.ts` exists; like/unlike live in `newsfeed.ts`. SOURCE:
+   `src/api/endpoints/newsfeed.ts` (glob for `posts.ts` returns no file).
+8. **Auth = cookie session + `ui_csrf` echoed as `X-CSRF-Token`; 401 ->
+   `POST /ui/session/refresh` once then retry** — VERDICT: Verified (and extended:
+   also sends `Authorization: Bearer <accessToken>` and optional
+   `X-IMPERSONATION-TOKEN`). SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")`
+   -> `X-CSRF-Token`; `Authorization` from `useAuthStore`; `refreshSession()`
+   posts `/ui/session/refresh`; single retry on 401).
+9. **Mutating requests must send CSRF; missing CSRF rejected** — VERDICT:
+   Verified (client always sets `X-CSRF-Token` when the `ui_csrf` cookie is
+   present). SOURCE: `src/api/client.ts` (CSRF block). Server-side rejection
+   behavior itself is an UNVERIFIED assumption from the sources at hand.
+10. **Like is a non-2xx -> error path; FastAPI `detail` shape mapping** —
+    VERDICT: Verified. Only `422 HTTPValidationError` is declared for these
+    endpoints; `detail` is `string | [{loc,msg,type}] | {code,...}`. SOURCE:
+    OpenAPI `components.schemas.HTTPValidationError` -> `ValidationError`;
+    `src/api/client.ts: normalizeErrorDetail`.
+11. **404 (post deleted) and 409 (idempotency, authoritative body) responses** —
+    VERDICT: Corrected (removed). Neither is declared in OpenAPI for like/unlike;
+    409 had no real contract. SOURCE: OpenAPI like/unlike `resp=200:;422:...`
+    (no 404/409).
+12. **No new auth/cleartext config; dev host cleartext already permitted** —
+    VERDICT: Unverified-assumption (network-security-config and the auth ticket
+    are not in the provided sources). Plausible and consistent with the dev host
+    being plaintext HTTP, but not provable here.
+13. **Web Like button disables while pending / is offline-disabled** — VERDICT:
+    Verified for the WEB app (`disabled={isOfflinePost || likeMutation.isPending}`),
+    but the Android spec intentionally chooses a never-disabled optimistic button
+    (FR-3) — a deliberate platform divergence, not an error. SOURCE:
+    `src/pages/feed/PostCard.tsx` like `<button ... disabled=...>`.
+14. **Android framework choices (Compose, Paging 3 override map, Room partial
+    update, Hilt, Turbine)** — VERDICT: Unverified-assumption / design choice
+    (framework ref). SOURCE (framework ref): Paging optimistic updates via
+    `PagingData.map` — https://developer.android.com/topic/libraries/architecture/paging/v3-transform ;
+    Compose semantics/accessibility —
+    https://developer.android.com/jetpack/compose/semantics . Not validated
+    against backend/web sources because they are client-internal.
+
+### Corrections made
+- Endpoint paths: `POST/DELETE /ui/posts/{id}/like` -> `POST /posts/{post_id}/like`
+  and `POST /posts/{post_id}/unlike` (no `/ui`, unlike is POST not DELETE).
+- Response shape: removed `{ liked, like_count }` for posts; it is an ack
+  (`{ ok: boolean }`) with no count. `LikeResponseDto` -> `LikeAckDto`.
+- Reconciliation model (FR-4, §4.2, §4.3, §6, §7, AC-2): success no longer reads
+  a body count; count is reconciled via feed/post refetch
+  (`invalidateQueries(["feed"])` on web). `setLiked` now takes `desiredCount`.
+- Removed fabricated `404`/`409` response contracts; only `422` is declared.
+- Auth: added the `Authorization: Bearer` header (and noted
+  `X-IMPERSONATION-TOKEN`) alongside the cookie + `X-CSRF-Token`.
+- Web reference file corrected to `src/api/endpoints/newsfeed.ts` (no `posts.ts`).
+- Wire field names noted: `liked_by_me`, `like_count`, `post_id`.
+- OQ-1 marked resolved.
+
+### Open assumptions
+- Server-side CSRF enforcement and rejection of missing-CSRF mutating requests
+  (claim 9): inferred from client behavior; not provable from the provided
+  backend artifacts.
+- Network-security-config cleartext exception for the dev host and the shared
+  OkHttp/auth interceptor wiring (claim 12): owned by other tickets, not present
+  in these sources.
+- DynamoDB eventual-consistency / count lag (OQ-2): not determinable from
+  OpenAPI; remains an open product/backend question — and now more material since
+  the count comes only from a refetch.
+- The exact refetch mechanism on Android (invalidate pager vs targeted post
+  read) is a client design choice; the web app uses query invalidation, which we
+  mirror conceptually but cannot 1:1 verify against a Paging 3 implementation.
+
+## 17. Test Plan
+
+IDs `TC-AND-173-NN`. "Traces" links to §14 acceptance criteria (AC-1..AC-8).
+Default target is the headless emulator AVD `test35` (API 35) for instrumented/
+Compose suites; JVM/Robolectric for unit; physical device `SM-A156U` (API 34,
+arm64) only where API-34-vs-35 / arm64-vs-x86 ABI behavior or real-network
+flakiness matters.
+
+- **TC-AND-173-01** — Type: contract/MockWebServer. Target: JVM unit (no device),
+  `PostApiService` + `PostInteractionRepositoryImpl`. Preconditions: MockWebServer
+  enqueues `200 { "ok": true }` for `POST /posts/p1/like`. Steps: call
+  `setLiked("p1", liked=true, desiredCount=43)`. Expected: request path is
+  `/posts/p1/like` (POST, no `/ui`, no body); returns
+  `ApiResult.Success(LikeState(liked=true, likeCount=43))`; `dao.updateLike("p1",
+  true, 43)` called exactly once. Traces: AC-2.
+- **TC-AND-173-02** — Type: contract/MockWebServer. Target: JVM unit, repository.
+  Preconditions: MockWebServer enqueues `200 { "ok": true }` for
+  `POST /posts/p1/unlike`. Steps: call `setLiked("p1", liked=false,
+  desiredCount=41)`. Expected: path `/posts/p1/unlike` (POST); Success with
+  `liked=false`; `dao.updateLike("p1", false, 41)` once. Traces: AC-2.
+- **TC-AND-173-03** — Type: contract/MockWebServer. Target: JVM unit, repository.
+  Preconditions: enqueue `422` with body
+  `{ "detail": [ { "loc": ["path","post_id"], "msg": "value is not a valid",
+  "type": "value_error" } ] }`. Steps: call `setLiked("p1", true, 43)`. Expected:
+  `ApiResult.Error` whose mapped message derives from `detail[0].msg` via the
+  `detail` normalizer; `dao.updateLike` is NEVER called (no cache write).
+  Traces: AC-4.
+- **TC-AND-173-04** — Type: unit (Turbine + MainDispatcherRule). Target: JVM,
+  `FeedViewModel.onLikeToggle`. Preconditions: post p1 `liked=false,
+  likeCount=10`; fake repo suspends. Steps: call `onLikeToggle(p1)`; collect
+  `overrides`. Expected: within one emission the override for p1 is
+  `LikeState(liked=true, likeCount=11)` BEFORE the repo completes; button never
+  disabled. Traces: AC-1.
+- **TC-AND-173-05** — Type: unit (Turbine). Target: JVM, ViewModel.
+  Preconditions: post p1 `liked=false, likeCount=10`; fake repo returns
+  `Success(LikeState(true, 99))` (server count differs from optimistic 11) and
+  the feed refetch surfaces count 99. Steps: toggle, await completion. Expected:
+  final override/UI shows `liked=true, likeCount=99` (server truth from refetch,
+  not 11). Traces: AC-2.
+- **TC-AND-173-06** — Type: unit (Turbine). Target: JVM, ViewModel.
+  Preconditions: post p1 `liked=false, likeCount=10`; fake repo returns
+  `ApiResult.Error`. Steps: toggle, await completion; collect `overrides` and
+  `effects`. Expected: override reverts to `liked=false, likeCount=10` (pre-tap)
+  and exactly one `FeedEffect.ShowError` emitted. Traces: AC-4.
+- **TC-AND-173-07** — Type: unit (Turbine). Target: JVM, ViewModel.
+  Preconditions: post p1 `liked=false, likeCount=0`. Steps: toggle to like then
+  immediately back to unlike (or unlike at 0). Expected: displayed count never <
+  0 (coerced at 0). Traces: AC-6.
+- **TC-AND-173-08** — Type: unit (Turbine). Target: JVM, ViewModel
+  coalescing/supersede. Preconditions: post p1; repo call is slow/cancellable.
+  Steps: tap p1 three times rapidly (like, unlike, like). Expected: first two
+  jobs cancelled (CancellationException), only the latest terminal request runs;
+  no rollback and NO `ShowError` from the cancelled jobs; terminal state =
+  `liked=true`. Traces: AC-5.
+- **TC-AND-173-09** — Type: integration (Room in-memory DB). Target: Robolectric
+  or instrumented, `PostDao.updateLike`. Preconditions: insert full `PostEntity`
+  p1. Steps: call `updateLike("p1", true, 7)`, then re-open the DAO / re-query
+  (process-death proxy). Expected: only `liked` and `like_count` changed (all
+  other columns intact); re-read returns `liked=true, like_count=7`. Traces: AC-3.
+- **TC-AND-173-10** — Type: Compose-UI (createAndroidComposeRule). Target:
+  emulator `test35`, `LikeButton`. Preconditions: render with `liked=false,
+  likeCount=42`. Steps: assert icon = `FavoriteBorder`; perform click. Expected:
+  `onToggle` invoked once; recompose with `liked=true` shows `Favorite` filled +
+  primary tint; count formatted (e.g. "42"/"1.2K"). Traces: AC-1.
+- **TC-AND-173-11** — Type: Compose-UI / accessibility (semantics). Target:
+  emulator `test35`, `LikeButton`. Preconditions: render liked/unliked variants.
+  Steps: assert `Role.Button`, `stateDescription` "Liked"/"Not liked",
+  `contentDescription` includes action + localized plural count ("Like, 42
+  likes"); assert touch target >= 48x48dp; verify strings come from `strings.xml`
+  plurals (no hardcoded). Expected: all semantics present and correct. Traces:
+  AC-7.
+- **TC-AND-173-12** — Type: contract/MockWebServer (offline/flaky-host). Target:
+  JVM unit, repository. Preconditions: MockWebServer configured to drop the
+  connection / no-response so the call times out, OR simulate `IOException`
+  (offline). Steps: call `setLiked("p1", true, 11)`. Expected: `ApiResult.Error`
+  (timeout/offline) -> caller rolls back; no `dao.updateLike`; message resolves
+  to "You're offline." / "Couldn't update like. Try again." No deferred write
+  queue. Traces: AC-4.
+- **TC-AND-173-13** — Type: instrumented/e2e (security/transport). Target:
+  PHYSICAL DEVICE `SM-A156U` (API 34, arm64) — MUST run on the physical device to
+  exercise the real network stack, real cookie jar, and arm64 ABI against the
+  live dev host. Preconditions: authenticated session with `ui_csrf` cookie +
+  Bearer token present. Steps: tap like on a real post; capture the outgoing
+  request (debug proxy or OkHttp logging interceptor in debug build). Expected:
+  request is `POST /posts/{post_id}/like` over the shared authenticated client,
+  carrying `Authorization: Bearer`, `X-CSRF-Token`, and session cookie; no PII in
+  logs; no new cleartext exception. Traces: AC-8.
+- **TC-AND-173-14** — Type: manual. Target: PHYSICAL DEVICE `SM-A156U` against
+  the unreliable dev host. Preconditions: real feed loaded. Steps: like a post,
+  background/kill the app (process death), relaunch, scroll the post back into
+  view; also like rapidly while toggling airplane mode. Expected: like state
+  persists across process death (Room), reconciles to server count after refetch,
+  and offline taps roll back with a snackbar without corrupting the count.
+  Traces: AC-3, AC-4, AC-5.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (optimistic, no spinner/disable) | TC-04, TC-10 |
+| AC-2 (reconcile to server count via refetch) | TC-01, TC-02, TC-05 |
+| AC-3 (persist to Room across restart) | TC-09, TC-14 |
+| AC-4 (failure rollback + snackbar) | TC-03, TC-06, TC-12, TC-14 |
+| AC-5 (coalesce/supersede, no error on cancel) | TC-08, TC-14 |
+| AC-6 (count never < 0) | TC-07 |
+| AC-7 (a11y: role/state/content desc, 48dp, plurals) | TC-11 |
+| AC-8 (shared auth client, CSRF, no cleartext) | TC-13 |

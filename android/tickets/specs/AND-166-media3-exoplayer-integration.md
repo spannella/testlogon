@@ -5,7 +5,8 @@ milestone: M4
 epic: E23
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-003]
 blocks: [AND-167, AND-168, AND-171]
 ---
@@ -198,10 +199,20 @@ class SomeVideoViewModel @Inject constructor(
 
 ## 5. API Contract
 
-No backend HTTP API is consumed by this ticket. Playback URL resolution
-(`GET /ui/...playback-url`, `POST /ui/.../playback/verify`) and the FastAPI
-cookie/CSRF session are owned by AND-280 / AND-167, which supply ready URIs to
-`PlayerManager.setMediaItem(uri, ...)`.
+No backend HTTP API is consumed by this ticket. Playback URL resolution and the
+FastAPI cookie/CSRF session are owned by downstream tickets (AND-280 / AND-167), which
+supply ready URIs to `PlayerManager.setMediaItem(uri, ...)`.
+
+> Correction (review AND-166): the playback-URL endpoints are NOT under `/ui/` and the
+> methods cited in an earlier draft were inverted. The authoritative shapes are:
+> `POST /broadcast/sessions/{session_id}/playback-url` (op `mint_playback_url`,
+> resp `200:BroadcastPlaybackUrlOut` = `{session_id, playback_url, expires_at}`) to mint
+> a URL, and `GET /broadcast/playback/verify` (op `verify_playback_token_route...`,
+> resp `200:BroadcastPlaybackTokenVerifyOut` = `{valid: boolean}`) to verify a token.
+> For VOD, playback fields ride on the video detail response (`hls_manifest_url`,
+> `playback_token`, `playback_expires_at` on `VideoDetailResponse`, see
+> `src/api/endpoints/vod.ts`). None of these are consumed here; they are listed only to
+> hand the correct contract to AND-167/AND-280. See §16 for the full audit.
 
 The relevant contract here is the **internal module API** (the public surface other modules
 depend on):
@@ -376,3 +387,232 @@ later concern). DataStore/Room are N/A here and remain owned by `core-data`.
 - No new lint/detekt regressions; no cleartext or permission additions in this module.
 - Logging seam and optional `AnalyticsListener` hook present but emit nothing by default.
 - Spec acceptance criteria AC-1…AC-7 all demonstrably met; PR description links this spec.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. "framework ref" =
+Android/AndroidX/Media3 documentation (a framework choice, not verifiable against this
+repo's backend/frontend). "Backend ref" = `reference/openapi.index.txt` /
+`openapi.pretty.json`. "Frontend ref" = `reference/src/...`.
+
+1. **Claim (§2, §5, §8): The web app uses `hls.js` for streaming; there is no
+   progressive-MP4 web analog.** VERDICT: **Verified.** SOURCE: Frontend ref
+   `src/components/shared/MediaPlayer.tsx` (`import Hls from "hls.js"`, header comment
+   "Shared HLS/DRM player component", `Hls.isSupported()` with native Safari
+   `application/vnd.apple.mpegurl` fallback). The player always loads an HLS manifest via
+   its `src` prop (`hls.loadSource(src)`); there is no dedicated progressive-MP4 path.
+
+2. **Claim (§5, original draft): Playback URL resolution is `GET /ui/...playback-url` and
+   `POST /ui/.../playback/verify`.** VERDICT: **Corrected.** The path prefix and both HTTP
+   methods were wrong. SOURCE (Backend ref):
+   `POST /broadcast/sessions/{session_id}/playback-url` (op `mint_playback_url_route...`,
+   `resp=200:BroadcastPlaybackUrlOut`) and `GET /broadcast/playback/verify`
+   (op `verify_playback_token_route_broadcast_playback_verify_get`,
+   `resp=200:BroadcastPlaybackTokenVerifyOut`) in `openapi.index.txt`. Minting is **POST**,
+   verification is **GET** — the inverse of the draft. Neither lives under `/ui/`.
+
+3. **Claim: `BroadcastPlaybackUrlOut` shape.** VERDICT: **Verified (added).** SOURCE:
+   `openapi.pretty.json` `components.schemas.BroadcastPlaybackUrlOut` =
+   `{session_id: string, playback_url: string, expires_at: integer}` (all required).
+
+4. **Claim: `BroadcastPlaybackTokenVerifyOut` shape.** VERDICT: **Verified (added).**
+   SOURCE: `openapi.pretty.json` `components.schemas.BroadcastPlaybackTokenVerifyOut` =
+   `{valid: boolean}` (required).
+
+5. **Claim: VOD playback fields ride on the video detail response.** VERDICT: **Verified
+   (added).** SOURCE: Frontend ref `src/api/endpoints/vod.ts: VideoDetailResponse` exposes
+   `hls_manifest_url: string | null`, `playback_token: string | null`,
+   `playback_expires_at: number | null` — confirming VOD delivery is HLS, not progressive
+   MP4, on the web.
+
+6. **Claim (§8): The web session is cookie-based with an `X-CSRF-Token` header, and
+   `core-player` does not touch it.** VERDICT: **Verified.** SOURCE: Frontend ref
+   `src/api/client.ts` — `credentials: "include"`, `getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)`. The CSRF token is read from the `ui_csrf` cookie.
+   `core-player` correctly references none of this (it plays a local asset).
+
+7. **Claim (§5, §11): The acceptance test plays a bundled asset via `asset:///` to avoid
+   the flaky dev backend.** VERDICT: **Unverified-assumption (sound).** The `asset:///`
+   scheme is a Media3/ExoPlayer `AssetDataSource` convention (framework ref:
+   https://developer.android.com/media/media3/exoplayer/media-sources). The specific asset
+   path and the dev-host IP (`http://18.222.237.167:8000`) are project conventions not
+   present in the provided sources; treated as assumption.
+
+8. **Claim (§4, §6): Media3 player-state constants and mapping
+   (`Player.STATE_IDLE/BUFFERING/READY/ENDED`), `C.TIME_UNSET`,
+   `ExoPlayer.Builder(context).setHandleAudioBecomingNoisy(true)`,
+   `player.applicationLooper`, non-thread-safety.** VERDICT: **Verified (framework ref).**
+   SOURCE: Media3 `Player` / `ExoPlayer` API — https://developer.android.com/reference/androidx/media3/common/Player
+   and https://developer.android.com/media/media3/exoplayer/hello-world . ExoPlayer must be
+   accessed from the thread of its `applicationLooper`; `C.TIME_UNSET` is the unknown-duration
+   sentinel.
+
+9. **Claim (§7): `PlaybackException.errorCode` codes and retryability
+   (`ERROR_CODE_IO_NETWORK_CONNECTION_FAILED/TIMEOUT`, `ERROR_CODE_BEHIND_LIVE_WINDOW`,
+   `ERROR_CODE_DECODING_FAILED`, `ERROR_CODE_PARSING_*`).** VERDICT: **Verified (framework
+   ref).** SOURCE: Media3 `PlaybackException` —
+   https://developer.android.com/reference/androidx/media3/common/PlaybackException .
+   Note: classifying `ERROR_CODE_BEHIND_LIVE_WINDOW` as retryable is reasonable but is a
+   design choice (live-window concerns are AND-167); fine as an assumption for this ticket.
+
+10. **Claim (§4, §7): `PlayerView` interop via `AndroidView`, `useController = false`,
+    `setShowBuffering`, null-player on `onRelease`/`onReset`.** VERDICT: **Verified
+    (framework ref).** SOURCE: Media3 UI `PlayerView` —
+    https://developer.android.com/reference/androidx/media3/ui/PlayerView and Compose
+    `AndroidView` lifecycle (`onReset`/`onRelease`) —
+    https://developer.android.com/develop/ui/compose/migrate/interoperability-apis/views-in-compose .
+
+11. **Claim (§2, §12, §13): Media3 1.4 (catalog `1.4.1`), Kotlin 2.0.21, AGP 8.7.3,
+    minSdk 24, compileSdk/targetSdk 35, JDK 17.** VERDICT: **Unverified-assumption.** No
+    `gradle/libs.versions.toml` or `build.gradle.kts` is present in the provided sources
+    (those land with AND-003). Version compatibility (Media3 1.4.x with AGP 8.7.3) is
+    plausible per AndroidX release notes (framework ref:
+    https://developer.android.com/jetpack/androidx/releases/media3) but is not checkable
+    here; §13 already flags the patch version as open.
+
+12. **Claim (§2, §12): Downstream consumers AND-167/AND-168/AND-171/AND-280/AND-190 and
+    upstream AND-003.** VERDICT: **Unverified-assumption.** Ticket-to-ticket dependency
+    mapping is internal planning metadata not present in the OpenAPI/frontend sources.
+    Mirrors the frontmatter `depends_on`/`blocks`; left as stated.
+
+### Corrections made
+
+- **§5 endpoint contract (Citation 2):** Replaced the incorrect `GET /ui/...playback-url`
+  and `POST /ui/.../playback/verify` with the authoritative
+  `POST /broadcast/sessions/{session_id}/playback-url` (→ `BroadcastPlaybackUrlOut`) and
+  `GET /broadcast/playback/verify` (→ `BroadcastPlaybackTokenVerifyOut`), and added the
+  exact response shapes plus the VOD `VideoDetailResponse` playback fields. The method
+  inversion (mint = POST, verify = GET) and the missing `/broadcast` prefix were the
+  substantive fixes. This is contract documentation only; no `core-player` code consumes
+  these endpoints, so the correction does not change the module's scope or AC set.
+
+### Open assumptions
+
+- **Build/version metadata** (Media3 `1.4.1`, AGP 8.7.3, Kotlin 2.0.21, SDK levels, JDK 17):
+  not verifiable — the version catalog and Gradle files arrive with AND-003 and are absent
+  from the provided sources (Citation 11).
+- **Test asset and dev-host IP** (`asset:///sample_progressive.mp4`,
+  `http://18.222.237.167:8000`): project conventions, not in sources (Citation 7).
+- **Inter-ticket dependency graph** (AND-003/167/168/171/280/190): planning metadata, not
+  in the API/frontend sources (Citation 12).
+- **`ERROR_CODE_BEHIND_LIVE_WINDOW` classified as retryable:** a design decision; live
+  semantics are AND-167's domain (Citation 9).
+
+## 17. Test Plan
+
+Test target legend: **JVM/Robolectric** = local, no device. **Emulator (test35)** =
+headless x86_64 AVD, Android 15 / API 35, CI. **Physical (A15)** = Samsung Galaxy A15 5G
+(SM-A156U, serial R5CX821TA9R), Android 14 / API 34, arm64-v8a — used when real hardware
+codecs / ABI / API-34-vs-35 behavior matter.
+
+- **TC-AND-166-01 — PlayerManager singleton reuse.**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric. Preconditions: Hilt test graph or
+  direct `DefaultPlayerManager` construction with `TestExoPlayerBuilder`/Robolectric looper.
+  Steps: call `acquire()` twice without `release()`. Expected: both calls return the *same*
+  `Player` instance (reference equality); no second `ExoPlayer` is constructed. Traces: AC-3.
+
+- **TC-AND-166-02 — release() then acquire() yields a fresh instance.**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric. Preconditions: as TC-01.
+  Steps: `acquire()` → capture ref → `release()` → `acquire()`. Expected: second `acquire()`
+  returns a new, non-equal instance; the released player reports released state / is not
+  reused. Traces: AC-3, AC-6.
+
+- **TC-AND-166-03 — State mapping IDLE→BUFFERING→READY→ENDED.**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric. Preconditions: fake `Player` /
+  `TestExoPlayerBuilder`; collector on `PlayerManager.state`. Steps: drive
+  `onPlaybackStateChanged` through `STATE_IDLE`, `STATE_BUFFERING`, `STATE_READY`,
+  `STATE_ENDED`. Expected: `PlayerUiState.playbackState` emits `IDLE, BUFFERING, READY,
+  ENDED` in order. Traces: AC-4.
+
+- **TC-AND-166-04 — Error mapping & retryability (real error shapes).**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric. Preconditions: collector on
+  `state`. Steps: fire `onPlayerError` with a `PlaybackException` of
+  `ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT`, then one of `ERROR_CODE_DECODING_FAILED`.
+  Expected: `PlayerError.code` matches each `errorCode`; `isRetryable == true` for the
+  network-timeout case and `false` for the decode case; `error` clears on a subsequent
+  successful prepare. Traces: AC-4, AC-6.
+
+- **TC-AND-166-05 — Acceptance: progressive MP4 plays in PlayerSurface.**
+  Type: instrumented/e2e (Compose-UI). Target: Emulator (test35) for CI; **also run on
+  Physical (A15)** to validate the real arm64 hardware decoder. Preconditions: bundled
+  `androidTest` asset `asset:///sample_progressive.mp4` (baseline-profile H.264/AAC ≤2 s);
+  Compose host hosting `PlayerSurface(playerManager)`. Steps: launch host →
+  `setMediaItem("asset:///sample_progressive.mp4", autoPlay = true)` → await `state`.
+  Expected: `playbackState` reaches `READY`, then `isPlaying == true`, and `positionMs`
+  advances `> 0` within the timeout. Traces: AC-4, AC-5, AC-7.
+  Note: MUST also run on Physical (A15) because hardware H.264 decoding and arm64-vs-x86
+  codec behavior cannot be fully trusted on the emulator (see R2).
+
+- **TC-AND-166-06 — minSdk-24 / codec-variance smoke on real hardware.**
+  Type: instrumented/e2e. Target: **Physical (A15)** (and document a separate API-24
+  device if available). Preconditions: same bundled baseline-profile asset. Steps: run the
+  acceptance flow of TC-05 on the physical device. Expected: playback reaches `READY` and
+  advances with no `ERROR_CODE_DECODING_FAILED`; if a decoder is missing the error is
+  surfaced (not crashed) per §7. Traces: AC-5, AC-6.
+  Note: MUST run on Physical (A15) — exercises the real arm64-v8a hardware decoder that the
+  x86_64 emulator does not represent (R2).
+
+- **TC-AND-166-07 — Lifecycle: ON_STOP pauses playback.**
+  Type: integration (Robolectric or instrumented). Target: JVM/Robolectric (or Emulator).
+  Preconditions: `TestLifecycleOwner`; `PlayerSurface` attached and playing. Steps: move
+  lifecycle to `ON_STOP`. Expected: `PlayerManager.pause()` is invoked; `isPlaying`
+  transitions to `false`; the player instance is NOT released. Traces: AC-6.
+
+- **TC-AND-166-08 — Rotation preserves player instance and position.**
+  Type: Compose-UI (instrumented). Target: Emulator (test35). Preconditions: `PlayerSurface`
+  playing; position > 0. Steps: trigger configuration change (recreate the Composable /
+  rotate). Expected: the *same* `Player` is re-acquired and rebound to a fresh `PlayerView`;
+  playback position is preserved (no reset to 0); no flicker/double-bind. Traces: AC-6, AC-3.
+
+- **TC-AND-166-09 — Single-surface re-parenting (no double-bind).**
+  Type: Compose-UI (instrumented). Target: Emulator (test35). Preconditions: ability to
+  attach a second `PlayerSurface`. Steps: attach surface A (player bound) → attach surface B.
+  Expected: the player re-parents to B; A's `PlayerView.player` is nulled
+  (`onReset`/`onRelease`); only one surface renders the player at a time. Traces: AC-6, AC-7.
+
+- **TC-AND-166-10 — ViewModel.onCleared() releases the player (no leaked codec).**
+  Type: instrumented. Target: Emulator (test35). Preconditions: StrictMode VM policy enabled;
+  a host ViewModel injecting `PlayerManager` and calling `release()` in `onCleared()`.
+  Steps: play, then finish the screen so the ViewModel is cleared. Steps include scanning
+  logcat. Expected: `release()` is called; no "Player not released" / "MediaCodec ...
+  leaked" warning appears in logcat; StrictMode reports no resource leak. Traces: AC-6.
+
+- **TC-AND-166-11 — Controller chrome disabled (bare surface).**
+  Type: Compose-UI (instrumented). Target: Emulator (test35). Preconditions: `PlayerSurface`
+  rendered. Steps: inspect the wrapped `PlayerView`. Expected: `useController == false`; no
+  transport controls / buffering spinner chrome are present (controls are AND-168's scope).
+  Traces: AC-7.
+
+- **TC-AND-166-12 — Offline / flaky-dev-host independence.**
+  Type: integration (instrumented). Target: Emulator (test35) with airplane mode / no
+  network. Preconditions: device offline; bundled asset present. Steps: run the acceptance
+  flow with networking disabled. Expected: playback of `asset:///sample_progressive.mp4`
+  still reaches `READY` and advances — the acceptance path has zero dependency on
+  `http://18.222.237.167:8000` or any backend. Traces: AC-5.
+
+- **TC-AND-166-13 — No network permission / no cleartext config added by module.**
+  Type: unit/manual (security). Target: JVM/Robolectric (merged-manifest assertion) +
+  manual review. Preconditions: built `core-player` AAR/merged manifest. Steps: inspect the
+  module's merged `AndroidManifest.xml`. Expected: `core-player` declares no `INTERNET` or
+  other permission of its own and adds no `usesCleartextTraffic`; only Media3-transitive
+  entries (if any) appear. Traces: AC-1, AC-2 (and §8 security posture).
+
+- **TC-AND-166-14 — Accessibility: content description announced.**
+  Type: Compose-UI (instrumented, accessibility). Target: Emulator (test35); spot-check
+  TalkBack on **Physical (A15)**. Preconditions: `PlayerSurface(..., contentDescription =
+  "Video player")`. Steps: query the semantics tree (`onNodeWithContentDescription`) and,
+  on device, enable TalkBack and focus the surface. Expected: the surface exposes the
+  provided content description to the accessibility tree and TalkBack announces it; the
+  default `player_surface_content_desc` string is used when none is passed. Traces: AC-7.
+
+### Coverage matrix
+
+| AC | Covered by |
+|---|---|
+| AC-1 (module compiles / consumable) | TC-13 (plus CI assemble gate) |
+| AC-2 (catalog deps, no hardcoded versions) | TC-13 (manifest/build review) |
+| AC-3 (singleton, two acquire() == same Player) | TC-01, TC-02, TC-08 |
+| AC-4 (state emits READY + isPlaying + advancing position) | TC-03, TC-04, TC-05 |
+| AC-5 (progressive MP4 plays in PlayerSurface — acceptance) | TC-05, TC-06, TC-12 |
+| AC-6 (lifecycle: ON_STOP pause, rotation preserves, onCleared releases) | TC-02, TC-04, TC-06, TC-07, TC-08, TC-10 |
+| AC-7 (controller chrome disabled / bare surface) | TC-05, TC-09, TC-11, TC-14 |

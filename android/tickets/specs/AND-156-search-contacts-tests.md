@@ -5,7 +5,8 @@ milestone: M3
 epic: E21
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-155, AND-153, AND-152]
 blocks: []
 ---
@@ -77,18 +78,32 @@ AND-152/153/155:
 3. **Cancellation:** when a new query arrives while a previous search is in
    flight, the in-flight request is cancelled (no stale results overwrite newer
    ones — last-write-wins by query token).
-4. **Paging:** the message-search `PagingSource` loads page 1, then appends
-   page 2 on the next key (cursor), exposes `prevKey`/`nextKey` correctly, and
-   surfaces `LoadResult.Error` on transport failure.
-5. **Empty state:** a 200 response with `items: []` yields the `Empty` UI state
-   (distinct from `Idle` and `Error`).
+4. **Paging:** CORRECTED — the backend `GET /messaging/messages/search` returns
+   a **bare JSON array of `MessageOut`** (no `cursor` query param, no
+   `next_cursor`/`total` in the body — verified against OpenAPI). There is no
+   server-side cursor pagination to test. The suite therefore asserts a
+   **single-page** `PagingSource` (one `Refresh` load returns all items with
+   `prevKey == null` and `nextKey == null`) and surfaces `LoadResult.Error` on
+   transport failure. Any multi-page/cursor behavior would be a **client-side**
+   construct (e.g. windowing by `limit`/`after_ts`) owned by AND-152/155 and is
+   an unverified assumption (see §16); the test mirrors whatever the production
+   `PagingSource` actually exposes. Page-2/`next_cursor` append assertions from
+   the prior draft are removed because the backend exposes no such field.
+5. **Empty state:** a 200 response with an **empty array `[]`** (not an
+   `items: []` envelope — the response is a bare array) yields the `Empty` UI
+   state (distinct from `Idle` and `Error`).
 6. **Error state:** non-2xx / timeout / parse failures map to a typed
    `ApiResult.Error` and the `Error` UI state with a user-facing message derived
    from the FastAPI `detail` shape.
 7. **Contacts tokenization:** the contacts repo forwards the raw query to
-   `/messaging/contacts/search?q=` and returns the parsed contact list; name/
-   fragment matches return results (server-side tokenization is not re-tested
-   client-side, only that the query reaches the endpoint and results parse).
+   `GET /messaging/contacts/search?q=&limit=` (the `q` param is **required**,
+   1–64 chars; `limit` defaults to 10, max 50 — verified against OpenAPI) and
+   returns the parsed contact list. CORRECTED — the response is a **bare JSON
+   array of `Contact` objects** (`{user_id, display_name}` only; the web client
+   types these as `UserSearchResult` = `{user_id, display_name}`), NOT an
+   `{items:[{handle, avatar_url, …}]}` envelope. Server-side tokenization is not
+   re-tested client-side; the test only asserts the query reaches the endpoint
+   and the array parses.
 8. **UI rendering:** each screen renders loading skeleton, content list, empty
    placeholder, and error+retry, and fires `onQueryChange`, `onResultClick`,
    and `onRetry` callbacks with correct arguments.
@@ -172,44 +187,79 @@ This ticket defines no new endpoints; it asserts conformance to the contracts
 from AND-152/153. Tests pin the exact request/response shapes so a backend or
 parser drift fails the build.
 
-**Message search** — `GET /messaging/messages/search`:
+**Message search** — `GET /messaging/messages/search` (op
+`search_messages_all_conversations_messaging_messages_search_get`). CORRECTED
+query params (verified against OpenAPI): `q` (**required**, 1–200 chars),
+`limit` (default 50, max 200), `sender_id` (was `sender`), `after_ts`
+(**integer epoch ms/s**, was `after` ISO-8601), `kind` (repeatable string
+array). **There is no `cursor` query param.** Note: the web reference app does
+**not** call this endpoint anywhere (`grep messages/search src/` → no hits), so
+its client-side usage is an Android-only contract derived from OpenAPI, not a
+verified web behavior (see §16).
 
 ```
-GET /messaging/messages/search?q=hello&sender=u_42&after=2026-01-01T00:00:00Z&limit=20&cursor=eyJ...
+GET /messaging/messages/search?q=hello&sender_id=u_42&after_ts=1735689600&limit=20&kind=text
 Cookies: session=...; ui_csrf=...
+Authorization: Bearer <accessToken>      # web client sets this (client.ts)
 X-CSRF-Token: <ui_csrf value>
 ```
 
-Expected 200 response (fixture `search_messages_page1.json`):
+CORRECTED 200 response — a **bare JSON array of `MessageOut`**, NOT an envelope
+with `items`/`next_cursor`/`total` (verified: response schema is
+`type: array, items: $ref MessageOut`). `MessageOut` carries `message_id`,
+`conversation_id`, `sender_id`, `text`, and `created_at` (**integer** epoch).
+There is no `sender_name`, `snippet`, or `sent_at` field. Fixture
+`search_messages.json`:
 
 ```json
-{
-  "items": [
-    {"message_id":"m_1","conversation_id":"c_9","sender_id":"u_42",
-     "sender_name":"Ada","snippet":"...hello there...","sent_at":"2026-06-01T12:00:00Z"}
-  ],
-  "next_cursor": "eyJwIjoyfQ==",
-  "total": 37
-}
+[
+  {"message_id":"m_1","conversation_id":"c_9","sender_id":"u_42",
+   "text":"hello there","created_at":1748779200}
+]
 ```
 
-**Contacts search** — `GET /messaging/contacts/search?q=ada`:
+**Contacts search** — `GET /messaging/contacts/search?q=ada&limit=10` (op
+`search_contact_messaging_contacts_search_get`; web: `searchUsers()` in
+`src/api/endpoints/messaging.ts`). CORRECTED 200 response — a **bare JSON array
+of `Contact`** (`{user_id, display_name}`); the web client types it as
+`UserSearchResult` = `{user_id, display_name}`. No `items` envelope, no
+`handle`/`avatar_url`:
 
 ```json
-{ "items": [ {"user_id":"u_42","display_name":"Ada Lovelace","handle":"@ada","avatar_url":null} ] }
+[ {"user_id":"u_42","display_name":"Ada Lovelace"} ]
 ```
 
-**Error fixtures** assert FastAPI `detail` mapping in all three forms:
+> Note: `GET /messaging/contacts/search` is the **message-user search** endpoint.
+> The owned-contacts list is a separate resource — `GET /ui/contacts` returning
+> `{contacts: ContactEntry[]}` (`ContactEntry` = `{owner_id, contact_id,
+> display_name, is_favorite, is_blocked, added_at, profile_photo_url?}`). The
+> tests target whichever the AND-153 `ContactsRepository` actually wraps; both
+> shapes are pinned here so a parser drift fails the build.
+
+**Error fixtures** assert FastAPI `detail` mapping in all three forms. The
+array form matches the verified `HTTPValidationError`/`ValidationError` schema
+(`{detail:[{loc:[str|int], msg, type}]}`); the string and object forms are both
+handled by the web client's `normalizeErrorDetail()` (string passthrough; object
+mapped via `mapAuthorizationError`/`msg`). VERIFIED against
+`src/api/client.ts: normalizeErrorDetail`:
 
 ```json
 {"detail":"Search temporarily unavailable"}
-{"detail":[{"loc":["query","q"],"msg":"ensure this value has at least 2 characters","type":"value_error"}]}
+{"detail":[{"loc":["query","q"],"msg":"ensure this value has at least 1 character","type":"string_too_short"}]}
 {"detail":{"code":"rate_limited","retry_after":5}}
 ```
 
+> Note on the second form: the backend min length for `q` is **1** (not 2) for
+> both search endpoints. A client-side 2-char min-length gate (§3.1) is an
+> Android UX assumption owned by AND-155, not a backend constraint.
+
 The 401-refresh path (`POST /ui/session/refresh` then single retry) is asserted
 via an enqueued `401` followed by `200`, verifying exactly one refresh and one
-replay of the original idempotent GET.
+replay of the original GET. VERIFIED against `src/api/client.ts` (`refreshSession`
+POSTs `/ui/session/refresh`; on success the original request is re-fetched once;
+a second 401 triggers logout and does not loop). Note the web client refreshes
+on 401 only when already authenticated and refreshes are de-duplicated via a
+shared `refreshPromise`.
 
 ## 6. Data & State Management
 
@@ -221,10 +271,15 @@ sealed interface SearchUiState {
     data object Idle : SearchUiState                     // query < minLen
     data object Loading : SearchUiState
     data class Content(val results: Flow<PagingData<MessageHit>>) : SearchUiState
-    data object Empty : SearchUiState                    // 200 + items == []
+    data object Empty : SearchUiState                    // 200 + empty array []
     data class Error(val message: String, val retryable: Boolean) : SearchUiState
 }
 ```
+
+> `MessageHit` is the app's domain model mapped from the backend `MessageOut`
+> (`message_id`, `conversation_id`, `sender_id`, `text`, `created_at:Long`). It
+> is NOT a wire DTO with `snippet`/`sender_name`/`sent_at` — those fields do not
+> exist on `MessageOut` (verified). The mapper test asserts this projection.
 
 State transitions verified: `Idle → Loading → Content`, `Idle → Loading → Empty`,
 `Idle → Loading → Error`, and `Error → Loading` on retry. The `query` string is
@@ -247,6 +302,12 @@ Tests cover the resilience requirements baked into the stack:
 - **Bounded retry (idempotent GET only):** a test enqueues two `503` then `200`
   and asserts the search GET is retried within the bounded backoff and ultimately
   succeeds; a separate test asserts non-idempotent calls are **not** retried.
+  ASSUMPTION (unverified): the web reference client (`src/api/client.ts`) does
+  **not** implement any 503/timeout retry — it only refreshes once on 401. A
+  bounded GET-retry + ~20 s timeout is an Android transport-layer design owned by
+  the OkHttp stack (AND-15x networking ticket), not a web-verified contract.
+  These tests only pass if that retry interceptor exists in the production app;
+  otherwise the case is N/A. See §16.
 - **401 refresh-once:** verified per §5 — exactly one `POST /ui/session/refresh`
   and one retry; a second consecutive 401 surfaces an auth `Error` and does not
   loop.
@@ -261,7 +322,11 @@ No production security surface changes. Test-specific requirements: fixtures mus
 contain only synthetic data (no real users/credentials/cookies). Tests assert
 that the `X-CSRF-Token` header is populated from the `ui_csrf` cookie on every
 search request (read from `RecordedRequest.getHeader("X-CSRF-Token")`), ensuring
-the CSRF contract is not silently dropped. Tests must not log cookie values; the
+the CSRF contract is not silently dropped. VERIFIED: `src/api/client.ts` reads
+the `ui_csrf` cookie and sets `X-CSRF-Token` on every request, and additionally
+sets `Authorization: Bearer <accessToken>` from the auth store and
+`X-IMPERSONATION-TOKEN` when impersonating — a parallel test asserts the Android
+client likewise attaches its bearer token to search requests. Tests must not log cookie values; the
 persistent cookie jar used in tests is an in-memory test double, never written to
 disk. No plaintext production host is contacted from any test.
 
@@ -292,20 +357,27 @@ by the future analytics ticket; the test suite simply does not assert it.
 This is the testing deliverable itself. Required test cases:
 
 **Repository (`core-data`, JVM + MockWebServer):**
-- `searchMessages` parses page 1, sends `q/sender/after/limit/cursor`, sets CSRF
-  header.
-- `searchMessages` empty `items` → repo returns empty page.
+- `searchMessages` parses the bare `MessageOut[]` array, sends
+  `q/sender_id/after_ts/limit/kind` query params (CORRECTED — no `cursor`), and
+  sets the `X-CSRF-Token` + `Authorization` headers.
+- `searchMessages` empty array `[]` → repo returns empty page.
 - `searchMessages` 503×2 then 200 → bounded retry succeeds.
 - `searchMessages` 401 then 200 → one refresh, one retry.
 - `searchContacts` parses list; sends `q`.
 - Timeout → `ApiResult.Error(Timeout)`.
 - All three `detail` shapes map to expected messages.
 
-**PagingSource (`core-data`):**
-- `load(Refresh)` returns page with correct `nextKey`, null `prevKey`.
-- `load(Append)` with cursor returns page 2; null `next_cursor` → `nextKey == null`.
+**PagingSource (`core-data`):** (CORRECTED — backend returns a bare array with no
+cursor; assertions reflect single-page loading)
+- `load(Refresh)` returns the full array as one page with `prevKey == null` and
+  `nextKey == null` (no server cursor exists).
 - Transport error → `LoadResult.Error`.
 - `AsyncPagingDataDiffer` snapshot of `Flow<PagingData>` equals expected list.
+- (If AND-152/155 implement client-side windowing via `limit`+`after_ts`, an
+  additional `load(Append)` case asserts the next window is fetched with the
+  correct `after_ts`; this is conditional on that production behavior existing —
+  see §16. The prior `next_cursor`-based append assertion is removed because no
+  `next_cursor`/`cursor` field exists on the wire.)
 
 **ViewModel (`feature-*`, virtual time):**
 - Debounce collapse; min-length gate; distinct-until-changed; cancellation
@@ -389,3 +461,252 @@ but the report is published). Flakiness budget: zero — virtual time and
   and approved by the AND-155 owner).
 - Code reviewed and merged; M3 search/contacts features can be signed off as
   regression-protected.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Message search endpoint is `GET /messaging/messages/search`.** VERIFIED.
+   OpenAPI `GET /messaging/messages/search`
+   (op `search_messages_all_conversations_messaging_messages_search_get`).
+2. **Message search query params are `q,sender_id,after_ts,limit,kind`.** CORRECTED
+   (was `q,sender,after(ISO),limit,cursor`). OpenAPI `GET /messaging/messages/search`
+   params: `q` (required, 1–200), `limit` (default 50, max 200), `sender_id`,
+   `after_ts` (integer epoch), `kind` (string array). No `cursor` param exists.
+3. **Message search 200 body is a bare `MessageOut[]` array (no
+   `items`/`next_cursor`/`total`).** CORRECTED (was an envelope with
+   `items/next_cursor/total`). OpenAPI `GET /messaging/messages/search`
+   `responses.200` → `{type: array, items: $ref MessageOut}`.
+4. **`MessageOut` fields used by the suite: `message_id`, `conversation_id`,
+   `sender_id`, `text`, `created_at` (integer epoch).** CORRECTED (spec previously
+   used `sender_name`, `snippet`, `sent_at` which do not exist). Schema
+   `components.schemas.MessageOut` (`created_at` is `type: integer`).
+5. **Contacts search endpoint is `GET /messaging/contacts/search` with `q` (req,
+   1–64) and `limit` (default 10, max 50).** VERIFIED. OpenAPI
+   `GET /messaging/contacts/search`
+   (op `search_contact_messaging_contacts_search_get`); web call
+   `src/api/endpoints/messaging.ts: searchUsers` (`api.get(.../contacts/search, {q, limit})`).
+6. **Contacts search 200 body is a bare array of `Contact`
+   (`{user_id, display_name}`).** CORRECTED (was `{items:[{...handle, avatar_url}]}`).
+   OpenAPI response `{type: array, items: $ref Contact}`; schema
+   `components.schemas.Contact` = `{user_id, display_name}`; web DTO
+   `src/api/types.ts: UserSearchResult` = `{user_id, display_name}`.
+7. **Owned-contacts list (distinct from search) is `GET /ui/contacts` returning
+   `{contacts: ContactEntry[]}`.** VERIFIED. `src/api/endpoints/contacts.ts:
+   getContacts`; schema `components.schemas.ContactEntry`
+   (`owner_id, contact_id, display_name, is_favorite, is_blocked, added_at,
+   profile_photo_url?`).
+8. **CSRF: `X-CSRF-Token` header is set from the `ui_csrf` cookie on every
+   request.** VERIFIED. `src/api/client.ts` (`getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)`).
+9. **Auth: client also sends `Authorization: Bearer <accessToken>` (and
+   `X-IMPERSONATION-TOKEN` when impersonating).** VERIFIED (added; spec had only
+   mentioned cookies/CSRF). `src/api/client.ts`. OpenAPI search ops also expose
+   `authorization` + `X-SESSION-ID` headers.
+10. **401 → single `POST /ui/session/refresh` then one replay of the original
+    request; second consecutive 401 logs out and does not loop.** VERIFIED.
+    `src/api/client.ts` (`refreshSession` POSTs `/ui/session/refresh`; retry once;
+    on retry 401 → `logout("session_expired")`); OpenAPI
+    `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`).
+11. **FastAPI `detail` shapes (string, array-of-`{loc,msg,type}`, object) all map
+    to user messages.** VERIFIED. Array form matches schemas
+    `HTTPValidationError`/`ValidationError` (`{loc:[str|int], msg, type}`); all
+    three handled by `src/api/client.ts: normalizeErrorDetail`
+    (+ `mapAuthorizationError` for object `code`s).
+12. **Backend min length for `q` is 1 (both endpoints), not 2.** VERIFIED/CORRECTED
+    fixture text. OpenAPI param `q` `minLength: 1`. The 2-char min-length gate is
+    an Android UX rule (see assumption below), not a backend constraint.
+13. **Robolectric + `createComposeRule` runs Compose UI tests on the JVM.**
+    VERIFIED (framework ref): https://robolectric.org/ and
+    https://developer.android.com/develop/ui/compose/testing.
+14. **Paging 3 `PagingSource`/`AsyncPagingDataDiffer`/`paging-testing` APIs.**
+    VERIFIED (framework ref):
+    https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data
+    and https://developer.android.com/reference/kotlin/androidx/paging/testing/package-summary.
+15. **`kotlinx-coroutines-test` virtual time (`StandardTestDispatcher`,
+    `advanceTimeBy`, `runTest`) drives debounce.** VERIFIED (framework ref):
+    https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/.
+16. **OkHttp `MockWebServer` for contract tests.** VERIFIED (framework ref):
+    https://square.github.io/okhttp/features/https/ and
+    https://github.com/square/okhttp/tree/master/mockwebserver.
+
+### Corrections made
+
+- §3.4 / §5 / §6 / §11 / §17: removed the cursor-pagination premise. The message
+  search response is a **bare `MessageOut[]` array** with no `cursor` param and no
+  `next_cursor`/`total` body fields; `PagingSource` is asserted as single-page.
+- §5 query params: `sender`→`sender_id`, `after`(ISO)→`after_ts`(integer epoch),
+  dropped `cursor`, added `kind`; marked `q` required (1–200).
+- §5 message fields: dropped non-existent `sender_name`/`snippet`/`sent_at`;
+  message body field is `text`, timestamp is `created_at` (integer epoch).
+- §5 / §3.7: contacts search returns a **bare `Contact[]` array**
+  (`{user_id, display_name}`), not an `{items:[{handle, avatar_url}]}` envelope;
+  added `limit` param; clarified `/ui/contacts` is the separate owned-list.
+- §5 / §3.5 / §6: "empty `items: []`" → "empty array `[]`".
+- §5 fixture: validation `msg`/`type` and min-length corrected to backend reality
+  (min length 1, `string_too_short`).
+- §8: added that the web client attaches `Authorization: Bearer` (+ impersonation
+  header), not only the CSRF cookie.
+
+### Open assumptions
+
+- **Client-side windowing/append.** The backend exposes no pagination cursor, so
+  any multi-page message-search behavior would be an Android client construct
+  (windowing via `limit`+`after_ts`). Unverifiable from the sources because the
+  web app does not call `/messaging/messages/search` at all and AND-152/155 are
+  not yet merged. Tests mirror the shipped `PagingSource`; the append case is
+  conditional.
+- **Bounded 503/timeout retry + ~20 s client timeout (§7).** The web client
+  (`src/api/client.ts`) implements **no** 503/timeout retry — only 401 refresh.
+  This is an Android transport-layer (OkHttp interceptor) assumption owned by the
+  networking ticket; tests pass only if that interceptor exists.
+- **Debounce 300 ms / min-length 2 (§3.1).** Not in the backend (min length is 1)
+  or the web client; these are AND-155 ViewModel constants to be referenced, not
+  hardcoded. Unverifiable until AND-155 lands.
+- **`stale`/offline cache flag (§6) and analytics events (§10).** Only assertable
+  if AND-155/152/153 expose them; not present in the reference sources.
+- **`UiState`/`MessageHit` domain shapes (§6).** Owned by AND-155; the signatures
+  here are the expected contract, reconciled at integration.
+- **Contacts paged vs. flat list.** Backend returns a flat array; whether AND-155
+  wraps contacts in Paging is an open question. The suite adapts.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric, local (no device); **CW** =
+contract test on JVM with OkHttp `MockWebServer`; **Robolectric-UI** = Compose UI
+on JVM via `createComposeRule`; **emu(test35)** = headless AVD API 35 x86_64;
+**device(SM-A156U)** = physical Samsung Galaxy A15 5G, API 34 arm64
+(serial R5CX821TA9R). No test ever contacts the live host `18.222.237.167`.
+
+- **TC-AND-156-01 — Debounce collapses rapid input (happy path).**
+  Type: unit (JVM, virtual time). Target: `MessageSearchViewModel`.
+  Preconditions: `MainDispatcherRule` with `StandardTestDispatcher`; MockK repo.
+  Steps: call `onQueryChanged("h"/"he"/"hello")`; `advanceTimeBy(debounceMs-1)`;
+  assert 0 repo calls; `advanceTimeBy(1)`. Expected: exactly one
+  `repo.searchMessages("hello", …)` invocation. Traces: AC-3.
+- **TC-AND-156-02 — Min-length gate & distinct-until-changed.**
+  Type: unit (JVM). Target: `MessageSearchViewModel`. Preconditions: as 01.
+  Steps: (a) type a sub-min query → assert state `Idle`, 0 repo calls; (b) type
+  "ab" then "ab" again past debounce → assert exactly one search. Expected: no
+  network for too-short input; repeated identical value does not re-trigger.
+  Traces: AC-3.
+- **TC-AND-156-03 — Cancellation / last-write-wins.**
+  Type: unit (JVM, virtual time). Target: `MessageSearchViewModel`.
+  Preconditions: repo with a suspendable/controllable first response.
+  Steps: issue "old" (in flight), then "new"; complete both; collect emissions
+  via Turbine. Expected: only "new" results surface; the superseded "old" search
+  is cancelled and never overwrites state. Traces: AC-3.
+- **TC-AND-156-04 — SavedStateHandle restore (process death).**
+  Type: unit (JVM). Target: `MessageSearchViewModel` + `SavedStateHandle`.
+  Steps: set query, let search commit; construct a new ViewModel from the same
+  handle. Expected: query restored and the search re-runs/results restored.
+  Traces: AC-3.
+- **TC-AND-156-05 — Error→Loading on retry.**
+  Type: unit (JVM). Target: `MessageSearchViewModel`. Steps: drive repo to error
+  → assert `Error(retryable=true)`; call `onRetry()`. Expected:
+  `Error → Loading → Content/Empty`. Traces: AC-3, AC-6.
+- **TC-AND-156-06 — `searchMessages` request shape & headers (contract).**
+  Type: contract/MockWebServer (CW). Target: `MessageSearchRepository` + Retrofit
+  service. Preconditions: MockWebServer enqueues fixture `search_messages.json`
+  (bare `MessageOut[]`); cookie jar has `ui_csrf`; auth store has a bearer token.
+  Steps: call `searchMessages(q="hello", senderId="u_42", afterTs=1735689600,
+  limit=20)`; read `RecordedRequest`. Expected: path `/messaging/messages/search`,
+  query `q=hello&sender_id=u_42&after_ts=1735689600&limit=20` (NO `cursor`),
+  header `X-CSRF-Token` == cookie value, `Authorization: Bearer …` present;
+  parsed list maps `message_id/conversation_id/sender_id/text/created_at(Long)`.
+  Traces: AC-5.
+- **TC-AND-156-07 — Empty result → `Empty` state (validation/edge).**
+  Type: contract/MockWebServer (CW). Target: `MessageSearchRepository` →
+  ViewModel. Steps: enqueue `200` with body `[]`. Expected: repo returns an empty
+  page; ViewModel emits `Empty` (distinct from `Idle`/`Error`). Traces: AC-3, AC-6.
+- **TC-AND-156-08 — FastAPI `detail` mapping, all three forms + parse failure.**
+  Type: contract/MockWebServer (CW). Target: repo error mapper.
+  Steps: enqueue in turn `{"detail":"…"}` (500/503), the 422
+  `{"detail":[{loc,msg,type}]}`, the object `{"detail":{"code":"rate_limited",
+  "retry_after":5}}`, and a malformed-JSON body. Expected: each maps to a typed
+  `ApiResult.Error` with the user-facing message derived per
+  `normalizeErrorDetail`; malformed JSON yields a typed parse error, never a
+  crash. Traces: AC-5.
+- **TC-AND-156-09 — Timeout → `ApiResult.Error(Timeout)`.**
+  Type: contract/MockWebServer (CW). Target: repo/transport. Preconditions:
+  `MockResponse().setBodyDelay(25, SECONDS)` against the ~20 s client timeout.
+  Steps: call `searchMessages`. Expected: `ApiResult.Error(kind=Timeout)` mapped
+  to a retryable `Error` UI state. (Assumption: ~20 s timeout configured — see
+  §16; skip if not.) Traces: AC-5.
+- **TC-AND-156-10 — Bounded GET retry (503×2 → 200) and no-retry for writes.**
+  Type: contract/MockWebServer (CW). Target: OkHttp retry interceptor + repo.
+  Steps: enqueue `503,503,200`; call the idempotent search GET; separately assert
+  a non-idempotent call is not retried. Expected: GET retried within bounded
+  backoff and ultimately succeeds; writes not retried. (Conditional on the retry
+  interceptor existing — §16.) Traces: AC-5.
+- **TC-AND-156-11 — 401 refresh-once then replay.**
+  Type: contract/MockWebServer (CW). Target: auth interceptor + repo.
+  Steps: enqueue `401` then `200` for the search GET; assert exactly one
+  `POST /ui/session/refresh` and exactly one replay of the original GET; then a
+  second test enqueues `401,401` and asserts auth `Error` with no loop.
+  Expected: single refresh + single replay; consecutive 401 surfaces auth error.
+  Traces: AC-5.
+- **TC-AND-156-12 — `searchContacts` request & bare-array parse (contract).**
+  Type: contract/MockWebServer (CW). Target: `ContactsRepository`.
+  Steps: enqueue `[{"user_id":"u_42","display_name":"Ada Lovelace"}]`; call
+  `searchContacts(q="ada")`; read `RecordedRequest`. Expected: path
+  `/messaging/contacts/search`, query contains `q=ada` (and `limit` if sent);
+  parsed list = one `Contact(user_id="u_42", display_name="Ada Lovelace")`; no
+  `handle`/`avatar_url` expected. Traces: AC-5.
+- **TC-AND-156-13 — `PagingSource` single-page refresh & error.**
+  Type: unit (JVM) + `paging-testing`. Target: message-search `PagingSource`.
+  Steps: (a) MockWebServer returns a fixture array → `load(Refresh)` returns one
+  page with `prevKey==null`, `nextKey==null`; (b) transport failure →
+  `LoadResult.Error`; (c) `AsyncPagingDataDiffer` snapshot of
+  `Flow<PagingData>` equals the expected list. Expected: as stated. Traces: AC-4.
+- **TC-AND-156-14 — `MessageSearchScreen` states & callbacks + a11y.**
+  Type: Compose-UI (Robolectric-UI). Target: `MessageSearchScreen`.
+  Steps: render loading (skeleton shown), content (N rows), empty placeholder,
+  error+retry; type text → assert `onQueryChange` fired; click a row → assert
+  `onResultClick(messageId)`; click retry → `onRetry`; assert each row, the
+  search field, and the retry button expose non-empty content
+  description/semantics, and placeholder/error text comes from
+  `stringResource` (`assertTextEquals(context.getString(R.string.…))`, not
+  hardcoded literals). Expected: all states/callbacks/a11y assertions pass.
+  Traces: AC-6.
+- **TC-AND-156-15 — `ContactsScreen` states, `onContactClick`, a11y.**
+  Type: Compose-UI (Robolectric-UI). Target: `ContactsScreen`. Steps: render
+  content/empty/error+retry; click a contact → assert `onContactClick(userId)`;
+  assert a11y labels and localized (resource-resolved) text. Expected: pass.
+  Traces: AC-6.
+- **TC-AND-156-16 — No live-host egress (security).**
+  Type: integration (JVM/CI). Target: full test classpath. Steps: run the suite
+  with a network guard (deny socket connections to `18.222.237.167` / any
+  non-loopback host). Expected: zero connections to the dev host; all traffic
+  hits `MockWebServer` on loopback. Traces: AC-7.
+- **TC-AND-156-17 — CSRF/cookie not leaked to logs; in-memory cookie jar
+  (security/privacy).** Type: unit (JVM). Target: test cookie jar + log capture.
+  Steps: run a search; capture logs; assert no `ui_csrf`/`session` value appears
+  and the cookie jar is never written to disk. Expected: no secret material in
+  logs; jar is the in-memory test double. Traces: AC-7 (supports §8).
+- **TC-AND-156-18 — Real-device instrumented smoke (offline/flaky-host path).**
+  Type: instrumented/e2e — **MUST run on device(SM-A156U)** (arm64, API 34) to
+  validate ABI/API-level behavior vs the emulator. Steps: install the debug APK;
+  with airplane mode ON, open search, type a query. Expected: the offline/error
+  state renders with a working retry (no crash, no live-host hit); on restoring a
+  pointed-at `MockWebServer`, retry succeeds. Rationale for device: API-34/arm64
+  differs from AVD `test35` (API-35/x86_64); offline transport + Compose render
+  on real hardware. Traces: AC-1, AC-6, AC-7.
+
+> CI default: TC-01–17 run on **JVM** (`testDebugUnitTest`) — no device needed,
+> satisfying AC-1's "Tests pass" gate. If a Compose+Robolectric incompatibility
+> appears on AGP 8.7.3, TC-14/15 fall back to **emu(test35)** as `androidTest`.
+> TC-18 is the only physical-device case.
+
+### Coverage matrix (AC → TC)
+
+| §14 AC | Covered by |
+| --- | --- |
+| AC-1 (suite green, no flakes) | TC-01…TC-18 (whole suite); device smoke TC-18 |
+| AC-2 (cases exist, real assertions) | TC-01…TC-17 (each asserts behavior) |
+| AC-3 (debounce/min-len/distinct/cancel/empty/error/restore) | TC-01, TC-02, TC-03, TC-04, TC-05, TC-07 |
+| AC-4 (PagingSource refresh/error + snapshot) | TC-13 |
+| AC-5 (request params, CSRF header, 3 detail maps, timeout, retry, 401-once) | TC-06, TC-08, TC-09, TC-10, TC-11, TC-12 |
+| AC-6 (Compose states/callbacks + a11y) | TC-05, TC-14, TC-15, TC-18 |
+| AC-7 (no live-host; all mocked) | TC-16, TC-17, TC-18 |
+| AC-8 (Jacoco ≥80% advisory) | Emergent from TC-01…TC-15 coverage; report published in CI |

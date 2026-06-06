@@ -5,7 +5,8 @@ milestone: M3
 epic: E22
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-157]
 blocks: []
 ---
@@ -40,11 +41,21 @@ group-settings ticket), and the message thread itself.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable).
   OpenAPI at `/openapi.json`. Cookie + `X-CSRF-Token` auth (see §8). All mutating calls here are
   **non-idempotent or state-changing** and therefore are **not** auto-retried (§7).
-- **Web reference:** `frontend/src/api/endpoints/conversations.ts` (participant PATCH/DELETE helpers)
-  and shared types in `frontend/src/api/types.ts` (`Participant`, `ParticipantRole`). Mirror those
-  payload shapes exactly; verify against `/openapi.json` at implementation time.
-- **Auth/session:** cookie-based session with one-shot `POST /ui/session/refresh` on 401 then retry,
-  handled by the shared OkHttp `Authenticator`/interceptor from core-network (no changes here).
+- **Web reference:** `src/api/endpoints/messaging.ts` (`addParticipants`, `updateParticipantRole`)
+  and shared types in `src/api/types.ts` (`Participant`, `AddParticipantsReq`, `UpdateRoleReq`).
+  Mirror those payload shapes exactly. NOTE (corrected during review): the web app has **no
+  conversations.ts** endpoint file and exposes **no remove-participant** helper — the web
+  `ParticipantsPanel.tsx` only adds members and changes roles; remove is Android-net-new against the
+  backend `DELETE` endpoint that does exist (see §5). Verified against `src/api/endpoints/messaging.ts`
+  and `/openapi.json`.
+- **Auth/session:** the web client sends an `Authorization: Bearer <token>` header **plus** session
+  cookies (`credentials: include`) **plus** an `X-CSRF-Token` header echoing the `ui_csrf` cookie
+  (verified in `src/api/client.ts`). The backend additionally declares optional `authorization` and
+  `X-SESSION-ID` headers on every participant endpoint (verified in `/openapi.json`). On 401 the web
+  client performs a one-shot `POST /ui/session/refresh` then retries once (verified in
+  `src/api/client.ts: refreshSession`). The Android `Authenticator`/interceptor from core-network must
+  send all of cookies + `Authorization` + `X-CSRF-Token` (and `X-SESSION-ID` if available); no changes
+  to that interceptor here.
 
 ## 3. Functional Requirements
 
@@ -83,19 +94,26 @@ enforced server-side).
 ### 4.1 Models (core-model)
 
 ```kotlin
-enum class ParticipantRole { OWNER, ADMIN, MEMBER }
+// CORRECTED: backend role enum is only {admin, member}. UpdateParticipantRoleIn.role ∈ {"admin","member"}
+// and frontend Participant.role is `"admin" | "member"`. There is NO `owner` role in the messaging
+// participant contract (an `owner`/`owner_user_id` concept exists on other resources but not here).
+// OWNER kept only as a defensive UNKNOWN-fallback bucket; do NOT send it to the server.
+enum class ParticipantRole { ADMIN, MEMBER }
 
 data class Participant(
-    val userId: String,
-    val displayName: String,
-    val avatarUrl: String?,
-    val role: ParticipantRole,
-    val joinedAt: Instant,
+    val userId: String,           // maps to Participant.user_id
+    val displayName: String?,     // Participant.display_name is OPTIONAL in the web type — nullable
+    val avatarUrl: String?,       // maps to Participant.profile_photo_url (NOT `avatar_url`)
+    val role: ParticipantRole,    // Participant.role ("admin" | "member"), default member when absent
+    val joinedAt: Instant?,       // Participant.joined_at is epoch seconds/millis number, OPTIONAL
 )
 
 data class GroupRoster(
     val conversationId: String,
     val participants: List<Participant>,
+    // UNVERIFIED ASSUMPTION: the backend does NOT return a `current_user_role` field (the GET
+    // participants response is untyped in /openapi.json and absent from web types). Derive the
+    // current user's role client-side from `participants` matched against the logged-in user id.
     val currentUserRole: ParticipantRole,
 )
 ```
@@ -153,7 +171,8 @@ data class RosterError(val message: String, val userId: String?)
 
 `uiState` is built with `combine(repo.observeRoster(id), mutationState)` and exposed via
 `stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Loading)`. `pendingUserIds` drives
-per-row progress; `canManage = currentUserRole in {OWNER, ADMIN}`.
+per-row progress; `canManage = currentUserRole == ParticipantRole.ADMIN` (corrected: no OWNER role
+exists in this contract).
 
 ### 4.4 UI (Compose, Material 3)
 
@@ -167,56 +186,87 @@ per-row progress; `canManage = currentUserRole in {OWNER, ADMIN}`.
 
 ## 5. API Contract
 
-Paths align with the web reference and `/openapi.json`; confirm exact field casing at build time. Base
-path `/conversations/{conversationId}`. All requests carry session cookies + `X-CSRF-Token`.
+All paths verified against `/openapi.json` and `src/api/endpoints/messaging.ts`. **CORRECTED:** the base
+path is `/messaging/conversations/{conversation_id}` (the spec previously claimed `/conversations/...`),
+the per-member path segment is `{participant_id}` (not `{userId}`), and the response shapes below replace
+the previously-assumed shapes. All requests carry session cookies + `Authorization: Bearer` +
+`X-CSRF-Token` (and optional `X-SESSION-ID`); see §2/§8.
 
-**GET `/conversations/{conversationId}/participants`** — roster fetch (idempotent; eligible for bounded
-backoff retry, ~20s timeout).
+**GET `/messaging/conversations/{conversation_id}/participants`** — `op=list_participants_...`
+(idempotent; eligible for bounded backoff retry, ~20s timeout). The response schema is **untyped** in
+`/openapi.json` (`schema: {}`) and there is no dedicated roster type in the web client; the web app
+instead derives participants from `GET /messaging/conversations/{conversation_id}` →
+`ConversationOut.participants` (`src/pages/messages/ParticipantsPanel.tsx`). The authoritative per-row
+shape is `Participant` from `src/api/types.ts`:
 ```json
 {
-  "conversation_id": "grp_abc123",
-  "current_user_role": "admin",
   "participants": [
-    { "user_id": "u_1", "display_name": "Ada", "avatar_url": null, "role": "owner",  "joined_at": "2026-06-01T12:00:00Z" },
-    { "user_id": "u_2", "display_name": "Bri", "avatar_url": "https://…", "role": "member", "joined_at": "2026-06-02T09:30:00Z" }
+    { "user_id": "u_1", "display_name": "Ada", "role": "admin",  "joined_at": 1748779200, "profile_photo_url": null, "status": "active" },
+    { "user_id": "u_2", "display_name": "Bri", "role": "member", "joined_at": 1748856600, "profile_photo_url": "https://…" }
   ]
 }
 ```
+NOTE: fields are snake_case; `display_name`, `joined_at`, `profile_photo_url`, `role` are all OPTIONAL.
+There is **NO `current_user_role`** field — derive it client-side (see §4.1). `joined_at` is a numeric
+epoch timestamp (not an ISO-8601 string). The image field is `profile_photo_url`, not `avatar_url`.
+If the Android team prefers the dedicated `/participants` GET over the conversation GET, treat its body
+as a best-effort superset and map defensively (it is untyped server-side).
 
-**POST `/conversations/{conversationId}/participants`** — add members (non-idempotent; no auto-retry).
-Request:
+**POST `/messaging/conversations/{conversation_id}/participants`** — `op=add_participants_...` (request
+`AddParticipantsIn`; non-idempotent; no auto-retry).
+Request (**CORRECTED** — field is `participant_ids`, not `user_ids`):
 ```json
-{ "user_ids": ["u_7", "u_8"] }
+{ "participant_ids": ["u_7", "u_8"] }
 ```
-Response `200`: `{ "added": [ { "user_id": "u_7", "display_name": "Cy", "avatar_url": null, "role": "member", "joined_at": "2026-06-05T10:00:00Z" } ] }`
+Response `200` (**CORRECTED** — NOT `{ "added": [...] }`):
+```json
+{ "ok": true, "added_count": 2 }
+```
+Because the response does not echo the added member rows, the optimistic path must build provisional
+rows locally and then `refreshRoster()` to obtain authoritative roles/`joined_at` (§6.2).
 
-**PATCH `/conversations/{conversationId}/participants/{userId}`** — change role (state-changing; no
-auto-retry). Request: `{ "role": "admin" }`. Response `200`: the updated `Participant` object.
+**PATCH `/messaging/conversations/{conversation_id}/participants/{participant_id}`** — change role
+(request `UpdateParticipantRoleIn`; state-changing; no auto-retry).
+Request: `{ "role": "admin" }` where `role ∈ {"admin","member"}` (**CORRECTED** — no `"owner"`).
+Response `200` (**CORRECTED** — NOT the full Participant object): `{ "ok": true, "role": "admin" }`.
 
-**DELETE `/conversations/{conversationId}/participants/{userId}`** — remove member (state-changing; no
-auto-retry). Response `204 No Content`.
+**DELETE `/messaging/conversations/{conversation_id}/participants/{participant_id}`** — remove member
+(`op=remove_participant_...`; state-changing; no auto-retry). **CORRECTED:** response is `200` with a
+JSON body (`Successful Response`), **not** `204 No Content`. This endpoint exists in the backend but is
+**not** wired in the web client (no `removeParticipant` helper / no remove UI in `ParticipantsPanel.tsx`),
+so the exact body is unverifiable from the web reference — treat it as `{ "ok": true }`-style and ignore
+the body on 200.
 
-Retrofit:
+Retrofit (**CORRECTED** paths/types):
 ```kotlin
 interface ConversationApi {
-    @GET("conversations/{id}/participants")
+    @GET("messaging/conversations/{id}/participants")
     suspend fun getParticipants(@Path("id") id: String): Response<RosterDto>
 
-    @POST("conversations/{id}/participants")
-    suspend fun addParticipants(@Path("id") id: String, @Body body: AddParticipantsRequest): Response<AddParticipantsResponse>
+    @POST("messaging/conversations/{id}/participants")
+    suspend fun addParticipants(@Path("id") id: String, @Body body: AddParticipantsRequest): Response<AddParticipantsResponse> // { ok, added_count }
 
-    @PATCH("conversations/{id}/participants/{userId}")
-    suspend fun changeRole(@Path("id") id: String, @Path("userId") userId: String, @Body body: ChangeRoleRequest): Response<ParticipantDto>
+    @PATCH("messaging/conversations/{id}/participants/{participantId}")
+    suspend fun changeRole(@Path("id") id: String, @Path("participantId") participantId: String, @Body body: ChangeRoleRequest): Response<ChangeRoleResponse> // { ok, role }
 
-    @DELETE("conversations/{id}/participants/{userId}")
-    suspend fun removeParticipant(@Path("id") id: String, @Path("userId") userId: String): Response<Unit>
+    @DELETE("messaging/conversations/{id}/participants/{participantId}")
+    suspend fun removeParticipant(@Path("id") id: String, @Path("participantId") participantId: String): Response<Unit> // 200, body ignored
 }
+
+data class AddParticipantsRequest(val participant_ids: List<String>)
+data class ChangeRoleRequest(val role: String)            // "admin" | "member"
+data class AddParticipantsResponse(val ok: Boolean, val added_count: Int)
+data class ChangeRoleResponse(val ok: Boolean, val role: String)
 ```
 
 **Error body** follows the shared FastAPI shape `detail: string | [{msg}] | {code,...}`, parsed by the
-existing core-network `ErrorBodyAdapter` into `ApiResult.Error(code, message)`. Relevant statuses:
-`401` (handled by refresh-then-retry interceptor), `403` (insufficient role), `404` (group/user gone),
-`409` (e.g. last-admin demotion, user already a member), `422` (validation).
+existing core-network `ErrorBodyAdapter` into `ApiResult.Error(code, message)`. Statuses documented in
+`/openapi.json` for these ops are `200` and `422` (HTTPValidationError) only; `401/403/404/409` are
+**assumed** by analogy with other messaging endpoints (e.g. the conversation list/get ops document
+`400/401/403/429`) and the app's auth middleware — treat `403`/`404`/`409` handling as defensive and
+not contractually guaranteed for the participant ops specifically: `401` (refresh-then-retry interceptor),
+`403` (insufficient role — assumed), `404` (group/user gone — assumed), `409` (last-admin demotion /
+already-a-member — assumed), `422` (validation — verified).
 
 ## 6. Data & State Management
 
@@ -265,8 +315,11 @@ in a lightweight per-conversation meta column; this ticket updates it on every r
 1. ViewModel adds the target `userId` to `pendingUserIds`.
 2. Repository applies the optimistic change to Room (insert/delete/role-update) inside a transaction.
 3. API call executes.
-4. **Success:** reconcile Room with the authoritative response (e.g. server-assigned role/joinedAt);
-   remove from `pendingUserIds`.
+4. **Success:** reconcile Room with the authoritative state, then remove from `pendingUserIds`. NOTE
+   (corrected): add returns only `{ ok, added_count }` and role-change returns only `{ ok, role }` —
+   neither echoes full member rows — so reconciliation for **add** is a follow-up `refreshRoster()`
+   (to obtain server-assigned `joined_at`/`role`); for **role-change** apply the returned `role`; for
+   **remove** keep the optimistic deletion.
 5. **Failure:** roll back the optimistic Room write (re-fetch the affected row from the last known good
    snapshot held in-repo, or trigger a `refreshRoster`), set `RosterError`, remove from
    `pendingUserIds`.
@@ -298,9 +351,12 @@ process death.
 
 - **Transport:** dev backend is plaintext HTTP; the app's network security config permits cleartext for
   the dev host only (inherited from core-network). No participant data is logged in plaintext.
-- **Auth:** every mutating request must include session cookies (persistent `CookieJar`) and the
-  `X-CSRF-Token` header echoing the `ui_csrf` cookie — both injected by the shared OkHttp interceptor.
-  Requests without CSRF must fail closed (no silent unauthenticated mutation).
+- **Auth:** every mutating request must include session cookies (persistent `CookieJar`), the
+  `Authorization: Bearer <token>` header, and the `X-CSRF-Token` header echoing the `ui_csrf` cookie —
+  all injected by the shared OkHttp interceptor (verified against `src/api/client.ts`: it sets
+  `credentials: "include"`, `Authorization: Bearer …`, and `X-CSRF-Token` from `getCookie("ui_csrf")`).
+  The backend also declares an optional `X-SESSION-ID` header on these ops; forward it when available.
+  Requests without CSRF/Authorization must fail closed (no silent unauthenticated mutation).
 - **Authorization:** client gating is a UX convenience only; the server is authoritative. The UI must
   never assume an action succeeded without a 2xx.
 - **Privacy:** participant `userId`/`displayName`/`avatarUrl` are PII; never include them in analytics
@@ -361,13 +417,17 @@ Coverage target consistent with module standard; all new public repo/VM function
 
 ## 13. Risks & Open Questions
 
-- **Q1 (endpoint shape):** confirm against `/openapi.json` whether add returns the full roster or only
-  `added[]`, and whether role values are `owner/admin/member` lowercase. Repository mapping isolates this.
-- **Q2 (batch add semantics):** does POST add fail atomically or partially (some users invalid)? If
-  partial, response must enumerate failures; current design assumes atomic 2xx with `added[]` and treats
-  422 as full failure.
-- **Q3 (last-admin / owner rules):** exact server rules for demoting the last admin and whether owner is
-  distinct from admin — client guard mirrors assumed rules; reconcile via 409 handling.
+- **Q1 (endpoint shape):** RESOLVED during review. Add returns `{ ok, added_count }` (no member rows);
+  role values are exactly `admin`/`member` lowercase (no `owner`). Roster is fetched via the untyped
+  `/participants` GET or derived from `ConversationOut.participants`. Repository mapping isolates this.
+- **Q2 (batch add semantics):** does POST add fail atomically or partially (some users invalid)? Still
+  OPEN — `added_count` could be < the requested count, implying partial success, but the contract is
+  undocumented. Current design treats `added_count < requested` by always following with a
+  `refreshRoster()` and treats `422` as full failure. Verify on the dev host.
+- **Q3 (last-admin / owner rules):** PARTIALLY RESOLVED. There is no distinct `owner` role in the
+  messaging participant contract (only admin/member), so the "owner vs admin" question is moot. Exact
+  server rules for demoting the last admin remain UNVERIFIED (no documented `409`); client guard mirrors
+  assumed rules and reconciles via error handling + refresh.
 - **Risk:** unreliable dev host causing optimistic/server divergence — mitigated by reconcile + refresh
   on every error.
 - **Risk:** stale `current_user_role` causing a forbidden action to appear available — mitigated by
@@ -375,14 +435,19 @@ Coverage target consistent with module standard; all new public repo/VM function
 
 ## 14. Acceptance Criteria
 
-AC-1. Adding one or more participants succeeds against `POST /conversations/{id}/participants`, the new
-members appear in the roster, and they remain after app restart (cold cache, no network). *(persist + reflect)*
+AC-1. Adding one or more participants succeeds against
+`POST /messaging/conversations/{conversation_id}/participants` with body `{ "participant_ids": [...] }`
+(response `{ ok, added_count }`), the new members appear in the roster after a follow-up refresh, and
+they remain after app restart (cold cache, no network). *(persist + reflect)*
 
-AC-2. Removing a participant succeeds against `DELETE /conversations/{id}/participants/{userId}`
-(204), the row disappears after confirmation, and the removal persists across restart.
+AC-2. Removing a participant succeeds against
+`DELETE /messaging/conversations/{conversation_id}/participants/{participant_id}` (HTTP `200`, body
+ignored), the row disappears after confirmation, and the removal persists across restart.
 
-AC-3. Changing a participant's role succeeds against `PATCH /conversations/{id}/participants/{userId}`,
-the role badge updates, and the new role persists across restart.
+AC-3. Changing a participant's role succeeds against
+`PATCH /messaging/conversations/{conversation_id}/participants/{participant_id}` with body
+`{ "role": "admin"|"member" }` (response `{ ok, role }`), the role badge updates, and the new role
+persists across restart.
 
 AC-4. Optimistic changes roll back fully (cache + UI) on 403/409/timeout, with a clear, retryable error
 surfaced; no orphaned `pendingUserIds`.
@@ -391,7 +456,8 @@ AC-5. Non-admin members see a read-only roster (no Add action, no row management
 
 AC-6. Current user cannot self-remove/self-demote, and the last admin cannot be demoted, via the UI.
 
-AC-7. All mutating requests include cookies + `X-CSRF-Token`; a 401 triggers exactly one refresh-retry.
+AC-7. All mutating requests include cookies + `Authorization: Bearer` + `X-CSRF-Token` (and
+`X-SESSION-ID` when available); a 401 triggers exactly one `POST /ui/session/refresh` then retry.
 
 AC-8. No PII appears in analytics params or release logs.
 
@@ -406,3 +472,225 @@ AC-8. No PII appears in analytics params or release logs.
 - API field shapes verified against `/openapi.json`; open questions Q1–Q3 resolved or documented as
   follow-ups.
 - PR reviewed and approved; no new cleartext exceptions beyond the existing dev-host config.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its VERDICT and exact source pointer. OpenAPI pointers use
+`METHOD /path` / schema names from `reference/openapi.index.txt` + `reference/openapi.pretty.json`;
+frontend pointers are paths under `reference/src/`.
+
+1. **Add endpoint path & method** = `POST /messaging/conversations/{conversation_id}/participants`.
+   VERDICT: Corrected (spec said `POST /conversations/{conversationId}/participants`).
+   SOURCE: OpenAPI `POST /messaging/conversations/{conversation_id}/participants`
+   (op=`add_participants_...`); `src/api/endpoints/messaging.ts: addParticipants`.
+2. **Add request body field** = `participant_ids: string[]`. VERDICT: Corrected (spec said `user_ids`).
+   SOURCE: schema `AddParticipantsIn` (property `participant_ids`); `src/api/types.ts: AddParticipantsReq`;
+   `src/api/endpoints/messaging.ts` line 593; `src/pages/messages/ParticipantsPanel.tsx` line 46
+   (`{ participant_ids: [userId] }`).
+3. **Add response shape** = `{ ok: boolean, added_count: number }`. VERDICT: Corrected (spec said
+   `{ added: [Participant…] }`). SOURCE: `src/api/endpoints/messaging.ts: addParticipants` return type
+   `api.post<{ ok: boolean; added_count: number }>`. (OpenAPI response is untyped `schema: {}`.)
+4. **Change-role endpoint** = `PATCH /messaging/conversations/{conversation_id}/participants/{participant_id}`.
+   VERDICT: Corrected (spec path/segment said `/conversations/.../{userId}`).
+   SOURCE: OpenAPI `PATCH /messaging/conversations/{conversation_id}/participants/{participant_id}`
+   (op=`update_participant_role_...`); `src/api/endpoints/messaging.ts: updateParticipantRole`.
+5. **Change-role request body** = `{ role: "admin" | "member" }`. VERDICT: Corrected (spec implied an
+   `owner` value was possible). SOURCE: schema `UpdateParticipantRoleIn` (`role` enum `["admin","member"]`,
+   required); `src/api/types.ts: UpdateRoleReq`.
+6. **Change-role response shape** = `{ ok: boolean, role: string }`. VERDICT: Corrected (spec said "the
+   updated Participant object"). SOURCE: `src/api/endpoints/messaging.ts: updateParticipantRole` return
+   type `api.patch<{ ok: boolean; role: string }>`.
+7. **Remove endpoint & response code** = `DELETE /messaging/conversations/{conversation_id}/participants/{participant_id}`,
+   HTTP **200** with JSON body. VERDICT: Corrected (spec said `204 No Content`).
+   SOURCE: OpenAPI `DELETE /messaging/conversations/{conversation_id}/participants/{participant_id}`
+   (op=`remove_participant_...`), response `200: Successful Response`.
+8. **Remove not implemented in web client.** VERDICT: Verified. SOURCE: `src/api/endpoints/messaging.ts`
+   exports `addParticipants` + `updateParticipantRole` only (no `removeParticipant`);
+   `src/pages/messages/ParticipantsPanel.tsx` has add + role controls but no remove UI. The backend
+   endpoint nevertheless exists (citation 7), so the exact 200 body is an assumption (see Open assumptions).
+9. **Roster GET endpoint** = `GET /messaging/conversations/{conversation_id}/participants`. VERDICT:
+   Verified (path corrected to `/messaging/...`). SOURCE: OpenAPI
+   `GET /messaging/conversations/{conversation_id}/participants` (op=`list_participants_...`).
+10. **Participant DTO fields** = snake_case `user_id`, optional `display_name`, optional `role`
+    (`"admin"|"member"`), optional numeric `joined_at`, optional `profile_photo_url`, `status`.
+    VERDICT: Corrected (spec used `avatar_url` and ISO-string `joined_at`, and non-null fields).
+    SOURCE: `src/api/types.ts: Participant` (lines 831-841).
+11. **No `current_user_role` field on the roster response.** VERDICT: Corrected → Unverified-assumption.
+    The spec/model assumed a server-provided `current_user_role`. SOURCE: absent from `src/api/types.ts`
+    (no such field on `Participant`/`Conversation`); GET participants response is untyped in OpenAPI
+    (`schema: {}`). Current user's role must be derived client-side.
+12. **Role values are exactly `admin`/`member` (no `owner`).** VERDICT: Corrected.
+    SOURCE: `UpdateParticipantRoleIn.role` enum; `src/api/types.ts: Participant.role` = `"admin" | "member"`.
+13. **Auth headers on participant calls** = cookies (`credentials: include`) + `Authorization: Bearer` +
+    `X-CSRF-Token` (from `ui_csrf` cookie); backend also declares optional `authorization` + `X-SESSION-ID`.
+    VERDICT: Corrected (spec listed only cookie + `X-CSRF-Token`). SOURCE: `src/api/client.ts` lines
+    124/158-159/167-170/183; OpenAPI participant ops `params=...,authorization,X-SESSION-ID`.
+14. **401 handling** = one-shot `POST /ui/session/refresh` then single retry. VERDICT: Verified.
+    SOURCE: `src/api/client.ts: refreshSession` (lines 121-128) and 401 handling (lines 191-236).
+15. **422 returns FastAPI `HTTPValidationError` (`detail`).** VERDICT: Verified. SOURCE: all four
+    participant ops list `422: HTTPValidationError` in `openapi.index.txt`; schema `HTTPValidationError`.
+16. **`403`/`404`/`409` status handling.** VERDICT: Unverified-assumption. SOURCE: NOT documented on the
+    participant ops (they list only `200`/`422`); inferred from sibling messaging ops
+    (`GET /messaging/conversations` lists `400/401/403/429`) and app auth middleware.
+17. **Framework choices** (Compose Material 3 `PullToRefreshBox`, Hilt `@HiltViewModel`/KSP, Room
+    `@Upsert`/`@Transaction`, Coil, Navigation-Compose `savedStateHandle` back-result). VERDICT:
+    Unverified-assumption (consistent with current AndroidX guidance; not checked against a live docs
+    URL in this review). SOURCE: framework ref — Android developer docs (Compose Material 3, Hilt, Room,
+    Navigation-Compose). Validate API surfaces against the versions pinned by the project at build time.
+
+### Corrections made
+
+- §2/§4.1/§5/§14/AC: base path corrected `/conversations/...` → `/messaging/conversations/...`; member
+  path segment `{userId}` → `{participant_id}`.
+- §5/§14: add request field `user_ids` → `participant_ids`.
+- §5/§6.2/§14: add response `{ added: [...] }` → `{ ok, added_count }`; add reconciliation now requires a
+  follow-up `refreshRoster()` since rows aren't echoed.
+- §5/§14: role-change response "Participant object" → `{ ok, role }`.
+- §5/§14/AC-2: DELETE response `204 No Content` → `200` with body (ignored).
+- §4.1/§4.3/§13: removed the `OWNER` role (contract is `admin`/`member` only); `canManage` now
+  `== ADMIN`.
+- §4.1 Participant DTO: `avatar_url` → `profile_photo_url`; ISO-string `joined_at` → numeric epoch;
+  `display_name`/`role`/`joined_at` made nullable.
+- §2/§8/AC-7: auth corrected to cookies + `Authorization: Bearer` + `X-CSRF-Token` (+ optional
+  `X-SESSION-ID`).
+- §2: corrected the web-reference pointer (no `conversations.ts`; the helpers live in `messaging.ts`)
+  and noted the web client has no remove-participant flow.
+- §13: Q1 resolved, Q3 partially resolved (no `owner` role), Q2 left open with explicit handling.
+
+### Open assumptions
+
+- **`current_user_role` derivation:** server does not return it; we assume the current user id is
+  available from the auth/session store and that exactly one `participants[]` row matches it. Why
+  unverifiable: roster GET is untyped server-side and no web code consumes a roster-level role.
+- **DELETE remove response body:** endpoint returns `200` but has no web consumer and an untyped schema;
+  we assume an `{ ok: true }`-style body and ignore it. Verify against the live dev host.
+- **`403`/`404`/`409` semantics** (insufficient role, last-admin demotion, already-a-member): not
+  documented for the participant ops; handling is defensive. Why unverifiable: only `200`/`422` are in
+  the OpenAPI spec for these ops.
+- **Batch-add atomicity (Q2):** `added_count` may be partial; undocumented. We always refresh after add.
+- **Pull-to-refresh / contact-picker reuse from AND-157:** assumes AND-157 landed those affordances;
+  not yet present in this repo snapshot.
+
+## 17. Test Plan
+
+Test targets: **JVM** = local JVM/Robolectric (no device); **emu35** = headless AVD `test35` (x86_64,
+API 35); **A15** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a).
+Most cases are device-agnostic and run fastest on JVM or emu35. A15 is reserved for cases that must
+exercise real hardware / a real network path against the flaky dev host; those are flagged
+"MUST run on A15". No participant feature here uses camera/biometrics/FCM/WebRTC, so the physical
+device is used primarily for the real-network/offline-transition case.
+
+- **TC-AND-158-01** — Add participants happy path (contract).
+  Type: contract/MockWebServer. Target: JVM. Preconditions: in-memory Room with an existing roster
+  (current user is admin); MockWebServer scripted `POST .../participants` → `200 {"ok":true,"added_count":2}`
+  then `GET .../participants` → roster incl. new members. Steps: call
+  `repo.addParticipants(convId, ["u_7","u_8"])`; await. Expected: request path is
+  `POST /messaging/conversations/{id}/participants`, body `{"participant_ids":["u_7","u_8"]}`; result is
+  `ApiResult.Success`; a follow-up refresh runs and Room now contains u_7/u_8; `pendingUserIds` cleared.
+  Traces: AC-1.
+
+- **TC-AND-158-02** — Remove participant happy path (contract).
+  Type: contract/MockWebServer. Target: JVM. Preconditions: roster with member u_2; MockWebServer
+  `DELETE .../participants/u_2` → `200 {"ok":true}`. Steps: call `repo.removeParticipant(convId,"u_2")`.
+  Expected: request is `DELETE /messaging/conversations/{id}/participants/u_2`; 200 body ignored; u_2
+  removed from Room; `ApiResult.Success`. Traces: AC-2.
+
+- **TC-AND-158-03** — Change role happy path (contract).
+  Type: contract/MockWebServer. Target: JVM. Preconditions: roster with member u_2; MockWebServer
+  `PATCH .../participants/u_2` → `200 {"ok":true,"role":"admin"}`. Steps: call
+  `repo.changeRole(convId,"u_2",ADMIN)`. Expected: request body `{"role":"admin"}`; Room role for u_2
+  becomes ADMIN; returned `role` applied; `ApiResult.Success`. Traces: AC-3.
+
+- **TC-AND-158-04** — Persistence across process death (the headline "persist + reflect").
+  Type: integration (in-memory→file Room). Target: emu35 (instrumented Room on a real DB file).
+  Preconditions: real Room DB file. Steps: perform add, remove, and role-change (each reconciled);
+  close the DB and re-open a fresh DAO instance against the same file with **no network**; query roster.
+  Expected: added member present, removed member absent, changed role persisted — all without a network
+  call. Traces: AC-1, AC-2, AC-3.
+
+- **TC-AND-158-05** — Optimistic rollback on 403.
+  Type: unit (Turbine VM) + contract. Target: JVM. Preconditions: roster, current user admin;
+  MockWebServer `PATCH .../participants/u_2` → `403 {"detail":"forbidden"}`. Steps: snapshot Room;
+  `onChangeRole("u_2", ADMIN)`; observe `uiState`. Expected: role flips optimistically then rolls back to
+  the pre-mutation snapshot (cache equality before==after); `RosterError` surfaced (retryable); roster
+  re-fetched; no orphaned `pendingUserIds`. Traces: AC-4.
+
+- **TC-AND-158-06** — Optimistic rollback on 409 last-admin demotion.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: roster where u_1 is the only admin;
+  MockWebServer `PATCH .../participants/u_1` → `409 {"detail":{"code":"last_admin"}}`. Steps: attempt to
+  demote u_1 to member. Expected: optimistic change rolled back; error mapped to "A group must have at
+  least one admin"; cache unchanged after reconcile. Traces: AC-4, AC-6.
+
+- **TC-AND-158-07** — Validation error (422) on add.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer `POST .../participants` →
+  `422` with `HTTPValidationError` body (`{"detail":[{"loc":["body","participant_ids"],"msg":"...","type":"..."}]}`).
+  Steps: `repo.addParticipants(convId, [])`. Expected: `detail[]` parsed by `ErrorBodyAdapter` into
+  `ApiResult.Error`; treated as full failure; no optimistic rows remain; no auto-retry of the POST.
+  Traces: AC-4.
+
+- **TC-AND-158-08** — Auth headers + CSRF + one-shot 401 refresh.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: cookie jar with `ui_csrf`; auth store token;
+  MockWebServer returns `401` once for `PATCH .../participants/u_2`, then `200` on retry after a
+  `POST /ui/session/refresh`. Steps: change role. Expected: original + retried requests carry
+  `Cookie`, `Authorization: Bearer …`, and `X-CSRF-Token: <ui_csrf>`; exactly one `/ui/session/refresh`
+  is issued; exactly one retry; final `Success`. A request missing CSRF/Authorization must fail closed.
+  Traces: AC-7.
+
+- **TC-AND-158-09** — Non-idempotent mutations are never auto-retried; GET is.
+  Type: unit. Target: JVM. Preconditions: MockWebServer returns a timeout/`5xx` for POST/PATCH/DELETE and
+  for GET. Steps: invoke each mutation once; invoke `refreshRoster`. Expected: each POST/PATCH/DELETE hits
+  the server exactly once (no retry) and returns a retryable `ApiResult.Error`; GET retries with bounded
+  jittered backoff (≤3 attempts). Traces: AC-4.
+
+- **TC-AND-158-10** — Offline path disables mutations (no write queue) against the flaky dev host.
+  Type: instrumented/e2e. Target: **A15 (MUST run on physical device)** — needs real connectivity
+  toggling and the real plaintext-HTTP dev host. Preconditions: app on A15 pointed at
+  `http://18.222.237.167:8000`; roster cached. Steps: enable airplane mode; open group detail. Expected:
+  cached roster renders with a stale banner; Add/overflow actions disabled showing "You're offline";
+  re-enabling network restores actions and a refresh reconciles. Traces: AC-4 (resilience), AC-1/2/3
+  (reflect-from-cache).
+
+- **TC-AND-158-11** — Non-admin sees read-only roster.
+  Type: Compose-UI. Target: emu35. Preconditions: roster where the current user's derived role is
+  MEMBER. Steps: render `GroupParticipantsScreen`. Expected: no "Add" app-bar action; no per-row overflow
+  menu; rows are display-only. Traces: AC-5.
+
+- **TC-AND-158-12** — Self-protection guards (UI).
+  Type: Compose-UI + unit. Target: emu35 (UI) / JVM (VM guard). Preconditions: current user is admin and
+  is the last admin. Steps: open own row overflow; attempt self-remove and self-demote; attempt last-admin
+  demote. Expected: self-remove/self-demote disabled or blocked client-side (no API call fired — assert at
+  VM level); last-admin demote blocked client-side with explanatory copy. Traces: AC-6.
+
+- **TC-AND-158-13** — Add → row appears; Remove → confirm dialog → row disappears; role badge updates.
+  Type: Compose-UI. Target: emu35. Preconditions: MockWebServer scripting `200` add/role/remove + GET.
+  Steps: drive add (picker result → `onAddParticipants`), remove (overflow → AlertDialog confirm), role
+  change (overflow → Make admin). Expected: roster list updates accordingly; destructive remove requires
+  confirmation; per-row progress shown while pending. Traces: AC-1, AC-2, AC-3, AC-5.
+
+- **TC-AND-158-14** — Accessibility checks on the roster UI.
+  Type: Compose-UI (semantics) + manual TalkBack. Target: emu35 (automated semantics) / A15 (manual
+  TalkBack pass). Preconditions: roster rendered as admin. Steps: assert content descriptions/semantic
+  labels on Add, overflow items, dialog buttons; role badges expose text (not color-only); touch targets
+  ≥48dp; in-flight rows announce "updating <name>" via `stateDescription`; run a TalkBack pass on A15.
+  Expected: all assertions pass; destructive remove announced as destructive. Traces: AC-5 (UI surface),
+  plus §9 accessibility requirements.
+
+- **TC-AND-158-15** — No PII in analytics params / release logs.
+  Type: unit. Target: JVM. Preconditions: fake analytics sink + Timber test tree (release config). Steps:
+  perform add/remove/role-change and a forced refresh failure. Expected: emitted events
+  (`group_participant_add/remove/role_change`, `group_roster_refresh_failed`) contain only
+  `conversation_id_hash`/`count`/`target_role`/`result`/`error_code` — no `user_id`/`display_name`/
+  `profile_photo_url`; logs contain no request/response bodies. Traces: AC-8.
+
+### Coverage matrix
+
+| AC | Covered by |
+| --- | --- |
+| AC-1 (add persists + reflects) | TC-01, TC-04, TC-13 |
+| AC-2 (remove persists) | TC-02, TC-04, TC-13 |
+| AC-3 (role change persists) | TC-03, TC-04, TC-13 |
+| AC-4 (optimistic rollback on 403/409/timeout, retryable) | TC-05, TC-06, TC-07, TC-09, TC-10 |
+| AC-5 (non-admin read-only) | TC-11, TC-13, TC-14 |
+| AC-6 (self/last-admin protection) | TC-06, TC-12 |
+| AC-7 (auth headers + one-shot 401 refresh) | TC-08 |
+| AC-8 (no PII in analytics/logs) | TC-15 |

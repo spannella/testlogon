@@ -5,7 +5,8 @@ milestone: M4
 epic: E24
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-031]
 blocks: []
 ---
@@ -71,8 +72,9 @@ in this ticket's tests where not yet available.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000`
   (plaintext HTTP, unreliable; ~20s call timeouts). OpenAPI at `/openapi.json`.
   Web reference for tip endpoints: `frontend/src/api/endpoints/*.ts`, shared
-  types `frontend/src/api/types.ts`. The exact tip endpoint path/fields below
-  MUST be validated against `/openapi.json` before implementation (OQ-1).
+  types `frontend/src/api/types.ts`. **[Verified 2026-06-06]** The endpoint is
+  `POST /posts/{post_id}/tip` (no `/ui` prefix) with request schema
+  `PostTipRequest`; see §5 for the corrected contract.
 
 ## 3. Functional Requirements
 
@@ -134,17 +136,25 @@ state to avoid ambiguity about whether the charge occurred.
 
 data class TipRequest(
     val postId: String,
-    val amount: TipAmount,
-    val message: String?,        // <= 200 chars, nullable
-    val idempotencyKey: String,  // UUID v4, stable across retries of same intent
+    val amount: TipAmount,                 // minor units (cents)
+    val paymentMethodId: String? = null,   // optional; default PM used server-side if null
+    // [Corrected 2026-06-06] message is NOT supported by the backend tip schema
+    // (PostTipRequest has no message field). Kept only as a client-side note;
+    // if product still wants it, FR-4 must be cut or backed by a new endpoint (OQ-5).
+    val message: String? = null,
+    val idempotencyKey: String,  // UUID v4; see OQ-3 (server support unconfirmed)
 )
 
+// [Corrected 2026-06-06] The backend tip response is an empty body (OpenAPI) /
+// { ok, tip_total_cents } (web client). It does NOT return tip_id, currency, or
+// created_at. The receipt below carries only what is actually available; the
+// confirmed amount shown to the user is the REQUEST amount echoed back locally
+// (the server does not return a per-tip amount), and tipTotalCents is the new
+// running post total when present.
 data class TipReceipt(
-    val tipId: String,
     val postId: String,
-    val amount: TipAmount,
-    val currency: String,        // ISO-4217, e.g. "USD"
-    val createdAt: Instant,
+    val amount: TipAmount,           // the amount that was submitted (cents)
+    val tipTotalCents: Int?,         // server-reported running total, if returned
 )
 
 data class TipConfig(
@@ -157,36 +167,46 @@ data class TipConfig(
 
 ### 4.2 Network service (core-network)
 
+**[Corrected 2026-06-06]** The path is `posts/{id}/tip` (no `ui/` prefix). The
+backend request schema is `PostTipRequest` with fields `amount_cents` (int,
+minimum 1), optional `currency` (default `"usd"`), and optional
+`payment_method_id`. There is **no `message` field** in the backend schema — see
+the §5 note and OQ-5. The backend does **not** document an `Idempotency-Key`
+header (OQ-3); it is shown below as a client-side-only header pending OQ-3.
+
 ```kotlin
 interface TipApiService {
-    @POST("ui/posts/{id}/tip")
+    @POST("posts/{id}/tip")
     suspend fun tipPost(
         @Path("id") postId: String,
+        // NOTE (OQ-3): Idempotency-Key is NOT in the backend OpenAPI; keep only
+        // if the server is confirmed to honor it, else drop and rely on submit lock.
         @Header("Idempotency-Key") idempotencyKey: String,
         @Body body: TipRequestDto,
-    ): Response<TipReceiptDto>
+    ): Response<TipResultDto>
 }
 
 @JsonClass(generateAdapter = true)
 data class TipRequestDto(
-    @Json(name = "amount") val amount: Int,
-    @Json(name = "message") val message: String?,
+    @Json(name = "amount_cents") val amountCents: Int,        // minor units, >= 1
+    @Json(name = "currency") val currency: String? = "usd",   // default usd
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
 )
 
+// Response: OpenAPI documents 200 with an EMPTY body schema ({}). The web client
+// (newsfeed.ts: tipPostDirect) types it as { ok, tip_total_cents }. Both fields
+// are therefore nullable/optional; do NOT assume a tip_id/created_at receipt.
 @JsonClass(generateAdapter = true)
-data class TipReceiptDto(
-    @Json(name = "tip_id") val tipId: String,
-    @Json(name = "post_id") val postId: String,
-    @Json(name = "amount") val amount: Int,
-    @Json(name = "currency") val currency: String,
-    @Json(name = "created_at") val createdAt: String, // ISO-8601 -> Instant adapter
+data class TipResultDto(
+    @Json(name = "ok") val ok: Boolean? = null,
+    @Json(name = "tip_total_cents") val tipTotalCents: Int? = null,
 )
 ```
 
-The `X-CSRF-Token` header and cookie jar are applied by the shared OkHttp
-interceptors; only the per-request `Idempotency-Key` is supplied here. The call
-returns raw `Response<…>` so the repository can branch on 401/4xx/5xx and map to
-`ApiResult<TipReceipt>`.
+The `X-CSRF-Token` header (echoed from the `ui_csrf` cookie) and cookie jar are
+applied by the shared OkHttp interceptors (verified in web `src/api/client.ts`).
+The call returns raw `Response<…>` so the repository can branch on 401/4xx/5xx
+and map to `ApiResult<TipReceipt>`.
 
 ### 4.3 Repository (core-data)
 
@@ -207,8 +227,13 @@ class TipRepositoryImpl @Inject constructor(
         withContext(io) {
             val resp = api.tipPost(
                 postId = request.postId,
-                idempotencyKey = request.idempotencyKey,
-                body = TipRequestDto(request.amount.value, request.message?.takeIf { it.isNotBlank() }),
+                idempotencyKey = request.idempotencyKey,  // see OQ-3
+                // [Corrected] body carries amount_cents + optional payment_method_id;
+                // no message field exists in the backend schema (OQ-5).
+                body = TipRequestDto(
+                    amountCents = request.amount.value,
+                    paymentMethodId = request.paymentMethodId,
+                ),
             )
             when {
                 resp.isSuccessful && resp.body() != null ->
@@ -304,48 +329,53 @@ after ~1.5s. `ModalBottomSheet` dismissal is gated: in `Submitting` the
 
 ## 5. API Contract
 
-One mutating endpoint (path/fields to be confirmed against `/openapi.json`,
-OQ-1):
+One mutating endpoint. **[Verified/Corrected 2026-06-06 against
+`POST /posts/{post_id}/tip` (op `tip_post_posts__post_id__tip_post`), schema
+`PostTipRequest`, and web `src/api/endpoints/newsfeed.ts: tipPostDirect`.]**
 
 **Tip a post**
 ```
-POST /ui/posts/{id}/tip
+POST /posts/{post_id}/tip          # CORRECTED: no /ui prefix, path param is post_id
 Headers:
-  X-CSRF-Token: <ui_csrf>
-  Idempotency-Key: <uuid-v4>
-  Cookie: <session>
+  X-CSRF-Token: <ui_csrf>          # verified: client.ts echoes ui_csrf cookie
+  Cookie: <session>                # credentials: include
   Content-Type: application/json
-Body:
-  { "amount": 10, "message": "great post!" }   // message optional/nullable
+  # Idempotency-Key: NOT in the OpenAPI contract (OQ-3) — do not assume support
+Body (PostTipRequest):
+  {
+    "amount_cents": 1000,                 // CORRECTED: integer minor units, minimum 1
+    "currency": "usd",                    // optional, default "usd"
+    "payment_method_id": "pm_..."         // optional; default PM used if omitted
+  }
 
-201 Created (or 200 OK)
-{
-  "tip_id": "tip_8f2c…",
-  "post_id": "post_123",
-  "amount": 10,
-  "currency": "USD",
-  "created_at": "2026-06-05T14:03:11Z"
-}
+200 OK
+{}                                        # OpenAPI: empty body schema ({})
+# Web client (tipPostDirect) types the body as:
+#   { "ok": true, "tip_total_cents": 12345 }
+# CORRECTED: there is NO tip_id / currency / created_at receipt.
 ```
 
 Notable responses:
-- `400 / 422 Unprocessable Entity` — invalid amount / out of range / bad body;
-  FastAPI `detail` (`string | [{msg}] | {code,...}`) mapped to an inline error.
+- `422 Unprocessable Entity` — invalid/missing `amount_cents` (e.g. < 1) or bad
+  body; FastAPI `HTTPValidationError` (`detail: [{loc, msg, type}]`) mapped to an
+  inline error. (Verified: only `422` and `200` are documented for this op.)
 - `401 Unauthorized` — shared interceptor performs one `POST /ui/session/refresh`
   then a single retry; a second 401 surfaces as auth error -> `Entry(error)`.
-- `402 Payment Required / 409` (insufficient balance / billing) — mapped to a
-  "billing required" outcome -> `TipEffect.NavigateToBilling` (FR-9).
-- `403` — self-tip or not permitted; surfaced as inline error (and the
-  affordance should already be hidden for self, FR-9).
-- `404` — post deleted/unavailable; inline error, no retry.
-- `5xx` / timeout — generic retriable error; same idempotency key on retry.
+  (Verified: `client.ts` refresh-once-then-retry, refresh path `/ui/session/refresh`.)
+- `402 / 409` (insufficient balance / billing) — **assumption (OQ-4):** not in the
+  documented responses for this op; if returned, map to a "billing required"
+  outcome -> `TipEffect.NavigateToBilling` (FR-9). Treat as best-effort until OQ-4.
+- `403` — self-tip or not permitted; the web client surfaces a toast. Map to inline
+  error; the affordance should already be hidden for self (FR-9). (Assumption: not
+  documented for this op.)
+- `404` — post deleted/unavailable; inline error, no retry. (Assumption.)
+- `5xx` / timeout — generic retriable error.
 
-Because the request carries an `Idempotency-Key`, a retry after an ambiguous
-failure (timeout, lost response) MUST return the original receipt rather than
-charging again; the client relies on this for safe FR-7 retries. If
-`/openapi.json` shows a different path (e.g. a generic `POST /ui/tips` with a
-`{post_id}` body) or omits idempotency support, the repository contract
-(`tip(TipRequest)`) is unaffected but OQ-1/OQ-3 must be resolved before merge.
+**[Corrected]** The backend does not document `Idempotency-Key` support (OQ-3),
+so safe-retry against ambiguous timeouts cannot be guaranteed at the contract
+level; until OQ-3 resolves, the only firm double-submit protection is the
+client-side `Submitting` lock (FR-8). The repository contract (`tip(TipRequest)`)
+is unaffected by these corrections.
 
 ## 6. Data & State Management
 
@@ -357,9 +387,11 @@ charging again; the client relies on this for safe FR-7 retries. If
   scoped to the host screen). It is **not** persisted across process death; a
   process kill mid-submit drops the key (acceptable: server idempotency only
   matters across explicit retries, see OQ-3).
-- **Source of truth:** the server `TipReceiptDto` is the only source for the
-  confirmed amount shown in `Confirmed`; the client never claims success from
-  local arithmetic.
+- **Source of truth:** success is gated on a 2xx from the server; the client
+  never claims success from local arithmetic. **[Corrected]** Because the tip
+  response does not return a per-tip amount (empty body / `{ ok, tip_total_cents }`),
+  the `Confirmed` amount is the **submitted** `amount_cents` echoed locally, and
+  `tip_total_cents` (when present) is the new running post total, not the tip.
 - **TipConfig:** read from remote config/DataStore if available, otherwise
   hardcoded defaults (`presets [1,5,10,20,50]`, `min 1`, `max 500`, `currency`
   from session/locale). DataStore is read-only here; no new keys are written.
@@ -497,19 +529,31 @@ Coverage target for new repository + ViewModel logic >= 85% lines.
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (endpoint shape):** Confirm against `/openapi.json` and
-  `frontend/src/api/endpoints/*.ts` the exact tip path (`POST /ui/posts/{id}/tip`
-  vs a generic `POST /ui/tips` with a body `post_id`), the request field names
-  (`amount` units — whole units vs cents), and the receipt field names
-  (`tip_id`/`amount`/`currency`/`created_at`). Adapter + service paths depend on
-  this; the repository contract does not.
-- **OQ-2 (amount units & currency):** Is `amount` an integer minor unit (cents)
-  or a whole-currency integer? Are presets/min/max server-driven (config
-  endpoint) or client constants? This affects validation and display formatting.
-- **OQ-3 (idempotency support):** Does the backend honor an `Idempotency-Key`
-  header for `/tip`? If not, FR-7 safe-retry guarantees weaken to client-side
-  submit locking only; product must accept the residual double-charge risk on an
-  ambiguous timeout, or the retry affordance must be removed.
+- **OQ-1 (endpoint shape) — RESOLVED 2026-06-06:** Path is `POST /posts/{post_id}/tip`
+  (no `/ui` prefix), request schema `PostTipRequest`
+  = `{ amount_cents (int, min 1), currency? (default "usd"), payment_method_id? }`.
+  Response is an empty body in OpenAPI; web client types it `{ ok, tip_total_cents }`.
+  There is **no `tip_id`/`created_at`/per-tip amount** in the response. Service +
+  adapters in §4.2 corrected accordingly.
+- **OQ-2 (amount units & currency) — RESOLVED:** `amount_cents` is an integer
+  **minor unit (cents)**, minimum 1; `currency` defaults to `"usd"`. The web app's
+  presets are `[100, 500, 1000]` cents (`TipDialog.tsx`). No tip-config endpoint
+  exists for posts (the `/broadcast/.../tips/config` endpoints are broadcast-only),
+  so post presets/min/max are **client constants** here — recommend aligning the
+  app defaults with the web `[100, 500, 1000]` cents rather than `[1,5,10,20,50]`.
+- **OQ-3 (idempotency support):** The OpenAPI contract for
+  `POST /posts/{post_id}/tip` does **not** document an `Idempotency-Key` header,
+  and the web client does not send one. **Current evidence says it is NOT
+  supported.** Therefore FR-7's safe-retry guarantee is unproven: until confirmed
+  with the backend team, rely on the client-side submit lock (FR-8) only, and
+  product must accept the residual double-charge risk on an ambiguous timeout (or
+  the auto-retry affordance must be removed).
+- **OQ-5 (message field) — NEW:** FR-4 specifies an optional 200-char message, but
+  the backend `PostTipRequest` schema has **no message field** (only
+  `amount_cents`, `currency`, `payment_method_id`); the web `TipDialog` also has no
+  message input. FR-4 as written is **unimplementable against the current API**.
+  Either cut FR-4 for posts or add a backend field before building it. The §4 types
+  retain `message` only as a client-local placeholder and never send it.
 - **OQ-4 (balance/billing prerequisite):** Confirm how insufficient balance is
   signaled (402 vs 409 vs `detail.code`) and the billing route AND-031 exposes
   for `NavigateToBilling`.
@@ -578,3 +622,238 @@ no message body or PII logged in release.
       green on the `android-port` branch.
 - [ ] PR reviewed; spec acceptance criteria checked off; no hardcoded strings or
       logged PII/message content.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Tip endpoint is `POST /posts/{post_id}/tip`** (no `/ui` prefix). VERDICT:
+   Corrected (spec said `POST /ui/posts/{id}/tip`). SOURCE: OpenAPI
+   `POST /posts/{post_id}/tip` (op `tip_post_posts__post_id__tip_post`);
+   `src/api/endpoints/newsfeed.ts: tipPostDirect`.
+2. **Request schema is `PostTipRequest` = `{ amount_cents (int, min 1),
+   currency? (default "usd"), payment_method_id? }`.** VERDICT: Corrected (spec
+   said body `{ amount, message }`). SOURCE: OpenAPI
+   `components.schemas.PostTipRequest`; `src/api/types.ts: TipReq`;
+   `src/pages/feed/TipDialog.tsx` (sends `amount_cents` + `payment_method_id`).
+3. **Amount is an integer minor unit (cents), minimum 1.** VERDICT: Verified
+   (spec's intent was right but field name was `amount`; now `amount_cents`).
+   SOURCE: OpenAPI `PostTipRequest.amount_cents.minimum = 1`;
+   `TipDialog.tsx` `PRESETS = [100, 500, 1000] // cents`.
+4. **No `message` field exists for post tips.** VERDICT: Corrected (FR-4
+   unimplementable as written — see OQ-5). SOURCE: OpenAPI `PostTipRequest`
+   (only 3 fields); `src/api/types.ts: TipReq`; `TipDialog.tsx` (no message input).
+5. **Response has no `tip_id`/`currency`/`created_at` receipt.** VERDICT:
+   Corrected (spec defined a `TipReceiptDto` with those fields). SOURCE: OpenAPI
+   op response `200: { "schema": {} }` (empty); web typed
+   `{ ok: boolean; tip_total_cents: number }` in `newsfeed.ts: tipPostDirect`.
+6. **`payment_method_id` is an accepted (optional) request field; default PM is
+   used server-side if omitted.** VERDICT: Verified (spec omitted it entirely).
+   SOURCE: OpenAPI `PostTipRequest.payment_method_id`; `TipDialog.tsx`
+   (`effectivePm` -> body `payment_method_id`).
+7. **Mutating tip request must carry `X-CSRF-Token` echoed from the `ui_csrf`
+   cookie, over a credentialed (cookie) session.** VERDICT: Verified. SOURCE:
+   `src/api/client.ts:168-170` (`getCookie("ui_csrf")` -> `X-CSRF-Token`),
+   `client.ts:183` (`credentials: "include"`).
+8. **On 401, the shared layer refreshes once via `POST /ui/session/refresh` then
+   retries the original request a single time.** VERDICT: Verified. SOURCE:
+   `src/api/client.ts:194-237` (single retry); `client.ts:122` /
+   `src/api/endpoints/auth.ts:59-60` (`/ui/session/refresh`).
+9. **Only `200` and `422` (HTTPValidationError) are documented responses for the
+   tip op.** VERDICT: Verified. SOURCE: OpenAPI op
+   `resp=200:;422:HTTPValidationError`; `components.schemas.HTTPValidationError`
+   (`detail: [{loc,msg,type}]`).
+10. **`Idempotency-Key` header support for tips.** VERDICT: Unverified-assumption
+    (evidence leans NO). SOURCE: header absent from OpenAPI op parameters and
+    from `newsfeed.ts: tipPostDirect`. See OQ-3.
+11. **`402`/`409` billing / insufficient-balance signaling and a
+    `NavigateToBilling` route.** VERDICT: Unverified-assumption. SOURCE: not in
+    the documented tip-op responses; AND-031 billing route not present in this
+    reference. See OQ-4.
+12. **`403` self-tip / not-permitted handling.** VERDICT: Unverified-assumption
+    (not documented for this op; web shows a generic toast). SOURCE: OpenAPI op
+    (no 403 documented); `TipDialog.tsx onError` -> toast.
+13. **Web preset amounts are `[100, 500, 1000]` cents (vs the spec's
+    `[1,5,10,20,50]`).** VERDICT: Corrected/Verified. SOURCE:
+    `src/pages/feed/TipDialog.tsx:19`.
+14. **No tip-config endpoint exists for posts (broadcast tips config is
+    broadcast-only).** VERDICT: Verified. SOURCE: OpenAPI only exposes
+    `PATCH /broadcast/sessions/{session_id}/tips/config` and
+    `GET .../tips/summary`; no `/posts` tip-config op. So §6 `TipConfig` is
+    client-side constants.
+15. **Compose Material 3 `ModalBottomSheet` and dismissal-gating via
+    `confirmValueChange`/`sheetState` are appropriate for the sheet.** VERDICT:
+    Unverified-assumption (framework choice). SOURCE: framework ref —
+    developer.android.com Material 3 `ModalBottomSheet` API. Not verifiable from
+    the backend/web sources.
+16. **`Icons.Outlined.Paid` / `VolunteerActivism` for the tip affordance.**
+    VERDICT: Unverified-assumption (UI/icon choice). SOURCE: framework ref —
+    Material Icons. The web uses `DollarSign` (`TipDialog.tsx:3`), so a money/
+    dollar glyph is the closest reference.
+
+### Corrections made
+
+- §2/§4.2/§5: endpoint path `POST /ui/posts/{id}/tip` -> `POST /posts/{post_id}/tip`.
+- §4.1/§4.2/§4.3/§5/§6: request body `{ amount, message }` ->
+  `PostTipRequest { amount_cents, currency?, payment_method_id? }`; field
+  `amount` -> `amount_cents`; added `payment_method_id`.
+- §4.1/§4.2/§5/§6: response receipt `TipReceiptDto { tip_id, post_id, amount,
+  currency, created_at }` -> empty body / `{ ok, tip_total_cents }`; renamed DTO
+  to `TipResultDto`; `TipReceipt` reduced to `{ postId, amount, tipTotalCents? }`
+  with the confirmed amount being the locally-echoed submitted amount.
+- §4 domain: added `paymentMethodId` to `TipRequest`; demoted `message` to a
+  non-transmitted client-local placeholder (no backend field).
+- §13: OQ-1 and OQ-2 marked RESOLVED with the verified contract; OQ-3 updated to
+  reflect that idempotency is not in the contract; added OQ-5 (no message field).
+- §5 response list: reclassified 402/409/403/404 as undocumented assumptions for
+  this op rather than asserted contract behavior.
+
+### Open assumptions
+
+- **Idempotency-Key (OQ-3):** not in the OpenAPI op or web client; cannot confirm
+  the server dedupes retries. Why unverifiable: no header in any authoritative
+  source and no backend access here.
+- **Billing/insufficient-balance status codes & route (OQ-4):** only 200/422 are
+  documented; 402/409 mapping and the AND-031 `NavigateToBilling` target are not
+  present in these references.
+- **403 self-tip semantics:** not documented; client self-tip guard (FR-9) is UX
+  only, server authority unverified.
+- **`message` field for posts (OQ-5):** absent from the backend schema; FR-4 is
+  unimplementable against the current API and is flagged for product.
+- **Framework/UI choices** (`ModalBottomSheet`, icon, plurals, telemetry event
+  names): design decisions, not derivable from backend/web sources.
+- **Response richness mismatch:** OpenAPI documents an empty body while the web
+  client reads `{ ok, tip_total_cents }`; the Android DTO treats both as optional.
+  The true runtime shape cannot be confirmed without hitting the live backend.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-178-NN`. Targets: JVM = JVM/Robolectric unit (no device);
+EMU = headless emulator AVD `test35` (x86_64, API 35); DEV = physical Samsung
+Galaxy A15 5G (SM-A156U, API 34, arm64-v8a) on the build host. Most cases are
+JVM/MockWebServer or Compose-UI and do **not** require hardware; the physical
+device is reserved for the real-network flaky-dev-host path.
+
+- **TC-AND-178-01 — Happy-path tip submit + confirm (repository contract).**
+  Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: MockWebServer
+  enqueues `200` with body `{ "ok": true, "tip_total_cents": 12345 }`.
+  Steps: call `TipRepository.tip(TipRequest(postId="post_123",
+  amount=TipAmount(1000), paymentMethodId="pm_1", idempotencyKey=K))`. Expected:
+  recorded request is `POST /posts/post_123/tip`, JSON body has
+  `amount_cents=1000` and `payment_method_id="pm_1"` (no `message` key); result is
+  `ApiResult.Success` with `amount=1000 cents` and `tipTotalCents=12345`.
+  Traces: AC-4, AC-5, AC-9.
+
+- **TC-AND-178-02 — Empty-body 200 still succeeds.** Type: contract/MockWebServer
+  (JVM). Target: JVM. Preconditions: MockWebServer enqueues `200` with body `{}`.
+  Steps: call `tip(...)`. Expected: `ApiResult.Success`; `tipTotalCents == null`;
+  confirmed amount equals the **submitted** amount (1000 cents) echoed locally.
+  Traces: AC-5.
+
+- **TC-AND-178-03 — 422 validation error maps to inline error.** Type:
+  contract/MockWebServer (JVM). Target: JVM. Preconditions: enqueue `422` with
+  `{"detail":[{"loc":["body","amount_cents"],"msg":"ensure this value is greater
+  than or equal to 1","type":"value_error"}]}`. Steps: call `tip(...)` with an
+  out-of-range amount. Expected: `ApiResult.Error` carrying the mapped `detail`
+  message; no success. Traces: AC-2, AC-6.
+
+- **TC-AND-178-04 — CSRF header present on mutating tip.** Type:
+  contract/MockWebServer (JVM). Target: JVM. Preconditions: cookie jar seeded with
+  a `ui_csrf` cookie; enqueue `200`. Steps: call `tip(...)`. Expected: recorded
+  request contains header `X-CSRF-Token` equal to the `ui_csrf` value and the
+  session cookie. Traces: AC-9.
+
+- **TC-AND-178-05 — 401 triggers single refresh-then-retry.** Type:
+  contract/MockWebServer (JVM). Target: JVM. Preconditions: enqueue `401`, then a
+  `200` for `POST /ui/session/refresh`, then `200` for the retried tip; auth state
+  = authenticated. Steps: call `tip(...)`. Expected: exactly one refresh call to
+  `/ui/session/refresh` and exactly one retry of the tip; final `ApiResult.Success`.
+  Second-401 variant: enqueue `401`,`refresh 200`,`401` -> `ApiResult.Error` (auth),
+  no further retry. Traces: AC-6, AC-9.
+
+- **TC-AND-178-06 — Idempotency-Key behavior (OQ-3 guard).** Type:
+  contract/MockWebServer (JVM). Target: JVM. Preconditions: enqueue `200`. Steps:
+  call `tip(...)` with key K. Expected: IF the service is built to send
+  `Idempotency-Key`, the recorded request carries header `Idempotency-Key == K`;
+  a repository-level retry of the same intent reuses K. NOTE: header support is an
+  unverified backend assumption (OQ-3) — if dropped, this case asserts the header
+  is absent and relies on the submit lock (TC-08) instead. Traces: AC-4, AC-6.
+
+- **TC-AND-178-07 — Timeout/offline maps to retriable error (slow dev host).**
+  Type: contract/MockWebServer (JVM) for timeout simulation; the real-network
+  variant is integration. Target: JVM for the simulated case;
+  **DEV (physical device) MUST run the real-network variant** against the flaky
+  dev host `http://18.222.237.167:8000` to exercise the ~20s call timeout and
+  cleartext path on real radio/Wi-Fi. Preconditions (JVM): MockWebServer with
+  `SocketPolicy.NO_RESPONSE` / throttled body; (DEV): device online to dev host.
+  Steps: call `tip(...)`. Expected: `ApiResult.Error` (timeout/offline class), no
+  success, same idempotency key preserved for a manual retry; no crash on
+  cleartext HTTP. Traces: AC-6.
+
+- **TC-AND-178-08 — ViewModel submit lock: double `send()` -> one call.** Type:
+  unit (Turbine, `MainDispatcherRule`) (JVM). Target: JVM. Preconditions: fake
+  `TipRepository` with a suspending/delayed `tip`. Steps: `open()` non-self post,
+  select preset, call `send()` twice rapidly. Expected: state goes
+  `Entry -> Submitting`; the fake repository is invoked exactly once; second
+  `send()` is a no-op while `Submitting`. Traces: AC-4.
+
+- **TC-AND-178-09 — ViewModel happy path: Submitting -> Confirmed + snackbar.**
+  Type: unit (Turbine) (JVM). Target: JVM. Preconditions: fake repo returns
+  `Success`. Steps: `open()`, select preset 1000, `send()`. Expected: emissions
+  `Entry -> Submitting(amount=1000) -> Confirmed`; a `TipEffect.ShowSnackbar`
+  effect is emitted; confirmed amount = submitted amount. Traces: AC-5.
+
+- **TC-AND-178-10 — ViewModel failure path + idempotency-key reuse.** Type: unit
+  (Turbine) (JVM). Target: JVM. Preconditions: fake repo returns `Error` first,
+  capturing the `TipRequest`. Steps: `send()` (fails) then `send()` again.
+  Expected: state returns to `Entry(error=…)`, no `Confirmed`; the captured
+  `idempotencyKey` is identical across both attempts; key rotates only on a fresh
+  `open()` or amount change. Traces: AC-6.
+
+- **TC-AND-178-11 — Validation + self-tip + billing-required guards.** Type: unit
+  (Turbine) (JVM). Target: JVM. Preconditions: `AuthStateStore.currentUserId` set;
+  fake repo. Steps: (a) `open()` where `creatorId == currentUserId` -> sheet not
+  shown/disabled; (b) custom amount empty / `< minTip` / `> maxTip` -> `canSend=false`,
+  valid preset -> `canSend=true`; (c) fake repo returns the billing-required
+  outcome -> `TipEffect.NavigateToBilling`. NOTE: (c) depends on OQ-4 status-code
+  mapping. Traces: AC-2, AC-7.
+
+- **TC-AND-178-12 — Compose: sheet renders + Send gating + submit/confirm UI.**
+  Type: Compose-UI (`createAndroidComposeRule`). Target: EMU (`test35`).
+  Preconditions: fake ViewModel feeding `Entry`/`Submitting`/`Confirmed`. Steps:
+  render `TipSheet`; assert preset chips, custom field, single-selection; Send
+  disabled until a valid amount; on Send show `CircularProgressIndicator` and
+  disabled inputs; `Confirmed` shows "Tip sent" and auto-dismisses (~1.5s).
+  Expected: all assertions pass; dismiss is blocked during `Submitting`.
+  Traces: AC-1, AC-2, AC-4, AC-5.
+
+- **TC-AND-178-13 — Compose accessibility semantics.** Type: Compose-UI
+  (semantics). Target: EMU (`test35`). Preconditions: rendered `TipSheet` +
+  `TipButton`. Steps: assert `TipButton` role=Button with content description and
+  >= 48dp touch target; preset chips expose `selected`; Send exposes disabled and
+  `stateDescription="Sending"` in `Submitting`; `Confirmed` uses a polite live
+  region; char-counter strings come from `<plurals>`. Expected: all semantics
+  present. Traces: AC-8.
+
+- **TC-AND-178-14 — Release build: no PII/message/body logging, no new cleartext
+  config.** Type: instrumented/e2e + manual review. Target: DEV (physical device,
+  to confirm real release behavior over the network) plus a JVM Logcat/asserting
+  check. Preconditions: release-type build/logger config. Steps: perform a tip and
+  capture logs; inspect network security config. Expected: no message content, no
+  request/response bodies, and no raw amounts at INFO/WARN in release; the
+  idempotency key (if used) appears only in debug; no new cleartext-permitted host
+  beyond the existing dev-host exception. Traces: AC-9.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 | TC-12 |
+| AC-2 | TC-03, TC-11, TC-12 |
+| AC-3 | (FR-4/message is unimplementable per OQ-5 — no API field; covered only if FR-4 is retained as client-local: TC-12 char counter. Flag for product.) |
+| AC-4 | TC-01, TC-06, TC-08, TC-12 |
+| AC-5 | TC-01, TC-02, TC-09, TC-12 |
+| AC-6 | TC-03, TC-05, TC-06, TC-07, TC-10 |
+| AC-7 | TC-11 |
+| AC-8 | TC-13 |
+| AC-9 | TC-01, TC-04, TC-05, TC-14 |

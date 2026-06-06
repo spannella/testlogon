@@ -5,7 +5,8 @@ milestone: M4
 epic: E24
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-102]
 blocks: [AND-173, AND-174, AND-175, AND-176, AND-177, AND-178]
 ---
@@ -52,8 +53,11 @@ state contract they call.
 - Stack: Kotlin 2.0.21, Coroutines/Flow, Hilt (KSP), Compose/Material 3, single-Activity Nav.
   Namespace `com.testlogon.android`. Module: `feature-feed` depending on `core-data`, `core-model`,
   `core-network`, `core-ui`, `core-testing`.
-- Web reference: `frontend/src/api/endpoints/*.ts` (e.g. `postLike.ts`, `postHide.ts`,
-  `postInteresting.ts`), shared types `frontend/src/api/types.ts`.
+- Web reference: `src/api/endpoints/*.ts` — the post/feed interaction calls actually live in
+  `newsfeed.ts` (`likePost`, `unlikePost`, `createComment`, `tipPostDirect`, `unlockPost`,
+  `hidePost`), with `postHide.ts` / `postInteresting.ts` wrapping `/feed/hide` and
+  `/feed/interesting`, and bookmarks in `bookmarks.ts`. (There is **no** `postLike.ts`; the
+  draft's filename was wrong — corrected here.) Transport/auth: `src/api/client.ts`.
 
 ## 3. Functional Requirements
 
@@ -69,8 +73,11 @@ FR-3 **Rollback on failure.** If the mutation returns `ApiResult.Failure` (any e
 transient, dismissible error signal is emitted for the affected post.
 
 FR-4 **Reconciliation on success.** On `ApiResult.Success`, the overlay value is replaced with the
-authoritative server value from the response (e.g. server-confirmed `likeCount`), not merely "kept."
-This reconciles optimistic guesses (the +1 we assumed) with server truth.
+authoritative server value from the response *when the response carries one* (e.g. post tip returns
+`tip_total_cents`), not merely "kept." **Caveat (verified §5):** the post like/unlike, comment-add,
+and bookmark responses do **not** return a count/state field, so for those interactions there is no
+server value to reconcile to — the optimistic delta is kept and cleared on the next page refresh.
+The reconcile lambda must tolerate a value-less success.
 
 FR-5 **Coverage — all interactions.** The primitive must support: like toggle (boolean + count),
 bookmark/save toggle (boolean), hide/not-interested (post removal flag), comment add (count
@@ -199,8 +206,12 @@ class FeedViewModel @Inject constructor(
 
     fun onLikeClicked(post: PostUiModel) = engine.dispatch(
         delta = InteractionDelta.LikeToggle(post.id, liked = !post.liked),
+        // Routes to POST /posts/{id}/like or /unlike depending on target state (no DELETE).
         mutate = { interactions.setLiked(post.id, liked = !post.liked) },
-        reconcile = { o, r -> o.copy(likedOverride = r.liked, likeCountDelta = r.likeCount - post.baseLikeCount) },
+        // NOTE: the post like/unlike response carries NO liked/count (verified §5). reconcile is a
+        // no-op for likes — keep the optimistic override+delta, clear on next refresh. Only
+        // interactions whose response returns a count (e.g. tip → tip_total_cents) reconcile here.
+        reconcile = { o, _ -> o },
     )
 
     fun onBookmarkClicked(post: PostUiModel) { /* BookmarkToggle, interactions.setSaved(...) */ }
@@ -230,18 +241,56 @@ interface InteractionRepository {
     suspend fun addComment(postId: String, body: String): ApiResult<CommentResult>// AND-174
     suspend fun tip(postId: String, amountMinor: Long): ApiResult<TipResult>      // AND-178
 }
-data class LikeResult(val liked: Boolean, val likeCount: Int)
+data class LikeResult(val liked: Boolean, val likeCount: Int) // see note: post like resp carries neither field
 data class SaveResult(val saved: Boolean)
-data class CommentResult(val commentId: String, val commentCount: Int)
-data class TipResult(val tipId: String, val confirmed: Boolean)
+data class CommentResult(val commentId: String, val commentCount: Int) // see note: comment resp has no count
+data class TipResult(val tipTotalCents: Long)                          // server returns tip_total_cents, no tip_id/confirmed
 ```
 
-Assumed server contract (confirm against `/openapi.json` in the consuming tickets):
-`POST /posts/{id}/like` and `DELETE /posts/{id}/like` → `{"liked": true, "like_count": 42}`;
-`POST /posts/{id}/hide` → `204`; `POST /posts/{id}/comments` body `{"body":"..."}` →
-`{"comment_id":"c_…","comment_count":13}`. All mutations are non-idempotent POST/DELETE and
-therefore **excluded from AND-016 auto-retry**; they carry cookies + `X-CSRF-Token` per the
-auth model. Error bodies follow the FastAPI `detail` shape mapped by AND-015.
+**Verified server contract** (checked against `reference/openapi.index.txt`,
+`reference/openapi.pretty.json`, and `reference/src/api/endpoints/newsfeed.ts` + `bookmarks.ts`).
+The draft's contract was largely wrong; corrected shapes:
+
+- **Like** — `POST /posts/{post_id}/like` and a *separate* `POST /posts/{post_id}/unlike`
+  (op `like_post_*` / `unlike_post_*`). There is **no** `DELETE /posts/{id}/like`. Both take an
+  **empty body** and the post like/unlike responses carry **no liked/count fields** — the web client
+  types them as `{ ok: boolean }` (`newsfeed.ts: likePost/unlikePost`) and the OpenAPI response is
+  an empty `200`. The `{ "liked", "like_count" }` shape (`LikeToggleOut`) belongs to the *video*
+  endpoint `POST /ui/videos/{video_id}/like`, **not** posts. Consequence: `LikeResult.likeCount`
+  cannot be reconciled from the post-like response; treat the optimistic `+1` as authoritative until
+  the next page refresh (or read the count from the post GET). Flagged in R1.
+- **Hide** — `POST /feed/hide` with body `{ "post_id": "…" }` (`HidePostRequest`) → `{ ok: boolean }`
+  (`newsfeed.ts: hidePost`, `postHide.ts`). **Not** `POST /posts/{id}/hide`, and **not** a `204`.
+  Restore uses `POST /feed/unhide` (same `HidePostRequest`). "Not interested" is the parallel pair
+  `POST /feed/interesting` / `POST /feed/uninteresting`.
+- **Comment add** — `POST /posts/{post_id}/comments` body `CreateCommentRequest`
+  (field is `body`, plus optional `body_format`/markdown/rich/gif/sticker variants) →
+  `200: CommentResponse` (web alias `FeedComment`, `newsfeed.ts: createComment`). The response
+  contains `comment_id`, `post_id`, `author_id`, `created_at`, etc. but **no `comment_count`** field.
+  Consequence: `CommentResult.commentCount` is **not** server-provided; the count overlay must be
+  driven by the optimistic `+1` and cleared on refresh (OQ2).
+- **Tip (post)** — `POST /posts/{post_id}/tip` body `PostTipRequest` `{ amount_cents, currency?,
+  payment_method_id? }` → web type `{ ok: boolean, tip_total_cents: number }`
+  (`newsfeed.ts: tipPostDirect`). Field is `amount_cents` (cents), **not** `amount_minor`; response
+  has **no `tip_id`/`confirmed`**. (Distinct from comment tips `POST /posts/{id}/comments/{cid}/tip`
+  and broadcast/messaging tips.) The engine's `TipResult` therefore reconciles a confirmed total,
+  not a confirmation boolean.
+- **Unlock** — `POST /posts/unlock` body `UnlockPostRequest` `{ post_id, payment_method_id?,
+  idempotency_key? }` → `UnlockPostResponse { post_id, payment_intent }` (web `newsfeed.ts: unlockPost`
+  types it `{ ok: boolean }`). **Not** `POST /posts/{id}/unlock`. This is the one mutation that
+  *does* accept an `idempotency_key`.
+- **Bookmark/save** — `POST /ui/bookmarks` body `CreateBookmarkRequest` `{ content_id, content_type
+  (default "post"), collection_id? }` → `{ ok, content_type, content_id, collection_id, created_at }`,
+  and remove is `DELETE /ui/bookmarks/{content_type}/{content_id}` → `{ ok }`
+  (`bookmarks.ts: createBookmark/removeBookmark`). **Not** a `/posts/{id}/…` route. `SaveResult`
+  has no server `saved` flag; treat the toggle as authoritative.
+
+All mutations above are non-idempotent POST/DELETE and therefore **excluded from AND-016 auto-retry**.
+Transport (verified in `src/api/client.ts`): every request sends `credentials: include` (cookies),
+`X-CSRF-Token` read from the `ui_csrf` cookie, **and** an `Authorization: Bearer <accessToken>`
+header (the draft mentioned only cookies + CSRF — the Bearer token is additional). Error bodies
+follow the FastAPI `detail` shape (string / `[{msg}]` / `{code}`) normalized by `normalizeErrorDetail`
+(AND-015); validation failures are `422: HTTPValidationError`.
 
 ## 6. Data & State Management
 
@@ -341,16 +390,20 @@ Coverage target: 100% of `OptimisticInteractionEngine` branches and `combineOver
 
 ## 13. Risks & Open Questions
 
-- **R1 — Server count drift.** If the server returns no count on a like response, delta-based
-  reconciliation can drift. *Mitigation:* require count in `LikeResult`; if absent, keep the
-  optimistic delta and clear it on next page refresh. Confirm shape in AND-173 against `/openapi.json`.
+- **R1 — Server count drift (CONFIRMED, not hypothetical).** Verified in §5: the post `like`/`unlike`
+  response returns **no** count or liked flag (only the *video* like endpoint returns `LikeToggleOut`).
+  Comment-add likewise returns no count. So delta-based reconciliation *cannot* read server truth for
+  these. *Mitigation (now the required behavior):* keep the optimistic delta and clear it on the next
+  page refresh (or re-fetch the post). Do **not** require a count in `LikeResult`/`CommentResult`.
 - **R2 — Paging snapshot churn.** Overlays keyed by post id can momentarily double-count if a refresh
   delivers the reconciled value before the overlay is cleared. *Mitigation:* `combineOverlay` treats
   an overlay as superseded when the base already reflects it; add a clear-on-refresh hook.
 - **R3 — Process death loses pending tips.** A tip submitted then process-killed shows no confirmation.
   *Open question:* should tips be queued durably (WorkManager)? Out of scope here; flagged for AND-178.
-- **OQ1** — Is hide a server-persisted preference or session-local? AND-175 says "preference honored";
-  confirm endpoint so rollback semantics (restore) match server.
+- **OQ1 (RESOLVED)** — Hide is server-persisted: `POST /feed/hide` records a preference, and there is
+  an explicit `POST /feed/unhide` to reverse it (both `HidePostRequest`). Rollback after a *failed*
+  hide is purely local (the overlay's `hidden` flag flips back); `/feed/unhide` is only needed to
+  reverse a *successful* hide, which is a separate user action owned by AND-175.
 - **OQ2** — Does comment add support optimistic body rendering, or only count? Resolve with AND-174.
 
 ## 14. Acceptance Criteria
@@ -388,3 +441,198 @@ AC-9 `OptimisticInteractionEngine` and `combineOverlay` reach 100% branch covera
 - No new endpoints introduced; `InteractionRepository` contract reviewed by owners of AND-173..AND-178.
 - Code merged to `android-port`; PR links AND-180 and references the six consumer tickets.
 - Spec acceptance bullet satisfied: optimistic apply and rollback are unit-tested and green.
+
+## 16. Citations & Assumption Audit
+
+Each numbered item: the claim, a VERDICT, and an exact source pointer.
+
+1. **Like uses `POST /posts/{id}/like` plus a separate `POST /posts/{id}/unlike` (no DELETE).**
+   VERDICT: **Corrected** (draft claimed `POST` + `DELETE /posts/{id}/like`).
+   SOURCE: OpenAPI `POST /posts/{post_id}/like` (op `like_post_posts__post_id__like_post`) and
+   `POST /posts/{post_id}/unlike` (op `unlike_post_*`); `src/api/endpoints/newsfeed.ts: likePost`,
+   `unlikePost`.
+2. **Post like/unlike response carries no `liked`/`like_count`.** VERDICT: **Corrected** (draft
+   claimed `{"liked":true,"like_count":42}`). SOURCE: OpenAPI `POST /posts/{post_id}/like`
+   `resp=200:` (empty schema); `newsfeed.ts: likePost` typed `{ ok: boolean }`. The
+   `{liked,like_count}` shape is `LikeToggleOut`, which belongs to OpenAPI
+   `POST /ui/videos/{video_id}/like` (`toggle_like_endpoint_*`), a different (video) endpoint.
+3. **Hide is `POST /feed/hide` with `{post_id}` → `{ok}` (not `POST /posts/{id}/hide`, not 204).**
+   VERDICT: **Corrected**. SOURCE: OpenAPI `POST /feed/hide` (op `hide_post_feed_hide_post`,
+   `req=HidePostRequest`, `resp=200:`); schema `HidePostRequest` (`post_id` required);
+   `src/api/endpoints/newsfeed.ts: hidePost`, `src/api/endpoints/postHide.ts`.
+4. **Restore-after-hide endpoint is `POST /feed/unhide`; "not interested" is
+   `/feed/interesting` + `/feed/uninteresting`.** VERDICT: **Verified**. SOURCE: OpenAPI
+   `POST /feed/unhide`, `POST /feed/interesting`, `POST /feed/uninteresting` (all `HidePostRequest`);
+   `src/api/endpoints/postInteresting.ts`, `postHide.ts: unhide`.
+5. **Comment add is `POST /posts/{id}/comments` body `CreateCommentRequest` (field `body`) →
+   `CommentResponse`/`FeedComment`.** VERDICT: **Verified** (path/method/req/resp).
+   SOURCE: OpenAPI `POST /posts/{post_id}/comments` (op `create_comment_*`, `req=CreateCommentRequest`,
+   `resp=200:CommentResponse`); `src/api/endpoints/newsfeed.ts: createComment`.
+6. **Comment-add response has NO `comment_count`.** VERDICT: **Corrected** (draft claimed
+   `{"comment_id":…,"comment_count":13}`). SOURCE: schema `components.schemas.CommentResponse` —
+   properties include `comment_id`, `post_id`, `author_id`, `created_at`, `body*`, `version`, etc., but
+   no count field; `CommentResult.commentCount` is therefore client-derived (optimistic only).
+7. **Post tip is `POST /posts/{id}/tip` body `PostTipRequest` (`amount_cents`) → `{ok, tip_total_cents}`.**
+   VERDICT: **Corrected** (draft used `amount_minor` and a `{tipId, confirmed}` response).
+   SOURCE: OpenAPI `POST /posts/{post_id}/tip` (op `tip_post_*`, `req=PostTipRequest`); schema
+   `PostTipRequest` (`amount_cents` required, `currency` default `usd`, optional `payment_method_id`);
+   `src/api/endpoints/newsfeed.ts: tipPostDirect` typed `{ ok: boolean; tip_total_cents: number }`.
+8. **Unlock is `POST /posts/unlock` body `{post_id, payment_method_id?, idempotency_key?}` →
+   `UnlockPostResponse{post_id, payment_intent}`.** VERDICT: **Corrected** (draft implied
+   `POST /posts/{id}/unlock`). SOURCE: OpenAPI `POST /posts/unlock` (op `unlock_post_posts_unlock_post`,
+   `req=UnlockPostRequest`, `resp=200:UnlockPostResponse`); schemas `UnlockPostRequest`/`UnlockPostResponse`;
+   `src/api/endpoints/newsfeed.ts: unlockPost`.
+9. **Bookmark/save is `POST /ui/bookmarks` + `DELETE /ui/bookmarks/{content_type}/{content_id}`
+   (not a `/posts/{id}` route).** VERDICT: **Corrected** (draft assumed `/posts/...`).
+   SOURCE: OpenAPI `POST /ui/bookmarks` (`req=CreateBookmarkRequest`) and
+   `DELETE /ui/bookmarks/{content_type}/{content_id}`; schema `CreateBookmarkRequest`
+   (`content_id` required, `content_type` default `post`, `collection_id?`);
+   `src/api/endpoints/bookmarks.ts: createBookmark`, `removeBookmark`.
+10. **CSRF: `X-CSRF-Token` header sourced from the `ui_csrf` cookie; requests send cookies.**
+    VERDICT: **Verified**. SOURCE: `src/api/client.ts` — `getCookie("ui_csrf")` →
+    `headers.set("X-CSRF-Token", csrf)`; all requests use `credentials: "include"`.
+11. **Requests ALSO send `Authorization: Bearer <accessToken>`.** VERDICT: **Corrected/augmented**
+    (draft said only cookies + CSRF). SOURCE: `src/api/client.ts` — `headers.set("Authorization",
+    `Bearer ${accessToken}`)` from `useAuthStore`.
+12. **401 triggers a single `POST /ui/session/refresh` then a retry; this layer does not itself retry.**
+    VERDICT: **Verified**. SOURCE: OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh_*`);
+    `src/api/client.ts` `refreshSession()` + single-flight `refreshPromise` on `res.status === 401`.
+13. **Error bodies follow FastAPI `detail` shape (string / `[{msg}]` / `{code}`); validation = 422
+    `HTTPValidationError`.** VERDICT: **Verified**. SOURCE: `src/api/client.ts: normalizeErrorDetail`
+    (handles string, array-of-`{msg}`, object-`{code}`); OpenAPI index shows `422:HTTPValidationError`
+    on every interaction endpoint.
+14. **Mutations are non-idempotent POST/DELETE and excluded from AND-016 auto-retry.**
+    VERDICT: **Verified** (against the method column of each OpenAPI entry above) + design intent.
+15. **Android stack/module layout (Kotlin 2.0.21, Coroutines/Flow, Hilt+KSP, Compose/M3, Paging 3,
+    Turbine, `kotlinx-coroutines-test`).** VERDICT: **Unverified-assumption** (no Android sources in
+    this repo to confirm versions). framework ref: Paging+ViewModel guidance
+    https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data ; coroutines test
+    https://developer.android.com/kotlin/coroutines/test . Carried over from AND-102/project context.
+
+### Corrections made
+- Frontmatter: `status: draft → reviewed`, added `reviewed_on: 2026-06-06`.
+- §2: web-reference filenames fixed — no `postLike.ts`; interaction calls live in `newsfeed.ts`
+  (+ `postHide.ts`/`postInteresting.ts`/`bookmarks.ts`).
+- §3 FR-4: noted that post like/comment/bookmark responses carry no value to reconcile to.
+- §4.3: `onLikeClicked` reconcile lambda changed to a no-op (the like response has no count/flag) and
+  annotated that it routes to `/like` or `/unlike`.
+- §5: rewritten with verified endpoints/methods/request+response shapes for like, unlike, hide,
+  unhide, comment, tip, unlock, bookmark; corrected Kotlin DTOs (`TipResult` now `tipTotalCents`);
+  added the Bearer-token + CSRF + cookie transport detail; corrected `amount_cents` vs `amount_minor`.
+- §13: R1 upgraded from hypothetical to confirmed; OQ1 resolved (hide is server-persisted with
+  `/feed/unhide`).
+
+### Open assumptions
+- **A1 — `combineOverlay` clears a stale overlay once the base reflects it.** Since the like/comment
+  responses return no count (items 2, 6), reconciliation depends on a *page refresh* delivering the
+  server value. The exact "overlay superseded by base" detection (§6, R2) is a design assumption with
+  no server signal to confirm timing; flagged for the consuming tickets.
+- **A2 — Tip "confirmed" semantics.** The post-tip response is `{ok, tip_total_cents}` with no
+  explicit confirmation/idempotency token (unlike unlock, which has `idempotency_key`). Whether a tip
+  is durably confirmed vs. accepted-pending is unverifiable from the API surface (R3 / AND-178).
+- **A3 — Android toolchain versions** (item 15) cannot be verified in this repo; inherited from
+  project context, not from an authoritative Android source tree.
+- **A4 — `InteractionRepository` Kotlin facade** is this ticket's own contract, not a server artifact;
+  it is intentionally an assumption that the consuming tickets (AND-173..178) implement.
+
+## 17. Test Plan
+
+Test target legend (CI/dev): **JVM** = JVM/Robolectric unit (no device); **emu35** = headless AVD
+`test35` (x86_64, Android 15 / API 35); **deviceA15** = physical Samsung Galaxy A15 5G (SM-A156U,
+serial R5CX821TA9R, Android 14 / API 34, arm64-v8a). This ticket is ViewModel/state logic, so most
+cases are JVM unit; UI-projection and a11y observability cases run on emu35; a small set asserting
+real-network/offline timeout behavior against the flaky dev host prefer **deviceA15**.
+
+- **TC-AND-180-01 — Optimistic apply before network resolves.** Type: unit (JVM).
+  Target: `FeedViewModel.onLikeClicked` + `OptimisticInteractionEngine.dispatch` + `combineOverlay`,
+  fake `InteractionRepository` whose `setLiked` never completes. Preconditions: base post
+  `liked=false, likeCount=10`. Steps: call `onLikeClicked(post)`; before completing the fake, collect
+  the projected `PostUiModel` via Turbine. Expected: projected `liked=true, likeCount=11` emitted
+  while `mutate` is still suspended; no error emitted. Traces: AC-1.
+- **TC-AND-180-02 — Success keeps optimistic delta when response has no count (like).** Type:
+  contract/MockWebServer (JVM). Target: `InteractionRepository.setLiked` → `POST /posts/{id}/like`
+  wired to MockWebServer; reconcile no-op. Preconditions: MockWebServer returns `200 {"ok":true}`
+  (verified empty/ok shape, §5 item 2). Steps: dispatch like; await success. Expected: request line is
+  `POST /posts/{id}/like` with empty body and headers `X-CSRF-Token` + `Authorization: Bearer …`;
+  projected `likeCount` stays at optimistic `11` (no server count to reconcile); overlay not cleared
+  until refresh. Traces: AC-2 (caveat path).
+- **TC-AND-180-03 — Success reconciles to server value when response carries one (tip).** Type:
+  contract/MockWebServer (JVM). Target: `InteractionRepository.tip` → `POST /posts/{id}/tip`.
+  Preconditions: MockWebServer returns `200 {"ok":true,"tip_total_cents":500}`. Steps: `onTipSubmitted`
+  with `amountMinor=200`; await success. Expected: request body contains `amount_cents` (not
+  `amount_minor`); overlay reconciles tip pending→confirmed using `tip_total_cents=500`. Traces: AC-2, AC-7.
+- **TC-AND-180-04 — Rollback on failure emits exactly one error.** Type: unit (JVM). Target:
+  `dispatch` rollback path. Preconditions: fake `setLiked` returns `ApiResult.Failure`. Steps: dispatch
+  like from `liked=false`; await terminal. Expected: overlay reverts to exact pre-apply value
+  (`liked=false, likeCount=10`); exactly one `InteractionError(postId, LIKE, …)` on
+  `interactionErrors`. Traces: AC-3.
+- **TC-AND-180-05 — Validation/error body (422) maps to a human message.** Type:
+  contract/MockWebServer (JVM). Target: error mapping (AND-015) feeding `InteractionError.message`.
+  Preconditions: MockWebServer returns `422 {"detail":[{"msg":"value is not a valid…","loc":[…]}]}`
+  (real `HTTPValidationError` shape). Steps: dispatch a mutation; await failure. Expected: rollback
+  occurs and `InteractionError.message` equals the extracted `msg` string (array-of-`{msg}` branch),
+  not a stringified object. Traces: AC-3.
+- **TC-AND-180-06 — Supersede/collapse of rapid toggles.** Type: unit (JVM). Target: `inFlight`
+  cancel-and-replace (FR-6). Preconditions: fake delays each call. Steps: call `onLikeClicked` twice
+  rapidly (false→true, then true→false). Expected: first job is cancelled (CancellationException
+  swallowed — no error), only the latest intent (`liked=false`) survives, no spurious
+  `InteractionError`. Traces: AC-4.
+- **TC-AND-180-07 — Hide removes then restores on failure.** Type: unit (JVM). Target:
+  `onHideClicked` + `combineOverlay` drop-hidden. Preconditions: post at index 2 of projected list;
+  fake `hide` (→ `POST /feed/hide`) returns Failure. Steps: dispatch hide → assert post dropped from
+  projection; let mutate fail. Expected: on failure `hidden` flips back and the post reappears at its
+  original index 2 (base list untouched). Traces: AC-5.
+- **TC-AND-180-08 — Hide contract: correct endpoint and body.** Type: contract/MockWebServer (JVM).
+  Target: `InteractionRepository.hide`. Preconditions: MockWebServer returns `200 {"ok":true}`. Steps:
+  dispatch hide. Expected: request is `POST /feed/hide` with JSON `{"post_id":"…"}` (NOT
+  `POST /posts/{id}/hide`, NOT expecting 204). Traces: AC-5.
+- **TC-AND-180-09 — Partial rollback isolation.** Type: unit (JVM). Target: per-type field ownership in
+  rollback. Preconditions: same post; bookmark succeeds, like fails (concurrent). Steps: dispatch
+  bookmark (success) and like (failure) together. Expected: like rolls back `likedOverride`/
+  `likeCountDelta` only; `savedOverride` from the successful bookmark is untouched. Traces: AC-6.
+- **TC-AND-180-10 — Comment pending marker added then reconciled/rolled back.** Type: unit (JVM).
+  Target: `onCommentSubmitted` non-toggle path. Preconditions: fake `addComment` scriptable.
+  Steps: submit comment → assert `pendingComments` contains marker and `commentCountDelta=+1` (no
+  server count, per §5 item 6); then (a) success → pending promoted/cleared, count delta kept until
+  refresh; (b) failure → pending marker removed and delta reverted with one error. Traces: AC-7, AC-3.
+- **TC-AND-180-11 — `combineOverlay` pure-function table.** Type: unit (JVM). Target: `combineOverlay`.
+  Preconditions: matrix of base × overlay (liked override, count delta, saved override, hidden,
+  comment delta, unlocked override). Steps: run table. Expected: each projection equals the expected
+  merged `PostUiModel`; `hidden=true` rows are absent; zero-effect overlays are dropped. Traces:
+  AC-1, AC-9 (branch coverage).
+- **TC-AND-180-12 — Flaky dev-host timeout / offline rolls back.** Type: integration (prefer
+  **deviceA15**; the physical device exercises the real plaintext-HTTP dev host
+  `http://18.222.237.167:8000` and real ~20s socket timeouts and airplane-mode network loss that the
+  emulator's virtualized NAT does not faithfully reproduce). Target: real Retrofit/OkHttp →
+  `InteractionRepository` against the dev host (or a delayed MockWebServer if the host is down).
+  Preconditions: toggle airplane mode / point at an unresponsive host. Steps: trigger a like; wait past
+  the timeout. Expected: `ApiResult.Failure(Timeout/Network)` → overlay rolls back and one
+  `InteractionError` fires; no auto-retry occurs. Traces: AC-3.
+- **TC-AND-180-13 — Security: no sensitive values logged; CSRF/cookies attached.** Type:
+  contract/MockWebServer + log capture (JVM). Target: §8/§10 redaction + transport. Preconditions:
+  capture Timber output and the recorded request. Steps: dispatch a tip (`amount_cents=1000`) and a
+  comment with body text. Expected: logs contain `type/postId/outcome` only — no amount, comment body,
+  cookie, or CSRF token value; the recorded request includes `X-CSRF-Token` and the session cookie,
+  and `Authorization: Bearer`. Traces: AC-8.
+- **TC-AND-180-14 — Accessibility: state transitions are observable for announcements.** Type:
+  Compose-UI / instrumented (emu35). Target: the consuming composable reading this ViewModel's
+  StateFlow (uses AND-099 affordance harness in `core-ui`); validates that like/unlike and removal
+  produce discrete StateFlow emissions a `liveRegion`/`stateDescription` can announce, and that
+  rollback strings resolve from `R.string.*` (no hardcoded English). Preconditions: TalkBack-style
+  semantics assertions via `onNodeWithContentDescription`/`assertHasStateDescription`. Steps: toggle
+  like, then force a rollback. Expected: state description updates on apply and again on rollback; the
+  failure snackbar text comes from a string resource. Traces: AC-1, AC-8.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (synchronous optimistic apply) | TC-01, TC-11, TC-14 |
+| AC-2 (reconcile to server value on success) | TC-02 (no-count caveat), TC-03 (count present) |
+| AC-3 (rollback + exactly one error) | TC-04, TC-05, TC-10(b), TC-12 |
+| AC-4 (collapse rapid toggles, no orphan/spurious error) | TC-06 |
+| AC-5 (hide removes; failure restores at index) | TC-07, TC-08 |
+| AC-6 (failed interaction doesn't revert unrelated success) | TC-09 |
+| AC-7 (tip & comment pending→confirmed/rolled-back) | TC-03, TC-10 |
+| AC-8 (externalized strings; no sensitive logging) | TC-13, TC-14 |
+| AC-9 (100% branch coverage of engine + combineOverlay) | TC-11 (+ TC-01/04/06/07/09 exercise engine branches) |

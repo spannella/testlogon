@@ -5,7 +5,8 @@ milestone: M4
 epic: E24
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-099, AND-092]
 blocks: []
 ---
@@ -23,6 +24,14 @@ The save toggle must be **optimistic** and reconcile against the backend
 bookmark endpoints owned by the Saved/Bookmarks feature (AND-092). Tapping
 share builds a canonical post URL and hands it to `ACTION_SEND` via a Compose
 `LocalContext` intent launcher.
+
+> **Review note (platform divergence):** The web reference does NOT use a system
+> share sheet or a public canonical URL. Web "share" (`src/pages/feed/SharePostDialog.tsx`)
+> opens an **in-app dialog that DMs the post to a conversation** via
+> `sendTextMessage(..., { preview: { url: "/posts/{post_id}", ... } })`. This
+> Android ticket deliberately chooses the native OS share sheet instead — an
+> accepted platform divergence, not a contract match. The web's internal post
+> path is `/posts/{post_id}` (see §16 corrections), not `/p/{postId}`.
 
 Done means: tapping the bookmark icon flips its state instantly and persists
 server-side (surviving scroll/recycle and process death via the saved-items
@@ -45,15 +54,27 @@ base everywhere: `com.testlogon.android`.
   bookmark state through that same repository so the Saved screen stays
   consistent. AND-092 owns persistence + the list screen; AND-176 owns the feed
   toggle and share.
-- Web reference: `frontend/src/api/endpoints/bookmarks.ts`,
-  `frontend/src/api/types.ts` for the `Bookmark` / `Post` shapes and the share
-  URL convention.
-- OpenAPI: `http://18.222.237.167:8000/openapi.json` — confirm exact bookmark
-  paths/verbs at implementation time; treat below as the contract derived from
-  the web client.
-- Auth: cookie-based session + `X-CSRF-Token` (echoed `ui_csrf` cookie). Mutating
-  bookmark calls (POST/DELETE) require the CSRF header and the persistent cookie
-  jar; on 401 the network layer performs one `POST /ui/session/refresh` + retry.
+- Web reference: `src/api/endpoints/bookmarks.ts`, `src/api/types.ts` for the
+  `BookmarkItem` / `FeedPost` shapes; `src/pages/feed/PostCard.tsx` and
+  `src/pages/feed/SharePostDialog.tsx` for feed action-row behavior. **Note:** the
+  DTO is `BookmarkItem` (keyed by `content_type`+`content_id`), not a `Bookmark`
+  with a `post_id` — see §5 and §16. There is no web "share URL convention";
+  share is in-app DM (see §1 review note).
+- OpenAPI (verified for this review): bookmark endpoints live under `/ui/bookmarks`
+  and `/ui/bookmark-collections`. Verified operations:
+  `POST /ui/bookmarks` (`create_bookmark`, req `CreateBookmarkRequest`, resp 201),
+  `DELETE /ui/bookmarks/{content_type}/{content_id}` (`delete_bookmark`, resp 200),
+  `GET /ui/bookmarks` (`list_bookmarks`, resp 200),
+  `GET /ui/bookmarks/status?ids=` (`bookmark_status`, resp 200).
+- Auth: cookie-based session + `X-CSRF-Token` echoed from the `ui_csrf` cookie
+  (verified in `src/api/client.ts`). Mutating bookmark calls (POST/DELETE) require
+  the CSRF header and the persistent cookie jar. **Correction:** the web does not
+  use an OkHttp authenticator — `client.ts` retries once on 401 *only if the user
+  was already authenticated*, via a single in-flight `POST /ui/session/refresh`
+  promise, then replays the request; on refresh failure it logs out. The Android
+  401-refresh-retry is a faithful port of that behavior. The web client also
+  attaches `Authorization: Bearer <accessToken>` (from the auth store) in addition
+  to the CSRF header; the Android port should carry the equivalent bearer/session.
 
 ## 3. Functional Requirements
 
@@ -155,8 +176,16 @@ data class ShareContent(val url: String, val subject: String?)
 
 ```kotlin
 object PostShare {
-    private const val WEB_BASE = "https://app.testlogon.com" // canonical web origin
-    fun urlFor(postId: String): String = "$WEB_BASE/p/$postId"
+    // WEB_BASE is an UNVERIFIED assumption — no public origin appears in OpenAPI
+    // or the web client. The web's internal post route is "/posts/{post_id}"
+    // (src/pages/feed/SharePostDialog.tsx), NOT "/p/{postId}". Use the verified
+    // web path segment; confirm the public origin before launch (R1).
+    private const val WEB_BASE = "https://app.testlogon.com" // ASSUMED canonical origin
+    fun urlFor(postId: String): String = "$WEB_BASE/posts/$postId"
+    // NOTE: FeedPost in the web contract has NO author_display_name — only
+    // author_id (src/api/types.ts: FeedPost). authorDisplayName here must be
+    // supplied by the Android PostUiModel from a profile source, or fall back to
+    // author_id; do not assume the feed payload carries it.
     fun subjectFor(post: PostUiModel): String? =
         post.authorDisplayName?.let { "Post by $it on TestLogon" }
 }
@@ -212,67 +241,127 @@ Optimistic flow inside `setBookmarked`: (1) upsert/delete the local
 
 ## 5. API Contract
 
-Bookmark endpoints are derived from the web `bookmarks.ts` client and are owned
-by AND-092; AND-176 consumes them. Confirm exact paths against `/openapi.json`.
+Bookmark endpoints are owned by AND-092; AND-176 consumes them. The shapes below
+are **verified** against OpenAPI (`openapi.index.txt` / `openapi.pretty.json`) and
+`src/api/endpoints/bookmarks.ts`. Corrections from the prior draft are flagged.
 
-**Save a post**
+> **Corrected:** the prior draft used `{post_id}` bodies/paths and a `BookmarkDto`
+> with `id`/`post_id`. The real contract is keyed by `content_type` + `content_id`.
+> Posts use `content_type = "post"` (enum: `post | video`).
+
+**Save a post** — `POST /ui/bookmarks` (`create_bookmark`, resp **201**)
 
 ```
 POST /ui/bookmarks
 Headers: X-CSRF-Token: <ui_csrf>; Cookie: <session>
-Body: { "post_id": "<postId>" }
--> 200 { "id": "bm_123", "post_id": "<postId>", "created_at": "2026-06-05T12:00:00Z" }
+Body (CreateBookmarkRequest):
+  { "content_type": "post", "content_id": "<postId>", "collection_id": "default" }
+  # content_id required (1..64, ^[a-zA-Z0-9_]+$); content_type defaults "post";
+  # collection_id optional, defaults "default".
+-> 201 { "ok": true, "content_type": "post", "content_id": "<postId>",
+         "collection_id": "default", "created_at": "2026-06-06T12:00:00Z" }
 ```
 
-**Unsave a post**
+**Unsave a post** — `DELETE /ui/bookmarks/{content_type}/{content_id}`
+(`delete_bookmark`, resp **200**)
 
 ```
-DELETE /ui/bookmarks/{post_id}
+DELETE /ui/bookmarks/post/<postId>
 Headers: X-CSRF-Token: <ui_csrf>; Cookie: <session>
--> 204 No Content   (or 200 { "ok": true })
+-> 200 { "ok": true }
 ```
 
-**List saved (read by AND-092; used here to seed cache)**
+> **Corrected:** path is `/ui/bookmarks/{content_type}/{content_id}` (two segments),
+> not `/ui/bookmarks/{post_id}`; and success is **200 `{ "ok": true }`**, not 204.
+> This means R2 is RESOLVED: unsave keys off `(content_type, content_id)`, so the
+> `bookmarkId` from the add response is NOT needed for delete.
+
+**List saved (read by AND-092; used here to seed cache)** — `GET /ui/bookmarks`
 
 ```
-GET /ui/bookmarks?cursor=<c>&limit=20  -> 200 { "items": [Bookmark], "next_cursor": "..." }
+GET /ui/bookmarks?cursor=<c>&limit=20&content_type=post&collection_id=<id>
+-> 200 { "bookmarks": [BookmarkItem], "next_cursor": "...", "total_count": N }
+# BookmarkItem: { content_type, content_id, collection_id, created_at,
+#   content_preview: { author_id, author_display_name?, body_snippet?,
+#                      image_url?, like_count? } }
 ```
+
+> **Corrected:** list response wrapper is `{ bookmarks, next_cursor, total_count }`
+> (not `{ items, next_cursor }`), and elements are `BookmarkItem` (not `Bookmark`).
+
+**Bookmark status (batch presence check)** — `GET /ui/bookmarks/status?ids=`
+(`bookmark_status`, resp **200**) — NEW, not in prior draft
+
+```
+GET /ui/bookmarks/status?ids=<id1>,<id2>,...
+-> 200 { "statuses": { "<id1>": true, "<id2>": false } }
+```
+
+> This endpoint lets the feed seed per-post saved-state cheaply for visible posts
+> without paging the whole saved list — recommended for FR-4/FR-8 hydration.
 
 Retrofit interface (in core-network, shared):
 
 ```kotlin
 interface BookmarkApi {
     @POST("ui/bookmarks")
-    suspend fun add(@Body body: AddBookmarkRequest): Response<BookmarkDto>
+    suspend fun add(@Body body: CreateBookmarkRequest): Response<BookmarkResponse>
 
-    @DELETE("ui/bookmarks/{postId}")
-    suspend fun remove(@Path("postId") postId: String): Response<Unit>
+    @DELETE("ui/bookmarks/{contentType}/{contentId}")
+    suspend fun remove(
+        @Path("contentType") contentType: String,   // "post"
+        @Path("contentId") contentId: String,
+    ): Response<OkResponse>
+
+    @GET("ui/bookmarks/status")
+    suspend fun status(@Query("ids") ids: String): Response<BookmarkStatusResponse>
 }
 
 @JsonClass(generateAdapter = true)
-data class AddBookmarkRequest(@Json(name = "post_id") val postId: String)
+data class CreateBookmarkRequest(
+    @Json(name = "content_type") val contentType: String = "post",
+    @Json(name = "content_id") val contentId: String,
+    @Json(name = "collection_id") val collectionId: String? = "default",
+)
 
 @JsonClass(generateAdapter = true)
-data class BookmarkDto(
-    val id: String,
-    @Json(name = "post_id") val postId: String,
+data class BookmarkResponse(
+    val ok: Boolean,
+    @Json(name = "content_type") val contentType: String,
+    @Json(name = "content_id") val contentId: String,
+    @Json(name = "collection_id") val collectionId: String?,
     @Json(name = "created_at") val createdAt: String?,
 )
+
+@JsonClass(generateAdapter = true)
+data class OkResponse(val ok: Boolean)
+
+@JsonClass(generateAdapter = true)
+data class BookmarkStatusResponse(val statuses: Map<String, Boolean>)
 ```
 
 FastAPI `detail` errors are normalized by the shared mapper:
-`string | [{msg}] | {code,...}` -> domain `AppError`. A `409` on add (already
-bookmarked) and `404` on delete (not bookmarked) are treated as **idempotent
-success** (the desired end-state already holds) rather than failures.
+`string | [{msg}] | {code,...}` -> domain `AppError` (this matches
+`normalizeErrorDetail` in `src/api/client.ts`). Note all bookmark ops also list a
+**422 `HTTPValidationError`** response (e.g. malformed `content_id` against the
+`^[a-zA-Z0-9_]+$` pattern). The web's documented idempotency handling
+(`src/pages/feed/PostCard.tsx`): a **409** on add (already bookmarked) is treated
+as success (`setIsBookmarked(true)`), and a **404** on delete (already removed) is
+treated as success (`setIsBookmarked(false)`) — the desired end-state already
+holds. The Android port mirrors this.
 
 Share has **no API contract** — it is a pure client-side Android intent.
 
 ## 6. Data & State Management
 
-- **Room (core-data), shared with AND-092**: `BookmarkEntity(postId: String PK,
-  bookmarkId: String?, createdAt: Long?, syncState: enum{SYNCED, PENDING_ADD,
-  PENDING_REMOVE})`. Optimistic toggles set `PENDING_*`; success -> `SYNCED`;
-  failure -> rollback (delete pending-add row / restore removed row).
+- **Room (core-data), shared with AND-092**: `BookmarkEntity(contentId: String PK,
+  contentType: String = "post", collectionId: String?, createdAt: Long?,
+  syncState: enum{SYNCED, PENDING_ADD, PENDING_REMOVE})`. Optimistic toggles set
+  `PENDING_*`; success -> `SYNCED`; failure -> rollback (delete pending-add row /
+  restore removed row). **Corrected:** there is no server `bookmarkId` to store —
+  the add response is `{ ok, content_type, content_id, collection_id, created_at }`
+  and delete keys off `(content_type, content_id)`, so the entity is keyed by
+  `contentId` (the postId for feed posts) + `contentType`, with `collectionId`.
 - **Read path**: `FeedViewModel` joins each post with `observeBookmarked(postId)`
   so the UI is driven by cache, not by transient view state. This satisfies FR-4
   and FR-8 (recycle/process-death survival).
@@ -388,14 +477,17 @@ data class PostUiModel(
 
 ## 13. Risks & Open Questions
 
-- **R1 — Canonical share URL**: `WEB_BASE`/path (`/p/{id}`) is assumed from the
-  web app; confirm the actual public post route and whether IDs are slugs.
-  *Open:* is there a server-issued share/short URL endpoint? Default to
-  client-built URL until confirmed.
-- **R2 — Endpoint shape**: bookmark add/remove verbs and the unsave path
-  (`DELETE /ui/bookmarks/{post_id}` vs `DELETE /ui/bookmarks/{bookmark_id}`)
-  must be verified against `/openapi.json`; affects whether we need the
-  `bookmarkId` from the add response.
+- **R1 — Canonical share URL** *(partially clarified)*: the web app has NO public
+  share URL — its share is an in-app DM, and its internal post route is
+  `/posts/{post_id}` (corrected from `/p/{id}`). No server-issued share/short URL
+  endpoint exists in OpenAPI. `WEB_BASE` (public origin) remains an unverified
+  assumption; confirm the actual public origin and whether IDs are slugs before
+  launch. Default to client-built `WEB_BASE/posts/{postId}` until confirmed.
+- **R2 — Endpoint shape** *(RESOLVED in this review)*: verified against OpenAPI.
+  Add = `POST /ui/bookmarks` (201, `CreateBookmarkRequest` keyed by
+  `content_type`+`content_id`); unsave = `DELETE /ui/bookmarks/{content_type}/{content_id}`
+  (200 `{ok:true}`). No `bookmarkId` is needed — delete keys off the content tuple.
+  See §5 and §16.
 - **R3 — Offline policy**: whether AND-092 provides background bookmark sync
   decides FR-3 wording (queue vs revert). Default: revert + offline snackbar.
 - **R4 — Shared ownership**: schema/interface drift between AND-092 and AND-176
@@ -449,3 +541,241 @@ AC-8 (Tested): The bookmark toggle/unsave behavior is covered by automated tests
   secrets.
 - Code reviewed and merged to `android-port`; ktlint/detekt clean; no new
   lint-baseline regressions.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. **Save endpoint is `POST /ui/bookmarks`.** VERIFIED.
+   Source: OpenAPI `POST /ui/bookmarks` (op `create_bookmark_ui_bookmarks_post`);
+   `src/api/endpoints/bookmarks.ts: createBookmark`.
+2. **Save request body shape.** CORRECTED — was `{ "post_id" }`; actual is
+   `CreateBookmarkRequest { content_type ("post"|"video", default "post"),
+   content_id (required, 1..64, ^[a-zA-Z0-9_]+$), collection_id (default "default") }`.
+   Source: `components.schemas.CreateBookmarkRequest` in `openapi.pretty.json`;
+   `src/api/endpoints/bookmarks.ts: createBookmark`.
+3. **Save success status / response body.** CORRECTED — was `200 {id,post_id,created_at}`;
+   actual is **201** with `{ ok, content_type, content_id, collection_id, created_at }`.
+   Source: OpenAPI `POST /ui/bookmarks` resp `201`; `src/api/endpoints/bookmarks.ts: createBookmark`
+   return type.
+4. **Unsave endpoint path.** CORRECTED — was `DELETE /ui/bookmarks/{post_id}`;
+   actual is `DELETE /ui/bookmarks/{content_type}/{content_id}`.
+   Source: OpenAPI `DELETE /ui/bookmarks/{content_type}/{content_id}`
+   (op `delete_bookmark_ui_bookmarks__content_type___content_id__delete`);
+   `src/api/endpoints/bookmarks.ts: removeBookmark`.
+5. **Unsave success status / body.** CORRECTED — was `204 No Content`; actual is
+   **200** `{ ok: true }`. Source: OpenAPI resp `200`;
+   `src/api/endpoints/bookmarks.ts: removeBookmark` (`api.del<{ ok: boolean }>`).
+6. **List saved endpoint + wrapper.** CORRECTED — was `{ items, next_cursor }`;
+   actual is `GET /ui/bookmarks` -> `{ bookmarks: BookmarkItem[], next_cursor?, total_count }`
+   with params `limit,cursor,content_type,collection_id`.
+   Source: OpenAPI `GET /ui/bookmarks` (op `list_bookmarks_ui_bookmarks_get`);
+   `src/api/endpoints/bookmarks.ts: BookmarkListResponse / getBookmarks`.
+7. **Batch presence endpoint `GET /ui/bookmarks/status?ids=` -> `{ statuses: {id:bool} }`.**
+   VERIFIED (newly surfaced; absent from prior draft). Source: OpenAPI
+   `GET /ui/bookmarks/status` (op `bookmark_status_ui_bookmarks_status_get`, param `ids`);
+   `src/api/endpoints/bookmarks.ts: getBookmarkStatus`.
+8. **DTO is keyed by `content_type`+`content_id`, not a `Bookmark`/`post_id`.**
+   CORRECTED. Source: `src/api/endpoints/bookmarks.ts: BookmarkItem`
+   (`content_type, content_id, collection_id, created_at, content_preview{...}`).
+9. **409-on-add and 404-on-delete treated as idempotent success.** VERIFIED.
+   Source: `src/pages/feed/PostCard.tsx: bookmarkMutation.onError` (status 409 ->
+   `setIsBookmarked(true)`; 404 -> `setIsBookmarked(false)`). Note: server's normal
+   error envelope per op is **422 HTTPValidationError**; 409/404 are runtime conflict
+   states handled client-side, not declared response codes in OpenAPI.
+10. **Auth = cookie session + `X-CSRF-Token` from `ui_csrf` cookie on mutations.**
+    VERIFIED. Source: `src/api/client.ts` (`getCookie("ui_csrf")` ->
+    `headers.set("X-CSRF-Token", csrf)`; `credentials: "include"`).
+11. **401 -> single `POST /ui/session/refresh` + one retry.** VERIFIED, with nuance.
+    CORRECTED framing — it is not an "OkHttp authenticator"; the web does a single
+    in-flight `refreshPromise` and ONLY refreshes if `isAuthenticated` was already
+    true, else propagates 401; on refresh failure -> `logout`. Source:
+    `src/api/client.ts: refreshSession` + the `res.status === 401` block; OpenAPI
+    `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`, resp 200).
+12. **Web client also sends `Authorization: Bearer <accessToken>`.** VERIFIED (added).
+    Source: `src/api/client.ts` (`headers.set("Authorization", \`Bearer ${accessToken}\`)`).
+13. **Error normalization `string | [{msg}] | {code,...}` -> message.** VERIFIED.
+    Source: `src/api/client.ts: normalizeErrorDetail` and `mapAuthorizationError`.
+14. **Web "share" opens a system share sheet with a canonical `/p/{postId}` URL.**
+    CORRECTED — web share is an IN-APP DM, not a system sheet; internal route is
+    `/posts/{post_id}` (NOT `/p/{postId}`). The Android system-share-sheet design is
+    an accepted platform divergence. Source: `src/pages/feed/SharePostDialog.tsx`
+    (`sendTextMessage(..., { preview: { url: \`/posts/${post.post_id}\`, ... } })`);
+    `src/pages/feed/PostCard.tsx` (share button opens `SharePostDialog`).
+15. **Public web origin `https://app.testlogon.com`.** UNVERIFIED-ASSUMPTION.
+    No public origin appears in OpenAPI or the web client (`VITE_API_BASE_URL` is
+    env-injected and points at the dev API host). Must confirm before launch (R1).
+16. **`FeedPost` carries an author display name for the share subject.**
+    UNVERIFIED-ASSUMPTION (effectively CORRECTED) — `FeedPost` has only `author_id`,
+    no `author_display_name`; the web feed renders `author_id` as the name.
+    `author_display_name` only appears nested in `BookmarkItem.content_preview`.
+    The Android `PostUiModel.authorDisplayName` must come from a profile source or
+    fall back to `author_id`. Source: `src/api/types.ts: FeedPost`;
+    `src/pages/feed/PostCard.tsx` (renders `{post.author_id}`).
+17. **No server-issued share/short-URL endpoint exists.** VERIFIED (absence).
+    Source: grep of `openapi.index.txt` for `share` returns only broadcast-clip
+    share-recording and messaging file/video/calendar-share message endpoints — none
+    mints a public post URL.
+18. **Share via `Intent.ACTION_SEND` + `Intent.createChooser`, `text/plain`.**
+    VERIFIED (framework ref). Source: Android docs —
+    https://developer.android.com/training/sharing/send (Sharsheet / ACTION_SEND).
+19. **`IconToggleButton` announces checked/toggle state to TalkBack; 48dp targets.**
+    VERIFIED (framework ref). Source: Material 3 Compose
+    https://developer.android.com/jetpack/compose/components/button#icon-button and
+    accessibility minimum touch target
+    https://developer.android.com/develop/ui/compose/accessibility.
+20. **`ActivityNotFoundException` possible when no share target / no `startActivity` resolver.**
+    VERIFIED (framework ref). Source: Android docs
+    https://developer.android.com/reference/android/content/ActivityNotFoundException.
+
+### Corrections made
+
+- C1 (§5): Save body `{post_id}` -> `CreateBookmarkRequest {content_type, content_id, collection_id}`.
+- C2 (§5): Save response `200 {id,post_id,created_at}` -> `201 {ok,content_type,content_id,collection_id,created_at}`.
+- C3 (§5): Unsave path `/ui/bookmarks/{post_id}` -> `/ui/bookmarks/{content_type}/{content_id}`.
+- C4 (§5): Unsave success `204` -> `200 {ok:true}`.
+- C5 (§5): List wrapper `{items,next_cursor}` -> `{bookmarks,next_cursor,total_count}`; element `Bookmark` -> `BookmarkItem`.
+- C6 (§5): Added the previously-missing `GET /ui/bookmarks/status?ids=` endpoint.
+- C7 (§5 Retrofit): `AddBookmarkRequest`/`BookmarkDto` replaced with verified
+  `CreateBookmarkRequest`/`BookmarkResponse`/`OkResponse`/`BookmarkStatusResponse`;
+  `remove(postId)` -> `remove(contentType, contentId)`.
+- C8 (§6): `BookmarkEntity` re-keyed `postId`+`bookmarkId` -> `contentId`+`contentType`+`collectionId`
+  (no server bookmarkId exists).
+- C9 (§2, §1, §4.3, §13/R1): Share corrected — web is in-app DM, internal route
+  `/posts/{post_id}` not `/p/{postId}`; Android native share-sheet noted as a
+  deliberate divergence; share-URL path segment fixed to `/posts/`.
+- C10 (§2): 401 handling reframed from "OkHttp authenticator" to the web's actual
+  single-in-flight-refresh-if-already-authenticated behavior; added the
+  `Authorization: Bearer` header fact.
+- C11 (§13/R2): marked RESOLVED with verified shapes.
+
+### Open assumptions
+
+- **OA-1 — Public share origin (`WEB_BASE`).** Unverifiable from sources: no public
+  origin in OpenAPI; the web injects `VITE_API_BASE_URL` at build time pointing at
+  the dev API. The `/posts/{post_id}` path segment is verified, the host is not.
+  Why: deployment/DNS config is outside the provided artifacts.
+- **OA-2 — Resolvability of the shared URL on a logged-out device.** AC-5 requires a
+  "resolvable" URL; whether `/posts/{post_id}` is publicly viewable without auth
+  cannot be confirmed (no public post-fetch route was verified). Why: no public
+  unauthenticated post endpoint appears in OpenAPI.
+- **OA-3 — Author display name on the feed.** `FeedPost` lacks `author_display_name`;
+  the share subject depends on an Android-side profile join or `author_id` fallback.
+  Why: the web feed contract simply does not carry it.
+- **OA-4 — AND-092 background sync existence.** The offline "Saved locally, will sync"
+  wording (§7) depends on whether AND-092 ships background bookmark sync. Default
+  remains revert + offline snackbar. Why: AND-092 internals are not in scope here.
+- **OA-5 — Logged-out bookmark gating in the web.** The web `PostCard` does not
+  visibly disable the bookmark button when logged out (FR-6 is an Android product
+  decision, not a verified web behavior). Why: web relies on the 401 path rather
+  than pre-disabling.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device);
+**emu35** = headless emulator AVD `test35` (x86_64, Android 15 / API 35);
+**A15** = physical Samsung Galaxy A15 5G (SM-A156U, Android 14 / API 34, arm64-v8a).
+Most cases here are non-hardware and run on JVM or emu35; the OS share-chooser
+real-target case is called out for the physical device.
+
+- **TC-AND-176-01** — Type: unit (JVM). Target: `BookmarkRepository.setBookmarked`.
+  Preconditions: in-memory Room empty; fake `BookmarkApi` returns 201
+  `{ok:true,...}` for add. Steps: call `setBookmarked(postId,true)`; collect
+  `observeBookmarked(postId)`. Expected: emits `true` immediately (optimistic
+  upsert, `PENDING_ADD`), then settles `SYNCED`; fake API received
+  `CreateBookmarkRequest(content_type="post", content_id=postId)`; result
+  `ApiResult.Success`. Traces: AC-1.
+- **TC-AND-176-02** — Type: unit (JVM). Target: `BookmarkRepository.setBookmarked`
+  (unsave). Preconditions: row exists `SYNCED`; fake API returns 200 `{ok:true}`
+  for `DELETE /ui/bookmarks/post/{id}`. Steps: `setBookmarked(postId,false)`.
+  Expected: cache flips to absent immediately; DELETE called with path segments
+  `("post", postId)`; settles success. Traces: AC-1.
+- **TC-AND-176-03** — Type: unit (JVM). Target: `setBookmarked` rollback.
+  Preconditions: fake API returns network failure / non-2xx on add. Steps:
+  `setBookmarked(postId,true)`. Expected: `observeBookmarked` emits `true` then
+  reverts to `false`; returns `ApiResult.Failure`; no orphan `PENDING_ADD` row.
+  Traces: AC-3.
+- **TC-AND-176-04** — Type: contract/MockWebServer (JVM). Target: `BookmarkApi` +
+  Moshi adapters + CSRF interceptor. Preconditions: MockWebServer enqueues add
+  201 and delete 200; a `ui_csrf` cookie present in the jar. Steps: call `add`
+  then `remove`. Expected: add request is `POST /ui/bookmarks` with JSON
+  `{"content_type":"post","content_id":...,"collection_id":...}` and header
+  `X-CSRF-Token`; remove is `DELETE /ui/bookmarks/post/{id}`; both parse
+  (`BookmarkResponse.ok==true`, `OkResponse.ok==true`). Verifies C1-C5/C7.
+  Traces: AC-1.
+- **TC-AND-176-05** — Type: contract/MockWebServer (JVM). Target: idempotency
+  mapping. Preconditions: MockWebServer returns 409 for add, 404 for delete.
+  Steps: toggle save (409) and unsave (404). Expected: both treated as success,
+  cache reaches desired state, NO `SnackbarEvent.BookmarkFailed` emitted.
+  Traces: AC-4.
+- **TC-AND-176-06** — Type: contract/MockWebServer (JVM). Target: 422 validation
+  error. Preconditions: server returns 422 `HTTPValidationError` (e.g. malformed
+  `content_id`). Steps: `setBookmarked`. Expected: mapped to `AppError`, cache
+  rolled back, `BookmarkFailed` snackbar event emitted. Traces: AC-3.
+- **TC-AND-176-07** — Type: contract/MockWebServer (JVM). Target: 401 refresh +
+  retry. Preconditions: authenticated session; server returns 401 once, then
+  `POST /ui/session/refresh` 200, then add succeeds on replay. Steps:
+  `setBookmarked(postId,true)`. Expected: exactly one refresh call, original
+  request replayed once, final success. Sub-case: refresh fails -> toggle reverts
+  and user treated as logged-out (FR-6). Traces: AC-1, AC-6.
+- **TC-AND-176-08** — Type: unit (JVM). Target: `FeedViewModel.onToggleBookmark`
+  serialization. Preconditions: coroutine test dispatcher; fake repo with
+  controllable delay. Steps: fire toggle true then false then true rapidly for the
+  same postId. Expected: prior in-flight jobs cancelled; only the last intent
+  (`true`) commits; final state matches last tap (last-write-wins). Traces: AC-1.
+- **TC-AND-176-09** — Type: unit (JVM). Target: `PostShare` + share-payload safety.
+  Steps: `PostShare.urlFor(postId)` and `subjectFor(model)`. Expected: URL equals
+  `https://app.testlogon.com/posts/{postId}` (path `/posts/`, not `/p/`); asserts
+  URL/subject contain NO cookie, session token, `ui_csrf`, CSRF value, bearer, or
+  user id. Traces: AC-5 (security), AC-8.
+- **TC-AND-176-10** — Type: integration/Robolectric (JVM). Target: `ShareLauncher`.
+  Preconditions: Robolectric context. Steps: call `share(context, ShareContent)`.
+  Expected: a started activity is an `ACTION_SEND` chooser, inner intent
+  `type=="text/plain"`, `EXTRA_TEXT==url`, `EXTRA_SUBJECT==subject` when present
+  (`ShadowApplication.getNextStartedActivity`). Traces: AC-5, AC-8.
+- **TC-AND-176-11** — Type: Compose-UI (emu35). Target: `BookmarkToggle` /
+  `PostActionRow`. Steps: render unsaved; tap; render saved; tap share. Expected:
+  icon goes outline->filled on tap and invokes `onCheckedChange(true)`;
+  `contentDescription` switches "Add bookmark"->"Remove bookmark"; share click
+  invokes `onShare`. Traces: AC-1, AC-5.
+- **TC-AND-176-12** — Type: Compose-UI/accessibility (emu35). Target:
+  `BookmarkToggle`, share button. Steps: assert semantics. Expected: toggle exposes
+  Switch/Toggleable role with checked state announced to TalkBack; both controls
+  >= 48dp touch targets; share `contentDescription=="Share post"`; no hardcoded
+  literals (all from `strings.xml`). Traces: AC-7.
+- **TC-AND-176-13** — Type: Compose-UI (emu35). Target: logged-out gating. Steps:
+  render `PostActionRow` with `enabled=false` (unauthenticated). Expected: bookmark
+  toggle disabled / no-op (no `onCheckedChange`); share button still enabled and
+  invokes `onShare` with a valid URL. Traces: AC-6.
+- **TC-AND-176-14** — Type: instrumented/e2e (emu35). Target: cache-driven
+  persistence. Steps: save a post; scroll it off and back; trigger configuration
+  change (rotation); kill + relaunch process. Expected: the post shows the filled
+  icon in all three cases (state sourced from Room, not transient view state).
+  Traces: AC-2, AC-8.
+- **TC-AND-176-15** — Type: instrumented/e2e (emu35). Target: offline toggle path.
+  Preconditions: airplane mode / no connectivity (or flaky-dev-host simulated
+  failure). Steps: tap bookmark. Expected (default policy): optimistic flip then
+  revert with an offline/failed snackbar carrying a working Retry; Retry re-invokes
+  the toggle. Traces: AC-3.
+- **TC-AND-176-16** — Type: manual/instrumented, **MUST run on physical device A15**.
+  Target: real OS share chooser. Rationale: the system Sharesheet, installed share
+  targets, and `ActivityNotFoundException` fallback behave differently on a real
+  device than the emulator's sparse app set; also validates arm64/API-34. Steps:
+  tap share on a feed post; pick a target (e.g. messaging/email); separately,
+  uninstall/disable share targets to exercise the no-target path. Expected: chooser
+  appears with the post URL + subject; on no target, the clipboard-copy fallback
+  fires with the `feed_share_no_target` snackbar; shared text contains no auth
+  material. Traces: AC-5.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (save toggles + persists) | TC-01, TC-02, TC-04, TC-07, TC-08, TC-11 |
+| AC-2 (persist/recycle/process-death) | TC-14 |
+| AC-3 (failure revert + retry) | TC-03, TC-06, TC-15 |
+| AC-4 (409/404 idempotent) | TC-05 |
+| AC-5 (share opens sheet, no auth leak) | TC-09, TC-10, TC-11, TC-16 |
+| AC-6 (logged-out gating) | TC-07, TC-13 |
+| AC-7 (accessibility) | TC-12 |
+| AC-8 (tested: repo/VM/Compose/Robolectric) | TC-09, TC-10, TC-14 (plus TC-01..08, 11) |

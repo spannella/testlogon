@@ -5,7 +5,8 @@ milestone: M3
 epic: E21
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-153, AND-127]
 blocks: []
 ---
@@ -18,9 +19,13 @@ This ticket wires the **contacts surface** (AND-153) to the **DM find-or-create*
 flow (AND-127) so that a user can tap a contact and land directly inside the
 direct-message conversation with that person. It is the connective "action"
 ticket of epic **E21 (Contacts)**: AND-153 renders the list and search; AND-127
-owns the `POST /conversations/dm/find-or-create` network call and the
+owns the `POST /messaging/conversations/dm/find-or-create` network call and the
 conversation/thread screen; AND-154 is the navigation + intent glue that turns a
 selected `Contact` into an open DM.
+
+> Review note (2026-06-06): the endpoint is namespaced under `/messaging`
+> (`POST /messaging/conversations/dm/find-or-create`), not bare
+> `/conversations/...`. See §16 for the full citation/correction audit.
 
 Two entry affordances are in scope:
 
@@ -42,10 +47,16 @@ owns the contract; this ticket consumes it.
 - **Module:** `feature-contacts` (introduced in AND-153), depending on
   `feature-messaging`'s public navigation contract (introduced in AND-127),
   `core-data`, `core-model`, `core-network`, `core-ui`.
-- **Web reference:** `frontend/src/api/endpoints/conversations.ts`
-  (`findOrCreateDm`) and `frontend/src/api/endpoints/contacts.ts`; shared types
-  in `frontend/src/api/types.ts`. The web app navigates from a contact card to
-  `/messaging/:conversationId` after the find-or-create resolves.
+- **Web reference:** `frontend/src/api/endpoints/messaging.ts`
+  (`findOrCreateDm`, **corrected** from `conversations.ts` which does not exist)
+  and `frontend/src/api/endpoints/contacts.ts`; shared types in
+  `frontend/src/api/types.ts`. **Correction:** the web app does **not** navigate
+  to `/messaging/:conversationId`. `ContactsPage.tsx: handleMessage` calls
+  `navigate("/messages", { state: { openConversation: convo } })` — it routes to
+  a single `/messages` surface and hands the resolved `Conversation` object via
+  router state. The Android port's per-conversation route
+  (`conversation/{conversationId}`) is an Android-side design choice owned by
+  AND-127, not a mirror of the web URL. See §16.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000`
   (plaintext HTTP, unreliable). OpenAPI at `/openapi.json`. Auth is
   cookie-based with the `ui_csrf` cookie echoed as `X-CSRF-Token`.
@@ -65,8 +76,11 @@ returned `conversationId`.
 
 FR-2. A contact **profile** screen (`ContactProfileScreen`) is reachable from a
 row's overflow/long-press or a row-trailing chevron; it shows the contact's
-display name, handle, avatar, and a primary **"Message"** action that performs
-the same DM resolution + navigation.
+display name and avatar (web `ContactEntry` exposes `display_name` and
+`profile_photo_url`; there is **no `handle` field** — any "handle"/username line
+is unverified and must either be dropped or sourced from a separate profile
+lookup), and a primary **"Message"** action that performs the same DM resolution
++ navigation.
 
 FR-3. While resolution is in flight, the originating affordance shows an inline
 busy state (row trailing spinner, or disabled "Message" button with spinner).
@@ -165,7 +179,9 @@ class ContactsViewModel @Inject constructor(
             _state.update { it.copy(pendingDmUserId = targetUserId) }
             when (val r = findOrCreateDm(targetUserId)) {
                 is ApiResult.Success ->
-                    _events.send(ContactsEvent.OpenThread(r.data.id))
+                    // server field is `conversation_id` (ConversationOut), mapped
+                    // to Conversation.conversationId by core-network
+                    _events.send(ContactsEvent.OpenThread(r.data.conversationId))
                 is ApiResult.Error ->
                     _events.send(ContactsEvent.ShowSnackbar(r.message, targetUserId))
             }
@@ -222,45 +238,70 @@ This ticket introduces **no new endpoint**. It consumes the find-or-create
 contract owned by **AND-127**. The shape consumed (for reference only; the
 canonical definition lives in AND-127's spec) is:
 
-`POST /conversations/dm/find-or-create`
+`POST /messaging/conversations/dm/find-or-create`
+(op `find_or_create_dm_messaging_conversations_dm_find_or_create_post`;
+req schema `FindOrCreateDmIn`; resp `200: ConversationOut`, `422: HTTPValidationError`).
 
-Request:
+> **Corrections (2026-06-06):** the path is `/messaging/conversations/dm/find-or-create`
+> (was `/conversations/dm/find-or-create`); the request field is **`user_id`**
+> (was `target_user_id`); the response is a full `ConversationOut`, whose id field
+> is **`conversation_id`** (not `id`) and whose discriminator is **`type`** with
+> values `"dm" | "group"` (not `kind`). There is **no `created` field** in the
+> schema — the "freshly created vs existing" distinction below is removed.
+
+Request (`FindOrCreateDmIn`, single required string field `user_id`):
 
 ```json
-{ "target_user_id": "usr_8c1f2a" }
+{ "user_id": "usr_8c1f2a" }
 ```
 
-Headers: session cookies + `X-CSRF-Token: <ui_csrf cookie value>`.
+Headers: session cookies + `X-CSRF-Token: <ui_csrf cookie value>`. The web client
+sets `X-CSRF-Token` from the `ui_csrf` cookie on **every** request when the cookie
+is present (not only mutations); see `client.ts`.
 
-Success `200`:
+Success `200` (`ConversationOut`, abridged to fields this ticket reads —
+`conversation_id`, `type`, `status` are required; `participants` is an array of
+`ParticipantOut`):
 
 ```json
 {
-  "id": "cnv_4b2d77",
-  "kind": "dm",
-  "created": false,
+  "conversation_id": "cnv_4b2d77",
+  "type": "dm",
+  "status": "active",
+  "created_at": 1717600000,
+  "created_by": "usr_self",
+  "participant_count": 2,
   "participants": [
-    { "user_id": "usr_self",   "display_name": "Me" },
-    { "user_id": "usr_8c1f2a", "display_name": "Ada L." }
+    { "user_id": "usr_self",   "display_name": "Me",     "status": "active", "role": "member" },
+    { "user_id": "usr_8c1f2a", "display_name": "Ada L.", "status": "active", "role": "member" }
   ]
 }
 ```
 
-`created` distinguishes a freshly created DM from an existing one; this ticket
-treats both identically (navigate to `id`).
+This ticket navigates using `conversation_id`. Because the schema exposes no
+`created` flag, both the find and the create paths are indistinguishable to the
+client and are treated identically (navigate to `conversation_id`). A future
+"new conversation" toast would need a backend change to surface that flag.
 
-FastAPI error envelope (`detail` may be `string | [{msg}] | {code,...}`),
-mapped by `core-network`'s shared parser:
+FastAPI error envelope (`detail` may be `string | [{msg,...}] | {code,...}`),
+mapped by `core-network`'s shared parser (mirrors web `normalizeErrorDetail` in
+`client.ts`). The OpenAPI spec for this op declares only `200` and `422`
+(`HTTPValidationError`); `403`/`404`/`409`/`5xx` are platform-wide error
+behaviours not enumerated on this op, so their exact `detail.code` strings (e.g.
+`user_blocked`) are **assumptions** pending backend confirmation:
 
 ```json
 { "detail": { "code": "user_blocked", "message": "You cannot message this user." } }
 ```
 
-Relevant statuses this ticket handles: `401` (handled globally — single
-`/ui/session/refresh` then retry, per platform rule), `403`/`409` blocked or
-not-allowed (terminal, inline message), `404` target not found (terminal),
-`5x`/timeout/IO (transient, snackbar + Retry). Because find-or-create is a
-**mutation, it is never auto-retried**; only the global 401-refresh-once applies.
+Statuses this ticket handles: `422` (validation — should not occur with a valid
+`user_id`; surfaced as a terminal error), `401` (handled globally — single
+`/ui/session/refresh` then one retry, and only if the user was already
+authenticated; an unauthenticated 401 propagates — see `client.ts`),
+`403`/`409` blocked or not-allowed (terminal, inline message), `404` target not
+found (terminal), `5x`/timeout/IO (transient, snackbar + Retry). Because
+find-or-create is a **mutation, it is never auto-retried**; only the global
+401-refresh-once applies.
 
 ## 6. Data & State Management
 
@@ -439,3 +480,258 @@ affordance and the rest of the list stays interactive.
 - Telemetry events from section 10 emitted and verified in a debug build.
 - PR links AND-153 and AND-127, includes a short demo of contact→DM (row and
   profile paths), and is reviewed/approved per repo policy.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer. Sources:
+OpenAPI index (`reference/openapi.index.txt`), OpenAPI spec
+(`reference/openapi.pretty.json`, `components.schemas.<Name>`), and the frontend
+reference (`reference/src/...`).
+
+1. **DM find-or-create endpoint path** — Claim (original): `POST
+   /conversations/dm/find-or-create`. **VERDICT: Corrected** to `POST
+   /messaging/conversations/dm/find-or-create`. Source: OpenAPI `POST
+   /messaging/conversations/dm/find-or-create`
+   (op `find_or_create_dm_messaging_conversations_dm_find_or_create_post`);
+   `src/api/endpoints/messaging.ts: findOrCreateDm`.
+
+2. **HTTP method** — Claim: `POST`. **VERDICT: Verified.** Source: OpenAPI
+   `POST /messaging/conversations/dm/find-or-create`;
+   `src/api/endpoints/messaging.ts: findOrCreateDm` (`api.post`).
+
+3. **Request body field** — Claim (original): `target_user_id`. **VERDICT:
+   Corrected** to `user_id`. Source: schema `FindOrCreateDmIn`
+   (single required string property `user_id`);
+   `src/api/endpoints/messaging.ts: findOrCreateDm` posts `{ user_id: userId }`.
+
+4. **Response id field** — Claim (original): `id` (e.g. `cnv_...`). **VERDICT:
+   Corrected** to `conversation_id`. Source: schema `ConversationOut`
+   (required `conversation_id`); `src/api/types.ts: Conversation.conversation_id`;
+   `src/api/endpoints/messagingAdapter.ts: adaptConversation` maps
+   `conversation_id`.
+
+5. **Response discriminator field** — Claim (original): `kind: "dm"`. **VERDICT:
+   Corrected** to `type` with values `"dm" | "group"`. Source: schema
+   `ConversationOut.type` (required string); `src/api/types.ts: Conversation.type:
+   "dm" | "group"`.
+
+6. **`created` boolean in response** — Claim (original): response includes
+   `created` distinguishing new vs existing DM. **VERDICT: Corrected (removed).**
+   No `created` property exists on `ConversationOut`. Source: schema
+   `ConversationOut` properties + `required` list; `src/api/types.ts:
+   Conversation` (no `created`).
+
+7. **Response schema** — Claim: response is the conversation/thread model.
+   **VERDICT: Verified** (and named). Source: OpenAPI op resp `200:ConversationOut`;
+   schema `ConversationOut`; participants are
+   `app__routers__messaging__ParticipantOut` (fields incl. `user_id`,
+   `display_name`, `status`, `role`).
+
+8. **Auth = cookie-based with CSRF** — Claim: cookie session + `ui_csrf` cookie
+   echoed as `X-CSRF-Token`. **VERDICT: Verified.** Source: `src/api/client.ts`
+   (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`; `credentials:
+   "include"`). Nuance: CSRF header is added to **every** request when the cookie
+   is present, not only mutations.
+
+9. **401 handling = refresh-once then retry** — Claim: single
+   `/ui/session/refresh` then retry, global. **VERDICT: Verified (with nuance).**
+   Source: OpenAPI `POST /ui/session/refresh`; `src/api/client.ts` refresh-once
+   logic. Nuance: refresh+retry only fires if the user was already authenticated;
+   an unauthenticated 401 propagates directly.
+
+10. **Current-user source for self-DM guard** — Claim: current user id from `GET
+    /ui/me`. **VERDICT: Verified.** Source: OpenAPI `GET /ui/me` (op
+    `ui_me_ui_me_get`); `src/api/endpoints/auth.ts: getMe` (`api.get("/ui/me")`).
+
+11. **FastAPI error envelope shape** — Claim: `detail` may be `string |
+    [{msg}] | {code,...}`. **VERDICT: Verified.** Source: `src/api/client.ts:
+    normalizeErrorDetail` (handles string, array, and `{code}` object forms).
+
+12. **Web navigation target after find-or-create** — Claim (original): web
+    navigates to `/messaging/:conversationId`. **VERDICT: Corrected.** Web
+    navigates to `/messages` passing the conversation via router state. Source:
+    `src/pages/contacts/ContactsPage.tsx: handleMessage` →
+    `navigate("/messages", { state: { openConversation: convo } })`.
+
+13. **Web reference file for the call** — Claim (original):
+    `frontend/src/api/endpoints/conversations.ts`. **VERDICT: Corrected** to
+    `messaging.ts` (no `conversations.ts` exists). Source: directory listing of
+    `src/api/endpoints/` (`messaging.ts` present, `conversations.ts` absent);
+    `src/api/endpoints/messaging.ts: findOrCreateDm`.
+
+14. **Contact identifier field** — Claim (original): a contact's `userId`.
+    **VERDICT: Corrected/clarified.** The web contact model keys on `contact_id`
+    (the target user's id), passed straight into `findOrCreateDm`. Source:
+    `src/api/types.ts: ContactEntry.contact_id`;
+    `src/pages/contacts/ContactsPage.tsx: handleMessage` uses
+    `contact.contact_id`. The Android `Contact.userId` must map to this id.
+
+15. **Contact profile "handle" field** — Claim (original): profile shows display
+    name, handle, avatar. **VERDICT: Corrected.** `ContactEntry` exposes only
+    `display_name` and `profile_photo_url`; no `handle`. Source: `src/api/types.ts:
+    ContactEntry`.
+
+16. **Validation error code** — Claim: op returns validation errors. **VERDICT:
+    Verified.** Source: OpenAPI op resp `422:HTTPValidationError`.
+
+17. **Android navigation route `conversation/{conversationId}` and
+    `launchSingleTop`** — **VERDICT: Unverified-assumption (Android-side design,
+    owned by AND-127).** Not derivable from web (web uses `/messages` + state).
+    Compose `NavController.launchSingleTop` semantics are a
+    framework behaviour (framework ref:
+    https://developer.android.com/guide/navigation/backstack ).
+
+18. **`StateFlow` + `Channel`-backed one-shot events pattern** — **VERDICT:
+    Unverified-assumption (Android platform convention).** Framework ref:
+    https://developer.android.com/topic/architecture/ui-layer/events .
+
+### Corrections made
+
+- §1, §2, §5, §4 (ViewModel snippet): endpoint path corrected
+  `/conversations/dm/find-or-create` → `/messaging/conversations/dm/find-or-create`.
+- §5: request field `target_user_id` → `user_id` (`FindOrCreateDmIn`).
+- §5, §4: response id `id` → `conversation_id`; discriminator `kind` → `type`
+  (`"dm"|"group"`); removed the non-existent `created` field and its semantics.
+- §2: web reference file `conversations.ts` → `messaging.ts`; corrected the web
+  navigation claim (it routes to `/messages` with router state, not
+  `/messaging/:conversationId`).
+- §3 (FR-2): removed the unsupported "handle" field from the profile screen.
+- §5: clarified 401 refresh-once nuance and that the op formally declares only
+  `200`/`422`; flagged `403/404/409` codes as platform-level assumptions.
+
+### Open assumptions
+
+- **Error `detail.code` strings** (`user_blocked`, not-found code, etc.) and the
+  exact non-2xx statuses (`403`/`404`/`409`) for find-or-create: the OpenAPI op
+  declares only `200`/`422`, so these are inferred from platform conventions and
+  unconfirmed against the backend. *Why:* not enumerated in `openapi.pretty.json`
+  for this op.
+- **Android per-conversation route + `launchSingleTop` back-stack behaviour:**
+  Android-only design owned by AND-127; not mirrored by the web client (which uses
+  a single `/messages` surface). *Why:* no web/OpenAPI source defines an Android
+  route.
+- **Self-DM guard rejection by backend:** whether the server rejects a self
+  `user_id` (and with what status) is unconfirmed; the client-side guard is
+  belt-and-suspenders. *Why:* not specified in the schema or web code.
+- **`Contact.userId` ↔ `contact_id` mapping owned by AND-153:** assumed that
+  AND-153's `Contact.userId` carries the same opaque id as web `contact_id`.
+  *Why:* AND-153 source not in this review's reference set.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = JVM unit/Robolectric (no device); **emu35** =
+headless emulator AVD `test35` (x86_64, API 35) in CI; **deviceA15** = physical
+Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). Cases
+are sized to a navigation/glue ticket; the heavy hardware targets (camera,
+biometrics, FCM, WebRTC) are out of scope for this ticket, so most run on JVM or
+emu35.
+
+- **TC-AND-154-01** — Type: unit (JVM, Turbine + MockK). Target: `ContactsViewModel`.
+  Preconditions: `findOrCreateDm` stubbed to return
+  `ApiResult.Success(Conversation(conversationId="cnv_1", type="dm", ...))`;
+  `session.currentUserId != target`. Steps: call `onContactClick(contact)`.
+  Expected: emits `ContactsEvent.OpenThread("cnv_1")`; `pendingDmUserId`
+  toggles non-null→null across the call; no snackbar event. Traces: AC-1, AC-7.
+
+- **TC-AND-154-02** — Type: unit (JVM). Target: `ContactsViewModel`.
+  Preconditions: `findOrCreateDm` stubbed `ApiResult.Success`. Steps: call
+  `onMessageClick(userId)` (profile path). Expected: emits
+  `OpenThread(conversationId)`; single use-case invocation. Traces: AC-2.
+
+- **TC-AND-154-03** — Type: unit (JVM). Target: `ContactsViewModel` re-entrancy.
+  Preconditions: `findOrCreateDm` suspended (never completes within test).
+  Steps: call `onContactClick(c)` twice for the same contact while pending.
+  Expected: `verify(exactly = 1) { findOrCreateDm(...) }`; only one
+  `pendingDmUserId` transition; no second `OpenThread`. Traces: AC-3.
+
+- **TC-AND-154-04** — Type: unit (JVM). Target: self-DM guard.
+  Preconditions: `session.currentUserId == target`. Steps: call
+  `onContactClick(selfContact)`. Expected: `findOrCreateDm` never invoked
+  (`verify(exactly = 0)`); no events emitted. Traces: AC-6.
+
+- **TC-AND-154-05** — Type: unit (JVM). Target: transient-error + retry path.
+  Preconditions: `findOrCreateDm` returns `ApiResult.Error` (transient) on first
+  call, `Success` on second. Steps: `onContactClick(c)`; on `ShowSnackbar` invoke
+  `startDm(retryUserId)`. Expected: first emits `ShowSnackbar` with non-null
+  `retryUserId` and **no** `OpenThread`; retry emits `OpenThread`; use case
+  invoked twice. Traces: AC-5.
+
+- **TC-AND-154-06** — Type: contract/MockWebServer (emu35 or JVM-Robolectric).
+  Target: `ConversationRepository`/`FindOrCreateDmUseCase` transport (consuming
+  AND-127). Preconditions: MockWebServer enqueues `200` with a real
+  `ConversationOut` body (`conversation_id`, `type:"dm"`, `status:"active"`,
+  `participants[]`). Steps: invoke use case with `user_id`. Expected: request is
+  `POST /messaging/conversations/dm/find-or-create` with JSON body
+  `{"user_id": "..."}` and header `X-CSRF-Token` equal to the `ui_csrf` cookie;
+  parsed `Conversation.conversationId == "cnv_..."`. Traces: AC-1.
+
+- **TC-AND-154-07** — Type: contract/MockWebServer. Target: error mapping.
+  Preconditions: MockWebServer enqueues `403` with body
+  `{"detail":{"code":"user_blocked","message":"..."}}`. Steps: invoke use case.
+  Expected: `ApiResult.Error` classified terminal (no Retry); message derived
+  from `detail` via the shared parser. (Note: `403`/`user_blocked` is an
+  assumed shape per §16 — keep the assertion on classification + parser, not the
+  literal code, until backend-confirmed.) Traces: AC-5.
+
+- **TC-AND-154-08** — Type: contract/MockWebServer. Target: 401 refresh-once.
+  Preconditions: authenticated session; MockWebServer enqueues `401`, then
+  `200` for `POST /ui/session/refresh`, then `200 ConversationOut` for the
+  retried find-or-create. Steps: invoke use case. Expected: exactly one
+  `/ui/session/refresh` call, then one retry of find-or-create, then success;
+  resulting `OpenThread`. Traces: AC-1, AC-5.
+
+- **TC-AND-154-09** — Type: integration/instrumented (emu35; or **deviceA15** to
+  exercise real Wi-Fi/airplane toggling — PREFER deviceA15 for the genuine
+  offline transition). Target: offline short-circuit (FR-8). Preconditions:
+  network disabled (airplane mode on deviceA15, or `ConnectivityObserver` faked
+  offline on emu35). Steps: tap a contact row. Expected: immediate "You're
+  offline" snackbar with Retry; no persistent row spinner; **no** find-or-create
+  request observed. Toggling network on + Retry then succeeds. Traces: AC-5, AC-7.
+
+- **TC-AND-154-10** — Type: Compose-UI (emu35, `createAndroidComposeRule`, fake
+  ViewModel). Target: `ContactsScreen` row busy state. Preconditions: fake state
+  with `pendingDmUserId = contact.userId`. Steps: render. Expected: tapped row
+  shows trailing spinner; on fake success the `onOpenThread` callback receives the
+  returned `conversationId`; rest of list remains clickable. Traces: AC-1, AC-7.
+
+- **TC-AND-154-11** — Type: Compose-UI (emu35). Target: `ContactProfileScreen`
+  Message button. Preconditions: profile rendered for a non-self contact. Steps:
+  tap "Message"; observe pending then success. Expected: button disabled + spinner
+  while pending, re-enabled after; self contact renders disabled "You" variant
+  and does not call the use case. Traces: AC-2, AC-6, AC-7.
+
+- **TC-AND-154-12** — Type: instrumented/e2e nav (emu35, `TestNavHostController`).
+  Target: NavHost back-stack + `launchSingleTop`. Preconditions: NavHost wired
+  with `ContactsRoutes.LIST` and `MessagingRoutes.THREAD_PATTERN`. Steps: open
+  the same DM thread twice via `OpenThread`; press Back. Expected: a single
+  `conversation/{id}` destination on the back stack (no duplicate); Back returns
+  to `contacts`. Traces: AC-4.
+
+- **TC-AND-154-13** — Type: Compose-UI accessibility (emu35, TalkBack semantics
+  assertions). Target: row + profile a11y. Preconditions: contacts list rendered.
+  Steps: assert semantics. Expected: row tap action has `contentDescription
+  "Message {name}"` and ≥48dp target; busy spinner exposes `stateDescription
+  "Starting conversation"`; disabled self state announces "Messaging yourself is
+  not available"; snackbar Retry is focusable with a content description. Traces:
+  AC-6, AC-7.
+
+- **TC-AND-154-14** — Type: manual (deviceA15, real dev host
+  `http://18.222.237.167:8000`). Target: end-to-end on the flaky plaintext dev
+  backend. Preconditions: signed-in build pointed at the dev host; cleartext
+  permitted for that host only. Steps: from contacts, tap a contact and wait
+  through dev-host latency; repeat to an already-existing DM. Expected: thread
+  opens for both find and create paths; slow responses show only the inline
+  spinner (bounded ~20s) with Retry on timeout; production build still rejects
+  cleartext (verify the network-security config). Traces: AC-1, AC-4, AC-5.
+
+### Coverage matrix
+
+| AC | Description | Covered by |
+|----|-------------|-----------|
+| AC-1 | Tap contact opens DM thread (`conversation_id`) | TC-01, TC-06, TC-08, TC-10, TC-14 |
+| AC-2 | Profile "Message" opens same DM | TC-02, TC-11 |
+| AC-3 | Single call per initiation; double-tap guarded | TC-03 |
+| AC-4 | Back returns to contacts; `launchSingleTop` no dupes | TC-12, TC-14 |
+| AC-5 | Transient/offline → snackbar+Retry; terminal → inline, no nav | TC-05, TC-07, TC-08, TC-09, TC-14 |
+| AC-6 | Self-DM disabled/"You", never calls backend | TC-04, TC-11, TC-13 |
+| AC-7 | Inline busy on originating affordance; list stays interactive | TC-01, TC-09, TC-10, TC-11, TC-13 |

@@ -5,9 +5,10 @@ milestone: M4
 epic: E23
 priority: P0
 size: L
-status: draft
 depends_on: [AND-166]
 blocks: [AND-169]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-168 — Reusable player UI
@@ -420,3 +421,329 @@ AC-8 All interactive controls expose correct accessibility semantics and meet
 - Telemetry events wired to the injected `PlayerAnalytics` no-op default and
   verified to fire in tests.
 - PR merged to `android-port`; ticket references AND-166 dependency satisfied.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim from sections 1–15, with a verdict and an exact source
+pointer. Sources: OpenAPI index/spec under `reference/`, the frontend reference
+app under `reference/src/`, and Android framework docs (labelled "framework ref").
+
+1. **Claim:** This ticket introduces no backend endpoints and makes no Retrofit
+   calls; it consumes only an in-process `Player` (Section 5).
+   **VERDICT:** Verified. The reusable web player (`src/components/shared/
+   MediaPlayer.tsx`) takes a pre-resolved `src` (manifest URL) prop and performs
+   no API calls itself; URL minting is a separate concern. The OpenAPI index has
+   playback-related endpoints (`POST /broadcast/sessions/{session_id}/playback-url`
+   → `BroadcastPlaybackUrlOut`; `GET /broadcast/playback/verify` →
+   `BroadcastPlaybackTokenVerifyOut`) but these mint/verify URLs and are owned by
+   the calling feature / AND-167, not by player chrome.
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx` (prop `src`); OpenAPI
+   `POST /broadcast/sessions/{session_id}/playback-url`, `GET /broadcast/playback/verify`.
+
+2. **Claim:** Web player chrome has play/pause, a seek bar with elapsed/duration
+   labels, volume/mute, fullscreen, and PiP controls (FR-1, Section 2 web ref).
+   **VERDICT:** Verified. All present in the custom-controls overlay:
+   `media-player-playpause`, `media-player-seekbar` (`formatTime` elapsed +
+   `media-player-duration`), `media-player-mute` + `media-player-volume`,
+   `media-player-fullscreen`, `media-player-pip`.
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx` (control overlay block,
+   `togglePlay`/`handleSeek`/`toggleMute`/`toggleFullscreen`/`togglePip`).
+
+3. **Claim:** Controls auto-hide after a 3000 ms default while playing and stay
+   visible while not playing (FR-2; `PlayerControlsConfig.autoHideMillis = 3_000L`).
+   **VERDICT:** Verified. Web uses `setTimeout(..., 3000)` in `resetControlsTimer`
+   only when `playerState === "playing"`, and forces `setShowControls(true)`
+   whenever state is not "playing".
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx: resetControlsTimer` and the
+   `useEffect` that pins controls visible when not playing.
+
+4. **Claim:** Buffering shows a centered indicator over the surface (FR-4).
+   **VERDICT:** Verified. Web renders a centered spinner overlay for
+   `playerState === "buffering"`.
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx` (buffering overlay block).
+
+5. **Claim:** On a playback error, controls are replaced by an error panel with a
+   localized message and a Retry button that re-prepares and resumes (FR-5).
+   **VERDICT:** Verified (behavioral parity). Web shows an error overlay
+   (`media-player-error`) with a message and a `media-player-retry` button whose
+   `retry()` destroys and re-creates the HLS instance and resumes.
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx` (error overlay + `retry`).
+
+6. **Claim:** Live manifests get a "LIVE" badge and no seek bar (Section 12
+   live-stream affordance; coordinates with AND-167).
+   **VERDICT:** Verified. Web shows `media-player-live-badge` when `mode === "live"`
+   and renders the seek bar only for `mode === "vod"` with `duration > 0`.
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx` (LIVE badge + VOD-gated seekbar).
+
+7. **Claim:** The cookie-based session/CSRF stack lives in `core-network` and the
+   calling feature, not in this module (Section 8).
+   **VERDICT:** Verified. Web transport uses `credentials: "include"` and sends a
+   `X-CSRF-Token` header read from the `ui_csrf` cookie — confirming auth/CSRF is
+   a transport-layer concern external to player chrome.
+   **SOURCE:** `src/api/client.ts` (`getCookie("ui_csrf")` → `X-CSRF-Token`,
+   `credentials: "include"`).
+
+8. **Claim:** Scrubbing issues exactly one `seekTo` on release; intermediate moves
+   only update a preview (FR-3, Section 6, AC-3).
+   **VERDICT:** Unverified-assumption (Android design choice). The web reference
+   uses an `<input type="range">` whose `onChange` sets `video.currentTime` on each
+   change (no single-on-release semantics), so it does not corroborate the
+   debounced "one seek on ScrubEnd" model. This is a deliberate native UX/perf
+   improvement, not a web-parity claim.
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx: handleSeek` (per-change seek)
+   contrasted with spec's `ScrubEnd`-only seek.
+
+9. **Claim:** A 10s rewind / 10s fast-forward affordance is part of the overlay
+   (FR-1; `seekStepMs = 10_000L`).
+   **VERDICT:** Unverified-assumption. The web reference has no 10s skip controls;
+   this is an Android-native addition. Section 2 already states the web is a "UX
+   reference only," so divergence is expected.
+   **SOURCE:** No web counterpart in `src/components/shared/MediaPlayer.tsx`
+   (overlay has only play/pause, seek bar, volume, CC, quality, PiP, fullscreen).
+
+10. **Claim:** Render the surface via Media3 `androidx.media3.ui.PlayerView` with
+    `useController = false`, overlaying Compose controls (Section 4).
+    **VERDICT:** Unverified-assumption (framework ref). Consistent with AndroidX
+    Media3 UI APIs but not verifiable against backend/frontend sources.
+    **SOURCE:** framework ref — AndroidX Media3 `PlayerView`
+    (https://developer.android.com/media/media3/ui/playerview).
+
+11. **Claim:** PiP via `Activity.enterPictureInPictureMode(PictureInPictureParams)`,
+    feature-gated on `FEATURE_PICTURE_IN_PICTURE` and API >= 26, with
+    `RemoteAction`s and `onPictureInPictureModeChanged` (FR-7, Section 4, AC-6).
+    **VERDICT:** Unverified-assumption (framework ref). Matches the Android PiP
+    contract; PiP has no web analog (web uses `requestPictureInPicture` on the
+    `<video>` element, a different API).
+    **SOURCE:** framework ref — Android Picture-in-Picture
+    (https://developer.android.com/develop/ui/views/picture-in-picture).
+    Web contrast: `src/components/shared/MediaPlayer.tsx: togglePip`.
+
+12. **Claim:** Fullscreen hides system bars via `WindowInsetsControllerCompat`
+    (FR-6, Section 4, AC-5).
+    **VERDICT:** Unverified-assumption (framework ref). Standard AndroidX immersive
+    API; the host owns orientation.
+    **SOURCE:** framework ref — `WindowInsetsControllerCompat`
+    (https://developer.android.com/develop/ui/views/layout/immersive).
+
+13. **Claim:** Playback error codes map to user messages with a retryable flag:
+    `ERROR_CODE_IO_*` retryable, `ERROR_CODE_BEHIND_LIVE_WINDOW` auto-recovers via
+    `seekToDefaultPosition()`, decoder/format errors non-retryable (Section 7).
+    **VERDICT:** Unverified-assumption (framework ref). These are Media3
+    `PlaybackException` error codes; behavior is a sound design choice but cannot
+    be verified from backend/frontend sources. (Web's HLS.js error taxonomy —
+    `NETWORK_ERROR`/`MEDIA_ERROR` with `recoverMediaError()`/`startLoad()` — is
+    analogous in intent but a different library.)
+    **SOURCE:** framework ref — Media3 `PlaybackException` error codes
+    (https://developer.android.com/reference/androidx/media3/common/PlaybackException).
+    Web analogue: `src/components/shared/MediaPlayer.tsx` (HLS `Hls.Events.ERROR`).
+
+14. **Claim:** Accessibility — controls expose `contentDescription`/
+    `stateDescription`, scrub bar exposes `progressBarRangeInfo` and seek actions,
+    48dp touch targets, auto-hide disabled under touch exploration (Section 9, AC-8).
+    **VERDICT:** Unverified-assumption (framework ref). Standard Compose semantics
+    guidance; no web/backend source to verify against (web uses `aria-label="Seek"`
+    / `aria-label="Volume"`, a partial analogue).
+    **SOURCE:** framework ref — Compose accessibility / semantics
+    (https://developer.android.com/develop/ui/compose/accessibility).
+
+### Corrections made
+
+- No factual corrections to endpoint paths, HTTP methods, request/response field
+  names, or CSRF/auth behavior were required: every concrete network/web claim in
+  the spec (Sections 5 and 8) was confirmed against the sources. The spec already
+  correctly scopes this ticket as UI-only with no Retrofit calls and correctly
+  attributes the cookie/CSRF stack to `core-network`.
+- Frontmatter updated: `status` changed from `draft` to `reviewed`; added
+  `reviewed_on: 2026-06-06`.
+- Claims #8 (single-seek-on-release) and #9 (10s skip) were re-labelled here as
+  Android-native design choices rather than web-parity claims, since the web
+  reference does not implement them. No inline edit to the FR text was needed
+  because Section 2 already declares the web a "UX reference only."
+
+### Open assumptions
+
+- All Android framework-level claims (Media3 `PlayerView`/`PlaybackException`, PiP
+  `PictureInPictureParams`/`RemoteAction`, `WindowInsetsControllerCompat`, Compose
+  semantics) are sound but unverifiable from the backend OpenAPI or frontend
+  sources — they are framework references, see citations #10–#14.
+- The exact public API of AND-166's `PlayerManager` (e.g., `retry()`,
+  single-player reuse, lifecycle release timing) is assumed per AND-166 and cannot
+  be verified here; the R3 handshake (do not release while `isInPip`) remains an
+  open coordination item with AND-166.
+- The 20s buffering watchdog threshold "matching the backend timeout budget"
+  (Section 7) is an assumed value; no backend timeout constant was located in the
+  reference sources.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM/Robolectric local; **AVD test35** = headless x86_64
+emulator, Android 15 / API 35; **A15 device** = physical Samsung Galaxy A15 5G
+(SM-A156U, serial R5CX821TA9R), Android 14 / API 34, arm64-v8a. Hardware/behavioral
+PiP and real-rotation cases prefer the physical device; fast CI UI suites use the
+emulator.
+
+- **TC-AND-168-01 — Happy path: progressive MP4 plays with working controls**
+  Type: instrumented/e2e (smoke).
+  Test target: A15 device (real surface/rotation) with AVD test35 as CI mirror.
+  Preconditions: AND-166 `PlayerManager` available; a bundled progressive MP4
+  asset; `VideoPlayer(state, onEvent, modifier)` hosted in a test Activity.
+  Steps: Launch; tap to reveal controls; tap play; observe playback; tap pause;
+  tap play again.
+  Expected: Video renders on the surface; play/pause toggles emit
+  `PlayerUiEvent.PlayPause` and drive `Player.play()/pause()`; elapsed time
+  advances; duration label is correct.
+  Traces: AC-1, AC-7.
+
+- **TC-AND-168-02 — Auto-hide and visibility rules**
+  Type: Compose-UI.
+  Test target: JVM (Robolectric) or AVD test35 with `createAndroidComposeRule`
+  and a test dispatcher.
+  Preconditions: `PlayerControlsConfig(autoHideMillis = 3_000L)`; fake `Player`.
+  Steps: Tap to show controls while playing; `advanceTimeBy(3000)`; then set
+  state to paused and re-check; set buffering; set error; start a scrub.
+  Expected: Controls hide ~3000 ms after the last interaction while playing;
+  remain visible while paused, buffering, erroring, and while scrubbing.
+  Traces: AC-2.
+
+- **TC-AND-168-03 — Auto-hide disabled under TalkBack / touch exploration**
+  Type: instrumented (accessibility).
+  Test target: A15 device with TalkBack enabled (real touch-exploration state).
+  Preconditions: `AccessibilityManager.isTouchExplorationEnabled == true`.
+  Steps: Start playback; reveal controls; wait beyond `autoHideMillis`.
+  Expected: Controls remain visible (auto-hide suppressed) while a screen reader
+  is active.
+  Traces: AC-2, AC-8.
+
+- **TC-AND-168-04 — Scrub issues exactly one seekTo on release**
+  Type: unit (JUnit + Turbine).
+  Test target: JVM, `PlayerUiStateHolder` + fake `Player`.
+  Preconditions: media loaded, known duration.
+  Steps: Emit `ScrubStart`, several `ScrubMove`, then `ScrubEnd(target)`.
+  Expected: No `seekTo` on Start/Move; exactly one `seekTo(target)` on End;
+  position-preview override is shown during drag and position polling resumes
+  after the ~200 ms settle.
+  Traces: AC-3.
+
+- **TC-AND-168-05 — Buffering indicator and play-button suppression**
+  Type: Compose-UI.
+  Test target: AVD test35.
+  Preconditions: fake `Player` reporting `STATE_BUFFERING`.
+  Steps: Drive state to Buffering (initial); inspect overlay.
+  Expected: Centered progress indicator shown; play/pause suppressed during
+  initial buffering; indicator clears when state becomes Ready.
+  Traces: AC-4.
+
+- **TC-AND-168-06 — Error panel + Retry re-prepares and resumes**
+  Type: unit + Compose-UI.
+  Test target: JVM (mapping) and AVD test35 (panel).
+  Preconditions: fake `Player` that fires `onPlayerError` with a decoder error
+  and, in a second run, an IO error.
+  Steps: Fire error; assert mapping; tap Retry in the Compose panel.
+  Expected: IO/network errors → retryable "Connection problem"; decoder/format
+  → non-retryable "This video can't be played"; error panel shows a localized
+  message + Retry; tapping Retry emits `PlayerUiEvent.Retry` → `PlayerManager.retry()`
+  and returns to playing/paused. Raw error code goes to telemetry, not the UI.
+  Traces: AC-4.
+
+- **TC-AND-168-07 — BEHIND_LIVE_WINDOW auto-recovers without an error panel**
+  Type: unit.
+  Test target: JVM, fake `Player`.
+  Preconditions: fake fires `ERROR_CODE_BEHIND_LIVE_WINDOW`.
+  Steps: Fire the error.
+  Expected: Holder calls `seekToDefaultPosition()` + re-prepare; no error panel
+  state is emitted; playback continues.
+  Traces: AC-4.
+
+- **TC-AND-168-08 — Flaky-dev-host / offline buffering watchdog**
+  Type: integration (MockWebServer for the media source) + Compose-UI.
+  Test target: AVD test35 with network disabled mid-stream (CI), or A15 device in
+  airplane mode for a true-offline check.
+  Preconditions: media source served by MockWebServer that stalls; watchdog
+  default 20 s.
+  Steps: Start playback; drop the connection so `STATE_BUFFERING` persists past
+  the threshold.
+  Expected: A soft "Still loading…" hint with a Retry affordance appears; the
+  player does NOT auto-fail and does NOT trigger a retry storm (retry is
+  user-initiated only).
+  Traces: AC-4.
+
+- **TC-AND-168-09 — Mute/unmute restores prior volume**
+  Type: unit.
+  Test target: JVM, `PlayerUiStateHolder` + fake `Player`.
+  Steps: Set volume 0.4; emit `ToggleMute`; emit `ToggleMute` again; also test
+  `SetVolume(0f)`.
+  Expected: Mute stores pre-mute volume and sets `player.volume = 0`; unmute
+  restores 0.4; setting volume to 0 reflects muted state, raising it unmutes.
+  Traces: AC-1.
+
+- **TC-AND-168-10 — Fullscreen hides/restores system bars and survives rotation**
+  Type: instrumented/e2e.
+  Test target: A15 device (real rotation + real inset behavior); MUST run on the
+  physical device for authentic `WindowInsetsControllerCompat` + rotation behavior,
+  with AVD test35 as a secondary CI check.
+  Preconditions: host Activity wired to `onFullscreenToggle`.
+  Steps: Tap fullscreen; rotate device; tap to exit fullscreen.
+  Expected: Entering fullscreen hides status/nav bars and fills the window;
+  position, play/pause, and controls-visibility survive rotation; exiting restores
+  inset content. The composable only emits `onFullscreenToggle(isFullscreen)`; the
+  host owns orientation.
+  Traces: AC-5.
+
+- **TC-AND-168-11 — PiP entry on a supported device**
+  Type: instrumented/e2e.
+  Test target: A15 device — MUST run on the physical device for genuine PiP
+  window/`onPictureInPictureModeChanged`/`RemoteAction` behavior (API 34, arm64).
+  Preconditions: `hasSystemFeature(FEATURE_PICTURE_IN_PICTURE)` true; API >= 26.
+  Steps: Start playback; trigger PiP via the affordance and via the home gesture;
+  in PiP tap the play/pause `RemoteAction`; return to the app.
+  Expected: Enters PiP; controls/text overlays are hidden (only the video surface
+  shows); `RemoteAction` toggles play/pause via `PlayerUiEvent.PlayPause`; on exit
+  full controls return at the preserved position; the single player is NOT released
+  while `isInPip` (R3).
+  Traces: AC-6.
+
+- **TC-AND-168-12 — PiP unsupported device degrades to fullscreen without crashing**
+  Type: instrumented.
+  Test target: AVD test35 with PiP feature simulated unavailable (or an
+  `IllegalStateException` injected on `enterPictureInPictureMode`).
+  Steps: Attempt PiP entry when unsupported / Activity not resumed.
+  Expected: PiP entry is wrapped in try/catch; falls back to in-app fullscreen
+  silently; no crash.
+  Traces: AC-6.
+
+- **TC-AND-168-13 — Accessibility semantics and 48dp touch targets**
+  Type: Compose-UI (accessibility) + manual TalkBack pass.
+  Test target: AVD test35 (semantics assertions) and A15 device (manual TalkBack).
+  Preconditions: controls visible.
+  Steps: Assert semantics on each control; measure touch targets; sweep with
+  TalkBack on the device.
+  Expected: Play/pause announces "Play"/"Pause"; mute announces state; scrub bar
+  exposes `progressBarRangeInfo` (current/duration) and accessibility set/adjust
+  progress actions; every interactive control is >= 48dp; all user-facing strings
+  are externalized in `strings.xml`.
+  Traces: AC-8.
+
+- **TC-AND-168-14 — Security: PiP hides chrome and FLAG_SECURE passthrough**
+  Type: instrumented (security).
+  Test target: A15 device (real PiP window + secure-surface capture behavior).
+  Preconditions: `secureSurface = true` set by caller; sensitive title overlay
+  present.
+  Steps: Enter PiP and inspect the PiP window; with `secureSurface=true` attempt a
+  screenshot/screen capture.
+  Expected: In PiP no controls/text overlays are exposed; with `secureSurface=true`
+  the window carries `FLAG_SECURE` and capture is blocked; media URLs are never
+  logged at INFO (host-only redaction).
+  Traces: AC-6, AC-8 (privacy), DoD security items.
+
+### Coverage matrix
+
+| Acceptance criterion (Section 14) | Covered by |
+| --- | --- |
+| AC-1 Render with play/pause, scrub/seek, 10s skip, volume/mute, fullscreen | TC-AND-168-01, TC-AND-168-09 |
+| AC-2 Auto-hide while playing; stay visible when paused/buffering/scrubbing/erroring/TalkBack | TC-AND-168-02, TC-AND-168-03 |
+| AC-3 Exactly one `seekTo` on release with live preview | TC-AND-168-04 |
+| AC-4 Buffering indicator; localized error panel + Retry re-prepare/resume | TC-AND-168-05, TC-AND-168-06, TC-AND-168-07, TC-AND-168-08 |
+| AC-5 Fullscreen hides/restores system bars; survives rotation | TC-AND-168-10 |
+| AC-6 PiP enter/hide-controls/RemoteActions/restore; degrade on unsupported | TC-AND-168-11, TC-AND-168-12, TC-AND-168-14 |
+| AC-7 Progressive MP4 end-to-end smoke | TC-AND-168-01 |
+| AC-8 Accessibility semantics + 48dp targets + externalized strings | TC-AND-168-03, TC-AND-168-13, TC-AND-168-14 |

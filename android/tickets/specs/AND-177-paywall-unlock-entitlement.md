@@ -5,7 +5,8 @@ milestone: M4
 epic: E24
 priority: P0
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-101, AND-031]
 blocks: []
 ---
@@ -176,25 +177,47 @@ Request (`UnlockPostRequest`):
 { "post_id": "p_123", "payment_method_id": null, "idempotency_key": "unlock:p_123:8f2a" }
 ```
 - `post_id` (string, required). `payment_method_id` (string|null) — omitted; server resolves
-  default. `idempotency_key` (string|null, `^[A-Za-z0-9:_.-]+$`, 1–128 chars).
+  default. `idempotency_key` (string|null, `^[A-Za-z0-9:_.-]+$`, 1–128 chars). All three field
+  names/types/constraints VERIFIED against `components.schemas.UnlockPostRequest`.
+- **Web nuance (VERIFIED):** the web client (`src/api/endpoints/newsfeed.ts: unlockPost`) sends
+  only `post_id` (+ optional `payment_method_id`) and does **not** send `idempotency_key`. The
+  field exists in the OpenAPI schema, so the Android client may send it, but its server-side
+  honoring is unverified (see §13 / Open assumptions).
 
-Response 200 (`UnlockPostResponse`):
+Response 200 (`UnlockPostResponse`): VERIFIED against `components.schemas.UnlockPostResponse`.
 ```json
 { "post_id": "p_123", "payment_intent": { "status": "...", "...": "..." } }
 ```
-- `payment_intent` is `additionalProperties: true` (opaque). The stub inspects `status`
-  (e.g. `succeeded`/`requires_action`/`processing`) and otherwise treats a returned intent
-  on a 200 as confirmable. Real provider would action `requires_action`.
+- Both `post_id` (string) and `payment_intent` (object) are **required** in the schema.
+- `payment_intent` is `additionalProperties: true` (opaque, no declared inner fields). The stub
+  inspects `status` (e.g. `succeeded`/`requires_action`/`processing`) and otherwise treats a
+  returned intent on a 200 as confirmable. Real provider would action `requires_action`.
+- **CORRECTION / web nuance:** the web reference client (`src/api/endpoints/newsfeed.ts:
+  unlockPost`) types this response loosely as `{ ok: boolean }` and does **not** read
+  `payment_intent`. The OpenAPI schema is authoritative for the Android port (use
+  `UnlockPostResponse`); the `{ ok: boolean }` web typing is stale/loose and must not be copied.
 
 Errors (FastAPI `detail`, mapped per AND-031 conventions): `401` → refresh-once-then-retry
 via `POST /ui/session/refresh`; `402`/`409` (payment declined / already unlocked / sold-out)
 → map to friendly message, `409 already unlocked` → `AlreadyEntitled`; `422`
 (`HTTPValidationError`, array of `{msg}`) → first `msg`. `detail` may be `string`,
 `[{msg}]`, or `{code,...}`.
+- **UNVERIFIED-ASSUMPTION:** OpenAPI for `POST /posts/unlock` declares **only** `200` and `422`
+  responses. The `401`/`402`/`409` codes are **not** in the spec — they are assumed runtime
+  behaviors inferred from the AND-031 transport (401 refresh) and FastAPI conventions. The
+  exact status code for "declined"/"already unlocked"/"sold-out" must be confirmed against a
+  live `/posts/unlock` call; treat the client mapping as defensive (handle any non-200 by code
+  if present, else fall back to the friendly `detail` message). The `detail` shape handling
+  (string / `[{msg}]` / `{code,...}`) is VERIFIED against `src/api/client.ts:
+  normalizeErrorDetail`.
 
 **Reveal/refresh — `GET /posts/{post_id}`** returns `PostResponse` whose lock fields drive
-display: `locked` (bool), `lock_type` (`fixed_price|tip_lottery|null`), `unlock_price_cents`
-(int|null), `unlock_count` (int), `unlock_limit` (int|null), `unlock_limit_reached` (bool).
+display: `locked` (bool, **required**), `lock_type` (`fixed_price|tip_lottery|null`),
+`unlock_price_cents` (int|null), `unlock_count` (int, default 0), `unlock_limit` (int|null),
+`unlock_limit_reached` (bool, default false). All field names/types VERIFIED against
+`components.schemas.PostResponse`. Note: the OpenAPI index lists `GET /posts/{post_id}` with an
+un-named `200` body, but the schema component `PostResponse` is the documented post shape and the
+web client (`src/api/endpoints/newsfeed.ts: getPost`) deserializes it as `FeedPost`.
 After a successful unlock the client may re-GET the post to obtain `locked == false` with the
 real body; the entitlement cache is the primary reveal trigger, this GET reconciles content.
 
@@ -365,3 +388,269 @@ Acceptance is **"tested w/ payment stub"**, so the stub is the primary test seam
 - No new lint/detekt errors; strings externalized; a11y semantics present.
 - Open Questions in §13 either resolved or filed as follow-up tickets; spec linked from the PR
   on branch `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer (OpenAPI `METHOD /path`
+and/or schema name; frontend `path: symbol`; or a framework ref).
+
+1. **Unlock endpoint is `POST /posts/unlock`.** VERDICT: Verified. SOURCE: OpenAPI
+   `POST /posts/unlock` (op=`unlock_post_posts_unlock_post`); frontend
+   `src/api/endpoints/newsfeed.ts: unlockPost`.
+2. **Request body is `UnlockPostRequest` with `post_id` (required string),
+   `payment_method_id` (string|null), `idempotency_key` (string|null,
+   `^[A-Za-z0-9:_.-]+$`, 1–128 chars).** VERDICT: Verified. SOURCE:
+   `components.schemas.UnlockPostRequest` (`required: [post_id]`).
+3. **Response 200 is `UnlockPostResponse` with `post_id` and `payment_intent`
+   (`additionalProperties: true`), both required.** VERDICT: Verified. SOURCE:
+   `components.schemas.UnlockPostResponse` (`required: [post_id, payment_intent]`).
+4. **Web client types the unlock response as `{ ok: boolean }` and ignores `payment_intent`.**
+   VERDICT: Verified (web nuance; OpenAPI is authoritative for Android). SOURCE:
+   `src/api/endpoints/newsfeed.ts: unlockPost`.
+5. **Web client does NOT send `idempotency_key` (only `post_id` + optional
+   `payment_method_id`).** VERDICT: Verified. SOURCE: `src/api/endpoints/newsfeed.ts:
+   unlockPost`. The Android client adding `idempotency_key` is schema-legal but server honoring
+   is unverified (see Open assumptions).
+6. **Reveal/refresh via `GET /posts/{post_id}` returning a post with lock fields
+   (`locked` bool [required], `lock_type` `fixed_price|tip_lottery|null`,
+   `unlock_price_cents` int|null, `unlock_count` int, `unlock_limit` int|null,
+   `unlock_limit_reached` bool).** VERDICT: Verified. SOURCE: OpenAPI `GET /posts/{post_id}`
+   (op=`get_post_posts__post_id__get`); `components.schemas.PostResponse`
+   (`required` includes `locked`); frontend `src/api/endpoints/newsfeed.ts: getPost`
+   (typed `FeedPost`).
+7. **Auth/CSRF: state-changing POST uses cookie session + `X-CSRF-Token` echoed from the
+   `ui_csrf` cookie; `credentials: include`.** VERDICT: Verified. SOURCE: `src/api/client.ts`
+   (lines ~167–171 read `ui_csrf` cookie → set `X-CSRF-Token`; `credentials: "include"`).
+8. **401 handling: refresh once via `POST /ui/session/refresh`, then retry the original
+   request once; a second 401 logs the user out / surfaces "sign in again".** VERDICT:
+   Verified. SOURCE: `src/api/client.ts` 401 branch (calls `refreshSession()`, single retry,
+   `logout("session_expired")` on repeat 401); `src/api/endpoints/auth.ts: refreshSession` →
+   `POST /ui/session/refresh`; OpenAPI `POST /ui/session/refresh`
+   (op=`ui_session_refresh_ui_session_refresh_post`, `resp=200:`).
+9. **FastAPI `detail` may be a `string`, an array of `{msg}`, or an object `{code,...}`, and
+   the client flattens accordingly (first/joined `msg`).** VERDICT: Verified. SOURCE:
+   `src/api/client.ts: normalizeErrorDetail`.
+10. **422 validation errors use `HTTPValidationError`.** VERDICT: Verified. SOURCE: OpenAPI
+    `POST /posts/unlock` `resp=...;422:HTTPValidationError`.
+11. **`lock_type` enum is exactly `fixed_price` | `tip_lottery` (nullable); this ticket scopes
+    `fixed_price` only.** VERDICT: Verified. SOURCE: `components.schemas.PostResponse.lock_type`
+    (`enum: [fixed_price, tip_lottery]` | null); also frontend `src/api/types.ts` (FeedPost
+    `lock_type?: "fixed_price" | "tip_lottery"`).
+12. **Out-of-scope unlock endpoints exist separately (messaging / broadcast / lottery).**
+    VERDICT: Verified (confirms non-goals point at real, distinct endpoints). SOURCE: OpenAPI
+    `POST /messaging/conversations/{conversation_id}/messages/{message_id}/unlock`
+    (`UnlockMessageIn`→`UnlockOut`), `POST /messaging/messages/{message_id}/lottery/unlock`
+    (`LotteryUnlockOut`), `POST /broadcast/sessions/{session_id}/chat/{message_id}/unlock`
+    (`BroadcastChatUnlockIn`).
+13. **`401`/`402`/`409` are NOT declared responses for `POST /posts/unlock` (only `200`/`422`
+    are).** VERDICT: Unverified-assumption (the codes are assumed, not documented). SOURCE:
+    OpenAPI `POST /posts/unlock` (`resp=200:UnlockPostResponse;422:HTTPValidationError`).
+14. **No `currency` field co-located with `unlock_price_cents` on `PostResponse`.** VERDICT:
+    Verified (negative result, supports §13 currency open question). SOURCE:
+    `components.schemas.PostResponse` (price is `unlock_price_cents` only; no `currency`).
+15. **Android stack/tooling choices (Room for the entitlement cache, DataStore for the
+    idempotency key, Hilt for the `PaymentProcessor` test binding, Coil/Media3 reveal paths,
+    Compose Material 3, MockWebServer for contract tests).** VERDICT: Unverified-assumption
+    (Android-side design decisions; not derivable from backend/web sources). SOURCE:
+    framework ref — Room <https://developer.android.com/training/data-storage/room>,
+    DataStore <https://developer.android.com/topic/libraries/architecture/datastore>,
+    Hilt testing <https://developer.android.com/training/dependency-injection/hilt-testing>,
+    Compose semantics/a11y
+    <https://developer.android.com/jetpack/compose/accessibility>,
+    OkHttp MockWebServer <https://square.github.io/okhttp/#mockwebserver>.
+
+### Corrections made
+
+- **§5 (response shape):** Added that the web client types the unlock response loosely as
+  `{ ok: boolean }` and ignores `payment_intent`; clarified that the authoritative shape for
+  Android is `UnlockPostResponse` and that both `post_id` and `payment_intent` are required.
+- **§5 (idempotency_key):** Noted that the web client does not send `idempotency_key` (only
+  `post_id` + optional `payment_method_id`); the field is schema-legal but server honoring is an
+  open assumption.
+- **§5 (error codes):** Flagged that `401`/`402`/`409` are not declared OpenAPI responses for
+  `POST /posts/unlock` (only `200`/`422`); marked them as inferred runtime behavior and tied the
+  `detail` flattening to the verified `normalizeErrorDetail` logic.
+- **§5 (reveal/refresh):** Annotated `GET /posts/{post_id}` / `PostResponse` field types as
+  verified (incl. required `locked`, default values) and noted the index's un-named 200 body vs.
+  the documented `PostResponse` component / web `FeedPost` typing.
+- No corrections were required for the auth/CSRF (§2/§8), 401-refresh (§7), or state-machine
+  (§3/§4) claims — all verified as written.
+
+### Open assumptions
+
+- **`payment_intent.status` value set:** `additionalProperties: true` exposes no declared
+  `status` enum; the stub's confirm logic (`succeeded`/`requires_action`/`processing`) is
+  assumed. Why unverifiable: opaque object in OpenAPI, no live `/posts/unlock` capture available.
+- **Server honoring of `idempotency_key` (replay returns same outcome, no double-charge):**
+  assumed. Why: web client never sends it; no backend behavior documented in OpenAPI.
+- **Status codes for declined / already-unlocked / sold-out (`402`/`409` mapping, incl.
+  `409 → AlreadyEntitled`):** assumed. Why: not in the endpoint's declared responses; only
+  `200`/`422` are documented.
+- **Default payment-method resolution when `payment_method_id` is null (and the error when none
+  exists):** assumed. Why: server-side behavior not described in the OpenAPI request/response.
+- **Currency for `unlock_price_cents`:** no `currency` field on `PostResponse`; whether price is
+  a single tenant currency or sourced elsewhere (e.g. `/ui/me`/tenant config) is unverified.
+- **Android-layer design (Room/DataStore/Hilt/MockWebServer, module layout under
+  `com.testlogon.android.*`):** assumed per project conventions; not derivable from
+  backend/web sources (framework refs cited in item 15).
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = JVM unit/Robolectric (local, no device); **emu35** = headless
+emulator AVD `test35` (x86_64, API 35); **A15** = physical Samsung Galaxy A15 5G (SM-A156U,
+serial R5CX821TA9R, API 34, arm64-v8a). Acceptance is "tested w/ payment stub", so
+`StubPaymentProcessor` (succeed/decline/timeout seams) plus MockWebServer are the primary seams.
+No case in this ticket requires real hardware (no camera/biometric/WebRTC/FCM/streaming), so the
+UI/instrumented suite runs on **emu35**; one ABI-parity smoke is called out on **A15**.
+
+- **TC-AND-177-01 — Happy path: unlock reveals content in place.**
+  - Type: Compose-UI (instrumented). Target: emu35.
+  - Preconditions: signed-in session; feed contains a `fixed_price` locked post
+    (`locked=true`, `lock_type="fixed_price"`, `unlock_price_cents` set); `StubPaymentProcessor`
+    in `succeed` mode; MockWebServer returns `200 UnlockPostResponse {post_id, payment_intent:{status:"succeeded"}}`.
+  - Steps: render feed; assert placeholder shown; tap "Unlock" CTA; await state.
+  - Expected: CTA shows spinner during `InProgress`, then the same item recomposes with real
+    body/media (`locked=false`); no navigation push; scroll position preserved.
+  - Traces: AC-1.
+
+- **TC-AND-177-02 — Request contract: body + CSRF header.**
+  - Type: contract/MockWebServer. Target: JVM.
+  - Preconditions: `ui_csrf` cookie present; repository wired to `PaywallApi`.
+  - Steps: call `PaywallRepository.unlock(postId)`; capture the recorded request.
+  - Expected: `POST /posts/unlock`; JSON body has `post_id`, `payment_method_id` omitted/null,
+    `idempotency_key` matching `^[A-Za-z0-9:_.-]+$` (1–128); `X-CSRF-Token` header equals the
+    `ui_csrf` cookie value; `Content-Type: application/json`. Request is never sent if CSRF is
+    absent.
+  - Traces: AC-3, AC-6.
+
+- **TC-AND-177-03 — Response parsing: UnlockPostResponse / confirmable intent.**
+  - Type: unit (contract/MockWebServer). Target: JVM.
+  - Preconditions: MockWebServer returns `200 {post_id, payment_intent:{status:"succeeded"}}`.
+  - Steps: invoke `unlock`; assert outcome and side effects.
+  - Expected: Moshi parses `UnlockPostResponse` (both fields required); `payments.confirm`
+    runs once; `EntitlementDao.upsert` writes `(userSub, postId)`; idempotency key cleared;
+    returns `Success`. (Guards against copying the stale web `{ ok: boolean }` typing.)
+  - Traces: AC-1, AC-2.
+
+- **TC-AND-177-04 — Entitlement cache short-circuit (already cached).**
+  - Type: unit. Target: JVM (Room in-memory).
+  - Preconditions: `EntitlementEntity(userSub, postId)` already present.
+  - Steps: call `unlock(postId)`.
+  - Expected: returns `AlreadyEntitled`; **no** HTTP request issued (MockWebServer records zero
+    calls); `isEntitled(postId)` emits `true`.
+  - Traces: AC-2, AC-5.
+
+- **TC-AND-177-05 — Persistence across process death.**
+  - Type: instrumented. Target: emu35.
+  - Preconditions: successful unlock completed (cache row written to on-disk Room).
+  - Steps: destroy/recreate the ViewModel and Activity (simulate process death); reopen the
+    same post in feed/detail.
+  - Expected: post renders unlocked from cache; **no** new `POST /posts/unlock` call observed.
+  - Traces: AC-2.
+
+- **TC-AND-177-06 — 409 already-unlocked → AlreadyEntitled, no error.**
+  - Type: unit (contract/MockWebServer). Target: JVM.
+  - Preconditions: MockWebServer returns `409` with `detail` (string or `[{msg}]`).
+    (Status code is an inferred behavior — see §16 item 13.)
+  - Steps: call `unlock`.
+  - Expected: maps to `AlreadyEntitled`; cache row written; reveal proceeds; **no** error
+    surface/toast.
+  - Traces: AC-5.
+
+- **TC-AND-177-07 — 402 declined → retryable failure, friendly message.**
+  - Type: unit (contract/MockWebServer). Target: JVM.
+  - Preconditions: MockWebServer returns `402` with `detail` (test all three shapes:
+    `"declined"`, `[{msg:"declined"}]`, `{code:"card_declined"}`).
+  - Steps: call `unlock`.
+  - Expected: `Failure(retryable=true)`; message derived via `normalizeErrorDetail`-equivalent
+    logic (string → as-is; array → first/joined `msg`; object → mapped/fallback); idempotency
+    key retained for retry.
+  - Traces: AC-5.
+
+- **TC-AND-177-08 — 401 refresh-once-then-retry, then give up.**
+  - Type: unit (contract/MockWebServer). Target: JVM.
+  - Preconditions: MockWebServer scripts: unlock→`401`, then `POST /ui/session/refresh`→`200`,
+    then unlock retry→(a) `200` success and (b) second `401`.
+  - Steps: call `unlock` for both scenarios.
+  - Expected: (a) exactly one `POST /ui/session/refresh` then one unlock retry → `Success`;
+    (b) second `401` → `Failure(retryable=false)` with "sign in again"; no infinite loop.
+  - Traces: AC-6.
+
+- **TC-AND-177-09 — Stub payment forced fail/timeout.**
+  - Type: unit. Target: JVM.
+  - Preconditions: `StubPaymentProcessor` in `decline` and in `timeout` mode; MockWebServer
+    returns `200` with a confirmable intent.
+  - Steps: call `unlock` in each mode.
+  - Expected: both map to `Failure(retryable=true)`; **no** entitlement row written; idempotency
+    key retained so a subsequent retry reuses the same key.
+  - Traces: AC-3, AC-4.
+
+- **TC-AND-177-10 — Idempotency key stability + double-tap no-op.**
+  - Type: unit. Target: JVM.
+  - Preconditions: first attempt times out (key persisted in DataStore); ViewModel in
+    `InProgress`.
+  - Steps: trigger a second `unlock`/`retry` for the same post within the same attempt-session;
+    inspect the key used on retry and the state transitions.
+  - Expected: retry reuses the **same** `idempotency_key`; stub asserts a single `confirm` per
+    key; a tap while `InProgress` is a no-op (no second HTTP call).
+  - Traces: AC-3, AC-4.
+
+- **TC-AND-177-11 — ViewModel state machine + CTA gating.**
+  - Type: unit (Turbine). Target: JVM.
+  - Preconditions: bound `PaywallUiState` from a locked post.
+  - Steps: drive `bind` then `unlock`; also bind a post with `unlock_limit_reached=true` and a
+    post with `unlock_price_cents=null`/null `lock_type`.
+  - Expected: transitions `Idle→InProgress→Unlocked|Failed|SoldOut`; CTA disabled during
+    `InProgress`, disabled when price/lock_type missing; `unlock_limit_reached=true` →
+    `SoldOut` (CTA replaced by "No longer available", no unlock attempted).
+  - Traces: AC-4, AC-5.
+
+- **TC-AND-177-12 — Offline behavior (flaky/unreachable dev host).**
+  - Type: integration. Target: emu35 (toggle airplane mode / kill MockWebServer).
+  - Preconditions: scenario A — entitlement cached; scenario B — not cached, network down.
+  - Steps: open the post offline (A); tap "Unlock" offline (B).
+  - Expected: (A) content reveals from cache with no network call; (B) fast-fail with an offline
+    message, `Failure(retryable=true)`, CTA re-enables; no crash; idempotency key retained.
+  - Traces: AC-2, AC-5.
+
+- **TC-AND-177-13 — Security: per-user cache isolation + logout wipe; no secret logging.**
+  - Type: instrumented + unit. Target: emu35.
+  - Preconditions: user A unlocks a post (cache row for A); a logcat capture around the unlock.
+  - Steps: log out / switch to user B; query `isEntitled` for the same post as B; inspect logs.
+  - Expected: `clearForUser(A)` ran on logout; user B sees the post **locked** (no cross-user
+    leak); `unlock_price_cents` row keyed by `userSub`; logs contain no cookie, no
+    `X-CSRF-Token`, and no full `payment_intent` body (only `status`).
+  - Traces: AC-2, AC-6, AC-7.
+
+- **TC-AND-177-14 — Accessibility of paywall CTA and reveal.**
+  - Type: Compose-UI (instrumented, with semantics/TalkBack assertions). Target: emu35.
+  - Preconditions: locked `fixed_price` post; locale with non-`$` currency to exercise
+    `NumberFormat`.
+  - Steps: inspect CTA semantics; tap; observe live-region announcements and focus after reveal.
+  - Expected: CTA `contentDescription` includes the localized price (e.g. "Unlock for $4.99");
+    `Unlocking…` announced via `liveRegion`; "Content unlocked" announced and focus moves
+    sensibly on reveal; touch target ≥ 48dp; all strings from `strings.xml` (no literals).
+  - Traces: AC-1, AC-4.
+
+- **TC-AND-177-15 — ABI/API parity smoke on physical device.**
+  - Type: instrumented/e2e. Target: **A15 (MUST run on physical device)** — arm64-v8a / API 34
+    vs the emulator's x86_64 / API 35.
+  - Preconditions: app installed on SM-A156U; `StubPaymentProcessor` succeed mode; reachable
+    MockWebServer or dev host.
+  - Steps: run the happy-path unlock + relaunch-from-cache flow on the device.
+  - Expected: unlock succeeds, content reveals, and cache persists identically to emu35 (Room
+    schema, Moshi parsing, and DataStore behave the same on arm64/API 34). No ABI- or
+    API-level-specific failure.
+  - Traces: AC-1, AC-2.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (reveal in place, no nav, scroll preserved) | TC-01, TC-03, TC-14, TC-15 |
+| AC-2 (entitlement cached; no re-charge after relaunch/feed reload) | TC-03, TC-04, TC-05, TC-12, TC-13, TC-15 |
+| AC-3 (idempotency_key; retry no double-charge) | TC-02, TC-09, TC-10 |
+| AC-4 (state machine + CTA gating + double-tap no-op) | TC-09, TC-10, TC-11, TC-14 |
+| AC-5 (409 → revealed no error; sold-out → "No longer available") | TC-04, TC-06, TC-07, TC-11, TC-12 |
+| AC-6 (401 refresh-then-retry; CSRF present; no secret logging) | TC-02, TC-08, TC-13 |
+| AC-7 (logout/account switch clears prior user's cache) | TC-13 |

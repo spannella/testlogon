@@ -5,9 +5,10 @@ milestone: M4
 epic: E23
 priority: P0
 size: M
-status: draft
 depends_on: [AND-166]
 blocks: [AND-168, AND-169]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-167 — HLS playback
@@ -25,7 +26,7 @@ Scope boundary: source resolution, `HlsMediaSource.Factory` configuration, live/
 - **Depends on AND-166 (Media3/ExoPlayer integration):** provides the `PlayerManager` wrapper (lifecycle-aware `ExoPlayer` create/release, single-player reuse) and the `core-media` module. This ticket extends `PlayerManager.setMediaItem(...)` / source resolution rather than introducing a new player.
 - **Blocks AND-168 (Reusable player UI):** consumes the playing source to render controls, buffering/error states, fullscreen, PiP.
 - **Blocks AND-169 (Adaptive quality / data-saver):** layers explicit quality caps and metered-network policy onto the `TrackSelector` defaults established here.
-- **Web reference:** `frontend/` uses `hls.js` attached to a `<video>` element. The manifest URLs and any signed query params come from feed/post media payloads (`frontend/src/api/types.ts`, media DTOs from feed work AND-097+). Mirror the URL/header handling, not the JS player internals.
+- **Web reference (verified):** the reference app's shared player is `src/components/shared/MediaPlayer.tsx` (MEDIA-001), which uses `hls.js` (`import Hls from "hls.js"`) attached to a `<video>` element, with `startLevel: -1` (auto/ABR), a Safari native-HLS fallback, and per-mode tuning (`lowLatencyMode`, `maxBufferLength` 6/30) for `mode: "live" | "vod"`. The manifest URL comes from the `hls_manifest_url` field on the video DTO, and **playback is authenticated by a `?token=<playback_token>` query parameter appended to the manifest URL** (verified in `src/pages/videos/VideoPlayerPage.tsx`: `` `${video.hls_manifest_url}?token=${video.playback_token}` `` and `src/pages/messages/VideoShareCard.tsx`). The token + URL are minted by the backend (`hls_manifest_url`, `playback_token`, `playback_expires_at` on `VideoDetailOut`, and via the entitlement endpoint for feed/post embeds). Mirror this URL/query-token handling, not the JS player internals. NOTE: `MediaPlayer.tsx` also accepts a `drmKeyUrl` for **AES-128 HLS encryption** — see §13 OQ5 correction.
 - **Stack:** Kotlin 2.0.21, Media3/ExoPlayer 1.4 (`androidx.media3:media3-exoplayer-hls`), Compose + Material 3, Hilt (KSP), Coroutines/Flow, OkHttp 4.12. minSdk 24, compileSdk/targetSdk 35, JDK 17, AGP 8.7.3.
 - **Module:** `core-media` (created in AND-166). Namespace `com.testlogon.android.core.media`.
 - **Networking:** Media segment fetches must reuse the app's configured OkHttp stack (timeouts ~20s, cookie jar, host-selection) so playback works against the unreliable plaintext dev backend `http://18.222.237.167:8000` and any CDN it points to. ExoPlayer must use an `OkHttpDataSource.Factory`, not the default `DefaultHttpDataSource`.
@@ -140,15 +141,15 @@ Set via `MediaItem.Builder().setLiveConfiguration(liveConfig)` when `type == HLS
 
 ## 5. API Contract
 
-No new TestLogon backend endpoints are introduced by this ticket. HLS manifests and segments are fetched directly by ExoPlayer over HTTP(S) from URLs supplied in media payloads (owned by feed/post DTO tickets, AND-097+). The relevant "contract" is the HLS wire format, served behind the app's configured HTTP stack:
+No new TestLogon backend endpoints are introduced by this ticket. HLS manifests and segments are fetched directly by ExoPlayer over HTTP(S) from URLs supplied in media payloads. **Verified source of the manifest URL:** the `hls_manifest_url` (nullable string) and accompanying `playback_token` (nullable string) + `playback_expires_at` (nullable epoch int) fields on `VideoDetailOut` (OpenAPI `GET /ui/videos/{video_id}` → resp `200:VideoDetailOut`), and the per-post entitlement call `POST /ui/posts/{postId}/video/entitlement` (frontend `src/api/endpoints/newsfeed.ts: issueVideoPostEntitlement`, returning `{ video_id, hls_manifest_url, playback_token, playback_expires_at }`). Live broadcasts mint a separate URL via `POST /broadcast/sessions/{session_id}/playback-url` → `BroadcastPlaybackUrlOut { session_id, playback_url, expires_at }`, verifiable with `GET /broadcast/playback/verify` → `BroadcastPlaybackTokenVerifyOut { valid }`. **The web client authenticates HLS playback by appending `?token=<playback_token>` to the manifest URL** (verified `src/pages/videos/VideoPlayerPage.tsx`), not by session cookies. The Android caller is expected to construct the tokenized URL the same way; consuming these DTOs is owned upstream (feed/post/video tickets), and this ticket only plays whatever tokenized URL it is handed. The relevant "contract" for this ticket is therefore the HLS wire format, served behind the app's configured HTTP stack:
 
 - **Master playlist** (`GET <uri>.m3u8`, `Content-Type: application/vnd.apple.mpegurl`): contains multiple `#EXT-X-STREAM-INF` variants (different `BANDWIDTH`/`RESOLUTION`) — required for FR4 adaptive switching.
 - **Media playlist** (per-variant `.m3u8`): VOD ends with `#EXT-X-ENDLIST`; live omits it and may include `#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,HOLD-BACK=...` and `#EXT-X-PART-INF` (LL-HLS).
-- **Segments** (`.ts` / fMP4 `.m4s`): fetched via the OkHttp data source; cookies from the persistent jar (AND-011) and the ~20s read timeout (AND-009) apply.
+- **Segments** (`.ts` / fMP4 `.m4s`): fetched via the OkHttp data source with the ~20s read timeout (AND-009). NOTE: per the verified web behavior, manifest/segment **authorization is carried in the `?token=` query string, not in cookies**; the persistent cookie jar (AND-011) will still be attached by the shared client when the host matches, but it is not the auth mechanism the backend relies on for media. Do not assume cookie-gated segments.
 
 Request handling rules:
 - Manifest/segment GETs are idempotent; ExoPlayer's own loader handles retries — do not add the app-level GET retry interceptor (AND-016) to media loads to avoid double-retry. Use the shared client but verify the retry interceptor is scoped to API calls only (open question OQ3).
-- Per-source `headers` map (FR6) is applied via `setDefaultRequestProperties`; do not attach `X-CSRF-Token` unless the manifest host equals the API host.
+- Per-source `headers` map (FR6) is applied via `setDefaultRequestProperties`. The web client's API transport (verified `src/api/client.ts`) attaches `Authorization: Bearer <accessToken>`, `X-CSRF-Token` (from the `ui_csrf` cookie), and `X-IMPERSONATION-TOKEN`, plus `credentials: include`. None of these are required for HLS media loads (auth is the `?token=` query param). Do not attach `Authorization`, `X-CSRF-Token`, or session cookies to a manifest/segment request unless the manifest host equals the configured API host (see §8 header-scoping).
 
 ## 6. Data & State Management
 
@@ -194,7 +195,7 @@ Resilience requirements:
 ## 8. Security & Privacy
 
 - **Cleartext:** the dev backend and possibly its segment CDN are plaintext HTTP. The existing network security config (set in app/networking tickets) must permit cleartext only for the dev host(s); production manifest hosts must remain HTTPS. Do not add a blanket `usesCleartextTraffic=true`.
-- **Header scoping:** never send the app session cookie / `X-CSRF-Token` to a manifest or segment host that differs from the API host. The `MediaSourceFactoryProvider` must guard `setDefaultRequestProperties` so app-auth headers are only attached when the URI host matches the configured API host; third-party CDN URLs that carry their own signed query params get no app headers.
+- **Header scoping:** never send the app's auth headers — `Authorization: Bearer <token>`, `X-CSRF-Token`, `X-IMPERSONATION-TOKEN`, or the session cookie (the full set the web client sends, verified in `src/api/client.ts`) — to a manifest or segment host that differs from the API host. The `MediaSourceFactoryProvider` must guard `setDefaultRequestProperties` so app-auth headers are only attached when the URI host matches the configured API host; third-party CDN URLs (which carry their own `?token=` signed query param) get no app headers.
 - **No new secrets / no persistence** of media URLs (which may be signed/expiring) beyond the in-memory player session.
 - Logs must not print full signed manifest URLs at non-debug levels (could contain tokens) — redact query strings (see §10).
 
@@ -241,8 +242,8 @@ Fixtures: a tiny pre-encoded 2-variant HLS test asset (e.g. 240p + 480p, a few s
 - **R2 — Double retry:** combining ExoPlayer's loader retries with the app's GET backoff interceptor (AND-016) could amplify load on a flaky host. **OQ3:** confirm AND-016's interceptor is scoped to API (Retrofit) calls only and excluded from media data-source requests; if not, scope it.
 - **R3 — Cleartext segment hosts:** if segments are served from a different cleartext host than the manifest, network-security-config domain list must include it. **OQ1:** enumerate actual manifest/segment hosts used by the dev backend.
 - **OQ2 — LoadErrorHandlingPolicy tuning:** are default retry counts/backoff acceptable for the dev host, or do we need a custom policy? Defer tuning unless smoke testing shows excessive stalls.
-- **OQ4 — LL-HLS:** does the backend emit Low-Latency HLS (`#EXT-X-PART`)? ExoPlayer 1.4 supports it; no extra work expected, but confirm target offset behavior if so.
-- **OQ5 — DRM:** assumed none (no `#EXT-X-KEY` / Widevine) for v1. If encrypted HLS appears, a follow-up ticket is required.
+- **OQ4 — LL-HLS:** does the backend emit Low-Latency HLS (`#EXT-X-PART`)? The web client opts into low-latency for live (`lowLatencyMode: mode === "live"`, with `maxBufferLength` 6 / `maxMaxBufferLength` 12 for live vs 30/60 for VOD — verified `src/components/shared/MediaPlayer.tsx`), which strongly suggests live streams MAY be LL-HLS. ExoPlayer 1.4 supports LL-HLS; no extra work expected, but confirm the `targetOffsetMs` / live-edge behavior against an actual live manifest, since web tunes buffer length per mode.
+- **OQ5 — DRM / encryption (CORRECTED):** the original assumption of "no encryption for v1" is too strong. The web reference player **does** support encrypted HLS via a `drmKeyUrl` prop for **AES-128 (`#EXT-X-KEY METHOD=AES-128`)** key delivery (verified `src/components/shared/MediaPlayer.tsx`: prop `drmKeyUrl` "Key server URL for AES-128 HLS encryption", `hlsConfig.emeEnabled = true` when set). AES-128 sample/segment encryption is handled natively by ExoPlayer's `HlsMediaSource` (the key URI is read from the playlist and fetched through the data source) and requires **no extra Android work for v1** as long as the key request goes through the same OkHttp data source — so basic AES-128 streams should play out of the box. What remains genuinely deferred is **Widevine/PlayReady (EME/CDM) DRM**, for which no `#EXT-X-KEY METHOD=SAMPLE-AES`/Widevine PSSH usage is evidenced in the reference; if Widevine-protected HLS appears, a follow-up ticket is required. Action: add an instrumented smoke for an AES-128 playlist if a fixture is available; otherwise track as a known gap.
 
 ## 14. Acceptance Criteria
 
@@ -264,3 +265,149 @@ AC8. Unit + instrumented tests in §11 pass on the headless-emulator CI lane (AN
 - Header-scoping and cleartext config reviewed (§8); no signed URLs logged in plaintext (§10).
 - Open questions OQ1/OQ3 resolved or explicitly deferred with owners noted; OQ5 (DRM) confirmed out of scope.
 - Downstream tickets AND-168 and AND-169 unblocked: `PlaybackUiState.isLive`, `selectedVideoHeight`, and the `TrackSelector` hook are available and documented.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. "OpenAPI" = `reference/openapi.index.txt` / `reference/openapi.pretty.json`; frontend paths are under `reference/src/`.
+
+1. **Manifest URL is delivered as `hls_manifest_url` on the video DTO.** — VERIFIED. OpenAPI `GET /ui/videos/{video_id}` → `200:VideoDetailOut`; schema `VideoDetailOut.hls_manifest_url` (nullable string). Frontend `src/api/endpoints/videos.ts: VideoDetail.hls_manifest_url`, `src/api/types.ts` (multiple), `src/pages/feed/VideoPostPlayer.tsx`.
+2. **HLS playback is authenticated by a `?token=<playback_token>` query parameter appended to the manifest URL — not by session cookies.** — CORRECTED (spec originally implied cookie-jar-gated playlists). Source: frontend `src/pages/videos/VideoPlayerPage.tsx` (`` `${video.hls_manifest_url}?token=${video.playback_token}` ``) and `src/pages/messages/VideoShareCard.tsx`. Backing fields `playback_token` / `playback_expires_at` confirmed on `VideoDetailOut` (OpenAPI schema `VideoDetailOut`).
+3. **Per-post/feed video playback URL + token come from an entitlement endpoint.** — VERIFIED. Frontend `src/api/endpoints/newsfeed.ts: issueVideoPostEntitlement` → `POST /ui/posts/{postId}/video/entitlement` returning `{ video_id, hls_manifest_url, playback_token, playback_expires_at }`; consumed in `src/pages/feed/VideoPostPlayer.tsx`.
+4. **Live broadcasts mint a separate playback URL.** — VERIFIED. OpenAPI `POST /broadcast/sessions/{session_id}/playback-url` → `BroadcastPlaybackUrlOut { session_id, playback_url, expires_at }`; token verification `GET /broadcast/playback/verify` → `BroadcastPlaybackTokenVerifyOut { valid }`.
+5. **Web reference uses `hls.js` with auto/ABR start level and a Safari native-HLS fallback.** — VERIFIED. `src/components/shared/MediaPlayer.tsx`: `import Hls from "hls.js"`, `startLevel: -1`, `if (!Hls.isSupported()) { ... native fallback ... }`. (Spec's framing that ExoPlayer replaces the `hls.js` shim is sound.)
+6. **Web live mode enables low-latency HLS and uses shorter buffers (live 6/12 vs VOD 30/60).** — VERIFIED. `src/components/shared/MediaPlayer.tsx`: `lowLatencyMode: mode === "live"`, `maxBufferLength: mode === "live" ? 6 : 30`, `maxMaxBufferLength: mode === "live" ? 12 : 60`. Informs §3 FR3 / §13 OQ4.
+7. **Encrypted HLS via AES-128 is a real product capability (not "no DRM").** — CORRECTED. `src/components/shared/MediaPlayer.tsx`: prop `drmKeyUrl` documented "Key server URL for AES-128 HLS encryption"; sets `hlsConfig.emeEnabled = true`. ExoPlayer handles AES-128 HLS natively. Widevine/PlayReady remains unevidenced and deferred. See §13 OQ5.
+8. **App API transport sends `Authorization: Bearer`, `X-CSRF-Token` (from `ui_csrf` cookie), `X-IMPERSONATION-TOKEN`, and `credentials: include`.** — VERIFIED / CLARIFIED. `src/api/client.ts` lines ~157–183. Spec previously cited only "cookie / X-CSRF-Token"; corrected to the full header set for §8 scoping.
+9. **No new TestLogon backend endpoints are introduced by this ticket; HLS is the wire contract.** — VERIFIED (negative). No `m3u8`/`hls`/`playlist` HLS-serving endpoint exists in `reference/openapi.index.txt` (grep returned no matches); manifests/segments are static media URLs, not API operations.
+10. **Web player surfaces variant list and current level on manifest-parse / level-switch (analogue of Android ABR observation).** — VERIFIED. `src/components/shared/MediaPlayer.tsx`: `Hls.Events.MANIFEST_PARSED` builds `QualityLevel[]` (height/bitrate); `Hls.Events.LEVEL_SWITCHED` updates current level. Supports §6 claim that selected height/bitrate is the observable ABR signal.
+11. **Web treats manifest load failure / token expiry as a distinct user-facing error ("Stream unavailable … or the URL has expired").** — VERIFIED. `src/components/shared/MediaPlayer.tsx` `Hls.Events.ERROR` NETWORK_ERROR branch; `playback_expires_at` field corroborates token expiry. Supports §7 error mapping and TC-AND-167-04.
+12. **Media3/ExoPlayer 1.4 `HlsMediaSource`, `setAllowChunklessPreparation`, `DefaultTrackSelector` ABR, `MediaItem.LiveConfiguration`, `ERROR_CODE_BEHIND_LIVE_WINDOW`, `isCurrentMediaItemLive`.** — UNVERIFIED-ASSUMPTION (framework ref). These are Media3 framework APIs not present in the provided sources; rely on Media3 1.4 docs (framework ref: https://developer.android.com/media/media3/exoplayer/hls and https://developer.android.com/reference/androidx/media3/exoplayer/hls/HlsMediaSource). API names are accurate to Media3 1.x as of the knowledge cutoff but should be pinned against the catalog version in AND-166.
+13. **`OkHttpDataSource.Factory` (media3-datasource-okhttp) is the data source.** — UNVERIFIED-ASSUMPTION (framework ref). Reasonable Media3 wiring; not in provided sources. Framework ref: https://developer.android.com/reference/androidx/media3/datasource/okhttp/OkHttpDataSource.
+14. **Cleartext dev backend host `http://18.222.237.167:8000`.** — UNVERIFIED-ASSUMPTION. Stated in spec/AND-166 context; not confirmable from OpenAPI/frontend sources here. Actual manifest/segment hosts (OQ1) remain unenumerated.
+15. **AND-016 GET-retry interceptor is scoped to API/Retrofit calls only (OQ3).** — UNVERIFIED-ASSUMPTION. AND-016 source not in provided references; must be confirmed in the Android codebase.
+
+### Corrections made
+- **§2 / §5 / §6:** Replaced the vague "signed query params / cookie-based playlists" framing with the verified mechanism — manifest URL = `hls_manifest_url`, auth = `?token=<playback_token>` query param (and the broadcast `playback-url` path for live). Cited exact DTO fields and frontend files.
+- **§5 / §7 / §8:** Corrected the auth-header set the web client actually sends (added `Authorization: Bearer` and `X-IMPERSONATION-TOKEN` alongside `X-CSRF-Token`/cookie) and clarified that none of these are the media auth mechanism; header-scoping guard now names the full set.
+- **§5 segments bullet:** Removed the implication that segments are cookie-gated; auth is the query token.
+- **§13 OQ4:** Strengthened with verified web evidence of low-latency live mode and per-mode buffer tuning.
+- **§13 OQ5:** Corrected the blanket "assume no DRM" to "AES-128 HLS is supported by the product and handled natively by ExoPlayer; only Widevine/PlayReady is deferred."
+
+### Open assumptions
+- Media3/ExoPlayer API surface (claims 12–13) is framework knowledge, not derivable from the provided TestLogon sources — pin to the AND-166 version catalog.
+- Actual manifest/segment CDN hostnames and whether segments share the manifest host (OQ1/R3) cannot be enumerated from the supplied OpenAPI/frontend (manifest URLs are opaque runtime values).
+- AND-016 interceptor scoping (OQ3/R2), AND-009 timeout value (~20s), AND-011 cookie jar, and the cleartext dev host are taken from sibling-ticket context not included here; verify in-repo.
+- Whether live broadcast manifests are LL-HLS (`#EXT-X-PART`) is inferred from the web `lowLatencyMode` flag, not confirmed against a real manifest.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** = headless emulator AVD `test35` (x86_64, Android 15 / API 35, KVM, CI lane AND-051); **device** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android 14 / API 34, arm64-v8a). All network-dependent automated cases use `MockWebServer` (AND-046) for determinism; the physical device is used where real-hardware decode / ABI differences matter.
+
+- **TC-AND-167-01 — Source resolution: AUTO `.m3u8` builds `HlsMediaSource`.**
+  - Type: unit (JVM). Target: JVM. Preconditions: `MediaSourceFactoryProvider` constructed with a stub `OkHttpClient`.
+  - Steps: call `create(MediaSourceSpec("https://h/x.m3u8"))`; also `"...x.m3u8?token=abc"`, `"...x.mp4"`, explicit `MediaType.HLS` on a non-`.m3u8` URI, explicit `MediaType.PROGRESSIVE` on a `.m3u8` URI.
+  - Expected: `.m3u8` (with/without query) and explicit HLS → `HlsMediaSource`; `.mp4` and explicit PROGRESSIVE → progressive/`DefaultMediaSourceFactory` source. `resolveType` strips query before suffix check.
+  - Traces: AC2 (partial), AC6 (progressive branch).
+
+- **TC-AND-167-02 — Header scoping: app-auth headers attached only when host == API host.**
+  - Type: unit (JVM). Target: JVM. Preconditions: configured API host known; provider with header hook.
+  - Steps: build sources for an API-host URL with headers (`Authorization`, `X-CSRF-Token`) and for a foreign CDN-host URL with the same headers; inspect the data-source `defaultRequestProperties` applied.
+  - Expected: app-auth headers present for API-host source; absent for foreign-host source. Foreign host gets no `Authorization`/`X-CSRF-Token`/cookie.
+  - Traces: AC5.
+
+- **TC-AND-167-03 — Happy path: multi-variant VOD reaches READY and plays + ABR switch (acceptance).**
+  - Type: contract/MockWebServer + instrumented. Target: emu35 (CI acceptance); confirm once on device for real arm64 decode.
+  - Preconditions: `MockWebServer` serves a 2-variant master playlist (240p + 480p) + small segment fixtures (`core-media/src/androidTest/assets/hls/`); dispatcher can throttle bandwidth.
+  - Steps: `PlayerManager.setMedia(MediaSourceSpec(uri))` (AUTO); await `STATE_READY` + `isPlaying==true`; throttle bandwidth low then high (or vice versa); observe `PlaybackUiState.selectedVideoHeight`/`selectedVideoBitrate`.
+  - Expected: reaches `STATE_READY`, `isPlaying` true, no pinned track, and selected height/bitrate changes between the two variants (proves adaptive switching).
+  - Traces: AC2, AC3, AC8.
+
+- **TC-AND-167-04 — Manifest error: 4xx / unparseable manifest maps to PlaybackError.**
+  - Type: contract/MockWebServer + instrumented. Target: emu35.
+  - Preconditions: `MockWebServer` returns 404 for the manifest, and a separate run returns malformed `.m3u8` body.
+  - Steps: `setMedia(...)`; observe `onPlayerError` / `PlaybackUiState.error`.
+  - Expected: 404 → `ERROR_CODE_IO_BAD_HTTP_STATUS`; malformed → `ERROR_CODE_PARSING_MANIFEST_MALFORMED`; mapped to the "Can't load video" `PlaybackError`; bounded single app-level retry not exceeded. Mirrors web "Stream unavailable / URL expired" handling.
+  - Traces: AC2 (negative), AC8.
+
+- **TC-AND-167-05 — Expired playback token: 401/403 on tokenized manifest.**
+  - Type: contract/MockWebServer + instrumented. Target: emu35.
+  - Preconditions: `MockWebServer` returns 403 when `?token=` is missing/expired.
+  - Steps: `setMedia(MediaSourceSpec("…/x.m3u8?token=expired"))`; observe error state.
+  - Expected: surfaces an IO/bad-HTTP-status `PlaybackError` (not a crash); query string redacted in any log. Confirms the token is the auth path (claim 2/11).
+  - Traces: AC5, AC7.
+
+- **TC-AND-167-06 — Live manifest: isLive true and unbounded duration.**
+  - Type: contract/MockWebServer + instrumented. Target: emu35.
+  - Preconditions: `MockWebServer` serves a media playlist WITHOUT `#EXT-X-ENDLIST` (optionally `#EXT-X-SERVER-CONTROL`).
+  - Steps: `setMedia(...)`; await ready; read `PlaybackUiState`.
+  - Expected: `isLive == true`, `durationMs == C.TIME_UNSET`, player targets the live edge using manifest hold-back when present else `DEFAULT_LIVE_TARGET_OFFSET_MS`.
+  - Traces: AC4 (partial), AC8.
+
+- **TC-AND-167-07 — Behind-live-window auto-recovery.**
+  - Type: integration/instrumented. Target: emu35.
+  - Preconditions: live source; simulate `ERROR_CODE_BEHIND_LIVE_WINDOW` (e.g. force the player behind the window via a sliding `MockWebServer` window or injected exception).
+  - Steps: trigger the behind-live error; observe recovery.
+  - Expected: `PlayerManager` calls `seekToDefaultPosition()` + `prepare()`, rejoins live edge, no terminal `PlaybackError` surfaced.
+  - Traces: AC4.
+
+- **TC-AND-167-08 — Single-player reuse: MP4 → HLS on the same ExoPlayer, no leak.**
+  - Type: integration/instrumented. Target: emu35.
+  - Preconditions: `PlayerManager` from AND-166; MP4 fixture + HLS fixture.
+  - Steps: play MP4, assert ready; `setMedia` HLS spec on the same manager; assert ready; capture the underlying `ExoPlayer` reference across both; drive lifecycle stop.
+  - Expected: same single `ExoPlayer` instance reused (no second player), state resets to IDLE/BUFFERING on switch, instance released after lifecycle stop (no leak).
+  - Traces: AC6.
+
+- **TC-AND-167-09 — OkHttp data source is used (not DefaultHttpDataSource); ~20s timeout applies.**
+  - Type: contract/MockWebServer + instrumented. Target: emu35.
+  - Preconditions: `MockWebServer` records request headers and can delay responses.
+  - Steps: `setMedia(...)`; inspect that requests carry the shared client's fingerprint (e.g. User-Agent / interceptor marker); add a delay beyond the read timeout for one case.
+  - Expected: manifest/segment requests go through the shared `OkHttpClient`; a response slower than ~20s yields a timeout/network error (`ERROR_CODE_IO_NETWORK_CONNECTION_FAILED`/`_TIMEOUT`) not a UI hang.
+  - Traces: AC5, AC8.
+
+- **TC-AND-167-10 — Telemetry: hls_prepare / hls_variant_switch / hls_error with redacted query strings.**
+  - Type: unit + instrumented. Target: JVM (redaction logic) + emu35 (AnalyticsListener firing during ABR).
+  - Preconditions: capturing logger; tokenized signed URL with `?token=secret`.
+  - Steps: run the ABR happy path (TC-03) and an error case (TC-04) with the capturing logger; inspect emitted events.
+  - Expected: `hls_prepare` (host+path only, type=HLS, isLive), `hls_variant_switch` (from→to height/bitrate), `hls_error` (errorCode name, host) emitted; NO query string / token / cookie / header value appears in any log line.
+  - Traces: AC7.
+
+- **TC-AND-167-11 — Cleartext policy: cleartext dev host allowed, arbitrary HTTPS-only enforced.**
+  - Type: instrumented (security). Target: emu35.
+  - Preconditions: network-security-config permitting cleartext only for the dev host(s).
+  - Steps: attempt a cleartext `http://` manifest load against the permitted dev host (succeeds path) and against a non-allowlisted cleartext host (blocked path).
+  - Expected: permitted dev host loads; non-allowlisted cleartext host is blocked by the platform (no blanket `usesCleartextTraffic`). 
+  - Traces: AC5 (security boundary), §8.
+
+- **TC-AND-167-12 — AES-128 encrypted HLS plays natively (OQ5 follow-up smoke).**
+  - Type: instrumented/e2e. Target: **device (MUST run on physical device)** — real arm64-v8a hardware decode of decrypted segments; emulator x86 decode is not representative for the encrypted/decoder path.
+  - Preconditions: a 2-variant AES-128 (`#EXT-X-KEY METHOD=AES-128`) HLS fixture with a key URI served by `MockWebServer`; if no fixture, mark skipped/known-gap.
+  - Steps: `setMedia` the AES-128 manifest; await ready; verify playback + ABR; confirm key request goes through the OkHttp data source.
+  - Expected: stream decrypts and plays; key fetched via shared data source; if Widevine/SAMPLE-AES encountered instead, fail fast with a clear unsupported error (deferred to follow-up).
+  - Traces: AC2 (encrypted variant), §13 OQ5.
+
+- **TC-AND-167-13 — Offline / flaky-dev-host smoke (manual).**
+  - Type: manual. Target: **device** (real cellular/Wi-Fi toggling against dev host `http://18.222.237.167:8000`).
+  - Preconditions: app pointed at dev backend; a real video with `hls_manifest_url` + `playback_token`.
+  - Steps: start playback; toggle airplane mode mid-stream; restore connectivity; for a live stream, leave the device backgrounded long enough to fall behind the live window.
+  - Expected: buffering state (not error) during brief drops; graceful network-error state on sustained loss; live auto-recovers to the edge on reconnect; no crash, no leaked player after backgrounding.
+  - Traces: AC4, AC6, §7 resilience, R1.
+
+- **TC-AND-167-14 — Captions/subtitles tracks are exposed, not stripped (accessibility plumbing).**
+  - Type: instrumented. Target: emu35.
+  - Preconditions: HLS fixture with `#EXT-X-MEDIA:TYPE=SUBTITLES`/`CLOSED-CAPTIONS`.
+  - Steps: `setMedia`; inspect the player `Tracks` after `onTracksChanged`.
+  - Expected: text/subtitle tracks present and selectable (UI/styling deferred to AND-168); HLS source does not drop them.
+  - Traces: §9, AC8 (test-suite green).
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+|---|---|
+| AC1 (dependency added, builds) | Covered by CI build gate; no dedicated TC (build/catalog assertion). Implicitly required by all instrumented TCs (TC-03..14). |
+| AC2 (VOD AUTO → HlsMediaSource, READY, plays) | TC-AND-167-01, TC-AND-167-03, TC-AND-167-04, TC-AND-167-12 |
+| AC3 (adaptive switching, no pinned track) | TC-AND-167-03 |
+| AC4 (live plays, isLive, live edge, behind-live recovery) | TC-AND-167-06, TC-AND-167-07, TC-AND-167-13 |
+| AC5 (shared OkHttp; app headers only when host==API) | TC-AND-167-02, TC-AND-167-05, TC-AND-167-09, TC-AND-167-11 |
+| AC6 (MP4 still works, single instance, MP4→HLS, no leak) | TC-AND-167-01 (progressive branch), TC-AND-167-08, TC-AND-167-13 |
+| AC7 (telemetry events, query strings redacted) | TC-AND-167-05, TC-AND-167-10 |
+| AC8 (unit + instrumented suites green on CI lane) | TC-AND-167-03, TC-AND-167-04, TC-AND-167-06, TC-AND-167-09, TC-AND-167-14 (suite); JVM TC-AND-167-01/02/10 |

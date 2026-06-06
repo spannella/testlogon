@@ -5,7 +5,8 @@ milestone: M4
 epic: E23
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-167, AND-168]
 blocks: []
 ---
@@ -199,11 +200,20 @@ sealed interface PlayerIntent {
 
 ### FakePlayer
 
-`FakePlayer` implements `androidx.media3.common.Player` (extending Media3's
-`SimpleBasePlayer` to avoid stubbing ~150 methods). It records added
-`MediaItem`s, exposes setters to drive `playbackState`, `isPlaying`,
-position/duration, tracks, and a `PlaybackException`, and synchronously
-dispatches `Player.Listener` callbacks. This avoids any real renderer/socket.
+`FakePlayer` extends Media3's abstract `SimpleBasePlayer`
+(`androidx.media3.common.SimpleBasePlayer`, which itself implements the
+`androidx.media3.common.Player` *interface*) to avoid stubbing ~150 methods. It
+records added `MediaItem`s and exposes setters to drive `playbackState`,
+`isPlaying`, position/duration, tracks, and a `PlaybackException`. Note the
+`SimpleBasePlayer` contract: a subclass holds a mutable `State` and overrides
+`getState()`; the `emit*` helpers below mutate that backing state and then call
+`SimpleBasePlayer.invalidateState()`, which is what synchronously dispatches the
+corresponding `Player.Listener` callbacks on the player's `Looper`. This avoids
+any real renderer/socket. (Verification note: `media3-test-utils` ships a
+`FakeExoPlayer`/`TestExoPlayerBuilder` but those are oriented at full ExoPlayer
+behavior; a hand-rolled `SimpleBasePlayer` subclass is the lighter seam used
+here — confirm the chosen base against the pinned Media3 1.4 artifact at build
+time, see §16 OA-2.)
 
 ```kotlin
 class FakePlayer : SimpleBasePlayer(Looper.getMainLooper()) {
@@ -464,3 +474,371 @@ semantics/content description (§9).
   owning upstream ticket.
 - Lint/detekt clean on test sources; JUnit HTML/XML reports produced and wired
   into CI; PR merged to `android-port` with green checks.
+
+## 16. Citations & Assumption Audit
+
+This is a test-only ticket that, by design, exercises **no backend HTTP API**.
+The OpenAPI index/spec was checked to confirm that claim (see C-0 / V-1). The
+load-bearing technical claims are therefore mostly Android-framework
+(Media3/ExoPlayer) facts and web-reference parity facts; each is audited below.
+
+1. **Claim:** This ticket touches no backend; auth/session/CSRF are out of
+   scope and media URIs are local fixtures (§2, §5, §8).
+   **VERDICT: Verified.** No media-playback transport endpoint exists in the
+   backend; the only video-adjacent endpoints are metadata/VOD/moderation REST
+   calls (e.g. `GET /ui/videos/{video_id}`, `GET /ui/videos/{video_id}/access`),
+   none of which this test ticket invokes.
+   **SOURCE:** `reference/openapi.index.txt` lines 1994–2056 (`/ui/videos*`,
+   `/ui/vod*`); no `*/playback-url`/HLS-manifest endpoint present.
+
+2. **Claim:** The Android player replaces the web client's `hls.js` for HLS
+   (§2, §3 FR-7, §5).
+   **VERDICT: Verified.** The web reference player imports and drives `hls.js`
+   directly (`import Hls from "hls.js"`, `new Hls(...)`, `hls.loadSource`,
+   `Hls.Events.MANIFEST_PARSED`).
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx` (lines 15, 325–355) — the
+   shared adaptive player; also consumed by `src/pages/broadcast/LivePlayer.tsx`.
+
+3. **Claim:** Web player exposes the same control affordances the Android tests
+   assert intents for — play/pause, seek bar, volume/mute, fullscreen, PiP
+   (§3 FR-4, §9).
+   **VERDICT: Verified (parity).** Web custom-controls overlay renders
+   play/pause (`media-player-playpause`), seek `<input type=range aria-label="Seek">`,
+   mute (`media-player-mute`) + volume (`aria-label="Volume"`), fullscreen
+   (`media-player-fullscreen`), and PiP (`media-player-pip`).
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx` (lines 695–868).
+   **Correction note:** the web player additionally exposes **quality selector**
+   (lines 100–162) and **subtitle/CC** controls (lines 789–830). These are NOT
+   in the spec's §4 `PlayerIntent` set; that is acceptable for AND-167/168 scope
+   but is flagged as an open parity gap (see OA-4) so the upstream UI tickets are
+   not silently under-tested.
+
+4. **Claim:** Live = no seek bar / unknown duration; VOD = finite duration +
+   seek bar, mapping to `durationMs == null` for live (§3 FR-3, §5, §6).
+   **VERDICT: Verified (parity) + framework-correct.** Web gates the seek bar on
+   `mode === "vod" && duration > 0` and shows a LIVE badge with no seek bar in
+   `mode === "live"`. On Android, an unknown duration surfaces as
+   `C.TIME_UNSET`, which the reducer maps to `durationMs = null` — this is the
+   documented sentinel for unset time in Media3.
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx` (lines 218, 703, 741–750);
+   framework ref: `androidx.media3.common.C.TIME_UNSET`
+   (https://developer.android.com/reference/androidx/media3/common/C#TIME_UNSET).
+
+5. **Claim:** Error overlay shows a Retry action; buffering overlay is distinct
+   from the initial loading overlay (§3 FR-5, §7, §9).
+   **VERDICT: Verified (parity).** Web renders a distinct `buffering` overlay
+   (`playerState === "buffering"`) separate from the `idle/loading` overlay, and
+   an `error` overlay containing a `Retry` button (`media-player-retry`).
+   **SOURCE:** `src/components/shared/MediaPlayer.tsx` (lines 651–693).
+   **Note:** Android error *copy* (`R.string.player_error_retry`, etc.) is owned
+   by AND-168 and is NOT verifiable from the web strings (web copy lives in
+   `MediaPlayer.tsx` literals such as "Stream unavailable…" / "Playback failed.
+   Please try again." at lines 366/387). See OA-1.
+
+6. **Claim:** `Player` is an interface; `FakePlayer` extends `SimpleBasePlayer`
+   to avoid stubbing the whole surface (§4).
+   **VERDICT: Verified (framework) — corrected mechanism.** `Player` is an
+   interface and `SimpleBasePlayer` is the abstract base intended for custom
+   players. **Correction:** a `SimpleBasePlayer` subclass does not "expose
+   setters that dispatch listener callbacks" directly; it overrides `getState()`
+   over a mutable `State` and calls `invalidateState()` to fan out
+   `Player.Listener` callbacks. §4 text was amended to state this.
+   **SOURCE:** framework ref
+   https://developer.android.com/reference/androidx/media3/common/SimpleBasePlayer
+   and https://developer.android.com/reference/androidx/media3/common/Player .
+
+7. **Claim:** `Player.State` constants `STATE_IDLE/STATE_BUFFERING/STATE_READY/
+   STATE_ENDED` drive the reducer; `isPlaying`/`playerError` are read from the
+   player (§4, §6).
+   **VERDICT: Verified (framework).** These four `@Player.State` int constants
+   and `isPlaying()` / `getPlayerError()` are part of the `Player` interface.
+   **SOURCE:** framework ref
+   https://developer.android.com/reference/androidx/media3/common/Player .
+
+8. **Claim:** `PlaybackException` codes `ERROR_CODE_IO_NETWORK_CONNECTION_FAILED`
+   and `ERROR_CODE_PARSING_MANIFEST_MALFORMED` map to `Error(Network)` /
+   `Error(Source)` (§7).
+   **VERDICT: Verified (framework).** Both constants exist on
+   `androidx.media3.common.PlaybackException`. (The web equivalent is coarser:
+   `Hls.ErrorTypes.NETWORK_ERROR` vs `MEDIA_ERROR` in `MediaPlayer.tsx` lines
+   357–393 — parity is conceptual, not 1:1.)
+   **SOURCE:** framework ref
+   https://developer.android.com/reference/androidx/media3/common/PlaybackException
+   ; web parallel `src/components/shared/MediaPlayer.tsx` (lines 357–394).
+
+9. **Claim:** HLS source selection constructs `HlsMediaSource` (vs
+   `ProgressiveMediaSource`) and master/media manifests are parseable offline via
+   `HlsPlaylistParser` to count variants and detect `#EXT-X-ENDLIST` (§3 FR-7,
+   §4, §5).
+   **VERDICT: Verified (framework).** `HlsMediaSource`,
+   `ProgressiveMediaSource`, and `HlsPlaylistParser` are real Media3 classes;
+   `HlsMultivariantPlaylist`/`HlsMediaPlaylist` expose variant lists and the
+   `hasEndTag` (`#EXT-X-ENDLIST`) flag. The fixture manifest grammar in §5 is
+   valid HLS.
+   **SOURCE:** framework refs
+   https://developer.android.com/reference/androidx/media3/exoplayer/hls/HlsMediaSource
+   and https://developer.android.com/reference/androidx/media3/exoplayer/hls/playlist/HlsPlaylistParser .
+   **Assumption:** the *production* class name `HlsSourceFactory` and the
+   `PlayerUiState`/`PlayerIntent`/`PlayerManager`/`PlayerFactory` symbol names in
+   §4 are owned by AND-166/167/168 and are not present in any provided source
+   tree — treated as **Unverified-assumption** (see OA-2/OA-3).
+
+10. **Claim:** PiP exposes `shouldEnterPip`/aspect-ratio and hides controls in
+    PiP; lifecycle release on `ON_STOP`/`ON_DESTROY` with single-player reuse
+    (§3 FR-6, FR-8).
+    **VERDICT: Unverified-assumption (upstream contract).** The web reference
+    uses browser PiP (`video.requestPictureInPicture()`,
+    `MediaPlayer.tsx` lines 516–528), which does not map to the Android
+    `shouldEnterPip`/`ON_STOP` lifecycle model; these are AND-166/168 production
+    behaviors not present in the provided sources.
+    **SOURCE:** none authoritative; web partial parallel
+    `src/components/shared/MediaPlayer.tsx` (lines 516–528). Android lifecycle
+    PiP framework ref:
+    https://developer.android.com/develop/ui/views/picture-in-picture .
+
+11. **Claim:** Tooling — Turbine, `kotlinx-coroutines-test`,
+    `androidx.compose.ui:ui-test-junit4`, Robolectric, `media3-test-utils`;
+    `MainDispatcherRule` already exists in `core-testing` (§4, §11).
+    **VERDICT: Unverified-assumption.** These are standard, plausible Android
+    test artifacts, but the Android repo (`android/`, `core-testing`) is not in
+    the provided reference tree, so neither the existing `MainDispatcherRule`
+    nor the dependency versions can be confirmed here.
+    **SOURCE:** none in provided sources; framework refs are the libraries'
+    canonical coordinates.
+
+### Corrections made
+
+- **C-0 (§frontmatter):** `status: draft -> reviewed`; added
+  `reviewed_on: 2026-06-06`.
+- **C-1 (§4 FakePlayer):** Corrected the `SimpleBasePlayer` usage mechanism —
+  a subclass overrides `getState()` and calls `invalidateState()` to dispatch
+  listener callbacks; it does not dispatch via bare setters. Clarified that
+  `SimpleBasePlayer` implements the `Player` *interface*, and noted
+  `media3-test-utils` ships `FakeExoPlayer`/`TestExoPlayerBuilder` as an
+  alternative to confirm against the pinned 1.4 artifact. (Citation 6.)
+- No factual API/path/method errors were found to correct, because the ticket
+  asserts no backend API. Web-reference parity claims (citations 2–5, 8) were
+  all confirmed accurate; two **additive** parity gaps (quality selector,
+  subtitles/CC) were surfaced as open assumptions rather than spec errors.
+
+### Open assumptions
+
+- **OA-1:** Android control content descriptions and string resources
+  (`R.string.player_error_retry`, "Play"/"Pause"/"Enter fullscreen"/"Retry")
+  are assumed delivered by AND-168. Not verifiable from sources (web uses
+  `data-testid` + literal copy, not Android string resources). Mirrors the
+  ticket's own OQ1; §9 assertions fail loudly if the gap exists.
+- **OA-2:** Production symbol names and seams (`PlayerManager`, `PlayerFactory`,
+  injectable `Clock`, `HlsSourceFactory`, `@VisibleForTesting` listeners) and
+  the exact `SimpleBasePlayer` API in Media3 1.4 are assumed from AND-166/167.
+  Not in the provided source tree. Mirrors OQ2.
+- **OA-3:** The `PlayerUiState` / `PlayerIntent` shapes in §4 are assumed to
+  match AND-168's actual ViewModel contract. Unverifiable here; if upstream
+  differs, the reducer/UI tests must follow upstream, not this spec.
+- **OA-4:** Web parity is broader than the spec's intent set — the web player
+  also exposes a **quality/variant selector** and **subtitle/CC** controls
+  (`MediaPlayer.tsx` lines 100–162, 789–830). Whether AND-168 ports these (and
+  thus whether they need test coverage here) is unconfirmed; if ported, add
+  intents + cases. Why open: depends on AND-167/168 scope decisions not in any
+  provided source.
+- **OA-5:** Test tooling presence/versions (`MainDispatcherRule`, Turbine,
+  Robolectric, `media3-test-utils`) assumed; Android repo not provided. Mirrors
+  the build-config side of the ticket.
+
+## 17. Test Plan
+
+Test targets per the ticket's CI/dev matrix:
+- **JVM/Robolectric** (local, no device) — default for unit + pure-Compose UI.
+- **Emulator AVD `test35`** (x86_64, API 35) — instrumented Compose UI/e2e in CI.
+- **Physical device** (Samsung Galaxy A15 5G, SM-A156U, arm64-v8a, API 34,
+  serial R5CX821TA9R) — used only where real decoder/PiP/ABI behavior matters.
+
+Because the suite is engineered to be headless and decoder-free (FR-9), most
+cases run on JVM/Robolectric or the emulator. Two cases are called out as
+PHYSICAL-DEVICE-REQUIRED because they validate real PiP system behavior and the
+arm64-v8a/API-34 hardware-decoder path that the x86_64/API-35 emulator cannot
+faithfully represent.
+
+- **TC-AND-172-01 — Reducer happy-path state sequence**
+  Type: unit (JVM/Robolectric).
+  Target: `PlayerUiStateReducerTest` over `PlayerManager` + `FakePlayer`.
+  Preconditions: `MainDispatcherRule` virtual clock; `FakePlayer` fresh.
+  Steps: collect `uiState` via Turbine; emit `STATE_BUFFERING`, then position
+  (0, 5_000ms buffered, 30_000ms duration) + `STATE_READY` playing, then pause,
+  then `STATE_ENDED`.
+  Expected: emissions `Idle -> Buffering -> Ready(isPlaying=true, durationMs=30_000)
+  -> Ready(isPlaying=false) -> Ended`, in order, with no extra emissions.
+  Traces: AC-3.
+
+- **TC-AND-172-02 — Live vs VOD duration mapping**
+  Type: unit (JVM/Robolectric).
+  Target: `PlayerUiStateReducerTest`.
+  Preconditions: `FakePlayer` in `STATE_READY`.
+  Steps: (a) emit duration `C.TIME_UNSET`; (b) emit finite duration 42_000ms.
+  Expected: (a) `Ready.durationMs == null` (live); (b) `Ready.durationMs == 42_000`.
+  Traces: AC-4.
+
+- **TC-AND-172-03 — Network error mapping**
+  Type: unit (JVM/Robolectric).
+  Target: `PlayerUiStateReducerTest` (error path, §7).
+  Preconditions: player in `Buffering`/`Ready`.
+  Steps: emit `PlaybackException(ERROR_CODE_IO_NETWORK_CONNECTION_FAILED)`.
+  Expected: `Error(kind = Network, canRetry = true)`.
+  Traces: AC-3.
+
+- **TC-AND-172-04 — Manifest parse error mapping**
+  Type: unit (JVM/Robolectric).
+  Target: `PlayerUiStateReducerTest`.
+  Preconditions: player active.
+  Steps: emit `PlaybackException(ERROR_CODE_PARSING_MANIFEST_MALFORMED)`.
+  Expected: `Error(kind = Source, canRetry = true)`.
+  Traces: AC-3.
+
+- **TC-AND-172-05 — Retry recovery transition**
+  Type: unit (JVM/Robolectric).
+  Target: `PlayerUiStateReducerTest` + `FakePlayer` call recording.
+  Preconditions: reducer in `Error(canRetry=true)`.
+  Steps: dispatch `PlayerIntent.Retry`.
+  Expected: `FakePlayer.prepare()` recorded once and state returns to
+  `Buffering` (then `Ready` once `STATE_READY` re-emitted). No duplicate player
+  instances created.
+  Traces: AC-3.
+
+- **TC-AND-172-06 — HLS source selection + variant count (offline)**
+  Type: contract/MockWebServer-style offline (JVM/Robolectric).
+  Target: `HlsSourceFactoryTest` parsing canned fixtures in
+  `core-media/src/test/resources/hls/`.
+  Preconditions: fixtures `master.m3u8` (2 variants), `360p.m3u8` (VOD,
+  `#EXT-X-ENDLIST`), and a live media playlist (no end tag).
+  Steps: (a) factory given `…/master.m3u8` -> assert it builds an
+  `HlsMediaSource` (not `ProgressiveMediaSource`); (b) parse master via
+  `HlsPlaylistParser` -> assert 2 adaptive video variants; (c) parse VOD media
+  playlist -> `hasEndTag == true` => finite duration; (d) parse live playlist ->
+  `hasEndTag == false` => `durationMs == null`.
+  Expected: all four assertions pass with no network access.
+  Traces: AC-4, AC-8.
+
+- **TC-AND-172-07 — Progressive (MP4) source selection**
+  Type: unit (JVM/Robolectric).
+  Target: `HlsSourceFactoryTest`.
+  Preconditions: none.
+  Steps: factory given a `file://…/clip.mp4` (non-`.m3u8`, non-HLS content type).
+  Expected: builds a `ProgressiveMediaSource`, not `HlsMediaSource`.
+  Traces: AC-8.
+
+- **TC-AND-172-08 — ViewModel intent dispatch (play/pause)**
+  Type: unit (JVM/Robolectric).
+  Target: `PlayerViewModelTest` over `PlayerViewModel` + `FakePlayer`.
+  Preconditions: VM constructed directly (Hilt bypassed).
+  Steps: call `onIntent(PlayPause)` from a paused state.
+  Expected: `FakePlayer.playWhenReady` toggled true; reverse toggles false.
+  Traces: AC-5.
+
+- **TC-AND-172-09 — Control affordances emit correct intents**
+  Type: Compose-UI (Robolectric; emulator `test35` in CI for parity).
+  Target: `PlayerControlsTest` with captured `onIntent` callback.
+  Preconditions: `PlayerControls` rendered with a seeded `Ready(paused)` state.
+  Steps: locate by content description and act on each control:
+  `onNodeWithContentDescription("Play").performClick()`;
+  seek = tap on progress bar (emits `SeekTo`); scrub = `performTouchInput { swipe… }`
+  (emits `SeekTo`); volume slider drag (emits `SetVolume`); mute click
+  (`ToggleMute`); fullscreen click (`ToggleFullscreen`); retry from error state
+  (`Retry`).
+  Expected: each interaction emits exactly the matching `PlayerIntent`; every
+  control is locatable by content description (no missing a11y label).
+  Traces: AC-5, AC-10.
+
+- **TC-AND-172-10 — Overlay visibility per state**
+  Type: Compose-UI (Robolectric).
+  Target: `PlayerScreenOverlaysTest`.
+  Preconditions: render screen with seeded states.
+  Steps: render `Buffering`, then `Error`, then `Ready`.
+  Expected: buffering spinner visible only in `Buffering`; error overlay + Retry
+  visible only in `Error`; neither in `Ready`.
+  Traces: AC-6.
+
+- **TC-AND-172-11 — PiP hides controls (state-level)**
+  Type: Compose-UI (Robolectric).
+  Target: `PlayerScreenOverlaysTest`.
+  Preconditions: render `Ready(isInPip = true)` (or dispatch
+  `PipChanged(true)`).
+  Steps: assert `shouldEnterPip`/aspect-ratio signal exposed and controls
+  composable not present.
+  Expected: control nodes asserted `doesNotExist()`; PiP signal correct.
+  Traces: AC-6.
+
+- **TC-AND-172-12 — Lifecycle release + single-player reuse**
+  Type: unit/Robolectric (JVM, `TestLifecycleOwner`).
+  Target: `PlayerManagerTest`.
+  Preconditions: `PlayerManager` with `PlayerFactory { FakePlayer() }`.
+  Steps: acquire player; drive lifecycle `ON_STOP` then `ON_DESTROY`; re-acquire.
+  Expected: `FakePlayer.released == true` after stop/destroy; factory invoked
+  such that no more than one live instance exists at a time (no `ExoPlayer`
+  leak).
+  Traces: AC-7.
+
+- **TC-AND-172-13 — Headless suite green, no sleep/network (determinism gate)**
+  Type: integration (CI meta-check, JVM + emulator `test35`).
+  Target: full `:feature-player` + `:core-media` test tasks.
+  Preconditions: build agent with no display/audio device/network.
+  Steps: run `./gradlew :feature-player:testDebugUnitTest
+  :core-media:testDebugUnitTest` and the Robolectric/instrumented UI tasks;
+  static-scan test sources for `Thread.sleep(` and real `OkHttp`/socket usage;
+  loop the suite 50x.
+  Expected: zero failures; zero `Thread.sleep`/network references; 0 flakes
+  across 50 runs; JUnit HTML/XML produced.
+  Traces: AC-1, AC-2, AC-9.
+
+- **TC-AND-172-14 — Security: no PII/secrets/network egress from tests**
+  Type: manual + integration scan.
+  Target: test sources + fixtures + build output.
+  Preconditions: tree built.
+  Steps: confirm all test media URIs are `file://`/`asset://`/`data:`/fake;
+  grep fixtures for real CDN hosts, the dev host `18.222.237.167`, tokens,
+  cookies, or device identifiers; confirm tests write only under
+  `build/`.
+  Expected: no real hosts/secrets/PII committed; no egress; no writes outside
+  build dirs.
+  Traces: AC-1, AC-9 (and §8).
+
+- **TC-AND-172-15 — Real PiP system behavior (PHYSICAL DEVICE REQUIRED)**
+  Type: instrumented/e2e.
+  Target: player Activity on the Samsung Galaxy A15 5G (SM-A156U, API 34,
+  serial R5CX821TA9R).
+  Preconditions: app installed via adb on the physical device; a local/asset
+  media source (no network).
+  Steps: start playback; trigger PiP (`shouldEnterPip` path / home gesture);
+  observe the system PiP window; tap to restore.
+  Expected: system enters PiP, custom controls are hidden in the PiP window and
+  restored on return; aspect ratio matches the signal. MUST be a physical device
+  because real system PiP windowing and the API-34 behavior are not faithfully
+  reproduced on the x86_64/API-35 emulator.
+  Traces: AC-6.
+
+- **TC-AND-172-16 — Real arm64-v8a decoder/HLS smoke (PHYSICAL DEVICE,
+  optional-but-recommended)**
+  Type: instrumented/e2e.
+  Target: player on the physical A15 (arm64-v8a, API 34).
+  Preconditions: a local HLS/MP4 asset bundled with the test apk (no network).
+  Steps: prepare + play the asset to `Ready`, scrub, and reach `Ended`.
+  Expected: real decoder reaches `Ready`/`Ended` and the reducer surfaces the
+  same `PlayerUiState` transitions validated in TC-01/02 on hardware. MUST be a
+  physical device to cover the arm64-v8a hardware-decoder path and API-34-vs-35
+  differences absent on the x86_64 emulator. (Out of the strict headless AC set;
+  a guard-rail against decoder regressions the fakes cannot catch.)
+  Traces: AC-3, AC-4 (hardware confirmation).
+
+### Coverage matrix
+
+| §14 Acceptance Criterion | Covered by |
+| --- | --- |
+| AC-1 (headless JVM suite, zero failures) | TC-13, TC-14 |
+| AC-2 (Compose UI tests pass) | TC-09, TC-10, TC-11, TC-13 |
+| AC-3 (full state seq + Error + Retry) | TC-01, TC-03, TC-04, TC-05; (TC-16 hw) |
+| AC-4 (live vs VOD duration mapping) | TC-02, TC-06; (TC-16 hw) |
+| AC-5 (each control intent) | TC-08, TC-09 |
+| AC-6 (buffering/error overlays; PiP hides controls) | TC-10, TC-11, TC-15 |
+| AC-7 (release on stop/destroy + single instance) | TC-12 |
+| AC-8 (HLS factory selection + variant count) | TC-06, TC-07 |
+| AC-9 (no sleep/network; 50-run 0-flake) | TC-13, TC-14 |
+| AC-10 (>=90% reducer/intent branch coverage; semantics-located controls) | TC-01–05, TC-08, TC-09 |

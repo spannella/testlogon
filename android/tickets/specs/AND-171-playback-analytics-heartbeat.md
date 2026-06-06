@@ -5,9 +5,10 @@ milestone: M4
 epic: E23
 priority: P2
 size: M
-status: draft
 depends_on: [AND-166]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-171 — Playback analytics/heartbeat
@@ -60,7 +61,12 @@ Server-side analytics dashboards (E52) are out of scope.
 
 FR-1. While the attached player is in `STATE_READY` **and** `playWhenReady == true`
 (i.e. actually playing, not buffering/paused), the component emits a heartbeat every
-**N seconds** (default `N = 10`, server-overridable — see §6).
+**N seconds** (default `N = 10`). ~~server-overridable~~ — **CORRECTED (2026-06-06):** the
+interval is **client-side only**; no server response carries a cadence override (the
+`next_interval_ms` field assumed in §6 does not exist — see §16). Note also that periodic
+heartbeats apply only to **live broadcast** targets; for VOD/content the verified contract
+is a single one-shot `POST /ui/videos/{id}/view` per session (see §5), so FR-1's interval
+loop drives only the broadcast `viewerHeartbeat` call.
 
 FR-2. On the first transition into the playing state for a given media item, emit a
 **`start`** event before the first periodic heartbeat.
@@ -185,86 +191,134 @@ possible (kept ahead of `HEARTBEAT` in a small priority pre-buffer).
 
 ## 5. API Contract
 
-The exact endpoint must be confirmed against `/openapi.json` and `frontend/src/api/`
-(see Open Questions OQ-1). The design below is the assumed contract; the DTO/adapter
-layer isolates the rest of the app from drift.
+> **REVIEW CORRECTION (2026-06-06):** The originally-assumed single endpoint
+> `POST /ui/playback/heartbeat` with a rich JSON body and a `{accepted, next_interval_ms,
+> stop}` response **does not exist** in the backend OpenAPI spec and is not used by the web
+> reference client. There is no unified "playback heartbeat" endpoint. The verified contract
+> is **two distinct, much thinner mechanisms** keyed on target kind. The DTO/adapter layer
+> still isolates the rest of the app, but the design in §4 must be reduced to match these
+> real shapes (no per-event JSON telemetry body, no server cadence/stop directive).
 
-**Endpoint:** `POST /ui/playback/heartbeat`
-(fallback per-target form: `POST /ui/{content|broadcast}/{id}/view`).
+There are **two** real endpoints, selected by `PlaybackTarget` kind. Both reuse the
+shared authenticated transport (cookies + `X-CSRF-Token` via AND-012). Neither accepts a
+JSON telemetry body; do **not** send `position_ms`/`duration_ms`/`watched_ms`/`phase`/
+`client_event_id` — those fields are not part of any verified server schema.
 
-**Headers:** session cookies (auto via jar), `X-CSRF-Token: {ui_csrf}` (auto via
-AND-012 interceptor), `Content-Type: application/json`.
+**(a) Content / VOD — one-shot view record (NOT a periodic body):**
 
-**Request body:**
-
-```json
-{
-  "session_id": "0f1c8b2a-...-uuid",
-  "target_kind": "content",
-  "target_id": "ct_01HZX...",
-  "phase": "heartbeat",
-  "position_ms": 42000,
-  "duration_ms": 360000,
-  "watched_ms": 10000,
-  "is_live": false,
-  "playback_speed": 1.0,
-  "client_event_id": "8a3d...-uuid",
-  "occurred_at": "2026-06-05T12:00:00.000Z"
-}
+```
+POST /ui/videos/{video_id}/view      → 200: ViewRecordOut ; 422: HTTPValidationError
 ```
 
-**Success `200`:**
+- No request body. The web client (`src/pages/gallery/VideoDetailPage.tsx`) fires
+  `recordView(videoId)` exactly **once on mount**, not on an interval.
+- Response `ViewRecordOut`: `{ "view_count": <int>, "is_new_view": <bool> }`.
+- Server-side X-SESSION-ID and impersonation headers are listed params; on Android the
+  session cookie jar covers session identity (no explicit `X-SESSION-ID` body field).
 
-```json
-{ "accepted": true, "next_interval_ms": 15000, "stop": false }
+**(b) Broadcast / live — viewer presence heartbeat (join → heartbeat → leave):**
+
+```
+POST /broadcast/sessions/{session_id}/viewers/join                  → 200: ViewerJoinOut
+POST /broadcast/sessions/{session_id}/viewers/heartbeat?viewer_id=  → 200: ViewerHeartbeatOut
+POST /broadcast/sessions/{session_id}/viewers/leave?viewer_id=      → 200: {ok, viewer_count}
 ```
 
-- `next_interval_ms` (optional): server-driven cadence override → fed to
-  `HeartbeatConfigStore` for the live session.
-- `stop` (optional): if `true`, the client ends reporting for this session (e.g.
-  entitlement revoked / concurrency limit). Playback decisions remain with AND-166.
+- `viewer_id` is a **query parameter**, not a JSON body field (web:
+  `src/api/endpoints/broadcast.ts: viewerHeartbeat` posts with `null` body and
+  `params: { viewer_id }`).
+- `join` returns `ViewerJoinOut`: `{ "viewer_id", "session_id", "viewer_count" }` — the
+  client mints/obtains its `viewer_id` from `join`, then heartbeats with it, then `leave`s.
+- `heartbeat` returns `ViewerHeartbeatOut`: `{ "ok": <bool>, "viewer_count": <int> }`.
+- There is **no** `next_interval_ms` and **no** `stop` field anywhere in these responses;
+  cadence is purely client-side, and there is no server "stop reporting" directive.
 
-**Error `4xx/5xx`:** FastAPI `detail` shape (string | `[{msg}]` | `{code,...}`), mapped
-via AND-015 to `ApiError`. `401` is handled by the global authenticator (one refresh +
-retry, AND-013). All other errors → drop after bounded retry.
+**(c) Broadcast clips (if a clip surface attaches):** `POST /broadcast/clips/{clip_id}/view`
+(one-shot, empty 200 body; public variant `POST /broadcast/public/clips/{clip_id}/view`).
+
+**Headers (all of the above):** session cookies (auto via jar), `X-CSRF-Token: {ui_csrf}`
+(auto via AND-012 interceptor). `Content-Type: application/json` is irrelevant for the
+no-body POSTs.
+
+**Error `4xx/5xx`:** FastAPI validation errors surface as `422: HTTPValidationError`
+(`{"detail": [{"loc","msg","type"}]}`); other errors use the standard FastAPI `detail`
+shape (string | `[{msg}]` | `{code,...}`), mapped via AND-015 to `ApiError`. `401` is
+handled by the global authenticator (one refresh via `POST /ui/session/refresh` + retry,
+AND-013 — verified present). All other errors → drop after bounded retry.
 
 ### 5.1 Retrofit + DTOs
 
+> **REVIEW CORRECTION (2026-06-06):** Interface and DTOs rewritten to the verified
+> server contract. The `HeartbeatRequestDto`/`HeartbeatResponseDto` above were fabricated.
+> There is no JSON request body; `viewer_id` is a query param; responses are the thin
+> `ViewRecordOut` / `ViewerJoinOut` / `ViewerHeartbeatOut` shapes.
+
 ```kotlin
 interface PlaybackAnalyticsApi {
-    @POST("ui/playback/heartbeat")
-    suspend fun heartbeat(@Body body: HeartbeatRequestDto): Response<HeartbeatResponseDto>
+    // Content / VOD — one-shot, no body
+    @POST("ui/videos/{videoId}/view")
+    suspend fun recordVideoView(@Path("videoId") videoId: String): Response<ViewRecordDto>
+
+    // Live broadcast viewer lifecycle — viewer_id is a QUERY param, no body
+    @POST("broadcast/sessions/{sessionId}/viewers/join")
+    suspend fun viewerJoin(@Path("sessionId") sessionId: String): Response<ViewerJoinDto>
+
+    @POST("broadcast/sessions/{sessionId}/viewers/heartbeat")
+    suspend fun viewerHeartbeat(
+        @Path("sessionId") sessionId: String,
+        @Query("viewer_id") viewerId: String,
+    ): Response<ViewerHeartbeatDto>
+
+    @POST("broadcast/sessions/{sessionId}/viewers/leave")
+    suspend fun viewerLeave(
+        @Path("sessionId") sessionId: String,
+        @Query("viewer_id") viewerId: String,
+    ): Response<ViewerLeaveDto>
 }
 
 @JsonClass(generateAdapter = true)
-data class HeartbeatRequestDto(
-    @Json(name = "session_id") val sessionId: String,
-    @Json(name = "target_kind") val targetKind: String,
-    @Json(name = "target_id") val targetId: String,
-    val phase: String,
-    @Json(name = "position_ms") val positionMs: Long,
-    @Json(name = "duration_ms") val durationMs: Long?,
-    @Json(name = "watched_ms") val watchedMs: Long,
-    @Json(name = "is_live") val isLive: Boolean,
-    @Json(name = "playback_speed") val playbackSpeed: Float,
-    @Json(name = "client_event_id") val clientEventId: String,
-    @Json(name = "occurred_at") val occurredAt: String,
+data class ViewRecordDto(           // ViewRecordOut
+    @Json(name = "view_count") val viewCount: Int,
+    @Json(name = "is_new_view") val isNewView: Boolean,
 )
 
 @JsonClass(generateAdapter = true)
-data class HeartbeatResponseDto(
-    val accepted: Boolean = true,
-    @Json(name = "next_interval_ms") val nextIntervalMs: Long? = null,
-    val stop: Boolean = false,
+data class ViewerJoinDto(           // ViewerJoinOut
+    @Json(name = "viewer_id") val viewerId: String,
+    @Json(name = "session_id") val sessionId: String,
+    @Json(name = "viewer_count") val viewerCount: Int,
+)
+
+@JsonClass(generateAdapter = true)
+data class ViewerHeartbeatDto(      // ViewerHeartbeatOut
+    val ok: Boolean,
+    @Json(name = "viewer_count") val viewerCount: Int,
+)
+
+@JsonClass(generateAdapter = true)
+data class ViewerLeaveDto(
+    val ok: Boolean,
+    @Json(name = "viewer_count") val viewerCount: Int,
 )
 ```
+
+Implications for §4: the `PlaybackSnapshot`/`HeartbeatRequestDto` rich-telemetry model is
+**not** sent to the server — it can survive only as an *internal* representation feeding
+local debug logs/counters (§10). The network layer maps `PlaybackTarget.Content` →
+`recordVideoView` (fired once per session) and `PlaybackTarget.Broadcast` → the
+join/heartbeat/leave lifecycle (heartbeat fired on the client interval). `START` ≈
+join/first-view; `HEARTBEAT` ≈ `viewerHeartbeat` (broadcast only — VOD has no periodic
+server call); `STOP` ≈ `viewerLeave` (broadcast) or no-op (VOD).
 
 ## 6. Data & State Management
 
 - **Configuration:** `HeartbeatConfigStore` exposes `intervalMs: StateFlow<Long>`
   (default 10_000, bounds 5_000–60_000) and `enabled: StateFlow<Boolean>`. Defaults
-  from `BuildConfig`/DataStore; runtime override from `next_interval_ms`. The live
-  session re-reads interval on each tick so server overrides take effect immediately.
+  from `BuildConfig`/DataStore. **CORRECTED (2026-06-06):** there is no `next_interval_ms`
+  in any server response, so there is **no runtime server-driven override**; the interval
+  is configured only locally. Re-reading the interval on each tick is still useful for
+  picking up a local/remote-config (Firebase/DataStore) change, but not for a per-response
+  server directive.
 - **Session state (in-memory only):**
 
 ```kotlin
@@ -284,8 +338,12 @@ private data class SessionState(
 - **Session id** is a `UUID.randomUUID()` minted at `attach`/media-transition;
   `client_event_id` is a fresh UUID per event for server-side dedup/idempotency.
 - **No `StateFlow<UiState>`** is exposed to UI: this is a background reporter, not a
-  screen. The only externally observable signal is the optional `stop` directive, which
-  is surfaced back to `PlayerManager` via a callback for AND-166 to act on if desired.
+  screen. **CORRECTED (2026-06-06):** there is no server `stop` directive in any verified
+  response, so the "surface `stop` back to `PlayerManager`" callback has no real trigger
+  from the network. The only optionally-observable signal is `ViewerHeartbeatOut.viewer_count`
+  (live viewer count), which a broadcast surface may choose to display; the reporter can
+  expose it via an optional callback. Any future "watching limit reached"/entitlement-revoked
+  behaviour would require a new backend field and is out of scope here.
 
 ## 7. Error Handling & Resilience
 
@@ -360,8 +418,11 @@ Unit/JVM tests (`core-testing`, JUnit + Turbine + a fake `Player`/`TestScope`):
   `START(new)` with distinct `session_id`s.
 - **T-5 watched-time clamping (FR-6):** a forward seek during an interval does not
   inflate `watched_ms` beyond the interval bound.
-- **T-6 server override:** `next_interval_ms` in a response changes subsequent cadence;
-  `stop:true` ends the session.
+- **T-6 server override:** ~~`next_interval_ms` in a response changes subsequent cadence;
+  `stop:true` ends the session.~~ **CORRECTED (2026-06-06):** these server fields do not
+  exist. Repurpose T-6 to verify a **local** interval change (via `HeartbeatConfigStore`)
+  is picked up on the next tick, and that the broadcast `viewer_count` from
+  `ViewerHeartbeatOut` is surfaced via the optional callback. (See TC-AND-171-08/09.)
 - **T-7 resilience (FR-8):** sink under `5xx` retries ≤2 then drops, increments
   `dropped_retry_exhausted`, and never throws into the player thread; channel overflow
   drops oldest `HEARTBEAT` and increments `dropped_overflow`.
@@ -387,10 +448,13 @@ instrumented test required (no UI).
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (endpoint shape):** the exact analytics endpoint(s) and payload field names are
-  unverified offline. Must be confirmed against `/openapi.json` and
-  `frontend/src/api/endpoints/*.ts` before merge. The DTO/adapter isolation limits blast
-  radius if the path is `/ui/{kind}/{id}/view` or a batch endpoint instead.
+- **OQ-1 (endpoint shape) — RESOLVED (2026-06-06):** verified against the OpenAPI index
+  and the web reference. There is **no** `/ui/playback/heartbeat` endpoint and no unified
+  analytics POST body. Reality (see §5/§16): VOD → one-shot `POST /ui/videos/{id}/view`
+  (`ViewRecordOut`); live broadcast → `viewers/join` → `viewers/heartbeat?viewer_id=` →
+  `viewers/leave?viewer_id=` (`ViewerJoinOut`/`ViewerHeartbeatOut`); clips →
+  `POST /broadcast/clips/{clip_id}/view`. The §4 rich-telemetry snapshot stays internal
+  only. **No** server cadence override and **no** server stop directive exist.
 - **OQ-2 (consent gating):** whether an analytics/DNT consent flag must gate emission is
   TBD; `enabled` flag is in place but defaults on. Owner: E52.
 - **Risk — live duration:** live broadcasts report `duration_ms = null`; ensure server
@@ -416,8 +480,11 @@ instrumented test required (no UI).
 - **AC-5:** Requests include cookies + `X-CSRF-Token`; `401` triggers exactly one refresh
   retry via the global authenticator; other failures are retried ≤2 then dropped without
   affecting playback (T-7, contract test).
-- **AC-6:** A server `next_interval_ms` adjusts cadence and `stop:true` ends reporting
-  for the session (T-6).
+- **AC-6:** ~~A server `next_interval_ms` adjusts cadence and `stop:true` ends reporting
+  for the session (T-6).~~ **CORRECTED (2026-06-06):** no such server fields exist.
+  Revised AC-6: a **local** interval change (`HeartbeatConfigStore`) takes effect on the
+  next tick, and the live `viewer_count` from `ViewerHeartbeatOut` is exposed to an
+  optional surface callback without affecting playback (T-6).
 - **AC-7:** Reporting never throws into, blocks, or stalls the player thread under any
   network condition (T-7).
 
@@ -435,3 +502,248 @@ instrumented test required (no UI).
 - Endpoint/path confirmed against `/openapi.json` (OQ-1 resolved) or, if unresolved, the
   assumption documented with a follow-up ticket referenced in the PR.
 - Code reviewed and merged to `android-port`; spec linked from the PR.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim from the spec, its verdict, and the exact source pointer.
+
+1. **Claim:** Heartbeat endpoint is `POST /ui/playback/heartbeat`.
+   **VERDICT: Corrected** — endpoint does not exist.
+   **Source:** OpenAPI index `reference/openapi.index.txt` (grep for `heartbeat`/`/view`
+   returns no such path). Real endpoints below.
+2. **Claim:** Content/VOD view reporting path.
+   **VERDICT: Corrected** → `POST /ui/videos/{video_id}/view`, no body, returns
+   `ViewRecordOut`.
+   **Source:** OpenAPI `POST /ui/videos/{video_id}/view` (`op=record_view_endpoint…`,
+   `resp=200:ViewRecordOut`); frontend `src/api/endpoints/gallery.ts: recordView`.
+3. **Claim:** `ViewRecordOut` shape.
+   **VERDICT: Verified** → `{ view_count: int, is_new_view: bool }` (both required).
+   **Source:** `openapi.pretty.json` `components.schemas.ViewRecordOut`;
+   `src/api/endpoints/gallery.ts: ViewRecordResponse`.
+4. **Claim:** VOD view is recorded periodically.
+   **VERDICT: Corrected** — the web client fires it **once on mount**, not on an interval.
+   **Source:** `src/pages/gallery/VideoDetailPage.tsx` (`// Fire view recording once on
+   mount`, `viewMut.mutate()` in a one-time `useState` initializer).
+5. **Claim:** Live broadcast periodic heartbeat path.
+   **VERDICT: Verified (path) / Corrected (shape)** →
+   `POST /broadcast/sessions/{session_id}/viewers/heartbeat` with `viewer_id` as a **query
+   param**, no JSON body, returns `ViewerHeartbeatOut`.
+   **Source:** OpenAPI `POST /broadcast/sessions/{session_id}/viewers/heartbeat`
+   (`params=session_id,viewer_id,…`, `resp=200:ViewerHeartbeatOut`);
+   `src/api/endpoints/broadcast.ts: viewerHeartbeat` (posts `null` body,
+   `params: { viewer_id }`).
+6. **Claim:** Broadcast viewer lifecycle requires join/leave around heartbeats.
+   **VERDICT: Verified** → `viewers/join` (→ `ViewerJoinOut{viewer_id,session_id,
+   viewer_count}`) and `viewers/leave?viewer_id=`.
+   **Source:** OpenAPI `…/viewers/join`, `…/viewers/leave`;
+   `src/api/endpoints/broadcast.ts: viewerJoin/viewerLeave`;
+   `openapi.pretty.json components.schemas.ViewerJoinOut`.
+7. **Claim:** `ViewerHeartbeatOut` shape.
+   **VERDICT: Verified** → `{ ok: bool, viewer_count: int }` (both required).
+   **Source:** `openapi.pretty.json components.schemas.ViewerHeartbeatOut`;
+   `src/api/endpoints/broadcast.ts: ViewerHeartbeatResponse`.
+8. **Claim:** Request body carries `session_id/target_kind/position_ms/duration_ms/
+   watched_ms/phase/playback_speed/client_event_id/occurred_at`.
+   **VERDICT: Corrected** — no verified endpoint accepts such a body; the periodic
+   broadcast call takes only `viewer_id` (query), and the VOD call takes nothing. These
+   fields can exist only as internal state for local debug logging.
+   **Source:** OpenAPI `req=` empty for both `…/viewers/heartbeat` and
+   `…/videos/{id}/view`; `src/api/endpoints/broadcast.ts: viewerHeartbeat` (null body).
+9. **Claim:** Success response `{ accepted, next_interval_ms, stop }` with server-driven
+   cadence override and a server stop directive.
+   **VERDICT: Corrected** — none of these fields exist in any response schema. Cadence is
+   client-only; there is no server stop directive.
+   **Source:** grep for `next_interval`/`"accepted"` in `openapi.index.txt` → no match;
+   verified schemas in items 3/7 contain no such fields.
+10. **Claim:** Clip view path `POST /broadcast/clips/{clip_id}/view` (and public variant).
+    **VERDICT: Verified.**
+    **Source:** OpenAPI `POST /broadcast/clips/{clip_id}/view`,
+    `POST /broadcast/public/clips/{clip_id}/view`.
+11. **Claim:** Auth is cookie-based session with `ui_csrf` echoed as `X-CSRF-Token`
+    (AND-012).
+    **VERDICT: Verified.**
+    **Source:** `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token",
+    csrf)`; `credentials: "include"`).
+12. **Claim:** Single 401 → refresh + retry via `POST /ui/session/refresh` (AND-013).
+    **VERDICT: Verified.**
+    **Source:** `src/api/client.ts` (401 branch calls `refreshSession()` then re-fetches
+    once); `refreshSession()` → `fetch(withApiBase("/ui/session/refresh"))`;
+    `src/api/endpoints/auth.ts: refreshSession` → `POST /ui/session/refresh`; OpenAPI
+    `POST /ui/session/refresh` present.
+13. **Claim:** 4xx validation surfaces as FastAPI `HTTPValidationError` `{detail:[{loc,msg,
+    type}]}`.
+    **VERDICT: Verified.**
+    **Source:** OpenAPI lists `422:HTTPValidationError` on all of `…/view`,
+    `…/viewers/heartbeat`, `…/viewers/join`.
+14. **Claim:** AND-145 presence heartbeat exists as cadence prior art.
+    **VERDICT: Verified** → `POST /messaging/presence/heartbeat` (`req=PresenceHeartbeatIn`).
+    **Source:** OpenAPI index line for `/messaging/presence/heartbeat`.
+15. **Claim (framework):** Media3/ExoPlayer `Player.Listener` callbacks
+    (`onPlaybackStateChanged`, `onPlayWhenReadyChanged`, `onMediaItemTransition`,
+    `onPlayerError`, `onPositionDiscontinuity`) and `STATE_READY`/`playWhenReady` semantics.
+    **VERDICT: Unverified-assumption (framework ref)** — not checkable from backend/web
+    sources; standard Media3 API per AND-166.
+    **Source (framework ref):** https://developer.android.com/media/media3/exoplayer/listening-to-player-events
+16. **Claim (framework):** Lifecycle gating via `repeatOnLifecycle(STARTED)`.
+    **VERDICT: Unverified-assumption (framework ref).**
+    **Source (framework ref):** https://developer.android.com/topic/libraries/architecture/coroutines#restart
+17. **Claim:** Endpoints additionally take `X-SESSION-ID`/`X-IMPERSONATION-TOKEN` header
+    params.
+    **VERDICT: Verified (present) / Assumption (handling)** — they are listed params; the
+    Android client is assumed to satisfy session identity via the cookie jar rather than an
+    explicit `X-SESSION-ID` field. Confirm during contract testing.
+    **Source:** OpenAPI `params=…,X-SESSION-ID,X-IMPERSONATION-TOKEN` on the broadcast
+    viewer endpoints.
+
+### Corrections made
+
+- Replaced the fabricated single `POST /ui/playback/heartbeat` endpoint with the two real
+  mechanisms: VOD one-shot `POST /ui/videos/{id}/view` (`ViewRecordOut`) and live
+  broadcast `viewers/join → viewers/heartbeat?viewer_id= → viewers/leave` (`ViewerJoinOut`/
+  `ViewerHeartbeatOut`). (§5, §5.1, §13/OQ-1)
+- Removed the fabricated JSON telemetry request body; `viewer_id` is a query param and VOD
+  takes no body. The rich `PlaybackSnapshot`/DTO becomes internal-only. (§5.1)
+- Removed the fabricated `{accepted, next_interval_ms, stop}` response and all
+  server-driven cadence-override / server-stop-directive behaviour. (§5, §6, FR-1, T-6,
+  AC-6)
+- Clarified that periodic heartbeats apply to **broadcast** only; VOD is one-shot. (FR-1, §5.1)
+- Rewrote the Retrofit `PlaybackAnalyticsApi` and DTOs to the verified shapes. (§5.1)
+
+### Open assumptions
+
+- **Internal snapshot model vs server:** the position/duration/watched-time accounting in
+  §4/§6 is retained as *internal* telemetry for local debug logs/counters only; no backend
+  consumes it. Unverifiable because no server schema accepts those fields.
+- **`X-SESSION-ID` handling:** assumed covered by the cookie jar on Android; the web client
+  relies on cookies (`credentials: "include"`) and does not set `X-SESSION-ID` explicitly.
+  Needs confirmation against a live dev host during contract testing.
+- **Whether the Android app should call VOD `view` once-per-session or once-per-resume:**
+  web fires once on mount; mapping "session" to "first play of a media item" is an
+  assumption (see FR-7). Unverifiable from sources.
+- **Consent/DNT gating (OQ-2):** no analytics-consent endpoint/flag found; ownership E52.
+- **Media3 listener/lifecycle framework behaviour:** assumed per AND-166 and Android docs;
+  not verifiable from backend/web sources.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device); **MWS** =
+contract test on MockWebServer (JVM); **emu35** = headless emulator AVD `test35`
+(x86_64, API 35); **A15** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a).
+Hardware-dependent cases prefer A15.
+
+- **TC-AND-171-01 — Broadcast heartbeat cadence (happy path).**
+  Type: unit (JVM). Target: `DefaultPlaybackReporter` + fake `Player` + `TestScope`
+  virtual clock. Preconditions: reporter attached with `PlaybackTarget.Broadcast`,
+  interval = 10 s, player `STATE_READY` & `playWhenReady=true`. Steps: advance virtual
+  time 10 s, then 30 s. Expected: exactly 1 `viewerHeartbeat` after first 10 s; 3 more
+  after the next 30 s (no catch-up bursts); `viewer_id` from the prior `join` is reused.
+  Traces: AC-1.
+
+- **TC-AND-171-02 — Start/stop lifecycle (broadcast = join/leave, VOD = one-shot view).**
+  Type: unit (JVM). Target: reporter + fake `Player`. Preconditions: attached. Steps:
+  enter playing → pause. Expected: for Broadcast, `viewers/join` precedes the first
+  heartbeat and a `viewers/leave` is emitted on pause; for Content, a single
+  `POST /ui/videos/{id}/view` is emitted at start and **no** periodic/stop calls.
+  Traces: AC-2.
+
+- **TC-AND-171-03 — Gating: no heartbeats while paused/buffering/backgrounded.**
+  Type: unit (JVM). Target: reporter + fake `Player` + fake `LifecycleOwner`.
+  Preconditions: attached, broadcast target. Steps: drive states buffering (intent off),
+  paused, and lifecycle below STARTED; then resume. Expected: zero heartbeats during
+  gated states; on resume cadence restarts from a fresh interval (first heartbeat at
+  +interval, no immediate catch-up). Traces: AC-3.
+
+- **TC-AND-171-04 — Media transition yields new session.**
+  Type: unit (JVM). Target: reporter. Preconditions: broadcast session A active. Steps:
+  fire `onMediaItemTransition` to broadcast B. Expected: `viewers/leave` for A then
+  `viewers/join` for B; new `sessionId` and new server `viewer_id`; distinct
+  `client_event_id`s in internal log. Traces: AC-4.
+
+- **TC-AND-171-05 — Contract: request shape, headers, response parse (broadcast).**
+  Type: contract/MockWebServer (MWS). Target: `PlaybackAnalyticsApi` + OkHttp/CSRF
+  interceptor. Preconditions: `ui_csrf` cookie set in jar. Steps: call `viewerJoin` then
+  `viewerHeartbeat`. Expected: heartbeat request path is
+  `/broadcast/sessions/{id}/viewers/heartbeat?viewer_id=…` with **no JSON body**, carries
+  cookie + `X-CSRF-Token`; response `{ok,viewer_count}` parses into `ViewerHeartbeatDto`;
+  `join` parses `{viewer_id,session_id,viewer_count}`. Traces: AC-5.
+
+- **TC-AND-171-06 — Contract: VOD one-shot view shape + parse.**
+  Type: contract/MockWebServer (MWS). Target: `PlaybackAnalyticsApi.recordVideoView`.
+  Steps: enqueue `{ "view_count": 42, "is_new_view": true }`; call once. Expected: path
+  `/ui/videos/{id}/view`, POST with empty body, `X-CSRF-Token` present; parses into
+  `ViewRecordDto(viewCount=42, isNewView=true)`. Traces: AC-1, AC-5.
+
+- **TC-AND-171-07 — 401 triggers exactly one refresh + retry.**
+  Type: contract/MockWebServer (MWS). Target: shared authenticator + `PlaybackAnalyticsApi`.
+  Steps: enqueue 401, then 200 `{ok,viewer_count}` for the heartbeat; ensure
+  `POST /ui/session/refresh` is enqueued 200. Expected: exactly one refresh call then one
+  retried heartbeat that succeeds; no infinite loop; player thread untouched.
+  Traces: AC-5.
+
+- **TC-AND-171-08 — Validation/error responses are dropped without throwing.**
+  Type: contract/MockWebServer (MWS). Target: `CoroutineHeartbeatSink`. Steps: enqueue
+  `422 HTTPValidationError` `{"detail":[{"loc":["query","viewer_id"],"msg":"field
+  required","type":"value_error.missing"}]}`, then a `500`. Expected: 422 dropped
+  immediately (no retry, `dropped_4xx++`); 500 retried ≤2 with jitter then dropped
+  (`dropped_retry_exhausted++`); no exception escapes to the player thread. Traces:
+  AC-5, AC-7.
+
+- **TC-AND-171-09 — Local interval change takes effect; viewer_count surfaced (revised T-6).**
+  Type: unit (JVM). Target: reporter + `HeartbeatConfigStore` + fake clock. Steps: run
+  with interval 10 s for two ticks, change config to 5 s, advance. Expected: subsequent
+  ticks use 5 s; each `ViewerHeartbeatOut.viewer_count` is delivered to the optional
+  surface callback. Confirms no reliance on a (non-existent) server cadence/stop field.
+  Traces: AC-6.
+
+- **TC-AND-171-10 — Watched-time clamping resists seeks.**
+  Type: unit (JVM). Target: reporter accounting. Steps: during one interval, fire a large
+  forward `onPositionDiscontinuity` (seek). Expected: internal `watchedMsDelta` clamped to
+  ≤ interval·speed and to the position delta when not live; seek does not inflate
+  internal watch accounting. (Internal-only; not sent to server — see §16.) Traces:
+  AC-2.
+
+- **TC-AND-171-11 — Flaky/offline dev host: never blocks playback, best-effort START/STOP.**
+  Type: integration (JVM + MWS with throttling/dispatcher delays). Target: sink + reporter.
+  Steps: set MWS to delay ~25 s (> 20 s timeout) and toggle the AND-017 connectivity probe
+  to offline mid-session. Expected: heartbeats short-circuit/drop while offline
+  (`dropped_offline++`); the single consumer stalls on the slow request while new events
+  keep entering the bounded `DROP_OLDEST` channel (no unbounded backlog); player thread is
+  never awaited; `START`/`STOP`(join/leave) attempted once when connectivity returns.
+  Traces: AC-7.
+
+- **TC-AND-171-12 — Channel overflow drops oldest, not newest START/STOP.**
+  Type: unit (JVM). Target: `CoroutineHeartbeatSink` channel (capacity 64, DROP_OLDEST).
+  Steps: enqueue >64 events with the consumer paused. Expected: oldest `HEARTBEAT`s
+  dropped (`dropped_overflow++`); priority `START`/`STOP` retained; no backpressure to
+  caller. Traces: AC-7.
+
+- **TC-AND-171-13 — Security: CSRF/cookie required; redaction; no PII/secret logging.**
+  Type: contract/MockWebServer (MWS) + log assertion. Target: interceptor + `Logger`.
+  Steps: (a) with `ui_csrf` cookie absent, attempt a heartbeat; (b) inspect debug logs.
+  Expected: (a) event is dropped+logged, never crashes (missing CSRF); (b) logs contain
+  only `phase`, `target_kind`, truncated id, outcome — no cookie/CSRF value, no full
+  request body above DEBUG. Traces: AC-5, AC-7.
+
+- **TC-AND-171-14 — Instrumented end-to-end against a live broadcast on a real device.**
+  Type: instrumented/e2e. Target: a player surface (AND-166/167) attaching the reporter,
+  pointed at the dev backend `http://18.222.237.167:8000`. **MUST run on A15 (physical
+  device)** — real-network HLS/streaming behaviour and arm64-v8a/API-34 path differ from
+  the x86_64/API-35 emulator. Preconditions: authenticated session, a live broadcast
+  session id. Steps: start playback, watch ≥3 intervals, background the app, foreground,
+  stop. Expected: `viewers/join` once, periodic `viewers/heartbeat` at the configured
+  interval while foreground+playing, paused during background, `viewers/leave` on stop;
+  playback never stalls; battery/network within bounded-channel expectations. Smoke-run
+  the UI-less path on **emu35** in CI first; the network-timing assertions are
+  authoritative only on **A15**. Traces: AC-1, AC-2, AC-3, AC-7.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 (interval emission while playing) | TC-01, TC-06, TC-14 |
+| AC-2 (START precedes, STOP on exit; watched duration) | TC-02, TC-10, TC-14 |
+| AC-3 (no emission while paused/buffering/backgrounded; clean resume) | TC-03, TC-14 |
+| AC-4 (stable session id; new media → new session) | TC-04 |
+| AC-5 (cookies+CSRF; one 401 refresh; bounded retry/drop) | TC-05, TC-06, TC-07, TC-08, TC-13 |
+| AC-6 (revised: local interval change; viewer_count surfaced) | TC-09 |
+| AC-7 (never throws/blocks/stalls player thread) | TC-08, TC-11, TC-12, TC-13, TC-14 |

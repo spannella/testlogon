@@ -5,7 +5,8 @@ milestone: M4
 epic: E24
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-099]
 blocks: []
 ---
@@ -43,11 +44,16 @@ regress like/unlike (AND-173), share/bookmark (AND-176), or core pagination
 - Namespace / applicationId base: `com.testlogon.android`. All new symbols live
   under `com.testlogon.android.feature.feed.*` and
   `com.testlogon.android.core.data.posts.*`.
-- Web reference: `frontend/src/api/endpoints/postHide.ts` and
-  `frontend/src/api/endpoints/postInteresting.ts` define the request/response
-  contracts mirrored here; shared shapes come from `frontend/src/api/types.ts`.
-  The canonical contract source at build time is the backend OpenAPI document at
-  `/openapi.json` (dev host `http://18.222.237.167:8000`).
+- Web reference (verified to exist): `src/api/endpoints/postHide.ts`
+  (`hidePost`→`POST /feed/hide`, `unhidePost`→`POST /feed/unhide`,
+  `listHiddenPosts`→`GET /feed/hidden`) and `src/api/endpoints/postInteresting.ts`
+  (`markPostInteresting`→`POST /feed/interesting`,
+  `unmarkPostInteresting`→`POST /feed/uninteresting`,
+  `listInterestingPosts`→`GET /feed/interesting`). These modules are
+  authoritative for response shapes because the OpenAPI 200 schemas are empty
+  (`{}`). The backend OpenAPI document (dev host `http://18.222.237.167:8000`)
+  defines request bodies via the `HidePostRequest` schema (`{post_id: string}`)
+  and auth/validation envelopes.
 - Upstream dependencies:
   - **AND-099 (Post item composable)** — owns `PostItem` and its overflow
     menu slot; this ticket adds the Hide and Not-interested menu entries and the
@@ -66,13 +72,24 @@ FR-1. The post overflow menu exposes two new items: **Hide this post** and
 **Not interested**. Both are enabled for any feed post the current user can see.
 
 FR-2. **Hide** removes the post from the visible feed immediately (optimistic),
-issues `POST /ui/posts/{postId}/hide`, and on success leaves the post hidden for
-the remainder of the session and across refresh/pagination.
+issues `POST /feed/hide` with body `{"post_id": "<id>"}` (CORRECTED — the path is
+`/feed/hide`, not `/ui/posts/{postId}/hide`; the id travels in the JSON body, not
+the URL path), and on success leaves the post hidden for the remainder of the
+session and across refresh/pagination.
 
-FR-3. **Not interested** removes the post from the visible feed immediately,
-issues `POST /ui/posts/{postId}/interesting` with `{"interested": false}`, and
-records a ranking-suppression preference server-side. The post is also locally
-suppressed identically to a hide for the current session.
+FR-3. **Not interested** removes the post from the visible feed immediately and
+suppresses it for the session identically to a hide. **CORRECTED / IMPORTANT:**
+the backend has NO "not interested / suppress this kind of content" endpoint. The
+`/feed/interesting` + `/feed/uninteresting` pair the original spec mapped to this
+action is a *positive* "more like this" ranking boost (toggle ON / OFF), i.e. the
+semantic OPPOSITE of "not interested", and its body is `{"post_id": "<id>"}`
+only — there is no `{"interested": false}` field anywhere in the contract. To
+honor the backlog acceptance ("preference honored") faithfully, **Not interested
+is implemented as a `POST /feed/hide`** (the only server-side suppression signal),
+tagged locally with `kind = NOT_INTERESTED` for telemetry/UX copy. Calling
+`/feed/uninteresting` for this action would be incorrect and is NOT done. See §13
+Open Questions and §16 for the audit trail; confirm with backend whether a
+dedicated negative-preference endpoint is planned.
 
 FR-4. A dismissable Snackbar appears after a successful hide/not-interested:
 "Post hidden" / "We'll show fewer posts like this" with an **Undo** action.
@@ -84,12 +101,14 @@ non-recoverable, the post is **re-inserted at its prior index** and a transient
 error Snackbar is shown: "Couldn't hide post. Tap to retry." Retry re-issues the
 same request.
 
-FR-6. **Undo** issues the inverse call:
-`POST /ui/posts/{postId}/unhide` for hide, and
-`POST /ui/posts/{postId}/interesting` with `{"interested": true}` for
-not-interested. On success the post is restored to the feed at its prior index;
-on failure the post remains removed (undo is best-effort) and a Snackbar reports
-the failure.
+FR-6. **Undo** issues the inverse call. Since both Hide and Not-interested are
+implemented via `/feed/hide` (see FR-3), the inverse for BOTH is
+`POST /feed/unhide` with body `{"post_id": "<id>"}` (CORRECTED — path is
+`/feed/unhide`, not `/ui/posts/{postId}/unhide`; there is no
+`{"interested": true}` call). `/feed/unhide` is documented idempotent (unhiding a
+post that is not hidden is a no-op success). On success the post is restored to
+the feed at its prior index; on failure the post remains removed (undo is
+best-effort) and a Snackbar reports the failure.
 
 FR-7. Locally suppressed post ids are persisted so that suppression survives
 process death within the session window and so the feed never re-renders a post
@@ -118,36 +137,60 @@ data class PostSuppression(
 ### 4.2 Network layer (core-network)
 
 ```kotlin
+// CORRECTED: real backend contract is /feed/hide and /feed/unhide with the
+// post id in a JSON body ({"post_id": ...}), NOT path params under /ui/posts.
 interface PostActionsApi {
-    @POST("ui/posts/{postId}/hide")
-    suspend fun hide(@Path("postId") postId: String): Response<PostActionResponse>
+    @POST("feed/hide")
+    suspend fun hide(@Body body: HidePostRequest): Response<HideMutationResponse>
 
-    @POST("ui/posts/{postId}/unhide")
-    suspend fun unhide(@Path("postId") postId: String): Response<PostActionResponse>
+    @POST("feed/unhide")
+    suspend fun unhide(@Body body: HidePostRequest): Response<HideMutationResponse>
 
-    @POST("ui/posts/{postId}/interesting")
-    suspend fun setInterested(
-        @Path("postId") postId: String,
-        @Body body: InterestedRequest,
-    ): Response<PostActionResponse>
+    // Optional: positive "more like this" boost. NOTE this is NOT "not
+    // interested"; it is the opposite signal (see FR-3). Included only if a
+    // future "Show more like this" affordance is added; the Not-interested
+    // action does NOT call these.
+    @POST("feed/interesting")
+    suspend fun markInteresting(@Body body: HidePostRequest): Response<PostInterestingResult>
+
+    @POST("feed/uninteresting")
+    suspend fun unmarkInteresting(@Body body: HidePostRequest): Response<PostInterestingResult>
 }
 
 @JsonClass(generateAdapter = true)
-data class InterestedRequest(val interested: Boolean)
+data class HidePostRequest(@Json(name = "post_id") val postId: String)
 
+// Shape per frontend postHide.ts (the OpenAPI 200 schema is empty {} so the
+// frontend module is authoritative): { ok, post_id, hidden }.
 @JsonClass(generateAdapter = true)
-data class PostActionResponse(
+data class HideMutationResponse(
+    val ok: Boolean,
     @Json(name = "post_id") val postId: String,
-    val hidden: Boolean? = null,
-    val interested: Boolean? = null,
+    val hidden: Boolean,
+)
+
+// Shape per frontend postInteresting.ts: { ok, post_id, is_interesting }.
+@JsonClass(generateAdapter = true)
+data class PostInterestingResult(
+    val ok: Boolean,
+    @Json(name = "post_id") val postId: String,
+    @Json(name = "is_interesting") val isInteresting: Boolean,
 )
 ```
 
 These are state-changing `POST`s, therefore **not** eligible for the bounded
 backoff retry that `core-network` applies only to idempotent `GET`s. They get a
-single attempt plus the standard one-shot 401→`/ui/session/refresh`→retry. The
-`X-CSRF-Token` header (echo of the `ui_csrf` cookie) and the persistent cookie
-jar are applied by the shared OkHttp interceptors. Per-call timeout follows the
+single attempt plus the standard one-shot 401→`/ui/session/refresh`→retry
+(verified: the web client refreshes via `POST /ui/session/refresh` exactly once
+on 401 then replays the request — see `src/api/client.ts`). Transport headers
+applied by the shared OkHttp interceptors mirror the web client: the
+`Authorization: Bearer <token>` header from the session store, the
+`X-CSRF-Token` header (echo of the `ui_csrf` cookie), and the persistent cookie
+jar (`credentials: include`). CORRECTED: auth is Bearer-token + CSRF + cookies,
+not "cookie-only" as originally stated. The OpenAPI also lists optional
+`X-SESSION-ID` (header) and `user_sub` (query) parameters and an optional
+`X-IMPERSONATION-TOKEN`; these are not required for the first-party mobile flow
+and are omitted unless the session epic wires them. Per-call timeout follows the
 global ~20s ceiling.
 
 ### 4.3 Repository (core-data)
@@ -174,15 +217,19 @@ Flow for `hide(postId)`:
 1. Upsert `PostSuppression(postId, HIDDEN, now, pending = true)` into Room and
    emit the updated `suppressed` set (optimistic removal is observed by the
    feed).
-2. Call `api.hide(postId)`.
+2. Call `api.hide(HidePostRequest(postId))`.
 3. On success → mark `pending = false`. Return `ApiResult.Success`.
 4. On failure → delete the suppression row (rollback), emit, return
    `ApiResult.Error` carrying the mapped message.
 
-`notInterested` is identical but writes `kind = NOT_INTERESTED` and calls
-`setInterested(postId, InterestedRequest(false))`. `unhide`/`interested` delete
-the corresponding suppression row first (optimistic restore), then call the
-inverse endpoint; on failure they re-insert the suppression row.
+`notInterested` is identical to `hide` but writes `kind = NOT_INTERESTED`; it
+calls the SAME `api.hide(HidePostRequest(postId))` (CORRECTED — see FR-3: there
+is no negative-preference endpoint, so Not-interested reuses `/feed/hide`; it does
+NOT call `/feed/interesting`, which is a positive boost). Both `unhide`
+(undo-hide) and `interested` (undo-not-interested, kept as a method name for the
+ViewModel's symmetry) delete the corresponding suppression row first (optimistic
+restore), then call `api.unhide(HidePostRequest(postId))`; on failure they
+re-insert the suppression row.
 
 ### 4.4 ViewModel (feature-feed)
 
@@ -224,41 +271,57 @@ action label for Undo/Retry.
 
 ## 5. API Contract
 
-Base URL (dev): `http://18.222.237.167:8000`. All requests carry session
-cookies and `X-CSRF-Token`.
+Base URL (dev): `http://18.222.237.167:8000`. All requests carry the
+`Authorization: Bearer` header, session cookies, and `X-CSRF-Token` (verified
+against `src/api/client.ts`). All paths below are CORRECTED against the OpenAPI
+index and the frontend modules; the id is always in the JSON body.
 
-**Hide**
+**Hide** (also used for Not-interested — see FR-3)
 ```
-POST /ui/posts/{postId}/hide
-→ 200 { "post_id": "p_123", "hidden": true }
-```
-
-**Unhide (undo)**
-```
-POST /ui/posts/{postId}/unhide
-→ 200 { "post_id": "p_123", "hidden": false }
-```
-
-**Not interested / interested (toggle)**
-```
-POST /ui/posts/{postId}/interesting
+POST /feed/hide
 Content-Type: application/json
-{ "interested": false }
-→ 200 { "post_id": "p_123", "interested": false }
+{ "post_id": "p_123" }                  // schema: HidePostRequest
+→ 200 { "ok": true, "post_id": "p_123", "hidden": true }   // postHide.ts: HideMutationResponse
 ```
+(The OpenAPI 200 response schema is empty `{}`; the response shape above is taken
+from the authoritative frontend module `src/api/endpoints/postHide.ts`. A second
+caller `src/api/endpoints/newsfeed.ts: hidePost` types the response as just
+`{ ok: boolean }`, so treat `hidden` defensively as optional when deserializing.)
 
-Error envelope (FastAPI) — mapped by `ApiErrorMapper`:
+**Unhide (undo for both Hide and Not-interested)**
 ```
-4xx/5xx { "detail": "..." }                         // string
-       | [ { "msg": "...", "loc": [...] } ]          // validation array
-       | { "code": "...", "detail": "..." }          // structured
+POST /feed/unhide
+Content-Type: application/json
+{ "post_id": "p_123" }                  // schema: HidePostRequest
+→ 200 { "ok": true, "post_id": "p_123", "hidden": false }
+```
+Documented idempotent: unhiding a not-hidden post is a no-op success.
+
+**Interesting / Uninteresting (POSITIVE "more like this" — NOT this ticket's
+"Not interested")**
+```
+POST /feed/interesting     body { "post_id": "p_123" }   // toggle boost ON
+POST /feed/uninteresting   body { "post_id": "p_123" }   // toggle boost OFF
+→ 200 { "ok": true, "post_id": "p_123", "is_interesting": true|false }  // postInteresting.ts
+GET  /feed/interesting?limit=200   → { "post_ids": [...], "count": N }
+```
+CORRECTED: there is no `{"interested": <bool>}` body and no
+`interested` response field anywhere. These endpoints are a positive ranking
+boost and are NOT invoked by the Hide/Not-interested actions.
+
+Error envelope (FastAPI) — mapped by `ApiErrorMapper` (verified against
+`src/api/client.ts: normalizeErrorDetail` and the `HTTPValidationError`/
+`ValidationError` schemas):
+```
+4xx/5xx { "detail": "..." }                                   // string
+       | { "detail": [ { "loc": [...], "msg": "...", "type": "..." } ] }  // 422 validation array
+       | { "detail": { "code": "...", ... } }                 // structured (e.g. role_required, geo_blocked)
 ```
 `404` (post gone) is treated as success-equivalent for hide (the post is already
-absent → keep it suppressed, clear pending). `401` triggers the single refresh +
-retry handled by `core-network`. The exact endpoint paths and the
-`interested` field name MUST be reconciled against `/openapi.json` and the
-`postHide.ts`/`postInteresting.ts` reference during implementation; if they
-differ, update `PostActionsApi` only — repository/ViewModel are insulated.
+absent → keep it suppressed, clear pending). `401` triggers the single
+`POST /ui/session/refresh` + retry handled by `core-network` (verified). A raw
+network/offline failure surfaces as `ApiError(status = 0)` in the web client and
+maps to the rollback + retry path here.
 
 ## 6. Data & State Management
 
@@ -314,10 +377,12 @@ interface PostSuppressionDao {
 
 ## 8. Security & Privacy
 
-- No new auth surface. Requests reuse the cookie-based session and the
-  `X-CSRF-Token` header from the persistent cookie jar; the state-changing POSTs
-  require CSRF, so the header MUST be present (enforced by the shared
-  interceptor).
+- No new auth surface. Requests reuse the existing session: the
+  `Authorization: Bearer` token from the session store, session cookies
+  (`credentials: include`), and the `X-CSRF-Token` header echoed from the
+  `ui_csrf` cookie (CORRECTED: the web client sends Bearer + CSRF + cookies, not
+  cookies alone). The state-changing POSTs require CSRF, so the header MUST be
+  present (enforced by the shared interceptor).
 - `postId`s are not PII; the local `post_suppression` table stores only ids,
   kind, and timestamps in the app-private Room database. No export, no logging of
   post content.
@@ -359,8 +424,9 @@ interface PostSuppressionDao {
 Unit (core-testing, JUnit + Turbine + MockWebServer):
 - `PostActionsRepositoryImpl`: success marks `pending=false`; failure rolls back
   (row deleted, `suppressed` re-emits without id); `404` keeps suppression;
-  `notInterested` sends `{"interested": false}` (assert request body via
-  MockWebServer `RecordedRequest`).
+  both `hide` and `notInterested` send `POST /feed/hide` with body
+  `{"post_id": "<id>"}` (CORRECTED — not `{"interested": false}`; assert path and
+  request body via MockWebServer `RecordedRequest`).
 - 401 path: MockWebServer returns 401 then 200 after refresh → asserts single
   retry and final success (refresh handled by interceptor under test harness).
 - `FeedViewModel.onHide/onNotInterested`: emits removal, then `FeedEffect`
@@ -399,33 +465,40 @@ Persistence:
 
 ## 13. Risks & Open Questions
 
-- **Endpoint shape unverified locally.** The exact paths (`/hide`, `/unhide`,
-  `/interesting`) and field names are inferred from `postHide.ts` /
-  `postInteresting.ts` and project conventions; they MUST be confirmed against
-  `/openapi.json`. Risk isolated to `PostActionsApi`.
-- **Does the backend filter hidden posts from `/ui/feed`?** If not, client-side
-  suppression is the only guarantee; the `suppressed` set already covers this, so
-  the feature works either way, but the Room table then grows and relies on the
-  purge policy. Open question for backend.
-- **Not-interested toggle semantics:** is `interested:true` a true inverse, or
-  does the backend treat it as a separate positive signal? Assumed inverse for
-  undo; confirm.
+- **Endpoint shape — RESOLVED during this review.** Verified against the OpenAPI
+  index and frontend modules: paths are `POST /feed/hide`, `POST /feed/unhide`,
+  `POST /feed/interesting`, `POST /feed/uninteresting` (all `req=HidePostRequest`,
+  body `{"post_id"}`); the original `/ui/posts/{postId}/*` paths were WRONG and
+  have been corrected throughout. Risk now isolated to the empty OpenAPI 200
+  schema (response field names taken from the frontend modules, not OpenAPI).
+- **No "not interested" endpoint exists — KEY FINDING.** The backend only offers
+  hide/unhide (suppression) and interesting/uninteresting (a *positive* boost).
+  There is no negative-preference / "show fewer like this" endpoint. This ticket
+  implements Not-interested via `/feed/hide`. OPEN QUESTION for backend: is a
+  dedicated negative-preference endpoint planned? If yes, swap only the
+  `notInterested` call in `PostActionsRepositoryImpl`.
+- **Does the backend filter hidden posts from the feed?** `/feed/unhide` deletes a
+  per-viewer `HIDE#{user}/POST#{post_id}` record, implying the feed query honors
+  hides server-side, but this is not provable from the documents alone. Client-side
+  suppression remains the guarantee; the `suppressed` set covers it either way.
+  Open question for backend confirmation.
 - **Reconciliation re-send (§7)** could double-apply on a backend that is not
-  idempotent for hide. Mitigation: hide is treated as idempotent (404 = ok);
-  confirm backend behavior.
+  idempotent for hide. `/feed/unhide` is documented idempotent; `/feed/hide`
+  idempotency is assumed (404 = ok) but not explicitly documented — confirm.
 - Pagination edge: re-inserting at a captured index after a far scroll may place
   the item off-screen; acceptable (item returns to its logical position).
 
 ## 14. Acceptance Criteria
 
 AC-1. Selecting **Hide this post** removes the post from the feed immediately,
-calls `POST /ui/posts/{postId}/hide`, and the post does not reappear on pull-to-
-refresh or further pagination in the session. (Backlog: "Hidden post leaves
-feed.")
+calls `POST /feed/hide` with body `{"post_id": "<id>"}`, and the post does not
+reappear on pull-to-refresh or further pagination in the session. (Backlog:
+"Hidden post leaves feed.")
 
 AC-2. Selecting **Not interested** removes the post immediately and calls
-`POST /ui/posts/{postId}/interesting` with body `{"interested": false}`; the
-preference is persisted and the post stays out of the feed. (Backlog:
+`POST /feed/hide` with body `{"post_id": "<id>"}` (CORRECTED — there is no
+`interested` field and no negative-preference endpoint; the suppression IS the
+hide); the preference is persisted and the post stays out of the feed. (Backlog:
 "preference honored.")
 
 AC-3. Suppression survives process death within the session (Room-backed
@@ -459,3 +532,228 @@ tests stay green.
 - Endpoint paths/fields reconciled against `/openapi.json` (or the open
   questions in §13 logged as follow-ups with the confirmed contract).
 - `ktlint`/`detekt` clean; PR reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Hide endpoint is `POST /feed/hide` with body `{post_id}`.** VERIFIED
+   (Corrected from `/ui/posts/{postId}/hide`). Source: OpenAPI `POST /feed/hide`
+   (op=`hide_post_feed_hide_post`, req=`HidePostRequest`); schema
+   `components.schemas.HidePostRequest` = `{ post_id: string }` (required);
+   frontend `src/api/endpoints/postHide.ts: hidePost` posts `/feed/hide` with
+   `{ post_id }`.
+2. **Unhide endpoint is `POST /feed/unhide` with body `{post_id}`; idempotent.**
+   VERIFIED (Corrected from `/ui/posts/{postId}/unhide`). Source: OpenAPI
+   `POST /feed/unhide` (op=`unhide_post_feed_unhide_post`, req=`HidePostRequest`),
+   description states it deletes the per-viewer `HIDE#{user}/POST#{post_id}`
+   record and is a no-op success when not hidden; frontend
+   `src/api/endpoints/postHide.ts: unhidePost`.
+3. **Hide response shape `{ ok, post_id, hidden }`.** VERIFIED (frontend) /
+   Unverified (OpenAPI). Source: frontend
+   `src/api/endpoints/postHide.ts: HideMutationResponse`. The OpenAPI 200 schema
+   for `/feed/hide` is empty (`{}`), so the frontend module is authoritative; a
+   second caller `src/api/endpoints/newsfeed.ts: hidePost` types it as
+   `{ ok: boolean }` only, hence `hidden` is treated as optional.
+4. **"Not interested" maps to `POST /feed/interesting` with
+   `{"interested": false}`.** CORRECTED — this claim was WRONG on two counts.
+   (a) There is no `interested` field: the body schema is `HidePostRequest`
+   (`{post_id}`) — OpenAPI `POST /feed/interesting` req=`HidePostRequest`;
+   frontend `src/api/endpoints/postInteresting.ts: markPostInteresting` posts
+   `{ post_id }`. (b) `/feed/interesting` is a POSITIVE "more like this" boost
+   (toggle ON), the semantic opposite of "not interested" — OpenAPI
+   `GET /feed/interesting` description ("Powers the 'more like this' feed-ranking
+   boost"), `POST /feed/uninteresting` description ("Remove the viewer's
+   'interesting' signal (toggle OFF)"). Resolution: Not-interested is implemented
+   as `POST /feed/hide` (the only suppression signal).
+5. **Interesting response field is `interested`.** CORRECTED to `is_interesting`.
+   Source: frontend `src/api/endpoints/postInteresting.ts: PostInterestingResult`
+   = `{ ok, post_id, is_interesting }`.
+6. **Undo for not-interested calls `interesting` with `{"interested": true}`.**
+   CORRECTED — undo for both Hide and Not-interested is `POST /feed/unhide`
+   (since Not-interested is a hide). Source: see citations 2 and 4.
+7. **Auth: cookie-based session + `X-CSRF-Token` only.** CORRECTED — the web
+   client also sends `Authorization: Bearer <accessToken>`. Source:
+   `src/api/client.ts` lines ~157-171 (sets `Authorization` from `authStore`,
+   `X-CSRF-Token` from the `ui_csrf` cookie via `getCookie`, and uses
+   `credentials: "include"`). OpenAPI additionally lists optional `X-SESSION-ID`
+   (header), `X-IMPERSONATION-TOKEN` (header) and `user_sub` (query) params on
+   each `/feed/*` op.
+8. **401 → single `POST /ui/session/refresh` → retry once.** VERIFIED. Source:
+   `src/api/client.ts: refreshSession` (POSTs `/ui/session/refresh`) and the 401
+   branch that refreshes once (guarded by `refreshPromise`) then replays the
+   request, logging out on a second 401.
+9. **FastAPI error envelope variants (`detail` string | validation array |
+   structured `{code,...}`).** VERIFIED. Source: `src/api/client.ts:
+   normalizeErrorDetail` (handles string, array of `{msg}`, and object with
+   `code` via `mapAuthorizationError`); OpenAPI schemas
+   `components.schemas.HTTPValidationError` → `{ detail: ValidationError[] }` and
+   `components.schemas.ValidationError` = `{ loc, msg, type }` (all required).
+10. **Offline/network failure surfaces distinctly.** VERIFIED. Source:
+    `src/api/client.ts` `catch` around `fetch` throws `new ApiError(0, "Network
+    error", err)` — the basis for the rollback + "tap to retry" path.
+11. **404 (post gone) treated as success-equivalent for hide.** UNVERIFIED-
+    ASSUMPTION. Not stated in the sources; `/feed/hide` lists only 200 and 422
+    responses in OpenAPI. Reasonable given unhide is documented idempotent, but
+    `/feed/hide` idempotency/404 behavior is not documented — flagged in §13.
+12. **Backend filters hidden posts out of the feed response.** UNVERIFIED-
+    ASSUMPTION. Implied by the `HIDE#{user}/POST#{post_id}` record described in
+    the `/feed/unhide` OpenAPI description, but the feed-read query is not in the
+    provided sources. Client-side suppression is the guarantee regardless.
+13. **`GET /feed/hidden` and `GET /feed/interesting` list surfaces exist.**
+    VERIFIED. Source: OpenAPI `GET /feed/hidden` region and
+    `GET /feed/interesting` (op=`list_interesting_posts_feed_interesting_get`,
+    returns `{ post_ids, count }` per `src/api/endpoints/postInteresting.ts:
+    PostInterestingList`). Not used by this ticket but available for
+    reconciliation/sync.
+14. **Frontend modules `postHide.ts` / `postInteresting.ts` named in the backlog
+    exist.** VERIFIED. Source: `src/api/endpoints/postHide.ts`,
+    `src/api/endpoints/postInteresting.ts`.
+15. **Android framework choices (Paging 3 `PagingData.filter`, Room `@Upsert`,
+    Compose `DropdownMenu`/`SnackbarHost`, `combine` over `cachedIn`).**
+    UNVERIFIED here / standard framework usage. (framework ref) Jetpack Paging,
+    Room, and Compose Material3 — not contract-bearing; correctness is a test
+    concern (see §17), not a backend-contract concern.
+
+### Corrections made
+
+- Endpoint paths corrected from `/ui/posts/{postId}/{hide,unhide,interesting}`
+  (path-param style) to `/feed/{hide,unhide,interesting,uninteresting}` with the
+  id in a JSON `{post_id}` body (FR-2, FR-6, §4.2, §4.3, §5, §14 AC-1/AC-2, §11).
+- Removed the non-existent `{"interested": <bool>}` request field and the
+  `interested` response field everywhere; corrected the interesting response
+  field to `is_interesting` (§4.2, §5).
+- Reclassified `/feed/interesting` + `/feed/uninteresting` as a POSITIVE
+  "more like this" boost, not "not interested"; re-implemented Not-interested as
+  `POST /feed/hide` and documented the missing-endpoint finding (FR-3, §4.3, §5,
+  §13, §14 AC-2).
+- Corrected auth description to Bearer + CSRF + cookies (was cookie-only) and
+  noted optional `X-SESSION-ID` / `user_sub` / `X-IMPERSONATION-TOKEN` (§4.2, §5,
+  §8).
+- Corrected response shapes to the frontend-authoritative DTOs and noted the
+  empty OpenAPI 200 schemas (§4.2, §5).
+- Tightened the 422 error envelope to the real `{ detail: [{loc,msg,type}] }`
+  shape (§5).
+
+### Open assumptions
+
+- **`/feed/hide` 404 / idempotency** — assumed 404 = success-equivalent and hide
+  is safe to re-send; not documented (OpenAPI lists only 200/422). Why: source
+  documents do not specify hide idempotency or a 404 case.
+- **Server-side feed filtering of hidden posts** — assumed the feed read excludes
+  hidden ids; the feed-read query is not in the provided sources. Why: only the
+  write-side hide/unhide ops and their DynamoDB key pattern are documented.
+- **A dedicated negative-preference ("not interested") endpoint** — assumed none
+  exists and hide is the correct substitute; confirmed absent in the index but a
+  future endpoint may be planned. Why: cannot prove a negative from a snapshot.
+- **Android framework behaviors** — `PagingData.filter` + `combine` over
+  `cachedIn` preserving scroll position is assumed per framework docs, not
+  verified against this codebase (no Android sources provided). (framework ref)
+
+## 17. Test Plan
+
+Test target legend: JVM = JVM unit/Robolectric (local, no device); EMU =
+headless emulator AVD `test35` (x86_64, API 35); DEV = physical Samsung Galaxy
+A15 5G (SM-A156U, API 34, arm64-v8a) via adb. None of this ticket's behavior is
+hardware-dependent (no camera/biometrics/WebRTC/FCM/Telecom), so the emulator is
+the default for instrumented/UI cases; one ABI/API-parity smoke case is pinned to
+the physical device.
+
+- **TC-AND-175-01** — Type: contract/MockWebServer (JVM). Target:
+  `PostActionsRepositoryImpl.hide`. Preconditions: MockWebServer enqueues
+  `200 {"ok":true,"post_id":"p1","hidden":true}`. Steps: call `hide("p1")`;
+  capture `RecordedRequest`. Expected: request is `POST /feed/hide`, body equals
+  `{"post_id":"p1"}`, `Content-Type: application/json`; `suppressed` emits a set
+  containing `p1`; row `pending` flips `true`→`false`; returns
+  `ApiResult.Success`. Traces: AC-1.
+- **TC-AND-175-02** — Type: contract/MockWebServer (JVM). Target:
+  `PostActionsRepositoryImpl.notInterested`. Preconditions: MockWebServer 200 as
+  above. Steps: call `notInterested("p2")`; capture `RecordedRequest`. Expected:
+  request is `POST /feed/hide` (NOT `/feed/interesting`), body `{"post_id":"p2"}`;
+  Room row stored with `kind = NOT_INTERESTED`; `suppressed` contains `p2`.
+  Traces: AC-2.
+- **TC-AND-175-03** — Type: unit (JVM). Target: feed `items` flow filtering.
+  Preconditions: a `PagingData` of posts `[p1,p2,p3]`; `suppressed = {p2}`.
+  Steps: collect the combined flow via `AsyncPagingDataDiffer`. Expected:
+  rendered list is `[p1,p3]`; `p2` absent; collection completes without a network
+  call. Traces: AC-1, AC-2.
+- **TC-AND-175-04** — Type: contract/MockWebServer (JVM). Target:
+  rollback on failure. Preconditions: MockWebServer enqueues `500` (then a
+  network-drop variant). Steps: call `hide("p1")`. Expected: `suppressed`
+  transiently contains then drops `p1` (row deleted), returns `ApiResult.Error`
+  with the mapped `detail` message; no retry is auto-issued (non-idempotent
+  POST). Traces: AC-5.
+- **TC-AND-175-05** — Type: contract/MockWebServer (JVM). Target: 401 refresh +
+  retry. Preconditions: enqueue `401`, then `200` for `/ui/session/refresh`, then
+  `200` for the replayed `/feed/hide`. Steps: call `hide("p1")` while
+  authenticated. Expected: exactly one `POST /ui/session/refresh` then exactly one
+  retry of `/feed/hide`; final `ApiResult.Success`; on a second 401 the session
+  is logged out. Traces: AC-6.
+- **TC-AND-175-06** — Type: contract/MockWebServer (JVM). Target: 404 handling.
+  Preconditions: enqueue `404 {"detail":"not found"}`. Steps: call `hide("p1")`.
+  Expected: suppression is KEPT (row remains, `pending` cleared); treated as
+  success-equivalent; `p1` stays filtered. Traces: AC-6.
+- **TC-AND-175-07** — Type: contract/MockWebServer (JVM). Target: 422 validation
+  error mapping. Preconditions: enqueue
+  `422 {"detail":[{"loc":["body","post_id"],"msg":"field required","type":"missing"}]}`.
+  Steps: call `hide("")`. Expected: `ApiErrorMapper` produces the single string
+  `"field required"`; `ApiResult.Error`; rollback performed. Traces: AC-5.
+- **TC-AND-175-08** — Type: unit (JVM). Target: undo path
+  (`unhide` / `interested`). Preconditions: row `{p1, HIDDEN}` present;
+  MockWebServer 200 for `/feed/unhide`. Steps: call `unhide("p1")`. Expected:
+  request is `POST /feed/unhide` body `{"post_id":"p1"}`; suppression row deleted
+  (optimistic restore); on a forced failure the row is re-inserted. Traces: AC-4.
+- **TC-AND-175-09** — Type: integration / Room (JVM Robolectric). Target:
+  `PostSuppressionDao` durability + purge. Preconditions: in-memory→reopened Room
+  DB. Steps: upsert two rows (one old, one recent), close/reopen DAO, run
+  `purgeOlderThan(cutoff)`. Expected: rows survive reopen (process-death proxy);
+  `purgeOlderThan` removes only the stale row; `observeAll` re-emits accordingly.
+  Traces: AC-3.
+- **TC-AND-175-10** — Type: Compose-UI (EMU). Target: hide-from-overflow +
+  Snackbar. Preconditions: feed rendered with item test tag `post_p1`;
+  MockWebServer 200. Steps: open the overflow menu, tap "Hide this post".
+  Expected: `post_p1` is removed; a Snackbar "Post hidden" with an "Undo" action
+  is shown. Traces: AC-1, AC-4.
+- **TC-AND-175-11** — Type: Compose-UI (EMU). Target: undo restores at prior
+  index. Preconditions: continues from TC-10. Steps: tap "Undo" before the
+  Snackbar times out. Expected: `post_p1` reappears at its original position; a
+  `POST /feed/unhide` is issued. Traces: AC-4.
+- **TC-AND-175-12** — Type: Compose-UI (EMU). Target: failure rollback + retry.
+  Preconditions: MockWebServer returns `500` for `/feed/hide`. Steps: hide
+  `post_p1`; observe rollback; tap the "…retry" Snackbar action (then enqueue
+  200). Expected: item re-appears after the 500, a retry Snackbar shows, and the
+  retry tap re-issues `/feed/hide` and removes the item on success. Traces: AC-5.
+- **TC-AND-175-13** — Type: instrumented/e2e (EMU). Target: backlog acceptance —
+  hide persists across refresh/pagination. Preconditions: feed loaded; hide
+  `post_p1` succeeds. Steps: pull-to-refresh and page forward (feed responses
+  still include `p1` to test client-side suppression). Expected: `post_p1` never
+  re-renders while its suppression row exists. Traces: AC-1, AC-2, AC-3.
+- **TC-AND-175-14** — Type: instrumented (Compose-UI) accessibility (EMU).
+  Target: a11y of menu items + Snackbar + announcement. Steps: enable TalkBack
+  semantics assertions; open overflow. Expected: "Hide this post" and
+  "Not interested" expose visible text / `contentDescription`; touch targets
+  ≥ 48dp; on removal a polite live-region announcement ("Post hidden") is emitted;
+  the "Undo"/"Retry" action is focusable. Traces: AC-1, AC-4.
+- **TC-AND-175-15** — Type: instrumented/e2e (DEV — physical Galaxy A15, API 34
+  arm64-v8a). Target: ABI/API-parity smoke of the full hide→undo→refresh flow.
+  Why physical: validate arm64-v8a + API-34 behavior versus the x86_64/API-35
+  emulator (Room/Paging/Compose parity); no emulator-only quirk masks a real
+  failure. Steps: run TC-13's flow on-device against MockWebServer (or the dev
+  host). Expected: identical outcome to EMU. Traces: AC-1, AC-3, AC-7.
+- **TC-AND-175-16** — Type: integration (JVM, regression). Target: no
+  like/share/pagination regression. Preconditions: existing AND-173/AND-176/
+  AND-098 suites present. Steps: run the existing feed test suites with this
+  ticket's changes applied. Expected: all pass; suppression `combine` does not
+  break paging or scroll restoration. Traces: AC-7.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (Hide leaves feed, calls `/feed/hide`) | TC-01, TC-03, TC-10, TC-13, TC-14, TC-15 |
+| AC-2 (Not interested = `/feed/hide`, persisted) | TC-02, TC-03, TC-13 |
+| AC-3 (survives process death, Room-backed) | TC-09, TC-13, TC-15 |
+| AC-4 (Snackbar + Undo restores + inverse call) | TC-08, TC-10, TC-11, TC-14 |
+| AC-5 (failure rollback + retry) | TC-04, TC-07, TC-12 |
+| AC-6 (401 single refresh+retry; 404 = success) | TC-05, TC-06 |
+| AC-7 (no regression) | TC-15, TC-16 |
