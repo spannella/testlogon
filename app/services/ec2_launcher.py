@@ -294,6 +294,46 @@ def launch_instance(
         except Exception:
             logger.exception("sg_associate_failed instance_id=%s sg_id=%s", instance_id, resolved_sg_id)
 
+    # Auto-register in host inventory (INFRA-001 integration / GAP-0223).
+    # Runs in both mock and real modes — the host inventory record lives in DDB
+    # regardless of whether the underlying EC2 instance is mocked or real.
+    # A missing public IP (real AWS may not assign one immediately) or any
+    # registration failure must not roll back the instance launch.
+    if result.get("public_ip"):
+        try:
+            from app.services import host_inventory
+            ami_info = AMIS.get(ami_id, {})
+            protocol = "rdp" if ami_info.get("os_type") == "windows" else "ssh"
+            port = 3389 if protocol == "rdp" else 22
+            host = host_inventory.create_host(
+                user_sub,
+                label=f"{label} (EC2)",
+                hostname=result["public_ip"],
+                port=port,
+                protocol=protocol,
+                username=ami_info.get("username", ""),
+                group="EC2 Instances",
+                os_type=ami_info.get("os_type", "unknown"),
+                source="ec2_auto",
+            )
+            host_id = host["host_id"]
+            # Back-write host_id to the DDB instance record.
+            T.ec2_instances.update_item(
+                Key={"user_sub": user_sub, "sk": f"INSTANCE#{instance_id}"},
+                UpdateExpression="SET host_id = :hid",
+                ExpressionAttributeValues={":hid": host_id},
+            )
+            item["host_id"] = host_id
+            logger.info(
+                "ec2_host_registered user_sub=%s instance_id=%s host_id=%s",
+                user_sub, instance_id, host_id,
+            )
+        except Exception:
+            logger.exception(
+                "ec2_host_register_failed user_sub=%s instance_id=%s",
+                user_sub, instance_id,
+            )
+
     logger.info(
         "ec2_launched user_sub=%s instance_id=%s type=%s ami=%s",
         user_sub, instance_id, instance_type, ami_id,
@@ -430,6 +470,36 @@ def terminate_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
             disassociate_instance(user_sub, sg_id, instance_id)
         except Exception:
             logger.exception("sg_disassociate_failed instance_id=%s sg_id=%s", instance_id, sg_id)
+
+    # Delete the auto-registered host inventory entry (INFRA-001 / GAP-0224).
+    # Runs in both mock and real modes — the host record exists regardless of
+    # whether the EC2 instance was mocked. Cleanup failure must not block
+    # termination, and delete_host is safe with a stale/missing host_id.
+    host_id = item.get("host_id", "")
+    if host_id:
+        # Disassociate any SSH key from this host first (INFRA-002).
+        ssh_key_id = item.get("ssh_key_id", "")
+        if ssh_key_id:
+            try:
+                from app.services import ssh_key_manager
+                ssh_key_manager.disassociate_key_from_host(user_sub, ssh_key_id, host_id)
+            except Exception:
+                logger.exception(
+                    "ec2_key_disassociate_failed user_sub=%s instance_id=%s key_id=%s",
+                    user_sub, instance_id, ssh_key_id,
+                )
+        try:
+            from app.services import host_inventory
+            host_inventory.delete_host(user_sub, host_id)
+            logger.info(
+                "ec2_host_deregistered user_sub=%s instance_id=%s host_id=%s",
+                user_sub, instance_id, host_id,
+            )
+        except Exception:
+            logger.exception(
+                "ec2_host_deregister_failed user_sub=%s instance_id=%s host_id=%s",
+                user_sub, instance_id, host_id,
+            )
 
     item["status"] = "terminated"
     item["terminated_at"] = now
