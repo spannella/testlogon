@@ -35,6 +35,7 @@ import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendC
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
+import { PaidCallRateBadge } from "./PaidCallRateBadge";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
 import { ParticipantsPanel } from "./ParticipantsPanel";
@@ -1113,6 +1114,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         )}
         {callsEnabled && (
           <>
+            {callPartnerId && <PaidCallRateBadge partnerUserId={callPartnerId} />}
             <Button
               variant="ghost"
               size="icon"

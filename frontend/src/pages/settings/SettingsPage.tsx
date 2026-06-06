@@ -1,6 +1,9 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
+import { Phone } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { LanguageSwitcher } from "@/components/shared/LanguageSwitcher";
 import { Account } from "./Account";
@@ -64,6 +67,27 @@ export default function SettingsPage() {
           >
             Open Theme Customization
           </a>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Phone className="h-4 w-4" />
+            Call Rate
+          </CardTitle>
+        </CardHeader>
+        <Separator />
+        <CardContent className="pt-4">
+          <p className="mb-3 text-sm text-muted-foreground">
+            Configure your per-minute rate to enable paid calls from other
+            users.
+          </p>
+          <Button variant="outline" asChild>
+            <Link to="/settings/call-rate" data-testid="call-rate-settings-link">
+              Manage Call Rate
+            </Link>
+          </Button>
         </CardContent>
       </Card>
 

@@ -130,6 +130,7 @@ const BlockedUsersPage = lazy(() => import("@/pages/settings/BlockedUsersPage"))
 const WebhooksPage = lazy(() => import("@/pages/settings/WebhooksPage"));
 const CustomEmojisPage = lazy(() => import("@/pages/settings/CustomEmojisPage"));
 const GeoRulesPage = lazy(() => import("@/pages/settings/GeoRulesPage"));
+const CallRateSettings = lazy(() => import("@/pages/settings/CallRateSettings"));
 const ReferralDashboard = lazy(() => import("@/pages/referrals/ReferralDashboard"));
 const PromoCodesPage = lazy(() => import("@/pages/promo/PromoCodesPage"));
 const SchedulerPage = lazy(() => import("@/pages/scheduler/SchedulerPage"));
@@ -388,6 +389,7 @@ export default function App() {
           <Route path="settings/webhooks" element={<WebhooksPage />} />
           <Route path="settings/emojis" element={<CustomEmojisPage />} />
           <Route path="settings/geo" element={<GeoRulesPage />} />
+          <Route path="settings/call-rate" element={<CallRateSettings />} />
           <Route path="webhooks" element={<WebhookDashboard />} />
           <Route path="webhooks/:endpointId" element={<WebhookEndpointDetail />} />
           <Route path="purchases" element={<PurchasesPage />} />
