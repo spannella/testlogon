@@ -635,6 +635,70 @@ def save_ledger_entry(creator_id: str, entry: Dict[str, Any]) -> None:
     ddb_put_item(build_ledger_item(creator_id, entry))
 
 
+def _mirror_creator_credit_to_billing(
+    creator_id: str,
+    amount_cents: int,
+    *,
+    currency: str,
+    created_at: int,
+    subscription_id: str,
+    subscriber_id: str,
+    invoice_id: Optional[str] = None,
+) -> None:
+    """Mirror a subscription creator NET credit into ``T.billing`` (GAP-0307).
+
+    Subscription creator revenue is written to ``T.subscriptions`` under
+    ``PK=CREATOR#{creator_id}`` with field ``entry_type``, but the creator
+    earnings dashboard (``creator_earnings._query_credit_entries``) and the
+    payout balance (``creator_payouts.get_available_balance``) query
+    ``T.billing`` under ``PK=USER#{creator_id}`` with ``Attr("type").eq("credit")``.
+    Without this mirror, subscription revenue is invisible to both.
+
+    The mirrored item matches the EXACT shape those queries expect:
+    ``pk=USER#{creator_id}``, ``sk=LEDGER#{ts}#{entry_id}``, ``type="credit"``,
+    ``amount_cents`` (creator NET, after platform fee), ``currency``, ``ts``,
+    ``reason`` containing ``"subscription"`` (so ``classify_entry`` buckets it
+    under ``subscriptions``), and a ``created_at`` field.
+
+    Best-effort: a billing-table write failure must NOT roll back the
+    subscription charge, but it is logged. Same DDB path in dev and prod
+    (no ``dev_mode`` branch) — ``T.billing`` is the same table in both.
+    """
+    try:
+        if amount_cents <= 0:
+            return
+        entry_id = new_id("biled")
+        item = {
+            "pk": f"USER#{creator_id}",
+            "sk": f"LEDGER#{created_at}#{entry_id}",
+            "type": "credit",
+            "amount_cents": int(amount_cents),
+            "currency": currency,
+            "reason": "subscription_charge",
+            "ts": int(created_at),
+            "created_at": int(created_at),
+            "entry_id": entry_id,
+            "subscription_id": subscription_id,
+            "subscriber_id": subscriber_id,
+            "meta": {"content_type": "subscription"},
+        }
+        if invoice_id:
+            item["invoice_id"] = invoice_id
+        T.billing.put_item(Item=item)
+        logger.info(
+            "creator_billing_credit_written creator_id=%s amount_cents=%s subscription_id=%s",
+            creator_id,
+            amount_cents,
+            subscription_id,
+        )
+    except Exception:  # pragma: no cover - best-effort mirror, never block charge
+        logger.exception(
+            "creator_billing_credit_mirror_failed creator_id=%s subscription_id=%s",
+            creator_id,
+            subscription_id,
+        )
+
+
 def _calendar_meta(calendar_id: str) -> Optional[Dict[str, Any]]:
     return T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": "meta"}).get("Item")
 
@@ -995,6 +1059,15 @@ async def subscribe(
         }
         save_ledger_entry(plan["creator_id"], charge_entry)
         save_ledger_entry(plan["creator_id"], fee_entry)
+        _mirror_creator_credit_to_billing(
+            plan["creator_id"],
+            int(invoice["amount_cents"]) - fee_cents,
+            currency=invoice["currency"],
+            created_at=ts,
+            subscription_id=subscription_id,
+            subscriber_id=subscriber_id,
+            invoice_id=invoice_id,
+        )
 
     put_notification(
         recipient_user_id=plan["creator_id"],
@@ -1388,6 +1461,15 @@ async def convert_trial(
     }
     save_ledger_entry(sub["creator_id"], charge_entry)
     save_ledger_entry(sub["creator_id"], fee_entry)
+    _mirror_creator_credit_to_billing(
+        sub["creator_id"],
+        int(invoice["amount_cents"]) - fee_cents,
+        currency=invoice["currency"],
+        created_at=ts,
+        subscription_id=subscription_id,
+        subscriber_id=sub["subscriber_id"],
+        invoice_id=invoice_id,
+    )
 
     audit_event(
         "subscription_trial_converted",
