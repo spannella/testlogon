@@ -192,6 +192,25 @@ def _run_gsi_pk(agent_run_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _is_safe_path(path: str) -> bool:
+    """Return True only for safe relative repository paths (GAP-0096).
+
+    Rejects: absolute paths (``/...``), tilde-expansion (``~...``), path
+    traversal components (``..`` as a full segment), Windows backslash paths,
+    and drive-letter / colon paths (``C:``). Mirrors
+    ``agent_docs.validate_path`` — keep in sync.
+    """
+    if not path or not isinstance(path, str):
+        return False
+    if path.startswith("/") or path.startswith("~"):
+        return False
+    if ".." in path.split("/"):
+        return False
+    if "\\" in path or ":" in path:
+        return False
+    return True
+
+
 def validate_architect_config(config: Dict[str, Any]) -> List[str]:
     """Return list of validation errors (empty = valid)."""
     errors: List[str] = []
@@ -208,15 +227,15 @@ def validate_architect_config(config: Dict[str, Any]) -> List[str]:
     if reference_docs is not None and len(reference_docs) == 0:
         errors.append("At least one reference document path is required")
     for path in reference_docs or []:
-        if ".." in str(path):
-            errors.append(f"Reference doc path must not traverse outside repo: {path}")
+        if not _is_safe_path(str(path)):
+            errors.append(f"Reference doc path must be a safe relative path: {path}")
 
     scan_paths = config.get("scan_paths")
     if scan_paths is not None and len(scan_paths) == 0:
         errors.append("At least one scan path is required")
     for path in scan_paths or []:
-        if ".." in str(path):
-            errors.append(f"Scan path must not traverse outside repo: {path}")
+        if not _is_safe_path(str(path)):
+            errors.append(f"Scan path must be a safe relative path: {path}")
 
     template = config.get("ticket_template")
     if template:
@@ -1168,8 +1187,12 @@ def build_architect_workflow(
     # git-safe chars before either is f-stringed into the clone_repo shell command.
     repo_url = validate_repo_url(cfg.get("repo_url", ""))
     branch = _sanitize_branch(cfg.get("repo_branch", "main"))
-    reference_docs = cfg.get("reference_docs", [])
-    scan_paths = cfg.get("scan_paths", [])
+    # GAP-0096: defence-in-depth — drop any unsafe (absolute / traversal /
+    # backslash / drive-letter) paths before they are spliced into the
+    # read_reference_docs / scan_codebase shell commands, even if a stale
+    # config bypassed validate_architect_config.
+    reference_docs = [p for p in cfg.get("reference_docs", []) if _is_safe_path(str(p))]
+    scan_paths = [p for p in cfg.get("scan_paths", []) if _is_safe_path(str(p))]
     max_time = int(cfg.get("max_analysis_time_seconds", 900))
     coding_tool = cfg.get("coding_tool", "claude_code")
     model = cfg.get("coding_tool_model")
@@ -1183,11 +1206,17 @@ def build_architect_workflow(
         tech_constraints=cfg.get("tech_stack_constraints"),
         naming_conventions=cfg.get("naming_conventions"),
     )
+    # GAP-0095: the analysis prompt embeds the user-controlled ticket subject.
+    # shlex.quote it into a single shell token so embedded ``"``, ``$()``,
+    # backticks, newlines, etc. cannot break out and execute when the command
+    # string is run with shell=True. The full prompt is quoted (the prior
+    # 160-char truncation + "..." was a display artefact of the unsafe path).
+    prompt_arg = shlex.quote(analysis_prompt)
     if coding_tool == "codex":
-        analyze_cmd = f'codex -q "{analysis_prompt[:160]}..."'
+        analyze_cmd = f"codex -q {prompt_arg}"
     else:
-        model_flag = f" --model {model}" if model else ""
-        analyze_cmd = f'claude --dangerously-skip-permissions{model_flag} -p "{analysis_prompt[:160]}..."'
+        model_flag = f" --model {shlex.quote(model)}" if model else ""
+        analyze_cmd = f"claude --dangerously-skip-permissions{model_flag} -p {prompt_arg}"
 
     half = max_time // 2
     steps: List[Dict[str, Any]] = [

@@ -1,6 +1,6 @@
 # GAP-0097: backlog scan misses sparse tickets
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-012 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-012 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AGENT-012.md`); see also `docs/tickets/writeups/AGENT-012.md`
 
 ## Location

@@ -1,6 +1,6 @@
 # GAP-0095: analysis prompt command injection latent
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-011 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-011 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/AGENT-011.md`); see also `docs/tickets/writeups/AGENT-011.md`
 
 ## Location
