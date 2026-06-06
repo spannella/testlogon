@@ -584,6 +584,17 @@ class KycCaseStore:
             if _is_conditional_conflict(exc):
                 raise KycCaseConflictError("kyc_case_update_conflict") from exc
             raise
+        # GAP-0273 (KYC-011): notify the applicant that more info is needed.
+        # Best-effort — never blocks the transition (helper swallows failures).
+        _emit_kyc_event_safe(
+            event="kyc.case.needs_info",
+            user_sub=str(existing.get("user_sub") or ""),
+            case_id=case_id,
+            requested_items=review.get("requested_items"),
+            note=note,
+            requested_by=admin_sub,
+            requested_at=ts,
+        )
         return self.get_case(case_id)
 
     def apply_admin_decision(
@@ -657,6 +668,18 @@ class KycCaseStore:
             if _is_conditional_conflict(exc):
                 raise KycCaseConflictError("kyc_case_update_conflict") from exc
             raise
+        # GAP-0272 (KYC-011): notify the applicant of the final decision.
+        # Best-effort — never blocks the transition (helper swallows failures).
+        _emit_kyc_event_safe(
+            event="kyc.case.approved" if target_status == "approved" else "kyc.case.rejected",
+            user_sub=str(existing.get("user_sub") or ""),
+            case_id=case_id,
+            decision=normalized,
+            reason_codes=reason_codes,
+            note=note,
+            decided_at=ts,
+            admin_sub=admin_sub,
+        )
         return self.get_case(case_id)
 
     def escalate_case(

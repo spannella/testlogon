@@ -383,24 +383,34 @@ def cross_reference_profile(extraction: dict[str, Any], profile: dict[str, Any])
 # --- deterministic mock MRZ ------------------------------------------------
 
 # Deterministic mock MRZ strings whose check digits are all valid.
+#
+# GAP-0271: the expiry field is "361231" (YYMMDD = 2036-12-31), an unambiguous
+# far-future date. The earlier example used "120415" (2012-04-15); although the
+# century roll-forward in ``_mrz_expiry_to_iso`` masked that at runtime (it maps
+# 2012 -> 2112), the raw value read as expired and a naive constant edit or a
+# clock-stubbed test could re-introduce ``status="rejected"``. The expiry and
+# all dependent check digits (expiry check + composite for TD3; expiry check +
+# composite for TD1) were recomputed with ``mrz_check_digit`` -- see
+# tests/test_gap_0271_kyc_id_scanner.py which pins them as valid for the next
+# decade. Do NOT change the expiry field without recomputing those check digits.
 _MOCK_MRZ: dict[str, dict[str, list[str]]] = {
     "passport": {
         "lines": [
             "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<",
-            "L898902C36UTO7408122F1204159ZE184226B<<<<<10",
+            "L898902C36UTO7408122F3612314ZE184226B<<<<<18",
         ],
     },
     "national_id_card": {
         "lines": [
             "I<UTOD231458907<<<<<<<<<<<<<<<",
-            "7408122F1204159UTO<<<<<<<<<<<6",
+            "7408122F3612314UTO<<<<<<<<<<<4",
             "ERIKSSON<<ANNA<MARIA<<<<<<<<<<",
         ],
     },
     "residence_permit": {
         "lines": [
             "I<UTOD231458907<<<<<<<<<<<<<<<",
-            "7408122F1204159UTO<<<<<<<<<<<6",
+            "7408122F3612314UTO<<<<<<<<<<<4",
             "ERIKSSON<<ANNA<MARIA<<<<<<<<<<",
         ],
     },
