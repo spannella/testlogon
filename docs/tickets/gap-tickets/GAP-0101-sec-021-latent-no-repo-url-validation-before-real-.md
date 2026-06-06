@@ -1,6 +1,6 @@
 # GAP-0101: SEC-021 latent: no repo_url validation before real execution
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-015 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-015 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AGENT-015.md`); see also `docs/tickets/writeups/AGENT-015.md`
 
 ## Location

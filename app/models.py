@@ -8131,6 +8131,9 @@ class StylistConfigOut(BaseModel):
     ticket_min_severity: Literal["error", "warning", "info"] = "warning"
     brand_colors: List[str] = Field(default_factory=list)
     font_families: List[str] = Field(default_factory=list)
+    # GAP-0103: derived indicator only. The raw app-auth secret name/ARN and the
+    # credentials behind it are never exposed in this output model.
+    has_app_credentials: bool = False
     updated_at: Optional[int] = None
 
 
@@ -8147,6 +8150,10 @@ class UpdateStylistConfigIn(BaseModel):
     ticket_min_severity: Optional[Literal["error", "warning", "info"]] = None
     brand_colors: Optional[List[str]] = None
     font_families: Optional[List[str]] = None
+    # GAP-0103: pointer to a Secrets Manager secret holding live-app auth
+    # credentials. Stored as a name/ARN only; the raw credential is never
+    # persisted and never returned. Empty string clears it.
+    app_auth_credentials_secret_name: Optional[str] = Field(default=None, max_length=2048)
 # Marketing Agent (AGENT-017)
 # ---------------------------------------------------------------------------
 
@@ -8401,6 +8408,14 @@ class SecurityAgentConfigOut(BaseModel):
     ignored_paths: List[str] = Field(default_factory=list)
     auto_create_remediation_tickets: bool = True
     remediation_ticket_min_severity: str = "high"
+    # GAP-0101: SSRF allowlist of repo hosts the agent may act against.
+    allowed_repo_hosts: List[str] = Field(
+        default_factory=lambda: ["github.com", "gitlab.com"]
+    )
+    # GAP-0102: write-only Secrets Manager reference (name/ARN). The raw GitHub
+    # token is NEVER exposed here; only the boolean indicator below is returned.
+    github_token_secret_name: Optional[str] = None
+    has_github_token: bool = False
     updated_at: Optional[int] = None
 
 

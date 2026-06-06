@@ -916,6 +916,11 @@ class Settings:
     )
     github_api_base_url: str = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
     github_token: str = os.environ.get("GITHUB_TOKEN", "")
+    # Name/ARN of an AWS Secrets Manager secret holding the GitHub token (GAP-0102).
+    # In prod the raw token is resolved from Secrets Manager by name; in dev the
+    # ``github_token`` env var is used as a fallback. The raw token is never stored
+    # in DynamoDB config nor returned in API responses.
+    github_token_secret_name: str = os.environ.get("GITHUB_TOKEN_SECRET_NAME", "")
     github_webhook_secret: str = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
     gitlab_api_base_url: str = os.environ.get("GITLAB_API_BASE_URL", "https://gitlab.com/api/v4").rstrip("/")
     google_oauth_client_id: str = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")

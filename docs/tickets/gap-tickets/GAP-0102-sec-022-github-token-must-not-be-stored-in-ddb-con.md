@@ -1,6 +1,6 @@
 # GAP-0102: SEC-022: GitHub token must not be stored in DDB config
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-015 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-015 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/AGENT-015.md`); see also `docs/tickets/writeups/AGENT-015.md`
 
 ## Location

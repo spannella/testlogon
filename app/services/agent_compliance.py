@@ -20,8 +20,10 @@ its transitions are driven in-memory so tests are deterministic.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from botocore.exceptions import ClientError
 
@@ -30,6 +32,7 @@ from app.core.cursor import decode_cursor, encode_cursor
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.core.validate_url import validate_repo_url
 from app.services import tickets as tickets_svc
 
 logger = logging.getLogger("app.agent_compliance")
@@ -134,8 +137,19 @@ _DEFAULT_SECURITY_CONFIG: Dict[str, Any] = {
     "ignored_paths": ["node_modules/", ".venv/", "tests/", "frontend/e2e/"],
     "auto_create_remediation_tickets": True,
     "remediation_ticket_min_severity": "high",
+    # GAP-0101: SSRF allowlist for repo URLs touched by the agent. Only repos
+    # whose host matches one of these entries (exact or subdomain) may be cloned
+    # / have PRs created against them when real execution is enabled.
+    "allowed_repo_hosts": ["github.com", "gitlab.com"],
+    # GAP-0102: indirection for the GitHub credential. This stores ONLY the name
+    # / ARN of an AWS Secrets Manager secret, never the raw token. The raw token
+    # is resolved at execution time and is never persisted in DDB nor returned in
+    # any API response.
+    "github_token_secret_name": "",
 }
 
+# Fields that are persisted to DynamoDB. ``github_token`` (the raw token) is
+# intentionally NOT a config field and must never be added here (GAP-0102).
 _CONFIG_FIELDS = tuple(_DEFAULT_SECURITY_CONFIG.keys())
 
 
@@ -340,6 +354,19 @@ def validate_security_config(config: Dict[str, Any]) -> List[str]:
     if min_sev is not None and min_sev not in ("critical", "high", "medium", "low"):
         errors.append("remediation_ticket_min_severity must be critical, high, medium, or low")
 
+    hosts = config.get("allowed_repo_hosts")
+    if hosts is not None:
+        if not isinstance(hosts, list) or not all(isinstance(h, str) for h in hosts):
+            errors.append("allowed_repo_hosts must be a list of strings")
+
+    secret_name = config.get("github_token_secret_name")
+    if secret_name is not None and not isinstance(secret_name, str):
+        errors.append("github_token_secret_name must be a string")
+
+    # GAP-0102: the raw token must never be accepted through the config API.
+    if "github_token" in config:
+        errors.append("github_token must not be stored in config; use github_token_secret_name")
+
     return errors
 
 
@@ -351,6 +378,102 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     hour = _coerce_int(out.get("periodic_audit_hour_utc"))
     if hour is not None:
         out["periodic_audit_hour_utc"] = hour
+    # GAP-0102: the raw token must never round-trip through the persisted config.
+    # Strip it defensively in case a caller ever smuggles it into the dict.
+    out.pop("github_token", None)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# GAP-0101: repo_url host allowlist validation (SSRF guard)
+# ---------------------------------------------------------------------------
+
+
+def validate_repo_host(repo_url: str, allowed_hosts: List[str]) -> str:
+    """Validate ``repo_url`` for shell safety AND host allowlisting (GAP-0101).
+
+    Reuses :func:`app.core.validate_url.validate_repo_url` to reject shell
+    metacharacters / dangerous protocols / control chars, then enforces that the
+    URL's hostname is in ``allowed_hosts`` (exact match or a subdomain of an
+    allowed host). This blocks SSRF to attacker-controlled or internal hosts
+    (e.g. ``169.254.169.254``, internal VPC endpoints) before any clone / PR /
+    token usage.
+
+    Empty input is allowed (CLI mode makes no outbound call); returns the URL
+    unchanged when valid; raises ``ValueError`` otherwise.
+    """
+    if not repo_url:
+        return repo_url
+    # Shell-safety / protocol checks first (raises ValueError on failure).
+    validate_repo_url(repo_url)
+    try:
+        parsed = urlparse(repo_url)
+    except Exception as exc:  # pragma: no cover - urlparse rarely raises
+        raise ValueError(f"invalid_repo_url: could not parse {repo_url!r}") from exc
+    # git@host:owner/repo SSH form has no scheme://; extract the host manually.
+    host = (parsed.hostname or "").lower()
+    if not host and repo_url.startswith("git@"):
+        host = repo_url[len("git@"):].split(":", 1)[0].split("/", 1)[0].lower()
+    allowed = [h.lower() for h in (allowed_hosts or [])]
+    if not any(host == a or host.endswith("." + a) for a in allowed):
+        logger.warning("repo_url validation rejected host=%r", host)
+        raise ValueError(f"repo_url host {host!r} is not in allowed_repo_hosts")
+    return repo_url
+
+
+# ---------------------------------------------------------------------------
+# GAP-0102: GitHub token resolution via Secrets Manager indirection
+# ---------------------------------------------------------------------------
+
+
+def resolve_github_token(*, user_id: str) -> str:
+    """Resolve the raw GitHub token at execution time (GAP-0102).
+
+    Dev/prod parity (SECOPS-007): both environments run the same code path.
+
+    * In dev mode the token comes from the ``GITHUB_TOKEN`` env var
+      (``S.github_token``) — empty by default, no Secrets Manager call.
+    * In prod the per-user ``github_token_secret_name`` (falling back to the
+      platform-level ``S.github_token_secret_name`` env var) names an AWS Secrets
+      Manager secret; the raw token is fetched via ``get_secret_value``.
+
+    The raw token is NEVER stored in DynamoDB nor returned in API responses.
+    Returns an empty string when no secret/token is configured.
+    """
+    if S.dev_mode:
+        return S.github_token
+    cfg = get_effective_config(user_id=user_id)
+    secret_name = cfg.get("github_token_secret_name") or ""
+    if not secret_name:
+        secret_name = getattr(S, "github_token_secret_name", "") or os.environ.get(
+            "GITHUB_TOKEN_SECRET_NAME", ""
+        )
+    if not secret_name:
+        return ""
+    import boto3  # local import: avoids a hard dependency at module import time
+
+    sm = boto3.client("secretsmanager")
+    resp = sm.get_secret_value(SecretId=secret_name)
+    return resp.get("SecretString", "") or ""
+
+
+def config_response_dict(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Project a stored/effective config into the shape returned by the API.
+
+    GAP-0102: derives the ``has_github_token`` boolean indicator and guarantees
+    the raw ``github_token`` is never present in the response. ``has_github_token``
+    is true when a Secrets Manager reference is configured (per-user or
+    platform-level) or, in dev, when the ``GITHUB_TOKEN`` env var is set.
+    """
+    out = dict(config or {})
+    out.pop("github_token", None)
+    secret_name = out.get("github_token_secret_name") or getattr(
+        S, "github_token_secret_name", ""
+    )
+    has_token = bool(secret_name)
+    if S.dev_mode and S.github_token:
+        has_token = True
+    out["has_github_token"] = has_token
     return out
 
 
@@ -1105,6 +1228,11 @@ def review_pr_mock(
     the created findings and whether a merge block should apply per config.
     """
     config = get_effective_config(user_id=user_id)
+    # GAP-0101: when real execution is enabled, ``pr_ref`` may resolve to a repo
+    # URL that gets cloned / scanned. Reject hosts outside the allowlist before
+    # any outbound action to prevent SSRF / token exfiltration.
+    if S.compliance_agent_execute_commands:
+        validate_repo_host(pr_ref, config.get("allowed_repo_hosts", ["github.com"]))
     created: List[Dict[str, Any]] = []
     for df in diff_findings or []:
         try:

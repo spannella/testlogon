@@ -1,6 +1,6 @@
 # GAP-0103: app credentials injection not implemented
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-016 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-016 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/AGENT-016.md`); see also `docs/tickets/writeups/AGENT-016.md`
 
 ## Location

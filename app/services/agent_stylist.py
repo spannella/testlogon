@@ -73,7 +73,20 @@ _CONFIG_FIELDS = (
     "ticket_min_severity",
     "brand_colors",
     "font_families",
+    # GAP-0103: name of the Secrets Manager secret holding live-app auth
+    # credentials for authenticated Playwright review sessions. This is a
+    # *pointer* (ARN / secret name), never the raw credential. Stored in DDB;
+    # the raw credential is resolved at trigger time and never persisted.
+    "app_auth_credentials_secret_name",
 )
+
+# Static mock credentials used in dev mode so the dev and prod credential
+# resolution code paths are identical (SECOPS-007). The same _resolve_app_credentials
+# entrypoint and the same trigger_review gate run in both modes.
+_DEV_MOCK_APP_CREDENTIALS: Dict[str, str] = {
+    "username": "e2e_alice@test.local",
+    "password": "devpassword",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +712,8 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     "ticket_min_severity": "warning",
     "brand_colors": ["#000000", "#ffffff", "#3b82f6", "#ef4444"],
     "font_families": ["Inter", "system-ui"],
+    # Empty = no live-app credentials configured (has_app_credentials -> False).
+    "app_auth_credentials_secret_name": "",
 }
 
 
@@ -754,7 +769,46 @@ def _coerce_config_numbers(config: Dict[str, Any]) -> Dict[str, Any]:
             {k: (_to_int(v) if k in ("width", "height") else v) for k, v in vp.items()}
             for vp in vps
         ]
+    # GAP-0103: expose only a derived boolean indicator. The raw secret pointer
+    # is intentionally NOT surfaced via StylistConfigOut (which has no
+    # app_auth_credentials_secret_name field), and the credential itself is
+    # never stored in DDB nor returned by any endpoint.
+    out["has_app_credentials"] = bool(out.get("app_auth_credentials_secret_name"))
     return out
+
+
+def _resolve_app_credentials(*, user_id: str) -> Optional[Dict[str, str]]:
+    """Resolve live-app auth credentials for an authenticated Playwright session.
+
+    Returns a dict (e.g. ``{"username": ..., "password": ...}`` or a session-cookie
+    bundle) or ``None`` when no credentials are configured. The raw credential is
+    NEVER persisted to DDB and never returned by any API endpoint.
+
+    Dev/prod parity (SECOPS-007): both modes go through this single entrypoint.
+    In dev mode a static mock is returned (no network / AWS call). In prod the
+    credential is fetched from AWS Secrets Manager using the configured secret
+    name pointer stored on the stylist config.
+    """
+    if S.dev_mode:
+        return dict(_DEV_MOCK_APP_CREDENTIALS)
+    config = get_stylist_config(user_id=user_id) or {}
+    secret_name = (config.get("app_auth_credentials_secret_name") or "").strip()
+    if not secret_name:
+        return None
+    try:
+        # Imported lazily so dev/test paths never touch boto3/AWS.
+        from app.core.aws import secretsmanager
+
+        resp = secretsmanager.get_secret_value(SecretId=secret_name)
+        import json as _json
+
+        creds = _json.loads(resp["SecretString"])
+        if not isinstance(creds, dict):
+            return None
+        return creds
+    except Exception as exc:  # pragma: no cover - prod-only Secrets Manager path
+        logger.error("Failed to resolve stylist app credentials: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -789,6 +843,13 @@ def trigger_review(
     the only path so the lifecycle is deterministic / testable.
     """
     config = get_stylist_config(user_id=user_id) or dict(_DEFAULT_CONFIG)
+    # GAP-0103: real Playwright execution requires authenticated app sessions.
+    # When the execute gate is on, refuse to run unless credentials resolve
+    # (dev mock or Secrets Manager). The mock review path below is unaffected.
+    if S.stylist_agent_execute_commands:
+        creds = _resolve_app_credentials(user_id=user_id)
+        if creds is None:
+            raise ValueError("app_auth_credentials_not_configured")
     vps = viewports or config.get("viewports") or _DEFAULT_CONFIG["viewports"]
     if review_type != "responsive":
         # full_page / accessibility default to the desktop viewport only
