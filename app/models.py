@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
+import ipaddress
 import re
 from enum import Enum
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from pydantic import (
     AliasChoices,
@@ -2165,6 +2167,25 @@ class DevtoolsBillingLedgerOut(BaseModel):
     parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)
 
 
+class DevtoolsFfmpegHealthOut(BaseModel):
+    """FFmpeg binary health for the internal dev-tools surface (GAP-0301).
+
+    `validate_ffmpeg()` returns a FULL dict only when the binary is available;
+    when it is unavailable it returns just ``{"status", "path", "error"}``.
+    All non-status/path fields are therefore optional so that
+    ``DevtoolsFfmpegHealthOut(**result)`` never raises on the unavailable path.
+    """
+
+    status: Literal["healthy", "degraded", "unavailable"]
+    path: str = ""
+    error: Optional[str] = None
+    version: Optional[str] = None
+    codecs: List[str] = Field(default_factory=list)
+    missing_required: List[str] = Field(default_factory=list)
+    missing_recommended: List[str] = Field(default_factory=list)
+    issues: List[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # MOD-002: DMCA Takedown Workflow
 # ---------------------------------------------------------------------------
@@ -2196,8 +2217,54 @@ class DmcaClaimIn(BaseModel):
     @classmethod
     def _validate_content_url(cls, v: str) -> str:
         v = v.strip()
+        # Existing scheme-prefix check (kept intact for backward compat).
         if v.startswith("javascript:") or v.startswith("data:"):
             raise ValueError("Invalid content URL scheme")
+
+        # Relative URLs (bare paths) are platform-internal and safe.
+        if v.startswith("/"):
+            return v
+
+        parsed = urlparse(v)
+        scheme = (parsed.scheme or "").lower()
+
+        # No scheme + not a leading-slash path: treat as a relative reference
+        # (e.g. "feed/post/abc"); leave to downstream resolution.
+        if not scheme:
+            return v
+
+        # SSRF defence #1: only http/https are permitted for absolute URLs.
+        # Rejects file:, ftp:, gopher:, dict:, ldap:, sftp:, etc.
+        if scheme not in ("http", "https"):
+            raise ValueError(f"content_url scheme '{scheme}:' is not permitted")
+
+        hostname = (parsed.hostname or "").strip().lower()
+        if not hostname:
+            raise ValueError("content_url must include a hostname")
+
+        # SSRF defence #2: reject well-known internal hostnames.
+        _BLOCKED_HOSTS = {"localhost", "metadata", "metadata.google.internal"}
+        if hostname in _BLOCKED_HOSTS or hostname.endswith(
+            (".localhost", ".local", ".internal")
+        ):
+            raise ValueError("content_url must not point to an internal hostname")
+
+        # SSRF defence #3: classify literal IP hosts (no DNS lookup) and reject
+        # private / loopback / link-local / reserved / unspecified addresses.
+        # urlparse strips the brackets from IPv6 literals in .hostname.
+        try:
+            ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            ip = None
+        if ip is not None and (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise ValueError("content_url must not point to an internal network address")
+
         return v
 
     @model_validator(mode="after")

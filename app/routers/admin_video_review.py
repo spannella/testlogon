@@ -17,6 +17,7 @@ from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_scope
 from app.auth.roles import AdminScope
 from app.core.cursor import decode_cursor, encode_cursor
+from app.core.settings import S
 from app.core.tables import T
 from app.models_video import VideoStatus
 from app.services.video_review import (
@@ -141,6 +142,28 @@ class VideoBatchReviewOut(BaseModel):
 
 def _video_to_queue_item(video: Any) -> VideoReviewQueueItemOut:
     """Convert a VideoMetadataModel to a queue item output."""
+    thumbnail_url = video.thumbnail_url
+    hls_manifest_url = video.hls_manifest_url
+
+    # GAP-0302: In DEV_MODE (moto S3, no real FFmpeg transcode) the ABR pipeline
+    # never populates thumbnail_url / hls_manifest_url, so the review UI shows a
+    # blank preview. Synthesise a directly-accessible /mock/s3/... URL from the
+    # stored S3 keys (same pattern as the messaging router's mock URLs). Prod
+    # path is untouched (SECOPS-007 parity); real transcode URLs pass through.
+    if S.dev_mode:
+        from urllib.parse import quote as _url_quote
+
+        if not thumbnail_url and getattr(video, "thumbnail_s3_key", None):
+            thumbnail_url = (
+                f"/mock/s3/{S.video_upload_bucket}/"
+                f"{_url_quote(video.thumbnail_s3_key, safe='/')}"
+            )
+        if not hls_manifest_url and getattr(video, "hls_manifest_s3_key", None):
+            hls_manifest_url = (
+                f"/mock/s3/{S.video_upload_bucket}/"
+                f"{_url_quote(video.hls_manifest_s3_key, safe='/')}"
+            )
+
     return VideoReviewQueueItemOut(
         video_id=video.id,
         owner_user_id=video.owner_user_id,
@@ -152,8 +175,8 @@ def _video_to_queue_item(video: Any) -> VideoReviewQueueItemOut:
         duration_seconds=video.duration_seconds,
         width=video.width,
         height=video.height,
-        thumbnail_url=video.thumbnail_url,
-        hls_manifest_url=video.hls_manifest_url,
+        thumbnail_url=thumbnail_url,
+        hls_manifest_url=hls_manifest_url,
         file_size_bytes=video.file_size_bytes,
         source_type=video.source_type,
         visibility=video.visibility,
