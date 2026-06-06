@@ -568,7 +568,14 @@ def get_uptime_report(provider: str, *, days: int = 30) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def check_and_alert(provider: str) -> Optional[Dict[str, Any]]:
-    """Return alert details if the provider exceeds configured thresholds."""
+    """Evaluate provider thresholds and deliver an alert when breached.
+
+    Returns the alert payload if the provider exceeds a configured threshold,
+    otherwise ``None``. When a breach is detected and no per-provider alert
+    cooldown is active (GAP-0205), the alert is delivered via the platform
+    email + in-app notification services through :func:`_dispatch_alert` before
+    the payload is returned.
+    """
     prov = normalize_provider(provider)
     status = get_provider_status(prov)
     config = get_provider_config(prov)
@@ -582,7 +589,8 @@ def check_and_alert(provider: str) -> Optional[Dict[str, Any]]:
         breaches.append("latency")
     if not breaches:
         return None
-    return {
+
+    alert = {
         "provider": prov,
         "status": status["status"],
         "breaches": breaches,
@@ -591,6 +599,12 @@ def check_and_alert(provider: str) -> Optional[Dict[str, Any]]:
         "alert_email": config["alert_email"],
         "at": now_ts(),
     }
+    # GAP-0205: actually deliver the alert (email + in-app), de-duped by a
+    # per-provider cooldown so a sustained incident does not spam every cycle.
+    if not _is_alert_suppressed(prov):
+        _dispatch_alert(alert)
+        _mark_alert_sent(prov)
+    return alert
 
 
 # ---------------------------------------------------------------------------
@@ -607,23 +621,125 @@ def check_and_alert(provider: str) -> Optional[Dict[str, Any]]:
 
 _HEALTH_CHECK_INTERVAL_SECONDS = 300  # 5 minutes
 
+# Suppress repeat alerts for the same provider for this window so a sustained
+# incident does not fire a fresh email every 5-minute cycle (GAP-0205).
+_ALERT_COOLDOWN_SECONDS = 1800  # 30 minutes
+
+# Sentinel user_sub for system-level (ROOT/ADMIN visible) operational alerts.
+_SYSTEM_ALERT_SUB = "SYSTEM"
+
+
+def _is_alert_suppressed(provider: str) -> bool:
+    """Return True if an alert was dispatched for this provider recently."""
+    prov = normalize_provider(provider)
+    try:
+        item = T.payment_provider_health.get_item(
+            Key={"pk": _provider_pk(prov), "sk": "ALERT_COOLDOWN"}
+        ).get("Item")
+    except Exception:
+        return False
+    if not item:
+        return False
+    last_sent = _to_int(item.get("last_sent_at"))
+    return (now_ts() - last_sent) < _ALERT_COOLDOWN_SECONDS
+
+
+def _mark_alert_sent(provider: str) -> None:
+    """Record the time an alert was dispatched, for cooldown de-dup."""
+    prov = normalize_provider(provider)
+    try:
+        T.payment_provider_health.put_item(
+            Item={
+                "pk": _provider_pk(prov),
+                "sk": "ALERT_COOLDOWN",
+                "last_sent_at": now_ts(),
+            }
+        )
+    except Exception:
+        logger.debug("Failed to record alert cooldown for %s", prov)
+
 
 def _dispatch_alert(alert: Dict[str, Any]) -> None:
-    """Handle a breach alert payload.
+    """Deliver a provider health breach alert (GAP-0205).
 
-    GAP-0204 wires the periodic evaluation; actual delivery (email) is the
-    scope of GAP-0205. Until then this logs the alert as a structured warning
-    so degradation is at least observable in the application logs.
+    Delivers via the existing platform alerting helpers:
+
+    - ``send_alert_email`` for the configured ``alert_email`` recipient. It
+      handles dev/prod parity itself (writes to ``S.dev_email_log`` in dev
+      mode, SES in prod) — SECOPS-007.
+    - ``write_alert`` for an in-app alert (ROOT/ADMIN visible in the Alerts UI)
+      under a SYSTEM sentinel user.
+
+    Never raises: each channel is best-effort so a delivery failure cannot kill
+    the background health-check loop. A structured warning is always logged so
+    the breach remains observable even if all delivery channels are no-ops.
     """
+    from app.services.alerts import send_alert_email, write_alert
+
+    prov = str(alert.get("provider") or "unknown")
+    breaches = alert.get("breaches") or []
+    status = str(alert.get("status") or "unknown")
+    err_bps = _to_int(alert.get("error_rate_bps"))
+    latency_ms = _to_int(alert.get("avg_latency_ms"))
+    alert_email = str(alert.get("alert_email") or "").strip()
+    breach_str = ", ".join(str(b) for b in breaches)
+
     logger.warning(
         "provider_health_alert provider=%s status=%s breaches=%s "
         "error_rate_bps=%s avg_latency_ms=%s alert_email=%s",
-        alert.get("provider"),
-        alert.get("status"),
-        alert.get("breaches"),
-        alert.get("error_rate_bps"),
-        alert.get("avg_latency_ms"),
-        alert.get("alert_email"),
+        prov, status, breaches, err_bps, latency_ms, alert_email or "(none)",
+    )
+
+    subject = (
+        f"[ALERT] Payment provider {prov.upper()} is {status.upper()} "
+        f"({breach_str})"
+    )
+    body = (
+        "Payment provider health alert\n"
+        f"Provider   : {prov}\n"
+        f"Status     : {status}\n"
+        f"Breaches   : {breach_str}\n"
+        f"Error rate : {err_bps / 100:.1f}% ({err_bps} bps)\n"
+        f"Avg latency: {latency_ms} ms\n"
+        f"Detected at: {alert.get('at', '')}\n\n"
+        f"Investigate at: /admin/payment-health/{prov}"
+    )
+
+    email_sent = False
+    if alert_email:
+        try:
+            send_alert_email([alert_email], subject, body)
+            email_sent = True
+        except Exception:
+            logger.exception(
+                "Failed to send provider health alert email for %s", prov
+            )
+
+    in_app_sent = False
+    try:
+        write_alert(
+            _SYSTEM_ALERT_SUB,
+            event="payment.provider_health",
+            outcome="warning" if status != STATUS_DOWN else "error",
+            title=f"Payment provider {prov} is {status}",
+            details={
+                "alert_type": "payment_provider_health",
+                "provider": prov,
+                "status": status,
+                "breaches": breach_str,
+                "error_rate_bps": err_bps,
+                "avg_latency_ms": latency_ms,
+            },
+        )
+        in_app_sent = True
+    except Exception:
+        logger.exception(
+            "Failed to create in-app alert for %s provider health", prov
+        )
+
+    logger.info(
+        "provider_alert_dispatched provider=%s email_sent=%s in_app_sent=%s",
+        prov, email_sent, in_app_sent,
     )
 
 
@@ -648,9 +764,10 @@ async def _provider_health_loop(interval: int = _HEALTH_CHECK_INTERVAL_SECONDS) 
         try:
             for prov in PROVIDERS:
                 try:
-                    alert = check_and_alert(prov)
-                    if alert:
-                        _dispatch_alert(alert)
+                    # check_and_alert dispatches the alert internally (GAP-0205,
+                    # de-duped by a per-provider cooldown); the return value is
+                    # only the payload for observability.
+                    check_and_alert(prov)
                 except Exception:
                     logger.exception(
                         "provider_health_check failed for %s", prov

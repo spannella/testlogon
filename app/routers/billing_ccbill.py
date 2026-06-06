@@ -48,6 +48,7 @@ from app.services.billing_ccbill import (
 from app.services.alerts import audit_event
 from app.services.sessions import require_ui_session
 from app.services.purchase_history import mark_reverted
+from app.services.payment_provider_health import is_provider_enabled
 from app.services.billing_dunning import (
     bump_dunning_after_payment_method_update,
     schedule_ccbill_autopay_disabled_notice,
@@ -55,6 +56,16 @@ from app.services.billing_dunning import (
 )
 
 router = APIRouter(tags=["billing"])
+
+
+def _require_provider_enabled(provider: str) -> None:
+    """GAP-0206 / FIN-014: gate the charge path on the admin provider toggle."""
+    if not is_provider_enabled(provider):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Payment provider '{provider}' is currently disabled. "
+            "Please try again later or contact support.",
+        )
 
 
 def _trial_bounds(payload: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
@@ -306,6 +317,7 @@ def remove_payment_method(payment_token_id: str, ctx=Depends(require_ui_session)
 
 @router.post("/api/billing/charge-once")
 async def charge_once_endpoint(body: OneTimeChargeIn, request: Request, ctx=Depends(require_ui_session)):
+    _require_provider_enabled("ccbill")  # GAP-0206
     user_sub = ctx["user_sub"]
     resp = charge_once(
         user_sub=user_sub,
@@ -338,6 +350,7 @@ async def charge_once_endpoint(body: OneTimeChargeIn, request: Request, ctx=Depe
 
 @router.post("/api/billing/pay-balance")
 async def pay_balance_endpoint(body: PayBalanceIn, request: Request, ctx=Depends(require_ui_session)):
+    _require_provider_enabled("ccbill")  # GAP-0206
     user_sub = ctx["user_sub"]
     resp = pay_balance(
         user_sub=user_sub,
@@ -360,6 +373,7 @@ async def pay_balance_endpoint(body: PayBalanceIn, request: Request, ctx=Depends
 
 @router.post("/api/billing/subscribe-monthly")
 async def subscribe_monthly_endpoint(body: SubscribeMonthlyIn, request: Request, ctx=Depends(require_ui_session)):
+    _require_provider_enabled("ccbill")  # GAP-0206
     user_sub = ctx["user_sub"]
     resp = subscribe_monthly(
         user_sub=user_sub,

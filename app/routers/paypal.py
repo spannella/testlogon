@@ -30,8 +30,19 @@ from app.services.billing_shared import (
     user_pk,
 )
 from app.services.purchase_history import mark_completed, mark_reverted, record_billing_transaction
+from app.services.payment_provider_health import is_provider_enabled
 
 router = APIRouter(tags=["billing"])
+
+
+def _require_provider_enabled(provider: str) -> None:
+    """GAP-0206 / FIN-014: gate the charge path on the admin provider toggle."""
+    if not is_provider_enabled(provider):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Payment provider '{provider}' is currently disabled. "
+            "Please try again later or contact support.",
+        )
 
 DEFAULT_MONTHLY_PRICE_CENTS = S.default_monthly_price_cents
 DEFAULT_CURRENCY = S.default_currency
@@ -924,6 +935,7 @@ def remove_payment_method(
 # ============================================================
 @router.post("/api/billing/charge-once")
 async def charge_once(body: OneTimeChargeIn, request: Request, x_user_id: Optional[str] = Header(default=None)):
+    _require_provider_enabled("paypal")  # GAP-0206
     user_id = require_user(x_user_id)
     pk = user_pk(user_id)
 

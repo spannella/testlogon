@@ -71,6 +71,8 @@ from app.services.billing_dunning import (
     schedule_dunning,
 )
 from app.services.ttl import with_ttl
+from app.services.payment_provider_health import is_provider_enabled
+from app.services import fraud_detection as fd
 from app.services.payment_incident_providers import (
     DEFAULT_PROVIDER_REGISTRY,
     resolve_provider_adapter,
@@ -93,6 +95,85 @@ from app.services.payment_incident_metrics import (
 
 router = APIRouter(tags=["billing"])
 logger = logging.getLogger(__name__)
+
+
+def _require_provider_enabled(provider: str) -> None:
+    """GAP-0206 / FIN-014: gate the charge path on the admin provider toggle.
+
+    Raises 503 when an operator has explicitly disabled ``provider`` via the
+    payment-provider-health admin toggle. Defaults to enabled when no CONFIG
+    row exists, so dev/prod behaviour is identical (SECOPS-007).
+    """
+    if not is_provider_enabled(provider):
+        logger.info(
+            "payment_provider_disabled_rejected", extra={"provider": provider}
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Payment provider '{provider}' is currently disabled. "
+            "Please try again later or contact support.",
+        )
+
+
+def _fraud_gate(
+    user_id: str,
+    amount_cents: int,
+    entry_type: str,
+    tx_id: str = "",
+    req: Optional[Request] = None,
+    *,
+    enforce_block: bool = True,
+) -> None:
+    """GAP-0207 / FIN-015: run fraud evaluation + freeze check on the charge path.
+
+    Always runs the synchronous freeze check (a single DDB read). Then runs
+    ``evaluate_transaction`` which short-circuits to ``allow`` when fraud
+    detection is disabled. A ``block`` action raises 403 (when ``enforce_block``);
+    a ``flag`` action is logged and allowed through (review queue).
+    """
+    if fd.is_frozen(user_id):
+        logger.warning("fraud_gate_frozen", extra={"user_id": user_id})
+        raise HTTPException(
+            status_code=403,
+            detail="Account is frozen. Contact support.",
+        )
+
+    ip = req.client.host if req is not None and req.client else None
+    result = fd.evaluate_transaction(
+        user_id=user_id,
+        amount_cents=int(amount_cents),
+        entry_type=entry_type,
+        tx_id=tx_id,
+        ip_address=ip,
+    )
+    action = result.get("action", "allow")
+    if action == "block":
+        logger.warning(
+            "fraud_gate_blocked",
+            extra={
+                "user_id": user_id,
+                "amount_cents": int(amount_cents),
+                "triggered_rules": result.get("triggered_rules"),
+                "risk_score": result.get("risk_score"),
+            },
+        )
+        if enforce_block:
+            raise HTTPException(
+                status_code=403,
+                detail="Transaction blocked by fraud prevention. Contact support.",
+            )
+    elif action == "flag":
+        logger.info(
+            "fraud_gate_flagged",
+            extra={
+                "user_id": user_id,
+                "amount_cents": int(amount_cents),
+                "triggered_rules": result.get("triggered_rules"),
+                "risk_score": result.get("risk_score"),
+            },
+        )
+
+
 _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE: "OrderedDict[str, float]" = OrderedDict()
 _PAYMENT_INCIDENT_WEBHOOK_REPLAY_LOCK = threading.Lock()
 
@@ -945,6 +1026,7 @@ def remove_payment_method(payment_method_id: str, req: Request = None, ctx=Depen
 @dual_route("POST", "/billing/pay-balance")
 def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, str]:
     ensure_stripe_configured()
+    _require_provider_enabled("stripe")  # GAP-0206
     user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
     pk = user_pk(user_id)
 
@@ -957,6 +1039,8 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
     amount = due if body.amount_cents is None else min(int(body.amount_cents), due)
     if amount <= 0:
         return {"status": "no_settled_balance_due"}
+
+    _fraud_gate(user_id, amount, "credit", req=req)  # GAP-0207
 
     billing = ddb_get(T.billing, pk, "BILLING") or {"currency": "usd", "default_payment_method_id": None}
     default_pm = billing.get("default_payment_method_id")
@@ -1045,7 +1129,9 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
 @dual_route("POST", "/billing/charge-once")
 def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
     ensure_stripe_configured()
+    _require_provider_enabled("stripe")  # GAP-0206
     user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+    _fraud_gate(user_id, int(body.amount_cents), "credit", req=req)  # GAP-0207
     pk = user_pk(user_id)
 
     ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
@@ -1205,9 +1291,13 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
 @dual_route("POST", "/billing/checkout_session")
 def create_checkout_session(body: BillingCheckoutReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, str]:
     ensure_stripe_configured()
+    _require_provider_enabled("stripe")  # GAP-0206
     target_user_sub, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
     if body.amount_cents <= 0:
         raise HTTPException(400, "amount_cents must be greater than zero")
+    # GAP-0207: redirect/async flow — freeze still blocks, but a fraud "block"
+    # is observe-only here since the real charge settles later via webhook.
+    _fraud_gate(target_user_sub, int(body.amount_cents), "credit", req=req, enforce_block=False)
     currency = (body.currency or S.stripe_default_currency or "usd").lower()
     description = body.description or "Security Control Panel charge"
 
@@ -2315,7 +2405,9 @@ def get_wallet_endpoint(ctx=Depends(require_ui_session), actor: AuthenticatedUse
 @dual_route("POST", "/billing/wallet/deposit")
 def wallet_deposit(body: WalletDepositReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
     ensure_stripe_configured()
+    _require_provider_enabled("stripe")  # GAP-0206
     user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+    _fraud_gate(user_id, int(body.amount_cents), "credit", req=req)  # GAP-0207
     pk = user_pk(user_id)
 
     billing = ddb_get(T.billing, pk, "BILLING") or {"currency": "usd", "default_payment_method_id": None}
