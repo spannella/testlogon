@@ -1,6 +1,6 @@
 # GAP-0111: Status-filter list exposes all creators' sessions
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BCAST-001 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BCAST-001 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BCAST-001.md`); see also `docs/tickets/writeups/BCAST-001.md`
 
 ## Location

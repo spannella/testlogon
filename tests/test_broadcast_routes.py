@@ -79,6 +79,7 @@ def test_start_session_forbidden_for_non_admin() -> None:
 
 def test_start_session_transitions_to_live_from_ready() -> None:
     with (
+        patch.object(broadcast, "get_session", return_value=_session("ready")),
         patch.object(broadcast, "start_session_with_provider", return_value=_session("live")) as start_session_with_provider,
         patch.object(broadcast, "record_broadcast_action") as record_broadcast_action,
         patch.object(broadcast, "get_output", return_value=None),
@@ -92,6 +93,7 @@ def test_start_session_transitions_to_live_from_ready() -> None:
 def test_start_session_forwards_correlation_and_idempotency_headers() -> None:
     req = SimpleNamespace(headers={"x-correlation-id": "cid-77", "x-idempotency-key": "idem-77"})
     with (
+        patch.object(broadcast, "get_session", return_value=_session("ready")),
         patch.object(broadcast, "start_session_with_provider", return_value=_session("live")) as start_session_with_provider,
         patch.object(broadcast, "record_broadcast_action"),
         patch.object(broadcast, "get_output", return_value=None),
@@ -104,6 +106,7 @@ def test_start_session_forwards_correlation_and_idempotency_headers() -> None:
 def test_start_session_failure_records_failed_audit_action() -> None:
     req = SimpleNamespace(headers={"x-correlation-id": "cid-start-fail"})
     with (
+        patch.object(broadcast, "get_session", return_value=_session("ready")),
         patch.object(broadcast, "start_session_with_provider", side_effect=HTTPException(status_code=409, detail="conflict")),
         patch.object(broadcast, "record_broadcast_action") as record_broadcast_action,
         patch.object(broadcast, "get_output", return_value=None),
@@ -170,6 +173,7 @@ def test_verify_playback_token_route_rejects_invalid_signature() -> None:
 def test_stop_session_route_handles_ready_session_stop() -> None:
     req = SimpleNamespace(headers={"x-correlation-id": "cid-stop-1", "x-idempotency-key": "idem-stop-1"})
     with (
+        patch.object(broadcast, "get_session", return_value=_session("live")),
         patch.object(broadcast, "stop_session_with_provider", return_value=_session("stopped")) as stop_session_with_provider,
         patch.object(broadcast, "record_broadcast_action") as record_broadcast_action,
         patch.object(broadcast, "get_output", return_value=None),
@@ -189,6 +193,7 @@ def test_stop_session_route_handles_ready_session_stop() -> None:
 def test_stop_session_failure_records_failed_audit_action() -> None:
     req = SimpleNamespace(headers={"x-correlation-id": "cid-stop-fail", "x-idempotency-key": "idem-stop-fail"})
     with (
+        patch.object(broadcast, "get_session", return_value=_session("live")),
         patch.object(broadcast, "stop_session_with_provider", side_effect=HTTPException(status_code=409, detail="conflict")),
         patch.object(broadcast, "record_broadcast_action") as record_broadcast_action,
         patch.object(broadcast, "get_output", return_value=None),
@@ -208,6 +213,7 @@ def test_stop_session_failure_records_failed_audit_action() -> None:
 def test_delete_session_failure_records_failed_audit_action() -> None:
     req = SimpleNamespace(headers={"x-correlation-id": "cid-del-fail"})
     with (
+        patch.object(broadcast, "get_session", return_value=_session("stopped")),
         patch.object(broadcast, "delete_session_with_provider", side_effect=HTTPException(status_code=409, detail="conflict")),
         patch.object(broadcast, "record_broadcast_action") as record_broadcast_action,
         pytest.raises(HTTPException),
@@ -226,6 +232,7 @@ def test_delete_session_failure_records_failed_audit_action() -> None:
 def test_delete_session_route_records_success_audit_action() -> None:
     req = SimpleNamespace(headers={"x-correlation-id": "cid-del-ok"})
     with (
+        patch.object(broadcast, "get_session", return_value=_session("stopped")),
         patch.object(broadcast, "delete_session_with_provider", return_value={"ok": True}) as delete_session_with_provider,
         patch.object(broadcast, "record_broadcast_action") as record_broadcast_action,
     ):

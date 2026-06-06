@@ -236,6 +236,29 @@ def _require_operator_role(ctx: dict) -> None:
         )
 
 
+def _require_operator_and_owner(session_id: str, ctx: dict):
+    """Fetch and return the session; raise unless caller owns it or is root.
+
+    Lifecycle operations (start/stop/delete) must be restricted to the session
+    owner, with root permitted as an emergency super-user. General admin role
+    is NOT sufficient to act on another broadcaster's session — preventing the
+    SEC-025 IDOR where any admin could control any session. Call this AFTER
+    _require_operator_role so the role gate (admin/root) is still enforced.
+    """
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if ctx["user_sub"] != session.created_by and ctx.get("role") != "root":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "BROADCAST_OWNERSHIP_FORBIDDEN",
+                "detail": "You can only perform lifecycle operations on your own sessions.",
+            },
+        )
+    return session
+
+
 def _correlation_id(request: Request) -> str:
     cid = request.headers.get("x-correlation-id", "").strip()
     return cid or str(uuid4())
@@ -312,11 +335,20 @@ def list_sessions_route(
     limit: int = Query(default=50, ge=1, le=200),
     ctx: dict = Depends(_ctx),
 ):
-    if status_filter:
+    is_operator = ctx.get("role") in {"admin", "root"}
+    if status_filter and is_operator:
+        # Admin/root may query the platform-wide status feed.
         result = list_sessions_by_status(status_filter, limit=limit)
-    else:
-        result = list_sessions_by_creator(ctx["user_sub"], limit=limit)
-    items = [_to_session_out(s) for s in result["items"]]
+        items = [_to_session_out(s) for s in result["items"]]
+        return BroadcastSessionListOut(items=items, has_more=bool(result.get("cursor")))
+
+    # Non-operators are always scoped to their own sessions (SEC: prevent
+    # cross-creator session enumeration via the status filter, GAP-0111).
+    result = list_sessions_by_creator(ctx["user_sub"], limit=limit)
+    sessions = result["items"]
+    if status_filter:
+        sessions = [s for s in sessions if s.status == status_filter]
+    items = [_to_session_out(s) for s in sessions]
     return BroadcastSessionListOut(items=items, has_more=bool(result.get("cursor")))
 
 
@@ -367,6 +399,7 @@ def start_session_route(
     ctx: dict = Depends(_ctx),
 ):
     _require_operator_role(ctx)
+    _require_operator_and_owner(session_id, ctx)
     cid = (x_correlation_id or "").strip() or _correlation_id(request)
     idem = (x_idempotency_key or "").strip() or request.headers.get("x-idempotency-key", "").strip()
     try:
@@ -409,6 +442,7 @@ def stop_session_route(
     ctx: dict = Depends(_ctx),
 ):
     _require_operator_role(ctx)
+    _require_operator_and_owner(session_id, ctx)
     cid = (x_correlation_id or "").strip() or _correlation_id(request)
     idem = (x_idempotency_key or "").strip() or request.headers.get("x-idempotency-key", "").strip()
     try:
@@ -453,6 +487,7 @@ def stop_session_route(
 @router.delete("/sessions/{session_id}", response_model=BroadcastDeleteOut)
 def delete_session_route(session_id: str, request: Request, ctx: dict = Depends(_ctx)):
     _require_operator_role(ctx)
+    _require_operator_and_owner(session_id, ctx)
     cid = _correlation_id(request)
     try:
         out = delete_session_with_provider(session_id=session_id)
@@ -715,10 +750,25 @@ def get_session_health_history_route(
 
 
 @router.get("/sessions/{session_id}/stream")
-async def broadcast_event_stream_route(session_id: str, ctx: dict = Depends(_ctx)):
+async def broadcast_event_stream_route(
+    session_id: str,
+    invite_token: Optional[str] = Query(default=None),
+    ctx: dict = Depends(_ctx),
+):
     """SSE stream for real-time broadcast events (viewer count, health updates)."""
-    _ = ctx
-    _ = get_session(session_id)  # 404 if session doesn't exist
+    session = get_session(session_id)  # 404 if session doesn't exist
+    # Go-Private access gating (GAP-0112): an authenticated user may only
+    # subscribe to a private session's event stream if they are the creator,
+    # are allowlisted, or present a valid invite token. Mirrors the gating on
+    # the playback-url and viewers/join endpoints.
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+        invite_token=invite_token,
+    )
     q = broadcast_sse_subscribe(session_id)
 
     async def gen():
