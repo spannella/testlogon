@@ -32,6 +32,27 @@ def _gen_export_id() -> str:
     return f"exp_{uuid.uuid4().hex}"
 
 
+def _csv_columns_and_mapper(column_format: Optional[str], categories: list[str]):
+    """Pick the CSV header columns + per-event row mapper (GAP-0211).
+
+    Returns ``(columns, row_fn)`` where ``row_fn(event)`` yields the row cells.
+    For an accounting CSV billing export (``column_format`` in {quickbooks, xero}
+    with ``billing`` in categories) the package-specific schema + mapper is used;
+    otherwise the generic audit schema is used (backward-compatible).
+    """
+    from app.services.audit_export_accounting import (
+        accounting_columns,
+        accounting_row_mapper,
+        is_accounting_export,
+    )
+
+    if is_accounting_export(column_format, categories):
+        cols = accounting_columns(column_format)
+        row_fn = accounting_row_mapper(column_format)
+        return cols, row_fn
+    return CSV_COLUMNS, (lambda ev: ev.to_csv_row(CSV_COLUMNS))
+
+
 # ----- PDF rendering (GAP-0209) ---------------------------------------------
 #
 # FIN-016 requires an audit-grade PDF: cover page with export metadata + content
@@ -289,8 +310,15 @@ def create_export_job(
     actor_user_id: Optional[str] = None,
     target_user_id: Optional[str] = None,
     event_actions: Optional[list[str]] = None,
+    column_format: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Create an export job record in DynamoDB and immediately process it (dev mode)."""
+    """Create an export job record in DynamoDB and immediately process it (dev mode).
+
+    ``column_format`` (GAP-0211): when ``"quickbooks"`` or ``"xero"`` and the
+    export is a CSV billing export, the CSV is rendered with that accounting
+    package's column schema instead of the generic audit schema.  ``None`` keeps
+    the generic schema (backward-compatible).
+    """
     export_id = _gen_export_id()
     now = now_ts()
 
@@ -300,6 +328,7 @@ def create_export_job(
         "status": "pending",
         "categories": categories,
         "format": format,
+        "column_format": column_format or "",
         "from_date": from_ts,
         "to_date": to_ts,
         "created_by": created_by,
@@ -348,6 +377,7 @@ def _process_export_inline(export_id: str, job: dict) -> None:
         event_actions = job.get("event_actions_filter") or None
         if isinstance(event_actions, list) and len(event_actions) == 0:
             event_actions = None
+        column_format = job.get("column_format") or None
 
         event_count = 0
         sha256 = hashlib.sha256()
@@ -369,11 +399,12 @@ def _process_export_inline(export_id: str, job: dict) -> None:
             pdf_bytes = _render_audit_pdf(events_list, export_id, job, file_hash)
             file_size = len(pdf_bytes)
         elif fmt == "csv":
+            cols, row_fn = _csv_columns_and_mapper(column_format, categories)
             bom = "﻿"
             content_parts.append(bom)
             sha256.update(bom.encode("utf-8"))
             header_buf = io.StringIO()
-            csv.writer(header_buf).writerow(CSV_COLUMNS)
+            csv.writer(header_buf).writerow(cols)
             header_line = header_buf.getvalue()
             content_parts.append(header_line)
             sha256.update(header_line.encode("utf-8"))
@@ -383,7 +414,7 @@ def _process_export_inline(export_id: str, job: dict) -> None:
                 limit=_DEV_INLINE_MAX_EVENTS,
             ):
                 row_buf = io.StringIO()
-                csv.writer(row_buf).writerow(event.to_csv_row(CSV_COLUMNS))
+                csv.writer(row_buf).writerow(row_fn(event))
                 line = row_buf.getvalue()
                 content_parts.append(line)
                 sha256.update(line.encode("utf-8"))
@@ -490,6 +521,7 @@ def _process_export_s3(export_id: str, job: dict) -> None:
         event_actions = job.get("event_actions_filter") or None
         if isinstance(event_actions, list) and len(event_actions) == 0:
             event_actions = None
+        column_format = job.get("column_format") or None
 
         # Stream content into an in-memory buffer to avoid materialising the
         # entire export as a Python string before upload.
@@ -510,11 +542,12 @@ def _process_export_s3(export_id: str, job: dict) -> None:
             file_hash = sha256.hexdigest()
             buf.write(_render_audit_pdf(events_list, export_id, job, file_hash))
         elif fmt == "csv":
+            cols, row_fn = _csv_columns_and_mapper(column_format, categories)
             bom = "﻿".encode("utf-8")
             buf.write(bom)
             sha256.update(bom)
             header_buf = io.StringIO()
-            csv.writer(header_buf).writerow(CSV_COLUMNS)
+            csv.writer(header_buf).writerow(cols)
             header_bytes = header_buf.getvalue().encode("utf-8")
             buf.write(header_bytes)
             sha256.update(header_bytes)
@@ -522,7 +555,7 @@ def _process_export_s3(export_id: str, job: dict) -> None:
                 categories, from_ts, to_ts, actor, target, event_actions,
             ):
                 row_buf = io.StringIO()
-                csv.writer(row_buf).writerow(event.to_csv_row(CSV_COLUMNS))
+                csv.writer(row_buf).writerow(row_fn(event))
                 line_bytes = row_buf.getvalue().encode("utf-8")
                 buf.write(line_bytes)
                 sha256.update(line_bytes)

@@ -1612,6 +1612,12 @@ class BulkBatchOut(BaseModel):
     failure_count: int = 0
     total_cents: int
     items: List[BulkBatchItem] = Field(default_factory=list)
+    # GAP-0212: 5-minute reversal window. ``undo_expires_at`` is the Unix ts
+    # until which an undo is valid (set only on completed batches);
+    # ``undo_performed_at`` is set when an undo completes. Both nullable for
+    # backward compatibility with batches that predate this field.
+    undo_expires_at: Optional[int] = None
+    undo_performed_at: Optional[int] = None
 
 
 class VerifyMicrodepositsReq(BaseModel):

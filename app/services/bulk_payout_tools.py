@@ -17,6 +17,10 @@ provider call, which is exactly the deterministic behaviour we want.
 """
 from __future__ import annotations
 
+import csv as _csv
+import io as _io
+import logging
+import re as _re
 import uuid
 from typing import Any, Optional
 
@@ -24,6 +28,12 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
+from app.services.billing_shared import (
+    user_pk,
+    ddb_put,
+    apply_balance_delta,
+    new_ledger_entry,
+)
 from app.services.creator_payouts import (
     approve_payout,
     complete_payout,
@@ -37,6 +47,8 @@ from app.services.refund_requests import (
     list_pending_requests,
 )
 
+logger = logging.getLogger(__name__)
+
 
 KIND_PAYOUT = "payout"
 KIND_REFUND = "refund"
@@ -49,8 +61,21 @@ _REFUND_PENDING = "pending"
 STATUS_PREVIEW = "preview"
 STATUS_COMPLETED = "completed"
 STATUS_COMPLETED_WITH_ERRORS = "completed_with_errors"
+STATUS_UNDONE = "undone"
 
 _GSI_ALL = "BATCH"
+
+# GAP-0212: a completed batch may be reversed within this window (seconds).
+UNDO_WINDOW_SECONDS = 300  # 5 minutes
+
+# GAP-0213: CSV import limits + ref_id format guard (reject injection/garbage).
+_CSV_MAX_ROWS = 500
+_CSV_MAX_BYTES = 5 * 1024 * 1024  # 5 MB hard cap
+_REF_ID_PATTERN = _re.compile(r"^[A-Za-z0-9_\-]{6,128}$")
+
+
+class CsvImportError(ValueError):
+    """Raised when an uploaded payout/refund CSV fails validation."""
 
 
 def _validate_kind(kind: str) -> None:
@@ -210,6 +235,13 @@ def _persist_batch(
     failure_count: int = 0,
 ) -> dict:
     summary = _summary(items)
+    # GAP-0212: open a reversal window only for completed batches. Preview
+    # batches and undone batches carry no undo window.
+    undo_expires_at = (
+        now_ts() + UNDO_WINDOW_SECONDS
+        if status in (STATUS_COMPLETED, STATUS_COMPLETED_WITH_ERRORS)
+        else None
+    )
     item = {
         "batch_id": batch_id,
         "created_at": created_at,
@@ -222,12 +254,15 @@ def _persist_batch(
         "total_cents": summary["total_cents"],
         "items": items,
         "gsi_all": _GSI_ALL,
+        "undo_expires_at": undo_expires_at,
     }
     T.bulk_payout_batches.put_item(Item=item)
     return _batch_to_out(item)
 
 
 def _batch_to_out(item: dict) -> dict:
+    undo_expires_at = item.get("undo_expires_at")
+    undo_performed_at = item.get("undo_performed_at")
     return {
         "batch_id": item.get("batch_id"),
         "created_at": int(item.get("created_at", 0)),
@@ -248,6 +283,10 @@ def _batch_to_out(item: dict) -> dict:
             }
             for i in item.get("items", [])
         ],
+        "undo_expires_at": int(undo_expires_at) if undo_expires_at is not None else None,
+        "undo_performed_at": (
+            int(undo_performed_at) if undo_performed_at is not None else None
+        ),
     }
 
 
@@ -385,3 +424,244 @@ def execute_batch(
         success_count=success_count,
         failure_count=failure_count,
     )
+
+
+# --------------------------------------------------------------------------
+# Undo (GAP-0212) — reverse a completed batch within the undo window
+# --------------------------------------------------------------------------
+
+def _reverse_payout(ref_id: str, admin_sub: str) -> None:
+    """Reverse a payout that ``execute_batch`` already advanced.
+
+    ``execute_batch`` drives a payout ``requested -> approved -> completed``.
+    The single-item ``reject_payout`` only operates on the ``requested`` state,
+    so a completed payout needs an explicit terminal reversal. We mark it
+    ``reversed`` and stamp who/when. Dev/prod parity (SECOPS-007): this is a
+    pure DDB status transition with no provider branching — identical in both
+    environments. When ``bulk_payout_use_real_provider`` is True the real
+    provider clawback would be wired in alongside this transition.
+    """
+    resp = T.creator_payouts.get_item(Key={"payout_id": ref_id})
+    item = resp.get("Item")
+    if not item:
+        raise LookupError("payout not found")
+    status = item.get("status", "")
+    if status == "requested":
+        # Never advanced past pending — the standard reject path applies.
+        reject_payout(ref_id, admin_sub, reason="Bulk batch undo")
+        return
+    if status not in ("approved", "processing", "completed"):
+        raise ValueError(f"payout not reversible (status={status})")
+    T.creator_payouts.update_item(
+        Key={"payout_id": ref_id},
+        UpdateExpression=(
+            "SET #s = :status, updated_at = :now, "
+            "reverted_by = :admin, reverted_at = :now"
+        ),
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={
+            ":status": "reversed",
+            ":now": now_ts(),
+            ":admin": admin_sub,
+        },
+    )
+
+
+def _reverse_refund(ref_id: str, admin_sub: str) -> None:
+    """Reverse a refund that ``execute_batch`` already approved.
+
+    ``approve_request`` credits the buyer's wallet (a ``refund_credit`` ledger
+    entry + ``payments_settled_cents -= amount`` balance delta) and moves the
+    request to ``approved``. ``reject_request`` only works on a ``pending``
+    request, so an approved refund needs the credit reversed. We write a
+    compensating ``refund_reversal`` debit ledger entry, undo the exact balance
+    delta that ``approve_request`` applied (``payments_settled_cents += amount``),
+    and mark the request ``reversed``.
+
+    Dev/prod parity (SECOPS-007): ledger writes go through the same
+    ``billing_shared`` helpers used by ``approve_request`` — no mock branching.
+    """
+    item = get_request(ref_id)
+    if not item:
+        raise LookupError("refund request not found")
+    status = item.get("status", "")
+    if status == "pending":
+        reject_request(ref_id, admin_sub, "Bulk batch undo")
+        return
+    if status != "approved":
+        raise ValueError(f"refund not reversible (status={status})")
+
+    amount = int(item.get("amount_cents", 0))
+    user_id = item.get("requester_user_id", "")
+    currency = (item.get("currency", "usd") or "usd").lower()
+    pk = user_pk(user_id)
+
+    if amount > 0 and user_id:
+        _, reversal_item = new_ledger_entry(
+            key_name="pk",
+            key_value=pk,
+            entry_type="refund_reversal",
+            amount_cents=amount,
+            state="settled",
+            reason="Refund reversed (bulk batch undo)",
+            meta={"refund_request_id": ref_id, "reversed_by": admin_sub},
+        )
+        ddb_put(T.billing, reversal_item)
+        # Undo the exact delta ``approve_request`` applied (it did
+        # ``payments_settled_cents -= amount``).
+        apply_balance_delta(
+            T.billing, pk, {"payments_settled_cents": amount}, currency=currency
+        )
+
+    from app.services.refund_requests import _rr_pk  # local import: internal helper
+
+    T.refund_requests.update_item(
+        Key={"pk": _rr_pk(ref_id), "sk": "META"},
+        UpdateExpression=(
+            "SET #s = :s, status_scope = :ss, updated_at = :t, "
+            "reverted_by = :admin, reverted_at = :t"
+        ),
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={
+            ":s": "reversed",
+            ":ss": "STATUS#reversed",
+            ":t": now_ts(),
+            ":admin": admin_sub,
+        },
+    )
+
+
+def undo_batch(batch_id: str, admin_sub: str) -> dict:
+    """Reverse all successful items in a completed batch within the undo window.
+
+    Raises ``ValueError`` if the batch is not found, is not completed, the undo
+    window has expired, or the batch was already undone. Per-item reversal
+    failures are captured (status ``undo_failed``) and do not abort the batch.
+    """
+    existing = T.bulk_payout_batches.get_item(Key={"batch_id": batch_id}).get("Item")
+    if not existing:
+        raise ValueError("batch not found")
+
+    # Check already-undone first so the clearer message wins (an undone batch's
+    # status is STATUS_UNDONE, which would otherwise trip the completed guard).
+    if existing.get("undo_performed_at") or existing.get("status") == STATUS_UNDONE:
+        raise ValueError("batch has already been undone")
+
+    status = existing.get("status")
+    if status not in (STATUS_COMPLETED, STATUS_COMPLETED_WITH_ERRORS):
+        raise ValueError(f"batch is not in a completed state (status={status})")
+
+    undo_expires_at = existing.get("undo_expires_at")
+    if undo_expires_at is None or now_ts() > int(undo_expires_at):
+        raise ValueError("undo window has expired")
+
+    kind = existing.get("kind")
+    items = existing.get("items", [])
+    reversal_results: list[dict] = []
+
+    for item in items:
+        if item.get("status") != "success":
+            # Skipped/failed items were never processed — leave them untouched.
+            reversal_results.append(dict(item))
+            continue
+        ref_id = item.get("ref_id", "")
+        try:
+            if kind == KIND_PAYOUT:
+                _reverse_payout(ref_id, admin_sub)
+            else:
+                _reverse_refund(ref_id, admin_sub)
+            reversal_results.append({**item, "status": "undone", "reason": ""})
+        except Exception as e:  # noqa: BLE001 - capture per-item reversal failure
+            logger.warning(
+                "undo_item_failed batch_id=%s kind=%s ref_id=%s err=%s",
+                batch_id, kind, ref_id, e,
+            )
+            reversal_results.append({**item, "status": "undo_failed", "reason": str(e)})
+
+    undo_ts = now_ts()
+    T.bulk_payout_batches.update_item(
+        Key={"batch_id": batch_id},
+        UpdateExpression=(
+            "SET #st = :st, undo_performed_at = :uat, "
+            "undo_performed_by = :uby, undo_expires_at = :ue, #it = :items"
+        ),
+        ExpressionAttributeNames={"#st": "status", "#it": "items"},
+        ExpressionAttributeValues={
+            ":st": STATUS_UNDONE,
+            ":uat": undo_ts,
+            ":uby": admin_sub,
+            ":ue": None,
+            ":items": reversal_results,
+        },
+    )
+    updated = T.bulk_payout_batches.get_item(Key={"batch_id": batch_id}).get("Item", {})
+    return _batch_to_out(updated)
+
+
+# --------------------------------------------------------------------------
+# CSV import (GAP-0213) — parse + validate a payout/refund CSV
+# --------------------------------------------------------------------------
+
+def parse_payout_csv(file_bytes: bytes, kind: str) -> list[str]:
+    """Parse a payout/refund CSV and return a validated, deduplicated ref_id list.
+
+    Expected columns: ``ref_id`` (required); ``amount_cents`` / ``recipient_email``
+    optional and informational only (the backend re-validates each ref_id against
+    its DB record in ``preview_batch`` / ``execute_batch``).
+
+    Security: rows whose ``ref_id`` does not match ``_REF_ID_PATTERN`` are silently
+    dropped (CSV-injection / formula payloads never reach the execute path). A hard
+    cap of ``_CSV_MAX_ROWS`` valid rows prevents resource exhaustion.
+
+    Pure function — no AWS calls, no environment branching (SECOPS-007).
+    Raises ``CsvImportError`` on format errors.
+    """
+    _validate_kind(kind)
+
+    if len(file_bytes) > _CSV_MAX_BYTES:
+        raise CsvImportError("file too large (max 5 MB)")
+
+    try:
+        text = file_bytes.decode("utf-8-sig")  # tolerate Excel BOM
+    except UnicodeDecodeError as exc:
+        raise CsvImportError("file must be UTF-8 encoded") from exc
+
+    reader = _csv.DictReader(_io.StringIO(text))
+    if not reader.fieldnames:
+        raise CsvImportError("CSV has no header row")
+
+    field_map = {f: (f or "").strip().lower() for f in reader.fieldnames}
+    if "ref_id" not in field_map.values():
+        raise CsvImportError(
+            f"CSV must have a 'ref_id' column. Found: {list(reader.fieldnames)}"
+        )
+
+    ref_ids: list[str] = []
+    seen: set[str] = set()
+    skipped_invalid = 0
+
+    for row in reader:
+        normalized = {field_map.get(k, k): (v or "").strip() for k, v in row.items()}
+        ref_id = normalized.get("ref_id", "").strip()
+        if not ref_id:
+            continue
+        if not _REF_ID_PATTERN.match(ref_id):
+            skipped_invalid += 1
+            continue
+        if ref_id in seen:
+            continue
+        seen.add(ref_id)
+        ref_ids.append(ref_id)
+        if len(ref_ids) > _CSV_MAX_ROWS:
+            raise CsvImportError(
+                f"CSV exceeds maximum of {_CSV_MAX_ROWS} rows. "
+                "Split into smaller batches."
+            )
+
+    if not ref_ids:
+        raise CsvImportError("no valid ref_id values found in CSV")
+
+    if skipped_invalid:
+        logger.info("csv_import_skipped_rows kind=%s count=%s", kind, skipped_invalid)
+
+    return ref_ids

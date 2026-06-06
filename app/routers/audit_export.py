@@ -74,6 +74,7 @@ async def create_audit_export(
     fmt = body.get("format", "ndjson")
     from_date = body.get("from_date", 0)
     to_date = body.get("to_date", 0)
+    column_format = body.get("column_format")
 
     if not categories or not isinstance(categories, list):
         raise HTTPException(status_code=400, detail="categories is required and must be a non-empty list")
@@ -81,6 +82,14 @@ async def create_audit_export(
         raise HTTPException(status_code=400, detail="format must be csv, ndjson, or pdf")
     if not isinstance(from_date, int) or not isinstance(to_date, int):
         raise HTTPException(status_code=400, detail="from_date and to_date must be integers")
+    # GAP-0211: accounting-software column mapping. Optional; defaults to the
+    # generic audit schema. Only applied to CSV billing exports downstream.
+    from app.services.audit_export_accounting import VALID_COLUMN_FORMATS
+    if column_format not in VALID_COLUMN_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail="column_format must be one of: quickbooks, xero (or omitted)",
+        )
 
     _validate_categories(categories)
     _validate_date_range(from_date, to_date)
@@ -96,6 +105,7 @@ async def create_audit_export(
         actor_user_id=body.get("actor_user_id"),
         target_user_id=body.get("target_user_id"),
         event_actions=body.get("event_actions"),
+        column_format=column_format,
     )
 
     return _job_to_out(job)
@@ -298,10 +308,14 @@ async def download_audit_export(
     content = item.get("export_content", "")
     if content:
         if fmt == "csv":
+            # GAP-0211: surface the accounting variant in the filename so the
+            # download is self-describing (e.g. ...-quickbooks.csv).
+            column_format = item.get("column_format") or ""
+            suffix = f"-{column_format}" if column_format in ("quickbooks", "xero") else ""
             return PlainTextResponse(
                 content=content,
                 media_type="text/csv",
-                headers={"Content-Disposition": f'attachment; filename="audit-export-{export_id}.csv"'},
+                headers={"Content-Disposition": f'attachment; filename="audit-export-{export_id}{suffix}.csv"'},
             )
         else:
             return PlainTextResponse(
@@ -321,6 +335,7 @@ def _job_to_out(item: dict) -> dict:
         "status": item.get("status", ""),
         "categories": list(item.get("categories", [])),
         "format": item.get("format", "ndjson"),
+        "column_format": item.get("column_format") or None,
         "from_date": int(item.get("from_date", 0)),
         "to_date": int(item.get("to_date", 0)),
         "event_count": int(item["event_count"]) if item.get("event_count") is not None else None,

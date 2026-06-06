@@ -274,6 +274,7 @@ def run_due_schedules() -> int:
                 from_ts=now - lookback,
                 to_ts=now,
                 created_by=str(sched.get("created_by", "")),
+                column_format=(sched.get("column_format") or None),
             )
             _advance_schedule(
                 schedule_id=str(schedule_id),
