@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Dict, List
 
 from boto3.dynamodb.conditions import Key
@@ -33,6 +34,8 @@ from app.core.tables import T
 from app.core.time import now_ts
 
 router = APIRouter(prefix="/ui/mfa", tags=["mfa-devices"])
+
+logger = logging.getLogger(__name__)
 
 
 def _sorted_devices(items: List[Dict[str, Any]], mapper: Callable[[Dict[str, Any]], Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -166,6 +169,15 @@ async def sms_devices_confirm(req: Request, body: SmsDeviceConfirmReq, ctx=Depen
     revoke_challenge(user_sub, body.challenge_id)
     stamp_mfa_verified(user_sub, ctx["session_id"])
     audit_event("sms_device_confirm", ctx["user_sub"], req, outcome="success", sms_device_id=sms_device_id)
+
+    # KYC-009 / GAP-0269: auto-evaluate KYC tier after phone (SMS) verification.
+    # Best-effort; no-op when gating is disabled (get_user_kyc_tier returns max).
+    try:
+        from app.services.kyc_tiers import auto_evaluate_tier
+        auto_evaluate_tier(user_sub, request=req)
+    except Exception:
+        logger.warning("kyc.tier.auto_evaluate_failed user_sub=%s", user_sub, exc_info=True)
+
     return {"ok": True, "sms_device_id": sms_device_id, "recovery_codes": recovery_codes}
 
 @router.post("/sms/devices/{sms_device_id}/remove/begin")

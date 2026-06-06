@@ -42,6 +42,30 @@ def require_user(x_user_id: Optional[str], expected_user_id: Optional[str] = Non
     return x_user_id
 
 
+def _enforce_kyc_tier(user_sub: str, minimum_tier: int) -> None:
+    """GAP-0268: Tier gate for the X-User-Id-authenticated subscription API.
+
+    Inert pass-through unless both the enforcement flag and the gating flag are on
+    (defaults OFF). Mirrors require_kyc_tier in app/auth/deps.py but works with this
+    router's header-based auth instead of session auth.
+    """
+    if not (S.kyc_tier_enforcement_enabled and S.kyc_tier_gating_enabled):
+        return
+    from app.services.kyc_tiers import get_user_kyc_tier, KYC_TIER_NAMES
+    tier = get_user_kyc_tier(user_sub)
+    if tier < minimum_tier:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "kyc_tier_insufficient",
+                "message": f"This action requires {KYC_TIER_NAMES.get(minimum_tier, f'Tier {minimum_tier}')} verification",
+                "current_tier": tier,
+                "required_tier": minimum_tier,
+                "upgrade_url": "/kyc",
+            },
+        )
+
+
 def interval_seconds(interval: str) -> int:
     if interval == "year":
         return 365 * 24 * 3600
@@ -848,6 +872,7 @@ async def subscribe(
     subscriber_id = require_user(x_user_id)
     if body.subscriber_id and body.subscriber_id != subscriber_id:
         raise HTTPException(status_code=403, detail="subscriber_id must match X-User-Id")
+    _enforce_kyc_tier(subscriber_id, 2)  # GAP-0268 (inert unless enforcement flag on)
     plan = ddb_get_item(pk_plan(plan_id), "META")
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")

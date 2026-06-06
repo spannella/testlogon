@@ -1397,6 +1397,17 @@ def _admin_decide_case(
             )
         except Exception:  # noqa: BLE001 — monitoring must never block approval
             pass
+
+        # KYC-009 / GAP-0269: auto-evaluate KYC tier after case approval.
+        # Best-effort; no-op when gating is disabled (get_user_kyc_tier returns max).
+        try:
+            from app.services.kyc_tiers import auto_evaluate_tier
+            auto_evaluate_tier(str(updated.get("user_sub") or ""), request=request)
+        except Exception:
+            logger.warning(
+                "kyc.tier.auto_evaluate_failed user_sub=%s case_id=%s",
+                updated.get("user_sub"), case_id, exc_info=True,
+            )
     return _wrap_case(updated)
 
 

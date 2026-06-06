@@ -282,6 +282,14 @@ async def register_confirm(
     mark_user_verified(username)
     audit_event("register_confirm", username, req, outcome="success")
 
+    # KYC-009 / GAP-0269: auto-evaluate KYC tier after email verification.
+    # Best-effort; no-op when gating is disabled (get_user_kyc_tier returns max).
+    try:
+        from app.services.kyc_tiers import auto_evaluate_tier
+        auto_evaluate_tier(username, request=req)
+    except Exception:
+        logger.warning("kyc.tier.auto_evaluate_failed user_sub=%s", username, exc_info=True)
+
     # ── Referral attribution hook (AFFILIATE-001) ───────────────
     try:
         ref_code = req.cookies.get("ref_attribution", "")

@@ -347,7 +347,12 @@ def require_kyc_tier(minimum_tier: int):
     """FastAPI dependency factory that enforces a minimum KYC tier."""
 
     async def _check(request: Request):
-        if not S.kyc_tier_gating_enabled:
+        # GAP-0268: router-level enforcement is gated behind a dedicated flag that
+        # defaults OFF. When disabled, this dependency is a pure pass-through so that
+        # existing tier-0 users (dev/E2E) are never blocked. The broader
+        # kyc_tier_gating_enabled flag must also be on for tier values to be read
+        # from DDB (otherwise get_user_kyc_tier returns KYC_TIER_MAX and all pass).
+        if not (S.kyc_tier_enforcement_enabled and S.kyc_tier_gating_enabled):
             return  # Feature flag: skip tier check when disabled
         from app.services.kyc_tiers import get_user_kyc_tier, KYC_TIER_NAMES
         user = await get_authenticated_user(request)

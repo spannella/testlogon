@@ -31,7 +31,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 from pydantic_core import PydanticCustomError
 
-from app.auth.deps import AuthenticatedUser, extract_bearer_token, get_authenticated_user, get_authenticated_user_sub
+from app.auth.deps import AuthenticatedUser, extract_bearer_token, get_authenticated_user, get_authenticated_user_sub, require_kyc_tier
 from app.auth.policy import require_admin_scope
 from app.metrics import (
     record_helpdesk_alert_sent,
@@ -5874,6 +5874,7 @@ def start_conversation(
     inp: StartConversationIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     cid = "c_" + new_id()
     created_at = now_ts()
@@ -6005,6 +6006,7 @@ def start_group_conversation(
     inp: StartGroupConversationIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     return start_conversation(
         StartConversationIn(
@@ -7919,6 +7921,7 @@ def send_text_message(
     inp: SendTextMessageIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     _enforce_messaging_internal_entitlement(
         user_id=user_id,
@@ -8176,6 +8179,7 @@ def create_image_message(
     inp: CreateImageMessageIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
@@ -8968,6 +8972,7 @@ def create_file_share_message(
     inp: CreateFileShareMessageIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
@@ -13553,6 +13558,7 @@ def send_message_tip(
     inp: SendTipIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(2)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     """Send a monetary tip attached to a message."""
     require_participant_active(user_id, conversation_id)
@@ -13701,6 +13707,7 @@ def unlock_message(
     inp: UnlockMessageIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(2)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     """Pay to unlock a locked (PPV) message."""
     require_participant_active(user_id, conversation_id)

@@ -1241,6 +1241,11 @@ class Settings:
     risk_high_threshold: int = int(os.environ.get("RISK_HIGH_THRESHOLD", "70"))
     # KYC tiered verification levels (KYC-009)
     kyc_tier_gating_enabled: bool = os.environ.get("KYC_TIER_GATING_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    # KYC-009 / GAP-0268: router-level enforcement of require_kyc_tier() gates.
+    # Defaults OFF so existing tier-0 users (dev/E2E) are never blocked. When False,
+    # require_kyc_tier is a pure pass-through. Must be explicitly enabled (and accounts
+    # pre-seeded at the right tier) before turning on per the Phase 2-4 rollout plan.
+    kyc_tier_enforcement_enabled: bool = os.environ.get("KYC_TIER_ENFORCEMENT_ENABLED", "false").lower() in ("1", "true", "yes", "on")
 
     # KYC enhanced/high-risk residency readiness gate (KYC-004 / GAP-0252)
     kyc_residency_gate_enabled: bool = os.environ.get("KYC_RESIDENCY_GATE_ENABLED", "true").lower() in ("1", "true", "yes", "on")

@@ -21,7 +21,7 @@ else:  # pragma: no cover
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.auth.deps import AuthenticatedUser, get_authenticated_user
+from app.auth.deps import AuthenticatedUser, get_authenticated_user, require_kyc_tier
 from app.auth.policy import require_admin_scope, require_role_value
 from app.auth.roles import AdminScope, Role, admin_profile_has_scope, normalize_role
 from app.core.settings import S
@@ -840,7 +840,7 @@ def create_us_bank_setup_intent(ctx=Depends(require_ui_session)) -> Dict[str, st
 
 
 @dual_route("POST", "/billing/payment-methods/card")
-def add_card(body: AddCardReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+def add_card(body: AddCardReq, req: Request = None, ctx=Depends(require_ui_session), _kyc: object = Depends(require_kyc_tier(2))) -> Dict[str, Any]:  # GAP-0268 (inert unless enforcement flag on)
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
     customer_id = get_or_create_customer(user_id)

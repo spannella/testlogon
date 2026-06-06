@@ -441,6 +441,23 @@ class KycIdScannerStore:
             profile = {}
         out["first_name"] = profile.get("first_name") or ""
         out["last_name"] = profile.get("last_name") or ""
+        # GAP-0270: if structured name fields are absent, derive them from display_name.
+        # Users who registered with only a full_name (stored as display_name) would
+        # otherwise produce an empty profile_name, skipping the name comparison and
+        # yielding match_score=0 -> every such scan is falsely flagged.
+        if not out["first_name"] and not out["last_name"]:
+            display_name = str(profile.get("display_name") or "").strip()
+            if display_name:
+                parts = display_name.split(None, 1)  # split on first whitespace, max 2 parts
+                out["first_name"] = parts[0] if parts else ""
+                out["last_name"] = parts[1] if len(parts) > 1 else ""
+                logger.debug(
+                    "kyc.id_scanner.crosscheck.display_name_fallback user_sub=%s "
+                    "derived first_name=%r last_name=%r",
+                    user_sub,
+                    out["first_name"],
+                    out["last_name"],
+                )
         out["date_of_birth"] = profile.get("birthday") or profile.get("date_of_birth") or ""
         out["nationality"] = profile.get("nationality") or profile.get("country") or ""
         # case META may carry overriding identity fields

@@ -41,6 +41,7 @@ from app.services.newsfeed_feed_query import FeedFilterParams, parse_filter_wind
 from app.services.rate_limit import rate_limit_feed_query
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
+from app.auth.deps import require_kyc_tier
 from app.services import post_interesting as _post_interesting_svc
 from app.services.subscription_access import can_access_creator
 from app.services.usage_metering import (
@@ -4666,7 +4667,7 @@ def unlike_post(post_id: str, user_id: UserIdDep):
 
 
 @router.post("/posts/{post_id}/tip")
-def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep):
+def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object = Depends(require_kyc_tier(2))):  # GAP-0268 (inert unless enforcement flag on)
     post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -5780,7 +5781,7 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
 # Unlock post via payment
 # -----------------------------
 @router.post("/posts/unlock", response_model=UnlockPostResponse)
-def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
+def unlock_post(req: UnlockPostRequest, user_id: UserIdDep, _kyc: object = Depends(require_kyc_tier(2))):  # GAP-0268 (inert unless enforcement flag on)
     post = ddb_get_item({"pk": pk_post(req.post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
