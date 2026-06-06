@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +44,8 @@ from app.core.tables import T
 from app.core.time import now_ts
 from app.services import kyc_cases
 from app.services.api_key_capabilities import expand_api_key_capabilities
+
+logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -461,6 +465,50 @@ def get_application_result(principal: Dict[str, Any], application_id: str) -> Di
 
 # ── Documents ────────────────────────────────────────────────────────
 
+def _store_document_bytes(
+    *,
+    partner_id: str,
+    application_id: str,
+    document_id: str,
+    filename: str,
+    file_type: str,
+    contents: bytes,
+) -> Dict[str, Any]:
+    """Persist partner-uploaded document bytes to S3 (GAP-0287).
+
+    Mirrors ``kyc_document_verification._store_image``: boto3 S3 client via the
+    centralized ``aws_clients.s3_client`` factory (SECOPS-007 parity — moto
+    in-process in dev, real S3 in prod, same code path). Returns ``s3_key`` +
+    ``bucket`` (+ a ``/mock/s3/...`` ``url`` in dev). Storage is best-effort: a
+    transient S3 failure logs a warning and still records the key so the
+    document metadata + idempotency stay consistent.
+    """
+    from app.core.settings import S
+
+    bucket = S.kyc_partner_api_docs_bucket or "local-uploads"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", filename or "document")
+    prefix = S.kyc_partner_api_docs_s3_prefix or "kyc-api-docs/"
+    s3_key = f"{prefix}{partner_id}/{application_id}/{document_id}/{safe_name}"
+
+    if contents:
+        try:
+            from app.core.aws_clients import s3_client
+
+            s3_client().put_object(
+                Bucket=bucket,
+                Key=s3_key,
+                Body=contents,
+                ContentType=str(file_type or "application/octet-stream"),
+            )
+        except Exception:  # pragma: no cover - dev mock / transient best effort
+            logger.warning("kyc.partner_api.document.s3_put_failed key=%s", s3_key)
+
+    out: Dict[str, Any] = {"s3_key": s3_key, "bucket": bucket}
+    if S.dev_mode:
+        out["url"] = f"/mock/s3/{bucket}/{s3_key}"
+    return out
+
+
 def upload_document(
     principal: Dict[str, Any],
     application_id: str,
@@ -469,6 +517,7 @@ def upload_document(
     file_type: str,
     filename: str = "",
     size_bytes: int = 0,
+    contents: bytes = b"",
 ) -> Dict[str, Any]:
     partner_id = _partner_id(principal)
     normalized_type = str(document_type or "").strip().lower()
@@ -483,6 +532,18 @@ def upload_document(
     item = _require_submission(partner_id, application_id)
     ts = now_ts()
     document_id = f"doc_{uuid.uuid4().hex[:16]}"
+
+    # GAP-0287: actually persist the uploaded bytes to S3 (previously read and
+    # discarded) and record the resulting key on the document.
+    storage = _store_document_bytes(
+        partner_id=partner_id,
+        application_id=application_id,
+        document_id=document_id,
+        filename=str(filename or ""),
+        file_type=str(file_type or "application/octet-stream"),
+        contents=contents or b"",
+    )
+
     doc = {
         "document_id": document_id,
         "document_type": normalized_type,
@@ -490,6 +551,8 @@ def upload_document(
         "filename": str(filename or ""),
         "size_bytes": int(size_bytes or 0),
         "uploaded_at": ts,
+        "s3_key": storage["s3_key"],
+        "bucket": storage["bucket"],
     }
     documents = list(item.get("documents") or [])
     documents.append(doc)
@@ -507,7 +570,84 @@ def upload_document(
         document_id=document_id,
         document_type=normalized_type,
     )
-    return {"document_id": document_id, "file_type": doc["file_type"], "document_type": normalized_type}
+    out = {
+        "document_id": document_id,
+        "file_type": doc["file_type"],
+        "document_type": normalized_type,
+    }
+    if storage.get("url"):
+        out["url"] = storage["url"]
+    return out
+
+
+def get_document_download(
+    principal: Dict[str, Any], application_id: str, document_id: str
+) -> Dict[str, Any]:
+    """Return a download URL / pointer for a previously uploaded document (GAP-0287).
+
+    Enforces per-partner isolation (only the owning partner's partition is read)
+    and returns a presigned S3 URL in prod, or the dev ``/mock/s3/...`` URL in
+    dev (SECOPS-007 parity — same code path, only the URL source differs).
+    """
+    from app.core.settings import S
+
+    partner_id = _partner_id(principal)
+    item = _require_submission(partner_id, application_id)
+    doc = next(
+        (
+            d
+            for d in (item.get("documents") or [])
+            if str(d.get("document_id") or "") == str(document_id)
+        ),
+        None,
+    )
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "kyc_api_document_not_found",
+                "message": "Document not found for this application",
+            },
+        )
+    s3_key = str(doc.get("s3_key") or "")
+    bucket = str(doc.get("bucket") or S.kyc_partner_api_docs_bucket or "local-uploads")
+    if not s3_key:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "kyc_api_document_not_available",
+                "message": "No stored file for this document",
+            },
+        )
+
+    result: Dict[str, Any] = {
+        "document_id": str(doc.get("document_id") or ""),
+        "document_type": str(doc.get("document_type") or ""),
+        "filename": str(doc.get("filename") or ""),
+        "file_type": str(doc.get("file_type") or "application/octet-stream"),
+        "size_bytes": int(doc.get("size_bytes") or 0),
+    }
+    if S.dev_mode:
+        result["url"] = f"/mock/s3/{bucket}/{s3_key}"
+        return result
+    try:
+        from app.core.aws_clients import s3_client
+
+        result["url"] = s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": s3_key},
+            ExpiresIn=300,
+        )
+    except Exception:  # pragma: no cover - transient
+        logger.warning("kyc.partner_api.document.presign_failed key=%s", s3_key)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "kyc_api_document_unavailable",
+                "message": "Document download is temporarily unavailable",
+            },
+        )
+    return result
 
 
 # ── Webhooks ─────────────────────────────────────────────────────────

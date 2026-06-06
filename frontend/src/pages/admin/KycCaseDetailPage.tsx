@@ -44,6 +44,9 @@ import {
 import { KycFacialComparisonReview } from "@/pages/admin/KycFacialComparisonReview";
 import { ResidencyVerificationTab } from "@/pages/admin/ResidencyVerificationTab";
 import { KycFinancialVerificationPanel } from "@/pages/admin/KycFinancialVerificationPanel";
+import { KycPiiSection } from "@/components/shared/KycPiiSection";
+import { useAuthStore } from "@/stores/authStore";
+import { getRoleFromAccessToken } from "@/lib/adminCapabilities";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -138,6 +141,11 @@ export default function KycCaseDetailPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  // KYC-023 / GAP-0288: viewer identity + role drive PII reveal/key-management.
+  const viewerSub = useAuthStore((s) => s.userId);
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const isRoot = getRoleFromAccessToken(accessToken) === "root";
 
   const [approveDialogOpen, setApproveDialogOpen] = useState(false);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
@@ -271,6 +279,12 @@ export default function KycCaseDetailPage() {
 
   const isActionable = ["submitted", "under_review", "needs_more_info"].includes(caseData.status);
 
+  // KYC-023 / GAP-0288: assigned admin (or root) may decrypt PII fields.
+  const canReveal =
+    isRoot ||
+    (!!caseData.decision_state?.assigned_admin_sub &&
+      caseData.decision_state.assigned_admin_sub === viewerSub);
+
   return (
     <div className="container mx-auto max-w-7xl space-y-6 px-4 py-6">
       <div className="flex items-center gap-4">
@@ -302,6 +316,9 @@ export default function KycCaseDetailPage() {
           </TabsTrigger>
           <TabsTrigger value="financial" data-testid="tab-financial">
             Financial Verification
+          </TabsTrigger>
+          <TabsTrigger value="pii" data-testid="tab-pii">
+            Sensitive PII
           </TabsTrigger>
         </TabsList>
 
@@ -419,6 +436,16 @@ export default function KycCaseDetailPage() {
 
         <TabsContent value="financial">
           <KycFinancialVerificationPanel userSub={caseData.user_sub} />
+        </TabsContent>
+
+        <TabsContent value="pii">
+          {/* PII -- masked fields, reveal, root key management + audit (KYC-023 / GAP-0288) */}
+          <KycPiiSection
+            caseId={caseData.kyc_case_id}
+            userSub={caseData.user_sub}
+            canReveal={canReveal}
+            isRoot={isRoot}
+          />
         </TabsContent>
       </Tabs>
 

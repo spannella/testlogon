@@ -1269,6 +1269,29 @@ class Settings:
     kyc_documents_status_index_name: str = os.environ.get("KYC_DOCUMENTS_STATUS_INDEX_NAME", "ByStatus")
     kyc_documents_bucket: str = os.environ.get("KYC_DOCUMENTS_BUCKET", "local-uploads")
     kyc_documents_s3_prefix: str = os.environ.get("KYC_DOCUMENTS_S3_PREFIX", "kyc-documents/")
+
+    # KYC Partner API (KYC-021) — per-API-key rate limits (GAP-0286) and the
+    # S3 storage location for partner-uploaded documents (GAP-0287). Same code
+    # path dev (in-process moto / DynamoDB Local) + prod (real S3/DDB) per
+    # SECOPS-007 — no dev_mode bypass; limits/bucket are env-configurable.
+    kyc_partner_api_docs_bucket: str = os.environ.get(
+        "KYC_PARTNER_API_DOCS_BUCKET", os.environ.get("KYC_DOCUMENTS_BUCKET", "local-uploads")
+    )
+    kyc_partner_api_docs_s3_prefix: str = os.environ.get(
+        "KYC_PARTNER_API_DOCS_S3_PREFIX", "kyc-api-docs/"
+    )
+    kyc_partner_api_rl_applications_per_hour: int = int(
+        os.environ.get("KYC_PARTNER_API_RL_APPLICATIONS_PER_HOUR", "100")
+    )
+    kyc_partner_api_rl_documents_per_hour: int = int(
+        os.environ.get("KYC_PARTNER_API_RL_DOCUMENTS_PER_HOUR", "200")
+    )
+    kyc_partner_api_rl_read_per_hour: int = int(
+        os.environ.get("KYC_PARTNER_API_RL_READ_PER_HOUR", "1000")
+    )
+    kyc_partner_api_rl_webhook_test_per_hour: int = int(
+        os.environ.get("KYC_PARTNER_API_RL_WEBHOOK_TEST_PER_HOUR", "10")
+    )
     kyc_documents_verification_enabled: bool = os.environ.get(
         "KYC_DOCUMENTS_VERIFICATION_ENABLED", "true"
     ).lower() in ("1", "true", "yes", "on")

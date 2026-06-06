@@ -382,6 +382,47 @@ def rate_limit_share_link_download(link_id: str, ip: str) -> None:
         )
 
 
+def rate_limit_kyc_partner_api(api_key_id: str, category: str) -> None:
+    """Per-API-key hourly rate limit for the KYC Partner API (GAP-0286, KYC-021).
+
+    The KYC-021 ticket (§4.7) specifies distinct hourly caps per category:
+      * ``applications``   — 100 / hour  (POST /applications, /submit)
+      * ``documents``      — 200 / hour  (POST /applications/{id}/documents)
+      * ``read``           — 1000 / hour (all GET endpoints)
+      * ``webhook_test``   — 10 / hour   (POST /webhooks/{id}/test)
+
+    Keying on ``apikey:{api_key_id}`` (not the partner's ``user_sub``) means each
+    issued API key gets its own budget. Uses the existing DynamoDB-backed counter
+    (``_bucket_limit``) so the same code path runs in dev (DynamoDB Local) and
+    prod (real DynamoDB) — no ``dev_mode`` bypass (SECOPS-007 parity). Caps are
+    env-configurable via the ``KYC_PARTNER_API_RL_*`` settings.
+    """
+    caps = {
+        "applications": int(getattr(S, "kyc_partner_api_rl_applications_per_hour", 100) or 100),
+        "documents": int(getattr(S, "kyc_partner_api_rl_documents_per_hour", 200) or 200),
+        "read": int(getattr(S, "kyc_partner_api_rl_read_per_hour", 1000) or 1000),
+        "webhook_test": int(getattr(S, "kyc_partner_api_rl_webhook_test_per_hour", 10) or 10),
+    }
+    cap = caps.get(category)
+    if cap is None:
+        return
+    win = 3600
+    sid = f"rl#kyc_api#{category}"
+    key = f"apikey:{api_key_id or 'unknown'}"
+    if not _bucket_limit(key, sid, cap, win):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "kyc_api_rate_limited",
+                "message": "Too many requests for this API key; try again later",
+                "category": category,
+                "limit": cap,
+                "window_seconds": win,
+            },
+            headers={"Retry-After": str(win)},
+        )
+
+
 def rate_limit_filemgr_mount_onboarding(user_sub: str, ip: str) -> None:
     sid = "rl#filemgr_mount_onboarding"
     max_n = int(getattr(S, "filemgr_mount_initiate_max_per_window", 5) or 5)
