@@ -37,6 +37,8 @@ def _preview_for_event(*, event_type: str, call_state: str, reason: Optional[str
         return "Recording a voicemail"
     if event_type == "call.voicemail_complete":
         return "Left a voicemail"
+    if event_type == "call.recording_available":
+        return "Call recording available"
     if call_state == "voicemail" or event_type == "voicemail":
         return "Voicemail"
     return f"Call event: {call_state}"

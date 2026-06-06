@@ -44,6 +44,7 @@ import { ScheduledMessages } from "./ScheduledMessages";
 import { HiddenMessagesPanel } from "./HiddenMessagesPanel";
 import { PinnedMessageBanner } from "./PinnedMessageBanner";
 import { PinnedMessagesPanel } from "./PinnedMessagesPanel";
+import { RecordingsPanel } from "./RecordingsPanel";
 import { ThreadPanel } from "./ThreadPanel";
 import { useMessageJump } from "./useMessageJump";
 import { CallSessionOverlay, type CallSessionUi, type CallUiState } from "./CallSessionOverlay";
@@ -85,6 +86,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const [scheduledOpen, setScheduledOpen] = React.useState(false);
   const [hiddenOpen, setHiddenOpen] = React.useState(false);
   const [pinsOpen, setPinsOpen] = React.useState(false);
+  const [recordingsOpen, setRecordingsOpen] = React.useState(false);
   const galleryEnabled = isMessagingGalleryEnabled();
   const dmLotteryEnabled = isMessagingDmLotteryEnabled();
   const [dismissedPinnedMessageId, setDismissedPinnedMessageId] = React.useState<string | null>(null);
@@ -835,7 +837,9 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   });
 
   // Drive billing heartbeats while a paid call is connected (GAP-0016).
-  useCallBillingHeartbeat({
+  // GAP-0147: capture the latest heartbeat so the in-call billing overlay can
+  // render the running cost ticker, balance, and low-balance warning.
+  const callBilling = useCallBillingHeartbeat({
     callId: callMachine.callId,
     enabled: callMachine.phase === "connected" && isPaidCall,
     onEndCall: () => {
@@ -1162,6 +1166,12 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
               <EyeOff className="mr-2 h-4 w-4" />
               Hidden messages
             </DropdownMenuItem>
+            {callRecordingEnabled && (
+              <DropdownMenuItem onClick={() => setRecordingsOpen(true)}>
+                <Video className="mr-2 h-4 w-4" />
+                Recordings
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {isGroup && (
@@ -1401,6 +1411,14 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         }}
       />
 
+      {callRecordingEnabled && (
+        <RecordingsPanel
+          open={recordingsOpen}
+          onOpenChange={setRecordingsOpen}
+          conversationId={convoId}
+        />
+      )}
+
       <ThreadPanel
         open={threadPanelOpen}
         onOpenChange={setThreadPanelOpen}
@@ -1523,6 +1541,13 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         showRecordingConsent={callRecording.recordingState === "consent_pending" && !!callRecording.consentPendingFrom}
         recordingConsentFrom={callRecording.consentPendingFrom}
         onConsentRecording={(accept: boolean) => callRecording.respondToRequest(accept)}
+        isPaidCall={isPaidCall}
+        billingTotalCostCents={callBilling?.total_cost_cents}
+        billingRateCentsPerMinute={callBilling?.rate_cents_per_minute}
+        billingElapsedSeconds={callBilling?.elapsed_seconds}
+        billingBalanceRemainingCents={callBilling?.balance_remaining_cents}
+        billingWarnLowBalance={callBilling?.warn_low_balance}
+        billingMinutesRemaining={callBilling?.minutes_remaining}
       />
     </div>
   );

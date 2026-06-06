@@ -27,6 +27,19 @@ export default defineConfig({
       "/api": "http://localhost:8000",
       "/v1": "http://localhost:8000",
       "/messaging": "http://localhost:8000",
+      // /messages is BOTH a SPA route (the messages page) and a backend API
+      // prefix (call-recording endpoints live at /messages/recordings). Serve
+      // index.html for browser navigations; proxy XHR/fetch to the backend.
+      "/messages": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        },
+      },
       "/feed": {
         target: "http://localhost:8000",
         bypass: (req) => {
