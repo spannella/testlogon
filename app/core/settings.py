@@ -1334,6 +1334,14 @@ class Settings:
     kyc_residency_recency_days: int = int(
         os.environ.get("KYC_RESIDENCY_RECENCY_DAYS", "90")
     )
+    # KYC-005 / GAP-0255: periodic background task that transitions verified
+    # residency documents whose document_date has aged out of the recency
+    # window to ``expired`` so a stale submission stops satisfying readiness
+    # gates forever. Default on (compliance requirement); flag exists only for
+    # emergency rollback without a code deploy.
+    kyc_residency_expiry_enabled: bool = os.environ.get(
+        "KYC_RESIDENCY_EXPIRY_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
 
     # KYC-018: Address Verification Service
     # Master switch for the address verification feature.

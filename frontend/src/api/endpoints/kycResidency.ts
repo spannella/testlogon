@@ -36,3 +36,6 @@ export const reviewKycResidencyDocument = (
   documentId: string,
   body: KycResidencyReviewRequest,
 ) => api.post<KycResidencyDocumentOut>(`/ui/kyc/residency/admin/${documentId}/review`, body);
+
+export const adminListKycResidencyForCase = (caseId: string) =>
+  api.get<KycResidencyListResponse>(`/ui/kyc/residency/admin/case/${caseId}`);

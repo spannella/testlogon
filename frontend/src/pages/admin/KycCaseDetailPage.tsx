@@ -42,6 +42,7 @@ import {
   type KycTimelineEvent,
 } from "@/api/endpoints/kyc-admin";
 import { KycFacialComparisonReview } from "@/pages/admin/KycFacialComparisonReview";
+import { ResidencyVerificationTab } from "@/pages/admin/ResidencyVerificationTab";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -295,6 +296,9 @@ export default function KycCaseDetailPage() {
           <TabsTrigger value="extraction" data-testid="tab-extraction">
             Document Extraction
           </TabsTrigger>
+          <TabsTrigger value="residency" data-testid="tab-residency">
+            Residency
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -403,6 +407,10 @@ export default function KycCaseDetailPage() {
 
         <TabsContent value="extraction">
           <ExtractionResultsPanel caseId={caseData.kyc_case_id} />
+        </TabsContent>
+
+        <TabsContent value="residency">
+          <ResidencyVerificationTab caseId={caseData.kyc_case_id} />
         </TabsContent>
       </Tabs>
 
