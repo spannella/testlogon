@@ -1,6 +1,6 @@
 # GAP-0092: health check URL shell injection latent
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-010 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-010 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AGENT-010.md`); see also `docs/tickets/writeups/AGENT-010.md`
 
 ## Location

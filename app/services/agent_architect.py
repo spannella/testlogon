@@ -97,6 +97,10 @@ _CONFIG_FIELDS = (
     "ticket_spec_style",
 )
 
+# GAP-0094: conservative allowlist for git branch names used in validation. The
+# clone command additionally sanitizes + shlex-quotes the branch (GAP-0079).
+_SAFE_BRANCH_RE = re.compile(r"^[a-zA-Z0-9_./-]{1,200}$")
+
 
 # ---------------------------------------------------------------------------
 # Table bootstrap (idempotent; tables are additive)
@@ -232,6 +236,22 @@ def validate_architect_config(config: Dict[str, Any]) -> List[str]:
     if coding_tool not in ("claude_code", "codex"):
         errors.append("Coding tool must be claude_code or codex")
 
+    # GAP-0094: reject repo_branch values containing shell metacharacters. The
+    # clone command sanitizes + shlex-quotes the branch (GAP-0079), but we also
+    # surface a clear error at the config-write boundary so admins cannot store a
+    # branch that would silently be rewritten.
+    repo_branch = str(config.get("repo_branch", "") or "")
+    if repo_branch:
+        if not _SAFE_BRANCH_RE.match(repo_branch):
+            errors.append(
+                "repo_branch contains disallowed characters; allowed: "
+                "alphanumerics, '-', '_', '/', '.'"
+            )
+        elif repo_branch.startswith("-"):
+            errors.append("repo_branch must not start with '-'")
+        elif ".." in repo_branch or "@{" in repo_branch:
+            errors.append("repo_branch must not contain '..' or '@{'")
+
     return errors
 
 
@@ -241,6 +261,10 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
         if key in config and config[key] is not None:
             out[key] = config[key]
     out.setdefault("repo_branch", "main")
+    # GAP-0094: defence-in-depth — sanitize the branch on every normalisation pass
+    # so service-code callers that bypass validate_architect_config still get a
+    # git-safe branch name.
+    out["repo_branch"] = _sanitize_branch(str(out["repo_branch"]))
     out.setdefault("reference_docs", list(_DEFAULT_REFERENCE_DOCS))
     out.setdefault("scan_paths", list(_DEFAULT_SCAN_PATHS))
     out.setdefault("ticket_template", _DEFAULT_TICKET_TEMPLATE)
