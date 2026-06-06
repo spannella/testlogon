@@ -5,7 +5,8 @@ milestone: M2
 epic: E17
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-116, AND-118]
 blocks: []
 ---
@@ -44,12 +45,20 @@ no wall-clock sleeps, no real network) across repeated and randomized-order runs
   - AND-118 — TTL expiry, LRU/size-based eviction, per-user cache clear on logout.
 - **Sibling (not under test here):** AND-117 stale/reconnect UX hooks are validated by their own
   UI tests; AND-119 covers only the data layer they consume.
-- **Backend contract:** FastAPI + DynamoDB, OpenAPI at `/openapi.json`. Cookie-based auth with
-  `ui_csrf` echoed as `X-CSRF-Token`; 401 → single `POST /ui/session/refresh` then retry.
-  Error `detail` is `string | [{msg}] | {code,...}`. The dev host is plaintext HTTP and
-  unreliable — tests simulate this rather than calling it.
+- **Backend contract:** FastAPI + DynamoDB, OpenAPI at `/openapi.json`. The web client uses
+  cookie-based auth (`credentials: "include"`) with the `ui_csrf` cookie echoed as the
+  `X-CSRF-Token` header; an `Authorization: Bearer <accessToken>` header is also attached when an
+  access token is present (verified: `src/api/client.ts` lines 135, 157-171). On a 401 *for an
+  already-authenticated caller*, the client performs a single deduplicated
+  `POST /ui/session/refresh` (shared `refreshPromise`) and retries the original request once; an
+  unauthenticated 401 propagates directly, and a failed refresh forces logout (verified:
+  `src/api/client.ts` lines 119-237). NOTE on server-side headers: the OpenAPI index lists
+  `X-SESSION-ID` and `X-IMPERSONATION-TOKEN` as request headers on `GET /ui/me`; impersonation
+  uses `X-IMPERSONATION-TOKEN` (client.ts 162-165). Error `detail` is `string | [{msg,...}] |
+  {code,...}` per `normalizeErrorDetail` (verified: client.ts 66-102). The dev host is plaintext
+  HTTP and unreliable — tests simulate this rather than calling it.
 - **Web reference:** `frontend/src/api/endpoints/*.ts`, `frontend/src/api/types.ts` for the
-  shapes the cache stores (e.g. `GET /ui/me`, list endpoints feeding Paging).
+  shapes the cache stores (e.g. `GET /ui/me` → `MeResp`, list endpoints feeding Paging).
 
 ## 3. Functional Requirements
 
@@ -169,19 +178,31 @@ exact number of recorded requests via `MockWebServer.requestCount`.
 This ticket defines no new endpoints. It asserts the cache layer's handling of existing
 endpoints, replayed through `MockWebServer`. Representative shapes used as fixtures:
 
-`GET /ui/me` success body (cached domain object):
+`GET /ui/me` success body (cached domain object). CORRECTED — the real `MeResp` shape is
+`{ user_sub, session_id, ip }` (verified: `src/api/types.ts` lines 31-35; endpoint
+`src/api/endpoints/auth.ts:45` `api.get<MeResp>("/ui/me")`; OpenAPI `GET /ui/me`). The earlier
+`{ user_id, username, display_name, factors }` fixture did not exist in the contract and has been
+replaced:
 
 ```json
-{ "user_id": "u_123", "username": "alice", "display_name": "Alice", "factors": ["totp"] }
+{ "user_sub": "u_123", "session_id": "sess_abc", "ip": "203.0.113.7" }
 ```
 
-FastAPI error bodies the cache/error mapping must tolerate (each is a fixture):
+FastAPI error bodies the cache/error mapping must tolerate (each is a fixture). NOTE: the array
+form is FastAPI's `HTTPValidationError` whose `ValidationError` items REQUIRE `loc`, `msg`, AND
+`type` (verified: OpenAPI `components.schemas.ValidationError`, required = `[loc, msg, type]`).
+The fixture below has been corrected to include `type`:
 
 ```json
 { "detail": "Service unavailable" }
-{ "detail": [ { "msg": "field required", "loc": ["body","x"] } ] }
+{ "detail": [ { "type": "missing", "loc": ["body","x"], "msg": "field required" } ] }
 { "detail": { "code": "RATE_LIMITED", "retry_after": 5 } }
 ```
+
+All three shapes are accepted by the web client's `normalizeErrorDetail` (verified: client.ts
+66-102): string → as-is, array → join of item `.msg` values, object with a known authorization
+`code` → mapped copy (an unknown `code` such as `RATE_LIMITED` falls through to the caller's
+fallback message). The Android `AppError` mapper under test must mirror this tolerance.
 
 The flaky-host suite enqueues HTTP 200, 500, 503, malformed JSON, and socket-timeout responses
 via `MockResponse` (`setResponseCode`, `setBody`, `setBodyDelay`,
@@ -348,3 +369,195 @@ Determinism rules (acceptance-critical):
   review and a lint/grep check in CI).
 - PR targets `android-port`, references AND-119/AND-116/AND-118, and is reviewed by a code owner
   of `core-data`. No new lint or `detekt` warnings introduced.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim in this spec, with verdict and an exact source pointer. Sources:
+OpenAPI index `reference/openapi.index.txt`, OpenAPI full spec
+`reference/openapi.pretty.json` (`components.schemas.<Name>`), and frontend reference under
+`reference/src/`.
+
+1. **`GET /ui/me` exists.** VERDICT: Verified. SOURCE: OpenAPI `GET /ui/me`
+   (`op=ui_me_ui_me_get`, `resp=200;422:HTTPValidationError`,
+   `params=user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`); `src/api/endpoints/auth.ts:45`
+   `api.get<MeResp>("/ui/me")`.
+2. **`GET /ui/me` success body shape.** VERDICT: Corrected. The spec previously claimed
+   `{ user_id, username, display_name, factors }`; the real DTO is
+   `MeResp = { user_sub: string, session_id: string, ip: string }`. SOURCE:
+   `src/api/types.ts:31-35 (MeResp)`. (The OpenAPI 200 response for `/ui/me` carries no named
+   schema in the index; the frontend `MeResp` is the authoritative consumed shape.)
+3. **`POST /ui/session/refresh` exists; empty request body; 200 response.** VERDICT: Verified.
+   SOURCE: OpenAPI `POST /ui/session/refresh` (`op=ui_session_refresh_ui_session_refresh_post`,
+   `req=` empty, `resp=200:`); `src/api/client.ts:121-130 (refreshSession)`.
+4. **Auth uses `ui_csrf` cookie echoed as `X-CSRF-Token` header.** VERDICT: Verified. SOURCE:
+   `src/api/client.ts:135` (doc comment), `:168-170` (`getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)`), `:16-19 (getCookie)`.
+5. **Cookie-based auth via `credentials: "include"`.** VERDICT: Verified. SOURCE:
+   `src/api/client.ts:183, 220` (request + retry both `credentials: "include"`); refresh at
+   `:124`.
+6. **A Bearer token is also attached when present.** VERDICT: Verified (refinement — the spec did
+   not mention this). SOURCE: `src/api/client.ts:157-160`
+   (`Authorization: Bearer ${accessToken}`).
+7. **401 → single `POST /ui/session/refresh` then one retry of the original request.** VERDICT:
+   Verified, with nuance. The refresh runs only when the caller is already authenticated
+   (unauthenticated 401 propagates), is deduplicated through a shared `refreshPromise`, and a
+   failed refresh forces logout. SOURCE: `src/api/client.ts:119, 194-237`.
+8. **Impersonation header is `X-IMPERSONATION-TOKEN`.** VERDICT: Verified (context). SOURCE:
+   `src/api/client.ts:162-165`; OpenAPI `GET /ui/me` `params=...,X-IMPERSONATION-TOKEN`.
+9. **Error `detail` is `string | [ {msg,...} ] | { code, ... }` and the client tolerates all
+   three.** VERDICT: Verified. SOURCE: `src/api/client.ts:66-102 (normalizeErrorDetail)` —
+   string passthrough (`:67`), array→join of `.msg` (`:70-88`), object/`code` mapping
+   (`:89-94`). Authorization-`code` mapping examples confirmed in
+   `src/api/client.errorMapping.test.ts`.
+10. **FastAPI validation-error item shape.** VERDICT: Corrected. The spec's array fixture
+    `{ msg, loc }` was missing the required `type` field. The real `ValidationError` requires
+    `loc`, `msg`, AND `type`. SOURCE: OpenAPI `components.schemas.ValidationError`
+    (`required: [loc, msg, type]`) and `components.schemas.HTTPValidationError` (array of
+    `ValidationError`).
+11. **An unknown object `code` (e.g. `RATE_LIMITED`) is not specially mapped and falls back.**
+    VERDICT: Verified. SOURCE: `src/api/client.ts:89-101`; negative case in
+    `src/api/client.errorMapping.test.ts:34-37` ("does not leak raw object payload for unknown
+    structures").
+12. **Network/offline error path exists in the transport.** VERDICT: Verified. SOURCE:
+    `src/api/client.ts:185-189` (`fetch` throw → `ApiError(0, "Network error")`). This is the web
+    analogue of the Android `AppError.Network`/`Timeout` the suite asserts.
+13. **Cache subsystem (SWR repository, TTL/eviction, per-user clear), Room 2.6 + DataStore,
+    `Resource<T>`/`ApiResult<T>`, `CacheRepository`, `networkBoundResource`, eviction policy,
+    `CacheLogger`/`CacheEvent`.** VERDICT: Unverified-assumption. These are Android-side
+    production artifacts from AND-116/AND-118 and are not present in the backend OpenAPI or the
+    web frontend; they cannot be confirmed from the provided authoritative sources.
+14. **Dev host `http://18.222.237.167:8000` with ~20s timeouts / intermittent 5xx.** VERDICT:
+    Unverified-assumption. The web client takes its base URL from env `VITE_API_BASE_URL`
+    (`src/api/client.ts:7`); the specific IP/port and its reliability characteristics are an
+    infra/ticket-provided detail, not part of the API contract. The suite simulates this rather
+    than depending on it, so the assumption does not affect determinism.
+15. **Test-framework / Android choices** (JUnit4, `kotlinx-coroutines-test` virtual time,
+    Turbine, Truth, OkHttp `MockWebServer`, in-memory Room). VERDICT: Unverified-assumption
+    (framework refs, not contract). These are standard Android testing tools; correctness is
+    asserted by the suite itself, not by the backend contract. framework ref:
+    OkHttp MockWebServer (`https://square.github.io/okhttp/4.x/okhttp-mockwebserver/`),
+    kotlinx-coroutines-test (`https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/`).
+
+### Corrections made
+
+- **§5 `GET /ui/me` fixture** replaced `{ user_id, username, display_name, factors }` with the
+  real `MeResp` shape `{ user_sub, session_id, ip }` (claim 2).
+- **§5 validation-error fixture** added the required `type` field to the array item; documented
+  that `ValidationError` requires `loc`, `msg`, `type` (claim 10).
+- **§2 backend-contract bullet** refined the auth description: cookie + CSRF confirmed, plus the
+  Bearer-token attachment, the only-if-authenticated/deduplicated/logout-on-failure nuances of the
+  401→refresh flow, and the server-side `X-SESSION-ID`/`X-IMPERSONATION-TOKEN` headers (claims
+  4-9). Also corrected the `/ui/me` reference to point at `MeResp`.
+
+### Open assumptions
+
+- **Android cache internals (AND-116/AND-118 surface):** the class/method names, `Resource`/
+  `ApiResult` shapes, eviction policy (LRU vs LFU vs FIFO; count- vs byte-cap), and
+  `CacheLogger`/`CacheEvent` API are not in any provided source. They must be reconciled against
+  the merged AND-116/AND-118 code before implementation (see R-1, R-3). Tests are written against
+  the policy *interface* so a policy swap changes fixtures, not assertions.
+- **Dev-host endpoint and reliability profile** (`18.222.237.167:8000`, ~20s timeout, 5xx rate)
+  are infra assumptions, not contract; the suite deliberately simulates them via
+  `FlakyDispatcher` so they need not be verified to make the suite deterministic.
+- **Presence of injectable clock/dispatcher seams** in the shipped AND-116 constructor is
+  unconfirmed (R-1); if absent, this ticket adds them as minimal, semantics-preserving changes.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** = headless emulator
+AVD `test35` (x86_64, Android 15/API 35); **A15** = physical Samsung Galaxy A15 5G (SM-A156U,
+serial R5CX821TA9R, Android 14/API 34, arm64-v8a). This is a data-layer test ticket: the bulk of
+cases are pure JVM unit / MockWebServer contract tests with no device dependency. A few cases are
+added to exercise real Room persistence and a real arm64/API-34 run; those are flagged.
+
+- **TC-AND-119-01** — Type: unit. Target: JVM. Precondition: `InMemoryCacheDao` seeded with a
+  valid (non-expired) entry for `key`; `FakeClock` at t0; `MockWebServer`/fake api enqueued with a
+  fresh success body. Steps: collect `repo.stream(key)` with Turbine. Expected: first emission is
+  the cached value (`Resource.Loading(cached)` / cached `Success`), second is `Resource.Success`
+  with the fresh value, then complete; DAO now holds the fresh entity; `CacheHit` logged.
+  Traces: AC-3 (FR-1).
+- **TC-AND-119-02** — Type: unit. Target: JVM. Precondition: empty cache; fresh success enqueued.
+  Steps: collect `repo.stream(key)`. Expected: a loading emission with NO data, then
+  `Resource.Success(fresh)`; no spurious cached emission; DAO persists the fresh entity;
+  `CacheMiss` logged. Traces: AC-3 (FR-2).
+- **TC-AND-119-03** — Type: contract/MockWebServer. Target: JVM. Precondition: valid cache present;
+  `MockWebServer` enqueues a transport failure (`setSocketPolicy(NO_RESPONSE)` with short
+  `callTimeout`). Steps: collect the stream. Expected: cached value emitted first, then
+  `Resource.Error(AppError.Timeout, data = cached)` (stale-served); DAO is NOT overwritten;
+  `Stale` logged. Traces: AC-3, AC-5 (FR-3).
+- **TC-AND-119-04** — Type: unit. Target: JVM. Precondition: empty cache; fetch fails (500). Steps:
+  collect the stream. Expected: loading-with-no-data then `Resource.Error(error, data = null)`;
+  DAO persists nothing. Traces: AC-3 (FR-4).
+- **TC-AND-119-05** — Type: unit. Target: JVM. Precondition: cache entry written at t0 with
+  `ttlMs = T`; `FakeClock` advanced by `T + 1`; fresh success enqueued. Steps: `clock.advanceBy(T+1)`
+  then collect the stream. Expected: the expired entry is treated as stale-must-refetch (not served
+  as authoritative without a refetch), a fetch occurs, and on success `updatedAtMs` is refreshed to
+  the new clock value. Traces: AC-4 (FR-5).
+- **TC-AND-119-06** — Type: integration. Target: emu35 (real Room in-memory DB). Precondition:
+  Room `inMemoryDatabaseBuilder` cache; eviction cap configured (count cap N and/or byte budget B)
+  passed explicitly; `bulkEntries` written to exceed the cap, with a known LRU access order. Steps:
+  write entries beyond the cap, touch a subset to mark them recently used, trigger eviction.
+  Expected: least-recently-used entries are evicted, recently-written/accessed survivors remain,
+  count/byte budget is respected; `Evict` count logged equals the number removed. Note: real Room
+  → run on emu35 (or JVM via Robolectric); no physical-device need. Traces: AC-4 (FR-6).
+- **TC-AND-119-07** — Type: integration. Target: emu35 (real Room in-memory DB). Precondition: Room
+  cache seeded with rows for `userScope = A` and `userScope = B`. Steps: invoke the per-user clear
+  hook for user A (AND-032/AND-118). Expected: only user A's rows are deleted; all of user B's rows
+  remain intact (cross-tenant isolation). Traces: AC-4 (FR-7).
+- **TC-AND-119-08** — Type: contract/MockWebServer. Target: JVM. Precondition: real Retrofit/OkHttp
+  stack against `MockWebServer`; retry interceptor configured GET-only, base backoff 10ms, max 3
+  attempts; `FlakyDispatcher` seeded `Random(0xFLAKY)`; first two GET responses fail (503), third
+  succeeds. Steps: issue the GET; advance virtual time over backoff. Expected:
+  `MockWebServer.requestCount == 3`; final result is success; backoff advanced via virtual time
+  (no `Thread.sleep`). Traces: AC-5 (FR-8).
+- **TC-AND-119-09** — Type: contract/MockWebServer. Target: JVM. Precondition: same stack; a
+  non-idempotent POST enqueued to fail (500). Steps: issue the POST. Expected:
+  `MockWebServer.requestCount == 1` (no retry of non-idempotent method); error surfaced.
+  Traces: AC-5 (FR-8).
+- **TC-AND-119-10** — Type: contract/MockWebServer. Target: JVM. Precondition: valid cache present;
+  `FlakyDispatcher` fault rate 1.0 (sustained failure), seeded. Steps: collect the stream under
+  sustained failure. Expected: cached data emitted plus a non-fatal `Resource.Error` carrying the
+  cached data; cache never overwritten with the failed result; `Stale` logged. Traces: AC-3, AC-5
+  (FR-3, FR-8).
+- **TC-AND-119-11** — Type: contract/MockWebServer. Target: JVM. Precondition: `MockWebServer`
+  enqueues HTTP 200 with malformed/invalid JSON body; valid cache present. Steps: collect the
+  stream. Expected: result maps to `AppError.Parse` (no crash/uncaught exception); existing cache
+  is preserved. Traces: AC-5 (FR-8).
+- **TC-AND-119-12** — Type: unit (parameterized). Target: JVM. Precondition: three `detail`
+  fixtures from §5 — `"Service unavailable"` (string), the corrected validation array
+  `[{type,loc,msg}]`, and `{code:"RATE_LIMITED", retry_after:5}`. Steps: run each through the
+  Android error mapper. Expected: each maps to the correct `AppError` subtype without throwing —
+  string → message verbatim; array → joined `msg` text; object/unknown-code → fallback message
+  (mirrors `normalizeErrorDetail`, client.ts:66-102). Traces: AC-5 (FR-8).
+- **TC-AND-119-13** — Type: unit (security). Target: JVM. Precondition: a response whose headers
+  include `Set-Cookie` and whose body is a normal payload. Steps: run the SWR write path; spy the
+  cache DAO. Expected: the DAO is asked to persist ONLY the response payload; it is never asked to
+  persist any `Set-Cookie`/auth-header value (auth lives in the cookie jar, not the cache).
+  Traces: AC-3, AC-6 (FR-1, §8 isolation).
+- **TC-AND-119-14** — Type: instrumented/e2e. Target: A15 (physical device, arm64-v8a, API 34).
+  Precondition: the suite assembled and run on the connected Samsung A15 via adb. Steps: run the
+  `core-data` debug unit/instrumented tests on-device (real Room on arm64), repeat the
+  `@Tag("flaky-sim")` suite 50x with seed `0xFLAKY`; run once more under randomized method order.
+  Expected: all cases green on arm64/API-34, identical outcomes to the emulator x86_64/API-35 run
+  (no ABI- or API-level divergence), 50/50 flaky-sim repetitions pass deterministically. Note: MUST
+  run on the physical device to catch arm64-vs-x86 / API-34-vs-35 differences; CI emu35 covers the
+  x86_64/API-35 baseline. Traces: AC-1, AC-2.
+- **TC-AND-119-15** — Type: manual (static/review gate). Target: JVM (CI lint/grep). Precondition:
+  full AND-119 source tree. Steps: run the CI grep/lint check. Expected: zero `Thread.sleep`, zero
+  real-clock (`System.currentTimeMillis`/`Instant.now` outside injected `Clock`), and zero literal
+  references to `18.222.237.167` anywhere in the suite. Traces: AC-6.
+
+This ticket has no UI, so there are no Compose-UI or accessibility cases — accessibility of the
+stale/reconnect affordances is owned by AND-117 (see §9). The offline/flaky path is covered by
+TC-03, TC-08, TC-10, and TC-11; security/isolation by TC-07 and TC-13.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 (suite passes, no skips) | TC-14 (and all of TC-01..TC-13 as the suite) |
+| AC-2 (determinism: repeat + random order + 50x flaky) | TC-08, TC-10, TC-14 |
+| AC-3 (SWR FR-1..FR-4) | TC-01, TC-02, TC-03, TC-04, TC-10, TC-13 |
+| AC-4 (TTL/eviction FR-5..FR-7) | TC-05, TC-06, TC-07 |
+| AC-5 (flaky host FR-8: retry/timeout/malformed/detail) | TC-03, TC-08, TC-09, TC-10, TC-11, TC-12 |
+| AC-6 (no real I/O) | TC-13, TC-15 |

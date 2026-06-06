@@ -5,7 +5,8 @@ milestone: M2
 epic: E13
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-027]
 blocks: []
 ---
@@ -28,10 +29,29 @@ authenticated, cookie-based network stack from **AND-027**
 (`authapi-session-endpoints`). The success bar from the backlog is narrow and
 testable: *achievements render with progress*.
 
-Out of scope: any write/claim action on an achievement, newly-earned
-notifications/toasts (notifications epic), social/leaderboard comparison, and the
-session lifecycle / refresh-on-401 plumbing (AND-027). The catalog is returned
-whole in one response, so Paging 3 is intentionally not used.
+> **CORRECTED (review 2026-06-06):** The backend does NOT expose a single
+> "earned + locked + per-item progress" catalog endpoint. Verified against the
+> OpenAPI index and the web reference, the achievements view is composed from up
+> to **three** authenticated GETs (mirroring the web `achievements.ts`):
+> - `GET /ui/achievements` → `{ achievements: UserAchievement[], total_points,
+>   achievement_count }` — the user's **earned** badges only (every item returned
+>   is unlocked; there is no `earned` flag, no locked rows, no nested progress).
+> - `GET /ui/achievements/progress` → `{ progress: AchievementProgress[] }` —
+>   per-`metric_key` in-flight progress (`current_value` / `next_threshold`).
+> - `GET /ui/achievements/definitions` → `{ definitions: AchievementDefinition[] }`
+>   — the full catalog used to derive **locked** items (definitions not present in
+>   the earned set) and to resolve a `threshold` (progress target) by `metric_key`.
+>
+> The combined earned/locked-with-progress UI in this ticket is therefore a
+> **client-side composition** of these responses. The single-endpoint `{items:[…]}`
+> contract previously asserted in §5 was fictional and has been corrected.
+
+Out of scope: any write/claim action on an achievement (incl. `setDisplayBadges`),
+newly-earned notifications/toasts (notifications epic), social/leaderboard
+comparison (the separate `/ui/achievements/leaderboard*` endpoints), and the
+session lifecycle / refresh-on-401 plumbing (AND-027). Each response is returned
+whole (no cursor on the earned/progress/definitions GETs), so Paging 3 is
+intentionally not used.
 
 ## 2. Context & References
 
@@ -39,14 +59,24 @@ whole in one response, so Paging 3 is intentionally not used.
   `app -> feature-achievements -> core-*` (`core-network`, `core-model`,
   `core-ui`, `core-data`, `core-testing`).
 - **Package root:** `com.testlogon.android.feature.achievements`.
-- **Web reference:** `frontend/src/api/endpoints/achievements.ts`, shared types in
-  `frontend/src/api/types.ts`. The Android `AchievementsApi` mirrors the web
-  endpoint path and query params 1:1.
-- **OpenAPI:** `GET http://18.222.237.167:8000/openapi.json` — verify the
-  `/ui/achievements` path and the `Achievement` schema (field names for progress,
-  `earned_at`, thresholds) against this at implementation time; treat the JSON
-  shapes below as the working contract and reconcile drift via an Open Question
-  (§13).
+- **Web reference:** `src/api/endpoints/achievements.ts` (functions
+  `getMyAchievements`, `getAchievementProgress`, `listDefinitions`), shared DTOs in
+  `src/api/types.ts` (`UserAchievement`, `AchievementProgress`,
+  `AchievementDefinition`), and the screens `src/pages/achievements/BadgeGrid.tsx`
+  and `ProgressTracker.tsx`. The Android `AchievementsApi` mirrors these web
+  endpoint paths and query params 1:1. (VERIFIED: paths/params/response shapes
+  read directly from these files during review.)
+- **OpenAPI:** `GET /openapi.json`. VERIFIED against
+  `reference/openapi.index.txt` and `reference/openapi.pretty.json`:
+  - `GET /ui/achievements` exists (`op=get_my_achievements_ui_achievements_get`),
+    query params `displayed` (bool|null), `category` (string|null),
+    `user_sub` (string|null); header params `X-SESSION-ID`,
+    `X-IMPERSONATION-TOKEN`; responses `200` (untyped schema — body shape is
+    defined by the web `types.ts`) and `422:HTTPValidationError`.
+  - `GET /ui/achievements/progress` and `GET /ui/achievements/definitions` exist
+    with `200` + `422:HTTPValidationError`.
+  - There is **no** `Achievement` schema with `earned`/`earned_at`/nested
+    `progress` — those field names were assumed and are corrected throughout (§5).
 - **Upstream ticket:**
   - **AND-027** — provides the authenticated `Retrofit`, persistent cookie jar,
     `ui_csrf` -> `X-CSRF-Token` echo, and the `401 -> POST /ui/session/refresh ->
@@ -67,17 +97,26 @@ FR-2. The catalog is partitioned into two visually distinct sections:
 **Earned** (achievements the user has completed) and **Locked / In progress**
 (not yet earned). Section order: Earned first, then Locked.
 
-FR-3. Each achievement row renders: an icon/badge, a title, a description, and —
-for items that expose progress — a **progress indicator** showing
-`current / target` (numeric label) and a determinate progress bar
-(`current / target` as a 0..1 fraction). Earned items show an earned badge and
-the `earned_at` date instead of a progress bar.
+FR-3. Each achievement row renders: an icon/badge (`icon_url`), a title
+(`label`), a description, a rarity chip, and — for items that expose progress —
+a **progress indicator** showing `current_value / next_threshold` (numeric label)
+and a determinate progress bar (`current_value / next_threshold` as a 0..1
+fraction). Earned items show an earned badge and the `unlocked_at` date (epoch
+seconds → formatted) instead of a progress bar. (CORRECTED: web fields are
+`label`/`icon_url`/`unlocked_at`, not `title`/`icon`/`earned_at`; progress comes
+from the separate `/ui/achievements/progress` response keyed by `metric_key`,
+with the target being `next_threshold` (web `ProgressTracker.tsx`) or the
+definition `threshold`.)
 
 FR-4. Locked items with no progress data (not started) render at 0 progress with
 a "locked" affordance and reduced emphasis (dimmed badge), not an error.
 
-FR-5. A header/summary shows the earned count vs total (e.g. "12 of 30
-unlocked"); this is derived client-side from the loaded list.
+FR-5. A header/summary shows the earned count and total points (e.g. "12 badges
+earned · 340 points"), and — when definitions are loaded — earned-vs-catalog
+total ("12 of 30 unlocked"). The earned count and total points come **directly**
+from the `/ui/achievements` response (`achievement_count`, `total_points`; web
+`BadgeGrid.tsx`); the catalog total is `definitions.size`. (CORRECTED: earned
+count is server-provided, not purely client-derived.)
 
 FR-6. Pull-to-refresh (or a refresh action) re-fetches the catalog and replaces
 the rendered state, preserving scroll position where possible.
@@ -119,8 +158,16 @@ feature-achievements/
 ### Repository
 
 The catalog is small and returned whole, so the repository exposes a single
-suspend fetch (not a `Pager`). Room is used as a best-effort offline snapshot
-(single table), refreshed transactionally on each successful load.
+suspend fetch (not a `Pager`). **CORRECTED:** that fetch fans out to the three
+authenticated GETs (`/ui/achievements`, `/ui/achievements/progress`,
+`/ui/achievements/definitions`) concurrently (`coroutineScope { async {…} }`) and
+composes the `AchievementCatalog` in the mapper (§6). Earned items come from the
+first call; locked items are `definitions − earned` (by `achievement_id`);
+progress is joined onto locked items by `metric_key`. The `definitions` and
+`progress` calls are best-effort: if either fails but the earned call succeeds,
+render earned-only and degrade locked/progress gracefully (see §7). Room is used
+as a best-effort offline snapshot (single table), refreshed transactionally on
+each successful load.
 
 ```kotlin
 interface AchievementsRepository {
@@ -225,91 +272,208 @@ entry per the IA tickets.
 
 ## 5. API Contract
 
+> **CORRECTED (review 2026-06-06):** This section previously described a single
+> `GET /ui/achievements` returning `{ items: [{ id, title, icon, earned,
+> earned_at, progress:{current,target} }] }`. That contract does not exist. The
+> real contract (verified against `src/api/endpoints/achievements.ts`,
+> `src/api/types.ts`, and the OpenAPI spec) is below.
+
 `AchievementsApi` is registered on the AND-027 authenticated `Retrofit` (cookie
 jar + `X-CSRF-Token` echo applied transparently by the shared OkHttp client).
+All three GETs are idempotent → eligible for the bounded backoff retry (§7).
 
 ```kotlin
 interface AchievementsApi {
+    /** Earned badges only. Optional filters mirror the web client. */
     @GET("ui/achievements")
-    suspend fun getAchievements(): AchievementsResponseDto
+    suspend fun getMyAchievements(
+        @Query("displayed") displayed: Boolean? = null,
+        @Query("category") category: String? = null,
+    ): MyAchievementsResponseDto
+
+    /** In-flight progress, keyed by metric_key. */
+    @GET("ui/achievements/progress")
+    suspend fun getProgress(): AchievementProgressResponseDto
+
+    /** Full catalog of definitions; used to derive locked items + thresholds. */
+    @GET("ui/achievements/definitions")
+    suspend fun listDefinitions(
+        @Query("active_only") activeOnly: Boolean = true,
+    ): AchievementDefinitionsResponseDto
 }
 ```
 
-**Request:** `GET /ui/achievements`. GET only, no query params (full catalog) —
-eligible for the bounded backoff retry on idempotent GETs (§7).
+**Requests:**
+- `GET /ui/achievements` — earned badges. Optional query params `displayed`
+  (bool) and `category` (string); the screen calls it with no params for the full
+  earned set. (VERIFIED: params exist in OpenAPI and web `getMyAchievements`. The
+  prior "no query params" claim was wrong.)
+- `GET /ui/achievements/progress` — no query params.
+- `GET /ui/achievements/definitions` — query `active_only` (bool, web default
+  `true`).
 
-**Response 200 (`AchievementsResponseDto`):**
+**Response 200 — `GET /ui/achievements` (`MyAchievementsResponseDto`):** the
+backend declares an untyped 200 in OpenAPI, so the body shape is taken from the
+web `getMyAchievements` return type and `UserAchievement` (`src/api/types.ts`):
 
 ```json
 {
-  "items": [
+  "achievements": [
     {
-      "id": "ach_first_login",
-      "title": "First Steps",
+      "achievement_id": "first_login",
+      "label": "First Steps",
       "description": "Sign in for the first time.",
-      "icon": "badge_first_login",
-      "earned": true,
-      "earned_at": "2026-05-30T08:11:02Z",
-      "progress": { "current": 1, "target": 1 }
-    },
+      "icon_url": "https://cdn.testlogon.dev/badges/first_login.png",
+      "rarity": "common",
+      "points": 10,
+      "unlocked_at": 1748592662,
+      "trigger_event": "auth.login",
+      "displayed": true
+    }
+  ],
+  "total_points": 10,
+  "achievement_count": 1
+}
+```
+
+Every item in `achievements` is **already earned** — there is no `earned` flag.
+
+**Response 200 — `GET /ui/achievements/progress`
+(`AchievementProgressResponseDto`):** from `AchievementProgress`:
+
+```json
+{
+  "progress": [
     {
-      "id": "ach_streak_10",
-      "title": "On a Roll",
+      "metric_key": "login_streak_days",
+      "current_value": 7,
+      "last_updated_at": 1748592662,
+      "last_updated_date": "2026-05-30",
+      "highest_value": 7,
+      "streak_anchor_date": "2026-05-23",
+      "next_threshold": 10,
+      "next_achievement": {
+        "achievement_id": "streak_10",
+        "label": "On a Roll",
+        "rarity": "uncommon",
+        "points": 25
+      }
+    }
+  ]
+}
+```
+
+`next_threshold` may be `null` (no further tier → treat as complete, web
+`ProgressTracker` renders 100%). The progress **target** is `next_threshold`.
+
+**Response 200 — `GET /ui/achievements/definitions`
+(`AchievementDefinitionsResponseDto`):** from `AchievementDefinition`:
+
+```json
+{
+  "definitions": [
+    {
+      "achievement_id": "streak_10",
+      "category": "general",
+      "subcategory": "engagement",
+      "label": "On a Roll",
       "description": "Sign in 10 days in a row.",
-      "icon": "badge_streak",
-      "earned": false,
-      "earned_at": null,
-      "progress": { "current": 7, "target": 10 }
-    },
-    {
-      "id": "ach_profile_complete",
-      "title": "All About You",
-      "description": "Complete your profile.",
-      "icon": "badge_profile",
-      "earned": false,
-      "earned_at": null,
-      "progress": null
+      "icon_url": "https://cdn.testlogon.dev/badges/streak_10.png",
+      "rarity": "uncommon",
+      "threshold": 10,
+      "points": 25,
+      "metric_key": "login_streak_days",
+      "active": true,
+      "sort_order": 20,
+      "created_at": 1740000000,
+      "updated_at": 1740000000
     }
   ]
 }
 ```
 
 Notes on the contract:
-- `progress` may be `null` (achievements with no measurable progress — boolean
-  unlock). When present, `target >= 1` and `0 <= current <= target` is expected;
-  the mapper clamps defensively (§6).
-- `earned_at` is `null` for not-yet-earned items.
-- `icon` is a server-side key; the client maps it to a local drawable with a
-  default fallback for unknown keys.
+- `icon_url` is a server-side **absolute URL** (loaded via the image pipeline,
+  e.g. Coil), not a drawable key. (CORRECTED: prior spec called `icon` a local
+  drawable key; provide a default-badge placeholder for null/failed loads.)
+- `unlocked_at`, `created_at`, `updated_at`, `last_updated_at` are **epoch
+  seconds (numbers)**, not ISO-8601 strings. (CORRECTED.)
+- Progress target = `next_threshold` (progress response) or the matching
+  definition `threshold`; fraction = `current_value / target`, clamped (§6).
+- A locked achievement = a `definition` whose `achievement_id` is not in the
+  earned set; its progress (if any) is joined by `metric_key`.
 
-**Errors:** FastAPI `detail` mapping (string | `[{msg}]` | `{code,...}`) via the
-shared `ApiResult<T>` decoder from core-network. `401` is handled upstream
-(refresh-once-then-retry); a `401` that survives retry maps to
-`ApiResult.AuthExpired` -> `AchievementsUiState.AuthExpired`.
+**Errors:** all three return `422 HTTPValidationError` =
+`{ "detail": [ { "loc": [...], "msg": "...", "type": "..." } ] }` (VERIFIED:
+`components.schemas.HTTPValidationError` / `ValidationError`). The shared
+`ApiResult<T>` decoder maps FastAPI `detail` (string | `[{loc,msg,type}]` |
+`{code,...}`). `401` is handled upstream (refresh-once-then-retry); a `401` that
+survives retry maps to `ApiResult.AuthExpired` -> `AchievementsUiState.AuthExpired`.
 
 DTOs:
 
 ```kotlin
 @JsonClass(generateAdapter = true)
-data class AchievementsResponseDto(
-    @Json(name = "items") val items: List<AchievementDto>,
+data class MyAchievementsResponseDto(
+    @Json(name = "achievements") val achievements: List<UserAchievementDto>,
+    @Json(name = "total_points") val totalPoints: Int = 0,
+    @Json(name = "achievement_count") val achievementCount: Int = 0,
 )
 
 @JsonClass(generateAdapter = true)
-data class AchievementDto(
-    @Json(name = "id") val id: String,
-    @Json(name = "title") val title: String,
+data class UserAchievementDto(
+    @Json(name = "achievement_id") val achievementId: String,
+    @Json(name = "label") val label: String,
     @Json(name = "description") val description: String? = null,
-    @Json(name = "icon") val icon: String? = null,
-    @Json(name = "earned") val earned: Boolean = false,
-    @Json(name = "earned_at") val earnedAt: String? = null,    // ISO-8601 | null
-    @Json(name = "progress") val progress: ProgressDto? = null,
+    @Json(name = "icon_url") val iconUrl: String? = null,
+    @Json(name = "rarity") val rarity: String? = null,
+    @Json(name = "points") val points: Int = 0,
+    @Json(name = "unlocked_at") val unlockedAt: Long? = null,   // epoch seconds
+    @Json(name = "trigger_event") val triggerEvent: String? = null,
+    @Json(name = "displayed") val displayed: Boolean = false,
 )
 
 @JsonClass(generateAdapter = true)
-data class ProgressDto(
-    @Json(name = "current") val current: Int,
-    @Json(name = "target") val target: Int,
+data class AchievementProgressResponseDto(
+    @Json(name = "progress") val progress: List<AchievementProgressDto>,
+)
+
+@JsonClass(generateAdapter = true)
+data class AchievementProgressDto(
+    @Json(name = "metric_key") val metricKey: String,
+    @Json(name = "current_value") val currentValue: Int = 0,
+    @Json(name = "highest_value") val highestValue: Int = 0,
+    @Json(name = "next_threshold") val nextThreshold: Int? = null,
+    @Json(name = "streak_anchor_date") val streakAnchorDate: String? = null,
+    @Json(name = "next_achievement") val nextAchievement: NextAchievementDto? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class NextAchievementDto(
+    @Json(name = "achievement_id") val achievementId: String,
+    @Json(name = "label") val label: String,
+    @Json(name = "rarity") val rarity: String? = null,
+    @Json(name = "points") val points: Int = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class AchievementDefinitionsResponseDto(
+    @Json(name = "definitions") val definitions: List<AchievementDefinitionDto>,
+)
+
+@JsonClass(generateAdapter = true)
+data class AchievementDefinitionDto(
+    @Json(name = "achievement_id") val achievementId: String,
+    @Json(name = "category") val category: String? = null,
+    @Json(name = "label") val label: String,
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "icon_url") val iconUrl: String? = null,
+    @Json(name = "rarity") val rarity: String? = null,
+    @Json(name = "threshold") val threshold: Int? = null,
+    @Json(name = "points") val points: Int = 0,
+    @Json(name = "metric_key") val metricKey: String? = null,
+    @Json(name = "active") val active: Boolean = true,
+    @Json(name = "sort_order") val sortOrder: Int = 0,
 )
 ```
 
@@ -319,12 +483,14 @@ data class ProgressDto(
 
 ```kotlin
 data class Achievement(
-    val id: String,
-    val title: String,
+    val id: String,                 // achievement_id
+    val title: String,              // label
     val description: String?,
-    val iconKey: String?,           // resolved to drawable in UI with fallback
-    val earned: Boolean,
-    val earnedAt: Instant?,
+    val iconUrl: String?,           // absolute URL; UI loads via Coil + fallback
+    val rarity: String?,
+    val points: Int,
+    val earned: Boolean,            // DERIVED client-side: id in earned set
+    val earnedAt: Instant?,         // unlocked_at (epoch seconds) -> Instant
     val progress: AchievementProgress?,  // null = no measurable progress
 )
 
@@ -338,16 +504,27 @@ data class AchievementProgress(
 }
 ```
 
-**Mapping & partitioning** (`AchievementsMappers`): DTO -> domain, then build
-`AchievementCatalog`:
-- `earned = items.filter { it.earned }` sorted by `earnedAt` descending
-  (nulls last);
-- `locked = items.filterNot { it.earned }` sorted by progress fraction
-  descending (closest-to-complete first), tie-broken by title;
-- `earnedCount = earned.size`, `total = items.size`;
-- `progress` clamped: `current.coerceIn(0, target)`, `target.coerceAtLeast(0)`;
-  malformed/negative values fall back to `null` rather than throwing;
-- malformed `earned_at` -> `null` (logged at WARN, never fatal).
+**Mapping & partitioning** (`AchievementsMappers`): the mapper takes the three
+DTO responses and composes `AchievementCatalog`. (CORRECTED: partitioning is by
+set membership across responses, not by a per-item `earned` flag.)
+- `earnedIds = myAchievements.achievements.map { it.achievementId }.toSet()`.
+- `earned`: map `myAchievements.achievements` → `Achievement(earned = true,
+  earnedAt = unlockedAt?.let(Instant::ofEpochSecond))`, sorted by `earnedAt`
+  descending (nulls last).
+- `locked`: `definitions.filter { it.achievementId !in earnedIds }` → mapped with
+  `earned = false`; join progress by `metric_key`
+  (`progressByMetric[def.metricKey]`), target = `progress.nextThreshold ?: def.threshold`;
+  sorted by progress fraction descending (closest-to-complete first), tie-broken
+  by `label`.
+- `earnedCount = myAchievements.achievementCount` (server-provided);
+  `total = definitions.size` (catalog) — falls back to `earned.size` if
+  definitions failed to load.
+- progress fraction clamped: `currentValue.coerceIn(0, target)`,
+  `target.coerceAtLeast(0)`; null/negative target → `progress = null` rather than
+  throwing.
+- malformed/negative `unlocked_at` -> `null` (logged at WARN, never fatal).
+- If the `definitions` call fails (degraded mode), `locked` is empty and the
+  screen renders earned-only with a non-fatal note (§7).
 
 **Room snapshot** (`core-data` conventions): a single `AchievementEntity` table
 (PK `id`) storing the flattened achievement plus a `cached_at` epoch-millis
@@ -386,6 +563,13 @@ usage beyond what core-data provides; no Paging.
   auth-required state and stops — no refresh/retry loop.
 - **Malformed payload:** mapper tolerates null/negative progress and bad dates
   (see §6); a wholesale parse failure surfaces as `Error`.
+- **Partial fan-out failure (CORRECTED):** the catalog is composed from three
+  GETs. If `/ui/achievements` (earned) succeeds but `/ui/achievements/progress`
+  and/or `/ui/achievements/definitions` fail, render in **degraded mode** (earned
+  badges shown; locked/progress omitted) rather than failing the whole screen.
+  Only a failure of the primary `/ui/achievements` call (with no cache) escalates
+  to the full-screen `Error`. A `401` on any of the three after refresh-retry →
+  `AuthExpired`.
 
 ## 8. Security & Privacy
 
@@ -438,10 +622,13 @@ usage beyond what core-data provides; no Paging.
   fraction desc), `progress == null` passthrough, progress clamping
   (negative/over-target), malformed `earned_at` -> null, unknown `icon` key
   fallback, and `earnedCount`/`total` math.
-- **Unit — API (MockWebServer):** assert path `/ui/achievements`, GET verb, no
-  query params, and JSON parsing of `AchievementsResponseDto` including
-  `progress: null` and `earned_at: null`. Mirrors the AND-027 MockWebServer
-  harness from core-testing.
+- **Unit — API (MockWebServer):** assert paths `/ui/achievements`,
+  `/ui/achievements/progress`, `/ui/achievements/definitions`, GET verb, and JSON
+  parsing of `MyAchievementsResponseDto` (`achievements`/`total_points`/
+  `achievement_count`), `AchievementProgressResponseDto` (incl.
+  `next_threshold: null`), and `AchievementDefinitionsResponseDto`. Verify
+  `unlocked_at` parses as epoch-seconds (number) and `active_only` query is sent.
+  Mirrors the AND-027 MockWebServer harness from core-testing.
 - **Unit — repository:** success writes through to `AchievementsDao`
   (`replaceAll` invoked); network failure with cache returns the snapshot;
   failure without cache propagates `Failure`; `AuthExpired` passthrough;
@@ -476,22 +663,26 @@ usage beyond what core-data provides; no Paging.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Endpoint shape unverified.** `/ui/achievements` and the `Achievement`
-  schema (especially the `progress` object field names and whether `earned` is a
-  flag vs derived from `earned_at`) are assumed from the web reference; confirm
-  against `/openapi.json` and `achievements.ts`. *Open: exact path and progress
-  field names.*
-- **R2 — Progress representation.** Assumed `{current, target}` integer pair;
-  backend may instead expose a precomputed `percent` float or a list of sub-task
-  flags. *Open: confirm before building the progress UI.* Mapper isolates this.
-- **R3 — Icon key catalog.** `icon` is a server-side string mapped to local
-  drawables; the full key set is unknown. Mitigated by a default-badge fallback,
-  but the key->drawable map needs to be kept in sync. *Open: source of truth for
-  icon keys.*
-- **R4 — Pagination.** Assumed the full catalog is returned in one response. If
-  the backend paginates achievements, this screen must adopt the Paging-3
-  scaffold (cf. AND-091/AND-098) — a non-trivial rework. *Open: confirm catalog
-  size bound / pagination.*
+- **R1 — Endpoint shape (RESOLVED in review).** Verified: there is no combined
+  catalog endpoint. The view composes `GET /ui/achievements` (earned),
+  `GET /ui/achievements/progress`, and `GET /ui/achievements/definitions`
+  (locked + thresholds). `earned` is **derived** by set membership (earned items
+  have no flag); see §5. *Residual risk: the 200 body of `/ui/achievements` is
+  untyped in OpenAPI, so the field contract is taken from the web `types.ts`; a
+  silent backend drift would only be caught at runtime/contract test.*
+- **R2 — Progress representation (RESOLVED in review).** Confirmed integer
+  `current_value` with target `next_threshold` (nullable → treat as complete);
+  no `percent` float. Definition `threshold` is the fallback target. Mapper
+  isolates the join.
+- **R3 — Icon source (RESOLVED in review).** `icon_url` is a server-side
+  **absolute URL**, not a drawable key (web `BadgeGrid`/`types.ts`). Load via the
+  image pipeline (Coil) with a default-badge placeholder on null/failure; no
+  client-side key→drawable map is required.
+- **R4 — Pagination.** The earned (`/ui/achievements`), progress, and
+  definitions GETs are non-paginated (no cursor in OpenAPI or the web client; only
+  `/ui/achievements/leaderboard` uses `cursor`, which is out of scope). Paging-3
+  is not needed. *Residual: no documented size bound on definitions; acceptable
+  for a single-screen catalog.*
 - **R5 — Dev backend instability** (plaintext, flaky). Mitigated by timeouts,
   bounded GET retry, and stale/offline UI; CI tests run against MockWebServer,
   not the live host.
@@ -518,9 +709,12 @@ AC-5. Zero achievements -> empty state; initial failure without cache ->
 full-screen retry; initial failure with cache -> cached render under
 stale/offline banner.
 
-AC-6. `AchievementsApi` is MockWebServer-tested: path `/ui/achievements`, GET
-verb, no query params, and `AchievementsResponseDto` parsing (including
-`progress: null` and `earned_at: null`).
+AC-6. `AchievementsApi` is MockWebServer-tested: GET paths `/ui/achievements`,
+`/ui/achievements/progress`, `/ui/achievements/definitions`, and parsing of
+`MyAchievementsResponseDto`, `AchievementProgressResponseDto` (incl.
+`next_threshold: null`), and `AchievementDefinitionsResponseDto` — including
+`unlocked_at` as epoch-seconds and the `active_only` query on definitions.
+(CORRECTED from the prior single-`AchievementsResponseDto`/no-query-params claim.)
 
 AC-7. A surviving 401 (post refresh-retry) yields an auth-required state with no
 retry loop.
@@ -544,3 +738,233 @@ retry loop.
 - All AC-1..AC-7 demonstrably met against MockWebServer and (smoke) the dev
   backend.
 - Code review approved; ktlint/detekt clean; no new lint baseline regressions.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source.
+
+1. **`GET /ui/achievements` exists and lists the user's achievements.** VERIFIED.
+   Source: OpenAPI `GET /ui/achievements` (`op=get_my_achievements_ui_achievements_get`),
+   `reference/openapi.index.txt`; `src/api/endpoints/achievements.ts: getMyAchievements`.
+2. **Its 200 body is `{ achievements: UserAchievement[], total_points, achievement_count }`** (NOT `{ items: [...] }`). CORRECTED.
+   Source: `src/api/endpoints/achievements.ts: getMyAchievements` (declared return type);
+   `src/pages/achievements/BadgeGrid.tsx` (`data.achievements`, `achievement_count`, `total_points`).
+   OpenAPI 200 schema is empty (untyped), so the web types are authoritative.
+3. **Every item in `/ui/achievements` is already earned; there is no `earned` boolean and no nested `progress` object.** CORRECTED.
+   Source: `src/api/types.ts: UserAchievement` (fields: `achievement_id, label, description, icon_url, rarity, points, unlocked_at, trigger_event, displayed`).
+4. **Achievement fields are `label` / `icon_url` / `unlocked_at` (epoch seconds), not `title` / `icon` / `earned_at` (ISO string).** CORRECTED.
+   Source: `src/api/types.ts: UserAchievement`; `src/pages/achievements/BadgeGrid.tsx` (`ach.label`, `ach.icon_url`).
+5. **`icon_url` is an absolute image URL (load via Coil), not a local drawable key.** CORRECTED.
+   Source: `src/pages/achievements/BadgeGrid.tsx` (`<img src={ach.icon_url} />`).
+6. **In-flight progress comes from a separate `GET /ui/achievements/progress` → `{ progress: AchievementProgress[] }`.** CORRECTED (was folded into a per-item field).
+   Source: OpenAPI `GET /ui/achievements/progress`; `src/api/endpoints/achievements.ts: getAchievementProgress`; `src/pages/achievements/ProgressTracker.tsx`.
+7. **Progress shape is `{ metric_key, current_value, next_threshold?, highest_value, next_achievement? }`; fraction = `current_value / next_threshold` (null threshold ⇒ 100%).** CORRECTED (prior `{current, target}`).
+   Source: `src/api/types.ts: AchievementProgress`; `ProgressTracker.tsx` (`pct = current_value / next_threshold`).
+8. **Locked achievements are derived from `GET /ui/achievements/definitions` → `{ definitions: AchievementDefinition[] }` minus the earned set; `threshold`/`metric_key` come from definitions.** CORRECTED (no locked rows exist in `/ui/achievements`).
+   Source: OpenAPI `GET /ui/achievements/definitions`; `src/api/endpoints/achievements.ts: listDefinitions`; `src/api/types.ts: AchievementDefinition` (`threshold, metric_key, sort_order, ...`).
+9. **`GET /ui/achievements` accepts `displayed` (bool) and `category` (string) query params (and `user_sub`); the prior "no query params" claim was wrong.** CORRECTED.
+   Source: OpenAPI `GET /ui/achievements` parameters (`openapi.pretty.json`); `src/api/endpoints/achievements.ts: getMyAchievements`.
+10. **`listDefinitions` sends `active_only` (default true).** VERIFIED.
+    Source: `src/api/endpoints/achievements.ts: listDefinitions`; OpenAPI `GET /ui/achievements/definitions` (`params=active_only,...`).
+11. **Summary counts (`achievement_count`, `total_points`) are server-provided, not purely client-derived.** CORRECTED.
+    Source: `src/pages/achievements/BadgeGrid.tsx`.
+12. **Auth is cookie-based session; CSRF via `ui_csrf` cookie → `X-CSRF-Token` header, applied to all requests.** VERIFIED.
+    Source: `src/api/client.ts` (`credentials: "include"`; `getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`).
+13. **401 → `POST /ui/session/refresh` (once) → retry; failed refresh = session expired.** VERIFIED.
+    Source: `src/api/client.ts: refreshSession` + the 401 branch.
+14. **Error responses use FastAPI `422 HTTPValidationError` = `{ detail: [{ loc, msg, type }] }`.** VERIFIED.
+    Source: `openapi.pretty.json` `components.schemas.HTTPValidationError` → `ValidationError` (`loc`, `msg`, `type` required).
+15. **The earned/progress/definitions GETs are non-paginated (no cursor); only `/ui/achievements/leaderboard` uses a cursor (out of scope).** VERIFIED.
+    Source: OpenAPI index lines for those ops (no `cursor` param) vs `GET /ui/achievements/leaderboard | params=period,limit,cursor,...`.
+16. **Write/claim actions (`setDisplayBadges`, admin definitions/seed/advance) are out of scope but exist.** VERIFIED (scoping note).
+    Source: OpenAPI `POST /ui/achievements/display-badges`, `/ui/achievements/admin/*`; `src/api/endpoints/achievements.ts`.
+17. **Framework choices** — single-`Activity` Navigation-Compose, Hilt VM, `StateFlow` + `collectAsStateWithLifecycle`, Material 3 `LinearProgressIndicator(progress = { fraction })`, Room single-table snapshot, Coil image loading. UNVERIFIED-ASSUMPTION (project convention; not derivable from backend/web sources).
+    Source: framework ref — Navigation Compose (https://developer.android.com/jetpack/compose/navigation), Lifecycle-aware collection (https://developer.android.com/topic/libraries/architecture/coroutines#lifecycle-aware), Coil (https://coil-kt.github.io/coil/compose/).
+
+### Corrections made
+
+- **§1, §5:** Replaced the fictional single `GET /ui/achievements` returning
+  `{ items: [{ id, title, icon, earned, earned_at, progress:{current,target} }] }`
+  with the real three-endpoint composition (earned + progress + definitions) and
+  corrected response/DTO shapes.
+- **Field renames everywhere:** `id→achievement_id`, `title→label`,
+  `icon→icon_url` (URL, not key), `earned_at` (ISO) → `unlocked_at` (epoch
+  seconds); removed the non-existent per-item `earned` flag and nested `progress`;
+  added `rarity`, `points`, `displayed`, `trigger_event`.
+- **Progress:** target is `next_threshold` (nullable) / definition `threshold`,
+  not a per-item `target`; sourced from a separate endpoint.
+- **§3 FR-3/FR-5:** corrected field names and made earned count/points
+  server-provided.
+- **§4/§6:** repository now fans out to three GETs; mapper partitions by set
+  membership across responses and joins progress by `metric_key`.
+- **§5/§11/AC-6:** corrected the "no query params" claim (`displayed`,
+  `category`, `active_only` exist) and the MockWebServer DTO names.
+- **§7:** added partial-fan-out degraded-mode handling.
+- **§13 R1–R4:** marked resolved with verified facts.
+- Frontmatter: `status: reviewed`, `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **Untyped 200 body** for `/ui/achievements` (and `/progress`, `/definitions`):
+  OpenAPI declares `schema: {}`, so the exact JSON contract is taken from the web
+  `src/api/types.ts`. A backend change not reflected in the web client would not
+  be caught until the contract test runs. Mitigation: contract/MockWebServer tests
+  pinned to the web shapes (TC-AND-093-02..04).
+- **Composition semantics** (locked = definitions − earned; join by `metric_key`):
+  inferred from the web app's tabbed structure (BadgeGrid earned, ProgressTracker
+  progress, definitions for the catalog). The web app does not itself render a
+  single merged earned/locked list, so the merge rule is an Android-side product
+  decision, not a backend contract.
+- **`category` filter values** (`creator | viewer | general`) come from
+  `AchievementDefinition.category`; whether `/ui/achievements?category=` filters
+  on the same enum is assumed, not exercised by the web client.
+- **Framework/architecture choices** (claim 17) follow project convention and are
+  not verifiable from the provided sources.
+
+## 17. Test Plan
+
+IDs `TC-AND-093-NN`. "Traces" link to §14 Acceptance Criteria (AC-1..AC-7).
+Default target is the JVM/Robolectric or CI emulator `test35` unless a case needs
+real hardware/behavior, in which case the **physical Samsung Galaxy A15 5G
+(SM-A156U, API 34)** is called out.
+
+- **TC-AND-093-01 — Mapper composes earned + locked + progress.**
+  Type: unit (JVM). Target: `AchievementsMappers`.
+  Preconditions: fixtures — earned `MyAchievementsResponseDto` (2 items),
+  `AchievementProgressResponseDto` (1 in-flight `login_streak_days`,
+  `current_value=7`, `next_threshold=10`), `AchievementDefinitionsResponseDto`
+  (4 definitions incl. the 2 earned).
+  Steps: call the mapper with the three DTOs.
+  Expected: `earned.size==2` (sorted `unlocked_at` desc), `locked.size==2`
+  (definitions − earned), the streak locked item has `progress.fraction==0.7f`
+  and target 10, `earnedCount==achievement_count`, `total==definitions.size`.
+  Traces: AC-1, AC-2, AC-3.
+
+- **TC-AND-093-02 — Contract: `/ui/achievements` parsing.**
+  Type: contract/MockWebServer. Target: `AchievementsApi.getMyAchievements`.
+  Preconditions: MockWebServer enqueues the §5 earned JSON.
+  Steps: call `getMyAchievements()`; capture the recorded request.
+  Expected: path `/ui/achievements`, method GET; parses `achievements`,
+  `total_points`, `achievement_count`; `unlocked_at` deserializes as `Long`
+  (epoch seconds). Traces: AC-6.
+
+- **TC-AND-093-03 — Contract: `/ui/achievements/progress` parsing incl. null threshold.**
+  Type: contract/MockWebServer. Target: `AchievementsApi.getProgress`.
+  Preconditions: enqueue a progress payload with one item `next_threshold: null`
+  and one with `next_threshold: 10`.
+  Steps: call `getProgress()`.
+  Expected: path `/ui/achievements/progress`, GET; `nextThreshold` is `null` then
+  `10`; null-threshold item maps to a complete/100% fraction in the mapper.
+  Traces: AC-2, AC-6.
+
+- **TC-AND-093-04 — Contract: `/ui/achievements/definitions` with `active_only`.**
+  Type: contract/MockWebServer. Target: `AchievementsApi.listDefinitions`.
+  Preconditions: enqueue a definitions payload.
+  Steps: call `listDefinitions(activeOnly = true)`; inspect the request URL.
+  Expected: path `/ui/achievements/definitions`, GET, query `active_only=true`;
+  `threshold`/`metric_key` parse. Traces: AC-1, AC-6.
+
+- **TC-AND-093-05 — Mapper edge cases (clamping & bad data).**
+  Type: unit (JVM). Target: `AchievementsMappers` / `AchievementProgress.fraction`.
+  Preconditions: fixtures with `current_value > next_threshold`, negative values,
+  `next_threshold = 0/null`, malformed/absent `unlocked_at`, null `icon_url`.
+  Steps: map.
+  Expected: fraction `coerceIn(0f,1f)`; target ≤ 0 ⇒ progress null (no throw);
+  bad `unlocked_at` ⇒ `earnedAt = null` (WARN-logged); null `icon_url` tolerated.
+  Traces: AC-2.
+
+- **TC-AND-093-06 — Repository happy path writes through to Room.**
+  Type: unit (Robolectric for in-memory Room). Target:
+  `DefaultAchievementsRepository.getAchievements`.
+  Preconditions: fake `AchievementsApi` returns all three responses; in-memory DAO.
+  Steps: call `getAchievements()`.
+  Expected: `ApiResult.Success<AchievementCatalog>`; `dao.replaceAll` invoked once
+  (delete+insert transaction); `cachedAchievements()` returns the snapshot.
+  Traces: AC-1, AC-5.
+
+- **TC-AND-093-07 — Repository partial fan-out failure → degraded mode.**
+  Type: unit (JVM). Target: repository/mapper.
+  Preconditions: earned call succeeds; progress and definitions calls throw
+  IOException.
+  Steps: call `getAchievements()`.
+  Expected: `Success` with earned items only, `locked` empty, no thrown error
+  (degraded mode per §7); the screen still renders earned badges. Traces: AC-1.
+
+- **TC-AND-093-08 — ViewModel state machine (Loading→Content / Empty / Error).**
+  Type: unit (JVM, Turbine on `StateFlow`). Target: `AchievementsViewModel`.
+  Preconditions: fake repo variants (non-empty success / empty earned+defs /
+  failure with no cache).
+  Steps: construct VM; collect `uiState`.
+  Expected: `Loading→Content(catalog)`; empty earned+empty definitions →
+  `Loading→Empty`; failure with no cache → `Loading→Error(canRetry=true)`.
+  Traces: AC-1, AC-5.
+
+- **TC-AND-093-09 — Offline/stale render from cache + flaky-host path.**
+  Type: unit (JVM) + instrumented smoke. Target: ViewModel/repository.
+  Preconditions: Room snapshot present; network fetch fails (simulated
+  IOException / unreachable plaintext dev host).
+  Steps: trigger initial load with the network failing.
+  Expected: `Content(cached, isStale = true)` under an offline banner, not
+  `Error`. Note: the unit case runs on JVM; an optional smoke run against the
+  flaky dev host is best done on the **physical device** (real radio/DNS flakiness)
+  but is not required for CI. Traces: AC-5.
+
+- **TC-AND-093-10 — ViewModel pull-to-refresh keeps Content on transient failure.**
+  Type: unit (JVM, Turbine). Target: `AchievementsViewModel.refresh`.
+  Preconditions: VM in `Content`; refresh fetch fails transiently.
+  Steps: call `refresh()`.
+  Expected: emits `Content(isRefreshing=true)` then returns to the prior
+  `Content` (data retained) with a transient inline message; screen is not blown
+  away. Traces: AC-4.
+
+- **TC-AND-093-11 — Surviving 401 → AuthExpired, no loop.**
+  Type: contract/MockWebServer + unit. Target: api/repository/ViewModel.
+  Preconditions: MockWebServer returns 401, then 401 again on the post-refresh
+  retry (AND-027 authenticator exhausted).
+  Steps: trigger load.
+  Expected: `ApiResult.AuthExpired` → `AchievementsUiState.AuthExpired`; exactly
+  one refresh attempt; no infinite retry. Traces: AC-7.
+
+- **TC-AND-093-12 — Compose UI renders progress (acceptance core).**
+  Type: Compose-UI (CI emulator `test35`). Target: `AchievementsContent` /
+  `AchievementRow`.
+  Preconditions: fixture catalog with an earned item (badge + date), an in-flight
+  locked item (7/10), and a no-progress locked item.
+  Steps: set content; assert.
+  Expected: Earned and Locked section headers present; a determinate
+  `LinearProgressIndicator` with fraction `0.7` and a "7 / 10" label; earned badge
+  + formatted `unlocked_at`; no-progress locked row at 0 with a locked affordance;
+  header shows "X badges earned · N points". Traces: AC-1, AC-2, AC-3.
+
+- **TC-AND-093-13 — Compose UI: empty / error+retry / auth-required states.**
+  Type: Compose-UI (CI emulator `test35`). Target: `AchievementsScreen`.
+  Preconditions: drive VM into `Empty`, `Error(canRetry)`, `AuthExpired`.
+  Steps: assert each branch.
+  Expected: `Empty` shows the empty state (no spinner/error); `Error` shows a
+  full-screen retry that invokes `retry()`; `AuthExpired` shows auth-required with
+  no retry button/loop. Traces: AC-5, AC-7.
+
+- **TC-AND-093-14 — Accessibility: TalkBack semantics & contrast-independence.**
+  Type: instrumented/Compose-UI a11y (PHYSICAL DEVICE — Samsung Galaxy A15 5G,
+  API 34, with real TalkBack). Target: `AchievementRow`, progress bar.
+  Preconditions: render the mixed fixture catalog; enable TalkBack on device.
+  Steps: swipe through rows.
+  Expected: each row announces merged `contentDescription`
+  (e.g. "On a Roll, locked, 7 of 10"); `LinearProgressIndicator` exposes
+  `progressBarRangeInfo` (percentage announced); decorative badges have
+  `contentDescription = null`; earned/locked distinguishable without color
+  (badge/check glyph + text); touch targets ≥ 48dp; dynamic font scaling and dark
+  theme render without truncation. Must run on the **physical device** for real
+  TalkBack behavior. Traces: AC-2.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (renders, earned/locked partition) | TC-01, TC-04, TC-06, TC-07, TC-08, TC-12 |
+| AC-2 (progress bar + label, earned badge, no-progress locked) | TC-01, TC-03, TC-05, TC-12, TC-14 |
+| AC-3 (header earned/total count) | TC-01, TC-12 |
+| AC-4 (pull-to-refresh, transient-failure resilience) | TC-10 |
+| AC-5 (empty / error-no-cache / stale-with-cache) | TC-06, TC-08, TC-09, TC-13 |
+| AC-6 (MockWebServer contract: paths/verbs/params/parsing) | TC-02, TC-03, TC-04 |
+| AC-7 (surviving 401 → auth-required, no loop) | TC-11, TC-13 |

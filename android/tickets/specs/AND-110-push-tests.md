@@ -5,7 +5,8 @@ milestone: M2
 epic: E15
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-106, AND-108]
 blocks: []
 ---
@@ -38,7 +39,7 @@ The goal is a deterministic, hermetic, fast (<10s for the unit tier) test suite 
 
 The deliverable is the test code itself; "functional requirements" here are the behaviors the suite must assert.
 
-**FR-1 Registration happy path.** Given an authenticated session, `PushRegistrationRepository.register(token)` issues exactly one `POST /ui/push/register` with the FCM token, platform, and app version, includes the `X-CSRF-Token` header echoed from the `ui_csrf` cookie, returns `ApiResult.Success`, and persists the token→server-registration mapping in DataStore.
+**FR-1 Registration happy path.** Given an authenticated session, `PushRegistrationRepository.register(token)` issues exactly one `POST /ui/push/register` with the FCM token and platform (the only two fields in `PushRegisterReq`; see §5 — there is **no `app_version`** field in the backend contract), includes the `X-CSRF-Token` header echoed from the `ui_csrf` cookie **and the `Authorization: Bearer <accessToken>` header** (the web client sets both; cookies are sent via `credentials: "include"`), returns `ApiResult.Success`, and persists the token→server-registration mapping in DataStore. The 200 body is a `PushDevice` (`{device_id, platform, created_at, last_seen_at}`), so the persisted mapping keys off `device_id`, not a `registration_id`.
 
 **FR-2 Idempotent re-registration.** Calling `register(token)` with an already-registered, unchanged token short-circuits without a network call (asserted via `mockWebServer.requestCount`).
 
@@ -111,7 +112,9 @@ object PushFixtures {
     val messageData = mapOf("type" to "message", "message_id" to "msg_42")
     val broadcastData = mapOf("type" to "broadcast", "broadcast_id" to "bc_7")
     val alertData = mapOf("type" to "alert", "alert_id" to "al_9")
-    const val REGISTER_OK = """{"registration_id":"reg_123","token":"fGcm-Test-Token-0001","status":"active"}"""
+    // Backend 200 body is a PushDevice (see §5); the prior {registration_id,token,status}
+    // fixture was fabricated and has been corrected to the real PushDevice shape.
+    const val REGISTER_OK = """{"device_id":"dev_123","platform":"android","created_at":1733443200,"last_seen_at":1733443200}"""
 }
 
 @get:Rule val mainDispatcherRule = MainDispatcherRule()   // StandardTestDispatcher
@@ -123,24 +126,27 @@ object PushFixtures {
 
 The endpoint under test (owned by AND-106; reproduced here as the asserted contract).
 
-**Request** — `POST /ui/push/register`
+**Request** — `POST /ui/push/register` · op `ui_register_push_ui_push_register_post` · req schema `PushRegisterReq`.
+
+`PushRegisterReq` has **exactly two required properties**: `token` (string) and `platform` (string). There is **no `app_version`** field in the backend schema — the earlier draft inferred one; it has been removed. The web client (`src/api/client.ts`) sends, on every request: the `Authorization: Bearer <accessToken>` header (when an access token is present), the `X-CSRF-Token` header copied verbatim from the `ui_csrf` cookie, the `X-IMPERSONATION-TOKEN` header (only when impersonating), and all cookies via `credentials: "include"`.
 
 ```http
 POST /ui/push/register HTTP/1.1
 Content-Type: application/json
-Cookie: tl_session=...; ui_csrf=<csrf>
+Authorization: Bearer <accessToken>
+Cookie: <session cookies>; ui_csrf=<csrf>
 X-CSRF-Token: <csrf>
 
-{"token":"fGcm-Test-Token-0001","platform":"android","app_version":"1.0.0"}
+{"token":"fGcm-Test-Token-0001","platform":"android"}
 ```
 
-**Success** — `200 OK`
+**Success** — `200 OK`, body is a `PushDevice` (the OpenAPI marks the 200 body untyped, `resp=200:`; the frontend types `registerPush` as returning `PushDevice`):
 
 ```json
-{"registration_id":"reg_123","token":"fGcm-Test-Token-0001","status":"active"}
+{"device_id":"dev_123","platform":"android","created_at":1733443200,"last_seen_at":1733443200}
 ```
 
-**Error** — FastAPI `detail`, all three shapes asserted:
+**Error** shapes (FastAPI `detail`). The OpenAPI documents only `422:HTTPValidationError` for this endpoint (the **list** shape). The string and object shapes below are the generic FastAPI/error-mapping shapes the web client's `normalizeErrorDetail` (`src/api/client.ts`) actually handles across the API; the object-with-`code` shape is real but is associated with 403 (e.g. `geo_blocked`, `role_required`) in the reference client, not arbitrary 500s — adjust the stub status accordingly when asserting it:
 
 ```json
 {"detail":"token already registered to another user"}
@@ -150,15 +156,15 @@ X-CSRF-Token: <csrf>
 
 Asserted via `MockWebServer`:
 - `RecordedRequest.path == "/ui/push/register"`, method `POST`.
-- Body decodes to `{token, platform:"android", app_version}`.
-- `X-CSRF-Token` header equals the seeded `ui_csrf` cookie value.
-- 401 path: register → `POST /ui/session/refresh` → register, in order, total 3 requests.
+- Body decodes to exactly `{token, platform:"android"}` (no `app_version`).
+- `X-CSRF-Token` header equals the seeded `ui_csrf` cookie value; `Authorization: Bearer …` header present.
+- 401 path: register → `POST /ui/session/refresh` → register, in order, total 3 requests. The reference client refreshes **once** (deduped via a shared `refreshPromise`) then retries once; a second 401 triggers logout/`Unauthorized`.
 
 No new endpoints are introduced by this ticket; the routing half (AND-108) is internal and has no HTTP contract.
 
 ## 6. Data & State Management
 
-- **Registration mapping** is read/written through `FakePushRegistrationStore` (an in-memory `PushRegistrationStore` impl) so DataStore I/O is not exercised on the JVM. Tests assert the stored `PushRegistration(registrationId, token, status)` after FR-1 and assert *no* write after FR-3.
+- **Registration mapping** is read/written through `FakePushRegistrationStore` (an in-memory `PushRegistrationStore` impl) so DataStore I/O is not exercised on the JVM. Tests assert the stored mapping after FR-1 — keyed off the server's `PushDevice.device_id` plus the local FCM `token` (the prior `PushRegistration(registrationId, token, status)` shape is corrected to `PushRegistration(deviceId, token, platform)` to match the real `PushDevice` 200 body; there is no `status` field) — and assert *no* write after FR-3.
 - **Idempotency state** (FR-2): the store returns the last-registered token; the repository compares before calling the network.
 - **`StateFlow`/`Flow` assertions** use Turbine: where a `PushUiState`/registration-status flow exists, tests `flow.test { assertThat(awaitItem())... ; cancelAndConsumeRemainingEvents() }`.
 - **Pending deep-link state** (FR-8): `PendingDeepLinkBuffer` holds at most one `PushDestination`; cold-start test asserts the buffer is populated by the service path and drained exactly once when the nav surface signals ready.
@@ -195,7 +201,7 @@ Not directly applicable — this is a logic/integration test ticket with no UI s
 
 No analytics events are emitted by tests. The suite verifies the *logging contract* of the code under test rather than producing telemetry:
 - A `RecordingLogger` test double captures log calls; tests assert registration failures log at `warn`/`error` with an error category but **without** the raw token (see §8).
-- A successful registration logs at most one `info`-level event with the `registration_id` (non-secret) and no token.
+- A successful registration logs at most one `info`-level event with the server `device_id` (non-secret) and no FCM token.
 These assertions are advisory (P2 within this ticket) and skipped if AND-106 does not yet expose an injectable logger; in that case a TODO references the owning ticket.
 
 ## 11. Testing Strategy
@@ -212,7 +218,7 @@ These assertions are advisory (P2 within this ticket) and skipped if AND-106 doe
     assertThat(req.path).isEqualTo("/ui/push/register")
     assertThat(req.getHeader("X-CSRF-Token")).isEqualTo(SEEDED_CSRF)
     assertThat(result).isInstanceOf(ApiResult.Success::class.java)
-    assertThat(store.last()?.registrationId).isEqualTo("reg_123")
+    assertThat(store.last()?.deviceId).isEqualTo("dev_123")
 }
 
 @Test fun register_401_refreshes_once_then_retries() = runTest {
@@ -272,7 +278,7 @@ These assertions are advisory (P2 within this ticket) and skipped if AND-106 doe
 ## 13. Risks & Open Questions
 
 - **Seam availability.** If AND-106/AND-108 land without the interfaces in §4.1 (e.g., repository concretely couples to DataStore, or routing calls `NavController` directly), this ticket must add the seams, slightly widening scope. *Mitigation:* coordinate the seams into AND-106/AND-108 PRs.
-- **Exact JSON field names.** `app_version`/`platform` and the `detail` object `code` field are inferred from project conventions; confirm against `/openapi.json` and `frontend/src/api/endpoints/*.ts` before finalizing fixtures. *Open question:* does register echo `status` or only `registration_id`?
+- **Exact JSON field names.** *Resolved during review (§16):* `PushRegisterReq` is `{token, platform}` only — there is **no `app_version`** — and the 200 body is a `PushDevice` `{device_id, platform, created_at, last_seen_at}` (no `registration_id`/`status`). The `detail` object `code` shape is real (e.g. `geo_blocked`, `role_required`) but tied to 403 in the reference client. Fixtures in §4.3/§5 are updated accordingly.
 - **Cold-start mechanism.** The buffer-vs-pending-intent strategy in AND-108 determines whether FR-8 is testable on the JVM (buffer) or only instrumented (intent extras). *Mitigation:* prefer the `PendingDeepLinkBuffer` design.
 - **Robolectric vs emulator for `RemoteMessage`.** `RemoteMessage` construction under Robolectric can be brittle across FCM versions; fall back to an emulator-only Tier B if needed. CI cost is the trade-off.
 - **Flake from MockWebServer timeouts.** Use a short, explicit client timeout (1s) in the timeout test rather than the production 20s to keep the suite fast and deterministic.
@@ -295,3 +301,165 @@ These assertions are advisory (P2 within this ticket) and skipped if AND-106 doe
 - JaCoCo gate wired into `feature-push` Gradle and enforced in CI; coverage report attached to the PR.
 - Open questions in §13 (JSON field names, cold-start mechanism) resolved against `/openapi.json` and the AND-108 implementation, or filed as follow-up tickets with references.
 - Code reviewed and merged to `android-port`; no Detekt/ktlint violations introduced by the new test sources.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, with VERDICT and an exact SOURCE pointer.
+
+1. **`POST /ui/push/register` is the registration endpoint (method POST, path `/ui/push/register`).** — **Verified.** OpenAPI `POST /ui/push/register` (op `ui_register_push_ui_push_register_post`); frontend `src/api/endpoints/push.ts: registerPush` → `api.post<PushDevice>("/ui/push/register", body)`.
+2. **Request body contains `token` and `platform`.** — **Verified.** OpenAPI schema `PushRegisterReq` (`components.schemas.PushRegisterReq`): properties `token`, `platform`, both `required`; frontend `src/api/types.ts: PushRegisterReq { token: string; platform: string }`.
+3. **Request body also contains `app_version`.** — **Corrected (claim was WRONG).** `PushRegisterReq` has no `app_version` property in the OpenAPI schema or in `src/api/types.ts: PushRegisterReq`. Removed from FR-1, §4.3, §5, and the asserted body.
+4. **Success (200) body is `{registration_id, token, status}`.** — **Corrected (claim was WRONG).** The frontend types the response as `PushDevice`: `src/api/types.ts: PushDevice { device_id, platform, created_at, last_seen_at }` (`src/api/endpoints/push.ts: registerPush` returns `PushDevice`). OpenAPI marks the 200 body untyped (`resp=200:`). Fixtures and the persisted-mapping shape updated to `PushDevice`.
+5. **`X-CSRF-Token` header is sent on every request, copied from the `ui_csrf` cookie.** — **Verified.** `src/api/client.ts` lines ~167-171: `const csrf = getCookie("ui_csrf"); if (csrf) headers.set("X-CSRF-Token", csrf);`.
+6. **Auth is purely "cookie-based login."** — **Corrected/clarified (claim was INCOMPLETE).** The reference client uses a hybrid: `Authorization: Bearer <accessToken>` header (`src/api/client.ts` ~157-160) PLUS cookies via `credentials: "include"` (~183) PLUS the CSRF header. Noted in FR-1 and §5; tests should assert both the Bearer and CSRF headers.
+7. **A 401 triggers exactly one `POST /ui/session/refresh`, then a single retry; a second 401 surfaces Unauthorized with no third attempt.** — **Verified.** `src/api/client.ts` ~119-237: shared `refreshPromise` dedupes refresh; on retry 401 → `useAuthStore.getState().logout("session_expired")` + `ApiError(401)`. OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`, `resp=200:`).
+8. **`/ui/session/refresh` exists, method POST.** — **Verified.** OpenAPI `POST /ui/session/refresh`; frontend `src/api/endpoints/auth.ts: refreshSession` → `api.post<StatusResp>("/ui/session/refresh")`.
+9. **FastAPI `detail` appears as three shapes: string, list-of-`{loc,msg,type}`, object-with-`{code,message}`; all are handled.** — **Verified (with scope caveat).** `src/api/client.ts: normalizeErrorDetail` handles the string, array (extracts `msg`), and object (`mapAuthorizationError` reads `code`) shapes. Caveat: OpenAPI documents only `422:HTTPValidationError` (the list shape) for `/ui/push/register`; the object-with-`code` shape is associated with 403 (`geo_blocked`, `role_required`, etc.) in the client, not 500. Noted in §5/§7.
+10. **Network/offline errors map to a typed network error.** — **Verified.** `src/api/client.ts` ~185-189: `catch (err) { … throw new ApiError(0, "Network error", err) }`. Maps cleanly to the Android `ApiResult.Error(Network)` claim.
+11. **The routing half (AND-108) has no HTTP contract; payload→destination mapping and nav routing are internal.** — **Verified (by absence).** No push-routing endpoint exists in the OpenAPI index; FCM data-payload parsing and Navigation-Compose routing are client-side only. The `type=message|broadcast|alert` keys and `message_id`/`broadcast_id`/`alert_id` field names are an **unverified assumption** (see Open assumptions).
+12. **Idempotent re-registration short-circuits with zero network calls (FR-2).** — **Unverified-assumption.** This is a proposed Android client behavior; the reference web client (`push.ts: registerPush`) does not implement client-side dedupe. Reasonable test target but not derived from a source.
+13. **Test stack versions (JUnit 4.13.2, OkHttp/MockWebServer 4.12, Moshi 1.15, Turbine 1.1.0, Robolectric 4.13, etc.).** — **Unverified-assumption (framework refs).** Library choices, not backend contract; pin against the module's version catalog at implementation time. Framework refs: MockWebServer (square.github.io/okhttp/), Turbine (github.com/cashapp/turbine), Robolectric (robolectric.org).
+
+### Corrections made
+
+- Removed the fabricated `app_version` request field (FR-1, §4.3 fixture, §5 request example, §5 assertion list). `PushRegisterReq` = `{token, platform}` only.
+- Corrected the 200 success body from `{registration_id, token, status}` to the real `PushDevice` `{device_id, platform, created_at, last_seen_at}` (§4.3 `REGISTER_OK` fixture, §5 success example, §6 stored-mapping shape, §11 sample assertion `store.last()?.deviceId`).
+- Corrected the persisted mapping shape from `PushRegistration(registrationId, token, status)` to `PushRegistration(deviceId, token, platform)` (§6); updated §10 logging to reference `device_id` instead of `registration_id`.
+- Clarified auth is a hybrid (Bearer + cookies + CSRF), not "cookie-based" alone (FR-1, §5).
+- Annotated the error-shape contract: only the 422/list shape is documented in OpenAPI for this endpoint; the object-with-`code` shape is a 403-associated shape in the reference client (§5, §7).
+- Resolved the §13 open question on field names (no `app_version`; `PushDevice` body, no `status`).
+
+### Open assumptions
+
+- **FCM data-payload keys** (`type`, `message_id`, `broadcast_id`, `alert_id`) — not present in any backend schema or frontend source available; they are defined by AND-108's client/server push-payload convention, which is not in the reference app (the web reference has no FCM data-message routing). Must be confirmed against the AND-108 implementation / backend push-sender before finalizing `PushFixtures`.
+- **Android-side types** (`ApiResult`, `ErrorType` taxonomy of Validation/Server/Unauthorized/Network/Unknown, `PushRegistrationRepository`, `PushDestinationMapper`, `PendingDeepLinkBuffer`, `DeepLinkDispatcher`) — these are AND-106/AND-108 deliverables, not verifiable from backend/frontend sources; treated as the contract this ticket asserts.
+- **Idempotent re-registration (FR-2)** — proposed client behavior, no source counterpart (see citation 12).
+- **JaCoCo 85% gate and the exact module/source-set paths** — project-internal conventions, not externally verifiable.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** = headless AVD `test35` (x86_64, Android 15 / API 35); **deviceA15** = physical Samsung Galaxy A15 5G (SM-A156U, serial `R5CX821TA9R`, Android 14 / API 34, arm64-v8a). For this ticket the device-dependent surface is small (real FCM delivery + notification tap), so most cases run on JVM; the genuine push-delivery case is called out for the physical device.
+
+- **TC-AND-110-01** — Registration happy path
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: MockWebServer up; in-memory cookie jar seeded with `ui_csrf=<csrf>`; access token present; `FakePushRegistrationStore` empty.
+  Steps: enqueue `200` with `REGISTER_OK` (`PushDevice` body); call `repo.register(FCM_TOKEN)`; take the recorded request.
+  Expected: exactly one request; `path == "/ui/push/register"`, method `POST`; JSON body decodes to `{token, platform:"android"}` with **no `app_version`**; `X-CSRF-Token` equals seeded cookie; `Authorization: Bearer …` header present; result `ApiResult.Success`; store now holds `PushRegistration(deviceId="dev_123", token, platform="android")`.
+  Traces: AC-1, AC-2, AC-6.
+
+- **TC-AND-110-02** — Idempotent re-registration (no network)
+  Type: unit/contract (JVM). Target: JVM.
+  Preconditions: store pre-seeded with the same `token` already registered.
+  Steps: call `repo.register(FCM_TOKEN)` with the unchanged token.
+  Expected: `server.requestCount == 0`; result is success/no-op; store unchanged.
+  Traces: AC-2. (Note: behavior is an unverified assumption per §16 #12.)
+
+- **TC-AND-110-03** — Error mapping: 400 string `detail`
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: as TC-01.
+  Steps: enqueue `400` with `{"detail":"token already registered to another user"}`; call register.
+  Expected: `ApiResult.Error(Validation)` (or client's 4xx category) carrying the surfaced message; **no store write**; no exception.
+  Traces: AC-2, AC-6.
+
+- **TC-AND-110-04** — Error mapping: 422 list `detail` (real HTTPValidationError shape)
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: as TC-01.
+  Steps: enqueue `422` with `{"detail":[{"loc":["body","token"],"msg":"field required","type":"value_error.missing"}]}`; call register.
+  Expected: `ApiResult.Error(Validation)`; first `msg` ("field required") surfaced; no store write.
+  Traces: AC-2, AC-6.
+
+- **TC-AND-110-05** — Error mapping: object `detail` + malformed body
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: as TC-01.
+  Steps: (a) enqueue `403` with `{"detail":{"code":"PUSH_DISABLED","message":"push disabled for tenant"}}`; call register. (b) enqueue `500` with body `<<not json>>`; call register again.
+  Expected: (a) typed `ApiResult.Error` with the object `message` surfaced, no store write; (b) `ApiResult.Error(Unknown)`, no crash, no store write.
+  Traces: AC-2, AC-6.
+
+- **TC-AND-110-06** — 401 → single refresh + retry → success
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: as TC-01.
+  Steps: enqueue `401`; enqueue `200` (refresh, `StatusResp`); enqueue `200` `REGISTER_OK`; call register; drain recorded requests.
+  Expected: `ApiResult.Success`; `server.requestCount == 3`; ordered paths `/ui/push/register`, `/ui/session/refresh`, `/ui/push/register`.
+  Traces: AC-2.
+
+- **TC-AND-110-07** — Double 401 → Unauthorized, no third register
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: as TC-01.
+  Steps: enqueue `401`; enqueue `200` (refresh); enqueue `401`; call register.
+  Expected: `ApiResult.Error(Unauthorized)`; exactly 3 requests (register, refresh, register) — **no** fourth/third-register attempt; refresh fired at most once.
+  Traces: AC-2.
+
+- **TC-AND-110-08** — Network/timeout: no retry of POST
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: client timeout set to 1s; `server.setSocketPolicy(NO_RESPONSE)` (or `SocketPolicy.NO_RESPONSE`).
+  Steps: call register.
+  Expected: `ApiResult.Error(Network)`; single attempt (POST not retried by the idempotent-GET backoff path); no store write; completes well under the production 20s timeout.
+  Traces: AC-2, AC-7.
+
+- **TC-AND-110-09** — Payload→destination mapping (valid + invalid)
+  Type: unit (JVM, parameterized). Target: JVM.
+  Preconditions: none.
+  Steps: map `messageData`, `broadcastData`, `alertData`; map `{"type":"zzz"}`, `emptyMap()`, `{"type":"message"}` (missing id), and a map with a null/empty id.
+  Expected: valid inputs → `Message("msg_42")` / `Broadcast("bc_7")` / `Alert("al_9")`; all invalid/missing/unknown inputs → `null` (or `Unknown`) with no crash and no navigation.
+  Traces: AC-3.
+
+- **TC-AND-110-10** — Tap routing: route strings + non-ASCII id pass-through
+  Type: unit (JVM, fake `DeepLinkDispatcher`/recording nav surface). Target: JVM.
+  Preconditions: recording nav surface.
+  Steps: dispatch `Message("msg_42")`, `Broadcast("bc_7")`, `Alert("al_9")`; dispatch a destination with a non-ASCII id.
+  Expected: routes `message/msg_42`, `broadcast/bc_7`, `alert/al_9`; ids pass through verbatim with correct argument encoding (locale-independent, non-ASCII id routes intact).
+  Traces: AC-3.
+
+- **TC-AND-110-11** — Cold-start buffer drains exactly once; warm-start navigates immediately
+  Type: integration (JVM, `runTest`). Target: JVM.
+  Preconditions: `PendingDeepLinkBuffer`; recording nav surface.
+  Steps: (cold) `buffer.set(Alert("al_9"))`; `routing.onNavReady()`; `advanceUntilIdle()`. (warm) with nav ready, dispatch `Message("msg_42")`.
+  Expected: cold → `recorder.routes` contains exactly `["alert/al_9"]` (drained once, buffer empty after); warm → immediate navigation to `message/msg_42`; no duplicate events.
+  Traces: AC-3.
+
+- **TC-AND-110-12** — Security: CSRF + Bearer required, no token/cookie leakage
+  Type: contract/MockWebServer + unit (JVM). Target: JVM.
+  Preconditions: seeded `ui_csrf` cookie; access token; `RecordingLogger` installed.
+  Steps: run a successful register; inspect recorded request headers; capture all log output across success and failure paths.
+  Expected: mutating request carries `X-CSRF-Token` == cookie value and `Authorization: Bearer …`; the raw FCM token never appears in any log line at any level; no real session cookie written to disk (in-memory jar only); no live host contacted.
+  Traces: AC-6.
+
+- **TC-AND-110-13** — Instrumented service glue: `onMessageReceived` routes a fixture payload
+  Type: instrumented/e2e (Espresso-Intents) or Robolectric. Target: emu35 (fast CI) or JVM/Robolectric for `RemoteMessage`.
+  Preconditions: `TestLogonMessagingService` constructible; nav graph/`PendingDeepLinkBuffer` available.
+  Steps: build a `RemoteMessage` with `messageData`; call `service.onMessageReceived(msg)`; assert via Espresso-Intents `intended(hasComponent(MainActivity))` + extras, or via buffer population.
+  Expected: the destination (`Message("msg_42")`) is routed/buffered; correct component + extras. Runs on emu35; fall back to Robolectric if `RemoteMessage` is stable, per §13.
+  Traces: AC-4.
+
+- **TC-AND-110-14** — Real FCM push delivery + notification tap (hardware)
+  Type: manual / instrumented-on-device. Target: **deviceA15 (MUST run on physical device)**.
+  Preconditions: real `google-services.json` (dev project), app installed on SM-A156U, POST-notifications permission granted, device registered. Out of the hermetic suite — smoke validation only.
+  Steps: send a real FCM data+notification message of each `type`; tap the posted notification from a cold app state and again from a warm state.
+  Expected: notification is delivered and tapping opens the correct screen (message/broadcast/alert) with the right id; cold tap drains the pending buffer after nav-ready; warm tap navigates immediately. Confirms behavior the emulator cannot fully exercise (real FCM transport + system notification tap on API 34 / arm64).
+  Traces: AC-4 (real-world confirmation of the wiring asserted hermetically in TC-13).
+
+- **TC-AND-110-15** — Determinism / no-flake gate
+  Type: integration (JVM, CI harness). Target: JVM.
+  Preconditions: full Tier A suite.
+  Steps: run `feature-push:testDebugUnitTest` 20 times consecutively; scan sources for `Thread.sleep`.
+  Expected: 20/20 green; zero `Thread.sleep` occurrences; all async via `runTest`/`advanceUntilIdle`.
+  Traces: AC-7.
+
+- **TC-AND-110-16** — JaCoCo coverage gate
+  Type: integration (Gradle/CI). Target: JVM.
+  Preconditions: JaCoCo wired into `feature-push`, scoped to the two target classes.
+  Steps: run the coverage verification task.
+  Expected: line coverage ≥ 85% on `PushRegistrationRepository` and `PushDestinationMapper`; build fails if below.
+  Traces: AC-5.
+
+### Coverage matrix
+
+| §14 Acceptance Criterion | Covered by |
+|---|---|
+| AC-1 (suite green, FR-1..FR-9 present) | TC-01 (and the FR cases across TC-02..TC-11), TC-15 |
+| AC-2 (registration: success/body/CSRF, idempotency, error shapes, 401 refresh/retry, timeout no-retry) | TC-01, TC-02, TC-03, TC-04, TC-05, TC-06, TC-07, TC-08 |
+| AC-3 (routing: mapping, route strings, malformed-no-nav, cold-start drain) | TC-09, TC-10, TC-11 |
+| AC-4 (instrumented `onMessageReceived` routes payload) | TC-13, TC-14 (device confirmation) |
+| AC-5 (JaCoCo ≥ 85% on the two classes) | TC-16 |
+| AC-6 (no live host / no real cookies or FCM secrets) | TC-01, TC-03, TC-04, TC-05, TC-12 |
+| AC-7 (determinism; no `Thread.sleep`) | TC-08, TC-15 |

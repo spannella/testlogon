@@ -5,7 +5,8 @@ milestone: M3
 epic: E18
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-120, AND-024]
 blocks: [AND-122]
 ---
@@ -75,20 +76,29 @@ the correct `conversationId`; loading/error/offline states render via the shared
 ## 3. Functional Requirements
 
 1. **List rendering.** Display conversations in a `LazyColumn`. Each row shows:
-   - **Avatar** (Coil-loaded from `ConversationDto.avatarUrl`; circular; initials
+   - **Avatar** (Coil-loaded from `ConversationOut.icon`; circular; initials
      placeholder fallback derived from `title` when null/blank or on load failure).
-   - **Title** (`ConversationDto.title`), single line, ellipsized.
-   - **Last-message preview** (`lastMessage?.preview` or `lastMessage?.body`
-     truncated), single line, ellipsized; shows "No messages yet" when null.
-   - **Relative timestamp** (`lastMessage?.createdAt` or
-     `conversation.updatedAt`) formatted as relative-to-now (e.g. "now", "5m",
-     "3h", "Mon", "Apr 2").
-   - **Unread indicator**: a filled badge showing `unreadCount` when `> 0`; the
+     CORRECTED: the backend has no `avatar_url`; the only image-ish field on
+     `ConversationOut` is `icon` (nullable string). DM avatars are otherwise derived
+     from `participants[]` (out of scope for the initials fallback here).
+   - **Title** (`ConversationOut.title`, nullable), single line, ellipsized; falls
+     back to a derived/placeholder name when null (no `counterpart_name` field
+     exists on the backend — CORRECTED).
+   - **Last-message preview** (`last_message_preview` top-level, else
+     `last_message?.preview`), single line, ellipsized; shows "No messages yet" when
+     null. CORRECTED: `MessageOut` exposes no `body` field; use `preview`.
+   - **Relative timestamp** (`last_message_at`, else `created_at`) formatted as
+     relative-to-now (e.g. "now", "5m", "3h", "Mon", "Apr 2"). CORRECTED: these are
+     **integer epoch seconds**, not ISO-8601 strings, and there is no `updated_at`
+     field; activity time is `last_message_at` (nullable int) with `created_at`
+     (required int) as fallback.
+   - **Unread indicator**: a filled badge showing `unread_count` when `> 0`; the
      title and preview render with emphasized weight/color when unread. No badge
-     when `unreadCount == 0`.
-2. **Sort.** Newest-activity-first using `lastActivityAt` (last message time, else
-   `updatedAt`). A stable secondary sort by `id`. (Full sort/aggregation hardened in
-   AND-122; this ticket sorts the single fetched page.)
+     when `unread_count == 0`. (`unread_count` defaults to 0 server-side, so it is
+     always present — CORRECTED from "nullable".)
+2. **Sort.** Newest-activity-first using `lastActivityAt` (= `last_message_at`, else
+   `created_at`). A stable secondary sort by `conversation_id`. (Full
+   sort/aggregation hardened in AND-122; this ticket sorts the single fetched page.)
 3. **Pull-to-refresh.** A Material 3 pull-to-refresh container wraps the list;
    gesture triggers `viewModel.refresh()` and shows the refresh spinner until the
    call settles. Refresh never clears already-rendered content on failure (stale
@@ -157,8 +167,14 @@ class ConversationRepositoryImpl @Inject constructor(
 ) : ConversationRepository {
     override suspend fun getConversations(limit: Int): ApiResult<List<ConversationRow>> =
         withContext(io) {
-            api.getConversations(limit = limit)      // ApiResult<ConversationListResponseDto>
-                .map { dto -> dto.items.map(ConversationDto::toRow).sortedRows() }
+            // CORRECTED: GET /messaging/conversations returns a BARE JSON ARRAY of
+            // ConversationOut (no envelope, no next_cursor). AND-120 must model the
+            // success body as List<ConversationDto>, not a ConversationListResponseDto
+            // with an `items` field. `limit` is NOT a documented query param on this
+            // endpoint (the web client optionally sends `cursor`); client-side `limit`
+            // is applied post-fetch as a safety cap until AND-122 adds real paging.
+            api.getConversations()                   // ApiResult<List<ConversationDto>>
+                .map { list -> list.map(ConversationDto::toRow).sortedRows().take(limit) }
         }
 }
 ```
@@ -166,13 +182,18 @@ class ConversationRepositoryImpl @Inject constructor(
 **Mapping** (`data/ConversationMappers.kt`):
 
 ```kotlin
+// CORRECTED field names to match backend ConversationOut:
+//   id -> conversation_id; no counterpart_name; no avatar_url (use icon);
+//   no updated_at (use last_message_at, else created_at);
+//   timestamps are epoch SECONDS (Int/Long), so multiply by 1000 for ms;
+//   no MessageOut.body (use preview / top-level last_message_preview).
 internal fun ConversationDto.toRow(): ConversationRow = ConversationRow(
-    id = id,
-    title = title ?: counterpartName.orEmpty().ifBlank { "Conversation" },
-    avatarUrl = avatarUrl,
-    preview = lastMessage?.let { it.preview ?: it.body },
-    timestampEpochMs = (lastMessage?.createdAt ?: updatedAt)?.toEpochMillisOrNull(),
-    unreadCount = unreadCount ?: 0,
+    id = conversationId,
+    title = title?.ifBlank { null } ?: "Conversation",   // derive from participants in AND-122
+    avatarUrl = icon,                                     // only image-ish field available
+    preview = lastMessagePreview ?: lastMessage?.preview,
+    timestampEpochMs = (lastMessageAt ?: createdAt)?.let { it * 1000L },
+    unreadCount = unreadCount,                            // server default 0; non-null
 )
 
 internal fun List<ConversationRow>.sortedRows(): List<ConversationRow> =
@@ -276,54 +297,79 @@ Long = System.currentTimeMillis()): String` using `java.time` thresholds (<60s "
 
 ## 5. API Contract
 
-Consumed via `MessagingApi` (AND-120). Endpoint: `GET /messaging/conversations`.
+Consumed via `MessagingApi` (AND-120). Endpoint: `GET /messaging/conversations`
+(verified: OpenAPI `op=list_conversations_messaging_conversations_get`).
 
-Request (query params, all optional this ticket uses `limit`):
+Request — CORRECTED. OpenAPI documents **no `limit` query param**; the only declared
+parameters are headers (`authorization`, `X-SESSION-ID`, `X-API-Key`). The web client
+optionally sends a `cursor` query param. Session is carried by cookies + the CSRF
+header (verified in `src/api/client.ts`: `ui_csrf` cookie echoed as `X-CSRF-Token`,
+plus `Authorization: Bearer <accessToken>` and `credentials: include`):
 
 ```
-GET /messaging/conversations?limit=30 HTTP/1.1
+GET /messaging/conversations HTTP/1.1
 Cookie: <session cookies + ui_csrf>
 X-CSRF-Token: <ui_csrf value>
+Authorization: Bearer <accessToken>   # web sends this; Android per AND-011/AND-013
 ```
 
 This is an **idempotent GET** → eligible for bounded backoff retry (AND-016) and a
 ~20s timeout (AND-009). On `401`, the OkHttp authenticator performs one
 `POST /ui/session/refresh` then retries (AND-013); the screen does not handle 401
-directly.
+directly. (Verified: `POST /ui/session/refresh` exists and `src/api/client.ts`
+refreshes once then retries.)
 
-Success `200` response (shape per AND-120 DTOs; representative):
+Success `200` response — CORRECTED. The body is a **bare JSON array** of
+`ConversationOut` (OpenAPI: `type: array, items: ConversationOut`); there is **no
+envelope and no `next_cursor`** on this endpoint. (The web `getConversations` also
+defensively accepts an object shape keyed `conversations` — NOT `items`.) Real field
+shape (verified against `components.schemas.ConversationOut`):
 
 ```json
-{
-  "items": [
-    {
-      "id": "conv_01HX...",
-      "title": "Ada Lovelace",
-      "counterpart_name": "Ada Lovelace",
-      "avatar_url": "https://.../ada.png",
-      "unread_count": 2,
-      "updated_at": "2026-06-05T14:21:09Z",
-      "last_message": {
-        "id": "msg_01HX...",
-        "body": "See you at 3?",
-        "preview": "See you at 3?",
-        "author_id": "user_99",
-        "created_at": "2026-06-05T14:21:09Z"
-      }
+[
+  {
+    "conversation_id": "conv_01HX...",
+    "type": "dm",
+    "status": "active",
+    "title": "Ada Lovelace",
+    "icon": "https://.../ada.png",
+    "created_at": 1749132069,
+    "created_by": "user_42",
+    "participant_count": 2,
+    "unread_count": 2,
+    "last_message_at": 1749132069,
+    "last_message_preview": "See you at 3?",
+    "last_message": {
+      "message_id": "msg_01HX...",
+      "conversation_id": "conv_01HX...",
+      "sender_id": "user_99",
+      "kind": "text",
+      "preview": "See you at 3?",
+      "created_at": 1749132069
     }
-  ],
-  "next_cursor": null
-}
+  }
+]
 ```
 
-Empty: `{"items": [], "next_cursor": null}` → `Empty` state.
+Notes on corrected fields: `conversation_id` (not `id`); `icon` is the only avatar-ish
+field (no `avatar_url`); no `counterpart_name`; no `updated_at` (use `last_message_at`
+→ `created_at`); timestamps are **integer epoch seconds**; `unread_count` defaults to
+`0` (always present); `MessageOut` uses `sender_id` (not `author_id`) and `preview`
+(no `body`). Required `ConversationOut` fields: `conversation_id`, `type`,
+`created_at`, `created_by`, `participant_count`, `status`.
 
-Error mapping (AND-015): FastAPI `detail` may be a `string`, a `[{"msg": ...}]`
-array, or a `{"code": ...}` object; `errorMessage(detail)` extracts a user-safe
-string. `401` is handled by the authenticator; `403`/`5xx`/parse errors →
-`Error(message, offline=false)`; `IOException`/timeout/health-down →
-`Error(..., offline=true)`. Paging (`next_cursor`) is parsed but unused here; AND-122
-owns multi-page consumption.
+Empty: `[]` → `Empty` state. (CORRECTED from `{"items": [], "next_cursor": null}`.)
+
+Error mapping (AND-015) — verified against `src/api/client.ts: normalizeErrorDetail`.
+FastAPI `detail` may be a `string`, a `[{"msg": ...}]` array, or a structured object
+`{"code": ..., "reason": ..., "message": ..., "required_scopes": [...]}`;
+`errorMessage(detail)` extracts a user-safe string. `401` is handled by the
+authenticator; `403` (e.g. `code=api_entitlement_denied` /
+`code=api_key_scope_denied` with `required_scopes:["messager:read"]`), `429`
+(`code=api_limit_exceeded`), `5xx`, and parse errors → `Error(message,
+offline=false)`; `IOException`/timeout/health-down → `Error(..., offline=true)`.
+This endpoint does **not** paginate, so AND-122's multi-page work will require a
+different/cursor-bearing source (the documented response carries no cursor).
 
 ## 6. Data & State Management
 
@@ -341,9 +387,11 @@ owns multi-page consumption.
   scroll/animation across refresh.
 - **Threading:** network + mapping on `Dispatchers.IO` in the repository; state
   emitted on the main-safe `viewModelScope`.
-- **Timestamps:** server emits ISO-8601 UTC; converted to epoch-ms at map time and
-  formatted relative at render time so rows re-read "now" correctly without storing
-  formatted strings.
+- **Timestamps:** CORRECTED — the backend emits **integer epoch seconds** (verified:
+  `ConversationOut.created_at`/`last_message_at` are `type: integer`; the web adapter
+  coerces them via `toNum`). Convert seconds→ms at map time (`* 1000`) and format
+  relative at render time so rows re-read "now" correctly without storing formatted
+  strings.
 
 ## 7. Error Handling & Resilience
 
@@ -457,10 +505,13 @@ owns multi-page consumption.
 
 ## 13. Risks & Open Questions
 
-- **DTO field names vs OpenAPI.** Exact field names (`counterpart_name`, `preview`,
-  `unread_count`, `next_cursor`) are assumed from the web reference; AND-120 is
-  authoritative. Confirm against `/openapi.json` and `frontend/src/api/types.ts`
-  before merge; adjust `toRow` mapping only.
+- **DTO field names vs OpenAPI — RESOLVED in this review (§16).** Verified against
+  `components.schemas.ConversationOut`/`MessageOut` and the web client: `id`→
+  `conversation_id`; `counterpart_name` and `avatar_url` do **not** exist (`icon` is
+  the only image field); `updated_at` does **not** exist (use `last_message_at` →
+  `created_at`); timestamps are epoch **seconds**; the response is a **bare array**
+  with **no `next_cursor`**; `MessageOut` uses `sender_id`/`preview` (no
+  `author_id`/`body`). `toRow` and the API DTO have been corrected accordingly.
 - **Unread semantics.** Whether `unread_count` is server-authoritative or must be
   aggregated client-side is decided in AND-122; this ticket trusts the server value.
 - **Pull-to-refresh on stale content.** Confirm desired UX: keep stale rows + banner
@@ -470,8 +521,8 @@ owns multi-page consumption.
   used; confirm whether a Gravatar-style derivation is desired (out of scope now).
 - **Thread route availability.** If the thread screen ticket lands later, navigation
   targets a placeholder; ensure no crash on an unregistered route (stub composable).
-- **Timestamp source field.** `last_message.created_at` vs `updated_at` precedence
-  confirmed with backend; current rule prefers last message time.
+- **Timestamp source field — RESOLVED.** There is no `updated_at`; precedence is
+  `last_message_at` → `created_at` (both epoch seconds). Confirmed against OpenAPI.
 
 ## 14. Acceptance Criteria
 
@@ -514,3 +565,231 @@ owns multi-page consumption.
 - `ConversationListUiState`/`ConversationRow` contract documented (§6) so AND-122 can
   swap in Paging 3 without changing the Compose layer.
 - Spec reviewed; telemetry/logging confirmed PII-free; merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. **Endpoint is `GET /messaging/conversations`.** VERIFIED. OpenAPI
+   `GET /messaging/conversations` (op `list_conversations_messaging_conversations_get`);
+   frontend `src/api/endpoints/messaging.ts: getConversations`.
+2. **Success `200` body is a bare JSON array of `ConversationOut` (no envelope, no
+   `next_cursor`).** CORRECTED (spec claimed `{items:[], next_cursor}`). OpenAPI
+   `GET /messaging/conversations` → `200` schema `{type: array, items:
+   ConversationOut}`; frontend `src/api/endpoints/messaging.ts: getConversations`
+   ("Backend returns a plain array"; its defensive object shape is keyed
+   `conversations`, not `items`).
+3. **Request query param `limit=30`.** CORRECTED → removed. OpenAPI declares only
+   header params (`authorization`, `X-SESSION-ID`, `X-API-Key`) for this op; the web
+   client optionally sends `cursor` (`src/api/endpoints/messaging.ts`). `limit` is now
+   documented as a client-side post-fetch cap only.
+4. **Conversation id field is `id`.** CORRECTED → `conversation_id`. OpenAPI
+   `components.schemas.ConversationOut.conversation_id` (required);
+   `src/api/endpoints/messagingAdapter.ts: adaptConversation`.
+5. **`counterpart_name` field exists.** CORRECTED → does not exist. Not present in
+   `components.schemas.ConversationOut` (fields: `title`, `topic`, `icon`,
+   `participants[]`, …). Title fallback must derive from participants (AND-122).
+6. **Avatar field is `avatar_url`.** CORRECTED → `icon` (nullable). OpenAPI
+   `ConversationOut.icon`; no `avatar_url` in the schema. (`MessageOut.bot_avatar_url`
+   exists but is unrelated.)
+7. **Activity timestamp field is `updated_at` (ISO-8601 string).** CORRECTED → no
+   `updated_at`; use `last_message_at` (nullable int) → `created_at` (required int),
+   both **epoch seconds**. OpenAPI `ConversationOut.last_message_at`/`created_at`
+   (`type: integer`); `src/api/endpoints/messagingAdapter.ts` coerces via `toNum`.
+8. **`unread_count` is nullable.** CORRECTED → integer with server `default: 0`
+   (always present). OpenAPI `ConversationOut.unread_count`.
+9. **Last-message preview from `last_message.body`/`last_message.preview`.** CORRECTED
+   → `MessageOut` has no `body`; use top-level `last_message_preview` else
+   `last_message.preview`. OpenAPI `ConversationOut.last_message_preview` and
+   `components.schemas.MessageOut` (has `preview`, no `body`/`text` property).
+10. **Message author field is `author_id`.** CORRECTED → `sender_id`. OpenAPI
+    `components.schemas.MessageOut.sender_id`; `messagingAdapter.ts: adaptMessage`.
+11. **CSRF: `ui_csrf` cookie echoed as `X-CSRF-Token` header.** VERIFIED.
+    `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`).
+12. **401 → one `POST /ui/session/refresh` then retry; screen does not handle 401.**
+    VERIFIED. OpenAPI `POST /ui/session/refresh` exists; `src/api/client.ts`
+    `refreshSession()` + single retry on 401.
+13. **Auth transport rides the cookie jar.** VERIFIED + AUGMENTED. Web uses cookies
+    (`credentials: "include"`) AND `Authorization: Bearer <accessToken>`
+    (`src/api/client.ts`); backend also accepts `X-SESSION-ID`/`X-API-Key` (OpenAPI
+    params). Note added that Bearer is also sent.
+14. **Error `detail` may be string / `[{msg}]` array / `{code:...}` object.**
+    VERIFIED. `src/api/client.ts: normalizeErrorDetail` + OpenAPI `403`/`429` examples
+    (`api_entitlement_denied`, `api_key_scope_denied` w/ `required_scopes`,
+    `api_limit_exceeded`); `422` = `HTTPValidationError`.
+15. **422 validation error schema.** VERIFIED. OpenAPI `GET /messaging/conversations`
+    `422: HTTPValidationError`.
+16. **`PullToRefreshBox` is the Material 3 pull-to-refresh API.** Unverified-assumption
+    (framework ref). Android docs:
+    https://developer.android.com/reference/kotlin/androidx/compose/material3/pulltorefresh/package-summary
+    — not verifiable from the backend/frontend sources; standard M3 Compose component.
+17. **`collectAsStateWithLifecycle()` for state collection.** Unverified-assumption
+    (framework ref). Android docs:
+    https://developer.android.com/topic/libraries/architecture/compose#lifecycleawarecollectasstate
+18. **Coil for avatar loading over the shared OkHttp client.** Unverified-assumption
+    (framework ref). Coil docs: https://coil-kt.github.io/coil/ — framework choice,
+    not in scope of the backend/frontend contract.
+19. **`messaging/thread/{conversationId}` route target.** Unverified-assumption — the
+    thread screen is a sibling ticket; the route string is an internal Android
+    navigation contract, not derivable from the backend or web sources.
+20. **Telemetry event names / payloads (`messaging_list_*`).** Unverified-assumption —
+    internal analytics contract; not present in the backend/frontend sources.
+
+### Corrections made
+
+- §3, §4, §5, §6, §13: response is a **bare array**, not `{items, next_cursor}`; the
+  endpoint has **no pagination cursor**.
+- §3, §4, §5: field renames — `id`→`conversation_id`, drop `counterpart_name`,
+  `avatar_url`→`icon`, drop `updated_at` (use `last_message_at`→`created_at`),
+  `author_id`→`sender_id`, drop `MessageOut.body` (use `preview`/`last_message_preview`).
+- §3, §4, §6: timestamps are **epoch seconds** (×1000 → ms), not ISO-8601 strings.
+- §3: `unread_count` is non-null (server default 0), not nullable.
+- §5: removed the `limit` query param (header-only params per OpenAPI; web uses
+  `cursor`); documented Bearer token in addition to cookies; enriched the `403`/`429`
+  error-shape catalog with real codes.
+- Frontmatter: `status: reviewed`, added `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **Material 3 `PullToRefreshBox`, `collectAsStateWithLifecycle`, Coil** (items 16–18):
+  Android-framework choices; correct per current Android docs but outside the
+  backend/frontend contract, so not "verified" against the authoritative sources here.
+- **Thread route string and analytics event names** (items 19–20): internal Android
+  contracts owned by sibling/this ticket; no upstream source to verify against.
+- **DM title/avatar derivation from `participants[]`**: the backend returns a
+  `participants[]` array but this ticket only renders `title`/`icon`; the precise
+  derivation of a counterpart display name/avatar for DMs is deferred to AND-122 and
+  is currently an assumption.
+- **AND-120 DTO modeling**: this spec assumes AND-120 will model the success body as
+  `List<ConversationDto>` matching `ConversationOut`. AND-120 is authoritative; if it
+  diverges, the §4 mapper is the only thing to adjust.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM/Robolectric local unit (no device); **MWS** =
+contract test with MockWebServer; **EMU** = headless emulator AVD `test35` (x86_64,
+API 35); **DEV** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API
+34, arm64-v8a). This screen has no camera/biometric/WebRTC/FCM/Telecom behavior, so
+most instrumented cases run fine on **EMU**; one ABI/API-parity smoke runs on **DEV**.
+
+- **TC-AND-121-01 — Mapper: full ConversationOut → ConversationRow.**
+  Type: unit (JVM). Target: `ConversationMappersTest`. Preconditions: a
+  `ConversationDto` with `conversation_id`, `title`, `icon`, `last_message_preview`,
+  `last_message_at` (epoch s), `unread_count=2`. Steps: call `toRow()`. Expected:
+  `id=conversation_id`, `avatarUrl=icon`, `preview=last_message_preview`,
+  `timestampEpochMs = last_message_at * 1000`, `unreadCount=2`, `isUnread=true`.
+  Traces: AC-1, AC-3.
+
+- **TC-AND-121-02 — Mapper: fallbacks (null title/icon/preview, no last message).**
+  Type: unit (JVM). Target: `ConversationMappersTest`. Preconditions: dto with
+  `title=null`/blank, `icon=null`, `last_message=null`, `last_message_preview=null`,
+  `unread_count=0`, valid `created_at`. Steps: `toRow()`. Expected: `title` falls back
+  to placeholder, `avatarUrl=null` (initials path), `preview=null` (→ "No messages
+  yet" at render), `timestampEpochMs = created_at*1000`, `unreadCount=0`,
+  `isUnread=false`. Traces: AC-1.
+
+- **TC-AND-121-03 — Sort: newest-activity-first with stable id tiebreak.**
+  Type: unit (JVM). Target: `ConversationMappersTest`. Preconditions: rows with mixed
+  `timestampEpochMs` incl. one null and two equal timestamps. Steps: `sortedRows()`.
+  Expected: descending by timestamp (null → oldest), equal timestamps ordered by
+  `conversation_id`. Traces: AC-3.
+
+- **TC-AND-121-04 — Relative time boundaries.**
+  Type: unit (JVM). Target: `RelativeTimeTest`. Preconditions: fixed `now`. Steps:
+  format 59s, 61s, 23h, 25h, 8d offsets. Expected: "now", "1m", "23h", weekday,
+  "MMM d". Traces: AC-1.
+
+- **TC-AND-121-05 — Repository contract: array body → mapped rows + correct request.**
+  Type: contract/MockWebServer (MWS). Target: `ConversationRepositoryTest`.
+  Preconditions: MWS enqueues `200` with a **bare JSON array** fixture (matching §5).
+  Steps: call `getConversations()`; capture the recorded request. Expected: rows
+  mapped and sorted; recorded request is `GET /messaging/conversations`, carries
+  `X-CSRF-Token` and session credentials, and does **not** rely on an `items`
+  envelope. Traces: AC-1.
+
+- **TC-AND-121-06 — Repository contract: empty array → empty success (not error).**
+  Type: contract/MockWebServer (MWS). Target: `ConversationRepositoryTest`.
+  Preconditions: MWS enqueues `200` body `[]`. Steps: `getConversations()`. Expected:
+  `ApiResult.Success` with empty list. Traces: AC-5.
+
+- **TC-AND-121-07 — Repository contract: error responses map correctly.**
+  Type: contract/MockWebServer (MWS). Target: `ConversationRepositoryTest`.
+  Preconditions: MWS enqueues, across runs, `403`
+  `{"detail":{"code":"api_key_scope_denied","required_scopes":["messager:read"]}}`,
+  `429` `{"detail":{"code":"api_limit_exceeded"}}`, `422` `HTTPValidationError`, and
+  `500`. Steps: `getConversations()` each. Expected: `ApiResult.Failure` with a
+  user-safe message extracted per the polymorphic `detail` rules; `offline=false`.
+  Traces: AC-6.
+
+- **TC-AND-121-08 — ViewModel state machine (happy + empty + error + offline).**
+  Type: unit (JVM, Turbine + `MainDispatcherRule`). Target:
+  `ConversationListViewModelTest`. Preconditions: fake repository. Steps: drive
+  success-nonempty, success-empty, server `Failure`, and `IOException` `Failure` on
+  first load. Expected: `Loading→Content(sorted)`; `Loading→Empty`;
+  `Loading→Error(offline=false)`; `Loading→Error(offline=true)`. Traces: AC-1, AC-3,
+  AC-5, AC-6.
+
+- **TC-AND-121-09 — ViewModel refresh-with-content failure keeps stale content.**
+  Type: unit (JVM, Turbine). Target: `ConversationListViewModelTest`. Preconditions:
+  prior `Content` state. Steps: `refresh()` with repo returning `IOException` failure.
+  Expected: rows retained, `staleReason=OFFLINE`, `isRefreshing=false`, and one
+  snackbar `ListEvent` emitted; a subsequent successful `refresh()`/`retry()` clears
+  the banner. Traces: AC-4, AC-6.
+
+- **TC-AND-121-10 — Compose: Content renders rows; unread badge gated on count.**
+  Type: Compose-UI (EMU). Target: `ConversationListScreenTest`. Preconditions:
+  `Content` with one unread (`unreadCount=2`) and one read row. Steps: assert title,
+  preview, timestamp text; assert badge present on unread row and absent on read row;
+  assert "No messages yet" for a null-preview row. Traces: AC-1.
+
+- **TC-AND-121-11 — Compose: Loading/Empty/Error surfaces + working retry.**
+  Type: Compose-UI (EMU). Target: `ConversationListScreenTest`. Preconditions: each
+  state in turn. Steps: assert `LoadingState`, `EmptyState`, `ErrorState` render;
+  click retry. Expected: correct `core-ui` surface per state; `onRetry` invoked once.
+  Traces: AC-5, AC-6.
+
+- **TC-AND-121-12 — Compose: row tap opens thread with correct id; pull-to-refresh.**
+  Type: Compose-UI (EMU). Target: `ConversationListScreenTest`. Preconditions:
+  `Content` with known ids. Steps: tap a row; perform pull-to-refresh gesture (or
+  assert `isRefreshing` spinner from state). Expected: `onOpenConversation(id)` fires
+  with the tapped `conversation_id`; `onRefresh` invoked. Traces: AC-2, AC-4.
+
+- **TC-AND-121-13 — Accessibility: row semantics + non-color-only unread.**
+  Type: Compose-UI / instrumented (EMU). Target: `ConversationListScreenTest`.
+  Preconditions: `Content` with one unread row. Steps: read merged semantics; assert
+  `Role.Button`, content description includes title + unread + relative time; assert
+  unread is conveyed by badge text/bold weight (not color alone); assert tap target
+  ≥ 48dp / row ≥ 56dp. Traces: AC-7.
+
+- **TC-AND-121-14 — Security: no PII/secret leakage in logs or analytics.**
+  Type: integration / manual. Target: `ConversationListViewModel` + Timber +
+  analytics. Preconditions: capturing Timber tree + fake analytics sink; load real
+  conversations. Steps: exercise load/refresh/open; inspect captured logs and analytics
+  payloads. Expected: no message previews, titles, cookies, `X-CSRF-Token`/`ui_csrf`,
+  Bearer token, or conversation ids in analytics; logs carry only counts/durations,
+  mapped messages, and HTTP status. Traces: AC-8.
+
+- **TC-AND-121-15 — End-to-end on physical device (ABI/API parity smoke).**
+  Type: instrumented/e2e (DEV — MUST run on the Samsung Galaxy A15 5G, serial
+  R5CX821TA9R; arm64-v8a / API 34 vs the emulator's x86_64 / API 35). Preconditions:
+  valid session against `http://18.222.237.167:8000`; cleartext dev flavor. Steps:
+  open the Messaging tab; observe list render; pull-to-refresh; toggle airplane mode
+  and refresh to hit the offline/stale path; tap a row. Expected: real conversations
+  render newest-first; refresh works; offline shows the stale banner + snackbar with
+  content retained; row tap navigates to `messaging/thread/{conversationId}`; no
+  arm64/API-34-specific crash (`java.time` relative formatting, Coil decode). Runs on
+  DEV to catch ABI- and API-level differences the x86_64/API-35 emulator can miss.
+  Traces: AC-1, AC-2, AC-4, AC-6.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 Renders from backend | TC-01, TC-02, TC-04, TC-05, TC-08, TC-10, TC-15 |
+| AC-2 Opens a thread | TC-12, TC-15 |
+| AC-3 Sort newest-first | TC-01, TC-03, TC-08 |
+| AC-4 Pull-to-refresh | TC-09, TC-12, TC-15 |
+| AC-5 Empty state | TC-06, TC-08, TC-11 |
+| AC-6 Loading/error/offline | TC-07, TC-08, TC-09, TC-11, TC-15 |
+| AC-7 Accessibility | TC-13 |
+| AC-8 No PII leakage | TC-14 |

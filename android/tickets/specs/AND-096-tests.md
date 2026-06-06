@@ -5,7 +5,8 @@ milestone: M2
 epic: E13
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-095]
 blocks: []
 ---
@@ -14,7 +15,7 @@ blocks: []
 
 ## 1. Overview & Goal
 
-This ticket delivers the automated test coverage for Epic E13 ("Activity, Saved & Achievements") of the TestLogon native Android port. E13 ships four user-facing surfaces — the Activity feed (AND-091), Saved/Bookmarks (AND-092), Achievements earned/locked (AND-093) and the Achievements leaderboard (AND-094) — plus the shared ViewModel/paging layer that drives them (AND-095). Those tickets each carry a thin "tested" acceptance bullet; AND-096 is the consolidating test ticket whose scope is **"Repo + UI smoke tests"** and whose acceptance is simply **"Tests pass."**
+This ticket delivers the automated test coverage for Epic E13 ("Activity, Saved & Achievements") of the TestLogon native Android port. E13 ships four user-facing surfaces — the Activity feed (AND-091), Saved/Bookmarks (AND-092), Achievements — earned badges + progress (AND-093; the web "earned/locked" framing maps to the My Badges tab `/ui/achievements` for earned and the Progress tab `/ui/achievements/progress` for not-yet-earned) and the Achievements leaderboard (AND-094) — plus the shared ViewModel/paging layer that drives them (AND-095). Those tickets each carry a thin "tested" acceptance bullet; AND-096 is the consolidating test ticket whose scope is **"Repo + UI smoke tests"** and whose acceptance is simply **"Tests pass."**
 
 The goal is a deterministic, offline (no live backend) test suite that:
 
@@ -30,11 +31,11 @@ This is a **test-only** ticket. It must not change production behaviour; any pro
 
 - **Epic E13 feature tickets** (the code under test):
   - AND-091 Activity feed — `activityFeed.ts` API + paged screen.
-  - AND-092 Saved / bookmarks — `bookmarks.ts`/saved API + screen; unsave.
-  - AND-093 Achievements — `achievements.ts` API + screen (earned/locked).
-  - AND-094 Achievements leaderboard — `/ui/achievements/leaderboard/me`.
+  - AND-092 Saved / bookmarks — `bookmarks.ts` (`/ui/bookmarks`) API + screen; unsave via bookmark delete. (CORRECTION: there is no `/ui/saved` endpoint; "Saved" is the bookmarks surface — verified against `src/api/endpoints/bookmarks.ts` and OpenAPI `GET /ui/bookmarks`.)
+  - AND-093 Achievements — `achievements.ts` API + screen. (CORRECTION: the web client has no single "earned/locked" response. `GET /ui/achievements` returns only EARNED achievements `{achievements, total_points, achievement_count}`; "locked"/progress-to-next is the separate Progress tab via `GET /ui/achievements/progress`.)
+  - AND-094 Achievements leaderboard — `GET /ui/achievements/leaderboard/me?period={p}` (my rank) and `GET /ui/achievements/leaderboard?period=&limit=&cursor=` (full board).
   - **AND-095 ViewModels (activity/saved/achievements)** — direct dependency; supplies the `StateFlow<UiState>` + Paging 3 layer this ticket exercises. AND-096 cannot start until AND-095 lands.
-- **Web reference**: `frontend/src/api/endpoints/activityFeed.ts`, `bookmarks.ts`, `achievements.ts`; shared types `frontend/src/api/types.ts`. Use these to confirm field names/shapes for fixtures.
+- **Web reference**: `src/api/endpoints/activityFeed.ts`, `src/api/endpoints/bookmarks.ts`, `src/api/endpoints/achievements.ts`; shared types `src/api/types.ts`; transport/auth/CSRF in `src/api/client.ts`; screens `src/pages/activity/ActivityFeedPage.tsx`, `src/pages/saved/SavedPage.tsx`, `src/pages/achievements/{AchievementsPage,BadgeGrid,ProgressTracker,LeaderboardTable}.tsx`. Use these to confirm field names/shapes for fixtures. (Note: the bookmark DTOs `BookmarkItem`/`BookmarkListResponse` are declared inline in `bookmarks.ts`, not in `types.ts`.)
 - **OpenAPI**: `http://18.222.237.167:8000/openapi.json` — source of truth for path params, query params, and error bodies. Captured fixtures must be byte-validated against schemas, not hand-invented.
 - **Core test module**: `core-testing` — provides `MainDispatcherRule`, `TestDispatcherProvider`, a `MockWebServer` harness, JSON fixture loading, and Turbine helpers. AND-096 extends this module with E13 fixtures rather than duplicating infra.
 - **Stack**: Kotlin 2.0.21, Compose + Material 3, Hilt (KSP), Coroutines/Flow, Retrofit 2.11 + OkHttp 4.12 + Moshi 1.15, Paging 3, JUnit4, MockWebServer, Turbine, Truth, Robolectric, Compose UI test. Namespace `com.testlogon.android`.
@@ -226,13 +227,15 @@ UI tests prefer **stateless screen overloads** (state + lambdas) so no Hilt grap
 
 AND-096 defines **no new endpoints**. It consumes the contracts owned by AND-091..094 and freezes them as fixtures. The contracts under test, captured from `/openapi.json`:
 
-- `GET /ui/activity/feed?limit={n}&cursor={c}` → `200 {"items":[{"id","type","actor","target","created_at",...}],"next_cursor": string|null}`
-- `GET /ui/saved?limit={n}&cursor={c}` → `200 {"items":[{"id","kind","title","saved_at",...}],"next_cursor"}`
-- `DELETE /ui/saved/{item_id}` → `204` (unsave; mutation, NOT retried on failure)
-- `GET /ui/achievements` → `200 {"earned":[{"id","name","progress","earned_at"}],"locked":[{"id","name","progress","target"}]}`
-- `GET /ui/achievements/leaderboard/me` → `200 {"entries":[{"rank","user","score"}],"me":{"rank","score","percentile"}}`
+> CORRECTION: the shapes below were rewritten to match `/openapi.json` (`openapi.pretty.json`) and `src/api/types.ts`. The previously-listed `id/type/actor/target`, `/ui/saved`, `204`, and `{earned,locked}` / `{entries,me}` shapes were inaccurate.
 
-Error bodies tested for all GETs: FastAPI `detail` as string, `[{msg}]`, and `{code,...}`; plus `401` (refresh-once path) and `5xx`/timeout (offline/stale). Fixtures live in `core-testing/.../fixtures/`. A guard test asserts each fixture deserializes into its `core-model` DTO so drift from the real schema fails CI. Ownership of the live contracts remains with the feature tickets; AND-096 only validates fixtures against them.
+- `GET /ui/activity/feed?cursor={c}&limit={n}` → `200 ActivityFeedResponse = {"items": ActivityOut[], "next_cursor": string|null, "total_unread": int}`. `ActivityOut`/`ActivityItem` fields: `activity_id`, `activity_type`, `actor_id`, `target_type`, `target_id`, `metadata` (object), `created_at` (int epoch), `read` (bool). (Verified: OpenAPI `GET /ui/activity/feed` → `ActivityFeedResponse`/`ActivityOut`; `src/api/types.ts: ActivityItem`, `ActivityFeedPageResponse`.) The web client sends `limit`/`cursor` only when truthy.
+- `GET /ui/bookmarks?limit={n}&cursor={c}&content_type={t}&collection_id={id}` → `200 BookmarkListResponse = {"bookmarks": BookmarkItem[], "next_cursor"?: string, "total_count": int}`. `BookmarkItem` is keyed by composite (`content_type` ∈ {post,video}, `content_id`) plus `collection_id`, `created_at` (string), `content_preview {author_id, author_display_name?, body_snippet?, image_url?, like_count?}`. (Verified: OpenAPI `GET /ui/bookmarks`; `src/api/endpoints/bookmarks.ts: BookmarkListResponse`/`BookmarkItem`.) NOTE: response key is `bookmarks`, NOT `items`.
+- `DELETE /ui/bookmarks/{content_type}/{content_id}` → `200 {"ok": true}` (unsave; mutation, NOT retried on failure). (Verified: OpenAPI `DELETE /ui/bookmarks/{content_type}/{content_id}`; `src/api/endpoints/bookmarks.ts: removeBookmark`.) NOTE: it is `200`, not `204`, and the key is the `(content_type, content_id)` pair, not a single `item_id`.
+- `GET /ui/achievements?displayed=&category=` → `200 {"achievements": UserAchievement[], "total_points": int, "achievement_count": int}` (EARNED only). `UserAchievement` fields: `achievement_id`, `label`, `description`, `icon_url`, `rarity`, `points`, `unlocked_at` (int), `trigger_event`, `displayed` (bool). For "locked"/progress: `GET /ui/achievements/progress` → `{"progress": AchievementProgress[]}` where `AchievementProgress` has `metric_key`, `current_value`, `highest_value`, `next_threshold?`, `next_achievement?`. (Verified: OpenAPI `GET /ui/achievements`, `GET /ui/achievements/progress`; `src/api/endpoints/achievements.ts`, `src/api/types.ts: UserAchievement`/`AchievementProgress`.) NOTE: there is no `{earned, locked}` envelope; the web UI splits this across the "My Badges" tab (earned) and the "Progress" tab.
+- `GET /ui/achievements/leaderboard/me?period={p}` → `200 LeaderboardEntry & {period}` (a flat single entry: `rank`, `user_sub`, `display_name`, `total_points`, `achievement_count`, `display_badges`, `period`). Full board: `GET /ui/achievements/leaderboard?period=&limit=&cursor=` → `{"entries": LeaderboardEntry[], "next_cursor"?: string, "period": string}`. (Verified: OpenAPI `GET /ui/achievements/leaderboard/me` + `/leaderboard`; `src/api/endpoints/achievements.ts: getMyRank`/`getLeaderboard`, `src/api/types.ts: LeaderboardEntry`.) NOTE: `me` is NOT `{entries, me:{rank,score,percentile}}` — it is one `LeaderboardEntry` row, and `period` is a REQUIRED query param. There is no `score`/`percentile` field; ranking uses `total_points`.
+
+Error bodies tested for all GETs: FastAPI `detail` as string, `[{msg}]`, and `{code,...}`; plus `401` (refresh-once path) and `5xx`/timeout (offline/stale). All endpoints declare `422 HTTPValidationError` for validation failures (verified in OpenAPI index). Fixtures live in `core-testing/.../fixtures/`. A guard test asserts each fixture deserializes into its `core-model` DTO so drift from the real schema fails CI. Ownership of the live contracts remains with the feature tickets; AND-096 only validates fixtures against them.
 
 ## 6. Data & State Management
 
@@ -257,7 +260,7 @@ sealed interface LeaderboardUiState { /* Loading / Content(entries, me) / Empty 
 Assertions:
 - Initial emission is always `Loading`.
 - Successful load → `Content` (or `Empty` when the list is empty — a dedicated empty fixture per screen).
-- Unsave is optimistic: state drops the item immediately, then commits on `204` or rolls back + sets `transientError` on failure.
+- Unsave: state drops the item, then commits on the `200 {"ok":true}` delete response or rolls back + sets `transientError` on failure. (CORRECTION: success status is `200`, not `204`.) UNVERIFIED ASSUMPTION — the *web* reference (`src/pages/saved/SavedPage.tsx`) is **pessimistic**: it calls `removeBookmark`, then `invalidateQueries(["bookmarks"])` to refetch on success and only shows a toast on error; it does NOT optimistically remove + roll back. The optimistic-with-rollback behaviour pinned here is an Android-side design choice owned by AND-092/AND-095, not a web contract. Tests must follow whatever AND-092/AND-095 actually ship; see §13 R4.
 - `stale = true` is set when an error occurs but a previously cached `Content` exists (offline/stale path), asserted with a fake repo that first succeeds then fails on refresh.
 - Paging state transitions (`LoadState.Loading`/`Error`/`NotLoading`) are asserted via `AsyncPagingDataDiffer.loadStateFlow` for Activity. No Room/DataStore writes are asserted here (cache behaviour is owned by `core-data` tickets); tests inject in-memory fakes.
 
@@ -326,7 +329,7 @@ This ticket *is* the testing strategy for E13. Layers and counts (minimums):
 - **R1 — ViewModel API churn (AND-095):** if the `UiState` sealed shapes change after tests are written, the suite breaks. Mitigation: keep AND-096 PR stacked on the AND-095 PR; pin shapes in §6 and review together.
 - **R2 — Robolectric vs Compose fidelity:** some Compose interactions (paging scroll, ExoPlayer-adjacent surfaces) render poorly under Robolectric. Mitigation: per-test fallback to instrumented `androidTest`; keep smoke tests shallow.
 - **R3 — Fixture drift from the unreliable dev backend:** the dev host may return shapes not in `/openapi.json`. Mitigation: `E13FixtureSchemaTest` + capture fixtures from OpenAPI examples, not ad-hoc curl, where possible.
-- **R4 — Optimistic unsave semantics undefined:** AND-092 says "unsave updates" but does not specify optimistic vs pessimistic. **Open question for AND-092 owner**: is the unsave optimistic with rollback (assumed here) or does it await `204` before removing? Tests follow whatever AND-092 ships; this spec assumes optimistic.
+- **R4 — Optimistic unsave semantics undefined:** AND-092 says "unsave updates" but does not specify optimistic vs pessimistic. VERIFIED against the web reference: `src/pages/saved/SavedPage.tsx` is **pessimistic** — `removeBookmark(content_type, content_id)` then `invalidateQueries(["bookmarks"])` (refetch) on success, toast on error; no optimistic removal or rollback. **Open question for AND-092 owner**: does the Android port keep web parity (pessimistic) or intentionally go optimistic-with-rollback (as the §6/§4 examples assume)? Tests follow whatever AND-092/AND-095 ship; if pessimistic, the §6 rollback assertion is replaced by "item reappears after the failed refetch / list unchanged on error." NOTE: the delete returns `200 {"ok":true}`, not `204`.
 - **R5 — Coverage gate strictness:** 70% may be unreachable if AND-095 ViewModels contain heavy paging glue. Mitigation: gate on repository+viewmodel packages only, exempt screens.
 
 ## 14. Acceptance Criteria
@@ -351,3 +354,92 @@ AC-10. No production behaviour change beyond reviewed test-visibility refactors.
 - Suite is deterministic: 50 consecutive local runs of the JVM suite show zero flakes (`--rerun-tasks` loop spot-check).
 - No `Thread.sleep`, no live network, no hard-coded secrets in any test.
 - Code reviewed and approved; coverage report attached to the PR; ticket linked to AND-095 and the E13 feature tickets it validates.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources: OpenAPI index/spec (`reference/openapi.index.txt`, `reference/openapi.pretty.json`), frontend (`reference/src/...`), or framework refs (Android docs).
+
+1. **Activity feed endpoint is `GET /ui/activity/feed` with `cursor`/`limit` query params.** Verified. OpenAPI `GET /ui/activity/feed` (op `get_activity_feed_...`, resp `200:ActivityFeedResponse`, params `cursor,limit,...`); `src/api/endpoints/activityFeed.ts: getActivityFeed`.
+2. **Activity feed response is `{items, next_cursor, total_unread}`; items are `ActivityOut`/`ActivityItem` with `activity_id, activity_type, actor_id, target_type, target_id, metadata, created_at, read`.** Corrected (spec previously said items had `id/type/actor/target`). `components.schemas.ActivityFeedResponse` + `ActivityOut` in `openapi.pretty.json`; `src/api/types.ts: ActivityItem`, `ActivityFeedPageResponse`.
+3. **"Saved" is the bookmarks surface; list is `GET /ui/bookmarks`, response `{bookmarks, next_cursor, total_count}`.** Corrected (spec previously claimed `GET /ui/saved` returning `{items, next_cursor}`). OpenAPI `GET /ui/bookmarks` (op `list_bookmarks_...`, params `limit,cursor,content_type,collection_id,...`); `src/api/endpoints/bookmarks.ts: BookmarkListResponse`, `getBookmarks`; `src/pages/saved/SavedPage.tsx`.
+4. **Unsave is `DELETE /ui/bookmarks/{content_type}/{content_id}` → `200 {"ok":true}`.** Corrected (spec previously said `DELETE /ui/saved/{item_id}` → `204`). OpenAPI `DELETE /ui/bookmarks/{content_type}/{content_id}` (op `delete_bookmark_...`, resp `200`); `src/api/endpoints/bookmarks.ts: removeBookmark`.
+5. **`GET /ui/achievements` returns EARNED achievements only: `{achievements, total_points, achievement_count}`; there is no `{earned, locked}` envelope.** Corrected. OpenAPI `GET /ui/achievements` (op `get_my_achievements_...`, params `displayed,category,...`); `src/api/endpoints/achievements.ts: getMyAchievements`; `src/pages/achievements/BadgeGrid.tsx` (renders `data.achievements`).
+6. **Not-yet-earned / progress is the separate `GET /ui/achievements/progress` → `{progress: AchievementProgress[]}` (with `next_threshold`/`next_achievement`).** Verified. OpenAPI `GET /ui/achievements/progress` (op `get_all_progress_...`); `src/api/types.ts: AchievementProgress`; `src/pages/achievements/ProgressTracker.tsx`.
+7. **`UserAchievement` fields: `achievement_id, label, description, icon_url, rarity, points, unlocked_at, trigger_event, displayed`.** Corrected (spec §5 had `id/name/progress/earned_at`). `src/api/types.ts: UserAchievement`.
+8. **`GET /ui/achievements/leaderboard/me` requires a `period` query param and returns a single flat `LeaderboardEntry & {period}` (rank, user_sub, display_name, total_points, achievement_count, display_badges) — not `{entries, me}`, no `score`/`percentile`.** Corrected. OpenAPI `GET /ui/achievements/leaderboard/me` (op `get_my_rank_...`, params `period,...`); `src/api/endpoints/achievements.ts: getMyRank`; `src/api/types.ts: LeaderboardEntry`.
+9. **Full leaderboard is `GET /ui/achievements/leaderboard?period=&limit=&cursor=` → `{entries, next_cursor, period}`.** Verified. OpenAPI `GET /ui/achievements/leaderboard` (op `get_leaderboard_endpoint_...`, params `period,limit,cursor,...`); `src/api/endpoints/achievements.ts: getLeaderboard`.
+10. **CSRF: token is read from the `ui_csrf` cookie and sent as the `X-CSRF-Token` header.** Verified. `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`). Spec's `X-CSRF-Token: test-csrf` dummy is the correct header name.
+11. **401 handling: refresh once via `POST /ui/session/refresh` (credentials included), then retry the original request exactly once; refresh is deduped via a shared promise, and only attempted if the user was already authenticated.** Verified. OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh_...`, resp `200`); `src/api/client.ts` (`refreshSession`, `refreshPromise`, single `retryRes`, `isAuthenticated` guard).
+12. **FastAPI `detail` normalization handles string, `[{msg}]` arrays, and object `{code,...}` forms.** Verified. `src/api/client.ts: normalizeErrorDetail` + `mapAuthorizationError`. All listed endpoints also declare `422:HTTPValidationError` (OpenAPI index).
+13. **Unsave UI semantics on the web are pessimistic (mutate → invalidate/refetch on success, toast on error), not optimistic-with-rollback.** Verified (web); the optimistic-rollback model in §4/§6 is an Android-side design choice. `src/pages/saved/SavedPage.tsx` (`removeMutation` + `invalidateQueries(["bookmarks"])`).
+14. **Network error path: a fetch throwable maps to a network error (status 0), distinct from HTTP errors.** Verified. `src/api/client.ts` catch block (`new ApiError(0, "Network error", err)`). Supports the spec's `ApiResult.Error.Network` distinction.
+15. **`createComposeRule`/`AndroidJUnit4` + `onNodeWith*`/`assertIsDisplayed`/`performClick` are the correct Compose UI test APIs; Robolectric can host these on the JVM `test` task.** Verified (framework ref): Compose testing — https://developer.android.com/develop/ui/compose/testing ; Robolectric — https://robolectric.org/ .
+16. **Paging 3 is tested by invoking `PagingSource.load(LoadParams.Refresh/Append)` directly and via `AsyncPagingDataDiffer` for UI flow.** Verified (framework ref): https://developer.android.com/topic/libraries/architecture/paging/test .
+17. **MockWebServer supports enqueued responses and `SocketPolicy` for timeout/no-response simulation.** Verified (framework ref): https://github.com/square/okhttp/tree/master/mockwebserver .
+
+### Corrections made
+
+- §1, §2, §5: "Saved" surface corrected from non-existent `/ui/saved` to the bookmarks API (`/ui/bookmarks`); list response key corrected from `items` to `bookmarks` (`{bookmarks, next_cursor, total_count}`).
+- §5, §6, §13: Unsave corrected from `DELETE /ui/saved/{item_id}` → `204` to `DELETE /ui/bookmarks/{content_type}/{content_id}` → `200 {"ok":true}` (composite key, 200 not 204).
+- §1, §2, §5: Achievements corrected — `GET /ui/achievements` returns earned-only `{achievements, total_points, achievement_count}`; the `{earned, locked}` envelope does not exist; "locked"/progress is `/ui/achievements/progress`. `UserAchievement` field names corrected.
+- §5: Leaderboard-me corrected from `{entries, me:{rank,score,percentile}}` to a flat `LeaderboardEntry & {period}` with a REQUIRED `period` param; added the separate full-board endpoint shape.
+- §5, §2: Activity item field names corrected to `activity_id/activity_type/actor_id/target_type/target_id/metadata/created_at/read`; response gains `total_unread`.
+- §6, §13 R4: Flagged that the web reference is pessimistic (not optimistic-with-rollback); marked the optimistic model as an Android-side assumption pending AND-092/AND-095.
+
+### Open assumptions
+
+- **Android repository/ViewModel/screen class names** (`SavedRepository`, `ActivityFeedViewModel`, `SavedUiState`, `AchievementsScreen`, etc.) and the `ApiResult<T>`/`UiState` sealed shapes: Unverified-assumption. They originate in AND-091..095, which are not present in the reference sources (only the web client + OpenAPI are). Tests must pin to whatever those tickets actually ship.
+- **Optimistic-vs-pessimistic unsave on Android**: Unverified-assumption. Web is pessimistic; the Android choice is owned by AND-092/AND-095 (see §13 R4).
+- **`core-testing` harness APIs** (`MainDispatcherRule`, `enqueueFixture`, Turbine helpers): Unverified-assumption — not in the provided sources; assumed per the stack in §2.
+- **JaCoCo 70% gate feasibility and exact package boundaries**: Unverified-assumption — depends on AND-095 implementation size (see §13 R5).
+- **Activity feed request path exactly `/ui/activity/feed?limit=20` (param order/omission)**: Partially unverified — the web client omits `cursor`/`limit` when falsy, so the precise query string for the Android client depends on AND-091's Retrofit interface; treat the §4 path assertion as illustrative.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device). **emu(test35)** = headless AVD, x86_64, Android 15/API 35. **device** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R), Android 14/API 34, arm64-v8a. Most cases are deterministic JVM/Robolectric; UI smoke runs on JVM (Robolectric) with an `emu(test35)` fallback for any LazyColumn/scroll Robolectric mis-renders. No case here strictly requires the physical device (this ticket has no camera/biometric/FCM/WebRTC/Telecom/streaming surface); the device is named only where ABI/API-34-vs-35 parity is the point (TC-13).
+
+- **TC-AND-096-01** — Activity feed first page maps DTO + cursor.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: `activity_feed_page1.json` fixture (20 `ActivityOut` items, `next_cursor` non-null). Steps: enqueue 200; call `repo.loadActivity(cursor=null, limit=20)`; inspect `ApiResult.Success`; `takeRequest()`. Expected: `Success`; `items.size==20`; `nextCursor` equals fixture value; mapped fields `activity_id/actor_id/created_at/read` populated; request hits `/ui/activity/feed` with `limit=20`. Traces: AC-2, AC-7.
+- **TC-AND-096-02** — Empty activity feed → `Empty`/empty page.
+  Type: contract/MockWebServer + unit. Target: JVM. Preconditions: empty fixture `{"items":[],"next_cursor":null,"total_unread":0}`. Steps: enqueue 200; load; pipe through ViewModel. Expected: repo returns `Success` with empty list; ViewModel emits `Loading` then `Empty` (not `Error`). Traces: AC-2.
+- **TC-AND-096-03** — Bookmarks list maps `{bookmarks,next_cursor,total_count}`.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: `saved_list.json` shaped as bookmarks response (note key `bookmarks`, items keyed by `content_type`+`content_id`). Steps: enqueue 200; call saved repo list; `takeRequest()`. Expected: `Success`; items mapped from `bookmarks` array (NOT `items`); request path `/ui/bookmarks` with `limit`. Traces: AC-2, AC-7.
+- **TC-AND-096-04** — Unsave success removes item (`DELETE /ui/bookmarks/{content_type}/{content_id}` → 200).
+  Type: integration (ViewModel + fake/MockWebServer). Target: JVM. Preconditions: list of 3 saved items loaded. Steps: invoke `onUnsave(content_type, content_id)`; delete returns `200 {"ok":true}`. Expected: removed item gone from emitted `Content`; per AND-092 semantics (optimistic drop+commit, OR pessimistic refetch); exactly one DELETE issued to the composite path. Traces: AC-4.
+- **TC-AND-096-05** — Unsave failure leaves list intact + surfaces transient error, DELETE attempted exactly once.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: 3 items loaded; delete enqueued as 500 (or network drop). Steps: `onUnsave(...)`. Expected: after failure the list still has 3 items (rollback if optimistic, or unchanged if pessimistic); `transientError != null`; `server.requestCount == 1` for the DELETE (no retry on mutations). Traces: AC-4.
+- **TC-AND-096-06** — PagingSource refresh + append + end-of-pagination.
+  Type: unit (Paging 3 test APIs). Target: JVM. Preconditions: two-page fake (`page1` next_cursor `eyJvIjoyMH0=`, page2 5 items next null). Steps: `load(Refresh(null,20))` then `load(Append("eyJvIjoyMH0=",20))`. Expected: refresh `Page.nextKey == "eyJvIjoyMH0="`; append `data.size==5`, `nextKey == null`. Traces: AC-3.
+- **TC-AND-096-07** — 401 → refresh-once via `POST /ui/session/refresh` → single retried success.
+  Type: integration (real OkHttp + MockWebServer + auth interceptor). Target: JVM. Preconditions: authenticated session; enqueue 401, then 200 to `/ui/session/refresh`, then 200 to the original GET. Steps: call a GET repo method. Expected: consumer observes ONE `Success`; exactly one `POST /ui/session/refresh` recorded; original request retried exactly once. (Mirrors `src/api/client.ts` refresh-once.) Traces: AC-6.
+- **TC-AND-096-08** — FastAPI `detail` variants + parse error mapping.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: fixtures for `detail` string, `[{msg}]`, `{code,...}`, plus a malformed-JSON body. Steps: enqueue each as the error body (e.g. 422/403) and one corrupt 200. Expected: each maps to a typed `ApiResult.Error` carrying the normalized message; malformed JSON → `ApiResult.Error.Parse`, never an uncaught `JsonDataException`. Traces: AC-2, AC-7.
+- **TC-AND-096-09** — Timeout / unreliable dev host → `Error.Network`, no hang, `stale` set when cache exists.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: `SocketPolicy.NO_RESPONSE` or dispatcher delay > client timeout; a fake that first succeeds then times out on refresh. Steps: trigger load, then a refresh that times out. Expected: repo returns `ApiResult.Error.Network` (bounded, no hang); ViewModel emits `Error(stale=true)` because prior `Content` existed; no crash. Traces: AC-2.
+- **TC-AND-096-10** — Compose smoke: Activity & Saved render content + empty + error/retry.
+  Type: Compose-UI (Robolectric). Target: JVM (fallback emu(test35)). Preconditions: stateless screen overloads with fake state. Steps: set `Content`, `Empty`, `Error` states; click retry. Expected: content nodes displayed; empty state copy shown; `retry_button` displayed + clickable (invokes `onRefresh`). Traces: AC-5.
+- **TC-AND-096-11** — Compose smoke: Achievements (earned badges) & Leaderboard render + interaction.
+  Type: Compose-UI (Robolectric). Target: JVM (fallback emu(test35)). Preconditions: achievements `Content` (earned `UserAchievement` list) and leaderboard `Content(entries, me)` fakes. Steps: set states; assert badge + rank rows; perform one interaction (e.g. tap a badge / period toggle). Expected: badge label/rarity/points and leaderboard rank/display_name rendered; interaction wired. Traces: AC-5.
+- **TC-AND-096-12** — Accessibility smoke on interactive nodes + externalized strings.
+  Type: Compose-UI (Robolectric). Target: JVM (fallback emu(test35)). Preconditions: Saved screen with unsave affordance + retry. Steps: query `onNodeWithContentDescription("Remove from saved")`; `assertHasClickAction()` on retry; read expected copy via `context.getString(R.string.…)`. Expected: every interactive node has a content description/label; retry has a click action; UI uses string resources (i18n externalization), not literals. Traces: AC-5.
+- **TC-AND-096-13** — `PagingData` reaches UI via `AsyncPagingDataDiffer` (Activity) incl. LoadState transitions, on real ABI/API.
+  Type: instrumented/e2e. Target: **device (SM-A156U, arm64-v8a, API 34)** primary; also emu(test35) for API-35/x86_64 parity. Preconditions: fake repo emitting a `PagingData` flow from two pages. Steps: collect into `AsyncPagingDataDiffer`; assert snapshot + `loadStateFlow` Loading→NotLoading; append. Expected: items diff into the UI layer; LoadState transitions observed; behaviour identical on arm64/API34 and x86_64/API35 (catches ABI/API-34-vs-35 regressions in Paging glue). Traces: AC-3, AC-5.
+- **TC-AND-096-14** — `E13FixtureSchemaTest`: every fixture deserializes into its `core-model` DTO.
+  Type: unit. Target: JVM. Preconditions: all E13 fixtures present. Steps: load each fixture; Moshi-parse into its DTO (`ActivityFeedResponse`/`BookmarkListResponse`/achievements/leaderboard). Expected: all parse with no unknown-required-field failures; failure means contract drift → CI red. Traces: AC-7.
+- **TC-AND-096-15** — Security: `assertNoLiveHosts` + no secrets in fixtures + no token/cookie logging.
+  Type: unit. Target: JVM. Preconditions: `RecordingLogger` test double; in-memory `CookieJar`. Steps: grep test classpath for `18.222.237.167` outside comments; scan fixtures for real PII/credentials; exercise the 401/refresh path and inspect `RecordingLogger`. Expected: no reachable live-host target; fixtures use synthetic identifiers (`user_001`); no `ui_csrf`/cookie/`Authorization` value emitted to logs. Traces: AC-8, AC-10.
+
+### Coverage matrix
+
+| AC | Covered by |
+|---|---|
+| AC-1 (suite green) | All TCs (the suite passing IS AC-1) |
+| AC-2 (per-repo success/empty/error) | TC-01, TC-02, TC-03, TC-08, TC-09 |
+| AC-3 (paging refresh/append/end) | TC-06, TC-13 |
+| AC-4 (unsave success + failure-once) | TC-04, TC-05 |
+| AC-5 (screen render + error/empty + PagingData→UI) | TC-10, TC-11, TC-12, TC-13 |
+| AC-6 (401 refresh-once-and-retry) | TC-07 |
+| AC-7 (fixtures deserialize to DTO) | TC-01, TC-03, TC-08, TC-14 |
+| AC-8 (no live hosts / no secrets) | TC-15 |
+| AC-9 (JaCoCo ≥70%) | Aggregate of TC-01..TC-09 (repository+viewmodel coverage); enforced by the CI JaCoCo gate, not a single TC |
+| AC-10 (no prod behaviour change) | TC-15 (logging cross-check) + code review gate |

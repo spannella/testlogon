@@ -5,7 +5,8 @@ milestone: M2
 epic: E17
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-003]
 blocks: [AND-116, AND-118]
 ---
@@ -49,9 +50,22 @@ Android device/emulator. No feature module is required to consume it yet.
 - **Downstream consumers:** AND-116 builds the SWR base repository on top of the
   DAOs defined here; AND-118 adds TTL columns/eviction and per-user cache clear
   (reusing logout teardown from AND-032).
-- **Web reference:** the web app (`frontend/`) has no persistence layer beyond
-  the browser; entity shapes here derive from `core-model` domain types, which
-  in turn mirror `frontend/src/api/types.ts`. No 1:1 web equivalent exists.
+- **Web reference:** *Correction (review):* the web app **does** have a
+  structured client-side persistence/cache layer — an IndexedDB database
+  (`app-offline-cache`) with `api_cache` / `api_cache_meta` object stores
+  (PWA-003) plus a `sync_queue` store (PWA-004), driven by
+  `src/lib/offlineCache.ts`, `src/lib/offlineCacheConfig.ts`,
+  `src/lib/withOfflineCache.ts`, and `src/lib/syncQueueDb.ts`. This IndexedDB
+  `api_cache` store is in fact the **conceptual 1:1 analog** of the Room cache
+  introduced here: it keys rows by `cacheKey`/`endpoint`/`userId` with a
+  `cachedAt` timestamp (the web analog of `CacheEntity.updatedAt`) and applies
+  per-endpoint TTL + max-entries eviction (`CACHE_TTL_CONFIG`,
+  `MAX_ENTRIES_PER_ENDPOINT`) — the exact policy AND-118 will mirror. The
+  earlier "no persistence layer / no 1:1 web equivalent" claim was inaccurate
+  and is corrected here. Entity shapes here still derive from `core-model`
+  domain types, which in turn mirror `frontend/src/api/types.ts`; Room's row
+  *shape* is Android-specific, but the *cache contract* has a direct web
+  precedent the downstream SWR/TTL tickets should follow.
 
 ## 3. Functional Requirements
 
@@ -452,3 +466,225 @@ AC-7. No auth/CSRF/secret data is written to Room (code review checklist item).
 - Downstream owners (AND-116, AND-118) confirm the exposed surface
   (`BaseDao`, `CacheEntity.updatedAt`, `clear()`, database singleton) is
   sufficient to build SWR and TTL/eviction without changes to this layer.
+
+## 16. Citations & Assumption Audit
+
+This ticket is **infrastructure-only** (local Room persistence). It introduces
+no REST endpoints, so there are no OpenAPI endpoint/method/field claims to
+verify against `openapi.index.txt` / `openapi.pretty.json`. The §5 statement
+"N/A — no network calls" is therefore **Verified** (a grep of the OpenAPI index
+for `room`/`cache`/`database` returns only an unrelated `POST
+/ui/geo/clear-cache` op, confirming no persistence endpoints exist for this
+work). The audit below covers the spec's cross-cutting claims about web-app
+behavior and the Android framework choices.
+
+1. **Claim:** The web client sends CSRF as the `ui_csrf` cookie value in an
+   `X-CSRF-Token` request header, and `ui_csrf` is the CSRF token (§6, §8).
+   **VERDICT: Verified.**
+   **Source:** frontend `src/api/client.ts` (`const csrf = getCookie("ui_csrf"); headers.set("X-CSRF-Token", csrf)`, lines ~167-170; `credentials: "include"`). Corroborated by `src/stores/offlineStore.ts: getCsrfFromCookie` and `src/api/endpoints/kycCompliance.ts`.
+
+2. **Claim:** Auth/CSRF/session state belongs outside Room (in the OkHttp
+   cookie jar / DataStore), and no secrets are written to Room (§6, §8, AC-7).
+   **VERDICT: Verified (design decision, consistent with web contract).**
+   **Source:** Web uses cookie-based session + `ui_csrf` cookie (`src/api/client.ts: credentials:"include"`); cookies are transport-layer auth, correctly mapped to OkHttp's cookie jar on Android rather than an app cache table. No source contradicts the no-secrets-in-Room rule.
+
+3. **Claim (CORRECTED):** "The web app has no persistence layer beyond the
+   browser; no 1:1 web equivalent exists" (§2, original draft).
+   **VERDICT: Corrected.** The web app has a structured IndexedDB cache that is
+   a direct conceptual analog of this Room cache.
+   **Source:** `src/lib/syncQueueDb.ts` (IndexedDB DB `app-offline-cache`, stores `api_cache` with indexes `cachedAt`/`endpoint`/`userId`/`userId_endpoint`, plus `api_cache_meta` and `sync_queue`); `src/lib/offlineCacheConfig.ts` (`CACHE_TTL_CONFIG`, `MAX_ENTRIES_PER_ENDPOINT`, `DEFAULT_TTL`, `classifyEndpoint`); `src/lib/offlineCache.ts`, `src/lib/withOfflineCache.ts`, `src/components/shared/StalenessIndicator.tsx`.
+
+4. **Claim:** `cachedAt`/`updatedAt`-style timestamps drive cache freshness;
+   per-entity `updatedAt` is the column AND-118 reads for TTL (§3 FR-3, §6).
+   **VERDICT: Verified by analogy to the web contract.**
+   **Source:** `src/lib/offlineCacheConfig.ts: getTtlForEndpoint` + the `cachedAt` index in `src/lib/syncQueueDb.ts: openSyncDb`. The web TTL model (seconds-since-`cachedAt`) maps to Room `updatedAt` epoch-millis; the Android-side TTL/eviction implementation itself is AND-118 scope.
+
+5. **Claim:** Room `@Upsert` provides insert-or-update without per-DAO conflict
+   strategy (§4.2). **VERDICT: Verified (framework ref).**
+   **Source:** framework ref — Android Room docs, `androidx.room.Upsert` (added in Room 2.5; available in pinned Room 2.6). https://developer.android.com/reference/androidx/room/Upsert
+
+6. **Claim:** Room schemas are exported via the KSP arg
+   `room.schemaLocation` and `exportSchema = true` writes
+   `schemas/<db>/<version>.json` (§4.1, §4.6, AC-5).
+   **VERDICT: Verified (framework ref).**
+   **Source:** framework ref — "Migrating Room databases" / schema export. https://developer.android.com/training/data-storage/room/migrating-db-versions#export-schemas
+
+7. **Claim:** `fallbackToDestructiveMigration()` exists on
+   `RoomDatabase.Builder` and may be gated by `BuildConfig.DEBUG` (§4.5, §4.6,
+   AC-6). **VERDICT: Verified (framework ref).** Note: the no-arg
+   `fallbackToDestructiveMigration()` is valid in Room 2.6 (it is deprecated in
+   favor of the `dropAllTables`-parameterized overload only in Room 2.7+, which
+   is newer than the pinned 2.6 — no change needed for this ticket).
+   **Source:** framework ref — `RoomDatabase.Builder.fallbackToDestructiveMigration`. https://developer.android.com/reference/androidx/room/RoomDatabase.Builder
+
+8. **Claim:** Room read methods returning `Flow<T>` emit on table changes;
+   `suspend` writes run off the main thread on Room's executor (§3 FR-7, §6).
+   **VERDICT: Verified (framework ref).**
+   **Source:** framework ref — "Write asynchronous DAO queries" (Flow + coroutines). https://developer.android.com/training/data-storage/room/async-queries
+
+9. **Claim:** `MigrationTestHelper` + `Room.inMemoryDatabaseBuilder(...)
+   .allowMainThreadQueries()` are the supported instrumented test primitives
+   (§11). **VERDICT: Verified (framework ref).**
+   **Source:** framework ref — "Test and debug your Room database". https://developer.android.com/training/data-storage/room/testing-db
+
+10. **Claim:** Room's default journal mode is WAL and default `onCorruption`
+    recreates the database file (§6, §7). **VERDICT: Verified (framework ref),
+    with a residual open question.**
+    **Source:** framework ref — `RoomDatabase.JournalMode.AUTOMATIC` resolves to WAL on API ≥ 16 with sufficient memory; Room installs a default corruption handler that deletes+recreates. https://developer.android.com/reference/androidx/room/RoomDatabase.JournalMode — the API-24-specific WAL behavior remains tracked as OQ3.
+
+11. **Claim:** Stack pins — Room 2.6, KSP, Kotlin 2.0.21, JDK 17, minSdk 24,
+    compile/targetSdk 35, AGP 8.7.3, Gradle 8.9 (§2). **VERDICT:
+    Unverified-assumption (inherited from AND-003).** Not independently
+    confirmable from the OpenAPI or frontend sources; treated as a project-wide
+    pin owned by AND-003. Compatibility (AGP 8.7.3 ↔ KSP ↔ Kotlin 2.0.21) is a
+    standard, plausible combination but should be confirmed against the actual
+    `core-data/build.gradle.kts` / version catalog when AND-003 lands.
+
+### Corrections made
+
+- **§2 Web reference (Citation 3):** Replaced the inaccurate "the web app has
+  no persistence layer beyond the browser / no 1:1 web equivalent exists" with
+  the verified fact that the web client has a structured IndexedDB offline cache
+  (`api_cache`/`api_cache_meta`/`sync_queue` in `app-offline-cache`) with per-
+  endpoint TTL + max-entries eviction — the direct conceptual analog of this
+  Room cache and the model AND-116 (SWR) / AND-118 (TTL/eviction) should mirror.
+  No other concrete factual errors were found; the framework-level claims in
+  §4/§6/§7/§11 verify correctly against Android Room/Hilt documentation.
+
+### Open assumptions
+
+- **OA-1 (Citation 11):** Exact version pins (Room 2.6, AGP 8.7.3, KSP, Kotlin
+  2.0.21, Gradle 8.9) are inherited from AND-003 and cannot be verified from the
+  provided OpenAPI/frontend sources; confirm against the version catalog once
+  AND-003 lands.
+- **OA-2 (Citation 10 / OQ3):** WAL journal-mode behavior on API 24 emulators
+  is assumed fine but not verified on the API 24 CI runner; tracked as §13 OQ3
+  and exercised by TC-AND-115-09.
+- **OA-3:** SQLCipher at-rest encryption need (§13 OQ1) is deferred to a future
+  feature ticket that caches PII; no source mandates encryption for the current
+  non-PII sample cache.
+- **OA-4:** The Hilt singleton/`@Singleton` scoping behavior (§4.5) is a
+  standard Dagger-Hilt pattern; assumed correct and validated behaviorally by
+  TC-AND-115-05 rather than against an external source.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device);
+**EMU** = headless emulator AVD `test35` (x86_64, Android 15 / API 35);
+**EMU24** = emulator at API 24 (CI matrix low end, per §11); **DEVICE** =
+physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Room DB code is
+JVM-portable only via Robolectric; true DB behavior requires an Android runtime,
+so most cases are instrumented on EMU. None of this ticket's behavior is
+hardware-dependent (no camera/biometrics/WebRTC/FCM), so the **physical device
+is used only for the arm64 / API-34 ABI-and-API differential check** (TC-10);
+all other instrumented cases run fastest on the KVM-accelerated EMU.
+
+- **TC-AND-115-01 — Sample entity round-trip (happy path).**
+  Type: instrumented (androidTest). Target: EMU.
+  Preconditions: `TestLogonDatabase` built via `Room.inMemoryDatabaseBuilder(...).allowMainThreadQueries()`; `SampleDao` obtained.
+  Steps: 1) `dao.upsert(CachedSampleEntity("k1","hello",42L))`. 2) Collect first emission of `dao.getById("k1")`.
+  Expected: emitted row `== CachedSampleEntity("k1","hello",42L)` (full structural equality, incl. `updatedAt`).
+  Traces: AC-3, AC-2.
+
+- **TC-AND-115-02 — Upsert updates existing row (no duplicate insert).**
+  Type: instrumented. Target: EMU.
+  Preconditions: in-memory DB + DAO as TC-01.
+  Steps: 1) `upsert(("k1","v1",1L))`. 2) `upsert(("k1","v2",2L))`. 3) Read `getById("k1")`; also `observeAll().first()`.
+  Expected: single row with `payload=="v2"`, `updatedAt==2L`; `observeAll()` size == 1 (proves `@Upsert` replaces, not duplicates, on same PK).
+  Traces: AC-2, AC-3.
+
+- **TC-AND-115-03 — `clear()` empties the table (teardown primitive).**
+  Type: instrumented. Target: EMU.
+  Preconditions: in-memory DB seeded with ≥1 row.
+  Steps: 1) `upsert(("k1","v",1L))`. 2) `clear()`. 3) `observeAll().first()`.
+  Expected: empty list. Confirms the `clear()` primitive AND-118 relies on for per-user cache wipe.
+  Traces: AC-2 (`clear()` surface), supports DoD downstream-surface item.
+
+- **TC-AND-115-04 — `Flow` reactivity on table change.**
+  Type: instrumented. Target: EMU.
+  Preconditions: in-memory DB + DAO; an active collector on `dao.observeAll()`.
+  Steps: 1) Start collecting `observeAll()`. 2) `upsert(("k1","a",1L))`. 3) `upsert(("k2","b",2L))`. 4) `clear()`.
+  Expected: collector receives successive emissions reflecting [], [k1], [k1,k2], [] (Room re-emits on every table mutation without manual invalidation).
+  Traces: AC-2, AC-3 (validates FR-7 reactivity).
+
+- **TC-AND-115-05 — Hilt provisions DB + DAO as singletons.**
+  Type: instrumented (Hilt test, `@HiltAndroidTest`). Target: EMU.
+  Preconditions: Hilt test component installs `DatabaseModule`; two injection points request `TestLogonDatabase` and `SampleDao`.
+  Steps: 1) Inject `TestLogonDatabase` twice. 2) Inject `SampleDao` and `db.sampleDao()`.
+  Expected: both `TestLogonDatabase` references are the *same* instance (singleton); `SampleDao` injects non-null and is backed by the same DB.
+  Traces: AC-4.
+
+- **TC-AND-115-06 — Schema JSON exported & committed (CI gate).**
+  Type: integration (CI/Gradle). Target: JVM/CI host.
+  Preconditions: `ksp { arg("room.schemaLocation", "$projectDir/schemas") }` configured; clean git tree.
+  Steps: 1) Run `:core-data:compileDebugAndroidTestSources` (or assemble). 2) Run `git status --porcelain schemas/`.
+  Expected: `schemas/<db>/1.json` exists after build; `git status` on `schemas/` is clean (no uncommitted diff). A deliberately-bumped uncommitted schema makes this step FAIL.
+  Traces: AC-5, AC-1.
+
+- **TC-AND-115-07 — Release build does NOT enable destructive fallback; debug does.**
+  Type: instrumented + build-variant inspection. Target: EMU (run per variant).
+  Preconditions: app/library built once as debug, once as release.
+  Steps: 1) Inspect `DatabaseModule.provideDatabase` path under `BuildConfig.DEBUG==false`: confirm `fallbackToDestructiveMigration()` is NOT applied. 2) Behavioral check: open a v2 store file against the v1 schema with no migration registered — release build throws `IllegalStateException`; debug build recreates the DB instead.
+  Expected: release → migration exception (no silent data loss); debug → destructive recreate succeeds.
+  Traces: AC-6, plus §7 migration-failure behavior.
+
+- **TC-AND-115-08 — Migration harness ready (baseline v1, forward-migration scaffold).**
+  Type: instrumented (`MigrationTestHelper`). Target: EMU.
+  Preconditions: `MigrationTestHelper` wired to the exported `schemas/` dir; v1 baseline present.
+  Steps: 1) `helper.createDatabase(NAME, 1)`, insert a row via raw SQL, close. 2) (Scaffold) assert that `runMigrationsAndValidate` is callable for a future `(1→2)` migration; for v1-only, assert the DB opens and validates against `1.json`.
+  Expected: v1 DB opens and validates against committed schema; harness is exercisable so the first real migration is testable without new wiring.
+  Traces: AC-5, supports R1 mitigation (§13).
+
+- **TC-AND-115-09 — Persistence + WAL across DB reopen on API 24 (low-end matrix).**
+  Type: instrumented. Target: EMU24 (API 24 runner per §11).
+  Preconditions: file-backed (NOT in-memory) `TestLogonDatabase` via `databaseBuilder` with default journal mode.
+  Steps: 1) Open DB, `upsert(("k1","persist",1L))`, close. 2) Reopen DB, `getById("k1").first()`.
+  Expected: row survives close/reopen; no WAL-related open failure on API 24. Resolves §13 OQ3 / OA-2.
+  Traces: AC-3, AC-1 (CI matrix API 24).
+
+- **TC-AND-115-10 — arm64 / API 34 differential round-trip (real hardware).**
+  Type: instrumented/e2e. Target: **DEVICE (must run on physical SM-A156U)**.
+  Rationale: confirms the Room/SQLite native layer round-trips identically on arm64-v8a / API 34 vs the x86_64 / API 35 emulator (ABI + API-level differential called out as device-only).
+  Preconditions: app installed on device via adb (serial R5CX821TA9R).
+  Steps: 1) Run the TC-01/TC-02/TC-09 suite as an on-device instrumented run. 2) Compare results to EMU/EMU24 runs.
+  Expected: identical pass results and equal round-tripped values across arm64/API34 and x86_64/API35 — no ABI- or API-level divergence.
+  Traces: AC-1, AC-3.
+
+- **TC-AND-115-11 — No secrets/CSRF written to Room (security).**
+  Type: unit/static (code-review-backed) + instrumented assertion. Target: JVM + EMU.
+  Preconditions: schema `1.json`; entity set = `{CachedSampleEntity}`.
+  Steps: 1) Static: assert no `@Entity`/`@ColumnInfo` field name matches `ui_csrf|csrf|cookie|token|password|secret` across `core-data`. 2) Behavioral: dump `cached_sample` columns and assert only `id`, `payload`, `updated_at` exist.
+  Expected: no auth/CSRF/secret columns present; cache holds only `id/payload/updated_at`. Enforces the §8 / AC-7 no-secrets rule (web stores CSRF only in the `ui_csrf` cookie, never in `api_cache` — see Citation 1/3).
+  Traces: AC-7.
+
+- **TC-AND-115-12 — SQLiteException propagates cleanly (resilience, no main-thread crash).**
+  Type: instrumented. Target: EMU.
+  Preconditions: in-memory DB; a constraint or forced failure path (e.g. insert into a closed DB / simulated write failure).
+  Steps: 1) Close DB. 2) Call a `suspend` DAO write and `runCatching` it.
+  Expected: the call throws an `SQLiteException`/`IllegalStateException` that surfaces as a coroutine result (propagates to caller for AND-116 to catch) rather than crashing on the main thread.
+  Traces: AC-3 (implicit), supports §7 disk-full/write-failure contract.
+
+- **TC-AND-115-13 — Build compiles with Room + KSP on JDK 17 / AGP 8.7.3.**
+  Type: integration (CI/Gradle). Target: JVM/CI host.
+  Preconditions: pinned toolchain (JDK 17, AGP 8.7.3, KSP, Kotlin 2.0.21).
+  Steps: 1) `:core-data:assemble`. 2) `:core-data:compileDebugAndroidTestSources`.
+  Expected: both succeed; KSP (not kapt) generates Room + Hilt code; no annotation-processor errors.
+  Traces: AC-1.
+
+Accessibility note: AND-115 has **no UI surface** (§9). There is no Compose
+screen, string, or user-visible text, so no Compose-UI / TalkBack / contrast
+accessibility cases apply to this ticket; accessibility is owned by the feature
+tickets that render cached data. (This absence is itself asserted by code review,
+not a test case.)
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (Room+KSP compiles; assemble + androidTest sources on JDK17/AGP8.7.3) | TC-13, TC-06, TC-09, TC-10 |
+| AC-2 (`TestLogonDatabase` v1 + `CacheEntity`/`BaseDao`/sample contracts) | TC-01, TC-02, TC-03, TC-04 |
+| AC-3 (instrumented `upsert_then_read_round_trips` passes) | TC-01, TC-02, TC-09, TC-10, TC-12 |
+| AC-4 (DB + `SampleDao` injectable Hilt singletons) | TC-05 |
+| AC-5 (schema `1.json` committed; CI fails on uncommitted schema) | TC-06, TC-08 |
+| AC-6 (release no destructive fallback; debug yes) | TC-07 |
+| AC-7 (no auth/CSRF/secret written to Room) | TC-11 |

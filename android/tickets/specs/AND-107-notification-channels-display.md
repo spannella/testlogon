@@ -5,9 +5,10 @@ milestone: M2
 epic: E15
 priority: P1
 size: M
-status: draft
 depends_on: [AND-105]
 blocks: [AND-108]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-107 — Notification channels + display
@@ -45,9 +46,17 @@ gracefully if the user denies it.
   flavor/Firebase config).
 - **Downstream:** AND-108 (deep-link routing) reads the `PendingIntent` extras contract in
   §5; AND-106 (push token registration) is parallel and unrelated to display.
-- **Web reference:** the FastAPI backend pushes notifications whose `data` payloads mirror
-  the web app's notification kinds (`frontend/src/api/types.ts`); there is **no REST
-  contract owned by this ticket** — the "contract" is the FCM data-message shape (§5).
+- **Web reference:** the FastAPI backend models a notification as `NotificationOut`
+  (`src/api/types.ts: NotificationOut` → `{ notification_id, notification_type, title, body,
+  data, read, created_at, batch_key, batch_count, batch_actors }`). **Correction (review):**
+  `notification_type` is a free-form **string**, not a fixed `message|broadcast|alert` enum —
+  observed web values include `post`, `message`, `follower`, `ticket`
+  (`src/pages/alerts/ActivityGroupCard.tsx`). The three Android channel "kinds" below are an
+  **Android-side classification** layered on top of `notification_type`, not a backend enum;
+  see §16. Also note the web client uses **Web Push (VAPID / service worker)**
+  (`src/lib/pushSetup.ts`), not FCM — FCM is the Android transport choice (AND-105). There is
+  **no REST contract owned by this ticket**; the "contract" is the FCM data-message shape (§5),
+  which is an Android-defined mapping the backend must be asked to emit (see §13/R1).
 - **Platform:** minSdk 24, compileSdk/targetSdk 35, Kotlin 2.0.21, Compose + Material 3,
   Hilt (KSP), Coroutines/Flow.
 
@@ -174,9 +183,16 @@ requirement back to the backend in §13.)
 
 ## 5. API Contract
 
-No HTTP REST endpoint is owned by this ticket — token registration (`POST /ui/push/register`)
-is AND-106. The contract here is the **FCM data-message shape** the backend must emit and
-this code parses:
+No HTTP REST endpoint is owned by this ticket — token registration (`POST /ui/push/register`,
+op `ui_register_push_ui_push_register_post`, req `PushRegisterReq = { token: string,
+platform: string }` — **verified** against OpenAPI) is AND-106. The contract here is the
+**FCM data-message shape** the backend must emit and this code parses. **Note (review):** the
+key names below (`kind`, `entity_id`, `deep_link`) are an **Android-side proposal** and do not
+exist verbatim in the backend's notification model, which uses `notification_type`,
+`notification_id`, `title`, `body`, and a generic `data: Record<string, unknown>` map
+(`src/api/types.ts: NotificationOut`). These keys must be agreed with the backend owner (§13/R1).
+Suggested mapping: `kind` ⇐ derived from `notification_type`; `entity_id` ⇐ `notification_id`;
+`deep_link` ⇐ a value inside `data`. The parser MUST tolerate the real backend names too:
 
 ```json
 {
@@ -245,9 +261,12 @@ request code derived from `entityId.hashCode()` to keep updates distinct per ent
 - **Logging:** never log full `title`/`body` at INFO+; only kind, entityId, and channel id.
   Malformed-payload logs list present **keys**, not values.
 - `PendingIntent` uses `FLAG_IMMUTABLE` to prevent extra tampering by other apps.
-- No session cookies, CSRF tokens, or credentials are involved in this ticket; notification
-  payloads carry no auth material (the deep link is an opaque app-scheme URI resolved
-  in-process by AND-108, which must itself re-auth/authorize on open).
+- No session cookies, CSRF tokens, or credentials are involved in **this** ticket (it performs
+  no HTTP I/O); notification payloads carry no auth material (the deep link is an opaque
+  app-scheme URI resolved in-process by AND-108, which must itself re-auth/authorize on open).
+  For context: the web client **does** use cookie auth + CSRF app-wide — `credentials: include`
+  plus a `ui_csrf` cookie echoed as the `X-CSRF-Token` header (`src/api/client.ts`); that
+  transport concern belongs to the HTTP tickets (AND-106 for `POST /ui/push/register`), not here.
 - `POST_NOTIFICATIONS` is the only new permission; declared in `core-notifications`
   `AndroidManifest.xml` with `<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>`.
 
@@ -360,3 +379,210 @@ request code derived from `entityId.hashCode()` to keep updates distinct per ent
 - `PendingIntent` extras contract (§5) documented in code KDoc and referenced by AND-108.
 - PR reviewed and merged to `android-port`; manual device smoke (one API < 33, one API 33+
   device/emulator) recorded in the PR description.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its verdict and exact source pointer.
+
+1. **Token registration endpoint is `POST /ui/push/register` with body `PushRegisterReq`.**
+   VERDICT: Verified. SOURCE: OpenAPI `POST /ui/push/register`
+   (op `ui_register_push_ui_push_register_post`, req `PushRegisterReq`); schema
+   `PushRegisterReq = { token: string, platform: string }` (openapi.pretty.json) and
+   `src/api/types.ts: PushRegisterReq`. (Endpoint is owned by AND-106, cited here only for §5 context.)
+2. **There is no REST endpoint owned by this ticket; it does no network I/O.**
+   VERDICT: Verified. SOURCE: OpenAPI index has no display/channel endpoint; the only push
+   write paths are `/ui/push/register|revoke|test` (AND-106 scope).
+3. **The backend notification model is `{ notification_id, notification_type, title, body, data, read, created_at, batch_key, batch_count, batch_actors }`.**
+   VERDICT: Verified. SOURCE: `src/api/types.ts: NotificationOut`; mirrored in OpenAPI
+   `GET /ui/notifications` resp `NotificationListResponse` (items: `NotificationOut`).
+4. **`notification_type` is a fixed enum of `message | broadcast | alert`.**
+   VERDICT: Corrected → it is a free-form **string**. SOURCE: `src/api/types.ts: NotificationOut.notification_type: string`
+   and `SendNotificationReq.notification_type: string`; observed concrete values in web UI are
+   `post`, `message`, `follower`, `ticket` (`src/pages/alerts/ActivityGroupCard.tsx`
+   `ActivityIcon` switch). The three Android channels are an Android-side classification of that
+   string, with a `tl_broadcasts` fallback for unmapped values (FR-4); this is intentional and
+   now documented as such in §2/§5.
+5. **The FCM data keys `kind`, `entity_id`, `deep_link` are the backend contract / "mirror the web app".**
+   VERDICT: Unverified-assumption (Android-defined). SOURCE: no such keys appear in
+   `NotificationOut` (uses `notification_id`, `notification_type`, generic `data` map). The web
+   client never receives FCM data messages at all (see #6). Treated as an Android proposal that
+   must be agreed with the backend owner; parser told to also accept the real names (§5, §13/R1).
+6. **The web reference app's transport is FCM with `data` messages.**
+   VERDICT: Corrected → the web client uses **Web Push (VAPID + service worker)**. SOURCE:
+   `src/lib/pushSetup.ts` (`registerServiceWorker`, `subscribeToPush` with
+   `applicationServerKey` VAPID, `POST /ui/push/register`), `GET /ui/push/vapid-key` in OpenAPI.
+   FCM is the Android-only transport introduced by AND-105; there is no web FCM artifact to mirror.
+7. **No session cookies / CSRF / credentials are involved in this ticket.**
+   VERDICT: Verified (scoped) — true because this ticket does no HTTP. SOURCE: §7 (no network
+   I/O). Context correction: the app *does* use cookie + CSRF auth elsewhere —
+   `credentials: "include"` and `ui_csrf` cookie → `X-CSRF-Token` header
+   (`src/api/client.ts` lines ~124, ~167-170). That belongs to the HTTP tickets, not here.
+8. **Validation/error responses on the push/notification endpoints are HTTP 422 `HTTPValidationError`.**
+   VERDICT: Verified (for the AND-106 endpoint referenced). SOURCE: OpenAPI index
+   `POST /ui/push/register | resp=200:;422:HTTPValidationError`; schema `HTTPValidationError`
+   (openapi.pretty.json, `detail: ValidationError[]`).
+9. **`POST_NOTIFICATIONS` is a runtime permission introduced in Android 13 / API 33.**
+   VERDICT: Verified (framework ref). SOURCE: Android docs
+   https://developer.android.com/develop/ui/views/notifications/notification-permission
+   (`android.permission.POST_NOTIFICATIONS`, requested at runtime on API 33+).
+10. **Notification channels are required on API 26 (Android 8.0)+; ignored below.**
+    VERDICT: Verified (framework ref). SOURCE: Android docs
+    https://developer.android.com/develop/ui/views/notifications/channels . The spec's use of
+    `NotificationChannelCompat`/`NotificationManagerCompat` correctly no-ops the channel APIs on
+    API < 26 while still posting via `NotificationCompat.Builder.setPriority`.
+11. **A `PendingIntent` must specify mutability (`FLAG_IMMUTABLE`/`FLAG_MUTABLE`) on API 31+ and immutable is required for these extras.**
+    VERDICT: Verified (framework ref). SOURCE: Android docs
+    https://developer.android.com/reference/android/app/PendingIntent#FLAG_IMMUTABLE and
+    https://developer.android.com/about/versions/12/behavior-changes-12#pending-intent-mutability .
+12. **Channel importance is immutable after first creation (only name/description update).**
+    VERDICT: Verified (framework ref). SOURCE: Android docs
+    https://developer.android.com/develop/ui/views/notifications/channels#UpdateChannel .
+    Matches FR-1/§4 idempotency note and R2.
+13. **`VISIBILITY_PRIVATE` / `setLockscreenVisibility` controls lock-screen content hiding.**
+    VERDICT: Verified (framework ref). SOURCE: Android docs
+    https://developer.android.com/reference/androidx/core/app/NotificationChannelCompat.Builder#setLockscreenVisibility(int) .
+14. **The 20s-timeout / bounded-backoff / offline rules do not apply to this ticket.**
+    VERDICT: Verified (scoped). SOURCE: this ticket performs no network I/O (§7); FCM delivery
+    and token registration backoff belong to AND-105/AND-106.
+
+### Corrections made
+- §2 (Context): clarified that `notification_type` is a free-form string (not a 3-value enum)
+  with observed web values, and that the web client uses Web Push/VAPID rather than FCM; FCM is
+  the Android transport. (Audit #4, #6.)
+- §5 (API Contract): added that `kind`/`entity_id`/`deep_link` are an Android-defined proposal,
+  not backend field names (which are `notification_type`/`notification_id`/`title`/`body`/`data`),
+  must be confirmed with the backend, and the parser must tolerate the real names; cited the
+  verified `PushRegisterReq` shape for the AND-106 reference. (Audit #1, #4, #5.)
+- §8 (Security): scoped the "no CSRF/cookies" claim to this ticket and noted the app-wide cookie+
+  CSRF transport (`ui_csrf` → `X-CSRF-Token`, `credentials: include`) for accuracy. (Audit #7.)
+
+### Open assumptions
+- **A1 — FCM data-only message shape (§5).** The backend currently exposes a notification REST/
+  read model only; no FCM payload schema exists in the sources. The exact `data` keys the
+  Android push will receive are unverifiable until the backend FCM emitter is specified. Why
+  unverifiable: no FCM emitter artifact in OpenAPI or frontend (web uses Web Push). Tracked as R1.
+- **A2 — `notification_type` → channel mapping.** Which concrete `notification_type` strings map
+  to `tl_messages` vs `tl_alerts` vs `tl_broadcasts` is an Android product decision; only the
+  `message` value is directly attested in the web source. Others (and the `broadcast`/`alert`
+  kinds) are assumed. Why unverifiable: backend type is an open string set.
+- **A3 — Analytics sink for `notif_permission_result` (§10).** Existence of an analytics pipeline
+  is conditional ("if none exists yet, log-only"); not confirmable from the provided sources.
+- **A4 — `deep_link` location.** Assumed to ride inside the backend `data` map; exact key TBD
+  with backend. Why unverifiable: generic `data: Record<string, unknown>` in `NotificationOut`.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu test35** = headless
+emulator AVD `test35` (x86_64, Android 15 / API 35) for fast instrumented/Compose-UI in CI;
+**device A15** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android 14 /
+API 34, arm64-v8a) for real-hardware behavior (real FCM delivery, notification taps, OEM
+heads-up). No MockWebServer cases here — this ticket does no HTTP (a contract test for
+`POST /ui/push/register` lives in AND-106).
+
+- **TC-AND-107-01 — Channel id mapping is deterministic for every kind.**
+  Type: unit (JVM). Target: `TlChannels.channelIdFor`. Preconditions: none.
+  Steps: call `channelIdFor` for `MESSAGE`, `BROADCAST`, `ALERT`, `UNKNOWN`.
+  Expected: `MESSAGE→tl_messages`, `ALERT→tl_alerts`, `BROADCAST→tl_broadcasts`,
+  `UNKNOWN→tl_broadcasts`. Traces: AC-1.
+
+- **TC-AND-107-02 — Payload parser: valid, missing-required, unknown-kind, deep_link optional.**
+  Type: unit (JVM). Target: `PushPayloadParser`. Preconditions: none.
+  Steps: parse a `Map<String,String>` for (a) each valid kind with all required keys, (b) missing
+  `entity_id`/`title`/`body`, (c) `kind="weird"`, (d) with and without `deep_link`. Also parse a
+  map using the **real backend names** (`notification_type`, `notification_id`) per §5 tolerance.
+  Expected: (a) `PushPayload` with correct kind; (b) returns null/drop; (c) `kind=UNKNOWN`;
+  (d) `deepLink` null when absent, verbatim when present; backend-named map parses successfully.
+  Traces: AC-1, AC-4, AC-6.
+
+- **TC-AND-107-03 — `isGranted()` is unconditionally true below API 33.**
+  Type: unit/Robolectric (JVM, `@Config(sdk=[24,30])`). Target: `NotificationPermissionState.isGranted`.
+  Preconditions: no `POST_NOTIFICATIONS` grant. Steps: call `isGranted()`.
+  Expected: returns true (permission not required pre-33); no permission request issued. Traces: AC-3.
+
+- **TC-AND-107-04 — `isGranted()` reflects real grant state on API 33+.**
+  Type: Robolectric (JVM, `@Config(sdk=[33])`). Target: `NotificationPermissionState.isGranted`.
+  Preconditions: toggle shadow grant. Steps: assert false when denied, true after granting
+  `POST_NOTIFICATIONS`. Expected: matches shadow grant state. Traces: AC-2.
+
+- **TC-AND-107-05 — Channels created idempotently: exactly 3 in group `tl_general`.**
+  Type: Robolectric (JVM, `@Config(sdk=[26]+)`). Target: `DefaultNotificationChannelInitializer.ensureChannels`.
+  Preconditions: fresh `ShadowNotificationManager`. Steps: call `ensureChannels()` twice; read
+  channels + importances. Expected: exactly 3 channels (`tl_messages` HIGH, `tl_broadcasts`
+  DEFAULT, `tl_alerts` HIGH) under group `tl_general`; second call keeps count at 3 and does not
+  change importance. Traces: AC-5.
+
+- **TC-AND-107-06 — `show()` posts to the correct channel per kind.**
+  Type: Robolectric (JVM, `@Config(sdk=[33])`, permission granted). Target: `NotificationPresenter.show`.
+  Preconditions: channels created, permission granted. Steps: `show()` a message/broadcast/alert
+  payload; inspect `ShadowNotificationManager.getActiveNotifications()`.
+  Expected: each notification carries its expected channel id; small icon `ic_stat_notification`,
+  color `TlBrand`, auto-cancel set; returns true. Traces: AC-1.
+
+- **TC-AND-107-07 — Same `entity_id` updates rather than stacks.**
+  Type: Robolectric (JVM). Target: `NotificationPresenter.show` dedupe.
+  Preconditions: permission granted. Steps: `show()` twice with identical `entity_id` and changed
+  body. Expected: exactly one active notification with id `entityId.hashCode()`, showing the
+  updated body. Traces: AC-6.
+
+- **TC-AND-107-08 — Denied permission drops silently with one debug log, no crash.**
+  Type: Robolectric (JVM, `@Config(sdk=[33])`, permission denied). Target: `NotificationPresenter.show`.
+  Preconditions: `POST_NOTIFICATIONS` not granted. Steps: `show()` a valid payload; capture logs.
+  Expected: returns false, zero active notifications, exactly one debug `dropped{reason=no_permission}`
+  line, no exception. Traces: AC-4.
+
+- **TC-AND-107-09 — `PendingIntent` extras + immutability contract.**
+  Type: Robolectric (JVM). Target: `NotificationPresenter` PendingIntent builder.
+  Preconditions: permission granted. Steps: `show()` a payload with a `deep_link`; capture the
+  posted `PendingIntent`/`Intent`. Expected: extras `tl.notif.kind`, `tl.notif.entityId`,
+  `tl.notif.deepLink` present and correct (deepLink may be null); flags include `FLAG_IMMUTABLE`;
+  target is `MainActivity`; request code derived from `entityId.hashCode()`. Traces: AC-7.
+
+- **TC-AND-107-10 — Rationale dialog shown once; Allow launches system request; Not-now persists flag.**
+  Type: Compose-UI (emu test35, `createAndroidComposeRule`). Target: `NotificationPermissionGate`
+  + `NotificationPermissionViewModel` with a fake permission launcher. Preconditions:
+  `notif_rationale_shown=false`. Steps: render gate post-auth; assert rationale `AlertDialog`
+  appears; tap "Allow" → assert fake `RequestPermission` contract invoked; in a second run tap
+  "Not now" → assert dismissed and `markRationaleShown()` set (no re-prompt next mount).
+  Expected: as stated; dialog never shown again once flag set. Traces: AC-2.
+
+- **TC-AND-107-11 — Accessibility of rationale dialog.**
+  Type: Compose-UI / instrumented a11y (emu test35; spot-check on device A15). Target: rationale
+  `AlertDialog`. Preconditions: dialog visible. Steps: run accessibility checks
+  (`enableAccessibilityChecks()`), traverse with TalkBack semantics. Expected: title/body/buttons
+  have content descriptions, buttons ≥ 48dp touch targets, no a11y violations. Traces: AC-2.
+
+- **TC-AND-107-12 — Real FCM data message lands on the correct channel (end-to-end).**
+  Type: instrumented/e2e — **MUST run on device A15** (real FCM delivery + OEM notification
+  shade; emulator FCM/heads-up behavior is not representative). Target: full path
+  `TlFirebaseMessagingService → PushPayloadParser → NotificationPresenter`. Preconditions:
+  signed-in build, `POST_NOTIFICATIONS` granted, device registered for FCM. Steps: send a
+  data-only FCM message of each kind (Firebase console or test harness); observe the shade and
+  Settings → Apps → TestLogon → Notifications. Expected: message→Messages channel (heads-up,
+  sound+vibrate), broadcast→Broadcasts (no vibrate), alert→Alerts (heads-up); each on its named
+  channel. Traces: AC-1.
+
+- **TC-AND-107-13 — Fresh API 33+ install requests permission after first authenticated session.**
+  Type: instrumented/e2e (emu test35 for the permission flow; also smoke on device A15).
+  Target: post-auth gate. Preconditions: fresh install, permission undetermined.
+  Steps: complete login/finalize; observe rationale then system permission dialog fires exactly
+  once after auth. Expected: rationale precedes system dialog; request issued once per FR-5.
+  Traces: AC-2.
+
+- **TC-AND-107-14 — Lock-screen visibility / no payload bodies logged (security).**
+  Type: instrumented (device A15, real lock screen). Target: channel `setLockscreenVisibility`
+  + logging. Preconditions: device locked with secure keyguard. Steps: post a `tl_messages` and a
+  `tl_broadcasts` notification while locked; inspect lock screen and logcat at INFO+.
+  Expected: `tl_messages`/`tl_alerts` content hidden (`VISIBILITY_PRIVATE` placeholder);
+  `tl_broadcasts` may show content; logcat at INFO+ contains no `title`/`body` values, only
+  kind/entityId/channel. Traces: AC-1, AC-4.
+
+### Coverage matrix
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 (kind→correct channel) | TC-01, TC-02, TC-06, TC-12, TC-14 |
+| AC-2 (API 33+ requests permission after auth, with rationale) | TC-04, TC-10, TC-11, TC-13 |
+| AC-3 (API < 33 no request, still displays) | TC-03 |
+| AC-4 (deny → silent drop, no crash, one log) | TC-02, TC-08, TC-14 |
+| AC-5 (idempotent channel creation, count stays 3) | TC-05 |
+| AC-6 (same entity_id updates, no stacking) | TC-02, TC-07 |
+| AC-7 (PendingIntent extras + FLAG_IMMUTABLE) | TC-09 |

@@ -5,9 +5,10 @@ milestone: M2
 epic: E16
 priority: P2
 size: M
-status: draft
 depends_on: [AND-112]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-114 — Locale switch + RTL readiness
@@ -47,9 +48,19 @@ or hard-`left`/`right`-anchored content) under a forced RTL locale.
   (`res/values/`, `res/values-ar/`, `res/values-he/`, …) with default-locale fallback.
   AND-114 consumes those `strings.xml` catalogs; it must not define new copy beyond the
   picker UI strings.
-- **Web reference:** the frontend exposes language selection via i18next; this ticket
-  replicates the *behavior* (instant switch, persistence) using platform-native
-  per-app locales rather than a JS i18n runtime.
+- **Web reference (verified):** the frontend uses **react-i18next** for the runtime
+  (`src/i18n/index.ts` bundles `en`/`es`/`fr` statically; `LanguageDetector` persists the
+  chosen language in `localStorage` key `i18nextLng`). The `LanguageSwitcher`
+  (`src/components/shared/LanguageSwitcher.tsx`) calls `i18n.changeLanguage(locale)` for an
+  instant switch AND, **best-effort**, persists the preference to the backend via
+  `saveUserLocale` → `PUT /ui/i18n/locale` (`src/api/endpoints/i18n.ts`). RTL is applied by
+  `RTLProvider` (`src/components/layout/RTLProvider.tsx`) setting `document.documentElement.dir`
+  via `isRTLLocale` (RTL set = `{ar, he, fa, ur}`). The backend additionally exposes
+  `GET /ui/i18n/locales`, `GET /ui/i18n/translations/{locale}`, and `GET /ui/i18n/locale`.
+  **This ticket deliberately diverges**: it replicates the *behavior* (instant switch,
+  persistence, RTL) using platform-native per-app locales + AND-112's bundled catalogs rather
+  than a JS i18n runtime or live backend translation fetch. The optional server-side
+  preference sync is discussed in §5.
 - **Platform docs (authoritative for approach):** AndroidX per-app language preferences
   (`AppCompatDelegate.setApplicationLocales`, `LocaleManagerCompat`,
   `locales_config.xml`), and Compose `LocalLayoutDirection` / `CompositionLocalProvider`.
@@ -220,13 +231,41 @@ language is shown in its own script.
 
 ## 5. API Contract
 
-**Not applicable — no backend interaction.** Locale selection is fully client-side and
-persisted on-device; it does not call FastAPI, does not send an `Accept-Language` header
-change to the backend, and does not depend on cookie/CSRF/session flows. The session and
-networking contracts remain owned by their respective tickets. If server-side
-localization of error `detail` payloads is ever required, that is out of scope here and
-would be a future networking ticket; for now the FastAPI `detail` mapping continues to
-surface server strings as-is and only client-owned copy is localized.
+**No backend interaction in the chosen design — but note this is a deliberate divergence
+from the web reference, not the absence of a backend contract.** (CORRECTED: the original
+spec asserted "no backend interaction" as if no i18n endpoints existed. They do — see below.)
+
+**What the backend actually offers (verified, OpenAPI tag `i18n`):**
+- `GET /ui/i18n/locales` (op `list_locales_ui_i18n_locales_get`) — public, no params;
+  returns available locales with display names. Frontend type `LocalesResponse` =
+  `{ locales: LocaleInfo[] }`, `LocaleInfo = { code, name, native_name, rtl }`
+  (`src/api/endpoints/i18n.ts`). Note the per-locale `rtl: boolean` flag.
+- `GET /ui/i18n/translations/{locale}` (op `get_translations_..._get`) — public; returns
+  `{ locale, translations: Record<string,string> }`; merges static JSON with admin DDB
+  overrides, falls back to English for missing keys.
+- `GET /ui/i18n/locale` (op `get_user_locale_ui_i18n_locale_get`) — authed; returns the
+  user's saved locale (`UserLocaleResponse = { locale }`). Optional params:
+  `user_sub` (query), `X-SESSION-ID` / `X-IMPERSONATION-TOKEN` (headers).
+- `PUT /ui/i18n/locale` (op `save_user_locale_ui_i18n_locale_put`) — authed; the web
+  `LanguageSwitcher` calls this **best-effort** (failures are swallowed; localStorage is the
+  real source of truth client-side). Frontend sends body `{ locale }` with
+  `Content-Type: application/json` and reads `{ ok, locale }`. Same optional params as the
+  GET. Error responses use `422 HTTPValidationError` (FastAPI standard). The OpenAPI marks
+  the success body untyped (`{}`); the `{ ok, locale }` shape is the *frontend's* declared
+  contract, not server-guaranteed.
+
+**Why AND-114 stays client-side anyway:** the Android port localizes via platform per-app
+locales + AND-112's compiled `strings.xml` catalogs, so it does **not** fetch translation
+bundles at runtime and does **not** require a network round-trip to switch language. It
+therefore does not depend on cookie/CSRF/session flows for the core feature. All of the web
+transport (auth `Authorization: Bearer`, `ui_csrf` cookie → `X-CSRF-Token` header,
+`credentials: include`; see `src/api/client.ts`) is irrelevant to the chosen design.
+
+**Optional server-preference sync (out of scope, flagged):** mirroring the web's best-effort
+`PUT /ui/i18n/locale` so a user's language follows them across web/Android would require the
+authenticated networking stack and is intentionally deferred (see OQ-3). For now the FastAPI
+`detail` mapping continues to surface server strings as-is and only client-owned copy is
+localized.
 
 ## 6. Data & State Management
 
@@ -355,10 +394,19 @@ The Test deliverable is the core of this ticket. Three layers:
   deterministic).
 - **OQ-1:** Exact locale set from AND-112 — confirmed to include `ar` and `he`? The
   picker and `locales_config.xml` must match AND-112's final shipped catalogs.
+  *(Verification note: the web reference bundles only `en`/`es`/`fr` — all LTR — in
+  `src/i18n/index.ts`; it ships NO RTL catalog. RTL locales `{ar, he, fa, ur}` exist only in
+  the `isRTLLocale` predicate and as backend-served bundles. So "AND-112 ships `ar`/`he`" is
+  an unverified cross-ticket assumption, not something the reference app demonstrates. The
+  RTL audit can still proceed using the `ar-XB` pseudo-locale even if no real RTL catalog
+  lands, but the picker's real-locale list must be reconciled with AND-112's actual output.)*
 - **OQ-2:** Does the product want the picker inside an existing Settings screen or a
   standalone entry? Assumed inside `feature-settings`.
-- **OQ-3:** Should the backend receive an `Accept-Language` hint for server-localized
-  errors? Out of scope here; flagged for a future networking ticket.
+- **OQ-3:** Should the Android client mirror the web's best-effort server-side preference
+  sync via `PUT /ui/i18n/locale` (and/or send an `Accept-Language` hint for server-localized
+  errors)? The web app DOES persist locale server-side best-effort and exposes
+  `GET/PUT /ui/i18n/locale` + `GET /ui/i18n/locales`/`/translations/{locale}`. Out of scope
+  here; flagged for a future networking ticket once the authed transport lands.
 
 ## 14. Acceptance Criteria
 
@@ -392,3 +440,269 @@ AC-6. Unit + UI + instrumented suites in §11 pass in CI; new locale code ≥ 80
 - Code reviewed; lint/ktlint/detekt clean; no new permissions; no network changes.
 - Spec deviations (if any) recorded in the PR description; OQ-1 confirmed against AND-112
   before merge.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. OpenAPI pointers use
+`METHOD /path`; frontend pointers use `path: symbol`; Android-framework choices are labelled
+`framework ref`.
+
+1. **Claim:** The web reference exposes language selection via i18next.
+   **VERDICT: Verified (and augmented).** It uses **react-i18next** with statically bundled
+   `en`/`es`/`fr` and a `localStorage` detector (key `i18nextLng`).
+   **SOURCE:** `src/i18n/index.ts` (SUPPORTED_LOCALES, `i18n.init` with LanguageDetector);
+   `src/components/shared/LanguageSwitcher.tsx: handleChange` (`i18n.changeLanguage`).
+
+2. **Claim (original §5):** "Not applicable — no backend interaction … does not call FastAPI."
+   **VERDICT: Corrected.** The backend DOES expose i18n endpoints and the web app DOES call
+   them (best-effort preference save). The *chosen Android design* is client-side, but the
+   "no backend contract exists" framing was wrong.
+   **SOURCE:** OpenAPI `GET /ui/i18n/locales`, `GET /ui/i18n/translations/{locale}`,
+   `GET /ui/i18n/locale`, `PUT /ui/i18n/locale` (tag `i18n`);
+   `src/api/endpoints/i18n.ts` (`getLocales`, `getTranslations`, `getUserLocale`,
+   `saveUserLocale`); `src/components/shared/LanguageSwitcher.tsx: saveLocale.mutate`.
+
+3. **Claim:** Saving a locale to the backend is `PUT /ui/i18n/locale` with body `{ locale }`
+   and returns `{ ok, locale }`.
+   **VERDICT: Verified (frontend contract).** Server success body is untyped (`{}`) in the
+   OpenAPI; the `{ ok, locale }` shape is the frontend's declared type. Errors → `422
+   HTTPValidationError`. Optional params `user_sub` (query), `X-SESSION-ID`,
+   `X-IMPERSONATION-TOKEN` (headers).
+   **SOURCE:** `src/api/endpoints/i18n.ts: saveUserLocale`; OpenAPI
+   `PUT /ui/i18n/locale` (op `save_user_locale_ui_i18n_locale_put`, params + 422).
+
+4. **Claim:** Available locales are returned with `code`, `name`, `native_name`, and an
+   `rtl` boolean flag.
+   **VERDICT: Verified.**
+   **SOURCE:** `src/api/endpoints/i18n.ts: LocaleInfo`; OpenAPI `GET /ui/i18n/locales`.
+
+5. **Claim:** The web app applies RTL by switching `document.dir` based on locale, using an
+   RTL locale set of `{ar, he, fa, ur}`.
+   **VERDICT: Verified.**
+   **SOURCE:** `src/components/layout/RTLProvider.tsx`; `src/i18n/index.ts: isRTLLocale`
+   (`RTL_LOCALES`).
+
+6. **Claim (FR-1/§6/OQ-1):** AND-112 ships `ar` and `he` catalogs, which the picker
+   enumerates.
+   **VERDICT: Unverified-assumption.** The reference app bundles only `en`/`es`/`fr` (all
+   LTR) and ships no RTL catalog; `ar`/`he` appear only in the `isRTLLocale` predicate and
+   as backend-served bundles. Cross-ticket dependency on AND-112's actual output.
+   **SOURCE:** `src/i18n/index.ts: SUPPORTED_LOCALES` (no ar/he); AND-112 output not present
+   in this repo.
+
+7. **Claim:** The web transport uses `Authorization: Bearer <token>`, the `ui_csrf` cookie
+   echoed as the `X-CSRF-Token` header, and `credentials: include`.
+   **VERDICT: Verified** (relevant only if the optional server sync is later adopted).
+   **SOURCE:** `src/api/client.ts: api` (Authorization header; `getCookie("ui_csrf")` →
+   `X-CSRF-Token`; `credentials: "include"`).
+
+8. **Claim:** A network failure on a backend call surfaces as a thrown error (web shows a
+   toast; `ApiError(0, "Network error")`).
+   **VERDICT: Verified.** Relevant to the optional-sync flaky-host path only; the core
+   Android feature performs no network I/O.
+   **SOURCE:** `src/api/client.ts` (catch around `fetch` → `ApiError(0, "Network error")`).
+
+9. **Claim:** In-app per-app language is applied via
+   `AppCompatDelegate.setApplicationLocales(LocaleListCompat)`, which persists durably
+   (framework `LocaleManager` on API 33+, AppCompat storage on 24–32) and recreates the
+   Activity.
+   **VERDICT: Verified (framework ref).**
+   **SOURCE:** framework ref —
+   https://developer.android.com/guide/topics/resources/app-languages
+   and https://developer.android.com/reference/androidx/appcompat/app/AppCompatDelegate#setApplicationLocales(androidx.core.os.LocaleListCompat)
+
+10. **Claim:** `locales_config.xml` + manifest `android:localeConfig` drive the system
+    Settings per-app language entry on API 33+; `generateLocaleConfig` is the AGP
+    alternative.
+    **VERDICT: Verified (framework ref).**
+    **SOURCE:** framework ref —
+    https://developer.android.com/guide/topics/resources/app-languages#sample-config
+
+11. **Claim:** Layout direction is derived from the resolved locale via
+    `TextUtilsCompat.getLayoutDirectionFromLocale` / Compose `LocalLayoutDirection` and
+    `LocalConfiguration.current.locales[0]`.
+    **VERDICT: Verified (framework ref).**
+    **SOURCE:** framework refs —
+    https://developer.android.com/reference/androidx/core/text/TextUtilsCompat ,
+    https://developer.android.com/develop/ui/compose/architecture/compositionlocal
+
+12. **Claim:** `ar-XB` is a built-in RTL pseudo-locale usable to force RTL in tests/CI
+    without a real RTL catalog.
+    **VERDICT: Verified (framework ref).**
+    **SOURCE:** framework ref —
+    https://developer.android.com/guide/topics/resources/pseudolocales
+
+13. **Claim (§9):** Directional icons should set `autoMirrored` to flip under RTL;
+    certain glyphs are intentionally exempt.
+    **VERDICT: Verified (framework ref).**
+    **SOURCE:** framework ref —
+    https://developer.android.com/guide/topics/resources/localization#mirror-layouts
+    (and Material guidance on bidirectionality).
+
+### Corrections made
+
+- **§5 (API Contract):** Replaced the blanket "Not applicable — no backend interaction"
+  with an accurate statement: the backend exposes a full `i18n` endpoint group
+  (`GET /ui/i18n/locales`, `GET /ui/i18n/translations/{locale}`, `GET`/`PUT /ui/i18n/locale`)
+  and the web app calls them (best-effort preference save). Documented exact paths, the
+  `{ locale }` request / `{ ok, locale }` response shapes, optional params, and the `422
+  HTTPValidationError` error shape, while preserving the (legitimate) rationale that the
+  Android port stays client-side by design.
+- **§2 (References):** Corrected the vague "exposes language selection via i18next" to the
+  verified mechanism (react-i18next + `localStorage` + best-effort `PUT /ui/i18n/locale`,
+  RTL via `document.dir`), and labelled the Android approach as a deliberate divergence.
+- **OQ-1 (§13):** Annotated that the reference ships no RTL catalog (only `en`/`es`/`fr`),
+  so the `ar`/`he` availability is an unverified AND-112 dependency.
+- **OQ-3 (§13):** Rewrote to reflect that server-side locale persistence already exists in
+  the web app (rather than implying only an `Accept-Language` question).
+
+### Open assumptions
+
+- **AND-112 catalog set (`ar`/`he`):** unverifiable from the reference app (it bundles only
+  LTR `en`/`es`/`fr`); depends on AND-112's final output. Must be reconciled before merge.
+- **Server success body of `PUT /ui/i18n/locale`:** OpenAPI declares it untyped (`{}`); the
+  `{ ok, locale }` shape is taken from the frontend's TS type, not server-guaranteed.
+- **Android framework API behaviors** (Activity recreation, durable locale storage split
+  across API levels, pseudo-locale rendering) are cited to official docs, not exercised in
+  this repo; confirmed on-device/emulator by the §17 instrumented cases.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-114-NN`. Targets: **JVM** = JVM unit/Robolectric (no device);
+**emu35** = headless AVD `test35` (x86_64, API 35); **device** = physical Samsung Galaxy
+A15 5G (SM-A156U, API 34, arm64-v8a). RTL/locale behavior is not hardware-sensitive, so most
+instrumented cases run on **emu35**; a small set runs additionally on **device** to cover the
+API-34-vs-35 split (R1) and the arm64 ABI.
+
+- **TC-AND-114-01 — Repo set/clear round-trip (happy path).**
+  Type: unit. Target: JVM (Robolectric for AppCompat).
+  Preconditions: in-memory/test DataStore; AppCompat test shadow.
+  Steps: call `setLocale("ar")`; collect `selectedLocaleTag`; call `setLocale(null)`; collect again.
+  Expected: emits `"ar"` then `null`; `AppCompatDelegate.setApplicationLocales` invoked with
+  `forLanguageTags("ar")` then `getEmptyLocaleList()`.
+  Traces: AC-3, AC-6.
+
+- **TC-AND-114-02 — Blank/whitespace tag treated as system default (validation).**
+  Type: unit. Target: JVM.
+  Preconditions: test DataStore.
+  Steps: `setLocale("   ")`; read flow.
+  Expected: stored key removed; flow emits `null`; empty locale list applied.
+  Traces: AC-3.
+
+- **TC-AND-114-03 — Stale/unsupported persisted tag discarded on launch (error/resilience).**
+  Type: unit. Target: JVM.
+  Preconditions: DataStore seeded with `ui_locale_tag="xx"` not present in `locales_config.xml`.
+  Steps: run startup reconciliation.
+  Expected: tag cleared, falls back to system default, WARN logged, no crash.
+  Traces: AC-3, AC-4.
+
+- **TC-AND-114-04 — DataStore read failure falls back to system default (error/resilience).**
+  Type: unit. Target: JVM.
+  Preconditions: DataStore stub throws `IOException` on read.
+  Steps: collect `selectedLocaleTag`.
+  Expected: flow catches `IOException`, emits `null`; app remains usable.
+  Traces: AC-3, AC-6.
+
+- **TC-AND-114-05 — ViewModel option list equals AND-112 catalog set + system-default sentinel.**
+  Type: unit. Target: JVM.
+  Preconditions: fake catalog provider returning the `locales_config.xml` set.
+  Steps: read `uiState.options`; call `onSelect("he")`.
+  Expected: options = system-default sentinel + exactly the catalog locales (endonym labels);
+  `onSelect` delegates to repo; `selectedTag` reflects selection.
+  Traces: AC-1, AC-4, AC-6.
+
+- **TC-AND-114-06 — Picker → repo wiring & immediate selected-state (Compose-UI).**
+  Type: Compose-UI. Target: emu35 (createComposeRule).
+  Preconditions: `LanguagePickerScreen` with fake VM.
+  Steps: tap the `ar` radio row.
+  Expected: single-choice selection moves to `ar`; `repo.setLocale("ar")` called once;
+  selected row exposes selected semantics.
+  Traces: AC-1.
+
+- **TC-AND-114-07 — Per-screen RTL golden audit, LTR vs RTL × {en, ar, he} (Compose-UI).**
+  Type: Compose-UI (screenshot, Paparazzi/roborazzi). Target: JVM (host-side, deterministic) — falls back to emu35 if roborazzi.
+  Preconditions: golden images committed; key screens per FR-6 (Login, MFA, landing/me, list,
+  media/detail, settings/picker).
+  Steps: render each screen under `LocalLayoutDirection = Ltr` and `Rtl` for each locale.
+  Expected: (a) no horizontally clipped/overlapping nodes (bounds within parent);
+  (b) leading nav/back affordance on the end side under RTL; (c) goldens match within threshold.
+  Traces: AC-2, AC-5, AC-6.
+
+- **TC-AND-114-08 — `ar-XB` pseudo-locale forces RTL with no real catalog (Compose-UI/instrumented).**
+  Type: instrumented. Target: emu35.
+  Preconditions: app built with pseudolocales enabled; `ar-XB` applied.
+  Steps: apply `ar-XB`, render key screens.
+  Expected: layout direction RTL; no hardcoded `left`/`right` anchoring regressions surface;
+  bracketed pseudo-strings visible (confirms resource resolution path).
+  Traces: AC-2, AC-5.
+
+- **TC-AND-114-09 — Live locale switch re-renders without manual restart (instrumented, happy path).**
+  Type: instrumented (Espresso/UiAutomator). Target: emu35.
+  Preconditions: app on landing screen, locale = system default (`en`).
+  Steps: open picker, select `ar`.
+  Expected: a known on-screen string equals the `values-ar` value and
+  `resources.configuration` layout direction is RTL, with no manual relaunch (Activity
+  auto-recreated).
+  Traces: AC-1.
+
+- **TC-AND-114-10 — Locale persists across process death (instrumented, persistence).**
+  Type: instrumented. Target: emu35.
+  Preconditions: locale set to `he`.
+  Steps: kill the process, relaunch cold.
+  Expected: resolved locale and RTL direction persist on next launch from the single source of
+  truth.
+  Traces: AC-3.
+
+- **TC-AND-114-11 — Activity recreation preserves nav/scroll state (instrumented, resilience).**
+  Type: instrumented. Target: emu35.
+  Preconditions: navigate to a deep list screen, scroll to a known item.
+  Steps: switch locale from the deep screen.
+  Expected: after recreation the user lands on the same destination with scroll/nav state
+  restored (`rememberSaveable`).
+  Traces: AC-1, AC-3.
+
+- **TC-AND-114-12 — API-34 (arm64) vs API-35 per-app locale parity (instrumented, R1).**
+  Type: instrumented. Target: **device** (Samsung A15 5G, API 34, arm64) AND emu35 (API 35).
+  MUST run on the physical device: validates the API-33+ framework `LocaleManager` path and
+  the arm64 ABI, distinct from the x86_64/API-35 emulator.
+  Preconditions: same APK installed on both.
+  Steps: set `ar` in-app on each; cold-restart; on API 33+ also set the locale via
+  Settings → Apps → TestLogon → Language and re-open.
+  Expected: identical applied locale + RTL on both; on API 33+ the system Settings entry is
+  present (driven by `locales_config.xml`) and reflects/round-trips the choice.
+  Traces: AC-2, AC-3, AC-4.
+
+- **TC-AND-114-13 — Accessibility: TalkBack reads picker rows with selected state & RTL order.**
+  Type: instrumented (a11y). Target: device (real TalkBack engine preferred) or emu35 with
+  accessibility checks.
+  Preconditions: picker open under `ar`.
+  Steps: enable accessibility checks (`AccessibilityChecks`/TalkBack); traverse the radio list.
+  Expected: each row has a content description and announces selected/not-selected; touch
+  targets ≥ 48dp; reading order correct under RTL; no contrast/label violations.
+  Traces: AC-2, AC-6.
+
+- **TC-AND-114-14 — No `left`/`right` directional attrs on key screens (lint/grep gate, security/quality).**
+  Type: unit (static-analysis gate in CI). Target: JVM/CI.
+  Preconditions: CI lint + repo grep over key-screen sources.
+  Steps: run lint/ktlint + a grep for `paddingLeft/Right`, `TextAlign.Left/Right`,
+  `android:layout_..._toLeftOf`, hardcoded `Alignment` left/right; assert
+  `android:supportsRtl="true"` present.
+  Expected: zero hits; `supportsRtl` true; build fails on any hit.
+  Traces: AC-5, AC-6.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (instant switch, no restart) | TC-05, TC-06, TC-09, TC-11 |
+| AC-2 (key screens pass RTL audit; icons mirror; goldens) | TC-07, TC-08, TC-12, TC-13 |
+| AC-3 (persist across cold start/process death; system-default + `en` fallback) | TC-01, TC-02, TC-03, TC-04, TC-10, TC-11, TC-12 |
+| AC-4 (`locales_config.xml` == picker == AND-112 set) | TC-03, TC-05, TC-12 |
+| AC-5 (no left/right attrs; `supportsRtl=true`) | TC-07, TC-08, TC-14 |
+| AC-6 (suites pass in CI; ≥80% coverage on new locale code) | TC-01, TC-04, TC-05, TC-07, TC-13, TC-14 |
+
+> Note: there is no app-network path in the chosen design, so the classic flaky-dev-host /
+> offline case is **N/A** for the core feature. It would apply only to the deferred optional
+> server-sync (`PUT /ui/i18n/locale`); if that is implemented, add a contract/MockWebServer
+> case asserting graceful best-effort behavior on `422`/network failure (mirroring the web's
+> swallowed-error path, `ApiError(0, "Network error")`).

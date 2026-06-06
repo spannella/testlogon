@@ -5,7 +5,8 @@ milestone: M2
 epic: E17
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-115, AND-032]
 blocks: []
 ---
@@ -257,6 +258,10 @@ behavior is that an `EXPIRED` or cache-miss read triggers the same GET the
 owning feature ticket already performs (e.g. `GET /ui/me`, list/detail
 endpoints), subject to the standard ~20s timeout and bounded backoff for GETs.
 
+> Verification note (§16): `GET /ui/me` is confirmed in the OpenAPI index
+> (`GET /ui/me | op=ui_me_ui_me_get`). Its 200 response has **no schema in the
+> OpenAPI spec** (`"schema": {}`); the web client types the body as `MeResp`.
+
 The relevant request/response shape is the **on-device row**, not a wire
 contract. Each cached row materializes the feature's DTO plus `CacheMeta`:
 
@@ -272,8 +277,13 @@ contract. Each cached row materializes the feature's DTO plus `CacheMeta`:
 ```
 
 `user_scope` is populated from the authenticated user id obtained via the
-session (`GET /ui/me` → `id`). Anonymous/global responses persist with
+session (`GET /ui/me` → `user_sub`). Anonymous/global responses persist with
 `user_scope = null`.
+
+> Correction (§16): the user identifier returned by `/ui/me` is **`user_sub`**,
+> not `id`. The web client's `MeResp` shape is `{ user_sub: string;
+> session_id: string; ip: string }` (`src/api/types.ts: MeResp`) — there is no
+> `id` field. `user_scope` therefore stores the `user_sub` value.
 
 ## 6. Data & State Management
 
@@ -337,9 +347,13 @@ This ticket adds the flag plumbing but leaves rendering to feature tickets.
 - **No SQL injection via raw queries:** `$table` interpolation is restricted to
   the compile-time `CacheTables.ALL` allowlist; all variable inputs
   (`userId`, cutoffs, limits) are bound parameters, never string-concatenated.
-- **No secrets cached:** session cookies and `ui_csrf` live in the OkHttp
-  persistent cookie jar / encrypted store, never in Room. Cache rows hold only
-  response payloads.
+- **No secrets cached:** session cookies and the `ui_csrf` token live in the
+  OkHttp persistent cookie jar / encrypted store, never in Room. Cache rows hold
+  only response payloads. (Verified against the web client: it sends requests
+  with `credentials: "include"` for cookies, an `Authorization: Bearer <token>`
+  header, and an `X-CSRF-Token` header sourced from the `ui_csrf` cookie —
+  `src/api/client.ts`. The Android port likewise must keep the bearer access
+  token out of the Room cache.)
 - **At-rest:** Room cache is app-private storage. If a payload contains PII, the
   per-user purge bounds exposure to the active session; full-disk encryption is
   the platform's responsibility (no SQLCipher added here).
@@ -478,3 +492,308 @@ unknown tables are rejected before SQL executes. Covered by §11.9.
 - KDoc on public `CacheManager`/`CachePolicy` APIs documenting TTL semantics and
   the user-scope isolation guarantee.
 - Code reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verification verdict, and the exact source pointer.
+
+1. **Claim:** The user identifier for `user_scope` comes from `GET /ui/me`.
+   **VERDICT: Verified** (endpoint exists).
+   **Source:** OpenAPI `GET /ui/me` (`op=ui_me_ui_me_get`, line 1638 of
+   `openapi.index.txt`); frontend `src/api/endpoints/auth.ts: getMe` →
+   `api.get<MeResp>("/ui/me")`.
+
+2. **Claim:** The id field returned by `/ui/me` is `id`.
+   **VERDICT: Corrected.** The field is **`user_sub`**, not `id`. `MeResp` is
+   `{ user_sub: string; session_id: string; ip: string }` — no `id` field.
+   **Source:** `src/api/types.ts: MeResp`. §5 corrected accordingly.
+
+3. **Claim (implicit):** `/ui/me` has a typed response body usable to derive the
+   user id.
+   **VERDICT: Verified with caveat.** The OpenAPI 200 response carries an
+   **empty schema** (`"schema": {}`), so the field shape is only authoritative
+   from the web client's `MeResp`, not the OpenAPI document.
+   **Source:** `openapi.pretty.json` responses block for `ui_me_ui_me_get`
+   (200 → `content.application/json.schema = {}`); `src/api/types.ts: MeResp`.
+
+4. **Claim:** CSRF is carried by a `ui_csrf` cookie surfaced as a request
+   header.
+   **VERDICT: Verified.** The web client reads the `ui_csrf` cookie and sets it
+   as the **`X-CSRF-Token`** request header.
+   **Source:** `src/api/client.ts` (`getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)`).
+
+5. **Claim:** Session auth is cookie-based and CSRF/cookies must stay out of
+   Room (§8).
+   **VERDICT: Verified, with addition.** The web client uses cookies
+   (`credentials: "include"`) **and** an `Authorization: Bearer <accessToken>`
+   header **and** `X-CSRF-Token`. The §8 note was expanded to require keeping the
+   bearer access token out of the cache as well.
+   **Source:** `src/api/client.ts` (`api<T>` builds `Authorization`,
+   `X-CSRF-Token`, and fetches with `credentials: "include"`).
+
+6. **Claim:** Logout is a backend operation that this ticket hooks the cache
+   purge into (FR-7, §12; endpoint owned by AND-032).
+   **VERDICT: Verified.** Logout is `POST /ui/session/logout`, returning
+   `StatusResp` (`{ status: string }`).
+   **Source:** OpenAPI `POST /ui/session/logout`
+   (`op=ui_session_logout_ui_session_logout_post`, line 1846 of
+   `openapi.index.txt`); `src/api/endpoints/auth.ts: logout` →
+   `api.post<StatusResp>("/ui/session/logout")`; `src/api/types.ts: StatusResp`.
+
+7. **Claim:** GET endpoints return a 422 validation error on bad input
+   (relevant to error-path tests for the GETs the cache replays).
+   **VERDICT: Verified.** `/ui/me` (and the other `/ui/*` GETs) declare
+   `422 → HTTPValidationError`. Shape: `{ detail: ValidationError[] }`, where
+   `ValidationError = { loc: (string|int)[]; msg: string; type: string }`.
+   **Source:** `openapi.index.txt` line 1638 (`resp=200:;422:HTTPValidationError`);
+   `openapi.pretty.json` `components.schemas.HTTPValidationError` and
+   `components.schemas.ValidationError`.
+
+8. **Claim:** Session refresh on 401 is an existing transport concern handled
+   below this layer (§7 says backoff/retry stays in `core-network`).
+   **VERDICT: Verified.** The web client refreshes once via
+   `POST /ui/session/refresh` on a 401 for an authenticated user, else logs out.
+   The Android `core-network` layer owns the analogous behavior; this cache
+   ticket adds no retry loop.
+   **Source:** `src/api/client.ts` (`refreshSession()` →
+   `POST /ui/session/refresh`; 401 handling in `api<T>`); OpenAPI
+   `POST /ui/session/refresh` (line 1847).
+
+9. **Claim:** The web app has no cache TTL/eviction equivalent, so this is
+   Android-specific (§2).
+   **VERDICT: Verified (negative finding).** The web client uses HTTP
+   `credentials`/cookie transport and per-call typed fetches with no on-device
+   persistent cache layer; freshness/eviction logic is absent from
+   `src/api/client.ts` and `src/api/endpoints/*`.
+   **Source:** `src/api/client.ts` (no persistence/TTL code path present).
+
+10. **Claim:** Room 2.6, Coroutines/Flow, Hilt, `@RawQuery`/`SupportSQLiteQuery`,
+    `Migration`, `runTest`/`TestDispatcher`, Turbine are the implementation
+    primitives (§4, §11, §12).
+    **VERDICT: Unverified-assumption (framework ref).** These are Android/Kotlin
+    framework choices, not derivable from the backend or web sources; they are
+    standard and correct per their docs.
+    **Source (framework ref):**
+    Room: https://developer.android.com/training/data-storage/room ;
+    Room migrations / `RawQuery`:
+    https://developer.android.com/reference/androidx/room/RawQuery ;
+    Coroutines testing (`runTest`, `TestDispatcher`):
+    https://developer.android.com/kotlin/coroutines/test ;
+    Hilt: https://developer.android.com/training/dependency-injection/hilt-android ;
+    Paging 3 `RemoteMediator` (R3):
+    https://developer.android.com/topic/libraries/architecture/paging/v3-network-db .
+
+11. **Claim:** The dev backend is plaintext HTTP at
+    `http://18.222.237.167:8000` with ~20s timeouts (§1, §2).
+    **VERDICT: Unverified-assumption.** The web client derives its base URL from
+    `VITE_API_BASE_URL` (env) — `src/api/client.ts: API_BASE_URL` — so this
+    concrete host/port and timeout are an Android-port deployment assumption not
+    present in the reference sources.
+    **Source:** `src/api/client.ts` (`API_BASE_URL` from
+    `import.meta.env.VITE_API_BASE_URL`).
+
+### Corrections made
+
+- **§5 user-id field:** `GET /ui/me` returns **`user_sub`**, not `id`. Both the
+  prose and the audit reflect this; `user_scope` stores `user_sub`. (Audit #2.)
+- **§5 added verification note** that `/ui/me`'s OpenAPI 200 schema is empty and
+  the field shape is authoritative only from the web client's `MeResp`.
+  (Audit #3.)
+- **§8 secrets-storage note expanded** to include the `Authorization: Bearer`
+  access token (in addition to cookies + `ui_csrf`) as something that must not
+  be cached in Room, matching the web client's transport. (Audit #5.)
+
+### Open assumptions
+
+- **Dev host/port + ~20s timeout** (`http://18.222.237.167:8000`): not in the
+  reference sources (web base URL is env-driven). Treated as a deployment
+  assumption for the Android port. (Audit #11.)
+- **Android framework/library versions and APIs** (Room 2.6, Hilt, Coroutines
+  test, Turbine, Paging 3): chosen by the Android port, not verifiable from
+  backend/web sources; validated against framework docs only. (Audit #10.)
+- **Per-table TTL values** (5/15/30 min) and `approx_bytes` estimation accuracy:
+  acknowledged as tuning guesses in §13 (R1, R2); no authoritative source.
+- **`/ui/me` 200 body fields beyond `MeResp`:** the OpenAPI document does not
+  define them, so only `user_sub`/`session_id`/`ip` are confirmed.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = local JVM/Robolectric unit (no device);
+**MWS** = contract test via MockWebServer; **AVD test35** = headless emulator,
+x86_64, Android 15 / API 35 (CI instrumented/Compose-UI); **Device A15** =
+physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R), Android 14 /
+API 34, arm64-v8a. This ticket is a pure data-layer concern with no direct UI
+and no hardware sensors, so most cases run on JVM/Robolectric or the emulator;
+the physical device is used only to confirm real-device SQLite/migration and
+arm64-vs-x86 (API 34-vs-35) parity.
+
+**TC-AND-118-01 — Expired entry triggers refetch (happy/acceptance)**
+- **Type:** unit (JVM, `FakeClock`)
+- **Target:** JVM
+- **Preconditions:** A cacheable row seeded with `fetched_at` far in the past;
+  `CachePolicies.forTable(table).ttl` known; fake `network()` returns a fresh
+  value.
+- **Steps:** Advance `FakeClock` past `ttl`; call `cachedFetch(...)`.
+- **Expected:** `freshness == EXPIRED`; `network()` is invoked exactly once;
+  the row is replaced; new `fetched_at`/`last_accessed_at == now`; emitted
+  `ApiResult.Success` carries the network value.
+- **Traces:** AC-1.
+
+**TC-AND-118-02 — FRESH read serves cache, no network (happy)**
+- **Type:** unit (JVM, `FakeClock`)
+- **Target:** JVM
+- **Preconditions:** Row with `fetched_at == now`; `staleAfter == ttl` (default)
+  policy so the row is FRESH.
+- **Steps:** Call `cachedFetch(...)` with `FakeClock` unchanged.
+- **Expected:** `freshness == FRESH`; `network()` is **not** called; cached
+  value emitted; `touch` updates `last_accessed_at`.
+- **Traces:** AC-4.
+
+**TC-AND-118-03 — Stale-while-revalidate emits cache then refreshed value**
+- **Type:** unit (JVM, Turbine on the returned `Flow`, `FakeClock`)
+- **Target:** JVM
+- **Preconditions:** Policy with `staleAfter < ttl`; row aged into the STALE
+  band; `network()` returns an updated value.
+- **Steps:** Collect the `Flow`; assert first then second emission.
+- **Expected:** First emission == cached value (immediate); second emission ==
+  refreshed network value; `network()` called once; row updated after refresh.
+- **Traces:** AC-4.
+
+**TC-AND-118-04 — freshness() boundary + clock-skew classification**
+- **Type:** unit (JVM, parameterized)
+- **Target:** JVM
+- **Preconditions:** `CachePolicy(ttl, staleAfter)` with `staleAfter < ttl`.
+- **Steps:** Evaluate `freshness(fetchedAt, now)` at: age just below
+  `staleAfter`; age between `staleAfter` and `ttl`; age == `ttl`; age > `ttl`;
+  negative age (now < fetchedAt, simulating backward clock).
+- **Expected:** FRESH; STALE; EXPIRED (at/above `ttl`); EXPIRED; negative age →
+  **FRESH** (fail-safe per §7).
+- **Traces:** AC-1, AC-4.
+
+**TC-AND-118-05 — LRU size eviction keeps newest, drops oldest-accessed**
+- **Type:** integration (Robolectric in-memory Room)
+- **Target:** JVM (Robolectric)
+- **Preconditions:** Insert `maxEntries + k` rows with strictly ascending
+  `last_accessed_at`.
+- **Steps:** Call `enforceLimits(table, policy)`.
+- **Expected:** The `k` lowest-`last_accessed_at` rows are deleted; the newest
+  `maxEntries` survive; total rows == `maxEntries`; runs in a single
+  transaction.
+- **Traces:** AC-3.
+
+**TC-AND-118-06 — TTL sweep deletes only expired rows**
+- **Type:** integration (Robolectric in-memory Room, `FakeClock`)
+- **Target:** JVM (Robolectric)
+- **Preconditions:** Seed rows with mixed `fetched_at` (some older than `ttl`,
+  some within).
+- **Steps:** Call `sweepExpired(table, policy)` (and `sweepAll()`).
+- **Expected:** Only rows with `fetched_at < (now - ttl)` are deleted; fresh/
+  stale rows remain; deleted-count reported in `CacheStats.expiredPurged`.
+- **Traces:** AC-1.
+
+**TC-AND-118-07 — Logout clears user-scoped cache, retains global (acceptance)**
+- **Type:** integration (Robolectric in-memory Room)
+- **Target:** JVM (Robolectric)
+- **Preconditions:** Seed rows for `user_scope = "A"` (the `user_sub` value),
+  rows for `user_scope = "B"`, and one row with `user_scope IS NULL` (global).
+- **Steps:** Invoke the AND-032 logout path → `clearAllUserScopedCache()`.
+- **Expected:** No rows with `user_scope IS NOT NULL` remain (A and B both
+  gone); the global row persists; a subsequent protected read finds no cache and
+  goes to network.
+- **Traces:** AC-2.
+
+**TC-AND-118-08 — Per-user clear scopes by user_sub only**
+- **Type:** unit/integration (Robolectric in-memory Room)
+- **Target:** JVM (Robolectric)
+- **Preconditions:** Rows for `user_scope = "A"` and `user_scope = "B"`.
+- **Steps:** Call `clearUserCache("A")`.
+- **Expected:** Only `user_scope = "A"` rows deleted; B and global rows
+  untouched. Confirms cross-user isolation by `user_sub` (§8).
+- **Traces:** AC-2.
+
+**TC-AND-118-09 — Additive migration applies and preserves rows**
+- **Type:** integration (Room `MigrationTestHelper`, Robolectric)
+- **Target:** JVM (Robolectric)
+- **Preconditions:** Build DB at schema version N with pre-existing rows.
+- **Steps:** Run `MIGRATION_N_TO_N1`; query schema.
+- **Expected:** New columns (`fetched_at`, `last_accessed_at`, `user_scope`,
+  `approx_bytes`) and indices (`idx_<t>_user`, `idx_<t>_lru`) exist; old rows
+  survive with `fetched_at = 0` (→ classified EXPIRED on next read).
+- **Traces:** AC-5.
+
+**TC-AND-118-10 — SQL-injection / unknown-table guard (security)**
+- **Type:** unit (JVM)
+- **Target:** JVM
+- **Preconditions:** A table name not in `CacheTables.ALL` (e.g.
+  `"feed; DROP TABLE auth"`).
+- **Steps:** Call a maintenance op (e.g. `sweepExpired`/`deleteUserScoped`) with
+  the rogue table name.
+- **Expected:** Rejected (throws / returns without executing) **before** any SQL
+  runs; auth/session tables untouched; bound params (`userId`, cutoffs, limits)
+  are never string-concatenated.
+- **Traces:** AC-6.
+
+**TC-AND-118-11 — Network failure on EXPIRED falls back to stale cache**
+- **Type:** contract (MockWebServer) + unit
+- **Target:** MWS (JVM)
+- **Preconditions:** Expired cached row present; MockWebServer configured to
+  return a network error or a 422 `HTTPValidationError`
+  (`{ detail: [{ loc, msg, type }] }`) for the replayed GET.
+- **Steps:** Trigger `cachedFetch` so it falls through to `network()`.
+- **Expected:** On error with cached data present → emit
+  `ApiResult.Success(cachedValue)` with `isStale = true` (no `ApiResult.Error`);
+  on 422 the parsed error shape matches `HTTPValidationError`; with **no** cache
+  present → emit `ApiResult.Error`.
+- **Traces:** AC-1, AC-4.
+
+**TC-AND-118-12 — Flaky/slow dev-host offline path (resilience)**
+- **Type:** contract (MockWebServer)
+- **Target:** MWS (JVM)
+- **Preconditions:** Stale cached row; MockWebServer set to a delayed/timeout
+  response (simulating the ~20s slow plaintext dev host) then a socket failure.
+- **Steps:** Read a STALE entry; let background revalidation hit the
+  timeout/failure.
+- **Expected:** Cached value served immediately; background refresh failure is
+  swallowed (logged, retried on next write per §7); UI never receives an error
+  for a present-cache read; maintenance op failures never abort the read/write.
+- **Traces:** AC-4.
+
+**TC-AND-118-13 — Migration + maintenance parity on real device (arm64/API 34)**
+- **Type:** instrumented/e2e
+- **Target:** **Device A15 (physical, REQUIRED)** — runs on arm64-v8a / API 34
+  to confirm real-device SQLite behavior vs the x86_64 / API 35 emulator.
+- **Preconditions:** App installed on SM-A156U; seed a DB at version N via test
+  hook.
+- **Steps:** Launch app (triggers app-start `sweepAll()` + migration); seed
+  user-A + global rows; perform logout; re-read.
+- **Expected:** Migration succeeds on-device; `idx_*` indices created; LRU
+  eviction and `clearAllUserScopedCache()` behave identically to JVM results
+  (TC-07, TC-09); no arm64-vs-x86 / API 34-vs-35 divergence in SQLite
+  `rowid`/ordering used by the LRU `ORDER BY last_accessed_at DESC` query.
+- **Traces:** AC-2, AC-3, AC-5.
+
+**TC-AND-118-14 — Stale-banner accessibility (a11y, when feature renders it)**
+- **Type:** Compose-UI (instrumented)
+- **Target:** AVD test35
+- **Preconditions:** A reference feature screen wired to `cachedFetch` exposing
+  `isStale = true`; localized `R.string.cache_stale_banner` present.
+- **Steps:** Render with a STALE result; run Compose UI + accessibility
+  assertions (TalkBack/semantics).
+- **Expected:** The stale hint uses a localized string resource (no hard-coded
+  text), exposes a non-empty `contentDescription`/semantics so TalkBack
+  announces stale state; no raw timestamp string surfaced. (Plumbing owned by
+  this ticket; rendering owned by feature tickets — assertion guards the
+  contract.)
+- **Traces:** AC-4.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 Expired entries refetch | TC-01, TC-04, TC-06, TC-11 |
+| AC-2 Logout clears user cache | TC-07, TC-08, TC-13 |
+| AC-3 LRU size eviction | TC-05, TC-13 |
+| AC-4 Stale-while-revalidate + FRESH no-network | TC-02, TC-03, TC-04, TC-11, TC-12, TC-14 |
+| AC-5 Additive migration applies/preserves | TC-09, TC-13 |
+| AC-6 Raw-query table allowlist | TC-10 |

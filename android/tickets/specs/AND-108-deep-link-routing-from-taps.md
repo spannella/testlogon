@@ -5,7 +5,8 @@ milestone: M2
 epic: E15
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-107, AND-022]
 blocks: []
 ---
@@ -67,9 +68,19 @@ route types.
   `AlertDetail(alertId: String)`, and the authenticated `Home` top-level route. If a
   feature route is not yet merged when AND-108 lands, a temporary placeholder route
   of the same shape is used and swapped on merge (see §13).
-- **Web reference:** `frontend/` notification deep links map to `/messages/:id`,
-  `/broadcasts/:id`, `/alerts/:id`; Android mirrors that information model with
-  type-safe in-process routes (not URL strings).
+- **Web reference (CORRECTED — verified against `reference/src/App.tsx`):** the web
+  app's per-entity detail route for messages is `messages/:conversationId` (note: the
+  route param is `conversationId`, and the underlying entity is a *conversation*, not a
+  free "thread"; `MessagesPage` also opens a conversation via router `state`). There is
+  **no** `/broadcasts/:id` route and **no** `/alerts/:id` route in the web app: the
+  broadcast surface is `broadcast` / `broadcast/:sessionId/live-qa` (keyed by
+  *session*), and `alerts` is a **list-only** page (no per-alert detail route). The
+  earlier draft claim of `/messages/:id`, `/broadcasts/:id`, `/alerts/:id` was
+  inaccurate; see §16. Android still mirrors the *information model* with type-safe
+  in-process routes (not URL strings), but implementers must confirm the actual
+  Android detail-route shapes with the feature-screen owners (the `broadcastId` /
+  `alertId` route args used below are Android-side assumptions, since the web app has no
+  matching per-id detail route — see §16 Open assumptions).
 - **Auth context:** the app is cookie-session based (see project auth flow). A tap
   while logged out must land on Login and resume to the intended destination
   post-auth (§6, §7). No new backend endpoints are introduced by this ticket.
@@ -313,18 +324,47 @@ in-process. Two contracts are nonetheless binding:
    `tl.deeplink.type` ∈ {`message`,`broadcast`,`alert`}, `tl.deeplink.id` (non-blank
    string), `tl.deeplink.consumed` (bool, internal).
 
-2. **FCM data payload shape (informational, owned by AND-107 / backend):** the
-   `data` message AND-107 receives is expected to contain the same discriminator and
-   id, e.g.
-   ```json
-   { "type": "message", "id": "thr_8f21c", "title": "New reply", "body": "..." }
+2. **FCM data payload shape (informational, owned by AND-107 / backend) —
+   UNVERIFIED ASSUMPTION:** the draft showed a flat `{ "type": "message", "id": "...",
+   "title": "...", "body": "..." }` data message. This exact wire shape is **not**
+   confirmed by the backend. The backend's own notification model is `NotificationOut`
+   (verified in `reference/src/api/types.ts: NotificationOut`):
+   ```ts
+   interface NotificationOut {
+     notification_id: string;
+     notification_type: string;            // discriminator, free-form string
+     title: string;
+     body: string;
+     data: Record<string, unknown>;        // arbitrary per-type payload (e.g. ids)
+     read: boolean;
+     created_at: number;
+     batch_key?: string | null;
+     batch_count: number;
+     batch_actors: string[];
+   }
    ```
-   AND-108 does not parse FCM directly; it only consumes the `Intent` AND-107 builds.
+   i.e. the discriminator is `notification_type` (an open string set), and any entity
+   id lives inside the free-form `data` map — there is no guaranteed top-level `id`
+   field, nor a fixed `{message|broadcast|alert}` enum at the backend. The concrete FCM
+   `data`→`{type,id}` mapping is therefore an **AND-107/backend-owned assumption** that
+   must be pinned by AND-107 before launch (see §16 Open assumptions). AND-108 does not
+   parse FCM directly; it only consumes the `Intent` AND-107 builds, so the internal
+   `DeepLinkContract` (§4.1) remains valid regardless of the final FCM wire shape — only
+   AND-107's translation step depends on it.
 
-Any detail-screen content fetch (e.g. `GET /ui/messages/{id}`) is owned by the
-respective feature screen's ViewModel, not by this router. Entity-not-found (404)
-after navigation is the feature screen's empty/error state, surfaced via that
-screen's own `ApiResult<T>` handling.
+Any detail-screen content fetch is owned by the respective feature screen's
+ViewModel, not by this router. **(CORRECTED)** The earlier draft's example
+`GET /ui/messages/{id}` does not exist in the backend. The real detail endpoints
+(verified in `reference/openapi.index.txt`) are, e.g.,
+`GET /messaging/conversations/{conversation_id}` → `ConversationOut` for a message
+thread, and `GET /broadcast/sessions/{session_id}` → `BroadcastSessionOut` for a
+broadcast; alerts are served as a list via `GET /ui/alerts` → `AlertsResp` (no
+per-alert detail endpoint). These are owned by feature tickets, not by this router.
+Entity-not-found (404) after navigation is the feature screen's empty/error state,
+surfaced via that screen's own `ApiResult<T>` handling. Note the backend's
+authenticated endpoints accept `X-SESSION-ID` (and `X-CSRF-Token` for mutations; the
+web client sends the CSRF token from the `ui_csrf` cookie — see `reference/src/api/client.ts`),
+but none of that is the router's concern.
 
 ## 6. Data & State Management
 
@@ -546,3 +586,276 @@ headlessly (Robolectric for nav-testing).
 - Feature-screen owners confirm the consumed route types (`MessageThread`,
   `BroadcastDetail`, `AlertDetail`) match the shapes used by the router (or the
   placeholder swap is tracked).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources:
+OpenAPI index (`reference/openapi.index.txt`), OpenAPI full spec
+(`reference/openapi.pretty.json`, `components.schemas.*`), the frontend reference app
+(`reference/src/...`), and Android framework docs (labelled "framework ref").
+
+1. **Claim:** No new backend HTTP endpoints are introduced; routing is fully in-process.
+   **VERDICT: Verified.** The feature is purely an Android intent/navigation concern;
+   nothing in the OpenAPI index corresponds to deep-link routing.
+   *Source:* design-level (negative claim); detail endpoints below are all owned by
+   other tickets.
+
+2. **Claim (draft):** The web app's notification deep links map to `/messages/:id`,
+   `/broadcasts/:id`, `/alerts/:id`. **VERDICT: Corrected.** The actual web routes are
+   `messages/:conversationId` (param is `conversationId`); there is **no**
+   `/broadcasts/:id` route (broadcast surface is `broadcast` and
+   `broadcast/:sessionId/live-qa`) and **no** `/alerts/:id` route (`alerts` is
+   list-only). *Source:* `reference/src/App.tsx` (routes `messages`,
+   `messages/:conversationId`, `alerts`, `broadcast`, `broadcast/:sessionId/live-qa`).
+
+3. **Claim:** A message "thread" is the routable message entity. **VERDICT: Corrected
+   (terminology).** The backend entity is a *conversation*. The detail fetch is
+   `GET /messaging/conversations/{conversation_id}` → `ConversationOut`. The Android
+   `MessageThread(threadId)` route is acceptable as an internal name but its id is a
+   *conversation id*. *Source:* OpenAPI `GET /messaging/conversations/{conversation_id}`
+   (schema `ConversationOut`); `reference/src/api/types.ts: ConversationOut`.
+
+4. **Claim (draft §5):** A detail content fetch looks like `GET /ui/messages/{id}`.
+   **VERDICT: Corrected.** No such endpoint exists. Real detail endpoints:
+   `GET /messaging/conversations/{conversation_id}` (`ConversationOut`),
+   `GET /broadcast/sessions/{session_id}` (`BroadcastSessionOut`); alerts via
+   `GET /ui/alerts` (`AlertsResp`, list only). *Source:* `reference/openapi.index.txt`
+   lines for `/messaging/conversations/{conversation_id}`,
+   `/broadcast/sessions/{session_id}`, and `reference/src/api/endpoints/alerts.ts`
+   (`GET /ui/alerts`).
+
+5. **Claim (draft §5):** The FCM `data` message is a flat
+   `{type, id, title, body}` with `type ∈ {message,broadcast,alert}`.
+   **VERDICT: Corrected → Unverified-assumption.** The backend notification model is
+   `NotificationOut { notification_id, notification_type: string, title, body,
+   data: Record<string, unknown>, read, created_at, batch_* }`: the discriminator is
+   `notification_type` (open string set), and entity ids live inside the free-form
+   `data` map — there is no fixed top-level `id` nor a `{message|broadcast|alert}` enum.
+   The exact FCM→`{type,id}` mapping is owned by AND-107/backend and is **not** verifiable
+   from these sources. *Source:* `reference/src/api/types.ts: NotificationOut`
+   (lines ~5257-5268); OpenAPI `GET /ui/notifications` → `NotificationListResponse`.
+
+6. **Claim (§2/§8):** The app/web is cookie-session based; mutations need CSRF.
+   **VERDICT: Verified.** The web client sends `credentials: "include"` and a
+   `X-CSRF-Token` header read from the `ui_csrf` cookie. *Source:*
+   `reference/src/api/client.ts` (`credentials: "include"`, `getCookie("ui_csrf")`,
+   `headers.set("X-CSRF-Token", csrf)`). Backend authed endpoints additionally accept
+   `X-SESSION-ID` (e.g. OpenAPI `GET /messaging/conversations/{conversation_id}` params).
+   Note: none of this is exercised by the router itself (correct as stated in §8).
+
+7. **Claim (§4.1):** A self-defined Android Intent extras contract (`DeepLinkContract`:
+   `tl.deeplink.type/id/consumed`) is the AND-107↔AND-108 boundary.
+   **VERDICT: Verified (internal design).** This is an Android-internal contract, not a
+   backend artifact; nothing in the sources contradicts it. It correctly does *not*
+   assume the backend FCM shape (see #5). *Source:* design-level; consistency with
+   `NotificationOut` noted in §5.
+
+8. **Claim (§4.2/§8):** Notification `PendingIntent`s must use `FLAG_IMMUTABLE`; warm
+   taps reuse the Activity via `FLAG_ACTIVITY_SINGLE_TOP` + `onNewIntent`.
+   **VERDICT: Verified (framework ref).** `FLAG_IMMUTABLE` is required on Android 12+
+   (API 31+) for any `PendingIntent`; single-top delivery via `onNewIntent` is standard.
+   *Source:* framework ref — developer.android.com `PendingIntent` (FLAG_IMMUTABLE) and
+   `Activity#onNewIntent` / launch mode docs.
+
+9. **Claim (§4.5/§7):** A `MutableSharedFlow(replay=1)` bridges the imperative
+   `onCreate`/`onNewIntent` parse into the Compose collector and buffers across the
+   cold-start composition race. **VERDICT: Verified (framework ref / design).**
+   *Source:* framework ref — Kotlin coroutines `SharedFlow` (replay) + Compose
+   `LaunchedEffect`/`collectAsStateWithLifecycle`.
+
+10. **Claim (§4.6/§5/§3):** Synthetic back stack `[Home, Detail]` via
+    Navigation-Compose `navigate(...) { popUpTo(...) }`; entity-not-found is the feature
+    screen's own state, not the router's. **VERDICT: Verified (framework ref / scoping).**
+    *Source:* framework ref — developer.android.com Navigation Compose (type-safe routes,
+    `popUpTo`, synthetic back stack). 404 handling correctly scoped out per #4 endpoints.
+
+11. **Claim (§3.2 mapping):** `message→MessageThread(threadId)`,
+    `broadcast→BroadcastDetail(broadcastId)`, `alert→AlertDetail(alertId)`, total over a
+    sealed type. **VERDICT: Verified (internal) with Open-assumption on the broadcast/alert
+    route shapes.** The mapping is internally total; however `BroadcastDetail(broadcastId)`
+    and `AlertDetail(alertId)` presuppose Android per-id detail screens that have **no
+    web counterpart** (web broadcast is session-keyed; web alerts is list-only). See Open
+    assumptions. *Source:* `reference/src/App.tsx` (no `/broadcasts/:id`, no `/alerts/:id`).
+
+### Corrections made
+
+- §2 "Web reference": replaced the wrong `/messages/:id`, `/broadcasts/:id`,
+  `/alerts/:id` route list with the verified web routes (`messages/:conversationId`;
+  `broadcast` / `broadcast/:sessionId/live-qa`; list-only `alerts`) and flagged that
+  Android per-id broadcast/alert detail routes have no direct web equivalent.
+- §5 detail-fetch example: replaced the non-existent `GET /ui/messages/{id}` with the
+  real endpoints (`/messaging/conversations/{conversation_id}` → `ConversationOut`,
+  `/broadcast/sessions/{session_id}` → `BroadcastSessionOut`, `/ui/alerts` →
+  `AlertsResp`) and added the `X-SESSION-ID` / `X-CSRF-Token` auth note.
+- §5 FCM payload: replaced the asserted flat `{type,id,title,body}` shape with the
+  real `NotificationOut` model (`notification_type` + free-form `data`) and downgraded
+  the `{type,id}` wire mapping to an explicit AND-107/backend-owned assumption.
+- "message thread" terminology clarified to "conversation" where it touches the backend.
+
+### Open assumptions
+
+- **FCM data → `{type,id}` mapping (AND-107/backend).** The exact FCM `data` keys that
+  AND-107 reads to populate `DeepLinkContract` extras are not specified by any source;
+  the backend model is open-ended (`notification_type` string + `data` map). Cannot be
+  verified here; must be pinned in AND-107's spec/PR. *Why unverifiable:* no FCM payload
+  schema exists in OpenAPI; `NotificationOut.data` is `Record<string, unknown>`.
+- **Android `BroadcastDetail`/`AlertDetail` per-id routes.** The web app has no
+  `/broadcasts/:id` or `/alerts/:id` detail route (broadcast is session-keyed; alerts is
+  a list). Whether the Android app will have true per-id detail screens for these (vs
+  routing a broadcast to its *session* screen, or an alert to the alerts *list*) is a
+  feature-team decision not derivable from the reference app. *Why unverifiable:* the
+  target Android feature routes are defined by other (possibly unmerged) tickets.
+- **`SessionRepository` / `SessionState.Authenticated` API (§4.7).** The auth ticket's
+  exact repository surface is referenced but not present in these sources (it is an
+  Android-side artifact). *Why unverifiable:* no Android source tree is provided; only
+  the web reference app and OpenAPI are authoritative here.
+- **Feature route arg names (`threadId`/`conversationId`).** The router uses `threadId`;
+  the web uses `conversationId`. The final Android arg name is owned by the message
+  feature ticket. *Why unverifiable:* Android feature routes not in scope sources.
+
+## 17. Test Plan
+
+Test targets: **JVM** = local JVM/Robolectric (no device); **emu35** = headless AVD
+`test35` (x86_64, Android 15 / API 35, KVM on the Ubuntu CI host); **device** =
+physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R), Android 14 / API 34,
+arm64-v8a, via adb on the build host. Because this ticket makes **no network calls**,
+no MockWebServer/contract cases are required; the relevant "flaky host" check is that
+routing is *independent* of the backend. "Traces" link to §14 Acceptance Criteria.
+
+- **TC-AND-108-01 — Parser happy path + mapping (unit).**
+  *Type:* unit. *Target:* JVM (Robolectric for `Intent`).
+  *Preconditions:* `DeepLinkContract` constants defined.
+  *Steps:* Build an `Intent` with `EXTRA_TYPE="message"`, `EXTRA_ID="conv_8f21c"`; call
+  `DeepLinkParser.parse(intent)`, then `.toRoute()`. Repeat for `broadcast` and `alert`.
+  *Expected:* parses to `Message("conv_8f21c")` etc.; `toRoute()` yields
+  `MessageThread("conv_8f21c")`, `BroadcastDetail(id)`, `AlertDetail(id)` respectively.
+  *Traces:* AC-1, AC-8.
+
+- **TC-AND-108-02 — Parser validation/negative cases (unit).**
+  *Type:* unit. *Target:* JVM.
+  *Preconditions:* none.
+  *Steps:* Call `parse` for: missing `EXTRA_TYPE`; unknown type `"foo"`; blank/whitespace
+  `EXTRA_ID`; missing `EXTRA_ID`; `null` intent.
+  *Expected:* every case returns `null`; no exception thrown.
+  *Traces:* AC-5.
+
+- **TC-AND-108-03 — Idempotent parse via EXTRA_CONSUMED (unit).**
+  *Type:* unit. *Target:* JVM.
+  *Preconditions:* a valid deep-link intent.
+  *Steps:* `parse` once (non-null); call `markConsumed(intent)`; `parse` again on the
+  same intent.
+  *Expected:* first parse non-null, second parse returns `null` (consumed flag honored).
+  *Traces:* AC-6.
+
+- **TC-AND-108-04 — PendingIntent factory round-trip / producer-consumer guard (unit).**
+  *Type:* unit/contract (internal Intent contract). *Target:* JVM (Robolectric
+  `PendingIntent`/`Intent`).
+  *Preconditions:* `DeepLinkIntentFactory` available.
+  *Steps:* For each `NotificationDeepLink` variant, build via
+  `DeepLinkIntentFactory.pendingIntent(...)`, extract the wrapped `Intent`, run
+  `DeepLinkParser.parse`.
+  *Expected:* parsed result equals the original variant; flags include
+  `FLAG_IMMUTABLE` and the launch intent has `FLAG_ACTIVITY_SINGLE_TOP`.
+  *Traces:* AC-7, AC-8.
+
+- **TC-AND-108-05 — Cold start routes to MessageThread with correct id (Compose-UI).**
+  *Type:* Compose-UI / navigation. *Target:* JVM (Robolectric +
+  `TestNavHostController`) for CI; also run on emu35.
+  *Preconditions:* authenticated session (stub `SessionRepository` → Authenticated).
+  *Steps:* Launch `MainActivity` with a `message`/`conv_x` deep-link intent (process
+  cold). Let the `NavHost` compose; let `DeepLinkHandler` drain.
+  *Expected:* current destination is `MessageThread` with arg == `conv_x`, not the start
+  destination. **(Core acceptance.)**
+  *Traces:* AC-1, AC-2.
+
+- **TC-AND-108-06 — Cold start routes broadcast and alert (Compose-UI).**
+  *Type:* Compose-UI. *Target:* JVM/Robolectric; emu35.
+  *Preconditions:* authenticated.
+  *Steps:* Repeat TC-05 with `broadcast`/`b_x` and `alert`/`a_x`.
+  *Expected:* destinations `BroadcastDetail(b_x)` and `AlertDetail(a_x)` respectively.
+  (Implementers: confirm these Android routes exist or are placeholders — see §16 Open
+  assumptions.)
+  *Traces:* AC-1.
+
+- **TC-AND-108-07 — Warm start via onNewIntent without recreate (Compose-UI/instrumented).**
+  *Type:* instrumented. *Target:* emu35 (real Activity lifecycle).
+  *Preconditions:* `MainActivity` already running on `Home`, authenticated.
+  *Steps:* Deliver a deep-link intent through `onNewIntent` (single-top); observe routing.
+  *Expected:* routes to the mapped detail; the Activity instance is **not** recreated
+  (same `hashCode`/`onCreate` not re-invoked) and unrelated state is preserved.
+  *Traces:* AC-2.
+
+- **TC-AND-108-08 — Synthetic back stack: Back returns to Home (Compose-UI/instrumented).**
+  *Type:* instrumented. *Target:* emu35.
+  *Preconditions:* cold-start deep link to a detail (TC-05), authenticated.
+  *Steps:* After landing on the detail, press system Back.
+  *Expected:* destination becomes `Home`; back-stack depth is 1; Back does not exit the
+  app. *Traces:* AC-3.
+
+- **TC-AND-108-09 — Logged-out tap defers to Login then resumes once (Compose-UI).**
+  *Type:* Compose-UI. *Target:* JVM/Robolectric with controllable `SessionState`.
+  *Preconditions:* `SessionState` starts unauthenticated; a `message` deep link.
+  *Steps:* Deliver the deep link; assert routed to `Login` and `pending` holds the link.
+  Flip `SessionState` → `Authenticated`.
+  *Expected:* navigates to the pending `MessageThread` **exactly once**, then
+  `clearPending()` leaves `pending == null` (no re-navigation). *Traces:* AC-4.
+
+- **TC-AND-108-10 — Malformed payload opens safe default, no crash (Compose-UI).**
+  *Type:* Compose-UI. *Target:* JVM/Robolectric; emu35.
+  *Preconditions:* authenticated and (separately) unauthenticated runs.
+  *Steps:* Launch with unknown type / blank id intent.
+  *Expected:* lands on `Home` (authed) or `Login` (unauthed); no crash; WARN log with
+  outcome `dropped_malformed` and **no entity id** in the log. *Traces:* AC-5.
+
+- **TC-AND-108-11 — Rotation / process-restart does not re-route (instrumented).**
+  *Type:* instrumented. *Target:* emu35.
+  *Preconditions:* deep-linked to a detail, authenticated.
+  *Steps:* Trigger configuration change (rotation) and Activity recreate; `getIntent()`
+  is re-read.
+  *Expected:* exactly one navigation total; no duplicate detail entry on the back stack
+  (idempotency via `EXTRA_CONSUMED` + `clearPending()`). *Traces:* AC-6.
+
+- **TC-AND-108-12 — Routing is independent of backend availability ("flaky host"/offline).**
+  *Type:* integration. *Target:* device (real, airplane mode toggled).
+  *Preconditions:* device in airplane mode (no network), authenticated session cached.
+  *Steps:* Tap a real notification (delivered while online, then go offline) / launch via
+  the `PendingIntent`.
+  *Expected:* the app still routes to the correct detail screen with the correct id; only
+  the *content fetch* on that screen shows its own loading/error state — routing never
+  blocks on or fails due to the network. *Traces:* AC-1, AC-2.
+  *(Must run on device to exercise real radio/offline + real PendingIntent delivery.)*
+
+- **TC-AND-108-13 — Security: no sensitive data in extras/routes; immutable PendingIntent
+   (unit + manual).**
+  *Type:* unit + manual inspection. *Target:* JVM (assertions) + manual review.
+  *Preconditions:* factory + parser available.
+  *Steps:* Build PendingIntents for all variants; assert flags contain `FLAG_IMMUTABLE`;
+  assert extras contain only `tl.deeplink.type`/`id`/`consumed` and the id is opaque (no
+  cookie/token/CSRF/`challenge_id`); grep route-arg serialization for sensitive keys.
+  *Expected:* only opaque ids present; `FLAG_IMMUTABLE` set; no auth material anywhere.
+  *Traces:* AC-7.
+
+- **TC-AND-108-14 — Accessibility: focus + announcement on arrival (instrumented/e2e).**
+  *Type:* instrumented/e2e (accessibility). *Target:* device (real TalkBack).
+  *Preconditions:* TalkBack enabled; authenticated; a `message` notification posted.
+  *Steps:* Tap the notification; observe focus and TalkBack output on the detail screen;
+  also verify the logged-out path shows the externalized
+  `R.string.deeplink_login_required` string (not a hardcoded literal).
+  *Expected:* focus moves to the destination's primary content and TalkBack announces it;
+  reduced-motion path uses zero-duration `TLTransitions`; login-prompt string is
+  externalized. *Traces:* AC-2 (and §9 accessibility requirements).
+  *(Run on device for real TalkBack/accessibility-service behavior.)*
+
+### Coverage matrix (AC → TCs)
+
+| §14 AC | Covered by |
+|--------|------------|
+| AC-1 (correct screen per type + id) | TC-01, TC-05, TC-06, TC-12 |
+| AC-2 (cold + warm start, no double/recreate Activity) | TC-05, TC-07, TC-12, TC-14 |
+| AC-3 (Back returns to Home; synthetic stack) | TC-08 |
+| AC-4 (logged-out → Login → resume once) | TC-09 |
+| AC-5 (malformed/unknown → safe default, no crash) | TC-02, TC-10 |
+| AC-6 (routed exactly once; idempotent) | TC-03, TC-11 |
+| AC-7 (FLAG_IMMUTABLE/single-top; no sensitive data) | TC-04, TC-13 |
+| AC-8 (centralized total mapping; shared contract) | TC-01, TC-04 |
+| AC-9 (tests pass in CI: JVM + core cold-start headless; back-stack/idempotency instrumented) | TC-01..04 + TC-05 (headless CI); TC-07, TC-08, TC-11 (instrumented) |

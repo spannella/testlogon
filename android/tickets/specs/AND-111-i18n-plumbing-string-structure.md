@@ -5,7 +5,8 @@ milestone: M2
 epic: E16
 priority: P1
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-003]
 blocks: []
 ---
@@ -74,7 +75,10 @@ string ownership a hard architectural constraint, not a style preference (see §
 React app under `frontend/` are **not consumed** by this ticket. Server-supplied text (e.g. error
 `detail` strings) is *display passthrough* and is not subject to client-side string-resource
 rules; client-authored copy that *wraps* server data (labels, retry buttons, "Try again") is.
-The frontend's i18n approach (if any) is non-authoritative here.
+The frontend's i18n approach is non-authoritative here — and, verified, the React app ships **no
+i18n framework at all** (no `i18next`/`react-intl`/`formatjs`/`lingui` in `frontend/package.json`;
+copy is hardcoded English in `.tsx`). The Android port therefore cannot mine an existing message
+catalog; baseline strings are sourced from Android-side literals, not from the web app.
 
 ## 3. Functional Requirements
 
@@ -240,6 +244,17 @@ AND-015), which is rendered via `UiText.Raw` and is intentionally exempt from st
 rules. The auth/session endpoints (`/ui/session/start`, `/ui/me`, etc.) are owned by AND-027 and
 later tickets.
 
+> **Verified note on the `detail` shape.** FastAPI's `detail` is *not* always a plain string.
+> For 422 responses it is `HTTPValidationError.detail`, an **array** of `ValidationError`
+> objects (`{loc, msg, type}`); for `HTTPException`-based 401/403/etc. it may be a string *or*
+> a structured object (e.g. `{code: "role_required_scope", required_scope: …}` or
+> `{code: "geo_blocked", …}`). The web client normalizes all of these to a single display
+> string in `normalizeErrorDetail` (`src/api/client.ts`). AND-015 owns the equivalent Android
+> normalization; AND-111 only guarantees the *fallback/wrapper* copy ("Try again",
+> "Authentication required", "Permission denied") is resourced, while the normalized server
+> message itself rides through as `UiText.Raw`. (Verified against OpenAPI `HTTPValidationError`
+> / `ValidationError` and `src/api/client.ts: normalizeErrorDetail`.)
+
 ## 6. Data & State Management
 
 No persistence (Room/DataStore) is added. Relevant "state" is two-fold:
@@ -278,10 +293,14 @@ i18n-specific failure modes and their handling:
   ensure no tokens, URLs containing credentials, or environment secrets are externalized as
   strings (the dev base URL belongs to BuildConfig/flavors per AND-006, not `strings.xml`).
 - **No interpolation of secrets.** Format args must never carry passwords, session/CSRF cookies,
-  `ui_csrf` values, or MFA codes into log-visible string assembly.
-- **Server passthrough sanitation.** `UiText.Raw` (error `detail`) is rendered as text only and
-  never interpreted as HTML/markup, avoiding injection via server-controlled copy.
-- This ticket does not touch the cookie jar, CSRF header, or `/ui/session/refresh` flow.
+  `ui_csrf` values, or MFA codes into log-visible string assembly. (Verified: the web client
+  reads the `ui_csrf` **cookie** and replays it as the `X-CSRF-Token` request header —
+  `src/api/client.ts:168-170` — so `ui_csrf` is a real, sensitive value, never to be resourced
+  or logged.)
+- **Server passthrough sanitation.** `UiText.Raw` (normalized error `detail`) is rendered as text
+  only and never interpreted as HTML/markup, avoiding injection via server-controlled copy.
+- This ticket does not touch the cookie jar, the `ui_csrf`→`X-CSRF-Token` mechanism, the
+  `Authorization: Bearer` / `X-IMPERSONATION-TOKEN` headers, or the `/ui/session/refresh` flow.
 
 ## 9. Accessibility & i18n
 
@@ -395,3 +414,224 @@ No analytics events are added. Logging guidance only:
 - Branch `android-port`; PR reviewed; `./gradlew spotlessCheck detekt :app:lintDebug` green;
   no new hardcoded strings; namespace `com.testlogon.android` (and `com.testlogon.core.ui`)
   respected throughout.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. AND-111 is a Chore with
+**no** network surface of its own, so most network claims are about *boundaries* (what this
+ticket does NOT touch) and *passthrough* shapes; those are still verified against authoritative
+sources because §5/§7/§8 assert them.
+
+1. **`/ui/session/start` exists, POST, `req=UiSessionStartReq` → `resp=200:UiSessionStartResp`.**
+   VERIFIED. OpenAPI `POST /ui/session/start` (op `ui_session_start_ui_session_start_post`).
+   The spec correctly lists it as out-of-scope (owned by AND-027).
+2. **`/ui/me` exists, GET.** VERIFIED. OpenAPI `GET /ui/me`
+   (op `ui_me_ui_me_get`; params `user_sub, X-SESSION-ID, X-IMPERSONATION-TOKEN`).
+3. **`/ui/session/refresh` exists, POST.** VERIFIED. OpenAPI `POST /ui/session/refresh`
+   (op `ui_session_refresh_ui_session_refresh_post`, `resp=200:`). §8's statement that AND-111
+   "does not touch" the refresh flow is consistent.
+4. **CSRF: a `ui_csrf` value is used for write protection.** VERIFIED + CLARIFIED. The web client
+   reads the **`ui_csrf` cookie** and sends it back as the **`X-CSRF-Token` header**, not as a
+   cookie alone. Source: `src/api/client.ts:135` (doc comment) and `src/api/client.ts:168-170`
+   (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`). §8 wording tightened to name the
+   cookie→header mechanism.
+5. **Auth transport is Bearer-token based (plus impersonation header).** VERIFIED.
+   `src/api/client.ts:156-165` sets `Authorization: Bearer <accessToken>` and
+   `X-IMPERSONATION-TOKEN`; OpenAPI session endpoints list `X-SESSION-ID` /
+   `X-IMPERSONATION-TOKEN` params. (Context only; AND-111 does not implement this.)
+6. **Server error `detail` is "display passthrough" text.** CORRECTED/CLARIFIED. `detail` is not
+   uniformly a string: 422 = `HTTPValidationError.detail: ValidationError[]` (objects with
+   `loc`/`msg`/`type`); other statuses may be a string or a structured object
+   (`code`/`required_scope`, `code: "geo_blocked"`). Sources: OpenAPI
+   `components.schemas.HTTPValidationError` and `components.schemas.ValidationError`;
+   `src/api/client.ts: normalizeErrorDetail` (coerces string|array|object → one display string).
+   §5 amended with a "Verified note on the `detail` shape" callout. The passthrough-via-`UiText.Raw`
+   design intent is unchanged and still valid.
+7. **The frontend's i18n approach is "if any" / non-authoritative.** VERIFIED (and stronger than
+   stated): the React app ships **no** i18n framework. SOURCE: `frontend/package.json` contains
+   none of `i18next`/`react-intl`/`formatjs`/`lingui` (grep over package.json: no matches); UI copy
+   is hardcoded English in `.tsx`. §2 amended to state this explicitly.
+8. **Non-transitive `R` classes are the AGP 8 default (`android.nonTransitiveRClass=true`).**
+   VERIFIED (framework ref). https://developer.android.com/build/optimize-your-build#use-non-transitive-r-classes
+   — default since AGP 8.0; drives the per-module string-ownership constraint in §4.
+9. **Lint check IDs `HardcodedText`, `SetTextI18n`, `StringFormatInvalid`, `StringFormatCount`,
+   `StringFormatMatches`, `PluralsCandidate`, `ImpliedQuantity`, `MissingTranslation` are real and
+   i18n-related.** VERIFIED (framework ref). https://googlesamples.github.io/android-custom-lint-rules/checks/index.md
+   (Android Lint built-in checks). These are stock detector IDs; promoting them to `error` is valid.
+10. **`isPseudoLocalesEnabled` on a build type enables `en-XA`/`ar-XB` pseudolocales.** VERIFIED
+    (framework ref). https://developer.android.com/guide/topics/resources/pseudolocales —
+    `BuildType.isPseudoLocalesEnabled` is a valid AGP DSL property.
+11. **`androidResources.localeFilters` is the AGP 8.7-era replacement for `resConfigs` locale
+    filtering.** VERIFIED (framework ref). https://developer.android.com/reference/tools/gradle-api/8.7/com/android/build/api/dsl/AndroidResources
+    (`localeFilters` added in AGP 8.5+, current in 8.7). The spec offering both `resConfigs` and
+    `localeFilters` is acceptable; `localeFilters` is preferred on 8.7.
+12. **`AppCompatDelegate.setApplicationLocales(...)` + `android:localeConfig` is the per-app
+    language mechanism.** VERIFIED (framework ref). https://developer.android.com/guide/topics/resources/app-languages
+    — correct API for the forward-looking picker (out of scope here).
+13. **CLDR plural quantity keys are `zero/one/two/few/many/other`; English uses `one`/`other`.**
+    VERIFIED (framework ref). https://developer.android.com/guide/topics/resources/string-resource#Plurals
+    and CLDR plural rules. §4's plurals example is correct.
+14. **Toolchain: Kotlin 2.0.21, AGP 8.7.3, Gradle 8.9, JDK 17, compileSdk/targetSdk 35,
+    minSdk 24.** UNVERIFIED-ASSUMPTION (inherited from AND-003). Not checkable from the OpenAPI/
+    frontend sources; consistent with a mid-2024 toolchain and self-coherent (AGP 8.7 requires
+    Gradle ≥ 8.9 and JDK 17). Treated as a project convention owned by AND-003.
+
+### Corrections made
+
+- **§2 (frontend i18n):** changed from a hedged "if any" to the verified fact that the web app has
+  **no i18n framework**, with the implication that the Android baseline cannot be mined from a web
+  message catalog. (Source: `frontend/package.json`.)
+- **§5 (error `detail`):** added a "Verified note on the `detail` shape" — `detail` is not always a
+  string; 422 yields a `ValidationError[]`, other codes may yield a string or a structured object;
+  the web client funnels these through `normalizeErrorDetail`. Clarified that AND-111 only owns the
+  wrapper copy, not the normalized server message. (Sources: OpenAPI `HTTPValidationError`/
+  `ValidationError`; `src/api/client.ts: normalizeErrorDetail`.)
+- **§8 (CSRF):** tightened "cookie jar, CSRF header" to name the concrete `ui_csrf` cookie →
+  `X-CSRF-Token` header mechanism, plus the `Authorization: Bearer` / `X-IMPERSONATION-TOKEN`
+  headers, and flagged `ui_csrf` as a never-resource/never-log secret. (Source:
+  `src/api/client.ts:168-170`.)
+
+No claim in the spec was found to be flatly *wrong* (no wrong path/method/field). The corrections
+above tighten over-simplifications, not factual errors. The endpoint names, CSRF cookie name, and
+lint IDs all check out.
+
+### Open assumptions
+
+- **A1 — Toolchain versions (Kotlin/AGP/Gradle/SDK levels).** Not verifiable from OpenAPI or the
+  frontend; assumed correct as inherited from AND-003. *Why unverifiable:* the Android build files
+  do not exist in the reference sources provided (the `android/` tree is the deliverable, not a
+  source). Mitigation: AND-003 is a hard dependency and owns these.
+- **A2 — Existence/shape of the `:core-ui` / `feature-*` module graph and `build-logic` convention
+  plugins.** Assumed from AND-003; not present in reference sources. *Why:* same as A1.
+- **A3 — That AND-015 (error mapping) and AND-027 (auth/session) will consume the `UiText.Raw`
+  passthrough and the resourced wrapper copy as described.** Cross-ticket assumption; those tickets
+  are referenced but not provided. *Why:* their specs are out of this review's scope.
+- **A4 — That product ships English-only in M2 (so `MissingTranslation` stays disabled).** Carried
+  from OQ2; a product decision, not a technical fact in any source. *Why:* no source encodes
+  release-locale policy.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-111-NN`. Because this is a build-time/i18n-policy chore, the bulk of coverage is
+JVM/Robolectric and Lint-gate verification; a small set of instrumented/Compose-UI and manual
+pseudolocale cases cover runtime resolution and the human-visible expansion/RTL behavior. The
+hardware/pseudolocale display case is best on the **physical device** (real font rendering, real
+system language switch, real TalkBack) but also runs on the emulator; everything else runs on the
+**headless emulator AVD `test35`** or **JVM** in CI.
+
+- **TC-AND-111-01 — Lint gate fails on a new hardcoded string (gate is proven).**
+  Type: contract (Lint static gate, also satisfies AC-6's "demonstrated once").
+  Test target: JVM (Gradle Lint, no device).
+  Preconditions: branch with i18n lint severities configured; clean baseline.
+  Steps: insert `Text("test")` in a first-party `src/main` composable; run
+  `./gradlew :app:lintDebug`. Expected: build **fails** with a `HardcodedText` error referencing the
+  inserted line; reverting the edit makes `lintDebug` pass. Traces: AC-1, AC-6.
+
+- **TC-AND-111-02 — Full i18n lint run is clean across modules.**
+  Type: contract (Lint static gate). Target: JVM (Gradle, `checkDependencies=true`).
+  Preconditions: baseline externalization complete. Steps: run
+  `./gradlew :app:lintDebug` (transitively `:core-ui`, `:feature-*`). Expected: **zero**
+  `HardcodedText`, `SetTextI18n`, `StringFormatInvalid`, `StringFormatCount`, `StringFormatMatches`,
+  `PluralsCandidate`, `ImpliedQuantity` violations; `abortOnError=true` honored; exit 0.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-111-03 — No first-party hardcoded literals remain (grep assertion).**
+  Type: unit (repo-grep / Gradle verification task). Target: JVM.
+  Preconditions: migration complete. Steps: grep first-party `src/main` for `Text("…literal…")` and
+  literal `contentDescription = "…"`. Expected: no matches except sanctioned `UiText.Raw`
+  server-passthrough sites. Traces: AC-2.
+
+- **TC-AND-111-04 — `<plurals>` selects `one` vs `other` correctly.**
+  Type: integration (Robolectric, runtime resources). Target: JVM/Robolectric.
+  Preconditions: `auth_session_active_count` plural defined. Steps:
+  `resources.getQuantityString(R.plurals.auth_session_active_count, 1, 1)` and `(…, 2, 2)`.
+  Expected: `"1 active session"` and `"2 active sessions"` respectively (English `one`/`other`).
+  Traces: AC-3, AC-7.
+
+- **TC-AND-111-05 — Resource-integrity unit test: every plural has `one`+`other`, no dup keys,
+  format-arg arity consistent.**
+  Type: unit (JVM, parses `strings.xml`). Target: JVM.
+  Preconditions: `:core-ui` and feature `strings.xml` present. Steps: scan all `<plurals>` for
+  required CLDR keys; assert no duplicate `name=` across a file; assert each `%n$` template's max
+  index equals its distinct-arg count. Expected: all assertions pass. Traces: AC-1, AC-3.
+
+- **TC-AND-111-06 — `core-ui` accessors resolve shared strings across the module boundary.**
+  Type: integration (Robolectric). Target: JVM/Robolectric.
+  Preconditions: `text()`, `quantityText()`, `Strings.get()`, `UiText.asString()` implemented.
+  Steps: from a test in a *feature* module, resolve a `:core-ui`-owned key via `text(...)` (not via
+  the feature's own `R`). Expected: returns the `:core-ui` English copy; confirms the sanctioned
+  cross-module path works despite non-transitive `R`. Traces: AC-7.
+
+- **TC-AND-111-07 — `UiText.Res` resolves to resource copy; `UiText.Raw` passes server text
+  through verbatim (and is rendered as plain text, not markup).**
+  Type: Compose-UI (Robolectric or instrumented). Target: emulator `test35` (or JVM/Robolectric).
+  Preconditions: `UiText` + `asString()` available. Steps: render a `Text(UiText.Res(id).asString())`
+  and a `Text(UiText.Raw("<b>raw &amp; server</b>").asString())`. Expected: the `Res` shows the
+  localized string; the `Raw` shows the literal characters `<b>raw &amp; server</b>` (no bold, no
+  HTML interpretation) — confirms the §8 server-passthrough sanitation. Traces: AC-7; security (§8).
+
+- **TC-AND-111-08 — Locale change re-resolves text via recomposition (config-change safe).**
+  Type: instrumented (Compose UI test). Target: emulator `test35`.
+  Preconditions: a screen using `stringResource`/`text()`. Steps: render under default locale, then
+  drive an `en-XA` configuration change. Expected: visible text re-resolves to the pseudolocale
+  form on recomposition without a ViewModel round-trip (proves UiState carries ids/`UiText`, not
+  resolved strings, per §6). Traces: AC-5, AC-7.
+
+- **TC-AND-111-09 — Pseudolocale (`en-XA`) expansion + bidi smoke on real hardware.**
+  Type: manual / instrumented. Target: **PHYSICAL DEVICE (Samsung Galaxy A15 5G, SM-A156U,
+  serial R5CX821TA9R, API 34)** — must run here for true font rendering and a real system language
+  switch; emulator is an acceptable fallback.
+  Preconditions: a `debug` build with `isPseudoLocalesEnabled = true` installed via adb.
+  Steps: set device language to *English (XA)*; open smoke-tested screens. Expected: copy shows
+  bracketed/accented, ~30%+ expanded text with **no clipped, truncated, or concatenated** strings;
+  `start`/`end` paddings hold under expansion. Traces: AC-5.
+
+- **TC-AND-111-10 — RTL mirroring smoke (`ar-XB`).**
+  Type: manual / instrumented. Target: **physical device** preferred (real RTL rendering/TalkBack),
+  emulator acceptable. Preconditions: same debug build. Steps: set device to *Accented English (XB)*
+  (RTL pseudolocale); inspect smoke screens. Expected: layout mirrors correctly; no `left`/`right`
+  hardcoding artifacts; icons/affordances mirror as expected. Traces: AC-5.
+
+- **TC-AND-111-11 — TalkBack reads resourced copy and grammatically-correct plural counts.**
+  Type: instrumented/accessibility. Target: **physical device** (real TalkBack engine) preferred;
+  emulator with TalkBack acceptable. Preconditions: a screen with a count-bearing label and a
+  non-decorative icon with a `*_a11y_*` description. Steps: enable TalkBack; focus the icon and the
+  count label. Expected: TalkBack announces the resolved content description and the correct
+  singular/plural phrasing (e.g. "1 active session" vs "2 active sessions"); decorative icons with
+  `contentDescription = null` are skipped. Traces: AC-3, AC-5, AC-7; a11y (§9).
+
+- **TC-AND-111-12 — Offline/resilience copy exists and is resourced (no hardcoded fallback).**
+  Type: Compose-UI (Robolectric/instrumented). Target: emulator `test35`.
+  Preconditions: the offline/retry state strings ("You're offline", "Try again") are externalized
+  in `:core-ui`. Steps: render the offline/stale state composable used by AND-021. Expected: the
+  shown text comes from `R.string` (assert by id, not literal) and resolves under pseudolocale too;
+  no literal in the composable. Traces: AC-1, AC-2; resilience (§7).
+
+- **TC-AND-111-13 — Missing resource is a hard programming error (no silent empty-string
+  fallback).**
+  Type: unit/integration (Robolectric). Target: JVM/Robolectric.
+  Preconditions: i18n accessors implemented. Steps: call `text(<an invalid/removed @StringRes>)`.
+  Expected: throws `Resources.NotFoundException` (per §7) — confirms no swallowing/empty fallback.
+  Traces: resilience (§7) (supports AC-1's integrity intent).
+
+- **TC-AND-111-14 — No secrets/PII resourced; format args never carry sensitive values
+  (review-assert + test).**
+  Type: unit (JVM, static scan). Target: JVM.
+  Preconditions: migration complete. Steps: scan `strings.xml` for token/credential/URL-with-secret
+  patterns and ensure `ui_csrf`/MFA/session values are never used as `getString` args in first-party
+  code. Expected: no matches. Traces: security (§8).
+
+### Coverage matrix (Section-14 AC → TC)
+
+| Acceptance Criterion | Covered by |
+| --- | --- |
+| **AC-1** lint clean, `abortOnError`, zero i18n violations | TC-01, TC-02, TC-05, TC-12, (TC-13) |
+| **AC-2** all first-party literals externalized | TC-02, TC-03, TC-12 |
+| **AC-3** ≥1 `<plurals>` + correct `one`/`other` test | TC-04, TC-05, TC-11 |
+| **AC-4** conventions/lint/workflow documented in `i18n.md` | (doc deliverable; verified by review — no automated TC) |
+| **AC-5** `isPseudoLocalesEnabled` + clean XA/XB rendering | TC-08, TC-09, TC-10, TC-11 |
+| **AC-6** hardcoded `Text("test")` fails `lintDebug` | TC-01 |
+| **AC-7** `text`/`quantityText`/`UiText` are the only cross-module path | TC-04, TC-06, TC-07, TC-08, TC-11 |
+
+> Note: **AC-4** is a documentation deliverable (`android/docs/i18n.md`) with no meaningful
+> automated test; it is verified by PR review. All other ACs have at least one automated/manual TC.

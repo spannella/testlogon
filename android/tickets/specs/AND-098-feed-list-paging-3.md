@@ -5,7 +5,8 @@ milestone: M2
 epic: E14
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-097]
 blocks: [AND-099]
 ---
@@ -35,9 +36,11 @@ backend times out or fails mid-pagination.
   `core-data`, `core-ui`, `core-testing`. Namespace
   `com.testlogon.android.feature.feed`.
 - **Upstream (AND-097):** provides `FeedApi` (Retrofit), the `FeedPost` /
-  `FeedPageDto` Moshi DTOs incl. paywall/locked metadata, and
-  `FeedRepository`. This ticket consumes that repository's paged endpoint; it
-  must not redefine DTOs or the Retrofit interface.
+  `FeedPageDto` Moshi DTOs incl. lock metadata (`lock_type`,
+  `unlock_price_cents`, `unlocked`, `lock_expired`, `unlock_limit_reached` — see
+  §16; there is no `locked`/`paywall` field), and `FeedRepository`. This ticket
+  consumes that repository's paged endpoint; it must not redefine DTOs or the
+  Retrofit interface.
 - **Downstream (AND-099):** `PostItem(post: FeedPost)` composable replaces the
   placeholder row introduced here. **AND-103** layers Coil thumbnails into that
   item.
@@ -87,8 +90,14 @@ further append requests are made and no footer is shown.
 
 FR-8. **Placeholder row.** Each item renders a temporary `FeedRowPlaceholder`
 exposing the post id and a one-line text snippet, sufficient for manual/automated
-verification until AND-099 lands. Locked/paywall posts (AND-097 metadata) render
-a "Locked" badge in the placeholder so the flag is visibly plumbed through.
+verification until AND-099 lands. Locked posts render a "Locked" badge in the
+placeholder so the flag is visibly plumbed through. **Correction (see §16):** the
+backend `FeedPost` has **no** `locked`/`paywall` fields. Lock state is derived
+from `lock_type` (`"fixed_price" | "tip_lottery"`) plus `unlock_price_cents`,
+with `unlocked: bool` indicating the viewer has access and `lock_expired` /
+`unlock_limit_reached` as further qualifiers. The badge shows when
+`lock_type != null && unlocked != true`. AND-097's Kotlin DTO must model these
+real fields, not a synthetic `locked`/`paywall` pair.
 
 FR-9. **State preservation.** Scroll position and the `PagingData` stream survive
 configuration changes and back-stack navigation within the session
@@ -215,46 +224,79 @@ lambda, not injected, so its lifetime matches each `Pager` invalidation.
 This ticket **consumes** the endpoint defined and tested in AND-097; the
 authoritative DTOs live there. Documented here for the paging contract only.
 
-**Request** — `GET /ui/feed` (cursor pagination; confirm exact path/params
-against `/openapi.json` and `frontend/src/api/endpoints/newsfeed.ts` during
-AND-097):
+**Request** — `GET /feed` (cursor pagination). **Corrected (see §16):** the path
+is `GET /feed`, **not** `/ui/feed`. Verified against the OpenAPI index
+(`GET /feed | op=view_feed_feed_get`) and the web client
+(`frontend/src/api/endpoints/newsfeed.ts: getFeed` -> `api.get("/feed", ...)`).
+
+Available query params per OpenAPI: `limit, cursor, author_id, q, from, to,
+has_media` (plus `user_sub` and the `X-SESSION-ID` / `X-IMPERSONATION-TOKEN`
+headers used by the session/impersonation stack). The web client sends
+`cursor, author_id, q, from, to, has_media` and **does not send `limit`** — the
+server applies a default page size. This Android ticket MAY send `limit` (it is a
+documented param) but must tolerate the server ignoring it; do not rely on
+`limit` to bound a page exactly.
 
 ```
-GET /ui/feed?limit=20
-GET /ui/feed?limit=20&cursor=<opaque-next-cursor>
-Cookie: <session cookies>
-X-CSRF-Token: <ui_csrf value>
+GET /feed
+GET /feed?cursor=<opaque-next-cursor>
+GET /feed?limit=20&cursor=<opaque-next-cursor>   # limit is optional/advisory
+Cookie: <session cookies>          # credentials: "include"
+X-CSRF-Token: <ui_csrf cookie value>
+Authorization: Bearer <access token>   # web client also attaches the bearer token
 ```
 
-**Response 200** (`FeedPageDto`):
+**Response 200.** The OpenAPI declares no response schema for `GET /feed`
+(`resp=200:` with an empty schema name), so the only authoritative shape is the
+web client's declared type
+(`frontend/src/api/endpoints/newsfeed.ts`): `{ items: FeedPost[]; next_cursor?:
+string }`. **Corrected (see §16):** there is **no `has_more` field**; end of
+pagination is signalled solely by an absent/empty `next_cursor`.
+
+The real `FeedPost` shape (`frontend/src/api/types.ts: FeedPost`) differs
+substantially from the draft below — the fields shown earlier (`id`, nested
+`author`, `text`, `media[]`, `locked`, `paywall`) were a fabricated guess and are
+**Corrected** here. Authoritative key fields:
 
 ```json
 {
   "items": [
     {
-      "id": "post_01HZ...",
-      "author": { "id": "usr_123", "display_name": "Jane", "avatar_url": "https://..." },
-      "text": "hello world",
-      "media": [{ "id": "med_1", "type": "image", "url": "https://...", "thumb_url": "https://..." }],
+      "post_id": "post_01HZ...",
+      "author_id": "usr_123",
+      "body": "hello world",
+      "image_urls": ["https://..."],
+      "video": null,
       "created_at": "2026-06-04T18:22:11Z",
-      "locked": false,
-      "paywall": { "required": false, "tier": null }
+      "like_count": 0,
+      "comment_count": 0,
+      "lock_type": "fixed_price",
+      "unlock_price_cents": 500,
+      "unlocked": false,
+      "lock_expired": false,
+      "unlock_limit_reached": false
     }
   ],
-  "next_cursor": "eyJvZmZzZXQiOjIwfQ==",
-  "has_more": true
+  "next_cursor": "eyJvZmZzZXQiOjIwfQ=="
 }
 ```
 
-- `next_cursor == null` (or `has_more == false`) => `nextKey = null` =>
-  `endOfPaginationReached`.
+- `post_id` (not `id`), `author_id` is a flat string (not a nested `author`
+  object; display name/avatar are resolved elsewhere), `body` (not `text`),
+  media is `image_urls: string[]` / `image_variants` / `video` (not `media[]`).
+- `next_cursor == null`/absent => `nextKey = null` => `endOfPaginationReached`.
 - Paging maps `items -> List<FeedPost>`, `next_cursor -> nextKey`.
+- These DTOs are owned/modelled by AND-097; this ticket only consumes them. The
+  shapes above are the contract AND-097's Moshi DTOs must match.
 
-**Error responses.** FastAPI `detail` may be `string | [{msg}] | {code,...}`;
+**Error responses.** The only declared non-200 response for `GET /feed` is `422
+HTTPValidationError` (`{ "detail": [ { "loc": [...], "msg": "...", "type":
+"..." } ] }`, schemas `HTTPValidationError`/`ValidationError`). For other codes
+FastAPI returns `{ "detail": ... }` where `detail` may be a string or an object;
 mapping is owned by `core-network` (`ApiResult` + `detail` mapper). Relevant to
-this ticket: `401` triggers the single-refresh-then-retry interceptor; a
-persisting `401`, any `5xx`, or a socket/timeout becomes `LoadResult.Error` with
-a retryable `FeedException`.
+this ticket: `401` triggers the single-refresh-then-retry flow (`POST
+/ui/session/refresh`); a persisting `401`, any `5xx`, or a socket/timeout becomes
+`LoadResult.Error` with a retryable `FeedException`.
 
 ## 6. Data & State Management
 
@@ -304,9 +346,9 @@ a retryable `FeedException`.
 - Dev backend is **plaintext HTTP**; this is a known dev-only posture. Production
   builds must use HTTPS; `usesCleartextTraffic` is gated to debug/dev flavors in
   the build config (owned by network/build tickets, noted here for compliance).
-- Paywall/locked content: this ticket only plumbs the `locked`/`paywall` flags
-  into the placeholder badge; it must not fetch or expose locked media. Gating UX
-  is downstream (AND-099+).
+- Locked content: this ticket only plumbs the lock flags (`lock_type`,
+  `unlocked`, etc. — see §16) into the placeholder badge; it must not fetch or
+  expose locked media. Gating UX is downstream (AND-099+).
 - No PII is persisted to disk by this ticket (no Room mediator).
 
 ## 9. Accessibility & i18n
@@ -376,7 +418,7 @@ retriable footer.
 
 - **Hard dependency — AND-097 (Feed API + DTOs):** must land first; provides
   `FeedApi`, `FeedRepository.getFeedPage`, `FeedPost`, `FeedPageDto`, and the
-  `locked`/`paywall` metadata this ticket plumbs.
+  lock metadata this ticket plumbs (`lock_type`/`unlocked`/etc. — see §16).
 - **Transitive:** AND-027 (auth/session stack) and the `core-network`
   `ApiResult` + cookie/CSRF + refresh interceptor must be in place (they are, by
   M1).
@@ -390,10 +432,12 @@ retriable footer.
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (path/params):** exact feed endpoint path and pagination param names
-  (`cursor` vs `after`, `limit` vs `page_size`) are owned by AND-097 — confirm
-  against `/openapi.json` and `newsfeed.ts`. This spec assumes
-  `GET /ui/feed?limit=&cursor=`.
+- **OQ-1 (path/params): RESOLVED (see §16).** The endpoint is
+  `GET /feed?cursor=<opaque>` (param name `cursor`); `limit` is a documented but
+  optional/advisory param the web client omits. The earlier assumption of
+  `GET /ui/feed` was wrong and has been corrected throughout. Remaining
+  AND-097-owned detail: the exact server default page size when `limit` is
+  omitted (unverified — not in the OpenAPI response schema).
 - **OQ-2 (pagination style):** assumes opaque-cursor forward-only. If the backend
   is offset/page-number based, swap `PagingSource<String, _>` for
   `PagingSource<Int, _>` and implement `getRefreshKey` accordingly — small,
@@ -428,8 +472,11 @@ a non-empty list it preserves items and surfaces a transient error.
 AC-5. A successful empty feed shows the empty state, distinct from the error
 state.
 
-AC-6. `locked`/`paywall` metadata from AND-097 is visibly reflected (Locked
-badge) in the placeholder row.
+AC-6. Lock metadata from AND-097 is visibly reflected (Locked badge) in the
+placeholder row. **Corrected (see §16):** lock state derives from the real
+`FeedPost` fields `lock_type` + `unlock_price_cents` + `unlocked` (and
+`lock_expired` / `unlock_limit_reached`), not from non-existent `locked`/`paywall`
+fields. Badge shows when `lock_type != null && unlocked != true`.
 
 AC-7. Scroll position and loaded pages survive configuration change and
 in-session back navigation (no refetch on return), verified by `cachedIn`
@@ -455,3 +502,317 @@ timeout-retry paths.
   `// TODO(AND-099)`).
 - Lint/detekt clean; merged to `android-port` with a passing review against this
   spec.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Feed endpoint is `GET /ui/feed`.** VERDICT: **Corrected** -> actual path is
+   `GET /feed`. SOURCE: OpenAPI `GET /feed | op=view_feed_feed_get`
+   (openapi.index.txt:265); frontend `src/api/endpoints/newsfeed.ts: getFeed`
+   (`api.get("/feed", ...)`). No `GET /ui/feed` route exists in the index.
+
+2. **HTTP method is GET.** VERDICT: **Verified.** SOURCE: OpenAPI `GET /feed`
+   (openapi.index.txt:265); `src/api/endpoints/newsfeed.ts: getFeed` uses
+   `api.get`.
+
+3. **Pagination param is `cursor` (opaque, forward-only).** VERDICT: **Verified.**
+   SOURCE: OpenAPI `GET /feed ... params=limit,cursor,author_id,q,from,to,...`
+   (openapi.index.txt:265); `src/api/endpoints/newsfeed.ts: FeedQueryParams`
+   (`cursor?: string`) and `getFeed` query building.
+
+4. **Request sends `limit=20`.** VERDICT: **Corrected / partly unverified** ->
+   `limit` is a valid OpenAPI query param but the web client does **not** send it
+   (`getFeed` only forwards `cursor, author_id, q, from, to, has_media`). Sending
+   `limit` is allowed; the server default page size when omitted is not in the
+   spec. SOURCE: openapi.index.txt:265 (param list) vs `src/api/endpoints/
+   newsfeed.ts: getFeed` (no `limit` in query).
+
+5. **Response 200 shape is `{ items, next_cursor }`.** VERDICT: **Verified (frontend
+   only).** SOURCE: `src/api/endpoints/newsfeed.ts: getFeed` return type
+   `{ items: FeedPost[]; next_cursor?: string }`. NOTE: OpenAPI declares no 200
+   response schema for `GET /feed` (`resp=200:` empty), so the frontend type is
+   the only authoritative shape.
+
+6. **Response includes a `has_more` boolean.** VERDICT: **Corrected** -> no such
+   field. End-of-pagination is signalled by absent/empty `next_cursor` only.
+   SOURCE: `src/api/endpoints/newsfeed.ts: getFeed` type
+   (`{ items; next_cursor? }`, no `has_more`).
+
+7. **`FeedPost` fields are `id`, nested `author{}`, `text`, `media[]`,
+   `created_at`, `locked`, `paywall`.** VERDICT: **Corrected** -> real fields are
+   `post_id`, `author_id` (flat string), `body`, `image_urls[]` /
+   `image_variants` / `video`, `created_at`, `like_count`, `comment_count`. There
+   are no `id`/`author`/`text`/`media`/`locked`/`paywall` fields. SOURCE:
+   `src/api/types.ts: FeedPost` (lines ~2181-2270).
+
+8. **Locked/paywall is expressed via `locked` + `paywall{required,tier}`.**
+   VERDICT: **Corrected** -> lock state is `lock_type`
+   (`"fixed_price" | "tip_lottery"`), `unlock_price_cents`, `unlocked` (viewer
+   has access), `lock_expired`, `unlock_limit_reached`, plus tip-lottery fields
+   (`lottery_*`). SOURCE: `src/api/types.ts: FeedPost` (lock fields at lines
+   ~2207-2225).
+
+9. **Auth is cookie + `X-CSRF-Token` from the `ui_csrf` cookie.** VERDICT:
+   **Verified.** SOURCE: `src/api/client.ts` (`credentials: "include"`,
+   `const csrf = getCookie("ui_csrf"); headers.set("X-CSRF-Token", csrf)`, lines
+   ~124-170). NOTE: the web client **also** attaches `Authorization: Bearer
+   <accessToken>` (client.ts:158-159) and optional `X-IMPERSONATION-TOKEN`; the
+   feed is bearer+cookie+CSRF, not cookie-only. Whether the Android client uses a
+   bearer token or pure cookie session is an AND-097/AND-027 decision (see Open
+   assumptions).
+
+10. **On 401, a single `POST /ui/session/refresh` then one retry; persistent 401
+    is terminal.** VERDICT: **Verified.** SOURCE: `src/api/client.ts:
+    refreshSession` (`fetch(withApiBase("/ui/session/refresh"), { method: "POST",
+    credentials: "include" })`, line 122) and the 401 handler that refreshes once
+    (guarded by `refreshPromise`) then retries and logs out on a second 401
+    (lines 194-228); OpenAPI `POST /ui/session/refresh |
+    op=ui_session_refresh_ui_session_refresh_post` (openapi.index.txt:1847).
+
+11. **422 error body is FastAPI `{ detail: [{ loc, msg, type }] }`.** VERDICT:
+    **Verified.** SOURCE: OpenAPI `resp=...;422:HTTPValidationError`
+    (openapi.index.txt:265); schemas `HTTPValidationError` -> `detail:
+    ValidationError[]` and `ValidationError{ loc, msg, type }`
+    (openapi.pretty.json:37133, 80337).
+
+12. **Network error (offline) surfaces distinctly from HTTP errors.** VERDICT:
+    **Verified (web behavior).** SOURCE: `src/api/client.ts` catch block throws
+    `ApiError(0, "Network error", err)` on fetch rejection (lines 185-189). The
+    Android equivalent is an `IOException`/timeout mapped to a retryable
+    `FeedException` (this ticket's §7).
+
+13. **Paging 3 (`PagingSource` / `Pager` / `LazyPagingItems` / `cachedIn` /
+    `collectAsLazyPagingItems`).** VERDICT: **Unverified-assumption (framework
+    ref).** Sound use of AndroidX Paging 3 APIs; not derivable from backend/
+    frontend sources. SOURCE: framework ref —
+    https://developer.android.com/topic/libraries/architecture/paging/v3-overview
+    and https://developer.android.com/develop/ui/compose/lists#large-datasets
+    (paging-compose `collectAsLazyPagingItems`).
+
+14. **Material 3 `PullToRefreshBox` for pull-to-refresh.** VERDICT:
+    **Unverified-assumption (framework ref).** SOURCE: framework ref —
+    https://developer.android.com/reference/kotlin/androidx/compose/material3/pulltorefresh/package-summary
+
+15. **`PagingData.asSnapshot { }` / `AsyncPagingDataDiffer` for tests.** VERDICT:
+    **Unverified-assumption (framework ref).** SOURCE: framework ref —
+    https://developer.android.com/topic/libraries/architecture/paging/test
+
+16. **Dev backend `http://18.222.237.167:8000`, plaintext, ~20s timeouts,
+    unreliable.** VERDICT: **Unverified-assumption** (operational fact stated in
+    the ticket; not checkable from the static sources here).
+
+### Corrections made
+
+- §5 request path `GET /ui/feed` -> `GET /feed` (claims 1, 2).
+- §5 added that `limit` is optional/advisory and omitted by the web client
+  (claim 4).
+- §5 response: removed `has_more`; end-of-page is `next_cursor` absence (claim 6).
+- §5 `FeedPost` JSON example rewritten to real fields: `post_id`, `author_id`,
+  `body`, `image_urls`/`video`, `like_count`/`comment_count`, and the real lock
+  fields (claims 7, 8).
+- §5 error section: pinned the canonical `422 HTTPValidationError` array shape
+  (claim 11).
+- FR-8, AC-6, §2, §8, §12: replaced non-existent `locked`/`paywall` with the real
+  lock fields (`lock_type` + `unlock_price_cents` + `unlocked` + `lock_expired` +
+  `unlock_limit_reached`) (claim 8).
+- §13 OQ-1 marked RESOLVED with the corrected path/param facts.
+- Frontmatter: `status: reviewed`, added `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **Server default page size when `limit` is omitted** — not in the OpenAPI 200
+  schema (it is empty) and the web client omits `limit`; AND-097 must confirm
+  empirically against the dev host.
+- **Android auth mode (bearer vs pure cookie session).** The web client sends
+  `Authorization: Bearer` + `ui_csrf` CSRF + session cookies. This spec assumes
+  the Android session stack (AND-027/AND-097) presents an equivalent authenticated
+  identity; whether it uses a bearer token, a cookie jar, or both is owned by
+  those tickets and not re-verified here.
+- **`X-SESSION-ID` / `X-IMPERSONATION-TOKEN` headers** appear on `GET /feed`'s
+  param list. Impersonation is not in scope; whether the Android app must send
+  `X-SESSION-ID` is an AND-027 concern (unverified here).
+- **Cursor opacity / stability across refresh** — assumed opaque and forward-only
+  (matches `FeedQueryParams.cursor: string`); the server's re-ordering behavior
+  between pages (§13 Risk-2) cannot be verified statically.
+- Paging 3 / Compose / Material 3 API choices (claims 13-15) are framework-doc
+  assumptions, not contract-derived.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-098-NN`. Targets: **JVM** = JVM/Robolectric local (no device);
+**emu test35** = headless AVD `test35` (x86_64, API 35); **device A15** =
+physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a).
+Most cases are device-agnostic; the live-backend acceptance and ABI/API-skew
+cases note their target explicitly.
+
+**TC-AND-098-01 — PagingSource first page success**
+- Type: unit (JVM).
+- Target: `FeedPagingSource.load`.
+- Preconditions: fake `FeedRepository.getFeedPage` returns
+  `ApiResult.Success(FeedPageDto(items=[3 posts], nextCursor="c2"))`.
+- Steps: call `load(LoadParams.Refresh(key=null, loadSize=20, ...))`.
+- Expected: `LoadResult.Page` with `data` = the 3 posts, `prevKey == null`,
+  `nextKey == "c2"`.
+- Traces: AC-1, AC-8.
+
+**TC-AND-098-02 — PagingSource end-of-pagination**
+- Type: unit (JVM).
+- Target: `FeedPagingSource.load` + `getRefreshKey`.
+- Preconditions: repo returns `Success(FeedPageDto(items=[2], nextCursor=null))`.
+- Steps: call `load` with `key="c2"`; also call `getRefreshKey(state)`.
+- Expected: `LoadResult.Page` with `nextKey == null` (=> `endOfPaginationReached`
+  in the differ); `getRefreshKey` returns `null`.
+- Traces: AC-1, AC-8.
+
+**TC-AND-098-03 — PagingSource maps failure to retryable error**
+- Type: unit (JVM).
+- Target: `FeedPagingSource.load`.
+- Preconditions: repo returns `ApiResult.Failure` (timeout).
+- Steps: call `load`.
+- Expected: `LoadResult.Error` carrying a `FeedException` with
+  `isRetryable == true`; loaded data is unchanged.
+- Traces: AC-3, AC-8.
+
+**TC-AND-098-04 — Two-page differ snapshot (happy path)**
+- Type: contract/MockWebServer (JVM + MockWebServer).
+- Target: `Pager` flow via `FeedRepository` over Retrofit/OkHttp.
+- Preconditions: MockWebServer enqueues page 1
+  `{ "items": [...20], "next_cursor": "c2" }` then page 2
+  `{ "items": [...5] }` (no `next_cursor`). Server asserts requests hit
+  **`/feed`** with `cursor` absent then `cursor=c2`.
+- Steps: collect `pager.flow` and call `PagingData.asSnapshot { scrollTo(24) }`.
+- Expected: realized list == 25 concatenated items in order; only two HTTP calls;
+  second request path/query exactly `/feed?cursor=c2` (no `has_more` consumed);
+  no third request after the no-`next_cursor` page.
+- Traces: AC-1, AC-8.
+
+**TC-AND-098-05 — Append failure then retry recovers**
+- Type: contract/MockWebServer (JVM + MockWebServer).
+- Target: `Pager` append + `LazyPagingItems.retry()` semantics.
+- Preconditions: page 1 -> 200 with `next_cursor="c2"`; first `cursor=c2` request
+  -> `503` (then a timeout variant in a second run); next `cursor=c2` request ->
+  200 with 5 items, no `next_cursor`.
+- Steps: load page 1; trigger append (fails -> `LoadState.Error` on append);
+  invoke `retry()`.
+- Expected: append surfaces `LoadState.Error` while the 20 page-1 items remain;
+  after `retry()` the 5 items append and state becomes `NotLoading` /
+  `endOfPaginationReached`. List never cleared.
+- Traces: AC-3, AC-8.
+
+**TC-AND-098-06 — 401 triggers single refresh + retry; persistent 401 terminal**
+- Type: contract/MockWebServer (JVM + MockWebServer, with the core-network refresh
+  interceptor wired).
+- Target: OkHttp 401-refresh interceptor + Paging error mapping.
+- Preconditions: Scenario A — `/feed` -> 401, `POST /ui/session/refresh` -> 200,
+  retried `/feed` -> 200. Scenario B — `/feed` -> 401, refresh -> 200, retried
+  `/feed` -> 401 again.
+- Steps: load the first page under each scenario.
+- Expected: A — exactly one refresh call, then a successful page (data shown). B —
+  one refresh, one retry, then a terminal `LoadState.Error` (retryable
+  `FeedException`); Paging does **not** loop or issue further refreshes.
+- Traces: AC-4, AC-8; verifies §7 401 loop-guard.
+
+**TC-AND-098-07 — 422 validation error mapping**
+- Type: contract/MockWebServer (JVM + MockWebServer).
+- Target: `core-network` detail mapper -> `FeedException` via PagingSource.
+- Preconditions: `/feed` -> `422 { "detail": [ { "loc": ["query","cursor"],
+  "msg": "invalid cursor", "type": "value_error" } ] }`.
+- Steps: load first page.
+- Expected: `LoadResult.Error` with a user-facing message derived from
+  `detail[0].msg`; not retried as if transient unless policy marks it retryable
+  (assert the mapper reads the array shape, not a bare string).
+- Traces: AC-4, AC-8.
+
+**TC-AND-098-08 — Offline / no network -> immediate error state**
+- Type: contract/MockWebServer (JVM) for the unit path; integration on **device
+  A15** for the real radio-off path.
+- Target: `FeedPagingSource` + `FeedScreen` error rendering.
+- Preconditions: JVM — repo/transport throws `IOException` immediately. Device —
+  enable airplane mode on the A15 before entering Feed.
+- Steps: enter Feed with an empty list.
+- Expected: refresh fails fast -> full-screen retriable error (empty list); on
+  restoring connectivity + Retry, the first page loads. MUST run the radio path on
+  **device A15** (real connectivity transitions; emulator airplane mode is
+  simulated).
+- Traces: AC-4; §7 stale/offline.
+
+**TC-AND-098-09 — Flaky dev-host timeout, then Retry succeeds (live)**
+- Type: integration / manual (live backend) on **emu test35** (CI) and spot-check
+  on **device A15**.
+- Target: end-to-end `FeedScreen` against `http://18.222.237.167:8000`.
+- Preconditions: signed-in session; OkHttp call timeout ~20s.
+- Steps: open Feed; if the initial/append call times out, observe the error UI;
+  tap Retry.
+- Expected: timeout yields a retriable footer (append) or full-screen error
+  (empty); Retry re-issues the request and (on a healthy response) loads/appends.
+  No unbounded Paging-level retries hammering the host.
+- Traces: AC-1, AC-3, AC-4; §13 Risk-1.
+
+**TC-AND-098-10 — Initial loading shows full-screen progress (empty list)**
+- Type: Compose-UI (emu test35 or Robolectric).
+- Target: `FeedScreen` refresh-loading branch.
+- Preconditions: fake `LazyPagingItems`/repo with `refresh = LoadState.Loading`,
+  `itemCount == 0`.
+- Steps: render `FeedScreen`.
+- Expected: a centered full-screen progress indicator with content description
+  (string `feed_loading`); no list rows, no footer.
+- Traces: AC-1; FR-1.
+
+**TC-AND-098-11 — Loaded list renders rows; Locked badge on locked post**
+- Type: Compose-UI (emu test35 or Robolectric).
+- Target: `FeedList` / `FeedRowPlaceholder`.
+- Preconditions: fake items: one unlocked post (`lock_type=null`) and one locked
+  post (`lock_type="fixed_price"`, `unlocked=false`).
+- Steps: render; query nodes by post id snippet.
+- Expected: N placeholder rows shown; the locked post shows the Locked badge
+  (string `feed_locked_badge`), the unlocked one does not. Asserts the **real**
+  lock-field logic (`lock_type != null && unlocked != true`), not `locked`.
+- Traces: AC-6; FR-8.
+
+**TC-AND-098-12 — Append-error footer Retry invokes retry()**
+- Type: Compose-UI (emu test35 or Robolectric).
+- Target: `FooterError` + `LazyPagingItems::retry` wiring.
+- Preconditions: fake items with loaded rows and `append = LoadState.Error`.
+- Steps: assert footer error + Retry button present; perform click.
+- Expected: existing rows still visible; clicking Retry calls `retry()` (verified
+  via a spy/fake); button is >= 48x48dp with a content description.
+- Traces: AC-3; FR-3; §9 a11y.
+
+**TC-AND-098-13 — Empty vs error disambiguation; pull-to-refresh fires refresh**
+- Type: Compose-UI (emu test35 or Robolectric).
+- Target: `FeedScreen` empty branch + `PullToRefreshBox`.
+- Preconditions: (a) refresh `NotLoading`, `endOfPaginationReached`,
+  `itemCount == 0`; (b) a fake repo counting calls.
+- Steps: (a) render and assert empty state, not error; (b) perform the
+  pull-to-refresh swipe / accessibility refresh action.
+- Expected: (a) empty-state text (`feed_empty`), no error/Retry; (b) refresh()
+  invoked exactly once (repo call count increments); indicator reflects
+  `refresh is Loading`.
+- Traces: AC-2, AC-5; FR-5, FR-6; §9 accessibility refresh action.
+
+**TC-AND-098-14 — State preservation across config change + back navigation**
+- Type: instrumented/e2e on **device A15** (real rotation + Activity recreation);
+  may also run on emu test35.
+- Target: `cachedIn(viewModelScope)` + scroll retention.
+- Preconditions: live or fixture-backed Feed with >= 2 loaded pages; scrolled
+  partway.
+- Steps: rotate the device (config change), then navigate to another tab and back.
+- Expected: no refetch on return (assert call count unchanged / via Timber
+  `feed_refresh_start` not re-emitted), same items, scroll position retained.
+  Rotation MUST be exercised on **device A15** for a real recreation cycle and to
+  catch arm64/API-34 behavior; emu test35 covers the API-35 variant.
+- Traces: AC-7; FR-9.
+
+### Coverage matrix
+
+| AC  | Covered by |
+|-----|------------|
+| AC-1 (initial load + infinite append to end) | TC-01, TC-02, TC-04, TC-09, TC-10 |
+| AC-2 (pull-to-refresh resets + indicator) | TC-13 |
+| AC-3 (append-error footer Retry; items kept) | TC-03, TC-05, TC-09, TC-12 |
+| AC-4 (refresh-fail: empty=full-screen, non-empty=transient; 401) | TC-06, TC-07, TC-08, TC-09 |
+| AC-5 (empty state distinct from error) | TC-13 |
+| AC-6 (lock metadata -> Locked badge) | TC-11 |
+| AC-7 (state survives config change + back nav) | TC-14 |
+| AC-8 (unit + differ + Compose + MockWebServer 401/timeout) | TC-01, TC-02, TC-03, TC-04, TC-05, TC-06, TC-07, TC-10, TC-11, TC-12, TC-13 |

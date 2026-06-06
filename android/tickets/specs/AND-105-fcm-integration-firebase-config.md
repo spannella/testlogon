@@ -5,7 +5,8 @@ milestone: M2
 epic: E15
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-004]
 blocks: [AND-106, AND-107, AND-108, AND-110, AND-297]
 ---
@@ -28,7 +29,7 @@ This is a P0 enabler in milestone M2, epic E15 (Push/Notifications). It is the r
 - **Module layering:** `app -> feature-* -> core-*`. FCM service code lives in `core-data` (or a dedicated `core-push` module if the team prefers isolation — see §13); the `google-services` Gradle plugin is applied in `:app`.
 - **Upstream dependency:** AND-004 (Hilt DI baseline) — `@HiltAndroidApp` Application and a building component graph are prerequisites because the messaging service and the message sink are Hilt-injected.
 - **Downstream consumers (blocked by this ticket):**
-  - AND-106 — Push token registration (`POST /ui/push/register`), consumes `onNewToken` + `getToken()`.
+  - AND-106 — Push token registration (`POST /ui/push/register`, request body `PushRegisterReq { token: string, platform: string }`, both required; verified against the backend OpenAPI and the web client, which sends `platform: "web"` — Android will send `platform: "android"`), consumes `onNewToken` + `getToken()`.
   - AND-107 — Notification channels + display, `POST_NOTIFICATIONS` runtime permission (Android 13+), consumes received `RemoteMessage` payloads.
   - AND-108 — Deep-link routing from taps, consumes notification `data` payload keys.
   - AND-110 — Push tests (end-to-end).
@@ -52,7 +53,7 @@ FR-6. A `PushTokenProvider` SHALL expose a suspending `currentToken(): ApiResult
 
 FR-7. Firebase initialization SHALL occur automatically via the `FirebaseInitProvider` (default content provider) — no manual `FirebaseApp.initializeApp()` in `onCreate`. The app MUST verify init succeeds on cold start.
 
-FR-8. **Foreground delivery:** a data-only or mixed message received while the app is in the foreground SHALL reach `onMessageReceived`. **Background delivery:** a message received while backgrounded/killed SHALL also reach `onMessageReceived` for data-only messages, and SHALL be auto-displayed by the system tray for notification-type messages.
+FR-8. **Foreground delivery:** a data-only or mixed message received while the app is in the foreground SHALL reach `onMessageReceived`. **Background delivery:** a message received while the app is merely backgrounded (process still alive) SHALL also reach `onMessageReceived` for data-only messages, and SHALL be auto-displayed by the system tray for notification-type messages. **Correction (verified against Android framework behavior):** if the app has been **force-stopped / swiped from recents on aggressive OEMs**, FCM does NOT deliver messages and `onMessageReceived` is NOT invoked until the app is relaunched — this is platform behavior, not a bug. The acceptance target for "killed" is therefore scoped to *background, process not force-stopped*; true force-stop behavior is documented and tested as a known limitation (especially on Samsung, see §7 and §13).
 
 FR-9. The service and sinks SHALL be testable without a live Firebase connection (sinks are interfaces; `RemoteMessage` is constructable via its `Builder`).
 
@@ -222,7 +223,8 @@ The relevant external contract is the FCM message envelope the app must parse. T
 Contract assumptions this ticket locks in for downstream consumers:
 - `notification.title` / `notification.body` map to `PushMessage.title` / `PushMessage.body`.
 - `data` is an arbitrary `Map<String,String>`; reserved keys (`type`, `route`, `entity_id`) will be defined by AND-108. AND-105 only guarantees they pass through untransformed.
-- A **data-only** message (no `notification` block) is required to test foreground+background delivery into `onMessageReceived`, because notification-type messages are intercepted by the system tray when backgrounded and do NOT invoke `onMessageReceived`.
+- A **data-only** message (no `notification` block) is required to test foreground+background delivery into `onMessageReceived`, because notification-type messages are intercepted by the system tray when backgrounded and do NOT invoke `onMessageReceived` (verified Android framework behavior).
+- The web reference client does **not** use FCM at all: it uses the Web Push API (VAPID + a `PushSubscription`) and posts the serialized subscription JSON as `PushRegisterReq.token` with `platform: "web"` (`src/lib/pushSetup.ts`, `src/pages/alerts/PushDevices.tsx`). The Android contract diverges deliberately: the `token` is the FCM registration token and `platform` is `"android"`. There is no VAPID key on Android (`GET /ui/push/vapid-key` is web-only).
 
 ## 6. Data & State Management
 
@@ -303,7 +305,7 @@ AC-2. Each configured flavor has a `google-services.json` whose package name mat
 AC-3. `TlFirebaseMessagingService` appears in the merged manifest with the `MESSAGING_EVENT` intent filter and `exported="false"`.
 AC-4. On cold start the app initializes Firebase (no `FirebaseApp` init exception) and `PushTokenProvider.currentToken()` returns `ApiResult.Success` with a non-empty token on a Play-services device.
 AC-5. **A test FCM (data-only) message is received in `onMessageReceived` while the app is in the foreground.**
-AC-6. **A test FCM message is received while the app is backgrounded/killed** — data-only via `onMessageReceived`, notification-type via the system tray on the default channel.
+AC-6. **A test FCM message is received while the app is backgrounded (process alive, not force-stopped)** — data-only via `onMessageReceived`, notification-type via the system tray on the default channel. Force-stopped/swiped-away delivery is explicitly out of scope per FR-8 (Android platform behavior) and is documented as a known limitation rather than gated.
 AC-7. `onNewToken` forwards the token to `PushTokenSink`; the token is never logged in full.
 AC-8. Unit tests in §11 pass in CI; the manual/Firebase delivery test is documented and reproducible.
 AC-9. No app-backend call and no UI surface are introduced by this ticket.
@@ -316,3 +318,71 @@ AC-9. No app-backend call and no UI surface are introduced by this ticket.
 - Unit tests added and green in CI; instrumented delivery test documented in the test plan and cross-referenced from AND-110.
 - Token-handling redaction confirmed; lint/detekt clean; no Firebase types leak past the abstraction seam intended for AND-106/AND-107.
 - Downstream tickets (AND-106/107/108/297) can bind their real sinks against the published `PushTokenSink` / `PushMessageSink` / `PushMessage` interfaces without modifying AND-105 code.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. **Claim:** The downstream token-upload endpoint is `POST /ui/push/register`. **Verdict: Verified.** **Source:** OpenAPI `POST /ui/push/register` (op `ui_register_push_ui_push_register_post`, `req=PushRegisterReq`, `resp=200;422:HTTPValidationError`); frontend `src/api/endpoints/push.ts: registerPush`.
+2. **Claim:** The register request body shape is `{ token: string, platform: string }` (both required). **Verdict: Verified (and made explicit in §2).** **Source:** OpenAPI `components.schemas.PushRegisterReq` (properties `token`, `platform`; `required: [token, platform]`); frontend `src/api/types.ts: PushRegisterReq`.
+3. **Claim:** The web client sends `platform: "web"`; Android must diverge and send `platform: "android"`. **Verdict: Verified (web) / Corrected-clarification (Android value).** **Source:** `src/pages/alerts/PushDevices.tsx` (`registerPush({ token: subscriptionJson, platform: "web" })`); platform string is a free-form `string` per `PushRegisterReq`, so `"android"` is a forward-looking assumption for AND-106, not a backend-enforced enum.
+4. **Claim:** The web reference client uses Web Push / VAPID, NOT FCM, so the Android `token` semantics differ (FCM registration token vs. serialized `PushSubscription` JSON). **Verdict: Verified.** **Source:** `src/lib/pushSetup.ts` (`subscribeToPush` returns `JSON.stringify(subscription.toJSON())`, `applicationServerKey` from VAPID key); `src/api/endpoints/push.ts: getVapidKey` -> `GET /ui/push/vapid-key`; OpenAPI `GET /ui/push/vapid-key`.
+5. **Claim:** AND-105 makes no app-backend HTTP call and introduces no UI (AC-9). **Verdict: Verified (by scope).** **Source:** No endpoint is invoked by this ticket; the only push endpoints (`/ui/push/register`, `/ui/push/revoke`, `/ui/push/devices`, `/ui/push/test`, `/ui/push/vapid-key`) are all consumed by later tickets per OpenAPI index lines 1773-1777.
+6. **Claim:** Backend auth/transport for the (later) register call uses session cookies + CSRF, not a bearer-only model. **Verdict: Verified (context only; not exercised here).** **Source:** `src/api/client.ts` (`credentials: "include"`, `X-CSRF-Token` from `ui_csrf` cookie, `X-IMPERSONATION-TOKEN`); OpenAPI register params include `X-SESSION-ID`, `X-IMPERSONATION-TOKEN`, `user_sub`. AND-106 owns wiring this; AND-105 correctly defers.
+7. **Claim:** The dev FastAPI backend (`http://18.222.237.167:8000`) is not involved in this ticket. **Verdict: Verified (by scope) / Unverified-assumption (the literal host string).** **Source:** No backend call is made; the host string is not present in `src/api/client.ts` (base URL is env-injected in the web app), so the exact host is an unverified config detail and is non-load-bearing for AND-105.
+8. **Claim:** A data-only message reaches `onMessageReceived` in foreground and background; a notification-type message backgrounded is shown by the system tray and does NOT invoke `onMessageReceived`. **Verdict: Verified (framework behavior).** **Source:** framework ref — Firebase Cloud Messaging "Receive messages" / message-type table (https://firebase.google.com/docs/cloud-messaging/android/receive).
+9. **Claim (original spec):** A message is received while the app is "killed". **Verdict: Corrected.** Force-stopped / swiped-away apps on aggressive OEMs do not receive FCM until relaunch; scope narrowed to "backgrounded, process not force-stopped". **Source:** framework ref — FCM "App in background" / lifecycle notes (https://firebase.google.com/docs/cloud-messaging/android/receive) and Android force-stop semantics.
+10. **Claim:** Firebase initializes automatically via `FirebaseInitProvider` (no manual `FirebaseApp.initializeApp()`). **Verdict: Verified (framework behavior).** **Source:** framework ref — Firebase Android setup / automatic initialization via merged `ContentProvider` (https://firebase.google.com/docs/android/setup).
+11. **Claim:** `FirebaseMessagingService` is registered via a `<service>` with the `com.google.firebase.MESSAGING_EVENT` intent filter and should be `exported="false"`. **Verdict: Verified (framework behavior).** **Source:** framework ref — FCM `FirebaseMessagingService` reference / client setup (https://firebase.google.com/docs/cloud-messaging/android/client).
+12. **Claim:** `default_notification_channel_id` / `default_notification_icon` meta-data drive system-tray display for notification messages and a valid channel is needed on Android 8+. **Verdict: Verified (framework behavior).** **Source:** framework ref — FCM "Edit app manifest" / notification channels (https://firebase.google.com/docs/cloud-messaging/android/client) and Android `NotificationChannel` docs.
+13. **Claim:** `FirebaseMessaging.token` is exposed as a `Task` and can be awaited via `kotlinx-coroutines-play-services` `Task.await()`. **Verdict: Verified (framework/library behavior).** **Source:** framework ref — `FirebaseMessaging.getToken()` returns `Task<String>` (https://firebase.google.com/docs/reference/android/com/google/firebase/messaging/FirebaseMessaging) + `kotlinx-coroutines-play-services` `await()`.
+14. **Claim:** Pinned versions Firebase BoM `33.7.0`, google-services plugin `4.4.2`, Kotlin 2.0.21, AGP 8.7.3, compile/target SDK 35, minSdk 24. **Verdict: Unverified-assumption.** No authoritative source in this repo set pins these; they are toolchain choices to ratify against the build-config ticket (AND-002/003) and current Firebase releases. Flagged in §13.
+15. **Claim:** The FCM registration token is a device secret and must not be logged in full; service is `exported="false"`. **Verdict: Verified (security best practice / framework behavior).** **Source:** framework ref — FCM token handling guidance + Android exported-component security (https://firebase.google.com/docs/cloud-messaging/android/client, https://developer.android.com/guide/topics/manifest/service-element).
+16. **Claim:** `POST_NOTIFICATIONS` runtime permission is required on Android 13+ for displayed notifications. **Verdict: Verified (framework behavior); owned by AND-107 not AND-105.** **Source:** framework ref — Android 13 notification runtime permission (https://developer.android.com/develop/ui/views/notifications/notification-permission).
+
+### Corrections made
+- **§2 downstream reference:** added the verified `PushRegisterReq { token, platform }` shape and the web `platform: "web"` fact, clarifying the Android divergence (citation 2/3).
+- **FR-8, §5, AC-6:** corrected the original "received while backgrounded/**killed**" claim. FCM does not deliver to force-stopped/swiped-away apps on aggressive OEMs; scope narrowed to "background, process not force-stopped", with force-stop documented as a known platform limitation (especially relevant to the Samsung physical test device) (citation 9).
+- **§5:** added an explicit statement that the web client uses Web Push/VAPID rather than FCM, so the `token` semantics differ between platforms (citation 4).
+
+### Open assumptions
+- **Toolchain/version pins** (BoM 33.7.0, google-services 4.4.2, Kotlin/AGP/SDK levels): not verifiable from the provided sources; ratify against the build-config ticket and live Firebase release notes (citation 14).
+- **Flavor set `dev`/`staging`/`prod` and applicationId suffixes:** assumed; must be reconciled with AND-002/AND-003 since each flavor package needs its own Firebase Android app registration (§13).
+- **Module placement `core-push` vs `core-data`:** team decision, not source-verifiable (§13).
+- **Dev backend host string `18.222.237.167:8000`:** not present in the frontend client (env-injected); non-load-bearing for AND-105 since no call is made (citation 7).
+- **`platform: "android"` literal value:** forward assumption for AND-106; the backend field is a free-form string with no enforced enum (citation 3).
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device); **emu35** = headless emulator AVD `test35` (x86_64, API 35, KVM on CI); **device** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a) connected to the build host. Cases that depend on real FCM push delivery, Google Play services behavior, or OEM background management MUST run on **device** (the emulator's Play-services image is not guaranteed and Samsung's aggressive background policy cannot be reproduced on a vanilla AVD).
+
+- **TC-AND-105-01** — Type: unit (JVM). Target: JVM. Precond: `PushMessage.from` available; `RemoteMessage` buildable. Steps: build `RemoteMessage.Builder("test@fcm").addData("type","test").addData("route","/notifications").build()`, set notification title/body via builder, call `PushMessage.from(rm)`. Expected: `title`/`body`/`data`/`messageId`/`sentTime`/`priority` map 1:1; `data` preserves keys/values untransformed. Traces: AC-5, AC-9 (contract pass-through).
+- **TC-AND-105-02** — Type: unit (JVM). Target: JVM. Precond: fake `PushTokenSink`. Steps: instantiate `TlFirebaseMessagingService` (sinks injected via test), call `onNewToken("ABC123token")`. Expected: `PushTokenSink.onTokenRefreshed` invoked exactly once with the exact token string. Traces: AC-7.
+- **TC-AND-105-03** — Type: unit (JVM). Target: JVM. Precond: fake `PushMessageSink`, throwing variant available. Steps: call `onMessageReceived(rm)` with (a) normal sink, (b) a sink that throws. Expected: (a) forwards mapped `PushMessage` once; (b) the exception is swallowed and does NOT propagate out of the callback (no crash). Traces: AC-5 (and §7 resilience).
+- **TC-AND-105-04** — Type: unit (JVM). Target: JVM. Precond: mock `FirebaseMessaging`, stubbed `Task`. Steps: stub `token` to a completed `Task("tok")` then to a failed `Task`. Call `PushTokenProvider.currentToken()`. Expected: success path returns `ApiResult.Success("tok")`; failure path returns `ApiResult.Error(PushError.TokenUnavailable)` and never throws. Traces: AC-4.
+- **TC-AND-105-05** — Type: unit (JVM). Target: JVM. Precond: `LoggingPushTokenSink` with a captured logger. Steps: call `onTokenRefreshed("SECRET_TOKEN_VALUE_1234567890")`, inspect emitted log. Expected: only a redacted prefix is logged (`take(6) + "…"`); the full token never appears; nothing logged above DEBUG. Traces: AC-7.
+- **TC-AND-105-06** — Type: contract/MockWebServer (JVM/Robolectric). Target: JVM. Precond: documents that AND-105 makes no backend call; a MockWebServer is started and asserted to receive zero requests during init + a simulated message. Steps: cold-init the push graph, dispatch a fake message through the sink. Expected: MockWebServer records 0 requests; proves AC-9 (no backend call introduced). Traces: AC-9.
+- **TC-AND-105-07** — Type: integration (manifest/merge). Target: emu35 (or JVM via merged-manifest assertion). Precond: app assembled. Steps: inspect the merged manifest. Expected: `TlFirebaseMessagingService` present with `<action android:name="com.google.firebase.MESSAGING_EVENT"/>` and `android:exported="false"`; `default_notification_channel_id` / `default_notification_icon` meta-data present. Traces: AC-3.
+- **TC-AND-105-08** — Type: integration (Gradle build). Target: CI build host (JVM/Gradle). Precond: per-flavor `google-services.json` committed. Steps: run `:app:processDevGoogleServices`, `:app:processStagingGoogleServices`, `:app:processProdGoogleServices`; then run with a deliberately mismatched package to assert fail-fast. Expected: each task succeeds when the flavor `applicationId` matches a `client_info.android_client_info.package_name`; the mismatched run fails the build. Traces: AC-1, AC-2.
+- **TC-AND-105-09** — Type: instrumented/e2e (real FCM delivery). Target: **device (REQUIRED)**. Precond: Galaxy A15 has Google Play services, app cold-started in foreground, FCM token captured via debug hook. Steps: send a **data-only** message via `fcm.googleapis.com/v1 .../messages:send` to the device token. Expected: `fcm_message_received` (TlPush) logs with messageId+priority+data key set while app is foregrounded; `onMessageReceived` fires. (Cannot run on emu35 — requires guaranteed Play services + real send credential.) Traces: AC-5.
+- **TC-AND-105-10** — Type: instrumented/e2e. Target: **device (REQUIRED)**. Precond: as TC-09, then send app to background (process still alive). Steps: send a **data-only** message. Expected: `onMessageReceived` fires while backgrounded (logged). Traces: AC-6.
+- **TC-AND-105-11** — Type: instrumented/e2e. Target: **device (REQUIRED)**. Precond: as TC-10, app backgrounded. Steps: send a **notification-type** message. Expected: a system-tray notification appears on the `default` channel with title/body; `onMessageReceived` is NOT invoked (framework behavior). Traces: AC-6.
+- **TC-AND-105-12** — Type: instrumented/e2e (negative / known-limitation). Target: **device (REQUIRED — Samsung OEM behavior)**. Precond: app force-stopped (swipe from recents + force stop). Steps: send a data-only message; observe delivery. Expected: message is NOT delivered while force-stopped (documented platform limitation per FR-8/§13); upon relaunch, subsequent messages are delivered again. Asserts the corrected scope, not a passing delivery. Traces: AC-6 (limitation), §13.
+- **TC-AND-105-13** — Type: instrumented (init + token). Target: device (preferred) / emu35 if it has Play services. Precond: clean cold start. Steps: launch app; call `PushTokenProvider.currentToken()`; also force a no-Play-services / offline condition (airplane mode) and call again. Expected: with Play services + network, `ApiResult.Success` with a non-empty token and a single `fcm_init_ok` log; offline/no-Play yields `ApiResult.Error(TokenUnavailable)` logged as `fcm_token_fetch_failed` (error class only) with no crash and no full-token leak. Traces: AC-4, AC-7 (flaky/offline path).
+- **TC-AND-105-14** — Type: manual/security (permission + exported). Target: device. Precond: app installed. Steps: from a separate test app / `adb` attempt to send an intent to `TlFirebaseMessagingService`; verify it is not reachable; confirm logcat at INFO/WARN/ERROR never contains a full FCM token across a token-refresh cycle. Expected: external delivery is rejected (`exported="false"`); no full token at INFO+; redacted prefix only at DEBUG. Traces: AC-7 (security), AC-3.
+
+Accessibility note: AND-105 introduces no app UI (§9), so screen-level a11y (TalkBack/contrast/touch targets) is N/A and deferred to AND-107/AND-108. The one a11y-adjacent asset check — the `ic_notification` drawable being monochrome/alpha-only per Android notification-icon guidelines — is verified as part of TC-AND-105-11 (correct rendering in the status bar / tray).
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|---|---|
+| AC-1 (plugin applied; messaging resolves; builds) | TC-AND-105-08 |
+| AC-2 (per-flavor google-services.json matches applicationId; process<Flavor>GoogleServices) | TC-AND-105-08 |
+| AC-3 (service in merged manifest, MESSAGING_EVENT, exported=false) | TC-AND-105-07, TC-AND-105-14 |
+| AC-4 (cold-start Firebase init; currentToken() Success) | TC-AND-105-04, TC-AND-105-13 |
+| AC-5 (data-only message in foreground -> onMessageReceived) | TC-AND-105-01, TC-AND-105-03, TC-AND-105-09 |
+| AC-6 (backgrounded/non-force-stopped delivery; tray for notification type; force-stop limitation) | TC-AND-105-10, TC-AND-105-11, TC-AND-105-12 |
+| AC-7 (onNewToken -> sink; token never logged in full) | TC-AND-105-02, TC-AND-105-05, TC-AND-105-13, TC-AND-105-14 |
+| AC-8 (unit tests pass in CI; manual delivery documented/reproducible) | TC-AND-105-01..06 (CI), TC-AND-105-09..13 (documented manual/e2e) |
+| AC-9 (no app-backend call; no UI) | TC-AND-105-01 (pass-through), TC-AND-105-06 |

@@ -5,7 +5,8 @@ milestone: M2
 epic: E14
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-097]
 blocks: [AND-098]
 ---
@@ -37,8 +38,9 @@ ViewModel, an injectable `CoroutineDispatcher`, and a fake repository in `core-t
   unit-tested."
 - **Upstream dependency — AND-097 (Feed API + DTOs):** provides `newsfeed.ts`-equivalent
   endpoints/DTOs (posts, media, paywall flags) and `FeedRepository`. This ticket binds to the
-  repository's `pagingData()` / `Pager` and its `ApiResult`-returning calls. The web reference
-  is `frontend/src/api/endpoints/newsfeed.ts` with shared types in `frontend/src/api/types.ts`.
+  repository's `pagingData()` / `Pager` and its `ApiResult`-returning calls. The web reference is
+  `src/api/endpoints/newsfeed.ts` (note: the file is named `newsfeed.ts`, but its `getFeed` call
+  hits **`GET /feed`**, not `/ui/newsfeed`) with shared types in `src/api/types.ts: FeedPost`.
 - **Downstream — AND-098 (Feed list / Paging 3):** consumes `FeedViewModel` to render the list,
   refresh control, and pagination loading/error footers. AND-098 owns all Composables; AND-102
   owns no UI.
@@ -47,8 +49,11 @@ ViewModel, an injectable `CoroutineDispatcher`, and a fake repository in `core-t
   uses typed `ApiResult<T>` with FastAPI `detail` mapping (string | `[{msg}]` | `{code,...}`).
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext, unreliable).
   Design for ~20s timeouts, bounded backoff retry on idempotent GETs, and offline/stale UI.
-  OpenAPI at `/openapi.json`. Auth is cookie-based with `X-CSRF-Token`; on 401 the network layer
-  calls `POST /ui/session/refresh` once then retries (owned by core-network, transparent here).
+  OpenAPI at `/openapi.json`. Auth (per `reference/src/api/client.ts`) is cookie-based
+  (`credentials: include`) **plus** an `Authorization: Bearer <accessToken>` header, with a
+  `X-CSRF-Token` header populated from the `ui_csrf` cookie on every request; an optional
+  `X-IMPERSONATION-TOKEN` is added when impersonating. On 401 the web client calls
+  `POST /ui/session/refresh` once then retries (owned by core-network, transparent here).
 - **Package base:** `com.testlogon.android`. Feature package: `com.testlogon.android.feature.feed`.
 
 ## 3. Functional Requirements
@@ -205,41 +210,81 @@ This ticket performs **no direct HTTP calls** — all network access is owned by
 repository's `Pager`/`ApiResult` only. The contract is documented here for traceability because
 AND-102's error/offline reduction depends on the response and error shapes AND-097 surfaces.
 
-Upstream endpoint (owned by AND-097), GET, idempotent (eligible for bounded-backoff retry):
+Upstream endpoint (owned by AND-097), GET, idempotent (eligible for bounded-backoff retry).
+**Corrected** against the OpenAPI index (`GET /feed`, op `view_feed_feed_get`) and the web
+client `reference/src/api/endpoints/newsfeed.ts: getFeed`. The path is **`/feed`**, not
+`/ui/newsfeed`. The `limit` query param **is** accepted by the backend (index lists
+`params=limit,cursor,author_id,q,from,to,has_media,...`), but the web client does **not** send
+`limit` — it relies on the server default; AND-097 may send `limit` if it chooses. Headers are
+set by the transport layer (cookies + `X-CSRF-Token` + `Authorization: Bearer`), not by this
+ticket:
 
 ```
-GET /ui/newsfeed?cursor=<opaque|null>&limit=20
+GET /feed?cursor=<opaque|absent>[&limit=<n>][&author_id=&q=&from=&to=&has_media=]
 Cookie: <session>; ui_csrf=<token>
 X-CSRF-Token: <token>
+Authorization: Bearer <accessToken>
 ```
 
-Expected 200 page shape (mapped to `FeedItemUi` upstream; abbreviated):
+Expected 200 page shape (the `/feed` 200 response has **no named schema** in OpenAPI; the
+authoritative shape is the web type `{ items: FeedPost[]; next_cursor?: string }` from
+`reference/src/api/endpoints/newsfeed.ts` + `reference/src/lib/feedPagination.ts`). **Corrected**
+— the prior example invented `id`/`author`/`text`/`media`/`paywall`/`has_more`, none of which
+exist. Real `FeedPost` fields (`reference/src/api/types.ts: FeedPost`) are flat:
 
 ```json
 {
   "items": [
     {
-      "id": "post_01HXYZ",
-      "author": { "id": "u_42", "display_name": "…", "avatar_url": "https://…" },
+      "post_id": "post_01HXYZ",
+      "author_id": "u_42",
       "created_at": "2026-06-01T12:00:00Z",
-      "text": "…",
-      "media": [{ "type": "image", "url": "https://…", "locked": false }],
-      "paywall": { "locked": true, "tier": "vip", "unlock_price_cents": 499 }
+      "body": "…",
+      "image_urls": ["https://…"],
+      "lock_type": "fixed_price",
+      "unlock_price_cents": 499,
+      "unlocked": false,
+      "unlock_limit_reached": false,
+      "lock_expired": false,
+      "like_count": 0,
+      "comment_count": 0
     }
   ],
-  "next_cursor": "eyJ0cyI6MTcxN30=",
-  "has_more": true
+  "next_cursor": "eyJ0cyI6MTcxN30="
 }
 ```
 
-FastAPI error envelope (mapped to a user message by core-network's `detail` mapper; consumed
-here only as `ApiError.message`):
+Notes on the corrected shape:
+- The unique id is **`post_id`** (used for dedup in `feedPagination.ts: mergeFeedPages`), not `id`.
+- The author is a flat **`author_id: string`**, not a nested `author` object; display name/avatar
+  are resolved elsewhere, not on `FeedPost`.
+- Body text is **`body`** (with `body_plain`/`body_markdown`/`body_rich` variants), not `text`.
+- Media is **`image_urls?: string[]`** / `image_variants` / `video?: {...}`, not a `media[]`
+  array of `{type,url,locked}`.
+- There is **no `paywall` object and no `tier`**. Lock/paywall is flat:
+  `lock_type` (`"fixed_price" | "tip_lottery"`), `unlock_price_cents`, `unlocked`,
+  `unlock_limit_reached`, `lock_expired`. These pass through to AND-098 unchanged.
+- **Terminal/end-reached signal is the absence of `next_cursor`** (the web client uses
+  `getNextPageParam: (lastPage) => lastPage.next_cursor` in `useFeedTimelineQuery.ts`). There is
+  **no `has_more`** on the feed response. (This resolves the Section 13 open question.)
+
+FastAPI error envelope (mapped to a user message by core-network's `detail` mapper / the web
+client's `normalizeErrorDetail` in `client.ts`; consumed here only as `ApiError.message`). All
+three forms below are handled by `normalizeErrorDetail`:
 
 ```json
 { "detail": "rate limited" }
 { "detail": [{ "msg": "invalid cursor", "loc": ["query","cursor"] }] }
 { "detail": { "code": "FEED_UNAVAILABLE", "message": "feed temporarily down" } }
 ```
+
+Feed-specific error code (verified, `useFeedTimelineQuery.ts: isInvalidCursorError`): a stale
+cursor returns **`{ "detail": { "code": "invalid_cursor" } }`**; the web client recovers by
+refetching the first page with no cursor. AND-097/AND-102 should mirror this: on an
+`invalid_cursor` refresh failure, drive a cursorless refresh rather than surfacing `Error`.
+A hard network failure (offline/DNS) surfaces from `client.ts` as `ApiError(status=0, "Network
+error")` — the `status == 0` signal is a reliable offline discriminator alongside the
+exception-type check in `Throwable.isOffline()`.
 
 The ViewModel never parses these directly; it receives a resolved `message: String` via the
 Paging `LoadState.Error.error` (an `ApiError`) and routes it to `FeedUiState.Error`.
@@ -288,9 +333,10 @@ Paging `LoadState.Error.error` (an `ApiError`) and routes it to `FeedUiState.Err
 - No credential or token handling in this ticket; session cookies and `ui_csrf`/`X-CSRF-Token`
   live in the persistent cookie jar (core-network). The ViewModel must never log cookie or CSRF
   values.
-- Paywall/locked metadata is honored as opaque flags; the ViewModel performs no
-  client-side bypass of `paywall.locked` and surfaces locked items unchanged so the UI gates
-  media access.
+- Paywall/locked metadata is honored as opaque flags; the ViewModel performs no client-side
+  bypass of the flat lock fields (`lock_type`, `unlock_price_cents`, `unlocked`,
+  `unlock_limit_reached`, `lock_expired` — there is no `paywall.locked` field; see Section 16)
+  and surfaces locked items unchanged so the UI gates media access.
 - Logged error messages are the user-safe `ApiError.message`; raw exception stack traces are
   logged only at `Log.DEBUG` and never include request bodies, auth headers, or PII (author
   names, text). Telemetry payloads (Section 10) carry only error category and load-state keys.
@@ -372,8 +418,11 @@ Target ≥90% line coverage on `FeedViewModel` + `reduce`.
   reconcile strictly in `onLoadStates`. *Open: adopt Material3 `PullToRefreshState` (AND-098)
   fully, or keep VM-owned flag?* Current design keeps VM-owned for testability.
 - **Empty vs end-reached:** distinguishing genuine empty feed from "first page, more coming"
-  requires `has_more`/`endReached` from AND-097. *Open: confirm the page exposes a terminal
-  signal mappable to `endReached`.*
+  requires a terminal signal from AND-097. *Resolved (see Section 16):* the `/feed` page exposes
+  **no `has_more`**; the terminal signal is the **absence of `next_cursor`** (web parity:
+  `useFeedTimelineQuery.ts` uses `getNextPageParam: (lastPage) => lastPage.next_cursor`). AND-097's
+  `PagingSource.LoadResult.Page.nextKey` must be `null` when `next_cursor` is absent so Paging
+  reports `append.endOfPaginationReached`; `reduce` maps that to `endReached`.
 - **Event replay:** ensure no `RefreshFailed` replay on rotation; verified by `replay=0`
   SharedFlow.
 
@@ -412,3 +461,217 @@ delegated to AND-097 and all rendering to AND-098.
 - Public surface reviewed and accepted by the AND-098 owner as the binding contract; open
   questions in Section 13 resolved or explicitly deferred with owners.
 - Spec reviewed; ticket moved from `draft` to ready/merged.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. **Feed endpoint path is `GET /feed`.** VERDICT: Corrected (spec said `GET /ui/newsfeed`).
+   SOURCE: OpenAPI `GET /feed` (op `view_feed_feed_get`); `src/api/endpoints/newsfeed.ts: getFeed`
+   (`api.get("/feed", ...)`).
+2. **HTTP method is GET and the call is idempotent (retry-eligible).** VERDICT: Verified.
+   SOURCE: OpenAPI `GET /feed`; `src/api/endpoints/newsfeed.ts: getFeed`.
+3. **`cursor` query param exists (opaque pagination key).** VERDICT: Verified.
+   SOURCE: OpenAPI `GET /feed` params include `cursor`; `src/api/endpoints/newsfeed.ts:
+   FeedQueryParams.cursor`.
+4. **`limit` query param exists.** VERDICT: Corrected/clarified. The backend accepts `limit`
+   (OpenAPI `GET /feed` `params=limit,cursor,...`), but the web client does **not** send it
+   (no `limit` in `getFeed`/`buildFeedRequestParams`); the original `limit=20` was an unverified
+   assumption about a default. SOURCE: OpenAPI `GET /feed`; `src/hooks/useFeedTimelineQuery.ts:
+   buildFeedRequestParams`.
+5. **200 response shape is `{ items: FeedPost[]; next_cursor?: string }`.** VERDICT: Corrected.
+   The `/feed` 200 has no named schema in OpenAPI (`resp=200:` is empty), so the web type is the
+   contract. SOURCE: `src/api/endpoints/newsfeed.ts: getFeed` return type;
+   `src/lib/feedPagination.ts: FeedPage`.
+6. **Post unique id field is `post_id` (not `id`).** VERDICT: Corrected.
+   SOURCE: `src/api/types.ts: FeedPost.post_id`; `src/lib/feedPagination.ts: mergeFeedPages`
+   (dedups on `post.post_id`).
+7. **Author is a flat `author_id: string`, not a nested `author{id,display_name,avatar_url}`.**
+   VERDICT: Corrected. SOURCE: `src/api/types.ts: FeedPost.author_id`.
+8. **Body text field is `body` (not `text`).** VERDICT: Corrected.
+   SOURCE: `src/api/types.ts: FeedPost.body` (+ `body_plain`/`body_markdown`/`body_rich`).
+9. **Media is `image_urls: string[]` / `image_variants` / `video{...}`, not a `media[]` array of
+   `{type,url,locked}`.** VERDICT: Corrected. SOURCE: `src/api/types.ts: FeedPost.image_urls`,
+   `FeedPost.image_variants`, `FeedPost.video`.
+10. **No `paywall` object and no `tier`; lock metadata is flat (`lock_type`,
+    `unlock_price_cents`, `unlocked`, `unlock_limit_reached`, `lock_expired`).** VERDICT:
+    Corrected. SOURCE: `src/api/types.ts: FeedPost` (fields `lock_type`, `unlock_price_cents`,
+    `unlocked`, `unlock_limit_reached`, `lock_expired`).
+11. **Terminal/end-reached signal is the absence of `next_cursor`; there is no `has_more` on the
+    feed page.** VERDICT: Corrected (resolves Section 13 open question). SOURCE:
+    `src/hooks/useFeedTimelineQuery.ts` (`getNextPageParam: (lastPage) => lastPage.next_cursor`);
+    `src/api/endpoints/newsfeed.ts: getFeed` return type (no `has_more`). (`has_more` exists only
+    on unrelated responses, e.g. `types.ts: GroupFeedResponse`.)
+12. **CSRF: an `X-CSRF-Token` header is sent, sourced from the `ui_csrf` cookie.** VERDICT:
+    Verified. SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token",
+    csrf)`).
+13. **Transport is cookie-based AND additionally sends `Authorization: Bearer <accessToken>`.**
+    VERDICT: Corrected/expanded (spec said only "cookie-based"). SOURCE: `src/api/client.ts`
+    (`credentials: "include"` + `headers.set("Authorization", \`Bearer ${accessToken}\`)`).
+14. **On 401 the client calls `POST /ui/session/refresh` once, then retries.** VERDICT: Verified.
+    SOURCE: OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`);
+    `src/api/client.ts: refreshSession` + the 401 branch.
+15. **FastAPI `detail` can be a string, an array of `{msg,loc}`, or an object `{code,message}`,
+    all collapsed to one user message.** VERDICT: Verified. SOURCE: `src/api/client.ts:
+    normalizeErrorDetail` (handles string / array-of-`{msg}` / object).
+16. **Stale-cursor error code is `invalid_cursor`; web recovers by refetching page one without a
+    cursor.** VERDICT: Verified (the spec's §5 example used a generic 422 `{msg:"invalid cursor"}`
+    which is also valid, but the feed-specific signal is `detail.code == "invalid_cursor"`).
+    SOURCE: `src/hooks/useFeedTimelineQuery.ts: isInvalidCursorError` + the catch-and-refetch
+    fallback.
+17. **A hard network failure surfaces as `ApiError(status=0, "Network error")`.** VERDICT:
+    Verified. SOURCE: `src/api/client.ts` (catch around `fetch` → `throw new ApiError(0, "Network
+    error", err)`).
+18. **422 is the validation error response with schema `HTTPValidationError`.** VERDICT: Verified.
+    SOURCE: OpenAPI `GET /feed` `resp=...;422:HTTPValidationError`.
+19. **AND-102 makes no direct HTTP calls; all network/mapping is owned by AND-097 / core-network.**
+    VERDICT: Unverified-assumption (architectural decision local to this Android port; no
+    web/OpenAPI source applies). Internally consistent with the layering in §2/§12.
+20. **`offline` classification via `UnknownHostException`/`ConnectException`/
+    `SocketTimeoutException`.** VERDICT: Unverified-assumption (JVM/OkHttp behavior, not in the
+    web sources). Reasonable; the web equivalent is the `ApiError(status=0)` path (claim 17).
+    framework ref: OkHttp surfaces these `java.net.*` exceptions on transport failure
+    (https://square.github.io/okhttp/).
+21. **Hilt `@HiltViewModel`, `viewModelScope`, `stateIn(WhileSubscribed)`, `cachedIn`,
+    Paging 3 `CombinedLoadStates`/`LoadState`, Turbine/`runTest` testing.** VERDICT:
+    Unverified-assumption / framework ref (Android framework choices, not derivable from the
+    backend/web sources). framework ref: Paging
+    (https://developer.android.com/topic/libraries/architecture/paging/v3-overview), ViewModel
+    StateFlow (https://developer.android.com/topic/libraries/architecture/viewmodel),
+    Hilt (https://developer.android.com/training/dependency-injection/hilt-android).
+
+### Corrections made
+
+- §2: auth description expanded to cookie + `Authorization: Bearer` + `X-CSRF-Token` (from
+  `ui_csrf` cookie) + optional `X-IMPERSONATION-TOKEN` (claims 12, 13); web-reference note that
+  `newsfeed.ts` actually calls `GET /feed` (claim 1).
+- §5: endpoint path `/ui/newsfeed` → **`/feed`** (claim 1); clarified `limit` is server-side, not
+  a client-sent `limit=20` (claim 4); response JSON rewritten to the real flat `FeedPost` shape —
+  `post_id`/`author_id`/`body`/`image_urls`/flat lock fields, removed fictional
+  `id`/`author`/`text`/`media[]`/`paywall`/`has_more` (claims 5–11); added the real
+  `invalid_cursor` recovery contract (claim 16) and the `status=0` offline signal (claim 17).
+- §8: removed reference to non-existent `paywall.locked`; replaced with the real flat lock fields
+  (claim 10).
+- §13: "Empty vs end-reached" open question resolved — terminal signal is absence of `next_cursor`,
+  no `has_more` (claim 11).
+- Frontmatter: `status: draft` → `status: reviewed`; added `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- All Android-stack choices (Hilt, Paging 3, coroutines/Turbine, `ConnectivityObserver`,
+  dispatcher injection) are not verifiable against the backend OpenAPI or the React web app —
+  they are deliberate native-port decisions (claims 19, 21). Verified only against Android
+  framework docs (framework refs above).
+- Offline classification by `java.net.*` exception type (claim 20) cannot be verified from the
+  web sources (the browser fetch surfaces a single opaque network error → `ApiError(status=0)`).
+  The Android mapping is an assumption to validate on-device against the unreliable dev host.
+- Whether AND-097 implements the feed via a Room `RemoteMediator` or an in-memory `PagingSource`
+  is still open (Section 13); it changes which `CombinedLoadStates` axis (`mediator` vs `source`)
+  `FeedLoadSnapshot.from` must prefer. Not resolvable from these sources — owned by AND-097.
+- The server-side default page size for `/feed` (when `limit` is omitted) is not documented in
+  the OpenAPI index and is not asserted here.
+
+## 17. Test Plan
+
+All cases trace to Section 14 acceptance criteria. The ticket's acceptance bar is "State
+unit-tested," so the core is JVM unit/Robolectric (no device). Device/emulator cases are included
+for the end-to-end refresh/offline behavior that AC-3 references "through AND-098"; mark each with
+its required target. Test targets: JVM = local JVM unit (JUnit + `kotlinx-coroutines-test` +
+Turbine + `core-testing` fakes); Emulator = AVD `test35` (API 35); Device = Samsung Galaxy A15
+5G (SM-A156U, API 34, arm64-v8a).
+
+- **TC-AND-102-01 — reduce: initial loading.** Type: unit (JVM). Target: `reduce(...)`.
+  Preconditions: `FakeFeedRepository` not needed (pure function). Steps: call `reduce(snap{refresh=Loading,
+  itemCount=0}, isRefreshing=false, net=Available)`. Expected: `FeedUiState.Loading`. Traces: AC-2.
+- **TC-AND-102-02 — reduce: server error, no cache.** Type: unit (JVM). Target: `reduce`.
+  Preconditions: none. Steps: `reduce(snap{refresh=Error(offline=false,message="rate limited"),
+  itemCount=0}, false, net=Available)`. Expected: `FeedUiState.Error("rate limited",
+  canRetry=true)`, NOT `Offline`. Traces: AC-2, AC-4.
+- **TC-AND-102-03 — reduce: offline by connectivity.** Type: unit (JVM). Target: `reduce`.
+  Preconditions: none. Steps: `reduce(snap{refresh=Error, itemCount=0}, false,
+  net=Unavailable)`. Expected: `FeedUiState.Offline`. Traces: AC-2.
+- **TC-AND-102-04 — reduce: offline by exception even when net=Available.** Type: unit (JVM).
+  Target: `reduce` + `Throwable.isOffline()`. Preconditions: none. Steps: build snapshot from a
+  `LoadState.Error(SocketTimeoutException())` (and/or `ApiError(status=0)`) with `itemCount=0`,
+  `net=Available`; reduce. Expected: `FeedUiState.Offline` (offline flag wins). Traces: AC-2.
+- **TC-AND-102-05 — reduce: empty feed.** Type: unit (JVM). Target: `reduce`. Preconditions:
+  none. Steps: `reduce(snap{refresh=NotLoading, itemCount=0, endReached=true}, false, Available)`
+  — endReached derived from absent `next_cursor` (see §16 claim 11). Expected: `FeedUiState.Empty`.
+  Traces: AC-2.
+- **TC-AND-102-06 — reduce: content with append permutations.** Type: unit (JVM). Target:
+  `reduce`/`AppendState`. Preconditions: none. Steps: with `itemCount>0` and `refresh=NotLoading`,
+  drive `append` = Idle, Loading, Error("…"), EndReached. Expected: `FeedUiState.Content` in all
+  four, with matching `AppendState`; append Error never escalates to full-screen `Error`. Traces:
+  AC-2, AC-4 (append-error containment).
+- **TC-AND-102-07 — reduce: stale-while-error.** Type: unit (JVM). Target: `reduce`.
+  Preconditions: none. Steps: `reduce(snap{refresh=Error, itemCount=5}, false, Available)`.
+  Expected: stays `FeedUiState.Content` (does not become `Error`/`Offline`). Traces: AC-4.
+- **TC-AND-102-08 — refresh() toggles and clears isRefreshing.** Type: unit (JVM). Target:
+  `FeedViewModel.refresh()` + `onLoadStates`. Preconditions: VM built with `FakeFeedRepository`,
+  `FakeConnectivityObserver`, `StandardTestDispatcher`; collect `uiState` via Turbine in
+  `runTest`. Steps: call `refresh()`; assert `isRefreshing=true` in emitted `Content`; then call
+  `onLoadStates(states{refresh=NotLoading}, itemCount=3)`. Expected: `isRefreshing` clears to
+  false deterministically. Traces: AC-1, AC-3.
+- **TC-AND-102-09 — refresh failure with items emits exactly one RefreshFailed event.** Type:
+  unit (JVM). Target: `FeedViewModel.events`. Preconditions: VM with items already loaded
+  (itemCount>0); Turbine on `events`. Steps: `onLoadStates(states{refresh=Error}, itemCount=4)`.
+  Expected: exactly one `FeedEvent.RefreshFailed`; `uiState` remains `Content`; no replay on a
+  second collector (replay=0). Traces: AC-4, AC-1.
+- **TC-AND-102-10 — retry() re-drives refresh vs append retry.** Type: unit (JVM). Target:
+  `FeedViewModel.retry()`. Preconditions: fake repo records refresh invocations. Steps: after an
+  initial-refresh failure (itemCount=0) call `retry()` → asserts a refresh is re-driven; after an
+  append failure call `retry()` → asserts append retry path (event/flag) taken, not a full
+  refresh. Expected: correct path per failure type. Traces: AC-1, AC-2.
+- **TC-AND-102-11 — connectivity Unavailable→Available recomputes state.** Type: unit (JVM).
+  Target: `uiState` combine over `connectivity.status`. Preconditions: VM in `Offline`
+  (refresh=Error + net=Unavailable). Steps: `FakeConnectivityObserver.emit(Available)` then
+  settle a successful refresh. Expected: `uiState` leaves `Offline` and re-derives `Content`/`Empty`.
+  Traces: AC-2, AC-3.
+- **TC-AND-102-12 — pagingFlow maps DTO→FeedItemUi preserving lock flags.** Type: unit (JVM,
+  Paging `asSnapshot`/`AsyncPagingDataDiffer`). Target: `FeedViewModel.pagingFlow`.
+  Preconditions: fake repo emits `PagingData` of `FeedPost` with `lock_type="fixed_price"`,
+  `unlock_price_cents=499`, `unlocked=false`. Steps: snapshot `pagingFlow`. Expected: emitted
+  `FeedItemUi` carries `post_id`, `author_id`, `body`, and the flat lock fields unchanged (no
+  client-side unlock; see §16 claims 6–10). Traces: AC-2, AC-6.
+- **TC-AND-102-13 — invalid_cursor refresh recovery.** Type: contract/MockWebServer. Target:
+  `FeedRepository` wiring as consumed by the VM (AND-097 seam) + `reduce`. Preconditions:
+  MockWebServer scripted: first paged request → `400/422` with body
+  `{"detail":{"code":"invalid_cursor"}}`, retry with no `cursor` → `200 {items:[…],
+  next_cursor:null}`. Steps: drive a refresh from a stale cursor. Expected: cursorless refetch
+  succeeds and VM lands in `Content`/`Empty` rather than `Error` (web parity, §16 claim 16).
+  Traces: AC-2, AC-4. Note: runs headless; no device needed.
+- **TC-AND-102-14 — flaky/offline dev host classified as Offline, not Error.** Type:
+  instrumented/e2e. Target: full VM→repo→network against the real plaintext dev host
+  `http://18.222.237.167:8000`. Preconditions: app installed; toggle airplane mode / block the
+  host to force `SocketTimeoutException`/unreachable under the ~20s timeout. Steps: open feed with
+  no cache and no connectivity; observe state; restore connectivity and `retry()`. Expected:
+  `FeedUiState.Offline` (not `Error`) while down; recovers to `Content` after restore. **MUST run
+  on the physical device** (SM-A156U) — real radio/airplane-mode + arm64/API-34 timeout behavior
+  against the unreliable host; emulator NAT does not reproduce real connectivity loss faithfully.
+  Traces: AC-2, AC-3.
+- **TC-AND-102-15 — Compose binding + accessibility of structural states.** Type: Compose-UI /
+  instrumented. Target: the AND-098 screen bound to this VM (state keys → localized strings +
+  semantics). Preconditions: test host Composable collecting `uiState`/`pagingFlow`/`events` and
+  forwarding `onLoadStates`. Steps: drive Loading/Empty/Offline/Error/Content; with TalkBack
+  semantics assert each structural state exposes a non-empty content description / `liveRegion`
+  announcement and the retry control has an accessible label; pull-to-refresh shows/clears the
+  spinner. Expected: every state is announced; no raw resource keys shown; retry reachable by
+  a11y services. Target: Emulator `test35` is sufficient (no special hardware); may also run on
+  the device. Traces: AC-3, AC-2 (state surface). Note: this validates AND-102's contract as
+  consumed by AND-098, not AND-102 code directly.
+- **TC-AND-102-16 — no android.* in unit test classpath / coverage threshold.** Type: unit
+  (JVM). Target: `FeedViewModel` + `reduce` test suite. Preconditions: CI runs `:feature-feed:test`
+  with no Robolectric/Android runtime on the reducer/VM tests. Steps: run the suite + JaCoCo.
+  Expected: suite green with no `android.*` runtime dependency on the pure paths; ≥90% line
+  coverage on `FeedViewModel` + `reduce`. Traces: AC-5, AC-6.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (VM exists, exposes uiState/pagingFlow/events/refresh/retry/onLoadStates) | TC-08, TC-09, TC-10, TC-12 |
+| AC-2 (load states reduce to Loading/Content/Empty/Error/Offline; offline vs error) | TC-01, TC-02, TC-03, TC-04, TC-05, TC-06, TC-11, TC-12, TC-13, TC-14, TC-15 |
+| AC-3 (refresh toggles/clears isRefreshing; pull-to-refresh works through AND-098) | TC-08, TC-11, TC-14, TC-15 |
+| AC-4 (refresh failure w/ items keeps Content + one RefreshFailed; no items → Error/Offline) | TC-02, TC-06, TC-07, TC-09, TC-13 |
+| AC-5 (state unit-tested; reduce exhaustive; ≥90% coverage; no android.* runtime) | TC-01…TC-12, TC-16 |
+| AC-6 (no HTTP/persistence/Composable introduced; delegated to AND-097/AND-098) | TC-12, TC-15, TC-16 |

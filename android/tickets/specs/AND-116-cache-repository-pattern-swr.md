@@ -5,7 +5,8 @@ milestone: M2
 epic: E17
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-115, AND-018]
 blocks: []
 ---
@@ -202,17 +203,31 @@ sealed interface ApiResult<out T> {
 }
 ```
 
-The first concrete consumer (downstream, e.g. profile repo) will wrap
-`GET /ui/me`, whose body is illustrative of a `Dto` persisted by `persist(...)`:
+The first concrete consumer (downstream, e.g. profile/session repo) will wrap
+`GET /ui/me` (verified present: `op=ui_me_ui_me_get`, `resp=200;422:HTTPValidationError`,
+`params=user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`). Its actual response body —
+the `MeResp` DTO the web client deserializes (`src/api/types.ts: MeResp`,
+`src/api/endpoints/auth.ts: getMe`) — is the real shape a `Dto` persisted by
+`persist(...)` would take:
 
 ```json
-{ "id": "u_123", "username": "spannella", "display_name": "Sean", "roles": ["user"] }
+{ "user_sub": "auth0|abc123", "session_id": "sess_456", "ip": "203.0.113.7" }
 ```
+
+> Correction (2026-06-06 review): the prior draft showed an invented body
+> `{ "id", "username", "display_name", "roles" }`. That schema does not exist for
+> `/ui/me`; the authoritative `MeResp` is `{ user_sub, session_id, ip }`. The JSON
+> above is illustrative only — endpoint-specific DTOs belong to consuming feature
+> tickets, not to this SWR base.
 
 `networkBoundResource` is endpoint-agnostic: callers supply `fetch` returning
 `ApiResult<Dto>`. FastAPI `detail` error mapping (`string | [{msg}] | {code,...}`)
 is handled upstream in the AND-018 `ApiError` conversion and reaches this layer
-only as `ApiResult.Failure`/`NetworkError`. Endpoint-specific contracts belong to
+only as `ApiResult.Failure`/`NetworkError`. This three-form `detail` shape is
+confirmed against the web client's `normalizeErrorDetail` (`src/api/client.ts`),
+which handles a plain string, a `ValidationError[]` array of `{msg}` items
+(the OpenAPI `HTTPValidationError`/`ValidationError` schema for `422`), and an
+object with a `code` field (e.g. `geo_blocked`). Endpoint-specific contracts belong to
 the consuming feature tickets, not here.
 
 ## 6. Data & State Management
@@ -250,8 +265,14 @@ the consuming feature tickets, not here.
 
 ## 8. Security & Privacy
 
-- No new auth surface. Cookie/CSRF session handling lives in the network layer;
-  SWR only sees already-authenticated `ApiResult`s.
+- No new auth surface. Authentication/CSRF transport lives in the network layer
+  (AND-018/OkHttp), and SWR only sees already-authenticated `ApiResult`s. Per the
+  web client (`src/api/client.ts`), the real transport is: `Authorization: Bearer
+  <accessToken>` header, an `X-CSRF-Token` header sourced from the `ui_csrf` cookie,
+  `credentials: include` (cookie jar), an optional `X-IMPERSONATION-TOKEN` header,
+  and automatic refresh-on-401. (The earlier "Cookie/CSRF session handling" phrasing
+  understated this — it is a Bearer-token + CSRF-header + cookie hybrid.) None of
+  this is SWR's concern; it is documented here only to scope it out correctly.
 - Cached entities may contain user data (e.g. profile). This ticket mandates that
   cache writes go only to the app-private Room database (no external storage) and
   that the consuming feature ticket is responsible for clearing relevant tables on
@@ -368,3 +389,221 @@ helper.
 - No UI, no feature wiring, no new HTTP endpoints introduced (confirmed in review).
 - Logout-purge clear contract documented for downstream session ticket.
 - Reviewed and approved by an Android maintainer; merged with passing CI.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **`GET /ui/me` exists as an endpoint.** VERDICT: Verified.
+   SOURCE: OpenAPI `GET /ui/me` (`op=ui_me_ui_me_get`, `resp=200;422:HTTPValidationError`,
+   `params=user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`); frontend `src/api/endpoints/auth.ts: getMe`.
+2. **`/ui/me` response body is `{ id, username, display_name, roles }`.** VERDICT: Corrected.
+   The real DTO is `MeResp = { user_sub: string, session_id: string, ip: string }`.
+   SOURCE: `src/api/types.ts: MeResp` (lines 31–35); `src/api/endpoints/auth.ts: getMe` (`api.get<MeResp>("/ui/me")`).
+   Fixed inline in §5.
+3. **This ticket introduces no new HTTP endpoints; it is a client-side SWR abstraction.** VERDICT: Verified.
+   SOURCE: ticket scope (`specs-src/AND-116.md`: "Stale-while-revalidate base repository … reused by features");
+   no endpoint is owned here. Consistent with OpenAPI index containing no SWR/repository path.
+4. **FastAPI `detail` error takes three forms: `string | [{msg}] | {code,...}`.** VERDICT: Verified.
+   SOURCE: `src/api/client.ts: normalizeErrorDetail` (handles string, `ValidationError[]` of `{msg}`,
+   and object-with-`code`); OpenAPI `components.schemas.HTTPValidationError` → `detail: ValidationError[]`
+   (422 response of `/ui/me` and most `/ui/*` ops).
+5. **Auth/CSRF transport is cookie/CSRF in the network layer.** VERDICT: Corrected (refined).
+   The actual transport is `Authorization: Bearer <accessToken>` + `X-CSRF-Token` header from the
+   `ui_csrf` cookie + `credentials: include` + optional `X-IMPERSONATION-TOKEN` + refresh-on-401.
+   SOURCE: `src/api/client.ts` (lines ~157–183: `Authorization` header; `getCookie("ui_csrf")` →
+   `X-CSRF-Token`; `credentials: "include"`; `X-IMPERSONATION-TOKEN`). Fixed inline in §8.
+6. **SWR consumes AND-018 `ApiResult<T>` (`Success` / `Failure(ApiError)` / `NetworkError(cause)`).**
+   VERDICT: Unverified-assumption. Cross-ticket dependency; AND-018 is not in the reference sources.
+   The exact `sealed interface ApiResult` shape in §5 is this spec's own design contract, not verified
+   against an authoritative source. SOURCE: ticket `Deps: AND-018` (`specs-src/AND-116.md`).
+7. **Cache is Room-backed (AND-115), single source of truth, DAO returns `Flow<Entity?>`.**
+   VERDICT: Unverified-assumption. Cross-ticket dependency; AND-115 DAO conventions are not in the
+   reference sources. SOURCE: ticket `Deps: AND-115` (`specs-src/AND-116.md`).
+8. **Web client uses TanStack Query SWR semantics (`staleTime`/`gcTime`/`placeholderData`).**
+   VERDICT: Unverified-assumption. Not confirmed against the reference `src/` (the searched
+   `src/api/client.ts` is a hand-rolled `fetch` wrapper, not a TanStack hook). Plausible at the
+   page/hook layer but not located in the provided sources; treat as motivation, not contract.
+9. **Framework choices: Kotlin Coroutines/Flow `flow{}`/`emitAll`, `kotlinx-coroutines-test`,
+   Turbine, Robolectric in-memory Room.** VERDICT: Verified (framework ref).
+   SOURCE (framework ref): Kotlin Flow — https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/ ;
+   coroutines-test — https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/ ;
+   Turbine — https://github.com/cashapp/turbine ; Robolectric — https://robolectric.org/ .
+   These are tool/framework selections, not backend contracts.
+10. **`NetworkBoundResource` is the canonical Google reference pattern adapted here.**
+    VERDICT: Verified (framework ref).
+    SOURCE (framework ref): Android architecture / "Now in Android" repository pattern guidance —
+    https://developer.android.com/topic/architecture/data-layer .
+
+### Corrections made
+
+- **§5 (API Contract):** Replaced the invented `/ui/me` body
+  `{ id, username, display_name, roles }` with the authoritative `MeResp`
+  `{ user_sub, session_id, ip }` and added source citations and a correction note.
+- **§5 (API Contract):** Annotated the FastAPI `detail` three-form claim as verified
+  against `normalizeErrorDetail` and `HTTPValidationError`.
+- **§8 (Security & Privacy):** Refined "Cookie/CSRF session handling" to the real
+  Bearer-token + `X-CSRF-Token`(from `ui_csrf` cookie) + `credentials: include` +
+  `X-IMPERSONATION-TOKEN` + refresh-on-401 transport.
+- Frontmatter: `status: draft` → `status: reviewed`; added `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **AND-018 `ApiResult<T>` shape** (claim 6): cannot be verified — AND-018 is a sibling
+  ticket not present in the reference OpenAPI or frontend `src/`. The §4.1/§5 type
+  declarations are design intent for this port, not a confirmed upstream contract.
+- **AND-115 Room DAO conventions** (claim 7): cannot be verified for the same reason
+  (sibling ticket, not in sources). `Flow<Entity?>`, `@Upsert`, `clearAll()` are assumed.
+- **TanStack Query usage in the web app** (claim 8): not located in the provided
+  `src/api/` sources; the SWR analogy is motivational, not a verified web behavior.
+- **Default TTL of 60s** (§4.4, R-2): a heuristic for the flaky dev host
+  (`http://18.222.237.167:8000`), not derived from any source; explicitly overridable.
+
+## 17. Test Plan
+
+All cases are JVM/Robolectric unit tests (no device or network) because this ticket is
+non-UI `core-data` library code; there is no Compose surface, no camera/biometric/FCM/WebRTC
+behavior, and no real HTTP call (the network seam is the injected `fetch: () -> ApiResult`).
+Consequently **no case requires the physical Samsung Galaxy A15 or the `test35` emulator** —
+the entire suite runs on the JVM unit/Robolectric target in CI. Device/emulator notes are
+included only to justify that choice. Test targets: `networkBoundResource` builder, the
+`Resource<T>` sealed type, the `isFresh`/`CachePolicy` TTL helper, and the `SwrRepository`
+base `stream(...)`.
+
+- **TC-AND-116-01 — Cached-then-fresh emission (happy path).**
+  Type: unit (JVM, `runTest` + Turbine). Target: `networkBoundResource`.
+  Preconditions: fake `query()` Flow seeded with cached value A; `fetch` returns
+  `ApiResult.Success(B)`; `shouldFetch` default `true`; a recording `saveFetchResult`
+  that, when called, makes `query()` subsequently emit B.
+  Steps: collect `networkBoundResource(...)` via Turbine; advance the test dispatcher.
+  Expected: emissions are exactly `Resource.Loading(A)` then `Resource.Success(B)` in
+  that order; `saveFetchResult(B)` invoked exactly once; the `Success` value is read back
+  from `query()` (not the raw NET DTO). Traces: AC-2, AC-6.
+
+- **TC-AND-116-02 — Empty cache then successful fetch.**
+  Type: unit (JVM). Target: `networkBoundResource`.
+  Preconditions: `query()` emits `null` initially; `fetch` returns `ApiResult.Success(B)`;
+  `saveFetchResult` makes `query()` then emit B.
+  Steps: collect via Turbine; advance dispatcher.
+  Expected: `Resource.Loading(null)` then `Resource.Success(B)`. Traces: AC-2, AC-6.
+
+- **TC-AND-116-03 — Fetch failure (server `ApiResult.Failure`) keeps stale data.**
+  Type: unit (JVM). Target: `networkBoundResource`.
+  Preconditions: `query()` seeded with A; `fetch` returns
+  `ApiResult.Failure(ApiError(...))` built from a real FastAPI error
+  (e.g. 422 `HTTPValidationError` `detail=[{ "loc":[...], "msg":"...", "type":"..." }]`,
+  or 403 `{ "code":"geo_blocked", ... }`).
+  Steps: collect via Turbine.
+  Expected: `Resource.Loading(A)` then `Resource.Error(throwable, A)`; `saveFetchResult`
+  never called; throwable derived from `ApiError` (the `detail` already normalized
+  upstream). Traces: AC-3.
+
+- **TC-AND-116-04 — Fetch failure (offline / flaky dev host) keeps stale data.**
+  Type: unit (JVM). Target: `networkBoundResource`.
+  Preconditions: `query()` seeded with A; `fetch` returns
+  `ApiResult.NetworkError(IOException("timeout"))` simulating the ~20s-timeout flaky
+  plaintext dev backend (`http://18.222.237.167:8000`).
+  Steps: collect via Turbine.
+  Expected: `Resource.Loading(A)` then `Resource.Error(IOException, A)`; cached A stays
+  visible; no save. (Real offline transport is out of scope for SWR; covered here via the
+  injected seam — confirms the offline path surfaces stale-with-error rather than clearing
+  cache.) Traces: AC-3.
+
+- **TC-AND-116-05 — Fetch failure with empty cache → retryable empty error.**
+  Type: unit (JVM). Target: `networkBoundResource`.
+  Preconditions: `query()` emits `null`; `fetch` returns `ApiResult.NetworkError(...)`.
+  Steps: collect via Turbine.
+  Expected: `Resource.Loading(null)` then `Resource.Error(throwable, null)`. Traces: AC-3.
+
+- **TC-AND-116-06 — Fresh cache skips network (`shouldFetch=false`).**
+  Type: unit (JVM). Target: `networkBoundResource` / `SwrRepository.stream`.
+  Preconditions: `query()` seeded with A; `isFresh(A)` returns `true` (so
+  `shouldFetch` is `false`); `fetch` is a spy that fails the test if invoked.
+  Steps: collect via Turbine.
+  Expected: single `Resource.Success(A)` emitted from cache; `fetch` never called.
+  Traces: AC-4.
+
+- **TC-AND-116-07 — `forceRefresh=true` overrides freshness.**
+  Type: unit (JVM). Target: `SwrRepository.stream`.
+  Preconditions: cache A is fresh (`isFresh` true) but `stream(key, forceRefresh=true)`;
+  `fetch` returns `ApiResult.Success(B)`.
+  Steps: collect via Turbine.
+  Expected: `Resource.Loading(A)` then `Resource.Success(B)`; `fetch` invoked exactly
+  once despite freshness. Traces: AC-4.
+
+- **TC-AND-116-08 — Unexpected exception in `fetch` is caught, never crashes collector.**
+  Type: unit (JVM). Target: `networkBoundResource` `.catch` in `stream`.
+  Preconditions: `query()` seeded with A; `fetch` throws a raw `IllegalStateException`
+  (escaping AND-018 mapping).
+  Steps: collect via Turbine; assert no exception propagates to the collector.
+  Expected: terminates with `Resource.Error(IllegalStateException, A)` (or `null` data if
+  empty cache); Flow completes normally, no `expectError()` on the Turbine collector.
+  Traces: AC-3.
+
+- **TC-AND-116-09 — `SwrRepository` subclass implements only the four/five hooks.**
+  Type: unit (JVM). Target: `SwrRepository`.
+  Preconditions: a test subclass overriding only `cacheFlow`, `fetch`, `persist`
+  (and optionally `isFresh`); seed via fakes.
+  Steps: call `stream(key)`; drive a cached-then-fresh scenario.
+  Expected: behaves identically to TC-01 using the base-class wiring; confirms the
+  minimal override surface compiles and works. Traces: AC-5.
+
+- **TC-AND-116-10 — TTL `isFresh` boundary tests with injected clock.**
+  Type: unit (JVM). Target: `isFresh(fetchedAt, ttlMs)` / `CachePolicy.DEFAULT_TTL_MS` /
+  `TimeProvider`.
+  Preconditions: injected fake clock (`nowMs()` fixed). Cases: `fetchedAt = null` →
+  false; `now - fetchedAt == ttl-1` → true; `== ttl` → false (exclusive boundary);
+  `> ttl` → false; default TTL == 60_000.
+  Steps: call `isFresh` for each case.
+  Expected: matches the boundary table; no reliance on `System.currentTimeMillis()`.
+  Traces: AC-4, AC-7.
+
+- **TC-AND-116-11 — Collector cancellation cancels in-flight `fetch`.**
+  Type: unit (JVM, structured concurrency). Target: `networkBoundResource`.
+  Preconditions: `fetch` is a long-suspending function that sets a `started` flag and
+  awaits cancellation, recording `cancelled`.
+  Steps: start collection, cancel the collecting job before `fetch` resolves; advance
+  dispatcher.
+  Expected: `fetch` coroutine is cancelled (`cancelled == true`); no `Success`/`Error`
+  emitted after cancellation. Traces: AC-3 (resilience), supports FR-9.
+
+- **TC-AND-116-12 — DB is the single source of truth (NET DTO never emitted).**
+  Type: unit (JVM). Target: `networkBoundResource`.
+  Preconditions: `fetch` returns `ApiResult.Success(netDto)` where `netDto` is a NET
+  type distinct from the DB/domain type; `saveFetchResult` maps and stores a *different*
+  domain object `dbVal`; `query()` then emits `dbVal`.
+  Steps: collect via Turbine; inspect the `Success` payload's type/identity.
+  Expected: the emitted `Resource.Success.data` is `dbVal` (read from `query()`), never
+  the raw `netDto`. Traces: AC-6.
+
+- **TC-AND-116-13 — `onFetchFailed` hook fires once on failure (telemetry seam).**
+  Type: unit (JVM). Target: `networkBoundResource`.
+  Preconditions: `query()` seeded with A; `fetch` returns `ApiResult.NetworkError(...)`;
+  recording `onFetchFailed`.
+  Steps: collect via Turbine.
+  Expected: `onFetchFailed(throwable)` invoked exactly once with the same throwable
+  carried in `Resource.Error`; not invoked on success paths. Traces: AC-3 (supports §10).
+
+- **TC-AND-116-14 — No PII/secret persisted or logged by SWR (security).**
+  Type: unit (JVM). Target: `networkBoundResource` + logging seam.
+  Preconditions: `fetch` returns a `Success` whose DTO contains a sensitive-looking field;
+  capture the `swr` logger output (test logger) and the values passed to `saveFetchResult`.
+  Steps: run a success and a failure path; inspect captured logs.
+  Expected: failure logs contain only the exception *class* (no response body / field
+  values); SWR persists only what the caller's `persist` writes (no tokens added by SWR);
+  cache writes target the app-private Room store only. Traces: supports §8 (no AC; security
+  guard for the abstraction).
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (`networkBoundResource`/`Resource` exist, compiles) | Compilation implied by all; structurally TC-01, TC-09 |
+| AC-2 (cached-then-fresh verified) | TC-01, TC-02 |
+| AC-3 (failure carries cache, never throws) | TC-03, TC-04, TC-05, TC-08, TC-11, TC-13 |
+| AC-4 (`shouldFetch`/`forceRefresh`) | TC-06, TC-07, TC-10 |
+| AC-5 (`SwrRepository` minimal override) | TC-09 |
+| AC-6 (no NET DTO emitted; DB source of truth) | TC-01, TC-02, TC-12 |
+| AC-7 (T-1..T-9 pass, ≥90% coverage) | TC-01–TC-14 collectively (covers Resource, builder, TTL helper, base) |
+
+Security-only guard (no AC mapping): TC-14 (§8). Telemetry seam (§10): TC-13.

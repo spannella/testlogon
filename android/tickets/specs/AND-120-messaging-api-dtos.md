@@ -5,7 +5,8 @@ milestone: M3
 epic: E18
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-027, AND-026, AND-010]
 blocks: [AND-121, AND-122, AND-123, AND-124, AND-125]
 ---
@@ -100,23 +101,39 @@ base URL. The backlog scope lists `/messaging/conversations`,
 prefix (`messaging/` vs bare) is reconciled against `/openapi.json` and the web
 reference before coding (Q-1) and declared consistently.
 
-FR-3. All methods are `suspend` and return the typed DTO body. `markRead` returns
-`OkResp` (reused from AND-026 Appendix A) or `Unit` per the confirmed shape (Q-4).
+FR-3. All methods are `suspend` and return the typed DTO body. **[CORRECTED — see
+§16]** `markRead` returns **`Unit`**: OpenAPI declares its `200` response with an
+empty/unspecified schema (`{}`), **not** `{"ok": true}`, so `OkResp` would throw on
+decode (Q-4 resolved → `Unit`, Retrofit handles the empty body).
 
 FR-4. Idempotent GETs (`config`, `listConversations`, `getConversation`,
 `listMessages`) accept paging/filter inputs via `@Query`; mutating POSTs
 (`sendMessage`, `markRead`) use `@Body` request DTOs. No raw `Map`/`JsonObject`
 bodies.
 
-FR-5. `listConversations` and `listMessages` are **cursor-paged**: each accepts an
-optional `cursor: String?` and `limit: Int?` query param and returns a paged
-envelope DTO (`items` + `next_cursor`) so AND-122/AND-123's Paging 3 sources can
-drive forward/reverse pagination. `listMessages` supports reverse-chronological
-history (AND-123) via the same cursor (Q-3 confirms `before`/`after` semantics).
+FR-5. **[CORRECTED — see §16]** The list endpoints are **NOT** an `{items,
+next_cursor}` envelope and `listConversations` is **not paged at all**. Verified
+against OpenAPI:
+- `GET messaging/conversations` returns a **bare JSON array** of `ConversationOut`
+  with **no** `cursor`/`limit`/`before` query params (the only declared params are
+  auth headers). `listConversations()` therefore takes no paging args and returns
+  `List<ConversationDto>`.
+- `GET messaging/conversations/{id}/messages` returns a **bare JSON array** of
+  `MessageOut`, paginated by `limit: Int?` (default 50, max 200, min 1) and
+  `before: String?` (reverse-history key) query params — **not** `cursor`, **not** a
+  `next_cursor` envelope. `listMessages()` returns `List<MessageDto>`. AND-123
+  drives reverse history by passing the oldest loaded `message_id`/timestamp as
+  `before`; end-of-history is signalled by a short/empty array, not a null cursor.
+  (Q-3 resolved: reverse-only via `before`.)
 
-FR-6. `sendMessage` posts `{ "body": "..." , "client_id": "..." }` and returns the
-persisted `MessageDto` (server-assigned `id`, `created_at`, echoed `client_id`)
-so AND-124 can reconcile its optimistic placeholder.
+FR-6. **[CORRECTED — see §16]** `sendMessage` posts a `SendTextMessageIn` whose
+text field is **`text`** (1–4000 chars), **not** `body`, and the wire contract has
+**no `client_id`** field anywhere (request or response). The endpoint returns the
+persisted `MessageDto` (server-assigned `message_id`, `created_at`). AND-124's
+optimistic-send reconciliation cannot rely on an echoed `client_id` (it must
+reconcile on `message_id`/`text`+`created_at` or a future server field); this is
+flagged as an open assumption in §16. Response status is **`200`** (`MessageOut`),
+not `201`.
 
 FR-7. POST methods carry `@Headers("Content-Type: application/json")`. The CSRF
 header is **not** declared per-method (injected globally by AND-012).
@@ -143,11 +160,8 @@ DTOs in `core-model/src/main/kotlin/com/testlogon/android/core/model/messaging/`
 ```kotlin
 package com.testlogon.android.core.network.messaging
 
-import com.testlogon.android.core.model.auth.OkResp
 import com.testlogon.android.core.model.messaging.ConversationDto
-import com.testlogon.android.core.model.messaging.ConversationPageDto
 import com.testlogon.android.core.model.messaging.MessageDto
-import com.testlogon.android.core.model.messaging.MessagePageDto
 import com.testlogon.android.core.model.messaging.MessagingConfigDto
 import com.testlogon.android.core.model.messaging.SendMessageReq
 import com.testlogon.android.core.model.messaging.MarkReadReq
@@ -158,32 +172,36 @@ import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
+// [CORRECTED vs original draft — verified against OpenAPI (see §16)]:
+//  - listConversations returns a BARE ARRAY, no query params.
+//  - listMessages returns a BARE ARRAY, paged via limit + before (NOT cursor).
+//  - sendMessage body is SendTextMessageIn { text } (NOT { body, client_id });
+//    response 200 MessageOut.
+//  - markRead returns Unit (empty 200 body), body field last_read_message_id.
+//  - No OkResp / ConversationPageDto / MessagePageDto exist on this surface.
 interface MessagingApi {
 
-    /** Messaging feature config (limits, flags). Idempotent GET. */
+    /** Messaging feature config (boolean feature flags). Idempotent GET. */
     @GET("messaging/config")
     suspend fun config(): MessagingConfigDto
 
-    /** Cursor-paged conversation list, most-recent first. Idempotent GET. */
+    /** Full conversation list (bare array, NOT paged). Idempotent GET. */
     @GET("messaging/conversations")
-    suspend fun listConversations(
-        @Query("cursor") cursor: String? = null,
-        @Query("limit") limit: Int? = null,
-    ): ConversationPageDto
+    suspend fun listConversations(): List<ConversationDto>
 
     /** Single conversation by id. Idempotent GET. */
     @GET("messaging/conversations/{id}")
     suspend fun getConversation(@Path("id") id: String): ConversationDto
 
-    /** Cursor-paged messages in a conversation (reverse history via cursor). */
+    /** Messages in a conversation (bare array); reverse history via `before`. */
     @GET("messaging/conversations/{id}/messages")
     suspend fun listMessages(
         @Path("id") id: String,
-        @Query("cursor") cursor: String? = null,
-        @Query("limit") limit: Int? = null,
-    ): MessagePageDto
+        @Query("limit") limit: Int? = null,   // default 50, max 200 server-side
+        @Query("before") before: String? = null,
+    ): List<MessageDto>
 
-    /** Send a text message; returns the persisted message (echoes client_id). */
+    /** Send a text message; returns the persisted MessageOut (HTTP 200). */
     @Headers("Content-Type: application/json")
     @POST("messaging/conversations/{id}/messages")
     suspend fun sendMessage(
@@ -191,90 +209,121 @@ interface MessagingApi {
         @Body body: SendMessageReq,
     ): MessageDto
 
-    /** Mark a conversation read up to a message/timestamp. */
+    /** Mark a conversation read up to a message id / timestamp. Empty 200 body. */
     @Headers("Content-Type: application/json")
     @POST("messaging/conversations/{id}/read")
     suspend fun markRead(
         @Path("id") id: String,
         @Body body: MarkReadReq,
-    ): OkResp
+    )
 }
 ```
 
-Path prefix note: the interface above assumes a `messaging/` prefix on the
-conversation routes. If `/openapi.json` shows the conversation routes are mounted
-at the root (`conversations/...`) with only `config` under `messaging/`, the
-annotations are adjusted to match (Q-1). The method names/signatures do not
-change.
+Path prefix note: **[VERIFIED — see §16]** Q-1 is resolved. All routes are mounted
+under a single `messaging/` prefix: `messaging/config`, `messaging/conversations`,
+`messaging/conversations/{conversation_id}`,
+`messaging/conversations/{conversation_id}/messages`, and
+`messaging/conversations/{conversation_id}/read`. The backlog's bare
+`/conversations/{id}` was shorthand; there is no root-level mount. (Path param is
+named `conversation_id` on the backend; the Retrofit `@Path("id")` name is local
+and only needs to match the `{id}` placeholder used in the annotation.)
 
 ### 4.2 DTOs (`core-model`, package `...core.model.messaging`)
 
+**[CORRECTED — every DTO below was reshaped to match the live OpenAPI schemas;
+see §16 for the field-by-field audit.]** Key changes vs the original draft:
+`MessagingConfigOut` is a set of feature-flag booleans (no length/page-size);
+`ConversationOut`/`MessageOut` key the id as `conversation_id`/`message_id`;
+timestamps are **epoch-second `Long` integers**, not ISO-8601 strings; the message
+text field is `text` (nullable); messages carry a `kind` discriminator; there is no
+`client_id`, no `read` boolean, and no page envelope DTOs.
+
 ```kotlin
+// GET messaging/config -> MessagingConfigOut (feature flags only)
 @JsonClass(generateAdapter = true)
 data class MessagingConfigDto(
-    @Json(name = "max_message_length") val maxMessageLength: Int,
-    @Json(name = "attachments_enabled") val attachmentsEnabled: Boolean = false,
-    @Json(name = "page_size") val pageSize: Int = 30,
+    @Json(name = "messaging_encrypted_messages_enabled") val encryptedMessagesEnabled: Boolean = false,
+    @Json(name = "messaging_gallery_enabled") val galleryEnabled: Boolean = false,
+    @Json(name = "messaging_dm_lottery_enabled") val dmLotteryEnabled: Boolean = false,
+    @Json(name = "messaging_hide_controls_enabled") val hideControlsEnabled: Boolean = false,
+    @Json(name = "messaging_pins_enabled") val pinsEnabled: Boolean = false,
+    @Json(name = "messaging_reporting_enabled") val reportingEnabled: Boolean = false,
+    @Json(name = "messaging_mass_send_enabled") val massSendEnabled: Boolean = false,
 )
 
-@JsonClass(generateAdapter = true)
-data class ConversationPageDto(
-    @Json(name = "items") val items: List<ConversationDto> = emptyList(),
-    @Json(name = "next_cursor") val nextCursor: String? = null,
-)
-
+// ConversationOut (returned bare-array by list, and singly by get).
+// Required by server: conversation_id, type, created_at, created_by,
+// participant_count, status. Many optional helpdesk/pin fields omitted as
+// unknown-key-tolerant; add only what consumers need.
 @JsonClass(generateAdapter = true)
 data class ConversationDto(
-    @Json(name = "id") val id: String,
+    @Json(name = "conversation_id") val conversationId: String,
+    @Json(name = "type") val type: String,                 // "dm" | "group"
     @Json(name = "title") val title: String? = null,
+    @Json(name = "created_at") val createdAt: Long,        // epoch seconds
+    @Json(name = "created_by") val createdBy: String,
+    @Json(name = "participant_count") val participantCount: Int,
+    @Json(name = "status") val status: String,
     @Json(name = "participants") val participants: List<ParticipantDto> = emptyList(),
     @Json(name = "last_message") val lastMessage: MessageDto? = null,
+    @Json(name = "last_message_at") val lastMessageAt: Long? = null,
+    @Json(name = "last_message_preview") val lastMessagePreview: String? = null,
     @Json(name = "unread_count") val unreadCount: Int = 0,
-    @Json(name = "updated_at") val updatedAt: String, // ISO-8601 UTC
+    @Json(name = "last_read_at") val lastReadAt: Long = 0,
 )
 
+// app__routers__messaging__ParticipantOut. Required: user_id, status, role.
 @JsonClass(generateAdapter = true)
 data class ParticipantDto(
     @Json(name = "user_id") val userId: String,
-    @Json(name = "username") val username: String,
-    @Json(name = "avatar_url") val avatarUrl: String? = null,
+    @Json(name = "status") val status: String,
+    @Json(name = "role") val role: String,                 // "admin" | "member"
+    @Json(name = "display_name") val displayName: String? = null,
+    @Json(name = "profile_photo_url") val profilePhotoUrl: String? = null,
+    @Json(name = "last_read_at") val lastReadAt: Long = 0,
 )
 
-@JsonClass(generateAdapter = true)
-data class MessagePageDto(
-    @Json(name = "items") val items: List<MessageDto> = emptyList(),
-    @Json(name = "next_cursor") val nextCursor: String? = null,
-)
-
+// MessageOut. Required: conversation_id, message_id, sender_id, created_at, kind.
+// `kind` is the message-type discriminator (text/image/file/gif/sticker/...);
+// `text` is null for non-text kinds. This ticket transports `kind` + `text`;
+// richer per-kind payloads (image/voice/etc.) are out of scope here.
 @JsonClass(generateAdapter = true)
 data class MessageDto(
-    @Json(name = "id") val id: String,
+    @Json(name = "message_id") val messageId: String,
     @Json(name = "conversation_id") val conversationId: String,
     @Json(name = "sender_id") val senderId: String,
-    @Json(name = "body") val body: String,
-    @Json(name = "created_at") val createdAt: String,   // ISO-8601 UTC
-    @Json(name = "client_id") val clientId: String? = null,
-    @Json(name = "read") val read: Boolean = false,
+    @Json(name = "created_at") val createdAt: Long,        // epoch seconds
+    @Json(name = "kind") val kind: String,                 // discriminator
+    @Json(name = "text") val text: String? = null,
+    @Json(name = "edited_at") val editedAt: Long? = null,
+    @Json(name = "read_by_count") val readByCount: Int? = null,
 )
 
+// POST messages body = SendTextMessageIn. Field is `text` (1..4000), NOT `body`.
+// No client_id on the wire. All fields optional server-side; `text` carried here.
 @JsonClass(generateAdapter = true)
 data class SendMessageReq(
-    @Json(name = "body") val body: String,
-    @Json(name = "client_id") val clientId: String,
+    @Json(name = "text") val text: String,
 )
 
+// POST read body = app__routers__messaging__MarkReadIn.
 @JsonClass(generateAdapter = true)
 data class MarkReadReq(
-    @Json(name = "up_to_message_id") val upToMessageId: String? = null,
+    @Json(name = "last_read_message_id") val lastReadMessageId: String? = null,
+    @Json(name = "last_read_at") val lastReadAt: Long? = null,
 )
 ```
 
-Timestamps stay as ISO-8601 `String` in the DTO; conversion to a domain time
-type (Instant) is a `core-data` mapping concern, not a transport one (keeps the
-DTO a faithful wire mirror). `OkResp` is reused from AND-026 Appendix A. No custom
-Moshi adapter is required beyond codegen unless a polymorphic message type appears
-(Q-2) — in that case a single sealed `@JsonClass(generator = "sealed:type")`
-adapter is added here.
+Timestamps are transported as **epoch-second `Long`** (matching the integer wire
+type and the web `adaptMessage`/`adaptConversation` `toNum(...)` coercion);
+conversion to a domain `Instant` is a `core-data` mapping concern. **[CORRECTED]**
+`markRead` returns `Unit` (empty body) — `OkResp` is **not** used on this surface.
+**[Q-2 resolved]** Messages **are** polymorphic via the required `kind`
+discriminator; this transport ticket keeps a single flat `MessageDto` carrying
+`kind` + nullable `text` (and tolerates the many per-kind optional keys via lenient
+parsing). A sealed hierarchy is deferred to the consuming features if/when richer
+per-kind rendering is needed; it is **not** required to satisfy this ticket's
+"payloads map vs fixtures" AC.
 
 ### 4.3 Hilt provider
 
@@ -318,88 +367,103 @@ source files and test fixtures only. `core-network` already declares
 
 ## 5. API Contract
 
-Base path (`dev`): `http://18.222.237.167:8000/`. All bodies JSON. Paths below use
-the assumed `messaging/` prefix (confirm per Q-1).
+Base path (`dev`): `http://18.222.237.167:8000/`. All bodies JSON. Prefix
+`messaging/` is **verified** (Q-1). **All examples below were corrected against the
+live OpenAPI shapes** (see §16); timestamps are epoch-second integers.
 
-### GET `messaging/config`
-Response `200`:
-```json
-{ "max_message_length": 4000, "attachments_enabled": false, "page_size": 30 }
-```
-
-### GET `messaging/conversations?cursor=&limit=30`
-Response `200`:
+### GET `messaging/config` → `MessagingConfigOut`
+Response `200` (feature flags only — **no** `max_message_length`/`page_size`):
 ```json
 {
-  "items": [
-    {
-      "id": "conv_01HZ...",
-      "title": null,
-      "participants": [
-        { "user_id": "usr_1", "username": "alice", "avatar_url": null },
-        { "user_id": "usr_2", "username": "bob", "avatar_url": "https://.../b.png" }
-      ],
-      "last_message": {
-        "id": "msg_99", "conversation_id": "conv_01HZ...", "sender_id": "usr_2",
-        "body": "see you then", "created_at": "2026-06-05T12:30:00Z",
-        "client_id": null, "read": false
-      },
-      "unread_count": 2,
-      "updated_at": "2026-06-05T12:30:00Z"
-    }
-  ],
-  "next_cursor": "eyJvIjoyMH0="
+  "messaging_encrypted_messages_enabled": false,
+  "messaging_gallery_enabled": true,
+  "messaging_dm_lottery_enabled": false,
+  "messaging_hide_controls_enabled": false,
+  "messaging_pins_enabled": true,
+  "messaging_reporting_enabled": true,
+  "messaging_mass_send_enabled": false
 }
 ```
-`next_cursor` is `null` on the last page.
 
-### GET `messaging/conversations/{id}`
-`messaging/conversations/conv_01HZ...` → `200` returns a single `ConversationDto`
-(same object shape as a list item).
+### GET `messaging/conversations` → **bare array** of `ConversationOut`
+**No query params.** Response `200` is a JSON array (not an envelope):
+```json
+[
+  {
+    "conversation_id": "conv_01HZ...",
+    "type": "dm",
+    "title": null,
+    "created_at": 1749126600,
+    "created_by": "usr_1",
+    "participant_count": 2,
+    "status": "active",
+    "participants": [
+      { "user_id": "usr_1", "status": "active", "role": "member", "display_name": "alice", "profile_photo_url": null },
+      { "user_id": "usr_2", "status": "active", "role": "member", "display_name": "bob", "profile_photo_url": "https://.../b.png" }
+    ],
+    "last_message": {
+      "message_id": "msg_99", "conversation_id": "conv_01HZ...", "sender_id": "usr_2",
+      "created_at": 1749126600, "kind": "text", "text": "see you then"
+    },
+    "last_message_at": 1749126600,
+    "unread_count": 2,
+    "last_read_at": 1749120000
+  }
+]
+```
 
-### GET `messaging/conversations/{id}/messages?cursor=&limit=30`
-Response `200`:
+### GET `messaging/conversations/{conversation_id}` → `ConversationOut`
+`messaging/conversations/conv_01HZ...` → `200` returns a single `ConversationOut`
+(same object shape as a list element).
+
+### GET `messaging/conversations/{conversation_id}/messages?limit=50&before=<id|ts>`
+Query params: `limit` (int, default **50**, max 200, min 1) and `before`
+(string, reverse-history key). Response `200` is a **bare array** of `MessageOut`:
+```json
+[
+  {
+    "message_id": "msg_98", "conversation_id": "conv_01HZ...", "sender_id": "usr_1",
+    "created_at": 1749124800, "kind": "text", "text": "lunch?", "read_by_count": 2
+  }
+]
+```
+Reverse history: pass the oldest loaded message's id/timestamp as `before`;
+end-of-history = a short/empty array (there is no `next_cursor`). AND-123 drives
+reverse paging from this.
+
+### POST `messaging/conversations/{conversation_id}/messages` → `MessageOut`
+Request body = `SendTextMessageIn` (text field is **`text`**, 1–4000 chars; **no**
+`client_id`):
+```json
+{ "text": "on my way" }
+```
+Response **`200`** (`MessageOut`):
 ```json
 {
-  "items": [
-    {
-      "id": "msg_98", "conversation_id": "conv_01HZ...", "sender_id": "usr_1",
-      "body": "lunch?", "created_at": "2026-06-05T12:00:00Z",
-      "client_id": "cli_abc", "read": true
-    }
-  ],
-  "next_cursor": "eyJvIjozMH0="
+  "message_id": "msg_100", "conversation_id": "conv_01HZ...", "sender_id": "usr_1",
+  "created_at": 1749126660, "kind": "text", "text": "on my way"
 }
 ```
-Reverse-history pagination semantics (whether `cursor` walks older or newer) per
-Q-3; AND-123 drives reverse paging from this envelope.
+There is **no echoed `client_id`**; AND-124 must reconcile its optimistic
+placeholder on `message_id`/content rather than a client token (see §16 open
+assumption).
 
-### POST `messaging/conversations/{id}/messages`
-Request:
+### POST `messaging/conversations/{conversation_id}/read`
+Request body = `MarkReadIn` (required body; both fields optional):
 ```json
-{ "body": "on my way", "client_id": "cli_7f3a" }
+{ "last_read_message_id": "msg_100" }
 ```
-Response `201` (or `200`):
-```json
-{
-  "id": "msg_100", "conversation_id": "conv_01HZ...", "sender_id": "usr_1",
-  "body": "on my way", "created_at": "2026-06-05T12:31:00Z",
-  "client_id": "cli_7f3a", "read": false
-}
-```
-The echoed `client_id` lets AND-124 reconcile the optimistic placeholder.
+Response **`200` with an empty/unspecified body** (`{}` schema) — **not**
+`{"ok": true}`. Decode as `Unit`.
 
-### POST `messaging/conversations/{id}/read`
-Request (optional cursor to a message; empty body marks all read):
-```json
-{ "up_to_message_id": "msg_100" }
-```
-Response `200`: `{ "ok": true }`.
-
-**Error envelope (all endpoints):** FastAPI `detail` union
-(`string | [{msg,type,loc}] | {code,...}`). Mapping to a typed `ApiError` is owned
-by **AND-015**; this ticket lets non-2xx surface as `HttpException`. A `401` is
-handled by AND-013 (refresh-then-retry once).
+**Error envelope (all endpoints):** non-2xx bodies are FastAPI `detail`, but the
+messaging routes return a **structured detail object** `{"detail": {"code": "...",
+"reason": "...", ...}}` (verified examples include `api_key_invalid`,
+`api_entitlement_denied`, `api_key_scope_denied`, `api_key_dual_credential_conflict`)
+on `400/401/403/429`, and the standard validation list `{"detail":
+[{"loc","msg","type"}]}` on `422`. Mapping to a typed `ApiError` is owned by
+**AND-015**; this ticket lets non-2xx surface as `HttpException`. A `401` is handled
+by AND-013 (refresh-then-retry once).
 
 ## 6. Data & State Management
 
@@ -410,11 +474,13 @@ handled by AND-013 (refresh-then-retry once).
 - **No `StateFlow`/`UiState`.** ViewModels (AND-122/AND-123) expose UI state by
   consuming repositories that wrap these calls in `ApiResult<T>` (AND-018). This
   interface returns plain DTOs on success and throws on failure.
-- **Cursor paging contract:** the `{ items, next_cursor }` envelope is the unit of
-  paging. AND-122/AND-123 implement `PagingSource` over `listConversations` /
-  `listMessages`, using `next_cursor` as `LoadResult.nextKey` (or `prevKey` for
-  reverse history). This ticket guarantees only the envelope shape and that
-  `next_cursor == null` denotes end-of-list.
+- **Paging contract [CORRECTED — see §16]:** there is **no `{items,next_cursor}`
+  envelope**. `listConversations` returns the **full conversation list** as a bare
+  array (no paging) — AND-122 paginates client-side or treats it as a single page.
+  `listMessages` returns a bare array paged by `limit` + `before`: AND-123's
+  `PagingSource` uses the oldest loaded message id/timestamp as the next `before`
+  key, and treats a returned page shorter than `limit` (or empty) as end-of-history.
+  This ticket guarantees the array element shapes only.
 - **Session state** lives in cookies (AND-011); CSRF in the `ui_csrf` cookie →
   `X-CSRF-Token` (AND-012). `MessagingApi` is unaware of both.
 - **Serialization:** Moshi codegen adapters via the shared converter; unknown keys
@@ -440,9 +506,10 @@ Responsibilities are narrow: declare endpoints/DTOs so failures propagate cleanl
 - **Deserialization failures** surface as `JsonDataException`; lenient parsing
   (nullable optionals, defaults, ignored unknown keys) minimizes these against the
   evolving dev backend.
-- **Empty-body decoding:** if `markRead` returns a bare `200` with no body,
-  declaring `OkResp` throws Moshi `EOFException`; resolve the return type
-  (`OkResp` vs `Unit`) against `/openapi.json` (Q-4), guarded by a test.
+- **Empty-body decoding [RESOLVED — see §16]:** `markRead`'s `200` response has an
+  empty/unspecified body, so its method returns **`Unit`** (Retrofit consumes the
+  empty body without invoking Moshi). Declaring `OkResp` here would throw
+  `EOFException`/`JsonDataException`; a test guards the `Unit` decode.
 - This ticket maps **no** errors itself — AND-015 (`ApiError`) and AND-018
   (`ApiResult`) own that.
 
@@ -505,47 +572,52 @@ private fun api(server: MockWebServer): MessagingApi {
 }
 ```
 
-**T-1 — `config`.** `GET messaging/config`; decode `MessagingConfigDto`
-(`max_message_length`, `page_size`) from `config.json` fixture.
+**T-1 — `config`.** `GET messaging/config`; decode `MessagingConfigDto` (the
+boolean flags `messaging_gallery_enabled`, `messaging_pins_enabled`, etc.) from
+`config.json` fixture. **[CORRECTED: flags, not `max_message_length`/`page_size`.]**
 
-**T-2 — `listConversations` contract + decode.**
+**T-2 — `listConversations` contract + decode (bare array).**
 ```kotlin
-@Test fun listConversations_getsPagedEnvelope() = runTest {
+@Test fun listConversations_getsBareArray() = runTest {
     val server = MockWebServer().apply {
-        enqueue(MockResponse().setBody(fixture("messaging/conversations_page.json")))
+        enqueue(MockResponse().setBody(fixture("messaging/conversations.json")))
         start()
     }
-    val page = api(server).listConversations(cursor = null, limit = 30)
+    val list = api(server).listConversations()
 
     val req = server.takeRequest()
     assertEquals("GET", req.method)
-    assertEquals("/messaging/conversations?limit=30", req.path)
-    assertEquals(1, page.items.size)
-    assertEquals("conv_01HZ...", page.items[0].id)
-    assertEquals(2, page.items[0].unreadCount)
-    assertEquals("usr_2", page.items[0].lastMessage?.senderId)
-    assertEquals("eyJvIjoyMH0=", page.nextCursor)
+    assertEquals("/messaging/conversations", req.path)   // no query params
+    assertEquals(1, list.size)
+    assertEquals("conv_01HZ...", list[0].conversationId)
+    assertEquals(2, list[0].unreadCount)
+    assertEquals("usr_2", list[0].lastMessage?.senderId)
+    assertEquals(1749126600L, list[0].createdAt)
     server.shutdown()
 }
 ```
-Also assert a `cursor` value is appended when non-null, and `next_cursor: null`
-decodes to a Kotlin `null` (end-of-list).
+**[CORRECTED: bare `List<ConversationDto>`, no envelope/cursor, no query params.]**
 
 **T-3 — `getConversation`.** `GET messaging/conversations/conv_1` (path param
-interpolated); decode `ConversationDto` including `participants[].avatar_url`
-nullability.
+interpolated); decode `ConversationDto` including `participants[].profile_photo_url`
+and `title` nullability. **[CORRECTED field names.]**
 
-**T-4 — `listMessages`.** `GET messaging/conversations/conv_1/messages?limit=30`;
-decode `MessagePageDto`; assert `items[].created_at`, `client_id` nullability, and
-`next_cursor`.
+**T-4 — `listMessages` (bare array + `before`/`limit`).** `GET
+messaging/conversations/conv_1/messages?limit=50&before=msg_98`; decode
+`List<MessageDto>`; assert the resolved query carries `limit` and `before` (not
+`cursor`), and assert `items[].createdAt` (Long), `kind`, and `text` nullability.
+**[CORRECTED: bare array, `before` not `cursor`, no `next_cursor`.]**
 
 **T-5 — `sendMessage`.** `POST messaging/conversations/conv_1/messages` with body
-`{"body":"on my way","client_id":"cli_7f3a"}`; assert verb/path, that the request
-body serializes exactly, and that the response `MessageDto` echoes
-`client_id == "cli_7f3a"` and carries a server `id`/`created_at`.
+`{"text":"on my way"}`; assert verb/path, that the request body serializes exactly
+(field `text`, no `client_id`), and that the response `MessageDto` carries a server
+`message_id`, `kind`, and `created_at` (Long). **[CORRECTED: `text` body, 200
+response, no `client_id`.]**
 
 **T-6 — `markRead`.** `POST messaging/conversations/conv_1/read` with
-`{"up_to_message_id":"msg_100"}`; decode `OkResp` (or tolerate empty body per Q-4).
+`{"last_read_message_id":"msg_100"}`; method returns `Unit`; assert the call
+completes against an empty `200` body (and does NOT throw a decode error).
+**[CORRECTED: `Unit` + empty body, `last_read_message_id`.]**
 
 **T-7 — DTO round-trip (`core-model`).** For `MessageDto`/`ConversationDto`,
 deserialize the fixture then re-serialize and assert no required field is dropped
@@ -612,16 +684,20 @@ the `core-model` DTOs; (3) declare `MessagingApi`; (4) add `MessagingApiModule`;
 - **R-5 DTO drift on field names.** Snake_case names assumed here
   (`unread_count`, `last_message`, `next_cursor`) must match live JSON exactly.
   Mitigation: fixtures captured from the real backend; round-trip tests (T-7).
-- **Q-1** Is the conversation route prefix `messaging/` or root `conversations/`,
-  and is `config` at `messaging/config` or `config`? *Proposed:* match
-  `/openapi.json`; spec assumes `messaging/` throughout.
-- **Q-2** Are messages polymorphic (a `type` field)? *Proposed:* default to single
-  text shape; add a sealed adapter only if OpenAPI shows a discriminator.
-- **Q-3** Does `listMessages` cursor page older or newer messages (reverse history
-  direction)? *Proposed:* confirm with web reference; expose the cursor verbatim so
-  AND-123 chooses prev/next key.
-- **Q-4** Does `markRead` return `{"ok":true}` or an empty body? *Proposed:* verify
-  via `/openapi.json`; default `OkResp`, fall back to `Unit`.
+- **Q-1 [RESOLVED].** Everything is under `messaging/` (`messaging/config`,
+  `messaging/conversations`, ...). No root mount. Source: OpenAPI paths.
+- **Q-2 [RESOLVED].** Messages **are** polymorphic via a required `kind`
+  discriminator (`text`, `image`, `file`, `gif`, `sticker`, calendar/poll/voice/...).
+  This ticket keeps a flat `MessageDto` with `kind` + nullable `text`; a sealed
+  hierarchy is deferred to consumers. Source: `MessageOut.required` includes `kind`;
+  `kind`-specific POST routes in the index.
+- **Q-3 [RESOLVED].** `listMessages` paginates **older** messages via a `before`
+  query param (string), not a cursor; it returns a bare array. AND-123 walks
+  backwards by passing the oldest loaded id/timestamp. Source: OpenAPI
+  `GET .../messages` params `limit,before`; frontend `getMessages` maps `cursor`→
+  `before`.
+- **Q-4 [RESOLVED].** `markRead` returns an **empty `200` body** (schema `{}`), not
+  `{"ok":true}`; return type is `Unit`. Source: OpenAPI `POST .../read` 200 content.
 
 ## 14. Acceptance Criteria
 
@@ -634,12 +710,16 @@ the `core-model` DTOs; (3) declare `MessagingApi`; (4) add `MessagingApiModule`;
   **vs captured fixtures** with MockWebServer (T-1..T-8).
 - **AC-3.** Each endpoint's verb + resolved path (+ query params for paged GETs +
   request body for POSTs) match Section 5 (path/verb assertions in T-1..T-6).
-- **AC-4.** Paged endpoints decode the `{items,next_cursor}` envelope, with
-  `next_cursor: null` → Kotlin `null` (T-2/T-4).
-- **AC-5.** `sendMessage` serializes `{body,client_id}` and decodes a `MessageDto`
-  that echoes `client_id` (T-5).
-- **AC-6.** Snake_case fields (`unread_count`, `last_message`, `created_at`,
-  `next_cursor`) decode via codegen adapters; unknown keys ignored; absent
+- **AC-4 [CORRECTED].** List endpoints decode **bare JSON arrays**:
+  `listConversations` → `List<ConversationDto>` (no query params); `listMessages` →
+  `List<MessageDto>` with `limit`+`before` query params resolved correctly (no
+  `cursor`/`next_cursor`) (T-2/T-4).
+- **AC-5 [CORRECTED].** `sendMessage` serializes `{"text": "..."}` (no `client_id`)
+  and decodes a `MessageDto` carrying `message_id`, `kind`, and `created_at` from a
+  `200` response (T-5).
+- **AC-6 [CORRECTED].** Snake_case fields (`conversation_id`, `message_id`,
+  `unread_count`, `last_message`, `created_at`, `last_message_at`) decode via codegen
+  adapters; epoch-second `created_at` decodes to `Long`; unknown keys ignored; absent
   optionals default (T-7/T-8).
 - **AC-7.** Non-2xx (e.g. `404` from `getConversation`) surfaces as `HttpException`
   and is not swallowed (T-9).
@@ -655,8 +735,8 @@ the `core-model` DTOs; (3) declare `MessagingApi`; (4) add `MessagingApiModule`;
 
 - DTOs (`com.testlogon.android.core.model.messaging`) and `MessagingApi` +
   `MessagingApiModule` (`com.testlogon.android.core.network.messaging[.di]`) are
-  implemented, reusing `OkResp` (AND-026) and the shared Retrofit (AND-010); no
-  DTOs redefined.
+  implemented on the shared Retrofit (AND-010); no DTOs redefined. **[CORRECTED:
+  `OkResp` is NOT used — `markRead` returns `Unit`.]**
 - Open questions Q-1..Q-4 resolved against `/openapi.json` and the web reference;
   the interface paths, cursor semantics, message shape, and `markRead` return type
   reflect the confirmed contract.
@@ -675,3 +755,303 @@ the `core-model` DTOs; (3) declare `MessagingApi`; (4) add `MessagingApiModule`;
 - A one-line note in the `core-network` README (AND-007) records the
   `MessagingApi` path/verb map and the delegation of cookie/CSRF/refresh to
   AND-011/AND-012/AND-013.
+
+## 16. Citations & Assumption Audit
+
+Each claim below is the spec's assertion, a VERDICT, and an exact source pointer.
+OpenAPI paths cite `reference/openapi.index.txt` / `reference/openapi.pretty.json`
+(by `components.schemas.<Name>` or path object); frontend pointers cite
+`reference/src/...`.
+
+1. **Prefix is `messaging/` for all routes (config, conversations, messages,
+   read).** VERDICT: **Verified.** Source: OpenAPI `GET /messaging/config`,
+   `GET /messaging/conversations`, `GET /messaging/conversations/{conversation_id}`,
+   `GET|POST /messaging/conversations/{conversation_id}/messages`,
+   `POST /messaging/conversations/{conversation_id}/read`. The backlog's bare
+   `/conversations/{id}` was shorthand (no root mount exists).
+
+2. **`GET messaging/config` returns `{max_message_length, attachments_enabled,
+   page_size}`.** VERDICT: **Corrected.** It returns `MessagingConfigOut`, a set of
+   **boolean feature flags** (`messaging_encrypted_messages_enabled`,
+   `messaging_gallery_enabled`, `messaging_dm_lottery_enabled`,
+   `messaging_hide_controls_enabled`, `messaging_pins_enabled`,
+   `messaging_reporting_enabled`, `messaging_mass_send_enabled`). Source:
+   `components.schemas.MessagingConfigOut`; frontend `src/api/types.ts:
+   MessagingConfig`; `src/api/endpoints/messaging.ts: getMessagingConfig`.
+
+3. **`listConversations` is cursor-paged returning `{items, next_cursor}` with
+   `cursor`/`limit` query params.** VERDICT: **Corrected.** `GET
+   /messaging/conversations` returns a **bare array** of `ConversationOut` and
+   declares **no** `cursor`/`limit` query params (only auth headers). Source:
+   OpenAPI path `/messaging/conversations` get → `200` schema `type: array, items:
+   $ref ConversationOut`; index params for that op = `authorization,X-SESSION-ID,
+   X-API-Key` only. (Frontend `getConversations` defensively also accepts an
+   envelope, but the live contract is a bare array.)
+
+4. **`listMessages` is cursor-paged returning `{items, next_cursor}` via a
+   `cursor` query param.** VERDICT: **Corrected.** `GET
+   /messaging/conversations/{conversation_id}/messages` returns a **bare array** of
+   `MessageOut`, paged via `limit` (default 50, max 200, min 1) and `before`
+   (string) — no `cursor`, no `next_cursor`. Source: OpenAPI path object
+   parameters `limit,before` + `200` schema `type: array, items: $ref MessageOut`;
+   frontend `src/api/endpoints/messaging.ts: getMessages` (maps its arg to
+   `{ before }`).
+
+5. **`getConversation` GET returns a single `ConversationOut`.** VERDICT:
+   **Verified.** Source: OpenAPI
+   `GET /messaging/conversations/{conversation_id}` → `200:ConversationOut`;
+   frontend `getConversation`.
+
+6. **Conversation id field is `id`; has `updated_at` (ISO-8601 string).** VERDICT:
+   **Corrected.** The id is **`conversation_id`**; there is **no `updated_at`** —
+   recency is `last_message_at` (epoch int). `created_at` is an **integer (epoch
+   seconds)**, not an ISO string. Required: `conversation_id, type, created_at,
+   created_by, participant_count, status`. Source:
+   `components.schemas.ConversationOut`; frontend `src/api/types.ts: Conversation`.
+
+7. **Participant fields `username` + `avatar_url`.** VERDICT: **Corrected.**
+   `app__routers__messaging__ParticipantOut` uses `user_id`, `status`, `role`
+   (required) plus optional `display_name`, `profile_photo_url`, `last_read_at`,
+   `joined_at`, etc. No `username`/`avatar_url`. Source:
+   `components.schemas.app__routers__messaging__ParticipantOut`; frontend
+   `src/api/types.ts: Participant`.
+
+8. **Message id field `id`; text in `body`; `created_at` ISO string; has
+   `client_id` and a `read` boolean.** VERDICT: **Corrected.** `MessageOut` uses
+   **`message_id`**, text is **`text`** (nullable), `created_at` is **integer
+   (epoch seconds)**, there is **no `client_id`** and **no `read` boolean**
+   (read state is `read_by_count` / `read_by_user_ids`). Required:
+   `conversation_id, message_id, sender_id, created_at, kind`. Source:
+   `components.schemas.MessageOut`; frontend `src/api/endpoints/messagingAdapter.ts:
+   adaptMessage` and `src/api/types.ts: Message`.
+
+9. **Messages are a single flat text shape (Q-2 / R-3).** VERDICT: **Corrected.**
+   Messages are **polymorphic** via a **required `kind`** discriminator
+   (text/image/file/gif/sticker/calendar/poll/voice/…); `text` is null for non-text
+   kinds. This ticket transports a flat `MessageDto` with `kind` + nullable `text`.
+   Source: `MessageOut.required` includes `kind`; the many `.../messages/{kind}`
+   POST routes in `openapi.index.txt`.
+
+10. **`sendMessage` body is `{body, client_id}` and the response echoes
+    `client_id`; status `201`.** VERDICT: **Corrected.** Request is
+    `SendTextMessageIn` whose text field is **`text`** (1–4000); there is **no
+    `client_id`** in the request or `MessageOut` response; response status is
+    **`200`** (`MessageOut`). Source: `components.schemas.SendTextMessageIn`
+    (`text` maxLength 4000), OpenAPI `POST .../messages` → `200:MessageOut`;
+    frontend `src/api/types.ts: SendTextMessageReq`, `src/api/endpoints/
+    messaging.ts: sendTextMessage`.
+
+11. **The `4000` max-message length lives in config.** VERDICT: **Corrected.** It
+    is a **request-body constraint** on `SendTextMessageIn.text` (maxLength 4000,
+    minLength 1), not a config field. Source: `components.schemas.SendTextMessageIn`.
+
+12. **`markRead` body is `{up_to_message_id}` and response is `{"ok": true}`
+    (`OkResp`).** VERDICT: **Corrected.** Body is
+    `app__routers__messaging__MarkReadIn` with **`last_read_message_id`** and/or
+    **`last_read_at`** (both optional, body required); the `200` response has an
+    **empty/unspecified body** (`schema: {}`) → return `Unit`, not `OkResp`. Source:
+    `components.schemas.app__routers__messaging__MarkReadIn`; OpenAPI `POST .../read`
+    request/response.
+
+13. **Mutating verbs are POST; CSRF/cookies injected globally (AND-011/012); 401 →
+    AND-013 refresh.** VERDICT: **Verified (transport)** for POST verbs (send/read
+    are POST per OpenAPI). The CSRF/cookie/401 wiring is an Android-side concern
+    owned by AND-011/012/013 and not observable in these sources — treated as a
+    cross-ticket dependency, not a backend claim.
+
+14. **Idempotent GETs eligible for AND-016 bounded backoff; ~20s dev-host
+    timeouts.** VERDICT: **Unverified-assumption** (Android transport policy, not in
+    OpenAPI/frontend). Carried as a dependency on AND-009/AND-016.
+
+15. **Error bodies are FastAPI `detail`.** VERDICT: **Verified + refined.** Non-2xx
+    on messaging routes return a **structured** `{"detail": {"code","reason",...}}`
+    (e.g. `api_key_invalid`, `api_entitlement_denied`, `api_key_scope_denied`,
+    `api_key_dual_credential_conflict`) on 400/401/403/429, and the validation list
+    `{"detail":[{"loc","msg","type"}]}` on 422. Source: OpenAPI `/messaging/
+    conversations` and `.../messages` response examples; `HTTPValidationError`.
+
+16. **Hilt `@Provides @Singleton fun provideMessagingApi(retrofit) =
+    retrofit.create(...)`.** VERDICT: **Unverified-assumption (framework pattern).**
+    Standard Retrofit+Hilt usage; not derivable from backend sources. Framework ref:
+    Retrofit `create` — https://square.github.io/retrofit/ ; Hilt modules —
+    https://developer.android.com/training/dependency-injection/hilt-android .
+
+17. **Moshi codegen (`@JsonClass(generateAdapter=true)`) with `@Json(name=...)`;
+    lenient unknown-key handling.** VERDICT: **Unverified-assumption (framework
+    pattern).** Framework ref: Moshi codegen —
+    https://github.com/square/moshi#codegen . (Moshi ignores unknown JSON keys by
+    default, which the lenient-parse requirement relies on.)
+
+### Corrections made
+
+- **Config DTO** rewritten from `{max_message_length, attachments_enabled,
+  page_size}` to the seven boolean feature flags of `MessagingConfigOut` (claims 2,
+  11).
+- **List endpoints** changed from `{items,next_cursor}` cursor envelopes to **bare
+  arrays**; `listConversations()` lost its `cursor`/`limit` params (none exist);
+  `listMessages()` paginates via **`limit` + `before`**, not `cursor`; removed
+  `ConversationPageDto`/`MessagePageDto` (claims 3, 4). Updated FR-5, §4.1
+  interface, §4.2 DTOs, §5, §6 paging contract, T-2/T-4, AC-4.
+- **ConversationDto** rekeyed `id`→`conversation_id`, dropped `updated_at`, added
+  `type/created_by/participant_count/status/last_message_at`, timestamps →
+  epoch-second `Long` (claim 6).
+- **ParticipantDto** rekeyed `username`/`avatar_url` → `display_name`/
+  `profile_photo_url` + `user_id`/`status`/`role` (claim 7).
+- **MessageDto** rekeyed `id`→`message_id`, `body`→`text` (nullable), `created_at`→
+  `Long`, removed `client_id` and `read`, added required `kind` discriminator
+  (claims 8, 9).
+- **SendMessageReq** changed body field `body`→`text`, removed `client_id`; send
+  response status corrected `201`→`200`; updated FR-6, §5, T-5, AC-5 (claim 10).
+- **MarkReadReq** field `up_to_message_id` → `last_read_message_id` (+ optional
+  `last_read_at`); **`markRead` return `OkResp`→`Unit`** (empty body); removed
+  `OkResp` import/usage; updated FR-3, §4.1, §7, §15, T-6 (claim 12).
+- **Error envelope** in §5 refined to the structured `detail` object shape (claim
+  15).
+- Q-1..Q-4 marked resolved in §13.
+
+### Open assumptions
+
+- **AND-124 optimistic-send reconciliation has no `client_id` to echo.** The wire
+  contract carries no client-supplied dedupe token (claim 10). AND-124 must
+  reconcile its optimistic placeholder on `message_id` (+ content/`created_at`) or
+  negotiate a new backend field. *Why unverifiable:* no such field exists in
+  `SendTextMessageIn`/`MessageOut`, and the backend's send-idempotency behaviour is
+  not described in OpenAPI (R-4 remains open).
+- **AND-016 backoff / ~20s dev-host timeout policy** (claim 14) — Android transport
+  policy, not in the backend/frontend sources.
+- **Hilt provider + Moshi codegen + lenient parsing** (claims 16, 17) — framework
+  conventions, validated against Retrofit/Hilt/Moshi docs, not backend sources.
+- **`config` cache/backoff eligibility and "limits"** — `MessagingConfigOut`
+  carries only feature-flag booleans; any client-side length/page limits must come
+  from elsewhere (e.g. the `SendTextMessageIn.text` 1–4000 constraint), not config.
+
+## 17. Test Plan
+
+All cases target the JVM/Robolectric runner unless noted; this is a headless
+transport+DTO ticket, so the bulk is contract/MockWebServer and unit decode tests
+on the **JVM unit/Robolectric** target (no device). Test target legend matches the
+CI/dev targets. The physical Galaxy A15 / emulator `test35` are only invoked for
+the Hilt graph instrumented case and a real-dev-host smoke; nothing here needs
+camera/biometric/WebRTC hardware.
+
+- **TC-AND-120-01 — config decode.** Type: contract/MockWebServer. Target: JVM
+  unit. Preconditions: `config.json` fixture = the seven `messaging_*` boolean
+  flags. Steps: enqueue `200` with fixture; call `config()`. Expected: `GET`,
+  path `/messaging/config`, decoded `MessagingConfigDto` with each flag mapped (e.g.
+  `galleryEnabled == true`, `pinsEnabled == true`); no `max_message_length` field
+  exists. Traces: AC-1, AC-2, AC-3.
+
+- **TC-AND-120-02 — listConversations bare array + no query params.** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions:
+  `conversations.json` fixture is a JSON **array**. Steps: enqueue `200`; call
+  `listConversations()`. Expected: `GET` `/messaging/conversations` with **no**
+  query string; result is `List<ConversationDto>`; `[0].conversationId`,
+  `unreadCount`, `lastMessage?.senderId`, and `createdAt` (Long) decode. Traces:
+  AC-1, AC-2, AC-3, AC-4.
+
+- **TC-AND-120-03 — getConversation path interpolation + nullable fields.** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions: `conversation.json`
+  fixture with `title: null` and a participant with `profile_photo_url: null`.
+  Steps: enqueue `200`; call `getConversation("conv_1")`. Expected: `GET`
+  `/messaging/conversations/conv_1`; `ConversationDto` decodes with `title == null`
+  and `participants[].profilePhotoUrl == null`; `type`/`status` present. Traces:
+  AC-1, AC-2, AC-3, AC-6.
+
+- **TC-AND-120-04 — listMessages `limit`+`before` + bare array.** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions: `messages.json` fixture
+  is a JSON array of `MessageOut`. Steps: enqueue `200`; call
+  `listMessages("conv_1", limit = 50, before = "msg_98")`. Expected: `GET`; resolved
+  path contains `limit=50` and `before=msg_98` and **no** `cursor`; result is
+  `List<MessageDto>`; `[0].messageId`, `kind`, nullable `text`, `createdAt` (Long)
+  decode. Traces: AC-1, AC-2, AC-3, AC-4.
+
+- **TC-AND-120-05 — listMessages with null paging args.** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions: same fixture. Steps:
+  call `listMessages("conv_1")` (both args null). Expected: resolved path is
+  `/messaging/conversations/conv_1/messages` with **no** query params (Retrofit
+  omits null `@Query`). Traces: AC-3, AC-4.
+
+- **TC-AND-120-06 — sendMessage serializes `{text}` and decodes `MessageOut`.**
+  Type: contract/MockWebServer. Target: JVM unit. Preconditions: `sent_message.json`
+  fixture. Steps: enqueue `200`; call `sendMessage("conv_1", SendMessageReq(text =
+  "on my way"))`. Expected: `POST`
+  `/messaging/conversations/conv_1/messages`; recorded request body is exactly
+  `{"text":"on my way"}` (no `client_id`/`body` keys); `Content-Type: application/
+  json`; response `MessageDto` has `messageId`, `kind == "text"`, `createdAt`
+  (Long). Traces: AC-1, AC-2, AC-3, AC-5.
+
+- **TC-AND-120-07 — markRead serializes `{last_read_message_id}` and returns
+  Unit on empty body.** Type: contract/MockWebServer. Target: JVM unit.
+  Preconditions: none. Steps: enqueue `200` with **empty body**; call
+  `markRead("conv_1", MarkReadReq(lastReadMessageId = "msg_100"))`. Expected:
+  `POST` `/messaging/conversations/conv_1/read`; request body
+  `{"last_read_message_id":"msg_100"}`; call returns `Unit` and does **not** throw a
+  decode error on the empty body. Traces: AC-1, AC-2, AC-3.
+
+- **TC-AND-120-08 — DTO round-trip (core-model).** Type: unit. Target: JVM unit.
+  Preconditions: captured `MessageOut`/`ConversationOut` fixtures. Steps: decode
+  fixture → re-encode with the production Moshi. Expected: required fields
+  (`conversation_id`, `message_id`, `sender_id`, `created_at`, `kind` /
+  `conversation_id`, `type`, `created_at`, `created_by`, `participant_count`,
+  `status`) survive; snake_case names and integer timestamps preserved. Traces:
+  AC-2, AC-6.
+
+- **TC-AND-120-09 — lenient decoding (unknown keys + absent optionals).** Type:
+  unit. Target: JVM unit. Preconditions: a `MessageOut` fixture with extra unknown
+  keys (e.g. `tip_amount_cents`, `voice_message`) and a non-text fixture with
+  `text` absent / `kind: "image"`. Steps: decode. Expected: decodes without error;
+  unknown keys ignored; `text == null`; absent optionals fall to defaults. Traces:
+  AC-6.
+
+- **TC-AND-120-10 — non-2xx propagation (structured detail).** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions: none. Steps: enqueue
+  `404` with body `{"detail":{"code":"not_found","reason":"conversation_not_found"}}`;
+  call `getConversation("missing")`. Expected: throws `retrofit2.HttpException` with
+  `code() == 404`; the raw error body is retrievable (not swallowed) for AND-015.
+  Also enqueue `403` `{"detail":{"code":"api_key_scope_denied",...}}` and assert
+  `HttpException(403)`. Traces: AC-7.
+
+- **TC-AND-120-11 — Hilt provider singleton.** Type: instrumented (Hilt graph).
+  Target: emulator `test35` (API 35) — sufficient, no hardware needed. Preconditions:
+  `@HiltAndroidTest` with the shared Retrofit bound. Steps: inject `MessagingApi`
+  twice. Expected: non-null; both injections yield the **same** singleton instance;
+  no second `Retrofit`/`OkHttpClient` constructed. Traces: AC-8, AC-9.
+
+- **TC-AND-120-12 — security: message `text` never logged in release.** Type:
+  manual + code-review (static). Target: JVM unit (assert the AND-009 interceptor
+  redaction config) + reviewer check. Preconditions: release build config. Steps:
+  inspect that no per-method body logging is added here and that the shared logging
+  interceptor redacts/omits `sendMessage` bodies and message-bearing responses.
+  Expected: message `text` does not reach logcat in release. Traces: AC-9 (and §8).
+
+- **TC-AND-120-13 — flaky/offline dev-host behaviour.** Type: integration /
+  manual. Target: **physical device (Galaxy A15, SM-A156U)** pointed at the
+  cleartext dev host `http://18.222.237.167:8000` over real mobile/Wi-Fi network
+  (preferred over emulator because the ~20s timeout + cleartext + real-network
+  flakiness is the behaviour under test). Steps: with the host slow/unreachable,
+  call `listConversations()` / `listMessages()`; then drop connectivity and call
+  `sendMessage()`. Expected: transport failures surface as
+  `SocketTimeoutException`/`IOException` (unchanged); idempotent GETs are retried per
+  AND-009/AND-016 policy while `sendMessage`/`markRead` are **not** auto-retried.
+  Traces: AC-3 (transport), §7. *Must run on the physical device.*
+
+- **TC-AND-120-14 — build/codegen gate.** Type: integration (CI). Target: JVM/CI.
+  Preconditions: clean checkout. Steps: run `./gradlew :core-model:
+  testDebugUnitTest :core-network:assemble :core-network:testDebugUnitTest`.
+  Expected: KSP generates a Moshi adapter for every messaging DTO (build fails if
+  one is missing); all tests pass; no new lint/detekt violations. Traces: AC-10.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|---|---|
+| AC-1 (operations declared, compiles) | TC-01, 02, 03, 04, 06, 07, 14 |
+| AC-2 (payloads map vs fixtures) | TC-01, 02, 03, 04, 06, 08 |
+| AC-3 (verb/path/query/body) | TC-01, 02, 03, 04, 05, 06, 07, 13 |
+| AC-4 (bare arrays; `limit`/`before`) | TC-02, 04, 05 |
+| AC-5 (`{text}` send → `MessageDto`) | TC-06 |
+| AC-6 (snake_case + epoch Long; lenient) | TC-03, 08, 09 |
+| AC-7 (non-2xx → HttpException) | TC-10 |
+| AC-8 (Hilt singleton) | TC-11 |
+| AC-9 (no new client; no manual headers; no body logging) | TC-11, 12 |
+| AC-10 (clean build + codegen + tests) | TC-14 |
