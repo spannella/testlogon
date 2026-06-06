@@ -39,37 +39,188 @@ def _now_ts() -> int:
     return int(time.time())
 
 
+def _upload_to_s3(local_path: str, *, bucket: str, key: str) -> None:
+    """Upload a local file to the VOD bucket (GAP-0121).
+
+    Uses the shared ``app.core.aws_clients.s3_client()`` factory so the same
+    code path runs in dev (moto intercepts boto3 in-process) and production
+    (real S3) per SECOPS-007 — the only difference is the resolved endpoint.
+
+    Raises RuntimeError on any boto3 error so the caller can mark the
+    recording as failed.
+    """
+    import os
+
+    from app.core.aws_clients import s3_client
+
+    file_size = os.path.getsize(local_path)
+    logger.info("Uploading %s -> s3://%s/%s (%d bytes)", local_path, bucket, key, file_size)
+    try:
+        s3_client().upload_file(local_path, bucket, key)
+    except Exception as exc:
+        raise RuntimeError(f"S3 upload failed for s3://{bucket}/{key}: {exc}") from exc
+
+
 # ─── Pipeline Steps ────────────────────────────────────────────────
 
 
 def inventory_segments(recording: RecordingRecord) -> List[str]:
-    """List .ts segment files from the archive prefix.
+    """List .ts segment files from the archive prefix in S3 (GAP-0119).
 
-    In mock mode, returns an empty list (no real segments).
-    In production, would list S3 objects under s3_archive_prefix.
+    In mock mode (no FFmpeg), returns an empty list.
+    Otherwise paginates ListObjectsV2 under ``s3_archive_prefix`` in the VOD
+    bucket, filters for ``.ts`` segments, and returns the keys sorted
+    lexicographically (zero-padded HLS sequence names sort chronologically).
     """
     if _should_mock():
         logger.info("Recording %s: mock inventory (no segments)", recording.recording_id)
         return []
 
-    # Production: list S3 objects under the archive prefix
-    # For now in dev, return empty since no real segments exist
-    logger.info("Recording %s: inventorying segments at %s", recording.recording_id, recording.s3_archive_prefix)
-    return []
+    prefix = (recording.s3_archive_prefix or "").strip()
+    if not prefix:
+        logger.warning(
+            "Recording %s: s3_archive_prefix is empty; no segments to inventory",
+            recording.recording_id,
+        )
+        return []
+
+    from app.core.aws_clients import s3_client
+
+    s3 = s3_client()
+    bucket = S.broadcast_recording_vod_bucket
+    max_seg = S.broadcast_recording_max_segments
+
+    keys: List[str] = []
+    paginator = s3.get_paginator("list_objects_v2")
+    try:
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if key.endswith(".ts"):
+                    keys.append(key)
+                    if len(keys) >= max_seg:
+                        logger.warning(
+                            "Recording %s: segment cap %d reached; truncating inventory",
+                            recording.recording_id, max_seg,
+                        )
+                        return sorted(keys)
+    except Exception as exc:
+        logger.error(
+            "Recording %s: S3 inventory error: %s",
+            recording.recording_id, exc, exc_info=True,
+        )
+        raise
+
+    segments = sorted(keys)
+    logger.info(
+        "Recording %s: inventoried %d segments from s3://%s/%s",
+        recording.recording_id, len(segments), bucket, prefix,
+    )
+    return segments
 
 
 def concatenate_segments(recording: RecordingRecord, segments: List[str]) -> Optional[str]:
-    """Concatenate .ts segments into a single transport stream.
+    """Concatenate .ts segments via the FFmpeg concat demuxer (GAP-0120).
 
-    Returns the path to the concatenated file, or None in mock mode.
+    Downloads each segment from S3 to a temp dir, writes a concat list file,
+    runs FFmpeg (``-f concat -safe 1`` with validated absolute local paths),
+    uploads the concatenated .ts back to S3, and returns the LOCAL path of the
+    concatenated file for the downstream transcode/MP4 steps. Returns None in
+    mock mode or when there are no segments.
+
+    The temp dir is intentionally left in place on success; downstream steps
+    read the returned path. Cleanup is handled by ``process_recording``.
     """
     if _should_mock() or not segments:
         logger.info("Recording %s: mock concatenation (skip)", recording.recording_id)
         return None
 
-    # Production: FFmpeg concat demuxer
-    logger.info("Recording %s: concatenating %d segments", recording.recording_id, len(segments))
-    return None
+    import os
+    import subprocess
+    import tempfile
+
+    from app.core.aws_clients import s3_client
+
+    s3 = s3_client()
+    bucket = S.broadcast_recording_vod_bucket
+
+    # Disk safety preflight (FFMPEG_MIN_FREE_DISK_GB).
+    free_gb = shutil.disk_usage(tempfile.gettempdir()).free / (1024 ** 3)
+    if free_gb < S.ffmpeg_min_free_disk_gb:
+        raise RuntimeError(
+            f"Insufficient disk space for recording: {free_gb:.1f} GB free, "
+            f"{S.ffmpeg_min_free_disk_gb} GB required"
+        )
+
+    tmp_dir = tempfile.mkdtemp(prefix=f"bcast_concat_{recording.recording_id}_")
+    try:
+        logger.info(
+            "Recording %s: downloading %d segments to %s",
+            recording.recording_id, len(segments), tmp_dir,
+        )
+
+        # Step 1: Download all segments to local disk.
+        local_paths: List[str] = []
+        for i, key in enumerate(segments):
+            local_name = os.path.join(tmp_dir, f"seg{i:06d}.ts")
+            s3.download_file(bucket, key, local_name)
+            local_paths.append(os.path.abspath(local_name))
+
+        # Step 2: Write the FFmpeg concat demuxer input file. With -safe 1 the
+        # demuxer rejects unsafe/relative paths, so validate that every entry
+        # is an absolute path that lives inside our temp dir before writing it.
+        tmp_dir_abs = os.path.abspath(tmp_dir)
+        concat_list_path = os.path.join(tmp_dir, "concat.txt")
+        with open(concat_list_path, "w") as fh:
+            for lp in local_paths:
+                if not os.path.isabs(lp) or os.path.commonpath([tmp_dir_abs, lp]) != tmp_dir_abs:
+                    raise RuntimeError(f"Refusing unsafe concat path: {lp}")
+                # Single-quote the path; escape any embedded single quotes.
+                safe = lp.replace("'", r"'\''")
+                fh.write(f"file '{safe}'\n")
+
+        # Step 3: Run the FFmpeg concat demuxer.
+        output_path = os.path.join(tmp_dir, "concatenated.ts")
+        args = [
+            S.ffmpeg_binary_path,
+            "-hide_banner", "-loglevel", "warning", "-y",
+            "-f", "concat", "-safe", "1",
+            "-i", concat_list_path,
+            "-c", "copy",
+            output_path,
+        ]
+        logger.info(
+            "Recording %s: running FFmpeg concat: %s",
+            recording.recording_id, " ".join(args),
+        )
+        result = subprocess.run(args, capture_output=True, text=True, timeout=3600)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"FFmpeg concat failed (rc={result.returncode}): {result.stderr[:500]}"
+            )
+
+        concat_size = os.path.getsize(output_path)
+        logger.info(
+            "Recording %s: concatenation complete, size=%d bytes",
+            recording.recording_id, concat_size,
+        )
+
+        # Step 4: Upload the concatenated .ts to S3 for downstream use.
+        s3_concat_key = f"{recording.session_id}/recording/concatenated.ts"
+        _upload_to_s3(output_path, bucket=bucket, key=s3_concat_key)
+
+        # Persist the key so a pipeline restart can locate the concat output.
+        update_recording_status(
+            recording.recording_id,
+            recording.status,  # keep current status (processing)
+            s3_concatenated_key=s3_concat_key,
+        )
+
+        return output_path
+
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
 
 
 def transcode_recording(recording: RecordingRecord, concat_path: Optional[str]) -> Dict[str, Any]:
@@ -127,7 +278,9 @@ def generate_mp4(recording: RecordingRecord, concat_path: Optional[str]) -> Dict
 
     mp4_size = _os.path.getsize(mp4_path)
     mp4_key = f"{recording.session_id}/recording/full.mp4"
-    # Upload to S3 would happen here in production
+    # GAP-0121: persist the generated MP4 to the VOD bucket so download/playback
+    # URLs built from mp4_s3_key resolve to a real object.
+    _upload_to_s3(mp4_path, bucket=S.broadcast_recording_vod_bucket, key=mp4_key)
     return {
         "mp4_s3_key": mp4_key,
         "mp4_size_bytes": mp4_size,
@@ -209,6 +362,7 @@ def process_recording(recording_id: str) -> Optional[RecordingRecord]:
     # Transition to processing
     update_recording_status(recording_id, "processing")
 
+    concat_path: Optional[str] = None
     try:
         # Step 1: Inventory
         segments = inventory_segments(recording)
@@ -264,3 +418,11 @@ def process_recording(recording_id: str) -> Optional[RecordingRecord]:
             error_message=str(exc)[:500],
         )
         return get_recording(recording_id)
+
+    finally:
+        # Clean up the temp dir holding the concatenated .ts (and downloaded
+        # segments). concatenate_segments leaves it in place on success so the
+        # transcode/MP4 steps can read it; remove it once the pipeline is done.
+        if concat_path:
+            import os
+            shutil.rmtree(os.path.dirname(concat_path), ignore_errors=True)

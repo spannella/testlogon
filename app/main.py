@@ -518,6 +518,7 @@ def create_app() -> FastAPI:
             _S.video_upload_bucket,
             _S.vod_output_bucket or "vod-output",
             _S.filemgr_bucket or "filemgr",  # FIN-001 invoice PDFs
+            _S.broadcast_recording_vod_bucket or "broadcast-vod",  # GAP-0121 recording VOD
         ] if b]
         app.add_event_handler("startup", lambda: _start_s3_mock(_dev_buckets))
 

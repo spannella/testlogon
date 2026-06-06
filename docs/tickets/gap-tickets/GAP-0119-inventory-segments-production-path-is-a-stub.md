@@ -1,6 +1,6 @@
 # GAP-0119: `inventory_segments` production path is a stub
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BCAST-006 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BCAST-006 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/BCAST-006.md`); see also `docs/tickets/writeups/BCAST-006.md`
 
 ## Location
