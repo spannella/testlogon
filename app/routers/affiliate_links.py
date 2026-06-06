@@ -208,6 +208,7 @@ async def affiliate_redirect(
         httponly=True,
         samesite="lax",
         path="/",
+        secure=S.ui_cookie_secure,
     )
 
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"

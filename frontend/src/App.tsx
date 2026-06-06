@@ -49,6 +49,9 @@ const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
 const SyndicateProfilePage = lazy(() => import("@/pages/syndicates/SyndicateProfilePage"));
 const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetailPage"));
 const SyndicateAdvertisingDetailPage = lazy(() => import("@/pages/syndicates/SyndicateAdvertisingDetailPage"));
+const DelegatesPage = lazy(
+  () => import("@/pages/delegates/DelegatesPage"),
+);
 const DelegationApiKeysPage = lazy(
   () => import("@/pages/delegates/DelegationApiKeysPage"),
 );
@@ -344,6 +347,7 @@ export default function App() {
           <Route path="syndicates/:syndicateId" element={<SyndicateProfilePage />} />
           <Route path="syndicates/:syndicateId/manage" element={<SyndicateDetailPage />} />
           <Route path="syndicates/:syndicateId/campaigns/:campaignId" element={<SyndicateAdvertisingDetailPage />} />
+          <Route path="delegates" element={<DelegatesPage />} />
           <Route path="delegation-api" element={<DelegationApiKeysPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="activity" element={<ActivityFeedPage />} />

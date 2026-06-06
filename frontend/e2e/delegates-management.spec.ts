@@ -498,3 +498,49 @@ test.describe("490 — Audit Log API", () => {
     expect(revoked).toBeTruthy();
   });
 });
+
+// ─── Section 491: /delegates route (GAP-0156) ────────────────────────────────
+//
+// Regression for GAP-0156: DelegatesPage existed on disk but had no <Route> in
+// App.tsx, so navigating to /delegates fell through to the catch-all 404.
+// These tests fail before the route addition and pass after.
+
+test.describe("491 — /delegates route (GAP-0156)", () => {
+  let alicePage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    const ctx = await browser.newContext();
+    alicePage = await ctx.newPage();
+    await injectAuth(alicePage, ALICE_ID);
+  });
+
+  test.afterAll(async () => {
+    await alicePage.context().close();
+  });
+
+  test("491.1 /delegates renders DelegatesPage (not a 404 fallback)", async () => {
+    await alicePage.goto(`${BASE}/delegates`, { waitUntil: "domcontentloaded" });
+
+    // Positive: DelegatesPage renders its <h1>Delegates</h1> heading.
+    await expect(
+      alicePage.getByRole("heading", { name: "Delegates", exact: true }),
+    ).toBeVisible({ timeout: 8000 });
+
+    // Negative: the not-found state must NOT be visible.
+    await expect(alicePage.getByText(/not found/i)).not.toBeVisible();
+  });
+
+  test("491.2 DelegatesPage lazy chunk loads without error", async () => {
+    const chunkErrors: string[] = [];
+    alicePage.on("pageerror", (err) => {
+      if (/loading chunk/i.test(err.message)) chunkErrors.push(err.message);
+    });
+
+    await alicePage.goto(`${BASE}/delegates`, { waitUntil: "domcontentloaded" });
+    await expect(
+      alicePage.getByRole("heading", { name: "Delegates", exact: true }),
+    ).toBeVisible({ timeout: 8000 });
+
+    expect(chunkErrors).toHaveLength(0);
+  });
+});
