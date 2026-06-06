@@ -9,8 +9,13 @@ All endpoints use cookie-based session auth (require_ui_session).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import io
 import logging
+import secrets
+import time
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -24,6 +29,10 @@ from app.services.provider_credentials import (
     get_provider_credential,
     upsert_provider_credential,
     delete_provider_credential,
+)
+from app.services.provider_oauth import (
+    build_google_oauth_start,
+    complete_google_oauth_callback,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +75,64 @@ class DriveImportResp(BaseModel):
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _mock_state_secret() -> str:
+    """Resolve the HMAC secret for mock-mode OAuth state, mirroring the service layer.
+
+    Uses the same precedence as ``app.services.provider_oauth._state_signing_secret``:
+    the dedicated ``google_oauth_state_signing_secret`` if set, otherwise the
+    ``ui_access_token_secret`` fallback. This keeps the security primitive (HMAC over
+    user_sub + timestamp with the same key) identical between dev/mock and prod paths
+    (SECOPS-007), even though the real path additionally uses a single-use, DDB-backed
+    state token via ``build_google_oauth_start`` / ``complete_google_oauth_callback``.
+    """
+    secret = (getattr(S, "google_oauth_state_signing_secret", "") or "").strip()
+    if secret:
+        return secret
+    fallback = (getattr(S, "ui_access_token_secret", "") or "").strip()
+    if fallback:
+        return fallback
+    raise HTTPException(500, "OAuth state signing secret not configured")
+
+
+def _sign_mock_oauth_state(user_sub: str) -> str:
+    """Generate a signed, time-limited OAuth state token for the dev/mock flow.
+
+    Format: base64url("<user_sub>|<ts>|<nonce>|<hmac-sha256>")
+    """
+    secret = _mock_state_secret()
+    ts = str(int(time.time()))
+    nonce = secrets.token_hex(16)
+    payload = f"{user_sub}|{ts}|{nonce}"
+    sig = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    raw = f"{payload}|{sig}"
+    return urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _verify_mock_oauth_state(state: str, expected_user_sub: str) -> None:
+    """Verify a signed mock-mode state token; raise HTTP 400 on any failure."""
+    secret = _mock_state_secret()
+    try:
+        pad = "=" * ((4 - (len(state) % 4)) % 4)
+        raw = urlsafe_b64decode((state + pad).encode("ascii")).decode("utf-8")
+        sub, ts, nonce, sig = raw.split("|", 3)
+    except Exception as exc:  # noqa: BLE001 - any malformed token is a 400
+        raise HTTPException(400, "Invalid OAuth state") from exc
+
+    payload = f"{sub}|{ts}|{nonce}"
+    expected_sig = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected_sig):
+        raise HTTPException(400, "Invalid OAuth state signature")
+    if not hmac.compare_digest(sub, expected_user_sub):
+        raise HTTPException(400, "OAuth state user mismatch")
+    try:
+        age = int(time.time()) - int(ts)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "Invalid OAuth state") from exc
+    ttl = int(getattr(S, "google_oauth_state_ttl_seconds", 600) or 600)
+    if age < 0 or age > ttl:
+        raise HTTPException(400, "OAuth state expired")
 
 
 def _get_cred_safe(user_sub: str):
@@ -119,14 +186,20 @@ async def initiate_google_drive_connect(ctx=Depends(require_ui_session)) -> Dict
     user_sub = ctx["user_sub"]
 
     if S.dev_mode and S.google_drive_mock_enabled:
+        # GAP-0241: embed an HMAC-signed, time-limited state (not the predictable
+        # "mock" literal) so the callback can verify the flow originated here.
+        state = _sign_mock_oauth_state(user_sub)
         return {
-            "auth_url": f"/files?drive-callback=1&code=mock_auth_code_{user_sub}&state=mock",
+            "auth_url": f"/files?drive-callback=1&code=mock_auth_code_{user_sub}&state={state}",
             "mock": True,
         }
 
-    # Real OAuth flow would go here
+    # GAP-0241 + GAP-0242: real OAuth flow delegates to the shared, tested provider
+    # service which mints a single-use, HMAC-signed, DDB-backed state token and builds
+    # the full Google authorization URL (client_id, redirect_uri, scope, state).
+    start = build_google_oauth_start(user_sub)
     return {
-        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "auth_url": start["authorization_url"],
         "mock": False,
     }
 
@@ -141,6 +214,11 @@ async def complete_google_drive_connect(body: DriveCallbackReq, ctx=Depends(requ
     user_sub = ctx["user_sub"]
 
     if S.dev_mode and S.google_drive_mock_enabled:
+        # GAP-0241: verify the signed state before touching any credential store.
+        if not body.state:
+            raise HTTPException(400, "Missing OAuth state")
+        _verify_mock_oauth_state(body.state, user_sub)
+
         # Mock mode: store a credential with a simple token
         mock_token = f"mock-drive-token-{user_sub}"
         upsert_provider_credential(
@@ -152,8 +230,20 @@ async def complete_google_drive_connect(body: DriveCallbackReq, ctx=Depends(requ
         )
         return {"ok": True, "connected": True}
 
-    # Real OAuth exchange would go here
-    raise HTTPException(501, "Real OAuth not implemented in this environment")
+    # GAP-0241 + GAP-0242: real OAuth code exchange delegates to the shared provider
+    # service, which (1) verifies the single-use HMAC-signed state, then (2) POSTs the
+    # authorization code to S.google_oauth_token_url and stores access_token,
+    # encrypted refresh_token, and expires_at. Runs in a thread so the (synchronous)
+    # network call does not block the event loop.
+    if not body.state:
+        raise HTTPException(400, "Missing OAuth state")
+    await asyncio.to_thread(
+        complete_google_oauth_callback,
+        user_sub,
+        code=body.code,
+        state=body.state,
+    )
+    return {"ok": True, "connected": True}
 
 
 @router.post("/disconnect")
