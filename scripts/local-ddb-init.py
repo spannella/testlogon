@@ -92,6 +92,11 @@ def _table_defs() -> List[TableDef]:
             gsi=[{"index_name": "ByStatusActivity", "partition_key": "status", "sort_key": "last_activity_at"}],
             attr_types={"last_activity_at": "N"},
         ),
+        # GAP-0189 / FIN-003: per-stage cart reminder configuration
+        TableDef(
+            _resolve_table_name(S.cart_reminder_config_table_name, "cart_reminder_config"),
+            "pk", "sk",
+        ),
         TableDef(
             _resolve_table_name(S.catalog_table_name, "shopping_catalog"),
             "PK",

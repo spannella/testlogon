@@ -798,6 +798,9 @@ class Settings:
     cart_abandonment_reminder_cooldown_hours: int = int(os.environ.get("CART_ABANDONMENT_REMINDER_COOLDOWN_HOURS", "48"))
     cart_abandonment_expire_hours: int = int(os.environ.get("CART_ABANDONMENT_EXPIRE_HOURS", "720"))
     cart_ttl_days: int = int(os.environ.get("CART_TTL_DAYS", "30"))
+    # Multi-stage cart reminders (GAP-0189 / FIN-003)
+    cart_reminders_enabled: bool = os.environ.get("CART_REMINDERS_ENABLED", "1") not in ("0", "false", "False")
+    cart_reminder_config_table_name: str = os.environ.get("CART_REMINDER_CONFIG_TABLE", "cart_reminder_config")
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
     catalog_default_low_stock_threshold: int = int(os.environ.get("CATALOG_LOW_STOCK_THRESHOLD", "5"))

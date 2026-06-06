@@ -16,3 +16,8 @@ add `error_code` to each `fail` dict return: `not_found`, `deactivated`, `expire
 This gap was identified by the second-pass as-built review of FIN-002. Apply the dev/prod
 parity rules in SECOPS-007 if the fix touches AWS-backed paths. Add a regression test
 (pytest offline / Playwright) that fails before the fix and passes after.
+
+
+## Implemented (branch impl/crit-batch-1, 2026-06-06)
+
+Superseded: the error_code-per-fail-path change was implemented together with GAP-0186 in app/services/promo_codes.py (all 8 codes: not_found/deactivated/expired/usage_limit/already_used/checkout_type_mismatch/product_mismatch/min_order). Verified present. Covered by tests/test_gap_0186_promo_validate_out_fields.py.

@@ -22,7 +22,7 @@ from app.core.time import now_ts
 # ─── Constants ────────────────────────────────────────────────────
 
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,30}$")
-VALID_CHECKOUT_TYPES = {"subscription", "vod", "shop"}
+VALID_CHECKOUT_TYPES = {"subscription", "vod", "shop", "tip", "unlock"}
 VALID_DISCOUNT_TYPES = {"percentage", "fixed_amount", "free_trial"}
 
 

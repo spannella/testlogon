@@ -732,13 +732,22 @@ def purchase_cart(
 # ─── SHOP-003: Cart Abandonment Detection & Reminders ──────────────────────────
 
 
-def scan_abandoned_carts(*, threshold_hours: int = 24, now: Optional[int] = None) -> List[Dict[str, Any]]:
+def scan_abandoned_carts(
+    *,
+    threshold_hours: int = 24,
+    now: Optional[int] = None,
+    apply_reminder_gate: bool = True,
+) -> List[Dict[str, Any]]:
     """Find OPEN carts with no activity in the last threshold_hours.
 
     Uses ByStatusActivity GSI: status="OPEN" AND last_activity_at < cutoff.
-    Filters out recently reminded carts and carts at max reminders.
     Loops over LastEvaluatedKey so a busy table doesn't silently hide carts
     beyond the first page (CLAUDE.md FilterExpression/pagination gotcha).
+
+    When ``apply_reminder_gate`` is True (the legacy single-blast path) carts at
+    ``max_reminders`` or within the global ``cooldown`` window are filtered out.
+    The multi-stage service (GAP-0189) passes ``apply_reminder_gate=False`` and
+    applies its own per-stage delay / stage-cap gating instead.
 
     `now` is injectable for deterministic testing; defaults to the wall clock.
     """
@@ -763,6 +772,9 @@ def scan_abandoned_carts(*, threshold_hours: int = 24, now: Optional[int] = None
         last_key = resp.get("LastEvaluatedKey")
         if not last_key:
             break
+
+    if not apply_reminder_gate:
+        return items
 
     # Filter in-memory: skip recently reminded or maxed-out carts
     eligible: List[Dict[str, Any]] = []

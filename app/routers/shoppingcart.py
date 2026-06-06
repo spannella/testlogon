@@ -269,17 +269,25 @@ async def _cart_abandonment_loop() -> None:
     while True:
         if S.cart_abandonment_enabled:
             try:
-                carts = scan_abandoned_carts(
-                    threshold_hours=S.cart_abandonment_threshold_hours,
-                )
-                for cart in carts:
-                    try:
-                        send_cart_reminder(cart)
-                    except Exception:
-                        logger.warning(
-                            "cart_reminder_failed",
-                            extra={"cart_id": cart.get("cart_id")},
-                        )
+                if S.cart_reminders_enabled:
+                    # GAP-0189 / FIN-003: multi-stage reminder pipeline.
+                    from app.services.cart_reminders import process_abandoned_carts
+
+                    result = process_abandoned_carts()
+                    logger.info("cart_abandonment_sweep", extra=result)
+                else:
+                    # Legacy single-blast fallback (CART_REMINDERS_ENABLED=0).
+                    carts = scan_abandoned_carts(
+                        threshold_hours=S.cart_abandonment_threshold_hours,
+                    )
+                    for cart in carts:
+                        try:
+                            send_cart_reminder(cart)
+                        except Exception:
+                            logger.warning(
+                                "cart_reminder_failed",
+                                extra={"cart_id": cart.get("cart_id")},
+                            )
                 # Auto-expire long-abandoned carts (best-effort)
                 try:
                     expire_abandoned_carts()

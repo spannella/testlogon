@@ -3315,7 +3315,7 @@ class PromoCodeStatsOut(PromoCodeOut):
 
 class PromoValidateIn(BaseModel):
     code: str
-    checkout_type: Literal["subscription", "vod", "shop"]
+    checkout_type: Literal["subscription", "vod", "shop", "tip", "unlock"]
     item_price_cents: int = 0
     creator_user_id: str
 

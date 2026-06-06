@@ -95,6 +95,7 @@ class Tables:
     purchase_transactions: Any
     purchase_events: Any
     shopping_cart: Any
+    cart_reminder_config: Any
     catalog: Any
     subscriptions: Any
     projects: Any
@@ -332,6 +333,7 @@ T = Tables(
     purchase_transactions=_safe_table(S.purchase_transactions_table_name),
     purchase_events=_safe_table(S.purchase_events_table_name),
     shopping_cart=_safe_table(S.shopping_cart_table_name),
+    cart_reminder_config=_safe_table(S.cart_reminder_config_table_name),
     catalog=_safe_table(S.catalog_table_name),
     subscriptions=_safe_table(S.subscriptions_table_name),
     projects=_safe_table(S.projects_table_name),
