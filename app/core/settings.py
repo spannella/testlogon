@@ -1587,6 +1587,8 @@ class Settings:
     creator_payouts_table_name: str = os.environ.get("DDB_CREATOR_PAYOUTS", "CreatorPayouts")
     payouts_table_name: str = os.environ.get("DDB_CREATOR_PAYOUTS", "CreatorPayouts")
     payout_hold_period_seconds: int = int(os.environ.get("PAYOUT_HOLD_PERIOD_SECONDS", "604800"))
+    # Messaging: editable window after send (MSG-001 / GAP-0310). 0 = unlimited.
+    message_edit_window_seconds: int = int(os.environ.get("MESSAGE_EDIT_WINDOW_SECONDS", str(15 * 60)))
     payout_hold_days: int = int(os.environ.get("PAYOUT_HOLD_DAYS", "7"))
     payout_minimum_cents: int = int(os.environ.get("PAYOUT_MINIMUM_CENTS", "1000"))
     payout_min_cents: int = int(os.environ.get("PAYOUT_MIN_CENTS", os.environ.get("PAYOUT_MINIMUM_CENTS", "1000")))
