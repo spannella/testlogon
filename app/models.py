@@ -265,6 +265,11 @@ class RegisterEmailCheckReq(BaseModel):
 class RegisterEmailCheckResp(BaseModel):
     status: str
     available: bool
+    # Distinguishes a taken+verified account (unverified=False) from a
+    # taken+pending-verification account (unverified=True) so the frontend can
+    # offer a resume/resend path (GAP-0107). Defaults to False for backward
+    # compatibility with clients that only read `available`.
+    unverified: bool = False
 
 class WebAuthnRegisterBeginReq(BaseModel):
     label: Optional[str] = None

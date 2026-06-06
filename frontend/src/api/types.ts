@@ -289,6 +289,10 @@ export interface RegisterEmailCheckReq {
 export interface RegisterEmailCheckResp {
   status: string;
   available: boolean;
+  // True when the email is taken by an account that has not yet completed
+  // verification (pending_verification). Present after the GAP-0107 backend
+  // change; absent (undefined/falsy) against the older response shape.
+  unverified?: boolean;
 }
 
 // ─── Passwordless ────────────────────────────────────────────────

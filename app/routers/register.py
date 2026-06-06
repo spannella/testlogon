@@ -32,9 +32,10 @@ from app.services.rate_limit import (
     rate_limit_password_recovery,
 )
 from app.services.registration import (
+    check_email_status,
     create_registration_challenge,
     create_user_record,
-    is_email_available,
+    get_pending_user,
     mark_user_verified,
     verify_registration_code,
 )
@@ -55,6 +56,42 @@ def _cognito_available() -> bool:
     if S.dev_mode:
         return False  # Use direct DDB registration path in dev mode (fixes #144)
     return bool(S.cognito_app_client_id)
+
+
+def _resume_pending_registration(req: Request, body: RegisterStartReq, username: str, ip: str) -> None:
+    """Re-issue a verification challenge for an existing pending_verification account.
+
+    GAP-0108 resume path: the account record already exists, so we do NOT create
+    a new user record and do NOT touch the stored password hash — we only mint a
+    fresh challenge (gated by the same rate limiter /resend uses) so the returning
+    user actually receives a code instead of a silent fake success.
+    """
+    if can_send_verification(username, "email"):
+        mfa_setup: list[str] = []
+        if body.enable_sms_mfa:
+            mfa_setup.append("sms")
+        if body.enable_totp_mfa:
+            mfa_setup.append("totp")
+        code = create_registration_challenge(
+            user_sub=username,
+            channel="email",
+            send_to=username,
+            mfa_setup=mfa_setup,
+            sms_phone=body.phone,
+        )
+        send_email_code(username, "Registration", code)
+        audit_event(
+            "register_start",
+            username,
+            req,
+            outcome="success",
+            verification_required=True,
+            delivery_medium="suppressed",
+            reason="resume_pending",
+        )
+    else:
+        audit_event("register_start", username, req, outcome="warning", reason="resume_rate_limited")
+    clear_lockout(username, ip, "register_start")
 
 
 @router.post("/start", response_model=RegisterStartResp)
@@ -95,7 +132,17 @@ async def register_start(
                 # error clearly rather than returning a misleading "ok".
                 audit_event("register_start", username, req, outcome="failure", reason="password_policy")
                 raise
-            # 409 user-already-exists and other non-400 errors: return the generic
+            # 409 user-already-exists: if the local account is still
+            # pending_verification, resume by re-issuing a challenge (GAP-0108
+            # dev/prod parity) rather than returning a silent fake success.
+            if (
+                exc.status_code == 409
+                and S.registration_allow_resume_unverified
+                and get_pending_user(username)
+            ):
+                _resume_pending_registration(req, body, username, ip)
+                return generic_response
+            # Other non-400 errors (and active-account 409s): return the generic
             # response to avoid leaking whether this email address is registered.
             logger.warning(
                 "register_start cognito_sign_up rejected",
@@ -109,6 +156,14 @@ async def register_start(
             audit_event("register_start", username, req, outcome="failure", reason="unexpected_error")
             record_lockout_failure(username, ip, "register_start")
             return generic_response
+
+    # Resume path (GAP-0108): if this email already exists as a pending_verification
+    # account, re-issue a fresh challenge instead of silently no-op'ing. Active
+    # accounts fall through to create_user_record below, which raises 409 (no code
+    # is sent to an already-verified account).
+    if S.registration_allow_resume_unverified and get_pending_user(username):
+        _resume_pending_registration(req, body, username, ip)
+        return generic_response
 
     verification_required = True
     try:
@@ -155,10 +210,13 @@ async def register_check(req: Request, body: RegisterEmailCheckReq) -> Dict[str,
     ip = client_ip_from_request(req)
     enforce_lockout(body.email, ip, "register_check")
     rate_limit_password_recovery(body.email, ip, "register_check")
-    generic_response = {"status": "ok", "available": True}
+    # On timeout/error we conservatively report the email as available and not
+    # unverified, to avoid false negatives (blocking users) from transient
+    # DynamoDB issues and to avoid surfacing a resend path we cannot confirm.
+    generic_response = {"status": "ok", "available": True, "unverified": False}
     try:
-        available = await asyncio.wait_for(
-            run_in_threadpool(is_email_available, body.email),
+        result = await asyncio.wait_for(
+            run_in_threadpool(check_email_status, body.email),
             timeout=REGISTER_CHECK_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
@@ -180,8 +238,15 @@ async def register_check(req: Request, body: RegisterEmailCheckReq) -> Dict[str,
         record_lockout_failure(body.email, ip, "register_check")
         return generic_response
     clear_lockout(body.email, ip, "register_check")
-    audit_event("register_check", body.email, req, outcome="success", available=available)
-    return {"status": "ok", "available": available}
+    audit_event(
+        "register_check",
+        body.email,
+        req,
+        outcome="success",
+        available=result["available"],
+        unverified=result["unverified"],
+    )
+    return {"status": "ok", **result}
 
 
 @router.post("/confirm", response_model=RegisterConfirmResp)

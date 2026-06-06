@@ -84,6 +84,12 @@ class Settings:
     # TTL
     ddb_ttl_attr: str = os.environ.get("DDB_TTL_ATTR", "ttl_epoch")
     registration_pending_ttl_days: int = int(os.environ.get("REGISTRATION_PENDING_TTL_DAYS", "7"))
+    # When True, POST /ui/register/start re-issues a verification challenge for a
+    # pending_verification account instead of silently returning a fake success
+    # (GAP-0108). Default on — the no-resume behaviour is the bug, not desired.
+    registration_allow_resume_unverified: bool = os.environ.get(
+        "REGISTRATION_ALLOW_RESUME_UNVERIFIED", "1"
+    ) not in ("0", "false", "False")
 
     # Sessions
     ui_session_ttl_seconds: int = int(os.environ.get("UI_SESSION_TTL_SECONDS", str(30 * 24 * 3600)))

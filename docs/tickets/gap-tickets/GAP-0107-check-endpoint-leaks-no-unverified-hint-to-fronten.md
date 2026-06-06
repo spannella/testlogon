@@ -1,6 +1,6 @@
 # GAP-0107: /check endpoint leaks no unverified hint to frontend
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AUTH-001 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AUTH-001 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AUTH-001.md`); see also `docs/tickets/writeups/AUTH-001.md`
 
 ## Location

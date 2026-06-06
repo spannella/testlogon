@@ -55,6 +55,48 @@ def is_email_available(email: str) -> bool:
     return not _user_exists(normalized)
 
 
+def check_email_status(email: str) -> Dict[str, bool]:
+    """Return availability plus a pending-verification hint for an email address.
+
+    Distinguishes the two "unavailable" states so the frontend can offer a
+    recovery (resend) path for abandoned registrations instead of a dead-end
+    error (GAP-0107):
+      - unknown email          -> {"available": True,  "unverified": False}
+      - active account         -> {"available": False, "unverified": False}
+      - pending_verification   -> {"available": False, "unverified": True}
+
+    The account_state lookup only runs when the user record exists, so the extra
+    DynamoDB read is avoided for all "available" responses.
+    """
+    # Imported lazily to keep the module import graph identical to before and to
+    # avoid any import-order coupling with app.services.account_state.
+    from app.services.account_state import get_account_state
+
+    normalized = normalize_email(email)
+    if not _user_exists(normalized):
+        return {"available": True, "unverified": False}
+    state = get_account_state(normalized)
+    if state.get("status") == "pending_verification":
+        return {"available": False, "unverified": True}
+    return {"available": False, "unverified": False}
+
+
+def get_pending_user(email: str) -> bool:
+    """Return True if the email exists and is in pending_verification state.
+
+    Used by the /register/start resume path (GAP-0108) to decide whether to
+    re-issue a verification challenge instead of raising the duplicate-email
+    409. Returns False for active accounts so an active account owner can never
+    trigger a fresh verification code via /start.
+    """
+    from app.services.account_state import get_account_state
+
+    normalized = normalize_email(email)
+    if not _user_exists(normalized):
+        return False
+    return get_account_state(normalized).get("status") == "pending_verification"
+
+
 def create_user_record(
     *,
     email: str,

@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { ArrowLeft, CheckCircle2, Circle, Eye, EyeOff, HelpCircle, Loader2, Shield, XCircle } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle2, Circle, Eye, EyeOff, HelpCircle, Loader2, Shield, XCircle } from "lucide-react";
 import { PageMeta } from "@/components/shared/PageMeta";
 
 import { Button } from "@/components/ui/button";
@@ -88,7 +88,7 @@ export default function Register() {
   const [resendLoading, setResendLoading] = React.useState(false);
   const [mfaLoading, setMfaLoading] = React.useState(false);
   const [emailStatus, setEmailStatus] = React.useState<
-    "idle" | "checking" | "available" | "unavailable" | "invalid" | "error" | "rate_limited"
+    "idle" | "checking" | "available" | "unavailable" | "unavailable_unverified" | "invalid" | "error" | "rate_limited"
   >("idle");
   const [mfaError, setMfaError] = React.useState<string | null>(null);
   const [smsChallengeId, setSmsChallengeId] = React.useState<string | null>(null);
@@ -176,6 +176,7 @@ export default function Register() {
     || hasPasswordIssues
     || emailStatus === "invalid"
     || emailStatus === "unavailable"
+    || emailStatus === "unavailable_unverified"
     || emailStatus === "rate_limited";
 
   React.useEffect(() => {
@@ -244,7 +245,13 @@ export default function Register() {
           if (!isActive || didTimeout) {
             return;
           }
-          setEmailStatus(data.available ? "available" : "unavailable");
+          if (data.available) {
+            setEmailStatus("available");
+          } else if (data.unverified) {
+            setEmailStatus("unavailable_unverified");
+          } else {
+            setEmailStatus("unavailable");
+          }
         })
         .catch((err) => {
           window.clearTimeout(timeoutTimer);
@@ -392,6 +399,36 @@ export default function Register() {
         setError(err.detail || "Failed to resend verification code.");
       } else {
         setError("An unexpected error occurred. Please try again.");
+      }
+    } finally {
+      setResendLoading(false);
+    }
+  };
+
+  const handleResendFromCheck = async () => {
+    const email = form.getValues("email").trim();
+    if (!email) {
+      setError("Enter your email address first.");
+      return;
+    }
+    setResendLoading(true);
+    setError(null);
+    try {
+      const resp = await registerResend({ email, delivery_method: "email" });
+      setRegisteredEmail(email);
+      if (resp.delivery_medium && resp.delivery_destination) {
+        setDeliveryInfo(
+          `We sent a new verification code via ${resp.delivery_medium} to ${resp.delivery_destination}.`,
+        );
+      } else {
+        setDeliveryInfo("We sent a new verification code to your email.");
+      }
+      setStep("verify");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.detail || "Could not resend verification code. Please try again.");
+      } else {
+        setError("Could not resend verification code. Please try again.");
       }
     } finally {
       setResendLoading(false);
@@ -616,8 +653,34 @@ export default function Register() {
                   {!form.formState.errors.email && emailStatus === "unavailable" && (
                     <p className="flex items-center gap-1 text-xs text-destructive">
                       <XCircle className="h-3.5 w-3.5" />
-                      An account with this email already exists.
+                      <span>
+                        An account with this email already exists.{" "}
+                        <Link to="/login" className="underline">Sign in instead?</Link>
+                      </span>
                     </p>
+                  )}
+                  {!form.formState.errors.email && emailStatus === "unavailable_unverified" && (
+                    <div
+                      role="alert"
+                      className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs"
+                    >
+                      <p className="flex items-center gap-1 font-medium text-amber-800">
+                        <AlertCircle className="h-3.5 w-3.5" />
+                        A verification is pending for this email.
+                      </p>
+                      <p className="text-muted-foreground">
+                        We can resend the verification code so you can finish setting up your account.
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={resendLoading}
+                        onClick={() => { void handleResendFromCheck(); }}
+                      >
+                        {resendLoading ? "Sending…" : "Resend verification code"}
+                      </Button>
+                    </div>
                   )}
                   {!form.formState.errors.email && emailStatus === "rate_limited" && (
                     <p className="flex items-center gap-1 text-xs text-destructive">

@@ -25,7 +25,7 @@ def run_async(coro):
 class TestRegisterRoutes(unittest.TestCase):
     def test_register_check_email_available(self):
         req = build_request()
-        with patch.object(register, "is_email_available", return_value=True), \
+        with patch.object(register, "check_email_status", return_value={"available": True, "unverified": False}), \
              patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery:
             result = run_async(register.register_check(
                 req,
@@ -39,6 +39,7 @@ class TestRegisterRoutes(unittest.TestCase):
         req = build_request()
         with patch.object(register, "_require_cognito"), \
              patch.object(register, "check_password_breach", return_value=0), \
+             patch.object(register, "get_pending_user", return_value=False), \
              patch.object(register, "cognito_sign_up", return_value={"UserConfirmed": True}), \
              patch.object(register, "create_user_record"), \
              patch.object(register, "can_send_verification", return_value=True), \
@@ -69,8 +70,9 @@ class TestRegisterRoutes(unittest.TestCase):
 
     def test_register_start_allows_dev_mode_without_cognito_config(self):
         req = build_request()
-        with patch.object(register, "S", SimpleNamespace(cognito_app_client_id="", dev_mode=True, dev_registration_email="", dev_registration_password="", dev_registration_code="", dev_registration_phone="")), \
+        with patch.object(register, "S", SimpleNamespace(cognito_app_client_id="", dev_mode=True, registration_allow_resume_unverified=True, dev_registration_email="", dev_registration_password="", dev_registration_code="", dev_registration_phone="")), \
              patch.object(register, "check_password_breach", return_value=0), \
+             patch.object(register, "get_pending_user", return_value=False), \
              patch.object(register, "cognito_sign_up") as cognito_sign_up, \
              patch.object(register, "create_user_record") as create_user_record, \
              patch.object(register, "can_send_verification", return_value=True), \
@@ -101,6 +103,7 @@ class TestRegisterRoutes(unittest.TestCase):
                      "Destination": "jane@example.com",
                  },
              }), \
+             patch.object(register, "get_pending_user", return_value=False), \
              patch.object(register, "create_user_record"), \
              patch.object(register, "can_send_verification", return_value=True), \
              patch.object(register, "create_registration_challenge", return_value="code"), \
@@ -129,7 +132,7 @@ class TestRegisterRoutes(unittest.TestCase):
 
     def test_register_start_duplicate_user(self):
         req = build_request()
-        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(409, "Exists")),              patch.object(register, "record_lockout_failure") as record_lockout_failure,              patch.object(register, "enforce_lockout") as enforce_lockout,              patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery,              patch.object(register, "audit_event") as audit_event:
+        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "get_pending_user", return_value=False),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(409, "Exists")),              patch.object(register, "record_lockout_failure") as record_lockout_failure,              patch.object(register, "enforce_lockout") as enforce_lockout,              patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery,              patch.object(register, "audit_event") as audit_event:
             result = run_async(register.register_start(
                 req,
                 RegisterStartReq(
@@ -311,12 +314,19 @@ class TestRegisterRoutes(unittest.TestCase):
 
     def test_register_check_is_generic_for_available_and_unavailable(self):
         req = build_request()
-        with patch.object(register, "is_email_available", return_value=True):
+        with patch.object(register, "check_email_status", return_value={"available": True, "unverified": False}):
             available = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
-        with patch.object(register, "is_email_available", return_value=False):
+        with patch.object(register, "check_email_status", return_value={"available": False, "unverified": False}):
             unavailable = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
-        self.assertEqual(available, {"status": "ok", "available": True})
-        self.assertEqual(unavailable, {"status": "ok", "available": False})
+        self.assertEqual(available, {"status": "ok", "available": True, "unverified": False})
+        self.assertEqual(unavailable, {"status": "ok", "available": False, "unverified": False})
+
+    def test_register_check_reports_unverified_for_pending(self):
+        """GAP-0107: a pending_verification account surfaces unverified=True."""
+        req = build_request()
+        with patch.object(register, "check_email_status", return_value={"available": False, "unverified": True}):
+            result = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
+        self.assertEqual(result, {"status": "ok", "available": False, "unverified": True})
 
     def test_register_check_times_out_without_hanging(self):
         req = build_request()
@@ -331,14 +341,14 @@ class TestRegisterRoutes(unittest.TestCase):
              patch.object(register, "audit_event") as audit_event:
             result = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
 
-        self.assertEqual(result, {"status": "ok", "available": True})
+        self.assertEqual(result, {"status": "ok", "available": True, "unverified": False})
         record_lockout_failure.assert_called_once()
         self.assertTrue(any(call.kwargs.get("reason") == "check_timeout" for call in audit_event.mock_calls))
 
 
     def test_register_start_is_generic_on_signup_failure(self):
         req = build_request()
-        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(409, "Exists")),              patch.object(register, "record_lockout_failure"):
+        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "get_pending_user", return_value=False),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(409, "Exists")),              patch.object(register, "record_lockout_failure"):
             result = run_async(register.register_start(
                 req,
                 RegisterStartReq(
