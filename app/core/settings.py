@@ -1300,6 +1300,12 @@ class Settings:
     kyc_face_auto_compare: bool = os.environ.get(
         "KYC_FACE_AUTO_COMPARE", "false"
     ).lower() in ("1", "true", "yes", "on")
+    # When True, uses the deterministic mock comparison even in non-dev mode
+    # (safety valve for staging environments where AWS Rekognition is not yet
+    # provisioned). MUST be False in production. See GAP-0275 / SECOPS-007.
+    kyc_face_comparison_use_mock: bool = os.environ.get(
+        "KYC_FACE_COMPARISON_USE_MOCK", "false"
+    ).lower() in ("1", "true", "yes", "on")
 
     # KYC Electronic Identity Verification / eIDV (KYC-022)
     kyc_eid_enabled: bool = os.environ.get(

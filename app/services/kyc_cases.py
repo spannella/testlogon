@@ -149,6 +149,19 @@ class KycCaseStore:
             "gsi_status_sk": _updated_sk(ts, case_id),
         }
         self._table.put_item(Item=item)
+        # GAP-0274 (KYC-011): notify on case creation, mirroring the
+        # submit_case emit. Best-effort — never blocks creation (the helper
+        # swallows failures). Emitted at the service layer so every create
+        # path (user-facing endpoint + partner API) gets dev/prod parity,
+        # consistent with submit_case already emitting kyc.case.submitted here.
+        _emit_kyc_event_safe(
+            event="kyc.case.created",
+            user_sub=user_sub,
+            case_id=case_id,
+            status=normalized_status,
+            intake_profile=item.get("intake_profile"),
+            created_at=ts,
+        )
         return item
 
     def get_case(self, case_id: str) -> dict[str, Any] | None:

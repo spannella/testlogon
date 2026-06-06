@@ -227,9 +227,53 @@ def _mock_compare(selfie_meta: dict[str, Any], id_meta: dict[str, Any]) -> int:
     return 55 + (digest % 41)  # 55-95 inclusive
 
 
+def _s3_object_ref(meta: dict[str, Any], bucket: str) -> dict[str, Any]:
+    """Build a Rekognition ``S3Object`` ref from a file metadata ``node_id``.
+
+    The ``node_id`` may be a bare key or a ``<bucket>/<key>`` path; we strip a
+    leading bucket prefix so the key is correct relative to ``bucket``.
+    """
+    path = str(meta.get("node_id") or "").lstrip("/")
+    if path.startswith(bucket + "/"):
+        key = path[len(bucket) + 1 :]
+    else:
+        key = path
+    return {"S3Object": {"Bucket": bucket, "Name": key}}
+
+
 def _production_compare(selfie_meta: dict[str, Any], id_meta: dict[str, Any]) -> int:
-    """Production comparison placeholder (would call AWS Rekognition CompareFaces)."""
-    raise KycFacialComparisonError("comparison_service_error")
+    """Production facial comparison via AWS Rekognition ``CompareFaces``.
+
+    Compares the selfie (source) against the id_front photo (target), both of
+    which live in ``S.kyc_documents_bucket`` as S3 objects. Returns the best
+    similarity score as an integer in ``[0, 100]`` (matching the contract of
+    ``_mock_compare`` so ``_decide`` can map it identically). Raises
+    ``KycFacialComparisonError("comparison_service_error")`` on any provider
+    error so the router maps it to HTTP 500.
+    """
+    bucket = S.kyc_documents_bucket
+    if not bucket:
+        logger.error("kyc.face.rekognition.no_bucket")
+        raise KycFacialComparisonError("comparison_service_error")
+
+    from app.core.aws import rekognition_client  # lazy import keeps module import-safe
+
+    rek = rekognition_client()
+    try:
+        resp = rek.compare_faces(
+            SourceImage=_s3_object_ref(selfie_meta, bucket),  # selfie = source
+            TargetImage=_s3_object_ref(id_meta, bucket),  # id_front = target
+            SimilarityThreshold=0.0,  # return all matches; we threshold via _decide
+        )
+    except Exception as exc:  # network / throttle / invalid-param / no-face, etc.
+        logger.error("kyc.face.rekognition.error %s", exc)
+        raise KycFacialComparisonError("comparison_service_error") from exc
+
+    face_matches = resp.get("FaceMatches") or []
+    if not face_matches:
+        return 0  # no matching face found -> score 0 -> fail
+    best_similarity = max(float(m.get("Similarity") or 0.0) for m in face_matches)
+    return max(0, min(100, int(round(best_similarity))))
 
 
 def _decide(score: int, anti_spoof_passed: bool) -> tuple[str, int]:
@@ -335,7 +379,7 @@ def compare_faces(
 
     anti_spoof = _anti_spoof_check(selfie_meta)
 
-    if S.dev_mode:
+    if S.dev_mode or S.kyc_face_comparison_use_mock:
         raw_score = _mock_compare(selfie_meta, id_meta)
     else:
         raw_score = _production_compare(selfie_meta, id_meta)

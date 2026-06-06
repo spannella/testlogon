@@ -123,6 +123,7 @@ from app.routers.kyc_partner_api import kyc_partner_api_router
 from app.routers.kyc_case_assignment import router as kyc_case_assignment_router
 from app.routers.kyc_translations import router as kyc_translations_router
 from app.services.kyc_case_assignment import start_kyc_sla_checker_task
+from app.services.kyc_monitoring_scheduler import kyc_monitoring_startup
 from app.services.kyc_liveness_call import start_kyc_liveness_expiry_task
 from app.services.kyc_residency import start_kyc_residency_expiry_task
 from app.routers.kyc_analytics import router as kyc_analytics_router
@@ -548,6 +549,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_deletion_scheduler_task)
     app.add_event_handler("startup", start_dmca_timer_task)
     app.add_event_handler("startup", start_kyc_sla_checker_task)
+    app.add_event_handler("startup", kyc_monitoring_startup)  # GAP-0276
     app.add_event_handler("startup", start_kyc_liveness_expiry_task)
     app.add_event_handler("startup", start_kyc_residency_expiry_task)
     from app.services.carrier_tracking_poller import start_carrier_polling_task
