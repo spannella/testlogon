@@ -972,6 +972,15 @@ class Settings:
     filemgr_preview_worker_concurrency: int = int(os.environ.get("FILEMGR_PREVIEW_WORKER_CONCURRENCY", "4"))
     filemgr_preview_job_max_attempts: int = int(os.environ.get("FILEMGR_PREVIEW_JOB_MAX_ATTEMPTS", "3"))
     filemgr_media_preview_cdn_base_url: str = os.environ.get("FILEMGR_MEDIA_PREVIEW_CDN_BASE_URL", "")
+    # GAP-0182: comma-separated allowlist of GIF CDN domains accepted for newsfeed gif comments.
+    gif_cdn_allowed_domains: str = os.environ.get(
+        "GIF_CDN_ALLOWED_DOMAINS",
+        "media.giphy.com,media0.giphy.com,media1.giphy.com,media2.giphy.com,"
+        "media3.giphy.com,media4.giphy.com,media.tenor.com,c.tenor.com",
+    )
+    # GAP-0183: comma-separated allowlist of additional platform sticker URL prefixes
+    # (relative paths or absolute CDN origins) accepted for newsfeed sticker comments.
+    sticker_cdn_allowed_prefixes: str = os.environ.get("STICKER_CDN_ALLOWED_PREFIXES", "")
     filemgr_media_preview_url_ttl_seconds: int = int(os.environ.get("FILEMGR_MEDIA_PREVIEW_URL_TTL_SECONDS", "900"))
     filemgr_media_preview_private: bool = os.environ.get("FILEMGR_MEDIA_PREVIEW_PRIVATE", "true").lower() == "true"
     filemgr_usage_upload_limit_bytes: int = int(os.environ.get("FILEMGR_USAGE_UPLOAD_LIMIT_BYTES", "0"))

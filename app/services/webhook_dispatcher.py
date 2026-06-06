@@ -12,6 +12,7 @@ from app.services.webhook_circuit_breaker import (
     record_delivery_result,
     should_attempt_delivery,
 )
+from app.services.webhook_stats import record_delivery_stat
 from app.services.webhook_service import (
     _decrypt_secret,
     _get_endpoint_raw,
@@ -78,10 +79,12 @@ async def run_webhook_dispatcher_loop() -> None:
                         mark_delivery_success(delivery, result)
                         reset_endpoint_failure_count(endpoint_id, user_sub)
                         record_delivery_result(endpoint, success=True)
+                        record_delivery_stat(endpoint_id, result)
                         _processed += 1
                     else:
                         handle_delivery_failure(delivery, endpoint, result)
                         record_delivery_result(endpoint, success=False)
+                        record_delivery_stat(endpoint_id, result)
                         _failed += 1
                 except Exception:
                     _failed += 1
@@ -154,10 +157,12 @@ async def run_webhook_dispatcher_once() -> dict:
                 mark_delivery_success(delivery, result)
                 reset_endpoint_failure_count(endpoint_id, user_sub)
                 record_delivery_result(endpoint, success=True)
+                record_delivery_stat(endpoint_id, result)
                 processed += 1
             else:
                 handle_delivery_failure(delivery, endpoint, result)
                 record_delivery_result(endpoint, success=False)
+                record_delivery_stat(endpoint_id, result)
                 failed += 1
         except Exception:
             failed += 1

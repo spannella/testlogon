@@ -1576,6 +1576,75 @@ class ScheduledPostsResponse(BaseModel):
     }
 
 
+def _gif_allowed_domains() -> frozenset:
+    """Resolve the GIF CDN domain allowlist from settings (GAP-0182)."""
+    raw = getattr(S, "gif_cdn_allowed_domains", "") or ""
+    return frozenset(d.strip().lower() for d in raw.split(",") if d.strip())
+
+
+def _validate_gif_url(url: str) -> str:
+    """GAP-0182: gif_url must be http(s) from an allowlisted GIF CDN domain.
+
+    Rejects data:, javascript:, file:, scheme-relative (//), and arbitrary
+    third-party domains. Applies identically in dev and prod (SECOPS-007).
+    """
+    url = (url or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in ("https", "http"):
+        logger.warning("gif_url rejected (scheme)", extra={"scheme": parsed.scheme})
+        raise ValueError(
+            f"gif_url scheme '{parsed.scheme}' is not allowed; use https://"
+        )
+    host = (parsed.hostname or "").lower()
+    if host not in _gif_allowed_domains():
+        logger.warning("gif_url rejected (domain)", extra={"host": host})
+        raise ValueError(
+            f"gif_url domain '{host}' is not on the allowed GIF CDN list"
+        )
+    return url
+
+
+def _sticker_allowed_prefixes() -> tuple:
+    """Resolve allowed platform sticker URL prefixes (GAP-0183)."""
+    base = ["/mock/s3/stickers/", "/stickers/", "/media/stickers/"]
+    extra = getattr(S, "sticker_cdn_allowed_prefixes", "") or ""
+    base.extend(p.strip() for p in extra.split(",") if p.strip())
+    return tuple(base)
+
+
+def _validate_sticker_url(url: str) -> str:
+    """GAP-0183: sticker_url must reference platform-hosted content only.
+
+    Accepts platform-relative paths (e.g. /mock/s3/stickers/...) or absolute
+    URLs under the configured CDN base. Rejects arbitrary external URLs,
+    data:, javascript:, and scheme-relative (//) forms. Same logic in dev and
+    prod (SECOPS-007); prod must set FILEMGR_MEDIA_PREVIEW_CDN_BASE_URL.
+    """
+    url = (url or "").strip()
+    # Platform-relative paths served from the same origin as the API.
+    # A leading "//" is a scheme-relative URL (off-platform) — exclude it.
+    if url.startswith("/") and not url.startswith("//"):
+        if url.startswith(_sticker_allowed_prefixes()):
+            return url
+        logger.warning("sticker_url rejected (relative)", extra={"url_prefix": url[:64]})
+        raise ValueError(
+            "sticker_url relative path must start with a platform sticker prefix"
+        )
+    # Absolute CDN URLs when a CDN base is configured.
+    cdn_base = (getattr(S, "filemgr_media_preview_cdn_base_url", "") or "").rstrip("/")
+    if cdn_base and url.startswith(cdn_base + "/"):
+        return url
+    parsed = urlparse(url)
+    logger.warning(
+        "sticker_url rejected (origin)",
+        extra={"scheme": parsed.scheme, "host": parsed.hostname},
+    )
+    raise ValueError(
+        "sticker_url must be a platform-relative path or platform CDN URL; "
+        f"got scheme='{parsed.scheme}', host='{parsed.hostname}'"
+    )
+
+
 class CreateCommentRequest(ContentFieldsMixin):
     parent_comment_id: Optional[str] = None
     # FEED-004: emoji/GIF/sticker comments. `kind` selects the content type.
@@ -1622,11 +1691,15 @@ class CreateCommentRequest(ContentFieldsMixin):
         if self.kind == "gif":
             if not (self.gif_url or "").strip():
                 raise ValueError("gif_url is required for gif comments")
+            # GAP-0182: enforce https + GIF CDN domain allowlist
+            self.gif_url = _validate_gif_url(self.gif_url)
         elif self.kind == "sticker":
             if not (self.sticker_id or "").strip():
                 raise ValueError("sticker_id is required for sticker comments")
             if not (self.sticker_url or "").strip():
                 raise ValueError("sticker_url is required for sticker comments")
+            # GAP-0183: enforce platform-only sticker origin
+            self.sticker_url = _validate_sticker_url(self.sticker_url)
         return self
 
 
