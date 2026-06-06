@@ -1801,8 +1801,9 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "ByStatus", "partition_key": "user_sub", "sort_key": "status"},
                 {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+                {"index_name": "ByGlobalStatus", "partition_key": "status", "sort_key": "created_at"},
             ],
-            attr_types={"created_at": "N"},
+            attr_types={"created_at": "N", "status": "S"},
         ),
         # Instance Monitoring & Health (INFRA-008)
         # Time-series metric datapoints per instance. SK = TS#{ts}; numeric `ts`
@@ -1879,8 +1880,9 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByNamespace", "partition_key": "namespace", "sort_key": "created_at"},
                 {"index_name": "ByStatus", "partition_key": "user_sub", "sort_key": "status"},
                 {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+                {"index_name": "ByGlobalStatus", "partition_key": "status", "sort_key": "created_at"},
             ],
-            attr_types={"created_at": "N"},
+            attr_types={"created_at": "N", "status": "S"},
         ),
         # Activity Feed (SOC-003)
         TableDef(

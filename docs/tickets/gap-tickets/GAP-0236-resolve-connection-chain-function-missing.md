@@ -16,3 +16,8 @@ add `resolve_connection_chain(user_sub, path_id)` that fetches each hop's SSH ke
 This gap was identified by the second-pass as-built review of INFRA-011. Apply the dev/prod
 parity rules in SECOPS-007 if the fix touches AWS-backed paths. Add a regression test
 (pytest offline / Playwright) that fails before the fix and passes after.
+
+
+## Implemented (branch impl/crit-batch-1, 2026-06-06)
+
+Fix landed; see commit on impl/crit-batch-1. Regression test added.
