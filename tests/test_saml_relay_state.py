@@ -58,12 +58,39 @@ def _mock_env(monkeypatch):
         ("data:text/html,<script>1</script>", "/"),
         ("/" + "a" * 5000, "/"),  # oversized
         ("/foo\r\nLocation: https://evil.example", "/"),  # non-printable / CRLF injection
+        # GAP-0175: non-ASCII (printable Unicode) must be rejected. ``str.isprintable()``
+        # alone passes these — they require the additional ``str.isascii()`` guard.
+        ("/café", "/"),  # "/café" — printable but non-ASCII (Latin-1)
+        ("/日本", "/"),  # "/日本" — printable but non-ASCII (CJK)
+        ("/‮evil", "/"),  # right-to-left override bidi spoof
+        ("/​zero-width", "/"),  # zero-width space
     ],
 )
 def test_safe_relay_state(value, expected):
     from app.routers.sso_saml import _safe_relay_state
 
     assert _safe_relay_state(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "/café",  # accented Latin
+        "/日本語",  # CJK
+        "/path/‮evil",  # bidi override embedded after a valid prefix
+        "https://app.example.com/é",  # non-ASCII in an absolute URL path
+    ],
+)
+def test_safe_relay_state_rejects_non_ascii(value):
+    """GAP-0175: RelayState restricted to printable ASCII (0x20-0x7E).
+
+    Fails before the GAP-0175 fix (``str.isprintable()`` permits printable Unicode,
+    so these values pass through verbatim) and passes after (``str.isascii()`` guard
+    forces the safe ``"/"`` fallback).
+    """
+    from app.routers.sso_saml import _safe_relay_state
+
+    assert _safe_relay_state(value) == "/"
 
 
 def test_safe_relay_state_same_host_absolute_preserved():

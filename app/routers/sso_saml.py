@@ -72,8 +72,11 @@ def _safe_relay_state(value: str | None) -> str:
         return "/"
     if not rs:
         return "/"
-    # Oversized or non-printable (control chars, newlines used for header injection).
-    if len(rs) > _MAX_RELAY_STATE_LEN or not rs.isprintable():
+    # Oversized, non-printable (control chars, newlines used for header injection),
+    # or non-ASCII (GAP-0175: RelayState is restricted to printable ASCII 0x20-0x7E;
+    # ``str.isprintable()`` alone permits printable Unicode such as "café" or homograph
+    # / bidi sequences, so ``str.isascii()`` is also required).
+    if len(rs) > _MAX_RELAY_STATE_LEN or not rs.isprintable() or not rs.isascii():
         return "/"
     # Protocol-relative URL ("//host/...") -> always external.
     if rs.startswith("//"):

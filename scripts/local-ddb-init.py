@@ -1488,6 +1488,8 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "user-orgs-index", "partition_key": "user_sub", "sort_key": "org_id"},
                 {"index_name": "invite-email-index", "partition_key": "email", "sort_key": "org_id"},
                 {"index_name": "slug-index", "partition_key": "slug", "sort_key": "org_id"},
+                # GAP-0176: O(1) invite lookup by invite_id (replaces full table scan in _find_invite)
+                {"index_name": "invite-id-index", "partition_key": "invite_id", "sort_key": "org_id"},
             ],
         ),
         # User Groups (GROUP-001 / GROUP-002)
