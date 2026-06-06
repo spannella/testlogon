@@ -16,3 +16,8 @@ add `enforce_k8s_quota(user_sub, preset)` call in `k8s_launcher.py` matching the
 This gap was identified by the second-pass as-built review of INFRA-012. Apply the dev/prod
 parity rules in SECOPS-007 if the fix touches AWS-backed paths. Add a regression test
 (pytest offline / Playwright) that fails before the fix and passes after.
+
+
+## Resolved — already implemented (verified 2026-06-06)
+
+SKIP/already-built: enforce_k8s_quota(user_sub, preset) is already called in k8s_launcher.launch_pod (gated on admin_compute_dashboard_enabled, wraps QuotaExceeded/SpendingLimitReached into PodLimitReached), matching ec2_launcher. Lock-in regression test added (tests/test_gap_0238_k8s_quota_enforced.py). No code change needed.
