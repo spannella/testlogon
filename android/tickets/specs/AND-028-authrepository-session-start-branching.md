@@ -5,7 +5,8 @@ milestone: M1
 epic: E04
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-027, AND-018]
 blocks: [AND-029, AND-031, AND-047]
 ---
@@ -21,7 +22,10 @@ into one of two typed domain outcomes:
 
 - **Authenticated** — the server completed the session in one step (no additional factors
   required); the session cookies are already set in the persistent jar and the caller may
-  proceed to `getMe()` (AND-029).
+  proceed to `getMe()` (AND-029). **[Corrected]** The authoritative signal for this branch,
+  per the web reference (`src/pages/Login.tsx:145`), is `auth_required == false` **and a
+  non-blank `session_id`** in the response — not merely "empty `required_factors`". See
+  Section 16 for the correction detail.
 - **MfaRequired(challengeId, factors)** — the server requires one or more additional
   factors; the caller must drive the MFA sub-flow (`/ui/mfa/{totp|sms|email}/begin|verify`)
   keyed by `challenge_id`, then finalize.
@@ -76,23 +80,30 @@ AND-027 and the `ApiResult`/`apiCall` machinery from AND-018.
    ApiResult<LoginResult> }` in `core-data`.
 2. Define the branch domain type `sealed interface LoginResult` in `core-model` with exactly
    two variants:
-   - `Authenticated` — no further factors required (`auth_required == false`, or
-     `required_factors` empty).
+   - `Authenticated` — session completed in one step (`auth_required == false` **and**
+     `session_id` is non-null/non-blank, mirroring the web client's
+     `!resp.auth_required && resp.session_id` check at `src/pages/Login.tsx:145`).
    - `MfaRequired(challengeId: String, factors: List<MfaFactor>)` — additional factors
-     required (`auth_required == true` with a non-empty `required_factors`).
+     required (anything that is not the `Authenticated` case: typically
+     `auth_required == true`, surfacing a `challenge_id` + `required_factors`).
 3. `login()` calls `AuthApi.sessionStart(SessionStartRequest(ChallengeContext(username,
    password)))` inside `apiCall { }` (AND-018) so transport failures fold to
    `ApiResult.NetworkError` and HTTP error bodies fold to `ApiResult.Failure(ApiError)`.
-4. **Branching rule** (deterministic, single source of truth):
-   - If the call succeeds and `auth_required == true` **and** `required_factors` is non-empty
-     **and** `challenge_id` is non-null/non-blank → `Authenticated` is **not** returned;
-     return `ApiResult.Success(MfaRequired(challengeId, factors))`.
-   - If `auth_required == false` (or `required_factors` is empty / absent) → return
-     `ApiResult.Success(Authenticated)`.
-   - If `auth_required == true` but `challenge_id` is missing/blank → treat as a malformed
-     server response: return `ApiResult.Failure(ApiError(status=200, code="malformed_mfa",
-     message="MFA required but no challenge_id returned"))`. (Do not crash; do not return
-     `Authenticated`.)
+4. **Branching rule** (deterministic, single source of truth — aligned with the web
+   reference at `src/pages/Login.tsx:145`):
+   - **[Corrected]** If the call succeeds and `auth_required == false` **and** `session_id`
+     is non-null/non-blank → return `ApiResult.Success(Authenticated)`. (The web client
+     gates the "login complete" path on `!auth_required && session_id`, then calls
+     `getMe()`; we mirror that.)
+   - Otherwise, if `challenge_id` is non-null/non-blank → return
+     `ApiResult.Success(MfaRequired(challengeId, requiredFactors.map(::fromWire)))`.
+     (`required_factors` MAY be empty here; the MFA sub-flow tickets refine it. The presence
+     of a `challenge_id` with `auth_required == true` is the operative MFA signal.)
+   - If `auth_required == true` (or `session_id` is absent) **and** `challenge_id` is
+     missing/blank → treat as a malformed server response: return
+     `ApiResult.Failure(ApiError(status=200, code="malformed_mfa", message="MFA required but
+     no challenge_id returned"))`. (Do not crash; do not return `Authenticated`.) This is the
+     fail-closed default for the auth-critical branch.
 5. `MfaFactor` is a typed enum mapped from `required_factors[]` strings (`"totp"`, `"sms"`,
    `"email"`); unknown factor strings map to `MfaFactor.Unknown(raw)` and are retained, not
    dropped (forward-compatibility).
@@ -162,6 +173,9 @@ data class SessionStartResponse(
     @Json(name = "auth_required") val authRequired: Boolean = false,
     @Json(name = "challenge_id") val challengeId: String? = null,
     @Json(name = "required_factors") val requiredFactors: List<String> = emptyList(),
+    // [Corrected] Present in the real UiSessionStartResp schema and used by the web client
+    // to gate the Authenticated branch (!auth_required && session_id). AND-027 must include it.
+    @Json(name = "session_id") val sessionId: String? = null,
 )
 ```
 
@@ -195,16 +209,18 @@ class AuthRepositoryImpl @Inject constructor(
     }.flatMap { resp -> resp.toLoginResult() }
 
     private fun SessionStartResponse.toLoginResult(): ApiResult<LoginResult> {
-        val mfaNeeded = authRequired && requiredFactors.isNotEmpty()
+        // [Corrected] Authenticated iff the web client's gate holds: !auth_required && session_id.
+        val authenticated = !authRequired && !sessionId.isNullOrBlank()
         return when {
-            mfaNeeded && !challengeId.isNullOrBlank() ->
+            authenticated -> ApiResult.Success(LoginResult.Authenticated)
+            !challengeId.isNullOrBlank() ->
                 ApiResult.Success(
                     LoginResult.MfaRequired(
                         challengeId = challengeId,
                         factors = requiredFactors.map(MfaFactor::fromWire),
                     ),
                 )
-            mfaNeeded -> // auth_required but no usable challenge_id
+            else -> // MFA implied but no usable challenge_id, or ambiguous response
                 ApiResult.Failure(
                     ApiError(
                         status = 200,
@@ -212,7 +228,6 @@ class AuthRepositoryImpl @Inject constructor(
                         message = "MFA required but no challenge_id returned",
                     ),
                 )
-            else -> ApiResult.Success(LoginResult.Authenticated)
         }
     }
 }
@@ -251,40 +266,54 @@ Request body:
 Headers: standard JSON `Content-Type: application/json`; cookies + `X-CSRF-Token`
 (`ui_csrf`) are added by interceptors (AND-011/AND-012), not by this repository.
 
+Response schema (`UiSessionStartResp`, verified against `components.schemas.UiSessionStartResp`):
+only `auth_required` (boolean) is `required`; `challenge_id` (string|null), `required_factors`
+(string[]) and **`session_id` (string|null)** are optional. The web client treats
+`session_id` as the completed-login marker.
+
 Representative success — **MFA required**:
 
 ```json
 {
   "auth_required": true,
   "challenge_id": "chl_01HXYZ...",
-  "required_factors": ["totp", "sms"]
+  "required_factors": ["totp", "sms"],
+  "session_id": null
 }
 ```
 → `ApiResult.Success(LoginResult.MfaRequired("chl_01HXYZ...", [Totp, Sms]))`
 
-Representative success — **fully authenticated** (session cookies set; no factors):
+Representative success — **fully authenticated** (session cookies set; `session_id` issued):
 
 ```json
 {
   "auth_required": false,
   "challenge_id": null,
-  "required_factors": []
+  "required_factors": [],
+  "session_id": "ses_01HXYZ..."
 }
 ```
-→ `ApiResult.Success(LoginResult.Authenticated)`
+→ `ApiResult.Success(LoginResult.Authenticated)` (web gate: `!auth_required && session_id`).
 
 Error responses are folded by `apiCall`/AND-015 into `ApiResult.Failure(ApiError)`:
 
-- **401 Unauthorized** (bad credentials) — FastAPI `detail`:
+- **401 Unauthorized** (bad credentials) — **[Unverified assumption]** the OpenAPI spec for
+  `POST /ui/session/start` documents only `200` and `422` responses; it does **not** declare a
+  401. The exact wire shape and message string below are assumed (FastAPI `detail`), not
+  confirmed by the sources. The web client simply renders `err.detail || "Invalid
+  credentials. Please try again."` (`src/pages/Login.tsx:178-186`) for any thrown `ApiError`,
+  so a credentials failure surfaces through the generic error path regardless of status code.
   ```json
   { "detail": "Invalid username or password" }
   ```
-  → `Failure(ApiError(status=401, message="Invalid username or password"))`.
+  → `Failure(ApiError(status=401, message="<server detail>"))`.
   (Note: AND-013 only auto-refreshes 401s on *session* expiry; a credentials 401 from
   `session/start` is surfaced as-is, not retried — see Section 7.)
-- **422 Unprocessable Entity** (validation) — `detail` as list:
+- **422 Unprocessable Entity** (validation) — VERIFIED in the spec (`resp=...;422:HTTPValidationError`).
+  `detail` is an array of `ValidationError { loc: (string|int)[], msg: string, type: string }`
+  (`components.schemas.ValidationError`; all three fields required):
   ```json
-  { "detail": [ { "loc": ["body","challenge_context","username"], "msg": "field required" } ] }
+  { "detail": [ { "loc": ["body","challenge_context","username"], "msg": "field required", "type": "missing" } ] }
   ```
   → `Failure(ApiError(status=422, message="field required", code=null))` per AND-015.
 - **5xx / unreachable host / timeout** → `ApiResult.NetworkError`.
@@ -379,18 +408,22 @@ Unit tests in `core-data/src/test` (JUnit, Truth/kotlin-test, coroutines-test). 
 is faked (a hand-written fake or a MockK stub returning canned `SessionStartResponse`s) so
 this ticket tests **branching**, not transport (transport is AND-027's MockWebServer suite).
 
-Branch/mapping tests (the acceptance core):
-- `auth_required=true, challenge_id="chl_1", required_factors=["totp"]` →
+Branch/mapping tests (the acceptance core; branching follows the corrected
+`!auth_required && session_id` gate):
+- `auth_required=true, challenge_id="chl_1", required_factors=["totp"], session_id=null` →
   `Success(MfaRequired("chl_1", [Totp]))`.
-- `auth_required=true, required_factors=["totp","sms","email"]` → factors map to
-  `[Totp, Sms, Email]` in order.
-- `required_factors=["totp","webauthn"]` → `[Totp, Unknown("webauthn")]` (unknown retained).
-- `auth_required=false, required_factors=[]` → `Success(Authenticated)`.
-- `auth_required=false` but a stray `challenge_id` present → still `Authenticated`
-  (auth_required is authoritative).
-- `auth_required=true, required_factors=["totp"], challenge_id=null` → `Failure(status=200,
-  code="malformed_mfa")`.
-- `auth_required=true, required_factors=[]` → `Authenticated` (no factors ⇒ not MFA).
+- `auth_required=true, challenge_id="chl_1", required_factors=["totp","sms","email"]` →
+  factors map to `[Totp, Sms, Email]` in order.
+- `auth_required=true, challenge_id="chl_1", required_factors=["totp","webauthn"]` →
+  `[Totp, Unknown("webauthn")]` (unknown retained).
+- `auth_required=false, session_id="ses_1", required_factors=[]` → `Success(Authenticated)`.
+- `auth_required=false, session_id=null` (no session issued) but `challenge_id="chl_1"`
+  present → `Success(MfaRequired("chl_1", ...))` (only `!auth_required && session_id`
+  authenticates; absent `session_id` does not authenticate).
+- `auth_required=true, required_factors=["totp"], challenge_id=null, session_id=null` →
+  `Failure(status=200, code="malformed_mfa")`.
+- `auth_required=true, challenge_id="chl_1", required_factors=[]` → `MfaRequired("chl_1", [])`
+  (a challenge_id with empty factors is still a challenge; the MFA flow refines factors).
 
 Failure-passthrough tests (fake `AuthApi` throws):
 - `HttpException(401)` → `ApiResult.Failure(ApiError(status=401, ...))` (via AND-015 mapping
@@ -429,14 +462,17 @@ DI smoke test:
 
 ## 13. Risks & Open Questions
 
-- **R1 — Branch signal ambiguity.** The backend may sometimes set `auth_required=true` with
-  an empty `required_factors`, or `false` with factors present. Mitigation: `auth_required`
-  is treated as authoritative for *whether* MFA is needed, but MFA is only triggered when
-  factors are also non-empty (fail-open to `Authenticated` would be wrong; we require both).
-  Confirm against `/openapi.json` and `frontend/src/api/endpoints` before merge.
-- **R2 — `challenge_id` field name/casing.** Spec assumes snake_case `challenge_id`. If the
-  real schema differs (e.g. `challengeId`), the Moshi `@Json(name=...)` in AND-027 must
-  match; verify against `/openapi.json`.
+- **R1 — Branch signal ambiguity.** *(Resolved during review.)* The web reference
+  (`src/pages/Login.tsx:145`) gates "login complete" on `!auth_required && session_id`, then
+  falls through to the MFA path. We adopt that exact gate: `Authenticated` requires
+  `auth_required == false` **and** a non-blank `session_id`; everything else with a
+  `challenge_id` is `MfaRequired`; a missing `challenge_id` in the non-authenticated case is
+  `malformed_mfa`. `required_factors` is no longer part of the authenticate/MFA decision (it
+  only populates `MfaRequired.factors`). Verified against `components.schemas.UiSessionStartResp`.
+- **R2 — `challenge_id` field name/casing.** *(Verified.)* `components.schemas.UiSessionStartResp`
+  uses snake_case `challenge_id` (nullable string), `auth_required` (boolean, required),
+  `required_factors` (string[]), `session_id` (nullable string). The Moshi `@Json(name=...)`
+  mappings in AND-027 must match these exact names — confirmed correct as written.
 - **Q1 — 401 disambiguation (credentials vs. expired session).** AND-013's authenticator
   must NOT loop `session/refresh` on a credentials 401 from `session/start` (there is no
   session to refresh). Open: confirm AND-013 scopes refresh to endpoints other than
@@ -444,8 +480,12 @@ DI smoke test:
 - **Q2 — Multi-factor selection.** `required_factors` may list several factors. This ticket
   returns the full ordered list; whether the user must satisfy *all* or *one* is decided by
   the MFA flow tickets, not here. Documented in `LoginResult.MfaRequired` KDoc.
-- **Q3 — Does `session/start` ever return user data inline on `Authenticated`?** Assumed no;
-  caller fetches `GET /ui/me` (AND-029). Confirm; if it does, AND-029 may short-circuit.
+- **Q3 — Does `session/start` ever return user data inline on `Authenticated`?** *(Largely
+  resolved.)* `UiSessionStartResp` carries only `auth_required`/`challenge_id`/
+  `required_factors`/`session_id` — **no user identity fields**. The web client always calls
+  `getMe()` after the authenticated branch (`src/pages/Login.tsx:147`). So AND-029's
+  `getMe()` is still required; `session_id` from start is not surfaced through `LoginResult`
+  in this ticket (it only drives the branch decision).
 
 ## 14. Acceptance Criteria
 
@@ -458,10 +498,12 @@ DI smoke test:
    `{"challenge_context":{"username","password"}}` (asserted via MockWebServer recorded
    request).
 4. **Both branches return correct typed results for representative responses (tested):**
-   an MFA response → `Success(MfaRequired(challengeId, factors))`; a no-factor response →
-   `Success(Authenticated)` — per the Section 11 table.
+   an MFA response (`auth_required=true` + `challenge_id`) → `Success(MfaRequired(challengeId,
+   factors))`; an authenticated response (`auth_required=false` + non-blank `session_id`) →
+   `Success(Authenticated)` — per the Section 11 table and the `!auth_required && session_id`
+   gate.
 5. Unknown `required_factors` entries map to `MfaFactor.Unknown(raw)` and are retained.
-6. `auth_required=true` with blank/missing `challenge_id` → `Failure(code="malformed_mfa")`,
+6. A non-authenticated response with blank/missing `challenge_id` → `Failure(code="malformed_mfa")`,
    not a crash and not `Authenticated`.
 7. Transport/HTTP failures pass through unchanged: `IOException`/timeout → `NetworkError`;
    HTTP error → `Failure(ApiError)`; `CancellationException` re-thrown.
@@ -476,10 +518,213 @@ DI smoke test:
 - Unit tests cover every branch and failure-passthrough case in Section 11 and pass via
   `./gradlew :core-data:test`; the MockWebServer request-shape and no-PII-logging tests pass.
 - Public types and the branching rule (Section 3.4) are documented in KDoc, including the
-  "auth_required + factors both required" rule and the all-vs-one factor note (Q2).
+  corrected `!auth_required && session_id` ⇒ Authenticated gate and the all-vs-one factor
+  note (Q2).
 - No Retrofit/OkHttp types leak through the `AuthRepository` interface (verified by
   inspecting the interface signature; only `core-model` types appear).
 - ktlint/detekt (AND-005) pass on new files; code reviewed.
 - AND-029 and AND-031 owners notified that `LoginResult`/`MfaFactor` is frozen for
   consumption; open questions Q1–Q3 either resolved against `/openapi.json` or filed as
   follow-ups before AND-031 integration.
+
+## 16. Citations & Assumption Audit
+
+Sources are cited as: OpenAPI `METHOD /path` / `components.schemas.<Name>` (from
+`reference/openapi.index.txt` and `reference/openapi.pretty.json`), or frontend paths under
+`reference/src/`. "framework ref" labels framework-choice citations.
+
+1. **Endpoint is `POST /ui/session/start`.** VERDICT: Verified.
+   Source: OpenAPI `POST /ui/session/start` (`op=ui_session_start_ui_session_start_post`,
+   `req=UiSessionStartReq`, `resp=200:UiSessionStartResp;422:HTTPValidationError`); frontend
+   `src/api/endpoints/auth.ts: sessionStart` (`api.post<SessionStartResp>("/ui/session/start", body)`).
+2. **Request body is `{ challenge_context: { username, password } }`.** VERDICT: Verified
+   (call site) / Unverified-assumption (typing of inner object).
+   Source: frontend `src/pages/Login.tsx:138-143` posts exactly `challenge_context: { username,
+   password }`. However `components.schemas.UiSessionStartReq.challenge_context` is a free-form
+   object (`additionalProperties: true`) and `src/api/types.ts: SessionStartReq` types it as
+   `Record<string, unknown>`. The strongly-typed `ChallengeContext(username, password)` is a
+   reasonable Android-side modeling assumption, not a backend-enforced schema.
+3. **Response field names `auth_required`, `challenge_id`, `required_factors`.** VERDICT:
+   Verified. Source: `components.schemas.UiSessionStartResp` (`auth_required` boolean, required;
+   `challenge_id` string|null; `required_factors` string[]); frontend `src/api/types.ts:
+   SessionStartResp`.
+4. **Response also includes `session_id` (string|null).** VERDICT: Corrected (was omitted in
+   the original spec DTO and contract). Source: `components.schemas.UiSessionStartResp.session_id`
+   (anyOf string|null); `src/api/types.ts: SessionStartResp.session_id?`.
+5. **Branching: Authenticated iff `!auth_required && session_id`.** VERDICT: Corrected (original
+   spec used `auth_required && required_factors.isNotEmpty()`). Source: frontend
+   `src/pages/Login.tsx:145` (`if (!resp.auth_required && resp.session_id) { ... login complete ... }`),
+   then MFA fallthrough using `challenge_id` + `required_factors` (`:154-156`).
+6. **`required_factors` strings include `"totp"`, `"sms"`, `"email"` (plus `recovery`).**
+   VERDICT: Verified. Source: frontend `src/pages/Login.tsx:41,161-163,400-406` (`MfaMethod =
+   "totp" | "sms" | "email" | "recovery"`, selection from `required_factors`). Mapping unknown
+   factors to `MfaFactor.Unknown(raw)` is an Android forward-compat choice (Unverified-assumption
+   that other factor strings exist, but harmless).
+7. **CSRF: `ui_csrf` cookie echoed as `X-CSRF-Token` header.** VERDICT: Verified. Source:
+   frontend `src/api/client.ts:168-170` (`const csrf = getCookie("ui_csrf"); headers.set("X-CSRF-Token", csrf)`).
+8. **Session rides on cookies (`credentials: include`).** VERDICT: Verified. Source:
+   `src/api/client.ts:183,220` (`credentials: "include"`); cookie jar persistence is the Android
+   analog (AND-011).
+9. **401 → single `session/refresh` + retry.** VERDICT: Verified (web transport behavior).
+   Source: `src/api/client.ts:122` (`refresh` POSTs `/ui/session/refresh`) and the 401-retry
+   block (`:198-221`). OpenAPI `POST /ui/session/refresh` exists (`resp=200`).
+10. **422 validation error shape: `detail: ValidationError[]` with `loc`, `msg`, `type`.**
+    VERDICT: Verified. Source: `components.schemas.HTTPValidationError` →
+    `components.schemas.ValidationError` (`loc`, `msg`, `type` all required). The original spec's
+    422 example omitted `type` — corrected in Section 5.
+11. **401 "Invalid username or password" for bad credentials.** VERDICT: Unverified-assumption.
+    Source: OpenAPI declares only `200`/`422` for `POST /ui/session/start` (no 401 documented).
+    The web client renders `err.detail || "Invalid credentials. Please try again."`
+    (`src/pages/Login.tsx:178-186`) for any thrown error; exact status/message unconfirmed.
+12. **No user identity returned inline on Authenticated; `getMe()` required.** VERDICT: Verified.
+    Source: `UiSessionStartResp` has no identity fields; `src/pages/Login.tsx:147` calls
+    `getMe()` after the authenticated branch. `GET /ui/me` exists (OpenAPI `GET /ui/me`,
+    `op=ui_me_ui_me_get`; `src/api/types.ts: MeResp { user_sub, session_id, ip }`).
+13. **MFA sub-flow endpoints keyed by `challenge_id`.** VERDICT: Verified. Source: OpenAPI
+    `POST /ui/mfa/totp/verify` (`TotpVerifyReq`), `POST /ui/mfa/sms/begin|verify`,
+    `POST /ui/mfa/email/begin|verify`, `POST /ui/session/finalize` (`UiSessionFinalizeReq`);
+    `src/api/types.ts: TotpVerifyReq.challenge_id`, `SessionFinalizeReq.challenge_id`. (Out of
+    scope for this ticket; cited for context.)
+14. **Stack: Kotlin/Coroutines, Retrofit 2.11 + OkHttp 4.12 + Moshi 1.15, Hilt, minSdk 24.**
+    VERDICT: Unverified-assumption (framework ref — project convention, not derivable from the
+    backend/frontend sources). These match the repository-wide Android stack stated in sibling
+    AND tickets; no authoritative source in this reference set.
+
+### Corrections made
+
+- **C1 (DTO):** Added `session_id: String?` to `SessionStartResponse` — present in
+  `UiSessionStartResp` and required by the corrected branch logic (Sections 4, 5; citation 4).
+- **C2 (branch rule):** Changed the Authenticated signal from "`auth_required==false` or empty
+  `required_factors`" to the web client's `!auth_required && session_id` gate; `MfaRequired` now
+  keys off a non-blank `challenge_id`, and `required_factors` no longer participates in the
+  authenticate/MFA decision (Sections 1, 3.2, 3.4, 4 impl, 5, 11, 13-R1, 14; citation 5).
+- **C3 (422 shape):** Added the required `type` field to the `ValidationError` example
+  (Section 5; citation 10).
+- **C4 (401 claim):** Marked the 401 status and message as an unverified assumption since the
+  OpenAPI documents only 200/422 for this endpoint (Section 5; citation 11).
+- **C5 (R2 / Q3):** Promoted R2 (field casing) and Q3 (inline user data) from open questions to
+  verified resolutions against the schema (citations 3, 4, 12).
+
+### Open assumptions
+
+- **OA1 — `challenge_context` inner typing.** Backend accepts a free-form object; `{username,
+  password}` is confirmed only from the web call site. If the server later requires extra fields
+  (e.g. device hints), the typed `ChallengeContext` must extend. (citation 2)
+- **OA2 — Credentials-failure HTTP status/message.** Not documented in OpenAPI; assumed 401 with
+  a FastAPI `detail` string. Confirm against the live dev host before relying on `status==401`
+  for any UI branching. (citation 11)
+- **OA3 — Whether an Authenticated `session/start` can ever return `auth_required=false` with a
+  null `session_id`.** The schema permits it (both optional/nullable). Spec treats null
+  `session_id` as non-authenticated; if the backend can complete a session without echoing
+  `session_id`, this rule would misclassify it as MFA/malformed — verify against the dev host.
+- **OA4 — Android framework versions (citation 14).** Not verifiable from this reference set;
+  carried as project convention.
+- **OA5 — `MfaFactor.Unknown` factor strings.** No factor beyond totp/sms/email/recovery is
+  observed in the sources; `Unknown(raw)` is defensive forward-compat, not evidence such factors
+  exist. (citation 6)
+
+## 17. Test Plan
+
+All cases live in `core-data/src/test` (JVM unit) unless marked otherwise; the `AuthApi` is
+faked/stubbed so these test branching, not transport (transport = AND-027). MockWebServer and
+instrumented cases are explicitly typed. "Traces: AC-#" refers to Section 14 acceptance criteria.
+
+- **TC-AND-028-01 — Happy path: MFA required.** Type: unit.
+  Preconditions: fake `AuthApi.sessionStart` returns `{auth_required:true,
+  challenge_id:"chl_1", required_factors:["totp","sms"], session_id:null}`.
+  Steps: call `repo.login("alice","pw")`.
+  Expected: `ApiResult.Success(LoginResult.MfaRequired("chl_1", [Totp, Sms]))`; factor order
+  preserved. Traces: AC-2, AC-4.
+- **TC-AND-028-02 — Happy path: fully authenticated.** Type: unit.
+  Preconditions: fake returns `{auth_required:false, session_id:"ses_1",
+  required_factors:[]}`.
+  Steps: call `login`.
+  Expected: `ApiResult.Success(LoginResult.Authenticated)`. Traces: AC-4.
+- **TC-AND-028-03 — Authenticated gate requires `session_id`.** Type: unit.
+  Preconditions: fake returns `{auth_required:false, session_id:null, challenge_id:"chl_1",
+  required_factors:["totp"]}` (not authenticated despite `auth_required:false`).
+  Steps: call `login`.
+  Expected: `Success(MfaRequired("chl_1", [Totp]))` (only `!auth_required && session_id`
+  authenticates). Traces: AC-4, AC-6.
+- **TC-AND-028-04 — Unknown factor retained.** Type: unit.
+  Preconditions: fake returns `{auth_required:true, challenge_id:"chl_1",
+  required_factors:["totp","webauthn"]}`.
+  Steps: call `login`.
+  Expected: `MfaRequired("chl_1", [Totp, Unknown("webauthn")])` — unknown not dropped.
+  Traces: AC-5.
+- **TC-AND-028-05 — Malformed MFA (no challenge_id).** Type: unit.
+  Preconditions: fake returns `{auth_required:true, required_factors:["totp"],
+  challenge_id:null, session_id:null}`.
+  Steps: call `login`.
+  Expected: `ApiResult.Failure(ApiError(status=200, code="malformed_mfa", message="MFA
+  required but no challenge_id returned"))`; no exception; not `Authenticated`. Traces: AC-6.
+- **TC-AND-028-06 — Challenge with empty factors.** Type: unit.
+  Preconditions: fake returns `{auth_required:true, challenge_id:"chl_1",
+  required_factors:[]}`.
+  Steps: call `login`.
+  Expected: `Success(MfaRequired("chl_1", []))` (a challenge_id is the MFA signal; factors
+  refined downstream). Traces: AC-4, AC-6.
+- **TC-AND-028-07 — Request shape on the wire.** Type: contract/MockWebServer.
+  Preconditions: MockWebServer enqueues a 200 `{auth_required:false, session_id:"ses_1"}`;
+  real Retrofit `AuthApi` wired to the mock base URL.
+  Steps: call `login("alice","pw")`; read `takeRequest()`.
+  Expected: method `POST`, path `/ui/session/start`, body equals
+  `{"challenge_context":{"username":"alice","password":"pw"}}`, `Content-Type:
+  application/json`. Traces: AC-3.
+- **TC-AND-028-08 — HTTP error passthrough (422 validation).** Type: contract/MockWebServer.
+  Preconditions: MockWebServer enqueues `422` with body `{"detail":[{"loc":["body",
+  "challenge_context","username"],"msg":"field required","type":"missing"}]}`.
+  Steps: call `login`.
+  Expected: `ApiResult.Failure(ApiError(status=422, message="field required"))` per AND-015;
+  `flatMap` does not alter it; no `LoginResult` produced. Traces: AC-7.
+- **TC-AND-028-09 — Credentials failure passthrough.** Type: contract/MockWebServer.
+  Preconditions: MockWebServer enqueues `401` with `{"detail":"Invalid username or
+  password"}` (per OA2 — status assumed).
+  Steps: call `login`.
+  Expected: `ApiResult.Failure(ApiError(status=401, message="Invalid username or
+  password"))`; not retried into Authenticated; no refresh loop. Traces: AC-7.
+- **TC-AND-028-10 — Offline / flaky dev host → NetworkError.** Type: unit.
+  Preconditions: fake `AuthApi` throws `SocketTimeoutException` (then a separate run throws
+  generic `IOException`).
+  Steps: call `login` for each.
+  Expected: `ApiResult.NetworkError(isTimeout=true)` for the timeout;
+  `NetworkError(isTimeout=false)` for the IOException; no exception escapes. Traces: AC-7.
+- **TC-AND-028-11 — Cancellation propagates.** Type: unit.
+  Preconditions: fake `AuthApi` throws `CancellationException`.
+  Steps: `assertFailsWith<CancellationException> { login(...) }`.
+  Expected: re-thrown unchanged (not folded into `NetworkError`). Traces: AC-7.
+- **TC-AND-028-12 — No PII in logs (security).** Type: contract/MockWebServer + log capture.
+  Preconditions: OkHttp logging interceptor attached at BASIC; password `"hunter2"` and a
+  response containing `challenge_id:"chl_secret"`.
+  Steps: call `login("alice","hunter2")`; capture emitted log lines.
+  Expected: captured logs contain neither `"hunter2"` nor `"chl_secret"`; no request/response
+  body for `session/start`. Traces: AC-8.
+- **TC-AND-028-13 — Interface leaks no transport types (security/architecture).** Type: unit
+  (reflection) / compile check.
+  Preconditions: `AuthRepository` interface.
+  Steps: reflect on `login`'s parameter and return types.
+  Expected: only `core-model` types (`String`, `ApiResult<LoginResult>`); no Retrofit/OkHttp/
+  Moshi types in the signature. Traces: AC-1, DoD.
+- **TC-AND-028-14 — Hilt provides `AuthRepository`.** Type: instrumented/e2e
+  (`@HiltAndroidTest`) or component test.
+  Preconditions: app/test Hilt graph with `AuthDataModule` installed.
+  Steps: inject `AuthRepository`.
+  Expected: resolves to an `AuthRepositoryImpl` singleton; graph compiles. Traces: AC-1, AC-9.
+
+Accessibility note: this ticket produces no UI, so no Compose-UI / a11y cases apply here;
+accessibility of error/MFA copy is covered by AND-031 (its stable `code`/`factor` values are
+asserted indirectly via TC-04/05).
+
+### Coverage matrix
+
+| AC (Section 14) | Covered by |
+| --- | --- |
+| AC-1 (interface + Hilt binding) | TC-13, TC-14 |
+| AC-2 (LoginResult / MfaFactor types) | TC-01 |
+| AC-3 (POST body shape) | TC-07 |
+| AC-4 (both branches typed correctly) | TC-01, TC-02, TC-03, TC-06 |
+| AC-5 (unknown factor retained) | TC-04 |
+| AC-6 (malformed_mfa, not crash/Authenticated) | TC-03, TC-05, TC-06 |
+| AC-7 (transport/HTTP passthrough; cancellation) | TC-08, TC-09, TC-10, TC-11 |
+| AC-8 (no PII in logs) | TC-12 |
+| AC-9 (tests green / lint) | TC-14 (+ all unit/contract TCs constitute the suite) |

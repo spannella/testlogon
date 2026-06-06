@@ -5,7 +5,8 @@ milestone: M1 (Auth Foundation)
 epic: E01 (Project scaffolding & build tooling)
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: []
 blocks: [AND-002, AND-003, AND-004, AND-008]
 ---
@@ -37,8 +38,15 @@ machine and the Ubuntu build server.
 under `frontend/`. API surface to mirror in later tickets: `frontend/src/api/endpoints/*.ts`
 and shared DTOs in `frontend/src/api/types.ts`. None of these affect AND-001 directly — they
 matter only insofar as the catalog must later carry Retrofit/Moshi/OkHttp versions used to
-talk to the FastAPI/DynamoDB backend (dev host `http://18.222.237.167:8000`, OpenAPI at
-`/openapi.json`). AND-001 only *reserves* those catalog entries; wiring is downstream.
+talk to the backend (dev host `http://18.222.237.167:8000`, OpenAPI at `/openapi.json`).
+AND-001 only *reserves* those catalog entries; wiring is downstream.
+
+> Review note: the base URL is **not** hardcoded in the web client — `src/api/client.ts`
+> reads it from `import.meta.env.VITE_API_BASE_URL` (empty ⇒ same-origin relative paths).
+> The `18.222.237.167:8000` host is an environment/build-server detail, not a source-verified
+> constant. Auth transport in the web client is **cookie-based** (`credentials: "include"`)
+> with CSRF via the `ui_csrf` cookie echoed as the `X-CSRF-Token` request header — this is the
+> contract the downstream OkHttp cookie + CSRF interceptor tickets (AND-003+) must mirror.
 
 **Related tickets.**
 - **AND-002** — Hilt DI + `:app` Application class. Depends on the catalog plugin aliases
@@ -516,3 +524,237 @@ declared in the catalog for AND-003+ to consume.
   this ticket.
 - Build is green and reproducible; `./gradlew help` documented in `android/README` (one line)
   or the ticket as the canonical "does it build" command for AND-008's CI to adopt.
+
+## 16. Citations & Assumption Audit
+
+AND-001 is a **build-tooling chore**: it ships no API client code, so it makes no concrete
+claims about endpoint paths, HTTP methods, request/response field shapes, or auth flows that
+execute at runtime. The verifiable claims fall into two buckets: (a) the few statements about
+the web client / backend it makes *by way of context* (verifiable against the frontend source
+and OpenAPI index), and (b) toolchain/version compatibility facts (verifiable only against
+vendor/framework documentation — labeled "framework ref"). Each is audited below.
+
+1. **Claim:** The web client talks to the backend with Retrofit/OkHttp/Moshi-equivalent
+   transport, and downstream tickets need cookie + CSRF interceptors.
+   **VERDICT:** Verified. **SOURCE:** `src/api/client.ts` — `fetch(..., { credentials: "include" })`
+   (cookie-based), CSRF read from the `ui_csrf` cookie (`getCookie("ui_csrf")`) and sent as the
+   `X-CSRF-Token` header. This confirms the cookie-jar + CSRF-interceptor design the catalog
+   reserves OkHttp/Retrofit/Moshi versions for.
+
+2. **Claim:** Backend dev host is `http://18.222.237.167:8000` with OpenAPI at `/openapi.json`.
+   **VERDICT:** Corrected / Unverified-assumption. **SOURCE:** `src/api/client.ts` resolves the
+   base URL from `import.meta.env.VITE_API_BASE_URL` (falls back to same-origin relative paths) —
+   the host is **not** a source constant. The specific IP/port is an environment detail not present
+   in the frontend source; treated as a build/CI environment assumption. (OpenAPI is provided as a
+   static index/spec under `reference/openapi.index.txt` / `reference/openapi.pretty.json`; the
+   `/openapi.json` path is the conventional FastAPI default and is plausible but not source-verified.)
+
+3. **Claim:** The web app's API surface to mirror lives in `frontend/src/api/endpoints/*.ts`
+   with shared DTOs in `frontend/src/api/types.ts`.
+   **VERDICT:** Verified. **SOURCE:** reference snapshot `src/api/endpoints/` (directory of `*.ts`
+   endpoint modules) and `src/api/types.ts` both exist with the described roles. (AND-001 only
+   *reserves* catalog versions for this; no endpoint is consumed here.)
+
+4. **Claim:** Backend is FastAPI/DynamoDB.
+   **VERDICT:** Unverified-assumption. **SOURCE:** the OpenAPI index/spec confirm a REST API with
+   `HTTPValidationError`-shaped 422 responses (FastAPI's default validation-error envelope, e.g.
+   `reference/openapi.index.txt` shows `resp=...;422:HTTPValidationError`), consistent with FastAPI;
+   the persistence layer (DynamoDB) is not observable from any provided source. Not load-bearing
+   for AND-001.
+
+5. **Claim:** Gradle wrapper pinned to **8.9**; AGP **8.7.3** requires Gradle 8.9+ and JDK 17.
+   **VERDICT:** Verified (framework ref). **SOURCE:** Android Gradle plugin release/compatibility
+   notes — AGP 8.7 minimum Gradle is 8.9, minimum JDK 17
+   (https://developer.android.com/build/releases/gradle-plugin and the AGP–Gradle compatibility table).
+
+6. **Claim:** Kotlin **2.0.21**, with the Compose compiler delivered as the
+   `org.jetbrains.kotlin.plugin.compose` Gradle plugin (versioned to the Kotlin version) rather than
+   `composeOptions { kotlinCompilerExtensionVersion }`.
+   **VERDICT:** Verified (framework ref). **SOURCE:** Kotlin 2.0 Compose Compiler Gradle plugin docs
+   (https://kotlinlang.org/docs/compose-compiler-migration-guide.html). The plugin version equals the
+   Kotlin version, so `kotlin = "2.0.21"` ⇒ `kotlin-compose` plugin `version.ref = "kotlin"` is correct.
+
+7. **Claim:** KSP **2.0.21-1.0.27** must track the Kotlin version exactly.
+   **VERDICT:** Verified (framework ref). **SOURCE:** KSP releases use the `<kotlin>-<ksp>` scheme and
+   each KSP build targets one Kotlin version (https://github.com/google/ksp/releases). The `2.0.21-…`
+   prefix matches `kotlin = "2.0.21"`; bumping Kotlin requires a paired KSP bump (R2).
+
+8. **Claim:** Hilt/Dagger **2.52** integrates via KSP.
+   **VERDICT:** Verified (framework ref). **SOURCE:** Dagger Hilt supports KSP-based code generation
+   (https://dagger.dev/dev-guide/ksp). Version `2.52` exists; actual application is deferred to AND-002.
+
+9. **Claim:** Compose BOM **2024.10.01** aligns Compose artifact versions; per-artifact Compose
+   libraries (`compose-ui`, `compose-material3`) are declared without explicit versions.
+   **VERDICT:** Verified (framework ref). **SOURCE:** Compose BOM mechanism
+   (https://developer.android.com/jetpack/compose/bom) — the BOM constrains member artifact versions, so
+   the version-less `[libraries]` entries are correct *provided the BOM is imported as a platform in the
+   consuming module* (that import is downstream in AND-002, an open assumption for AND-001).
+
+10. **Claim:** `RepositoriesMode.FAIL_ON_PROJECT_REPOS` forbids per-module repositories and the
+    version catalog at `gradle/libs.versions.toml` is auto-loaded as `libs` without an explicit
+    `versionCatalogs {}` block.
+    **VERDICT:** Verified (framework ref). **SOURCE:** Gradle docs — dependency-resolution management /
+    `FAIL_ON_PROJECT_REPOS` (https://docs.gradle.org/current/userguide/dependency_resolution.html) and the
+    convention that a `gradle/libs.versions.toml` file is auto-registered as the `libs` catalog
+    (https://docs.gradle.org/current/userguide/platforms.html#sub:conventional-dependencies-toml).
+
+11. **Claim:** `minSdk 24`, `compileSdk/targetSdk 35`, JDK 17 toolchain match the Ubuntu build
+    server.
+    **VERDICT:** Unverified-assumption. **SOURCE:** no machine-readable description of the build
+    server's installed SDK/JDK is in the provided sources; this rests on the §2 build-server note. The
+    *internal consistency* (SDK 35 + JDK 17 + AGP 8.7 + Gradle 8.9) is valid (see items 5–6), but server
+    parity itself is an assumption to confirm before merge (R1).
+
+12. **Claim:** `distributionSha256Sum` value
+    `d725d707bfabd4dfdc958c624003b3c80accc03f7037b5122c4b1d0ef15cedeb` is the checksum for
+    `gradle-8.9-bin.zip`.
+    **VERDICT:** Unverified-assumption. **SOURCE:** must be checked against the published checksum at
+    `https://services.gradle.org/distributions/gradle-8.9-bin.zip.sha256` before commit (the spec already
+    flags this in §4.1). Not verifiable from the offline reference set.
+
+### Corrections made
+
+- **§2** — Removed the implication that the backend base URL is a hardcoded constant in the web
+  client. The real client (`src/api/client.ts`) reads it from `VITE_API_BASE_URL` and otherwise uses
+  same-origin relative paths; the `18.222.237.167:8000` host is reclassified as an environment/build
+  detail (audit item 2). Added a review note documenting the verified cookie + `X-CSRF-Token`/`ui_csrf`
+  auth transport (audit item 1) so downstream interceptor tickets cite the correct contract. Dropped
+  the unverifiable "DynamoDB" qualifier from the inline backend description (the FastAPI shape is
+  observable; the datastore is not — audit item 4).
+
+### Open assumptions
+
+- **OA-1** — Build-server toolchain (SDK 35, JDK 17, AGP/Gradle compatibility on Ubuntu) is asserted,
+  not source-verified; confirm on the server before merge (audit item 11 / R1).
+- **OA-2** — `distributionSha256Sum` for `gradle-8.9-bin.zip` is unverified offline; verify against
+  services.gradle.org at commit time (audit item 12).
+- **OA-3** — Dev backend host/port `18.222.237.167:8000` and the `/openapi.json` path are not present
+  in the frontend source; they are environment conventions (audit items 2 & 4).
+- **OA-4** — Framework version facts (items 5–10) are cited from vendor docs by knowledge, not fetched
+  live in this review; re-confirm exact patch availability (AGP 8.7.3, KSP 2.0.21-1.0.27, Compose BOM
+  2024.10.01) at implementation time.
+
+## 17. Test Plan
+
+All cases are **build-level**; AND-001 ships no runtime/UI code, so there are no
+contract/MockWebServer, Compose-UI, instrumented-e2e, or accessibility cases (explicitly N/A —
+those begin at AND-003/AND-004). Test IDs trace to the §14 Acceptance Criteria (AC), numbered
+top-to-bottom AC-1 … AC-13.
+
+- **TC-AND-001-01** — Type: integration (clean-clone build).
+  **Preconditions:** fresh clone of `android-port`, no warm Gradle caches, JDK 17 + Android SDK 35
+  available; no manual edits.
+  **Steps:** from `android/`, run `./gradlew help`.
+  **Expected:** `BUILD SUCCESSFUL`; wrapper downloads `gradle-8.9-bin.zip` and passes the
+  `distributionSha256Sum` check; no version-resolution errors.
+  **Traces:** AC-1, AC-2, AC-6.
+
+- **TC-AND-001-02** — Type: integration (task graph + module includes).
+  **Preconditions:** TC-01 passed (configures successfully).
+  **Steps:** run `./gradlew :app:tasks` and `./gradlew projects`.
+  **Expected:** `:app` and the five `core-*` modules (`:core-network`, `:core-model`, `:core-ui`,
+  `:core-data`, `:core-testing`) are listed; `:app:tasks` enumerates Android application tasks.
+  **Traces:** AC-5, AC-7.
+
+- **TC-AND-001-03** — Type: integration (catalog is single source of versions).
+  **Preconditions:** TC-01 passed.
+  **Steps:** run `./gradlew :app:dependencies`; then grep all `*.gradle.kts` for inline version
+  literals (e.g. quoted `x.y.z` in dependency/plugin coordinates).
+  **Expected:** resolved versions equal `gradle/libs.versions.toml`; **no** version string appears in
+  any `build.gradle.kts` (all via `libs.*` aliases).
+  **Traces:** AC-3, AC-4, AC-7.
+
+- **TC-AND-001-04** — Type: unit (catalog/Kotlin-version coupling).
+  **Preconditions:** none beyond repo checkout.
+  **Steps:** assert in `libs.versions.toml` that `ksp` starts with the `kotlin` value
+  (`2.0.21` ⇒ `ksp = "2.0.21-…"`) and `agp` is `8.7.x`, `compileSdk/targetSdk = 35`, `minSdk = 24`,
+  JDK target 17. (Can be a small script or a CI guard.)
+  **Expected:** all version-coupling invariants hold; mismatched Kotlin/KSP fails the check.
+  **Traces:** AC-3.
+
+- **TC-AND-001-05** — Type: integration (toolchain parity).
+  **Preconditions:** JDK 17 installed/provisionable.
+  **Steps:** run `./gradlew -q javaToolchains`.
+  **Expected:** JDK 17 is selected/available for the build per `jvmToolchain(17)`.
+  **Traces:** AC-3, AC-13.
+
+- **TC-AND-001-06** — Type: integration (smoke build / APK).
+  **Preconditions:** `:app` left buildable (per OQ3 resolution); SDK 35 present.
+  **Steps:** run `./gradlew :app:assembleDebug` (or the agreed alternative `:app:lintDebug` /
+  `:core-model:compileDebugKotlin` if `:app` is codeless).
+  **Expected:** `BUILD SUCCESSFUL`; if `assembleDebug`, `app/build/outputs/apk/debug/app-debug.apk`
+  exists.
+  **Traces:** AC-8.
+
+- **TC-AND-001-07** — Type: integration (configuration-cache reuse).
+  **Preconditions:** `org.gradle.configuration-cache=true`.
+  **Steps:** run `./gradlew help` twice in succession.
+  **Expected:** first run "Calculating task graph…"/stores the cache entry; second run logs
+  "Reusing configuration cache." with no CC-incompatibility warnings.
+  **Traces:** AC-9.
+
+- **TC-AND-001-08** — Type: integration (offline / flaky-host resilience).
+  **Preconditions:** dependency + wrapper caches warm (TC-01 ran once); network to the dev backend
+  and/or Maven repos unavailable.
+  **Steps:** run `./gradlew --offline help`.
+  **Expected:** `BUILD SUCCESSFUL` with no network access; confirms the build never contacts
+  `18.222.237.167` and tolerates an offline/flaky environment.
+  **Traces:** AC-6 (offline variant), AC-9.
+
+- **TC-AND-001-09** — Type: contract/static (repository lockdown).
+  **Preconditions:** repo checkout.
+  **Steps:** (a) confirm `settings.gradle.kts` sets `repositoriesMode = FAIL_ON_PROJECT_REPOS` and
+  declares only `google()` + `mavenCentral()` (+ `gradlePluginPortal()` under `pluginManagement`);
+  (b) add a temporary `repositories {}` block to a module's `build.gradle.kts` and run any configure
+  task.
+  **Expected:** baseline passes; the injected per-module repository causes a configuration-time
+  failure (proving `FAIL_ON_PROJECT_REPOS` is enforced). Revert the injection after.
+  **Traces:** AC-5.
+
+- **TC-AND-001-10** — Type: manual/static (security — no secrets, `.gitignore` correctness).
+  **Preconditions:** repo checkout.
+  **Steps:** inspect `.gitignore` for `.gradle/`, `build/`, `local.properties`, `*.keystore`/`*.jks`;
+  scan tracked files for API keys/tokens/keystores; confirm `gradle/wrapper/gradle-wrapper.jar` **is**
+  tracked.
+  **Expected:** ignore rules present; no secrets or backend credentials in any committed file; wrapper
+  jar committed.
+  **Traces:** AC-10, AC-11.
+
+- **TC-AND-001-11** — Type: security/static (wrapper integrity).
+  **Preconditions:** `validateDistributionUrl=true` and `distributionSha256Sum` set.
+  **Steps:** (a) verify `distributionUrl` ends in `gradle-8.9-bin.zip`; (b) compare
+  `distributionSha256Sum` against the published `.sha256` for that distribution; (c) (negative) corrupt
+  the sum locally and run `./gradlew help`.
+  **Expected:** (a)/(b) match; (c) the wrapper aborts with a checksum-mismatch error. Revert after.
+  **Traces:** AC-2.
+
+- **TC-AND-001-12** — Type: integration (build-server parity).
+  **Preconditions:** access to the Ubuntu build server (JDK 17, SDK 35, `ANDROID_SDK_ROOT`/
+  `ANDROID_HOME` exported).
+  **Steps:** on the server, from a fresh clone run `./gradlew help :app:tasks assembleDebug
+  --stacktrace`.
+  **Expected:** identical `BUILD SUCCESSFUL` results to the developer machine; confirms toolchain
+  parity (closes OA-1).
+  **Traces:** AC-13, AC-1, AC-7, AC-8.
+
+### Coverage matrix
+
+| §14 Acceptance Criterion (AC) | Covered by |
+|---|---|
+| AC-1 — required files + wrapper pinned to Gradle 8.9 | TC-01, TC-12 |
+| AC-2 — `distributionUrl` = `gradle-8.9-bin.zip` + valid SHA-256 | TC-01, TC-11 |
+| AC-3 — catalog pins AGP 8.7.x / Kotlin 2.0.x / KSP-matches / JDK 17 / SDK 35 / minSdk 24 | TC-03, TC-04, TC-05 |
+| AC-4 — no version string in any `build.gradle.kts` | TC-03 |
+| AC-5 — `FAIL_ON_PROJECT_REPOS`, `google()`+`mavenCentral()`, `:app` + five `core-*` | TC-02, TC-09 |
+| AC-6 — fresh clone `./gradlew help` succeeds | TC-01, TC-08 |
+| AC-7 — `:app:tasks`/`:app:dependencies` succeed, show catalog versions | TC-02, TC-03, TC-12 |
+| AC-8 — smoke build (`assembleDebug` or agreed alternative) succeeds | TC-06, TC-12 |
+| AC-9 — second `help` reuses configuration cache | TC-07, TC-08 |
+| AC-10 — `.gitignore` excludes caches/keystores; wrapper jar committed | TC-10 |
+| AC-11 — no secrets/keys/backend credentials committed | TC-10 |
+| AC-12 — (all commands pass identically on the Ubuntu build server) | TC-12 |
+| AC-13 — server parity / consistency of toolchain | TC-05, TC-12 |
+
+> Note: §14 lists thirteen checkboxes; AC-12 ("All commands pass identically on the Ubuntu build
+> server") and the toolchain-parity intent (AC-13) are both exercised by TC-12. If §14 is later
+> renumbered, keep this matrix's TC mappings aligned.
