@@ -632,10 +632,22 @@ def viewer_join_route(
 def viewer_heartbeat_route(
     session_id: str,
     viewer_id: str = Query(...),
+    invite_token: Optional[str] = Query(default=None),
     ctx: dict = Depends(_ctx),
 ):
     """Heartbeat to keep viewer session alive. Call every 30s."""
-    _ = ctx
+    session = get_session(session_id)  # 404 if session doesn't exist
+    # Access gate (GAP-0115): a heartbeat keeps a viewer counted as live, so a
+    # non-member could otherwise inflate / poison a private session's viewer
+    # count with an arbitrary viewer_id. Mirror the viewers/join gating.
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+        invite_token=invite_token,
+    )
     count = touch_viewer(session_id, viewer_id)
     return ViewerHeartbeatOut(ok=True, viewer_count=count)
 
@@ -697,8 +709,13 @@ def report_session_health_route(
     ctx: dict = Depends(_ctx),
 ):
     """Accept health metrics from the broadcaster client or ingest probe."""
-    _ = ctx
     session = get_session(session_id)
+    # Ownership gate (GAP-0115): health metrics may only be reported by the
+    # broadcaster (session owner) or an operator. Without this, any
+    # authenticated user could poison the health snapshot stream observed on
+    # the creator's dashboard. Mirrors configure_chat_tiers_route.
+    if ctx["user_sub"] != session.created_by:
+        _require_operator_role(ctx)
     if session.status != "live":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1815,16 +1832,30 @@ async def broadcast_chat_stream_route(
     session_id: str,
     after: Optional[str] = Query(default=None),
     poll_ms: int = Query(default=500, ge=200, le=3000),
+    invite_token: Optional[str] = Query(default=None),
     ctx: dict = Depends(_ctx),
 ):
     """SSE stream for real-time broadcast chat messages."""
-    _ = ctx
     session = get_session(session_id)
     if session.status not in ("live", "ready"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "BROADCAST_NOT_LIVE", "message": "Chat stream is only available for live broadcasts"},
         )
+    # Go-Private access gating (GAP-0113): mirror the gating on the event
+    # stream / playback-url / viewers/join endpoints. Without this, any
+    # authenticated user could subscribe to a private session's live chat.
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+        invite_token=invite_token,
+    )
+    # Capture once before entering the generator. Per-viewer redaction rules
+    # (locked content, expiry, reactions) depend on this (GAP-0114).
+    viewer_user_id = ctx["user_sub"]
 
     import anyio
 
@@ -1853,7 +1884,7 @@ async def broadcast_chat_stream_route(
                         payload = json.dumps({"message_id": msg["message_id"]}, separators=(",", ":"))
                         yield f"event: chat:delete\ndata: {payload}\n\n"
                     else:
-                        out = _chat_msg_out(msg)
+                        out = _chat_msg_out(msg, viewer_user_id=viewer_user_id)
                         payload = json.dumps(out, separators=(",", ":"), default=str)
                         if out.get("kind") == "product_link":
                             event_type = "chat:product_link"
