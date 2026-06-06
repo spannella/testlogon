@@ -1,6 +1,6 @@
 # GAP-0137: `start_bot_scheduler_task` may raise RuntimeError at startup
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BOT-002 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BOT-002 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BOT-002.md`); see also `docs/tickets/writeups/BOT-002.md`
 
 ## Location

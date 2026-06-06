@@ -1,6 +1,6 @@
 # GAP-0138: Orphaned auto-reply rules on bot deletion
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BOT-003 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BOT-003 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BOT-003.md`); see also `docs/tickets/writeups/BOT-003.md`
 
 ## Location

@@ -448,8 +448,17 @@ async def run_bot_scheduler_loop() -> None:
         await asyncio.sleep(60)
 
 
-def start_bot_scheduler_task() -> None:
-    """Called from main.py startup to launch background scheduler."""
+async def start_bot_scheduler_task() -> None:
+    """Called from main.py startup to launch background scheduler.
+
+    Must be ``async`` so that ``asyncio.create_task()`` is always invoked from
+    within a running event loop. Starlette's startup machinery awaits async
+    handlers (``is_async_callable()`` returns ``True`` for coroutine functions),
+    guaranteeing a running loop. Keeping this synchronous would raise
+    ``RuntimeError: no running event loop`` when the function is called from a
+    sync/CLI/alternative-server context (GAP-0137). No change to the
+    registration in ``app/main.py`` is required.
+    """
     if not S.bot_scheduled_messages_enabled:
         logger.info("bot_scheduler: disabled by BOT_SCHEDULED_MESSAGES_ENABLED")
         return

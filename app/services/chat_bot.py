@@ -174,7 +174,7 @@ def update_bot_status(*, creator_id: str, bot_id: str, status: str) -> dict | No
 
 
 def delete_bot(*, creator_id: str, bot_id: str) -> bool:
-    """Delete a bot and all its assignments."""
+    """Delete a bot and all its assignments, auto-reply rules and scheduled sends."""
     bot = get_bot_for_owner(creator_id=creator_id, bot_id=bot_id)
     if not bot:
         return False
@@ -183,6 +183,29 @@ def delete_bot(*, creator_id: str, bot_id: str) -> bool:
     assignments = _query_all_assignments(bot_id=bot_id)
     for a in assignments:
         T.bot_assignments.delete_item(Key={"pk": a["pk"], "sk": a["sk"]})
+
+    # GAP-0138: cascade-delete auto-reply rules. These live in T.chat_bots under
+    # pk=BOT#{bot_id} / sk=RULE#{rule_id} (a different partition than the main bot
+    # record at CREATOR#{creator_id}/BOT#{bot_id}). Without this they were orphaned.
+    rules = _query_all_auto_reply_rules_raw(bot_id=bot_id)
+    for r in rules:
+        T.chat_bots.delete_item(Key={"pk": r["pk"], "sk": r["sk"]})
+    if rules:
+        logger.info(
+            "Bot deleted: cascade-deleted %d auto-reply rule(s) for bot_id=%s",
+            len(rules), bot_id,
+        )
+
+    # GAP-0138: cascade-delete scheduled sends (T.bot_scheduled_sends under
+    # pk=BOT#{bot_id} / sk=SCHED#{schedule_id}) so they are not left orphaned.
+    scheds = _query_all_scheduled_sends_raw(bot_id=bot_id)
+    for s in scheds:
+        T.bot_scheduled_sends.delete_item(Key={"pk": s["pk"], "sk": s["sk"]})
+    if scheds:
+        logger.info(
+            "Bot deleted: cascade-deleted %d scheduled send(s) for bot_id=%s",
+            len(scheds), bot_id,
+        )
 
     T.chat_bots.delete_item(Key={"pk": f"CREATOR#{creator_id}", "sk": f"BOT#{bot_id}"})
     logger.info("Bot deleted: bot_id=%s creator_id=%s", bot_id, creator_id)
@@ -463,6 +486,46 @@ def _query_all_assignments(*, bot_id: str) -> list[dict]:
         KeyConditionExpression=Key("pk").eq(f"BOT#{bot_id}"),
     )
     return resp.get("Items", [])
+
+
+def _query_all_auto_reply_rules_raw(*, bot_id: str) -> list[dict]:
+    """Query T.chat_bots for all RULE# items for a bot (raw items with pk/sk).
+
+    Used by delete_bot() to cascade-delete auto-reply rules (GAP-0138).
+    Pages through LastEvaluatedKey so no rules are missed on busy tables.
+    """
+    items: list[dict] = []
+    kwargs: dict = {
+        "KeyConditionExpression": Key("pk").eq(f"BOT#{bot_id}") & Key("sk").begins_with("RULE#"),
+    }
+    while True:
+        resp = T.chat_bots.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return items
+
+
+def _query_all_scheduled_sends_raw(*, bot_id: str) -> list[dict]:
+    """Query T.bot_scheduled_sends for all SCHED# items for a bot (raw pk/sk).
+
+    Used by delete_bot() to cascade-delete scheduled sends (GAP-0138).
+    Pages through LastEvaluatedKey so none are missed on busy tables.
+    """
+    items: list[dict] = []
+    kwargs: dict = {
+        "KeyConditionExpression": Key("pk").eq(f"BOT#{bot_id}") & Key("sk").begins_with("SCHED#"),
+    }
+    while True:
+        resp = T.bot_scheduled_sends.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return items
 
 
 def _build_assignment_sk(target_type: str, target_id: str | None) -> str:

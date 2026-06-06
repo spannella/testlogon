@@ -1,6 +1,6 @@
 # GAP-0141: API key ciphertext must never appear in API responses
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BOT-004 · **Effort**: S
+**Status**: Deferred (unbuilt BOT-004 prereq, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BOT-004 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BOT-004.md`); see also `docs/tickets/writeups/BOT-004.md`
 
 ## Location
