@@ -16,3 +16,8 @@ call `host_inventory.delete_host(user_sub, item["host_id"])` inside `terminate_p
 This gap was identified by the second-pass as-built review of INFRA-004. Apply the dev/prod
 parity rules in SECOPS-007 if the fix touches AWS-backed paths. Add a regression test
 (pytest offline / Playwright) that fails before the fix and passes after.
+
+
+## Implemented (branch impl/crit-batch-1, 2026-06-06)
+
+Fix landed; see commit on impl/crit-batch-1. Regression test added.

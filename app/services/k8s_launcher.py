@@ -19,6 +19,18 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
+# Host inventory integration (INFRA-001) — imported at module level so the
+# auto-register (GAP-0226) and auto-cleanup (GAP-0227) paths are easily
+# monkeypatched in tests as ``app.services.k8s_launcher.create_host`` /
+# ``delete_host``. These are pure DynamoDB operations with no dev/prod fork,
+# so they run identically under the mock and real K8s paths (SECOPS-007).
+from app.services.host_inventory import (  # noqa: E402
+    create_host,
+    delete_host,
+    HostValidationError,
+    HostLimitExceeded,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -344,9 +356,50 @@ def launch_pod(
     }
     T.k8s_pods.put_item(Item=item)
 
+    # 7. Auto-register in the Host Inventory (GAP-0226) so the pod is reachable
+    #    via Quick Connect / connection profiles, and write the resulting
+    #    host_id back into the pod record so termination can clean it up
+    #    (GAP-0227). Failure to register must NOT fail the launch — the pod is
+    #    already created — so create_host errors are logged and swallowed.
+    try:
+        host = create_host(
+            user_sub,
+            label=f"{label} (K8s)",
+            hostname=result["service_hostname"],
+            port=22,
+            protocol="ssh",
+            username=image_info.get("username", "ubuntu"),
+            description=f"Auto-registered K8s pod {pod_id} (preset={preset})",
+            group="K8s Containers",
+            os_type=image_info.get("os_type", "linux"),
+            source="k8s_auto",
+        )
+        host_id = host.get("host_id", "")
+        if host_id:
+            T.k8s_pods.update_item(
+                Key={"user_sub": user_sub, "sk": f"POD#{pod_id}"},
+                UpdateExpression="SET host_id = :hid",
+                ExpressionAttributeValues={":hid": host_id},
+            )
+            item["host_id"] = host_id
+            logger.info(
+                "k8s_pod_host_registered user_sub=%s pod_id=%s host_id=%s",
+                user_sub, pod_id, host_id,
+            )
+    except (HostValidationError, HostLimitExceeded):
+        logger.warning(
+            "k8s_pod_host_register_failed user_sub=%s pod_id=%s hostname=%s",
+            user_sub, pod_id, result.get("service_hostname"),
+        )
+    except Exception:
+        logger.exception(
+            "k8s_pod_host_register_error user_sub=%s pod_id=%s",
+            user_sub, pod_id,
+        )
+
     logger.info(
-        "k8s_pod_launched user_sub=%s pod_id=%s image=%s preset=%s ttl=%d",
-        user_sub, pod_id, image, preset, ttl_seconds,
+        "k8s_pod_launched user_sub=%s pod_id=%s image=%s preset=%s ttl=%d host_id=%s",
+        user_sub, pod_id, image, preset, ttl_seconds, item.get("host_id", ""),
     )
 
     return item
@@ -453,6 +506,26 @@ def terminate_pod(user_sub: str, pod_id: str) -> Dict[str, Any]:
 
     item["status"] = "terminated"
     item["terminated_at"] = now
+
+    # Clean up the auto-registered Host Inventory entry (GAP-0227). The
+    # `if host_id:` guard makes this a no-op for pods created before GAP-0226
+    # (host_id == ""). delete_host returns False for an unknown host (it never
+    # raises HostNotFound), so a broad except is sufficient; cleanup failures
+    # must not roll back the already-completed termination.
+    host_id = item.get("host_id", "")
+    if host_id:
+        try:
+            delete_host(user_sub, host_id)
+            logger.info(
+                "k8s_pod_host_deregistered user_sub=%s pod_id=%s host_id=%s",
+                user_sub, pod_id, host_id,
+            )
+        except Exception:
+            logger.exception(
+                "k8s_pod_host_deregister_failed user_sub=%s pod_id=%s host_id=%s",
+                user_sub, pod_id, host_id,
+            )
+
     logger.info("k8s_pod_terminated user_sub=%s pod_id=%s", user_sub, pod_id)
     return item
 

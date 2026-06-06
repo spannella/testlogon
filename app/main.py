@@ -290,6 +290,7 @@ from app.routers.license_compliance import (
 )
 from app.routers.k8s_launcher import router as k8s_launcher_router
 from app.services.k8s_launcher import start_k8s_ttl_checker_task
+from app.services.compute_billing import start_compute_billing_timer_task
 from app.services.agent_worker_provisioner import start_idle_worker_checker_task
 from app.routers.instance_templates import router as instance_templates_router
 from app.services.instance_templates import ensure_system_templates
@@ -728,6 +729,7 @@ def create_app() -> FastAPI:
     app.include_router(license_compliance_admin_router)
     app.include_router(k8s_launcher_router)
     app.add_event_handler("startup", start_k8s_ttl_checker_task)
+    app.add_event_handler("startup", start_compute_billing_timer_task)
     app.add_event_handler("startup", start_idle_worker_checker_task)
     app.include_router(instance_templates_router)
     app.add_event_handler("startup", ensure_system_templates)

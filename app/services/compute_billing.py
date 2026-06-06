@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -486,3 +487,190 @@ def _update_alerts_sent(user_sub: str, month_key: str, new_thresholds: List[int]
             ":t": set(new_thresholds),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Background billing timer (GAP-0228 / INFRA-005)
+#
+# The manual POST /ui/remote/billing/tick endpoint calls record_billing_tick
+# for a single resource. This timer performs the same per-tick deduction
+# automatically for every running EC2 instance and K8s pod on a fixed poll
+# interval, tracking a per-resource last_billed_at timestamp so duration is
+# computed accurately, and auto-terminating resources whose wallet runs dry.
+# ---------------------------------------------------------------------------
+
+# Minimum elapsed minutes before a periodic tick is emitted, to avoid
+# sub-interval ticks (e.g. immediately after launch).
+_MIN_TICK_MINUTES = 0.5
+
+
+def _scan_all_running_instances() -> List[Dict[str, Any]]:
+    """Scan all running EC2 instances system-wide (no user_sub filter)."""
+    items: List[Dict[str, Any]] = []
+    kwargs: Dict[str, Any] = {
+        "FilterExpression": "attribute_exists(instance_id) AND #st = :running",
+        "ExpressionAttributeNames": {"#st": "status"},
+        "ExpressionAttributeValues": {":running": "running"},
+    }
+    while True:
+        resp = T.ec2_instances.scan(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return items
+
+
+def _scan_all_running_pods() -> List[Dict[str, Any]]:
+    """Scan all running K8s pods system-wide (no user_sub filter)."""
+    items: List[Dict[str, Any]] = []
+    kwargs: Dict[str, Any] = {
+        "FilterExpression": "attribute_exists(pod_id) AND #st = :running",
+        "ExpressionAttributeNames": {"#st": "status"},
+        "ExpressionAttributeValues": {":running": "running"},
+    }
+    while True:
+        resp = T.k8s_pods.scan(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return items
+
+
+def _update_last_billed_at(resource_type: str, user_sub: str, resource_id: str, ts: int) -> None:
+    """Record when a resource was last billed, to compute the next tick's duration."""
+    if resource_type == "ec2":
+        table = T.ec2_instances
+        sk = f"INSTANCE#{resource_id}"
+    else:
+        table = T.k8s_pods
+        sk = f"POD#{resource_id}"
+    table.update_item(
+        Key={"user_sub": user_sub, "sk": sk},
+        UpdateExpression="SET last_billed_at = :t",
+        ExpressionAttributeValues={":t": ts},
+    )
+
+
+def _auto_terminate_resource(resource_type: str, user_sub: str, resource_id: str) -> None:
+    """Terminate a resource whose wallet balance can no longer cover it."""
+    try:
+        if resource_type == "ec2":
+            from app.services.ec2_launcher import terminate_instance
+            terminate_instance(user_sub, resource_id)
+        else:
+            from app.services.k8s_launcher import terminate_pod
+            terminate_pod(user_sub, resource_id)
+    except Exception:
+        logger.exception(
+            "compute_billing_auto_terminate_failed resource_type=%s user_sub=%s resource_id=%s",
+            resource_type, user_sub, resource_id,
+        )
+
+
+def _tick_resource(
+    *,
+    resource_type: str,
+    user_sub: str,
+    resource_id: str,
+    resource_label: str,
+    instance_type_or_preset: str,
+    last_billed: int,
+    started_at: int,
+    now: int,
+) -> bool:
+    """Emit a single periodic billing tick for one running resource.
+
+    Returns True if a tick was emitted, False if skipped (too soon).
+    Auto-terminates the resource on InsufficientBalanceError.
+    """
+    anchor = last_billed if last_billed else (started_at or now)
+    elapsed_minutes = max(0.0, (now - anchor) / 60.0)
+    if elapsed_minutes < _MIN_TICK_MINUTES:
+        return False
+
+    try:
+        record_billing_tick(
+            user_sub,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            resource_label=resource_label,
+            instance_type_or_preset=instance_type_or_preset,
+            event="periodic_tick",
+            duration_minutes=elapsed_minutes,
+        )
+        _update_last_billed_at(resource_type, user_sub, resource_id, now)
+        return True
+    except InsufficientBalanceError:
+        logger.warning(
+            "compute_billing_zero_balance resource_type=%s user_sub=%s resource_id=%s -- terminating",
+            resource_type, user_sub, resource_id,
+        )
+        _auto_terminate_resource(resource_type, user_sub, resource_id)
+        return False
+
+
+def _tick_all_running_resources() -> int:
+    """Enumerate all running EC2 instances and K8s pods; emit periodic billing
+    ticks. Returns the number of ticks emitted.
+    """
+    ticked = 0
+    now = now_ts()
+
+    for inst in _scan_all_running_instances():
+        if _tick_resource(
+            resource_type="ec2",
+            user_sub=inst.get("user_sub", ""),
+            resource_id=inst.get("instance_id", ""),
+            resource_label=inst.get("label", ""),
+            instance_type_or_preset=inst.get("instance_type", "t3.micro"),
+            last_billed=int(inst.get("last_billed_at", 0) or 0),
+            started_at=int(inst.get("started_at", 0) or 0),
+            now=now,
+        ):
+            ticked += 1
+
+    for pod in _scan_all_running_pods():
+        if _tick_resource(
+            resource_type="k8s",
+            user_sub=pod.get("user_sub", ""),
+            resource_id=pod.get("pod_id", ""),
+            resource_label=pod.get("label", ""),
+            instance_type_or_preset=pod.get("preset", "small"),
+            last_billed=int(pod.get("last_billed_at", 0) or 0),
+            started_at=int(pod.get("started_at", 0) or 0),
+            now=now,
+        ):
+            ticked += 1
+
+    logger.info("compute_billing_timer_tick ticked=%d", ticked)
+    return ticked
+
+
+async def run_compute_billing_timer(*, poll_interval: int | None = None) -> None:
+    """Background task: periodically bill every running compute resource.
+
+    Performs the same per-tick deduction as POST /ui/remote/billing/tick for
+    all running EC2 instances and K8s pods, and auto-terminates resources whose
+    wallet balance is exhausted.
+    """
+    interval = poll_interval if poll_interval is not None else S.compute_billing_poll_interval
+    while True:
+        try:
+            _tick_all_running_resources()
+        except Exception:
+            logger.exception("compute_billing_timer error")
+        await asyncio.sleep(interval)
+
+
+def start_compute_billing_timer_task() -> None:
+    """Register the compute billing timer background task at app startup."""
+    if S.compute_billing_enabled:
+        asyncio.ensure_future(run_compute_billing_timer())
+        logger.info(
+            "Compute billing timer started (interval=%ds)",
+            S.compute_billing_poll_interval,
+        )
