@@ -5,7 +5,8 @@ milestone: M3
 epic: E19
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-124]
 blocks: []
 ---
@@ -24,8 +25,8 @@ Goal restated as a testable outcome: a user can open a countdown picker, choose 
 
 - **Module:** `feature-messaging` (Gradle module `:feature:messaging`), package `com.testlogon.android.feature.messaging`. The countdown picker and bubble live under `…feature.messaging.countdown`.
 - **Layering:** `feature-messaging` → `core-network` (Retrofit service + `ApiResult<T>`), `core-model` (DTO ↔ domain), `core-data` (repository, Room cache, outbox), `core-ui` (Compose components, theme). No backward dependencies.
-- **Backend:** FastAPI + DynamoDB. Dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable). OpenAPI at `/openapi.json`. The countdown endpoint is documented as `Create Countdown Message (MSG-010)`. Cookie-based auth: session cookies + `ui_csrf` echoed as `X-CSRF-Token`; on `401` the OkHttp authenticator calls `POST /ui/session/refresh` once and retries. Persistent cookie jar required (core-network tickets).
-- **Web reference:** `frontend/src/api/endpoints/conversations.ts` (countdown send) and `frontend/src/api/types.ts` (`MessageOut` countdown fields). The Android DTO must mirror `SendCountdownMessageIn` and the `MessageOut` countdown projection.
+- **Backend:** FastAPI + DynamoDB. Dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable). OpenAPI at `/openapi.json`. The countdown endpoint description is `Send a countdown message to a conversation (MSG-010)` (OpenAPI summary `Create Countdown Message`). Auth (per `src/api/client.ts`): session cookies (`credentials: "include"`) **plus** an `Authorization: Bearer <accessToken>` header from the auth store **plus** `ui_csrf` cookie echoed as `X-CSRF-Token`; on `401` the web client calls `POST /ui/session/refresh` once and retries (the OkHttp authenticator mirrors this). The OpenAPI parameters for this endpoint list optional `authorization` and `X-SESSION-ID` headers. Persistent cookie jar required (core-network tickets). *(Correction: original draft said "Cookie-based auth" only and omitted the Bearer token.)*
+- **Web reference:** `src/api/endpoints/messaging.ts` (`sendCountdownMessage`), `src/pages/messages/CountdownComposerDialog.tsx` + `CountdownCard.tsx` (composer + render behavior), and `src/api/types.ts` (`Message` countdown fields). The Android DTO must mirror `SendCountdownMessageIn` and the `MessageOut` countdown projection. *(Correction: original draft pointed at `endpoints/conversations.ts`; the actual countdown call lives in `endpoints/messaging.ts`.)*
 - **Dependency AND-124** supplies: `MessageComposer`, `ComposerState`, the outbox (`OutboxMessageEntity`/`OutboxDao`), `MessageRepository.sendMessage(...)` as the optimistic-send template, the `SendStatus` enum (`SENDING/SENT/FAILED`), and the merge/dedup-by-`clientId` flow. AND-126 supplies the sealed `Message`/`MessageContent` domain model and the read-side mapper that produces a `Countdown` content variant.
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, Hilt (KSP), Coroutines/Flow, Retrofit 2.11 + OkHttp 4.12 + Moshi 1.15, Room 2.6, Paging 3. minSdk 24 / target 35, JDK 17.
 
@@ -176,9 +177,9 @@ Implementation maps `CountdownDraft` → `SendCountdownMessageIn` → `Messaging
 
 ## 5. API Contract
 
-**Endpoint:** `POST /messaging/conversations/{conversation_id}/messages/countdown` (operationId `create_countdown_message_…`, "Create Countdown Message (MSG-010)").
+**Endpoint:** `POST /messaging/conversations/{conversation_id}/messages/countdown` (operationId `create_countdown_message_messaging_conversations__conversation_id__messages_countdown_post`, summary "Create Countdown Message", description "Send a countdown message to a conversation (MSG-010)"). *Verified against `openapi.index.txt` line 336.*
 
-**Request headers:** session cookies (cookie jar) + `X-CSRF-Token: <ui_csrf>` (CSRF interceptor) + `Content-Type: application/json`.
+**Request headers:** session cookies (cookie jar) + `Authorization: Bearer <accessToken>` + `X-CSRF-Token: <ui_csrf>` (CSRF interceptor) + `Content-Type: application/json`. *(The OpenAPI declares optional `authorization` and `X-SESSION-ID` headers for this op; the web client sends the Bearer token and the `ui_csrf`-derived CSRF header on every call — see `src/api/client.ts`.)*
 
 **Request body** — schema `SendCountdownMessageIn`:
 ```json
@@ -199,16 +200,18 @@ Implementation maps `CountdownDraft` → `SendCountdownMessageIn` → `Messaging
 **Success `201`** — schema `MessageOut` (countdown projection); relevant fields:
 ```json
 {
-  "id": "msg_01H...",
+  "message_id": "msg_01H...",
   "conversation_id": "conv_01H...",
+  "sender_id": "usr_01H...",
   "kind": "countdown",
   "countdown_title": "Launch",
   "target_datetime": 1780000000,
   "associated_event_type": "custom",
   "associated_event_id": null,
-  "created_at": "2026-06-05T14:22:31.004Z"
+  "created_at": 1780000000
 }
 ```
+*(Corrections vs original draft: the identifier field is `message_id`, NOT `id`; `created_at` is an **integer Unix epoch** (`MessageOut.created_at: type integer`), NOT an ISO-8601 string. The author field is `sender_id`. There is **no** `client_id`/idempotency field on `MessageOut`. Verified against `components.schemas.MessageOut` and `src/api/endpoints/messagingAdapter.ts: adaptMessage` which reads `message_id` and `toNum(created_at)`. The `kind` enum value `"countdown"` is one of the `MessageOut.kind` enum members.)*
 
 **Moshi DTOs + Retrofit:**
 ```kotlin
@@ -235,7 +238,7 @@ The `MessageOut` DTO (countdown fields `kind`, `countdown_title`, `target_dateti
 - `401` → authenticator refreshes once then retries; second `401` → `Unauthorized`, send `FAILED`, surface re-auth.
 - `403` → CSRF/permission; `FAILED`, non-retryable hint.
 - `404` → conversation gone; `FAILED`, "conversation unavailable".
-- `422` → `detail: [{msg, loc}]` (e.g. title length, missing `target_datetime`); `FAILED`, show first `msg`; validate client-side to avoid most cases.
+- `422` → `HTTPValidationError` = `{ detail: ValidationError[] }`, where each `ValidationError` is `{ loc: (string|int)[], msg: string, type: string }` (all three required) — e.g. title length, missing `target_datetime`; `FAILED`, show first `msg`; validate client-side to avoid most cases. *(Correction: original draft listed only `{msg, loc}`; `type` is also present and required. Verified against `components.schemas.ValidationError`. Note: per `openapi.index.txt`, the only declared error response for this op is `422`; `401/403/404/5xx` below are framework-level/transport behaviors, not enumerated response schemas for this endpoint — treated as unverified-for-this-op assumptions, consistent with the shared client in `src/api/client.ts`.)*
 - `5xx`/timeout/`IOException` → `FAILED`, retryable.
 
 ## 6. Data & State Management
@@ -303,9 +306,9 @@ The `MessageOut` DTO (countdown fields `kind`, `countdown_title`, `target_dateti
 
 ## 13. Risks & Open Questions
 
-- **OQ-1:** Does the countdown endpoint accept/dedupe a client idempotency key (e.g. `client_id`)? `SendCountdownMessageIn` as documented does **not** list one. If absent, a manual retry after an uncertain failure risks a duplicate countdown. **Resolution before merge:** confirm via `/openapi.json` + `frontend/src/api/endpoints/conversations.ts`; if unsupported, reconcile by `(authorId, title, target_datetime, createdAt≈)` heuristic and gate retry behind explicit user confirmation.
-- **OQ-2:** `associated_event_type`/`associated_event_id` semantics for `custom` (this ticket's default) — confirm `custom` requires no `associated_event_id`. Schema allows null, so defaulting to `custom`/null is safe.
-- **OQ-3:** Success status code 201 vs 200 — handle both via `Response.isSuccessful`. `created_at` precision/offset — use a tolerant ISO-8601 adapter (shared with AND-124).
+- **OQ-1 (RESOLVED — no idempotency key):** Confirmed that **neither** `SendCountdownMessageIn` (request) **nor** `MessageOut` (response) carries a `client_id`/idempotency field — verified against `components.schemas.SendCountdownMessageIn`, `components.schemas.MessageOut`, and `src/api/endpoints/messaging.ts: sendCountdownMessage` (the web client posts only `{title, target_datetime, associated_event_type?, associated_event_id?, reply_to_message_id?}`). Therefore a manual retry after an uncertain failure **can** create a duplicate countdown. Mitigation as drafted: client-side reconcile by `(sender_id, title, target_datetime, createdAt≈)` heuristic (note: author field is `sender_id`, not `authorId`) and gate retry behind explicit user confirmation.
+- **OQ-2 (RESOLVED):** Schema confirms `associated_event_type` defaults to `"custom"` and `associated_event_id` is `string ≤128 | null`. The web composer (`CountdownComposerDialog.tsx`) treats `associated_event_id` as **required when `associated_event_type != "custom"`** and not required for `custom` — so defaulting to `custom`/null (this ticket's behavior) is safe and contract-correct.
+- **OQ-3 (RESOLVED):** Success is **`201` only** for this op (no `200` declared in OpenAPI responses); still handle via `Response.isSuccessful` for robustness. `created_at` is an **integer Unix epoch** (`MessageOut.created_at: type integer`), so **do NOT use an ISO-8601 adapter** — decode as `Long` epoch (web `adaptMessage` does `toNum(created_at)`). *(Correction: original draft assumed a 200/201 ambiguity and an ISO-8601 timestamp.)*
 - **Risk — device clock skew:** remaining time depends on the device clock; a wrong clock shows a wrong countdown. Mitigation: documented limitation; optional future server-`now` offset correction (out of scope).
 - **Risk — battery/recomposition:** a naive per-bubble 1s timer could thrash. Mitigation: single conflated ticker + `derivedStateOf` + lifecycle-scoped collection; covered by the "ticker stops below STARTED" UI test.
 - **Risk — far-future targets:** large `target − now` must format without overflow; `Duration`/`Long` seconds are safe within documented ranges; tested at multi-year lead time.
@@ -335,3 +338,91 @@ AC-7. Ticking is lifecycle-aware: timers stop when the thread leaves the foregro
 - Strings externalized; bubble exposes a coherent throttled accessibility description; locale/RTL/time-zone-correct formatting; touch targets ≥ 48dp.
 - All ACs in §14 demonstrably met; OQ-1 (idempotency/dedupe) confirmed and reflected in code before merge.
 - PR targets the `android-port` branch and references AND-137 and AND-124 (and AND-126/AND-123 as consumed).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. OpenAPI pointers reference `reference/openapi.index.txt` (line 336 for this op) and `reference/openapi.pretty.json` (`components.schemas.<Name>`). Frontend pointers are paths under `reference/src/`.
+
+1. **Endpoint is `POST /messaging/conversations/{conversation_id}/messages/countdown`.** — **Verified.** Source: OpenAPI `POST /messaging/conversations/{conversation_id}/messages/countdown` (index line 336); `src/api/endpoints/messaging.ts: sendCountdownMessage`.
+2. **operationId / summary / description.** operationId `create_countdown_message_messaging_conversations__conversation_id__messages_countdown_post`; summary "Create Countdown Message"; description "Send a countdown message to a conversation (MSG-010)". — **Verified.** Source: OpenAPI path object for the op (`openapi.pretty.json`).
+3. **Request schema `SendCountdownMessageIn`:** `title` (string, required, minLength 1, maxLength 200), `target_datetime` (integer, required, "UTC Unix timestamp of the target event"), `associated_event_type` (string, default `"custom"`, pattern `^(broadcast|call|calendar|custom)$`), `associated_event_id` (string ≤128 | null), `reply_to_message_id` (string | null); required = `[title, target_datetime]`. — **Verified.** Source: `components.schemas.SendCountdownMessageIn`.
+4. **Success status is `201` with body `MessageOut`; only `422` is the declared error response.** — **Verified.** Source: OpenAPI op `responses` (`201: MessageOut`, `422: HTTPValidationError`); index line 336 `resp=201:MessageOut;422:HTTPValidationError`.
+5. **Response identifier field is `message_id` (NOT `id`).** — **Corrected** (draft said `id`). Source: `components.schemas.MessageOut` (`message_id` property); `src/api/endpoints/messagingAdapter.ts: adaptMessage` (`message_id: String(raw.message_id ?? "")`).
+6. **`MessageOut.created_at` is an integer Unix epoch (NOT ISO-8601 string).** — **Corrected** (draft example used an ISO string; OQ-3 assumed an ISO-8601 adapter). Source: `components.schemas.MessageOut.created_at: {type: integer}`; `adaptMessage` uses `created_at: toNum(raw.created_at)`.
+7. **Countdown projection fields on `MessageOut`: `countdown_title`, `target_datetime`, `associated_event_type`, `associated_event_id`, `kind`.** — **Verified.** Source: `components.schemas.MessageOut` (those properties exist); `src/api/types.ts` (`countdown_title?`, `target_datetime?`, `associated_event_type?: "broadcast"|"call"|"calendar"|"custom"|null`, `associated_event_id?`).
+8. **`MessageOut.kind` enum includes `"countdown"`.** — **Verified.** Source: `components.schemas.MessageOut.kind.enum` = `[text,image,file,audio,video,gallery,file_share,calendar_share,calendar_event,meeting_poll,video_share,voice_message,voicemail,countdown,gif,sticker,find_datetime]`. (Note: this server enum differs from the AND-126 domain enumeration cited in §1, e.g. server has `voice_message`/`gif`/`sticker` but no `poll`/`system`; the `countdown` member — all this ticket needs — is present.)
+9. **No client idempotency key (`client_id`) on request or response.** — **Verified (OQ-1 resolved).** Source: `components.schemas.SendCountdownMessageIn` (no such field), `components.schemas.MessageOut` (no such field), `src/api/endpoints/messaging.ts: sendCountdownMessage` (posts no client key).
+10. **`422` validation shape is `HTTPValidationError = {detail: ValidationError[]}` with `ValidationError = {loc, msg, type}` (all required).** — **Corrected** (draft listed only `{msg, loc}`). Source: `components.schemas.HTTPValidationError`, `components.schemas.ValidationError`.
+11. **Auth: session cookies + `Authorization: Bearer <accessToken>` + `ui_csrf` cookie echoed as `X-CSRF-Token`.** — **Corrected** (draft said "Cookie-based auth" only, omitting the Bearer token). Source: `src/api/client.ts` (`headers.set("Authorization", \`Bearer ${accessToken}\`)`, `getCookie("ui_csrf")` → `X-CSRF-Token`, `credentials: "include"`). OpenAPI op also declares optional `authorization` and `X-SESSION-ID` headers (`openapi.pretty.json` op `parameters`).
+12. **On `401`, refresh once via `POST /ui/session/refresh` then retry; second failure logs out.** — **Verified.** Source: `src/api/client.ts: refreshSession()` (POST `/ui/session/refresh`) and the 401 retry block (single in-flight `refreshPromise`, retry, logout on repeat 401).
+13. **`403` handling carries structured `detail.code` (e.g. `geo_blocked`, `role_required*`, `helpdesk_*`).** — **Verified.** Source: `src/api/client.ts: mapAuthorizationError` + the 403 branch handling `code === "geo_blocked"`.
+14. **Web validation: title non-blank & ≤200 chars, target strictly future; target seconds = `floor(localDate.getTime()/1000)`.** — **Verified.** Source: `src/pages/messages/CountdownComposerDialog.tsx` (`canSubmit`, `targetTs = Math.floor(new Date(localDatetime).getTime()/1000)`, `isFuture = targetTs > nowTs`).
+15. **`custom` requires no `associated_event_id`; non-custom requires one (web).** — **Verified (OQ-2 resolved).** Source: `CountdownComposerDialog.tsx` (`eventIdRequired = eventType !== "custom"`; `canSubmit` includes `(!eventIdRequired || eventId.trim().length > 0)`). Schema permits `associated_event_id: null` (`SendCountdownMessageIn`).
+16. **Web render ticks once per second from wall-clock and stops at zero; format `{d}d HH:MM:SS` / `HH:MM:SS`.** — **Verified.** Source: `src/pages/messages/CountdownCard.tsx` (`setInterval(...,1000)`, `calculateRemaining` recomputed from `Date.now()`, `clearInterval` when `total <= 0`; days shown only when `> 0`).
+17. **Web completed-state copy is "Time's up!" (custom) / "Event started!" (non-custom), with deep-link CTAs for broadcast/call/calendar when an event id is present.** — **Verified.** Source: `CountdownCard.tsx`. The Android spec's "Event reached" string (§1/§6/§9) is an **app-level copy choice**, not a server contract — acceptable divergence.
+18. **`collectAsStateWithLifecycle` stops collection below `STARTED` (lifecycle-aware ticking, FR-8).** — **Verified (framework ref).** Source: framework ref — Android Developers, `lifecycle-runtime-compose` / `collectAsStateWithLifecycle` (https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#(kotlinx.coroutines.flow.StateFlow).collectAsStateWithLifecycle(androidx.lifecycle.Lifecycle.State,kotlin.coroutines.CoroutineContext)).
+19. **Material 3 `ModalBottomSheet` / `DatePicker` / `TimePicker` exist for the picker (FR-1/FR-2).** — **Unverified-assumption (framework ref).** Source: framework ref — Material 3 Compose APIs (https://developer.android.com/jetpack/compose/components/datepickers). Not checkable from backend/frontend sources; standard M3 components.
+
+### Corrections made
+
+- **§2 & §5:** auth description expanded to include `Authorization: Bearer <accessToken>` (web client sends it); previously stated "Cookie-based auth" only. (Audit #11)
+- **§2 & §13:** web-reference path corrected from `frontend/src/api/endpoints/conversations.ts` to `src/api/endpoints/messaging.ts` (`sendCountdownMessage`); added the actual composer/render files. (Audit #1)
+- **§5 success example:** `"id"` → `"message_id"`; `created_at` ISO-8601 string → integer epoch; added `sender_id`; noted absence of `client_id`. (Audit #5, #6, #9)
+- **§5 error responses:** `422` shape corrected to include the required `type` field; clarified that only `422` is an OpenAPI-declared error for this op. (Audit #10)
+- **§13 OQ-1/OQ-2/OQ-3:** marked resolved with verified findings (no idempotency key; `custom` needs no event id; success is `201`-only and `created_at` is an integer epoch, so no ISO-8601 adapter). The reconcile heuristic field corrected from `authorId` to `sender_id`. (Audit #9, #15, #6)
+
+### Open assumptions
+
+- **AND-126 domain `kind` enumeration vs server enum (§1).** The §1 list (`…poll/countdown/calendar/system`) does not match the server `MessageOut.kind` enum (audit #8). This is owned by AND-126, not verifiable as "correct" here; only `countdown` (this ticket's concern) is confirmed present server-side. **Why open:** cross-ticket domain mapping is out of this ticket's authority.
+- **`401/403/404/5xx` mapping for this specific op (§5).** OpenAPI declares only `422` for this operation; the other statuses are framework/transport behaviors inferred from the shared `src/api/client.ts`. Treated as reasonable assumptions, not endpoint-declared contracts. **Why open:** not enumerated in the OpenAPI responses for this path.
+- **`X-SESSION-ID` header usage from Android (§2/§5).** The op declares an optional `X-SESSION-ID` header, but `src/api/client.ts` does not set it (it uses cookies + Bearer + CSRF). **Why open:** no source shows a client populating it; assume Android does not send it unless a core-network ticket dictates otherwise.
+- **Material 3 picker components and exact M3 string/copy choices (§9, FR-1/2).** Framework-level; no authoritative project source. **Why open:** UI-framework choice, not a backend/web contract.
+- **Device-clock-based remaining time (no server `now` reference).** Confirmed the server provides no reference clock in `MessageOut`; clock-skew remains an accepted limitation. **Why open:** server contract offers nothing to correct against.
+
+## 17. Test Plan
+
+Test targets: **JVM/Robolectric** (local, no device), **emulator AVD `test35`** (x86_64, API 35), **physical device** Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Pure-logic, contract, and ViewModel suites run on JVM/Robolectric. Compose-UI/instrumented suites run on the emulator by default; the physical device is only required where real hardware/ABI/API-34 behavior matters (none of this ticket's core logic is hardware-dependent — see TC-AND-137-12). All timing tests use an injected clock/ticker and a `TestScope`/virtual time — never real wall-clock waits.
+
+- **TC-AND-137-01 — Formatter happy path (pure).** Type: unit (JVM). Target: `CountdownFormatter`. Preconditions: none. Steps: call `format()` with `Duration`s for `2d 04:12:09`, `04:12:09`, `00:00:09`, and `00:00:00`; call `isDone()` at `0s` and `-5s`. Expected: exact strings as listed; `isDone` true at `≤ 0`, false above; days shown only when `≥ 1d` (matches web `CountdownCard`). Traces: AC-3.
+
+- **TC-AND-137-02 — Remaining-time derivation decreases and clamps (pure).** Type: unit (JVM, `TestScope`). Target: `rememberRemaining`/derivation using a fake ticker emitting controlled `Instant`s. Preconditions: injected clock/ticker. Steps: set target = now+10s; advance ticker 1s at a time past the target. Expected: derived `Duration` strictly decreases each tick, never negative, equals `ZERO` at/after target; no real `delay` used. Traces: AC-3, AC-7.
+
+- **TC-AND-137-03 — Request contract & headers (contract/MockWebServer).** Type: contract (JVM, MockWebServer). Target: `MessageRepository.sendCountdown` → `MessagingApi`. Preconditions: enqueue `201` with a valid `MessageOut` countdown body. Steps: call `sendCountdown(conversationId, clientId, draft)` with title="Launch", a future target. Expected: request is `POST /messaging/conversations/{conversation_id}/messages/countdown`; JSON body has `title`, integer `target_datetime`, `associated_event_type="custom"`, `associated_event_id` and `reply_to_message_id` null/omitted; headers include `X-CSRF-Token` and `Authorization: Bearer …` and `Content-Type: application/json`. Traces: AC-2.
+
+- **TC-AND-137-04 — Response mapping `201` → domain (contract/MockWebServer).** Type: contract (JVM). Target: `MessageOut.toDomain()` via repository. Preconditions: enqueue `201` body with `message_id`, integer `created_at`, `kind:"countdown"`, `countdown_title`, `target_datetime`, `associated_event_type:"custom"`, `associated_event_id:null`. Steps: send; inspect `ApiResult.Success`. Expected: `ApiResult.Success<Message>` whose content is `MessageContent.Countdown(title, targetEpochSeconds, CUSTOM, null)`, server `id` taken from **`message_id`**, `createdAt` parsed as a **Long epoch** (not ISO-8601). Traces: AC-2, AC-6.
+
+- **TC-AND-137-05 — `422` validation error mapping (contract/MockWebServer).** Type: contract (JVM). Target: `apiCall`/`detail` decoder. Preconditions: enqueue `422` with `{"detail":[{"loc":["body","title"],"msg":"String should have at most 200 characters","type":"string_too_long"}]}`. Steps: send; inspect result. Expected: `ApiResult.Error` surfacing the first `msg`; decoder tolerates the `type` field; status classified non-retryable-validation. Traces: AC-4, AC-5.
+
+- **TC-AND-137-06 — Server/transport error mapping (contract/MockWebServer).** Type: contract (JVM). Target: `apiCall`. Preconditions: enqueue `500`, then a socket timeout, then a dropped connection in separate runs. Steps: send each. Expected: each → `ApiResult.Error` classified retryable; OkHttp call timeout (~20s) bounds the hang; UI never blocks. Traces: AC-5.
+
+- **TC-AND-137-07 — Optimistic send + reconcile (unit ViewModel).** Type: unit (JVM, `MainDispatcherRule` + Turbine). Target: `MessagingViewModel.onSendCountdown`. Preconditions: valid draft; repo stubbed `Success`. Steps: open picker, set valid draft, send. Expected: an outbox row `SENDING` with `kind="countdown"` and a `clientId` appears immediately, sheet closes, draft cleared, scroll-to-bottom requested; on `Success` the row reconciles to `SENT` with server `message_id`/`created_at`, outbox deleted, no duplicate (dedup by `clientId`). Traces: AC-1, AC-2.
+
+- **TC-AND-137-08 — Send failure + retry preserves payload (unit ViewModel).** Type: unit (JVM, Turbine). Target: `onSendCountdown` + `onRetry`. Preconditions: repo stubbed `Error` first, then `Success`. Steps: send valid draft → observe `FAILED`; invoke `onRetry(clientId)`. Expected: row goes `FAILED` (title/target preserved via `payloadJson`), retry re-decodes the exact payload and re-fires → `SENDING` → `SENT`; `attemptCount` increments. Traces: AC-5.
+
+- **TC-AND-137-09 — Client-side validation blocks send (unit ViewModel).** Type: unit (JVM). Target: `onSendCountdown` validation. Preconditions: none. Steps: attempt send with (a) blank title, (b) 201-char title, (c) null target, (d) past/now target. Expected: each blocked with the appropriate inline error ("Pick a future time" for past/now; length/required for title), no outbox row, no network call. Traces: AC-4.
+
+- **TC-AND-137-10 — Time-zone correctness (unit).** Type: unit (JVM, fixed zone + fixed clock). Target: draft→`target_datetime` conversion. Preconditions: set device zone (e.g. `America/Chicago`) and a fixed clock. Steps: select a local date/time; compute the request timestamp; also format the target back for display. Expected: `target_datetime` equals the correct UTC seconds (`floor(localInstant/1000)`, matching web `CountdownComposerDialog`); displayed target is rendered in the device zone. Traces: AC-6.
+
+- **TC-AND-137-11 — Bubble ticks and flips to completed (Compose-UI).** Type: Compose-UI (emulator `test35`). Target: `CountdownBubble` + ticker. Preconditions: composed with target = now+3s using an injected/advanceable clock. Steps: assert displayed remaining text; advance test clock 1s at a time; advance past target. Expected: remaining text decreases each second; at/after target the bubble shows the completed ("Event reached") state, stops scheduling ticks (no recomposition storm), without a reload. Traces: AC-3.
+
+- **TC-AND-137-12 — Lifecycle-aware ticker stops below STARTED (instrumented).** Type: instrumented (emulator `test35`; physical device only if verifying API-34 lifecycle parity). Target: ticker collection via `collectAsStateWithLifecycle`. Preconditions: thread screen visible with a countdown bubble. Steps: move the host lifecycle to `STOPPED` (background), wait, then return to `RESUMED`. Expected: no ticks/recompositions while below `STARTED` (no leaked coroutine, no battery drain); on resume the derived remaining snaps to correct wall-clock value with no accumulated drift. Traces: AC-7.
+
+- **TC-AND-137-13 — Offline / flaky dev-host path (contract + Compose-UI).** Type: contract/MockWebServer + Compose-UI (emulator). Target: send pipeline under no connectivity / dev-host failure. Preconditions: simulate offline (no route) or MockWebServer dropping the connection. Steps: send a valid countdown. Expected: optimistic bubble appears then goes `FAILED` with "No connection — Retry"; nothing dropped; the bubble still ticks locally from its stored target; a subsequent successful retry reconciles to `SENT`. Traces: AC-5, AC-3.
+
+- **TC-AND-137-14 — Auth: CSRF/Bearer present; 401→refresh→retry (contract/MockWebServer).** Type: contract (JVM/instrumented). Target: transport (cookie jar + CSRF interceptor + authenticator). Preconditions: MockWebServer returns `401` once then `201` on retry; cookie jar seeded; `ui_csrf` set. Steps: send. Expected: first request carries `X-CSRF-Token` + `Authorization: Bearer` + cookies; on `401` a single `POST /ui/session/refresh` fires, then the original request retries and succeeds; a second consecutive `401` → `FAILED`/re-auth, no infinite loop. Traces: AC-2, AC-5.
+
+- **TC-AND-137-15 — Accessibility of picker and bubble (Compose-UI).** Type: Compose-UI (emulator). Target: `CountdownPickerSheet`, `CountdownBubble`. Preconditions: bubble composed mid-countdown. Steps: assert semantics. Expected: title field labeled "Countdown title"; "Send countdown" button has a content description and announces its disabled reason; the bubble exposes a single coherent `contentDescription` (e.g. "Countdown: Launch, 2 days 4 hours remaining") updated at a coarse (≈minute) cadence, not every second; completed state announces "Event reached"; state conveyed by text not color-only; touch targets ≥ 48dp. Traces: AC-3, AC-4.
+
+- **TC-AND-137-16 — Security: title not logged; no auth bypass (unit + manual).** Type: unit (JVM) + manual. Target: logging/telemetry facade + transport. Preconditions: send a countdown with a recognizable title. Steps: capture Timber/logcat and analytics payloads during send/retry; inspect outgoing request. Expected: no title/target/cookies in logs or analytics (only `clientId`, hashed conversationId, buckets); request always carries the CSRF + cookie/Bearer (interceptor not bypassable); release network log interceptor at `BASIC`. Traces: AC-2, AC-5.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (open picker, enter title+future, optimistic bubble) | TC-AND-137-07, TC-AND-137-15 |
+| AC-2 (POST contract, cookies+CSRF, 201 reconcile, no dup) | TC-AND-137-03, TC-AND-137-04, TC-AND-137-07, TC-AND-137-14, TC-AND-137-16 |
+| AC-3 (bubble shows title/target, ticks/sec, flips completed) | TC-AND-137-01, TC-AND-137-02, TC-AND-137-11, TC-AND-137-13, TC-AND-137-15 |
+| AC-4 (past/now or bad title blocked client-side) | TC-AND-137-05, TC-AND-137-09, TC-AND-137-15 |
+| AC-5 (FAILED+Retry preserves payload, survives process death) | TC-AND-137-05, TC-AND-137-06, TC-AND-137-08, TC-AND-137-13, TC-AND-137-14, TC-AND-137-16 |
+| AC-6 (time-zone correctness, UTC target_datetime) | TC-AND-137-04, TC-AND-137-10 |
+| AC-7 (lifecycle-aware ticking, no drift/leak/storm) | TC-AND-137-02, TC-AND-137-11, TC-AND-137-12 |

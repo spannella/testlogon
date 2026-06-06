@@ -5,7 +5,8 @@ milestone: M3
 epic: E20
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-009]
 blocks: []
 ---
@@ -66,7 +67,13 @@ and transparently reconnects after a drop, all verified against `MockWebServer`.
   (typically `sse-starlette`). OpenAPI at `/openapi.json` lists the concrete stream
   path; this core is endpoint-agnostic and is parameterized by a request URL.
 - **Web reference:** the frontend uses the browser `EventSource` API with
-  `withCredentials`; this ticket reproduces that behavior natively.
+  `withCredentials: true` (verified in `src/hooks/useMessagingStream.ts`,
+  `useAlertStream.ts`, `useBroadcastStream.ts`, `pages/broadcast/BroadcastChat.tsx`);
+  this ticket reproduces that behavior natively. Note: the browser `EventSource` can
+  ONLY send cookies — it cannot attach `Authorization` or `X-CSRF-Token` headers, so
+  the web stream authenticates by cookie alone. The native OkHttp path is a superset:
+  it carries the cookie jar AND can attach the CSRF/Authorization headers the shared
+  client adds, which is harmless for a `GET` stream (see §8).
 - **Repo:** `spannella/testlogon`, app under `android/`, branch `android-port`.
 
 ## 3. Functional Requirements
@@ -308,9 +315,14 @@ data class BackoffPolicy(
 ## 5. API Contract
 
 This ticket defines no NEW app endpoint; it is a transport client parameterized by
-URL. It DOES pin the wire contract the client speaks. The concrete stream path
-(e.g. `GET /ui/events` or similar) is owned by the consuming feature ticket and read
-from `/openapi.json`; this core works against any conformant `text/event-stream`.
+URL. It DOES pin the wire contract the client speaks. The concrete stream path is
+owned by the consuming feature ticket and read from `/openapi.json`; this core works
+against any conformant `text/event-stream`. The backend exposes several real SSE
+streams the downstream E20 tickets will consume — verified in the OpenAPI index:
+`GET /sse`, `GET /messaging/events/stream`, `GET /ui/alerts/stream`,
+`GET /ui/dashboard/stream`, and per-resource streams like
+`GET /broadcast/sessions/{session_id}/stream`. (There is **no** `GET /ui/events`
+endpoint; an earlier draft's placeholder path was incorrect — see §16.)
 
 **Request issued per connection:**
 ```
@@ -598,3 +610,337 @@ connection (FR-9/10; T-6).
 - [ ] Lifecycle consumer pattern documented in the module README/KDoc (no UI shipped).
 - [ ] No new lint/detekt warnings in `core-network`; KSP/Hilt build clean.
 - [ ] PR reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources are the
+OpenAPI index/spec under `reference/` and the frontend reference app under
+`reference/src/`.
+
+1. **Claim:** The session-refresh endpoint hit by the shared `Authenticator` (AND-013)
+   on a `401` is `POST /ui/session/refresh` (§7, FR-7).
+   **VERDICT: Verified.** Source: OpenAPI `POST /ui/session/refresh`
+   (`op=ui_session_refresh_ui_session_refresh_post`, `req=` empty, `resp=200`);
+   frontend `src/api/client.ts: refreshSession()` (`fetch("/ui/session/refresh", {method:"POST", credentials:"include"})`) and `src/api/endpoints/auth.ts: refreshSession`.
+
+2. **Claim:** Auth is cookie-based; the `ui_csrf` cookie value is echoed as the
+   `X-CSRF-Token` request header (§2, §5, §8).
+   **VERDICT: Verified.** Source: `src/api/client.ts` lines ~167-171 —
+   `getCookie("ui_csrf")` then `headers.set("X-CSRF-Token", csrf)` on every request,
+   with `credentials: "include"` for the cookie jar.
+
+3. **Claim:** The web client uses the browser `EventSource` API with
+   `withCredentials: true` and this ticket reproduces it natively (§2, §5).
+   **VERDICT: Verified.** Source: `src/hooks/useMessagingStream.ts:209`
+   (`new EventSource(MESSAGING_STREAM_URL, { withCredentials: true })`),
+   `src/hooks/useAlertStream.ts:45`, `src/hooks/useBroadcastStream.ts:49-50`,
+   `src/pages/broadcast/BroadcastChat.tsx:74`.
+
+4. **Claim:** Reconnect uses exponential backoff with a 1s base and a 30s cap, reset
+   on a successful open (FR-5, §7, AC-4).
+   **VERDICT: Verified (with a deliberate native enhancement).** Source:
+   `src/hooks/useMessagingStream.ts:5,226-228` and `src/hooks/useAlertStream.ts:6,150-152`
+   — `Math.min(1000 * Math.pow(2, retryCount), 30_000)`, `retryCount` reset in
+   `es.onopen` (and on `heartbeat` in the alert hook). The web reference uses **no
+   jitter**; this spec adds full jitter (§4.5). Jitter is an intentional improvement for
+   the flaky dev host, not a contract mismatch — flagged so reviewers know it diverges
+   from the web behavior on purpose.
+
+5. **Claim:** The backend sends *typed* SSE events (named `event:` lines), not just
+   anonymous `message` frames, so consumers must read the event name (FR-3, §5 mapping).
+   **VERDICT: Verified.** Source: `src/hooks/useMessagingStream.ts:7-12,166-221`
+   registers named listeners for ~40 event types (e.g. `message:new`, `typing:update`,
+   `webrtc.offer`) because "EventSource.onmessage only fires for un-typed or
+   'message'-typed events"; `useAlertStream.ts:99,130,141` listens for `alert`,
+   `hello`, `heartbeat`. This validates the `SseEvent.Message(event = type ?: "message")`
+   mapping in §4.3.
+
+6. **Claim:** SSE streams are `GET` requests (§2, §5).
+   **VERDICT: Verified.** Source: every SSE path in the OpenAPI index is `GET` —
+   `GET /sse`, `GET /messaging/events/stream`, `GET /ui/alerts/stream`,
+   `GET /ui/dashboard/stream`, `GET /broadcast/sessions/{session_id}/stream`.
+
+7. **Claim:** Concrete SSE stream paths exist on the backend and are
+   endpoint-agnostic to this core (§5).
+   **VERDICT: Corrected.** The real paths are `GET /sse`
+   (`op=sse_sse_get`, params `user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`),
+   `GET /messaging/events/stream` (`op=events_stream_messaging_events_stream_get`,
+   params `after,limit,poll_ms,x_request_id,authorization,X-SESSION-ID`),
+   `GET /ui/alerts/stream` (`op=alerts_stream_ui_alerts_stream_get`),
+   `GET /ui/dashboard/stream`, and `GET /broadcast/sessions/{session_id}/stream`.
+   The prior draft cited `GET /ui/events` as the example path — **no such endpoint
+   exists** in the OpenAPI index; corrected in §5.
+
+8. **Claim:** The `Last-Event-ID` header is sent on reconnect to resume the stream
+   (FR-3/5/6, §5, AC-3).
+   **VERDICT: Unverified-assumption (correct as SSE-spec behavior; backend replay
+   unconfirmed).** The browser `EventSource` sends `Last-Event-ID` automatically, so
+   the web hooks never set it explicitly — there is no frontend code path to cite, and
+   the OpenAPI index does not list `Last-Event-ID` as a parameter on the stream
+   endpoints. Sending the header is correct per the WHATWG SSE standard
+   (framework ref: https://html.spec.whatwg.org/multipage/server-sent-events.html),
+   but whether `sse-starlette` actually *replays* missed events on `Last-Event-ID` is
+   not verifiable from these sources — already tracked as R-4. The client correctly
+   *sends* the header; gap-free resume is the consumer's concern.
+
+9. **Claim:** Fatal vs. retriable HTTP classification — `401` (post-refresh)/`403`/`404`
+   and other non-`408`/`429` `4xx` are fatal; `408`/`429`/`5xx`/`IOException` retriable
+   (FR-7, §5, §7, AC-5).
+   **VERDICT: Unverified-assumption (transport policy, not an OpenAPI contract).**
+   The SSE stream endpoints only declare `200` and `422:HTTPValidationError` responses
+   in OpenAPI (e.g. `GET /messaging/events/stream | resp=200:;422:HTTPValidationError`),
+   so `401/403/404/429/5xx` are not enumerated per-endpoint — they are gateway/auth
+   layer behaviors. The fatal-vs-retriable split is a reasonable client resilience
+   policy consistent with the web client's `401`→single-refresh→logout flow
+   (`src/api/client.ts:194-237`) and `403` handling (`:240-255`), but the exact status
+   set is a design decision, not a wire-contract guarantee. Verify against live stream
+   behavior when the consuming endpoint is wired.
+
+10. **Claim:** The error body shape for a validation failure is
+    `{"detail": [ValidationError, ...]}` (relevant to error-path tests, §7).
+    **VERDICT: Verified.** Source: OpenAPI `components.schemas.HTTPValidationError`
+    (`detail` = array of `ValidationError`) at `openapi.pretty.json:37133`. Some
+    non-SSE endpoints additionally use `ErrorEnvelope` = `{ "error": ErrorDetail }`
+    (`openapi.pretty.json:31777`); SSE stream endpoints declare only `200`/`422`.
+
+11. **Claim:** SSE adds no new Android manifest permissions beyond existing `INTERNET`,
+    and clear-text is scoped to the dev IP (§8).
+    **VERDICT: Unverified-assumption (inherited from AND-009; no source in this
+    repo).** This depends on AND-009's `network_security_config.xml` and manifest,
+    which are not present in the reference sources. Plausible and consistent with the
+    stated stack, but cannot be confirmed here.
+
+12. **Claim:** OkHttp `okhttp-sse` provides `EventSource`/`EventSourceListener`/
+    `EventSources.createFactory`, and `EventSourceListener.onEvent(id, type, data)` is
+    the frame callback (§4.1, §4.3).
+    **VERDICT: Unverified-assumption (framework ref).** Not in repo; correct per
+    OkHttp 4.12.0 API (framework ref:
+    https://square.github.io/okhttp/4.x/okhttp-sse/okhttp3.sse/). Pinned versions
+    (OkHttp 4.12.0, okhttp-sse 4.12.0) are a build choice, not verifiable from sources.
+
+13. **Claim:** `newBuilder()` shares the underlying `ConnectionPool`/`Dispatcher`, and
+    `readTimeout(0)` disables the read timeout for streams (§4.4, §6, AC-6).
+    **VERDICT: Unverified-assumption (framework ref).** Correct per OkHttp docs
+    (framework ref: https://square.github.io/okhttp/4.x/okhttp/okhttp3/-ok-http-client/new-builder/);
+    not present in repo sources.
+
+14. **Claim:** `repeatOnLifecycle(Lifecycle.State.STARTED)` is the lifecycle-correct
+    collection pattern for a cold `Flow` (§3 FR-10, §6, AC-7).
+    **VERDICT: Unverified-assumption (framework ref).** Standard AndroidX pattern
+    (framework ref:
+    https://developer.android.com/topic/libraries/architecture/coroutines#restart);
+    no repo source.
+
+### Corrections made
+
+- **§5:** Removed the non-existent example path `GET /ui/events` and replaced it with
+  the five real SSE stream paths verified in the OpenAPI index
+  (`/sse`, `/messaging/events/stream`, `/ui/alerts/stream`, `/ui/dashboard/stream`,
+  `/broadcast/sessions/{session_id}/stream`). (Audit item 7.)
+- **§2 (Web reference):** Clarified that the browser `EventSource` authenticates by
+  **cookie only** (it cannot send `Authorization`/`X-CSRF-Token` headers), so the
+  native OkHttp path attaching those headers is a deliberate superset, not a 1:1
+  reproduction. Added the verified hook file citations. (Audit items 2, 3.)
+- **§4.5 / audit item 4:** Noted that the spec's full-jitter backoff is an intentional
+  enhancement over the web reference's jitter-free backoff (same 1s base / 30s cap /
+  reset-on-open), so reviewers don't read it as a contract mismatch.
+
+### Open assumptions
+
+- **Backend `Last-Event-ID` replay (item 8):** the client sends the header per the SSE
+  standard, but `sse-starlette` replay-on-resume is not evidenced in the sources
+  (tracked as R-4). Why unverifiable: no backend handler source provided; OpenAPI does
+  not model SSE frame semantics or the `Last-Event-ID` request header.
+- **Fatal/retriable status set (item 9):** the SSE endpoints declare only `200`/`422`
+  in OpenAPI; `401/403/404/408/429/5xx` handling is a client transport policy, not a
+  per-endpoint contract. Why unverifiable: status codes are produced by the auth/gateway
+  layer, not declared on the stream operations.
+- **Manifest/network-security config (item 11):** owned by AND-009; not in the provided
+  reference sources. Why unverifiable: AND-009 artifacts are not in this repo snapshot.
+- **OkHttp / AndroidX framework behaviors (items 12-14):** validated against official
+  docs (framework refs), not against repo sources, because no Android app source is
+  included in the reference set.
+
+## 17. Test Plan
+
+All cases trace to the §14 Acceptance Criteria (AC-1 … AC-7). The bulk of this core is
+pure JVM/Robolectric-free logic and is covered by **JVM unit + contract/MockWebServer**
+tests (matching the source acceptance bullet "tested w/ MockWebServer"). A small number
+of integration/instrumented cases validate Hilt wiring, lifecycle, and real-network
+behavior; one case is pinned to the **physical device** to exercise true mobile
+radio drop/handoff that the emulator cannot reproduce faithfully.
+
+Test targets legend: **JVM** = local JUnit4 + MockWebServer + `kotlinx-coroutines-test`
++ Turbine (no device); **emulator** = headless AVD `test35` (x86_64, API 35);
+**physical** = Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a, serial R5CX821TA9R).
+
+---
+
+**TC-AND-143-01 — Happy path: connect + emit typed events**
+- Type: contract/MockWebServer (JVM).
+- Target: `DefaultSseClient.events()` against `MockWebServer`.
+- Preconditions: `MockResponse` with `Content-Type: text/event-stream`, body of two
+  frames: `id:1\nevent:notification\ndata:{"x":1}\n\n` and `id:2\nevent:notification\ndata:{"x":2}\n\n`.
+- Steps: collect `events(SseRequest(url))` with Turbine; read 3 emissions.
+- Expected: emits `Open`, then `Message(id="1", event="notification", data="{\"x\":1}")`,
+  then `Message(id="2", event="notification", data="{\"x\":2}")`. Event name comes from
+  the SSE `event:` line (verified web behavior, audit item 5).
+- Traces: AC-2.
+
+**TC-AND-143-02 — Reconnect after drop carries `Last-Event-ID`** (gating)
+- Type: contract/MockWebServer (JVM).
+- Target: `DefaultSseClient.events()` + reconnect loop.
+- Preconditions: response #1 emits one frame (`id:1 …`) then drops the socket
+  (`SocketPolicy.DISCONNECT_AFTER_REQUEST` or body end); response #2 emits `id:2 …`.
+- Steps: collect with Turbine; after re-open, call `server.takeRequest()` for the 2nd
+  request and read `getHeader("Last-Event-ID")`.
+- Expected: emission order `Open`, `Message(1)`, `Reconnecting(attempt=1, …)`, `Open`,
+  `Message(2)`; the second request's `Last-Event-ID == "1"`.
+- Traces: AC-3 (and the source ticket's gating acceptance bullet).
+
+**TC-AND-143-03 — Backoff schedule, jitter bounds, and reset-on-open**
+- Type: unit (JVM, `runTest` virtual time).
+- Target: `BackoffPolicy.nextDelayMillis()` + the reconnect loop.
+- Preconditions: `BackoffPolicy.Sse` (base 1s, cap 30s); deterministic `Random` seed or
+  injected RNG.
+- Steps: drive N consecutive drops; capture each `Reconnecting.delayMillis`; then inject a
+  successful `Open` and one more drop; assert virtual-time advance via `delay`.
+- Expected: each delay ∈ `[base, min(base·2^(attempt-1), cap)]` (full jitter); delays grow
+  toward the 30s cap; a successful `Open` resets `attempt` so the next delay restarts at
+  the base window. No real sleep (virtual time advances; `Thread.sleep` absent).
+- Traces: AC-4, AC-7 (no `Thread.sleep`).
+
+**TC-AND-143-04 — Server `retry:` / `Retry-After` floors the delay**
+- Type: contract/MockWebServer (JVM).
+- Target: reconnect-delay computation with server hint.
+- Preconditions: (a) stream emits `retry: 5000` then drops; (b) a `429` response with
+  `Retry-After: 5`.
+- Steps: collect; capture the next `Reconnecting.delayMillis` for each.
+- Expected: next delay ≥ 5000 ms in both cases — the server hint is honored as a lower
+  bound, never reconnecting faster than requested (FR-6).
+- Traces: AC-4, AC-5.
+
+**TC-AND-143-05 — Stale termination after MAX_CONSECUTIVE_FAILURES**
+- Type: contract/MockWebServer (JVM, virtual time).
+- Target: bounded reconnect.
+- Preconditions: server always drops/fails with no successful `Open` between attempts;
+  `maxConsecutiveFailures = 8`.
+- Steps: collect; advance virtual time through 8 failures.
+- Expected: 7 `Reconnecting` events then `Closed(STALE)`, after which the flow completes
+  (no further emissions, no 9th request).
+- Traces: AC-4.
+
+**TC-AND-143-06 — Fatal HTTP classification (no reconnect)**
+- Type: contract/MockWebServer (JVM), parameterized.
+- Target: `classifyFailure()` fatal branch.
+- Preconditions: enqueue `401` (simulating post-refresh, see TC-09), `403`, `404`, and a
+  generic `400`.
+- Steps: collect each; assert single terminal emission and no second request issued.
+- Expected: `401` → `Closed(UNAUTHORIZED)`; `403`/`404`/`400` → `Closed(FATAL_HTTP)`; in
+  all cases `server.requestCount == 1` (no reconnect).
+- Traces: AC-5.
+
+**TC-AND-143-07 — Retriable statuses reconnect**
+- Type: contract/MockWebServer (JVM), parameterized.
+- Target: `classifyFailure()` retriable branch.
+- Preconditions: enqueue `408`, `429` (+`Retry-After`), `500`, then a successful stream.
+- Steps: collect; assert a `Reconnecting` then a retry request then `Open`.
+- Expected: each of `408/429/500` yields `Reconnecting` and a subsequent reconnect
+  request (≥2 requests), unlike TC-06's fatal codes.
+- Traces: AC-5.
+
+**TC-AND-143-08 — IOException / socket timeout reconnects**
+- Type: contract/MockWebServer (JVM).
+- Target: `onFailure(t: IOException, response=null)` path.
+- Preconditions: `SocketPolicy.NO_RESPONSE` / abrupt close to force an `IOException`
+  (no HTTP status), then a healthy response.
+- Steps: collect; assert reconnect.
+- Expected: `Reconnecting(cause = IOException-ish)` then `Open` then `Message`.
+- Traces: AC-5, AC-4.
+
+**TC-AND-143-09 — 401 surfaces as fatal only after the shared Authenticator's single refresh**
+- Type: contract/MockWebServer (JVM).
+- Target: interplay with the AND-013 `Authenticator` on the shared client.
+- Preconditions: configure the test `OkHttpClient` with an `Authenticator` that performs
+  one `POST /ui/session/refresh` + retry on `401` (mirroring `src/api/client.ts`
+  refresh-once semantics, audit item 1); MockWebServer returns `401` on the stream, a
+  `200` on `/ui/session/refresh`, then `401` again on the retried stream.
+- Steps: collect; observe the refresh attempt then the terminal classification.
+- Expected: exactly one refresh POST is issued by the Authenticator; the still-`401`
+  stream terminates with `Closed(UNAUTHORIZED)` and no reconnect (FR-7). If the second
+  attempt returns `200`, instead expect `Open` (refresh recovered the stream).
+- Traces: AC-5, AC-6.
+
+**TC-AND-143-10 — Cancellation cancels the EventSource (no leak)**
+- Type: unit/contract (JVM).
+- Target: `invokeOnCancellation { es.cancel() }` wiring (FR-2).
+- Preconditions: a long-lived stream from MockWebServer.
+- Steps: collect in a child job; after first `Message`, cancel the job; record
+  `server.requestCount`; wait; re-check.
+- Expected: no emissions after cancel; `requestCount` does not grow (the source is
+  cancelled, no reconnect scheduled). Exactly one `EventSource` per collection.
+- Traces: AC-1, AC-7.
+
+**TC-AND-143-11 — `@SseOkHttp` client config + shared-client reuse**
+- Type: integration (JVM, Hilt test or direct provider call).
+- Target: `SseNetworkModule.provideSseOkHttpClient(base)`.
+- Preconditions: a base `OkHttpClient` with a known `connectionPool`, `cookieJar`,
+  and CSRF interceptor.
+- Steps: build the `@SseOkHttp` client; inspect config.
+- Expected: `readTimeoutMillis == 0`; `pingIntervalMillis == 25_000`;
+  `connectionPool === base.connectionPool` and `cookieJar === base.cookieJar`
+  (interceptors/authenticator retained) — i.e. `newBuilder()` reuse, not a new pool.
+- Traces: AC-6.
+
+**TC-AND-143-12 — Hilt graph provides a singleton `SseClient`**
+- Type: instrumented (emulator AVD `test35`).
+- Target: Hilt `SingletonComponent` binding `SseClient -> DefaultSseClient`.
+- Preconditions: `@HiltAndroidTest` app; `core-network` module installed.
+- Steps: inject `SseClient` twice; assert same instance and non-null `@SseOkHttp` client.
+- Expected: a single `@Singleton SseClient` is resolvable; KSP/Hilt build clean. Runs on
+  the emulator (no hardware dependency); API-35 target matches `compileSdk`.
+- Traces: AC-1, AC-6.
+
+**TC-AND-143-13 — Lifecycle: `repeatOnLifecycle(STARTED)` connects/disconnects with UI; main-safe**
+- Type: instrumented/Compose-UI (emulator AVD `test35`).
+- Target: documented consumer pattern (§6) collecting `events()` under
+  `repeatOnLifecycle(STARTED)`.
+- Preconditions: a test Activity/Composable that collects against a local MockWebServer;
+  collection started on `STARTED`.
+- Steps: move the lifecycle to STARTED (expect connect), then STOPPED (expect the
+  `EventSource` cancelled — `requestCount` stops growing), then STARTED again (reconnect).
+  Assert the main thread is never blocked (no ANR; collection is `flowOn(IO)`).
+- Expected: connection tracks the lifecycle; no leaked connection across the
+  stop/start cycle; UI thread responsive throughout.
+- Traces: AC-7, AC-1.
+
+**TC-AND-143-14 — Real-network drop/resume over mobile radio**
+- Type: instrumented/e2e — **MUST run on the physical device** (Samsung A15 5G,
+  SM-A156U, arm64-v8a, API 34).
+- Target: end-to-end reconnect against a reachable `text/event-stream` server while the
+  device's connectivity is toggled.
+- Preconditions: device connected via adb; an SSE endpoint reachable from the device
+  (dev host or a local mock served to the device). Rationale: emulator NICs do not
+  reproduce real cellular/Wi-Fi drop, half-open sockets, or arm64-vs-x86 ABI behavior —
+  the flaky-dev-host/offline path (R-2) needs true radio behavior.
+- Steps: start collecting; toggle airplane mode / drop Wi-Fi briefly, then restore;
+  observe events and headers (capture `Last-Event-ID` on resume via a proxy/mock).
+- Expected: `Open` → events → on drop `Reconnecting` with backoff → on restore `Open`
+  and resume; `pingInterval(25s)` converts a half-open socket into `onFailure`→reconnect
+  rather than a silent stall (R-1); `Last-Event-ID` replayed on the resume request.
+  If connectivity stays down past `MAX_CONSECUTIVE_FAILURES`, `Closed(STALE)`.
+- Traces: AC-3, AC-4, AC-7.
+
+---
+
+### Coverage matrix (AC → TC)
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (one EventSource/collection, cancelled on unsubscribe; Hilt singleton) | TC-10, TC-12, TC-13 |
+| AC-2 (connects + emits `Open`/`Message` with correct id/event/data) | TC-01 |
+| AC-3 (reconnect after drop; `Last-Event-ID` on reconnect) | TC-02, TC-14 |
+| AC-4 (bounded jittered backoff 1s→30s, reset-on-open, `retry:` floor, `Closed(STALE)`) | TC-03, TC-04, TC-05, TC-08, TC-14 |
+| AC-5 (fatal `401`/`403`/`404`; retriable `408`/`429`/`5xx`/`IOException`) | TC-04, TC-06, TC-07, TC-08, TC-09 |
+| AC-6 (`@SseOkHttp` reuses shared client; `readTimeout=0`, `pingInterval` set) | TC-09, TC-11, TC-12 |
+| AC-7 (main-safe, lifecycle-friendly, no `Thread.sleep`, no leaked connection) | TC-03, TC-10, TC-13, TC-14 |

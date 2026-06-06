@@ -5,7 +5,8 @@ milestone: M3
 epic: E20
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-143]
 blocks: []
 ---
@@ -54,9 +55,18 @@ and there are **no leaks**, verified by instrumented and unit tests.
 - **Stack:** Kotlin 2.0.21, Coroutines/Flow, OkHttp 4.12 (`okhttp-sse`),
   AndroidX Lifecycle 2.8 (`lifecycle-runtime-compose`,
   `ProcessLifecycleOwner`), Hilt (KSP). minSdk 24 / targetSdk 35, JDK 17.
-- **Reference:** the web app's `EventSource` reconnect behavior in
-  `frontend/src/api/` (browser `EventSource` auto-reconnect with
-  `Last-Event-ID`) is the functional baseline we are matching on native.
+- **Reference:** the web app's `EventSource` reconnect behavior is the functional
+  baseline we are matching on native. **[CORRECTED]** The reconnect logic lives in
+  the SSE hooks (`src/hooks/useMessagingStream.ts`, `src/hooks/useAlertStream.ts`,
+  `src/hooks/useBroadcastStream.ts`), **not** under `src/api/`. Each hook uses the
+  browser `EventSource` (`withCredentials: true`) and on `onerror` reconnects with
+  `delay = min(1000 * 2^retryCount, 30_000)` — exponential, 30 s cap, **no
+  jitter** — resetting `retryCount` to 0 immediately on `onopen` (and the alert
+  hook also resets on every `heartbeat` event). The native client deliberately
+  **adds** full jitter (FR-1) and a 60 s healthy-duration reset window (FR-2) on
+  top of this baseline; those refinements are not present in the web app and are
+  Android design choices. App-level `Last-Event-ID` is handled by the browser
+  automatically and is not set explicitly by the hooks.
 - **Backend constraint:** design for ~20 s connect/read timeouts on the SSE
   socket budget, bounded backoff, and offline/stale UI states (project context).
 
@@ -216,9 +226,18 @@ screens.
 No new backend endpoints. AND-149 governs **how** the existing SSE endpoint
 (owned by AND-143) is consumed under failure. Reused/expected wire behavior:
 
-- **SSE GET** (path defined by AND-143, e.g. `GET /ui/events/stream`):
-  request carries session cookies + `Accept: text/event-stream`,
-  `Cache-Control: no-cache`, and on reconnect `Last-Event-ID: <id>`.
+- **SSE GET** (path defined by AND-143). **[CORRECTED]** There is no
+  `/ui/events/stream` endpoint in the backend. The real SSE GET endpoints (all
+  `resp=200` with an unschema'd `text/event-stream` body) are, e.g.:
+  `GET /sse` (newsfeed; web `feedSseUrl = "/sse"`),
+  `GET /messaging/events/stream`, `GET /ui/alerts/stream`,
+  `GET /ui/dashboard/stream`, `GET /broadcast/sessions/{session_id}/stream`.
+  AND-149 is endpoint-agnostic — the concrete path is injected via `SseRequest`
+  by the consuming feature/AND-143. Each request carries session cookies +
+  `Accept: text/event-stream`, `Cache-Control: no-cache`, and on reconnect
+  `Last-Event-ID: <id>`. **[ASSUMPTION]** Web reference uses the browser
+  `EventSource` (auto `Last-Event-ID`); some streams also accept an `after`
+  cursor query param (e.g. `/messaging/events/stream` `params=after,limit,poll_ms`).
 - **Event frame** parsed by AND-143's `SseEvent`:
 
   ```
@@ -229,9 +248,16 @@ No new backend endpoints. AND-149 governs **how** the existing SSE endpoint
 
 - **Retryable HTTP statuses on stream open:** `502`, `503`, `504`, plus
   network/timeout `IOException` → backoff reconnect.
-- **Auth refresh** (reused from AND-009): `POST /ui/session/refresh` with
-  `X-CSRF-Token` header (echoing `ui_csrf` cookie), empty body; `200` → retry
-  stream; non-200 → `Offline(AUTH)`.
+- **Auth refresh** (reused from AND-009): `POST /ui/session/refresh`, empty body;
+  `200` → retry stream; non-200 → `Offline(AUTH)`. **[CORRECTED]** The endpoint is
+  verified (`POST /ui/session/refresh`, no request body, `resp=200` empty schema),
+  but the web reference's `refreshSession()` (`src/api/client.ts`) issues this as a
+  raw `fetch(..., { method: "POST", credentials: "include" })` and does **not**
+  attach an `X-CSRF-Token` header — only cookies. The earlier claim that refresh
+  carries `X-CSRF-Token` was wrong for this call; `X-CSRF-Token` (echoing the
+  `ui_csrf` cookie) is added by the general `api()` wrapper to other mutating
+  requests, not to the refresh call. Android should match the web: cookie-only POST
+  to refresh.
 - **FastAPI `detail` mapping** (`string | [{msg}] | {code,...}`) applies only to
   the refresh response error path; the SSE stream itself is line-protocol, not
   JSON envelope.
@@ -287,7 +313,15 @@ This is the heart of the ticket.
 - **No PII in logs.** Event `data` payloads are never logged at INFO; only event
   `type`, `id`, and state transitions are logged (DEBUG gated).
 - **Refresh safety.** On `401`, only one refresh is attempted; credentials are
-  never embedded in the stream URL or `Last-Event-ID`.
+  never embedded in the stream URL or `Last-Event-ID`. **[ASSUMPTION]** In the web
+  reference, SSE streams use the browser `EventSource` directly and do **not** pass
+  through the `api()` wrapper, so the web app's one-shot 401→`/ui/session/refresh`
+  logic (`src/api/client.ts`) does not run for SSE — the browser simply
+  reconnects. FR-9's "401 on the stream → single refresh + retry" is therefore an
+  Android-side hardening choice (consistent with the documented project auth rule),
+  not an observed web SSE behavior; flagged as an assumption to confirm with the
+  backend (whether the SSE endpoints actually emit `401` on session expiry vs.
+  just closing the connection).
 
 ## 9. Accessibility & i18n
 
@@ -420,3 +454,272 @@ AC-7. On reconnect, the request carries the correct `Last-Event-ID` header.
 - KtLint/Detekt clean; new public APIs have KDoc; PR merged to `android-port`
   with the test evidence (MockWebServer logs / leak counter) referenced in the
   description.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **`POST /ui/session/refresh` exists, takes no request body, returns `200`.**
+   VERDICT: **Verified.** SOURCE: OpenAPI `POST /ui/session/refresh`
+   (op=`ui_session_refresh_ui_session_refresh_post`, `req=` empty, `resp=200:`
+   empty schema) and `src/api/client.ts: refreshSession()`.
+
+2. **On `401`, the client performs exactly one refresh then a single retry; a
+   second failure logs out / surfaces auth error.** VERDICT: **Verified** (web
+   contract). SOURCE: `src/api/client.ts: api()` 401 branch — single shared
+   `refreshPromise`, one retry, `logout("session_expired")` on retry-`401`.
+
+3. **The refresh call carries an `X-CSRF-Token` header.** VERDICT: **Corrected.**
+   `refreshSession()` issues a raw `fetch(POST, { credentials: "include" })` with
+   **no** `X-CSRF-Token`. The CSRF header (from the `ui_csrf` cookie) is added by
+   the general `api()` wrapper to other mutating calls, not to refresh.
+   SOURCE: `src/api/client.ts: refreshSession()` vs. `api()` (`getCookie("ui_csrf")`
+   → `headers.set("X-CSRF-Token", csrf)`).
+
+4. **CSRF transport is `X-CSRF-Token` echoing the `ui_csrf` cookie.** VERDICT:
+   **Verified** for normal mutating requests. SOURCE: `src/api/client.ts: api()`.
+
+5. **Auth is cookie/session based; SSE requests must carry session cookies.**
+   VERDICT: **Verified.** SOURCE: all SSE hooks use
+   `new EventSource(url, { withCredentials: true })` —
+   `src/hooks/useMessagingStream.ts:209`, `src/hooks/useAlertStream.ts:45`,
+   `src/hooks/useBroadcastStream.ts:49`.
+
+6. **SSE endpoint path `GET /ui/events/stream`.** VERDICT: **Corrected.** No such
+   path exists. Real SSE GET endpoints: `GET /sse`
+   (`src/api/endpoints/newsfeed.ts:152 feedSseUrl = "/sse"`; OpenAPI
+   `GET /sse` op=`sse_sse_get`), `GET /messaging/events/stream`
+   (`src/hooks/useMessagingStream.ts:4`; OpenAPI
+   op=`events_stream_messaging_events_stream_get`), `GET /ui/alerts/stream`
+   (OpenAPI op=`alerts_stream_ui_alerts_stream_get`), `GET /ui/dashboard/stream`
+   (op=`dashboard_stream_ui_dashboard_stream_get`),
+   `GET /broadcast/sessions/{session_id}/stream`
+   (op=`broadcast_event_stream_route_...`). All have `resp=200:` with no documented
+   schema (`text/event-stream`). AND-149 stays endpoint-agnostic via `SseRequest`.
+
+7. **Web reconnect = jittered exponential backoff, reset after 60 s healthy.**
+   VERDICT: **Corrected** (as the web baseline). Web reconnect is
+   `delay = min(1000 * 2^retryCount, 30_000)` — exponential, 30 s cap, **no
+   jitter** — with `retryCount` reset to 0 *immediately* on `onopen` (and on
+   `heartbeat` in the alert hook). SOURCE:
+   `src/hooks/useMessagingStream.ts:5,226-228,211-213`,
+   `src/hooks/useAlertStream.ts:6,150-152,47-49,141-144`. The native FR-1 jitter
+   and FR-2 60 s reset window are deliberate Android refinements, not web behavior.
+
+8. **30 s backoff cap.** VERDICT: **Verified** against web. SOURCE:
+   `MAX_RETRY_DELAY = 30_000` in `src/hooks/useMessagingStream.ts:5` and
+   `src/hooks/useAlertStream.ts:6`.
+
+9. **`401` on the SSE stream triggers a refresh + retry (FR-9).** VERDICT:
+   **Unverified-assumption.** Web SSE uses the browser `EventSource` directly and
+   does **not** route through `api()`, so the web app never runs refresh-on-401 for
+   streams — it just reconnects. Whether the backend even returns `401` on SSE
+   session expiry (vs. closing the socket) is undocumented. SOURCE (negative):
+   SSE hooks never call `api()`; `src/api/client.ts` 401 logic is `fetch`-scoped.
+
+10. **`502/503/504` and timeouts are retryable.** VERDICT:
+    **Unverified-assumption.** Reasonable transport-level policy, but the OpenAPI
+    only documents `200`/`422` for the SSE endpoints and the web hooks treat *any*
+    `onerror` as a uniform reconnect (no status-class branching). No source
+    distinguishes 5xx-retryable from 4xx-fatal for streams. SOURCE (web is
+    status-agnostic): `onerror` handlers in the SSE hooks.
+
+11. **`403/404/410` are non-retryable / fatal.** VERDICT:
+    **Unverified-assumption** for SSE. Same rationale as #10 — web SSE does not
+    branch on status. For non-SSE calls, `403` is surfaced as a hard error
+    (`src/api/client.ts` 403 branch), supporting the intent.
+
+12. **FastAPI error `detail` shape is `string | [{msg}] | {code,...}`.** VERDICT:
+    **Verified.** SOURCE: OpenAPI `HTTPValidationError.detail` = array of
+    `ValidationError` (each with `msg`), and `src/api/client.ts:
+    normalizeErrorDetail()` handles all three shapes incl. `{code}` via
+    `mapAuthorizationError`.
+
+13. **`Last-Event-ID` resume (FR-4) / server support.** VERDICT:
+    **Unverified-assumption.** The web app never sets `Last-Event-ID` explicitly
+    (browser does it implicitly); several stream endpoints instead expose an
+    `after` cursor query param (OpenAPI `GET /messaging/events/stream`
+    `params=after,limit,poll_ms`). Server honoring of `Last-Event-ID` is
+    unconfirmed — already flagged in §13.
+
+14. **Cleartext dev host `http://18.222.237.167:8000`.** VERDICT:
+    **Unverified-assumption** (project/context value, not in OpenAPI or frontend
+    sources; `VITE_API_BASE_URL` is env-injected in `src/api/client.ts`).
+
+15. **Framework choices: AndroidX Lifecycle `collectAsStateWithLifecycle`,
+    `ProcessLifecycleOwner`, `repeatOnLifecycle`/`WhileSubscribed`, OkHttp-SSE
+    `EventSource`.** VERDICT: **Verified (framework ref).** SOURCES:
+    Lifecycle-aware collection —
+    https://developer.android.com/topic/libraries/architecture/coroutines#lifecycle-aware ;
+    `ProcessLifecycleOwner` —
+    https://developer.android.com/reference/androidx/lifecycle/ProcessLifecycleOwner ;
+    `SharingStarted.WhileSubscribed` —
+    https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-sharing-started/ ;
+    OkHttp SSE `EventSource` —
+    https://square.github.io/okhttp/ .
+
+### Corrections made
+
+- **§5 SSE path:** replaced the non-existent `GET /ui/events/stream` with the real
+  SSE endpoints (`/sse`, `/messaging/events/stream`, `/ui/alerts/stream`,
+  `/ui/dashboard/stream`, `/broadcast/sessions/{session_id}/stream`) and clarified
+  AND-149 is endpoint-agnostic.
+- **§5 refresh header:** removed the incorrect claim that `POST /ui/session/refresh`
+  carries `X-CSRF-Token`; the web refresh call is cookie-only.
+- **§2 reference pointer:** corrected the reconnect-logic location (SSE hooks under
+  `src/hooks/`, not `src/api/`) and the web baseline (exponential, 30 s cap, **no
+  jitter**, immediate reset on `onopen`/`heartbeat`); noted FR-1 jitter and FR-2
+  60 s reset are Android additions.
+- **§8:** annotated that web SSE bypasses the `api()` 401-refresh path, so FR-9's
+  401→refresh is an Android hardening choice, not observed web SSE behavior.
+
+### Open assumptions
+
+- **Server `Last-Event-ID` support** (claim 13) — not documented; some endpoints
+  use an `after` cursor instead. Confirm with backend; consumer-side `id` de-dup is
+  the mitigation (§13).
+- **SSE `401` semantics** (claim 9) — unknown whether SSE endpoints emit `401` on
+  expiry or just drop; refresh-on-401 for streams is unverified.
+- **5xx-retryable vs 4xx-fatal status branching for SSE** (claims 10, 11) — not
+  documented (only `200`/`422` in OpenAPI) and not present in web hooks; a
+  pragmatic transport policy, to validate against live host behavior.
+- **`staleAfter = 45s` watchdog value** (§13) — a guess vs. the dev host's idle
+  policy; tune against observation.
+- **Dev host URL / cleartext scope** (claim 14) — project context only, not in the
+  verifiable sources.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = local JVM unit/Robolectric (no device); **AVD35** =
+headless emulator `test35` (x86_64, API 35); **A15** = physical Samsung Galaxy A15
+5G (SM-A156U, serial R5CX821TA9R, Android 14 / API 34, arm64-v8a). Most cases are
+device-independent (pure logic / MockWebServer / Robolectric); device targets are
+called out only where ABI / API-level / real-network behavior matters.
+
+- **TC-AND-149-01** — Type: unit (JVM). Target: `SseBackoffPolicy`.
+  Preconditions: `SseBackoffConfig` defaults; seeded `Random`. Steps: call
+  `delayFor(0..6)`; assert geometric growth `base*2^attempt` before jitter, `cap`
+  clamp at 30 s for high attempts, and every result lies within
+  `[0.5,1.0]*capped`. Also assert `shouldReset(59s)==false`, `shouldReset(60s)==true`.
+  Expected: all assertions hold deterministically with the seed.
+  Traces: AC-2.
+
+- **TC-AND-149-02** — Type: unit (JVM). Target: `classify(throwable, code)`.
+  Preconditions: none. Steps: feed `SocketTimeoutException`, generic `IOException`,
+  premature-EOF, and codes `502/503/504` → expect `Retryable`; `401` →
+  `AuthRefresh`; `403/404/410` and malformed-stream-after-auth → `Fatal(reason)`
+  with correct `OfflineReason`. Expected: mapping table matches §7.
+  Note: classification policy for SSE 5xx/4xx is an unverified assumption
+  (audit #10/#11) — this test pins the chosen behavior. Traces: AC-3.
+
+- **TC-AND-149-03** — Type: contract/MockWebServer (JVM, `runTest` virtual time).
+  Target: `ResilientSseStream.events()`. Preconditions: MockWebServer enqueues an
+  `text/event-stream` response with 2 events then closes; a second response with a
+  3rd event. Steps: collect; let server drop after event 2. Expected: client
+  reconnects and delivers event 3; observed `state` sequence is
+  `Connecting → Connected → Reconnecting → Connected`; no terminal error emitted.
+  Traces: AC-1.
+
+- **TC-AND-149-04** — Type: contract/MockWebServer (JVM, virtual time). Target:
+  backoff scheduling in `ResilientSseStream`. Preconditions: seeded `Random`,
+  server drops repeatedly. Steps: force N consecutive failures; read
+  `TestCoroutineScheduler.currentTime` deltas between reconnect attempts.
+  Expected: deltas equal `policy.delayFor(attempt)` (jittered exponential, capped
+  at 30 s); after `resetAfter=60s` of healthy connection the attempt counter
+  resets to 0. Traces: AC-2.
+
+- **TC-AND-149-05** — Type: contract/MockWebServer (JVM). Target: `Last-Event-ID`
+  resume. Preconditions: first response emits events with `id: 1831`, `id: 1832`
+  then closes. Steps: collect, allow reconnect, inspect the second request via
+  `takeRequest()`. Expected: second request header `Last-Event-ID: 1832`.
+  Note: server honoring of this header is an open assumption (audit #13); test
+  asserts the client *sends* it. Traces: AC-7.
+
+- **TC-AND-149-06** — Type: contract/MockWebServer (JVM). Target: 401 refresh
+  path. Preconditions: stream returns `401`; `/ui/session/refresh` enqueued `200`;
+  next stream response `200` with an event. Steps: collect. Expected: exactly one
+  `POST /ui/session/refresh` (cookie-only, **no** `X-CSRF-Token` header — per
+  correction #2/audit #3), then a single retry that connects and delivers the
+  event; the refresh guard prevents a second refresh until a later `onOpen`.
+  Traces: AC-3.
+
+- **TC-AND-149-07** — Type: contract/MockWebServer (JVM). Target: refresh-failure
+  and non-retryable terminal states. Preconditions: (a) stream `401` then
+  `/ui/session/refresh` returns non-200; (b) separate run: stream returns `404`.
+  Steps: collect each. Expected: (a) → `Offline(AUTH)`, no further dialing;
+  (b) → `Offline(NOT_FOUND)` with no retry. Contrast with `503` which retries
+  (covered by TC-03/04). Traces: AC-3.
+
+- **TC-AND-149-08** — Type: contract/MockWebServer (JVM, virtual time). Target:
+  stale watchdog. Preconditions: server holds the connection open, sends `onOpen`
+  but no events for `> staleAfter (45s)`. Steps: advance virtual time past
+  `staleAfter`. Expected: state flips `Connected → Stale`, the connection is
+  proactively recycled (cancel + reconnect), and `activeEventSources` returns to
+  its pre-recycle count (exactly one live source after reconnect). Traces: AC-1.
+
+- **TC-AND-149-09** — Type: instrumented/Robolectric (JVM or AVD35) with
+  `TestLifecycleOwner` + a fake `ProcessLifecycleOwner` foreground `StateFlow`.
+  Target: foreground/background gate. Preconditions: one active collector, stream
+  connected (MockWebServer). Steps: move process below `STARTED`; then back to
+  foreground. Expected: on background, the `EventSource` is cancelled, state →
+  `Idle`, `activeEventSources == 0`; on foreground with the collector still
+  present, exactly one connection reopens (`activeEventSources == 1`, exactly one
+  new `takeRequest`). Traces: AC-4.
+
+- **TC-AND-149-10** — Type: Compose-UI (AVD35; Robolectric acceptable). Target:
+  `collectSseAsState` lifecycle scoping. Preconditions: a test Composable
+  collecting via `collectSseAsState(minActiveState = STARTED)`; MockWebServer.
+  Steps: drive the host lifecycle `STARTED`→below→`STARTED`, then trigger a
+  configuration change (recreation). Expected: stream opens at `STARTED`, closes
+  when below; across config-change recreation the ref count stays `1` (no second
+  `EventSource`). Traces: AC-6.
+
+- **TC-AND-149-11** — Type: integration/MockWebServer (JVM). Target:
+  `SseStreamRegistry` ref-counting. Preconditions: two collectors of the *same*
+  `SseRequest`, one of a *different* key. Steps: subscribe both same-key
+  collectors, then cancel one. Expected: a single shared connection serves both
+  same-key collectors (one `takeRequest`); cancelling one keeps the connection
+  alive; the connection tears down only ~5 s (`stopTimeout`) after the last
+  collector leaves; the different-key collector opens its own connection.
+  Traces: AC-6.
+
+- **TC-AND-149-12** — Type: instrumented/leak (AVD35). Target: no-leak assertion.
+  Preconditions: connected stream with collectors; debug `activeEventSources`
+  counter wired. Steps: cancel all collectors and let `stopTimeout` elapse.
+  Expected: `activeEventSources == 0`, OkHttp `connectionPool.connectionCount()`
+  drains to 0, and the `TestScope` completes with no lingering child coroutines.
+  Traces: AC-5.
+
+- **TC-AND-149-13** — Type: integration (A15 — physical device, MUST). Target:
+  no-network short-circuit + real `ConnectivityManager`/radio behavior.
+  Preconditions: app on the A15; toggle airplane mode / disable Wi-Fi+cellular via
+  adb. Steps: with a live collector, drop all networks, then restore.
+  Expected: while offline the client emits `Offline(NO_NETWORK)` and does **not**
+  dial (no backoff burn); on the real `onAvailable` callback it resumes and
+  reconnects exactly once. Rationale for physical device: exercises the actual
+  radio/`ConnectivityManager` validated-network transitions and arm64/API-34 path,
+  which the emulator does not faithfully reproduce. Traces: AC-1.
+
+- **TC-AND-149-14** — Type: manual + accessibility (A15 — physical device).
+  Target: `SseConnectionState.toUserMessage()` localization + non-visual
+  signaling. Preconditions: a thin host screen rendering connection chrome from
+  the `StateFlow`, TalkBack enabled on the A15. Steps: drive the device through
+  connecting → live → reconnecting → offline (use the flaky dev host or a proxy
+  that drops the socket); with TalkBack on, observe announcements. Expected: every
+  state label resolves through `R.string.*` resources (no hard-coded English;
+  verify via a pseudolocale/RTL locale), and state is exposed as data so a
+  `liveRegion`/`contentDescription` announces transitions (not color-only). Run on
+  the physical device to validate real TalkBack output and the live dev-host flaky
+  path. Traces: AC-1 (UI-surfaced affordances; supports §9).
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|---|---|
+| AC-1 (survives blips; Reconnecting→Connected; no terminal error) | TC-03, TC-08, TC-13, TC-14 |
+| AC-2 (jittered exp backoff, 30 s cap, reset after 60 s) | TC-01, TC-04 |
+| AC-3 (5xx/timeout retry; one 401 refresh+retry; 403/404 → Offline) | TC-02, TC-06, TC-07 |
+| AC-4 (background cancels EventSource; foreground reopens one) | TC-09 |
+| AC-5 (no leaks: activeEventSources==0, pool drains, no coroutines) | TC-12 |
+| AC-6 (shared single connection; config change ≠ second EventSource) | TC-10, TC-11 |
+| AC-7 (correct `Last-Event-ID` on reconnect) | TC-05 |

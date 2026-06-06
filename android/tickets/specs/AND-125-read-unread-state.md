@@ -5,7 +5,8 @@ milestone: M3
 epic: E18
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-123]
 blocks: []
 ---
@@ -17,7 +18,14 @@ blocks: []
 This ticket adds **read / unread state management** to the TestLogon Android
 messaging feature. When a user opens a conversation thread (the screen delivered
 by AND-123), the app must mark that conversation as read on the backend via
-`POST /conversations/{id}/read` and reflect the change locally so that:
+`POST /messaging/conversations/{conversation_id}/read` and reflect the change
+locally so that:
+
+> **Review note (AND-125):** the path is `/messaging/conversations/{conversation_id}/read`
+> (the `/messaging` prefix and `conversation_id` param name are confirmed against
+> the OpenAPI index; an earlier draft omitted `/messaging`). The request marker
+> is `last_read_at` (a numeric timestamp), **not** `last_read_message_id`, and the
+> success response has **no body**. See §5 and §16 for the corrections.
 
 - the per-conversation unread badge on the conversation-list row (AND-121)
   clears,
@@ -65,7 +73,10 @@ in unit tests against fixtures and the existing fake API.
 
 **FR-1 — Mark read on thread open.** When the thread screen for conversation
 `id` becomes active (first composition / `ON_START`), if the conversation's
-cached `unreadCount > 0`, the app issues `POST /conversations/{id}/read`.
+cached `unreadCount > 0`, the app issues
+`POST /messaging/conversations/{conversation_id}/read`. *(Verified: the web
+client gates the call on `unread_count > 0` identically — `ConversationView.tsx`
+line 303.)*
 
 **FR-2 — Idempotent re-entry.** Re-opening an already-read thread (cached
 `unreadCount == 0`) must **not** issue a redundant network call within the same
@@ -87,14 +98,28 @@ conversation-list ViewModel (AND-122) must recompute reactively from the same
 data source so the global badge stays consistent.
 
 **FR-6 — Read marker position.** The request marks read up to the newest message
-known to the client (`last_read_message_id` = id of the most recent message in
-the thread page, when available). If no message id is available yet, the call
-sends no marker and the server marks the whole conversation read.
+known to the client. **Corrected:** the marker the web client actually sends is
+`last_read_at` — the numeric `created_at` timestamp of the most recent message in
+the thread page (`markRead(convoId, lastMsg.created_at)`,
+`src/api/endpoints/messaging.ts` line 489 / `ConversationView.tsx` line 303), not
+a `last_read_message_id`. The backend `MarkReadIn` schema accepts **both**
+`last_read_at` (integer, nullable) and `last_read_message_id` (string, nullable);
+the Android client SHOULD mirror the web client and send `last_read_at`. If no
+message is loaded yet, send `null` (omit the marker) and the server marks the
+whole conversation read.
 
-**FR-7 — Read-receipt config gate.** If `/messaging/config` reports read
-receipts disabled (`read_receipts_enabled == false`), the local clear still
-occurs but the network call is skipped (the server tracks no per-user read
-position). This keeps the dependency on `/config` from AND-120.
+**FR-7 — Read-receipt config gate.** *(Corrected / cannot be implemented as
+originally written.)* The earlier draft gated the network call on a
+`read_receipts_enabled` flag from `/messaging/config`. **No such field exists**
+in `MessagingConfigOut` (its booleans are `messaging_dm_lottery_enabled`,
+`messaging_encrypted_messages_enabled`, `messaging_gallery_enabled`,
+`messaging_hide_controls_enabled`, `messaging_mass_send_enabled`,
+`messaging_pins_enabled`, `messaging_reporting_enabled`). The web client does
+**not** gate mark-read on any config flag — it always POSTs when
+`unread_count > 0`. Therefore AND-125 ships **without** a read-receipt config
+gate: always attempt the mark-read POST after the optimistic local clear. (If a
+read-receipt privacy flag is added to `/messaging/config` later, re-introduce
+the gate; tracked as an open assumption in §16.)
 
 ## 4. Technical Design
 
@@ -108,13 +133,21 @@ extends `:core-network`.
 interface MessagingApi {
     // ...existing AND-120 endpoints...
 
-    @POST("conversations/{id}/read")
+    // Corrected: path is "messaging/conversations/{conversation_id}/read";
+    // success body is empty (200 with no schema) -> Response<Unit>.
+    @POST("messaging/conversations/{conversation_id}/read")
     suspend fun markConversationRead(
-        @Path("id") conversationId: String,
+        @Path("conversation_id") conversationId: String,
         @Body body: MarkReadRequestDto,
-    ): Response<MarkReadResponseDto>
+    ): Response<Unit>
 }
 ```
+
+> **Verified against OpenAPI:** `POST /messaging/conversations/{conversation_id}/read`
+> (op `mark_read_messaging_conversations__conversation_id__read_post`),
+> `req=app__routers__messaging__MarkReadIn`, `resp=200:` (empty schema) and
+> `422:HTTPValidationError`. The success response carries **no body**, so there is
+> no `MarkReadResponseDto` to deserialize.
 
 ### 4.2 Repository (core-data)
 
@@ -125,10 +158,14 @@ exposes a Flow of the aggregate.
 ```kotlin
 // com.testlogon.android.core.data.messaging.MessagingRepository
 interface MessagingRepository {
-    /** Optimistically clears unread, then syncs to server. Safe to call repeatedly. */
+    /**
+     * Optimistically clears unread, then syncs to server. Safe to call repeatedly.
+     * Corrected: the marker is a numeric `last_read_at` timestamp (the newest
+     * loaded message's `created_at`), mirroring the web client — not a message id.
+     */
     suspend fun markConversationRead(
         conversationId: String,
-        lastReadMessageId: String?,
+        lastReadAt: Long?,
     ): ApiResult<Unit>
 
     /** Reactive total of unread conversations (or unread messages, per config). */
@@ -144,21 +181,21 @@ Implementation outline:
 ```kotlin
 override suspend fun markConversationRead(
     conversationId: String,
-    lastReadMessageId: String?,
+    lastReadAt: Long?,
 ): ApiResult<Unit> = withContext(io) {
     val local = conversationDao.getById(conversationId) ?: return@withContext ApiResult.Success(Unit)
     if (local.unreadCount == 0 && !local.readDirty) return@withContext ApiResult.Success(Unit) // FR-2
 
     conversationDao.applyOptimisticRead(conversationId, dirty = true) // FR-3, sets unreadCount=0,isUnread=false
 
-    if (!configCache.readReceiptsEnabled) {            // FR-7
-        conversationDao.clearDirty(conversationId)
-        return@withContext ApiResult.Success(Unit)
-    }
-
-    when (val r = apiCall { api.markConversationRead(conversationId, MarkReadRequestDto(lastReadMessageId)) }) {
+    // FR-7 corrected: no `read_receipts_enabled` flag exists in /messaging/config,
+    // and the web client never gates on config — always attempt the POST.
+    when (val r = apiCall { api.markConversationRead(conversationId, MarkReadRequestDto(lastReadAt, null)) }) {
         is ApiResult.Success -> {
-            conversationDao.applyServerRead(conversationId, r.data)  // FR-4 persists authoritative fields
+            // Corrected: success has no body. Persist our own read marker and
+            // clear dirty; the authoritative `unread_count` is re-fetched via the
+            // conversation list / GET conversation, not returned by this endpoint.
+            conversationDao.applyLocalReadCommitted(conversationId, lastReadAt) // FR-4
             ApiResult.Success(Unit)
         }
         is ApiResult.Error -> ApiResult.Error(r.error) // keep optimistic clear + dirty flag (FR-4)
@@ -183,7 +220,9 @@ fun onThreadVisible() {
     if (readMarked) return                         // FR-2 in-session guard
     readMarked = true
     viewModelScope.launch {
-        repo.markConversationRead(conversationId, newestMessageId())
+        // Corrected: pass the newest loaded message's created_at (epoch) as the
+        // last_read_at marker (mirrors web ConversationView.tsx), not a message id.
+        repo.markConversationRead(conversationId, newestMessageCreatedAt())
     }
 }
 ```
@@ -212,64 +251,67 @@ from the UI's perspective (no spinner, no blocking).
 
 ## 5. API Contract
 
-### 5.1 `POST /conversations/{id}/read`
+### 5.1 `POST /messaging/conversations/{conversation_id}/read`
+
+*(Path, schemas, and response shape below are verified against the OpenAPI spec
+and the web reference; an earlier draft had the path, request DTO, and response
+DTO wrong — corrections noted inline.)*
 
 Auth: cookie session + `X-CSRF-Token` (echo of `ui_csrf`); on `401` the
 authenticator (AND-013) calls `POST /ui/session/refresh` once and retries.
+**Verified** against `src/api/client.ts`: CSRF token read from the `ui_csrf`
+cookie and sent as `X-CSRF-Token`, all calls use `credentials: "include"`, and a
+401 triggers a single `POST /ui/session/refresh` then one retry.
 
-**Path param:** `id` — conversation id (string).
+**Path param:** `conversation_id` — conversation id (string). *(Corrected from
+`id`.)*
 
-**Request body** (`MarkReadRequestDto`):
-
-```json
-{ "last_read_message_id": "msg_01HZX9K2QF" }
-```
-
-`last_read_message_id` is optional/nullable; omit (`null`) to mark the entire
-conversation read (FR-6).
-
-**Success `200`** (`MarkReadResponseDto`):
+**Request body** (`MarkReadIn`; required body per OpenAPI):
 
 ```json
-{
-  "conversation_id": "conv_8F3",
-  "unread_count": 0,
-  "last_read_message_id": "msg_01HZX9K2QF",
-  "last_read_at": "2026-06-05T14:03:22Z"
-}
+{ "last_read_at": 1749132202, "last_read_message_id": null }
 ```
+
+The backend `MarkReadIn` schema has two nullable fields: `last_read_at`
+(integer) and `last_read_message_id` (string). The web client sends only
+`last_read_at` (the newest message's `created_at`). Sending `null` for both marks
+the whole conversation read (FR-6). *(Corrected: the original draft's body used
+only `last_read_message_id`.)*
+
+**Success `200`:** **empty / untyped body** (OpenAPI `resp=200:` with `schema {}`).
+There is **no** `MarkReadResponseDto`; do not attempt to parse a JSON object with
+`conversation_id` / `unread_count` (those are returned by `GET .../conversations`
+and `GET .../conversations/{conversation_id}` via `ConversationOut.unread_count`,
+not by this endpoint). The authoritative post-read `unread_count` is reconciled
+by re-reading the conversation list, not from this response. *(Corrected: the
+original draft invented a `MarkReadResponseDto` body.)*
 
 **DTOs (Moshi):**
 
 ```kotlin
 @JsonClass(generateAdapter = true)
 data class MarkReadRequestDto(
-    @Json(name = "last_read_message_id") val lastReadMessageId: String?,
+    @Json(name = "last_read_at") val lastReadAt: Long?,
+    @Json(name = "last_read_message_id") val lastReadMessageId: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
-data class MarkReadResponseDto(
-    @Json(name = "conversation_id") val conversationId: String,
-    @Json(name = "unread_count") val unreadCount: Int,
-    @Json(name = "last_read_message_id") val lastReadMessageId: String?,
-    @Json(name = "last_read_at") val lastReadAt: String?,
-)
+// No response DTO: api.markConversationRead returns Response<Unit>.
 ```
 
 **Error shapes** (mapped via AND-015 to `ApiError`):
 
-- `401` → refresh-and-retry; if still 401 → `ApiError.Unauthorized`.
-- `403` → CSRF/permission → `ApiError.Forbidden`.
+- `422` → FastAPI validation `{"detail":[{"msg": "...","loc":[...],"type":"..."}]}`
+  → `HTTPValidationError`. **This is the only non-200 response documented in
+  OpenAPI for this op.**
+- `401` → refresh-and-retry; if still 401 → `ApiError.Unauthorized`. *(Inferred
+  from the global auth pipeline / AND-013; not enumerated on this op in OpenAPI —
+  unverified for this specific path but consistent with platform behavior.)*
+- `403` → CSRF/permission → `ApiError.Forbidden`. *(Unverified for this op; not
+  in OpenAPI responses. Handle defensively.)*
 - `404` → conversation gone → treat as read locally, clear dirty, log warn.
-- `422` → FastAPI validation `{"detail":[{"msg": "...","loc":[...]}]}`.
+  *(Unverified for this op; not in OpenAPI responses. Defensive handling.)*
 - `5xx` / timeout / IO → `ApiError.Network` / `ApiError.Server`; optimistic
   clear retained, dirty flag set.
-
-> If `/openapi.json` reveals the live shape differs (e.g. body is empty and the
-> marker is a query param, or response is `204 No Content`), the DTOs and the
-> `@POST` signature are adjusted to match; the web reference
-> `frontend/src/api/endpoints/messaging.ts` is the tiebreaker. This is an open
-> question (§13).
 
 ## 6. Data & State Management
 
@@ -302,8 +344,11 @@ fun observeUnreadConversationCount(): Flow<Int>
 suspend fun getDirty(): List<ConversationEntity>
 ```
 
-`applyServerRead(id, dto)` writes `unreadCount`, `lastReadMessageId`,
-`lastReadAt` and sets `readDirty = 0`.
+`applyLocalReadCommitted(id, lastReadAt)` records the committed read marker
+(`lastReadAt`) and sets `readDirty = 0`. **Corrected:** since the endpoint returns
+no body, there is no server DTO to apply — the authoritative `unread_count` is
+reconciled later from `ConversationOut.unread_count` (GET conversation / list),
+not from the read response.
 
 **State exposure.** `observeTotalUnread()` returns the DAO Flow; the
 conversation-list `UiState` (AND-122) carries `totalUnread: Int`. The thread
@@ -380,10 +425,14 @@ regress them:
    `lastReadAt`; `readDirty=false` (FR-4).
 4. Error response (500/IO) → optimistic clear retained, `readDirty=true`, no
    exception thrown (FR-4).
-5. `read_receipts_enabled=false` → local clear, **no** POST, dirty cleared
-   (FR-7).
-6. `last_read_message_id` is set from newest message id and serialized; null
-   marker path sends `{"last_read_message_id":null}` (FR-6).
+5. *(Corrected — no config gate exists.)* Mark-read always attempts the POST
+   after the optimistic clear; there is no `read_receipts_enabled` short-circuit
+   (FR-7 corrected). Test that a config response lacking any read-receipt flag
+   does not suppress the POST.
+6. `last_read_at` is set from the newest message's `created_at` and serialized as
+   `{"last_read_at":<epoch>,"last_read_message_id":null}`; the null-marker path
+   (no message loaded) sends `{"last_read_at":null,"last_read_message_id":null}`
+   (FR-6).
 7. `observeTotalUnread()` emits the recomputed aggregate after a clear (FR-5) —
    asserted with Turbine.
 8. `syncPendingReads()` re-POSTs only dirty rows and reconciles them.
@@ -393,8 +442,10 @@ regress them:
 9. `onThreadVisible()` calls the repo once even across multiple `ON_START`
    events in one session; re-arms after a new inbound message.
 
-**Moshi:** round-trip `MarkReadRequestDto` / `MarkReadResponseDto` against JSON
-fixtures committed under `core-testing` resources (extends AND-120 fixtures).
+**Moshi:** serialize `MarkReadRequestDto` and assert it matches the committed
+request fixture (`{"last_read_at":...,"last_read_message_id":null}`). There is no
+response DTO to round-trip (success body is empty). Fixtures committed under
+`core-testing` resources (extends AND-120 fixtures).
 
 **Instrumented (optional, smoke):** open thread from list (AND-121) → badge node
 loses its unread semantics. Run on the build server CI (AND-008).
@@ -416,11 +467,12 @@ Coverage target: repository read logic and aggregate recompute ≥ 90% lines.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Endpoint contract uncertainty.** Whether `/conversations/{id}/read`
-  takes a body marker, a query param, or none, and whether it returns `200` with
-  a body or `204`. *Mitigation:* verify against `/openapi.json` and
-  `frontend/src/api/endpoints/messaging.ts` before implementation; DTOs are
-  thin and easily adjusted. **Open.**
+- **R1 — Endpoint contract uncertainty.** **RESOLVED in this review.** Path is
+  `POST /messaging/conversations/{conversation_id}/read`; it takes a required JSON
+  body (`MarkReadIn`: `last_read_at` int? + `last_read_message_id` string?) and
+  returns `200` with an **empty body** (no DTO). The web client sends
+  `{ last_read_at: <newest msg created_at> }`
+  (`src/api/endpoints/messaging.ts` line 489). See §5 and §16.
 - **R2 — Unread semantics: conversations vs messages.** AND-122 may aggregate by
   unread-conversation count or unread-message count; AND-125 must mirror whatever
   AND-122 chose. *Mitigation:* reuse AND-122's DAO aggregate, do not introduce a
@@ -432,16 +484,19 @@ Coverage target: repository read logic and aggregate recompute ≥ 90% lines.
 - **R4 — Dirty-flag thrash on a flaky backend.** Repeated failures keep rows
   dirty. *Mitigation:* `syncPendingReads()` is bounded (runs on refresh /
   foreground / connectivity-restored, not in a tight loop).
-- **R5 — Read receipts privacy default.** If `/config` omits the flag, default
-  to **enabled=false** (skip network) to avoid leaking read state. **Open —
-  confirm default.**
+- **R5 — Read receipts privacy default.** **RESOLVED / obsolete.**
+  `MessagingConfigOut` has **no** `read_receipts_enabled` field, and the web
+  client never gates mark-read on config. AND-125 always attempts the POST after
+  the optimistic clear (FR-7 corrected). If a read-receipt privacy flag is added
+  server-side later, re-introduce the gate (tracked in §16 Open assumptions).
 
 ## 14. Acceptance Criteria
 
 1. **Opening a thread marks read.** Opening a conversation with `unreadCount > 0`
-   issues exactly one `POST /conversations/{id}/read` (when read receipts
-   enabled) and the conversation's local `unreadCount` becomes `0`. *(FR-1, FR-3;
-   matches source acceptance "Opening a thread marks read".)*
+   issues exactly one `POST /messaging/conversations/{conversation_id}/read`
+   (with `last_read_at` = newest message `created_at`) and the conversation's
+   local `unreadCount` becomes `0`. *(FR-1, FR-3; matches source acceptance
+   "Opening a thread marks read".)*
 2. **Counts update.** The per-row unread badge clears and the aggregate unread
    count exposed by the list ViewModel decrements accordingly, reactively, within
    one frame of opening the thread. *(FR-5; matches "counts update".)*
@@ -451,15 +506,19 @@ Coverage target: repository read logic and aggregate recompute ≥ 90% lines.
    error; the optimistic clear is retained and the row is marked dirty.
 5. **Deferred sync.** `syncPendingReads()` re-POSTs dirty rows and reconciles
    them on the next list refresh / foreground / connectivity restoration.
-6. **Config gate.** With `read_receipts_enabled=false`, the badge clears locally
-   and no network call is made.
+6. **No config-gate regression.** *(Corrected — see §16.)* There is no
+   `read_receipts_enabled` flag in `/messaging/config`; mark-read always attempts
+   the POST after the optimistic clear. AC met when a `/messaging/config` response
+   (with or without any future read-receipt flag) does not suppress the POST and
+   the local clear still occurs.
 7. **Tested.** Unit tests in §11 (items 1–9 + Moshi round-trip) pass in CI
    (AND-008); read-path coverage ≥ 90% lines.
 
 ## 15. Definition of Done
 
-- `MessagingApi.markConversationRead`, `MarkReadRequestDto`,
-  `MarkReadResponseDto`, and repository methods
+- `MessagingApi.markConversationRead` (returns `Response<Unit>`),
+  `MarkReadRequestDto` (`last_read_at`, `last_read_message_id`; no response DTO),
+  and repository methods
   (`markConversationRead`, `observeTotalUnread`, `syncPendingReads`) implemented
   under `com.testlogon.android.*` and merged to `android-port`.
 - `ConversationEntity` columns + DAO queries + Room migration landed without
@@ -473,3 +532,267 @@ Coverage target: repository read logic and aggregate recompute ≥ 90% lines.
   (R1/R2/R5 resolved or explicitly deferred with follow-up notes).
 - No message content, username, or PII in logs or telemetry.
 - Code reviewed and merged; spec status moved from `draft` to `done`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Endpoint path is `POST /messaging/conversations/{conversation_id}/read`.**
+   VERDICT: **Corrected** (original draft used `POST /conversations/{id}/read`,
+   missing the `/messaging` prefix and using `id` instead of `conversation_id`).
+   SOURCE: OpenAPI index `POST /messaging/conversations/{conversation_id}/read`
+   (op `mark_read_messaging_conversations__conversation_id__read_post`); frontend
+   `src/api/endpoints/messaging.ts: markRead` (line 489–490).
+
+2. **Request body schema is `MarkReadIn` with nullable `last_read_at` (integer)
+   and `last_read_message_id` (string); body is required.** VERDICT: **Verified.**
+   SOURCE: OpenAPI `components.schemas.app__routers__messaging__MarkReadIn`
+   (openapi.pretty.json line 85939); request body `required: true` referencing
+   that schema (openapi.pretty.json line ~119372–119381).
+
+3. **The marker the client sends is `last_read_at` (newest message `created_at`
+   timestamp), NOT `last_read_message_id`.** VERDICT: **Corrected** (original FR-6
+   and §5 built the design around `last_read_message_id`). SOURCE:
+   `src/api/endpoints/messaging.ts: markRead` — `api.post(.../read, { last_read_at: lastReadAt })`
+   (line 489–490); `src/pages/messages/ConversationView.tsx` line 303 —
+   `markRead(convoId, lastMsg.created_at)`.
+
+4. **Success response has an empty/untyped body (no `MarkReadResponseDto`).**
+   VERDICT: **Corrected** (original draft invented a `200` JSON object with
+   `conversation_id` / `unread_count` / `last_read_message_id` / `last_read_at`).
+   SOURCE: OpenAPI index `resp=200:` (no schema); openapi.pretty.json responses
+   `"200": { "content": { "application/json": { "schema": {} } } }`
+   (line ~119382–119390).
+
+5. **`POST /messaging/config` has no `read_receipts_enabled` flag; the web client
+   does not gate mark-read on any config flag.** VERDICT: **Corrected** (FR-7,
+   AC-6, R5 all assumed such a flag). SOURCE: OpenAPI
+   `components.schemas.MessagingConfigOut` (openapi.pretty.json line 51378) —
+   fields are `messaging_dm_lottery_enabled`, `messaging_encrypted_messages_enabled`,
+   `messaging_gallery_enabled`, `messaging_hide_controls_enabled`,
+   `messaging_mass_send_enabled`, `messaging_pins_enabled`,
+   `messaging_reporting_enabled`; `src/pages/messages/ConversationView.tsx`
+   line 300–305 (no config gate around `markRead`).
+
+6. **Auth: cookie session + `X-CSRF-Token` echoed from the `ui_csrf` cookie;
+   `credentials: include` on every call.** VERDICT: **Verified.** SOURCE:
+   `src/api/client.ts` — `getCookie("ui_csrf")` then
+   `headers.set("X-CSRF-Token", csrf)` (lines 167–170); `credentials: "include"`
+   (lines 183, 220).
+
+7. **On 401 the client refreshes once via `POST /ui/session/refresh` then retries
+   the original request once.** VERDICT: **Verified.** SOURCE: `src/api/client.ts`
+   `refreshSession()` posts `/ui/session/refresh` with `method: "POST"` (lines
+   121–125); 401 handling refresh-then-retry (lines 191–225).
+
+8. **Mark-read is fired only when the conversation has `unread_count > 0`, and
+   failures are silently swallowed.** VERDICT: **Verified.** SOURCE:
+   `src/pages/messages/ConversationView.tsx` lines 300–305 —
+   `if (lastMsg && (conversation.unread_count ?? 0) > 0) markRead(...).catch(() => {})`.
+
+9. **`ConversationOut.unread_count` is an integer (default 0); the conversation id
+   field is `conversation_id`.** VERDICT: **Verified.** SOURCE: OpenAPI
+   `components.schemas.ConversationOut.unread_count` (openapi.pretty.json line
+   19670: `default 0`, `type integer`); required `conversation_id`
+   (line 19677).
+
+10. **Only `422 HTTPValidationError` is a documented non-200 response for this
+    op.** VERDICT: **Verified** (for documented responses). SOURCE: OpenAPI index
+    line 376 `resp=200:;422:HTTPValidationError`; openapi.pretty.json responses
+    block (lines ~119382–119400). 401/403/404 handling for this path is
+    **Unverified-assumption** (see Open assumptions).
+
+11. **`apiCall` wrapper maps `Response<T>` → `ApiResult<T>` and FastAPI `detail`
+    → typed errors (AND-018/AND-015).** VERDICT: **Unverified-assumption** — these
+    are upstream Android tickets not present in the provided sources; assumed from
+    the spec's own cross-references.
+
+12. **Compose lifecycle APIs (`DisposableEffect`, `LifecycleEventObserver`,
+    `Lifecycle.Event.ON_START`, `LocalLifecycleOwner`) for the mark-read trigger.**
+    VERDICT: **Verified — framework ref.** SOURCE (framework ref):
+    https://developer.android.com/jetpack/compose/side-effects (DisposableEffect)
+    and https://developer.android.com/topic/libraries/architecture/lifecycle .
+
+13. **Room schema migration / DAO Flow aggregation for the unread count.**
+    VERDICT: **Verified — framework ref.** SOURCE (framework ref):
+    https://developer.android.com/training/data-storage/room/migrating-db-versions .
+
+14. **Aggregate is unread-*conversation* count vs unread-*message* count (R2).**
+    VERDICT: **Unverified-assumption** — AND-122's chosen aggregation is not in the
+    provided sources; the DAO query in §6 sums conversations with `unreadCount > 0`.
+    Must mirror AND-122 (the source is the AND-122 ticket, not provided here).
+
+### Corrections made
+
+- **Path:** `POST /conversations/{id}/read` → `POST /messaging/conversations/{conversation_id}/read`
+  (added `/messaging`, renamed path param to `conversation_id`). Updated in
+  Overview, FR-1, §4.1, §5.1, AC-1.
+- **Request marker:** replaced `last_read_message_id`-only body with the verified
+  `last_read_at` (numeric timestamp) marker the web client sends; request DTO is
+  now `MarkReadRequestDto(lastReadAt: Long?, lastReadMessageId: String? = null)`.
+  Updated FR-6, §4.2, §4.3, §5.1, §11 items 5–6, Moshi note.
+- **Response shape:** removed the fabricated `MarkReadResponseDto`; success body
+  is empty, API now returns `Response<Unit>`; repository persists its own marker
+  via `applyLocalReadCommitted` instead of `applyServerRead(dto)`. Updated §4.1,
+  §4.2, §5.1, §6, §15.
+- **Config gate (FR-7):** removed — `MessagingConfigOut` has no
+  `read_receipts_enabled` and the web client never gates on config. Updated FR-7,
+  §4.2, §11 item 5, AC-6, R5.
+- **Error table:** demoted 401/403/404 to explicitly "unverified for this op /
+  defensive"; 422 marked as the only documented non-200.
+- **Risks:** R1 and R5 marked RESOLVED with sources.
+- **Frontmatter:** `status: draft → reviewed`; added `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **401/403/404 on this specific op** are not enumerated in OpenAPI (only 422).
+  Their handling is assumed from the global auth/error pipeline; handle
+  defensively but do not contractually rely on them. (Why unverifiable: not in
+  the OpenAPI responses for this path, and the web client swallows all errors so
+  it reveals no status-specific behavior.)
+- **`apiCall` / `ApiResult` / FastAPI `detail` mapping (AND-018/AND-015)** —
+  upstream Android tickets, not in the provided reference sources.
+- **Unread aggregation unit (conversations vs messages)** — defined by AND-122,
+  whose source is not provided. AND-125 must reuse AND-122's DAO aggregate.
+- **`ConversationEntity` existing columns** — owned by AND-122; whether
+  `lastReadMessageId`/`lastReadAt`/`readDirty` already exist is unverifiable from
+  the provided sources (no Android source tree given).
+- **Future read-receipt privacy flag** — if added to `/messaging/config`, the
+  config gate (removed FR-7) should be reinstated.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = JVM unit/Robolectric (local, no device);
+**Emulator** = headless AVD `test35` (x86_64, API 35); **Device** = physical
+Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Contract tests use
+MockWebServer on the JVM.
+
+- **TC-AND-125-01 — Mark read on open (happy path).** Type: unit.
+  Target: JVM (`MessagingRepository`, fake `MessagingApi`).
+  Preconditions: cached conversation with `unreadCount = 3`, newest loaded
+  message `created_at = 1749132202`.
+  Steps: call `markConversationRead("conv_8F3", 1749132202)`.
+  Expected: DAO `unreadCount = 0`, `isUnread = false`; exactly one
+  `POST /messaging/conversations/conv_8F3/read` issued; on success `readDirty = 0`
+  and the committed marker stored. Traces: AC-1, AC-2.
+
+- **TC-AND-125-02 — Request body shape (contract).** Type: contract/MockWebServer.
+  Target: JVM (`MessagingApi` + MockWebServer).
+  Preconditions: server returns `200` with empty body.
+  Steps: invoke `markConversationRead("conv_8F3", 1749132202)`.
+  Expected: recorded request is `POST /messaging/conversations/conv_8F3/read`,
+  `Content-Type: application/json`, body `{"last_read_at":1749132202,"last_read_message_id":null}`;
+  empty `200` body deserializes cleanly to `Response<Unit>` (no parse error).
+  Traces: AC-1.
+
+- **TC-AND-125-03 — Null marker path.** Type: unit.
+  Target: JVM (repository, fake API).
+  Preconditions: conversation `unreadCount = 1`, no messages loaded yet.
+  Steps: call `markConversationRead("conv_8F3", null)`.
+  Expected: body serialized as `{"last_read_at":null,"last_read_message_id":null}`;
+  optimistic clear still applied. Traces: AC-1 (FR-6).
+
+- **TC-AND-125-04 — Idempotent re-entry (no redundant call).** Type: unit.
+  Target: JVM (repository, fake API).
+  Preconditions: conversation already `unreadCount = 0`, `readDirty = false`.
+  Steps: call `markConversationRead` again in the same session.
+  Expected: no network request issued; returns `ApiResult.Success`.
+  Traces: AC-3.
+
+- **TC-AND-125-05 — ViewModel one-shot guard + re-arm.** Type: unit.
+  Target: JVM (`ThreadViewModel`, Robolectric for lifecycle if needed).
+  Preconditions: thread with unread; spy repository.
+  Steps: deliver two `ON_START` events; then simulate a new inbound message
+  (unread > 0) and another `ON_START`.
+  Expected: repo `markConversationRead` called once across the first two
+  `ON_START`s; called again after the re-arm. Traces: AC-3 (FR-2).
+
+- **TC-AND-125-06 — Failure resilience (5xx/IO).** Type: contract/MockWebServer.
+  Target: JVM.
+  Preconditions: server returns `500` (and a separate case: socket
+  disconnect/IO).
+  Steps: mark read on an unread conversation.
+  Expected: no exception thrown; optimistic clear retained (`unreadCount = 0`),
+  `readDirty = true`; no error surfaced to UI; returns `ApiResult.Error`.
+  Traces: AC-4.
+
+- **TC-AND-125-07 — 422 validation shape.** Type: contract/MockWebServer.
+  Target: JVM.
+  Preconditions: server returns `422` with
+  `{"detail":[{"loc":["body","last_read_at"],"msg":"...","type":"..."}]}`.
+  Steps: mark read.
+  Expected: mapped to typed `ApiError` from `detail`; optimistic clear retained,
+  `readDirty = true`; no crash. Traces: AC-4.
+
+- **TC-AND-125-08 — No config gate (corrected FR-7).** Type: unit.
+  Target: JVM (repository, fake API + fake `/messaging/config`).
+  Preconditions: `/messaging/config` response containing none of the read-receipt
+  fields (because none exist).
+  Steps: mark read on an unread conversation.
+  Expected: the POST is **still** issued (no short-circuit); local clear occurs.
+  Traces: AC-6.
+
+- **TC-AND-125-09 — Aggregate recompute (reactive).** Type: unit.
+  Target: JVM (Room in-memory + Turbine).
+  Preconditions: three conversations, two unread; collect `observeTotalUnread()`.
+  Steps: mark one unread conversation read.
+  Expected: Flow emits the new aggregate (2 → 1) without a manual refresh.
+  Traces: AC-2 (FR-5).
+
+- **TC-AND-125-10 — Deferred sync of dirty rows.** Type: unit.
+  Target: JVM (repository, fake API).
+  Preconditions: two rows `readDirty = true` (prior offline failures), one clean.
+  Steps: call `syncPendingReads()` with the API now succeeding.
+  Expected: exactly two `POST .../read` issued (only dirty rows); both rows
+  `readDirty = 0` after success; the clean row untouched. Traces: AC-5.
+
+- **TC-AND-125-11 — Flaky/offline host then recovery (integration).**
+  Type: integration. Target: Emulator (`test35`) with MockWebServer toggled
+  offline→online; connectivity probe (AND-017) stubbed.
+  Preconditions: backend unreachable; conversation unread.
+  Steps: open thread (mark fails, row dirty) → restore connectivity → trigger
+  `syncPendingReads()` via the foreground/connectivity hook.
+  Expected: badge clears immediately on open and stays cleared; row dirty while
+  offline; re-POSTed and reconciled (`readDirty = 0`) after recovery; no error UI.
+  Traces: AC-4, AC-5.
+
+- **TC-AND-125-12 — CSRF + 401 refresh-and-retry.** Type: contract/MockWebServer.
+  Target: JVM (full OkHttp stack with CSRF interceptor + authenticator).
+  Preconditions: `ui_csrf` cookie set; server returns `401` once then `200` after
+  a `POST /ui/session/refresh`.
+  Steps: mark read.
+  Expected: first request carries `X-CSRF-Token` = `ui_csrf` value; on 401 a
+  single `POST /ui/session/refresh` then one retry of the read POST; final result
+  success. Traces: AC-1 (security).
+
+- **TC-AND-125-13 — Badge accessibility semantics.** Type: Compose-UI.
+  Target: Emulator (`test35`); runnable on Device for a real TalkBack pass.
+  Preconditions: conversation-list row (AND-121) shows "3 unread messages".
+  Steps: open the thread (triggering mark read) and return to the list.
+  Expected: the badge node's content description updates/clears (semantics, not
+  just color); when count is 0 the unread semantics are absent; count uses the
+  `unread_count` plural from `strings.xml`. Traces: AC-2 (a11y, no regression).
+
+- **TC-AND-125-14 — End-to-end mark-read on physical device.** Type:
+  instrumented/e2e. Target: **Device (SM-A156U, API 34, arm64-v8a)** — MUST run
+  on the physical device to validate real arm64/API-34 behavior and real network
+  cookie/CSRF transport against the dev host.
+  Preconditions: signed-in dev build pointed at the dev backend; a conversation
+  with `unread_count > 0`.
+  Steps: open the conversation from the list; observe the badge; background and
+  foreground the app; pull-to-refresh the list.
+  Expected: badge clears within one frame; exactly one read POST observed; aggregate
+  badge decrements; state survives background/foreground and process death; no
+  crash on arm64. Traces: AC-1, AC-2, AC-5.
+
+### Coverage matrix
+
+| AC (section 14) | Covered by |
+| --- | --- |
+| AC-1 Opening marks read | TC-01, TC-02, TC-03, TC-12, TC-14 |
+| AC-2 Counts update (reactive, a11y) | TC-01, TC-09, TC-13, TC-14 |
+| AC-3 No redundant calls | TC-04, TC-05 |
+| AC-4 Failure resilience | TC-06, TC-07, TC-11 |
+| AC-5 Deferred sync | TC-10, TC-11, TC-14 |
+| AC-6 No config-gate regression | TC-08 |
+| AC-7 Tested / coverage ≥ 90% | TC-01..TC-10 (JVM unit/contract suite); aggregate coverage gate |

@@ -5,7 +5,8 @@ milestone: M3
 epic: E18
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-120, AND-098]
 blocks: [AND-121]
 ---
@@ -51,6 +52,14 @@ re-implementing any data logic.
 - Backend: FastAPI + DynamoDB. Dev host `http://18.222.237.167:8000` is plaintext and
   unreliable; design for ~20s timeouts and bounded retry on idempotent GETs only.
   Endpoint reference: `GET /messaging/conversations`. OpenAPI at `/openapi.json`.
+  **[CORRECTED 2026-06-06]** The documented backend contract for this endpoint declares
+  NO `cursor` and NO `limit` query parameters (only `authorization`/`X-SESSION-ID`/`X-API-Key`
+  headers), and its 200 response is a **bare JSON array of `ConversationOut`** — not an
+  envelope object. There is therefore no server-provided `next_cursor` or `unread_total` in
+  the current contract. The web client opportunistically sends `?cursor=` (tolerated but
+  undocumented) and synthesizes an `{conversations, next_cursor}` envelope client-side, where
+  `next_cursor` is `undefined` for the array shape. See §5 and §13 R1/R5 for the impact on
+  paging design; the `MessagingApi` surface AND-120 exposes must reconcile this.
 - Web reference: `frontend/src/api/endpoints/messaging.ts` (list/cursor shape),
   `frontend/src/api/types.ts` (`Conversation`, `Message`).
 - Namespace: `com.testlogon.android`. ViewModel package:
@@ -60,9 +69,17 @@ re-implementing any data logic.
 
 FR-1 — **Paged conversation stream.** Expose
 `val pagingData: Flow<PagingData<ConversationListItem>>`, backed by a `Pager` whose
-`PagingSource` calls `MessagingApi.getConversations(cursor, limit)`. Page size 20,
+`PagingSource` calls `MessagingApi.getConversations(cursor)`. Page size 20,
 prefetch distance 5, no placeholders. `cachedIn(viewModelScope)` so config changes do
 not re-fetch.
+**[CORRECTED 2026-06-06]** The documented endpoint accepts NO `limit` query param
+(OpenAPI declares only header params), so `limit`/`loadSize` is NOT sent to the server;
+`PagingConfig.pageSize` governs only Paging-side buffering, and effective page size is
+whatever the server returns. The web reference (`getConversations`) likewise passes only
+`cursor`. Because the documented 200 body is a bare array with no `next_cursor`, true
+server cursor paging is currently **not contractually supported**; the `PagingSource`
+must treat a missing/`undefined` cursor as end-of-list (single-page result) until
+AND-120/backend confirms a cursor contract. See §13 R5.
 
 FR-2 — **Sort policy.** Conversations are ordered by most-recent activity descending:
 primary key `lastMessageAt` (epoch millis, descending), tie-break by `conversationId`
@@ -73,11 +90,17 @@ order across page boundaries). The sort contract is asserted in tests against a
 fixture whose server order is canonical.
 
 FR-3 — **Unread aggregation.** Expose a total unread badge value
-`val unreadTotal: StateFlow<Int>`. Source of truth is the server-provided aggregate
-when present (`unread_total` in the list envelope / `GET /messaging/config`), falling
-back to summing `unreadCount` over the materialized first page when the aggregate is
-absent. The value is exposed independently of `PagingData` (Paging cannot reliably
-sum across lazily-loaded pages).
+`val unreadTotal: StateFlow<Int>`. **[CORRECTED 2026-06-06]** There is NO server-provided
+`unread_total` aggregate: it does not appear in the `GET /messaging/conversations`
+response (a bare `ConversationOut[]`) nor in `MessagingConfigOut` (which is feature-flag
+booleans only — `messaging_*_enabled`), and the token `unread_total` appears nowhere in
+the OpenAPI spec or the web reference. The badge value MUST therefore be computed
+client-side by summing per-conversation `unread_count` over the materialized first page.
+The optional `serverUnreadTotal` parameter in the ViewModel is retained only as a
+forward-compatible hook (always `null` against the current backend) and must default to
+the first-page sum. The value is exposed independently of `PagingData` (Paging cannot
+reliably sum across lazily-loaded pages). NOTE: a first-page-only sum under-counts if
+unread conversations exist on later pages; flagged for AND-121 review (see §13 R1).
 
 FR-4 — **Screen UiState (non-paging).** Expose `val uiState: StateFlow<UiState>` with
 `Loading`, `Content`, `Empty`, and `Error` for the screen chrome / first-load
@@ -96,9 +119,16 @@ duplicates. Provide a stable item key (`conversationId`) so AND-121 keys
 id was returned in the immediately preceding page (defensive dedup on cursor overlap).
 
 FR-7 — **Mapping.** Map `ConversationDto` -> `ConversationListItem` (UI model) in the
-ViewModel/source boundary: derive a display title, last-message preview, formatted
-timestamp source value, avatar URL, and `unreadCount`. No DTO leaks past
+ViewModel/source boundary: derive a display title, last-message preview, the
+last-activity timestamp, an avatar/icon URL, and `unreadCount`. No DTO leaks past
 `feature-messaging`'s public surface.
+**[CORRECTED 2026-06-06]** Field names per the authoritative `ConversationOut` schema:
+the sort/timestamp source is the top-level **`last_message_at`** (an **epoch integer**,
+NOT an ISO-8601 string — `created_at` and `last_message_at` are integers in the schema,
+so NO ISO→epoch parsing is required; pass the integer through, defaulting null→0). The
+preview is the top-level **`last_message_preview`** (string|null), not `last_message.preview`.
+There is **no `avatar_url` field**; the conversation avatar source is **`icon`**
+(string|null). `unread_count` is an integer.
 
 ## 4. Technical Design
 
@@ -202,43 +232,66 @@ AND-121 calls it from `LaunchedEffect(lazyItems.loadState)`. Mapping —
 states are left to AND-121's footer. This keeps the ViewModel testable without Compose
 by exercising `onLoadState`/`onFirstPageLoaded` directly with synthetic `LoadState`s.
 
-`ConversationDto.toListItem()` (mapper) lives in `feature-messaging`; it converts the
-DTO timestamp (ISO-8601 string from FastAPI) to epoch millis and trims the preview.
+`ConversationDto.toListItem()` (mapper) lives in `feature-messaging`. **[CORRECTED
+2026-06-06]** The DTO timestamps are already **epoch integers** (`last_message_at`,
+`created_at` per `ConversationOut`), so the mapper does NOT parse ISO-8601 — it passes
+`last_message_at` through (null→0), copies `last_message_preview`, maps `icon` to the
+item's avatar field, and trims the preview. Note the units: the source value is whatever
+the backend emits (epoch seconds vs millis is unconfirmed — flag to AND-120 fixtures;
+the model field is named generically and AND-121 formats it locale-aware, see §13 Open).
 
 ## 5. API Contract
 
 Consumes `MessagingApi` (owned by AND-120); this ticket defines no new endpoint.
 
-`GET /messaging/conversations?cursor={opaque}&limit={n}` — idempotent GET, retry-safe.
+`GET /messaging/conversations` — idempotent GET, retry-safe. **[CORRECTED 2026-06-06]**
+The documented contract declares NO query params (`cursor`/`limit` are not in the OpenAPI
+parameter list; only `authorization`, `X-SESSION-ID`, `X-API-Key` headers). Required API
+key scope: `messager:read`.
 
-Response envelope (mapped by AND-120's DTOs; shape this ticket relies on):
+**Actual 200 response (authoritative `ConversationOut[]` — a bare array, NOT an
+envelope):**
 
 ```json
-{
-  "conversations": [
-    {
-      "conversation_id": "cnv_8a1f",
-      "title": "Ops On-call",
-      "avatar_url": "https://.../a.png",
-      "last_message": { "preview": "deploy is green", "created_at": "2026-06-05T14:02:11Z" },
-      "unread_count": 3
-    }
-  ],
-  "next_cursor": "eyJrIjoiY252XzZkMmUifQ==",
-  "unread_total": 7
-}
+[
+  {
+    "conversation_id": "cnv_8a1f",
+    "type": "dm",
+    "title": "Ops On-call",
+    "icon": "https://.../a.png",
+    "last_message_at": 1749132131000,
+    "last_message_preview": "deploy is green",
+    "created_at": 1749100000000,
+    "unread_count": 3,
+    "last_read_at": 1749130000000,
+    "participant_count": 2,
+    "status": "active"
+  }
+]
 ```
 
-Field reliance: `conversation_id` (item key + dedup), `last_message.created_at`
-(sort key -> `lastMessageAt`), `unread_count` (aggregation fallback), `next_cursor`
-(`nextKey`; `null`/absent ⇒ end of list), `unread_total` (preferred aggregate; may be
-absent). On absent `next_cursor` the source returns `nextKey = null`. Empty
-`conversations` on first load with no cursor ⇒ `Empty`.
+The previously-documented `{conversations, next_cursor, unread_total}` envelope does
+**not** exist in the backend contract; it is a client-side construction in the web
+reference (`getConversations` wraps the array as `{conversations, next_cursor}` with
+`next_cursor === undefined` for the array shape). AND-120's `MessagingApi` is expected to
+deserialize the bare array (and, if it surfaces an envelope, `nextCursor` will be null).
+
+Field reliance (per `ConversationOut`): `conversation_id` (item key + dedup),
+`last_message_at` (sort key -> `lastMessageAt`; **epoch integer**, nullable),
+`last_message_preview` (preview), `icon` (avatar URL source), `unread_count`
+(unread aggregation — the only available source, see FR-3). There is no `next_cursor`
+in the response, so pagination terminates after the first page under the current
+contract; an empty array on first load ⇒ `Empty`.
 
 Error body (FastAPI `detail`, mapped by AND-120/core-network to `ApiResult.Failure`):
-`detail` may be `string | [{msg}] | {code,...}`; the resulting message is surfaced via
-`ConvListUiState.Error.message`. Transport/timeout/connection failures set
-`isOffline = true`.
+this endpoint documents **structured** error bodies — 400/401/403/429 return
+`{ "detail": { "code", "reason", "message"?, ... } }` (e.g. 401 `{code:"api_key_invalid",
+reason:"invalid_key"}`, 403 `{code:"api_entitlement_denied"}` / `{code:"api_key_scope_denied",
+required_scopes:[...]}`, 400 `{code:"api_key_dual_credential_conflict"}`), and 422 returns
+`HTTPValidationError` (`detail: [{loc,msg,type}]`). core-network's `detail` normalizer
+must therefore handle `object{code,...}`, `array[{msg}]`, and `string`; the resulting
+message is surfaced via `ConvListUiState.Error.message`. Transport/timeout/connection
+failures set `isOffline = true`.
 
 ## 6. Data & State Management
 
@@ -357,10 +410,21 @@ state-mapping logic in `ConversationListViewModel`.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Aggregate availability.** Does `GET /messaging/conversations` return
-  `unread_total`, or is it only on `GET /messaging/config`? Confirm against
-  `/openapi.json`. Fallback (sum first page) under-counts if unread spans later pages;
-  acceptable as interim, flagged for AND-121 review.
+- **R1 — Aggregate availability.** RESOLVED [2026-06-06]: neither `GET /messaging/conversations`
+  nor `GET /messaging/config` (`MessagingConfigOut`, feature flags only) returns an
+  `unread_total`; the token does not exist anywhere in OpenAPI or the web reference. The
+  unread badge MUST be the first-page `unread_count` sum (FR-3). This under-counts if
+  unread conversations span later pages; accepted as interim, flagged for AND-121 review.
+  A dedicated unread-count endpoint (if one is added later) would be a separate ticket.
+- **R5 — No cursor pagination in the documented backend contract.** RESOLVED [2026-06-06]:
+  `GET /messaging/conversations` documents no `cursor`/`limit` query params and returns a
+  bare `ConversationOut[]` with no `next_cursor`. As written, this endpoint returns a
+  single (likely capped) page. The Paging 3 scaffolding is still built (so the screen and
+  tests are ready), but it will behave as a single-page source until the backend exposes a
+  real cursor. AND-120 owns confirming whether the deployed backend returns more than the
+  documented array (the web client tolerates an envelope) and defining the `MessagingApi`
+  return shape; this ticket consumes whatever AND-120 exposes and maps `next_cursor` -> nextKey
+  (null today). Do NOT assume a working cursor in acceptance until AND-120 confirms it.
 - **R2 — Cursor stability on active inbox.** Backend cursor may be activity-ordered;
   rapid new messages can cause page overlap/skips. Mitigated by FR-6 dedup + stable
   keys; a `RemoteMediator`/Room cache would fully fix it (out of scope, future ticket).
@@ -410,3 +474,234 @@ state-mapping logic in `ConversationListViewModel`.
   documented with KDoc and ready for AND-121 to collect without further data logic.
 - PR on branch `android-port`, references AND-122, links AND-120/AND-098, and notes
   AND-121 as the unblocked consumer. Reviewed and merged.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer. Sources:
+OpenAPI index = `reference/openapi.index.txt`; OpenAPI spec = `reference/openapi.pretty.json`
+(`components.schemas.<Name>`); frontend = `reference/src/...`.
+
+1. **Endpoint exists: `GET /messaging/conversations`.** VERIFIED. OpenAPI
+   `GET /messaging/conversations` (op `list_conversations_messaging_conversations_get`);
+   `reference/src/api/endpoints/messaging.ts: getConversations`.
+2. **It is an idempotent GET (retry-safe).** VERIFIED (HTTP method GET). OpenAPI
+   `GET /messaging/conversations`.
+3. **Request takes `cursor` and `limit` query params.** CORRECTED. The documented
+   OpenAPI operation declares NO query params — only headers `authorization`,
+   `X-SESSION-ID`, `X-API-Key`. Source: OpenAPI `GET /messaging/conversations` parameters
+   (index line shows `params=authorization,X-SESSION-ID,X-API-Key`). The web client
+   sends only an optional `cursor` and never `limit`: `reference/src/api/endpoints/messaging.ts:
+   getConversations` (`cursor ? { cursor } : undefined`).
+4. **200 response is an `{conversations, next_cursor, unread_total}` envelope.** CORRECTED.
+   The 200 body is a bare array `ConversationOut[]` (OpenAPI `GET /messaging/conversations`
+   responses.200: `{type: array, items: $ref ConversationOut}`). The envelope is a
+   client-side construct: `reference/src/api/endpoints/messaging.ts: getConversations`
+   ("Backend returns a plain array; handle both array and object shapes").
+5. **`next_cursor` field drives `nextKey`.** CORRECTED / UNVERIFIED for real paging. No
+   `next_cursor` exists in the documented response; the web reference sets
+   `next_cursor = undefined` for the array case. Source: OpenAPI `ConversationOut` (no such
+   field) + `reference/src/api/endpoints/messaging.ts: getConversations`.
+6. **`unread_total` aggregate exists in the list envelope or `GET /messaging/config`.**
+   CORRECTED. `unread_total` appears nowhere in OpenAPI or the frontend.
+   `MessagingConfigOut` is feature-flag booleans only (`messaging_dm_lottery_enabled`,
+   `messaging_encrypted_messages_enabled`, `messaging_gallery_enabled`,
+   `messaging_hide_controls_enabled`, `messaging_mass_send_enabled`, `messaging_pins_enabled`,
+   `messaging_reporting_enabled`). Source: OpenAPI `components.schemas.MessagingConfigOut`;
+   `GET /messaging/config` (op `messaging_config_messaging_config_get`).
+7. **Item key field is `conversation_id`.** VERIFIED. OpenAPI `ConversationOut.conversation_id`
+   (string, required); `reference/src/api/types.ts: Conversation.conversation_id`;
+   `reference/src/api/endpoints/messagingAdapter.ts: adaptConversation` (`conversation_id`).
+8. **Sort key is `last_message.created_at`, an ISO-8601 string needing ISO→epoch parsing.**
+   CORRECTED. The sort source is top-level `last_message_at`, an **epoch integer** (nullable);
+   `created_at` is likewise an integer. No ISO parsing. Source: OpenAPI
+   `ConversationOut.last_message_at` (integer|null), `ConversationOut.created_at` (integer);
+   `reference/src/api/types.ts: Conversation` (`last_message_at?: number`, `created_at: number`);
+   `reference/src/api/endpoints/messagingAdapter.ts: adaptConversation` (`toNum(...)`).
+9. **Preview comes from `last_message.preview`.** CORRECTED. The preview is the top-level
+   `last_message_preview` (string|null). Source: OpenAPI `ConversationOut.last_message_preview`;
+   `reference/src/api/types.ts: Conversation.last_message_preview`.
+10. **Avatar comes from `avatar_url`.** CORRECTED. No `avatar_url` field exists; the avatar
+    source is `icon` (string|null). Source: OpenAPI `ConversationOut.icon`;
+    `reference/src/api/types.ts: Conversation.icon` (no `avatar_url`).
+11. **`unread_count` is a per-conversation integer (aggregation source).** VERIFIED. OpenAPI
+    `ConversationOut.unread_count`; `reference/src/api/types.ts: Conversation.unread_count: number`.
+12. **GET requests carry the `X-CSRF-Token` header (global client policy).** VERIFIED.
+    `reference/src/api/client.ts` sets `X-CSRF-Token` from the `ui_csrf` cookie on every
+    request (no method gating) with `credentials: "include"`.
+13. **401 handled by a single `POST /ui/session/refresh` + one retry.** VERIFIED. OpenAPI
+    `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`);
+    `reference/src/api/client.ts: refreshSession` (`fetch(withApiBase("/ui/session/refresh"))`)
+    and the 401 branch (single in-flight `refreshPromise`, one retry, then `logout`).
+14. **Error body `detail` may be `string | [{msg}] | {code,...}`.** VERIFIED (and refined).
+    `GET /messaging/conversations` documents structured `{detail:{code,reason,...}}` for
+    400/401/403/429 and `HTTPValidationError` (`detail:[{loc,msg,type}]`) for 422. Source:
+    OpenAPI `GET /messaging/conversations` responses (examples `api_key_invalid`,
+    `api_entitlement_denied`, `api_key_scope_denied`, `api_key_dual_credential_conflict`);
+    `reference/src/api/client.ts: normalizeErrorDetail`.
+15. **Required API key scope `messager:read` for the list.** VERIFIED. OpenAPI
+    `GET /messaging/conversations` description ("Required API key scope(s): `messager:read`").
+16. **Paging 3 / `cachedIn` / `PagingSource` are the chosen Android paging mechanism.**
+    VERIFIED (framework ref). androidx.paging — https://developer.android.com/topic/libraries/architecture/paging/v3-overview
+17. **Compose `LazyColumn` item keys for dedup; `collectAsLazyPagingItems`.** VERIFIED
+    (framework ref, owned by AND-121). https://developer.android.com/develop/ui/compose/lists#item-keys
+    and https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data#display-paged-data
+18. **Hilt `@HiltViewModel` injection.** VERIFIED (framework ref).
+    https://developer.android.com/training/dependency-injection/hilt-jetpack#viewmodels
+
+### Corrections made
+
+- C1 (claims 3): removed `limit` from the API call signature (`getConversations(cursor)`),
+  noted no `cursor`/`limit` query params are documented (§2, FR-1, §5).
+- C2 (claim 4): response is a bare `ConversationOut[]`, not an envelope; envelope is
+  client-synthesized (§2, §5, §13 R5).
+- C3 (claims 5, 6): no server `next_cursor` and no `unread_total` anywhere; pagination is
+  effectively single-page and unread is first-page sum only (FR-1, FR-3, §5, §13 R1/R5).
+- C4 (claim 8): timestamps are epoch integers, not ISO-8601; mapper does no ISO parsing
+  (FR-7, §4).
+- C5 (claim 9): preview field is `last_message_preview` (top-level), not `last_message.preview`
+  (FR-7, §5).
+- C6 (claim 10): avatar source is `icon`, not `avatar_url` (FR-7, §5).
+- C7 (claim 14): error `detail` for this endpoint is predominantly a structured
+  `{code,reason,...}` object (plus 422 array); normalizer must handle all three (§5).
+
+### Open assumptions
+
+- **Timestamp unit (seconds vs millis).** `last_message_at`/`created_at` are integers but
+  the OpenAPI schema does not state the unit, and fixtures were not available here.
+  UNVERIFIED — must be confirmed against AND-120 fixtures before formatting/sorting math.
+- **Real cursor pagination.** Whether the *deployed* backend ever returns more than the
+  documented bare array (the web client tolerates an envelope) is UNVERIFIED from the
+  static sources; treated as single-page until AND-120 confirms (§13 R5).
+- **Analytics facade existence.** §10 events assume a `core-data` analytics facade; its
+  presence/shape is UNVERIFIED here (no Android source in the reference tree) — guarded by
+  "if present".
+- **AND-120 `MessagingApi`/`ApiResult` exact signatures.** This is an upstream Android
+  ticket not present in the reference sources; UNVERIFIED — consumed as specified by AND-120.
+- **`isOffline` mapping for transport failures.** The web client throws `ApiError(0,
+  "Network error")` on fetch failure (`reference/src/api/client.ts`); the Android mapping of
+  connection/timeout exceptions to `isOffline=true` is an Android-side convention, UNVERIFIED
+  against a concrete core-network impl (not in reference tree).
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** = headless
+emulator AVD `test35` (x86_64, API 35); **deviceA15** = physical Samsung Galaxy A15 5G
+(SM-A156U, API 34, arm64-v8a, serial R5CX821TA9R). This ticket is logic-only, so most
+cases are JVM unit/contract; UI/accessibility cases belong to the consumer (AND-121) but
+are included where this ticket's outputs are observable. The list endpoint uses no camera/
+biometric/WebRTC/FCM hardware, so deviceA15 is required only for the ABI-difference smoke.
+
+- **TC-AND-122-01** — PagingSource first page (happy path).
+  Type: unit (JVM). Target: JVM. Preconditions: fake `MessagingApi` returns N
+  `ConversationOut` items mapped to `ConversationListItem`. Steps: call
+  `source.load(Refresh, key=null)`. Expected: `LoadResult.Page` with mapped items in
+  server order, `prevKey == null`, `nextKey` = mapped next cursor (null when the bare
+  array / absent cursor is returned). Traces: AC-1, AC-2.
+
+- **TC-AND-122-02** — End-of-list / single-page bare-array contract.
+  Type: contract/MockWebServer. Target: JVM (MockWebServer). Preconditions: server returns
+  a bare JSON array `ConversationOut[]` with no `next_cursor` (authoritative shape). Steps:
+  drive `pagingData` via `asSnapshot`; let it attempt to append. Expected: exactly one page
+  materialized, `nextKey == null`, no further network call, no crash. Traces: AC-2.
+
+- **TC-AND-122-03** — Multi-page pagination via synthesized cursor (forward-compat).
+  Type: contract/MockWebServer. Target: JVM. Preconditions: fake API returns
+  `{conversations, next_cursor}` for page 1 then `next_cursor=null` for page 2 (envelope
+  path the web client can produce). Steps: `asSnapshot` advancing through both pages.
+  Expected: concatenated items = page1 ++ page2 in order; pagination stops when
+  `next_cursor == null`. Traces: AC-2.
+
+- **TC-AND-122-04** — Global sort order preserved across page joins.
+  Type: unit (JVM). Target: JVM. Preconditions: fixture with mixed `last_message_at` epoch
+  integers across two pages, canonical server order known. Steps: snapshot the concatenated
+  list. Expected: order equals server order (`last_message_at` desc, `conversation_id` asc
+  tie-break); the source does NOT locally re-sort a page. Traces: AC-3.
+
+- **TC-AND-122-05** — Dedup across overlapping pages.
+  Type: unit (JVM). Target: JVM. Preconditions: fixture where one `conversation_id` appears
+  at the tail of page 1 and head of page 2 (cursor drift). Steps: snapshot concatenated
+  list. Expected: the duplicated `conversation_id` appears once; stable item key
+  (`conversation_id`) is exposed for `LazyColumn`. Traces: AC-4.
+
+- **TC-AND-122-06** — Unread aggregation = first-page sum (no server aggregate).
+  Type: unit (JVM). Target: JVM. Preconditions: first page items with `unread_count`
+  values [3,0,2]; `serverUnreadTotal = null` (the only real case — no backend aggregate).
+  Steps: call `onFirstPageLoaded(null, pageItems)`; read `unreadTotal`. Expected:
+  `unreadTotal == 5`. Traces: AC-5.
+
+- **TC-AND-122-07** — Unread aggregation respects optional server value if ever provided.
+  Type: unit (JVM). Target: JVM. Preconditions: `onFirstPageLoaded(7, pageItems summing to
+  5)`. Steps: read `unreadTotal`. Expected: `unreadTotal == 7` (forward-compat hook honored;
+  documents that today's backend always passes null → falls back to the sum). Traces: AC-5.
+
+- **TC-AND-122-08** — Mapper field correctness (epoch int, icon, preview, null tolerance).
+  Type: unit (JVM). Target: JVM. Preconditions: `ConversationDto` with
+  `last_message_at` integer, `last_message_preview` set, `icon` set, plus a second DTO with
+  `last_message_at=null`, `last_message_preview=null`, `icon=null`. Steps: call
+  `toListItem()`. Expected: `lastMessageAt` = the integer (and 0 for null), preview copied/
+  trimmed (null tolerated), avatar field = `icon` (null tolerated); NO ISO parsing path is
+  exercised. Traces: AC-1, AC-9.
+
+- **TC-AND-122-09** — UiState mapping from LoadState + itemCount.
+  Type: unit (JVM). Target: JVM. Preconditions: synthetic `LoadState`s. Steps: parametrize
+  `onLoadState`: (Loading, 0)→Loading; (NotLoading, 0)→Empty; (Error, 0)→Error;
+  (NotLoading/Error, >0)→Content. Expected: states resolve as mapped; append/prepend
+  states do NOT alter `uiState` (stay Content). Traces: AC-6.
+
+- **TC-AND-122-10** — First-load error vs offline flag.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: (a) server returns 403
+  `{detail:{code:"api_entitlement_denied"}}`; (b) MockWebServer set to disconnect /
+  socket timeout to simulate the flaky dev host. Steps: trigger refresh with 0 items; map
+  the resulting `LoadState.Error` via `onLoadState`. Expected: (a) `Error(isOffline=false)`
+  with normalized message from structured `detail.code`; (b) `Error(isOffline=true)`. The
+  ViewModel never swallows the error. Traces: AC-6.
+
+- **TC-AND-122-11** — Append error keeps content; refresh recovers.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: page 1 ok, page 2 errors. Steps:
+  load page 1 (Content), trigger append (fails), then `retry()`/`refresh()` with page 2 ok.
+  Expected: `uiState` stays `Content` on append error (error surfaced via Paging
+  `LoadState.Append`, not `uiState`); retry succeeds. Traces: AC-6, AC-7.
+
+- **TC-AND-122-12** — Refresh idempotency & non-destructiveness.
+  Type: unit (JVM). Target: JVM. Preconditions: non-empty list loaded. Steps: call
+  `refresh()` repeatedly. Expected: no crash; on a non-empty list `uiState` stays
+  `Content` (silent refresh); on an empty list it resets to `Loading`. Traces: AC-7.
+
+- **TC-AND-122-13** — 401 transparent refresh + retry; PII-free logging.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: first GET → 401, then
+  `POST /ui/session/refresh` → 200, retried GET → 200 (mirrors core-network policy). Also
+  capture logs. Steps: load the list while authenticated. Expected: list loads after one
+  transparent refresh+retry; logs/analytics contain only `conversation_id`/counts/cursor-
+  presence boolean — never titles, previews, or full cursors (security/PII check). Traces:
+  AC-1, AC-8.
+
+- **TC-AND-122-14** — Unread badge accessibility semantics (consumer-observable).
+  Type: Compose-UI (instrumented). Target: emu35 (API 35) — accessibility/Compose semantics
+  are device-independent here. Preconditions: AND-121 host collecting `unreadTotal` and
+  `pagingData` from the real ViewModel with a fake API. Steps: render the list with unread
+  total = 5 and assert via semantics. Expected: the unread badge exposes a non-empty
+  content description / state description reflecting the count, and list rows are keyed by
+  `conversation_id` (no duplicate-key crash). NOTE: gated on AND-121; included for coverage
+  of this ticket's observable outputs. Traces: AC-4, AC-5.
+
+- **TC-AND-122-15** — ABI / API-level smoke (arm64 API 34 vs x86_64 API 35).
+  Type: instrumented/e2e. Target: **deviceA15 (MUST run on physical device)** for the
+  arm64-v8a/API-34 leg; emu35 for the x86_64/API-35 leg. Preconditions: app built; list
+  reachable against a fake/staging API. Steps: launch, open the conversation list, scroll.
+  Expected: identical mapping/sort/dedup behavior and no ABI- or API-level
+  (epoch/int-overflow, time formatting) discrepancy between the two targets. Traces: AC-2,
+  AC-3, AC-8.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (exposes pagingData/uiState/unreadTotal, Hilt) | TC-01, TC-08, TC-13 |
+| AC-2 (paging via cursor; null terminates) | TC-01, TC-02, TC-03, TC-15 |
+| AC-3 (global sort desc + tie-break, server order) | TC-04, TC-15 |
+| AC-4 (no duplicate conversation_id; stable key) | TC-05, TC-14 |
+| AC-5 (unreadTotal server-or-sum, both paths) | TC-06, TC-07, TC-14 |
+| AC-6 (Loading/Content/Empty/Error + isOffline; first-load vs append) | TC-09, TC-10, TC-11 |
+| AC-7 (refresh idempotent, non-destructive) | TC-11, TC-12 |
+| AC-8 (paging+state unit-tested, green, no Compose required, coverage) | TC-01..TC-13, TC-15 |
+| AC-9 (no DTO leak past feature-messaging) | TC-08 |

@@ -5,7 +5,8 @@ milestone: M3
 epic: E18
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-120]
 blocks: [AND-123]
 ---
@@ -234,45 +235,68 @@ thread destination, e.g. `navController.navigate(ThreadRoute(conversationId))`.
 
 ## 5. API Contract
 
-**Request** — `POST /messaging/conversations/dm/find-or-create`
-Headers: cookie session (auto), `X-CSRF-Token: <ui_csrf>` (AND-012),
-`Content-Type: application/json`.
+**Request** — `POST /messaging/conversations/dm/find-or-create` (path **verified**
+in OpenAPI index, op `find_or_create_dm_...`; `messaging` prefix confirmed present).
+Headers: cookie session (auto, `credentials: "include"`), `X-CSRF-Token: <ui_csrf>`
+(AND-012; web client reads the `ui_csrf` cookie and sets this header —
+`client.ts`), `Content-Type: application/json`. Note: the web client **also** sends
+`Authorization: Bearer <accessToken>` when an access token is present in the auth
+store (`client.ts`), so the backend accepts both cookie-session and bearer auth;
+the Android client uses the cookie-session path (AND-011).
 
 ```json
 { "user_id": "usr_8c1f..." }
 ```
 
-**Response 200/201** — the resolved (existing or new) conversation. Shape matches
-AND-120 `ConversationDto` (subset shown):
+**Response 200** — the resolved (existing or new) conversation. The backend schema
+is `ConversationOut` (verified in `/openapi.json`); the AND-120 `ConversationDto`
+mirrors it and `toDomain()` maps `conversation_id` → domain `Conversation.id`.
+**Corrected** subset (real field names/types):
 
 ```json
 {
-  "id": "conv_4a90...",
+  "conversation_id": "conv_4a90...",
   "type": "dm",
+  "status": "active",
+  "participant_count": 2,
   "participants": [
-    { "user_id": "usr_self...", "display_name": "You" },
-    { "user_id": "usr_8c1f...", "display_name": "Ada L." }
+    { "user_id": "usr_self...", "display_name": "You", "status": "active", "role": "member" },
+    { "user_id": "usr_8c1f...", "display_name": "Ada L.", "status": "active", "role": "member" }
   ],
   "last_message": null,
+  "last_message_at": null,
+  "last_message_preview": null,
   "unread_count": 0,
-  "created_at": "2026-06-05T12:00:00Z",
-  "updated_at": "2026-06-05T12:00:00Z"
+  "created_at": 1749124800,
+  "created_by": "usr_self..."
 }
 ```
 
-A pre-existing DM returns `200` with a populated `last_message`; a newly created
-one typically returns `201` with `last_message: null`. Both decode through the
-same `ConversationDto.toDomain()`; the client treats them identically (FR-2). The
-**exact** field names are verified against `/openapi.json` and
-`frontend/src/api/endpoints/messaging.ts` during AND-120 fixture capture and
-reused here.
+Corrections vs. the prior draft (verified against `components.schemas.ConversationOut`):
+the id field is **`conversation_id`** (not `id`); timestamps are **integer epoch
+seconds** (`created_at`), not ISO strings; there is **no `updated_at`** field — the
+nearest analogue is the nullable `last_message_at`; `type`, `status`,
+`participant_count`, `created_at`, `created_by` are **required**. `participants`
+items are `app__routers__messaging__ParticipantOut` whose required fields are
+`user_id`, `status`, `role` (with nullable `display_name`, `profile_photo_url`).
+
+The OpenAPI declares a single success code **`200:ConversationOut`** for this
+operation (no documented `201`). The web client (`messaging.ts: findOrCreateDm`)
+treats existing vs. new identically — a populated `last_message` distinguishes an
+existing thread; both decode through `ConversationDto.toDomain()` (FR-2). A `201`
+for new conversations is an **unverified assumption** and is non-load-bearing.
 
 **Errors** (FastAPI `detail`, mapped by AND-015):
-- `401` — session expired → AND-013 refresh-once-then-retry; if still 401, surfaced
-  as auth failure.
-- `403` — CSRF/permission (e.g. peer blocked) → inline error.
-- `404` — peer `user_id` unknown → `detail` string mapped to inline error.
-- `422` — validation (`detail: [{msg, loc, type}]`) → first `msg` shown.
+- `422` — validation (`detail: [{loc, msg, type}]`) → first `msg` shown. This is the
+  **only** error code documented for this op in `/openapi.json` (resp=`422:HTTPValidationError`).
+- `401` — session expired / invalid token → AND-013 refresh-once-then-retry; if
+  still 401, surfaced as auth failure. (Handled by shared auth infra, not declared
+  per-op in OpenAPI.)
+- `403` — CSRF/permission (e.g. peer blocked) → inline error. **Plausible but not
+  declared** in OpenAPI for this op; the web client has generic 403 handling
+  (`client.ts: mapAuthorizationError`). Treated as an unverified assumption.
+- `404` — peer `user_id` unknown → `detail` mapped to inline error. **Not declared**
+  in OpenAPI for this op (unverified assumption); client still handles it generically.
 
 `detail` may be `string | [{msg}] | {code,...}`; AND-015 normalizes all three.
 
@@ -316,9 +340,11 @@ reused here.
 ## 8. Security & Privacy
 
 - All requests ride the **cookie-based session** (AND-011) with the
-  `X-CSRF-Token` header injected by AND-012; the POST is rejected (`403`) without
-  a valid CSRF token, which is the intended protection against cross-site DM
-  creation.
+  `X-CSRF-Token` header injected by AND-012 (verified: the web client sets
+  `X-CSRF-Token` from the `ui_csrf` cookie in `client.ts`). The POST is expected to
+  be rejected without a valid CSRF token, the intended protection against cross-site
+  DM creation. (The web client additionally attaches `Authorization: Bearer` when an
+  access token exists; the Android client relies on the cookie session per AND-011.)
 - No credentials, tokens, or peer PII are logged. The peer `user_id` is an opaque
   identifier; do not log `display_name` (Section 10).
 - Authorization (whether the caller may DM the peer — blocks, privacy settings) is
@@ -395,17 +421,16 @@ simulation.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Exact endpoint path.** Backlog writes `POST /conversations/dm/find-or-create`
-  but the AND-120 base is `/messaging/conversations`. This spec assumes
-  `messaging/conversations/dm/find-or-create`. **Action:** confirm against
-  `/openapi.json` during AND-120 fixture capture; adjust the single `@POST` path if
-  the backend omits the `messaging` prefix.
-- **R2 — Request body key.** Assumed `{"user_id": "..."}`. The web reference may use
-  `participant_id` / `recipient_id`. Confirm against
-  `frontend/src/api/endpoints/messaging.ts`.
-- **R3 — Status code semantics.** Whether new vs. existing returns `201` vs `200` is
-  assumed but not load-bearing; the client treats both identically. Confirm only if
-  product wants a "new conversation" UX distinction.
+- **R1 — Exact endpoint path. RESOLVED (verified).** OpenAPI index line 314 declares
+  `POST /messaging/conversations/dm/find-or-create`; the `messaging` prefix IS
+  present, matching this spec. No change needed.
+- **R2 — Request body key. RESOLVED (verified).** Schema `FindOrCreateDmIn` has a
+  single required property `user_id: string`; the web client sends `{ user_id }`
+  (`messaging.ts: findOrCreateDm`). The assumed key is correct.
+- **R3 — Status code semantics. RESOLVED (corrected).** OpenAPI declares only
+  `200:ConversationOut` for this op (no `201`). New vs. existing is not signalled by
+  status code; the client distinguishes by `last_message`/`last_message_at` and
+  treats both identically. The earlier `201` claim was an unverified assumption.
 - **R4 — Group DM future.** This ticket is strictly 1:1. A future multi-participant
   create would need a different endpoint/body and is out of scope.
 - **R5 — Self-DM allowed?** Some products permit "note to self" DMs. We assume
@@ -452,3 +477,219 @@ recomposition/config change. (ViewModel effect test.)
 - Strings externalized; affordance has content description and ≥48dp target.
 - PR description links AND-120 (upstream) and AND-123 (nav target) and notes any
   unresolved open questions from Section 13.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Endpoint path is `POST /messaging/conversations/dm/find-or-create`.**
+   VERDICT: Verified. SOURCE: OpenAPI index `POST /messaging/conversations/dm/find-or-create`
+   (op `find_or_create_dm_messaging_conversations_dm_find_or_create_post`);
+   frontend `src/api/endpoints/messaging.ts: findOrCreateDm`.
+2. **HTTP method is POST.** VERDICT: Verified. SOURCE: same OpenAPI line (METHOD=POST);
+   `src/api/endpoints/messaging.ts: findOrCreateDm` (`api.post`).
+3. **Request body is `{ "user_id": "<peer>" }` (single required string).**
+   VERDICT: Verified. SOURCE: `components.schemas.FindOrCreateDmIn` (property `user_id`,
+   required); `src/api/endpoints/messaging.ts: findOrCreateDm` sends `{ user_id: userId }`.
+4. **Response schema is `ConversationOut` with success code 200.** VERDICT: Verified
+   (and Corrected re: the prior `200/201` claim). SOURCE: OpenAPI index `resp=200:ConversationOut;422:HTTPValidationError`.
+5. **Response id field is `conversation_id` (not `id`).** VERDICT: Corrected. SOURCE:
+   `components.schemas.ConversationOut` (required `conversation_id`);
+   `src/api/endpoints/messagingAdapter.ts: adaptConversation` reads `raw.conversation_id`.
+   The domain `Conversation.id` is the AND-120 mapping of `conversation_id`.
+6. **Timestamps are integer epoch seconds; no `updated_at` field.** VERDICT: Corrected.
+   SOURCE: `components.schemas.ConversationOut` (`created_at: integer`,
+   `last_message_at: integer|null`; no `updated_at`); `messagingAdapter.ts` wraps
+   `created_at`/`last_message_at` in `toNum(...)`.
+7. **Participants expose `user_id` and `display_name`.** VERDICT: Verified. SOURCE:
+   `components.schemas.app__routers__messaging__ParticipantOut` (required `user_id`,
+   `status`, `role`; nullable `display_name`).
+8. **`unread_count` defaults to 0 and `last_message` is nullable.** VERDICT: Verified.
+   SOURCE: `components.schemas.ConversationOut` (`unread_count` default 0;
+   `last_message` anyOf MessageOut|null).
+9. **CSRF: POST carries `X-CSRF-Token` from the `ui_csrf` cookie.** VERDICT: Verified.
+   SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`).
+10. **Session is cookie-based (`credentials: "include"`).** VERDICT: Verified.
+    SOURCE: `src/api/client.ts` (`credentials: "include"` on the fetch).
+11. **Web client also sends `Authorization: Bearer <accessToken>`.** VERDICT: Verified
+    (refines the spec's "cookie-only" framing). SOURCE: `src/api/client.ts`
+    (`headers.set("Authorization", \`Bearer ${accessToken}\`)`).
+12. **401 → refresh-once-then-retry.** VERDICT: Verified (transport behavior).
+    SOURCE: `src/api/client.ts` (automatic token refresh on 401); Android side AND-013
+    `Authenticator` (framework ref:
+    https://square.github.io/okhttp/recipes/#handling-authentication-kt-java).
+13. **422 error shape is `detail: [{ loc, msg, type }]`.** VERDICT: Verified. SOURCE:
+    `components.schemas.HTTPValidationError` → `ValidationError` (required `loc`, `msg`, `type`).
+14. **403 (CSRF/block) and 404 (unknown peer) are returnable.** VERDICT:
+    Unverified-assumption. SOURCE: not declared for this op in OpenAPI (only `200`/`422`);
+    generic handling exists in `src/api/client.ts: mapAuthorizationError`.
+15. **New-vs-existing distinguished by `201` vs `200`.** VERDICT: Unverified-assumption
+    (kept as non-load-bearing). SOURCE: OpenAPI declares only `200`; client treats both
+    paths identically (`messaging.ts: findOrCreateDm`).
+16. **POST is excluded from AND-016 idempotent-GET retry policy.** VERDICT:
+    Unverified-assumption (internal Android policy, not in external sources). SOURCE: this
+    spec / AND-016; consistent with REST idempotency conventions (framework ref:
+    https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/POST).
+17. **One-shot navigation via Channel + receiveAsFlow (no re-navigation on
+    recomposition/config change).** VERDICT: Verified (framework choice). SOURCE: Android
+    guidance on events vs. state (framework ref:
+    https://developer.android.com/topic/architecture/ui-layer/events).
+18. **Self-DM guard is a local pre-check.** VERDICT: Unverified-assumption (product/
+    backend may allow note-to-self). SOURCE: no backend constraint found in OpenAPI; see R5.
+
+### Corrections made
+
+- Response id field corrected from `id` to **`conversation_id`** (§5 example + audit).
+- Timestamps corrected from ISO-8601 strings to **integer epoch seconds**, and the
+  nonexistent **`updated_at`** removed (replaced with `last_message_at`) (§5).
+- Success codes corrected from "200/201" to **200 only**; `201` reclassified as an
+  unverified, non-load-bearing assumption (§5, §13 R3).
+- §5 example expanded with the actually-required fields (`status`, `participant_count`,
+  `created_by`) and correct participant fields (`status`, `role`).
+- Error table: `403`/`404` downgraded to **plausible/unverified** (only `422` is
+  declared for this op); `422` `detail` tuple order normalized to `[{loc, msg, type}]`.
+- Auth framing refined: cookie session + `X-CSRF-Token` **plus** an `Authorization:
+  Bearer` header from the web auth store (§5, §8).
+- §13 R1 and R2 marked **RESOLVED/verified**; R3 marked **RESOLVED/corrected**.
+
+### Open assumptions
+
+- **403/404 for blocked/unknown peers** — not declared in OpenAPI for this op; only
+  `200`/`422` are. The client must still handle them defensively. (Why: backend may
+  return generic auth/not-found responses not enumerated per-op.)
+- **`201` for newly-created conversations** — never observed in OpenAPI; client treats
+  both outcomes identically, so this is non-load-bearing. (Why: status semantics not
+  documented; could only be confirmed by a live capture against the dev host.)
+- **Self-DM is disallowed (FR-5 guard)** — no backend rule found in the sources. (Why:
+  the OpenAPI does not express same-participant constraints; product decision in R5.)
+- **AND-016 retry exclusion for POST** — an internal Android transport policy not
+  expressible from the backend/frontend sources. (Why: client-side concern.)
+- **The AND-120 `ConversationDto`/`toDomain()` exact Kotlin shape** — defined in a
+  sibling ticket, not in these sources. (Why: out of this repo's reference set.)
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = JVM unit/Robolectric (local, no device); **MWS** =
+contract test over MockWebServer (JVM); **EMU** = headless emulator AVD `test35`
+(x86_64, API 35); **DEVICE** = physical Samsung Galaxy A15 5G (SM-A156U,
+serial R5CX821TA9R, API 34, arm64-v8a). This ticket is pure networking + ViewModel +
+a small Compose affordance with no camera/biometrics/WebRTC/push, so the emulator is
+sufficient for all instrumented/Compose cases; a single ABI smoke is pinned to the
+physical device to cover arm64-v8a / API-34.
+
+**TC-AND-127-01 — Happy path: request line + body + CSRF**
+Type: contract/MockWebServer. Target: MWS (`DefaultMessagingRepository`).
+Preconditions: AuthStateStore self id `usr_self`; `ui_csrf` cookie present; MWS enqueues
+`200` with a `ConversationOut` fixture (`conversation_id: conv_1`).
+Steps: call `findOrCreateDm("usr_peer")`; inspect the `RecordedRequest`.
+Expected: method `POST`, path `/messaging/conversations/dm/find-or-create`, JSON body
+exactly `{"user_id":"usr_peer"}`, header `X-CSRF-Token` present; result
+`ApiResult.Success` with `conversation.id == "conv_1"`.
+Traces: AC-1.
+
+**TC-AND-127-02 — Existing DM maps and opens that thread**
+Type: integration (repo+VM with MWS). Target: MWS + JVM.
+Preconditions: MWS `200` fixture with populated `last_message`/`last_message_at`,
+`conversation_id: conv_existing`.
+Steps: `StartDmViewModel.startDm("usr_peer")`; collect `effects` via Turbine.
+Expected: exactly one `OpenThread("conv_existing")`; `state.inFlight` returns to false;
+no error. Traces: AC-2.
+
+**TC-AND-127-03 — Newly created DM maps and opens (empty thread)**
+Type: integration. Target: MWS + JVM.
+Preconditions: MWS `200` fixture with `last_message: null`, `last_message_at: null`,
+`unread_count: 0`, `conversation_id: conv_new`.
+Steps: `startDm("usr_peer")`; collect effects.
+Expected: one `OpenThread("conv_new")`; client behaves identically to TC-02 (no 201
+dependence). Traces: AC-2.
+
+**TC-AND-127-04 — Field-shape contract (correct names/types decode)**
+Type: contract/MockWebServer. Target: MWS.
+Preconditions: fixture uses real `ConversationOut` shape — `conversation_id`,
+integer `created_at`, `participants[].{user_id,display_name,status,role}`, no `updated_at`.
+Steps: decode via the AND-120 `ConversationDto` adapter + `toDomain()`.
+Expected: decode succeeds; domain `id == conversation_id`; integer `created_at` parsed
+as epoch (not a string); absence of `updated_at` causes no failure. Traces: AC-1, AC-2.
+
+**TC-AND-127-05 — Debounce / single-flight on rapid taps**
+Type: unit (ViewModel). Target: JVM (Turbine + fake repo with a suspended deferred).
+Preconditions: repo `findOrCreateDm` suspends until released; spy counts invocations.
+Steps: call `startDm("usr_peer")` twice before the first completes; release.
+Expected: repository invoked exactly **once**; exactly one `OpenThread` effect emitted.
+Traces: AC-3.
+
+**TC-AND-127-06 — Self-DM short-circuit, no network**
+Type: unit (repository). Target: MWS (assert no recorded request).
+Preconditions: AuthStateStore self id `usr_self`.
+Steps: call `findOrCreateDm("usr_self")`.
+Expected: `ApiResult.Failure.Validation("Cannot message yourself")`; MWS records
+**zero** requests. Traces: AC-5.
+
+**TC-AND-127-07 — 422 validation error maps to inline message**
+Type: contract/MockWebServer. Target: MWS.
+Preconditions: MWS `422` body `{"detail":[{"loc":["body","user_id"],"msg":"field required","type":"missing"}]}`.
+Steps: call `findOrCreateDm("usr_peer")`.
+Expected: `ApiResult.Failure` whose message derives from the first `detail[].msg`
+("field required") per AND-015; no `Conversation` produced. Traces: AC-4.
+
+**TC-AND-127-08 — 404/403 generic-failure path (defensive, unverified codes)**
+Type: contract/MockWebServer. Target: MWS.
+Preconditions: parametrized MWS responses `404` and `403` with `{"detail":"..."}`.
+Steps: call `findOrCreateDm("usr_peer")` for each.
+Expected: `ApiResult.Failure` with the `detail` string surfaced; ViewModel sets `error`
+and emits **no** `OpenThread`. (Documents that these codes are not OpenAPI-declared but
+must be handled.) Traces: AC-4.
+
+**TC-AND-127-09 — Timeout/offline failure re-enables affordance**
+Type: integration (flaky-host simulation). Target: MWS (`SocketPolicy.NO_RESPONSE` /
+throttled body to mimic the ~20s dev-host stall).
+Preconditions: MWS configured to stall past the OkHttp timeout (AND-009).
+Steps: `startDm("usr_peer")`; await completion.
+Expected: `ApiResult.Failure.Network`; `state.inFlight` false; `state.error` set;
+no navigation. Traces: AC-4.
+
+**TC-AND-127-10 — One-shot navigation survives recomposition/config change**
+Type: Compose-UI. Target: EMU.
+Preconditions: `MessagePeerButton` hosted in a test composable with a stubbed
+success VM; nav callback records conversation ids.
+Steps: tap "Message"; observe one navigation; trigger recomposition/config change
+(rotate/`StateRestorationTester`); confirm no re-navigation.
+Expected: `onOpenThread` invoked **exactly once** for the success; not re-fired after
+recomposition. Traces: AC-6.
+
+**TC-AND-127-11 — Compose: failure shows error and does not navigate; busy disables**
+Type: Compose-UI. Target: EMU.
+Preconditions: stubbed VM returns failure for one tap, then a slow success for another.
+Steps: tap with failure → assert error surfaced and no nav; tap with in-flight success →
+assert button reports `disabled`/progress while in flight.
+Expected: error visible, no navigation on failure; button non-clickable while
+`inFlight`. Traces: AC-3, AC-4.
+
+**TC-AND-127-12 — Accessibility of the "Message" affordance**
+Type: Compose-UI (a11y assertions). Target: EMU.
+Preconditions: `MessagePeerButton` rendered.
+Steps: assert non-empty `contentDescription` from `R.string.dm_message_cd`; touch
+target ≥ 48dp; in-flight state exposes `disabled` semantics so TalkBack does not invite
+a tap; error is delivered to a live-region snackbar host.
+Expected: all a11y assertions pass. Traces: AC-3, AC-4.
+
+**TC-AND-127-13 — ABI/API smoke on physical hardware (arm64-v8a / API 34)**
+Type: instrumented/e2e. Target: **DEVICE (must run on the physical device)**.
+Preconditions: app installed on SM-A156U; stub/local server returns a `200`
+`ConversationOut`.
+Steps: from a profile surface tap "Message"; observe navigation into the thread route
+keyed by the resolved `conversation_id`.
+Expected: find-or-create succeeds and navigates on arm64-v8a/API-34; no
+ABI/JSON-codec divergence from the x86_64/API-35 emulator runs. (Pinned to the device
+to catch arm64-vs-x86 and API-34-vs-35 differences.) Traces: AC-2.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (one POST, correct body, cookie + CSRF) | TC-01, TC-04 |
+| AC-2 (existing/new both open the thread route) | TC-02, TC-03, TC-04, TC-13 |
+| AC-3 (debounce: no duplicate request/navigation) | TC-05, TC-11, TC-12 |
+| AC-4 (failure → retryable inline error, no nav) | TC-07, TC-08, TC-09, TC-11, TC-12 |
+| AC-5 (self-DM → no request, local validation error) | TC-06 |
+| AC-6 (navigation fires once, no re-fire) | TC-10 |

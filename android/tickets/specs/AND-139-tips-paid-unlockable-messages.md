@@ -5,7 +5,8 @@ milestone: M3
 epic: E19
 priority: P1
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-124, AND-031]
 blocks: []
 ---
@@ -14,41 +15,41 @@ blocks: []
 
 ## 1. Overview & Goal
 
-Add monetized-message support to the messaging surface: **paid/unlockable messages** (a message whose body/media is gated behind a price and only revealed after purchase), **tipping** an individual message, and the **lottery unlock** variant (an unlock whose price is resolved by a server-side lottery/draw rather than a fixed amount). The defining requirement is a clean separation of two concerns: (1) the **locked-message UI** — rendering a gated message as a teaser with price, lock affordance, and post-unlock reveal — and (2) the **purchase flows** that drive `POST /messages/{id}/tip` and `POST /messages/{id}/unlock`, with the underlying *payment authorization* delegated to the billing dependency (AND-031), which in this ticket is **stubbed behind an interface and fully tested** rather than wired to a live payment processor.
+Add monetized-message support to the messaging surface: **paid/unlockable messages** (a message whose body/media is gated behind a price and only revealed after purchase), **tipping** an individual message, and the **lottery unlock** variant (an unlock whose price is resolved by a server-side lottery/draw rather than a fixed amount). The defining requirement is a clean separation of two concerns: (1) the **locked-message UI** — rendering a gated message as a teaser with price, lock affordance, and post-unlock reveal — and (2) the **purchase flows** that drive `POST /messaging/conversations/{conversation_id}/messages/{message_id}/tip` and `.../unlock` (**CORRECTED** — the real backend paths are conversation-scoped, not the flat `/messages/{id}/tip` the source ticket scoped; see §5 and §16), with the underlying *payment authorization* delegated to the billing dependency (AND-031), which in this ticket is **stubbed behind an interface and fully tested** rather than wired to a live payment processor.
 
-Goal, restated as a testable outcome: a user viewing a locked message sees a teaser with the price and an "Unlock" affordance; tapping it runs the billing-authorize → server-unlock sequence and, on success, reconciles the row in place to its revealed (unlocked) content. Separately, a user can tip any eligible message via a tip sheet (preset/custom amounts), driving `POST /messages/{id}/tip`. The lottery unlock resolves its price from the server before charging. All flows degrade safely on payment failure, server failure, and offline. The deliverables are the locked-message Composables, the tip sheet, the `MonetizationViewModel` action surface, the repository + DTOs for the two endpoints, and the `BillingAuthorizer` seam that AND-031 will later satisfy.
+Goal, restated as a testable outcome: a user viewing a locked message sees a teaser with the price and an "Unlock" affordance; tapping it runs the billing-authorize → server-unlock sequence and, on success, reconciles the row in place to its revealed (unlocked) content. Separately, a user can tip any eligible message via a tip sheet (preset/custom amounts), driving `POST /messaging/conversations/{conversation_id}/messages/{message_id}/tip`. The **lottery unlock is a distinct, separate message type** (`lottery_dm`) with its own single-call endpoint `POST /messaging/messages/{message_id}/lottery/unlock` that draws-and-reveals atomically server-side (**CORRECTED** — there is no two-step price-resolve-then-confirm protocol, and the web client performs no client-side billing-authorize for lottery; see FR-4 and §16). All flows degrade safely on payment failure, server failure, and offline. The deliverables are the locked-message Composables, the tip sheet, the `MonetizationViewModel` action surface, the repository + DTOs for the two endpoints, and the `BillingAuthorizer` seam that AND-031 will later satisfy.
 
 ## 2. Context & References
 
 - **Module:** `feature-messaging` (Gradle module `:feature:messaging`), package `com.testlogon.android.feature.messaging.monetization`. The locked-message item and tip sheet extend the Thread (message list) screen delivered by AND-123 and the send path from AND-124; this ticket adds the monetization read/teaser rendering and the two write flows.
 - **Layering:** `:feature:messaging` -> `:core:network` (Retrofit service, `ApiResult<T>`, `apiCall { }`, `DetailErrorAdapter`), `:core:model` (DTO/domain + mappers), `:core:data` (Room cache + repository, analytics facade), `:core:ui` (Compose components, theme, state composables). No backward dependencies. The `BillingAuthorizer` interface is declared in `:core:model` (a pure contract) and implemented by the billing module under AND-031; a `FakeBillingAuthorizer` for this ticket lives in `:core:testing`.
-- **Backend:** FastAPI + DynamoDB. Dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable; ~20s timeouts). OpenAPI at `/openapi.json`. Cookie-based auth: session cookies + `ui_csrf` cookie echoed as `X-CSRF-Token`; on `401` the OkHttp authenticator calls `POST /ui/session/refresh` once and retries. Persistent cookie jar required (core-network).
-- **Web reference:** `frontend/src/api/endpoints/messages.ts` (the `tipMessage` / `unlockMessage` calls and the lottery variant) and `frontend/src/api/types.ts` (`Message`, `MessageMonetization`, `TipRequest`, `UnlockRequest`, `UnlockResult`). The Android DTOs here must mirror those shapes; confirm exact field names against `/openapi.json` before implementation.
+- **Backend:** FastAPI + DynamoDB. Dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable; ~20s timeouts). OpenAPI at `/openapi.json`. Auth (**CORRECTED/CLARIFIED** vs. "cookie-based" only): the web client sends an **`Authorization: Bearer <accessToken>` header** (from the auth store) **plus** the `ui_csrf` cookie echoed as `X-CSRF-Token`, with `credentials: include` so session cookies are also sent; on `401` it calls `POST /ui/session/refresh` once and retries (verified in `src/api/client.ts`). The messaging endpoints additionally accept an `X-SESSION-ID` parameter (per OpenAPI index). On Android this maps to: persistent cookie jar **and** the Bearer-token/header path from core-network's auth tickets (AND-029); a `401` authenticator that refreshes once. Do not assume pure cookie-session.
+- **Web reference (CORRECTED file/symbol names):** `src/api/endpoints/messaging.ts` (functions `sendMessageTip(conversationId, messageId, body)`, `unlockMessage(conversationId, messageId, paymentMethodId?)`, and the separate `unlockLotteryMessage(messageId)` / `getLotteryMessage(messageId)` / `createLotteryMessage(body)`) and `src/api/types.ts` (`Message` with flat fields `lock_price_cents`/`lock_description`/`is_unlocked`/`locked`/`tip_amount_cents`/`tip_currency` and a separate `lottery` sub-object; `SendTipReq`; `LotteryMessage`; `LotteryUnlockResp`; `LotterySelectedOutcome`; `CreateLotteryMessageReq`). **There is no `MessageMonetization`, `TipRequest`, `UnlockRequest`, or `UnlockResult` type in the reference** — those names in the original draft were invented. The Android DTOs must mirror the real shapes (`SendTipIn`/`TipOut`, `UnlockMessageIn`/`UnlockOut`, `LotteryUnlockOut`) confirmed against `/openapi.json`. See §5 and §16.
 - **Dependency AND-124** supplies the message domain model (`Message`), the Room `MessageEntity`/`MessageDao`, the thread render loop, `ApiResult`, and the `apiCall { }`/`DetailErrorAdapter` plumbing. AND-139 extends `Message` with monetization fields and adds the unlock/tip write paths.
 - **Dependency AND-031 (billing)** owns real payment authorization (payment-method selection, processor charge, receipt). This ticket consumes it only through `BillingAuthorizer` and ships with a stub/fake so the unlock/tip flows are independently testable.
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, Hilt (KSP), Coroutines/Flow, Retrofit 2.11 + OkHttp 4.12 + Moshi 1.15, Room 2.6, Paging 3. minSdk 24 / compileSdk/targetSdk 35, JDK 17.
 
 ## 3. Functional Requirements
 
-FR-1. A message may carry monetization metadata. The thread item Composable (from AND-124) branches on `Message.monetization`: a `null` monetization renders a normal message; a non-null one with `unlocked == false` renders the **locked teaser**; `unlocked == true` renders the revealed content.
+FR-1. A message may carry paid-message metadata. **(CORRECTED shape)** The backend `Message` does **not** nest a single `monetization` object; instead a fixed-price locked message carries flat fields `lock_price_cents` (Long, cents), `lock_description` (String, the teaser caption), `locked`/`is_unlocked` (Booleans). A lottery message is a **separate message type** carried in a distinct `lottery` sub-object (`{ message_type: "lottery_dm", lock_state: "locked"|"unlocked", selected_outcome? }`). The thread item Composable (from AND-124) branches: no lock fields and no `lottery` block -> normal message; `locked == true && is_unlocked == false` -> **fixed-price locked teaser**; `lottery.lock_state == "locked"` -> **lottery locked teaser**; otherwise revealed. The Android domain `MessageMonetization` model (§4.1) is an internal mapping convenience, **not** a wire shape.
 
-FR-2. The **locked teaser** shows: a lock glyph, an optional preview (blurred/placeholder image or truncated caption supplied by the server as `teaser`), the formatted **price** (currency-aware), the unlock type label (Fixed price vs **Lottery**), and a primary **Unlock** button. It never renders the gated `body`/media until unlock succeeds.
+FR-2. The **fixed-price locked teaser** shows: a lock glyph, an optional preview (the server-supplied `lock_description` caption and/or a blurred preview attachment), the formatted **price** from `lock_price_cents` (currency-aware), and a primary **Unlock** button. **(CORRECTED)** There is no server `teaser`/`teaser_image_url` field on the message JSON — use `lock_description`; blurred media previews are delivered via the gallery/attachment preview path (`preview_key`), not an inline `teaser_image_url`. The teaser never renders the gated `body`/media until unlock succeeds.
 
-FR-3. Tapping **Unlock** on a fixed-price message runs: `BillingAuthorizer.authorize(amount, currency)` -> on success `POST /messages/{id}/unlock` with the returned `payment_token` -> on success, reconcile the row to `unlocked = true` with the server-returned revealed `body`/media. The button shows an in-progress state and is disabled during the flow.
+FR-3. Tapping **Unlock** on a fixed-price message runs: `BillingAuthorizer.authorize(amount, currency)` -> on success `POST /messaging/conversations/{conversation_id}/messages/{message_id}/unlock` with body `{ "payment_method_id": "<id>" }` -> on success (`UnlockOut` = `{ ok, conversation_id, message_id, unlock_payment_id, amount_cents }`). **(CORRECTED)** The unlock response does **NOT** contain the revealed `body`/media — `UnlockOut` returns only the receipt. The client must **re-fetch the message/thread** (the web reference invalidates the `["messages", conversationId]` query on success) to obtain the revealed content, then reconcile the row to `is_unlocked = true`. The button shows an in-progress state and is disabled during the flow. **Also note:** the billing seam supplies a `payment_method_id` (an opaque selected-payment-method identifier), not a `payment_token`; the web client requires a selected payment method before unlock.
 
-FR-4. **Lottery unlock**: when `monetization.type == LOTTERY`, the displayed price is a *range or "draw"* hint, not a final number. Tapping Unlock first calls `POST /messages/{id}/unlock` (or the lottery resolve step) to obtain the **resolved price**, presents a confirmation ("You drew $X — confirm?") , then runs `BillingAuthorizer.authorize(resolvedAmount)` and finalizes the unlock. The user must explicitly confirm the drawn amount before any charge. (Exact endpoint shape is OQ-2.)
+FR-4. **Lottery unlock (CORRECTED — single atomic call, no price-confirm step):** the lottery is its own `lottery_dm` message. There is **no** two-step "resolve price -> confirm -> authorize -> finalize" protocol and **no** drawn-price confirmation dialog in the real contract. Tapping Unlock calls `POST /messaging/messages/{message_id}/lottery/unlock` with an **empty body** (no `payment_method_id`, no `client_id`, no `mode`/`draw_id`); the server **draws and reveals atomically**, returning `LotteryUnlockOut` = `{ message_id, lock_state: "unlocked", selected_outcome, unlocked_at }`. The web client performs **no client-side `BillingAuthorizer.authorize` for lottery** — pricing/charging (if any) is server-side and gated by feature flag `messaging_dm_lottery`. On success the client reveals `selected_outcome` (text or media) with a reveal animation (respecting reduced-motion) and re-fetches via `getLotteryMessage(messageId)` for hydration. The Android design should therefore drop the `resolveLottery`/confirm-draw steps; the `LotteryDraw`/`onLotteryConfirm` surfaces below are an **unverified, non-matching assumption** retained only as a note (see §13/§16) and MUST be removed before implementation unless a separate priced-lottery endpoint is confirmed.
 
-FR-5. **Tip**: any tip-eligible message exposes a tip affordance (overflow action / long-press). Tapping opens a **tip sheet** (Material 3 `ModalBottomSheet`) with preset amounts (e.g., 1/5/10/20) and a custom-amount field, plus an optional short note (max 200 chars). Confirming runs `BillingAuthorizer.authorize(amount)` -> `POST /messages/{id}/tip` -> on success, a confirmation (snackbar) and optional inline "tipped" indicator on the row.
+FR-5. **Tip**: any tip-eligible message authored by another user exposes a tip affordance (overflow action / long-press). Tapping opens a **tip sheet** (Material 3 `ModalBottomSheet`) with preset amounts (e.g., 1/5/10/20) and a custom-amount field, plus an optional short note (**max 500 chars** per `SendTipIn.note` maxLength — **CORRECTED** from 200). Confirming runs `BillingAuthorizer.authorize(amount)` to obtain a `payment_method_id` -> `POST /messaging/conversations/{conversation_id}/messages/{message_id}/tip` with `SendTipIn` = `{ amount_cents, currency, note?, payment_method_id? }` -> on success (`TipOut` = `{ ok, conversation_id, message_id, tip_payment_id, amount_cents, currency }`) a confirmation (snackbar) and optional inline "tipped" indicator on the row.
 
-FR-6. Amount validation: tip/unlock amounts are positive, within `[min, max]` bounds (defaults min = smallest currency unit, max = 500.00 of the message currency unless the server supplies bounds), parsed locale-aware, and never sent as a free-form string. Custom amount under min / over max is blocked with an inline error; the confirm button is disabled.
+FR-6. Amount validation: tip/unlock amounts are positive integers in **cents**, within `[min, max]` bounds. **(CORRECTED bounds)** `SendTipIn.amount_cents` is constrained server-side to `minimum: 1` (1 cent) and `maximum: 100000` (i.e. **$1000.00**, not $500.00). The client mirrors min 1 / max 100000 cents unless the server supplies tighter bounds; the web client computes `cents = Math.round(parseFloat(input) * 100)` and rejects `cents < 1`. Amounts are parsed locale-aware and sent as integer cents, never as a free-form string. Out-of-range custom amount is blocked with an inline error and the confirm button disabled.
 
-FR-7. Idempotency: each unlock/tip carries a client-generated `client_id` (UUID). A repeated `client_id` for the same message is treated by the server as the same logical transaction (no double charge). Manual retry after an *uncertain* failure reuses the same `client_id`.
+FR-7. Idempotency **(CORRECTED — no `client_id` on tip/unlock):** the real `SendTipIn`/`UnlockMessageIn` request bodies have **no `client_id` field**, and `unlockMessage`/`sendMessageTip` send no idempotency header. The only message endpoint that uses idempotency is lottery **create** (`Idempotency-Key` header on `POST /messaging/messages/lottery`), which is out of scope here. Therefore client-side dedupe of tip/unlock via `client_id` is **not supported by the contract**; per OQ-1, retry-after-uncertain-failure cannot be assumed safe and must be treated as a known gap (see §7, §13, §16). Any Android idempotency must be coordinated with the backend (e.g. adding an `Idempotency-Key` header) before relying on retries.
 
 FR-8. The flows are **non-destructive** on failure: a failed unlock leaves the message locked and shows a retryable error; a failed tip leaves the sheet open with the amount preserved and a retry affordance. Payment-declined and server errors are distinguished in the message shown.
 
 FR-9. Already-unlocked messages (server says `unlocked == true`, e.g., re-fetched after a prior purchase) render revealed with no purchase prompt. Unlock state persists across app restarts (sourced from the message cache / server, not from local-only flags).
 
-FR-10. The user's **own** messages (authored by the current `GET /ui/me` user) are not offered tip/unlock affordances against themselves; tip is offered only on other users' eligible messages, and a creator's own paid message renders revealed.
+FR-10. The user's **own** messages (authored by the current user) are not offered tip/unlock affordances against themselves; tip is offered only on other users' eligible messages, and a creator's own paid message renders revealed. **(VERIFIED)** The web reference enforces this via `isOwn` (e.g., payment-methods query is `enabled: !isOwn` in `MessageBubble.tsx`, gating Send-Tip/Unlock to recipient bubbles). Current-user identity for Android comes from the auth-state store (AND-029).
 
 ## 4. Technical Design
 
@@ -155,22 +156,27 @@ class MonetizationViewModel @Inject constructor(
    - `Cancelled` -> phase `IDLE` (no error toast).
    - `Declined(reason)` -> phase `FAILED`, `UiError.PaymentDeclined(reason)`.
    - `Failed(t)` -> phase `FAILED`, `UiError.from(t)`.
-3. On `repo.unlock` `ApiResult.Success(revealed)` -> `messageDao.upsert(revealed.toEntity())` (reconcile row to `unlocked = true`), phase `IDLE`; on `Error` -> phase `FAILED`.
+3. On `repo.unlock` `ApiResult.Success(UnlockOut)` -> **(CORRECTED)** the unlock response is only a receipt, so the repo must then **re-fetch the message** (or thread page) to get the revealed `body`/media, write it to `messageDao` (reconcile row to `is_unlocked = true`), phase `IDLE`; on `Error` -> phase `FAILED`. Do not expect the revealed body in the unlock response.
 
-`onUnlockClick` (LOTTERY) sets phase `RESOLVING`, calls `repo.resolveLottery(messageId, clientId)` to obtain `resolvedPriceMinor`, stores it, and stops (awaiting `onLotteryConfirm`). `onLotteryConfirm` runs the same authorize → finalize as steps 2–3 using the resolved amount.
+`onUnlockClick` (LOTTERY) **(CORRECTED — no resolve/confirm step):** sets phase `UNLOCKING`, calls `repo.unlockLottery(messageId)` (empty body), and on success writes the revealed `selected_outcome` to the row (`lock_state = "unlocked"`). The `RESOLVING` phase, `resolveLottery`, `onLotteryConfirm`, and the drawn-price confirmation dialog do **not** correspond to any endpoint and should be removed unless a separate priced-lottery flow is confirmed with the backend (OQ-2). No client-side `BillingAuthorizer.authorize` is invoked for lottery per the web reference.
 
 `onTipConfirm`: validate amount in bounds; `submitting = true`; `billing.authorize(amount)` -> `repo.tip(messageId, auth.paymentToken, amountMinor, note, clientId)` -> success: close sheet, emit confirmation, mark row tipped; error: keep sheet open, surface error, preserve amount.
 
 ### 4.5 Repository (`:core:data`)
 
 ```kotlin
+// CORRECTED to match the verified contract: conversation-scoped paths, payment_method_id (not
+// payment_token), amount_cents (not amount_minor), no client_id, unlock returns a receipt so the
+// repo re-fetches the message, and lottery is a single empty-body call.
 interface MonetizationRepository {
-    suspend fun unlock(messageId: String, paymentToken: String, clientId: String): ApiResult<Message>
-    suspend fun resolveLottery(messageId: String, clientId: String): ApiResult<LotteryDraw>   // OQ-2
+    suspend fun unlock(
+        conversationId: String, messageId: String, paymentMethodId: String?,
+    ): ApiResult<Message>            // calls /unlock (UnlockOut receipt) then re-fetches the message
+    suspend fun unlockLottery(messageId: String): ApiResult<Message>   // single atomic draw+reveal
     suspend fun tip(
-        messageId: String, paymentToken: String,
-        amountMinor: Long, note: String?, clientId: String,
-    ): ApiResult<TipReceipt>
+        conversationId: String, messageId: String, paymentMethodId: String?,
+        amountCents: Long, currency: String, note: String?,
+    ): ApiResult<TipOut>
 }
 ```
 
@@ -203,113 +209,124 @@ fun TipSheet(
 
 ## 5. API Contract
 
-**Unlock — `POST /messages/{id}/unlock`** (path `id` = messageId).
-Request headers: session cookies (cookie jar) + `X-CSRF-Token` (CSRF interceptor) + `Content-Type: application/json`.
+> **This section has been substantially corrected against `/openapi.json` and `src/api/endpoints/messaging.ts`.** All three endpoints were wrong in the original draft (flat `/messages/{id}/...` paths, `payment_token`, `amount_minor`, `client_id`, a nested `monetization` response, and an unlock that returns the revealed body). The verified contract follows.
 
-Request body:
-```json
-{ "payment_token": "tok_stub_...", "client_id": "7c1f...-uuid" }
-```
-Success `200` returns the revealed message:
-```json
-{
-  "id": "msg_01H...",
-  "conversation_id": "conv_01H...",
-  "author_id": "usr_01H...",
-  "body": "the now-revealed gated text",
-  "client_id": null,
-  "created_at": "2026-06-05T14:22:31.004Z",
-  "monetization": { "type": "fixed", "unlocked": true, "price_minor": 500, "currency": "USD",
-                    "teaser": null, "teaser_image_url": null, "tip_eligible": true }
-}
-```
+**Unlock — `POST /messaging/conversations/{conversation_id}/messages/{message_id}/unlock`** (op `unlock_message_...`).
+Path params: `conversation_id`, `message_id`. Headers: `Authorization: Bearer <token>` + `X-CSRF-Token` + cookies (`credentials: include`) + `X-SESSION-ID` + `Content-Type: application/json`.
 
-**Lottery resolve (variant of unlock)** — `POST /messages/{id}/unlock` with `{ "mode": "lottery_draw", "client_id": "..." }` (or a dedicated `/messages/{id}/unlock/lottery` step — **OQ-2**). Returns the drawn price:
+Request body (`UnlockMessageIn` — every field optional):
 ```json
-{ "draw_id": "draw_01H...", "price_minor": 350, "currency": "USD", "expires_at": "2026-06-05T14:25:00Z" }
+{ "payment_method_id": "pm_123" }
 ```
-The follow-up finalize sends `{ "payment_token": "...", "draw_id": "draw_01H...", "client_id": "..." }`.
+Success `200` returns **only a receipt** (`UnlockOut`), NOT the revealed message:
+```json
+{ "ok": true, "conversation_id": "conv_...", "message_id": "msg_...",
+  "unlock_payment_id": "upay_...", "amount_cents": 500 }
+```
+The revealed `body`/media is obtained by **re-fetching the message/thread** after success (web invalidates `["messages", conversationId]`).
 
-**Tip — `POST /messages/{id}/tip`**.
-Request body:
+**Lottery unlock — `POST /messaging/messages/{message_id}/lottery/unlock`** (op `unlock_lottery_message_...`). **No conversation in path. Empty request body (no schema). Single atomic draw+reveal.** Success `200` (`LotteryUnlockOut`):
 ```json
-{ "payment_token": "tok_stub_...", "amount_minor": 500, "currency": "USD",
-  "note": "great post", "client_id": "9a2e...-uuid" }
+{ "message_id": "msg_...", "lock_state": "unlocked",
+  "selected_outcome": { "outcome_id": "o_1", "payload_type": "text", "text_content": "..." },
+  "unlocked_at": 1717600000 }
 ```
-Success `200`/`201`:
+Related: `GET /messaging/messages/{message_id}/lottery` -> `LotteryMessageOut` (for hydration/state); `POST /messaging/messages/lottery` (create, `Idempotency-Key` header) is creator-side and out of scope. There is **no** `draw_id`/`expires_at`/price-resolve step in the contract.
+
+**Tip — `POST /messaging/conversations/{conversation_id}/messages/{message_id}/tip`** (op `send_message_tip_...`).
+Request body (`SendTipIn`):
 ```json
-{ "tip_id": "tip_01H...", "message_id": "msg_01H...", "amount_minor": 500,
-  "currency": "USD", "created_at": "2026-06-05T14:22:31.004Z" }
+{ "amount_cents": 500, "currency": "USD", "note": "great post", "payment_method_id": "pm_123" }
+```
+`amount_cents` required (`min 1`, `max 100000`); `currency` defaults `"USD"`; `note` max 500; `payment_method_id` optional/nullable. Success `200` (`TipOut`):
+```json
+{ "ok": true, "conversation_id": "conv_...", "message_id": "msg_...",
+  "tip_payment_id": "tpay_...", "amount_cents": 500, "currency": "USD" }
 ```
 
-**Moshi DTOs + Retrofit:**
+**Moshi DTOs + Retrofit (corrected to match the verified wire shapes):**
 ```kotlin
 @JsonClass(generateAdapter = true)
-data class UnlockRequest(
-    @Json(name = "payment_token") val paymentToken: String,
-    @Json(name = "draw_id") val drawId: String? = null,
-    @Json(name = "mode") val mode: String? = null,
-    @Json(name = "client_id") val clientId: String,
+data class UnlockMessageIn(
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
-data class LotteryDrawDto(
-    @Json(name = "draw_id") val drawId: String,
-    @Json(name = "price_minor") val priceMinor: Long,
-    @Json(name = "currency") val currency: String,
-    @Json(name = "expires_at") val expiresAt: String?,
-)
-
-@JsonClass(generateAdapter = true)
-data class TipRequest(
-    @Json(name = "payment_token") val paymentToken: String,
-    @Json(name = "amount_minor") val amountMinor: Long,
-    @Json(name = "currency") val currency: String,
-    @Json(name = "note") val note: String?,
-    @Json(name = "client_id") val clientId: String,
-)
-
-@JsonClass(generateAdapter = true)
-data class TipReceiptDto(
-    @Json(name = "tip_id") val tipId: String,
+data class UnlockOut(
+    @Json(name = "ok") val ok: Boolean,
+    @Json(name = "conversation_id") val conversationId: String,
     @Json(name = "message_id") val messageId: String,
-    @Json(name = "amount_minor") val amountMinor: Long,
-    @Json(name = "currency") val currency: String,
-    @Json(name = "created_at") val createdAt: String,
+    @Json(name = "unlock_payment_id") val unlockPaymentId: String,
+    @Json(name = "amount_cents") val amountCents: Long,
 )
 
 @JsonClass(generateAdapter = true)
-data class MonetizationDto(
-    @Json(name = "type") val type: String,            // "fixed" | "lottery"
-    @Json(name = "unlocked") val unlocked: Boolean,
-    @Json(name = "price_minor") val priceMinor: Long?,
-    @Json(name = "currency") val currency: String,
-    @Json(name = "teaser") val teaser: String?,
-    @Json(name = "teaser_image_url") val teaserImageUrl: String?,
-    @Json(name = "tip_eligible") val tipEligible: Boolean,
+data class SendTipIn(
+    @Json(name = "amount_cents") val amountCents: Long,           // min 1, max 100000
+    @Json(name = "currency") val currency: String = "USD",
+    @Json(name = "note") val note: String? = null,               // max 500
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
 )
+
+@JsonClass(generateAdapter = true)
+data class TipOut(
+    @Json(name = "ok") val ok: Boolean,
+    @Json(name = "conversation_id") val conversationId: String,
+    @Json(name = "message_id") val messageId: String,
+    @Json(name = "tip_payment_id") val tipPaymentId: String,
+    @Json(name = "amount_cents") val amountCents: Long,
+    @Json(name = "currency") val currency: String,
+)
+
+// Lottery (separate message type). selected_outcome carries the revealed payload.
+@JsonClass(generateAdapter = true)
+data class LotterySelectedOutcomeDto(
+    @Json(name = "outcome_id") val outcomeId: String,
+    @Json(name = "payload_type") val payloadType: String,        // "text" | "image" | "video"
+    @Json(name = "text_content") val textContent: String? = null,
+    @Json(name = "media_asset_id") val mediaAssetId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class LotteryUnlockOut(
+    @Json(name = "message_id") val messageId: String,
+    @Json(name = "lock_state") val lockState: String,            // "unlocked"
+    @Json(name = "selected_outcome") val selectedOutcome: LotterySelectedOutcomeDto,
+    @Json(name = "unlocked_at") val unlockedAt: Long,            // epoch seconds (integer)
+)
+
+// Fixed-price paid-message fields live FLAT on MessageDto (no nested "monetization"):
+//   lock_price_cents: Long?, lock_description: String?, locked: Boolean?, is_unlocked: Boolean?,
+//   tip_amount_cents: Long?, tip_currency: String?, and a separate `lottery` sub-object.
 
 interface MessageMonetizationApi {
-    @POST("messages/{id}/unlock")
-    suspend fun unlock(@Path("id") id: String, @Body req: UnlockRequest): Response<MessageDto>
+    @POST("messaging/conversations/{cid}/messages/{mid}/unlock")
+    suspend fun unlock(
+        @Path("cid") conversationId: String,
+        @Path("mid") messageId: String,
+        @Body req: UnlockMessageIn,
+    ): Response<UnlockOut>
 
-    @POST("messages/{id}/unlock")
-    suspend fun resolveLottery(@Path("id") id: String, @Body req: UnlockRequest): Response<LotteryDrawDto>
+    @POST("messaging/messages/{mid}/lottery/unlock")
+    suspend fun unlockLottery(@Path("mid") messageId: String): Response<LotteryUnlockOut>
 
-    @POST("messages/{id}/tip")
-    suspend fun tip(@Path("id") id: String, @Body req: TipRequest): Response<TipReceiptDto>
+    @POST("messaging/conversations/{cid}/messages/{mid}/tip")
+    suspend fun tip(
+        @Path("cid") conversationId: String,
+        @Path("mid") messageId: String,
+        @Body req: SendTipIn,
+    ): Response<TipOut>
 }
 ```
 
-**Error responses** (FastAPI `detail` → `UiError` via `DetailErrorAdapter`; `detail` may be `string | [{msg,...}] | {code,...}`):
-- `401` -> authenticator runs `POST /ui/session/refresh` once + retry; second `401` -> `UiError.Unauthorized` (flow FAILED, surface re-auth).
-- `402` (payment required / insufficient) or `{code:"payment_*"}` -> `UiError.PaymentDeclined` (non-retryable without re-authorizing).
-- `403` -> CSRF/permission/own-message; non-retryable hint.
-- `404` -> message gone; FAILED "message unavailable".
-- `409` -> already unlocked / duplicate transaction -> treat as success: re-fetch/reveal the message (idempotent outcome).
-- `410` (lottery draw expired) -> clear resolved price, re-resolve.
-- `422` -> `[{msg, loc}]`; show first `msg` (e.g., amount out of range).
-- `5xx` / timeout / `IOException` -> FAILED, retryable with same `client_id`.
+**Error responses (CORRECTED).** Per `/openapi.json`, the documented responses for `/unlock`, `/tip`, and `/lottery/unlock` are **only `200` and `422:HTTPValidationError`**; the sibling messaging control endpoints additionally document `400/401/403/429`. The original draft's `402/409/410` codes are **not in the contract** and must be treated as unverified assumptions, not relied upon. FastAPI `detail` → `UiError` via `DetailErrorAdapter`; `detail` is `string | [{msg, loc, ...}] | {code, ...}` (`normalizeErrorDetail` in `src/api/client.ts` confirms all three shapes, including a `{code}` authorization map).
+- `401` -> authenticator runs `POST /ui/session/refresh` once + retry; second `401` -> `UiError.Unauthorized` (flow FAILED, surface re-auth). *(Verified in client.ts.)*
+- `403` -> CSRF/permission/own-message or geo-block (`{code:"geo_blocked"}`); non-retryable hint. *(Verified.)*
+- `404` -> message gone; FAILED "message unavailable". *(Plausible but not documented for these ops — unverified.)*
+- `422` -> body `{ detail: [{msg, loc}] }`; show first `msg` (e.g., amount out of range, `amount_cents` < 1 or > 100000). *(Verified — only documented error besides 401/403.)*
+- `429` -> rate-limited; FAILED, retryable after backoff. *(Documented on sibling messaging endpoints.)*
+- `5xx` / timeout / `IOException` -> FAILED, retryable. **Caveat:** with no `client_id`/`Idempotency-Key` on the contract (FR-7), a retry after an *uncertain* failure is NOT guaranteed dedupe-safe and risks a double charge; gate retry behind explicit user action and coordinate idempotency with the backend (OQ-1).
+- **Payment-declined / already-unlocked / lottery-expired** codes (`402`/`409`/`410`) are **assumed, not contractually defined**; if the backend returns them, map declined->`PaymentDeclined`, `409`->treat as already-unlocked (re-fetch), but do not design around them as guaranteed (OQ-1/OQ-2).
 
 ## 6. Data & State Management
 
@@ -386,8 +403,8 @@ interface MessageMonetizationApi {
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (must resolve before merge):** Exact request/response shapes for `POST /messages/{id}/tip` and `POST /messages/{id}/unlock` — field names (`payment_token` vs `payment_method_id`), whether `client_id` is accepted/deduped, and the `409 already-unlocked` behavior. Verify against `/openapi.json` and `frontend/src/api/endpoints/messages.ts`. If `client_id` dedupe is unsupported, retry-after-uncertain-failure is unsafe and must be disabled.
-- **OQ-2 (must resolve before merge):** Lottery unlock protocol — is it a two-step `resolve` then `finalize` (as designed), a single endpoint that draws-and-charges atomically, or a dedicated path `/messages/{id}/unlock/lottery`? Confirm `draw_id`/`expires_at` semantics. The two-step design here is the safe assumption (explicit confirm before charge) and may need to collapse to one call.
+- **OQ-1 (RESOLVED for shapes; one gap remains).** Verified against `/openapi.json` + `src/api/endpoints/messaging.ts`: the fields are `payment_method_id` (not `payment_token`) and `amount_cents` (not `amount_minor`); paths are conversation-scoped. **There is no `client_id` and no `Idempotency-Key` on `/unlock` or `/tip`**, and no documented `409 already-unlocked`. **Remaining gap:** because the contract offers no client idempotency key for these two writes, retry-after-uncertain-failure is **not dedupe-safe** — this MUST be coordinated with the backend (add an `Idempotency-Key` header, as lottery-create already supports) before any auto/one-tap retry is enabled.
+- **OQ-2 (RESOLVED).** Lottery unlock is a **single atomic draw-and-reveal** call: `POST /messaging/messages/{message_id}/lottery/unlock` with an **empty body**, returning `LotteryUnlockOut` (`selected_outcome`, `unlocked_at`). There is **no** two-step resolve/finalize, **no** `draw_id`/`expires_at`, and **no** client-side billing-authorize or drawn-price confirmation in the web reference (confirmed by `MessageBubble.lottery.test.tsx`). The Android design's two-step lottery flow is incorrect and is being corrected to the single call. Whether the lottery carries a charge at all is server-side/feature-flagged (`messaging_dm_lottery`); if a *priced* lottery confirmation is later required, it needs a new backend endpoint (not present today).
 - **OQ-3 (security):** Does the locked DTO ever contain the gated `body`/media before purchase? It must not. If the server ships gated content with `unlocked == false`, raise as a backend security defect; the client must still refuse to render it.
 - **OQ-4:** Billing contract (AND-031) — does `authorize` return a reusable `payment_token`, and is the amount captured at authorize or at server confirm? This affects whether `409` retries can re-use the token. The `BillingAuthorizer` interface must be agreed with the AND-031 owner.
 - **Risk:** double-charge on retry if idempotency is incomplete (token + `client_id` + `draw_id`). Mitigation: reuse all idempotency keys, treat `409` as success, and gate retry behind explicit user action.
@@ -419,3 +436,80 @@ AC-7. Automated tests cover fixed unlock, lottery resolve+confirm, tip happy pat
 - `X-CSRF-Token` and cookie-jar paths verified on both endpoints; Detekt/ktlint clean; KSP builds.
 - OQ-1, OQ-2, and OQ-3 confirmed against `/openapi.json` and the web reference, and reflected in code, before merge.
 - All ACs in §14 demonstrably met. PR targets the `android-port` branch and references AND-139, AND-124, and AND-031.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its VERDICT (Verified / Corrected / Unverified-assumption) and exact SOURCE pointer.
+
+1. **Unlock endpoint path/method.** Claim (orig): `POST /messages/{id}/unlock`. VERDICT: **Corrected** to `POST /messaging/conversations/{conversation_id}/messages/{message_id}/unlock`. SOURCE: OpenAPI `POST /messaging/conversations/{conversation_id}/messages/{message_id}/unlock` (op `unlock_message_messaging_...`); `src/api/endpoints/messaging.ts: unlockMessage`.
+2. **Unlock request body.** Claim (orig): `{ payment_token, client_id }`. VERDICT: **Corrected** to `UnlockMessageIn { payment_method_id?: string|null }` (only field; no `client_id`). SOURCE: OpenAPI schema `UnlockMessageIn`; `src/api/endpoints/messaging.ts: unlockMessage` (`{ payment_method_id: paymentMethodId ?? null }`).
+3. **Unlock response = revealed message.** Claim (orig): returns the revealed `Message` with `monetization.unlocked=true` and `body`. VERDICT: **Corrected** — returns receipt only (`UnlockOut { ok, conversation_id, message_id, unlock_payment_id, amount_cents }`); client must re-fetch to reveal. SOURCE: OpenAPI schema `UnlockOut`; `src/pages/messages/MessageBubble.tsx: unlockMut.onSuccess` invalidates `["messages", conversationId]`.
+4. **Tip endpoint path/method.** Claim (orig): `POST /messages/{id}/tip`. VERDICT: **Corrected** to `POST /messaging/conversations/{conversation_id}/messages/{message_id}/tip`. SOURCE: OpenAPI `POST /messaging/conversations/{conversation_id}/messages/{message_id}/tip` (op `send_message_tip_messaging_...`); `src/api/endpoints/messaging.ts: sendMessageTip`.
+5. **Tip request body.** Claim (orig): `{ payment_token, amount_minor, currency, note, client_id }`. VERDICT: **Corrected** to `SendTipIn { amount_cents (required, 1..100000), currency (default "USD"), note? (max 500), payment_method_id? }`; no `client_id`. SOURCE: OpenAPI schema `SendTipIn`; `src/api/types.ts: SendTipReq`.
+6. **Tip response.** Claim (orig): `{ tip_id, message_id, amount_minor, currency, created_at }`. VERDICT: **Corrected** to `TipOut { ok, conversation_id, message_id, tip_payment_id, amount_cents, currency }` (no `tip_id`, no `created_at`, uses `amount_cents`). SOURCE: OpenAPI schema `TipOut`; `src/api/endpoints/messaging.ts: sendMessageTip` return type.
+7. **Tip note max length.** Claim (orig): 200 chars. VERDICT: **Corrected** to 500. SOURCE: OpenAPI `SendTipIn.note` `maxLength: 500`.
+8. **Tip amount bounds.** Claim (orig): max 500.00. VERDICT: **Corrected** to min 1 cent / max 100000 cents ($1000.00). SOURCE: OpenAPI `SendTipIn.amount_cents` `minimum:1, maximum:100000`; web `cents = Math.round(parseFloat(...)*100)` with `cents < 1` rejected (`MessageBubble.tsx`).
+9. **Money field naming.** Claim (orig): `amount_minor`/`price_minor`. VERDICT: **Corrected** to `amount_cents`/`lock_price_cents` (wire); internal Android `*Cents`/minor-units modeling is fine. SOURCE: OpenAPI `SendTipIn`/`TipOut`/`UnlockOut`; `src/api/types.ts: Message.lock_price_cents`.
+10. **Paid-message metadata shape.** Claim (orig): nested `Message.monetization { type, unlocked, price_minor, teaser, teaser_image_url, tip_eligible }`. VERDICT: **Corrected** — backend uses **flat** `Message` fields `lock_price_cents`, `lock_description`, `locked`, `is_unlocked`, `tip_amount_cents`, `tip_currency`, plus a separate `lottery` sub-object. No `monetization`, `teaser`, `teaser_image_url`, or `tip_eligible` fields exist. SOURCE: `src/api/types.ts: Message` (lines ~1171–1216).
+11. **Billing seam token.** Claim (orig): opaque `payment_token`. VERDICT: **Corrected** — the seam is a `payment_method_id` (selected payment method), supplied by billing (`getPaymentMethods`). SOURCE: `src/api/endpoints/billing.ts: getPaymentMethods` (used in `MessageBubble.tsx`); request fields `payment_method_id`.
+12. **Lottery unlock protocol.** Claim (orig): two-step resolve→confirm-drawn-price→authorize→finalize, with `draw_id`/`expires_at`. VERDICT: **Corrected** — single atomic `POST /messaging/messages/{message_id}/lottery/unlock` (empty body) → `LotteryUnlockOut { message_id, lock_state, selected_outcome, unlocked_at }`; no draw_id/expires_at, no client billing-authorize, no confirm dialog. SOURCE: OpenAPI `POST /messaging/messages/{message_id}/lottery/unlock` + schema `LotteryUnlockOut`; `src/api/endpoints/messaging.ts: unlockLotteryMessage`; `src/pages/messages/MessageBubble.lottery.test.tsx`.
+13. **Lottery is a separate message type.** Claim (orig): a `monetization.type == LOTTERY` variant of the same unlock. VERDICT: **Corrected** — lottery is its own `lottery_dm` message (created via `POST /messaging/messages/lottery`, read via `GET /messaging/messages/{message_id}/lottery`), distinct from fixed-price locked messages. SOURCE: OpenAPI `LotteryMessageOut`, `CreateLotteryMessageIn`; `src/api/types.ts: LotteryMessage`, `Message.lottery`.
+14. **`unlocked_at`/`created_at` types.** Claim (orig implied ISO-8601 strings, e.g. `created_at: "...Z"`). VERDICT: **Corrected** — lottery `unlocked_at`/`created_at` are **integer epoch** values. SOURCE: OpenAPI `LotteryUnlockOut.unlocked_at` (`type: integer`), `LotteryMessageOut.created_at` (`type: integer`).
+15. **Auth/CSRF transport.** Claim (orig): "cookie-based auth: session cookies + `ui_csrf` echoed as `X-CSRF-Token`; 401→`POST /ui/session/refresh` once". VERDICT: **Corrected/clarified** — also sends `Authorization: Bearer <accessToken>` and `X-SESSION-ID`; `credentials: include` for cookies; single refresh-on-401 confirmed. SOURCE: `src/api/client.ts` (`Authorization` header, `getCookie("ui_csrf")` → `X-CSRF-Token`, `refreshSession()` → `/ui/session/refresh`); OpenAPI params `authorization, X-SESSION-ID` on the messaging endpoints.
+16. **Own-message guard (FR-10).** Claim: own messages not offered tip/unlock. VERDICT: **Verified.** SOURCE: `src/pages/messages/MessageBubble.tsx` payment-methods query `enabled: !isOwn`; `isOwn` prop gating tip/unlock affordances.
+17. **Error `detail` shapes.** Claim: `string | [{msg,...}] | {code,...}`. VERDICT: **Verified.** SOURCE: `src/api/client.ts: normalizeErrorDetail` (+ `mapAuthorizationError` `{code}` handling); OpenAPI `HTTPValidationError` (`detail: [{msg, loc, type}]`).
+18. **Documented error codes for these ops.** Claim (orig): `402/409/410` handled. VERDICT: **Unverified-assumption** — OpenAPI documents only `200` + `422` for `/unlock`,`/tip`,`/lottery/unlock` (siblings add `400/401/403/429`). `402/409/410` are not in the contract. SOURCE: OpenAPI index lines for the three ops (`resp=200:...;422:HTTPValidationError`).
+19. **Idempotency via `client_id`.** Claim (orig): client_id dedupes tip/unlock; retry reuses it. VERDICT: **Corrected/Unverified** — no `client_id`/`Idempotency-Key` exists on these two endpoints; only lottery-**create** uses `Idempotency-Key`. Safe retry requires backend coordination. SOURCE: OpenAPI `SendTipIn`/`UnlockMessageIn` (no such field); `POST /messaging/messages/lottery` `params=Idempotency-Key`; `src/api/endpoints/messaging.test` (`messaging.lottery.test.ts`) header assertions.
+20. **Gated content never shipped while locked (OQ-3).** Claim: locked DTO must not include gated body/media. VERDICT: **Unverified-assumption** (security) — not provable from the static sources; the locked `Message` exposes `lock_description`/preview only and the revealed body arrives on re-fetch, which is consistent, but a live backend probe is needed to confirm the server never leaks gated `body`/media at `locked == true`. SOURCE: `src/api/types.ts: Message` (separate `lock_description` vs `text`); no contract field guarantees exclusion.
+21. **Stack/Compose/Hilt/Retrofit choices.** VERDICT: **Unverified-assumption** (framework refs, not derivable from backend/web sources). Android Compose Material 3 `ModalBottomSheet`/`AlertDialog`, accessibility semantics, and 48dp targets follow framework guidance — framework ref: developer.android.com/jetpack/compose, developer.android.com/guide/topics/ui/accessibility.
+
+### Corrections made
+- Endpoints repathed from flat `/messages/{id}/{tip,unlock}` to conversation-scoped `/messaging/conversations/{conversation_id}/messages/{message_id}/{tip,unlock}` (items 1,4).
+- Request fields: `payment_token`→`payment_method_id`; `amount_minor`→`amount_cents`; removed non-existent `client_id` (items 2,5,11,19).
+- Unlock response: revealed-`Message` → receipt-only `UnlockOut`; added mandatory re-fetch to reveal (item 3); FR-3, §4.4, §4.5 updated.
+- Tip response: invented `{tip_id, created_at, amount_minor}` → real `TipOut` (item 6).
+- Note max 200→500 (item 7); amount max $500→$1000/100000 cents (item 8).
+- Paid-message shape: nested `monetization` (+ `teaser`/`teaser_image_url`/`tip_eligible`/`type`) → flat `lock_*`/`is_unlocked`/`locked`/`tip_*` fields + separate `lottery` block (items 10,13); FR-1, FR-2 updated.
+- Lottery: removed the two-step resolve/confirm/finalize, `draw_id`/`expires_at`, `RESOLVING` phase, `resolveLottery`, `onLotteryConfirm`, and the drawn-price `AlertDialog`; replaced with the single empty-body `lottery/unlock` call returning `selected_outcome` (item 12); FR-4, §4.4, §4.5, OQ-2 updated.
+- Auth description expanded to include Bearer token + `X-SESSION-ID` (item 15).
+- Error-code table: flagged `402/409/410` as undocumented assumptions; kept verified `401/403/422/429` (item 18).
+- Moshi DTOs + Retrofit interface in §5 rewritten to the verified schemas; repository interface in §4.5 rewritten (`payment_method_id`, `amount_cents`, re-fetch, single lottery call).
+- Frontmatter: `status: reviewed`, `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+- **OQ-1 idempotency gap:** no `client_id`/`Idempotency-Key` on `/unlock` or `/tip` in the contract, so retry-after-uncertain-failure is not provably dedupe-safe. Unverifiable as safe without a backend change; item 19.
+- **OQ-3 gated-content confidentiality:** cannot be proven from static OpenAPI/web sources that the server never returns gated `body`/media while `locked==true`; requires a live probe against the dev host (item 20). Treated as a security must-verify.
+- **Undocumented error codes (`402/409/410`):** not in OpenAPI; behavior on payment-declined / already-unlocked / lottery-expired is unknown and assumed (item 18).
+- **Whether lottery unlock charges the viewer at all** is server-side/feature-flagged and not exposed in the contract; if a priced/confirmed lottery is required, a new endpoint must be added (item 12, OQ-2).
+- **Billing seam (AND-031) semantics** — whether `authorize` yields a reusable, capture-deferred `payment_method_id` — remains an AND-031 cross-team agreement (OQ-4); framework-internal, not in these sources.
+- **Stack/framework choices** (Compose, Hilt, Retrofit/Moshi) are inherited project conventions; framework refs only (item 21).
+
+## 17. Test Plan
+
+IDs `TC-AND-139-NN`. "Traces" links to §14 Acceptance Criteria. Targets: JVM = local JVM/Robolectric; Emulator = headless AVD `test35` (x86_64, API 35); Device = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). MockWebServer + `FakeBillingAuthorizer`; no live dev-host or live-payment calls in CI.
+
+- **TC-AND-139-01 — Fixed unlock happy path (re-fetch reveals body).** Type: unit + contract/MockWebServer. Target: JVM. Preconditions: locked `Message` (`locked=true,is_unlocked=false,lock_price_cents=500`); `FakeBillingAuthorizer` returns `Authorized(payment_method_id="pm_1")`; MockWebServer queues `200 UnlockOut {ok:true,...,amount_cents:500}` for `POST .../unlock` then `200` revealed message for the subsequent fetch. Steps: call `onUnlockClick(id)`; await phases. Expected: authorize called once; `POST .../unlock` body == `{"payment_method_id":"pm_1"}`; on receipt the repo issues the message re-fetch; row reconciles to `is_unlocked=true` with revealed body; phase returns IDLE; no revealed body assumed from the unlock response. Traces: AC-2.
+- **TC-AND-139-02 — Unlock request transport headers.** Type: contract/MockWebServer. Target: JVM. Preconditions: authed session (Bearer token + `ui_csrf`). Steps: trigger unlock; inspect recorded request. Expected: request carries `Authorization: Bearer ...`, `X-CSRF-Token`, `X-SESSION-ID`, `Content-Type: application/json`; path is conversation-scoped. Traces: AC-2, AC-5.
+- **TC-AND-139-03 — Billing Cancelled isolates server.** Type: unit. Target: JVM. Preconditions: `FakeBillingAuthorizer` → `Cancelled`. Steps: `onUnlockClick`. Expected: no `/unlock` request issued (MockWebServer records 0 calls); phase IDLE; row stays locked; no error toast. Traces: AC-5.
+- **TC-AND-139-04 — Billing Declined surfaced distinctly.** Type: unit. Target: JVM. Preconditions: `FakeBillingAuthorizer` → `Declined("card_declined")`. Steps: `onUnlockClick`. Expected: no `/unlock` call; phase FAILED with `UiError.PaymentDeclined`, message distinct from server-error copy; row locked. Traces: AC-5.
+- **TC-AND-139-05 — Unlock server 5xx/timeout after authorize (uncertain failure).** Type: contract/MockWebServer. Target: JVM. Preconditions: authorize Authorized; MockWebServer returns `500` (and a variant with socket timeout ~20s policy). Steps: `onUnlockClick`; observe. Expected: phase FAILED with retryable server-error copy ("couldn't reach server"), distinct from declined; row remains locked; **retry is user-gated** and the plan notes the no-`client_id` dedupe gap (no silent auto-retry). Traces: AC-5, AC-2.
+- **TC-AND-139-06 — Tip happy path + receipt mapping.** Type: unit + contract/MockWebServer. Target: JVM. Preconditions: tip sheet open on another user's message; preset 500¢ selected; authorize Authorized("pm_1"); MockWebServer `200 TipOut`. Steps: `onTipConfirm`. Expected: `POST .../tip` body == `{"amount_cents":500,"currency":"USD","note":...,"payment_method_id":"pm_1"}`; on success sheet closes, confirmation emitted, row marked tipped; `TipOut` fields mapped (`tip_payment_id`, `amount_cents`). Traces: AC-4.
+- **TC-AND-139-07 — Tip amount validation bounds.** Type: unit + Compose-UI. Target: JVM (logic) + Emulator (UI). Preconditions: tip sheet open. Steps: enter custom `0`, then `100001`¢-equivalent ($1000.01), then valid `750`¢; observe confirm enablement and inline error. Expected: `0`/over-max blocked with inline error and disabled confirm; valid amount enables confirm; `amount_cents` sent as integer (no float/string). Traces: AC-4.
+- **TC-AND-139-08 — Tip failure preserves sheet + amount.** Type: unit. Target: JVM. Preconditions: authorize Authorized; MockWebServer `422 {detail:[{msg:"amount out of range",loc:[...]}]}`. Steps: `onTipConfirm`. Expected: sheet stays open, amount/note preserved, first `msg` shown; retry affordance present. Traces: AC-4, AC-5.
+- **TC-AND-139-09 — Lottery single-call unlock + reveal.** Type: unit + contract/MockWebServer. Target: JVM. Preconditions: `lottery_dm` message `lock_state=locked`; MockWebServer `200 LotteryUnlockOut {selected_outcome:{payload_type:"text",text_content:"win"},unlocked_at:...}`. Steps: `onUnlockClick` (lottery). Expected: exactly one `POST /messaging/messages/{id}/lottery/unlock` with **empty body**; **no** `BillingAuthorizer.authorize` call; **no** resolve/confirm step or drawn-price dialog; row reveals `selected_outcome`; hydration re-fetch via `getLotteryMessage` reconciles. Traces: AC-3.
+- **TC-AND-139-10 — Lottery unlock error + user retry.** Type: unit + Compose-UI. Target: JVM + Emulator. Preconditions: first `lottery/unlock` fails (`500`), second succeeds. Steps: tap Unlock → see error → tap Unlock again. Expected: "Unlock failed" shown; second tap re-issues the call; success reveals outcome; retry is explicit (mirrors `MessageBubble.lottery.test.tsx`). Traces: AC-3, AC-5.
+- **TC-AND-139-11 — Own-message affordance suppression.** Type: unit + Compose-UI. Target: JVM + Emulator. Preconditions: message authored by current user (`isOwn`); paid + lottery variants. Steps: render row, open overflow. Expected: no Tip/Unlock affordance offered; own paid message renders revealed (no purchase prompt). Traces: AC-6.
+- **TC-AND-139-12 — Locked teaser never renders gated body (UI + semantics).** Type: Compose-UI. Target: Emulator. Preconditions: locked message with `lock_price_cents=500`, `lock_description="preview"`, gated `body` absent. Steps: render `LockedMessageItem`; inspect node + semantics tree. Expected: shows formatted price ("$5.00") + Unlock button + `lock_description`; gated body/media not present in the rendered tree or semantics; in-progress state announced via `stateDescription` (not spinner-only). Traces: AC-1, AC-7.
+- **TC-AND-139-13 — Unlock state persists across restart (DAO).** Type: integration (Room in-memory) + instrumented. Target: JVM (Room) / Emulator (process recreation). Preconditions: message unlocked & revealed body written to `MessageDao`. Steps: round-trip entity; simulate process death/reopen; re-read. Expected: monetization columns + `is_unlocked=true` and revealed body persist (server-authoritative, no local-only flag); reveal supersedes locked row by `id`. Traces: AC-2.
+- **TC-AND-139-14 — Offline / flaky-dev-host write guard.** Type: integration. Target: Device (toggle airplane mode / real flaky network). Preconditions: no connectivity (or dev-host timeout). Steps: attempt unlock and tip. Expected: writes are disabled or fail-fast to FAILED with "No connection" (non-idempotent writes are never queued/auto-retried); on reconnect, user-initiated retry works. Best on the **physical device** for real radio/offline behavior. Traces: AC-5.
+- **TC-AND-139-15 — Security: payment id / note never logged or persisted.** Type: unit + manual. Target: JVM + Device. Preconditions: BASIC logging in release; run a tip+unlock. Steps: capture logcat (device) and inspect DB/prefs. Expected: `payment_method_id`, tip note, and cookies absent from logcat/telemetry; no card data in this module; tip note not in analytics payloads. Device run confirms real release logging behavior. Traces: AC-5 (security), AC-7.
+- **TC-AND-139-16 — Accessibility audit (Compose-UI).** Type: Compose-UI + manual TalkBack. Target: Emulator (automated) + Device (TalkBack). Preconditions: locked teaser + tip sheet rendered. Steps: assert `contentDescription` includes price ("Unlock for $5.00"); preset chips labeled with `selected` semantics; note field labeled with counter; touch targets ≥48dp; RTL render. Manual TalkBack pass on device for the unlock + tip + lottery-reveal flows. Expected: all semantics present; no color/spinner-only state. Traces: AC-1, AC-4.
+
+### Coverage matrix
+- **AC-1** (locked teaser shows price + Unlock, hides gated body; already-unlocked renders revealed): TC-12, TC-16.
+- **AC-2** (fixed unlock → authorize → POST unlock → re-fetch reveal; persists across restart): TC-01, TC-02, TC-05, TC-13.
+- **AC-3** (lottery single-call draw+reveal, no charge-before-confirm semantics): TC-09, TC-10.
+- **AC-4** (tip via sheet, preset/validated custom, confirmation on success; out-of-range blocked): TC-06, TC-07, TC-08, TC-16.
+- **AC-5** (billing failures isolate server; distinct error copy; server failure preserves state with user-gated retry): TC-02, TC-03, TC-04, TC-05, TC-08, TC-14, TC-15.
+- **AC-6** (no tip/unlock on own messages): TC-11.
+- **AC-7** (automated coverage of unlock, lottery, tip+validation, billing-cancel/decline isolation, uncertain-failure retry, locked-body-not-rendered, all against Fake + MockWebServer, no live calls): TC-01, TC-03, TC-04, TC-05, TC-06, TC-07, TC-09, TC-12, TC-15.

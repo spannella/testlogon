@@ -5,7 +5,8 @@ milestone: M3
 epic: E19
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-130, AND-140]
 blocks: []
 ---
@@ -60,38 +61,88 @@ AND-140 action set only.
 This ticket's "functional requirements" are the behaviors the suite must assert.
 
 FR-1 **Image upload request shape.** Sending an image must (a) call
-`POST /messages/images/presign` with the declared `content_type` and
-`byte_size`, (b) PUT the (compressed) bytes to the returned `upload_url`, and
-(c) call `POST /messages/image` with the `upload_id`/`key`, `thread_id`,
-optional `caption`, and generated `width`/`height`/`thumbnail`. Tests assert the
-exact JSON body and header set of each call and the ordering.
+`POST /messaging/conversations/{conversation_id}/images/presign` with the
+declared `content_type` and `filename`, (b) PUT the (compressed) bytes to the
+returned `upload_url` (response also carries `bucket`/`key`/`content_type`), and
+(c) call `POST /messaging/conversations/{conversation_id}/messages/image` with
+the `bucket`/`key` (both required), plus `content_type`, `filename`, `filesize`,
+`kind` ("image"/"video"/"file"), optional `caption`, and generated
+`width`/`height`. Tests assert the exact JSON body and header set of each call
+and the ordering.
+[Corrected — verified against OpenAPI `POST /messaging/conversations/{conversation_id}/images/presign` (req=`SendImagePresignIn` `{content_type,filename}`, resp=`PresignOut` `{upload_url,bucket,key,content_type}`) and `POST /messaging/conversations/{conversation_id}/messages/image` (req=`CreateImageMessageIn`, required `bucket,key`). The original spec's `/messages/images/presign`, `/messages/image`, `byte_size`, `upload_id`, `thread_id`, and `thumbnail` object do not exist; the API is conversation-scoped and uses `bucket`/`key`/`filesize`/`kind`. The server derives the thumbnail; the client does not send a `thumbnail` object — see frontend `src/api/endpoints/messaging.ts: sendImageMessage`.]
 
 FR-2 **Image compression & thumbnail.** Given a known input bitmap, the
 compressor must emit JPEG/WEBP under the configured max dimension and quality,
 and a thumbnail under the thumbnail dimension. Tests assert output dimensions,
-mime, and that compressed `byte_size` matches the value sent in presign.
+mime, and that the compressed byte count matches the `filesize` value sent in
+the `messages/image` request body.
+[Corrected — `byte_size` is not sent at presign (presign carries only
+`content_type`/`filename`); the compressed size rides as `filesize` in
+`CreateImageMessageIn`. Thumbnail generation is a client display concern only —
+the upload contract has no thumbnail field; the backend derives media URLs.]
 
 FR-3 **Image render & viewer.** An `ImageMessage` DTO must render a thumbnail
 node in the thread; tapping it opens the full-screen viewer; back/dismiss
 returns. Tests assert the thumbnail Coil model URL, the viewer route argument,
 and that a `loading`/`error`/`loaded` viewer state is reflected.
 
-FR-4 **Action: reactions.** Adding/removing a reaction calls the correct
-endpoint, optimistically updates the message's reaction summary in the thread
-`StateFlow`, and persists to Room; reaction details load on demand. Tests assert
-optimistic update, server confirmation reconciliation, and rollback on error.
+FR-4 **Action: reactions.** Adding **and** removing a reaction both call the
+**same** endpoint `POST /messaging/conversations/{conversation_id}/messages/{message_id}/reactions`
+with body `{ "emoji": "...", "action": "add" | "remove" }` — there is no
+per-emoji DELETE route. The call optimistically updates the message's reaction
+summary in the thread `StateFlow` and persists to Room; reaction details load on
+demand via `GET .../messages/{message_id}/reactions/details` (resp
+`ReactionDetailsOut`, an object keyed by emoji). Tests assert optimistic update,
+server confirmation reconciliation, and rollback on error.
+[Corrected — verified against OpenAPI `POST .../reactions` (req=`ReactIn`
+`{emoji (required), action}`) and `GET .../reactions/details`
+(resp=`ReactionDetailsOut` `{reactions: object}`), and frontend
+`src/api/endpoints/messaging.ts: reactToMessage` / `getReactionDetails`. The
+original `DELETE /messages/{id}/reactions/{emoji}` and the
+`GET /messages/{id}/reactions -> {items:[ReactionDetailDto]}` shapes do not
+exist.]
 
-FR-5 **Action: pin/unpin.** Pin/unpin toggles message `is_pinned`, updates the
-thread's pins list, and persists. Tests assert thread state + pins list + Room.
+FR-5 **Action: pin/unpin.** Pin is `POST .../messages/{message_id}/pin`, unpin is
+`DELETE .../messages/{message_id}/pin`; both return `MessageControlActionOut`
+(`{ok, conversation_id, message_id, action, updated_at}`), **not** a full
+`MessageDto`. The client toggles the local pinned flag and refreshes the pins
+list via `GET .../conversations/{conversation_id}/pins` (resp
+`ConversationPinsPageOut` `{items, next_cursor}`), then persists. Tests assert
+thread state + pins list + Room.
+[Corrected — verified against OpenAPI `POST`/`DELETE .../{message_id}/pin`
+(resp=`MessageControlActionOut`) and `GET .../conversations/{conversation_id}/pins`
+(resp=`ConversationPinsPageOut`); frontend `pinMessage`/`unpinMessage`/
+`getPinnedMessages`. The pins endpoint is `/conversations/{id}/pins`, not the
+spec's `/threads/{tid}/pins`, and the pin response is a control-action ack, not
+a `MessageDto`.]
 
-FR-6 **Action: edit (+history).** Editing replaces body, sets `edited_at`, and
-appends an edit-history entry. Tests assert the new body in state, the history
-entry, and persistence.
+FR-6 **Action: edit (+history).** Editing is `PATCH
+.../conversations/{conversation_id}/messages/{message_id}` with body
+`{ "text": "edited" }` (the field is `text`, **not** `body`), returns
+`MessageOut` with `edited_at` set, and the prior content becomes an edit-history
+entry retrievable via `GET .../messages/{message_id}/edits`. Tests assert the new
+text in state, the history entry, and persistence.
+[Corrected — verified against OpenAPI `PATCH .../messages/{message_id}`
+(req=`EditMessageIn`, required field `text`; a deprecated `body` alias exists but
+the client sends `text`) and frontend `editMessage` (`body: { text }`). Original
+`{ "body": "edited" }` field name was wrong.]
 
-FR-7 **Action: delete / revoke / hide.** Delete removes the message (or marks
-tombstone), revoke marks it revoked for all, hide marks it hidden locally only.
-Tests assert each distinct end state in the thread `StateFlow` and Room, and
-that hide is not sent to the server.
+FR-7 **Action: delete / revoke / hide.** Delete-for-me is `DELETE
+.../messages/{message_id}`; revoke-for-all is `DELETE
+.../messages/{message_id}/revoke` (resp `MessageOut`, **not** a `POST`); hide-for-me
+is `POST .../messages/{message_id}/hide` and unhide is `DELETE
+.../messages/{message_id}/hide`, both returning `MessageControlActionOut`. Tests
+assert each distinct end state in the thread `StateFlow` and Room.
+[Corrected — major fix. Hide is **not** local-only: a real server endpoint
+exists (`POST`/`DELETE .../{message_id}/hide`, resp=`MessageControlActionOut`,
+errors=`MessageControlsErrorOut`), with a companion `GET
+.../conversations/{conversation_id}/hidden-messages` list. Revoke is a `DELETE`
+verb (`DELETE .../{message_id}/revoke`), not the spec's `POST
+/messages/{id}/revoke`, and returns `MessageOut` (no `revoked=true` boolean is
+guaranteed by the schema — assert via the returned `MessageOut` shape/`message_id`).
+Verified against OpenAPI and frontend `deleteMessage`/`revokeMessage` *(see note
+in §16: a `revokeMessage` wrapper is not present in `messaging.ts`; the
+revoke route itself is confirmed in OpenAPI)* / `hideMessage`/`unhideMessage`.]
 
 FR-8 **Headless determinism.** Every test runs with `StandardTestDispatcher` /
 `runTest`, MockWebServer, an in-memory Room DB, and a fake clock; no test
@@ -175,7 +226,7 @@ class MessageActionsViewModelTest {             // FR-4..FR-7
     @Test fun pin_updates_thread_and_pins_list_and_room()
     @Test fun edit_appends_history_and_sets_edited_at()
     @Test fun delete_revoke_hide_reach_distinct_end_states()
-    @Test fun hide_is_local_only_no_network_call()
+    @Test fun hide_calls_server_and_reconciles()   // corrected: hide IS a network call (POST .../hide)
 }
 
 class ImageMessageRenderTest {                   // FR-3 (Robolectric Compose)
@@ -195,42 +246,58 @@ This ticket asserts against, but does not define, the following contracts (owned
 by AND-130 / AND-140). Tests pin these shapes via MockWebServer fixtures so a
 backend or client drift breaks the build.
 
-Presign (AND-130):
-```
-POST /messages/images/presign
-{ "content_type": "image/jpeg", "byte_size": 184320 }
--> 200 { "upload_id": "up_1", "upload_url": "https://s3.../put", "key": "img/up_1.jpg",
-         "headers": { "Content-Type": "image/jpeg" } }
-```
-Binary PUT: `PUT {upload_url}` with body = compressed bytes, `Content-Type`
-header from `headers`. Asserted: method, URL, content-type, body length.
+> **NOTE (review correction):** the entire contract below was rewritten to match
+> the authoritative OpenAPI index/spec and the frontend `src/api/endpoints/messaging.ts`.
+> All real message routes are **conversation-scoped** under
+> `/messaging/conversations/{conversation_id}/...`; the original spec's bare
+> `/messages/...` and `/threads/...` paths do not exist. Auth/CSRF: web sends
+> `Authorization: Bearer <token>` + `X-CSRF-Token` (= `ui_csrf` cookie) +
+> `credentials: include`; the Android client mirrors this with its cookie jar +
+> CSRF echo (see §8). Validation errors are FastAPI `422 HTTPValidationError`;
+> message-control routes (pin/hide/report) use `MessageControlsErrorOut`
+> (`{detail, error_code?}`) on 401/403/404/422/429.
 
-Send image (AND-130):
+Presign (AND-130) — `POST /messaging/conversations/{conversation_id}/images/presign`:
 ```
-POST /messages/image
-{ "thread_id": "t1", "upload_id": "up_1", "key": "img/up_1.jpg",
-  "caption": "hi", "width": 1600, "height": 1200,
-  "thumbnail": { "key": "img/up_1_thumb.jpg", "width": 320, "height": 240 } }
--> 201 MessageDto(type="image", media={url,thumbnail_url,width,height}, ...)
+req  SendImagePresignIn  { "content_type": "image/jpeg", "filename": "image.jpg" }
+-> 200 PresignOut { "upload_url": "https://s3.../put", "bucket": "...",
+                    "key": "img/up_1.jpg", "content_type": "image/jpeg" }
+```
+Binary PUT: `PUT {upload_url}` with body = compressed bytes and `Content-Type`
+header = `presign.content_type`. Asserted: method, URL, content-type, body length.
+
+Send image (AND-130) — `POST /messaging/conversations/{conversation_id}/messages/image`:
+```
+req  CreateImageMessageIn  (required: bucket, key)
+{ "bucket": "...", "key": "img/up_1.jpg", "content_type": "image/jpeg",
+  "filename": "image.jpg", "filesize": 184320, "kind": "image",
+  "caption": "hi", "width": 1600, "height": 1200 }
+-> 200 MessageOut   (server derives media URLs incl. thumbnail; client sends NO thumbnail object)
 ```
 
-Actions (AND-140), all asserted for body + the `X-CSRF-Token` header:
+Actions (AND-140) — all conversation-scoped; mutating calls asserted for body +
+`X-CSRF-Token` header:
 ```
-POST   /messages/{id}/reactions        { "emoji": "👍" }     -> 200 ReactionSummaryDto
-DELETE /messages/{id}/reactions/{emoji}                      -> 204
-GET    /messages/{id}/reactions                              -> 200 { "items": [ReactionDetailDto] }
-POST   /messages/{id}/pin                                    -> 200 MessageDto
-DELETE /messages/{id}/pin                                    -> 200 MessageDto
-GET    /threads/{tid}/pins                                   -> 200 { "items": [MessageDto] }
-PATCH  /messages/{id}            { "body": "edited" }        -> 200 MessageDto(edited_at, ...)
-GET    /messages/{id}/edits                                  -> 200 { "items": [EditHistoryEntryDto] }
-DELETE /messages/{id}                                        -> 204
-POST   /messages/{id}/revoke                                 -> 200 MessageDto(revoked=true)
+POST   .../messages/{message_id}/reactions   { "emoji":"👍", "action":"add" }    -> 200   (ReactIn; same route for "remove")
+GET    .../messages/{message_id}/reactions/details                               -> 200 ReactionDetailsOut { "reactions": {…} }
+POST   .../messages/{message_id}/pin                                             -> 200 MessageControlActionOut
+DELETE .../messages/{message_id}/pin                                             -> 200 MessageControlActionOut
+GET    .../conversations/{conversation_id}/pins                                  -> 200 ConversationPinsPageOut { items, next_cursor }
+PATCH  .../messages/{message_id}             { "text":"edited" }                 -> 200 MessageOut (edited_at set; EditMessageIn)
+GET    .../messages/{message_id}/edits                                           -> 200 (edit-history list)
+DELETE .../messages/{message_id}                                                 -> 200   (delete-for-me)
+DELETE .../messages/{message_id}/revoke                                          -> 200 MessageOut (revoke-for-all)
+POST   .../messages/{message_id}/hide                                            -> 200 MessageControlActionOut (hide-for-me)
+DELETE .../messages/{message_id}/hide                                            -> 200 MessageControlActionOut (unhide)
 ```
-`hide` has **no** endpoint; a test asserts `server.requestCount` does not
-increase when hiding. Error fixtures use FastAPI `detail` in all three shapes
-(string | `[{msg}]` | `{code,...}`) to verify the mapper feeds `ApiResult.Error`
-and triggers rollback.
+`hide` **does** have a server endpoint (corrected; it is **not** local-only) — a
+hidden-messages list exists at `GET .../conversations/{conversation_id}/hidden-messages`.
+Tests must assert the hide network call is made and reconciled, not that it is
+suppressed. Error fixtures use FastAPI `detail` in all three shapes
+(string | `[{msg}]` | `{code,...}`) — verified against frontend
+`src/api/client.ts: normalizeErrorDetail`/`mapAuthorizationError` — to confirm
+the mapper feeds `ApiResult.Error` and triggers rollback; message-control routes
+additionally return `MessageControlsErrorOut`.
 
 ## 6. Data & State Management
 
@@ -242,8 +309,11 @@ Tests exercise the real `core-data` layer against an in-memory `TestLogonDatabas
 - **Persistence:** after each action, the DAO is queried directly:
   `messageDao.getById("m1")`, `reactionDao.forMessage("m1")`,
   `messageDao.pinsForThread("t1")`, `editHistoryDao.forMessage("m1")`. Hide sets
-  a local `hidden=true` column; delete writes a tombstone or removes per the
-  AND-140 design; revoke sets `revoked=true`. Each is asserted distinctly.
+  a local `hidden=true` column **after** the server `POST .../hide` acks (hide is
+  a server action, corrected from the original "local-only" assumption); delete
+  writes a tombstone or removes per the AND-140 design; revoke sets a revoked
+  marker reflecting the `MessageOut` returned by `DELETE .../revoke`. Each is
+  asserted distinctly.
 - **Optimistic/reconcile:** the repository applies the mutation to Room and emits
   immediately, then patches with the server DTO on success or restores the
   captured prior row on failure. Tests assert both branches, including that a
@@ -261,7 +331,7 @@ app's error behavior:
 - **Upload failures:** presign 500, PUT 403 (expired URL), and send-image 422
   each map to `ApiResult.Error` with the FastAPI `detail` reason surfaced; no
   partial message is left in Room. A presign success followed by PUT failure must
-  **not** call `POST /messages/image`.
+  **not** call `POST .../conversations/{conversation_id}/messages/image`.
 - **Action failures:** every optimistic action rolls back to the prior Room +
   state snapshot on non-2xx; tests cover 401 (see below), 409 (e.g. edit on a
   revoked message), and 5xx.
@@ -279,12 +349,18 @@ app's error behavior:
 ## 8. Security & Privacy
 
 - Tests assert the `X-CSRF-Token` header is present and equals the `ui_csrf`
-  cookie value on every mutating request (reactions/pin/edit/delete/revoke,
+  cookie value on every mutating request (reactions/pin/hide/edit/delete/revoke,
   presign, send). A test omits the cookie and asserts the request is still well
   formed only after the jar is seeded, guarding the CSRF-echo contract.
+  [Verified — frontend `src/api/client.ts` reads `getCookie("ui_csrf")` and sets
+  `X-CSRF-Token`; `credentials: "include"` carries the session cookie.]
 - The persistent cookie jar contract is verified via `RecordingCookieJar`:
   cookies set by a prior `Set-Cookie` are replayed on subsequent calls within the
-  same test; this proves the session rides cookies, not headers.
+  same test; this proves the session cookie is carried across calls. (Note: the
+  web client also sends `Authorization: Bearer <accessToken>` from its auth store
+  alongside the cookie — see `client.ts`; the Android client carries the
+  equivalent token, so "cookies, not headers" is imprecise: it is cookie + bearer
+  + CSRF echo.)
 - No real credentials, tokens, or PII appear in fixtures; the dev backend host is
   never contacted. Bitmap fixtures are synthetic. Temp files created by the
   compressor live under a JUnit `@TempDir` and are deleted after each test.
@@ -330,8 +406,8 @@ Limited but non-zero for the Compose render tier:
   | Image (AND-130) | presign+put+send order/body; compression/thumbnail | thumbnail render; tap→viewer; viewer states | open/view event |
   | Reaction (AND-140) | n/a | reaction summary render | add/remove optimistic+rollback; details load |
   | Pin (AND-140) | n/a | pinned badge | pin/unpin → state+pins list+Room |
-  | Edit (AND-140) | n/a | edited marker | edit → body+edited_at+history |
-  | Delete/Revoke/Hide (AND-140) | n/a | tombstone/revoked/hidden render | distinct end states; hide local-only |
+  | Edit (AND-140) | n/a | edited marker | edit (`text` field) → text+edited_at+history |
+  | Delete/Revoke/Hide (AND-140) | n/a | tombstone/revoked/hidden render | distinct end states; hide IS a server call (POST .../hide) |
 - **Determinism:** `StandardTestDispatcher`, virtual time, in-memory DB, fixed
   fixture seeds, MockWebServer dispatchers. CI runs `./gradlew :feature-messaging:testDebugUnitTest :core-data:testDebugUnitTest`
   plus the headless `connectedDebugAndroidTest` (or Robolectric-only on the
@@ -368,8 +444,13 @@ Limited but non-zero for the Compose render tier:
 - **R3 Delete semantics.** AND-140 may model delete as hard-remove or tombstone;
   the test must follow whatever AND-140 ships. **Open:** confirm the exact end
   state with AND-140 before finalizing FR-7 assertions.
-- **R4 hide endpoint.** Assumed local-only (no network). **Open:** verify
-  against AND-140 / OpenAPI that no `hide` endpoint exists.
+- **R4 hide endpoint.** ~~Assumed local-only (no network).~~ **RESOLVED (this
+  review):** a real `hide` endpoint **exists** — `POST .../messages/{message_id}/hide`
+  and `DELETE .../messages/{message_id}/hide` (resp `MessageControlActionOut`,
+  errors `MessageControlsErrorOut`), plus `GET
+  .../conversations/{conversation_id}/hidden-messages`. FR-7 and §11 updated:
+  hide IS a network action; assert the call is made and reconciled, not
+  suppressed.
 - **R5 Optimistic-update contract.** Whether reactions are optimistic is an
   AND-140 design choice; if non-optimistic, drop the intermediate-snapshot
   assertion and keep only confirmed-state + rollback-on-error.
@@ -384,8 +465,10 @@ Limited but non-zero for the Compose render tier:
 3. Image flow tests prove presign→PUT→send ordering, exact request bodies, and
    that a PUT failure prevents the send call.
 4. Each AND-140 action test proves: thread `StateFlow` mutation, Room
-   persistence, and (for optimistic actions) rollback on error; hide makes no
-   network call.
+   persistence, and (for optimistic actions) rollback on error; hide performs its
+   server call (`POST .../messages/{message_id}/hide`) and reconciles the local
+   `hidden` flag from the `MessageControlActionOut` ack (corrected — hide is not
+   local-only).
 5. `X-CSRF-Token`/cookie contract and the single-retry 401→refresh behavior are
    asserted.
 6. The suite is flake-free across 50 consecutive runs and meets the ≥90% coverage
@@ -407,3 +490,352 @@ Limited but non-zero for the Compose render tier:
   Gradle build.
 - Open questions R3/R4/R5 resolved with AND-140 owner and assertions finalized
   accordingly; PR reviewed and merged.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. OpenAPI
+pointers are `METHOD /path` from `reference/openapi.index.txt` and/or a
+`components.schemas.<Name>` from `reference/openapi.pretty.json`. Frontend
+pointers are `reference/src/api/...`. Framework choices are labeled
+"framework ref".
+
+1. **Image presign endpoint & request shape.** VERDICT: **Corrected.** Real:
+   `POST /messaging/conversations/{conversation_id}/images/presign`,
+   req=`SendImagePresignIn` `{content_type, filename}`, resp=`PresignOut`
+   `{upload_url, bucket, key, content_type}`. Source: OpenAPI
+   `POST /messaging/conversations/{conversation_id}/images/presign`; schemas
+   `SendImagePresignIn`, `PresignOut`; `src/api/endpoints/messaging.ts: sendImageMessage`
+   (presign call). Original `/messages/images/presign` with `byte_size` and a
+   `{upload_id, headers}` response is wrong.
+
+2. **Send-image endpoint & body.** VERDICT: **Corrected.** Real:
+   `POST /messaging/conversations/{conversation_id}/messages/image`,
+   req=`CreateImageMessageIn` (required `bucket, key`; plus `content_type`,
+   `filename`, `filesize`, `kind`, `caption`, `width`, `height`). Resp
+   `MessageOut`. Source: OpenAPI path above; schema `CreateImageMessageIn`;
+   `src/api/endpoints/messaging.ts: sendImageMessage` (payload). Original
+   `/messages/image` with `upload_id`, `thread_id`, and a `thumbnail` object is
+   wrong; the client sends no thumbnail (server derives media URLs).
+
+3. **Binary PUT.** VERDICT: **Verified.** PUT to `presign.upload_url` with
+   `Content-Type: presign.content_type`. Source:
+   `src/api/endpoints/messaging.ts` (`fetch(presign.upload_url, {method:"PUT", ...})`
+   / `uploadToPresignedUrl`).
+
+4. **Reactions add/remove endpoint.** VERDICT: **Corrected.** Single route
+   `POST .../messages/{message_id}/reactions`, req=`ReactIn`
+   `{emoji (required), action: "add"|"remove"}`; no per-emoji DELETE. Source:
+   OpenAPI `POST .../{message_id}/reactions`; schema `ReactIn`;
+   `src/api/endpoints/messaging.ts: reactToMessage`. Original
+   `DELETE /messages/{id}/reactions/{emoji}` is wrong.
+
+5. **Reaction details endpoint.** VERDICT: **Corrected.**
+   `GET .../messages/{message_id}/reactions/details`, resp=`ReactionDetailsOut`
+   `{reactions: object}`. Source: OpenAPI
+   `GET .../{message_id}/reactions/details`; schema `ReactionDetailsOut`;
+   `src/api/endpoints/messaging.ts: getReactionDetails`. Original
+   `GET /messages/{id}/reactions -> {items:[ReactionDetailDto]}` is wrong (path
+   and shape).
+
+6. **Pin / unpin endpoints & response.** VERDICT: **Corrected.**
+   `POST .../{message_id}/pin` and `DELETE .../{message_id}/pin`, both resp
+   `MessageControlActionOut` `{ok, conversation_id, message_id, action,
+   updated_at}` — not `MessageDto`. Source: OpenAPI those two paths; schema
+   `MessageControlActionOut`; `src/api/endpoints/messaging.ts: pinMessage`/`unpinMessage`.
+
+7. **Pins list endpoint.** VERDICT: **Corrected.**
+   `GET /messaging/conversations/{conversation_id}/pins`, resp
+   `ConversationPinsPageOut` `{items, next_cursor}`. Source: OpenAPI that path;
+   schema `ConversationPinsPageOut`; `src/api/endpoints/messaging.ts: getPinnedMessages`.
+   Original `GET /threads/{tid}/pins` is wrong.
+
+8. **Edit endpoint & field name.** VERDICT: **Corrected.**
+   `PATCH .../messages/{message_id}`, req=`EditMessageIn` with required field
+   **`text`** (deprecated `body` alias exists), resp `MessageOut` (`edited_at`).
+   Source: OpenAPI `PATCH .../{message_id}`; schema `EditMessageIn`;
+   `src/api/endpoints/messaging.ts: editMessage` (`body: { text }`). Original
+   `{ "body": "edited" }` field name is wrong.
+
+9. **Edit history endpoint.** VERDICT: **Verified.**
+   `GET .../messages/{message_id}/edits`. Source: OpenAPI
+   `GET .../{message_id}/edits`.
+
+10. **Delete (for me).** VERDICT: **Corrected (verb/path).**
+    `DELETE .../messages/{message_id}`. Source: OpenAPI
+    `DELETE /messaging/conversations/{conversation_id}/messages/{message_id}`;
+    `src/api/endpoints/messaging.ts: deleteMessage`. Original bare
+    `/messages/{id}` path is wrong (missing conversation scope).
+
+11. **Revoke (for all) endpoint & verb.** VERDICT: **Corrected.**
+    `DELETE .../messages/{message_id}/revoke`, resp `MessageOut`. Source: OpenAPI
+    `DELETE .../{message_id}/revoke`. Original `POST /messages/{id}/revoke ->
+    MessageDto(revoked=true)` is wrong (verb + path; the schema does not
+    guarantee a `revoked=true` boolean — `MessageOut` is returned).
+
+12. **Hide / unhide endpoints exist.** VERDICT: **Corrected (major).** Real:
+    `POST .../{message_id}/hide` and `DELETE .../{message_id}/hide`, resp
+    `MessageControlActionOut`, errors `MessageControlsErrorOut`; list at
+    `GET .../conversations/{conversation_id}/hidden-messages`. Source: OpenAPI
+    those paths; `src/api/endpoints/messaging.ts: hideMessage`/`unhideMessage`/
+    `getHiddenMessages`. Original "hide has no endpoint / local-only" is wrong.
+
+13. **All message routes are conversation-scoped.** VERDICT: **Corrected.**
+    Every route lives under `/messaging/conversations/{conversation_id}/...`.
+    Source: OpenAPI index (lines 327, 342, 349, 353, 356–361, 372).
+    Spec's bare `/messages/...` and `/threads/...` namespace is wrong throughout.
+
+14. **CSRF echo: `X-CSRF-Token` == `ui_csrf` cookie.** VERDICT: **Verified.**
+    Source: `src/api/client.ts` (`getCookie("ui_csrf")` then
+    `headers.set("X-CSRF-Token", csrf)`).
+
+15. **Auth transport includes a bearer token (not cookies alone).** VERDICT:
+    **Corrected (nuance).** Web sends `Authorization: Bearer <accessToken>` +
+    `X-CSRF-Token` + `credentials:"include"`. Source: `src/api/client.ts`
+    (Authorization + CSRF + credentials). The spec's "session rides cookies, not
+    headers" understated the bearer header; clarified in §8.
+
+16. **401 → refresh once → single retry.** VERDICT: **Verified.** A single
+    `POST /ui/session/refresh` (deduped via `refreshPromise`), one retry, and a
+    second 401 logs out — no loop. Source: OpenAPI `POST /ui/session/refresh`
+    (line 1847); `src/api/client.ts` 401 block (lines ~194–237).
+
+17. **FastAPI error `detail` in three shapes (string | `[{msg}]` |
+    `{code,...}`).** VERDICT: **Verified.** Source:
+    `src/api/client.ts: normalizeErrorDetail` (string / array-of-`{msg}` /
+    object) and `mapAuthorizationError` (`{code,...}`). Message-control routes
+    also return `MessageControlsErrorOut` `{detail, error_code?}` (schema).
+
+18. **Validation errors are `422 HTTPValidationError`.** VERDICT: **Verified.**
+    Source: OpenAPI responses on the messaging routes (`422:HTTPValidationError`).
+
+19. **Test stack (Robolectric Compose/Bitmap on JVM, MockWebServer, in-memory
+    Room, coroutines-test, Turbine).** VERDICT: **Verified (framework ref).**
+    Robolectric runs Android unit tests on the JVM:
+    https://robolectric.org/ ; in-memory Room via
+    `Room.inMemoryDatabaseBuilder`:
+    https://developer.android.com/training/data-storage/room/testing-db ;
+    Compose test rule `createComposeRule`:
+    https://developer.android.com/develop/ui/compose/testing ;
+    coroutines `runTest`/`StandardTestDispatcher`:
+    https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-test/ .
+
+20. **Instrumented smoke on a headless emulator / `connectedDebugAndroidTest`.**
+    VERDICT: **Verified (framework ref).**
+    https://developer.android.com/studio/test/command-line and
+    https://developer.android.com/studio/run/emulator-commandline (headless
+    `-no-window`).
+
+### Corrections made
+
+- §3 FR-1, FR-2, FR-4, FR-5, FR-6, FR-7 — endpoints, request/response field
+  names, and the hide-is-local-only assumption all corrected to the real,
+  conversation-scoped contract (citations 1–13).
+- §5 API Contract — rewritten end-to-end: real presign/send shapes, single
+  reactions toggle route, `reactions/details`, pin/unpin/hide/unhide returning
+  `MessageControlActionOut`, `/conversations/{id}/pins`, edit field `text`,
+  revoke as `DELETE .../revoke`, and the added `hidden-messages` list.
+- §6 — hide column now set after the server ack; revoke marker derives from the
+  returned `MessageOut`.
+- §7 — corrected the "must not call send" reference to the conversation-scoped
+  `messages/image` path; the 401-refresh-once flow confirmed accurate.
+- §8 — CSRF echo confirmed; clarified that auth also carries a bearer token
+  ("cookies, not headers" was imprecise); added hide to the mutating-request set.
+- §4 / §11 — renamed `hide_is_local_only_no_network_call` to
+  `hide_calls_server_and_reconciles`; matrix cells updated (edit `text`, hide is
+  a server call).
+- §13 R4 — resolved: hide endpoint exists.
+- §14 AC-4 — corrected to require the hide server call + reconciliation.
+- Frontmatter — `status: reviewed`, `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **Reactions POST response body.** OpenAPI lists `resp=200` for
+  `POST .../reactions` with **no named schema**, and the frontend
+  `reactToMessage` ignores the body. Whether the server returns an updated
+  reaction summary is **unverifiable** from the sources; the optimistic-update +
+  reconcile assertion in FR-4 assumes the client recomputes the summary locally
+  (or refetches via `reactions/details`). Confirm with AND-140.
+- **Edit-history & hidden-messages list item schemas.** `GET .../edits` and
+  `GET .../hidden-messages` have no named response schema in the index; the
+  exact item DTO (`EditHistoryEntryDto`, hidden-message item) is an
+  **unverified assumption** — pin the fixture shape against AND-140's
+  implementation, not the OpenAPI index.
+- **Optimistic reactions / delete-as-tombstone-vs-hard-remove (R3, R5).**
+  Client-side behavior choices owned by AND-140; not expressible from the
+  backend contract. Remain open per §13.
+- **`revoked`/`is_pinned`/`edited_at` fields on `MessageOut`.** The render-state
+  flags the tests assert (revoked badge, pinned badge, edited marker) depend on
+  `MessageOut` carrying those fields; `MessageOut` was not field-audited in this
+  review. **Unverified-assumption** — confirm against schema `MessageOut` before
+  finalizing render assertions.
+- **Dev backend host `http://18.222.237.167:8000/openapi.json`.** Not reachable
+  from / not present in the provided sources. **Unverified-assumption** (and
+  irrelevant to the suite, which mocks all HTTP).
+
+## 17. Test Plan
+
+All cases run headlessly unless noted. Test targets: **JVM** = Robolectric/unit,
+no device; **emulator** = headless AVD `test35` (API 35, x86_64);
+**device** = Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a) for real
+hardware behavior. "Traces" links to §14 Acceptance Criteria.
+
+- **TC-AND-142-01 — Image happy path: presign → PUT → send, in order with exact
+  bodies.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions:
+  MockWebServer with a 3-response dispatcher (presign 200 `PresignOut`, PUT 200,
+  send 200 `MessageOut`); seeded conversation `c1`; CSRF cookie seeded. Steps:
+  call `sendImage(c1, bitmap, caption="hi")`; `advanceUntilIdle()`. Expected:
+  request 1 = `POST /messaging/conversations/c1/images/presign` body
+  `{content_type, filename}`; request 2 = `PUT {upload_url}` with
+  `Content-Type` = presign content_type and body length = compressed size;
+  request 3 = `POST /messaging/conversations/c1/messages/image` body containing
+  `bucket`, `key`, `filesize`, `kind:"image"`, `caption:"hi"`, `width`,
+  `height`; ordering presign→PUT→send. Traces: AC-2, AC-3.
+
+- **TC-AND-142-02 — PUT failure aborts send.** Type: contract/MockWebServer
+  (JVM). Target: JVM. Preconditions: presign 200, PUT 403 (expired URL). Steps:
+  call `sendImage`; `advanceUntilIdle()`. Expected: result is `ApiResult.Error`
+  with the surfaced `detail`; `POST .../messages/image` is **never** sent
+  (assert via `requestCount`/recorded paths); no partial message row in Room.
+  Traces: AC-3.
+
+- **TC-AND-142-03 — Compressor invariants (real bitmap encode).** Type:
+  instrumented. Target: **physical device** (true JPEG/WEBP encoding differs from
+  Robolectric shadows — R1). Preconditions: a 4000×3000 source bitmap.
+  Steps: compress at configured max dimension + thumbnail dimension. Expected:
+  longest side ≤ max dim, thumbnail longest side ≤ thumb dim, output mime ∈
+  {jpeg, webp}, and the reported byte count equals the `filesize` later sent.
+  Note: MUST run on the physical device for encoder fidelity; a JVM/Robolectric
+  variant asserts only dimension/mime invariants. Traces: AC-2.
+
+- **TC-AND-142-04 — Image render + tap-to-viewer + viewer states.** Type:
+  Compose-UI (Robolectric). Target: JVM. Preconditions: `createComposeRule`,
+  fake `ImageLoader` resolving a test drawable synchronously (R2), an
+  `ImageMessage` DTO. Steps: render thread; assert thumbnail node; click it;
+  drive loading→loaded; press back. Expected: thumbnail node present with the
+  expected Coil model URL; tap navigates to viewer route with the correct media
+  arg; viewer reflects loading→loaded; back dismisses. Traces: AC-2.
+
+- **TC-AND-142-05 — Reaction add: optimistic then confirmed (single toggle
+  route).** Type: unit (JVM). Target: JVM. Preconditions: MainDispatcherRule,
+  Turbine on `uiState`, MockWebServer `POST .../reactions` → 200. Steps:
+  `addReaction(c1,m1,"👍")`. Expected: intermediate snapshot shows my reaction
+  optimistically; the single request is `POST
+  /messaging/conversations/c1/messages/m1/reactions` body
+  `{emoji:"👍", action:"add"}`; no `DELETE` route is used; confirmed state
+  persists; Room reflects it. Traces: AC-2, AC-4.
+
+- **TC-AND-142-06 — Reaction remove uses same route with action:"remove".**
+  Type: unit (JVM). Target: JVM. Preconditions: a pre-seeded reaction by me.
+  Steps: `removeReaction(c1,m1,"👍")`. Expected: request is `POST .../reactions`
+  body `{emoji:"👍", action:"remove"}` (NOT a per-emoji DELETE); summary updates;
+  Room updated. Traces: AC-2, AC-4.
+
+- **TC-AND-142-07 — Reaction rollback on error (Room byte-identical).** Type:
+  unit (JVM). Target: JVM. Preconditions: `POST .../reactions` → 500 with
+  FastAPI `detail` string. Steps: `addReaction`; `advanceUntilIdle()`. Expected:
+  optimistic snapshot appears then rolls back; final `uiState` == pre-call;
+  Room row byte-identical to the captured snapshot; `ApiResult.Error` surfaced.
+  Traces: AC-4.
+
+- **TC-AND-142-08 — Pin/unpin → state + pins list + Room.** Type: unit (JVM).
+  Target: JVM. Preconditions: MockWebServer: `POST .../pin` →
+  `MessageControlActionOut`, then `GET .../conversations/c1/pins` →
+  `ConversationPinsPageOut{items:[…]}`. Steps: `pin(c1,m1)` then `unpin(c1,m1)`.
+  Expected: pin issues `POST .../m1/pin`, response parsed as
+  `MessageControlActionOut` (not MessageDto); pins list refreshed from
+  `/conversations/c1/pins`; local pinned flag + Room toggle on; unpin issues
+  `DELETE .../m1/pin` and reverses. Traces: AC-2, AC-4.
+
+- **TC-AND-142-09 — Edit uses `text` field; sets edited_at; appends history.**
+  Type: unit (JVM). Target: JVM. Preconditions: `PATCH .../m1` →
+  `MessageOut{edited_at}`, `GET .../m1/edits` → history list. Steps:
+  `edit(c1,m1,"edited")`. Expected: request body is `{ "text":"edited" }` (NOT
+  `body`); state shows new text + `edited_at`; history entry retrievable; Room
+  persists. Traces: AC-2, AC-4.
+
+- **TC-AND-142-10 — Delete / revoke / hide reach distinct end states (correct
+  verbs).** Type: unit (JVM). Target: JVM. Preconditions: dispatcher mapping
+  `DELETE .../m1` (delete-for-me) → 200, `DELETE .../m1/revoke` → `MessageOut`,
+  `POST .../m1/hide` → `MessageControlActionOut`. Steps: run each against a
+  distinct seeded message. Expected: delete → tombstone/removed per AND-140;
+  revoke uses **DELETE .../revoke** and sets the revoked marker from the returned
+  `MessageOut`; hide uses **POST .../hide** and sets `hidden=true` after the ack;
+  three distinct Room/state end states. Traces: AC-2, AC-4.
+
+- **TC-AND-142-11 — Hide IS a server call (regression for the corrected
+  assumption).** Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: `POST .../m1/hide` → `MessageControlActionOut`. Steps:
+  `hide(c1,m1)`; `advanceUntilIdle()`. Expected: exactly one network request,
+  `POST /messaging/conversations/c1/messages/m1/hide`; `requestCount`
+  increments by 1; local `hidden` flag reconciled from the ack. (Explicitly
+  asserts hide is NOT suppressed.) Traces: AC-4.
+
+- **TC-AND-142-12 — CSRF echo + bearer on every mutating call.** Type:
+  contract/MockWebServer (JVM). Target: JVM. Preconditions: `RecordingCookieJar`
+  seeded with `ui_csrf=abc` and a session cookie; auth store with a bearer
+  token. Steps: perform react / pin / hide / edit / delete / revoke / presign /
+  send. Expected: each mutating request carries `X-CSRF-Token: abc` (==
+  `ui_csrf`) and `Authorization: Bearer …`; the session cookie is replayed from
+  the jar. Traces: AC-5.
+
+- **TC-AND-142-13 — 401 → single refresh → one retry; second 401 surfaces auth
+  error (no loop).** Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: dispatcher: idempotent `GET .../pins` → 401, then
+  `POST /ui/session/refresh` → 200, then retry → 200; a separate sequence where
+  the retry also 401s. Steps: trigger the GET in each sequence. Expected: exactly
+  one `POST /ui/session/refresh` then one retry; first sequence succeeds; second
+  surfaces an auth error and does **not** loop (`requestCount` bounded).
+  Non-idempotent POST/PATCH/DELETE asserted **not** retried. Traces: AC-5.
+
+- **TC-AND-142-14 — FastAPI error shapes map to ApiResult.Error + rollback.**
+  Type: unit (JVM). Target: JVM. Preconditions: three error fixtures —
+  `detail` string, `detail:[{msg}]`, `detail:{code:"role_required",…}` /
+  `MessageControlsErrorOut` for a pin 403. Steps: drive a reaction and a pin
+  against each. Expected: every shape is normalized to a non-empty message,
+  yields `ApiResult.Error`, and triggers optimistic rollback. Traces: AC-4,
+  AC-5.
+
+- **TC-AND-142-15 — Flaky-dev-host / offline path.** Type: contract/MockWebServer
+  (JVM). Target: JVM. Preconditions: dispatcher that drops the connection / 503s
+  N times then 200 for an idempotent GET, plus a hard offline (`SocketPolicy`
+  disconnect) case; virtual time via `advanceTimeBy`. Steps: trigger a pins/edits
+  GET. Expected: bounded backoff retries succeed without real waiting (no
+  `Thread.sleep`); offline surfaces a network `ApiResult.Error`; no partial Room
+  writes. Traces: AC-1, AC-4.
+
+- **TC-AND-142-16 — Accessibility of thumbnail, viewer, and action menu.** Type:
+  Compose-UI (Robolectric). Target: JVM. Preconditions: `createComposeRule`,
+  string resources loaded. Steps: render an image message + open the action
+  menu. Expected: thumbnail exposes a non-empty `contentDescription` (caption or
+  localized "Image message" fallback via `R.string.image_message_a11y`); viewer
+  dismiss control has an accessible label; react/pin/edit/delete/revoke/hide menu
+  items are distinct semantics nodes with content descriptions. Traces: AC-1,
+  AC-2.
+
+- **TC-AND-142-17 — Telemetry redaction + event correctness.** Type: unit (JVM).
+  Target: JVM. Preconditions: `RecordingAnalytics` + recording OkHttp logging
+  interceptor. Steps: send an image, react, hide, open viewer. Expected:
+  `image_send` (with `filesize`/`compressed`), `message_action`
+  (`action ∈ {react,pin,unpin,edit,delete,revoke,hide}`), and `image_view_open`
+  each fire exactly once; image PUT/POST bodies are NOT present in logs
+  (redaction). Traces: AC-1.
+
+- **TC-AND-142-18 — ABI / API-level smoke (arm64 API 34 vs x86_64 API 35).**
+  Type: instrumented/e2e. Target: **physical device** (arm64-v8a, API 34) AND
+  emulator `test35` (x86_64, API 35). Preconditions: a minimal Coil-load +
+  viewer-navigation instrumented test. Steps: run on both targets. Expected:
+  identical pass; flags any arm64-vs-x86 or API-34-vs-35 image-decode/render
+  divergence. Note: the device leg MUST run on hardware to catch ABI-specific
+  decode behavior. Traces: AC-1.
+
+### Coverage matrix (§14 AC → covering TCs)
+
+| Acceptance Criterion | Covered by |
+|---|---|
+| AC-1 fully headless, zero manual / zero real-network | TC-01..02, 04..17 (mocked); TC-15 (offline), TC-16 (a11y), TC-17 (telemetry), TC-18 (CI device/emu legs) |
+| AC-2 every FR-1..FR-7 has ≥1 named test | TC-01 (FR-1), TC-03 (FR-2), TC-04 (FR-3), TC-05/06/07 (FR-4), TC-08 (FR-5), TC-09 (FR-6), TC-10/11 (FR-7) |
+| AC-3 presign→PUT→send order, bodies, PUT-failure aborts send | TC-01, TC-02 |
+| AC-4 each action: StateFlow + Room + rollback; hide is a server call | TC-05, TC-06, TC-07, TC-08, TC-09, TC-10, TC-11, TC-14 |
+| AC-5 CSRF/cookie + single-retry 401→refresh | TC-12, TC-13, TC-14 |
+| AC-6 flake-free + ≥90% coverage | TC-15 (no-flake/virtual time); coverage met cumulatively by TC-01..17 (JaCoCo gate) |
+| AC-7 `testDebugUnitTest` + headless instrumented green on CI | TC-01..17 (unit/Robolectric), TC-03/TC-18 (instrumented on emulator `test35` + device) |
