@@ -1,6 +1,6 @@
 # GAP-0125: Private chat messages exposed in public chat history
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BCAST-012 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BCAST-012 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BCAST-012.md`); see also `docs/tickets/writeups/BCAST-012.md`
 
 ## Location

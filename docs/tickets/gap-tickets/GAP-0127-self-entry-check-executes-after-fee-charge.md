@@ -1,6 +1,6 @@
 # GAP-0127: Self-entry check executes after fee charge
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BCAST-014 · **Effort**: S
+**Status**: No change needed (verified guard correct, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BCAST-014 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BCAST-014.md`); see also `docs/tickets/writeups/BCAST-014.md`
 
 ## Location

@@ -263,7 +263,10 @@ def get_chat_history(
         "KeyConditionExpression": Key("session_id").eq(session_id),
         "Limit": limit,
         "ScanIndexForward": False,  # newest first for fetch
-        "FilterExpression": Attr("deleted").ne(True),
+        # Exclude soft-deleted items and private-chat messages (GAP-0125):
+        # private_chat-kind messages share this table but must never appear
+        # in the public chat history.
+        "FilterExpression": Attr("deleted").ne(True) & Attr("kind").ne("private_chat"),
     }
     if before_sort_key:
         kwargs["KeyConditionExpression"] = (
@@ -295,6 +298,10 @@ def fetch_chat_messages_after(
         "KeyConditionExpression": Key("session_id").eq(session_id),
         "Limit": limit,
         "ScanIndexForward": True,
+        # Exclude soft-deleted items and private-chat messages (GAP-0125):
+        # the SSE polling path must never leak private_chat-kind messages
+        # into the public chat stream.
+        "FilterExpression": Attr("deleted").ne(True) & Attr("kind").ne("private_chat"),
     }
     if after_sort_key:
         kwargs["KeyConditionExpression"] = (

@@ -1,6 +1,6 @@
 # GAP-0126: Billing atomicity gap in `_write_private_chat_billing()`
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BCAST-012 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BCAST-012 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BCAST-012.md`); see also `docs/tickets/writeups/BCAST-012.md`
 
 ## Location
