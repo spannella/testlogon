@@ -5,7 +5,8 @@ milestone: M1 (Auth Foundation)
 epic: E01 (Project scaffolding & build tooling)
 priority: P0
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on:
   - AND-002
 blocks:
@@ -53,11 +54,16 @@ it adds no `usesCleartextTraffic` flag and no `networkSecurityConfig` (see §8).
 
 **Web reference (`frontend/`).** The React/Vite web client selects its API base
 via Vite env (`import.meta.env.VITE_API_BASE_URL`, consumed in
-`frontend/src/api/client.ts` / the axios/fetch wrapper under
-`frontend/src/api/`). The Android port mirrors that "base URL is an
-environment-injected constant, not a literal" pattern, using Gradle flavors +
-`BuildConfig` as the Android-idiomatic equivalent. No API endpoint paths are
-defined in this ticket.
+`src/api/client.ts`, with a duplicate copy in `src/api/endpoints/profile.ts`).
+The Android port mirrors that "base URL is an environment-injected constant, not
+a literal" pattern, using Gradle flavors + `BuildConfig` as the Android-idiomatic
+equivalent. **Trailing-slash note (verified):** the web client does **not** rely
+on a trailing slash — `client.ts` normalizes it away
+(`API_BASE_URL = (...VITE_API_BASE_URL ?? "").toString().replace(/\/$/, "")`) and
+re-inserts the separator in `withApiBase()`. Android's **trailing-`/` requirement
+(§5/§6) is a Retrofit-specific contract**, not inherited from the web client; the
+two differ deliberately and both are correct for their respective HTTP stacks. No
+API endpoint paths are defined in this ticket.
 
 **Related AND tickets.**
 - **AND-002** (blocked-by): created the `:app` module, set `namespace`/
@@ -499,3 +505,273 @@ Open questions:
 - Changes committed on branch `android-port` (no merge to default), PR opened
   referencing AND-006, CI (`assembleDevDebug` + `testDevDebugUnitTest`) green,
   reviewed and approved.
+
+## 16. Citations & Assumption Audit
+
+This ticket is a build-config ticket: it provisions `BuildConfig.API_BASE_URL`
+and Gradle flavors. It defines **no HTTP API surface**. The auditable claims are
+therefore (a) the web-client base-URL pattern it mirrors, (b) the few REST paths
+it name-drops in §5 as "owned elsewhere", and (c) the Android/Gradle framework
+mechanics. Each is checked below.
+
+1. **Claim:** The web client selects its API base via Vite env
+   `import.meta.env.VITE_API_BASE_URL`, consumed in `src/api/client.ts`.
+   **VERDICT: Verified.**
+   **SOURCE:** `src/api/client.ts:7`
+   (`const API_BASE_URL = ((import.meta as any).env?.VITE_API_BASE_URL ?? "")...`).
+
+2. **Claim (corrected):** The web client treats the base URL as
+   environment-injected and the Android trailing-slash rule mirrors web behavior.
+   **VERDICT: Corrected.** The web client explicitly **strips** any trailing
+   slash (`.replace(/\/$/, "")`) and re-adds the path separator in
+   `withApiBase()`; it does *not* require a trailing slash. Android's trailing-`/`
+   requirement is a **Retrofit-specific** contract, not inherited from web. §2 was
+   amended to state this distinction.
+   **SOURCE:** `src/api/client.ts:7-14` (`withApiBase`); there is a duplicate
+   `API_BASE_URL` normalizer in `src/api/endpoints/profile.ts:63-72`.
+
+3. **Claim:** The trailing-slash matters because Retrofit's `baseUrl()` drops the
+   last path segment of a non-`/`-terminated base when composing relative paths.
+   **VERDICT: Verified (framework ref).**
+   **SOURCE:** framework ref — Retrofit `Retrofit.Builder.baseUrl`
+   (https://square.github.io/retrofit/2.x/retrofit/retrofit2/Retrofit.Builder.html#baseUrl-okhttp3.HttpUrl-).
+
+4. **Claim:** `POST /ui/session/start` exists (§5).
+   **VERDICT: Verified.**
+   **SOURCE:** OpenAPI `POST /ui/session/start` | op=`ui_session_start_ui_session_start_post`
+   | req=`UiSessionStartReq` | resp=`200:UiSessionStartResp;422:HTTPValidationError`.
+
+5. **Claim:** `POST /ui/session/finalize` exists (§5).
+   **VERDICT: Verified.**
+   **SOURCE:** OpenAPI `POST /ui/session/finalize` | op=`ui_session_finalize_ui_session_finalize_post`
+   | req=`UiSessionFinalizeReq` | resp=`200:;422:HTTPValidationError`.
+
+6. **Claim:** `GET /ui/me` exists (§5).
+   **VERDICT: Verified.**
+   **SOURCE:** OpenAPI `GET /ui/me` | op=`ui_me_ui_me_get` | resp=`200:;422:HTTPValidationError`
+   | params=`user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`.
+
+7. **Claim:** `POST /ui/session/refresh` exists, and a 401 → refresh → retry flow
+   is the resilience pattern (§7).
+   **VERDICT: Verified (path) / Unverified-assumption (the 401-retry flow).** The
+   path exists; the OpenAPI entry shows `req=` (no body) and `resp=200:` (no typed
+   schema). The "401 → refresh → retry" behavior is an Android networking design
+   choice owned by AND-009/AND-010, not something this build-config ticket
+   implements, and is not asserted by the OpenAPI index.
+   **SOURCE:** OpenAPI `POST /ui/session/refresh` | op=`ui_session_refresh_ui_session_refresh_post`
+   | req= | resp=`200:`.
+
+8. **Claim:** `/ui/mfa/*` endpoints exist (§5).
+   **VERDICT: Verified.**
+   **SOURCE:** OpenAPI lines incl. `POST /ui/mfa/email/begin`,
+   `POST /ui/mfa/sms/begin`, `POST /ui/mfa/totp/verify`,
+   `POST /ui/mfa/recovery/{factor}` (op prefixes `ui_email_*`, `ui_sms_*`,
+   `ui_totp_*`, `ui_recovery_*`).
+
+9. **Claim:** The dev backend is `http://18.222.237.167:8000` (plaintext, flaky)
+   and is the authoritative `dev` value.
+   **VERDICT: Verified (against ticket) / Unverified-assumption (against
+   reference repo).** The value comes from the AND-006 backlog ticket
+   (`specs-src/AND-006.md` line 12), which is authoritative for this deployment
+   detail. It does **not** appear anywhere in the frontend reference source or the
+   OpenAPI spec (grep for `18.222.237.167` → no matches), so it cannot be
+   cross-checked against those sources.
+   **SOURCE:** `specs-src/AND-006.md:12`
+   (`dev → http://18.222.237.167:8000`); reference repo: no match.
+
+10. **Claim:** `staging`/`prod` hosts (`*.testlogon.example`) are placeholders.
+    **VERDICT: Unverified-assumption (explicitly).** Marked as placeholders by the
+    spec itself (§13 OQ-1). No provisioned staging/prod hostname exists in any
+    source. Correctly flagged TODO.
+    **SOURCE:** none available — author-declared placeholder (spec §3 / §13 OQ-1).
+
+11. **Claim:** Gradle `buildConfigField("String", "API_BASE_URL", "\"...\"")`
+    requires `buildFeatures.buildConfig = true` and the 3rd arg is literal emitted
+    source (needing escaped quotes for a `String`).
+    **VERDICT: Verified (framework ref).**
+    **SOURCE:** framework ref — AGP `ProductFlavor.buildConfigField` /
+    `buildFeatures { buildConfig = true }`
+    (https://developer.android.com/build/gradle-tips#share-custom-fields-and-resource-values-with-your-app-code,
+    https://developer.android.com/reference/tools/gradle-api/current/com/android/build/api/dsl/BuildFeatures).
+
+12. **Claim:** A single flavor dimension yields 3 flavors × 2 build types = 6
+    variants; the default unit-test variant is `devDebug` when `dev` is the first
+    declared flavor.
+    **VERDICT: Verified (framework ref).** Variant count is arithmetic from the
+    flavor/build-type matrix; the default variant follows AGP's "first-declared
+    flavor per dimension" rule.
+    **SOURCE:** framework ref — Android build variants
+    (https://developer.android.com/build/build-variants#product-flavors).
+
+13. **Claim:** Cleartext (`http://`) traffic is blocked by default on Android and
+    encoding the URL alone does not permit it; an allowance is owned by AND-009.
+    **VERDICT: Verified (framework ref).** Cleartext is disallowed by default for
+    `targetSdk ≥ 28` absent a network-security-config / `usesCleartextTraffic`.
+    The cross-ticket ownership (AND-009) is an internal planning assumption.
+    **SOURCE:** framework ref — Network security config / cleartext default
+    (https://developer.android.com/training/articles/security-config).
+
+### Corrections made
+
+- **§2 (web-client trailing slash):** Corrected the implication that Android's
+  trailing-`/` rule mirrors the web client. The web client *strips* the trailing
+  slash (`client.ts:7`); the Android requirement is a Retrofit-specific contract.
+  Added an explicit "Trailing-slash note (verified)" paragraph and corrected the
+  reference path (`src/api/client.ts`, not `frontend/src/api/client.ts`; the repo
+  layout under `reference/src/` has no `frontend/` prefix). Also noted the
+  duplicate normalizer in `src/api/endpoints/profile.ts`.
+
+All other concrete claims (§5 endpoint existence, Gradle/AGP mechanics, cleartext
+default) were found accurate and required no inline change.
+
+### Open assumptions
+
+- **Dev host `18.222.237.167:8000`:** verifiable only against the source ticket,
+  not against the OpenAPI spec or frontend source (no occurrence there). Treated
+  as authoritative because it is a deployment fact owned by the backlog ticket.
+- **`staging`/`prod` hostnames:** placeholders; no provisioned value exists in any
+  source (spec §13 OQ-1). Must be confirmed before any staging/prod build ships.
+- **401 → `/ui/session/refresh` → retry resilience flow (§7):** the path exists,
+  but the retry behavior is a downstream networking design (AND-009/AND-010) and
+  is not asserted by any authoritative source for this ticket.
+- **Cross-ticket ownership boundaries** (AND-002 having set
+  `buildConfig = true`/`applicationId`; AND-009 owning cleartext config; AND-010
+  consuming the constant) are internal planning assumptions, not verifiable from
+  the reference repo or OpenAPI.
+
+## 17. Test Plan
+
+Acceptance Criteria referenced below are the nine checkboxes in §14, numbered
+AC-1..AC-9 top-to-bottom:
+AC-1 flavor dimension + 3 flavors; AC-2 per-flavor `buildConfigField` values;
+AC-3 default variant `dev` → dev host; AC-4 every value trailing-`/`;
+AC-5 `buildConfig=true` + non-null `String` for all six variants;
+AC-6 `applicationIdSuffix` (`.dev`/`.staging`, prod unsuffixed);
+AC-7 `assembleDevDebug`/`assembleStagingDebug`/`assembleProdRelease` configure &
+assemble; AC-8 `BuildConfigTest.kt` exists + `testDevDebugUnitTest` passes;
+AC-9 no cleartext flag / no network-security-config / no secrets / no per-flavor
+source sets; (plus the lint criterion, treated as AC-9's companion).
+
+- **TC-AND-006-01** — Type: unit (JVM, `testDevDebugUnitTest`)
+  - Preconditions: `dev` flavor declared; project configures.
+  - Steps: Run `./gradlew :app:testDevDebugUnitTest` exercising
+    `BuildConfigTest.dev_variant_pointsAtDevHost`.
+  - Expected: `BuildConfig.FLAVOR == "dev"` and
+    `BuildConfig.API_BASE_URL == "http://18.222.237.167:8000/"`.
+  - Traces: AC-3, AC-8.
+
+- **TC-AND-006-02** — Type: unit (JVM)
+  - Preconditions: as above.
+  - Steps: Run `BuildConfigTest.api_base_url_isPresent_andTrailingSlashed`.
+  - Expected: `API_BASE_URL` is non-blank and `endsWith("/")` is true.
+  - Traces: AC-4, AC-5, AC-8.
+
+- **TC-AND-006-03** — Type: unit (JVM, parameterized/added)
+  - Preconditions: staging & prod flavors declared. (May require a
+    `testStagingDebugUnitTest` / `testProdReleaseUnitTest` run, since `BuildConfig`
+    is variant-scoped.)
+  - Steps: For `staging` run `testStagingDebugUnitTest`; for `prod` run
+    `testProdReleaseUnitTest`; assert `API_BASE_URL` equals the declared HTTPS
+    placeholder and ends with `/`, and `FLAVOR` matches.
+  - Expected: staging → `https://staging.api.testlogon.example/`;
+    prod → `https://api.testlogon.example/`; both trailing-slashed; non-null.
+  - Traces: AC-2, AC-4, AC-5.
+
+- **TC-AND-006-04** — Type: contract/MockWebServer (deferred-consumer smoke)
+  - Preconditions: AND-010 Retrofit present OR a throwaway local
+    `Retrofit.Builder().baseUrl(BuildConfig.API_BASE_URL)` in a test.
+  - Steps: Build Retrofit with `BuildConfig.API_BASE_URL` (dev value) and a
+    MockWebServer base; issue a request to a relative path `ui/me`; capture the
+    recorded request path.
+  - Expected: Resolved URL preserves the full host+port and appends `ui/me`
+    (i.e. no dropped path segment) — proves the trailing-`/` guarantee is honored
+    by Retrofit. (Validates the *purpose* of AC-4; the network call itself is
+    AND-010's, this is the contract assertion AND-006 enables.)
+  - Traces: AC-4.
+
+- **TC-AND-006-05** — Type: integration (Gradle build)
+  - Preconditions: clean checkout, JDK 17, SDK 35, AGP 8.7.3.
+  - Steps: Run `./gradlew :app:assembleDevDebug :app:assembleStagingDebug
+    :app:assembleProdRelease`.
+  - Expected: All three configure and assemble with **no** "flavor must specify
+    dimension" / unresolved-symbol error; APKs produced.
+  - Traces: AC-1, AC-7.
+
+- **TC-AND-006-06** — Type: integration (Gradle build, negative/error-shape)
+  - Preconditions: temporarily remove the escaped quotes from the `dev`
+    `buildConfigField` value (`"http://...:8000/"` → `http://...:8000/`).
+  - Steps: Run `./gradlew :app:assembleDevDebug`.
+  - Expected: Build **fails** with a Kotlin/Java compile error in generated
+    `BuildConfig` (unresolved symbol). Restoring the quotes restores green.
+    (Validates the §7/§13 R-2 build-time error mode.)
+  - Traces: AC-2, AC-7.
+
+- **TC-AND-006-07** — Type: integration (Gradle config, negative)
+  - Preconditions: temporarily set `buildFeatures.buildConfig = false`.
+  - Steps: Run `./gradlew :app:testDevDebugUnitTest`.
+  - Expected: Compilation fails because `BuildConfig.API_BASE_URL` does not exist
+    (test references a missing field). Restoring `buildConfig = true` restores
+    green. (Validates AC-5 dependency on the feature flag.)
+  - Traces: AC-5, AC-8.
+
+- **TC-AND-006-08** — Type: instrumented/e2e (applicationId co-install)
+  - Preconditions: device/emulator; `assembleDevDebug` + `assembleStagingDebug`
+    built.
+  - Steps: `adb install` the devDebug APK, then the stagingDebug APK; query
+    `adb shell pm list packages | grep testlogon`; launch
+    `com.testlogon.android.dev.debug/.MainActivity`.
+  - Expected: Both packages co-exist —
+    `com.testlogon.android.dev.debug` and `com.testlogon.android.staging.debug`
+    installed simultaneously without uninstall conflict; dev launches.
+  - Traces: AC-6.
+
+- **TC-AND-006-09** — Type: manual (prod applicationId unsuffixed)
+  - Preconditions: `assembleProdRelease` built (or `prodDebug`).
+  - Steps: Inspect the generated `BuildConfig`/merged manifest `APPLICATION_ID`
+    for a prod variant.
+  - Expected: prod `applicationId` is exactly `com.testlogon.android` (no
+    `.prod`); only the AND-002 build-type suffix (`.debug`) may apply for
+    prodDebug, never a flavor suffix.
+  - Traces: AC-6.
+
+- **TC-AND-006-10** — Type: security/permission (no cleartext flag, no secrets)
+  - Preconditions: branch diff for AND-006 available; `devDebug` APK built.
+  - Steps: (a) Grep the diff + merged manifest for `usesCleartextTraffic` and
+    `networkSecurityConfig`; (b) grep flavor block / `BuildConfig` for any
+    token/key/secret; (c) confirm no `src/dev`, `src/staging`, `src/prod` source
+    sets were created.
+  - Expected: No `usesCleartextTraffic`, no `networkSecurityConfig`, no secret in
+    any `buildConfigField`, no per-flavor source set. Cleartext to the dev host
+    remains *blocked at runtime* (owned by AND-009).
+  - Traces: AC-9.
+
+- **TC-AND-006-11** — Type: integration (lint)
+  - Preconditions: project configures.
+  - Steps: Run `./gradlew :app:lintDevDebug`.
+  - Expected: Completes with **no new** warnings attributable to the flavor block.
+  - Traces: AC-9 (lint companion criterion).
+
+- **TC-AND-006-12** — Type: contract (flaky-dev-host isolation, design assertion)
+  - Preconditions: dev flavor built.
+  - Steps: Confirm the dev host string exists **only** as a `buildConfigField`
+    value and is not hard-coded in any Kotlin source (grep source tree for
+    `18.222.237.167`).
+  - Expected: The flaky/plaintext dev host is isolated to the switchable
+    `BuildConfig` constant — switching flavors (or a future runtime override per
+    §6) requires no source edit. (Validates the §1/§7 isolation rationale for the
+    unreliable/offline-prone host.)
+  - Traces: AC-2, AC-3.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 flavor dimension + 3 flavors | TC-05 |
+| AC-2 per-flavor `buildConfigField` values | TC-03, TC-06, TC-12 |
+| AC-3 default variant `dev` → dev host | TC-01, TC-12 |
+| AC-4 every value trailing-`/` | TC-02, TC-03, TC-04 |
+| AC-5 `buildConfig=true` + non-null `String`, all variants | TC-02, TC-03, TC-07 |
+| AC-6 `applicationIdSuffix` (prod unsuffixed) | TC-08, TC-09 |
+| AC-7 three assemble tasks succeed | TC-05, TC-06 |
+| AC-8 `BuildConfigTest.kt` exists + `testDevDebugUnitTest` passes | TC-01, TC-02, TC-07 |
+| AC-9 no cleartext/nsc/secrets/source-sets (+ lint) | TC-10, TC-11 |

@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-010]
 blocks: [AND-016, AND-017]
 ---
@@ -178,9 +179,16 @@ out: POST https://api.testlogon.com/ui/session/start      body {"challenge_conte
 ```
 
 Path (`/ui/session/start`), method, body, and headers (e.g. `X-CSRF-Token`) are unchanged.
-Port `-1` yields the scheme default (443/80). All downstream endpoints (`/ui/session/start`,
-`/ui/mfa/{totp,sms,email}/{begin,verify}`, `/ui/session/finalize`, `/ui/me`,
-`/ui/session/refresh`, `/openapi.json`) inherit the rewrite identically. The DataStore record
+Port `-1` yields the scheme default (443/80). All downstream endpoints inherit the rewrite
+identically — verified against the backend OpenAPI index: `POST /ui/session/start`,
+`POST /ui/session/finalize`, `POST /ui/session/refresh` (no request body), `GET /ui/me`, and
+the MFA endpoints `POST /ui/mfa/sms/begin`, `POST /ui/mfa/sms/verify`,
+`POST /ui/mfa/email/begin`, `POST /ui/mfa/email/verify`, and `POST /ui/mfa/totp/verify`.
+**Correction:** TOTP has **no** `begin` endpoint — the backend exposes only
+`/ui/mfa/totp/verify` (plus device-management endpoints); only `sms` and `email` have a
+`begin` step. The earlier shorthand `/ui/mfa/{totp,sms,email}/{begin,verify}` was inaccurate.
+`/openapi.json` is **not** a documented path in the backend spec (it is a plausible FastAPI
+default but unverifiable here); it is omitted from the verified list. The DataStore record
 shape persisted on disk:
 
 ```json
@@ -339,3 +347,234 @@ Coverage target ≥ 90% lines on `HostSelectionInterceptor`, `HostOverrideProvid
   `core-data` boundaries.
 - Code reviewed and merged to `android-port`; downstream tickets (AND-016, AND-017, AND-051)
   reference the documented interceptor ordering and store interface.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim in this spec, its verdict, and the authoritative source pointer.
+"OpenAPI" pointers refer to `reference/openapi.index.txt` / `reference/openapi.pretty.json`;
+frontend pointers refer to `reference/src/...`.
+
+1. **`POST /ui/session/start` exists and takes `UiSessionStartReq` with a `challenge_context`
+   object field; responds `200:UiSessionStartResp` / `422:HTTPValidationError`.** — **Verified.**
+   OpenAPI `POST /ui/session/start` (op `ui_session_start_ui_session_start_post`);
+   `components.schemas.UiSessionStartReq` has property `challenge_context`
+   (`type: object`, `additionalProperties: true`); `UiSessionStartResp` has
+   `auth_required`, `challenge_id`, `required_factors`.
+2. **`POST /ui/session/finalize` exists (`req=UiSessionFinalizeReq`).** — **Verified.**
+   OpenAPI `POST /ui/session/finalize` (op `ui_session_finalize_ui_session_finalize_post`).
+3. **`POST /ui/session/refresh` exists and takes no request body.** — **Verified.**
+   OpenAPI `POST /ui/session/refresh` shows `req=` (empty) and `resp=200:`. Mirrors frontend
+   `src/api/client.ts: refreshSession` (POST, `credentials: "include"`, no body).
+4. **`GET /ui/me` exists.** — **Verified.** OpenAPI `GET /ui/me` (op `ui_me_ui_me_get`),
+   `resp=200:;422:HTTPValidationError`.
+5. **MFA endpoints `/ui/mfa/sms/{begin,verify}`, `/ui/mfa/email/{begin,verify}`, and
+   `/ui/mfa/totp/verify` exist.** — **Verified.** OpenAPI: `POST /ui/mfa/sms/begin`,
+   `POST /ui/mfa/sms/verify`, `POST /ui/mfa/email/begin`, `POST /ui/mfa/email/verify`,
+   `POST /ui/mfa/totp/verify`.
+6. **TOTP has a `begin` endpoint (implied by `/ui/mfa/{totp,sms,email}/{begin,verify}`).** —
+   **Corrected.** OpenAPI has **no** `/ui/mfa/totp/begin`; TOTP exposes only
+   `/ui/mfa/totp/verify` (plus `/ui/mfa/totp/devices/*`). Spec §5 corrected to enumerate real
+   paths and call out that only `sms`/`email` have a `begin` step.
+7. **`/openapi.json` is a routable endpoint that inherits the rewrite.** —
+   **Unverified-assumption.** No such path appears in `reference/openapi.index.txt` and the
+   only `openapi` key in `openapi.pretty.json` is the `"openapi": "3.1.0"` version field. It is
+   a plausible FastAPI default but cannot be confirmed from the sources; removed from the
+   verified endpoint list in §5.
+8. **The web client sends `X-CSRF-Token`, sourced from the `ui_csrf` cookie.** — **Verified.**
+   `src/api/client.ts:168-170` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`).
+   This substantiates §5's claim that the rewrite must preserve the `X-CSRF-Token` header and
+   §8's host-bound-credential reasoning.
+9. **Session/credential transport is cookie-based with credentialed requests
+   (`credentials: "include"`), which is why a host switch must clear host-scoped cookies
+   (§6/§8 `HostChanged`).** — **Verified.** `src/api/client.ts:124,183,220`
+   (`credentials: "include"`); plus `Authorization: Bearer` and `X-IMPERSONATION-TOKEN`
+   headers (`client.ts:158-165`). Confirms host-bound session state exists and motivates the
+   clear-on-host-change requirement.
+10. **The web client layers a runtime/env base URL over relative paths (the model this ticket
+    mirrors).** — **Verified.** `src/api/client.ts:7` reads `VITE_API_BASE_URL`; `withApiBase`
+    (`client.ts:10-13`) prepends it to each path unless the path is already absolute. Same
+    pattern duplicated in `src/api/endpoints/profile.ts:63,71-72`.
+11. **OkHttp invokes application interceptors in add-order; `HttpUrl.newBuilder()` can rewrite
+    scheme/host/port while preserving path/query/headers.** — **Verified (framework ref).**
+    OkHttp interceptors doc: https://square.github.io/okhttp/features/interceptors/ ;
+    `HttpUrl.Builder` API: https://square.github.io/okhttp/4.x/okhttp/okhttp3/-http-url/-builder/ .
+12. **DataStore (Preferences) provides a `Flow` of values and atomic `edit { }` writes for the
+    persisted override.** — **Verified (framework ref).** Jetpack DataStore guide:
+    https://developer.android.com/topic/libraries/architecture/datastore .
+13. **`@IntoSet` Hilt multibindings do not guarantee element order (motivating the explicit
+    ordered list in §4/R-1).** — **Verified (framework ref).** Dagger/Hilt multibindings:
+    https://dagger.dev/dev-guide/multibindings (sets are unordered).
+14. **Release builds should reject cleartext `http`; manifest cleartext config gates dev/QA
+    hosts (§8).** — **Unverified-assumption (project policy).** This is an Android security
+    posture choice (network security config / `usesCleartextTraffic`), not derivable from the
+    backend or frontend sources. Framework ref:
+    https://developer.android.com/privacy-and-security/security-config . The actual default
+    backend being plaintext HTTP is consistent with the project context but the release-build
+    https-only rule is a decision owned here/AND-006.
+
+### Corrections made
+
+- **§5 endpoint enumeration:** removed the misleading `/ui/mfa/{totp,sms,email}/{begin,verify}`
+  shorthand, which implied a nonexistent `/ui/mfa/totp/begin`. Replaced with the exact set of
+  verified paths and an explicit note that only `sms`/`email` have a `begin` step (claim #6).
+- **§5 `/openapi.json`:** removed from the "verified" endpoint list and reclassified as an
+  unverifiable assumption, since it is absent from the backend OpenAPI index (claim #7).
+- All other concrete API/header/transport claims were checked and left in place (cited above).
+
+### Open assumptions
+
+- **`/openapi.json` routability** (claim #7): not in the OpenAPI index; cannot be confirmed.
+  Low impact — the interceptor rewrites *any* URL uniformly, so correctness does not depend on
+  this path existing.
+- **Release-build https-only enforcement and QA cleartext build type** (claim #14, §8/R-3): a
+  project security decision, not verifiable from backend/frontend sources. OQ-2 (dedicated `qa`
+  build type for cleartext) remains open and is assumed-yes pending product/security sign-off.
+- **Exact downstream auth-header/cookie names beyond `X-CSRF-Token`/`ui_csrf`** are owned by
+  AND-015/AND-017; this ticket only asserts they are host-bound (verified via claim #9) and
+  must be cleared on host change.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-014-NN`. Acceptance criteria referenced are from §14 (AC-1…AC-8). Backend
+"contract" cases use MockWebServer because this ticket calls no real endpoint; where a real
+response/error shape is needed (e.g. session-start validation), the documented OpenAPI shapes
+(`UiSessionStartResp`, `422:HTTPValidationError`) are used as fixtures.
+
+- **TC-AND-014-01 — Reroute to new host after override set.**
+  Type: contract/MockWebServer.
+  Preconditions: two MockWebServer instances A (seeded as `BuildConfig` default base URL) and B;
+  single `OkHttpClient` with `HostSelectionInterceptor`; no override stored.
+  Steps: (1) issue a request, assert A receives it; (2) `store.setFromUrl(B.url("/").toString())`,
+  await snapshot propagation; (3) issue a new request.
+  Expected: step 3 request is received by **B**, not A; A records no second request.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-014-02 — `clear()` restores BuildConfig routing.**
+  Type: contract/MockWebServer.
+  Preconditions: continuation of TC-01 state (override → B active).
+  Steps: call `store.clear()`, await propagation, issue a request.
+  Expected: request routes back to A (the `BuildConfig` default); B receives nothing further.
+  Traces: AC-7, AC-2.
+
+- **TC-AND-014-03 — Path, query, method, body, and headers preserved across rewrite.**
+  Type: contract/MockWebServer.
+  Preconditions: override → B active.
+  Steps: issue `GET /ui/me?x=1` with header `X-CSRF-Token: t` and (for a POST variant)
+  `POST /ui/session/start` with body `{"challenge_context":{}}`.
+  Expected: `RecordedRequest.path == "/ui/me?x=1"`, method preserved, `X-CSRF-Token: t` echoed,
+  POST body byte-identical; only scheme/host/port changed to B.
+  Traces: AC-4.
+
+- **TC-AND-014-04 — Scheme and explicit port rewrite.**
+  Type: contract/MockWebServer.
+  Preconditions: override with B's scheme and a port differing from the default.
+  Steps: issue a request.
+  Expected: request lands on B's host **and** the override port; with `port == -1` the scheme
+  default (80/443) is used.
+  Traces: AC-1, AC-4.
+
+- **TC-AND-014-05 — `setFromUrl` validation table.**
+  Type: unit.
+  Preconditions: debug build (`BuildConfig.DEBUG == true`) so http is permitted.
+  Steps: call `setFromUrl` with: valid `http://h:8000`, valid `https://h`, malformed `"::::"`,
+  `ftp://h`, and empty-host `"http:///path"`.
+  Expected: first two → `ApiResult` success with parsed `HostOverride`; malformed → `Malformed`;
+  `ftp` → `UnsupportedScheme`; empty host → `EmptyHost`; in every failure case state is **not**
+  mutated (subsequent `override.first()` unchanged).
+  Traces: AC-5.
+
+- **TC-AND-014-06 — Release build rejects cleartext http.**
+  Type: unit.
+  Preconditions: test double / injected flag for `BuildConfig.DEBUG == false`.
+  Steps: call `setFromUrl("http://h:8000")` and `setFromUrl("https://h")`.
+  Expected: http → `ApiResult.Error(UnsupportedScheme)`, no mutation; https → success.
+  Traces: AC-5.
+
+- **TC-AND-014-07 — Override persists across store recreation (process-death proxy).**
+  Type: integration (DataStore).
+  Preconditions: temp Preferences DataStore file.
+  Steps: write an override via `setFromUrl`, dispose the `DataStoreHostOverrideStore`, construct
+  a new instance over the **same** DataStore file, read `override.first()`.
+  Expected: scheme/host/port round-trip exactly from keys `host_scheme`/`host_host`/`host_port`.
+  Traces: AC-6, AC-2.
+
+- **TC-AND-014-08 — No-restart / same-singleton semantics.**
+  Type: integration.
+  Preconditions: single `OkHttpClient` and `HostSelectionInterceptor` obtained once from the
+  Hilt graph (or constructed once).
+  Steps: capture object identity; route a pre-flip request (to A); flip override to B; route a
+  post-flip request; assert the `OkHttpClient`/interceptor references are identical (`===`) before
+  and after, and no Retrofit rebuild occurred.
+  Expected: pre-flip → A, post-flip → B, same client instance throughout; no rebuild.
+  Traces: AC-3, AC-1.
+
+- **TC-AND-014-09 — Concurrency: flip override under load with no torn read.**
+  Type: integration.
+  Preconditions: thread pool dispatching N concurrent requests; A and B servers.
+  Steps: while requests are in flight, flip the override A→B repeatedly.
+  Expected: no exception; every request lands on a *valid, whole* host (either fully A or fully
+  B — never a mixed host/port); volatile snapshot reads are atomic.
+  Traces: AC-1, AC-3.
+
+- **TC-AND-014-10 — `HostChanged` signal emitted on every effective host change.**
+  Type: unit (Flow collector).
+  Preconditions: collector subscribed to the store's `HostChanged` `SharedFlow`.
+  Steps: `setFromUrl(B)` (change), `setFromUrl(B)` again (same effective host), `clear()`.
+  Expected: a `HostChanged` emission for the first change and for `clear()`; behavior on a
+  no-op same-host set is asserted explicitly (documented: emit only on *effective* change).
+  Traces: AC-8.
+
+- **TC-AND-014-11 — Interceptor ordering: host selection runs first.**
+  Type: integration.
+  Preconditions: `NetworkModule` graph with host-selection + a probe interceptor standing in for
+  AND-016/AND-017.
+  Steps: send a request with an override active; have the probe interceptor capture the URL it
+  observes.
+  Expected: the probe (downstream) observes the **rewritten** host/port, proving host selection
+  is added before it (R-1 mitigation).
+  Traces: AC-4 (effective-URL preservation for downstream), AC-1.
+
+- **TC-AND-014-12 — Flaky/offline host: interceptor adds no retries and surfaces failure.**
+  Type: contract/MockWebServer.
+  Preconditions: override → B; B configured to not respond / drop the socket.
+  Steps: issue a request; observe timeout/IOException behavior.
+  Expected: the call fails via the normal OkHttp timeout (`callTimeout(20s)`) or IOException;
+  `HostSelectionInterceptor` does **not** swallow, retry, or re-route it. In-flight calls against
+  a now-changed host complete against their dispatch-time host.
+  Traces: AC-3 (no rebuild/retry side effects), AC-1.
+
+- **TC-AND-014-13 — Defensive rewrite-failure fallback never crashes the call.**
+  Type: unit.
+  Preconditions: a `HostOverrideProvider` test double returning a snapshot that triggers the
+  defensive `try/catch` path (simulated builder failure).
+  Steps: invoke `intercept()`.
+  Expected: the interceptor falls back to `chain.proceed(original)` (request proceeds unrewritten
+  to the `BuildConfig` host), logs at WARN, and does not throw.
+  Traces: AC-2 (BuildConfig fallback), AC-1.
+
+- **TC-AND-014-14 — Security: host switch triggers host-scoped credential clearing.**
+  Type: integration (security).
+  Preconditions: a stubbed cookie-jar/cache consumer subscribed to `HostChanged`; an override
+  active with simulated host-bound state (e.g. a `ui_csrf` cookie / session).
+  Steps: change the effective host via `setFromUrl`.
+  Expected: the `HostChanged` signal fires and the consumer's clear hook is invoked, so old-host
+  cookies/CSRF are not carried to the new host (verifies the §8 security requirement at the
+  signal boundary; actual jar clearing is owned/tested by AND-015).
+  Traces: AC-8.
+
+Note on accessibility: this ticket ships **no UI** (§9); content-description / TalkBack / RTL
+checks are owned by the downstream host-settings screen (AND-051) and are intentionally out of
+scope here. No Compose-UI or instrumented-a11y case is included for that reason.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 reroute on override change (MockWebServer) | TC-01, TC-04, TC-08, TC-09, TC-11, TC-12, TC-13 |
+| AC-2 no override → BuildConfig default | TC-01, TC-02, TC-07, TC-13 |
+| AC-3 no restart / no Retrofit-OkHttp rebuild | TC-08, TC-09, TC-12 |
+| AC-4 path/query/method/body/headers preserved | TC-03, TC-04, TC-11 |
+| AC-5 `setFromUrl` validation; release rejects http | TC-05, TC-06 |
+| AC-6 persists across process death | TC-07 |
+| AC-7 `clear()` restores default | TC-02 |
+| AC-8 `HostChanged` emitted on effective change | TC-10, TC-14 |

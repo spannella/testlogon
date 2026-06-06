@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-009]
 blocks: [AND-017]
 ---
@@ -56,7 +57,11 @@ cleanly with all of them.
   compileSdk/targetSdk 35, JDK 17, AGP 8.7.3, Gradle 8.9.
 - **Backend:** FastAPI; OpenAPI at `/openapi.json`. Error body `detail` may be
   `string | [{msg}] | {code,...}` (mapping owned by AND-015). Idempotent GETs in scope
-  include `GET /ui/me`, `GET /openapi.json`, and any future read endpoints.
+  include `GET /ui/me` (a documented path), `GET /openapi.json`, and any future read
+  endpoints. *(Review note: `GET /ui/me` is confirmed in the OpenAPI path index; `/openapi.json`
+  is FastAPI's built-in schema endpoint and is NOT enumerated in the documented path index —
+  treat it as an assumed, conventionally-available read. `GET /health` also exists and is the
+  natural single-shot probe target for AND-017.)*
 - **Web reference:** `frontend/src/api/endpoints/*.ts` — the web client uses
   `credentials: include` and does not implement structured GET backoff; this is a
   native-only resilience improvement.
@@ -322,6 +327,12 @@ Content-Type: application/json
 
 Caller observes a single `Response(code=200)`; the 503 is invisible above the interceptor.
 
+> Note (review): The `GET /ui/me` `200` body above (`{"user_id":...}`) is **illustrative only**.
+> The OpenAPI spec documents `GET /ui/me` (`op=ui_me_ui_me_get`) with a `200` response that has
+> **no declared response schema** (`resp=200:` is empty in the index) and a `422:HTTPValidationError`.
+> This layer is payload-agnostic, so the exact field names do not affect this ticket, but the body
+> shown must not be treated as a verified contract.
+
 Never-retried exchange (mutation):
 
 ```
@@ -548,3 +559,243 @@ response bodies are closed (T-9); cancellation aborts backoff promptly (T-7).
 - [ ] Risks R-1 (double-retry composition) and R-3 (callTimeout interaction) verified by
       request-count assertions and documented.
 - [ ] PR reviewed and merged to `android-port`; downstream AND-017 unblocked.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **`GET /ui/me` exists and is an idempotent read.** VERDICT: **Verified.** SOURCE: OpenAPI
+   index `GET /ui/me | op=ui_me_ui_me_get | req= | resp=200:;422:HTTPValidationError`.
+
+2. **`GET /ui/me` returns `{"user_id":...,"username":...}` (the §5 example body).** VERDICT:
+   **Corrected → Unverified-assumption.** SOURCE: OpenAPI `GET /ui/me` documents `200` with **no
+   declared response schema** (`resp=200:` empty). The concrete JSON in §5 is illustrative only;
+   this layer is payload-agnostic so it does not affect behavior. Inline note added in §5.
+
+3. **`POST /ui/session/start` is a mutation that must never be replayed; its body is
+   `{"challenge_context":{...}}`.** VERDICT: **Verified.** SOURCE: OpenAPI index `POST
+   /ui/session/start | op=ui_session_start_ui_session_start_post | req=UiSessionStartReq |
+   resp=200:UiSessionStartResp;422:HTTPValidationError`; schema `components.schemas.UiSessionStartReq`
+   has a single `challenge_context` object property (`additionalProperties: true`), so the example
+   body `{"challenge_context":{"username":"a","password":"b"}}` is shape-consistent.
+
+4. **`POST /ui/session/finalize` and the MFA `*/verify` endpoints are mutating POSTs.** VERDICT:
+   **Verified.** SOURCE: OpenAPI index `POST /ui/session/finalize | req=UiSessionFinalizeReq`;
+   `POST /ui/mfa/totp/verify` (`op=ui_totp_verify_...`), `POST /ui/mfa/sms/verify`
+   (`op=ui_sms_verify_...`), `POST /ui/mfa/email/verify` (`op=ui_email_verify_...`). All are POST →
+   correctly excluded by the GET-only guard (FR-2).
+
+5. **Error body `detail` may be `string | [{msg}] | {code,...}` (mapping owned by AND-015).**
+   VERDICT: **Verified.** SOURCE: OpenAPI `components.schemas.HTTPValidationError.detail` is an
+   **array of `ValidationError`** (each carrying `msg`) for `422`; the web client's
+   `normalizeErrorDetail` (`src/api/client.ts:66-99`) additionally handles the `string` form
+   (`typeof detail === "string"`), the array form, and the object form with `code`/`msg`
+   (`mapAuthorizationError`, `"msg" in detail`). The three-shape claim is accurate.
+
+6. **The 5xx/502/503/504 transient behavior of the dev host (cold DynamoDB / ALB warm-up).**
+   VERDICT: **Unverified-assumption.** SOURCE: operational claim about the live host
+   `18.222.237.167:8000`; not derivable from OpenAPI or frontend source. Reasonable and the
+   premise of the ticket, but flagged as an environment assumption.
+
+7. **The web client uses cookie-based auth with `credentials: include` and does NOT implement
+   structured GET backoff (native-only improvement).** VERDICT: **Verified.** SOURCE:
+   `src/api/client.ts:124,183,220` (`credentials: "include"`). The only "retry" in the client
+   (`src/api/client.ts:216-236`) is a **401 session-refresh** retry, not status/transport backoff
+   for GETs — confirming this ticket adds new behavior.
+
+8. **CSRF is carried as header `X-CSRF-Token` sourced from a cookie, recomputed per request
+   (FR re-issue claim in §8).** VERDICT: **Verified.** SOURCE: `src/api/client.ts:167-170`
+   (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`). Because retries re-run the
+   chain below this interceptor, CSRF/cookies are freshly applied per attempt as the spec states.
+
+9. **`401` is handled by an Authenticator and must not be retried by this interceptor (FR-4).**
+   VERDICT: **Verified (design-consistent).** SOURCE: the web reference performs a 401-triggered
+   session refresh + single retry (`src/api/client.ts:200-236`); on Android this maps to OkHttp's
+   `Authenticator` (AND-013). The interceptor's exclusion of `401` is correct and non-overlapping.
+
+10. **`GET /openapi.json` is an in-scope idempotent read.** VERDICT: **Unverified-assumption.**
+    SOURCE: NOT present in `openapi.index.txt`. It is FastAPI's conventional built-in schema
+    endpoint, so availability is a safe assumption but not a documented contract. Inline note
+    added in §2.
+
+11. **A single-shot health probe path exists for AND-017's opt-out.** VERDICT: **Verified
+    (supporting).** SOURCE: OpenAPI index `GET /health | op=health_health_get | req= | resp=200:`
+    (and `GET /messaging/healthz`). Confirms a cheap unretried probe target exists; AND-017 may use
+    `RetryPolicy.NO_RETRY` against it.
+
+12. **OkHttp interceptor / Authenticator / `Retry-After` / `retryOnConnectionFailure`
+    framework semantics** (application-interceptor re-run on each `proceed()`, `Authenticator`
+    runs independently, blocking sleep on the Dispatcher worker thread is acceptable). VERDICT:
+    **Verified (framework ref).** SOURCE (framework ref): OkHttp Interceptors guide
+    https://square.github.io/okhttp/features/interceptors/ ; OkHttp `Authenticator` API
+    https://square.github.io/okhttp/4.x/okhttp/okhttp3/-authenticator/ . `Retry-After` header
+    semantics (delta-seconds | HTTP-date): MDN
+    https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Retry-After .
+
+13. **Hilt `@Binds @IntoSet` multibinding into an `Interceptor` set; `@Singleton` scoping.**
+    VERDICT: **Verified (framework ref).** SOURCE (framework ref): Dagger multibindings
+    https://dagger.dev/dev-guide/multibindings ; Hilt components/scopes
+    https://developer.android.com/training/dependency-injection/hilt-android . NOTE: correctness
+    of the actual AND-009 seam (whether it exposes `Set<Interceptor>` and in what order) is owned by
+    AND-009 and is an inter-ticket assumption here (see Open assumptions).
+
+### Corrections made
+
+- **§5** — Marked the concrete `GET /ui/me` `200` JSON body as *illustrative only*; OpenAPI
+  declares no response schema for that `200`, so the field names (`user_id`, `username`) are not a
+  verified contract. (Claim #2.)
+- **§2** — Clarified that `GET /ui/me` is a documented path but `GET /openapi.json` is NOT in the
+  OpenAPI path index (FastAPI built-in, assumed), and noted that `GET /health` exists as the
+  natural AND-017 probe target. (Claims #10, #11.)
+- No factual errors were found in the FR/FR-numbering, the GET-only guard logic, the
+  retryable-status set, the backoff math, or the security/replay-safety claims; those verified as
+  written.
+
+### Open assumptions
+
+- **Live-host transient-5xx behavior** (Claim #6): cannot be verified from OpenAPI/frontend; it is
+  an operational property of the dev deployment and the motivating premise of the ticket.
+- **`GET /openapi.json` availability** (Claim #10): conventional FastAPI endpoint, not enumerated
+  in the documented path index.
+- **AND-009 interceptor-seam shape** (Claim #13): this ticket assumes AND-009 exposes an ordered
+  application-interceptor set consumable via `@IntoSet` with the logging interceptor appended last.
+  The exact seam type/order is defined by AND-009, not verifiable from the backend/frontend sources.
+- **`/ui/me` exact response fields**: undeclared in OpenAPI; payload-agnostic for this ticket.
+
+## 17. Test Plan
+
+IDs `TC-AND-016-NN`. All JVM unit/contract tests use `MockWebServer`, JUnit4, Truth, a fake
+`Sleeper` (no real waiting) and a seeded `Random`. "Traces" link to §14 acceptance criteria.
+
+**TC-AND-016-01 — Happy path: transient 503 then 200 (gating).**
+Type: contract/MockWebServer.
+Preconditions: client wired with `RetryBackoffInterceptor(DEFAULT, AlwaysOnline, FakeSleeper)`.
+Steps: enqueue `503 {"detail":"temporarily unavailable"}` then `200` body; issue `GET /ui/me`.
+Expected: caller receives a single `Response(code=200)` with body intact; `server.requestCount == 2`.
+Traces: AC-1.
+
+**TC-AND-016-02 — Mutation never retried: POST 503 → one attempt (gating).**
+Type: contract/MockWebServer.
+Preconditions: same client.
+Steps: enqueue a single `503`; issue `POST /ui/session/start` with body
+`{"challenge_context":{"username":"a","password":"b"}}`.
+Expected: caller observes `503`; `server.requestCount == 1`.
+Traces: AC-2.
+
+**TC-AND-016-03 — Mutation guard is parametric across PUT/PATCH/DELETE.**
+Type: unit (parametrized).
+Preconditions: same client; one `503` enqueued per case.
+Steps: issue `PUT`, `PATCH`, `DELETE` (e.g. against `/ui/media/preferences` for PUT) each with a 503.
+Expected: each returns `503` after exactly one `proceed()`; `requestCount == 1` per case.
+Traces: AC-2.
+
+**TC-AND-016-04 — Exhaustion returns terminal response unchanged.**
+Type: contract/MockWebServer.
+Preconditions: `maxAttempts = 3`.
+Steps: enqueue `503` three times; issue `GET /ui/me`.
+Expected: returned response is `503` with its `detail` body intact (FR-6); `requestCount == 3`
+(no 4th attempt).
+Traces: AC-3.
+
+**TC-AND-016-05 — Non-retryable statuses returned after one attempt.**
+Type: unit (parametrized: `400`, `401`, `403`, `404`, `422`).
+Preconditions: same client; one of each status enqueued per case for a GET.
+Steps: issue `GET /ui/me`; assert each.
+Expected: each returns after exactly one attempt (`requestCount == 1`); confirms `401` is left to
+the AND-013 `Authenticator` and `422`/4xx are never retried. Use a real `422` body
+`{"detail":[{"loc":["query","x"],"msg":"field required","type":"value_error.missing"}]}`
+(HTTPValidationError shape) to confirm the body passes through untouched.
+Traces: AC-4.
+
+**TC-AND-016-06 — Retryable transport exception retries to success.**
+Type: contract/MockWebServer.
+Preconditions: same client.
+Steps: first `MockResponse().socketPolicy = DISCONNECT_AT_START`, then `200`; issue `GET /ui/me`.
+Expected: success after retry; `requestCount == 2`.
+Traces: AC-4 (transport-exception branch), AC-1.
+
+**TC-AND-016-07 — Offline fails fast (no backoff spin).**
+Type: unit.
+Preconditions: `ConnectivityChecker { false }`; fake `Sleeper` that records call count.
+Steps: enqueue a transport failure / `503`; issue `GET /ui/me`.
+Expected: fails on the first transport error or returns the first `503` without sleeping; sleeper
+invoked 0 times; minimal `proceed()` calls (FR-9). Also assert `UnknownHostException` is treated as
+fail-fast regardless of connectivity (`IOException.isRetryable()` returns false for it).
+Traces: AC-6.
+
+**TC-AND-016-08 — Backoff math with seeded Random.**
+Type: unit (`BackoffCalculator` directly).
+Preconditions: fixed-seed `Random`; `DEFAULT` policy.
+Steps: compute `delayMsFor(0..3)`; compute with `retryAfterMs` present.
+Expected: each delay ∈ `[0, min(maxDelay, base*2^n)]`; ceiling grows monotonically until capped at
+`maxDelayMs=4000`; `Retry-After` overrides jitter and is capped at `maxDelay`; deterministic across
+runs with the same seed.
+Traces: AC-5.
+
+**TC-AND-016-09 — Retry-After header honored and capped.**
+Type: contract/MockWebServer.
+Preconditions: `honorRetryAfter = true`.
+Steps: enqueue `503` with `Retry-After: 2` then `200`; also a separate case `Retry-After: 99`
+(must cap at 4s).
+Expected: next-attempt delay == 2000 ms (case 1) and == 4000 ms cap (case 2) as observed by the
+fake `Sleeper`; final result `200`; `requestCount == 2`.
+Traces: AC-5.
+
+**TC-AND-016-10 — Per-call `RetryPolicy.NO_RETRY` tag disables retry.**
+Type: unit.
+Preconditions: same client.
+Steps: issue a GET tagged `Request.tag(RetryPolicy::class.java, RetryPolicy.NO_RETRY)` against a `503`.
+Expected: `requestCount == 1`; no sleep; proves FR-10 / AND-017 opt-out.
+Traces: AC-7.
+
+**TC-AND-016-11 — Cancellation aborts backoff promptly.**
+Type: unit.
+Preconditions: fake `Sleeper` that toggles `call.isCanceled()` true mid-sleep (or real `Sleeper`
+with a cancelled `Call`).
+Steps: enqueue `503` then `200`; cancel the call during the inter-attempt sleep.
+Expected: an `IOException` (e.g. "canceled during backoff") is thrown; no further `proceed()` after
+cancellation (FR-11).
+Traces: AC-7.
+
+**TC-AND-016-12 — Intermediate response bodies are closed (no leak).**
+Type: unit.
+Preconditions: counting `ResponseBody`/connection-pool idle assertion.
+Steps: enqueue `503` then `200`; issue `GET /ui/me`.
+Expected: intermediate `503` body is `close()`d before the retry (FR-7); no `IllegalStateException`
+or leaked-connection warning; pool returns to idle.
+Traces: AC-7.
+
+**TC-AND-016-13 — Hilt graph compiles and contributes the interceptor (@IntoSet).**
+Type: integration (Hilt compile/inject test).
+Preconditions: `RetryModule` + `RetryBindingModule` installed in `SingletonComponent`.
+Steps: build the Hilt graph; inject the `Set<Interceptor>` (or the client) and assert
+`RetryBackoffInterceptor` is present in the set; default `ConnectivityChecker` resolves to
+`AlwaysOnline`.
+Expected: graph compiles with no duplicate-binding error; interceptor present.
+Traces: AC-6.
+
+**TC-AND-016-14 — Security/replay: MFA verify POSTs are not replayed on 503 (manual + unit).**
+Type: unit (extends TC-02 set) + manual sanity against dev host.
+Preconditions: same client.
+Steps: enqueue a single `503` for `POST /ui/mfa/totp/verify` (and `/ui/session/finalize`); issue
+the request. Manually, point at the dev host and confirm a transient 503 on a verify call is not
+re-sent (MFA attempt counter not decremented twice).
+Expected: `requestCount == 1` per endpoint; no double-submission; protects MFA attempt budget /
+session finalize idempotency (§8).
+Traces: AC-2.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+|---|---|
+| AC-1 (503→200 success, count==2) | TC-01, TC-06 |
+| AC-2 (mutations never retried) | TC-02, TC-03, TC-14 |
+| AC-3 (bounded; terminal returned unchanged) | TC-04 |
+| AC-4 (only retryable statuses/exceptions retry; 4xx/401/422 not) | TC-05, TC-06 |
+| AC-5 (full-jitter bounds; Retry-After override + cap) | TC-08, TC-09 |
+| AC-6 (offline fail-fast; Hilt @IntoSet graph compiles) | TC-07, TC-13 |
+| AC-7 (NO_RETRY tag; bodies closed; cancellation) | TC-10, TC-11, TC-12 |
+
+> Accessibility/i18n: per §9 this ticket has no UI surface, so no Compose-UI or accessibility test
+> cases apply; terminal-failure presentation/localization is exercised in AND-015 and the consuming
+> feature modules.

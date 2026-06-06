@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P0
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-003, AND-004]
 blocks: [AND-010, AND-011, AND-012, AND-013]
 ---
@@ -202,9 +203,11 @@ object RedactingLoggerFactory {
 ```
 
 `HttpLoggingInterceptor.redactHeader(name)` is case-insensitive and replaces the value with
-`██` in both request and response header dumps. Body redaction of credential payloads (e.g.
-the `challenge_context.password` in `POST /ui/session/start`) is **not** provided by OkHttp;
-mitigated by FR-4 (logging is debug-only and never ships).
+`██` in both request and response header dumps. Body redaction of credential payloads carried inside the free-form
+`challenge_context` object in `POST /ui/session/start` is **not** provided by OkHttp;
+mitigated by FR-4 (logging is debug-only and never ships). (Note: per `UiSessionStartReq`,
+`challenge_context` is an open object — `additionalProperties: true` — so the specific
+field names of any credentials it carries are not fixed by the backend schema; see §16.)
 
 ### 4.4 Network security config
 
@@ -303,7 +306,9 @@ away: the connection pool and (later) the cookie jar hold transport state.
   `network_security_config.xml`; the global default remains `false`, so staging/prod hosts
   (HTTPS) cannot be downgraded.
 - **Body credentials caveat:** OkHttp cannot redact JSON bodies, so the login body
-  (`{challenge_context:{username,password}}`) would print in debug. Documented as a known
+  (a `{challenge_context: {...}}` envelope; `challenge_context` is a free-form object per the
+  `UiSessionStartReq` schema — credential field names such as username/password are not fixed
+  by the backend contract, see §16) would print in debug. Documented as a known
   limitation acceptable only because logging never ships; a follow-up may add a body-filtering
   logger if debug log sharing becomes a concern (Open Question Q2).
 - **No secret storage:** this ticket stores no tokens; cookie persistence and its encryption
@@ -400,8 +405,9 @@ coordinated as AND-011/013 land.
   contract in AND-012 so logging stays last.
 - **R-2 (Duplicate Hilt bindings).** `NetworkDefaultsModule` will collide with AND-011/013
   providers if not removed. *Mitigation:* inline TODO + a tracking note in those tickets.
-- **R-3 (Body credential leakage in debug logs).** OkHttp cannot redact bodies; the login
-  password prints in debug. *Mitigation:* debug-only gating; revisit per Q2.
+- **R-3 (Body credential leakage in debug logs).** OkHttp cannot redact bodies; any
+  credentials inside the `challenge_context` login envelope print in debug. *Mitigation:*
+  debug-only gating; revisit per Q2.
 - **R-4 (callTimeout vs. AND-013 refresh).** If AND-013's refresh+retry is slow on the dev
   host, 30s may abort it. *Mitigation:* revisit `callTimeout` when AND-013 is implemented;
   value is centralized as a constant.
@@ -450,3 +456,269 @@ AC-7. The Hilt graph compiles and the client injects successfully with the no-op
       AND-011/012/013.
 - [ ] No new lint/detekt warnings in `core-network`; KSP/Hilt build clean.
 - [ ] PR reviewed and merged to `android-port`; downstream AND-010 unblocked.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim in this spec, with verdict and an exact source pointer. This ticket
+is transport plumbing, so most claims are framework/library facts (labeled "framework ref")
+rather than backend-contract facts; the few backend claims are verified against the OpenAPI
+spec and the frontend reference client.
+
+1. **CSRF: the `ui_csrf` cookie value is echoed back as the `X-CSRF-Token` header.**
+   VERDICT: Verified. SOURCE: `src/api/client.ts` lines 167-171
+   (`const csrf = getCookie("ui_csrf"); ... headers.set("X-CSRF-Token", csrf)`); also
+   `src/api/endpoints/kycCompliance.ts:63-67`, `src/api/endpoints/profile.ts:157-159`.
+
+2. **Auth is cookie-based with `credentials: include` on every request.**
+   VERDICT: Verified. SOURCE: `src/api/client.ts:180-184` (`fetch(url, { ...init, headers,
+   credentials: "include" })`); refresh path also uses `credentials: "include"`
+   (`src/api/client.ts:122-125`).
+
+3. **A bearer token may also be sent via the `Authorization` header.**
+   VERDICT: Verified. SOURCE: `src/api/client.ts:157-160` (sets `Authorization: Bearer
+   ${accessToken}` from the auth store when present). This confirms `Authorization` is a real
+   credential-bearing header worth redacting.
+
+4. **Real auth endpoints exist: `POST /ui/session/start`, `POST /ui/session/finalize`,
+   `GET /ui/me`, `POST /ui/session/refresh`.**
+   VERDICT: Verified. SOURCE: OpenAPI index —
+   `POST /ui/session/start | op=ui_session_start_ui_session_start_post | req=UiSessionStartReq | resp=200:UiSessionStartResp`;
+   `POST /ui/session/finalize | req=UiSessionFinalizeReq | resp=200:;422:HTTPValidationError`;
+   `GET /ui/me | resp=200:;422:HTTPValidationError`;
+   `POST /ui/session/refresh | req= | resp=200:`.
+
+5. **The login request body is `{ challenge_context: { username, password } }`.**
+   VERDICT: Corrected → Unverified-assumption (field names). SOURCE:
+   `components.schemas.UiSessionStartReq` defines a single property `challenge_context` of
+   `type: object` with `additionalProperties: true` and no declared sub-fields. The envelope
+   key `challenge_context` is Verified; the specific `username`/`password` field names are NOT
+   defined by the backend contract and were softened in §4.3 / §8 / §13 to "credentials
+   inside the free-form `challenge_context`". OpenAPI `POST /ui/session/start`,
+   schema `UiSessionStartReq`.
+
+6. **`POST /ui/session/refresh` takes no request body and returns 200.**
+   VERDICT: Verified. SOURCE: OpenAPI index `POST /ui/session/refresh | req= | resp=200:`;
+   frontend `src/api/client.ts:121-130` calls it with `method: "POST"` and no body. (Supports
+   the §7 claim that AND-013's refresh+retry fits in the 30s `callTimeout` budget — refresh is
+   a single bodyless POST.)
+
+7. **The web client refreshes the session once on a 401 and retries the original request.**
+   VERDICT: Verified. SOURCE: `src/api/client.ts:191-221` (single in-flight `refreshPromise`,
+   then retry with fresh session). This is the behavior AND-013 ports to an OkHttp
+   `Authenticator`; it justifies the §7 `callTimeout` headroom rationale.
+
+8. **Validation errors return `422` with an `HTTPValidationError` body
+   (`{ "detail": ValidationError[] }`).**
+   VERDICT: Verified. SOURCE: OpenAPI index `resp=...;422:HTTPValidationError` on the auth
+   endpoints; `components.schemas.HTTPValidationError` = `{ detail: array<ValidationError> }`.
+   (Used in §17 contract tests for realistic error shapes; note this ticket does not parse
+   error bodies — mapping is AND-014.)
+
+9. **Dev backend is plaintext HTTP at `http://18.222.237.167:8000` and unreliable.**
+   VERDICT: Unverified-assumption. SOURCE: project/ticket context only (ticket scope + §2);
+   not derivable from the OpenAPI spec or frontend source (which use a relative/configured
+   base URL). Treated as a given environmental constraint that drives timeout/clear-text
+   decisions.
+
+10. **OkHttp `connectTimeout`/`readTimeout`/`writeTimeout` default to 10s and `callTimeout`
+    defaults to 0 (no timeout) — hence all four must be set explicitly.**
+    VERDICT: Verified (framework ref). SOURCE: OkHttp `OkHttpClient.Builder` docs —
+    https://square.github.io/okhttp/4.x/okhttp/okhttp3/-ok-http-client/-builder/ .
+
+11. **`retryOnConnectionFailure(true)` retries only transport-level connection problems
+    (stale pooled connections, unreachable routes), never replaying a request already written
+    to a healthy connection.**
+    VERDICT: Verified (framework ref). SOURCE: OkHttp `OkHttpClient.Builder.retryOnConnectionFailure`
+    docs — https://square.github.io/okhttp/4.x/okhttp/okhttp3/-ok-http-client/-builder/retry-on-connection-failure/ .
+
+12. **`HttpLoggingInterceptor.redactHeader(name)` is case-insensitive and replaces the value
+    with `██` in both request and response header dumps.**
+    VERDICT: Verified (framework ref). SOURCE: OkHttp logging-interceptor
+    `HttpLoggingInterceptor.redactHeader` docs —
+    https://square.github.io/okhttp/4.x/logging-interceptor/okhttp3/logging/-http-logging-interceptor/redact-header/ .
+    (OkHttp redacts only headers, not bodies — confirms the §8 body-leakage caveat.)
+
+13. **Application interceptors run in the order added, and an interceptor added last observes
+    headers injected by earlier interceptors.**
+    VERDICT: Verified (framework ref). SOURCE: OkHttp interceptors guide —
+    https://square.github.io/okhttp/features/interceptors/ . (Supports FR-7: logging added
+    last so it sees & redacts CSRF/auth headers.)
+
+14. **Android `network-security-config` `domain-config` matches by host only (not port), and a
+    `base-config cleartextTrafficPermitted="false"` keeps other hosts HTTPS-only.**
+    VERDICT: Verified (framework ref). SOURCE: Android Network security configuration docs —
+    https://developer.android.com/privacy-and-security/security-config . (Confirms Q1: IP
+    scoping cannot be narrowed to `:8000`.)
+
+15. **`MockWebServer` (`com.squareup.okhttp3:mockwebserver`) supports `enqueue`,
+    `setBodyDelay`, and `SocketPolicy.NO_RESPONSE` for timeout testing.**
+    VERDICT: Verified (framework ref). SOURCE: OkHttp MockWebServer docs —
+    https://github.com/square/okhttp/tree/master/mockwebserver .
+
+### Corrections made
+
+- **§4.3, §8, §13 (claim 5):** Removed the assertion that the login body is specifically
+  `{ challenge_context: { username, password } }`. The `UiSessionStartReq` schema declares
+  `challenge_context` as an open object (`additionalProperties: true`) with no fixed
+  sub-fields, so the credential field names are not part of the backend contract. Reworded to
+  "credentials inside the free-form `challenge_context`" and cross-referenced this audit. The
+  security point (OkHttp cannot redact bodies) is unchanged and still valid.
+- No other factual errors found. Endpoint paths/methods, the `ui_csrf`→`X-CSRF-Token` CSRF
+  mechanism, cookie-based auth, the single-retry-on-401 behavior, and the 422/HTTPValidationError
+  error shape are all confirmed against the sources and were already stated correctly.
+
+### Open assumptions
+
+- **Dev host identity & reliability** (`http://18.222.237.167:8000`, plaintext, flaky): from
+  ticket/project context only; not present in OpenAPI or frontend source (claim 9). Drives the
+  timeout and clear-text decisions; if the dev host/IP changes, §4.4 and the constants in §4.1
+  must be revisited.
+- **Exact credential field names inside `challenge_context`**: not defined by the backend
+  schema (claim 5). Does not affect this ticket's deliverable (transport plumbing) but is
+  flagged for the E03 auth tickets that actually build the request body.
+- **20s/30s timeout values**: chosen heuristically for the unreliable dev host; not derived
+  from any measured backend latency in the sources. Centralized as named constants (§4.1) so
+  they can be tuned (R-4) without code churn.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-009-NN`. All JVM-side tests live in `core-network/src/test` using
+MockWebServer + JUnit4 + Truth. "Traces" link to the §14 Acceptance Criteria.
+
+- **TC-AND-009-01** — Happy path (contract/MockWebServer).
+  Preconditions: `MockWebServer` running; client built via `NetworkModule.provideOkHttpClient(
+  emptySet(), CookieJar.NO_COOKIES, Authenticator.NONE)`.
+  Steps: enqueue `200 {"status":"ok"}`; issue `GET /ping`.
+  Expected: response code `200`; body deserializes to `{"status":"ok"}`; exactly one request
+  recorded by the server.
+  Traces: AC-3, AC-7.
+
+- **TC-AND-009-02** — Header redaction (unit, gating).
+  Preconditions: build the logging interceptor via `RedactingLoggerFactory.create()` but inject
+  a test `HttpLoggingInterceptor.Logger` that captures messages into a `MutableList<String>`
+  (instead of `Log.d`); attach to a MockWebServer-backed client.
+  Steps: enqueue a `200` response that sets `Set-Cookie: session=def; ...`; send a request with
+  `Authorization: Bearer secret-token-should-not-appear` and `Cookie: session=abc; ui_csrf=xyz`.
+  Expected: captured log contains `Authorization: ██`, `Cookie: ██`, `Set-Cookie: ██`; none of
+  `secret-token-should-not-appear`, `abc`, `xyz`, `def` appear in ANY captured line; the
+  response body `{"status":"ok"}` IS present.
+  Traces: AC-4. (Gating acceptance assertion.)
+
+- **TC-AND-009-03** — `X-CSRF-Token` redaction (unit).
+  Preconditions: same capturing-logger setup as TC-02.
+  Steps: send a request carrying `X-CSRF-Token: csrf-secret-xyz`.
+  Expected: log shows `X-CSRF-Token: ██`; `csrf-secret-xyz` absent from all captured lines.
+  (Mirrors the web client's `ui_csrf`→`X-CSRF-Token` header per §16 claim 1.)
+  Traces: AC-4.
+
+- **TC-AND-009-04** — `Proxy-Authorization` redaction (unit).
+  Preconditions: capturing-logger setup.
+  Steps: send a request with `Proxy-Authorization: Basic c2VjcmV0`.
+  Expected: `Proxy-Authorization: ██` in log; `c2VjcmV0` absent. (Confirms FR-5's full list,
+  not just the four headers in AC-4.)
+  Traces: AC-4.
+
+- **TC-AND-009-05** — Timeout values applied / read timeout surfaces `SocketTimeoutException`
+  (contract/MockWebServer).
+  Preconditions: client built with shortened timeouts (test seam: timeout constants injected /
+  small builder variant) so CI does not wait 20s; MockWebServer enqueues a response with
+  `setBodyDelay` exceeding the read timeout (or `SocketPolicy.NO_RESPONSE`).
+  Steps: issue a `GET`; await completion.
+  Expected: a `SocketTimeoutException` (subtype of `InterruptedIOException`) is thrown; this
+  ticket does not catch/map it. Additionally assert via a builder-inspection helper that the
+  production client's `connectTimeoutMillis`/`readTimeoutMillis`/`writeTimeoutMillis` == 20000,
+  `callTimeoutMillis` == 30000, and `retryOnConnectionFailure` == true.
+  Traces: AC-2.
+
+- **TC-AND-009-06** — Connection-failure retry does not replay sent request bodies (contract).
+  Preconditions: client with `retryOnConnectionFailure(true)`; MockWebServer first response
+  uses `SocketPolicy.DISCONNECT_AFTER_REQUEST` / a stale-connection scenario, second enqueued
+  response is `200`.
+  Steps: issue an idempotent `GET`; observe transparent reconnect.
+  Expected: the call ultimately succeeds via OkHttp's connection re-establishment without the
+  caller observing the transient failure; for a request whose body was already fully written on
+  a healthy connection, no silent replay occurs (per §16 claim 11). 
+  Traces: AC-2.
+
+- **TC-AND-009-07** — Debug build includes the logging interceptor (unit).
+  Preconditions: `BuildConfig.DEBUG == true` (or the debug branch via the test seam exposing the
+  predicate).
+  Steps: build the client through the provider; inspect `client.interceptors`.
+  Expected: exactly one `HttpLoggingInterceptor` is present.
+  Traces: AC-5.
+
+- **TC-AND-009-08** — Release build excludes the logging interceptor (unit, security).
+  Preconditions: release branch via the test seam (`BuildConfig.DEBUG == false`).
+  Steps: build the client; inspect `client.interceptors`.
+  Expected: NO `HttpLoggingInterceptor` instance present (verified by absence, per FR-4 — not a
+  lowered level). Guards against credential/cookie leakage in production Logcat.
+  Traces: AC-5.
+
+- **TC-AND-009-09** — Logging interceptor is added LAST so it observes/redacts downstream
+  headers (unit).
+  Preconditions: provider invoked with a non-empty `appInterceptors` set containing a dummy
+  interceptor that ADDS `X-CSRF-Token: injected` to the outbound request; debug build; capturing
+  logger.
+  Steps: issue a request that originally had no CSRF header.
+  Expected: the injected `X-CSRF-Token` appears in the log AS `██` (proving the logger ran after
+  the injecting interceptor and still redacted it). 
+  Traces: AC-4, AC-5.
+
+- **TC-AND-009-10** — Hilt graph builds standalone with no-op defaults (integration).
+  Preconditions: a Hilt test component installing `NetworkModule` + `NetworkDefaultsModule`
+  with an empty interceptor multibinding.
+  Steps: trigger graph creation and inject `OkHttpClient`.
+  Expected: graph compiles and the client injects successfully; injected `cookieJar` ==
+  `CookieJar.NO_COOKIES` and `authenticator` == `Authenticator.NONE` (the AND-011/013
+  placeholders). Construction never touches the network.
+  Traces: AC-1, AC-7.
+
+- **TC-AND-009-11** — Single `OkHttpClient` construction site (instrumented/CI static check).
+  Preconditions: Konsist or a ripgrep-based Gradle verification task over the Android source set.
+  Steps: scan for `OkHttpClient.Builder(`.
+  Expected: it appears only in `NetworkModule`; the check fails the build on any other match.
+  Traces: AC-1.
+
+- **TC-AND-009-12** — Clear-text scoping (manual / instrumented).
+  Preconditions: `network_security_config.xml` present and referenced by the merged manifest.
+  Steps (manual or `androidTest`): attempt a plaintext `http://18.222.237.167/...` request
+  (allowed) and a plaintext request to an arbitrary other host (expected blocked); confirm the
+  `base-config` default is `cleartextTrafficPermitted="false"` and only `18.222.237.167` is
+  whitelisted.
+  Expected: cleartext to `18.222.237.167` succeeds at the TLS-policy layer; cleartext to any
+  other host raises a cleartext-not-permitted error. (Host-only match per §16 claim 14 — port
+  is not constrained.)
+  Traces: AC-6.
+
+- **TC-AND-009-13** — 422 validation error passes through untouched (contract/MockWebServer).
+  Preconditions: MockWebServer-backed client.
+  Steps: enqueue `422` with body
+  `{"detail":[{"loc":["body","challenge_context"],"msg":"field required","type":"value_error"}]}`
+  (real `HTTPValidationError` shape per §16 claim 8); issue a request.
+  Expected: the client returns the `422` response verbatim with the body intact; this ticket
+  performs NO error mapping (that is AND-014). Confirms the transport layer is contract-neutral.
+  Traces: AC-3.
+
+- **TC-AND-009-14** — Offline / flaky-dev-host failure surfaces as IOException (contract).
+  Preconditions: client pointed at a MockWebServer that is shut down before the call (simulating
+  the unreliable dev host / offline), or `SocketPolicy.NO_RESPONSE` with short timeouts.
+  Steps: issue a `GET`.
+  Expected: an `IOException` subtype (`ConnectException` / `SocketTimeoutException`) is thrown
+  and propagates uncaught (mapping owned by AND-014); DI graph and client remain reusable for
+  subsequent calls.
+  Traces: AC-2, AC-3.
+
+Note on accessibility (§9): this ticket has no UI surface, so no Compose-UI or accessibility
+test cases apply. The "where there is UI" accessibility requirement is intentionally N/A here.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|---|---|
+| AC-1 (single @Singleton client, only construction site) | TC-AND-009-10, TC-AND-009-11 |
+| AC-2 (timeouts 20s, callTimeout 30s, retryOnConnectionFailure true) | TC-AND-009-05, TC-AND-009-06, TC-AND-009-14 |
+| AC-3 (request against MockWebServer succeeds) | TC-AND-009-01, TC-AND-009-13, TC-AND-009-14 |
+| AC-4 (sensitive headers redacted, body still logged) | TC-AND-009-02, TC-AND-009-03, TC-AND-009-04, TC-AND-009-09 |
+| AC-5 (logging present in debug, absent in release) | TC-AND-009-07, TC-AND-009-08, TC-AND-009-09 |
+| AC-6 (clear-text scoped to 18.222.237.167, global default off) | TC-AND-009-12 |
+| AC-7 (graph compiles & injects with no-op defaults) | TC-AND-009-01, TC-AND-009-10 |

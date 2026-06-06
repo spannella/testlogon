@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-010]
 blocks: []
 ---
@@ -44,10 +45,15 @@ mapper (AND-013). This ticket owns only the *signal*, not its presentation.
   for its ping client so timeouts and the cookie jar are consistent.
 - **Stack:** Kotlin 2.0.21, Coroutines/Flow, OkHttp 4.12, Retrofit 2.11, Hilt
   (KSP), `androidx.core` `ConnectivityManager` APIs, minSdk 24 / targetSdk 35.
-- **Backend:** FastAPI. OpenAPI at `/openapi.json`. A dedicated health endpoint
-  (`GET /healthz`, see §5) is the preferred probe target; if absent on the dev
-  host, the probe falls back to a `HEAD /openapi.json`. Web reference does not
-  implement an equivalent monitor; this is Android-specific.
+- **Backend:** FastAPI. A dedicated health endpoint (`GET /health`, see §5) is
+  the preferred probe target; `GET /api/ping` is an equivalent verified
+  alternative. (CORRECTION: the OpenAPI spec has **no `/healthz`** root endpoint
+  — only a domain-scoped `GET /messaging/healthz`; the canonical health paths are
+  `GET /health` and `GET /api/ping`.) Web reference does not implement an
+  equivalent backend-probe monitor — the web `OfflineBanner` only watches the
+  browser `navigator.onLine` / `online`/`offline` events
+  (`src/components/shared/OfflineBanner.tsx`); this active backend probe is
+  Android-specific.
 - **Consumers (downstream):** AND-024 (offline/stale banner), app shell
   splash/retry, and any `feature-*` ViewModel that wants to gate network calls.
 
@@ -148,15 +154,21 @@ does not stall the 15 s loop. The shared 20 s timeout is for real data calls.
 
 ```kotlin
 interface HealthApi {
-    @GET("healthz")
-    suspend fun healthz(): Response<Unit>
+    @GET("health")            // verified: GET /health, 200, no params/auth
+    suspend fun health(): Response<Unit>
 
-    @HEAD("openapi.json") // fallback target
-    suspend fun openApiHead(): Response<Unit>
+    @GET("api/ping")          // verified fallback: GET /api/ping, 200, no params/auth
+    suspend fun ping(): Response<Unit>
 }
 
 @Qualifier annotation class HealthClient
 ```
+
+> NOTE (corrected): the original draft targeted `@GET("healthz")` and a
+> `@HEAD("openapi.json")` fallback. Neither is a documented backend endpoint.
+> The verified targets are `GET /health` and `GET /api/ping`. A `HEAD` fallback
+> is not used because the spec defines only one `head` operation across the whole
+> API and `/openapi.json` is not a documented path.
 
 The probe client is built by cloning the AND-010 `OkHttpClient` via
 `newBuilder()` and overriding timeouts; it shares the persistent cookie jar so
@@ -214,30 +226,41 @@ is `@Singleton` and constructor-injected.
 The probe is read-only and idempotent (GET/HEAD only — consistent with the
 "retries for idempotent GETs only" project rule).
 
-**Primary:** `GET /healthz`
-
-```
-HTTP/1.1 200 OK
-Content-Type: application/json
-{"status":"ok"}
-```
-
-Only the status code matters; the body is ignored (`Response<Unit>`). Any 2xx =
-healthy.
-
-**Fallback:** `HEAD /openapi.json` (used when `/healthz` returns 404, recorded
-once via a capability flag so we stop probing the missing endpoint).
+**Primary:** `GET /health` (verified: `op=health_health_get`, response `200`,
+`application/json`, no params, no auth).
 
 ```
 HTTP/1.1 200 OK
 Content-Type: application/json
 ```
+
+CORRECTION: the OpenAPI 200 response schema for `/health` is an **empty schema
+(`{}`)** — the body shape is undefined. Do **not** assume a `{"status":"ok"}`
+body; only the status code matters and the body is ignored (`Response<Unit>`).
+Any 2xx = healthy.
+
+**Fallback:** `GET /api/ping` (verified: `op=ping_api_ping_get`, response `200`,
+`application/json`, no params, no auth) — used when `/health` returns 404,
+recorded once via a capability flag so we stop probing the missing endpoint.
+
+```
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+(The original `HEAD /openapi.json` fallback was removed: `/openapi.json` is not a
+documented path and the API defines only a single `head` operation, so a HEAD
+probe is unsupported and unverifiable.)
 
 Failure mapping: socket/connect timeout → `ProbeFailure.TIMEOUT`; IOException /
 DNS / connection-refused → `IO_ERROR`; any non-2xx → `HTTP_ERROR`. No request
-body, no auth required, no CSRF header needed (health is unauthenticated). If a
+body, no auth required, no CSRF header needed (health is unauthenticated; the
+web client's `X-CSRF-Token` header — set from the `ui_csrf` cookie in
+`src/api/client.ts` — applies to mutations, not these idempotent GETs). If a
 probe unexpectedly returns 401 it is treated as `HTTP_ERROR` and does **not**
-trigger the AND-016 session-refresh path.
+trigger the AND-016 session-refresh path. (The web client *does* auto-refresh on
+401 for authenticated users in `src/api/client.ts`; the probe deliberately opts
+out of that path.)
 
 ## 6. Data & State Management
 
@@ -325,7 +348,7 @@ instrumentation required.
   one additional probe; advance 5 s while unreachable and assert one probe.
 - **Failure mapping:** timeout → `TIMEOUT`, 500 → `HTTP_ERROR`, connection
   refused → `IO_ERROR`.
-- **Fallback:** `/healthz` 404 then `HEAD /openapi.json` 200 → `Reachable`.
+- **Fallback:** `/health` 404 then `GET /api/ping` 200 → `Reachable`.
 - **probeNow():** returns synchronously-resolved status and forces a request.
 - **Leak check:** assert `awaitClose` unregisters the network callback when the
   flow's last collector cancels.
@@ -347,9 +370,11 @@ Target: ≥ 90% line coverage on `BackendHealthMonitor` and `applyHysteresis`.
 
 ## 13. Risks & Open Questions
 
-- **R1:** `/healthz` may not exist on the dev host. Mitigation: `HEAD
-  /openapi.json` fallback (§5). *Open:* confirm canonical health path with
-  backend owner; update if a different path (`/health`, `/ping`) is canonical.
+- **R1:** A given health path may not be deployed on the dev host. Mitigation:
+  `GET /api/ping` fallback when `GET /health` 404s (§5); both are documented in
+  the backend OpenAPI spec. *Open:* confirm with the backend owner which of
+  `/health` vs `/api/ping` is the intended liveness probe (both currently return
+  200 with an undefined body); update the primary target if guidance differs.
 - **R2:** `NET_CAPABILITY_VALIDATED` can lag on captive portals — device shows
   transport but no real internet. The backend ping is the backstop (we will
   report `Unreachable`, which is correct for the user).
@@ -393,3 +418,243 @@ Target: ≥ 90% line coverage on `BackendHealthMonitor` and `applyHysteresis`.
   least once manually, with the up→down→up transition observed in logs.
 - Code review approved on branch `android-port`; no user-facing strings
   introduced (banner copy deferred to AND-024).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verification verdict, and the exact source pointer.
+
+1. **Claim:** Primary probe target is `GET /healthz`.
+   **VERDICT: Corrected.** No `/healthz` root endpoint exists; the only
+   `healthz` path is domain-scoped (`GET /messaging/healthz`). Corrected to
+   `GET /health`.
+   **SOURCE:** OpenAPI `GET /health` (`op=health_health_get`); negative check on
+   `GET /healthz` in `reference/openapi.index.txt`.
+
+2. **Claim:** Fallback probe is `HEAD /openapi.json`.
+   **VERDICT: Corrected.** `/openapi.json` is not a documented path in the spec,
+   and the API defines only one `head` operation total, so a HEAD probe is
+   unsupported/unverifiable. Corrected to `GET /api/ping`.
+   **SOURCE:** OpenAPI `GET /api/ping` (`op=ping_api_ping_get`); absence of
+   `/openapi.json` path and single `"head"` occurrence in
+   `reference/openapi.pretty.json`.
+
+3. **Claim:** `GET /health` returns `200 OK` with body `{"status":"ok"}`.
+   **VERDICT: Corrected.** The 200 response is `application/json` but its schema
+   is empty (`{}`) — the body shape is undefined. Spec now states the body is
+   ignored and only the status code matters.
+   **SOURCE:** OpenAPI `GET /health` responses.200.content.application/json.schema
+   `= {}` (`reference/openapi.pretty.json` line ~109005).
+
+4. **Claim:** `GET /api/ping` returns `200` and is a usable health target.
+   **VERDICT: Verified** (same empty-schema caveat as `/health`).
+   **SOURCE:** OpenAPI `GET /api/ping` responses.200 (`reference/openapi.pretty.json`
+   line ~92023).
+
+5. **Claim:** The health endpoints require no auth and no params.
+   **VERDICT: Verified.** Both `/health` and `/api/ping` index rows show
+   `req=` (no request body) and empty `params=`, no security scheme.
+   **SOURCE:** `reference/openapi.index.txt` rows for `GET /health` and `GET /api/ping`.
+
+6. **Claim:** No CSRF header is needed for probes.
+   **VERDICT: Verified.** The web client sets `X-CSRF-Token` from the `ui_csrf`
+   cookie for requests generally, but these are unauthenticated idempotent GETs;
+   CSRF protection is relevant to mutations, not GET/HEAD.
+   **SOURCE:** `src/api/client.ts` (CSRF token block: `getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)`).
+
+7. **Claim:** A probe 401 must NOT trigger AND-016 session refresh.
+   **VERDICT: Verified (as deliberate Android divergence).** The web client *does*
+   auto-refresh once on 401 for authenticated users; the probe intentionally opts
+   out and maps 401 → `HTTP_ERROR`.
+   **SOURCE:** `src/api/client.ts` (the `if (res.status === 401) { ... refreshSession() ... }`
+   block, ~lines 191-209).
+
+8. **Claim:** The web reference app implements no equivalent backend-health
+   monitor; this is Android-specific.
+   **VERDICT: Verified.** The web `OfflineBanner` derives offline state purely
+   from `navigator.onLine` and the browser `online`/`offline` events; no active
+   backend ping/poll exists. No frontend code calls `/health` or `/api/ping`.
+   **SOURCE:** `src/components/shared/OfflineBanner.tsx`; negative grep for
+   `/health`/`/api/ping` connectivity use across `src/`.
+
+9. **Claim:** The web client treats a thrown `fetch` (network error) as offline.
+   **VERDICT: Verified** (supports the design rationale that transport/IO errors
+   are the offline signal).
+   **SOURCE:** `src/api/client.ts` (catch block: `// Network error (offline, DNS
+   failure, etc.)` → `throw new ApiError(0, "Network error", err)`).
+
+10. **Claim:** Standard error responses elsewhere use an `ErrorEnvelope` shape.
+    **VERDICT: Verified** (relevant for the `HTTP_ERROR` mapping — note the
+    health endpoints themselves declare no error schema, only 200).
+    **SOURCE:** `components.schemas.ErrorEnvelope` (`{ error: ErrorDetail }`,
+    `required: [error]`) in `reference/openapi.pretty.json` (~line 31777).
+
+11. **Claim:** `ConnectivityManager` + `NetworkCallback` /
+    `NET_CAPABILITY_VALIDATED` / `NET_CAPABILITY_INTERNET` is the correct API for
+    transport observation; `ACCESS_NETWORK_STATE` is the required permission.
+    **VERDICT: Unverified-assumption (framework ref).** Not checkable against the
+    backend/frontend sources; standard Android framework behavior.
+    **SOURCE:** framework ref —
+    https://developer.android.com/reference/android/net/ConnectivityManager and
+    https://developer.android.com/training/monitoring-device-state/connectivity-status-type
+
+12. **Claim:** `SharingStarted.WhileSubscribed(5_000)` / `StateFlow` /
+    `flatMapLatest` / `callbackFlow` semantics (conflation, cancellation, grace
+    window) behave as described.
+    **VERDICT: Unverified-assumption (framework ref).** Coroutines/Flow library
+    behavior, not in scope of the project sources.
+    **SOURCE:** framework ref —
+    https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-sharing-started/
+
+13. **Claim:** AND-010 provides the shared `OkHttpClient`, `Moshi`, and
+    `BuildConfig.API_BASE_URL`, and AND-009 owns the cleartext network-security
+    config for `18.222.237.167`.
+    **VERDICT: Unverified-assumption.** Cross-ticket dependency; cannot be
+    confirmed from backend/frontend sources or framework docs.
+    **SOURCE:** internal ticket dependency (AND-010 / AND-009) — confirm at
+    integration time.
+
+14. **Claim:** The dev backend is plaintext HTTP at `http://18.222.237.167:8000`.
+    **VERDICT: Unverified-assumption.** The host/port is an environment fact not
+    present in the OpenAPI or frontend sources provided.
+    **SOURCE:** internal environment config — confirm with backend owner.
+
+### Corrections made
+
+- **C1 (§2, §4.3, §5, §11, §13):** Replaced the non-existent `GET /healthz`
+  primary target with the verified `GET /health`.
+- **C2 (§4.3, §5, §11):** Replaced the unsupported `HEAD /openapi.json` fallback
+  with the verified `GET /api/ping`.
+- **C3 (§5):** Removed the asserted `{"status":"ok"}` response body; the 200
+  schema is empty/undefined, so only the status code is used.
+- **C4 (§5):** Clarified CSRF — named the web header `X-CSRF-Token` (from
+  `ui_csrf`) and the auto-refresh-on-401 path that the probe deliberately avoids.
+- **C5 (§2):** Cited the web `OfflineBanner`'s `navigator.onLine` mechanism as
+  evidence the active backend probe is genuinely Android-specific.
+
+### Open assumptions
+
+- **OA1 — Which health path is canonical.** Both `/health` and `/api/ping`
+  return 200 with undefined bodies; backend owner has not designated one as the
+  official liveness probe. (Why: no annotation/summary in the spec distinguishes
+  them.)
+- **OA2 — Android framework semantics** (ConnectivityManager, Flow/StateFlow
+  sharing). (Why: outside the provided backend/frontend sources; rely on official
+  Android/Kotlin docs.)
+- **OA3 — Cross-ticket contracts** (AND-010 client/Moshi/BASE_URL, AND-009
+  cleartext config). (Why: those tickets' artifacts are not in the source set.)
+- **OA4 — Dev host/port** `http://18.222.237.167:8000`. (Why: an environment
+  fact absent from OpenAPI/frontend sources.)
+
+## 17. Test Plan
+
+Case IDs `TC-AND-017-NN`. "Traces" links each case to §14 acceptance criteria.
+
+- **TC-AND-017-01 — Happy path: up → Reachable.**
+  Type: contract/MockWebServer. Preconditions: fake `NetworkConnectivityObserver`
+  emits `true`; `MockWebServer` enqueues `200` for `GET /health`. Steps: collect
+  `status` via Turbine under a `StandardTestDispatcher`/virtual time; let the
+  first probe fire. Expected: status emits `Reachable(latencyMs >= 0)` after one
+  success (FR-6 fast-recovery = 1). Traces: AC-1, AC-2.
+
+- **TC-AND-017-02 — Down then recover (source AC).**
+  Type: contract/MockWebServer. Preconditions: transport `true`. Steps: enqueue
+  `200` (assert `Reachable`); enqueue two failures (`SocketPolicy.NO_RESPONSE`
+  then `503`), advancing virtual time past each poll; then re-enqueue `200`.
+  Expected: stays `Reachable` after the 1st failure, flips to
+  `Unreachable` only after the **2nd** consecutive failure, then returns to
+  `Reachable` after the next single success. Traces: AC-1.
+
+- **TC-AND-017-03 — No transport → Offline, zero requests.**
+  Type: unit/contract. Preconditions: fake observer emits `false`. Steps: collect
+  `status`; let virtual time advance well beyond a poll interval. Expected:
+  status is `Offline`; `MockWebServer.requestCount == 0` (FR-3). Traces: AC-3.
+
+- **TC-AND-017-04 — Transport regained triggers immediate probe.**
+  Type: contract/MockWebServer. Preconditions: observer starts `false`
+  (`Offline`), then flips to `true`; enqueue `200`. Steps: flip transport;
+  observe. Expected: a probe fires immediately (not after waiting a full 15 s)
+  and status becomes `Reachable`. Traces: AC-4.
+
+- **TC-AND-017-05 — Cadence under virtual time.**
+  Type: unit (virtual time). Preconditions: transport `true`. Steps: while
+  `Reachable`, advance 15 s and assert exactly one additional request; force
+  `Unreachable`, advance 5 s and assert exactly one request; assert each computed
+  delay falls within ±20% jitter of the base period. Expected: 15 s healthy /
+  5 s unhealthy cadence honored. Traces: AC-4.
+
+- **TC-AND-017-06 — Hysteresis edge cases.**
+  Type: unit (`applyHysteresis`). Steps: feed success, failure, success → assert
+  no flip to `Unreachable`; feed failure, failure → assert flip; feed one
+  success → assert flip back to `Reachable`. Expected: matches FR-6 (2 fails to
+  drop, 1 success to recover). Traces: AC-1.
+
+- **TC-AND-017-07 — Failure mapping to ProbeFailure.**
+  Type: contract/MockWebServer. Steps: enqueue a `NO_RESPONSE`/read-timeout →
+  expect `Unreachable(TIMEOUT)`; enqueue `500` → expect
+  `Unreachable(HTTP_ERROR)`; simulate connection refused (server shutdown / bad
+  port) → expect `Unreachable(IO_ERROR)`. Expected: correct `ProbeFailure`
+  variants per §5/§7. Traces: AC-1.
+
+- **TC-AND-017-08 — Health 404 falls back to /api/ping.**
+  Type: contract/MockWebServer. Preconditions: transport `true`. Steps: enqueue
+  `404` for `GET /health`, then `200` for `GET /api/ping`. Expected: status
+  becomes `Reachable`; the capability flag records the fallback so subsequent
+  polls hit `/api/ping` (the dead `/health` is not re-probed). Traces: AC-1, AC-6.
+
+- **TC-AND-017-09 — probeNow() forces an immediate ping.**
+  Type: unit/contract. Steps: with transport `true` and a `200` enqueued, call
+  `probeNow()`. Expected: a request is issued synchronously w.r.t. the call and
+  the resolved `BackendStatus` (e.g. `Reachable`) is returned to the caller.
+  Traces: AC-5.
+
+- **TC-AND-017-10 — Probe requests are GET-only, unauthenticated, no CSRF; 401
+  does not refresh.** Type: contract/MockWebServer. Steps: run several probes and
+  inspect `RecordedRequest`s. Expected: every request method is `GET`, path is
+  `/health` or `/api/ping`, no `Authorization`/`X-CSRF-Token`/`Cookie`-derived
+  auth header is required for success; a `401` response maps to
+  `Unreachable(HTTP_ERROR)` and **no** session-refresh request is emitted.
+  Traces: AC-6.
+
+- **TC-AND-017-11 — Probe timeout does not stall the loop.**
+  Type: contract/MockWebServer. Steps: configure the `@HealthClient` 4 s timeout;
+  enqueue a delayed/`NO_RESPONSE` body so the probe times out; advance time.
+  Expected: probe resolves as `TIMEOUT` near the 4 s bound (not the shared 20 s),
+  the loop proceeds to the next scheduled poll, and no overlapping pings occur.
+  Traces: AC-1, AC-4.
+
+- **TC-AND-017-12 — Callback unregistered on last collector cancel (leak check).**
+  Type: unit. Steps: collect `status`, then cancel the last collector; allow the
+  `WhileSubscribed(5_000)` grace window to elapse in virtual time. Expected:
+  `awaitClose` runs and `cm.unregisterNetworkCallback` is invoked (verified via a
+  fake/spy `ConnectivityManager`); polling stops. Traces: AC-7.
+
+- **TC-AND-017-13 — Flaky/offline dev-host path against live host (manual).**
+  Type: manual / instrumented. Preconditions: AND-009 cleartext config present;
+  device pointed at `http://18.222.237.167:8000`. Steps: observe `Reachable`;
+  stop/sever the host (or enable airplane mode); restore. Expected: logs show
+  `Reachable→Unreachable(...)` then `Unreachable→Reachable`; airplane mode yields
+  `Offline` instantly with no ping attempt. Traces: AC-1, AC-3, AC-4.
+
+- **TC-AND-017-14 — JVM-only, coverage gate.**
+  Type: unit/CI. Steps: run the §11 suite with no instrumentation; measure
+  coverage. Expected: all tests pass on JVM; ≥ 90% line coverage on
+  `BackendHealthMonitor` and `applyHysteresis`. Traces: AC-8.
+
+> Accessibility note: this ticket ships no UI, so no Compose-UI/a11y cases apply
+> here. The a11y verification for the offline banner (contentDescription,
+> `liveRegion`/announce-on-change, localized copy) is owned by AND-024 and is
+> explicitly out of scope (§9).
+
+### Coverage matrix
+
+| §14 Acceptance Criterion | Covered by |
+| --- | --- |
+| AC-1 (up→down→recover; failure mapping; fallback) | TC-01, TC-02, TC-06, TC-07, TC-08, TC-11, TC-13 |
+| AC-2 (StateFlow over the model, conflated, WhileSubscribed) | TC-01 |
+| AC-3 (no transport → Offline, zero requests) | TC-03, TC-13 |
+| AC-4 (immediate probe on regain; 15 s/5 s cadence + jitter) | TC-04, TC-05, TC-11, TC-13 |
+| AC-5 (probeNow forces a ping, returns status) | TC-09 |
+| AC-6 (GET/HEAD only, no auth/CSRF, 401 ≠ refresh) | TC-08, TC-10 |
+| AC-7 (callback unregistered on last cancel) | TC-12 |
+| AC-8 (JVM tests pass, ≥90% coverage) | TC-14 |

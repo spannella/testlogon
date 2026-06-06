@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-011]
 blocks: [AND-015, AND-016, AND-017]
 ---
@@ -51,7 +52,19 @@ expired-session refresh-and-retry edge of an already-authenticated session.
   same "on 401 → refresh once → retry" flow in its fetch wrapper. This port mirrors
   that single-flight behavior. Shared error shape in `frontend/src/api/types.ts`.
 - **Auth model:** session rides on cookies; `ui_csrf` cookie echoed as `X-CSRF-Token`;
-  on `401` the client refreshes once then retries.
+  on `401` the client refreshes once then retries. **Verified** against
+  `src/api/client.ts` (`credentials: "include"`, `getCookie("ui_csrf")` →
+  `X-CSRF-Token`, and the 401-refresh-retry block lines ~191-237).
+  **Clarification (verified):** the web client *additionally* sends an
+  `Authorization: Bearer <accessToken>` header (from its auth store) and an
+  `X-IMPERSONATION-TOKEN` header when impersonating (`src/api/client.ts` lines ~156-165).
+  This Android ticket intentionally scopes to the **cookie-based** session only (no bearer
+  token, no impersonation) — this is a deliberate scope simplification, recorded as an
+  open assumption in §16, not an oversight. The `/ui/session/refresh` endpoint itself
+  requires no bearer/session-id param (OpenAPI `params=` empty), so cookie-only refresh is
+  contract-valid. Also note: the web 401 handler clears impersonation
+  (`useImpersonationStore.getState().clear()`) before refreshing — N/A here since this port
+  has no impersonation.
 
 ## 3. Functional Requirements
 
@@ -231,22 +244,42 @@ jar (AND-011); `X-CSRF-Token` attached by the CSRF interceptor (AND-012). Header
 `X-TL-Refresh: 1` is internal (loop guard) and is **not** part of the wire contract with
 the backend — strip or ignore server-side.
 
+> **Web-divergence note (verified):** the web reference's `refreshSession()` issues the
+> refresh as a **bare** `POST /ui/session/refresh` with only `credentials: "include"` —
+> it does **not** set `X-CSRF-Token` on the refresh call itself (`src/api/client.ts:
+> refreshSession`, lines ~121-130), unlike normal `api()` calls which always attach it.
+> The backend accepts the refresh without CSRF (OpenAPI lists `params=` empty, i.e. no
+> required headers/params for this endpoint). Attaching `X-CSRF-Token` on the Android
+> refresh via the global AND-012 interceptor is therefore **harmless and a superset** of
+> the web contract, not a mismatch — but it is not *required* by the backend. Keep it for
+> consistency with the cookie-jar-attached CSRF on the retried request.
+
 Success — `200 OK`. The response sets refreshed `Set-Cookie` headers (session + possibly
-rotated `ui_csrf`), captured automatically by the cookie jar:
+rotated `ui_csrf`), captured automatically by the cookie jar. **Verified:** OpenAPI
+declares the `200` response with an empty/unconstrained schema (`"schema": {}`) — the
+backend does not document a success body shape. The example below is **illustrative
+only** and is NOT a verified contract; do not depend on any field:
 
 ```json
-{ "ok": true }
+{ }   // body shape unspecified by OpenAPI; treat any/empty 2xx body as success
 ```
 
-Failure — `401 Unauthorized` (or `403`) when the session cannot be refreshed:
+Failure — runtime `401 Unauthorized` (or `403`) when the session cannot be refreshed.
+**Correction:** OpenAPI documents **only** a `200` response for `POST /ui/session/refresh`
+(no `401`/`403`/`422` is declared, and the endpoint has no request params). The `401`/`403`
+arises at runtime from the FastAPI auth dependency, not from the documented schema, so the
+exact error body below is an **unverified assumption**:
 
 ```json
-{ "detail": "Session expired" }
+{ "detail": "..." }   // exact detail text NOT documented by OpenAPI — illustrative
 ```
 
-FastAPI `detail` may also be `[{"msg": "..."}]` or `{"code": "...", ...}`; this ticket
-does **not** parse `detail` (only the status code matters), but it must not crash on any
-of those shapes — the body is ignored on non-2xx.
+FastAPI `detail` may be a string, `[{"loc": [...], "msg": "...", "type": "..."}]`
+(verified via `components.schemas.HTTPValidationError` → `ValidationError`), or a
+`{"code": "...", ...}` object (the web client's `normalizeErrorDetail` handles all three —
+see `src/api/client.ts: normalizeErrorDetail`). This ticket does **not** parse `detail`
+(only the status code matters), but it must not crash on any of those shapes — the body
+is ignored on non-2xx.
 
 The original retried request reuses its own method, URL, and body. Note: OkHttp will not
 replay non-repeatable request bodies; in practice TestLogon mutations are small JSON
@@ -360,9 +393,11 @@ Determinism: inject `appScope` as a `TestScope` and collect events via Turbine.
 
 ## 13. Risks & Open Questions
 
-- **R-1:** `POST /ui/session/refresh` exact success body/shape unconfirmed against
-  `/openapi.json`; mitigated by keying only on HTTP status, not body. Verify path +
-  status codes against OpenAPI before merge.
+- **R-1 (RESOLVED in review):** `POST /ui/session/refresh` path + `POST` method are
+  **verified** present in OpenAPI (`op=ui_session_refresh_ui_session_refresh_post`).
+  The success body shape is **confirmed unspecified** (OpenAPI `200` has an empty schema
+  `{}`); no `401`/`403`/`422` is documented. Mitigated by keying only on HTTP status, not
+  body — the design is unaffected. See §16 for the full audit.
 - **R-2:** Non-repeatable request bodies are not replayed by OkHttp; if a mutating call
   with a streamed body 401s, it won't auto-retry. Open question: do any TestLogon
   mutations use streamed/one-shot bodies? Assumed no (small JSON).
@@ -403,3 +438,277 @@ Determinism: inject `appScope` as a `TestScope` and collect events via Turbine.
   refresh + retried requests); graceful `BuildConfig` fallback when AND-014 absent.
 - Spec reviewed; the `SessionEvent.LoggedOut` consumer hook is documented for the
   downstream app-shell/navigation ticket.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Claim:** The refresh endpoint is `POST /ui/session/refresh`.
+   **VERDICT: Verified.**
+   **Source:** OpenAPI `POST /ui/session/refresh`
+   (`op=ui_session_refresh_ui_session_refresh_post`); frontend `src/api/client.ts:
+   refreshSession` (`fetch(withApiBase("/ui/session/refresh"), { method: "POST" })`).
+
+2. **Claim:** Refresh `200` success body is `{ "ok": true }`.
+   **VERDICT: Corrected → Unverified-assumption.**
+   **Source:** OpenAPI `POST /ui/session/refresh` → `responses.200.content.application/json.schema`
+   is empty (`{}`) — no body shape is specified. The web client (`refreshSession`) checks
+   only `res.ok` and never reads the body. The illustrative example was downgraded and the
+   `{ "ok": true }` literal removed.
+
+3. **Claim:** Refresh failure returns `401` (or `403`) with body `{ "detail": "Session expired" }`.
+   **VERDICT: Corrected → Unverified-assumption (status real, body unverified).**
+   **Source:** OpenAPI declares **only** a `200` for this endpoint (no `401`/`403`/`422`).
+   The `401`/`403` is a runtime FastAPI auth-dependency result, not a documented schema; the
+   exact `detail` text is not in any source. Design keys on status only, so unaffected.
+
+4. **Claim:** FastAPI `detail` may be a string, a list of `{msg,...}`, or a `{code,...}` object.
+   **VERDICT: Verified.**
+   **Source:** `components.schemas.HTTPValidationError` → `detail: ValidationError[]` and
+   `components.schemas.ValidationError` (`{loc, msg, type}`); frontend
+   `src/api/client.ts: normalizeErrorDetail` handles string / `[{msg}]` / `{code}` shapes.
+
+5. **Claim:** Auth is cookie-based; `ui_csrf` cookie is mirrored to `X-CSRF-Token`.
+   **VERDICT: Verified (with clarification).**
+   **Source:** `src/api/client.ts` — `fetch(..., { credentials: "include" })`,
+   `getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`. Clarification: web also
+   sends `Authorization: Bearer` + `X-IMPERSONATION-TOKEN`; intentionally out of scope here
+   (see Open assumptions).
+
+6. **Claim:** On `401`, the web client refreshes once then retries the original request.
+   **VERDICT: Verified.**
+   **Source:** `src/api/client.ts` lines ~191-237 (the `if (res.status === 401)` block:
+   guard → `refreshSession()` → single retry → on retry `401` `logout`).
+
+7. **Claim:** Single-flight — concurrent `401`s collapse into one refresh call.
+   **VERDICT: Verified (web equivalent).**
+   **Source:** `src/api/client.ts` — module-level `let refreshPromise` reused by all callers
+   (`if (!refreshPromise) refreshPromise = refreshSession().finally(...)`). The Android
+   generation-counter + lock is the threaded analogue (framework ref:
+   https://square.github.io/okhttp/recipes/#handling-authentication-kt-java —
+   `Authenticator` runs synchronously off the I/O thread).
+
+8. **Claim:** Unauthenticated `401` does not trigger refresh.
+   **VERDICT: Verified.**
+   **Source:** `src/api/client.ts` — `if (!useAuthStore.getState().isAuthenticated) { ... throw }`
+   *before* touching `refreshPromise`. Android reads this from `SessionCookieStore.hasSession()`
+   (AND-011) instead of an auth store.
+
+9. **Claim:** A re-`401` after the single retry logs the user out (bounded retry).
+   **VERDICT: Verified.**
+   **Source:** `src/api/client.ts` — `if (retryRes.status === 401) useAuthStore().logout("session_expired")`;
+   refresh failure path also calls `logout("session_expired")` in `refreshSession`.
+
+10. **Claim:** Refresh failure clears the session and emits a single logged-out signal.
+    **VERDICT: Verified (web equivalent).**
+    **Source:** `src/api/client.ts: refreshSession` → `useAuthStore.getState().logout("session_expired")`
+    on `!res.ok`. Android maps this to `cookieStore.clearSession()` + one
+    `SessionEvent.LoggedOut` (AND-011 clear API).
+
+11. **Claim:** The refresh call carries `X-CSRF-Token` (via AND-012 interceptor).
+    **VERDICT: Corrected (clarified divergence).**
+    **Source:** `src/api/client.ts: refreshSession` issues a **bare** POST with only
+    `credentials: "include"` — no `X-CSRF-Token`. OpenAPI `params=` empty for the endpoint
+    (no required headers). Sending CSRF on the Android refresh is a harmless superset, not a
+    requirement; documented in §5.
+
+12. **Claim:** `/ui/session/refresh` requires no `X-SESSION-ID`/`user_sub`/bearer param.
+    **VERDICT: Verified.**
+    **Source:** OpenAPI index line `POST /ui/session/refresh | ... | params=` (empty),
+    contrasted with sibling `/ui/session/logout` and most `/ui/*` and `/api/*` endpoints
+    which list `params=user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`.
+
+13. **Claim:** Sibling endpoints exist for the broader session flow this unblocks
+    (start / finalize / logout).
+    **VERDICT: Verified.**
+    **Source:** OpenAPI `POST /ui/session/start` (`req=UiSessionStartReq`,
+    `resp=200:UiSessionStartResp`), `POST /ui/session/finalize` (`req=UiSessionFinalizeReq`),
+    `POST /ui/session/logout`.
+
+14. **Claim:** OkHttp `Authenticator` is the correct framework hook for transparent 401
+    re-auth, invoked synchronously and supporting `Response.priorResponse`/retry-count guards.
+    **VERDICT: Verified (framework ref).**
+    **Source:** framework ref https://square.github.io/okhttp/recipes/#handling-authentication-kt-java
+    and `okhttp3.Authenticator` API docs
+    https://square.github.io/okhttp/4.x/okhttp/okhttp3/-authenticator/ .
+
+15. **Claim:** Cleartext HTTP to the dev host requires `network-security-config` opt-in.
+    **VERDICT: Verified (framework ref).**
+    **Source:** framework ref
+    https://developer.android.com/training/articles/security-config (cleartext is blocked by
+    default since API 28; per-domain `cleartextTrafficPermitted` required).
+
+### Corrections made
+
+- **§5 success body:** removed the asserted `{ "ok": true }` contract; OpenAPI specifies an
+  empty `200` schema, so the body shape is now flagged illustrative/unverified (claim #2).
+- **§5 failure body:** clarified that OpenAPI documents **no** `401`/`403`/`422` for this
+  endpoint; the failure status is a runtime auth result and the `{ "detail": "Session expired" }`
+  text is an unverified assumption (claim #3). Tied the `detail` polymorphism to the real
+  `HTTPValidationError`/`ValidationError` schemas (claim #4).
+- **§5 CSRF on refresh:** added a verified web-divergence note — the web `refreshSession`
+  sends **no** `X-CSRF-Token`; attaching it on Android is a harmless superset (claim #11).
+- **§2 auth model:** added verified pointers to `src/api/client.ts` and recorded that the web
+  client additionally sends `Authorization: Bearer` + `X-IMPERSONATION-TOKEN`, deliberately
+  out of scope here (claim #5).
+- **§13 R-1:** marked resolved — path/method verified, success/error schemas confirmed
+  unspecified.
+
+### Open assumptions
+
+- **Exact refresh error body / status:** unverifiable — OpenAPI documents only `200`; the
+  `401`/`403` and any `detail` text are runtime behavior not captured in the sources. Design
+  keys on status only, so this does not block implementation.
+- **`/refresh` rotating the `ui_csrf` cookie (spec R-3):** unverifiable from OpenAPI (no
+  `Set-Cookie`/response-header schema) or frontend (cookies handled by the browser). Must be
+  confirmed empirically against the live dev backend; mitigated by interceptor ordering
+  (cookie jar before CSRF on the retry).
+- **Bearer-token / impersonation scope omission:** the web client uses a bearer token and
+  impersonation header in addition to cookies; this port assumes cookie-only auth is
+  sufficient for TestLogon's authenticated session. Unverified that no authenticated endpoint
+  *requires* the bearer token — flagged for confirmation before feature tickets (AND-015+).
+- **Non-repeatable request bodies (spec R-2):** whether any TestLogon mutation uses a
+  streamed/one-shot body is unverifiable from the sources (request bodies in OpenAPI are JSON
+  schemas, which are repeatable in practice); assumed none.
+- **Internal `X-TL-*` headers untouched (spec R-4):** cannot be verified against the backend
+  (they are client-internal); relies on the Android interceptor ordering, not an external
+  contract.
+
+## 17. Test Plan
+
+All cases live in `core-network` JVM unit tests against `okhttp3.mockwebserver.MockWebServer`
+unless marked otherwise, using `core-testing` fakes for `SessionCookieStore` and
+`SessionEvents`, and Turbine for `SharedFlow` collection. `appScope` is injected as a
+`TestScope` for determinism.
+
+- **TC-AND-013-01 — Happy path: 401 → one refresh → one retry → success.**
+  Type: contract/MockWebServer.
+  Preconditions: fake `hasSession()` = true; MockWebServer dispatcher queues `401` for the
+  business request, `200` for `/ui/session/refresh`, then `200` for the retried business
+  request.
+  Steps: issue one GET through the authenticated client.
+  Expected: business call returns `200`; `/ui/session/refresh` was hit **exactly once**
+  (path + `requestCount` assertion); the business request was sent exactly twice (original +
+  one retry); no `SessionEvent.LoggedOut` emitted.
+  Traces: AC-1.
+
+- **TC-AND-013-02 — Repeated refresh failure logs the user out.**
+  Type: contract/MockWebServer.
+  Preconditions: `hasSession()` = true; queue `401` for the business request, then `401`
+  (non-2xx) for `/ui/session/refresh`.
+  Steps: issue one GET; collect `SessionEvents.events` via Turbine.
+  Expected: `refresher.refresh()` returns false → `clearSession()` called exactly once →
+  **exactly one** `SessionEvent.LoggedOut` emitted; authenticator returns `null` (OkHttp
+  surfaces the `401`); business request NOT retried after the failed refresh.
+  Traces: AC-2.
+
+- **TC-AND-013-03 — Single-flight: concurrent 401s collapse to one refresh.**
+  Type: integration (thread pool + MockWebServer).
+  Preconditions: `hasSession()` = true; queue one `200` for `/ui/session/refresh` and `200`
+  for each retried business request; dispatcher returns `401` to the first attempt of each.
+  Steps: fire ~10 concurrent requests on an executor so they all `401` near-simultaneously.
+  Expected: `/ui/session/refresh` hit **exactly once**; all 10 business requests retry and
+  succeed; `refreshGeneration` advanced by exactly 1; a single-flight-collapse counter
+  (§10) registers the skipped refreshes.
+  Traces: AC-3.
+
+- **TC-AND-013-04 — Bounded retry: re-401 after refresh stops with no second refresh.**
+  Type: contract/MockWebServer.
+  Preconditions: `hasSession()` = true; queue `401` business, `200` refresh, then `401` again
+  for the retried business request.
+  Steps: issue one GET.
+  Expected: `/ui/session/refresh` hit **exactly once**; business request sent exactly twice
+  (original + one retry); on the second `401` `authenticate` returns `null` (via
+  `priorRetryCount >= 1`) — no second refresh; final response is `401`.
+  Traces: AC-4.
+
+- **TC-AND-013-05 — Unauthenticated 401 → no refresh.**
+  Type: unit + contract/MockWebServer.
+  Preconditions: `hasSession()` = false; queue `401` for the business request.
+  Steps: issue one GET.
+  Expected: `/ui/session/refresh` **never** called (`requestCount` for that path == 0);
+  `authenticate` returns `null`; `LoggedOut` emitted at most once (idempotent — assert
+  exactly 0 or 1, not duplicated).
+  Traces: AC-5.
+
+- **TC-AND-013-06 — Loop guard: a 401 on /ui/session/refresh never recurses.**
+  Type: unit.
+  Preconditions: construct a `Response` whose `request` carries the internal `X-TL-Refresh: 1`
+  header and status `401`.
+  Steps: call `authenticate(route, response)` directly.
+  Expected: returns `null` immediately (no call to `refresher.refresh()`); treated as refresh
+  failure → `clearSession()` + one `LoggedOut`. No recursion / no second refresh.
+  Traces: AC-6.
+
+- **TC-AND-013-07 — Refresh timeout / IOException → logout (flaky dev host / offline).**
+  Type: contract/MockWebServer.
+  Preconditions: `hasSession()` = true; MockWebServer set to `SocketPolicy.NO_RESPONSE` (or
+  body throttled beyond a short test-injected timeout) for `/ui/session/refresh`.
+  Steps: issue one GET against a refresh client built with a ~200ms timeout.
+  Expected: `SessionRefresherImpl.refresh()` catches `IOException`/timeout → returns false →
+  `clearSession()` + exactly one `LoggedOut`; no infinite retry; the failure-reason telemetry
+  records `timeout`/`io`.
+  Traces: AC-2, AC-4.
+
+- **TC-AND-013-08 — Offline before refresh even starts (no connectivity).**
+  Type: contract/MockWebServer.
+  Preconditions: `hasSession()` = true; business `401` queued, then the server is shut down
+  (`server.shutdown()`) so the refresh connection fails outright.
+  Steps: issue one GET.
+  Expected: refresh throws `IOException` → false → logout path (one `LoggedOut`); no crash;
+  authenticator returns `null`.
+  Traces: AC-2.
+
+- **TC-AND-013-09 — Redaction: no cookie/CSRF/Set-Cookie in logs.**
+  Type: unit (log capture).
+  Preconditions: capture the `TL.Net.Auth`/OkHttp `HttpLoggingInterceptor` output via an
+  in-memory log sink; debug build flags on; refresh and retry exchanges carry `Cookie`,
+  `X-CSRF-Token`, and `Set-Cookie`.
+  Steps: run the happy-path exchange (TC-01) with logging enabled; scan captured logs.
+  Expected: no raw cookie value, no `ui_csrf`/session value, no `X-CSRF-Token` value, and no
+  `Set-Cookie` value appears at any level (headers redacted to `██`); only structured event
+  names (`refresh.start`, `refresh.success`, etc.) appear.
+  Traces: AC-7.
+
+- **TC-AND-013-10 — Security: clearSession removes ALL auth cookies on failure.**
+  Type: unit.
+  Preconditions: real or fake `SessionCookieStore` seeded with both the session cookie and
+  `ui_csrf`.
+  Steps: drive the logout path (e.g. reuse TC-02), then inspect the cookie jar.
+  Expected: after `failLogout()`, `hasSession()` == false AND `ui_csrf` is gone — no
+  auth-bearing cookie survives; a subsequent request starts unauthenticated (so a following
+  `401` takes the FR-6 no-refresh branch).
+  Traces: AC-2, AC-5, AC-7.
+
+- **TC-AND-013-11 — LoggedOut consumer/navigation hook (downstream wiring smoke).**
+  Type: instrumented/e2e (lightweight).
+  Preconditions: a test app shell collecting `SessionEvents.events`; a stubbed authenticated
+  client driven to the logout path.
+  Steps: trigger refresh failure; observe the app shell.
+  Expected: exactly one navigation to the login graph is requested; the `SharedFlow`
+  collector debounces duplicate emissions to a single navigation; the authenticator itself
+  performs no navigation.
+  Traces: AC-2.
+
+- **TC-AND-013-12 — Accessibility of the resulting logout UX (downstream-owned check).**
+  Type: Compose-UI / manual.
+  Preconditions: the consuming login screen reached via `LoggedOut`.
+  Steps: with TalkBack on, confirm any "session expired" copy is a localized string resource
+  and is announced; verify focus moves to the login screen.
+  Expected: session-expiry messaging is a localized resource (not hard-coded in
+  `core-network`), is screen-reader announced, and meets focus/contrast guidance. Note: this
+  ticket emits only the signal (no human-readable text on `SessionEvent.LoggedOut`), so the
+  a11y obligation lives with the consuming screen — this case documents the boundary.
+  Traces: AC-7 (no-text-in-signal guarantee) and the §9 a11i contract.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (one refresh + one retry → success) | TC-AND-013-01 |
+| AC-2 (repeated failure → clearSession + one LoggedOut) | TC-AND-013-02, TC-AND-013-07, TC-AND-013-08, TC-AND-013-10, TC-AND-013-11 |
+| AC-3 (concurrent 401s → single refresh) | TC-AND-013-03 |
+| AC-4 (no second refresh-driven retry) | TC-AND-013-04, TC-AND-013-07 |
+| AC-5 (unauthenticated 401 → no refresh) | TC-AND-013-05, TC-AND-013-10 |
+| AC-6 (401 on refresh call does not recurse) | TC-AND-013-06 |
+| AC-7 (no cookie/CSRF/Set-Cookie in logs) | TC-AND-013-09, TC-AND-013-10, TC-AND-013-12 |

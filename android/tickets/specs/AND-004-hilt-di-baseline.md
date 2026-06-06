@@ -5,7 +5,8 @@ milestone: M1
 epic: E01
 priority: P0
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-002]
 blocks: [AND-009]
 ---
@@ -477,3 +478,237 @@ DEBUG-gated and contains build metadata only.
 - CI (AND-008) reproduces the build green on a fresh checkout.
 - Leaves a clean `SingletonComponent` ready for AND-009 to add the first network module with
   no app-level refactor required.
+
+## 16. Citations & Assumption Audit
+
+This is a DI-scaffolding ticket; it makes **no backend calls of its own** (Section 5 = "Not
+applicable"). The only backend-facing assertions in the spec are the forward references in
+Sections 5/7/8 to endpoints and transport that *later* tickets implement. Those are audited
+below alongside the framework choices.
+
+1. **Claim (§5):** The cookie-based session endpoints are `POST /ui/session/start`,
+   `POST /ui/session/finalize`, `GET /ui/me`.
+   **VERDICT: Verified.**
+   **SOURCE:** OpenAPI `POST /ui/session/start` (op `ui_session_start_ui_session_start_post`,
+   req=`UiSessionStartReq`, resp=`200:UiSessionStartResp`), `POST /ui/session/finalize` (op
+   `ui_session_finalize_ui_session_finalize_post`, req=`UiSessionFinalizeReq`), `GET /ui/me`
+   (op `ui_me_ui_me_get`). Frontend `src/api/endpoints/auth.ts: sessionStart` →
+   `api.post("/ui/session/start")`, `sessionFinalize` → `/ui/session/finalize`, `getMe` →
+   `api.get("/ui/me")`.
+
+2. **Claim (§5):** There is an "MFA" step between session start and finalize.
+   **VERDICT: Verified (path generalized).**
+   **SOURCE:** The spec does not assert a specific MFA path. The actual contract is a family
+   of endpoints, not a single `/ui/session/mfa`: OpenAPI/frontend
+   `src/api/endpoints/auth.ts` expose `POST /ui/mfa/totp/verify` (`verifyTotp`),
+   `POST /ui/mfa/sms/begin` (`beginSms`), `POST /ui/mfa/sms/verify` (`verifySms`),
+   `POST /ui/mfa/email/begin` (`beginEmail`), `POST /ui/mfa/email/verify` (`verifyEmail`),
+   `POST /ui/mfa/recovery/{factor}` (`useRecoveryCode`). Noted here so AND-027+ uses the
+   correct paths; no correction to §5 needed because it names no specific MFA route.
+
+3. **Claim (§8):** Session security uses a `ui_csrf` value surfaced as an `X-CSRF-Token`
+   header (handled later by AND-012).
+   **VERDICT: Verified.**
+   **SOURCE:** Frontend `src/api/client.ts` — `getCookie("ui_csrf")` then
+   `headers.set("X-CSRF-Token", csrf)` (CSRF token read from the `ui_csrf` cookie and echoed
+   in the `X-CSRF-Token` request header).
+
+4. **Claim (§8/§7):** The transport is cookie-based (persistent cookie jar, AND-011).
+   **VERDICT: Verified.**
+   **SOURCE:** Frontend `src/api/client.ts` issues every request with
+   `credentials: "include"` (browser cookie transport), confirming the session is
+   cookie/credential-based rather than bearer-token in the body.
+
+5. **Claim (§7):** The unreliable dev host is `http://18.222.237.167:8000`.
+   **VERDICT: Unverified-assumption.**
+   **SOURCE:** Not present in the frontend source. `src/api/client.ts` derives the base URL
+   from the build-time env var `VITE_API_BASE_URL` (defaulting to a same-origin relative
+   path), so no literal host is checkable here. The literal IP is a project deployment
+   convention carried across the AND-* plan, not something the provided OpenAPI/frontend
+   sources can confirm. Out of scope for this ticket regardless (transport is AND-009/016/017).
+
+6. **Claim (§4.1/§13):** Hilt annotation processing runs through KSP, not kapt; KSP version
+   must align to the Kotlin version (`2.0.21-1.0.x`).
+   **VERDICT: Verified (framework ref).**
+   **SOURCE:** framework ref — Dagger Hilt KSP support and Hilt Gradle setup
+   (https://dagger.dev/hilt/gradle-setup), KSP releases / Kotlin-version alignment
+   (https://github.com/google/ksp/releases). Hilt supports KSP via `ksp(hilt-android-compiler)`.
+
+7. **Claim (§4.2/§3 FR-2/FR-3):** `@HiltAndroidApp` on the Application generates the
+   `SingletonComponent`; `@AndroidEntryPoint` enables member injection in `MainActivity`.
+   **VERDICT: Verified (framework ref).**
+   **SOURCE:** framework ref — https://developer.android.com/training/dependency-injection/hilt-android
+   (`@HiltAndroidApp`, `@AndroidEntryPoint`, `SingletonComponent`).
+
+8. **Claim (§4.3):** `@Binds` is preferred over `@Provides` for an interface→impl binding
+   whose impl uses constructor injection.
+   **VERDICT: Verified (framework ref).**
+   **SOURCE:** framework ref — Dagger `@Binds` guidance
+   (https://dagger.dev/api/latest/dagger/Binds.html) and Hilt module docs.
+
+9. **Claim (§11/§3 FR-7):** Instrumented Hilt tests require a custom `AndroidJUnitRunner`
+   that substitutes `HiltTestApplication`, wired via `testInstrumentationRunner`, with
+   `HiltAndroidRule` + `@HiltAndroidTest`.
+   **VERDICT: Verified (framework ref).**
+   **SOURCE:** framework ref — https://developer.android.com/training/dependency-injection/hilt-testing
+   (custom runner overriding `newApplication` to return `HiltTestApplication`, `HiltAndroidRule`).
+
+10. **Claim (§4.3/§4.4):** `BuildConfig.APPLICATION_ID`, `BuildConfig.BUILD_TYPE`,
+    `BuildConfig.VERSION_NAME`, `BuildConfig.DEBUG` are available for the summary string.
+    **VERDICT: Verified (framework ref).**
+    **SOURCE:** framework ref — AGP generated `BuildConfig` fields
+    (https://developer.android.com/build/gradle-tips#share-custom-fields-and-resource-values-with-your-app-s-code).
+    `buildConfig` feature must be enabled (assumed inherited from AND-001/AND-002 module setup;
+    see Open assumptions).
+
+11. **Claim (§2):** Toolchain — Kotlin 2.0.21, JDK 17, Gradle 8.9, AGP 8.7.3, Hilt 2.52,
+    Compose + Material 3.
+    **VERDICT: Unverified-assumption (cross-ticket).**
+    **SOURCE:** Owned by AND-001 (version catalog) / AND-002; not contained in the provided
+    OpenAPI/frontend reference sources. Compatibility of Hilt 2.52 with AGP 8.7.3 / Kotlin
+    2.0.21 is already flagged in the spec's own Q1 as a build-bring-up confirmation item.
+
+### Corrections made
+
+- **None to the spec body.** All backend-facing assertions in Sections 5/8 (session
+  endpoints and `ui_csrf` → `X-CSRF-Token`) were confirmed exactly against the OpenAPI index
+  and `src/api/endpoints/auth.ts` / `src/api/client.ts`. Framework assertions match the
+  current AndroidX Hilt / KSP docs. Only frontmatter was changed (`status: reviewed`,
+  `reviewed_on: 2026-06-06`).
+- **Clarification (no edit required):** §5's generic "MFA" reference maps to the
+  `/ui/mfa/*` endpoint family (item 2 above), not a single `/ui/session/mfa` route. Captured
+  here so downstream AND-027+ tickets use the verified paths.
+
+### Open assumptions
+
+- **Dev host `18.222.237.167:8000` (item 5):** not derivable from the provided sources
+  (frontend uses env-injected `VITE_API_BASE_URL`). Out of scope for this DI ticket.
+- **Toolchain pins (item 11):** Kotlin/JDK/Gradle/AGP/Hilt versions are owned by
+  AND-001/AND-002 and cannot be confirmed from the OpenAPI/frontend reference set; correctness
+  is deferred to AND-008 build bring-up (matches spec Q1).
+- **`buildConfig` build feature enabled (item 10):** the `BuildConfig.*` fields require
+  `android.buildFeatures.buildConfig = true`; assumed inherited from AND-002's module config.
+  If AND-002 did not enable it, FR-4/FR-5 must add it — flagged for the implementer.
+- **`androidx.hilt-navigation-compose` (`hiltExt`):** staged in the catalog but not applied;
+  activation deferred to AND-031 (spec Q2). Version `1.2.0` not independently verified here.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-004-NN`. Because this ticket ships no backend interaction, "contract"
+coverage targets the **Hilt graph contract** (bindings resolve, scopes correct) rather than
+HTTP; a single MockWebServer-style note is included only to assert the negative (no network
+is touched). Acceptance Criteria referenced are from Section 14 (AC-1 … AC-8).
+
+- **TC-AND-004-01 — Build-time graph resolution (happy path).**
+  Type: contract (build) / integration.
+  Preconditions: clean checkout on `android-port`; catalog has `hilt`/`ksp`/
+  `hilt-android-testing`; `app` applies Hilt + KSP plugins.
+  Steps: run `./gradlew :app:assembleDebug`.
+  Expected: build succeeds; KSP generates `Hilt_TestLogonApp` / `DaggerTestLogonApp_*`
+  components; no missing-binding, duplicate-binding, or scope errors.
+  Traces: AC-3, AC-5.
+
+- **TC-AND-004-02 — App launches with Hilt without crashing.**
+  Type: instrumented/e2e.
+  Preconditions: debug APK installed on emulator.
+  Steps: launch `MainActivity` from the launcher intent.
+  Expected: process starts; `@HiltAndroidApp` graph initializes; `@AndroidEntryPoint`
+  injection into `MainActivity` completes; no `IllegalStateException`/missing-binding crash.
+  Traces: AC-1, AC-4.
+
+- **TC-AND-004-03 — Trivial dependency is injected and non-blank.**
+  Type: instrumented/e2e (HiltAndroidTest).
+  Preconditions: `HiltGraphSmokeTest` with `HiltAndroidRule`; `HiltTestRunner` active.
+  Steps: `hiltRule.inject()`; read injected `appInfo.summary()`.
+  Expected: returns a non-blank string containing `com.testlogon.android`.
+  Traces: AC-2, AC-6.
+
+- **TC-AND-004-04 — Summary rendered in Compose host with test tag.**
+  Type: Compose-UI (instrumented).
+  Preconditions: `createAndroidComposeRule<MainActivity>()`.
+  Steps: query `onNodeWithTag("app_info_summary")`; assert it exists and shows the summary
+  text.
+  Expected: node exists; displayed text equals `appInfo.summary()` (e.g.
+  `com.testlogon.android · debug · 1.0`).
+  Traces: AC-7, AC-2.
+
+- **TC-AND-004-05 — Provider formatting (unit).**
+  Type: unit (JVM).
+  Preconditions: `DefaultAppInfoProvider` with stubbed/substring-asserted `BuildConfig`.
+  Steps: call `summary()`.
+  Expected: format is `applicationId · buildType · versionName` (three ` · `-joined fields,
+  applicationId first).
+  Traces: AC-2.
+
+- **TC-AND-004-06 — Singleton scope: instance created once per process.**
+  Type: contract (HiltAndroidTest) / integration.
+  Preconditions: two injection points (test field + `MainActivity` field, or two EntryPoint
+  lookups) resolving `AppInfoProvider`.
+  Steps: obtain both references.
+  Expected: both are the **same** `DefaultAppInfoProvider` instance (referential equality),
+  proving `@Singleton` in `SingletonComponent`.
+  Traces: AC-3 (graph correctness), AC-6.
+
+- **TC-AND-004-07 — Test runner substitutes HiltTestApplication.**
+  Type: instrumented (configuration assertion).
+  Preconditions: `testInstrumentationRunner = "com.testlogon.android.HiltTestRunner"`.
+  Steps: in an instrumented test, read
+  `ApplicationProvider.getApplicationContext()` class.
+  Expected: application is `HiltTestApplication` (not `TestLogonApp`), confirming the runner
+  override.
+  Traces: AC-6.
+
+- **TC-AND-004-08 — Missing-binding fails the build (negative/error shape).**
+  Type: contract (build) — run in a scratch branch / CI smoke, not merged.
+  Preconditions: temporarily inject an unbound type (e.g. an interface with no `@Binds`).
+  Steps: run `./gradlew :app:assembleDebug`.
+  Expected: KSP/Hilt **compile** failure naming the unsatisfied type; no runtime crash path
+  reached. Confirms DI errors are compile-time (Section 7).
+  Traces: AC-3.
+
+- **TC-AND-004-09 — No kapt usage anywhere.**
+  Type: unit/static (CI grep or detekt rule, AND-005).
+  Preconditions: build scripts present.
+  Steps: scan `*.gradle.kts` for `kapt(`; confirm Hilt compiler is wired via
+  `ksp(...)`/`kspAndroidTest(...)` only.
+  Expected: zero `kapt(` matches; Hilt compiler present under `ksp` configurations.
+  Traces: AC-5.
+
+- **TC-AND-004-10 — No network touched / no offline dependency (resilience guard).**
+  Type: contract/MockWebServer (negative assertion) or integration.
+  Preconditions: smoke test runs with **no** OkHttp/MockWebServer started and device in
+  airplane mode (or no network permission granted to the trivial graph path).
+  Steps: launch app and resolve `appInfo.summary()` offline.
+  Expected: summary resolves identically offline; no network call attempted; no dependency on
+  the flaky dev host. Confirms §7 "performs no I/O".
+  Traces: AC-1, AC-2, AC-8.
+
+- **TC-AND-004-11 — Security/PII: summary exposes only build metadata.**
+  Type: unit + manual review.
+  Preconditions: `summary()` output and any DEBUG log line.
+  Steps: assert the string contains only `applicationId`, `buildType`, `versionName`; assert
+  it contains no device identifier (no IMEI/ANDROID_ID/serial), no token, no credential.
+  Expected: only the three build-static fields present; the DEBUG-gated log (Section 10) is
+  emitted only when `BuildConfig.DEBUG` is true and carries no PII.
+  Traces: AC-8.
+
+- **TC-AND-004-12 — Accessibility: summary node is a readable TalkBack node.**
+  Type: Compose-UI (instrumented, a11y).
+  Preconditions: `app_info_summary` node present.
+  Steps: assert the node is not merged-away/hidden; semantics expose its text; it does not set
+  `invisibleToUser`/`clearAndSetSemantics` that would suppress TalkBack.
+  Expected: node is present in the semantics tree with readable text (Section 9 requirement).
+  Traces: AC-7.
+
+### Coverage matrix
+
+| Section-14 AC | Covered by |
+| --- | --- |
+| AC-1 (app runs with Hilt, no crash) | TC-02, TC-10 |
+| AC-2 (trivial dep resolves, contains `com.testlogon.android`) | TC-03, TC-04, TC-05, TC-10 |
+| AC-3 (`assembleDebug` succeeds, no missing/dup bindings) | TC-01, TC-06, TC-08 |
+| AC-4 (manifest `android:name=".TestLogonApp"`, `@HiltAndroidApp`) | TC-02 |
+| AC-5 (Hilt+KSP via catalog, no kapt) | TC-01, TC-09 |
+| AC-6 (runner substitutes `HiltTestApplication`; smoke test passes) | TC-03, TC-06, TC-07 |
+| AC-7 (summary visible with `testTag("app_info_summary")`) | TC-04, TC-12 |
+| AC-8 (no backend/secrets/PII/telemetry; DEBUG-only log) | TC-10, TC-11 |

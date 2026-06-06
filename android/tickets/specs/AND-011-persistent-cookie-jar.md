@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-009]
 blocks: [AND-012]
 ---
@@ -14,11 +15,19 @@ blocks: [AND-012]
 
 ## 1. Overview & Goal
 
-TestLogon authenticates entirely through server-set cookies. The web reference
-app relies on the browser cookie store to keep `POST /ui/session/start`,
-the MFA exchange, `POST /ui/session/finalize`, and every authenticated request
-on the same session. Android has no implicit cookie store, so OkHttp must be
-given an explicit `CookieJar`. The default `okhttp3.CookieJar.NO_COOKIES`
+TestLogon's web reference app authenticates with a **hybrid** scheme: it relies
+on the browser cookie store *and* a persisted bearer `accessToken`. Verified in
+`src/api/client.ts`, every request both sends `credentials: "include"` (cookies)
+and, when an `accessToken` is present in the persisted auth store, an
+`Authorization: Bearer <accessToken>` header. The cookie half keeps
+`POST /ui/session/start`, the MFA exchange, `POST /ui/session/finalize`, the
+`ui_csrf` CSRF cookie, and the `POST /ui/session/refresh` 401-recovery flow on
+the same session. (Correction: the original draft claimed authentication is
+"entirely through server-set cookies"; the source shows a bearer token is also
+in play. The cookie jar this ticket builds is necessary but not by itself
+sufficient — bearer-token storage is owned by the auth feature, AND-013+.)
+Android has no implicit cookie store, so OkHttp must be given an explicit
+`CookieJar`. The default `okhttp3.CookieJar.NO_COOKIES`
 discards every `Set-Cookie`, which would break the session immediately after the
 first hop.
 
@@ -50,13 +59,23 @@ This jar is the foundation for the CSRF interceptor (AND-012), which reads the
 - **Blocks AND-012** — the CSRF interceptor reads the `ui_csrf` cookie value out
   of this jar (or via the jar's helper) to set the `X-CSRF-Token` header.
 - **Auth flow (downstream, AND-013+):** `POST /ui/session/start` →
-  `{auth_required, challenge_id, required_factors[]}` → MFA
-  `/ui/mfa/{totp|sms|email}/begin|verify` → `POST /ui/session/finalize` →
-  `GET /ui/me`. On `401`, the client calls `POST /ui/session/refresh` once and
-  retries. Every step depends on cookies surviving between calls.
-- **Web reference:** browser-managed cookies; `frontend/src/api/*` sends
-  `credentials: 'include'` and echoes `ui_csrf`. This jar reproduces that
-  behavior natively.
+  `UiSessionStartResp {auth_required: bool, challenge_id?: string,
+  required_factors: string[], session_id?: string}` (verified against OpenAPI
+  schema `UiSessionStartResp` and `src/api/types.ts: SessionStartResp`) → MFA
+  verify endpoints `POST /ui/mfa/totp/verify`, `POST /ui/mfa/sms/begin` +
+  `POST /ui/mfa/sms/verify`, `POST /ui/mfa/email/begin` +
+  `POST /ui/mfa/email/verify` → `POST /ui/session/finalize` (req
+  `UiSessionFinalizeReq`) → `GET /ui/me`. (Correction: the original draft wrote
+  `/ui/mfa/{totp|sms|email}/begin|verify`; TOTP has **no** `begin` endpoint in
+  the OpenAPI index — only `/ui/mfa/totp/verify` exists. SMS and email have both
+  begin and verify.) On `401`, the client calls `POST /ui/session/refresh` once
+  and retries (verified in `src/api/client.ts: refreshSession`/`api`). Every step
+  depends on cookies surviving between calls.
+- **Web reference:** browser-managed cookies; `src/api/client.ts` sends
+  `credentials: 'include'` on every call and echoes the `ui_csrf` cookie value
+  into an `X-CSRF-Token` header. (Correction: the original draft pointed at a
+  nonexistent `frontend/src/api/*` path; the reference source root is `src/`.)
+  This jar reproduces the cookie-transport behavior natively.
 - **Backend:** dev host `http://18.222.237.167:8000` is **plaintext HTTP**.
   Cookies arriving over HTTP will typically lack the `Secure` attribute; the jar
   must not require `Secure` to persist a cookie. Production will be HTTPS.
@@ -222,7 +241,7 @@ normalized when they reach the jar.
 
 ```json
 {
-  "name": "tl_session",
+  "name": "ui_csrf",
   "value": "<opaque>",
   "expiresAt": 1780000000000,
   "domain": "18.222.237.167",
@@ -260,15 +279,30 @@ headers and `Cookie` request headers, which the framework handles. The relevant
 contract is the cookie set the backend issues during the auth flow owned by
 AND-013+:
 
-- `Set-Cookie: tl_session=...; HttpOnly; Path=/` — session/auth cookie.
-- `Set-Cookie: ui_csrf=...; Path=/` — CSRF token cookie, readable by AND-012
-  via `currentCookie("ui_csrf", url)`.
-- `Set-Cookie: tl_refresh=...; Max-Age=...; HttpOnly; Path=/` — persistent
-  refresh cookie used by `POST /ui/session/refresh`; this is the cookie that
-  must survive process restart.
+- `ui_csrf` — CSRF token cookie. **Verified**: `src/api/client.ts` and
+  `src/stores/offlineStore.ts` read `ui_csrf` from `document.cookie` and copy it
+  into the `X-CSRF-Token` request header. Because the web client reads it from
+  `document.cookie`, this cookie is **not** `HttpOnly`. Exposed to AND-012 via
+  `currentCookie("ui_csrf", url)`.
+- A server-set **session cookie** (`HttpOnly`) — its existence is implied by the
+  cookie-auth flow (`require_ui_session` server guard, `credentials: "include"`,
+  the `POST /ui/session/refresh` recovery path). **Unverified assumption:** the
+  original draft named it `tl_session`; that exact name does **not** appear
+  anywhere in the reference source or OpenAPI (expected, since an `HttpOnly`
+  cookie is invisible to JS). The jar must treat the name as opaque and store
+  whatever the server sends — it must not hard-code `tl_session`.
+- A persistent **refresh cookie** consumed by `POST /ui/session/refresh`
+  (which takes no request body — verified `resp=200`, `req=` empty in the
+  OpenAPI index). **Unverified assumption:** the original draft named it
+  `tl_refresh` and assumed it is a separate, long-lived `Max-Age` cookie; no such
+  name or attribute is observable in the sources. The refresh mechanism is real;
+  whether it rides on the same `HttpOnly` session cookie or a distinct refresh
+  cookie cannot be confirmed from these references (see OQ-1). The jar must not
+  depend on a specific refresh-cookie name.
 
-Over the dev host these arrive without `Secure` (plaintext HTTP) and must still
-be stored. No request body or JSON contract is owned here.
+Cookie names other than `ui_csrf` are therefore treated as opaque. Over the dev
+host these arrive without `Secure` (plaintext HTTP) and must still be stored. No
+request body or JSON contract is owned here.
 
 ## 6. Data & State Management
 
@@ -443,3 +477,239 @@ crashing (TC-9).
 - `currentCookie` helper exported for AND-012; logout `clear()` entry point
   available for AND-013+.
 - Code reviewed, ktlint/detekt clean, merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **CSRF: web client reads `ui_csrf` cookie and sends it as `X-CSRF-Token`.**
+   VERDICT: Verified. SOURCE: `src/api/client.ts: api` (`getCookie("ui_csrf")`
+   → `headers.set("X-CSRF-Token", csrf)`); corroborated in
+   `src/stores/offlineStore.ts: getCsrfFromCookie` and
+   `src/api/endpoints/profile.ts` / `src/api/endpoints/kycCompliance.ts`.
+2. **`ui_csrf` is NOT `HttpOnly`.** VERDICT: Verified (by inference from
+   behavior). SOURCE: `src/api/client.ts` reads it from `document.cookie`, which
+   is impossible for an `HttpOnly` cookie. The original draft's `Set-Cookie:
+   ui_csrf=...; Path=/` (no HttpOnly) is consistent and retained.
+3. **401 recovery: client calls `POST /ui/session/refresh` once, then retries.**
+   VERDICT: Verified. SOURCE: `src/api/client.ts: refreshSession` (`fetch("/ui/
+   session/refresh", { method: "POST", credentials: "include" })`) and the 401
+   branch of `api` (single-flight `refreshPromise`, retry).
+4. **`POST /ui/session/refresh` takes no request body and returns 200.**
+   VERDICT: Verified. SOURCE: OpenAPI index `POST /ui/session/refresh | req= |
+   resp=200:` (op `ui_session_refresh_ui_session_refresh_post`).
+5. **`POST /ui/session/start` request/response shape
+   `{auth_required, challenge_id?, required_factors[], session_id?}`.**
+   VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/start`
+   (`req=UiSessionStartReq, resp=200:UiSessionStartResp`) + schema
+   `components.schemas.UiSessionStartResp` (required: `auth_required`); frontend
+   `src/api/types.ts: SessionStartResp` and `src/api/endpoints/auth.ts:
+   sessionStart`.
+6. **`POST /ui/session/finalize` exists (req `UiSessionFinalizeReq`).**
+   VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/finalize`
+   (`req=UiSessionFinalizeReq`); `src/api/endpoints/auth.ts: sessionFinalize`.
+7. **`GET /ui/me` exists.** VERDICT: Verified. SOURCE: OpenAPI `GET /ui/me`
+   (op `ui_me_ui_me_get`); `src/api/endpoints/auth.ts: getMe`.
+8. **MFA verify endpoints.** VERDICT: Corrected. SOURCE: OpenAPI index —
+   `POST /ui/mfa/totp/verify`, `POST /ui/mfa/sms/begin`,
+   `POST /ui/mfa/sms/verify`, `POST /ui/mfa/email/begin`,
+   `POST /ui/mfa/email/verify`; `src/api/endpoints/auth.ts` (`verifyTotp`,
+   `beginSms`/`verifySms`, `beginEmail`/`verifyEmail`). The draft's
+   `/ui/mfa/{totp|sms|email}/begin|verify` falsely implied a `totp/begin`
+   endpoint — none exists; TOTP is verify-only.
+9. **Web app authenticates "entirely through server-set cookies".**
+   VERDICT: Corrected. SOURCE: `src/api/client.ts: api` also sends
+   `Authorization: Bearer <accessToken>` from `src/stores/authStore.ts`
+   (persisted zustand store, `accessToken` field). Auth is hybrid (cookie session
+   + bearer token), not cookie-only. The cookie jar remains required but is not
+   the whole auth story.
+10. **Cookie name `tl_session` for the session/auth cookie.**
+    VERDICT: Unverified-assumption. SOURCE: no occurrence of `tl_session` in
+    `reference/src/**` or `openapi.pretty.json`. An `HttpOnly` session cookie is
+    invisible to JS, so absence is expected; the name itself is unconfirmed.
+    Spec now treats the name as opaque.
+11. **Cookie name `tl_refresh` and a distinct long-lived `Max-Age` refresh
+    cookie.** VERDICT: Unverified-assumption. SOURCE: no occurrence of
+    `tl_refresh` in the sources; only the `/ui/session/refresh` *endpoint* is
+    observable. Whether refresh rides the session cookie or a separate cookie is
+    unknown (see OQ-1). Spec no longer hard-codes this name.
+12. **Reference frontend source path.** VERDICT: Corrected. SOURCE: actual root
+    is `reference/src/` (e.g. `src/api/client.ts`); the draft's
+    `frontend/src/api/*` path does not exist in the reference tree.
+13. **Dev host `http://18.222.237.167:8000` is plaintext HTTP; cookies arrive
+    without `Secure`.** VERDICT: Unverified-assumption. SOURCE: not derivable
+    from the reference source or OpenAPI (no base-URL constant; the web client
+    uses `VITE_API_BASE_URL` from env in `src/api/client.ts: withApiBase`).
+    Carried over from the ticket/environment context; treated as a config-time
+    assumption, not a contract.
+14. **OkHttp `Cookie.matches(HttpUrl)` implements RFC 6265 domain/path/secure
+    matching, and `CookieJar.NO_COOKIES` discards cookies.**
+    VERDICT: Verified (framework ref). SOURCE: OkHttp 4.x API —
+    https://square.github.io/okhttp/4.x/okhttp/okhttp3/-cookie/ and
+    https://square.github.io/okhttp/4.x/okhttp/okhttp3/-cookie-jar/.
+15. **`EncryptedSharedPreferences` / `MasterKey` (AES256-SIV keys, AES256-GCM
+    values) from `androidx.security:security-crypto`, Keystore-backed.**
+    VERDICT: Verified (framework ref). SOURCE:
+    https://developer.android.com/reference/androidx/security/crypto/EncryptedSharedPreferences
+    and .../crypto/MasterKey. Note: `security-crypto` is deprecated as of
+    Jetpack (2024); 1.1.0-alpha06 remains the last published artifact — relevant
+    to OQ-2.
+16. **Auto-backup exclusion via `backup_rules.xml` / `allowBackup`.**
+    VERDICT: Verified (framework ref). SOURCE:
+    https://developer.android.com/guide/topics/data/autobackup#IncludingFiles.
+
+### Corrections made
+
+- Overview/§2: changed "authenticates entirely through server-set cookies" to a
+  hybrid cookie + bearer-token description (claim 9).
+- §2 auth-flow line: removed the nonexistent `/ui/mfa/totp/begin`; listed the
+  real verify/begin endpoints and added verified request/response schema names
+  (claims 5, 8).
+- §2 web-reference line: fixed `frontend/src/api/*` → `src/api/client.ts`, and
+  named the `X-CSRF-Token` header explicitly (claims 1, 12).
+- §5 API Contract: replaced hard-coded `tl_session`/`tl_refresh` cookie names
+  with opaque-name handling, marked them unverified, and corrected `ui_csrf` to
+  non-`HttpOnly` with verified sources (claims 2, 10, 11).
+- §4 serialization JSON example: changed the illustrative `name` from
+  `tl_session` to `ui_csrf` (the only confirmed cookie name).
+
+### Open assumptions
+
+- **Session/refresh cookie names and attributes** (claims 10, 11): unverifiable
+  because the session cookie is `HttpOnly` (never exposed to the reference JS)
+  and the OpenAPI spec documents endpoints, not `Set-Cookie` headers. Resolution
+  requires observing live `Set-Cookie` responses from the backend (OQ-1).
+- **Whether the backend session cookie is session-scoped vs persistent**
+  (OQ-1): same reason; drives the `PersistSessionCookies` default and the
+  restart-survival path.
+- **Plaintext dev host / missing `Secure` attribute** (claim 13): an
+  environment fact, not in the verifiable sources; revalidate for production
+  HTTPS.
+- **Exact bearer-token lifecycle** (where `accessToken` is minted/refreshed for
+  Android): owned by AND-013+; out of scope here but noted because it changes
+  the "cookies alone restore the session" premise.
+
+## 17. Test Plan
+
+Test types: unit (JUnit + Truth), contract/MockWebServer, integration,
+Compose-UI (n/a — headless), instrumented/e2e, manual. IDs trace to the
+section-14 Acceptance Criteria (AC-1..AC-7).
+
+- **TC-AND-011-01 — Capture + replay round-trip.**
+  Type: contract/MockWebServer.
+  Preconditions: `PersistentCookieJar` over a `FakeCookieStore`, OkHttp client
+  with the jar attached; MockWebServer enqueues a response with
+  `Set-Cookie: a=1; Path=/`.
+  Steps: (1) GET `/x` (server sets cookie); (2) GET `/y` on the same host.
+  Expected: request 2 carries `Cookie: a=1`. Traces: AC-1.
+
+- **TC-AND-011-02 — Persistent cookie survives simulated process restart.**
+  Type: unit + instrumented.
+  Preconditions: a file/real-Keystore-backed `CookieStore`.
+  Steps: (1) `saveFromResponse` with a cookie carrying `Max-Age`/`Expires`
+  (persistent); (2) construct a **new** `PersistentCookieJar` over the **same**
+  store; (3) `loadForRequest` for a matching URL. Instrumented variant: real
+  `EncryptedCookieStore` on device, recreate the store/Hilt graph.
+  Expected: the persistent cookie is returned after the fresh construction.
+  Traces: AC-2.
+
+- **TC-AND-011-03 — Session (no-expiry) cookie not persisted by default.**
+  Type: unit.
+  Preconditions: `PersistSessionCookies=false`.
+  Steps: (1) `saveFromResponse` with a cookie that has no `Max-Age`/`Expires`;
+  (2) confirm it is returned in-process; (3) new jar over the same store.
+  Expected: present in the first process, absent after the fresh jar.
+  Traces: AC-2, AC-3.
+
+- **TC-AND-011-04 — Domain matching (RFC 6265).** Type: unit.
+  Preconditions: cookie stored for `host-a`.
+  Steps: `loadForRequest` for `host-b`.
+  Expected: cookie is not returned (delegates to `Cookie.matches`).
+  Traces: AC-3.
+
+- **TC-AND-011-05 — Path + scheme matching.** Type: unit.
+  Preconditions: cookie with `Path=/api`; a `Secure` cookie stored.
+  Steps: `loadForRequest` for `/` (path miss) and for `http://` vs `https://`
+  (scheme check on the `Secure` cookie).
+  Expected: `Path=/api` cookie absent at `/`; `Secure` cookie withheld over
+  `http`. Traces: AC-3.
+
+- **TC-AND-011-06 — Expiry enforcement + eviction.** Type: unit.
+  Preconditions: cookie with `expiresAt` in the past placed in the store.
+  Steps: `loadForRequest` for a matching URL.
+  Expected: cookie not returned and removed from both memory and store.
+  Traces: AC-3.
+
+- **TC-AND-011-07 — Overwrite + delete semantics.** Type: unit.
+  Steps: (1) save `(name,domain,path)=a` value v1; (2) save same key value v2;
+  (3) save same key with a past expiry.
+  Expected: v2 replaces v1; the past-expiry write deletes the entry from memory
+  and store. Traces: AC-3.
+
+- **TC-AND-011-08 — `clear()` wipes memory and storage.** Type: unit +
+  instrumented.
+  Steps: save persistent cookies; call `clear()`; construct a fresh jar over the
+  same store. Instrumented: assert the `EncryptedSharedPreferences` file is empty
+  (synchronous `commit()`).
+  Expected: store empty and the fresh jar returns nothing. Traces: AC-4.
+
+- **TC-AND-011-09 — Logging redaction (no cookie values in logs).**
+  Type: contract/MockWebServer + manual.
+  Preconditions: AND-009 `HttpLoggingInterceptor` + the jar both attached; a log
+  capture sink.
+  Steps: drive a request/response that sets and sends a cookie; inspect captured
+  logs.
+  Expected: no `Cookie`/`Set-Cookie` values appear; only name+domain diagnostics.
+  Traces: AC-5.
+
+- **TC-AND-011-10 — `currentCookie("ui_csrf", url)` helper.** Type: unit.
+  Preconditions: a `ui_csrf` cookie stored for the host.
+  Steps: call `currentCookie("ui_csrf", url)` for a matching and a
+  non-matching URL.
+  Expected: returns the cookie for the match, `null` otherwise (supports the
+  AND-012 CSRF interceptor). Traces: AC-6.
+
+- **TC-AND-011-11 — Crypto/deserialization resilience.** Type: unit +
+  instrumented.
+  Preconditions: corrupt the persisted blob (truncate/garble) or inject one
+  undecodable entry alongside a valid one.
+  Steps: construct a jar / call `loadAll`.
+  Expected: `GeneralSecurityException`/`IOException` and per-entry decode errors
+  are caught; the jar resets to empty (full corruption) or skips the bad entry
+  (single), never throwing into the OkHttp call. Traces: AC-7.
+
+- **TC-AND-011-12 — Concurrency safety.** Type: unit (stress).
+  Steps: run many threads invoking `saveFromResponse`/`loadForRequest`
+  concurrently.
+  Expected: no `ConcurrentModificationException`, no lost writes; disk I/O occurs
+  outside the lock. Traces: AC-2, AC-3.
+
+- **TC-AND-011-13 — Plaintext-host / no-`Secure` storage (dev) + offline path.**
+  Type: contract/MockWebServer.
+  Preconditions: server (HTTP) returns a credential cookie without `Secure`;
+  then simulate a network failure on the next call.
+  Steps: (1) capture the non-`Secure` cookie; (2) trigger an offline/transport
+  error on a later request.
+  Expected: the cookie is still stored and replayed (jar does not require
+  `Secure`); a transport failure does not corrupt or clear the jar (cookies
+  persist for retry). Traces: AC-1, AC-2.
+
+- **TC-AND-011-14 — Disk-write failure tolerance + backup exclusion.**
+  Type: unit + manual.
+  Steps: (unit) stub `store.saveAll` to throw; save a persistent cookie. (manual)
+  verify `backup_rules.xml` excludes the `tl_cookie_jar` prefs file.
+  Expected: the cookie stays usable in-memory for the live session; no exception
+  propagates to OkHttp; the cookie prefs file is excluded from auto-backup.
+  Traces: AC-2, AC-5.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|---|---|
+| AC-1 (response cookie attached to next request) | TC-01, TC-13 |
+| AC-2 (persistent cookie survives process restart) | TC-02, TC-03, TC-12, TC-13, TC-14 |
+| AC-3 (RFC 6265 domain/path/scheme/expiry matching) | TC-03, TC-04, TC-05, TC-06, TC-07, TC-12 |
+| AC-4 (`clear()` wipes memory + storage) | TC-08 |
+| AC-5 (no cookie names/values in logs) | TC-09, TC-14 |
+| AC-6 (`currentCookie("ui_csrf", url)` for AND-012) | TC-10 |
+| AC-7 (crypto/deser failure degrades to empty, no crash) | TC-11 |

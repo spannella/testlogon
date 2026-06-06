@@ -5,7 +5,8 @@ milestone: M1
 epic: E03
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-022]
 blocks: [AND-024]
 ---
@@ -54,9 +55,20 @@ when logged out, and navigation between its destinations is verified by tests.
   (`POST /ui/session/start` → MFA `begin`/`verify` → `POST /ui/session/finalize`
   → `GET /ui/me`) is the eventual driver of which graph shows. This ticket does
   **not** implement that flow; it only models the *destinations* that flow will
-  navigate between and reads a coarse logged-in/logged-out signal.
-- **Web reference:** `frontend/` SPA routes (`/login`, `/mfa`, `/register`,
-  `/recovery`, `/magic-link`) inform the destination set and argument shape.
+  navigate between and reads a coarse logged-in/logged-out signal. *(Verified
+  against OpenAPI: `POST /ui/session/start`, `POST /ui/session/finalize`,
+  `GET /ui/me`, plus `POST /ui/mfa/{totp,sms,email}/verify` and
+  `POST /ui/mfa/{totp,sms,email}/begin` all exist — see §16.)*
+- **Web reference:** the `frontend/` SPA exposes the unauthenticated routes
+  `/login`, `/register`, `/password-recovery`, and `/magic-link-verify`
+  (verified in `src/App.tsx`). **Correction:** the web app has **no** `/mfa`
+  route and no `/recovery` or `/magic-link` route. In the web client, MFA is an
+  *in-page step* of the Login page (`LoginStep = "credentials" | "mfa" |
+  "magic-link" | "webauthn"` in `src/pages/Login.tsx`), and the `challenge_id`
+  is held in React component state, **not** passed as a URL argument. Modelling
+  MFA as a *separate* arg-bearing Android destination (this ticket's design) is
+  therefore a deliberate platform divergence, not a mirror of the web routes —
+  it is recorded as a design assumption in §16, not a contract requirement.
 - **Stack:** Kotlin 2.0.21, Jetpack Compose + Material 3, Navigation-Compose,
   Hilt (KSP), Coroutines/Flow. minSdk 24, compileSdk/targetSdk 35, JDK 17,
   Gradle 8.9, AGP 8.7.3.
@@ -223,15 +235,29 @@ no I/O.
 **No backend API is consumed by this ticket.** It is pure client navigation
 plumbing. The only contract surface is the **navigation route contract** in
 §4.1, plus the *future* coupling: the MFA destination's `challengeId` argument is
-shaped to receive the `challenge_id` string returned by `POST /ui/session/start`:
+shaped to receive the `challenge_id` string returned by `POST /ui/session/start`
+(OpenAPI request schema `UiSessionStartReq`, response schema
+`UiSessionStartResp`; the frontend aliases these as `SessionStartReq` /
+`SessionStartResp` in `src/api/types.ts`):
 
 ```json
 { "auth_required": true, "challenge_id": "chg_abc123", "required_factors": ["totp"] }
 ```
 
+**Verified field shapes (`UiSessionStartResp`):** `auth_required: boolean`
+(the *only* required field), `challenge_id: string | null` (optional/nullable),
+`required_factors: string[]`, `session_id: string | null` (optional). Because
+`challenge_id` may be **absent** (e.g. when `auth_required` is `false` and the
+session is established directly via `session_id`), the producer in E04 must only
+navigate to the MFA destination when a non-null `challenge_id` is present; the
+route argument itself is non-nullable `NavType.StringType`.
+
 The real `/ui/session/*` and `/ui/mfa/*` calls, cookie jar, and `X-CSRF-Token`
 handling are owned by the auth feature tickets (E04/E05); this ticket only
 guarantees the route can carry `challenge_id` losslessly via `Uri.encode`.
+*(CSRF mechanism verified: the web client reads the `ui_csrf` cookie and sends
+it as the `X-CSRF-Token` header with `credentials: "include"` —
+`src/api/client.ts`.)*
 
 ## 6. Data & State Management
 
@@ -282,8 +308,12 @@ guarantees the route can carry `challenge_id` losslessly via `Uri.encode`.
 - No deep links are registered for auth destinations in this ticket (deep-link /
   magic-link URL handling is its own future ticket); this avoids exposing
   `challenge_id` via external intents prematurely.
-- Cookie jar, CSRF header, and `session/refresh`-on-401 logic are explicitly out
-  of scope and owned by core-network / E04.
+- Cookie jar, CSRF header (`X-CSRF-Token` from the `ui_csrf` cookie), and
+  `session/refresh`-on-401 logic are explicitly out of scope and owned by
+  core-network / E04. *(Verified against `src/api/client.ts`: on a `401` for an
+  authenticated request the web client calls `POST /ui/session/refresh` once,
+  de-duplicated via a shared `refreshPromise`, then retries the original
+  request; an unauthenticated `401` is surfaced directly without refresh.)*
 
 ## 9. Accessibility & i18n
 
@@ -395,3 +425,244 @@ the AC "Graph wired; login is the start destination when logged out."
 - All package references use `com.testlogon.android`. PR opened against
   `android-port` with the test evidence for AC-2/AC-3 referenced in the
   description, and the AND-024 integration point documented in code comments.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources:
+OpenAPI index/spec under `reference/openapi.*`; frontend under `reference/src/`;
+Android framework docs labelled *(framework ref)*.
+
+1. **`POST /ui/session/start` exists and returns the login/MFA challenge.**
+   VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/start`
+   (`req=UiSessionStartReq`, `resp=200:UiSessionStartResp`);
+   `src/api/endpoints/auth.ts: sessionStart`.
+2. **`UiSessionStartResp` field shape — `auth_required: bool` (required),
+   `challenge_id: string|null`, `required_factors: string[]`,
+   `session_id: string|null`.** VERDICT: Verified (with refinement: only
+   `auth_required` is required; `challenge_id` is nullable/optional). SOURCE:
+   OpenAPI `components.schemas.UiSessionStartResp`; mirrored in
+   `src/api/types.ts: SessionStartResp`.
+3. **The §5 example JSON `{auth_required, challenge_id, required_factors}` is a
+   valid `UiSessionStartResp`.** VERDICT: Verified. SOURCE: schema
+   `UiSessionStartResp` (note `session_id` also permitted; `challenge_id`
+   optional).
+4. **The MFA destination's `challengeId` corresponds to the server
+   `challenge_id`.** VERDICT: Verified. SOURCE: `UiSessionStartResp.challenge_id`;
+   `src/pages/Login.tsx` (`resp.challenge_id` captured after `sessionStart`).
+5. **Auth-model chain `session/start → MFA begin/verify → session/finalize →
+   /ui/me`.** VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/finalize`
+   (`req=UiSessionFinalizeReq`), `GET /ui/me`, `POST /ui/mfa/totp/verify`,
+   `POST /ui/mfa/sms/{begin,verify}`, `POST /ui/mfa/email/{begin,verify}`;
+   `src/api/endpoints/auth.ts: sessionFinalize, getMe, verifyTotp, beginSms,
+   verifySms, beginEmail, verifyEmail`.
+6. **Web SPA unauthenticated routes are `/login`, `/register`,
+   `/password-recovery`, `/magic-link-verify`.** VERDICT: Corrected (spec
+   originally listed `/mfa`, `/recovery`, `/magic-link`). SOURCE:
+   `src/App.tsx` (`<Route path="/login">`, `"/register"`,
+   `"/password-recovery"`, `"/magic-link-verify"`).
+7. **The web app has a dedicated `/mfa` route.** VERDICT: Corrected — false. MFA
+   is an in-page step of the Login page. SOURCE: `src/App.tsx` (no `/mfa` route);
+   `src/pages/Login.tsx` (`type LoginStep = "credentials" | "mfa" |
+   "magic-link" | "webauthn"`; `challenge_id` kept in component state, set via
+   `setStep("mfa")`).
+8. **MFA factor variants are `totp | sms | email | recovery`, selectable
+   in-screen (informs R4).** VERDICT: Verified. SOURCE: `src/pages/Login.tsx`
+   (`type MfaMethod = "totp" | "sms" | "email" | "recovery"`, `activeMfa`
+   state); OpenAPI `POST /ui/mfa/{totp,sms,email}/verify`,
+   `POST /ui/mfa/recovery/{factor}`.
+9. **Auth transport is cookie-based with CSRF header `X-CSRF-Token` sourced from
+   the `ui_csrf` cookie, `credentials: "include"`.** VERDICT: Verified. SOURCE:
+   `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token",
+   csrf)`, `credentials: "include"`).
+10. **`session/refresh`-on-401 retry-once is part of the transport (out of scope
+    here).** VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/refresh`;
+    `src/api/client.ts` (refresh-once via shared `refreshPromise`, then retry).
+11. **Validation/error responses use `HTTPValidationError` (422) with a
+    `detail` array.** VERDICT: Verified. SOURCE: OpenAPI
+    `resp=...;422:HTTPValidationError` on `POST /ui/session/start`;
+    `components.schemas.HTTPValidationError`; `src/api/client.ts`
+    (`normalizeErrorDetail(body.detail, ...)`).
+12. **Register / Recovery / Magic-link backend endpoints exist (future
+    coupling for placeholders).** VERDICT: Verified. SOURCE:
+    `src/api/endpoints/auth.ts` — `registerStart` (`/ui/register/start`),
+    `passwordRecoveryStart` (`/ui/password-recovery/start`), `passwordlessStart`
+    (`/ui/passwordless/start`); the web app's "magic link" is the *passwordless*
+    flow.
+13. **Navigation-Compose nested graph via `navigation(route, startDestination)
+    {}` and `NavGraphBuilder` extension.** VERDICT: Verified *(framework ref)*.
+    SOURCE: Android docs — Navigation Compose nested graphs,
+    https://developer.android.com/develop/ui/compose/navigation#nested-nav.
+14. **Path argument via `navArgument(...) { type = NavType.StringType }` read
+    from `NavBackStackEntry.arguments`.** VERDICT: Verified *(framework ref)*.
+    SOURCE: https://developer.android.com/develop/ui/compose/navigation#nav-with-args.
+15. **`Uri.encode` makes path args containing `/` and spaces round-trip
+    losslessly.** VERDICT: Verified *(framework ref)*. SOURCE:
+    `android.net.Uri.encode`,
+    https://developer.android.com/reference/android/net/Uri#encode(java.lang.String).
+16. **`collectAsStateWithLifecycle()` for collecting `StateFlow<SessionStatus>`
+    in the host.** VERDICT: Verified *(framework ref)*. SOURCE:
+    https://developer.android.com/topic/libraries/architecture/coroutines#lifecycle-aware.
+17. **`launchSingleTop = true` prevents duplicate destinations on rapid taps.**
+    VERDICT: Verified *(framework ref)*. SOURCE: Navigation `navigate` /
+    `NavOptionsBuilder.launchSingleTop`,
+    https://developer.android.com/guide/navigation/backstack#singleTop.
+
+### Corrections made
+
+- **§2 web routes (claims 6 & 7):** removed the non-existent `/mfa`, `/recovery`,
+  and `/magic-link` web routes; replaced with the actual `/login`, `/register`,
+  `/password-recovery`, `/magic-link-verify`. Clarified that web MFA is an
+  in-page Login step (state-held `challenge_id`), and that modelling MFA as a
+  separate arg-bearing Android destination is a deliberate platform divergence /
+  design assumption, not a web-contract mirror.
+- **§5 response shape (claim 2):** refined the field contract to match
+  `UiSessionStartResp` exactly — `auth_required` is the only required field and
+  `challenge_id` is nullable/optional; added the rule that E04 must only navigate
+  to MFA when `challenge_id` is non-null. Added the correct OpenAPI schema names
+  (`UiSessionStartReq`/`UiSessionStartResp`) and their frontend aliases.
+- **§2 / §5 / §8 citations:** annotated the session-flow, CSRF (`X-CSRF-Token` /
+  `ui_csrf`), and 401-refresh claims with verified source pointers.
+
+### Open assumptions
+
+- **A1 — Android MFA modelled as a standalone arg-bearing destination
+  (`auth/mfa/{challengeId}`).** Unverifiable against the web contract because the
+  web app keeps MFA in-page; this is an intentional native-navigation design
+  choice. No backend contract requires it.
+- **A2 — Route strings (`auth/login`, `auth/mfa/{challengeId}`, `auth/register`,
+  `auth/recovery`, `auth/magic_link`) and graph id `auth_graph`.** Client-internal
+  identifiers; not derivable from any backend or web source. Assumed stable for
+  this ticket.
+- **A3 — `SessionStatus { Unknown, LoggedOut, LoggedIn }` and
+  `RootViewModel.sessionStatus: StateFlow<SessionStatus>`.** New Android
+  abstraction with a stub emitting `LoggedOut`; the real source (derived from
+  `GET /ui/me` / session cookies) lands in E04. The coarse tri-state is an
+  assumption, not a backend-provided enum.
+- **A4 — `Unknown` is routed to the auth (Login) graph during cold boot.** A
+  product/UX assumption (avoid a blank host); no source dictates boot behavior.
+- **A5 — Android module placement (`core-ui` for route types, `feature-auth` for
+  placeholders, `app` for the graph builder).** Internal architecture decision
+  (R2); unverifiable externally.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-023-NN`. AC references point at §14. Because this ticket is pure
+client navigation plumbing, contract/MockWebServer cases assert the *shape the
+route arg must carry* (the verified `UiSessionStartResp.challenge_id`) rather
+than live calls, which belong to E04.
+
+- **TC-AND-023-01 — Unit: `AuthDest.Mfa.build` happy path.**
+  Type: unit (JVM). Preconditions: `AuthDest` available on classpath.
+  Steps: call `AuthDest.Mfa.build("chg_abc123")`. Expected:
+  returns `"auth/mfa/chg_abc123"`. Traces: AC-1, AC-5.
+
+- **TC-AND-023-02 — Unit: `challengeId` encoding of special characters.**
+  Type: unit (JVM). Preconditions: none. Steps: call
+  `AuthDest.Mfa.build("a/b c+d?e")`. Expected: `/`, space, `+`, `?` are
+  percent-encoded (`Uri.encode`) so the produced route parses back to the
+  original value when decoded by Navigation. Traces: AC-5.
+
+- **TC-AND-023-03 — Unit: `AuthNavActions` routes each edge correctly.**
+  Type: unit (JVM, mock/fake `NavController`). Preconditions: fake controller
+  recording `navigate(route)`. Steps: invoke `toMfa("chg_x")`, `toRegister()`,
+  `toRecovery()`, `toMagicLink()`, `back()`. Expected: navigate called with
+  `auth/mfa/chg_x`, `auth/register`, `auth/recovery`, `auth/magic_link`
+  respectively; `back()` calls `popBackStack()`. Traces: AC-1, AC-3, AC-6.
+
+- **TC-AND-023-04 — Compose-UI: start destination when LoggedOut.**
+  Type: Compose-UI / instrumented (`createComposeRule` +
+  `TestNavHostController`). Preconditions: host composed with
+  `SessionStatus.LoggedOut`. Steps: render `TestLogonNavHost`. Expected: current
+  graph route == `AuthGraph.ROUTE` (`auth_graph`) and current destination route
+  == `AuthDest.Login.route` (`auth/login`); `login_screen` test tag is
+  displayed. Traces: AC-2.
+
+- **TC-AND-023-05 — Compose-UI: Unknown boots to Login.**
+  Type: Compose-UI / instrumented. Preconditions: host composed with
+  `SessionStatus.Unknown`. Steps: render host. Expected: start destination is
+  `auth/login` (Unknown treated as logged-out for routing). Traces: AC-2.
+
+- **TC-AND-023-06 — Compose-UI: Login → MFA edge carries arg.**
+  Type: Compose-UI / instrumented. Preconditions: host at Login; MFA invoked
+  with `challengeId = "chg_xyz"`. Steps: click `login_to_mfa_button`. Expected:
+  current route matches pattern `auth/mfa/{challengeId}` and
+  `NavBackStackEntry.arguments.getString("challengeId") == "chg_xyz"`;
+  `MfaPlaceholderScreen` displays `chg_xyz`. Traces: AC-3, AC-5.
+
+- **TC-AND-023-07 — Compose-UI: Login → Register / Recovery / Magic-link edges.**
+  Type: Compose-UI / instrumented. Preconditions: host at Login. Steps: click
+  Register, then back; Recovery, then back; Magic-link. Expected: routes become
+  `auth/register`, `auth/recovery`, `auth/magic_link` respectively. Traces:
+  AC-3.
+
+- **TC-AND-023-08 — Instrumented: back navigation returns to Login.**
+  Type: instrumented / e2e (`Espresso.pressBack()`). Preconditions: navigated to
+  MFA (with arg), Register, Recovery, Magic-link in separate runs. Steps: from
+  each child destination press system back. Expected: current destination
+  returns to `auth/login`; from Login, a further back exits the host (no custom
+  interception). Traces: AC-4.
+
+- **TC-AND-023-09 — Compose-UI: no `NavController` passed into screens.**
+  Type: Compose-UI / static-architecture. Preconditions: placeholder composable
+  signatures available. Steps: assert each placeholder composable's parameter
+  list contains only navigation lambdas / primitives (no `NavController` /
+  `NavHostController` parameter) — enforced via a compile-time signature check or
+  a detekt/lint rule. Expected: no controller type appears in any screen
+  signature. Traces: AC-6.
+
+- **TC-AND-023-10 — Contract/MockWebServer: MFA arg matches
+  `UiSessionStartResp.challenge_id`.**
+  Type: contract / MockWebServer. Preconditions: MockWebServer enqueues
+  `200 {"auth_required":true,"challenge_id":"chg_abc123",
+  "required_factors":["totp"]}`. Steps: parse the body with the
+  `SessionStartResp` DTO and feed `challenge_id` into `AuthDest.Mfa.build`.
+  Expected: parsed `challenge_id == "chg_abc123"`, `auth_required == true`,
+  `required_factors == ["totp"]`; built route ==
+  `auth/mfa/chg_abc123`. Confirms the route arg is shaped to carry the real
+  server field. Traces: AC-5.
+
+- **TC-AND-023-11 — Contract: response with absent `challenge_id`
+  (auth not required).**
+  Type: contract / unit. Preconditions: body
+  `{"auth_required":false,"required_factors":[],"session_id":"sess_1"}` (a valid
+  `UiSessionStartResp` per schema). Steps: parse with `SessionStartResp` DTO.
+  Expected: `challenge_id` deserializes as null/absent without error; the
+  caller must NOT navigate to the MFA destination (no `build` with null). Guards
+  the nullable-`challenge_id` contract (§16 claim 2). Traces: AC-3, AC-5.
+
+- **TC-AND-023-12 — Unit: empty / missing MFA argument is rendered safely
+  (offline/degraded path).**
+  Type: unit / Compose-UI. Preconditions: navigate to `auth/mfa/` with the arg
+  effectively empty. Steps: read arg via `orEmpty()`. Expected:
+  `MfaPlaceholderScreen` receives `""` and renders without crashing; a guard
+  logs a warning. (Stands in for the flaky-dev-host/offline case: this ticket
+  has no network, so the resilience surface is the empty-arg guard.) Traces:
+  AC-5.
+
+- **TC-AND-023-13 — Security: `challengeId` redacted in nav breadcrumb logs.**
+  Type: unit / instrumented. Preconditions: `OnDestinationChangedListener`
+  installed; capturing logger. Steps: navigate to `auth/mfa/chg_secret`.
+  Expected: emitted DEBUG breadcrumb is `mfa/<redacted>` (no raw
+  `chg_secret` in any log line); no cookies/tokens logged; no deep link is
+  registered for auth destinations. Traces: AC-3 (covers §8/§10 security
+  posture).
+
+- **TC-AND-023-14 — Accessibility: placeholder screens are TalkBack-navigable.**
+  Type: Compose-UI accessibility. Preconditions: each placeholder rendered.
+  Steps: assert via semantics that each screen root has a `heading()` semantic;
+  every actionable button has a non-empty content description sourced from
+  `strings.xml` (e.g. `R.string.auth_login_continue_to_mfa`) and a touch target
+  ≥ 48dp. Expected: all assertions pass; no hardcoded UI strings. Traces: AC-1
+  (covers §9 accessibility requirements).
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covering test case(s) |
+|----------------------------|------------------------|
+| AC-1 (graph + 5 destinations exist) | TC-01, TC-03, TC-14 |
+| AC-2 (Login is start dest; LoggedOut/Unknown boot to auth) | TC-04, TC-05 |
+| AC-3 (Login → MFA/Register/Recovery/Magic-link) | TC-03, TC-06, TC-07, TC-11, TC-13 |
+| AC-4 (back from children returns to Login) | TC-08 |
+| AC-5 (`challengeId` round-trips losslessly) | TC-01, TC-02, TC-06, TC-10, TC-11, TC-12 |
+| AC-6 (no `NavController` in screens; lambdas only) | TC-03, TC-09 |
+| AC-7 (unit + Compose UI tests pass in CI) | All TC-01 … TC-14 |

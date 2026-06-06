@@ -5,7 +5,8 @@ milestone: M1
 epic: E04
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-028, AND-030]
 blocks: [AND-034, AND-035, AND-036]
 ---
@@ -46,14 +47,22 @@ for typed results, `core-ui` for `UiText`). Package:
   store is hydrated. The ViewModel does *not* call `getMe()` itself; it emits the
   `NavigateHome` effect and lets the post-login coordinator / `RootViewModel`
   refresh `me`. (If sequencing changes, see Open Questions §13.)
+  > **Web divergence (verified):** the web client at `src/pages/Login.tsx:147-149`
+  > awaits `getMe()` *before* navigating to `/` on a no-MFA login. This ticket
+  > deliberately defers `getMe` to the post-login coordinator instead of mirroring
+  > the web ordering; R1 (§13) tracks that decision.
 - **AND-033..036** MFA flows — downstream consumers of the `NavigateToMfa`
   effect; this ticket only hands them `challengeId` + `factors`.
 - Backend session start: `POST /ui/session/start` with
   `{challenge_context:{username,password}}` → `{auth_required, challenge_id,
   required_factors[]}`. Cookie + `ui_csrf`/`X-CSRF-Token` handling is internal to
   `core-network` and `AuthRepository`; the ViewModel is transport-agnostic.
-- Web reference: `frontend/src/api/endpoints/session.ts` (login submit + branch),
-  `frontend/src/api/types.ts` (`SessionStartResponse`).
+- Web reference (corrected): `src/api/endpoints/auth.ts` (`sessionStart`),
+  `src/api/types.ts` (`SessionStartReq` / `SessionStartResp`), and the credentials
+  submit + branch logic in `src/pages/Login.tsx`. (There is no `session.ts`; the
+  login submit lives in `auth.ts`, and the response DTO is `SessionStartResp`, not
+  `SessionStartResponse`.) Backend schema names are `UiSessionStartReq` /
+  `UiSessionStartResp`.
 
 ## 3. Functional Requirements
 
@@ -189,17 +198,27 @@ No new endpoint is defined or called directly by this ticket. The ViewModel invo
 `AuthRepository.login(...)` (AND-028), which owns the
 `POST /ui/session/start` call. For reference, the repository consumes:
 
-Request body:
+Request body (schema `UiSessionStartReq`): a single free-form `challenge_context`
+object (the backend schema declares it `additionalProperties: true`). The web client
+populates it with `username`/`password` (verified at `src/pages/Login.tsx:138-143`):
 ```json
 { "challenge_context": { "username": "user@example.com", "password": "•••••" } }
 ```
 
-Response (200) mapped by AND-028 into `LoginResult`:
+Response (200, schema `UiSessionStartResp`) mapped by AND-028 into `LoginResult`:
 ```json
-{ "auth_required": true, "challenge_id": "chl_7f3a…", "required_factors": ["totp", "sms"] }
+{ "auth_required": true, "challenge_id": "chl_7f3a…", "required_factors": ["totp", "sms"], "session_id": null }
 ```
-- `auth_required == false` (or no factors) → `LoginResult.Authenticated`.
-- `auth_required == true` with `required_factors` → `LoginResult.MfaRequired`.
+Fields (verified against `UiSessionStartResp` and `SessionStartResp`): `auth_required`
+(boolean, the only required field), `challenge_id` (nullable string), `required_factors`
+(string array), `session_id` (nullable string).
+- `auth_required == false` **and** `session_id` present → `LoginResult.Authenticated`.
+  (This mirrors the web branch `if (!resp.auth_required && resp.session_id)` in
+  `src/pages/Login.tsx:145`; AND-028 should require `session_id`, not merely an empty
+  factor list, before treating the result as authenticated.)
+- `auth_required == true` (challenge issued, factors listed) → `LoginResult.MfaRequired`.
+- `required_factors` carries opaque lowercase strings (`"totp"`, `"sms"`, `"email"`,
+  `"recovery"`); AND-028 maps these to the `MfaFactor` enum.
 
 The ViewModel depends only on these `core-model` shapes (defined by AND-028):
 ```kotlin
@@ -209,8 +228,12 @@ sealed interface LoginResult {
 }
 enum class MfaFactor { TOTP, SMS, EMAIL, RECOVERY }
 ```
-Endpoint/DTO ownership: `POST /ui/session/start` → AND-028; MFA endpoints
-(`/ui/mfa/{totp|sms|email}/begin|verify`) → AND-033.
+Endpoint/DTO ownership: `POST /ui/session/start` → AND-028; MFA endpoints → AND-033.
+(Verified endpoint set: `POST /ui/mfa/totp/verify`, `POST /ui/mfa/sms/begin`,
+`POST /ui/mfa/sms/verify`, `POST /ui/mfa/email/begin`, `POST /ui/mfa/email/verify`,
+`POST /ui/mfa/recovery/{factor}`, and `POST /ui/session/finalize`. Note: TOTP has a
+verify endpoint but **no** `begin` — the earlier `{totp|sms|email}/begin|verify`
+shorthand was inexact.)
 
 ## 6. Data & State Management
 
@@ -428,3 +451,188 @@ Coverage gate: 100% of `LoginViewModel` branches and the `toLoginUiText` mapper.
   creds without MFA → home; bad creds → invalid-credentials error; airplane mode →
   network error, submit re-enabled.
 - Spec open questions R1/R4 resolved or explicitly deferred with an owner.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Login submit hits `POST /ui/session/start`.** VERIFIED.
+   Source: OpenAPI `POST /ui/session/start` (op `ui_session_start_ui_session_start_post`);
+   frontend `src/api/endpoints/auth.ts: sessionStart`.
+2. **Request body is `{ challenge_context: { username, password } }`.** VERIFIED for the
+   outer `challenge_context` wrapper; the inner `username`/`password` keys are the web
+   client's convention, not a typed contract.
+   Source: schema `UiSessionStartReq` (single `challenge_context` object,
+   `additionalProperties: true`); web population at `src/pages/Login.tsx:138-143`.
+   The inner key *names* are best treated as a verified-by-web-usage convention rather
+   than a schema guarantee (see Open assumptions).
+3. **Response 200 shape: `auth_required`, `challenge_id?`, `required_factors[]`,
+   `session_id?`.** VERIFIED.
+   Source: schema `UiSessionStartResp` (only `auth_required` is required; `challenge_id`
+   and `session_id` are nullable); frontend `src/api/types.ts: SessionStartResp`.
+4. **Authenticated vs MFA branch condition.** CORRECTED. Spec originally said
+   "`auth_required == false` (or no factors)". The web client branches on
+   `!resp.auth_required && resp.session_id`.
+   Source: `src/pages/Login.tsx:145`. Spec §5 now requires `session_id` present for the
+   `Authenticated` mapping.
+5. **`required_factors` values are lowercase strings `totp|sms|email|recovery`.** VERIFIED.
+   Source: `src/pages/Login.tsx:159-163` (string comparisons `factors.includes("totp")`
+   etc.) and the recovery factor path; mapped to `MfaFactor` enum by AND-028.
+6. **CSRF: token from `ui_csrf` cookie sent as `X-CSRF-Token` header.** VERIFIED.
+   Source: `src/api/client.ts:135,168-170` (`getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)`).
+7. **Cookie-based session (`credentials: include`).** VERIFIED.
+   Source: `src/api/client.ts:182-183, 219-220`.
+8. **401 handling: refresh once via `POST /ui/session/refresh` then retry, but only if
+   already authenticated; an unauthenticated 401 (bad creds) surfaces directly.** VERIFIED.
+   Source: `src/api/client.ts:191-224`; OpenAPI `POST /ui/session/refresh`
+   (op `ui_session_refresh_ui_session_refresh_post`, resp `200`).
+9. **Error `detail` shape is `string | [{msg}] | {code,...}`.** VERIFIED.
+   Source: `src/api/client.ts:66-96` (`normalizeErrorDetail` handles string, array of
+   `{msg}`, and object with `code` via `mapAuthorizationError`); OpenAPI
+   `HTTPValidationError.detail` = array of `ValidationError` (each has `msg`); every
+   `/ui/...` op lists `422:HTTPValidationError`.
+10. **Web reference path for login submit.** CORRECTED. Spec cited
+    `frontend/src/api/endpoints/session.ts` and DTO `SessionStartResponse`. No `session.ts`
+    exists; the submit lives in `auth.ts` and the DTO is `SessionStartResp`.
+    Source: `src/api/endpoints/auth.ts: sessionStart`; `src/api/types.ts: SessionStartResp`.
+11. **MFA endpoint set (downstream, AND-033).** CORRECTED shorthand. Spec wrote
+    `/ui/mfa/{totp|sms|email}/begin|verify`; TOTP has **no** `begin`.
+    Source: OpenAPI — `POST /ui/mfa/totp/verify`, `POST /ui/mfa/sms/begin`,
+    `POST /ui/mfa/sms/verify`, `POST /ui/mfa/email/begin`, `POST /ui/mfa/email/verify`,
+    `POST /ui/mfa/recovery/{factor}`, `POST /ui/session/finalize`.
+12. **Web awaits `getMe()` before navigating home on no-MFA login.** VERIFIED (and noted
+    as a deliberate divergence for this ViewModel, which defers `getMe`).
+    Source: `src/pages/Login.tsx:147-149`.
+13. **`POST /ui/session/start` is non-idempotent / no auto-retry.** Plausible but
+    UNVERIFIED-ASSUMPTION (idempotency is a design judgment; OpenAPI does not annotate it).
+    Retry policy itself is owned by `core-network` (AND-018), outside these sources.
+14. **`android.util.Patterns.EMAIL_ADDRESS` for email shape validation.** VERIFIED as a
+    framework API. Source: framework ref —
+    https://developer.android.com/reference/android/util/Patterns#EMAIL_ADDRESS .
+15. **`MutableSharedFlow(replay=0, extraBufferCapacity=1, DROP_OLDEST)` gives a
+    non-suspending `tryEmit` for one-shot effects.** VERIFIED as a framework behavior.
+    Source: framework ref —
+    https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-mutable-shared-flow/ .
+16. **Lifecycle-aware effect collection via `repeatOnLifecycle(STARTED)`.** VERIFIED as a
+    framework pattern. Source: framework ref —
+    https://developer.android.com/topic/libraries/architecture/coroutines#restart .
+17. **Dev backend host `http://18.222.237.167:8000`.** UNVERIFIED-ASSUMPTION. The
+    frontend resolves its base URL from `VITE_API_BASE_URL` (`src/api/client.ts:7`); the
+    literal IP is not present in these sources (it comes from infra/`core-network` config).
+
+### Corrections made
+
+- §2 / §5: web reference path `session.ts` → `auth.ts`; DTO `SessionStartResponse` →
+  `SessionStartResp`; added backend schema names `UiSessionStartReq` / `UiSessionStartResp`.
+- §5: Authenticated branch now requires `auth_required == false` **and** `session_id`
+  present (was "`auth_required == false` (or no factors)"), matching `Login.tsx:145`.
+- §5: documented the full response field set incl. nullable `session_id`, and that
+  `required_factors` are opaque lowercase strings.
+- §5: clarified `challenge_context` is a free-form (`additionalProperties:true`) object;
+  inner keys are the web convention.
+- §5: corrected the MFA endpoint shorthand (TOTP has no `begin`; listed the real set).
+- §2: added a verified note that the web client awaits `getMe()` before navigating,
+  flagging this ViewModel's deferral as an intentional divergence.
+
+### Open assumptions
+
+- **Inner `challenge_context` keys (`username`/`password`).** The schema is free-form, so
+  these names are guaranteed only by web usage, not by the typed contract. If the backend
+  ever renames them, AND-028 (not this ticket) must follow; the ViewModel is agnostic.
+- **Non-idempotency of `/ui/session/start` and the retry policy.** A reasonable design
+  stance but not annotated in OpenAPI; the actual retry/backoff behavior is owned by
+  `core-network` (AND-018) and not present in the verifiable sources here.
+- **Dev backend IP/port.** Not in the frontend (env-driven); treat as infra config.
+- **Typed `ApiError` taxonomy** (`Unauthorized/Validation/Network/Timeout/Server/Unknown`)
+  and `UiText` are `core-network`/`core-ui` constructs owned by AND-018/AND-020 and are
+  not defined in these reference sources; the mapping is consumed, not specified, here.
+
+## 17. Test Plan
+
+All cases are pure-JVM ViewModel tests unless noted, using `kotlinx-coroutines-test`
+(`StandardTestDispatcher`), `Turbine` for `StateFlow`/`SharedFlow`, and a
+`FakeAuthRepository`. MockWebServer/contract cases assert that the request/response
+*shapes the ViewModel relies on* (owned by AND-028) line up with the verified
+`UiSessionStart*` schemas; instrumented/Compose cases are listed where UI surfaces the
+ViewModel's state (AND-030 host).
+
+- **TC-AND-031-01** — Type: unit. Pre: fresh `LoginViewModel`. Steps: read
+  `uiState.value`. Expected: `username=""`, `password=""`, `status=Idle`,
+  `error=null`, `submitEnabled=false`, `isSubmitting=false`. Traces: AC-1, AC-2.
+- **TC-AND-031-02** — Type: unit. Pre: fresh VM. Steps: `onUsernameChange("a@b.com")`,
+  `onPasswordChange("pw")`; read state. Expected: `submitEnabled=true`. Traces: AC-2.
+- **TC-AND-031-03** — Type: unit. Pre: fresh VM. Steps: `onUsernameChange("foo")`
+  (no `@`), `onPasswordChange("pw")`. Expected: `submitEnabled=false` (email-shape gate).
+  Also assert blank password (`onPasswordChange("")`) → `submitEnabled=false`.
+  Traces: AC-2.
+- **TC-AND-031-04** — Type: unit. Pre: valid creds entered; fake set to a never-completing
+  `login` (suspend on a latch). Steps: `onSubmit()`; advance dispatcher. Expected:
+  `status=Submitting`, `isSubmitting=true`, `submitEnabled=false` while in flight.
+  Traces: AC-3.
+- **TC-AND-031-05** — Type: unit. Pre: valid creds; fake returns
+  `ApiResult.Success(LoginResult.Authenticated)`. Steps: collect `effects` with Turbine;
+  `onSubmit()`. Expected: emits exactly `LoginEffect.NavigateHome`, `error=null`.
+  Traces: AC-4.
+- **TC-AND-031-06** — Type: unit. Pre: valid creds; fake returns
+  `ApiResult.Success(MfaRequired("chl_1", [TOTP, SMS]))`. Steps: collect effects;
+  `onSubmit()`. Expected: emits `NavigateToMfa("chl_1", [TOTP, SMS])`; `status` returns
+  to `Idle`. Traces: AC-4.
+- **TC-AND-031-07** — Type: unit. Pre: valid creds; fake returns
+  `ApiResult.Failure(ApiError.Unauthorized)`. Steps: `onSubmit()`. Expected: `status=Idle`,
+  `error=UiText.Res(login_error_invalid_credentials)`, `submitEnabled=true` (re-enabled),
+  no effect emitted. Traces: AC-5.
+- **TC-AND-031-08** — Type: unit (parameterized). Pre: valid creds. Steps: run
+  `onSubmit()` for `ApiError.Timeout`, `ApiError.Network`, `ApiError.Server`,
+  `ApiError.Unknown`. Expected: Timeout/Network → `login_error_network`; Server →
+  `login_error_server`; Unknown → `login_error_generic`; all leave `status=Idle` and
+  re-enable submit. Traces: AC-5.
+- **TC-AND-031-09** — Type: unit. Pre: valid creds; fake returns
+  `ApiResult.Failure(ApiError.Validation(firstMessage="bad"))` (the `[{msg}]` shape from
+  `HTTPValidationError`). Steps: `onSubmit()`. Expected: `error=UiText.Dynamic("bad")`,
+  `status=Idle`. Traces: AC-5.
+- **TC-AND-031-10** — Type: unit. Pre: valid creds; slow fake. Steps: call `onSubmit()`
+  twice before completion. Expected: `FakeAuthRepository.calls == 1` (double-tap
+  debounced). Traces: AC-3.
+- **TC-AND-031-11** — Type: unit. Pre: a failure has set `error != null`. Steps: (a)
+  `onErrorShown()` → `error=null`; (b) from another failed state, `onUsernameChange("x")`
+  → `error=null`; same for `onPasswordChange`. Traces: AC-6.
+- **TC-AND-031-12** — Type: unit. Pre: `onUsernameChange("  a@b.com  ")`,
+  `onPasswordChange("pw")`. Steps: `onSubmit()` with a capturing fake. Expected: fake
+  receives `username == "a@b.com"` (trimmed); password passed unmodified. Traces: AC-2, AC-4.
+- **TC-AND-031-13** — Type: unit (security). Pre: state populated with a password.
+  Steps: call `LoginUiState.toString()`. Expected: output does not contain the password
+  value (toString excludes/redacts `password`). Traces: AC-7.
+- **TC-AND-031-14** — Type: contract/MockWebServer (boundary, via AND-028's
+  `AuthRepository` against MockWebServer). Pre: server stubs
+  `200 {"auth_required":false,"session_id":"sess_1","required_factors":[]}` and
+  `200 {"auth_required":true,"challenge_id":"chl_1","required_factors":["totp"]}`.
+  Steps: drive `login()` for each. Expected: first → `LoginResult.Authenticated`
+  (because `auth_required=false` **and** `session_id` present), VM emits `NavigateHome`;
+  second → `MfaRequired("chl_1",[TOTP])`, VM emits `NavigateToMfa`. Also assert request
+  body carries `challenge_context.username/password` and `X-CSRF-Token` header is present.
+  Traces: AC-1, AC-4.
+- **TC-AND-031-15** — Type: integration (offline / flaky-dev-host path). Pre: network
+  disabled or MockWebServer configured to time out beyond the OkHttp call timeout.
+  Steps: valid creds, `onSubmit()`. Expected: `ApiError.Timeout`/`Network` →
+  `error=login_error_network`, `status=Idle`, `submitEnabled=true`; exactly one attempt
+  (no auto-retry on this non-idempotent POST). Traces: AC-5.
+- **TC-AND-031-16** — Type: Compose-UI + accessibility (instrumented, AND-030 host).
+  Pre: VM injected via `hiltViewModel()`. Steps: with `submitEnabled=false` and then a
+  forced `Submitting` state, inspect the submit control. Expected: control reports a
+  disabled/busy semantics state to TalkBack (`semantics { disabled() }`), and an
+  `error` is exposed via a `liveRegion` so a screen reader announces it; visual toggle of
+  `passwordVisible` does not alter stored password. Traces: AC-1, AC-3, AC-7.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 (StateFlow + one-shot effects) | TC-01, TC-14, TC-16 |
+| AC-2 (submitEnabled gate) | TC-01, TC-02, TC-03, TC-12 |
+| AC-3 (in-flight disable + single request) | TC-04, TC-10, TC-16 |
+| AC-4 (MfaRequired→NavigateToMfa, Authenticated→NavigateHome) | TC-05, TC-06, TC-12, TC-14 |
+| AC-5 (failure mapping, Idle, re-enable) | TC-07, TC-08, TC-09, TC-15 |
+| AC-6 (error clears on input / onErrorShown) | TC-11 |
+| AC-7 (password never persisted/logged) | TC-13, TC-16 |
+| AC-8 (state transitions + branch coverage) | TC-01..TC-12 (whole suite) |

@@ -5,7 +5,8 @@ milestone: M1 (Auth Foundation)
 epic: E01 (Project scaffolding & build tooling)
 priority: P1
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-001]
 blocks: [AND-006]
 ---
@@ -60,9 +61,17 @@ feature/core modules inherit the gate automatically.
 formatting/static-analysis tooling and are listed only for cross-spec consistency.
 
 **Tool versions (pin in catalog).** Spotless Gradle plugin `6.25.0`, ktlint engine `1.3.1`,
-detekt `1.23.7` (with `detekt-formatting` and the `io.nlopez.compose.rules:detekt` Compose
-rule set `0.4.16`). These are the latest stable lines compatible with Kotlin 2.0.21 / Gradle 8.9
-as of this spec; exact pins live in `libs.versions.toml`.
+detekt `1.23.8` (with `detekt-formatting` and the `io.nlopez.compose.rules:detekt` Compose
+rule set `0.4.16`). **[Corrected]** The original draft pinned detekt `1.23.7`, but per the
+detekt compatibility table 1.23.7 is built against Kotlin **2.0.10**; the first 1.23.x patch
+that compiles/parses Kotlin **2.0.21** sources is detekt **1.23.8** — so the pin must be
+`1.23.8` to match the AND-001 Kotlin 2.0.21 toolchain. The Compose rule set `0.4.16` targets
+the detekt 1.23.x line (compatible with 1.23.8). Note: Spotless `6.25.0` (Jan 2024) ships a
+default ktlint of `1.1.1`; pinning the ktlint engine to `1.3.1` relies on Spotless's
+`ktlint("1.3.1")` version-override API and is treated as an *unverified compatibility
+assumption* (see §16) — if the 6.25.0 adapter cannot drive the 1.3.1 engine, bump Spotless to
+the latest 6.x/7.x line that bundles a ktlint ≥ 1.3.1 adapter. Exact pins live in
+`libs.versions.toml`.
 
 ## 3. Functional Requirements
 
@@ -119,7 +128,7 @@ regenerate the detekt baseline.
 [versions]
 spotless = "6.25.0"
 ktlint   = "1.3.1"
-detekt   = "1.23.7"
+detekt   = "1.23.8"   # corrected from 1.23.7: 1.23.8 is the 1.23.x patch built for Kotlin 2.0.21
 detektCompose = "0.4.16"
 
 [plugins]
@@ -385,12 +394,16 @@ plugin / `subprojects` wiring; (4) `spotlessApply` to normalize the existing sca
 
 ## 13. Risks & Open Questions
 
-- **R1 — Tool/Kotlin compatibility.** ktlint 1.3.1 / detekt 1.23.7 must parse Kotlin 2.0.21
-  sources. *Mitigation:* these are the stable lines validated against K2; if a parser issue
-  arises, fall back to the latest patch and record the pin in the catalog.
+- **R1 — Tool/Kotlin compatibility.** ktlint 1.3.1 / detekt 1.23.8 must parse Kotlin 2.0.21
+  sources. *Correction during review:* the draft's detekt `1.23.7` is built against Kotlin
+  2.0.10, not 2.0.21 — pin **1.23.8** (the 1.23.x patch aligned to Kotlin 2.0.21 per the detekt
+  compatibility table). *Residual risk (Spotless↔ktlint):* Spotless 6.25.0 defaults to ktlint
+  1.1.1; driving the 1.3.1 engine via `ktlint("1.3.1")` is unverified. *Mitigation:* if a parser
+  or adapter issue arises, bump to the latest compatible patch (Spotless 6.x/7.x and/or detekt
+  1.23.x) and record the pin in the catalog.
 - **R2 — detekt-compose-rules detekt-version coupling.** The Compose rule set is tied to a
-  detekt minor line. *Mitigation:* pin `detektCompose = 0.4.16` against detekt 1.23.x; bump both
-  together.
+  detekt minor line. *Mitigation:* pin `detektCompose = 0.4.16` against detekt 1.23.x (compatible
+  with 1.23.8); bump both together.
 - **R3 — Convention plugin vs. `subprojects` scope.** Standing up `build-logic` may exceed the
   S sizing if AND-001 did not provision it. *Open question:* does AND-001 already include a
   `build-logic` included build? If not, ship the `subprojects {}` variant for this ticket and
@@ -458,3 +471,202 @@ SDK 35) identically to local.
   pinned (and added to `verification-metadata.xml` if AND-001 enabled dependency verification).
 - Hand-off note to AND-006 confirms the task names and SARIF report paths the CI pipeline will
   consume.
+
+## 16. Citations & Assumption Audit
+
+This is a build/chore ticket with **no runtime API surface**, so most claims are about tool
+versions and framework wiring rather than backend endpoints. Each key technical claim below is
+listed with a VERDICT and an exact SOURCE pointer.
+
+1. **Claim:** detekt `1.23.7` is "compatible with Kotlin 2.0.21 / validated against K2."
+   **VERDICT: Corrected → detekt `1.23.8`.**
+   **Source:** framework ref — detekt compatibility table, https://detekt.dev/docs/introduction/compatibility/
+   (1.23.7 ↔ Kotlin 2.0.10; 1.23.8 ↔ Kotlin 2.0.21). AND-001 toolchain is Kotlin 2.0.21 (§2),
+   so the pin must be 1.23.8.
+
+2. **Claim:** Spotless Gradle plugin `6.25.0` can drive ktlint engine `1.3.1` via `ktlint("1.3.1")`.
+   **VERDICT: Unverified-assumption.**
+   **Source:** framework ref — Spotless changelog, https://github.com/diffplug/spotless/blob/main/plugin-gradle/CHANGES.md
+   (6.25.0 dated 2024-01-23, default ktlint 1.1.1; no explicit 1.3.1 adapter entry at/before 6.25.0).
+   The `ktlint(version)` override API exists, but adapter↔engine compatibility for 1.3.1 on the
+   6.25.0 adapter is not confirmed by the changelog. Fallback documented in §2/§13-R1.
+
+3. **Claim:** Compose rule set artifact `io.nlopez.compose.rules:detekt:0.4.16` exists and targets
+   the detekt 1.23.x line. **VERDICT: Verified (existence) / Verified-by-line (compat).**
+   **Source:** framework ref — Maven Central, https://central.sonatype.com/artifact/io.nlopez.compose.rules/detekt
+   (0.4.16 published; 0.4.x series tracks detekt 1.23.x, compatible with the corrected 1.23.8 pin).
+
+4. **Claim (§5/§8):** The backend auth contract this ticket defers to uses cookie-based sessions
+   plus a CSRF token from the `ui_csrf` cookie sent as the `X-CSRF-Token` request header.
+   **VERDICT: Verified.**
+   **Source:** frontend `src/api/client.ts` — `credentials: "include"`, `getCookie("ui_csrf")`,
+   `headers.set("X-CSRF-Token", csrf)`.
+
+5. **Claim (§5):** Endpoints `POST /ui/session/start`, `POST /ui/session/finalize`, `GET /ui/me`,
+   and the `/ui/mfa/*` family exist and are owned by later networking tickets.
+   **VERDICT: Verified.**
+   **Source:** OpenAPI index — `POST /ui/session/start` (op=ui_session_start, req=UiSessionStartReq,
+   resp=200:UiSessionStartResp), `POST /ui/session/finalize` (req=UiSessionFinalizeReq),
+   `GET /ui/me` (op=ui_me_ui_me_get), and `POST /ui/mfa/{totp,sms,email,recovery}/*`. These are
+   out of scope for AND-005 (correctly marked N/A in §5).
+
+6. **Claim (§2):** AND-001 toolchain — Kotlin 2.0.21, Gradle 8.9, AGP 8.7.3, JDK 17,
+   compileSdk/targetSdk 35, minSdk 24, KSP-based Hilt; versions in `libs.versions.toml`.
+   **VERDICT: Unverified-assumption** (cross-spec dependency on AND-001; no AND-001 source in the
+   provided reference set to confirm). Treated as authoritative per the ticket but flagged.
+
+7. **Claim (§4):** detekt `jvmTarget = "17"`, SARIF/HTML reports under `build/reports/detekt/`,
+   `buildUponDefaultConfig`, `baseline`, `parallel`, and the `detektPlugins` dependency
+   configuration are valid detekt-Gradle-plugin API. **VERDICT: Verified (framework API).**
+   **Source:** framework ref — detekt Gradle plugin docs, https://detekt.dev/docs/gettingstarted/gradle/.
+
+8. **Claim (§4/§6):** Spotless `SpotlessExtension` with `kotlin { ktlint(...).editorConfigOverride(...) }`,
+   `kotlinGradle {}`, `trimTrailingWhitespace()`, `endWithNewline()` are valid Spotless API.
+   **VERDICT: Verified (framework API).**
+   **Source:** framework ref — Spotless gradle README, https://github.com/diffplug/spotless/blob/main/plugin-gradle/README.md.
+
+9. **Claim (§6):** `.editorconfig` ktlint properties (`ktlint_code_style = ktlint_official`,
+   `ktlint_standard_*`, `ktlint_function_naming_ignore_when_annotated_with`) are honored by the
+   ktlint 1.x engine. **VERDICT: Verified (framework behavior).**
+   **Source:** framework ref — ktlint .editorconfig docs, https://pinterest.github.io/ktlint/latest/rules/configuration-ktlint/.
+
+### Corrections made
+
+- **§2, §4 (toml), §13-R1, §13-R2:** detekt pin changed `1.23.7` → `1.23.8` because 1.23.7 is
+  built against Kotlin 2.0.10 while AND-001 uses Kotlin 2.0.21; 1.23.8 is the matching 1.23.x
+  patch (detekt compatibility table). The "validated against K2 for 2.0.21" wording was corrected
+  accordingly.
+- **§2, §13-R1:** Added an explicit note that Spotless 6.25.0's default ktlint is 1.1.1 and that
+  driving ktlint 1.3.1 via the `ktlint("1.3.1")` override is an unverified compatibility
+  assumption with a documented fallback (bump Spotless).
+- No correction needed for §5/§8: the cookie + `X-CSRF-Token`/`ui_csrf` auth contract and the
+  cited endpoint paths/methods are accurate against the OpenAPI index and `src/api/client.ts`.
+
+### Open assumptions
+
+- **Spotless 6.25.0 ↔ ktlint 1.3.1 engine compatibility** — not confirmable from the Spotless
+  changelog (no explicit 1.3.1 adapter entry at/before 6.25.0); must be validated empirically by
+  running `spotlessCheck`/`spotlessApply` (see TC-AND-005-08). Why unverifiable: adapter↔engine
+  support matrices are not published per-version in the consulted changelog.
+- **AND-001 contents** (Gradle/AGP/Kotlin/JDK/SDK pins, presence of a `build-logic` included
+  build, dependency-verification metadata) — no AND-001 source was in the provided reference set;
+  taken as authoritative per the ticket but flagged. Drives the convention-plugin-vs-`subprojects`
+  open question in §13-R3.
+- **Exact ruleset names** in the detekt default config (e.g. `Compose:UnstableCollections`,
+  `complexity.LongMethod.threshold`) follow detekt/compose-rules conventions but the precise
+  available rule IDs depend on the resolved `0.4.16`/`1.23.8` artifacts; verify when the build is
+  first assembled.
+
+## 17. Test Plan
+
+"Tests" here are reproducible verifications of the quality gate itself (no production code to unit
+test). Each case traces to a §14 Acceptance Criterion. All commands run from `android/`.
+
+**TC-AND-005-01 — Clean-run acceptance.**
+Type: integration. Preconditions: fresh `android-port` checkout; AND-001 scaffold present; warm
+or cold Gradle cache. Steps: run `./gradlew spotlessCheck detekt`. Expected: exit 0; no
+violations reported across `:app` and all existing `:core-*`/`:feature-*` modules. Traces: AC-1.
+
+**TC-AND-005-02 — Task existence & fan-out.**
+Type: integration. Preconditions: scaffold wired. Steps: `./gradlew tasks --all | grep -E
+'spotlessCheck|spotlessApply|detekt'`; then `./gradlew spotlessCheck --dry-run`. Expected: root
+`spotlessCheck`, `spotlessApply`, `detekt` tasks exist; dry-run shows per-module subtasks for
+every Kotlin module. Traces: AC-2.
+
+**TC-AND-005-03 — Versions sourced only from the catalog.**
+Type: unit (config assertion). Preconditions: repo checked out. Steps: inspect
+`libs.versions.toml` for `spotless`, `ktlint`, `detekt` (=`1.23.8`), `detektCompose`; grep all
+`*.gradle.kts` for hard-coded version strings of these tools. Expected: all four declared in the
+catalog; **zero** hard-coded versions in build scripts; detekt pinned at `1.23.8` (not `1.23.7`).
+Traces: AC-3.
+
+**TC-AND-005-04 — Config files present & referenced.**
+Type: unit (config assertion). Preconditions: repo checked out. Steps: assert existence of
+`android/.editorconfig`, `android/config/detekt/detekt.yml`, `android/config/detekt/baseline.xml`,
+`android/config/lint/lint.xml`; confirm the convention plugin / `subprojects` block references
+`config/detekt/detekt.yml` and the baseline. Expected: all four files exist and are wired.
+Traces: AC-4.
+
+**TC-AND-005-05 — Empty baseline (no hidden debt).**
+Type: unit (config assertion). Preconditions: repo checked out. Steps: open
+`config/detekt/baseline.xml`. Expected: a `<SmellBaseline>` with **no** `<ID>` entries; clean
+run from TC-01 confirms acceptance does not rely on suppression. Traces: AC-1, AC-4.
+
+**TC-AND-005-06 — Uniform application to a new module (zero extra wiring).**
+Type: integration. Preconditions: gate wired via convention plugin or `subprojects {}`. Steps:
+add a throwaway `:core-scratch` module with one `.kt` file containing a wildcard import and an
+over-long method, applying only `id("com.testlogon.android.quality")` (or nothing, for
+`subprojects`); run `./gradlew spotlessCheck detekt`; remove the module. Expected: violations are
+caught **without** editing the convention plugin. Traces: AC-5.
+
+**TC-AND-005-07 — Positive detection: formatting + smell both fail.**
+Type: integration (negative). Preconditions: clean scaffold. Steps: introduce a deliberate
+formatting deviation (bad indentation / missing final newline) and a deliberate code smell
+(wildcard import + over-long method) in a scratch file; run `./gradlew spotlessCheck` then
+`./gradlew detekt`; revert. Expected: each task exits non-zero; Spotless message names the
+file and hints `spotlessApply`; detekt message includes rule id + file:line + report path.
+Traces: AC-6.
+
+**TC-AND-005-08 — Auto-fix round-trip (incl. ktlint 1.3.1 engine resolves).**
+Type: integration. Preconditions: a misformatted `.kt` file. Steps: run `./gradlew spotlessApply`;
+re-run `./gradlew spotlessCheck`. Expected: file is rewritten; subsequent `spotlessCheck` passes;
+the run also empirically confirms Spotless 6.25.0 successfully resolves and drives the pinned
+ktlint `1.3.1` engine (resolves Open-assumption #1). If resolution fails, escalate per §13-R1
+fallback. Traces: AC-7.
+
+**TC-AND-005-09 — Report artifacts produced.**
+Type: integration. Preconditions: gate wired. Steps: run `./gradlew detekt`; inspect
+`build/reports/detekt/`. Expected: `detekt.sarif` and `detekt.html` exist per module; XML/TXT
+disabled per §4 config. Traces: AC-8.
+
+**TC-AND-005-10 — Composable naming does not trip FunctionNaming.**
+Type: integration (regression for §13-R5). Preconditions: gate wired. Steps: add a scratch
+`@Composable fun HomeScreen()` (PascalCase) and a `@Test fun does_X()`; run `./gradlew detekt`;
+remove. Expected: no `FunctionNaming` violation, due to the
+`ignore_when_annotated_with = Composable, Test` overrides in `.editorconfig`/detekt config.
+Traces: AC-1, AC-6.
+
+**TC-AND-005-11 — Offline & deterministic.**
+Type: integration. Preconditions: warm Gradle cache from a prior run. Steps: run
+`./gradlew spotlessCheck detekt --offline` twice. Expected: both runs pass with identical
+results; second run shows UP-TO-DATE/cached tasks; no network fetch at task time. Traces: AC-1, AC-10.
+
+**TC-AND-005-12 — Generated code excluded.**
+Type: integration (security/robustness). Preconditions: KSP/Hilt/Moshi generated output present
+under `**/build/**`. Steps: run `./gradlew :app:kspDebugKotlin` (or assemble) then
+`./gradlew spotlessCheck detekt`. Expected: no violations originate from `**/build/**` or
+`**/generated/**`; the gate runs clean despite generated sources (confirms `targetExclude`/detekt
+`excludes`). Traces: AC-1.
+
+**TC-AND-005-13 — Supply-chain pins (no dynamic versions).**
+Type: unit (security). Preconditions: repo checked out. Steps: grep `libs.versions.toml` and
+build scripts for `+` / `latest.release` / range notation on the four tools; if AND-001 enabled
+`gradle/verification-metadata.xml`, confirm the new artifacts' checksums are present. Expected:
+no dynamic versions; verification metadata covers the added artifacts (or N/A if AND-001 did not
+enable it). Traces: AC-3.
+
+**TC-AND-005-14 — Build-server parity.**
+Type: instrumented/e2e (CI host). Preconditions: Ubuntu build server, JDK 17, SDK 35, same
+catalog. Steps: run `./gradlew spotlessCheck detekt` on the server. Expected: identical pass
+result to local; hands off task names + SARIF paths to AND-006. Traces: AC-10.
+
+**TC-AND-005-15 — README "Code Quality" documentation.**
+Type: manual. Preconditions: PR open. Steps: review `android/README.md`. Expected: documents the
+four commands (`spotlessCheck`, `spotlessApply`, `detekt`, baseline regen), config-file
+locations, the `spotlessApply` pre-commit recommendation, and how to regenerate the baseline.
+Traces: AC-9.
+
+### Coverage matrix
+
+| AC | Covered by |
+| --- | --- |
+| AC-1  | TC-01, TC-05, TC-10, TC-11, TC-12 |
+| AC-2  | TC-02 |
+| AC-3  | TC-03, TC-13 |
+| AC-4  | TC-04, TC-05 |
+| AC-5  | TC-06 |
+| AC-6  | TC-07, TC-10 |
+| AC-7  | TC-08 |
+| AC-8  | TC-09 |
+| AC-9  | TC-15 |
+| AC-10 | TC-11, TC-14 |

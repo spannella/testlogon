@@ -5,7 +5,8 @@ milestone: M1
 epic: E04
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-026]
 blocks: [AND-028, AND-029, AND-030]
 ---
@@ -60,13 +61,19 @@ shape, and successful response decoding.
 - **Transitive upstream:** AND-010 (Retrofit + Moshi), AND-009 (shared
   `OkHttpClient`), AND-006 (`BuildConfig.API_BASE_URL`). The shared Retrofit's
   base URL for `dev` resolves to `http://18.222.237.167:8000/`.
-- **Auth flow (authoritative):** `POST /ui/session/start` with
-  `{challenge_context:{username,password}}` →
-  `{auth_required, challenge_id, required_factors[]}`; MFA via
+- **Auth flow (authoritative — verified):** `POST /ui/session/start` with
+  `{challenge_context:{…}}` (the backend `UiSessionStartReq.challenge_context` is a
+  free-form object, `additionalProperties:true`; the web client passes a
+  `Record<string, unknown>`, conventionally `{username, password}`, but the schema
+  is **not** strongly typed) →
+  `{auth_required, challenge_id?, required_factors[], session_id?}`; MFA via
   `/ui/mfa/{totp|sms|email}/begin|verify` (separate ticket); `POST
   /ui/session/finalize`; `GET /ui/me`. Session rides on cookies + a `ui_csrf`
-  cookie echoed as `X-CSRF-Token`; on 401 the client calls `POST
-  /ui/session/refresh` once then retries (Authenticator, AND-013).
+  cookie echoed as `X-CSRF-Token` (verified in `src/api/client.ts`); on 401 the
+  web client calls `POST /ui/session/refresh` once then retries — but **only if it
+  was already authenticated**; an unauthenticated 401 (e.g. bad password on the
+  login screen) propagates directly without a refresh attempt (Authenticator,
+  AND-013).
 - **Backend:** FastAPI + DynamoDB; dev host is plaintext HTTP and unreliable
   (~20s timeouts, bounded backoff for idempotent GETs — owned by AND-009/AND-016).
   OpenAPI at `/openapi.json`. Web reference for shapes:
@@ -119,18 +126,17 @@ All production code lands in
 package com.testlogon.android.core.network.auth
 
 import com.testlogon.android.core.model.auth.MeResp
-import com.testlogon.android.core.model.auth.OkResp
+import com.testlogon.android.core.model.auth.RevokeSessionReq
 import com.testlogon.android.core.model.auth.SessionFinalizeReq
 import com.testlogon.android.core.model.auth.SessionFinalizeResp
-import com.testlogon.android.core.model.auth.SessionInfo
+import com.testlogon.android.core.model.auth.SessionsResp
 import com.testlogon.android.core.model.auth.SessionStartReq
 import com.testlogon.android.core.model.auth.SessionStartResp
+import com.testlogon.android.core.model.auth.StatusResp
 import retrofit2.http.Body
-import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
-import retrofit2.http.Path
 
 interface AuthApi {
 
@@ -147,39 +153,57 @@ interface AuthApi {
     /**
      * Refreshes the session. No request body. Called by the 401 Authenticator
      * (AND-013) at most once per failed call, and by the repository proactively.
+     * Backend returns `{ "status": "ok" }` (StatusResp), not `{ "ok": true }`.
      */
     @POST("ui/session/refresh")
-    suspend fun sessionRefresh(): OkResp
+    suspend fun sessionRefresh(): StatusResp
 
     /** Ends the current session (clears server-side state; cookies cleared by jar). */
     @POST("ui/session/logout")
-    suspend fun sessionLogout(): OkResp
+    suspend fun sessionLogout(): StatusResp
 
     /** Current principal. Idempotent GET; used for auth-gating (AND-025). */
     @GET("ui/me")
     suspend fun me(): MeResp
 
-    /** Active sessions for the current principal. Idempotent GET. */
+    /**
+     * Active sessions for the current principal. Idempotent GET. The backend
+     * returns a WRAPPED object `{ "sessions": [...] }`, not a bare array — so the
+     * return type is `SessionsResp(sessions: List<SessionInfo>)` (AND-026), NOT
+     * `List<SessionInfo>`. Verified against `src/api/endpoints/auth.ts: getSessions`.
+     */
     @GET("ui/sessions")
-    suspend fun listSessions(): List<SessionInfo>
+    suspend fun listSessions(): SessionsResp
 
-    /** Revoke a single session by id. */
-    @DELETE("ui/sessions/{sessionId}")
-    suspend fun revokeSession(@Path("sessionId") sessionId: String): OkResp
+    /**
+     * Revoke a single session by id. The contract is `POST ui/sessions/revoke`
+     * with a JSON body `{ "session_id": "..." }` — NOT `DELETE
+     * ui/sessions/{id}`. Verified against OpenAPI `POST /ui/sessions/revoke`
+     * (op=ui_sessions_revoke) and `src/api/endpoints/auth.ts: revokeSession`.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("ui/sessions/revoke")
+    suspend fun revokeSession(@Body body: RevokeSessionReq): StatusResp
 }
 ```
 
 Notes:
-- DTO types (`SessionStartReq`, `MeResp`, `OkResp`, etc.) are **owned by
+- DTO types (`SessionStartReq`, `MeResp`, `StatusResp`, etc.) are **owned by
   AND-026**. If a referenced type is not yet present, this ticket is blocked.
-  `OkResp` is the generic `{ "ok": true }`-style acknowledgement DTO from
-  Appendix A; if the backend returns a bare empty body for `refresh`/`logout`,
-  the corresponding method type may be `Unit` instead — confirmed against
-  `/openapi.json` during implementation (see Q-1).
-- `listSessions` returns `List<SessionInfo>`; if the backend wraps it as
-  `{ "sessions": [...] }`, a thin `SessionsResp(sessions: List<SessionInfo>)`
-  wrapper DTO (AND-026) is used and the method returns that. This is resolved by
-  inspecting `/openapi.json` and the web reference before coding (Q-2).
+- **`refresh`/`logout`/`revoke` return `StatusResp` (`{ "status": "ok" }`)**, NOT
+  the generic `OkResp` (`{ "ok": true }`). This was an error in the original
+  draft: the web client (`src/api/endpoints/auth.ts`) types `logout`, `refresh`,
+  and `revokeSession` as `StatusResp`. `OkResp` is used elsewhere in the backend
+  (e.g. `password-recovery/confirm`) but not by these three session endpoints.
+  AND-026 must therefore expose a `StatusResp(status: String)` DTO. (Q-1 resolved.)
+- **`listSessions` returns the WRAPPED `SessionsResp(sessions: List<SessionInfo>)`**
+  — the backend returns `{ "sessions": [...] }`, not a bare array
+  (`src/api/endpoints/auth.ts: getSessions` → `{ sessions: SessionInfo[] }`).
+  (Q-2 resolved against the web reference.)
+- **`SessionStartReq.challenge_context`** is a free-form object
+  (`additionalProperties:true`); model it as `Map<String, Any?>` (or a permissive
+  DTO) in AND-026 rather than a strict `{username, password}` type. The web client
+  passes a `Record<string, unknown>`.
 
 ### 4.2 Hilt provider
 
@@ -213,8 +237,9 @@ AND-009's shared `OkHttpClient`. No client/Retrofit is constructed here.
 - Relative paths, no leading slash: `@POST("ui/session/start")` resolves against
   base `http://18.222.237.167:8000/` to
   `http://18.222.237.167:8000/ui/session/start`.
-- Mutating verbs: `start`, `finalize`, `refresh`, `logout`, `revoke` are
-  POST/DELETE — the CSRF interceptor (AND-012) attaches `X-CSRF-Token` to these.
+- Mutating verbs: `start`, `finalize`, `refresh`, `logout`, `revoke` are **all
+  POST** (revoke is `POST ui/sessions/revoke`, not DELETE — corrected) — the CSRF
+  interceptor (AND-012) attaches `X-CSRF-Token` to these.
 - Idempotent GETs: `me`, `listSessions` — eligible for AND-016 bounded backoff.
 
 ### 4.4 Gradle wiring
@@ -228,8 +253,15 @@ dependency of `core-network`.
 
 Base path (`dev`): `http://18.222.237.167:8000/`. All bodies are JSON.
 
-### POST `ui/session/start`
-Request:
+> All shapes below are **verified** against `reference/openapi.pretty.json`
+> (`components.schemas.UiSession*`) and `reference/src/api/types.ts`. Where the
+> original draft differed, the corrected shape is shown and the change is logged in
+> §16.
+
+### POST `ui/session/start`  (req=`UiSessionStartReq`, resp=`UiSessionStartResp`)
+Request — `challenge_context` is a free-form object (`additionalProperties:true`);
+the web client conventionally sends username/password but the schema does not
+require any specific keys:
 ```json
 { "challenge_context": { "username": "alice@example.com", "password": "s3cret" } }
 ```
@@ -238,66 +270,95 @@ Response `200`:
 {
   "auth_required": true,
   "challenge_id": "chl_01HRX...",
-  "required_factors": ["totp"]
-}
-```
-
-### POST `ui/session/finalize`
-Request (challenge id from start, after MFA verify succeeds):
-```json
-{ "challenge_id": "chl_01HRX..." }
-```
-Response `200` (session cookies set via `Set-Cookie`; `ui_csrf` cookie included):
-```json
-{ "ok": true, "user": { "username": "alice@example.com", "roles": ["user"] } }
-```
-(`SessionFinalizeResp` shape per AND-026 Appendix A.)
-
-### POST `ui/session/refresh`
-Request: no body. Mutating verb; carries cookies + `X-CSRF-Token`.
-Response `200`:
-```json
-{ "ok": true }
-```
-
-### POST `ui/session/logout`
-Request: no body. Response `200`: `{ "ok": true }`. Cookie jar clears session
-cookies on success (jar behavior owned by AND-011).
-
-### GET `ui/me`
-Response `200`:
-```json
-{
-  "username": "alice@example.com",
-  "roles": ["user"],
-  "mfa_enrolled": true,
+  "required_factors": ["totp"],
   "session_id": "sess_01HRY..."
 }
 ```
-`401` when unauthenticated → triggers AND-013 refresh-then-retry once.
+Only `auth_required` is required; `challenge_id` and `session_id` are nullable.
 
-### GET `ui/sessions`
-Response `200`:
+### POST `ui/session/finalize`  (req=`UiSessionFinalizeReq`)
+Request (challenge id from start, after MFA verify succeeds). `remember_device`
+is an optional boolean (default `false`):
 ```json
-[
-  {
-    "session_id": "sess_01HRY...",
-    "created_at": "2026-06-05T12:00:00Z",
-    "last_seen_at": "2026-06-05T12:30:00Z",
-    "user_agent": "TestLogon-Android/1.0 (Pixel 7; Android 14)",
-    "ip": "203.0.113.7",
-    "current": true
-  }
-]
+{ "challenge_id": "chl_01HRX...", "remember_device": false }
+```
+Response `200` (session cookies set via `Set-Cookie`; `ui_csrf` cookie included).
+Corrected shape per `types.ts: SessionFinalizeResp` — the draft's
+`{ok, user{username, roles}}` was wrong:
+```json
+{
+  "status": "ok",
+  "session_id": "sess_01HRY...",
+  "required_factors": [],
+  "passed": { "totp": true }
+}
+```
+(`status` is `"ok" | "pending"`.)
+
+### POST `ui/session/refresh`
+Request: no body. Mutating verb; carries cookies + `X-CSRF-Token`.
+Response `200` (corrected — `StatusResp`, not `OkResp`):
+```json
+{ "status": "ok" }
 ```
 
-### DELETE `ui/sessions/{sessionId}`
-Path: `ui/sessions/sess_01HRY...`. Response `200`: `{ "ok": true }`.
-`404` if the session id is unknown/already revoked.
+### POST `ui/session/logout`
+Request: no body. Response `200`: `{ "status": "ok" }` (`StatusResp`). Cookie jar
+clears session cookies on success (jar behavior owned by AND-011).
 
-**Error envelope (all endpoints):** FastAPI `detail` union
-(`string | [{msg, type, loc}] | {code, ...}`). Mapping to a typed `ApiError` is
-owned by **AND-015**; this ticket lets non-2xx surface as `HttpException` so
+### GET `ui/me`
+Response `200` (corrected per `types.ts: MeResp` — the draft's
+`{username, roles, mfa_enrolled, session_id}` was wrong):
+```json
+{
+  "user_sub": "usr_01HRZ...",
+  "session_id": "sess_01HRY...",
+  "ip": "203.0.113.7"
+}
+```
+`401` when unauthenticated → triggers AND-013 refresh-then-retry once (only when a
+session already existed; an unauthenticated 401 is terminal — see §2).
+
+### GET `ui/sessions`
+Response `200` — a WRAPPED object (corrected; the draft showed a bare array), with
+`SessionInfo` fields per `types.ts: SessionInfo` (note `is_current`, not `current`;
+`created_at`/`last_seen_at` are numeric epoch timestamps, not ISO strings; plus
+`revoked`/`revoked_at`):
+```json
+{
+  "sessions": [
+    {
+      "session_id": "sess_01HRY...",
+      "is_current": true,
+      "created_at": 1749124800,
+      "last_seen_at": 1749126600,
+      "ip": "203.0.113.7",
+      "user_agent": "TestLogon-Android/1.0 (Pixel 7; Android 14)",
+      "revoked": false,
+      "revoked_at": null
+    }
+  ]
+}
+```
+
+### POST `ui/sessions/revoke`  (corrected — was `DELETE ui/sessions/{id}`)
+Request body `{ "session_id": "..." }`:
+```json
+{ "session_id": "sess_01HRY..." }
+```
+Response `200`: `{ "status": "ok" }` (`StatusResp`). A bad/unknown id surfaces as
+`422 HTTPValidationError` (validation) or a non-2xx per backend policy — the
+contract does not document a `404`.
+
+> Related (out of scope for AND-027): `POST ui/sessions/revoke_others` exists in
+> the contract for bulk revocation of all other sessions; it is not part of this
+> ticket's scope.
+
+**Error envelope (all endpoints):** validation failures return `422` with the
+named schema **`HTTPValidationError`** (`{ "detail": [ { "loc": [...], "msg":
+"...", "type": "..." } ] }`), per the OpenAPI index. Other FastAPI errors return
+`{ "detail": string | {...} }`. Mapping to a typed `ApiError` is owned by
+**AND-015**; this ticket lets non-2xx surface as `HttpException` so
 AND-015/AND-018 can map it.
 
 ## 6. Data & State Management
@@ -427,19 +488,20 @@ private fun api(server: MockWebServer): AuthApi {
 (verb POST) and decodes `SessionFinalizeResp`.
 
 **T-3 — `sessionRefresh`** issues `POST /ui/session/refresh` with an **empty
-body** and tolerates a `200 {"ok":true}` (and, per Q-1, an empty body if the type
-is `Unit`).
+body** and decodes `200 {"status":"ok"}` into `StatusResp`.
 
-**T-4 — `sessionLogout`** issues `POST /ui/session/logout`, decodes `OkResp`.
+**T-4 — `sessionLogout`** issues `POST /ui/session/logout`, decodes `StatusResp`
+(`{"status":"ok"}`).
 
-**T-5 — `me`** issues `GET /ui/me` and decodes `MeResp` including snake_case
-fields (`mfa_enrolled`, `session_id`) via the AND-026 adapters.
+**T-5 — `me`** issues `GET /ui/me` and decodes `MeResp` with fields
+`user_sub`, `session_id`, `ip` via the AND-026 adapters.
 
-**T-6 — `listSessions`** issues `GET /ui/sessions` and decodes a
-`List<SessionInfo>` (or wrapper per Q-2), including timestamp fields.
+**T-6 — `listSessions`** issues `GET /ui/sessions` and decodes the wrapped
+`SessionsResp` (`{"sessions":[...]}`), including the numeric `created_at` /
+`last_seen_at` epoch fields and the `is_current` flag.
 
-**T-7 — `revokeSession`** issues `DELETE /ui/sessions/sess_1` (path param
-interpolated) and decodes `OkResp`.
+**T-7 — `revokeSession`** issues `POST /ui/sessions/revoke` with body
+`{"session_id":"sess_1"}` and decodes `StatusResp`.
 
 **T-8 — error propagation.** A `401` response from `me()` throws
 `retrofit2.HttpException` with `code() == 401` (confirms non-2xx is not swallowed,
@@ -477,13 +539,15 @@ MockWebServer tests T-1..T-9.
 
 ## 13. Risks & Open Questions
 
-- **R-1 Empty-body decoding for refresh/logout.** If the backend returns a bare
-  `200` with no body, declaring the return as `OkResp` will throw a Moshi
-  `EOFException`. Mitigation: confirm shape via `/openapi.json`; use `Unit` return
-  type for genuinely empty responses. Guarded by T-3/T-4.
-- **R-2 Sessions list envelope.** `GET /ui/sessions` may return a bare array or a
-  `{sessions:[...]}` wrapper. Mitigation: inspect web reference + OpenAPI before
-  coding; pick the matching DTO. Guarded by T-6.
+- **R-1 Empty-body decoding for refresh/logout.** RESOLVED: the web client types
+  both as `StatusResp` (`{"status":"ok"}`), so a non-empty JSON body is expected
+  and `StatusResp` is the correct return type — no `Unit`/`EOFException` concern.
+  Residual risk: the dev backend could still emit an empty body under error
+  conditions; lenient handling at the repository layer mitigates. Guarded by
+  T-3/T-4.
+- **R-2 Sessions list envelope.** RESOLVED: `GET /ui/sessions` returns a
+  `{"sessions":[...]}` wrapper (`src/api/endpoints/auth.ts: getSessions`), so the
+  return type is `SessionsResp`, not a bare array. Guarded by T-6.
 - **R-3 DTO drift from AND-026.** If AND-026 names a field/type differently than
   assumed here (e.g. `OkResp` vs `StatusResp`), this interface won't compile.
   Mitigation: this ticket consumes AND-026 as-is; resolve naming in AND-026, not
@@ -491,13 +555,15 @@ MockWebServer tests T-1..T-9.
 - **R-4 CSRF on mutating verbs.** If AND-012's interceptor is not yet present,
   `start`/`finalize`/`refresh`/`logout`/`revoke` may 403 against a real backend.
   Unit tests use MockWebServer and are unaffected; end-to-end depends on AND-012.
-- **Q-1** Do `refresh`/`logout` return `{"ok":true}` or an empty body? *Proposed:*
-  verify against `/openapi.json`; default to `OkResp`, fall back to `Unit`.
-- **Q-2** Is `GET /ui/sessions` a bare array or wrapped? *Proposed:* match the web
-  reference (`frontend/src/api/endpoints/*.ts`); default to `List<SessionInfo>`.
-- **Q-3** Does `revokeSession` use `DELETE /ui/sessions/{id}` or `POST
-  /ui/sessions/{id}/revoke`? *Proposed:* confirm via OpenAPI; spec assumes
-  `DELETE`. Adjust the annotation if the contract differs.
+- **Q-1** Do `refresh`/`logout` return `{"ok":true}` or an empty body? **RESOLVED:**
+  both return `StatusResp` (`{"status":"ok"}`), per `src/api/endpoints/auth.ts`.
+- **Q-2** Is `GET /ui/sessions` a bare array or wrapped? **RESOLVED:** wrapped as
+  `{"sessions":[...]}` → `SessionsResp` (`src/api/endpoints/auth.ts: getSessions`).
+- **Q-3** Does `revokeSession` use `DELETE /ui/sessions/{id}` or a POST? **RESOLVED:**
+  neither of the originally guessed forms — the contract is `POST
+  /ui/sessions/revoke` with body `{"session_id":...}` (OpenAPI
+  `op=ui_sessions_revoke`; `src/api/endpoints/auth.ts: revokeSession`). The
+  interface has been corrected accordingly.
 
 ## 14. Acceptance Criteria
 
@@ -510,7 +576,7 @@ MockWebServer tests T-1..T-9.
 - **AC-3.** `sessionStart` serializes the nested
   `{challenge_context:{username,password}}` body exactly and decodes
   `{auth_required, challenge_id, required_factors}` (T-1).
-- **AC-4.** `me()` decodes snake_case fields (`mfa_enrolled`, `session_id`) via
+- **AC-4.** `me()` decodes snake_case fields (`user_sub`, `session_id`, `ip`) via
   AND-026 adapters (T-5).
 - **AC-5.** Non-2xx (e.g. `401` from `me`) surfaces as `HttpException` and is not
   swallowed (T-8).
@@ -539,3 +605,255 @@ MockWebServer tests T-1..T-9.
 - A one-line note in the `core-network` README (owned by AND-007) records the
   `AuthApi` path/verb map and the delegation of cookie/CSRF/refresh to
   AND-011/AND-012/AND-013.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources:
+**OAI-IDX** = `reference/openapi.index.txt`; **OAI** = `reference/openapi.pretty.json`
+(`components.schemas.<Name>`); frontend paths are under `reference/src/`.
+
+1. **`POST /ui/session/start` (req `UiSessionStartReq`, resp `UiSessionStartResp`).**
+   VERDICT: Verified. SOURCE: OAI-IDX `POST /ui/session/start`
+   (`op=ui_session_start`); `src/api/endpoints/auth.ts: sessionStart`.
+2. **`session/start` request is `{challenge_context:{…}}`.** VERDICT: Verified
+   (with caveat). SOURCE: OAI `UiSessionStartReq.challenge_context`
+   (`type:object, additionalProperties:true`); `src/api/types.ts: SessionStartReq`
+   (`challenge_context?: Record<string, unknown>`). The `{username,password}`
+   inner shape is a **convention**, not enforced by the schema — see Open
+   assumptions.
+3. **`session/start` response `{auth_required, challenge_id?, required_factors[],
+   session_id?}`.** VERDICT: Corrected (added `session_id`; `challenge_id`
+   nullable). SOURCE: OAI `UiSessionStartResp` (required: `auth_required`;
+   `challenge_id`/`session_id` are `anyOf string|null`); `src/api/types.ts:
+   SessionStartResp`.
+4. **`POST /ui/session/finalize` (req `UiSessionFinalizeReq`).** VERDICT: Verified.
+   SOURCE: OAI-IDX `POST /ui/session/finalize` (`op=ui_session_finalize`);
+   `src/api/endpoints/auth.ts: sessionFinalize`.
+5. **`finalize` request `{challenge_id, remember_device?}`.** VERDICT: Corrected
+   (added `remember_device`, default false). SOURCE: OAI `UiSessionFinalizeReq`
+   (required `challenge_id`; `remember_device` boolean default false);
+   `src/api/types.ts: SessionFinalizeReq`.
+6. **`finalize` response shape.** Draft claimed `{ok:true, user:{username,
+   roles}}`. VERDICT: Corrected to `{status:"ok"|"pending", session_id?,
+   required_factors[], passed:{}}`. SOURCE: `src/api/types.ts:
+   SessionFinalizeResp`. (OAI-IDX shows `resp=200:` with no named schema, so the
+   frontend type is the authoritative shape.)
+7. **`POST /ui/session/refresh`, no body, returns `StatusResp`.** Draft claimed
+   `OkResp` (`{ok:true}`). VERDICT: Corrected to `StatusResp` (`{status:"ok"}`).
+   SOURCE: OAI-IDX `POST /ui/session/refresh` (`req=`, empty); `src/api/
+   endpoints/auth.ts: refreshSession` (`api.post<StatusResp>`).
+8. **`POST /ui/session/logout`, no body, returns `StatusResp`.** Draft claimed
+   `OkResp`. VERDICT: Corrected to `StatusResp`. SOURCE: OAI-IDX `POST
+   /ui/session/logout`; `src/api/endpoints/auth.ts: logout`
+   (`api.post<StatusResp>`).
+9. **`GET /ui/me` response `{user_sub, session_id, ip}`.** Draft claimed
+   `{username, roles, mfa_enrolled, session_id}`. VERDICT: Corrected. SOURCE:
+   `src/api/types.ts: MeResp`; OAI-IDX `GET /ui/me` (`op=ui_me`, `resp=200:` no
+   named schema → frontend type authoritative).
+10. **`GET /ui/sessions` returns a WRAPPED `{sessions:[...]}`, not a bare array.**
+    VERDICT: Corrected (`SessionsResp`). SOURCE: `src/api/endpoints/auth.ts:
+    getSessions` (`api.get<{ sessions: SessionInfo[] }>`); OAI-IDX `GET
+    /ui/sessions`.
+11. **`SessionInfo` fields.** Draft used `current`, ISO-string timestamps. VERDICT:
+    Corrected to `{session_id, is_current, created_at:number, last_seen_at:number,
+    ip, user_agent, revoked, revoked_at?}`. SOURCE: `src/api/types.ts:
+    SessionInfo` (timestamps are numeric epoch; flag is `is_current`).
+12. **Revoke is `POST /ui/sessions/revoke` with body `{session_id}` → `StatusResp`.**
+    Draft claimed `DELETE /ui/sessions/{sessionId}` → `OkResp`. VERDICT: Corrected
+    (verb, path, body, and return type all changed). SOURCE: OAI-IDX `POST
+    /ui/sessions/revoke` (`op=ui_sessions_revoke`); `src/api/endpoints/auth.ts:
+    revokeSession` (`api.post<StatusResp>("/ui/sessions/revoke", {session_id})`).
+13. **`POST /ui/sessions/revoke_others` exists (out of scope).** VERDICT: Verified.
+    SOURCE: OAI-IDX `POST /ui/sessions/revoke_others`; `src/api/endpoints/auth.ts:
+    revokeOtherSessions`.
+14. **CSRF: `ui_csrf` cookie echoed as `X-CSRF-Token` header on requests.**
+    VERDICT: Verified. SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")` →
+    `headers.set("X-CSRF-Token", csrf)`).
+15. **Session is cookie-based; client sends credentials with the request.**
+    VERDICT: Verified. SOURCE: `src/api/client.ts` (`credentials: "include"` on
+    every fetch).
+16. **On 401, refresh-then-retry once — only if already authenticated.** VERDICT:
+    Corrected/clarified (draft implied unconditional refresh). SOURCE:
+    `src/api/client.ts` (`if (res.status === 401) { … if
+    (!useAuthStore.getState().isAuthenticated) { throw … } … refreshSession() …
+    retry }`).
+17. **Validation errors return `422` with named schema `HTTPValidationError`.**
+    VERDICT: Verified. SOURCE: OAI-IDX (every session endpoint lists
+    `422:HTTPValidationError`); OAI `components.schemas.HTTPValidationError`.
+18. **DTO ownership: types come from AND-026; this ticket only binds them.**
+    VERDICT: Unverified-assumption (cross-ticket process claim, not in sources).
+19. **Framework choices — Retrofit `suspend` returning DTO body; empty 2xx → `Unit`;
+    `@Headers`, `@Body`, `@Path`, `@POST/@GET` semantics.** VERDICT:
+    Unverified-assumption (framework ref). SOURCE: framework ref —
+    https://square.github.io/retrofit/ (Retrofit 2.x annotations & coroutine
+    support); not derivable from the backend/frontend sources.
+20. **Hilt `@Provides @Singleton` provider built on the shared Retrofit.** VERDICT:
+    Unverified-assumption (framework ref). SOURCE: framework ref —
+    https://dagger.dev/hilt/ ; an Android architecture choice, not in the sources.
+21. **Dev base URL `http://18.222.237.167:8000/` over plaintext HTTP.** VERDICT:
+    Unverified-assumption. SOURCE: not present in the provided sources (no base
+    URL/host in OpenAPI or frontend); carried over from upstream tickets
+    AND-006/AND-009/AND-010.
+
+### Corrections made
+
+- **Revoke endpoint** rewritten: `DELETE /ui/sessions/{sessionId}` →
+  `POST /ui/sessions/revoke` with `@Body RevokeSessionReq {session_id}`; return
+  `OkResp` → `StatusResp`. (§4.1, §4.3, §5, T-7, AC-2.) [claim 12]
+- **`listSessions`** return type: `List<SessionInfo>` → `SessionsResp`
+  (`{sessions:[...]}` wrapper). (§4.1, §5, T-6.) [claim 10]
+- **`refresh`/`logout` return type**: `OkResp` → `StatusResp`. (§4.1, §5, T-3,
+  T-4.) [claims 7, 8]
+- **`SessionFinalizeResp`** corrected from `{ok, user{…}}` to
+  `{status, session_id?, required_factors, passed}`. (§5.) [claim 6]
+- **`MeResp`** corrected from `{username, roles, mfa_enrolled, session_id}` to
+  `{user_sub, session_id, ip}`. (§5, T-5, AC-4.) [claim 9]
+- **`SessionInfo`** corrected: `current`→`is_current`; timestamps are numeric
+  epoch, not ISO strings; added `revoked`/`revoked_at`. (§5, T-6.) [claim 11]
+- **`session/start`** request `challenge_context` documented as free-form object;
+  response gains nullable `challenge_id` and `session_id`. (§2, §5.) [claims 2, 3]
+- **`finalize`** request gains optional `remember_device`. (§5.) [claim 5]
+- **401 handling** clarified: refresh-then-retry only when already authenticated.
+  (§2.) [claim 16]
+- **Error envelope** named: `422 HTTPValidationError`. (§5.) [claim 17]
+- Imports/annotations in §4.1 updated (`DELETE`/`Path`/`OkResp` removed;
+  `StatusResp`/`SessionsResp`/`RevokeSessionReq` added). Q-1/Q-2/Q-3 and R-1/R-2
+  marked RESOLVED. (§4.1, §13.)
+
+### Open assumptions
+
+- **`challenge_context` inner keys** (`username`/`password`): the schema is
+  `additionalProperties:true` (free-form), so the exact key names are a convention
+  copied from the web client's usage, not an enforced contract. AND-026 should
+  model it as a permissive map. [claim 2]
+- **DTO names/ownership in AND-026** (`StatusResp`, `SessionsResp`,
+  `RevokeSessionReq`, etc.): assumed to exist/be added by AND-026; not verifiable
+  from the backend/frontend sources. [claim 18]
+- **Dev base URL / plaintext-HTTP host**: not present in any provided source;
+  inherited from AND-006/AND-009. [claim 21]
+- **Android framework behaviors** (Retrofit empty-body→`Unit`, Hilt singleton
+  provider, KSP Moshi codegen): framework refs, not derivable from the sources.
+  [claims 19, 20]
+- **`me`/`finalize` exact server schema**: OpenAPI lists these with `resp=200:`
+  and no named component schema, so the response shape is taken from the
+  frontend `types.ts` (the contract the web client relies on) rather than from a
+  formal backend schema. [claims 6, 9]
+
+## 17. Test Plan
+
+All tests use the production Moshi/Retrofit config against `MockWebServer` unless
+noted. IDs trace to the §14 Acceptance Criteria.
+
+- **TC-AND-027-01 — `sessionStart` contract.** Type: contract/MockWebServer.
+  Preconditions: MockWebServer enqueues
+  `200 {"auth_required":true,"challenge_id":"chl_1","required_factors":["totp"],"session_id":"sess_1"}`.
+  Steps: call `sessionStart(SessionStartReq(challengeContext=mapOf("username" to
+  "alice@example.com","password" to "s3cret")))`; capture the recorded request.
+  Expected: method `POST`, path `/ui/session/start`, body contains
+  `"challenge_context"` and `"username":"alice@example.com"`; decoded resp has
+  `authRequired==true`, `challengeId=="chl_1"`, `requiredFactors==["totp"]`,
+  `sessionId=="sess_1"`. Traces: AC-1, AC-2, AC-3.
+
+- **TC-AND-027-02 — `sessionFinalize` contract.** Type: contract/MockWebServer.
+  Preconditions: enqueue
+  `200 {"status":"ok","session_id":"sess_1","required_factors":[],"passed":{"totp":true}}`.
+  Steps: call `sessionFinalize(SessionFinalizeReq(challengeId="chl_1"))`. Expected:
+  `POST /ui/session/finalize`; body contains `"challenge_id":"chl_1"`; decoded
+  `status=="ok"`, `passed["totp"]==true`. Traces: AC-1, AC-2.
+
+- **TC-AND-027-03 — `sessionRefresh` no-body + StatusResp.** Type:
+  contract/MockWebServer. Preconditions: enqueue `200 {"status":"ok"}`. Steps:
+  call `sessionRefresh()`. Expected: `POST /ui/session/refresh`, recorded request
+  body length `== 0`; decoded `StatusResp.status=="ok"`. Traces: AC-1, AC-2.
+
+- **TC-AND-027-04 — `sessionLogout` StatusResp.** Type: contract/MockWebServer.
+  Preconditions: enqueue `200 {"status":"ok"}`. Steps: call `sessionLogout()`.
+  Expected: `POST /ui/session/logout`, empty request body, decoded
+  `status=="ok"`. Traces: AC-1, AC-2.
+
+- **TC-AND-027-05 — `me` decodes corrected fields.** Type: contract/MockWebServer.
+  Preconditions: enqueue
+  `200 {"user_sub":"usr_1","session_id":"sess_1","ip":"203.0.113.7"}`. Steps: call
+  `me()`. Expected: `GET /ui/me`; decoded `userSub=="usr_1"`,
+  `sessionId=="sess_1"`, `ip=="203.0.113.7"` (snake_case mapped by adapters).
+  Traces: AC-1, AC-2, AC-4.
+
+- **TC-AND-027-06 — `listSessions` wrapped + numeric timestamps.** Type:
+  contract/MockWebServer. Preconditions: enqueue `200 {"sessions":[{"session_id":
+  "sess_1","is_current":true,"created_at":1749124800,"last_seen_at":1749126600,
+  "ip":"203.0.113.7","user_agent":"x","revoked":false}]}`. Steps: call
+  `listSessions()`. Expected: `GET /ui/sessions`; decoded
+  `SessionsResp.sessions[0].isCurrent==true`, `createdAt==1749124800L`,
+  `revoked==false`. (A bare-array body must NOT decode — guards the wrapper fix.)
+  Traces: AC-1, AC-2.
+
+- **TC-AND-027-07 — `revokeSession` POST + body.** Type: contract/MockWebServer.
+  Preconditions: enqueue `200 {"status":"ok"}`. Steps: call
+  `revokeSession(RevokeSessionReq(sessionId="sess_1"))`. Expected: method `POST`,
+  path `/ui/sessions/revoke` (NOT DELETE, NOT path-templated), request body
+  contains `"session_id":"sess_1"`; decoded `status=="ok"`. Traces: AC-1, AC-2.
+
+- **TC-AND-027-08 — 401 surfaces as HttpException (not swallowed).** Type:
+  contract/MockWebServer. Preconditions: enqueue `401` with body
+  `{"detail":"Authentication required"}`. Steps: call `me()`; assert it throws.
+  Expected: `retrofit2.HttpException` with `code()==401`; raw error body
+  retrievable for AND-015. Traces: AC-5.
+
+- **TC-AND-027-09 — 422 validation error shape preserved.** Type:
+  contract/MockWebServer. Preconditions: enqueue `422` with
+  `{"detail":[{"loc":["body","challenge_id"],"msg":"field required","type":"value_error.missing"}]}`.
+  Steps: call `sessionFinalize(SessionFinalizeReq(challengeId=""))`. Expected:
+  `HttpException` `code()==422`; `errorBody()` contains the `HTTPValidationError`
+  `detail[].loc/msg/type` intact (decoding deferred to AND-015). Traces: AC-5.
+
+- **TC-AND-027-10 — flaky-dev-host / offline transport failure.** Type:
+  contract/MockWebServer (+ integration). Preconditions: enqueue
+  `MockResponse().setSocketPolicy(NO_RESPONSE)` (or shut the server to simulate
+  `UnknownHostException`). Steps: call `me()` with a short client timeout.
+  Expected: an `IOException`/`SocketTimeoutException` propagates **unchanged**
+  (no swallowing, no wrapping by `AuthApi`); leaves AND-009/AND-016 backoff to act.
+  Traces: AC-5.
+
+- **TC-AND-027-11 — Hilt provider is a shared singleton.** Type: integrated
+  (`@HiltAndroidTest` or `core-testing` harness). Preconditions: Hilt graph with
+  AND-010 `NetworkModule` + `AuthApiModule`. Steps: inject `AuthApi` twice.
+  Expected: both injections non-null and the **same** instance; built on the
+  shared `Retrofit` (no second `Retrofit`/`OkHttpClient` created). Traces: AC-6,
+  AC-7.
+
+- **TC-AND-027-12 — no per-method cookie/CSRF/auth headers in the interface.**
+  Type: unit (reflection/source check). Preconditions: compiled `AuthApi`. Steps:
+  reflect over each method's annotations (or a detekt/source assertion). Expected:
+  no `@Header`/`@Headers` declaring `Cookie`, `Authorization`, or `X-CSRF-Token`;
+  only `Content-Type: application/json` on JSON POSTs. (CSRF/cookies remain
+  AND-011/AND-012 concerns.) Traces: AC-7.
+
+- **TC-AND-027-13 — credentials never logged (security).** Type: unit/manual
+  code-review gate. Preconditions: debug build with AND-009 logging interceptor.
+  Steps: exercise `sessionStart` against MockWebServer with logging on; capture
+  logcat/test log. Expected: the request body (password) and any `Set-Cookie` /
+  `X-CSRF-Token` headers are redacted; the cleartext password never appears.
+  Traces: AC-7. (Security/permission case.)
+
+- **TC-AND-027-14 — module builds clean.** Type: integration/CI. Preconditions:
+  AGP 8.7.3 / Gradle 8.9 / JDK 17, KSP Moshi adapters present for all referenced
+  DTOs. Steps: run `:core-network:assemble` and `:core-network:testDebugUnitTest`.
+  Expected: green build, no detekt/lint regressions, all TCs above pass. Traces:
+  AC-1, AC-8.
+
+> Accessibility: not applicable — `AuthApi` is a headless transport interface with
+> no UI surface (see §9). No Compose-UI/a11y cases are in scope for this ticket;
+> a11y is covered by the consuming `feature-auth` tickets.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (all 7 ops declared, compiles vs AND-026) | TC-01..07, TC-14 |
+| AC-2 (verb + path + body match contract, MockWebServer) | TC-01..07 |
+| AC-3 (`start` nested `challenge_context` body + decode) | TC-01 |
+| AC-4 (`me` snake_case fields decode) | TC-05 |
+| AC-5 (non-2xx surfaces as `HttpException`, not swallowed) | TC-08, TC-09, TC-10 |
+| AC-6 (Hilt `@Singleton`, same instance on re-injection) | TC-11 |
+| AC-7 (no new client/Retrofit; no per-method CSRF/cookie headers) | TC-11, TC-12, TC-13 |
+| AC-8 (CI green, builds clean, no lint/detekt regressions) | TC-14 |

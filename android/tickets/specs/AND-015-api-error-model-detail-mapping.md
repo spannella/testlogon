@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-010]
 blocks: [AND-018]
 ---
@@ -70,10 +71,14 @@ Scope, in one line from the backlog: *`ApiError(status, detail, body)`; parse Fa
   `{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`; `HTTPException` raises produce
   `{"detail": "<string>"}`; the app's custom auth/business errors produce
   `{"detail": {"code": "...", "message": "...", ...}}`.
-- **Web reference:** `frontend/src/api/types.ts` (the `ApiError` / `ErrorDetail` types) and the
-  `normalizeErrorDetail` helper plus the auth-code message map in
-  `frontend/src/api/endpoints/*.ts`. This ticket is a faithful Kotlin port of that behavior; the
-  TS strings are the authority for message text.
+- **Web reference (verified):** the authoritative error logic lives in **`src/api/client.ts`**,
+  not `types.ts`. `client.ts` defines the `ApiError` *class* (`status: number, detail: string,
+  body?: unknown`), the `normalizeErrorDetail(detail, fallback)` helper, and the
+  `mapAuthorizationError(detail)` code map. `src/api/types.ts` does **not** export an `ApiError` or
+  `ErrorDetail` type (correction: the original draft mis-cited `types.ts`). The web `ApiError` is a
+  *flat string* `detail` produced by `normalizeErrorDetail`; this Android port intentionally
+  preserves the *structured* `ErrorDetail` and normalizes lazily — a deliberate divergence. The TS
+  strings in `client.ts` are the authority for message text.
 
 ## 3. Functional Requirements
 
@@ -95,18 +100,23 @@ field into the correct variant, using the injected Moshi. It must be **total** (
 any malformed input yields `ErrorDetail.Empty` rather than propagating.
 
 FR-4. `normalizeErrorDetail(detail: ErrorDetail): String` collapses any variant into one
-human-readable string, porting the web logic:
+human-readable string, porting the web logic (VERIFIED against `src/api/client.ts`):
 - `Message` → the string itself.
-- `Validation` → the **first** item's `msg` if present; if multiple, join with `"; "` (matching
-  the web reference's behavior of surfacing the leading validation message).
-- `Coded` → the code's mapped user message (FR-5) when known; else `message` if present; else a
-  generic fallback.
+- `Validation` → **all** items' non-empty `msg` joined with `", "` (comma-space). CORRECTED: the
+  earlier draft said "first item, join with `; `"; the web maps every item and joins with `", "`.
+- `Coded` → the code's mapped user message (FR-5) when known; else, for `geo_blocked`, the backend
+  `message` (fallback `GEO_BLOCKED`); else the caller's generic fallback. CORRECTED: the web does
+  **not** use a coded object's `message` field as a generic fallback for arbitrary codes.
 - `Empty` → a generic fallback string (resource-backed, FR-6 in §9).
 
-FR-5. `mapAuthCode(code: String): String?` maps known application codes to specific messages.
-Required codes from the backlog: `role_required`, `geo_blocked`, and the **helpdesk** code family
-(any code beginning with `helpdesk_`, e.g. `helpdesk_locked`, `helpdesk_review`,
-`helpdesk_contact`). Unknown codes return `null` so the caller falls back per FR-4.
+FR-5. `mapAuthCode(code: String): ErrorMessageKey?` maps known application codes to specific
+messages. CORRECTED — the verified web codes (`src/api/client.ts: mapAuthorizationError`) are:
+`role_required`, `role_required_scope`, `role_required_admin_profile_type`,
+`helpdesk_claim_required`, `helpdesk_assignee_required`, `helpdesk_claim_not_available`. The
+backlog's shorthand "`role_required`, `geo_blocked`, helpdesk code family" was imprecise:
+`geo_blocked` is handled on the 403 path (not in this map), and there is **no** `helpdesk_*`
+prefix fallback — each helpdesk code is mapped explicitly. Unknown codes return `null` so the
+caller falls back per FR-4.
 
 FR-6. `ApiError.userMessage: String` is a computed property that returns
 `normalizeErrorDetail(detail)`, i.e. the single string a UI should display.
@@ -174,27 +184,47 @@ yields an `ErrorMessageKey` enum; a thin resolver (provided in `core-ui`/`app`, 
 here) turns a key into a localized string. For convenience and tests, a default English string
 table is included.
 
+> **CORRECTED against `src/api/client.ts: mapAuthorizationError`.** The earlier draft invented
+> codes (`helpdesk_locked`/`helpdesk_review`/`helpdesk_contact`) and a generic-message
+> `geo_blocked`. The real web code map keys are: `role_required`, `role_required_scope`,
+> `role_required_admin_profile_type`, `helpdesk_claim_required`, `helpdesk_assignee_required`,
+> `helpdesk_claim_not_available`. `geo_blocked` is **not** handled in `mapAuthorizationError`; the
+> web handles it in a dedicated 403 branch using the backend `message` (fallback "This content is
+> not available in your region."). There is **no** `helpdesk_*` prefix fallback in the web — an
+> unmapped code returns `null` → caller fallback. The enum/map below mirrors the verified web copy
+> verbatim.
+
 ```kotlin
 package com.testlogon.android.core.model.error
 
 enum class ErrorMessageKey {
-    GENERIC,            // R.string.error_generic
-    OFFLINE,            // R.string.error_offline
-    PARSE,              // R.string.error_unexpected
-    ROLE_REQUIRED,      // R.string.error_role_required
-    GEO_BLOCKED,        // R.string.error_geo_blocked
-    HELPDESK_LOCKED,    // R.string.error_helpdesk_locked
-    HELPDESK_REVIEW,    // R.string.error_helpdesk_review
-    HELPDESK_CONTACT,   // R.string.error_helpdesk_generic
+    GENERIC,                        // R.string.error_generic
+    OFFLINE,                        // R.string.error_offline
+    PARSE,                          // R.string.error_unexpected
+    ROLE_REQUIRED,                  // R.string.error_role_required
+    ROLE_REQUIRED_SCOPE,            // R.string.error_role_required_scope (takes {scope} arg)
+    ROLE_REQUIRED_ADMIN_PROFILE,    // R.string.error_role_required_admin_profile
+    GEO_BLOCKED,                    // R.string.error_geo_blocked (403 special-path fallback)
+    HELPDESK_CLAIM_REQUIRED,        // R.string.error_helpdesk_claim_required
+    HELPDESK_ASSIGNEE_REQUIRED,     // R.string.error_helpdesk_assignee_required
+    HELPDESK_CLAIM_NOT_AVAILABLE,   // R.string.error_helpdesk_claim_not_available
 }
 
-/** Maps a backend `code` to a message key, or null if unrecognized. */
+/**
+ * Maps a backend `code` to a message key, or null if unrecognized.
+ * Verbatim port of `mapAuthorizationError` in `src/api/client.ts`.
+ * NOTE: `role_required_scope` is parameterized by `required_scope` in the web; callers that need
+ * the scope-interpolated copy should read `Coded.extra["required_scope"]` and format the resource.
+ * NOTE: `geo_blocked` is intentionally NOT mapped here — see normalizeErrorDetail / §5 geo path.
+ */
 fun mapAuthCode(code: String): ErrorMessageKey? = when (code) {
     "role_required" -> ErrorMessageKey.ROLE_REQUIRED
-    "geo_blocked" -> ErrorMessageKey.GEO_BLOCKED
-    "helpdesk_locked" -> ErrorMessageKey.HELPDESK_LOCKED
-    "helpdesk_review" -> ErrorMessageKey.HELPDESK_REVIEW
-    else -> if (code.startsWith("helpdesk_")) ErrorMessageKey.HELPDESK_CONTACT else null
+    "role_required_scope" -> ErrorMessageKey.ROLE_REQUIRED_SCOPE
+    "role_required_admin_profile_type" -> ErrorMessageKey.ROLE_REQUIRED_ADMIN_PROFILE
+    "helpdesk_claim_required" -> ErrorMessageKey.HELPDESK_CLAIM_REQUIRED
+    "helpdesk_assignee_required" -> ErrorMessageKey.HELPDESK_ASSIGNEE_REQUIRED
+    "helpdesk_claim_not_available" -> ErrorMessageKey.HELPDESK_CLAIM_NOT_AVAILABLE
+    else -> null   // no prefix fallback in web; unknown codes degrade per FR-4
 }
 ```
 
@@ -216,16 +246,25 @@ fun normalizeErrorDetail(detail: ErrorDetail): NormalizedMessage = when (detail)
     is ErrorDetail.Message ->
         NormalizedMessage.Literal(detail.text)
 
+    // CORRECTED: web joins ALL items' msg with ", " (comma-space), not first-only with "; ".
+    // See `normalizeErrorDetail` in src/api/client.ts (messages.join(", ")).
     is ErrorDetail.Validation ->
-        detail.items.takeIf { it.isNotEmpty() }
-            ?.joinToString("; ") { it.msg }
+        detail.items.mapNotNull { it.msg.takeIf { m -> m.isNotEmpty() } }
+            .takeIf { it.isNotEmpty() }
+            ?.joinToString(", ")
             ?.let { NormalizedMessage.Literal(it) }
             ?: NormalizedMessage.Keyed(ErrorMessageKey.GENERIC)
 
+    // CORRECTED: the web does NOT fall back to a coded object's `message` field for unmapped
+    // codes (the only object-`msg` fallback is the FastAPI-style `{msg}` shape, not `{code,...}`).
+    // Mapped code wins; geo_blocked is handled on the 403 path (§5) using its backend `message`;
+    // any other unmapped code degrades to the caller fallback (GENERIC here).
     is ErrorDetail.Coded ->
         mapAuthCode(detail.code)?.let { NormalizedMessage.Keyed(it) }
-            ?: detail.message?.let { NormalizedMessage.Literal(it) }
-            ?: NormalizedMessage.Keyed(ErrorMessageKey.GENERIC)
+            ?: if (detail.code == "geo_blocked")
+                   detail.message?.let { NormalizedMessage.Literal(it) }
+                       ?: NormalizedMessage.Keyed(ErrorMessageKey.GEO_BLOCKED)
+               else NormalizedMessage.Keyed(ErrorMessageKey.GENERIC)
 
     ErrorDetail.Empty ->
         NormalizedMessage.Keyed(ErrorMessageKey.GENERIC)
@@ -236,15 +275,26 @@ A default English string table backs JVM tests and serves as the canonical sourc
 `strings.xml` (§9):
 
 ```kotlin
+// Copy CORRECTED to match `mapAuthorizationError` / the 403 geo path in src/api/client.ts
+// verbatim. OFFLINE/PARSE/GENERIC are client-only (no exact web equivalent; see Open assumptions).
+// The web network-error toast text is "Network error — check your connection and try again".
 val DefaultErrorStrings: Map<ErrorMessageKey, String> = mapOf(
-    ErrorMessageKey.GENERIC to "Something went wrong. Please try again.",
-    ErrorMessageKey.OFFLINE to "You appear to be offline. Check your connection and retry.",
+    ErrorMessageKey.GENERIC to "Permission denied.", // web 403 fallback; see note re per-call fallback
+    ErrorMessageKey.OFFLINE to "Network error — check your connection and try again.",
     ErrorMessageKey.PARSE to "We received an unexpected response. Please try again.",
-    ErrorMessageKey.ROLE_REQUIRED to "You don't have permission to access this.",
-    ErrorMessageKey.GEO_BLOCKED to "This content isn't available in your region.",
-    ErrorMessageKey.HELPDESK_LOCKED to "Your account is locked. Contact the help desk.",
-    ErrorMessageKey.HELPDESK_REVIEW to "Your account is under review. Contact the help desk.",
-    ErrorMessageKey.HELPDESK_CONTACT to "Please contact the help desk to continue.",
+    ErrorMessageKey.ROLE_REQUIRED to
+        "You don't currently have permission for this action. Request temporary elevation or contact a general admin/root operator.",
+    ErrorMessageKey.ROLE_REQUIRED_SCOPE to
+        // {scope} is humanized from required_scope, e.g. "billing support"
+        "You don't currently have %1\$s permission for this action. Request temporary elevation or ask a general admin/root operator to perform it.",
+    ErrorMessageKey.ROLE_REQUIRED_ADMIN_PROFILE to
+        "This action requires general admin access. Request temporary elevation or ask a general admin/root operator to perform it.",
+    ErrorMessageKey.GEO_BLOCKED to "This content is not available in your region.",
+    ErrorMessageKey.HELPDESK_CLAIM_REQUIRED to "Claim this helpdesk conversation before replying.",
+    ErrorMessageKey.HELPDESK_ASSIGNEE_REQUIRED to
+        "Only the currently assigned helpdesk agent can reply in this conversation.",
+    ErrorMessageKey.HELPDESK_CLAIM_NOT_AVAILABLE to
+        "You need to be online and available before you can claim and reply.",
 )
 
 fun NormalizedMessage.resolveWith(strings: Map<ErrorMessageKey, String>): String = when (this) {
@@ -372,32 +422,50 @@ This ticket consumes error response **bodies** rather than defining endpoints. T
 ] }
 ```
 → `ErrorDetail.Validation([ValidationItem(msg="field required", ...)])` → message
-`"field required"`.
+`"field required"`. Multiple items join with `", "` (per verified web `messages.join(", ")`).
+Note: `loc` items are `string | integer` in the `ValidationError` schema; the Kotlin model
+stringifies them (`ValidationItem.loc: List<String>`).
 
 **Shape C — coded object** (app auth/business errors):
 
 ```json
-{ "detail": { "code": "role_required", "message": "Manager role required", "required_role": "manager" } }
+{ "detail": { "code": "role_required", "required_scope": "billing_support" } }
 ```
-→ `ErrorDetail.Coded(code="role_required", message="Manager role required",
-extra={required_role=manager})` → mapped message for `ROLE_REQUIRED`
-(`"You don't have permission to access this."`, the code map wins over the backend `message`).
+→ `ErrorDetail.Coded(code="role_required", message=null, extra={required_scope=billing_support})`
+→ mapped message for `ROLE_REQUIRED`
+(`"You don't currently have permission for this action. Request temporary elevation or contact a
+general admin/root operator."`). **CORRECTED:** the original draft used a fabricated
+`"Manager role required"` body and the wrong target string; the verified web copy is in
+`src/api/client.ts: mapAuthorizationError`. When the code is `role_required_scope`, the web
+humanizes `required_scope` into the message (`ROLE_REQUIRED_SCOPE`, `%1$s` = humanized scope).
+For a known code, the client copy wins over any backend `message`.
 
 ```json
-{ "detail": { "code": "geo_blocked", "country": "XX" } }
+{ "detail": { "code": "geo_blocked", "message": "...", "country": "XX" } }
 ```
-→ `ErrorDetail.Coded("geo_blocked", null, {country=XX})` → `"This content isn't available in
-your region."`
+→ `ErrorDetail.Coded("geo_blocked", message=<backend or null>, {country=XX})`.
+**CORRECTED:** `geo_blocked` is **not** in the auth-code map. The web handles it on a dedicated
+403 branch that prefers the **backend `message`**, falling back to
+`"This content is not available in your region."` (apostrophe/wording corrected from the draft's
+`"isn't"`/`"your region"`). Port: prefer `Coded.message`, else `GEO_BLOCKED` key. The `country`
+field is retained in `extra` for a GeoBlocked screen (web stores `window.__geoBlocked`).
 
 ```json
-{ "detail": { "code": "helpdesk_locked" } }
+{ "detail": { "code": "helpdesk_claim_required" } }
 ```
-→ `HELPDESK_LOCKED`; any `helpdesk_*` not explicitly mapped → `HELPDESK_CONTACT`.
+→ `HELPDESK_CLAIM_REQUIRED`. **CORRECTED:** the real helpdesk codes are
+`helpdesk_claim_required`, `helpdesk_assignee_required`, `helpdesk_claim_not_available` (the
+draft's `helpdesk_locked`/`helpdesk_review`/`helpdesk_contact` do not exist in the web). There is
+**no** `helpdesk_*` prefix fallback; an unmapped helpdesk code degrades to the caller fallback.
 
-These bodies arise from the auth flow endpoints (`POST /ui/session/start`,
-`/ui/mfa/{totp|sms|email}/verify`, `POST /ui/session/finalize`, `GET /ui/me`) but the parser is
-endpoint-agnostic. Authoritative code/message text is cross-checked against
-`frontend/src/api/types.ts` and the web `normalizeErrorDetail` map.
+These bodies arise from auth/business endpoints (e.g. `POST /ui/session/start`,
+`POST /ui/mfa/totp/verify`, `POST /ui/mfa/sms/verify`, `POST /ui/mfa/email/verify`,
+`POST /ui/session/finalize`, `GET /ui/me` — all VERIFIED in the OpenAPI index; note these are
+three distinct verify paths, not a single `{totp|sms|email}` route) but the parser is
+endpoint-agnostic. The `422` validation envelope (Shape B) is the documented
+`HTTPValidationError`/`ValidationError` schema; coded `detail` objects (Shape C) are **runtime**
+responses not present in the OpenAPI schema, so their authoritative source is
+`src/api/client.ts` (not `types.ts`, which has no `ApiError`/`ErrorDetail` type).
 
 ## 6. Data & State Management
 
@@ -450,10 +518,11 @@ The whole ticket is error handling, but it must itself be failure-proof:
 - **All user-facing strings are localizable.** Every `ErrorMessageKey` maps to a string resource
   in `core-ui` (or `core-model`'s resources if it carries an Android resource module). The
   `DefaultErrorStrings` table in §4.3 is the canonical English source and must be mirrored in
-  `res/values/strings.xml`:
+  `res/values/strings.xml` (keys CORRECTED to match the verified web codes):
   `error_generic`, `error_offline`, `error_unexpected`, `error_role_required`,
-  `error_geo_blocked`, `error_helpdesk_locked`, `error_helpdesk_review`,
-  `error_helpdesk_generic`.
+  `error_role_required_scope` (with a `%1$s` scope placeholder), `error_role_required_admin_profile`,
+  `error_geo_blocked`, `error_helpdesk_claim_required`, `error_helpdesk_assignee_required`,
+  `error_helpdesk_claim_not_available`.
 - **Backend literal strings** (Shapes A/B) are passed through as-is and are **not** translatable on
   the client; this is a known limitation noted for product (Q-2).
 - **Accessibility:** these strings are surfaced by UI tickets via standard Compose `Text` /
@@ -482,19 +551,24 @@ All tests are JVM unit tests in `core-model/src/test/...` (pure mapping) and
 `ErrorDetail.Message("Invalid challenge")`; `userMessage == "Invalid challenge"`.
 
 **T-2 (acceptance) — validation array.** A 422 body decodes to `Validation` with one item;
-`normalizeErrorDetail` → literal `"field required"`. Multi-item joins with `"; "`.
+`normalizeErrorDetail` → literal `"field required"`. Multi-item joins with `", "` (CORRECTED).
 
 **T-3 (acceptance) — coded `role_required`.** Shape C decodes to `Coded("role_required", ...)`;
-`userMessage` (resolved via `DefaultErrorStrings`) equals
-`"You don't have permission to access this."`, asserting the code map overrides backend `message`.
+`userMessage` (resolved via `DefaultErrorStrings`) equals the verified web copy
+`"You don't currently have permission for this action. Request temporary elevation or contact a
+general admin/root operator."`, asserting the code map wins over backend `message`.
 
-**T-4 (acceptance) — `geo_blocked`.** → `"This content isn't available in your region."`
+**T-4 (acceptance) — `geo_blocked`.** With a backend `message`, `userMessage` == that message;
+without one → `"This content is not available in your region."` (CORRECTED text + behavior).
 
-**T-5 (acceptance) — helpdesk family.** `helpdesk_locked` → `HELPDESK_LOCKED` string;
-`helpdesk_review` → review string; an unmapped `helpdesk_xyz` → `HELPDESK_CONTACT` string.
+**T-5 (acceptance) — helpdesk family.** `helpdesk_claim_required` → claim-required copy;
+`helpdesk_assignee_required` → assignee copy; `helpdesk_claim_not_available` → availability copy;
+an unmapped `helpdesk_xyz` → caller fallback (`GENERIC`), since there is no prefix fallback
+(CORRECTED).
 
-**T-6 — unknown code fallback.** `Coded("widget_exploded", message="boom")` → literal `"boom"`;
-`Coded("widget_exploded", message=null)` → `GENERIC` string.
+**T-6 — unknown code fallback.** `Coded("widget_exploded", message="boom")` → `GENERIC` string
+(CORRECTED: the web does NOT surface a coded object's `message` for arbitrary codes; only
+`geo_blocked` uses its `message`). `Coded("widget_exploded", message=null)` → `GENERIC`.
 
 **T-7 — malformed / empty bodies are total.** `parseDetail(null)`, `parseDetail("")`,
 `parseDetail("not json")`, `parseDetail("<html>502</html>")`, `parseDetail("""{"detail":42}""")`,
@@ -557,8 +631,11 @@ parallel with step 2.
   design), matching the web `normalizeErrorDetail` behavior.
 - **Q-2 (open)** Should backend free-form strings (Shape A/B) be localized client-side? *Proposed:*
   no for v1; pass through and track if QA finds untranslated strings.
-- **Q-3 (open)** Confirm the exact helpdesk code set and any `geo_blocked`/`role_required` extra
-  fields from `/openapi.json`; fold the authoritative list into `mapAuthCode` before merge.
+- **Q-3 (RESOLVED via review)** The coded `detail` objects (`role_required*`, `geo_blocked`,
+  `helpdesk_*`) are **runtime** responses and are **not** present in `/openapi.json` (verified: a
+  grep of the OpenAPI spec finds none of these codes). The authoritative set is therefore
+  `src/api/client.ts: mapAuthorizationError` + the 403 geo branch, now folded into `mapAuthCode`
+  and §5. If the backend later adds a documented error-code schema, reconcile then.
 
 ## 14. Acceptance Criteria
 
@@ -595,10 +672,187 @@ parallel with step 2.
 - `strings.xml` entries for all eight `ErrorMessageKey`s are added (English values matching
   `DefaultErrorStrings`); the key→string parity test passes.
 - Tests T-1 through T-11 implemented and green in CI; coverage on the new surface ≥95%.
-- Message text and code map cross-checked against `frontend/src/api/types.ts` and the web
-  `normalizeErrorDetail`; the authoritative helpdesk code set confirmed from `/openapi.json`
-  (Q-3 resolved or explicitly deferred with a follow-up).
+- Message text and code map cross-checked against `src/api/client.ts` (`normalizeErrorDetail` +
+  `mapAuthorizationError` + the 403 geo path), not `types.ts`; the helpdesk/role/geo code set is
+  confirmed from `client.ts` (NOT `/openapi.json`, which omits these runtime codes — Q-3 resolved).
 - `./gradlew :core-model:testDebugUnitTest :core-network:testDebugUnitTest` passes locally and in
   CI with no new lint/detekt violations (AND-005 config).
 - Code reviewed and merged to `android-port`; AND-018 (`ApiResult<T>`) and AND-013 (401 handling)
   are unblocked — they can construct/embed `ApiError` and branch on its `status`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer. "OpenAPI" pointers are
+`METHOD /path` / schema names from `reference/openapi.index.txt` + `openapi.pretty.json`;
+frontend pointers are `src/...` paths under `reference/src/`.
+
+1. **FastAPI 422 validation envelope is `{"detail":[{loc,msg,type}]}`.** VERIFIED.
+   OpenAPI schema `HTTPValidationError` (`detail: array<ValidationError>`) and `ValidationError`
+   (`loc: array<string|integer>`, `msg: string`, `type: string`; all required). Endpoints carry
+   `resp=...;422:HTTPValidationError`.
+2. **`loc` items are `string | integer`, modeled as `List<String>`.** VERIFIED (schema) /
+   Corrected note added in §5 (the draft modeled only strings; stringification is the chosen port).
+3. **Auth endpoints exist: `POST /ui/session/start`, `POST /ui/session/finalize`, `GET /ui/me`,
+   and three verify routes `POST /ui/mfa/totp/verify`, `/ui/mfa/sms/verify`, `/ui/mfa/email/verify`.**
+   VERIFIED. OpenAPI index `POST /ui/session/start` (`req=UiSessionStartReq`,
+   `resp=200:UiSessionStartResp;422:HTTPValidationError`), `POST /ui/session/finalize`
+   (`req=UiSessionFinalizeReq`), `GET /ui/me`, `POST /ui/mfa/totp/verify` (`TotpVerifyReq`),
+   `POST /ui/mfa/sms/verify` (`SmsVerifyReq`), `POST /ui/mfa/email/verify` (`EmailVerifyReq`).
+   CORRECTED: the draft wrote a single `/ui/mfa/{totp|sms|email}/verify` route.
+4. **`normalizeErrorDetail` collapses string / array / object detail.** VERIFIED.
+   `src/api/client.ts: normalizeErrorDetail` (string→itself; array→map each item's `msg`,
+   `filter(Boolean)`, `join(", ")`; object→`mapAuthorizationError` then `{msg}` fallback else the
+   passed `fallback`).
+5. **Validation array joins with `", "` over ALL items.** CORRECTED (was `"; "`, first-only).
+   `src/api/client.ts: normalizeErrorDetail` → `messages.join(", ")`.
+6. **Auth code map keys.** CORRECTED. `src/api/client.ts: mapAuthorizationError` defines exactly:
+   `role_required_scope`, `role_required_admin_profile_type`, `role_required`,
+   `helpdesk_claim_required`, `helpdesk_assignee_required`, `helpdesk_claim_not_available`. The
+   draft's `helpdesk_locked`/`helpdesk_review`/`helpdesk_contact` and a `helpdesk_*` prefix
+   fallback do not exist.
+7. **`role_required` message text.** CORRECTED. `src/api/client.ts: mapAuthorizationError`:
+   "You don't currently have permission for this action. Request temporary elevation or contact a
+   general admin/root operator." (draft had "You don't have permission to access this.")
+8. **`geo_blocked` handling.** CORRECTED. `src/api/client.ts` 403 branch (the `rawDetail.code ===
+   "geo_blocked"` block): NOT in the auth-code map; prefers backend `message`, fallback
+   "This content is not available in your region.", and stashes the detail for a GeoBlocked screen.
+   Draft had it in the code map with text "This content isn't available in your region."
+9. **Unmapped coded objects do NOT use their `message` field as a generic fallback.** CORRECTED.
+   `src/api/client.ts: normalizeErrorDetail` only has a `{msg}` (validation-style) object fallback
+   and otherwise returns the caller `fallback`; there is no `{code,message}` → `message` path.
+10. **Network/transport error → status 0.** VERIFIED. `src/api/client.ts` catch block:
+    `throw new ApiError(0, "Network error", err)` with toast "Network error — check your
+    connection and try again". (Android adds a `STATUS_PARSE = -1` sentinel — see assumptions.)
+11. **401 handling reads `detail` via `normalizeErrorDetail` with fallback "Authentication
+    required".** VERIFIED. `src/api/client.ts` 401 branch. (AND-013 owns the refresh retry; this
+    ticket only sets `status=401`.)
+12. **The web `ApiError` carries `(status: number, detail: string, body?: unknown)` and lives in
+    `client.ts`, not `types.ts`.** VERIFIED/CORRECTED. `src/api/client.ts: class ApiError`;
+    `src/api/types.ts` has no `ApiError`/`ErrorDetail` export (the draft mis-cited `types.ts`).
+13. **Coded `detail` codes are absent from `/openapi.json`.** VERIFIED (negative). A grep of
+    `openapi.pretty.json` for `role_required|geo_blocked|helpdesk_*` returns no hits — they are
+    runtime-only. Resolves Q-3.
+14. **Moshi `Any?` decoding of `detail` distinguishes the union (String/List/Map/Double).**
+    UNVERIFIED-ASSUMPTION (framework ref). Standard Moshi behavior for `Any`; not provable from
+    these sources. See Open assumptions.
+15. **Kotlin/Moshi/Retrofit/OkHttp/AGP/Gradle/JDK pins.** UNVERIFIED-ASSUMPTION here (inherited
+    from AND-010); not re-checked against build files in this review (out of scope for this ticket's
+    sources). Treat as AND-010's responsibility.
+
+### Corrections made
+
+- §2: web error types live in `src/api/client.ts` (class `ApiError`, `normalizeErrorDetail`,
+  `mapAuthorizationError`), not `types.ts`.
+- §4.2: replaced fabricated `helpdesk_locked/review/contact` codes and generic `geo_blocked`
+  mapping with the verified six-code map; removed the nonexistent `helpdesk_*` prefix fallback;
+  added `role_required_scope` / `role_required_admin_profile_type`.
+- §4.3: validation join corrected to `", "` over all items; coded fallback corrected so only
+  `geo_blocked` consumes a backend `message`; `DefaultErrorStrings` updated to verbatim web copy.
+- §5: corrected Shape C examples (role_required body/text, geo_blocked message-first behavior,
+  real helpdesk codes), the MFA path notation (three distinct verify routes), and the source
+  citation (client.ts vs types.ts; coded objects absent from OpenAPI).
+- FR-4 / FR-5: corrected join behavior, coded fallback, and the code set.
+- §9: corrected `strings.xml` key list to match the new keys.
+- §11: T-2/T-3/T-4/T-5/T-6 expectations corrected to verified strings/behavior.
+- §13 Q-3 and §15 DoD: corrected the authoritative source (client.ts, not `/openapi.json`).
+
+### Open assumptions
+
+- **OFFLINE / PARSE / GENERIC default copy** (`error_offline`, `error_unexpected`,
+  `error_generic`): UNVERIFIED. The web has no exact one-to-one resource; `OFFLINE` mirrors the web
+  toast text, but `PARSE` ("We received an unexpected response…") and the `GENERIC` default are
+  client-authored. `GENERIC` stands in for the web's *per-call* `fallback` argument
+  (`res.statusText` / "Permission denied" / "Authentication required"), which Android cannot
+  reproduce 1:1 since it normalizes lazily — product sign-off on a single generic string is needed.
+- **`STATUS_PARSE = -1` sentinel and the `JsonDataException` → PARSE classification:** Android-only;
+  the web has no parse-sentinel (it does `res.json().catch(() => null)` and normalizes). Reasonable
+  but unverifiable against the web.
+- **Moshi `Any?` union decoding** (claim 14): relies on Moshi defaults; framework ref only.
+- **`required_scope` humanization** (`auth_support`/`billing_support`/`content_moderation` →
+  friendly text): VERIFIED in `src/api/client.ts: humanizeScope`, but the Android resource form
+  (`%1$s` interpolation) is an assumed implementation detail.
+
+## 17. Test Plan
+
+Test cases for the error model/mapping. JVM unit + MockWebServer contract tests dominate; a couple
+of instrumented/Compose cases verify resource resolution and accessibility at the seam this ticket
+defines (UI rendering itself is owned downstream). Each case traces to §14 AC(s).
+
+- **TC-AND-015-01 — String detail happy path.** Type: unit. Preconditions: `ApiErrorParser` with
+  AND-010 Moshi. Steps: `parseDetail("""{"detail":"Invalid challenge"}""")`; normalize. Expected:
+  `ErrorDetail.Message("Invalid challenge")`; `userMessage == "Invalid challenge"`. Traces: AC-1,
+  AC-3, AC-4.
+- **TC-AND-015-02 — Validation array, single + multi item join.** Type: unit. Preconditions: as
+  above. Steps: parse a 422 `HTTPValidationError` body with one `{loc,msg,type}` item, then a
+  two-item body. Expected: single → literal `"field required"`; multi → both `msg` joined with
+  `", "` (NOT `"; "`); `loc` integers stringified. Traces: AC-1, AC-3, AC-4.
+- **TC-AND-015-03 — Coded `role_required` maps and overrides backend message.** Type: unit.
+  Steps: parse `{"detail":{"code":"role_required","message":"ignored"}}`; resolve via
+  `DefaultErrorStrings`. Expected: equals the verified ROLE_REQUIRED copy ("You don't currently
+  have permission…contact a general admin/root operator."); backend `message` ignored. Traces:
+  AC-1, AC-4, AC-5.
+- **TC-AND-015-04 — Coded `role_required_scope` interpolates humanized scope.** Type: unit. Steps:
+  parse `{"detail":{"code":"role_required_scope","required_scope":"billing_support"}}`. Expected:
+  key `ROLE_REQUIRED_SCOPE`; resolved string contains "billing support" and "Request temporary
+  elevation". Traces: AC-4, AC-5.
+- **TC-AND-015-05 — `geo_blocked` prefers backend message, falls back otherwise.** Type: unit.
+  Steps: (a) `{"detail":{"code":"geo_blocked","message":"Blocked in XX","country":"XX"}}`; (b)
+  same without `message`. Expected: (a) `userMessage == "Blocked in XX"`; (b) == "This content is
+  not available in your region."; `extra["country"] == "XX"` in both. Traces: AC-1, AC-4, AC-5,
+  AC-7.
+- **TC-AND-015-06 — Helpdesk family + no prefix fallback.** Type: unit. Steps: parse each of
+  `helpdesk_claim_required`, `helpdesk_assignee_required`, `helpdesk_claim_not_available`, then an
+  unmapped `helpdesk_unknown`. Expected: first three resolve to their verified copy; the unmapped
+  one → `GENERIC` (no prefix fallback). Traces: AC-4, AC-5.
+- **TC-AND-015-07 — Unknown coded object → generic, message not surfaced.** Type: unit. Steps:
+  `Coded("widget_exploded", message="boom")` and `message=null`. Expected: both → `GENERIC`
+  string (the web never surfaces a `{code,message}` message for arbitrary codes). Traces: AC-4,
+  AC-5.
+- **TC-AND-015-08 — Totality on malformed / hostile bodies.** Type: unit. Preconditions: includes
+  flaky-dev-host shapes. Steps: `parseDetail` over `null`, `""`, `"not json"`,
+  `"<html>502 Bad Gateway</html>"`, `{"detail":42}`, `{"detail":[]}`, `{"detail":{}}`. Expected:
+  each → `ErrorDetail.Empty` (or empty `Validation`) → `GENERIC`; no exception thrown. Traces:
+  AC-3.
+- **TC-AND-015-09 — HttpException extraction via MockWebServer.** Type: contract/MockWebServer.
+  Preconditions: Retrofit pointed at MockWebServer; AND-010 Moshi. Steps: enqueue HTTP 403 with a
+  coded `geo_blocked` body; make a call that throws `retrofit2.HttpException`; run
+  `ApiErrorParser.from(ex)`. Expected: `status == 403`, parsed `Coded("geo_blocked", ...)`, correct
+  `userMessage`, raw `body` captured, `errorBody().string()` read exactly once without
+  `IllegalStateException`. Traces: AC-7.
+- **TC-AND-015-10 — Transport vs parse classification.** Type: unit. Steps:
+  `fromTransport(SocketTimeoutException())`, `fromTransport(UnknownHostException())`,
+  `fromTransport(JsonDataException("x"))`. Expected: first two → `status == 0` + `OFFLINE`; third →
+  `status == -1` + `PARSE`. Traces: AC-6.
+- **TC-AND-015-11 — Flaky-dev-host non-JSON 5xx end to end.** Type: contract/MockWebServer.
+  Preconditions: simulate the unreliable plaintext dev host. Steps: enqueue 502 with an HTML body
+  and `Content-Type: text/html`; trigger `HttpException`; run `from(ex)`. Expected: `status == 502`,
+  `detail == Empty`, `userMessage == GENERIC`; no crash. Traces: AC-3, AC-6.
+- **TC-AND-015-12 — Security: raw body / PII not leaked into user message.** Type: unit. Steps:
+  parse a coded body containing an internal field (e.g. `{"code":"role_required","stack":"..."}`);
+  inspect `userMessage`. Expected: message is the curated ROLE_REQUIRED string only; no `stack`,
+  `body`, or `extra` content appears in `userMessage` (raw kept only in `ApiError.body`). Traces:
+  AC-5, AC-7 (supports §8).
+- **TC-AND-015-13 — Resource parity (key→string + strings.xml).** Type: unit (+ lint-style).
+  Steps: assert every `ErrorMessageKey` has a `DefaultErrorStrings` entry; assert each maps to a
+  declared `R.string.*` id (parity test against `strings.xml`). Expected: no missing keys; the
+  `%1$s` placeholder present for `error_role_required_scope`. Traces: AC-8.
+- **TC-AND-015-14 — Accessibility/i18n of resolved messages (instrumented).** Type:
+  instrumented/Compose-UI. Preconditions: a minimal Compose `Text` rendering a resolved
+  `userMessage`; `Context`-backed resolver. Steps: render ROLE_REQUIRED and GEO_BLOCKED; switch
+  locale; run TalkBack/semantics assertions. Expected: strings resolve from resources (localizable),
+  carry text semantics for screen readers, are full sentences, and contain no raw codes/jargon.
+  Traces: AC-8 (supports §9).
+
+### Coverage matrix
+
+| §14 AC | Covered by |
+| --- | --- |
+| AC-1 (representative bodies → expected messages) | TC-01, TC-02, TC-03, TC-05 |
+| AC-2 (`ApiError` shape + helpers) | TC-09, TC-10 (construct + `isTransport`/`isAuth`/`status`) |
+| AC-3 (union discrimination + totality) | TC-01, TC-02, TC-08, TC-11 |
+| AC-4 (`normalizeErrorDetail` web parity) | TC-01, TC-02, TC-03, TC-05, TC-06, TC-07 |
+| AC-5 (`mapAuthCode` codes + null) | TC-03, TC-04, TC-05, TC-06, TC-07, TC-12 |
+| AC-6 (transport/HTTP/parse classification) | TC-10, TC-11 |
+| AC-7 (`HttpException` extraction + `extra`) | TC-05, TC-09, TC-12 |
+| AC-8 (key/string parity + localizable) | TC-13, TC-14 |
+| AC-9 (all tests green, clean build) | All TC-01…TC-14 (CI gate) |

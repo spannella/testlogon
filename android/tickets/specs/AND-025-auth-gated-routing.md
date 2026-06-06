@@ -5,7 +5,8 @@ milestone: M1
 epic: E03
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-023, AND-024, AND-029]
 blocks: [AND-026, AND-027, AND-028]
 ---
@@ -234,17 +235,24 @@ This ticket performs **no new network calls of its own**; it reacts to state.
 Two existing endpoints are referenced through repositories owned by other
 tickets:
 
-- `GET /ui/me` (AND-029) → drives `AuthState`. Response shape (subset):
+- `GET /ui/me` (AND-029) → drives `AuthState`. **Corrected** response shape
+  (authoritative `MeResp`, frontend `src/api/types.ts: MeResp`):
   ```json
-  { "user_sub": "us-east-2:abc-123", "username": "spannella", "factors": ["totp"] }
+  { "user_sub": "us-east-2:abc-123", "session_id": "sess-...", "ip": "1.2.3.4" }
   ```
-  A `200` resolves `Authenticated(userSub)`; a `401` (after one
-  `/ui/session/refresh` retry) resolves `Unauthenticated`.
+  There is **no** `username` or `factors` field on `/ui/me` (the prior draft
+  invented those). `user_sub` is the only field routing reads, to build
+  `Authenticated(userSub)`. A `200` resolves `Authenticated(userSub)`; a `401`
+  (after one `POST /ui/session/refresh` retry) resolves `Unauthenticated`.
+  (OpenAPI `GET /ui/me` declares an empty `200` schema — a FastAPI dict
+  response — so the frontend `MeResp` is the authoritative field contract.)
 - `POST /ui/session/logout` (AND-028 `SessionRepository.logout()`) — invoked by
   `AuthRoutingViewModel.logout()`. Requires `X-CSRF-Token` header echoing the
-  `ui_csrf` cookie (handled by the core-network interceptor). Request body
-  empty; `204`/`200` expected; on success or network failure the client clears
-  local auth state.
+  `ui_csrf` cookie (verified in `src/api/client.ts`; handled by the
+  core-network interceptor on Android). Request body empty; **success is `200`
+  with body `StatusResp { "status": string }`** (the prior draft's `204` is
+  not a documented response — OpenAPI lists only `200`/`422`). On success or
+  network failure the client clears local auth state.
 
 Error `detail` mapping (`string | [{msg}] | {code,...}`) is handled in
 core-network and surfaces to this layer only as a thrown `ApiResult.Error`,
@@ -395,7 +403,12 @@ navigation correctly (tested)") maps directly to the transition-matrix tests.
   *Open question for AND-026.*
 - **R4 — expiry reason inference:** distinguishing user logout from interceptor
   expiry for telemetry requires a signal from core-network (e.g., a
-  `clear(reason)` overload). *Open:* does AND-028 expose a reason?
+  `clear(reason)` overload). *Precedent:* the web reference already passes a
+  reason on the expiry path — `useAuthStore.getState().logout("session_expired")`
+  in `src/api/client.ts` (fired when the post-refresh retry still returns 401).
+  The Android core-network interceptor (AND-028) should mirror this with a
+  `clear(reason)`/`logout(reason)` overload. *Open:* confirm AND-028 surfaces
+  the reason enum to this layer.
 - **R5 — graph contribution shape:** assumes AND-023/024 expose
   `NavGraphBuilder` extension functions rather than self-contained `NavHost`s.
   Confirm the integration contract with those tickets.
@@ -445,3 +458,280 @@ the suite encodes the backlog AC "auth state changes drive navigation correctly
 - PR description links AND-023/AND-024/AND-029 and notes the stubbed paths (if
   AND-028 not merged) plus the resolution of open questions R1 and R4.
 - Reviewed by a code owner of `:app` navigation; merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with a VERDICT and an exact SOURCE pointer.
+
+1. **`GET /ui/me` is the endpoint that resolves identity / auth state.**
+   VERDICT: Verified. SOURCE: OpenAPI `GET /ui/me` (op `ui_me_ui_me_get`);
+   frontend `src/api/endpoints/auth.ts: getMe` (`api.get<MeResp>("/ui/me")`).
+2. **`/ui/me` response shape.** Claim (original draft): `{ user_sub, username,
+   factors }`. VERDICT: Corrected → `MeResp = { user_sub, session_id, ip }`.
+   SOURCE: `src/api/types.ts: MeResp` (lines 31-35). OpenAPI `GET /ui/me` 200
+   declares an empty `{}` schema (FastAPI dict), so the frontend type is the
+   authoritative field contract. `username`/`factors` do not exist on this
+   endpoint.
+3. **A 200 from `/ui/me` ⇒ Authenticated; a 401 (after refresh) ⇒
+   Unauthenticated.** VERDICT: Verified. SOURCE: `src/api/client.ts` 401 branch
+   — on a still-401 after the single refresh retry it calls
+   `useAuthStore.getState().logout("session_expired")` (lines 223-225).
+4. **On 401 the client performs exactly one `POST /ui/session/refresh` then
+   retries the original request once.** VERDICT: Verified. SOURCE:
+   `src/api/client.ts: refreshSession` (`POST /ui/session/refresh`, lines
+   121-130) and the single-flight `refreshPromise` + single retry (lines
+   204-237). OpenAPI `POST /ui/session/refresh` (op
+   `ui_session_refresh_ui_session_refresh_post`, resp 200).
+5. **Logout endpoint is `POST /ui/session/logout`, empty request body.**
+   VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/logout` (`req=` empty,
+   resp `200`/`422`); frontend `src/api/endpoints/auth.ts: logout`
+   (`api.post<StatusResp>("/ui/session/logout")`, no body).
+6. **Logout success status / body.** Claim (original draft): `204`/`200`.
+   VERDICT: Corrected → `200` only, body `StatusResp { status: string }`.
+   SOURCE: OpenAPI `POST /ui/session/logout` lists only `200`/`422` (no `204`);
+   `src/api/types.ts: StatusResp` (lines 2844-2846); return type
+   `api.post<StatusResp>` in `auth.ts: logout`.
+7. **CSRF: the `ui_csrf` cookie value is echoed in the `X-CSRF-Token` header on
+   mutating requests.** VERDICT: Verified. SOURCE: `src/api/client.ts` —
+   `const csrf = getCookie("ui_csrf"); headers.set("X-CSRF-Token", csrf)`
+   (lines 167-171); requests use `credentials: "include"` (cookie session).
+8. **Error `detail` may be a `string`, an array of `{msg}` items, or an object
+   with a `code`.** VERDICT: Verified. SOURCE: `src/api/client.ts`
+   `normalizeErrorDetail` (array-of-`{msg}` handling lines 70-88; object/`code`
+   handling lines 89-100); object-`code` geo path lines 244-250. OpenAPI
+   `HTTPValidationError = { detail: ValidationError[] }`, each `ValidationError`
+   carrying `msg`/`loc`/`type` (components.schemas.HTTPValidationError, line
+   37133).
+9. **The session is cookie-based and persists across requests.** VERDICT:
+   Verified (transport-level). SOURCE: every call in `src/api/client.ts` uses
+   `credentials: "include"`; no bearer token is required for `/ui/me` per
+   OpenAPI (no security scheme on the op). NOTE/assumption — see Open
+   assumptions #A1: the *web* client additionally sends an
+   `Authorization: Bearer` header when an `accessToken` is present
+   (`client.ts` lines 157-160); the Android port deliberately models a
+   pure-cookie session. This is an Android design choice, not a contract
+   contradiction.
+10. **Expiry signal exists for telemetry reason inference (R4).** VERDICT:
+    Verified (precedent). SOURCE: `src/api/client.ts: logout("session_expired")`
+    on the post-refresh-401 path (line 225) and in `refreshSession` failure
+    (line 127). Whether AND-028's Android interceptor exposes the same reason
+    enum to this layer is unverified (Open assumptions #A2).
+11. **`AuthState`, `AuthStateStore`, `SessionRepository`, the unauth/auth graph
+    builders, and `getMe()`/DataStore persistence are owned by AND-029 / AND-023
+    / AND-024 / AND-028.** VERDICT: Unverified-assumption (upstream Android
+    tickets, not in the provided sources). These are cross-ticket contracts; see
+    Open assumptions #A3.
+12. **Navigation-Compose with type-safe routes (`@Serializable` destinations,
+    `composable<T>`, `navigation<T>`) and `popUpTo(...) { inclusive = true }`
+    back-stack control.** VERDICT: Verified (framework ref). SOURCE:
+    https://developer.android.com/guide/navigation/design/type-safety and
+    https://developer.android.com/guide/navigation/backstack (popUpTo /
+    launchSingleTop semantics).
+13. **`TestNavHostController` enables JVM/Robolectric navigation assertions.**
+    VERDICT: Verified (framework ref). SOURCE:
+    https://developer.android.com/guide/navigation/navigation-testing
+14. **`collectAsStateWithLifecycle`, `StateFlow.stateIn`, and
+    `SharingStarted.WhileSubscribed` semantics for lifecycle-aware state.**
+    VERDICT: Verified (framework ref). SOURCE:
+    https://developer.android.com/topic/architecture/ui-layer#stateflow and
+    https://developer.android.com/kotlin/flow/stateflow-and-sharedflow
+
+### Corrections made
+
+- **§5, `/ui/me` response shape:** replaced the invented
+  `{ user_sub, username, factors }` example with the authoritative
+  `MeResp = { user_sub, session_id, ip }` (`src/api/types.ts: MeResp`), and
+  noted that only `user_sub` is consumed by routing.
+- **§5, logout response:** corrected `204`/`200` to `200` only with body
+  `StatusResp { status }`; OpenAPI documents no `204` for
+  `POST /ui/session/logout`.
+- **§5 wording:** clarified that `/ui/session/refresh` is a `POST` and that the
+  CSRF echo is verified in `src/api/client.ts`.
+- **§13 R4:** added the verified web-client precedent
+  (`logout("session_expired")`) showing an expiry reason is already plumbed in
+  the reference app, narrowing the open question to AND-028's Android surface.
+
+### Open assumptions
+
+- **A1 — Pure-cookie Android session.** The web client sends both cookies and an
+  optional `Authorization: Bearer` (`client.ts` 157-160). The spec models the
+  Android client as cookie-only. Cannot be confirmed from the provided sources
+  whether the Android backend contract requires a bearer token; treated as an
+  AND-028/core-network design decision.
+- **A2 — Interceptor reason enum (R4).** Whether AND-028 exposes a
+  `clear(reason)`/`logout(reason)` signal to this layer is not present in any
+  provided source (Android tickets not included). Web precedent exists (A10/R4).
+- **A3 — Upstream Android contracts.** `AuthState` sealed interface,
+  `AuthStateStore`, `SessionRepository`, `BootstrapScreen`, and the
+  `NavGraphBuilder.unauthenticatedGraph`/`authenticatedGraph` extension shapes
+  are defined by AND-023/024/028/029, which are not in the reference sources.
+  The spec's R1/R5 already flag the emission-ordering and graph-contribution
+  shape as items to confirm with those tickets.
+- **A4 — Bootstrap/timeout durations (~20s getMe, ~25s bootstrap retry).**
+  Product/UX values with no authoritative source; treated as design defaults.
+
+## 17. Test Plan
+
+Test cases for the routing layer. Types: unit (JVM), contract/MockWebServer,
+integration (Robolectric + `TestNavHostController`), Compose-UI, instrumented/
+e2e, manual. "Traces" links to §14 Acceptance Criteria (AC-1…AC-8).
+
+- **TC-AND-025-01 — Bootstrap shown while state is Unknown.**
+  Type: integration (`TestNavHostController`, Robolectric).
+  Preconditions: fake `AuthStateStore.state` seeded with `AuthState.Unknown`;
+  `AuthGatedNavHost` mounted.
+  Steps: 1) Mount host. 2) Read current destination.
+  Expected: current destination is `TopLevelGraph.Bootstrap`; neither auth nor
+  unauth graph is on the back stack; no `navigate` to Login/Home occurred.
+  Traces: AC-2.
+
+- **TC-AND-025-02 — No login flash for returning authenticated user.**
+  Type: integration.
+  Preconditions: store starts `Unknown`, then emits
+  `Authenticated("us-...")` (simulating cached DataStore resolve).
+  Steps: 1) Mount host (lands on Bootstrap). 2) Emit `Authenticated`. 3) Inspect
+  back stack and the sequence of visited destinations.
+  Expected: host moves Bootstrap → Authenticated graph; `Unauthenticated`/Login
+  was never a current destination at any point.
+  Traces: AC-2.
+
+- **TC-AND-025-03 — Unauthenticated state shows Login, no auth graph on stack.**
+  Type: integration.
+  Preconditions: store emits `Unauthenticated`.
+  Steps: 1) Mount host. 2) Drive state to `Unauthenticated`. 3) Walk back stack.
+  Expected: current top-level destination is the unauthenticated graph (Login
+  start); no entry whose route hierarchy contains `TopLevelGraph.Authenticated`.
+  Traces: AC-1.
+
+- **TC-AND-025-04 — Login→app transition pops unauth graph inclusive.**
+  Type: integration.
+  Preconditions: host on `Unauthenticated` (Login).
+  Steps: 1) Emit `Authenticated("us-...")`. 2) Walk back stack for any
+  `Unauthenticated` route.
+  Expected: current destination is the authenticated graph; back stack contains
+  **no** `TopLevelGraph.Unauthenticated` entry (popUpTo inclusive).
+  Traces: AC-3.
+
+- **TC-AND-025-05 — Logout/expiry transition pops auth graph inclusive.**
+  Type: integration.
+  Preconditions: host on `Authenticated`, possibly deep within the auth graph.
+  Steps: 1) Emit `Unauthenticated`. 2) Walk back stack for any `Authenticated`
+  route.
+  Expected: current destination is the unauthenticated graph (Login); back stack
+  contains **no** `TopLevelGraph.Authenticated` entry; in-flight authenticated
+  screen removed.
+  Traces: AC-4.
+
+- **TC-AND-025-06 — Duplicate identical AuthState emission triggers no extra
+  navigation.**
+  Type: integration (spy/count).
+  Preconditions: host on `Authenticated`; a navigation counter or back-stack
+  snapshot captured.
+  Steps: 1) Re-emit the same `Authenticated("us-...")` value twice. 2) Compare
+  back-stack entry IDs / navigate count before vs. after.
+  Expected: exactly zero additional `navigate` calls (guarded by
+  `distinctUntilChanged` + the `routeTo` hierarchy check); destination unchanged.
+  Traces: AC-6.
+
+- **TC-AND-025-07 — System Back from a graph start destination never crosses the
+  auth boundary.**
+  Type: integration (and a Compose-UI variant).
+  Preconditions: (a) host on auth graph start (Home); (b) host on unauth graph
+  start (Login).
+  Steps: For each, dispatch a system Back.
+  Expected: (a) Back from Home does not surface Login (follows normal Compose
+  exit-at-start-tab behavior); (b) Back from Login does not surface the auth
+  graph. Neither back stack reveals the opposing graph.
+  Traces: AC-5.
+
+- **TC-AND-025-08 — `logout()` clears local state even when the network call
+  fails.**
+  Type: unit (`runTest`, `StandardTestDispatcher`).
+  Preconditions: fake `SessionRepository.logout()` throws (simulating the flaky
+  dev host / offline); fake `AuthStateStore` records `clear()` calls.
+  Steps: 1) Call `viewModel.logout()`. 2) Advance the dispatcher.
+  Expected: `authStateStore.clear()` is invoked exactly once despite the thrown
+  exception; no exception propagates out of `logout()`.
+  Traces: AC-7.
+
+- **TC-AND-025-09 — `logout()` happy path calls repository then clears.**
+  Type: unit.
+  Preconditions: fake `SessionRepository.logout()` succeeds (returns
+  `StatusResp`); fakes record call order.
+  Steps: 1) Call `logout()`. 2) Advance dispatcher.
+  Expected: `sessionRepository.logout()` is called, then
+  `authStateStore.clear()`; resulting store state transition to
+  `Unauthenticated` drives the FR-4 redirect (covered with TC-05).
+  Traces: AC-4, AC-7.
+
+- **TC-AND-025-10 — `routeState` initial value is `Unknown`, then mirrors the
+  store.**
+  Type: unit.
+  Preconditions: fake store backed by `MutableStateFlow`.
+  Steps: 1) Collect `viewModel.routeState`. 2) Push `Unauthenticated`, then
+  `Authenticated`.
+  Expected: first observed value is `AuthState.Unknown` (the `stateIn` initial),
+  then emissions mirror the store in order; a config-change re-subscription does
+  not collapse to a wrong default.
+  Traces: AC-2, AC-8.
+
+- **TC-AND-025-11 — `capturePendingReturnRoute` stores and clears the route.**
+  Type: unit.
+  Preconditions: fresh VM (`pendingReturnRoute == null`).
+  Steps: 1) `capturePendingReturnRoute("home/details/42")`. 2) Read flow.
+  3) `capturePendingReturnRoute(null)`. 4) Read flow.
+  Expected: value becomes `"home/details/42"` then `null`. (FR-7 capture-only;
+  restoration is AND-026.)
+  Traces: AC-8.
+
+- **TC-AND-025-12 — Process-death/restore is idempotent (no double navigation).**
+  Type: integration.
+  Preconditions: host already on `Authenticated`; simulate restore by
+  re-subscribing the effect while the store replays last persisted
+  `Authenticated`.
+  Steps: 1) Re-run the `LaunchedEffect` collection. 2) Inspect navigate count.
+  Expected: `routeTo` no-ops (hierarchy guard) — zero additional navigations;
+  destination unchanged.
+  Traces: AC-6, AC-8.
+
+- **TC-AND-025-13 — Expiry path: post-refresh 401 drives Login redirect (offline/
+  flaky-host).**
+  Type: contract/MockWebServer (core-network seam) + integration.
+  Preconditions: MockWebServer scripted to return `401` for an authenticated
+  call, `200`/failure for the single `POST /ui/session/refresh`, then `401`
+  again on retry; store wired to the interceptor.
+  Steps: 1) Trigger an authenticated request. 2) Let the single refresh+retry
+  run. 3) Observe store state and routing.
+  Expected: exactly one `POST /ui/session/refresh` is issued (assert request
+  count on MockWebServer); a still-401 flips state to `Unauthenticated`; routing
+  redirects to Login and pops the auth graph inclusive. No retry loop.
+  Traces: AC-4.
+
+- **TC-AND-025-14 — Bootstrap timeout shows retry; security: no PII/secret
+  logged; a11y of BootstrapScreen.**
+  Type: Compose-UI + manual review.
+  Preconditions: `refreshFromBackend()` left unresolved past the bootstrap
+  timeout; Timber/test tree capturing logs.
+  Steps: 1) Mount host, keep state `Unknown` past timeout. 2) Assert retry
+  affordance appears and re-invokes `refreshFromBackend()`. 3) Assert the
+  `CircularProgressIndicator` exposes the localized `contentDescription` and the
+  retry transition posts a polite live-region announcement. 4) Inspect captured
+  logs.
+  Expected: "Couldn't reach server — Retry" action present and functional;
+  bootstrap strings come from `strings.xml` (no hardcoded literals); logs
+  contain **no** `user_sub`, cookie, or CSRF value (only `AuthState` type
+  names); progress + retry are TalkBack-accessible.
+  Traces: AC-2 (security/a11y of the bootstrap gate); supports AC-8 coverage gate.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (Unauthenticated ⇒ Login, no auth graph on stack) | TC-03 |
+| AC-2 (Unknown ⇒ Bootstrap, no login flash) | TC-01, TC-02, TC-10, TC-14 |
+| AC-3 (Login→app pops unauth inclusive) | TC-04 |
+| AC-4 (Auth→Unauth: logout/expiry/post-refresh-401 pops auth inclusive) | TC-05, TC-09, TC-13 |
+| AC-5 (Back never crosses auth boundary) | TC-07 |
+| AC-6 (Duplicate emission ⇒ no extra navigation) | TC-06, TC-12 |
+| AC-7 (`logout()` clears local state on network failure) | TC-08, TC-09 |
+| AC-8 (100% branch coverage of transition/`routeTo` logic; backlog AC) | TC-10, TC-11, TC-12, TC-14 |

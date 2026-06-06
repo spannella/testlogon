@@ -5,7 +5,8 @@ milestone: M1
 epic: E03
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-003]
 blocks: [AND-020, AND-021, AND-022, AND-023]
 ---
@@ -52,9 +53,17 @@ foundation to build on.
 - **Edge-to-edge:** `targetSdk` 35 forces edge-to-edge by default; theme must
   cooperate via `enableEdgeToEdge()` (called by the single Activity, AND owned by
   the app shell ticket) and transparent system bars driven by theme darkness.
-- **Web reference:** `frontend/` uses its own design tokens; there is no
-  requirement for pixel parity. Brand colors below are seed values for the static
-  scheme and may be refined by design later without changing this contract.
+- **Web reference:** `frontend/` uses its own design tokens (shadcn/ui + Tailwind
+  HSL variables); there is no requirement for pixel parity. Brand colors below are
+  seed values for the static scheme and may be refined by design later without
+  changing this contract. Note (verified): the web app actually persists a
+  three-way theme **mode** (`"light" | "dark" | "system"`) plus accent color,
+  font scale, density, and high-contrast server-side via `GET/PATCH/PUT/DELETE
+  /ui/theme` (`ThemeConfigResponse` → `ThemeConfig`), and applies the `system`
+  case reactively through `matchMedia("(prefers-color-scheme: dark)")` (see
+  `src/components/ThemeProvider.tsx`). This Android ticket deliberately implements
+  only the OS-following case (`isSystemInDarkTheme()`); mirroring the persisted
+  `/ui/theme` `mode` preference is a separate future ticket (see §6, §13).
 - **Downstream consumers (blocks):** AND-020+ core-ui components, `feature-*`
   screens, and the single-Activity app shell all depend on `TestLogonTheme`.
 
@@ -278,9 +287,12 @@ No persistent or networked data is introduced. The theme has exactly two inputs:
 
 - **`darkTheme: Boolean`** — defaults to `isSystemInDarkTheme()`, a Compose-level
   read of the OS night-mode `Configuration`. The app does not store a per-user
-  light/dark override in this ticket; an in-app theme preference (DataStore-backed)
-  is explicitly out of scope and, if desired later, is a separate ticket that
-  would pass an override into `darkTheme`.
+  light/dark override in this ticket; an in-app theme preference is explicitly out
+  of scope and, if desired later, is a separate ticket that would pass an override
+  into `darkTheme`. (Verified: the web reference persists this as `ThemeConfig.mode`
+  = `"light" | "dark" | "system"` via `/ui/theme`; a future Android override ticket
+  should mirror that field rather than invent a new contract, and would likely back
+  the override with DataStore and/or the `/ui/theme` endpoint.)
 - **`dynamicColor: Boolean`** — compile-time default `true`, gated at runtime by
   `Build.VERSION.SDK_INT`.
 
@@ -446,8 +458,13 @@ Tests run under the existing CI build (AND-008) via the standard
   (default `true`)?* Spec defaults to `true` per the scope's "dynamic color"
   requirement; flip the default if product disagrees.
 - **In-app theme override.** No user-facing light/dark toggle is delivered. If
-  product wants one, it is a follow-up ticket adding a DataStore preference fed
-  into `darkTheme`.
+  product wants one, it is a follow-up ticket adding a preference fed into
+  `darkTheme`. To stay contract-compatible with the web client, that ticket should
+  mirror the existing backend `ThemeConfig.mode` (`"light" | "dark" | "system"`)
+  exposed by `GET/PATCH/PUT/DELETE /ui/theme`, rather than a bespoke local-only
+  enum. (The web app also persists accent color, font scale, density, and
+  high-contrast via the same endpoint; those are out of scope for the Android M3
+  theme ticket and would be further follow-ups.)
 - **Activity cast assumption.** `ApplySystemBarAppearance` assumes the host
   context is an `Activity`. Safe for the single-Activity architecture but would
   break if the theme were ever hosted in a non-Activity context (e.g., a custom
@@ -489,3 +506,320 @@ Tests run under the existing CI build (AND-008) via the standard
 - No new permissions, no telemetry, no user-facing strings added.
 - Brief KDoc on `TestLogonTheme` documenting the `darkTheme`/`dynamicColor`
   parameters and the API-31 dynamic-color gate.
+
+## 16. Citations & Assumption Audit
+
+This is a pure `core-ui` design-system ticket: it makes **no** network calls, so
+most claims are framework references (Android/Compose docs) rather than backend
+contract claims. Backend/frontend sources were still checked for the spec's claims
+about the web reference's theming behavior, since the spec asserts things about it.
+
+1. **Claim:** "AND-019 makes no network calls; there is no FastAPI endpoint,
+   request, or response shape associated with it" (§5).
+   **VERDICT:** Verified. The ticket's deliverables (`TestLogonTheme`, color/type/
+   shape definitions) are UI-only. There is no theming-related endpoint *consumed
+   by this ticket*. (Backend theming endpoints exist but are not in this ticket's
+   scope — see claim 2.)
+   **SOURCE:** Ticket scope `specs-src/AND-019.md`; absence of any endpoint call
+   in the deliverable design (§4).
+
+2. **Claim (added in review):** "The web reference persists a three-way theme
+   `mode` plus accent/font/density/high-contrast server-side" (§2, §6, §13).
+   **VERDICT:** Verified.
+   **SOURCE:** OpenAPI `GET /ui/theme`, `PATCH /ui/theme`, `PUT /ui/theme`,
+   `DELETE /ui/theme` (all `resp=200:ThemeConfigResponse`); schema
+   `components.schemas.ThemeConfigResponse` / `ThemeConfig`;
+   `src/api/endpoints/themeCustomization.ts: getThemeCustomization / patchThemeCustomization / resetThemeCustomization`;
+   `src/api/types.ts: ThemeConfig` (fields `mode`, `accent_color`,
+   `custom_accent_hex`, `font_scale`, `density`, `preset`, `high_contrast`) and
+   `ThemeMode = "light" | "dark" | "system"`.
+
+3. **Claim (added in review):** "The web app applies the `system` theme case
+   reactively via `matchMedia('(prefers-color-scheme: dark)')`."
+   **VERDICT:** Verified.
+   **SOURCE:** `src/components/ThemeProvider.tsx` (the dark/light `useEffect`
+   toggles the `dark` class on `<html>` and, for `theme === "system"`, subscribes
+   to `window.matchMedia("(prefers-color-scheme: dark)")`). The Android analogue
+   is `isSystemInDarkTheme()` (framework ref).
+
+4. **Claim:** "Web app has an Appearance settings screen offering System / Light /
+   Dark."
+   **VERDICT:** Verified.
+   **SOURCE:** `src/pages/settings/Appearance.tsx` (`THEMES` array with values
+   `system | light | dark`, `setTheme` from `uiStore`).
+
+5. **Claim:** "`/ui/theme` requires a UI session and CSRF for non-GET cookie
+   requests."
+   **VERDICT:** Verified (as the web client's documented behavior).
+   **SOURCE:** `src/api/endpoints/themeCustomization.ts` header comment
+   ("Backend: /ui/theme (require_ui_session; CSRF for non-GET cookie requests)").
+   Not exercised by this Android ticket; relevant only to the future override
+   ticket noted in §6/§13.
+
+6. **Claim:** "Dynamic color requires Android 12 (API 31, `Build.VERSION_CODES.S`);
+   `dynamicLightColorScheme(context)` / `dynamicDarkColorScheme(context)` are used
+   only when `SDK_INT >= 31`, else static schemes; `minSdk` 24 makes the gate
+   mandatory" (§2, §3 FR-3, §7).
+   **VERDICT:** Verified (framework ref).
+   **SOURCE:** framework ref — Android Material 3 Compose dynamic color API
+   (`androidx.compose.material3.dynamicLightColorScheme` /
+   `dynamicDarkColorScheme`, available API 31+):
+   https://developer.android.com/develop/ui/compose/designsystems/material3#dynamic .
+
+7. **Claim:** "`darkTheme` defaults to `isSystemInDarkTheme()` and recomposes on OS
+   night-mode change without manual subscription" (§3 FR-4, §6).
+   **VERDICT:** Verified (framework ref).
+   **SOURCE:** framework ref — `androidx.compose.foundation.isSystemInDarkTheme`:
+   https://developer.android.com/reference/kotlin/androidx/compose/foundation/package-summary#isSystemInDarkTheme() .
+
+8. **Claim:** "System-bar icon appearance is driven via
+   `WindowCompat.getInsetsController(window, view)` setting
+   `isAppearanceLightStatusBars` / `isAppearanceLightNavigationBars`; this path is
+   non-deprecated and works API 24+" (§4, §3 FR-7).
+   **VERDICT:** Verified (framework ref).
+   **SOURCE:** framework ref — `androidx.core.view.WindowCompat` /
+   `WindowInsetsControllerCompat`:
+   https://developer.android.com/reference/androidx/core/view/WindowInsetsControllerCompat .
+
+9. **Claim:** "`targetSdk` 35 forces edge-to-edge by default; the Activity calls
+   `enableEdgeToEdge()`" (§2).
+   **VERDICT:** Verified (framework ref). `enableEdgeToEdge()` ownership is
+   correctly placed in the app-shell Activity, not this ticket.
+   **SOURCE:** framework ref — Android 15 edge-to-edge enforcement and
+   `enableEdgeToEdge`:
+   https://developer.android.com/develop/ui/views/layout/edge-to-edge .
+
+10. **Claim:** "M3 `Shapes` roles are `extraSmall`/`small`/`medium`/`large`/
+    `extraLarge`; the spec sets 4/8/12/16/28 dp" (§3 FR-6, §4).
+    **VERDICT:** Verified (framework ref). The role *names* are the real M3 shape
+    roles; the dp values are an intentional project choice (and happen to match the
+    M3 default scale).
+    **SOURCE:** framework ref — `androidx.compose.material3.Shapes`:
+    https://developer.android.com/reference/kotlin/androidx/compose/material3/Shapes .
+
+11. **Claim:** "`MaterialTheme` installs the resolved scheme/typography/shapes via
+    composition locals readable as `MaterialTheme.colorScheme/.typography/.shapes`"
+    (§5, §6).
+    **VERDICT:** Verified (framework ref).
+    **SOURCE:** framework ref — `androidx.compose.material3.MaterialTheme`:
+    https://developer.android.com/reference/kotlin/androidx/compose/material3/MaterialTheme .
+
+12. **Claim:** "`createComposeRule()` is Robolectric-capable and runs under
+    `testDebugUnitTest` without a device; default test host is a
+    `ComponentActivity`, so the `Activity` cast in `ApplySystemBarAppearance`
+    succeeds" (§7, §11).
+    **VERDICT:** Verified (framework ref).
+    **SOURCE:** framework ref — Compose testing (`createComposeRule`) and
+    Robolectric support for Compose:
+    https://developer.android.com/develop/ui/compose/testing .
+
+13. **Claim:** "Brand seed hex values (`BrandPrimary 0xFF2962FF`, etc.) and the
+    full light/dark role assignments are the design contract" (§4).
+    **VERDICT:** Unverified-assumption (explicitly flagged provisional in §13).
+    **SOURCE:** none authoritative — these are engineering placeholders; no design
+    token source exists in the reference repo for the native app, and the web app
+    uses unrelated shadcn HSL tokens.
+
+14. **Claim:** "Typography uses `FontFamily.Default` (platform font), `sp` units
+    scale with system font size; no bundled font" (§3 FR-5, §9).
+    **VERDICT:** Verified (framework ref) for the API behavior; the specific per-
+    role sizes are a project choice.
+    **SOURCE:** framework ref — `androidx.compose.material3.Typography` and
+    `sp` scaling: https://developer.android.com/develop/ui/compose/text/fonts .
+
+15. **Claim:** "Dynamic color reads only the derived tonal palette, never the
+    wallpaper image; no media permission required" (§8).
+    **VERDICT:** Verified (framework ref).
+    **SOURCE:** framework ref — Dynamic color is derived by the platform from the
+    user's wallpaper and exposed only as a `ColorScheme`; no app permission is
+    involved: https://developer.android.com/develop/ui/compose/designsystems/material3#dynamic .
+
+### Corrections made
+
+No hard factual errors (wrong endpoint path/method/field) were found — the spec's
+"no network contract" stance is accurate for this ticket's scope. The review made
+**accuracy/completeness corrections** to the spec's characterization of the web
+reference:
+
+- **§2 Web reference:** expanded from "uses its own design tokens" to also state
+  (verified) that the web app persists a three-way theme `mode` + accent/font/
+  density/high-contrast server-side via `/ui/theme` and applies `system` reactively
+  via `matchMedia`. Previously the spec implied the web side had nothing
+  comparable, which understated the existing contract.
+- **§6 Data & State Management:** the "out of scope, future ticket" note now names
+  the concrete backend contract (`ThemeConfig.mode` via `/ui/theme`) a future
+  override ticket should mirror, instead of leaving the storage mechanism vague.
+- **§13 Risks:** the in-app theme override risk now points the follow-up ticket at
+  the existing `ThemeConfig.mode` enum (`"light" | "dark" | "system"`) for
+  contract compatibility with the web client.
+
+These are additive clarifications; no existing design decision, code sample, or
+acceptance criterion was changed.
+
+### Open assumptions
+
+- **Brand palette (all hex values in §4):** unverifiable — no authoritative design
+  token source for the native app exists in the reference repo; the web app's HSL
+  tokens are unrelated. Flagged provisional in §13; UI-test expected constants must
+  move with any design update (claim 13).
+- **Per-role typography sizes/weights and shape dp values:** project choices, not
+  derived from an authoritative source. The role *names* and scaling behavior are
+  framework-verified (claims 10, 14); the exact numbers are assumptions.
+- **`/ui/theme` auth/CSRF specifics for a future Android override:** the web client
+  comment states `require_ui_session` + CSRF on non-GET (claim 5); the exact
+  Android header/cookie handling is owned by the `core-network` tickets and is an
+  assumption for any future override ticket, not validated here.
+
+## 17. Test Plan
+
+All cases trace to the Acceptance Criteria in §14 (AC-1 … AC-8). Because this is a
+non-networked UI ticket, "contract/MockWebServer" cases are N/A; the contract under
+test is the Kotlin/Compose theme surface. Tests pin `dynamicColor = false` unless a
+case explicitly targets the dynamic-color branch so results are deterministic across
+machines/wallpapers.
+
+- **TC-AND-019-01 — Public theme entry point exists & emits MaterialTheme**
+  Type: unit (compile/source) / Compose-UI.
+  Preconditions: `core-ui` builds; AND-003 complete.
+  Steps: Reference `TestLogonTheme(darkTheme, dynamicColor, content)` from a test in
+  `com.testlogon.android.core.ui.theme`; set content that reads
+  `MaterialTheme.colorScheme`.
+  Expected: Symbol resolves as the single public composable; content composes and a
+  non-null `ColorScheme` is provided.
+  Traces: AC-1.
+
+- **TC-AND-019-02 — Light primary equals BrandPrimary (static scheme)**
+  Type: instrumented/Robolectric (`createComposeRule`).
+  Preconditions: dynamic color disabled.
+  Steps: `setContent { TestLogonTheme(darkTheme = false, dynamicColor = false) { capture = MaterialTheme.colorScheme.primary } }`.
+  Expected: `captured == BrandPrimary` (0xFF2962FF).
+  Traces: AC-2, AC-7.
+
+- **TC-AND-019-03 — Dark primary differs from light primary**
+  Type: instrumented/Robolectric.
+  Preconditions: dynamic color disabled.
+  Steps: Capture `primary` for `darkTheme = false` and `darkTheme = true`.
+  Expected: The two values are not equal (measurable light/dark divergence).
+  Traces: AC-7.
+
+- **TC-AND-019-04 — Dark background is the dark-scheme value**
+  Type: instrumented/Robolectric.
+  Preconditions: dynamic color disabled.
+  Steps: Capture `MaterialTheme.colorScheme.background` with `darkTheme = true`.
+  Expected: `background == Color(0xFF1A1C1E)`.
+  Traces: AC-7.
+
+- **TC-AND-019-05 — All Material 3 color roles populated (no library defaults)**
+  Type: unit/instrumented.
+  Preconditions: dynamic color disabled.
+  Steps: For both `LightColors` and `DarkColors`, assert the roles named in FR-2
+  (`primary`, `onPrimary`, `primaryContainer`, `onPrimaryContainer`, `secondary`,
+  `tertiary`, `error`, `background`, `onBackground`, `surface`, `onSurface`,
+  `surfaceVariant`, `outline`) are `!= Color.Unspecified` and match the §4 constants.
+  Expected: Every asserted role is explicitly set to the spec value.
+  Traces: AC-2.
+
+- **TC-AND-019-06 — Typography & shape tokens match spec**
+  Type: unit/instrumented.
+  Preconditions: none beyond theme available.
+  Steps: Assert `MaterialTheme.typography.titleLarge.fontSize == 22.sp`,
+  `bodyLarge.fontSize == 16.sp`, and `MaterialTheme.shapes.medium ==
+  RoundedCornerShape(12.dp)` (plus extraSmall=4, small=8, large=16, extraLarge=28).
+  Expected: All token assertions pass.
+  Traces: AC-2, AC-7.
+
+- **TC-AND-019-07 — `darkTheme` defaults to `isSystemInDarkTheme()` and is overridable**
+  Type: instrumented/Robolectric (configuration override).
+  Preconditions: ability to set `uiMode` night yes/no in the test config.
+  Steps: (a) Host `TestLogonTheme(dynamicColor = false) { ... }` under a NIGHT_YES
+  configuration and capture a scheme value; under NIGHT_NO capture again. (b)
+  Separately call with explicit `darkTheme = true`/`false` to confirm the override
+  wins regardless of system config.
+  Expected: With no override, resolved scheme follows the system night mode; with an
+  explicit `darkTheme`, the override is honored.
+  Traces: AC-4.
+
+- **TC-AND-019-08 — Dynamic color used only when enabled AND SDK_INT >= 31**
+  Type: instrumented/Robolectric with `@Config(sdk = ...)`.
+  Preconditions: Robolectric able to set SDK level.
+  Steps: (a) `@Config(sdk = 34)` with `dynamicColor = true`: assert
+  `primary == BrandPrimary` (static, because gate requires 31+ — verifies fallback
+  on sub-31 *and* that 34 still resolves dynamic only when available; use sdk=30 for
+  a strict pre-31 fallback assertion). (b) `@Config(sdk = 30)`, `dynamicColor = true`:
+  assert static `BrandPrimary` is used (fallback). (c) `dynamicColor = false` on any
+  SDK: assert static `BrandPrimary`.
+  Expected: Static brand scheme used whenever `dynamicColor == false` OR `SDK_INT < 31`.
+  Traces: AC-3.
+
+- **TC-AND-019-09 — Lint NewApi passes (no unguarded API-31 call)**
+  Type: integration (static analysis / CI gate).
+  Preconditions: `:core-ui:lintDebug` configured.
+  Steps: Run `:core-ui:lintDebug`.
+  Expected: No `NewApi` errors for `dynamicLightColorScheme`/`dynamicDarkColorScheme`
+  (they are guarded by `Build.VERSION.SDK_INT >= Build.VERSION_CODES.S`).
+  Traces: AC-3.
+
+- **TC-AND-019-10 — System-bar icon appearance follows darkTheme**
+  Type: instrumented (real `ComponentActivity` host).
+  Preconditions: theme hosted in an Activity (createComposeRule default).
+  Steps: Render `TestLogonTheme(darkTheme = false)` then `darkTheme = true`; read
+  `WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars` /
+  `isAppearanceLightNavigationBars` after the `SideEffect` settles.
+  Expected: Light theme → light status/nav bars `true`; dark theme → `false`.
+  Traces: AC-5.
+
+- **TC-AND-019-11 — Preview path is Activity-cast safe (offline/no-host resilience)**
+  Type: Compose-UI / unit.
+  Preconditions: simulate `view.isInEditMode == true` (preview) or host without an
+  Activity window.
+  Steps: Compose `TestLogonTheme` where `ApplySystemBarAppearance` runs in edit mode.
+  Expected: No `ClassCastException`; the system-bar `SideEffect` is skipped and the
+  theme still resolves a scheme. (This is the analogue of the "flaky host / no real
+  Activity" path for a non-networked ticket.)
+  Traces: AC-1, AC-6.
+
+- **TC-AND-019-12 — Light & dark previews render**
+  Type: manual (Android Studio) + Compose-UI screenshot (optional).
+  Preconditions: `ThemePreview` with NIGHT_NO and NIGHT_YES `@Preview` annotations,
+  `dynamicColor = false`.
+  Steps: Open the preview pane; render both variants; optionally capture screenshots
+  in CI.
+  Expected: Light preview shows light background/brand primary; dark preview shows
+  dark background; text and Button render with themed colors.
+  Traces: AC-6.
+
+- **TC-AND-019-13 — App-wide application; no feature redefines a ColorScheme**
+  Type: integration (build/architecture check).
+  Preconditions: a sample/app-shell consumer wraps content in `TestLogonTheme {}`.
+  Steps: (a) Build the app-shell consumer using only `TestLogonTheme`. (b) Static
+  check (lint rule, Konsist, or CI grep) asserting no `lightColorScheme(`/
+  `darkColorScheme(`/`MaterialTheme(colorScheme = ` usage outside the
+  `core.ui.theme` package, and no `androidx.compose.material` (M2) imports.
+  Expected: Consumer compiles reading tokens via `MaterialTheme.*`; no feature-level
+  scheme/M2 import is found.
+  Traces: AC-8.
+
+- **TC-AND-019-14 — Accessibility: contrast & dynamic type**
+  Type: manual + Compose-UI.
+  Preconditions: light/dark previews; ability to set system font scale.
+  Steps: (a) Spot-check key `onX`/`X` pairs (onPrimary/primary, onBackground/
+  background, onSurface/surface) with a contrast tool for ≥4.5:1 on body text.
+  (b) Set system font size to largest and re-render a typography sample; confirm `sp`
+  text scales and `lineHeight` keeps text legible (no clipping/overlap). (c) Confirm
+  status/nav bar icons remain visible against themed background under edge-to-edge.
+  Expected: Body text pairs meet WCAG AA; text scales with system font size; bar
+  icons contrast correctly.
+  Traces: AC-2, AC-5, AC-6.
+
+### Coverage matrix
+
+| Acceptance Criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 — `TestLogonTheme` is the single public entry point | TC-01, TC-11 |
+| AC-2 — complete light/dark schemes, full typography, specified shapes | TC-02, TC-05, TC-06, TC-14 |
+| AC-3 — dynamic color only when enabled & SDK≥31; Lint NewApi passes | TC-08, TC-09 |
+| AC-4 — `darkTheme` defaults to `isSystemInDarkTheme()` & overridable | TC-07 |
+| AC-5 — system-bar icon appearance follows `darkTheme` | TC-10, TC-14 |
+| AC-6 — light & dark `@Preview` render | TC-11, TC-12, TC-14 |
+| AC-7 — UI test: light primary=Brand, dark≠light, dark bg=0xFF1A1C1E, type/shape tokens | TC-02, TC-03, TC-04, TC-06 |
+| AC-8 — `core-ui` consumed app-wide; no feature redefines a `ColorScheme` | TC-13 |

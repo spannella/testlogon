@@ -229,11 +229,15 @@ data class MfaVerifyResp(
 )
 
 // Recovery (login flow) — modeled for completeness; backend RecoveryReq.
+// NOTE: OpenAPI `RecoveryReq.factor` is OPTIONAL with backend default "totp"
+// (NOT nullable). We keep it Kotlin-nullable with a null default so an omitted
+// value serializes to absence and lets the backend apply its "totp" default;
+// callers that need a non-totp factor must set it explicitly. (openapi: RecoveryReq)
 @JsonClass(generateAdapter = true)
 data class RecoveryReq(
     @Json(name = "challenge_id") val challengeId: String,
     @Json(name = "recovery_code") val recoveryCode: String,
-    val factor: String? = null,
+    val factor: String? = null,  // backend default "totp" when omitted
 )
 
 @JsonClass(generateAdapter = true)
@@ -389,7 +393,9 @@ No persistent or in-memory app state is introduced. DTOs are transient wire type
 They must **not** be stored directly in Room or DataStore; mapping to domain
 models and persistence is the responsibility of core-data / repository tickets.
 DTOs carry no Compose `@Stable`/`@Immutable` annotations because they never enter
-composition directly. ISO-8601 timestamps remain `String` at this layer; parsing
+composition directly. (CORRECTED) `SessionInfo.created_at`/`last_seen_at`/`revoked_at`
+are epoch numbers on the wire (OpenAPI/web type `number`), so they are modeled as
+`Long` here — there are NO ISO-8601 string timestamps in this DTO set; any parsing
 to `Instant` is deferred to the domain-mapping ticket to avoid coupling DTOs to a
 time library. The `MfaFactor.UNKNOWN` fallback is the only stateful behavioral
 choice and exists purely to keep deserialization total.
@@ -621,7 +627,12 @@ Each numbered item: the claim → VERDICT → SOURCE (exact pointer).
 16. CSRF: `ui_csrf` cookie sent as `X-CSRF-Token` header. → **Verified** →
     `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", …)`).
 17. 401 handling refreshes via `POST /ui/session/refresh` then retries once. →
-    **Verified** → `src/api/client.ts` `refreshSession()` + retry block.
+    **Verified** → `src/api/client.ts` `refreshSession()` + single-retry block.
+    Nuance (verified): refresh is attempted ONLY when the auth store reports
+    `isAuthenticated`; an unauthenticated 401 (e.g. bad login) propagates directly
+    without a refresh attempt, and a refresh request is de-duplicated via a shared
+    `refreshPromise` (`src/api/client.ts` lines ~194-237). Transport concern, not a
+    DTO field.
 18. "Auth rides on cookies (HttpOnly) only." → **Corrected/Clarified** → web
     client also sends `Authorization: Bearer <accessToken>` from its auth store in
     addition to `credentials: "include"` cookies (`src/api/client.ts`). Neither is
@@ -644,6 +655,21 @@ Each numbered item: the claim → VERDICT → SOURCE (exact pointer).
     real factor path (`/ui/mfa/recovery/{factor}`) not in the enum — callers must
     handle it. Note `passed` is keyed by factor token (`Map<String,Boolean>`) and
     is intentionally NOT typed by the enum to stay total.
+22. `RecoveryReq.factor` is an optional `String? = null`. → **Verified (with note)** →
+    OpenAPI `RecoveryReq` lists only `challenge_id`,`recovery_code` as `required`;
+    `factor` is optional but carries backend `default: "totp"` (NOT a nullable type).
+    Web `src/api/types.ts: RecoveryReq` has `factor?: string`. Modeling it nullable
+    with a `null` default is correct on the wire (omission → backend applies "totp"),
+    documented inline in §4. (openapi: `RecoveryReq`.)
+23. The recovery endpoint `POST /ui/mfa/recovery/{factor}` returns `MfaVerifyResp`
+    (the same shape as the other MFA verify calls), not `OkResp`/`StatusResp`. →
+    **Verified** → `src/api/endpoints/auth.ts: useRecoveryCode` (`api.post<MfaVerifyResp>`).
+    OpenAPI index `POST /ui/mfa/recovery/{factor}` has `req=RecoveryReq`, `resp=200:`
+    (no published response schema; web type authoritative).
+24. `OkResp {ok}` is used by `POST /ui/password-recovery/confirm`. → **Verified** →
+    `src/api/endpoints/auth.ts: passwordRecoveryConfirm` (`api.post<OkResp>`);
+    `src/api/types.ts: OkResp = {ok: boolean}`. Modeled for completeness; not on the
+    core session/MFA login path.
 
 ### Corrections made
 - `challenge_context` retyped from `{username,password}` to optional free-form
@@ -667,6 +693,10 @@ Each numbered item: the claim → VERDICT → SOURCE (exact pointer).
 - Documented `logout`/`refresh`/revoke return `StatusResp` (item 15).
 - Updated FR-1/FR-2/FR-3, §5 JSON samples, §8 redaction targets, §11 tests,
   §13 R1/R2/R3, and §14 AC-4 to match the corrected DTO set.
+- §6 corrected: removed the stale "ISO-8601 timestamps remain `String`" statement
+  (it contradicted the corrected `SessionInfo`); timestamps are epoch `Long`.
+- §4 `RecoveryReq.factor` annotated with the backend `default: "totp"` semantics
+  (item 22).
 
 ### Open assumptions
 - **Backend response bodies for `/ui/me`, `/ui/session/finalize`, `/ui/mfa/*/verify`,

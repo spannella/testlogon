@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P0
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-011, AND-010, AND-009]
 blocks: [AND-019, AND-020]
 ---
@@ -68,9 +69,12 @@ header on requests (mirroring web client).*
   - **AND-019 / AND-020** auth/session feature work (session start, MFA,
     finalize) relies on mutating calls carrying a valid CSRF header to succeed
     against the backend; those tickets are functionally blocked by this one.
-- **Web reference:** the echo behavior lives in `frontend/src/api/` (request
-  interceptor that copies `ui_csrf` → `X-CSRF-Token`). Header/cookie names here
-  must match that source exactly: cookie `ui_csrf`, header `X-CSRF-Token`.
+- **Web reference:** the echo behavior lives in the reference app's `src/api/`
+  layer — specifically the `api<T>()` fetch wrapper in `src/api/client.ts`
+  (lines 167-171: `getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`).
+  **Verified (review):** cookie name `ui_csrf` and header `X-CSRF-Token` match the
+  web source exactly. Note the wrapper sets the header on *all* methods, not just
+  mutating ones (see FR-3 correction and §16).
 - **Backend:** FastAPI dev host `http://18.222.237.167:8000` (plaintext, unreliable).
   OpenAPI at `/openapi.json`. CSRF is enforced on mutating routes under `/ui/*`.
 
@@ -84,8 +88,13 @@ interceptor sets the request header `X-CSRF-Token` to exactly that value.
 
 FR-3. "Mutating" is defined by HTTP method: `POST`, `PUT`, `PATCH`, `DELETE`.
 Safe/idempotent-read methods (`GET`, `HEAD`, `OPTIONS`, `TRACE`) are **not**
-modified (no header added), matching the web client and the backend's
-enforcement surface.
+modified (no header added). **Correction (review):** this is *not* a mirror of
+the web client. The web reference (`src/api/client.ts:167-171`) sets
+`X-CSRF-Token` on **every** request whenever the `ui_csrf` cookie is present,
+regardless of HTTP method — it does **not** gate on method. The Android client
+deliberately narrows this to mutating methods because the backend only enforces
+CSRF on mutating routes; sending the header on safe reads is harmless on the web
+but provides no value and is an intentional, defensible deviation here. See §16.
 
 FR-4. If the request **already** carries an `X-CSRF-Token` header (set
 explicitly by a caller), the interceptor must **not** overwrite it. The
@@ -102,7 +111,16 @@ state (so a value refreshed mid-session — e.g. after AND-013's refresh — is
 picked up on the next call without restarting the app).
 
 FR-7. The header value is sent verbatim — no URL-encoding, trimming beyond
-blank-check, or transformation. It must equal the raw cookie value byte-for-byte.
+blank-check, or transformation. It equals the raw cookie value as OkHttp exposes
+it via `Cookie.value`. **Correction (review):** the web client does **not** send
+the value byte-for-byte — `src/api/client.ts:16-19` reads the cookie through a
+`getCookie` helper that applies `decodeURIComponent`, so a percent-encoded cookie
+is URL-*decoded* before being placed in the header. For the UUID-style tokens the
+backend issues this is a no-op, so the practical contract is identical; but the
+"byte-for-byte mirrors the web client" framing is inaccurate for tokens
+containing `%`-escapes. OkHttp's `CookieJar`/`Cookie.value` already returns the
+decoded cookie value, so reading via `loadForRequest(...).value` (as in §4.1)
+matches the web client's *effective* (decoded) value. See §16.
 
 FR-8. The interceptor is registered exactly once on the shared client and is
 order-stable relative to the logging interceptor (it must run such that the
@@ -252,7 +270,11 @@ is the backend's double-submit CSRF expectation on mutating `/ui/*` routes:
   ```
   Set-Cookie: ui_csrf=8f3a1c2e-7b40-4d6e-9a11-0c2f6b9d4e55; Path=/; HttpOnly=false; SameSite=Lax
   ```
-  (Native client persists this via AND-011's jar regardless of attribute parsing
+  (Attributes shown are **illustrative/unverified** — `Set-Cookie` headers are not
+  described by OpenAPI; the web client reads `ui_csrf` via plain `document.cookie`
+  in JS (`src/api/client.ts:16`), which proves the cookie is **not** `HttpOnly`,
+  but the exact `Path`/`SameSite`/`Max-Age` are assumptions. The native client
+  persists whatever the server sends via AND-011's jar regardless of attribute
   nuances; `HttpOnly` is irrelevant on Android since there is no JS boundary.)
 
 - **Outgoing mutating request after this ticket**, example
@@ -263,15 +285,25 @@ is the backend's double-submit CSRF expectation on mutating `/ui/*` routes:
   X-CSRF-Token: 8f3a1c2e-7b40-4d6e-9a11-0c2f6b9d4e55
   Content-Type: application/json
 
-  {"challenge_id":"chal_123","code":"492013"}
+  {"challenge_id":"chal_123","totp_code":"492013"}
   ```
   The `X-CSRF-Token` header value **equals** the `ui_csrf` cookie value.
+  **Correction (review):** the body field is `totp_code`, not `code`. Per
+  OpenAPI `POST /ui/mfa/totp/verify` (req schema `TotpVerifyReq`), the required
+  fields are `challenge_id: string` and `totp_code: string`. The body shape is
+  illustrative only — this ticket never constructs it (owned by AND-019/AND-020).
 
-- **Server rejection contract** (informational): a mutating request with a
-  missing or mismatched `X-CSRF-Token` yields `403` with a FastAPI `detail` body
-  (`string | [{msg}] | {code,...}`). Mapping that error is owned by AND-015
-  (error model); this ticket's job is to ensure the header is present and correct
-  so the legitimate path does not `403`.
+- **Server rejection contract** (informational, **unverified**): a mutating
+  request with a missing or mismatched `X-CSRF-Token` is expected to yield `403`.
+  **Review note:** the OpenAPI spec documents **no** `403` response for any `/ui/*`
+  route (mutating routes list only `200` and `422:HTTPValidationError`), so the
+  exact `403` body shape cannot be confirmed from the sources — CSRF enforcement
+  is FastAPI middleware that is not reflected in the per-route schema. The
+  *documented* error envelope for these routes is `422` →
+  `HTTPValidationError = { detail: ValidationError[] }`, where
+  `ValidationError = { loc: (string|int)[], msg: string, type: string }`. Any
+  `403`/`detail` mapping is owned by AND-015; this ticket's job is only to ensure
+  the header is present and correct so the legitimate path does not get rejected.
 
 - **Outgoing GET** (e.g. `GET /ui/me`): **no** `X-CSRF-Token` header is added.
 
@@ -450,10 +482,10 @@ parallelizable subtasks of note.
 
 - **R-1 Cookie name/header mismatch with web.** If the backend uses a different
   cookie name (`csrf_token`, `XSRF-TOKEN`) or header (`X-XSRF-TOKEN`), the header
-  will be ignored and mutating calls `403`. *Mitigation:* names taken from the web
-  reference and the project auth notes (`ui_csrf` / `X-CSRF-Token`); verify against
-  `/openapi.json` and `frontend/src/api/` before merge. Constants are centralized
-  for a one-line fix.
+  will be ignored and mutating calls `403`. **Resolved (review):** names verified
+  against `src/api/client.ts:168-170` (`getCookie("ui_csrf")` →
+  `X-CSRF-Token`); `ui_csrf` / `X-CSRF-Token` are correct. Constants are
+  centralized for a one-line fix should the backend ever change them.
 - **R-2 `loadForRequest` blocking on disk.** If AND-011's jar performs synchronous
   disk/crypto reads inside `loadForRequest`, this runs on the network thread.
   *Mitigation:* AND-011 must keep an in-memory mirror (its own requirement); a
@@ -514,10 +546,234 @@ parallelizable subtasks of note.
   plaintext logging of the token exists.
 - `./gradlew :core-network:assemble :core-network:testDebugUnitTest` passes
   locally and in CI with no new lint/detekt violations (AND-005 config).
-- Cookie/header names verified against the web reference (`frontend/src/api/`) and
-  `/openapi.json` before merge.
+- Cookie/header names verified against the web reference (`src/api/client.ts`) and
+  the OpenAPI spec before merge (done in this review — see §16).
 - Code reviewed and merged to `android-port`; downstream auth/session tickets
   (AND-019/AND-020) are unblocked for mutating calls.
 - A one-line note in the `core-network` README (owned by AND-007) documents the
   CSRF double-submit policy (which methods get the header, and that the value is
   sourced from the shared cookie jar).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Cookie name is `ui_csrf`.** VERDICT: **Verified.** SOURCE:
+   `src/api/client.ts:168` (`const csrf = getCookie("ui_csrf")`); also
+   `src/api/endpoints/kycCompliance.ts:65`, `src/api/endpoints/profile.ts:157`,
+   `src/stores/offlineStore.ts:48`.
+2. **Echo header name is `X-CSRF-Token`.** VERDICT: **Verified.** SOURCE:
+   `src/api/client.ts:170` (`headers.set("X-CSRF-Token", csrf)`); also
+   `kycCompliance.ts:67`, `profile.ts:159`. (Not `X-XSRF-TOKEN`/`XSRF-TOKEN`.)
+3. **Backend uses a double-submit CSRF scheme: server-set `ui_csrf` cookie is
+   echoed into `X-CSRF-Token` on requests.** VERDICT: **Verified** (client side).
+   SOURCE: `src/api/client.ts:167-171`. The server-side comparison itself is not
+   in the sources (middleware), but the client contract — cookie value copied to
+   header — is confirmed.
+4. **The web client adds the CSRF header ONLY on mutating requests.** VERDICT:
+   **Corrected.** SOURCE: `src/api/client.ts:167-171` adds the header on **every**
+   request when the cookie is present, with **no** method check. The Android
+   method-gating (POST/PUT/PATCH/DELETE only) is an intentional deviation, not a
+   mirror. (Spec §1, FR-2/FR-3 amended.)
+5. **The CSRF value is sent byte-for-byte verbatim, mirroring the web client.**
+   VERDICT: **Corrected.** SOURCE: web `getCookie` applies `decodeURIComponent`
+   (`src/api/client.ts:16-19`), so the web header is the URL-*decoded* cookie
+   value, not raw bytes. OkHttp's `Cookie.value` likewise returns the decoded
+   value, so reading via `loadForRequest(...).value` matches the web *effective*
+   value; the "byte-for-byte" wording was inaccurate for `%`-encoded tokens.
+   (FR-7 amended.) Note `kycCompliance.ts:67` also `decodeURIComponent`s.
+6. **`POST /ui/session/start` returns `UiSessionStartResp` and sets cookies.**
+   VERDICT: **Verified** (endpoint/response). SOURCE: OpenAPI
+   `POST /ui/session/start | req=UiSessionStartReq | resp=200:UiSessionStartResp`.
+   The specific `Set-Cookie` for `ui_csrf` on this route is **not** in OpenAPI
+   (see #11).
+7. **`POST /ui/session/finalize` exists and is a mutating `/ui/*` route.**
+   VERDICT: **Verified.** SOURCE: OpenAPI
+   `POST /ui/session/finalize | op=ui_session_finalize_... | req=UiSessionFinalizeReq | resp=200:`.
+8. **`POST /ui/session/refresh` is the refresh route (no body), used by AND-013.**
+   VERDICT: **Verified.** SOURCE: OpenAPI
+   `POST /ui/session/refresh | req= | resp=200:`; frontend `refreshSession()`
+   (`src/api/client.ts:121-130`) calls it with `method:"POST"`, no body,
+   `credentials:"include"`.
+9. **`GET /ui/me` is a non-mutating route that must NOT carry the CSRF header.**
+   VERDICT: **Verified** (endpoint + method). SOURCE: OpenAPI
+   `GET /ui/me | resp=200:;422:HTTPValidationError`. (Web client *does* send the
+   header even here — see #4 — but the Android design correctly omits it.)
+10. **`POST /ui/mfa/totp/verify` body fields.** VERDICT: **Corrected.** The spec's
+    example used `code`; the real required field is `totp_code`. SOURCE: OpenAPI
+    `POST /ui/mfa/totp/verify | req=TotpVerifyReq`; schema `TotpVerifyReq` =
+    `{ challenge_id: string (req), totp_code: string (req) }`
+    (components.schemas.TotpVerifyReq). (§5 amended.)
+11. **A CSRF failure returns HTTP `403` with a FastAPI `detail` body
+    (`string | [{msg}] | {code,...}`).** VERDICT: **Unverified-assumption.**
+    SOURCE: no `403` response is documented for any route in
+    `openapi.index.txt` (mutating `/ui/*` routes declare only `200` and
+    `422:HTTPValidationError`); CSRF rejection is middleware-level and not in the
+    schema. The *documented* error envelope is `422` →
+    `HTTPValidationError = { detail: ValidationError[] }`,
+    `ValidationError = { loc, msg, type }` (components.schemas.HTTPValidationError,
+    components.schemas.ValidationError). (§5 amended to flag this.)
+12. **`Set-Cookie: ui_csrf=...; Path=/; SameSite=Lax; HttpOnly=false` attributes.**
+    VERDICT: **Unverified-assumption** (except non-HttpOnly). `Set-Cookie` is not
+    in OpenAPI. The cookie being readable by JS via `document.cookie`
+    (`src/api/client.ts:16`) proves it is **not** `HttpOnly`; `Path`/`SameSite`/
+    `Max-Age` are assumptions. (§5 amended.)
+13. **The interceptor must be an APPLICATION interceptor (`addInterceptor`) on the
+    AND-009 singleton client, before the logging interceptor.** VERDICT:
+    **Unverified-assumption** (internal cross-ticket design; AND-009 source not in
+    this repo snapshot). Reasonable per OkHttp's interceptor model. SOURCE:
+    framework ref — OkHttp interceptors guide
+    (https://square.github.io/okhttp/features/interceptors/).
+14. **`CookieJar.loadForRequest(url)` returns the cookies (with decoded values)
+    that will be sent for that URL; reading it avoids re-implementing matching.**
+    VERDICT: **Verified** (framework). SOURCE: framework ref — OkHttp `CookieJar`
+    / `Cookie` API
+    (https://square.github.io/okhttp/4.x/okhttp/okhttp3/-cookie-jar/).
+15. **AND-013 401-refresh is wired via `OkHttpClient.Builder.authenticator(...)`,
+    not as an interceptor, and its retry re-runs the interceptor chain.** VERDICT:
+    **Unverified-assumption** for the AND-013 wiring (sibling ticket), but the
+    retry-re-runs-interceptors behavior is **Verified** (framework). SOURCE:
+    framework ref — OkHttp `Authenticator`
+    (https://square.github.io/okhttp/4.x/okhttp/okhttp3/-authenticator/). The web
+    analog (refresh-once-on-401) is at `src/api/client.ts:194-209`.
+16. **`HTTPValidationError`/`ValidationError` 422 shape used in tests.** VERDICT:
+    **Verified.** SOURCE: components.schemas.HTTPValidationError
+    (`{ detail: ValidationError[] }`) and components.schemas.ValidationError
+    (`{ loc: (string|int)[], msg: string, type: string }`, all required).
+
+### Corrections made
+
+- **§1 / FR-2 / FR-3:** Removed the false "matching the web client" claim about
+  method gating. The web client sends `X-CSRF-Token` on **all** methods; Android's
+  mutating-only gating is now documented as a deliberate deviation. (Citation #4.)
+- **FR-7:** Corrected "byte-for-byte verbatim, mirrors web client" — the web
+  client `decodeURIComponent`s the cookie; OkHttp `Cookie.value` is likewise
+  decoded, so the design still matches the *effective* value, but the wording was
+  fixed. (Citation #5.)
+- **§5 example body:** `"code"` → `"totp_code"` per `TotpVerifyReq`. (Citation #10.)
+- **§5 server-rejection contract:** flagged the `403`/`detail` body as unverified
+  (no `403` in OpenAPI) and documented the verified `422` envelope. (Citation #11.)
+- **§5 Set-Cookie example:** flagged attributes as illustrative/unverified; kept
+  only the verified "not HttpOnly" fact. (Citation #12.)
+- **§2 + §15 + R-1:** Fixed the web-reference path from `frontend/src/api/` to the
+  actual `src/api/client.ts` and recorded that the name verification is now done.
+
+### Open assumptions
+
+- **CSRF-failure HTTP status/body** (Citation #11): no `403` is documented in the
+  OpenAPI; the status and `detail` shape on CSRF rejection cannot be confirmed
+  from the provided sources. Owned/mapped by AND-015. Confirm with backend owners.
+- **`ui_csrf` cookie attributes** (Citation #12): `Path`/`SameSite`/`Max-Age` not
+  observable from the sources; only "non-HttpOnly" is proven.
+- **Does the backend rotate `ui_csrf` on `session/refresh`?** (spec Q-1): not
+  observable from OpenAPI/frontend. Design is rotation-safe either way via
+  per-request resolution (FR-6); no code change needed.
+- **AND-009 / AND-011 / AND-013 internal seams** (Citations #13, #15, and the
+  in-memory-mirror assumption in §6/R-2): these depend on sibling-ticket source
+  not present in this snapshot. Treated as contracts to be confirmed when those
+  tickets land.
+
+## 17. Test Plan
+
+All cases live in `core-network/src/test/...` unless marked instrumented.
+IDs trace to the §14 Acceptance Criteria (AC-1..AC-8).
+
+- **TC-AND-012-01** — Type: contract/MockWebServer. Preconditions: `MockWebServer`
+  started with one enqueued `200`; cookie jar seeded with `ui_csrf=<uuid>` for the
+  server URL; client built with the jar + `CsrfInterceptor`. Steps: issue
+  `POST /ui/session/finalize` with a JSON body. Expected: `server.takeRequest()
+  .getHeader("X-CSRF-Token") == <uuid>` (equals the seeded cookie value); request
+  also carries the `ui_csrf` cookie. Traces: AC-1.
+
+- **TC-AND-012-02** — Type: unit (parameterized). Preconditions: jar seeded with a
+  token. Steps: issue one request per method in
+  `{POST, PUT, PATCH, DELETE, GET, HEAD, OPTIONS}` (lower- and upper-case variants
+  for at least one mutating + one safe method). Expected: header present and equal
+  to token for POST/PUT/PATCH/DELETE; header `null` for GET/HEAD/OPTIONS;
+  case-insensitivity confirmed (`post` treated as mutating). Traces: AC-1, AC-2.
+
+- **TC-AND-012-03** — Type: contract/MockWebServer. Preconditions: jar seeded.
+  Steps: issue `GET /ui/me`. Expected: recorded `X-CSRF-Token` is `null`; response
+  passes through unmodified. Traces: AC-2.
+
+- **TC-AND-012-04** — Type: unit. Preconditions: **empty** cookie jar (no
+  `ui_csrf`), e.g. pre-login. Steps: issue `POST /ui/session/start`. Expected: no
+  `X-CSRF-Token` header added; no exception thrown; `chain.proceed` invoked exactly
+  once; request completes normally. Traces: AC-3.
+
+- **TC-AND-012-05** — Type: unit. Preconditions: jar holds a blank/whitespace-only
+  `ui_csrf` value. Steps: issue a `POST`. Expected: header is **not** added
+  (blank-check), no crash. Traces: AC-3.
+
+- **TC-AND-012-06** — Type: unit. Preconditions: jar seeded with cookie value
+  `cookie-val`. Steps: issue a `POST` whose builder already sets
+  `.header("X-CSRF-Token","caller-value")`. Expected: recorded header ==
+  `caller-value` (caller wins; interceptor does not overwrite). Traces: AC-4.
+  (Validates FR-4 and supports negative-test crafting.)
+
+- **TC-AND-012-07** — Type: unit. Preconditions: jar seeded with a token containing
+  characters that survive cookie storage but would change under URL transforms
+  (e.g. an opaque token); also a UUID token. Steps: issue a `POST`. Expected:
+  recorded header equals `Cookie.value` as returned by the jar (no extra encoding,
+  no trimming beyond blank-check). Traces: AC-1, AC-5.
+  (Guards FR-7 against accidental re-encoding; see §16 #5.)
+
+- **TC-AND-012-08** — Type: unit (rotation). Preconditions: jar seeded with token
+  `A`. Steps: issue `POST` #1; update the jar to token `B`; issue `POST` #2.
+  Expected: request #1 header == `A`, request #2 header == `B` (per-request
+  resolution against current jar state). Traces: AC-5.
+
+- **TC-AND-012-09** — Type: integration (MockWebServer + Authenticator). 
+  Preconditions: client configured with `CsrfInterceptor` **and** a stub
+  `Authenticator`; jar seeded with token `A`; server enqueues `401` then `200`.
+  Steps: issue a `POST`; the authenticator rotates the jar cookie to `B` and
+  returns the retried request. Expected: first attempt carries `A`; the retried
+  attempt re-runs the interceptor chain and carries `B`. Traces: AC-5.
+  (Note: depends on AND-013; mark `@Ignore`/pending until AND-013 lands, per §12.)
+
+- **TC-AND-012-10** — Type: integration (Hilt). Preconditions: `@HiltAndroidTest`
+  harness wiring `core-network`. Steps: resolve the
+  `@AppInterceptor Set<Interceptor>` and the provided `OkHttpClient`. Expected: the
+  set contains **exactly one** `CsrfInterceptor`; `client.interceptors()` contains
+  exactly one instance (no double registration). Traces: AC-6.
+
+- **TC-AND-012-11** — Type: unit (ordering). Preconditions: built client.
+  Steps: inspect `client.interceptors()`. Expected: index of `CsrfInterceptor` is
+  **before** `HttpLoggingInterceptor`, so the logged request includes the attached
+  header. Traces: AC-6.
+
+- **TC-AND-012-12** — Type: integration (security/log redaction). Preconditions:
+  `HttpLoggingInterceptor` configured with AND-009's redaction; a test log sink
+  capturing emitted lines; jar seeded with a known token. Steps: issue a `POST`
+  and capture debug logs. Expected: log contains an `X-CSRF-Token` line but its
+  value is redacted (e.g. `██`); the raw token string never appears in any log
+  line (also assert raw token absent from `Cookie`/`Set-Cookie` log lines).
+  Traces: AC-7. (Security case.)
+
+- **TC-AND-012-13** — Type: contract/MockWebServer (error path). Preconditions:
+  jar seeded; server enqueues a `422` body
+  `{"detail":[{"loc":["body","totp_code"],"msg":"field required","type":"missing"}]}`.
+  Steps: issue `POST /ui/mfa/totp/verify`. Expected: the interceptor still
+  attaches the correct `X-CSRF-Token` (it does not inspect/alter the response); the
+  `422` body propagates unchanged for the error layer (AND-015) to map. Traces:
+  AC-1. (Uses the real verified `HTTPValidationError` shape; see §16 #16.)
+
+- **TC-AND-012-14** — Type: integration (offline / flaky dev host). Preconditions:
+  jar seeded; `MockWebServer` configured to drop the connection / return a socket
+  failure (or point client at an unreachable host). Steps: issue a `POST`.
+  Expected: the interceptor adds the header before failure, calls `chain.proceed`
+  exactly once, and propagates the `IOException` without wrapping or swallowing; no
+  retry is performed by this layer. Traces: AC-3 (no-crash/pass-through resilience).
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (mutating carries header == cookie) | TC-01, TC-02, TC-07, TC-13 |
+| AC-2 (non-mutating: no header) | TC-02, TC-03 |
+| AC-3 (no cookie → no header, no throw) | TC-04, TC-05, TC-14 |
+| AC-4 (caller header preserved) | TC-06 |
+| AC-5 (current jar state / rotation) | TC-07, TC-08, TC-09 |
+| AC-6 (registered once, before logging) | TC-10, TC-11 |
+| AC-7 (header redacted in debug logs) | TC-12 |
+| AC-8 (tests pass / clean build) | all TC-01..TC-14 in CI |

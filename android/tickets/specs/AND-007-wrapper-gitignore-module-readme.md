@@ -5,7 +5,8 @@ milestone: M1
 epic: E01
 priority: P1
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-001]
 blocks: [AND-002, AND-003, AND-004, AND-005, AND-006]
 ---
@@ -225,3 +226,143 @@ A CI matrix job (Linux + Windows) running T-1, T-2, and T-4 is the recommended p
 - `gradle-wrapper.jar` provenance and pinned SHA-256 are noted in the PR description.
 - Open questions Q-1/Q-2 are resolved (or explicitly deferred with sign-off) and the README reflects the resolution.
 - PR links AND-001 as the satisfied dependency and references that AND-007 unblocks AND-002.
+
+## 16. Citations & Assumption Audit
+
+AND-007 is a build-hygiene **chore**: it ships no Kotlin, no UI, and makes no network calls. The only externally-verifiable technical claims are (a) the session/CSRF contract that Section 5 *describes as living elsewhere*, and (b) framework/toolchain version pins. Each is audited below against the authoritative OpenAPI index/spec and the frontend reference source.
+
+1. **Claim (§5):** The runtime base URL defaults to the dev host and the session flow is `POST /ui/session/start` → MFA → `POST /ui/session/finalize` → `GET /ui/me`.
+   - **VERDICT: Verified.** All three paths and methods exist exactly as written.
+   - **SOURCE:** OpenAPI `POST /ui/session/start` (op=`ui_session_start_ui_session_start_post`, req=`UiSessionStartReq`, resp=`200:UiSessionStartResp`); `POST /ui/session/finalize` (op=`ui_session_finalize_ui_session_finalize_post`, req=`UiSessionFinalizeReq`); `GET /ui/me` (op=`ui_me_ui_me_get`). Frontend: `src/api/endpoints/auth.ts: sessionStart` → `api.post("/ui/session/start")`, `sessionFinalize` → `api.post("/ui/session/finalize")`. The intermediate MFA step is real — `src/api/endpoints/auth.ts` exposes `/ui/mfa/totp/verify`, `/ui/mfa/sms/verify`, `/ui/mfa/email/verify`, consistent with `SessionStartResp.required_factors` / `SessionStartResp.challenge_id`.
+
+2. **Claim (§5):** Session is **cookie-based** with a `ui_csrf` cookie echoed as the `X-CSRF-Token` request header.
+   - **VERDICT: Verified.** The web client reads the `ui_csrf` cookie and sets it verbatim as the `X-CSRF-Token` header on requests.
+   - **SOURCE:** `src/api/client.ts` (lines ~167-170): `const csrf = getCookie("ui_csrf"); if (csrf) headers.set("X-CSRF-Token", csrf);` and the doc comment "CSRF token from `ui_csrf` cookie".
+
+3. **Claim (§5):** Request/response DTO shapes for the session flow are owned downstream (`core-network`); §5 itself specifies none.
+   - **VERDICT: Verified (deferred-by-design) — and cross-checked.** For accuracy, the real shapes are: `SessionStartReq { challenge_context? }` → `SessionStartResp { auth_required, challenge_id?, required_factors[], session_id? }`; `SessionFinalizeReq { challenge_id, remember_device? }` → `SessionFinalizeResp { status:"ok"|"pending", session_id?, required_factors[], passed{} }`.
+   - **SOURCE:** `src/api/types.ts: SessionStartReq/SessionStartResp/SessionFinalizeReq/SessionFinalizeResp` (lines 8-29); OpenAPI components.schemas `UiSessionStartReq`/`UiSessionStartResp`/`UiSessionFinalizeReq`.
+
+4. **Claim (§5/§7):** Validation failures surface as a structured error body, not bare strings.
+   - **VERDICT: Verified.** Every `/ui/session/*` op declares `422:HTTPValidationError`.
+   - **SOURCE:** OpenAPI index lines for `POST /ui/session/start` and `POST /ui/session/finalize` (`resp=...;422:HTTPValidationError`); schema `HTTPValidationError` in `openapi.pretty.json` (`{ detail: [{ loc, msg, type }] }`).
+
+5. **Claim (§2/§7/§8):** The dev backend `http://18.222.237.167:8000` is **plaintext HTTP** requiring a cleartext-permitted build.
+   - **VERDICT: Unverified-assumption.** The IP/port and its plaintext nature come from project context, not from any source under `reference/`. The OpenAPI spec does not pin a server host, and cleartext config is an Android-runtime concern owned downstream. Treated as a documentation constraint only.
+   - **SOURCE:** none in `reference/`; project-context value. Android cleartext behavior: `usesCleartextTraffic` / `network-security-config` (framework ref: https://developer.android.com/training/articles/security-config).
+
+6. **Claim (§1/§3/§4.1):** Gradle wrapper pinned to **8.9** (`-bin`) with `distributionSha256Sum` + `validateDistributionUrl=true`.
+   - **VERDICT: Unverified-assumption (framework choice, internally consistent).** Not verifiable from `reference/`; this is a toolchain decision inherited from AND-001. The wrapper-properties keys and the `gradle wrapper --gradle-version` / `--gradle-distribution-sha256-sum` flags are valid.
+   - **SOURCE:** framework ref: https://docs.gradle.org/current/userguide/gradle_wrapper.html (wrapper task, checksum verification).
+
+7. **Claim (§2):** Toolchain pins — JDK 17, AGP 8.7.3, Kotlin 2.0.21, KSP, compileSdk/targetSdk 35, minSdk 24.
+   - **VERDICT: Unverified-assumption.** These describe AND-001's output and are not present in `reference/`. They must match whatever AND-001/AND-002 actually land; flagged for lockstep confirmation.
+   - **SOURCE:** AND-001 (upstream ticket); framework refs: AGP/Kotlin/KSP release notes (https://developer.android.com/build/releases/gradle-plugin).
+
+8. **Claim (§2/§4/§14):** Product flavors derive `applicationId` from base `com.testlogon.android`; base-URL surfaced via `BuildConfig.API_BASE_URL` overridable from untracked `local.properties`.
+   - **VERDICT: Unverified-assumption.** Flavor names and the `BuildConfig` field are documented here but **implemented** by AND-002/`core-network`; nothing in `reference/` constrains them. This matches open question Q-1.
+   - **SOURCE:** AND-002 / `core-network` (downstream, not yet authoritative); framework ref: https://developer.android.com/build/build-variants.
+
+### Corrections made
+
+- **None to factual content.** Every concrete, source-checkable claim (session paths, HTTP methods, CSRF header derivation, 422 error shape) was confirmed accurate against the OpenAPI index and the frontend reference; no path/method/field corrections were required.
+- **Frontmatter:** `status` changed `draft → reviewed`; added `reviewed_on: 2026-06-06`.
+- **Precision added (non-corrective):** Audit item 3 records the exact session DTO field names from `src/api/types.ts` so downstream `core-network` work has a verified reference, even though §5 intentionally defers them.
+
+### Open assumptions
+
+- **Dev host plaintext (item 5):** `http://18.222.237.167:8000` and its cleartext requirement are project-context facts with no corroborating source under `reference/`; cannot be verified here.
+- **Toolchain/version pins (items 6, 7):** Gradle 8.9, AGP 8.7.3, Kotlin 2.0.21, SDK 35/24 originate from AND-001 and are not in the reference sources; they must be reconciled against AND-001's committed `gradle/libs.versions.toml` and wrapper at merge time.
+- **Flavors & base-URL wiring (item 8):** Flavor set, `applicationId` suffixes, and the `BuildConfig.API_BASE_URL` mechanism are owned by AND-002/`core-network` (open question Q-1); the README must be updated in lockstep if those change.
+
+## 17. Test Plan
+
+Because AND-007 ships build/config/text artifacts (no runtime code), most cases are build/process verification rather than unit/Compose tests. Cases are sized to the chore.
+
+- **TC-AND-007-01 — Clean-clone build succeeds**
+  - **Type:** integration (CI, Linux + Windows matrix)
+  - **Preconditions:** Throwaway working dir; only an Android SDK 35 + JDK 17 installed; no host `gradle`; AND-001 + AND-007 merged on `android-port`.
+  - **Steps:** `git clone <repo>`; `cd testlogon/android`; create `local.properties` with `sdk.dir` per README; `./gradlew --no-daemon :app:assembleDebug` (and `gradlew.bat` on Windows).
+  - **Expected:** Build succeeds; a debug APK is produced; no manual edits beyond the documented `local.properties` SDK path.
+  - **Traces:** AC-1.
+
+- **TC-AND-007-02 — Wrapper reports pinned Gradle version**
+  - **Type:** contract (build-tool) / instrumented (CI)
+  - **Preconditions:** Repo cloned per TC-01; no host `gradle` on PATH.
+  - **Steps:** Run `./gradlew --version`; on Windows CI run `gradlew.bat --version`.
+  - **Expected:** Output reports Gradle **8.9**; the wrapper (not a host install) drives the build.
+  - **Traces:** AC-3.
+
+- **TC-AND-007-03 — Wrapper files are tracked**
+  - **Type:** unit (repo assertion)
+  - **Preconditions:** Repo cloned.
+  - **Steps:** `git ls-files android/` and assert presence of `gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`, `gradle/wrapper/gradle-wrapper.properties`, `.gitignore`, `README.md`.
+  - **Expected:** All listed files appear; notably `gradle-wrapper.jar` is tracked (the `!gradle/wrapper/gradle-wrapper.jar` negation works).
+  - **Traces:** AC-3.
+
+- **TC-AND-007-04 — Ignore rules keep tree clean after build**
+  - **Type:** integration
+  - **Preconditions:** TC-01 build completed.
+  - **Steps:** `git status --porcelain android/`.
+  - **Expected:** Empty output — no `build/`, `.gradle/`, `local.properties`, `.cxx/`, `captures/`, `*.apk`/`*.aab` shown as untracked.
+  - **Traces:** AC-4.
+
+- **TC-AND-007-05 — No secrets tracked (security)**
+  - **Type:** unit (secret-leak scan) / security
+  - **Preconditions:** Repo cloned.
+  - **Steps:** `git ls-files android/ | grep -E '\.(jks|keystore)$|secrets\.properties|keystore\.properties|local\.properties'`.
+  - **Expected:** No matches. No keystore, `secrets.properties`, `keystore.properties`, or `local.properties` is tracked.
+  - **Traces:** AC-5.
+
+- **TC-AND-007-06 — gradlew executable bit**
+  - **Type:** unit (repo assertion) / permission
+  - **Preconditions:** Repo cloned.
+  - **Steps:** `git ls-files -s android/gradlew`.
+  - **Expected:** Mode is `100755` (executable bit set), so POSIX checkouts can run `./gradlew` without `chmod`.
+  - **Traces:** AC-6.
+
+- **TC-AND-007-07 — Wrapper checksum is enforced**
+  - **Type:** integration (negative / supply-chain)
+  - **Preconditions:** Clean Gradle user home (no cached 8.9 dist); `distributionSha256Sum` pinned in `gradle-wrapper.properties`.
+  - **Steps:** Temporarily corrupt `distributionSha256Sum` (one char) in a scratch copy; run `./gradlew --version`.
+  - **Expected:** Gradle fails fast with a checksum-mismatch error and does not proceed; restoring the value fixes it. Confirms `distributionSha256Sum` + `validateDistributionUrl=true` are active.
+  - **Traces:** AC-6.
+
+- **TC-AND-007-08 — README documents flavors and applicationId**
+  - **Type:** manual (doc review)
+  - **Preconditions:** `android/README.md` present.
+  - **Steps:** Read the Product Flavors section; cross-check each listed flavor's resulting `applicationId` against base `com.testlogon.android`.
+  - **Expected:** Every flavor and its `applicationId` (suffix) is listed; a reader can predict the installed package name. (If AND-002 has not finalized flavors, the section is marked provisional per Q-1.)
+  - **Traces:** AC-2.
+
+- **TC-AND-007-09 — README documents base-URL switch incl. flaky-host/offline path**
+  - **Type:** manual (doc review)
+  - **Preconditions:** README present.
+  - **Steps:** Read the Base-URL Switch + Troubleshooting sections; verify they cover (a) dev plaintext host `http://18.222.237.167:8000`, (b) local-mock fallback when the dev host is down/offline, (c) the untracked `local.properties` `apiBaseUrl` override, and (d) the cleartext-traffic requirement + ~20s timeout warning.
+  - **Expected:** All four are present; offline/flaky guidance steers newcomers to the mock so backend flakiness is not mistaken for a build failure.
+  - **Traces:** AC-2.
+
+- **TC-AND-007-10 — README commands run as written & links resolve**
+  - **Type:** manual / instrumented (markdown link-lint + command smoke)
+  - **Preconditions:** README present; repo cloned.
+  - **Steps:** Execute each copy-pasteable command (prereqs, build, run, unit test, instrumented test); run a markdown link checker over internal links.
+  - **Expected:** Every command succeeds (or fails only for documented external reasons like SDK absence); all internal links resolve.
+  - **Traces:** AC-1, AC-2.
+
+- **TC-AND-007-11 — Cross-platform line endings / exec bit (Windows)**
+  - **Type:** integration (Windows CI runner)
+  - **Preconditions:** `.gitattributes` rules (if added) for `gradlew text eol=lf`, `*.bat text eol=crlf`; Windows runner.
+  - **Steps:** Fresh clone on Windows; run `gradlew.bat :app:assembleDebug`; verify `gradlew` retains LF and the bat file CRLF.
+  - **Expected:** Build runs on Windows; no CRLF corruption of `gradlew`; addresses risk R-4.
+  - **Traces:** AC-1, AC-3.
+
+### Coverage matrix
+
+| Acceptance Criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (clean-clone build, no extra setup) | TC-AND-007-01, TC-10, TC-11 |
+| AC-2 (README: flavors + base-URL switch) | TC-AND-007-08, TC-09, TC-10 |
+| AC-3 (wrapper tracked; `--version` = 8.9) | TC-AND-007-02, TC-03, TC-11 |
+| AC-4 (clean `git status` after build) | TC-AND-007-04 |
+| AC-5 (no secrets/local.properties tracked) | TC-AND-007-05 |
+| AC-6 (gradlew 100755; SHA-256 pinned & enforced) | TC-AND-007-06, TC-07 |

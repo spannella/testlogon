@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-009, AND-006]
 blocks: [AND-014, AND-015]
 ---
@@ -197,6 +198,7 @@ fun provideSampleApi(retrofit: Retrofit): SampleApi = retrofit.create(SampleApi:
 ```kotlin
 package com.testlogon.android.core.network.sample
 
+import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import retrofit2.http.GET
 
@@ -207,15 +209,27 @@ interface SampleApi {
 
 @JsonClass(generateAdapter = true)
 data class MeDto(
-    val username: String,
-    val roles: List<String> = emptyList(),
-    val mfaEnrolled: Boolean = false,
+    @Json(name = "user_sub") val userSub: String,
+    @Json(name = "session_id") val sessionId: String,
+    val ip: String = "",
 )
 ```
 
-`MeDto` mirrors the relevant `GET /ui/me` fields from the web reference; it is a seed that real
-auth DTOs (in the auth feature) will supersede. It exists so the round-trip test has a concrete,
-representative target rather than a contrived type.
+> **Corrected (review 2026-06-06):** the original draft modeled `MeDto` as
+> `{ username, roles, mfaEnrolled }`. That shape does **not** exist on the backend. The
+> authoritative `GET /ui/me` response (web reference `MeResp` in
+> `src/api/types.ts`) is `{ user_sub: string; session_id: string; ip: string }`. The sample DTO
+> now mirrors the real fields, using `@Json(name = ...)` to map the snake_case wire format to
+> camelCase Kotlin properties (the backend uses snake_case throughout; Moshi does **not**
+> auto-convert case, so explicit `@Json` names — or a naming strategy — are required). All three
+> fields are required on the wire; `ip` keeps a default only to exercise the lenient-defaults
+> path in T-5.
+
+`MeDto` mirrors the real `GET /ui/me` fields (`MeResp`) from the web reference; it is a seed that
+real auth DTOs (in the auth feature) will supersede. It exists so the round-trip test has a
+concrete, representative target rather than a contrived type. Note the backend `GET /ui/me`
+response body is not described by a schema in `openapi.json` (the index shows `resp=200:` with an
+empty body schema), so `MeResp` from the frontend is the authoritative field source.
 
 ### 4.5 Gradle wiring (`core-network/build.gradle.kts`)
 
@@ -259,24 +273,29 @@ added in this ticket if not already present.
 This ticket defines **no application endpoints**; it provides the transport that carries them.
 The only contract exercised is the verification sample, modeled on the real:
 
-`GET /ui/me`
-Response `200`:
+`GET /ui/me` (verified: OpenAPI `GET /ui/me`, op `ui_me_ui_me_get`; web reference
+`src/api/endpoints/auth.ts: getMe` → `api.get<MeResp>("/ui/me")`)
+Response `200` (shape per `src/api/types.ts: MeResp`):
 
 ```json
 {
-  "username": "alice@example.com",
-  "roles": ["user"],
-  "mfaEnrolled": true
+  "user_sub": "us-east-1:8f2c…",
+  "session_id": "sess_01HZX…",
+  "ip": "203.0.113.7"
 }
 ```
 
-decodes to `MeDto(username="alice@example.com", roles=["user"], mfaEnrolled=true)` via the
+decodes to `MeDto(userSub="us-east-1:8f2c…", sessionId="sess_01HZX…", ip="203.0.113.7")` via the
 generated Moshi adapter. Request bodies are exercised symmetrically in the round-trip test by
 serializing a DTO and asserting the Moshi-produced JSON.
 
 Real endpoint contracts (session start/finalize/refresh, MFA, error `detail` shapes) are owned
-by the auth feature tickets and **AND-015** (error model). The FastAPI `detail` union
-(`string | [{msg}] | {code,...}`) is explicitly out of scope here.
+by the auth feature tickets and **AND-015** (error model). For reference, the real session
+endpoints are `POST /ui/session/start` (req `UiSessionStartReq` → resp `UiSessionStartResp`),
+`POST /ui/session/finalize` (req `UiSessionFinalizeReq`), and `POST /ui/session/refresh`
+(no body, `200`) — verified in the OpenAPI index. The FastAPI error `detail` union
+(`string | ValidationError[] | {code,...}`, where each `ValidationError` is `{loc, msg, type}`)
+is explicitly out of scope here and owned by AND-015.
 
 ## 6. Data & State Management
 
@@ -288,7 +307,7 @@ DataStore, no cookies in this ticket.
   ticket does not impose a dispatcher.
 - **Serialization config:** Moshi is built once; adapters are generated at compile time. Unknown
   JSON keys are ignored by default (Moshi skips), and absent fields fall back to Kotlin defaults
-  (e.g. `roles = emptyList()`), which is the desired lenient behavior against an evolving backend.
+  (e.g. `ip = ""`), which is the desired lenient behavior against an evolving backend.
 - **Persistence:** none. Cookie persistence is AND-011; cache is Room per `core-data`.
 - **State exposed to UI:** none. `StateFlow<UiState>` / `ApiResult<T>` wrapping happens in
   `core-data` repositories (AND-018) consuming these services.
@@ -352,7 +371,7 @@ All tests are JVM unit tests in `core-network/src/test/...` (no instrumentation 
 fun sampleEndpoint_roundTripsJson() = runTest {
     val server = MockWebServer().apply {
         enqueue(MockResponse().setBody(
-            """{"username":"alice@example.com","roles":["user"],"mfaEnrolled":true}"""
+            """{"user_sub":"us-east-1:8f2c","session_id":"sess_01HZX","ip":"203.0.113.7"}"""
         ))
         start()
     }
@@ -365,10 +384,12 @@ fun sampleEndpoint_roundTripsJson() = runTest {
 
     val me = api.me()
 
-    assertEquals("alice@example.com", me.username)
-    assertEquals(listOf("user"), me.roles)
-    assertTrue(me.mfaEnrolled)
-    assertEquals("/ui/me", server.takeRequest().path)
+    assertEquals("us-east-1:8f2c", me.userSub)
+    assertEquals("sess_01HZX", me.sessionId)
+    assertEquals("203.0.113.7", me.ip)
+    val recorded = server.takeRequest()
+    assertEquals("GET", recorded.method)
+    assertEquals("/ui/me", recorded.path)
     server.shutdown()
 }
 ```
@@ -386,7 +407,8 @@ class against the production `provideMoshi()` Moshi expects an `IllegalArgumentE
 and is idempotent for an already-slashed input.
 
 **T-5 — Lenient parsing.** A response body with an extra unknown field and a missing optional
-field decodes successfully with defaults applied (`roles == emptyList()`).
+field decodes successfully with defaults applied (e.g. omit `ip` → `ip == ""`, and include an
+extra unknown key the adapter must skip).
 
 **T-6 — Hilt graph smoke test.** A `@HiltAndroidTest` (Robolectric or a minimal
 `SingletonComponent` test harness from `core-testing`) injects `Retrofit` and `Moshi` and
@@ -473,3 +495,157 @@ tests. No parallelizable subtasks of note.
   unblocked (the `@BaseUrl` seam and propagating exceptions are in place).
 - A one-paragraph note in the `core-network` README (owned by AND-007) documents the
   no-leading-slash path convention and the codegen-only Moshi policy.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer. "OpenAPI index" =
+`reference/openapi.index.txt`; "OpenAPI spec" = `reference/openapi.pretty.json`; frontend paths
+are relative to `reference/src/`.
+
+1. **`GET /ui/me` exists and is an HTTP `GET`.** VERIFIED. OpenAPI index: `GET /ui/me | op=ui_me_ui_me_get | resp=200:;422:HTTPValidationError`. Frontend: `src/api/endpoints/auth.ts: getMe` = `api.get<MeResp>("/ui/me")`.
+2. **`GET /ui/me` response shape.** CORRECTED. Draft claimed `{ username, roles, mfaEnrolled }`; authoritative shape is `{ user_sub: string; session_id: string; ip: string }`. SOURCE: `src/api/types.ts: MeResp` (`user_sub`, `session_id`, `ip`). The OpenAPI index lists `resp=200:` with **no** body schema for this op, so the frontend DTO is the authoritative field source.
+3. **Wire format is snake_case; Moshi needs explicit `@Json` names.** VERIFIED (contract) + framework ref. `MeResp` fields are `user_sub`/`session_id` (snake_case) in `src/api/types.ts`. Moshi codegen does not transform property names by default, so `@Json(name = "user_sub")` mappings are required. Framework ref: Moshi codegen / `@Json` — https://github.com/square/moshi#custom-field-names-with-json.
+4. **Sample service path declared without a leading slash (`@GET("ui/me")`) and base URL is slash-normalized.** VERIFIED (Retrofit semantics) — framework ref: https://square.github.io/retrofit/2.x/retrofit/retrofit2/Retrofit.Builder.html#baseUrl-okhttp3.HttpUrl- (relative paths resolve against a base URL that must end in `/`; a leading-slash path is treated as host-absolute). The web client itself uses leading-slash absolute paths against a stripped base (`src/api/client.ts: withApiBase`), but the Android Retrofit convention differs intentionally; T-1 asserts the resolved request path is `/ui/me`.
+5. **Suspend functions need no `Call` adapter (Retrofit 2.6+).** VERIFIED — framework ref: https://github.com/square/retrofit/blob/master/CHANGELOG.md (2.6.0 added native `suspend` support). Pinned version 2.11.0 (spec §2) supports it.
+6. **CSRF is carried as header `X-CSRF-Token`, read from the `ui_csrf` cookie.** VERIFIED. SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")` then `headers.set("X-CSRF-Token", csrf)`). Confirms the redaction-header name in §8 and the AND-012 seam. (CSRF interceptor itself is out of scope here.)
+7. **Auth uses `Authorization: Bearer <token>` plus credentialed cookies.** VERIFIED. SOURCE: `src/api/client.ts` (`Authorization: Bearer ${accessToken}`; `credentials: "include"` on every `fetch`). Relevant to AND-011/012/013 seams referenced in §7.
+8. **401 triggers a single session refresh via `POST /ui/session/refresh`, then one retry.** VERIFIED. SOURCE: `src/api/client.ts: refreshSession` (`fetch(withApiBase("/ui/session/refresh"), { method: "POST" })`) and the single-flight `refreshPromise` retry logic; OpenAPI index `POST /ui/session/refresh | resp=200:`. Underpins the AND-013 authenticator seam in §7.
+9. **Error `detail` is a union `string | ValidationError[] | {code,...}`.** VERIFIED. SOURCE: `src/api/client.ts: normalizeErrorDetail` (handles `string`, array of `{msg}`, and object with `code`/`msg`); OpenAPI spec `components.schemas.ValidationError` = `{ loc, msg, type }` (all required) wrapped by `HTTPValidationError.detail: ValidationError[]`. Confirms §5's union claim (corrected wording from `[{msg}]` to `ValidationError[]` of `{loc,msg,type}`). Mapping owned by AND-015.
+10. **Non-2xx → `HttpException`, decode failure → `JsonDataException`/`JsonEncodingException`, transport → `IOException`.** VERIFIED — framework ref (Retrofit/Moshi/OkHttp behavior): https://square.github.io/retrofit/2.x/retrofit/retrofit2/HttpException.html and https://github.com/square/moshi#failing-on-unknown-json-values. These are framework guarantees, not project-specific.
+11. **Real session endpoints exist as named in §5.** VERIFIED. OpenAPI index: `POST /ui/session/start | req=UiSessionStartReq | resp=200:UiSessionStartResp`, `POST /ui/session/finalize | req=UiSessionFinalizeReq`, `POST /ui/session/refresh`. Note: the **frontend** type names are `SessionStartReq`/`SessionStartResp` (`src/api/endpoints/auth.ts`), i.e. the OpenAPI `Ui*` prefix is dropped client-side — a naming nuance for downstream auth tickets, not this one.
+12. **`dev` base URL is `http://18.222.237.167:8000` (cleartext); staging/prod are HTTPS.** UNVERIFIED-ASSUMPTION. Not present in the OpenAPI or frontend sources provided; it is an AND-006 flavor detail. The web client derives its base from `VITE_API_BASE_URL` at runtime (`src/api/client.ts`), so the specific dev IP cannot be confirmed here.
+13. **Shared singleton `OkHttpClient` (~20s timeouts, debug redacting logger) comes from AND-009.** UNVERIFIED-ASSUMPTION (upstream-ticket dependency, not derivable from backend/frontend sources). This spec correctly defers the client construction to AND-009.
+14. **`@Singleton` Hilt provisioning, KSP codegen, AGP/Gradle/Kotlin pins.** UNVERIFIED-ASSUMPTION re: exact versions (project build choices, not in the provided sources). Hilt/Moshi-codegen/Retrofit usage patterns themselves are standard — framework refs: Hilt https://developer.android.com/training/dependency-injection/hilt-android ; Moshi KSP codegen https://github.com/square/moshi#codegen.
+
+### Corrections made
+
+- **§4.4 sample DTO** rewritten: `MeDto` fields changed from the fabricated
+  `{ username: String, roles: List<String>, mfaEnrolled: Boolean }` to the real `MeResp` shape
+  `{ userSub, sessionId, ip }` with `@Json(name = ...)` snake_case mappings; added the `Json`
+  import. (Claim 2.)
+- **§5 API Contract** JSON example and decode line replaced with the real `user_sub`/`session_id`/`ip`
+  fields; added verified citations for `GET /ui/me`, the session endpoints, and the `detail`
+  union refined to `ValidationError[]` of `{loc,msg,type}`. (Claims 2, 9, 11.)
+- **§11 T-1** test body and assertions updated to the real fields and now also asserts the request
+  **method** is `GET` (previously only the path). (Claims 1, 2.)
+- **§11 T-5 and §6** lenient-defaults example changed from `roles == emptyList()` to `ip == ""`,
+  since `roles` no longer exists. (Claim 2.)
+
+### Open assumptions
+
+- **Dev host / cleartext config (Claim 12):** the literal `http://18.222.237.167:8000` and the
+  per-flavor HTTPS rule are AND-006 deliverables and are not present in the OpenAPI or frontend
+  reference. Treated as an upstream contract this ticket merely consumes.
+- **Shared `OkHttpClient` characteristics (Claim 13):** the ~20s timeouts and redacting logger are
+  AND-009 details; this spec depends on, but cannot verify, them from the provided sources.
+- **Version pins / build-tool choices (Claim 14):** Kotlin 2.0.21, Retrofit 2.11.0, OkHttp 4.12.0,
+  Moshi 1.15.x, AGP 8.7.3, Gradle 8.9 are project decisions not derivable from the references.
+- **`GET /ui/me` body schema absent in OpenAPI:** because the index shows `resp=200:` with no
+  schema, the authoritative response shape rests solely on the frontend `MeResp` type. If the
+  backend later publishes a schema, re-verify the sample DTO against it.
+
+## 17. Test Plan
+
+All cases target the `core-network` transport surface. IDs trace to the §14 Acceptance Criteria.
+Most are JVM unit/contract tests (no device needed); the Hilt-graph and cleartext checks are
+Robolectric/JVM. There is no UI in this ticket, so Compose-UI / instrumented-e2e / accessibility
+cases are intentionally absent (noted in the coverage matrix).
+
+- **TC-AND-010-01** — Happy-path round-trip.
+  - Type: contract/MockWebServer.
+  - Preconditions: `MockWebServer` running; `SampleApi` built on a Moshi+MoshiConverterFactory Retrofit pointed at `server.url("/")`.
+  - Steps: enqueue `200` body `{"user_sub":"us-east-1:8f2c","session_id":"sess_01HZX","ip":"203.0.113.7"}`; call `api.me()`; capture `takeRequest()`.
+  - Expected: returns `MeDto(userSub="us-east-1:8f2c", sessionId="sess_01HZX", ip="203.0.113.7")`; recorded request method == `GET`, path == `/ui/me`.
+  - Traces: AC-1.
+
+- **TC-AND-010-02** — Request-side serialization uses the generated adapter.
+  - Type: unit.
+  - Preconditions: production `provideMoshi()` Moshi.
+  - Steps: obtain `moshi.adapter(MeDto::class.java)`; serialize `MeDto("u","s","1.2.3.4")`; parse the JSON.
+  - Expected: emitted JSON contains snake_case keys `user_sub`, `session_id`, `ip` (proving `@Json` mapping + codegen, not reflection).
+  - Traces: AC-5.
+
+- **TC-AND-010-03** — Codegen only; no reflection fallback.
+  - Type: unit.
+  - Preconditions: production `provideMoshi()` Moshi (no `KotlinJsonAdapterFactory`).
+  - Steps: call `moshi.adapter(UnannotatedDataClass::class.java)` for a Kotlin data class lacking `@JsonClass(generateAdapter = true)`.
+  - Expected: throws `IllegalArgumentException` ("no adapter for class … "), confirming reflection is absent.
+  - Traces: AC-5.
+
+- **TC-AND-010-04** — Base URL normalization.
+  - Type: unit.
+  - Preconditions: none.
+  - Steps: `normalizeBaseUrl("http://h:8000")`; `normalizeBaseUrl("http://h:8000/")`.
+  - Expected: both yield `"http://h:8000/"` (appends once, idempotent).
+  - Traces: AC-3.
+
+- **TC-AND-010-05** — Lenient parsing: unknown key skipped + missing optional defaulted.
+  - Type: contract/MockWebServer.
+  - Preconditions: as TC-01.
+  - Steps: enqueue `200` body `{"user_sub":"u","session_id":"s","unexpected":42}` (omits `ip`, adds unknown key); call `api.me()`.
+  - Expected: decodes successfully; `ip == ""` (Kotlin default); no exception from the unknown field.
+  - Traces: AC-6.
+
+- **TC-AND-010-06** — HTTP non-2xx surfaces as `HttpException` (clean propagation).
+  - Type: contract/MockWebServer.
+  - Preconditions: as TC-01.
+  - Steps: enqueue `422` with FastAPI body `{"detail":[{"loc":["body","x"],"msg":"field required","type":"value_error.missing"}]}`; call `api.me()`.
+  - Expected: throws `retrofit2.HttpException` with `code() == 422`; raw error body is retrievable via `response().errorBody()`; transport does **not** translate it (AND-015's job).
+  - Traces: AC-1, AC-7.
+
+- **TC-AND-010-07** — Malformed JSON surfaces as `JsonDataException`/`JsonEncodingException`.
+  - Type: contract/MockWebServer.
+  - Preconditions: as TC-01.
+  - Steps: enqueue `200` with non-JSON / truncated body (e.g. `{"user_sub":`); call `api.me()`.
+  - Expected: throws a Moshi `JsonEncodingException`/`JsonDataException` (a subtype of `IOException`), propagated unwrapped.
+  - Traces: AC-1, AC-7.
+
+- **TC-AND-010-08** — Offline / flaky dev host surfaces as `IOException`.
+  - Type: contract/MockWebServer.
+  - Preconditions: build Retrofit against a server URL, then `server.shutdown()` (or enqueue `SocketPolicy.DISCONNECT_AT_START` / `NO_RESPONSE` with a short client timeout).
+  - Steps: call `api.me()` against the dead/disconnecting host.
+  - Expected: throws `java.io.IOException` (e.g. `SocketTimeoutException`/`ConnectException`), never a silent null; demonstrates the unreliable-dev-host path stays propagatable for AND-018.
+  - Traces: AC-1, AC-7.
+
+- **TC-AND-010-09** — Hilt graph: singletons, identity, and resolved base URL.
+  - Type: integration (Robolectric `@HiltAndroidTest` or `core-testing` SingletonComponent harness).
+  - Preconditions: Hilt test component wired with `NetworkModule` and the AND-009 client module.
+  - Steps: inject `Retrofit` and `Moshi` twice; read `retrofit.baseUrl()`.
+  - Expected: both injections return the same instances (singleton identity); `retrofit.baseUrl().toString()` equals `normalizeBaseUrl(BuildConfig.API_BASE_URL)` and ends with `/`.
+  - Traces: AC-2, AC-3.
+
+- **TC-AND-010-10** — Shared OkHttpClient (no duplicate client).
+  - Type: integration (Hilt).
+  - Preconditions: AND-009 client module present in the test graph.
+  - Steps: inject both the singleton `OkHttpClient` and the `Retrofit`; compare `retrofit.callFactory()` to the injected client.
+  - Expected: referential equality — Retrofit reuses the AND-009 client; no second `OkHttpClient` is constructed.
+  - Traces: AC-4.
+
+- **TC-AND-010-11** — Security: non-dev base URL is HTTPS.
+  - Type: unit (parameterized) / build-variant.
+  - Preconditions: ability to evaluate the resolved base URL per flavor (or assert the normalization rule against representative staging/prod values).
+  - Steps: resolve the normalized base URL for `staging` and `prod`.
+  - Expected: scheme is `https`; only `dev` may be cleartext `http`. (Guards the §8 cleartext-scoping assertion; the literal dev IP is an AND-006 assumption — see §16 Open assumptions.)
+  - Traces: AC-3, AC-7.
+
+- **TC-AND-010-12** — Build/codegen verification.
+  - Type: manual (CI build gate).
+  - Preconditions: clean module checkout; AGP 8.7.3 / Gradle 8.9 / JDK 17.
+  - Steps: run `./gradlew :core-network:assemble :core-network:testDebugUnitTest`.
+  - Expected: build succeeds; KSP emits a generated `MeDtoJsonAdapter`; all unit tests green; no new lint/detekt violations.
+  - Traces: AC-5, AC-7.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (sample endpoint round-trips JSON; path/method asserted) | TC-01, TC-06, TC-07, TC-08 |
+| AC-2 (`@Singleton` Retrofit/Moshi; same instance on re-inject) | TC-09 |
+| AC-3 (base URL = normalized `BuildConfig`, trailing `/`) | TC-04, TC-09, TC-11 |
+| AC-4 (built on shared AND-009 `OkHttpClient`; no duplicate) | TC-10 |
+| AC-5 (Moshi Kotlin codegen; un-annotated rejected) | TC-02, TC-03, TC-12 |
+| AC-6 (lenient unknown/missing fields with defaults) | TC-05 |
+| AC-7 (tests pass in CI; clean build with generated adapters) | TC-06, TC-07, TC-08, TC-11, TC-12 |
+
+> No Compose-UI, instrumented/e2e, or accessibility cases: this is a headless transport ticket
+> with no UI surface (§9). Accessibility/i18n are owned by `core-ui` and the `feature-*` tickets.

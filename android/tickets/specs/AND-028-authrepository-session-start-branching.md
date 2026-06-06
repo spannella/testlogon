@@ -297,12 +297,15 @@ Representative success — **fully authenticated** (session cookies set; `sessio
 
 Error responses are folded by `apiCall`/AND-015 into `ApiResult.Failure(ApiError)`:
 
-- **401 Unauthorized** (bad credentials) — **[Unverified assumption]** the OpenAPI spec for
-  `POST /ui/session/start` documents only `200` and `422` responses; it does **not** declare a
-  401. The exact wire shape and message string below are assumed (FastAPI `detail`), not
-  confirmed by the sources. The web client simply renders `err.detail || "Invalid
-  credentials. Please try again."` (`src/pages/Login.tsx:178-186`) for any thrown `ApiError`,
-  so a credentials failure surfaces through the generic error path regardless of status code.
+- **401 Unauthorized** (bad credentials) — **[Status corroborated; message unverified]** the
+  OpenAPI spec for `POST /ui/session/start` documents only `200` and `422` responses; it does
+  **not** declare a 401. However the web transport DOES treat an unauthenticated 401 as a real
+  outcome: `src/api/client.ts:194-203` throws `ApiError(401, ...)` for a 401 when not already
+  authenticated (and does **not** refresh it). So the **401 status** is corroborated by the
+  reference client; only the exact `detail` **message string** below is assumed (FastAPI
+  `detail`), not confirmed. The web client renders `err.detail || "Invalid credentials. Please
+  try again."` (`src/pages/Login.tsx:178-186`) for any thrown `ApiError`, so a credentials
+  failure surfaces through the generic error path regardless of the precise string.
   ```json
   { "detail": "Invalid username or password" }
   ```
@@ -473,10 +476,14 @@ DI smoke test:
   uses snake_case `challenge_id` (nullable string), `auth_required` (boolean, required),
   `required_factors` (string[]), `session_id` (nullable string). The Moshi `@Json(name=...)`
   mappings in AND-027 must match these exact names — confirmed correct as written.
-- **Q1 — 401 disambiguation (credentials vs. expired session).** AND-013's authenticator
-  must NOT loop `session/refresh` on a credentials 401 from `session/start` (there is no
-  session to refresh). Open: confirm AND-013 scopes refresh to endpoints other than
-  `session/start`, or that a no-cookie 401 short-circuits refresh.
+- **Q1 — 401 disambiguation (credentials vs. expired session).** *(Corroborated by the web
+  reference.)* AND-013's authenticator must NOT loop `session/refresh` on a credentials 401 from
+  `session/start` (there is no session to refresh). The web client encodes exactly this rule:
+  `src/api/client.ts:194-203` refreshes+retries a 401 **only** when `isAuthenticated`, and throws
+  an unauthenticated 401 straight to the caller. Android equivalent: gate AND-013's refresh on the
+  presence of an existing session (auth state / cookie), or exclude `session/start` from refresh.
+  Remaining open item is purely an AND-013 implementation detail (how it detects "already
+  authenticated"), not a backend-contract unknown.
 - **Q2 — Multi-factor selection.** `required_factors` may list several factors. This ticket
   returns the full ordered list; whether the user must satisfy *all* or *one* is decided by
   the MFA flow tickets, not here. Documented in `LoginResult.MfaRequired` KDoc.
@@ -565,17 +572,28 @@ Sources are cited as: OpenAPI `METHOD /path` / `components.schemas.<Name>` (from
 8. **Session rides on cookies (`credentials: include`).** VERDICT: Verified. Source:
    `src/api/client.ts:183,220` (`credentials: "include"`); cookie jar persistence is the Android
    analog (AND-011).
-9. **401 → single `session/refresh` + retry.** VERDICT: Verified (web transport behavior).
-   Source: `src/api/client.ts:122` (`refresh` POSTs `/ui/session/refresh`) and the 401-retry
-   block (`:198-221`). OpenAPI `POST /ui/session/refresh` exists (`resp=200`).
+9. **401 → single `session/refresh` + retry, but ONLY when already authenticated.** VERDICT:
+   Verified (web transport behavior), with an important nuance. Source: `src/api/client.ts:122`
+   (`refreshSession` POSTs `/ui/session/refresh`) and the 401 block (`:194-221`). The client
+   refreshes+retries once **only if** `useAuthStore.getState().isAuthenticated` is true; an
+   **unauthenticated** 401 (e.g. wrong password on the login page) is thrown straight to the
+   caller without refresh (`:196-203`). This directly corroborates the Android plan: a
+   credentials 401 from `session/start` (no prior session) must NOT loop through refresh.
+   OpenAPI `POST /ui/session/refresh` exists (`resp=200`; index line 1847).
 10. **422 validation error shape: `detail: ValidationError[]` with `loc`, `msg`, `type`.**
     VERDICT: Verified. Source: `components.schemas.HTTPValidationError` →
     `components.schemas.ValidationError` (`loc`, `msg`, `type` all required). The original spec's
     422 example omitted `type` — corrected in Section 5.
-11. **401 "Invalid username or password" for bad credentials.** VERDICT: Unverified-assumption.
-    Source: OpenAPI declares only `200`/`422` for `POST /ui/session/start` (no 401 documented).
-    The web client renders `err.detail || "Invalid credentials. Please try again."`
-    (`src/pages/Login.tsx:178-186`) for any thrown error; exact status/message unconfirmed.
+11. **401 for bad credentials (status), with FastAPI `detail` message.** VERDICT: Partially
+    verified / message-string Unverified-assumption. The **401 status** for an unauthenticated
+    request is corroborated by the web transport: `src/api/client.ts:194-203` constructs and
+    throws an `ApiError(401, normalizeErrorDetail(body.detail, "Authentication required"), ...)`
+    for a 401 when not authenticated. However, OpenAPI declares only `200`/`422` for
+    `POST /ui/session/start` (index line 1848), so the 401 is not in the documented schema, and
+    the **exact `detail` string** (e.g. "Invalid username or password") is NOT confirmed by any
+    source — it is assumed. The Login page renders `err.detail || "Invalid credentials. Please
+    try again."` (`src/pages/Login.tsx:178-186`) for any thrown error, so the UI copy does not
+    depend on the precise server string.
 12. **No user identity returned inline on Authenticated; `getMe()` required.** VERDICT: Verified.
     Source: `UiSessionStartResp` has no identity fields; `src/pages/Login.tsx:147` calls
     `getMe()` after the authenticated branch. `GET /ui/me` exists (OpenAPI `GET /ui/me`,
@@ -604,15 +622,24 @@ Sources are cited as: OpenAPI `METHOD /path` / `components.schemas.<Name>` (from
   OpenAPI documents only 200/422 for this endpoint (Section 5; citation 11).
 - **C5 (R2 / Q3):** Promoted R2 (field casing) and Q3 (inline user data) from open questions to
   verified resolutions against the schema (citations 3, 4, 12).
+- **C6 (401 evidence, re-review 2026-06-06):** Strengthened citations 9 and 11 and OA2/Q1 using
+  `src/api/client.ts:194-203`: the web client refreshes+retries a 401 **only** when already
+  authenticated and throws an unauthenticated 401 (wrong-password case) straight through without
+  refresh. This corroborates both the 401 *status* on a credentials failure and the "no refresh
+  loop on `session/start` credentials 401" requirement (Q1). The exact `detail` message string
+  remains unverified (Sections 5, 7, 13-Q1, 16 citations 9/11, OA2).
 
 ### Open assumptions
 
 - **OA1 — `challenge_context` inner typing.** Backend accepts a free-form object; `{username,
   password}` is confirmed only from the web call site. If the server later requires extra fields
   (e.g. device hints), the typed `ChallengeContext` must extend. (citation 2)
-- **OA2 — Credentials-failure HTTP status/message.** Not documented in OpenAPI; assumed 401 with
-  a FastAPI `detail` string. Confirm against the live dev host before relying on `status==401`
-  for any UI branching. (citation 11)
+- **OA2 — Credentials-failure HTTP status/message.** The **401 status** is now corroborated by
+  the web transport (`src/api/client.ts:194-203` throws `ApiError(401, ...)` for an
+  unauthenticated 401), so it is no longer a pure assumption; what remains **unverified** is the
+  exact `detail` message string, which is not in OpenAPI (endpoint documents only 200/422, index
+  line 1848). Confirm the message against the live dev host if any UI keys off the literal text;
+  do not branch on the string. (citation 11)
 - **OA3 — Whether an Authenticated `session/start` can ever return `auth_required=false` with a
   null `session_id`.** The schema permits it (both optional/nullable). Spec treats null
   `session_id` as non-authenticated; if the backend can complete a session without echoing
@@ -679,7 +706,8 @@ instrumented cases are explicitly typed. "Traces: AC-#" refers to Section 14 acc
   `flatMap` does not alter it; no `LoginResult` produced. Traces: AC-7.
 - **TC-AND-028-09 — Credentials failure passthrough.** Type: contract/MockWebServer.
   Preconditions: MockWebServer enqueues `401` with `{"detail":"Invalid username or
-  password"}` (per OA2 — status assumed).
+  password"}` (401 status corroborated by `src/api/client.ts:194-203`; exact `detail` string
+  is the OA2 assumption — the test asserts status and passthrough, not the literal message).
   Steps: call `login`.
   Expected: `ApiResult.Failure(ApiError(status=401, message="Invalid username or
   password"))`; not retried into Authenticated; no refresh loop. Traces: AC-7.

@@ -5,7 +5,8 @@ milestone: M1
 epic: E03
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-022]
 blocks: [AND-025]
 ---
@@ -25,7 +26,7 @@ The scope is deliberately a **skeleton**: no real network calls, no list content
 - **Depends on AND-022 (Navigation host & routes):** provides the single-Activity `NavHost`, the typed-route convention, and shared transition specs. This ticket plugs a nested graph into that host.
 - **Sibling AND-023 (Unauthenticated nav graph):** the parallel unauthenticated subgraph (Login → MFA → …). AND-024 is its authenticated counterpart; both are siblings under the root host.
 - **Blocks AND-025 (Auth-gated routing):** AND-025 observes auth state and chooses between the unauth graph (AND-023) and this authenticated graph, and handles logout/expiry redirects. AND-024 must expose a stable route constant and entry point that AND-025 can target with `popUpTo`.
-- **Web reference:** `frontend/` post-login shell (tabbed layout) is the UX reference; the Me tab maps to the web `/me` view backed by `GET /ui/me`.
+- **Web reference:** `frontend/` post-login shell (tabbed layout) is the UX reference; the Me tab maps to the web profile view, which is served at the web route **`/profile`** (`ProfilePage`, `src/App.tsx:382`) — *not* a `/me` route — backed by `GET /ui/me` (`src/api/endpoints/auth.ts: getMe`). *(Corrected: spec previously cited a non-existent web `/me` route.)*
 - **Stack:** Kotlin 2.0.21, Jetpack Compose + Material 3, Navigation-Compose, Hilt (KSP), Coroutines/Flow. minSdk 24, compileSdk/targetSdk 35, JDK 17, AGP 8.7.3, Gradle 8.9.
 
 ## 3. Functional Requirements
@@ -149,7 +150,9 @@ private fun NavController.navigateToTab(tab: AuthedTab) {
 
 ## 5. API Contract
 
-**N/A for this ticket.** AND-024 is structural navigation only and makes no network calls. The **Me** tab placeholder will be backed by `GET /ui/me` (cookie session + `X-CSRF-Token`), but wiring that endpoint, its `ApiResult<MeResponse>` mapping, and the Retrofit interface are owned by the downstream Profile/Me feature ticket (and AND-025 for session/auth observation). This spec defines only the navigation seam (`AuthedTab.ME` route) into which that content is later injected. No request/response shapes are introduced here.
+**N/A for this ticket.** AND-024 is structural navigation only and makes no network calls. The **Me** tab placeholder will be backed by `GET /ui/me` (verified: OpenAPI `GET /ui/me`, op `ui_me_ui_me_get`; frontend `src/api/endpoints/auth.ts: getMe`), but wiring that endpoint, its result mapping, and the Retrofit interface are owned by the downstream Profile/Me feature ticket (and AND-025 for session/auth observation). This spec defines only the navigation seam (`AuthedTab.ME` route) into which that content is later injected. No request/response shapes are introduced here.
+
+For downstream accuracy, the verified transport contract for `GET /ui/me` is: the web client sends **all three** of (a) a session cookie via `credentials: "include"`, (b) `X-CSRF-Token` read from the `ui_csrf` cookie, and (c) `Authorization: Bearer <accessToken>` when an access token is present (`src/api/client.ts:157-184`). *(Corrected: the prior phrasing "cookie session + `X-CSRF-Token`" was incomplete — it omitted the Bearer token; CSRF is required on the web client regardless of method.)* The verified `GET /ui/me` response shape (`MeResp`, `src/api/types.ts:31`) is `{ user_sub: string; session_id: string; ip: string }` — note the DTO name is `MeResp`, not the previously-named `MeResponse`. None of this is implemented in AND-024; it is recorded only to seed the downstream ticket.
 
 ## 6. Data & State Management
 
@@ -246,3 +249,73 @@ AC-8 — Unit + Compose UI tests in §11 pass in CI on `android-port`.
 - [ ] Unit and Compose UI tests written and green in CI; `ktlint`/`detekt` clean.
 - [ ] Public API (`AuthedGraph.ROUTE`, `authedGraph(...)`) documented with KDoc for AND-025.
 - [ ] Code reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Scope note: AND-024 is a pure-navigation skeleton ticket with **no network calls**. The only externally-verifiable technical claims are (a) the backend endpoint that will later back the Me tab, (b) the web reference behavior/route, (c) the auth/CSRF transport that downstream wiring inherits, and (d) the Android-framework navigation patterns. Most claims in this spec are internal design decisions about Compose navigation and are not verifiable against the backend/frontend sources; those are labeled as design choices or framework refs rather than backend contract claims.
+
+1. **Claim:** The Me tab will be backed by `GET /ui/me`. — **VERDICT: Verified.** — **Source:** OpenAPI `GET /ui/me` (op `ui_me_ui_me_get`, `reference/openapi.index.txt:1638`); frontend `src/api/endpoints/auth.ts: getMe` → `api.get<MeResp>("/ui/me")`.
+2. **Claim:** The Me tab maps to the web `/me` view. — **VERDICT: Corrected.** — **Source:** `src/App.tsx:382` registers `<Route path="profile" element={<ProfilePage />} />`; there is no web route at `/me`. The web view is at `/profile`; the *endpoint* is `/ui/me`. Spec §2 corrected to say the web route is `/profile`.
+3. **Claim (spec §5, pre-review):** `GET /ui/me` uses "cookie session + `X-CSRF-Token`". — **VERDICT: Corrected (incomplete).** — **Source:** `src/api/client.ts:157-184` — the web client attaches a session cookie (`credentials: "include"`), `X-CSRF-Token` from the `ui_csrf` cookie, **and** `Authorization: Bearer <accessToken>` when an access token exists. The original phrasing omitted the Bearer token. Corrected inline in §5.
+4. **Claim:** The response DTO is `MeResponse` mapped as `ApiResult<MeResponse>`. — **VERDICT: Corrected.** — **Source:** `src/api/types.ts:31` defines the response type as `MeResp` (`{ user_sub: string; session_id: string; ip: string }`), not `MeResponse`. The `ApiResult<…>` wrapper is an Android-side design convention, not a backend type. §5 corrected to use `MeResp` and to note the wrapper is Android-internal.
+5. **Claim:** `GET /ui/me` validation/error surface. — **VERDICT: Verified.** — **Source:** OpenAPI `GET /ui/me` declares `resp=200:;422:HTTPValidationError` and an unauthenticated call yields `401` handled by the web client's refresh path (`src/api/client.ts:121-204`). Not exercised by AND-024 (no calls); recorded for the downstream ticket and the §17 contract tests there.
+6. **Claim:** No web→authed direct navigation edge; entry is reserved for AND-025 (gating invariant). — **VERDICT: Unverified-assumption (internal design).** — **Source:** Cross-ticket design contract with AND-023/AND-025; not verifiable against backend/frontend sources. This is an intentional architectural decision, not a backend claim.
+7. **Claim:** Material 3 `Scaffold` + `NavigationBar` + `NavigationBarItem` is the correct bottom-nav primitive. — **VERDICT: Verified (framework ref).** — **Source:** framework ref, Material 3 Compose Navigation bar — https://developer.android.com/develop/ui/compose/components/navigation-bar
+8. **Claim:** Multi-back-stack tab switching via `popUpTo(startDestination){ saveState = true }` + `launchSingleTop` + `restoreState`. — **VERDICT: Verified (framework ref).** — **Source:** framework ref, Navigation Compose bottom navigation / multiple back stacks — https://developer.android.com/develop/ui/compose/navigation#bottom-nav and https://developer.android.com/guide/navigation/backstack/multi-back-stack
+9. **Claim:** `currentBackStackEntryAsState()` is the source of truth for the selected tab. — **VERDICT: Verified (framework ref).** — **Source:** framework ref, Navigation Compose — https://developer.android.com/develop/ui/compose/navigation#bottom-nav
+10. **Claim:** `Icons.Outlined.*` requires the `material-icons-extended` artifact (R3). — **VERDICT: Verified (framework ref).** — **Source:** framework ref, Compose Material icons — https://developer.android.com/develop/ui/compose/graphics/images/material-icons
+11. **Claim:** Hilt `@HiltViewModel` injection point for the shell ViewModel. — **VERDICT: Verified (framework ref).** — **Source:** framework ref, Hilt + Compose ViewModels — https://developer.android.com/develop/ui/compose/libraries#hilt
+12. **Claim:** `@Serializable` type-safe routes are an option matching AND-022 (R2). — **VERDICT: Unverified-assumption.** — **Source:** depends on the convention AND-022 landed on; AND-022 spec not provided to this review. Framework support exists (Navigation type-safe routes — https://developer.android.com/guide/navigation/design/type-safety) but the project choice is unverified here.
+
+### Corrections made
+
+- **§2:** Replaced the non-existent web "`/me` view" with the actual web route `/profile` (`ProfilePage`, `src/App.tsx:382`), keeping the verified `GET /ui/me` endpoint backing and adding the `getMe` source pointer. (Audit #2)
+- **§5:** (a) Corrected the transport description from "cookie session + `X-CSRF-Token`" to the full verified set: session cookie + `X-CSRF-Token` (from `ui_csrf`) + `Authorization: Bearer` when present (`src/api/client.ts:157-184`). (b) Renamed the response DTO from `MeResponse` to the verified `MeResp` and added its field shape, clarifying that `ApiResult<…>` is an Android-side wrapper, not a backend type. (c) Added explicit OpenAPI op/endpoint citations. (Audit #1, #3, #4)
+- No other factual corrections were required: the remaining concrete claims are Android-framework navigation patterns (verified as framework refs) or internal cross-ticket design decisions (which are not contract claims).
+
+### Open assumptions
+
+- **AND-022 route convention (string vs. `@Serializable` type-safe):** unverifiable — the AND-022 spec/source was not provided to this review. The spec correctly defers to "match AND-022." (Audit #12)
+- **Gating invariant ownership (no unauth→authed edge; entry only via AND-025):** a cross-ticket design contract, not verifiable against backend/frontend sources; depends on AND-025's implementation. (Audit #6)
+- **`X-SESSION-ID` / `user_sub` query param on `GET /ui/me`:** the OpenAPI index lists `params=user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN` for `GET /ui/me`, but the web client (`src/api/client.ts`) does not send `X-SESSION-ID` and relies on the session cookie instead; these params appear to be server-side/gateway-injected. Reconciling the OpenAPI-declared params with the cookie-based web transport is **deferred to the downstream Me ticket** and is out of scope for AND-024. (Related to Audit #3, #5)
+
+## 17. Test Plan
+
+All IDs trace to the Acceptance Criteria in §14 (AC-1..AC-8). Because AND-024 makes no network calls, there are no live contract tests in *this* ticket; the one contract/MockWebServer case below is the recommended downstream seed for the Me endpoint and is explicitly marked as deferred so the §17 coverage is complete for the structural deliverable.
+
+- **TC-AND-024-01** — Type: unit (JVM). **Preconditions:** `AuthedTab` enum available. **Steps:** call `AuthedTab.fromRoute("authed/home")`, `fromRoute("authed/me")`, `fromRoute(null)`, `fromRoute("garbage/route")`. **Expected:** returns `HOME`, `ME`, `HOME` (fallback to `START`), `HOME` (fallback) respectively. **Traces:** AC-2, AC-7 (route↔tab mapping), partially AC-1.
+
+- **TC-AND-024-02** — Type: unit (JVM). **Preconditions:** `AuthedShellViewModel` constructible (Hilt test or direct). **Steps:** instantiate VM; read first `uiState` emission. **Expected:** `ShellUiState.selectedTab == AuthedTab.HOME` (START). **Traces:** AC-2.
+
+- **TC-AND-024-03** — Type: Compose-UI (`createComposeRule` + `TestNavHostController` set to `AuthedGraph.ROUTE`). **Preconditions:** shell composed at `AuthedGraph.ROUTE`. **Steps:** assert nodes. **Expected:** `tab_home` and `tab_me` both exist; the `NavigationBar` renders; `home_placeholder` is displayed by default. **Traces:** AC-1, AC-2.
+
+- **TC-AND-024-04** — Type: Compose-UI. **Preconditions:** shell rendered, Home default. **Steps:** `onNodeWithTag("tab_me").performClick()`; then `onNodeWithTag("tab_home").performClick()`. **Expected:** after Me tap → `me_placeholder` displayed, `home_placeholder` not displayed, Me item `selected`; after Home tap → reverse. **Traces:** AC-3.
+
+- **TC-AND-024-05** — Type: Compose-UI / instrumented. **Preconditions:** shell rendered; a way to push a child destination within a tab's inner stack (test stub destination) OR assert root identity for placeholders. **Steps:** on Me tab, navigate to a child (or record placeholder identity); re-tap the **Me** item. **Expected:** inner stack pops to the Me root; no duplicate destination is stacked (`launchSingleTop`); destination is not recreated. **Traces:** AC-5.
+
+- **TC-AND-024-06** — Type: Compose-UI / instrumented. **Preconditions:** shell rendered. **Steps:** Home → Me → Home; assert Home's prior destination state is restored (for placeholders, assert the Home destination entry is *restored* not *recreated* — e.g., same `NavBackStackEntry` id / a remembered marker survives). **Expected:** state preserved across tab switch; no recreation from scratch. **Traces:** AC-4.
+
+- **TC-AND-024-07** — Type: instrumented (config-change). **Preconditions:** shell rendered on Me tab. **Steps:** trigger rotation/recreation; re-read selected tab and visible destination. **Expected:** inner `NavController` restores its back stack; selected tab recomputed from the restored route so the bar indicator still shows Me (matches §7 resilience). **Traces:** AC-4.
+
+- **TC-AND-024-08** — Type: unit/Compose-UI (API-surface). **Preconditions:** `feature-shell` public API. **Steps:** reference `AuthedGraph.ROUTE` and call `NavGraphBuilder.authedGraph(navController)` inside a `TestNavHostController` graph; navigate to `AuthedGraph.ROUTE`. **Expected:** the extension compiles/links against the public signature and renders the shell — proves the AND-025 entry contract is usable. **Traces:** AC-1, AC-6.
+
+- **TC-AND-024-09** — Type: instrumented/e2e (accessibility). **Preconditions:** shell rendered; TalkBack/semantics assertions enabled. **Steps:** inspect semantics of both `NavigationBarItem`s. **Expected:** each item is a focusable target ≥ 48dp; the active item carries the `Selected` semantics state; labels come from string resources (`tab_home`, `tab_me`); `Icon` `contentDescription` is null (no double-announcement, label provides the name). **Traces:** AC-7.
+
+- **TC-AND-024-10** — Type: Compose-UI (accessibility / large font). **Preconditions:** shell rendered with font scale forced to 200%. **Steps:** render at 2.0f fontScale; assert both tab labels present. **Expected:** both labels remain legible/visible (single line with ellipsis acceptable), no crash, no tab dropped (matches §9). **Traces:** AC-7.
+
+- **TC-AND-024-11** — Type: Compose-UI / instrumented (security / gating invariant). **Preconditions:** root host with both unauth (AND-023) and authed graphs registered. **Steps:** statically/behaviorally assert there is **no** navigation action from any unauthenticated destination directly into `AuthedGraph.ROUTE` (e.g., attempt `navController.navigate(AuthedGraph.ROUTE)` is not wired from unauth screens; only AND-025's observer path reaches it). **Expected:** authed graph is unreachable except via the reserved entry; confirms §8 gating invariant is not violated by this ticket. **Traces:** AC-6 (entry contract), AC-1.
+
+- **TC-AND-024-12** — Type: contract/MockWebServer — **DEFERRED to downstream Me ticket (recorded here for completeness; not implemented in AND-024).** **Preconditions:** Retrofit `getMe()` against MockWebServer. **Steps:** (a) enqueue `200` with body `{"user_sub":"u1","session_id":"s1","ip":"1.2.3.4"}` and assert it maps to `MeResp`; (b) enqueue `422` `HTTPValidationError` and assert validation-error mapping; (c) enqueue `401` and assert the session-refresh/redirect path (owned by AND-025); (d) simulate offline/flaky dev host (no response / `IOException`) and assert a network-error result rather than a crash. **Expected:** correct DTO + error-shape mapping per the verified contract (OpenAPI `GET /ui/me`; `src/api/types.ts: MeResp`). **Traces:** AC-1 (downstream Me content); out of scope for AC-8 of this ticket.
+
+### Coverage matrix
+
+| §14 Acceptance Criterion | Covered by |
+| --- | --- |
+| AC-1 — authed graph/shell shows after (simulated) login | TC-AND-024-03, TC-AND-024-08, TC-AND-024-11 (and downstream TC-12) |
+| AC-2 — Home is default selected; `home_placeholder` shown | TC-AND-024-01, TC-AND-024-02, TC-AND-024-03 |
+| AC-3 — tapping Me/Home switches destination + indicator | TC-AND-024-04 |
+| AC-4 — per-tab back stack/state preserved (no recreate) | TC-AND-024-06, TC-AND-024-07 |
+| AC-5 — re-select current tab pops to root, no duplicate | TC-AND-024-05 |
+| AC-6 — exposes `AuthedGraph.ROUTE` + `authedGraph(...)` for AND-025 | TC-AND-024-08, TC-AND-024-11 |
+| AC-7 — string-resource labels; TalkBack-navigable; ≥48dp; 200% font | TC-AND-024-09, TC-AND-024-10, TC-AND-024-01 |
+| AC-8 — unit + Compose UI tests green in CI | TC-AND-024-01..11 (the suite itself) |

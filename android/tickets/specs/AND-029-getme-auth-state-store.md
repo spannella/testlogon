@@ -5,7 +5,8 @@ milestone: M1
 epic: E04
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-028, AND-011]
 blocks: [AND-025, AND-032, AND-043, AND-044]
 ---
@@ -38,7 +39,7 @@ Goal, stated as a single testable sentence: *after a successful login, `me` popu
 
 FR-1. `AuthRepository.getMe()` issues `GET /ui/me` using the shared OkHttp client (persistent cookie jar + CSRF header) and returns `ApiResult<User>`.
 
-FR-2. On a successful `getMe()` (HTTP 200), the repository writes `AuthState(authenticated = true, userSub = user.sub)` to the `AuthStateStore` and caches the `User` in memory for the session.
+FR-2. On a successful `getMe()` (HTTP 200), the repository writes `AuthState(authenticated = true, userSub = user.userSub)` to the `AuthStateStore` and caches the `User` in memory for the session.
 
 FR-3. On a `getMe()` returning 401 (no/expired session) after the single refresh-retry has been exhausted, the repository writes `AuthState(authenticated = false, userSub = null)` and returns `ApiResult.Error(Unauthorized)`. A 401 is the canonical "you are not logged in" signal and MUST flip the store to unauthenticated.
 
@@ -57,13 +58,12 @@ FR-8. The store value persists across process death and cold start: a relaunched
 ### 4.1 Domain models (`:core:model`)
 
 ```kotlin
+// CORRECTED: the real GET /ui/me payload is minimal (see §5.1 / §16).
+// It returns only the session identity facts — NOT a rich user profile.
 data class User(
-    val sub: String,
-    val username: String,
-    val email: String?,
-    val displayName: String?,
-    val mfaEnabled: Boolean,
-    val createdAt: String?, // ISO-8601, as returned by backend
+    val userSub: String,   // maps "user_sub"
+    val sessionId: String, // maps "session_id"
+    val ip: String,        // maps "ip"
 )
 
 sealed interface AuthState {
@@ -73,7 +73,7 @@ sealed interface AuthState {
 }
 ```
 
-`AuthState` is intentionally minimal — only the durable facts (`authenticated`, `userSub`). The full `User` lives in memory (and may be re-fetched), because it is not safe to assume PII should sit in plaintext DataStore (see §8).
+`AuthState` is intentionally minimal — only the durable facts (`authenticated`, `userSub`). The full `User` lives in memory (and may be re-fetched). Note (correction): `/ui/me` does **not** return profile PII (email/username/display name) — it returns only `user_sub`, `session_id`, `ip` (see §5.1 and §16). The PII-minimization rationale in §8 still holds (do not persist `session_id`/`ip` beyond memory), but the original claim that `User` carries email/displayName was inaccurate and has been corrected.
 
 ### 4.2 AuthStateStore (`:core:data`)
 
@@ -144,7 +144,7 @@ class AuthRepositoryImpl @Inject constructor(
         when (val r = api.getMe().toApiResult { it.toDomain() }) {
             is ApiResult.Success -> {
                 _cachedUser.value = r.data
-                authStateStore.setAuthenticated(r.data.sub)
+                authStateStore.setAuthenticated(r.data.userSub)
                 r
             }
             is ApiResult.Error -> {
@@ -171,31 +171,27 @@ A `@Module @InstallIn(SingletonComponent::class)` binds `AuthStateStore` → `Da
 
 Request: no body. Cookies (session + `ui_csrf`) from the persistent jar are attached automatically; `X-CSRF-Token: <ui_csrf>` header is added by the shared interceptor.
 
-Success `200 OK` (shape mirrors `frontend/src/api/types.ts`; confirm exact keys against `/openapi.json` at integration):
+Success `200 OK`. **CORRECTED** against the web contract `frontend/src/api/types.ts: MeResp` (the OpenAPI `200` response for `ui_me_ui_me_get` has an *empty* schema `{}`, so the frontend type is the authoritative shape). The real payload is minimal — it is the session identity, not a user profile:
 
 ```json
 {
-  "sub": "user_8f3a...",
-  "username": "alice",
-  "email": "alice@example.com",
-  "display_name": "Alice A.",
-  "mfa_enabled": true,
-  "created_at": "2025-11-02T18:04:11Z"
+  "user_sub": "user_8f3a...",
+  "session_id": "sess_4c2e...",
+  "ip": "203.0.113.7"
 }
 ```
+
+> Earlier draft incorrectly listed `sub`/`username`/`email`/`display_name`/`mfa_enabled`/`created_at`. Those fields do **not** exist on `/ui/me`. See §16 for the audit.
 
 Moshi DTO (snake_case via `@Json`):
 
 ```kotlin
 @JsonClass(generateAdapter = true)
 data class MeResponse(
-    val sub: String,
-    val username: String,
-    val email: String?,
-    @Json(name = "display_name") val displayName: String?,
-    @Json(name = "mfa_enabled") val mfaEnabled: Boolean = false,
-    @Json(name = "created_at") val createdAt: String?,
-) { fun toDomain() = User(sub, username, email, displayName, mfaEnabled, createdAt) }
+    @Json(name = "user_sub") val userSub: String,
+    @Json(name = "session_id") val sessionId: String,
+    val ip: String,
+) { fun toDomain() = User(userSub, sessionId, ip) }
 ```
 
 Retrofit:
@@ -206,7 +202,9 @@ interface AuthApi {
 }
 ```
 
-Error responses: `401 Unauthorized` (no/expired/invalid session) → mapped to `ErrorKind.Unauthorized`. FastAPI error bodies use `detail` (`string | [{msg}] | {code,...}`) and are decoded by the shared error mapper. This ticket consumes the GET only; it does not own session/start, MFA, finalize, refresh, or logout endpoints (those are AND-028, AND-013/AND-044, AND-032).
+Error responses: `401 Unauthorized` (no/expired/invalid session) → mapped to `ErrorKind.Unauthorized`. (Verified: 401 is enforced at runtime by the backend auth dependency and handled globally by the web client `src/api/client.ts`; the OpenAPI document only *enumerates* `422 HTTPValidationError` for this op — `resp=200:;422:HTTPValidationError`.) FastAPI error bodies use `detail` (`string | [{msg}] | {code,...}` — confirmed: `HTTPValidationError.detail = ValidationError[]` with `{loc,msg,type}`, and `src/api/client.ts: normalizeErrorDetail` handles the string / array-of-`{msg}` / object-with-`{code}` variants). These are decoded by the shared error mapper. This ticket consumes the GET only; it does not own session/start, MFA, finalize, refresh, or logout endpoints (those are AND-028, AND-013/AND-044, AND-032).
+
+> Refresh-retry contract (verified against `src/api/client.ts`): on a 401 for an already-authenticated caller, the web client calls `POST /ui/session/refresh` **once** (coalesced via a single shared `refreshPromise`) and retries the original request; if the retry is still 401 it logs out with reason `session_expired`. The Android `getMe()` relies on the same single-refresh-then-retry semantics (interceptor owned by AND-013/AND-044) before treating a 401 as definitive.
 
 ## 6. Data & State Management
 
@@ -226,7 +224,7 @@ Error responses: `401 Unauthorized` (no/expired/invalid session) → mapped to `
 ## 8. Security & Privacy
 
 - **No tokens stored:** auth is cookie-based; no bearer/refresh token is persisted by this ticket. The session secret lives only in AND-011's cookie jar.
-- **Minimal PII in DataStore:** only `authenticated` and `user_sub` are persisted. `user_sub` is an opaque identifier, not a credential. Email/username/displayName stay in memory (`cachedUser`) and are dropped on process death. Standard (unencrypted) Preferences DataStore is acceptable for `user_sub`; do **not** add email/password there.
+- **Minimal PII in DataStore:** only `authenticated` and `user_sub` are persisted. `user_sub` is an opaque identifier, not a credential. The other `/ui/me` fields (`session_id`, `ip` — corrected; `/ui/me` does not return email/username/displayName) stay in memory (`cachedUser`) and are dropped on process death. In particular `ip` is mildly sensitive and `session_id` is session-scoped, so neither is persisted. Standard (unencrypted) Preferences DataStore is acceptable for `user_sub`; do **not** add `session_id`, `ip`, or any future profile PII there.
 - **Cookie jar encryption** is AND-011's responsibility (EncryptedSharedPreferences/DataStore); this ticket must not duplicate or leak cookies into `auth_state`.
 - **Clear-on-logout:** `clear()` removes `user_sub` and resets the flag; AND-032 pairs it with cookie-jar clear so no residual identity remains.
 - **CSRF:** `getMe()` rides the shared interceptor that echoes `ui_csrf` as `X-CSRF-Token`; no per-call CSRF handling here.
@@ -258,7 +256,7 @@ No direct UI is delivered by this ticket — it is a data/repository layer. Acce
 - 200 with representative `MeResponse` → `ApiResult.Success`, `cachedUser` populated, `setAuthenticated(sub)` invoked.
 - 401 → `ApiResult.Error(Unauthorized)`, `clear()` invoked, `cachedUser=null`.
 - 500 and socket timeout → `ApiResult.Error`, store **not** mutated (verify `setAuthenticated`/`clear` never called via a fake store).
-- Moshi mapping: `display_name`/`mfa_enabled`/`created_at` map correctly; missing optional fields tolerated.
+- Moshi mapping (corrected): `user_sub`→`userSub`, `session_id`→`sessionId`, `ip`→`ip` map correctly from a captured `MeResp` sample; a malformed/missing required field surfaces a mapping error (these three fields are required per `src/api/types.ts: MeResp`).
 
 **Integration:**
 - Login finalize (AND-028 path, mocked) → repository auto-calls `getMe()` → `authState` becomes `Authenticated`.
@@ -281,7 +279,7 @@ Coverage target: store and repository `getMe` branches ≥ 90% line coverage.
 
 ## 13. Risks & Open Questions
 
-- **R1 — exact `/ui/me` payload keys.** Field names (`display_name`, `mfa_enabled`, presence of `created_at`) assumed from `frontend/src/api/types.ts`; verify against `/openapi.json` before locking the DTO. *Mitigation:* tolerant optionals + a mapping test pinned to a captured sample.
+- **R1 — exact `/ui/me` payload keys (RESOLVED in review).** Verified against `frontend/src/api/types.ts: MeResp`: the payload is `{ user_sub, session_id, ip }` (all required). The OpenAPI `200` schema for `ui_me_ui_me_get` is empty (`{}`), so the frontend type is the binding contract. The earlier draft's `display_name`/`mfa_enabled`/`created_at` were incorrect and have been removed. *Residual risk:* because OpenAPI does not pin the shape, the backend could drift; *mitigation:* a contract/MockWebServer mapping test pinned to a captured `MeResp` sample (see TC-AND-029-01) so any drift fails CI.
 - **R2 — DataStore read latency on cold start.** If the eager read is not warm before AND-025 computes the start destination, a brief splash is required. *Mitigation:* `SharingStarted.Eagerly` + `Unknown` bootstrap state that AND-025 holds on (no login flash).
 - **R3 — refresh-retry ownership overlap.** The single-401-refresh interceptor is AND-013/AND-044; if not yet merged, `getMe()` still treats raw 401 as `Unauthorized`. *Open question:* confirm interceptor is in the OkHttp stack before this ticket relies on post-refresh 401 semantics.
 - **R4 — should `cachedUser` be persisted?** Decided no (PII minimization). Open question if a downstream profile screen needs offline `User` — would belong to a separate cache (Room) ticket, not here.
@@ -313,3 +311,94 @@ AC-7. `authState` is a hot `StateFlow` exposing the persisted value to consumers
 - No mutation of `authenticated` on transient errors verified by test.
 - KDoc on public `AuthStateStore`/`AuthRepository.getMe()` surface; PR notes downstream consumers (AND-025/032/043/044).
 - Builds green on `android-port` (AGP 8.7.3 / Gradle 8.9 / JDK 17); merged behind AND-011 and AND-028.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **`getMe()` calls `GET /ui/me`.** — VERIFIED. OpenAPI `GET /ui/me` (op `ui_me_ui_me_get`); frontend `src/api/endpoints/auth.ts: getMe` (`api.get<MeResp>("/ui/me")`).
+
+2. **`/ui/me` is a GET with no request body.** — VERIFIED. OpenAPI `GET /ui/me` (`req=` empty); `src/api/endpoints/auth.ts: getMe` sends no body.
+
+3. **`/ui/me` 200 payload shape = `{ user_sub, session_id, ip }`.** — CORRECTED (was `sub/username/email/display_name/mfa_enabled/created_at`). SOURCE: `src/api/types.ts: MeResp` (`{ user_sub: string; session_id: string; ip: string }`). NOTE: OpenAPI's `200` content schema for `ui_me_ui_me_get` is empty (`{}`), so the frontend type is the authoritative contract.
+
+4. **A 401 from `getMe()` is the canonical "not logged in" signal.** — VERIFIED (behavioral). `src/api/client.ts` lines ~194-237: a 401 triggers refresh+retry; a still-401 retry calls `useAuthStore.getState().logout("session_expired")`. The 401 itself is enforced at runtime by the backend auth dependency (not enumerated in OpenAPI, which lists only `422:HTTPValidationError` for this op).
+
+5. **Single refresh-then-retry on 401, via `POST /ui/session/refresh`.** — VERIFIED. OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`); `src/api/client.ts: refreshSession` + the coalesced `refreshPromise` (one in-flight refresh) and single retry; `src/api/endpoints/auth.ts: refreshSession`.
+
+6. **CSRF: authenticated requests echo `ui_csrf` cookie as `X-CSRF-Token`.** — VERIFIED. `src/api/client.ts` lines ~167-171: `const csrf = getCookie("ui_csrf"); headers.set("X-CSRF-Token", csrf)`.
+
+7. **Network/timeout errors do NOT log the user out.** — VERIFIED. `src/api/client.ts` lines ~185-189: a fetch throw becomes `ApiError(0, "Network error", err)` and does not touch auth state (no `logout()` call). Supports FR-4/AC-5.
+
+8. **FastAPI error bodies use `detail` (string | array-of-`{msg}` | object-with-`{code}`).** — VERIFIED. Schema `HTTPValidationError.detail = ValidationError[]` (each `{loc, msg, type}`) in `openapi.pretty.json`; `src/api/client.ts: normalizeErrorDetail` + `mapAuthorizationError` handle all three variants.
+
+9. **Logout endpoint exists and is owned by AND-032.** — VERIFIED (endpoint). OpenAPI `POST /ui/session/logout` (op `ui_session_logout_ui_session_logout_post`); `src/api/endpoints/auth.ts: logout`. (Ownership attribution to AND-032 is an internal planning fact, not externally verifiable.)
+
+10. **Login finalize endpoint exists and is owned by AND-028.** — VERIFIED (endpoint). OpenAPI `POST /ui/session/finalize` (op `ui_session_finalize_ui_session_finalize_post`, `req=UiSessionFinalizeReq`); `src/api/endpoints/auth.ts: sessionFinalize`. Finalize response shape (`src/api/types.ts: SessionFinalizeResp = { status:"ok"|"pending"; session_id?; required_factors; passed }`) — VERIFIED; relevant because the "finalize success → call getMe()" wiring (FR-7) keys off `status === "ok"`.
+
+11. **`user_sub` is an opaque identifier safe for plaintext DataStore; richer PII is not returned.** — CORRECTED/VERIFIED. Since `/ui/me` returns only `user_sub`/`session_id`/`ip` (`src/api/types.ts: MeResp`), there is no email/username/displayName to leak. `user_sub` is used as a query/identifier param across the API (e.g. `params=user_sub` on `GET /ui/me`), consistent with opaque-id treatment.
+
+12. **Cookie-based session; web client uses cookies via `credentials: "include"`.** — VERIFIED. `src/api/client.ts`: every `fetch` uses `credentials: "include"`. ASSUMPTION-NOTED: the web client *also* attaches a `Bearer` token from `useAuthStore` when present (`src/api/client.ts` lines ~157-160) — a hybrid. The Android port deliberately targets the cookie path only (cookie jar from AND-011); treat "no bearer token stored" (§8) as an intentional Android design decision, not a contradiction of the web client.
+
+13. **DataStore (Preferences), Hilt, StateFlow, `SharingStarted.Eagerly`, Moshi `@Json` snake_case mapping, OkHttp persistent CookieJar.** — UNVERIFIED-ASSUMPTION (framework refs; not derivable from backend/frontend sources). These are Android implementation choices: DataStore Preferences (framework ref: developer.android.com/topic/libraries/architecture/datastore), Hilt (framework ref: developer.android.com/training/dependency-injection/hilt-android), Kotlin Flow `stateIn`/`SharingStarted` (framework ref: kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/state-in.html), OkHttp `CookieJar` (framework ref: square.github.io/okhttp). Reasonable and idiomatic; called out as assumptions because the reference sources are a web app + backend.
+
+14. **`X-SESSION-ID` / `X-IMPERSONATION-TOKEN` accepted by `/ui/me`.** — VERIFIED (and intentionally out of scope here). OpenAPI `GET /ui/me` `params=user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`; `src/api/client.ts` sets `X-IMPERSONATION-TOKEN` only when impersonation is active. The Android port does not implement impersonation in this ticket; the cookie session suffices, so these headers are not sent by `getMe()`.
+
+### Corrections made
+
+- **C1 (major).** Replaced the entire `/ui/me` payload model. The draft's `User`/`MeResponse`/JSON sample/mapping used `sub, username, email, display_name, mfa_enabled, created_at`; the real `MeResp` (`src/api/types.ts`) is `{ user_sub, session_id, ip }`. Fixed: §4.1 `User` model, §4.3 `setAuthenticated(r.data.userSub)`, §5.1 JSON sample + `MeResponse` DTO + `toDomain()`, FR-2 (`user.userSub`), §8 PII bullet, §11 mapping test, §13 R1.
+- **C2.** §5.1 error-response note: clarified that 401 is runtime-enforced (OpenAPI enumerates only `422:HTTPValidationError` for `ui_me`) and added the verified single-refresh-then-retry contract from `client.ts`.
+- **C3.** §8: corrected which fields are "kept in memory" (now `session_id`/`ip`, not email/username/displayName) and added that `ip`/`session_id` must not be persisted.
+- **C4.** §13 R1 downgraded from open risk to RESOLVED with the verified shape and a residual-drift mitigation.
+
+### Open assumptions
+
+- **OA1.** OpenAPI does not pin the `/ui/me` 200 schema (empty `{}`), so the contract rests solely on the frontend `MeResp` type. If the backend changes `/ui/me`, only a captured-sample contract test (TC-AND-029-01) will catch it. Unverifiable beyond the frontend type.
+- **OA2.** All Android-stack choices (DataStore/Hilt/Flow/OkHttp/Moshi, eager state warm-up timing, ~20s timeout) are framework decisions not present in the reference sources (web app + backend). Cited as framework refs in item 13; the cold-start "warm before start destination" timing (R2) is an empirical assumption to validate on-device.
+- **OA3.** Ownership of the refresh-retry interceptor (AND-013/AND-044) and logout ordering (AND-032 clears cookies then `clear()`) are cross-ticket planning assumptions; the *endpoints* are verified but the inter-ticket sequencing cannot be verified from the sources (R3, R5).
+
+## 17. Test Plan
+
+IDs `TC-AND-029-NN`. "Traces" links to §14 acceptance criteria.
+
+- **TC-AND-029-01 — Moshi mapping of real `MeResp` (200).** Type: contract/MockWebServer. Preconditions: MockWebServer enqueues `200` with body `{"user_sub":"user_8f3a","session_id":"sess_4c2e","ip":"203.0.113.7"}` (captured sample matching `src/api/types.ts: MeResp`). Steps: call `AuthRepositoryImpl.getMe()`. Expected: `ApiResult.Success(User(userSub="user_8f3a", sessionId="sess_4c2e", ip="203.0.113.7"))`; request was `GET /ui/me` with no body. Traces: AC-1.
+
+- **TC-AND-029-02 — Malformed/missing required field fails mapping.** Type: unit/contract. Preconditions: MockWebServer enqueues `200` with `{"session_id":"s","ip":"1.2.3.4"}` (missing `user_sub`). Steps: call `getMe()`. Expected: `ApiResult.Error` (mapping/parse error kind), store NOT mutated, `cachedUser` unchanged. Traces: AC-1, AC-5.
+
+- **TC-AND-029-03 — Success populates cachedUser + flips store to Authenticated.** Type: unit (MockWebServer + fake/real `AuthStateStore`). Preconditions: store starts `Unauthenticated`. Steps: enqueue valid `200`; call `getMe()`. Expected: `cachedUser` = mapped `User`; `setAuthenticated("user_8f3a")` invoked; `authState` emits `Authenticated("user_8f3a")`. Traces: AC-1, AC-2, AC-7.
+
+- **TC-AND-029-04 — Definitive 401 (post-refresh) clears state.** Type: unit/contract. Preconditions: store seeded `Authenticated("old_sub")`; refresh interceptor simulated as already-exhausted so the 401 reaches the repo as `ErrorKind.Unauthorized`. Steps: enqueue `401` with `{"detail":"Authentication required"}`; call `getMe()`. Expected: `ApiResult.Error(Unauthorized)`; `clear()` invoked; `authState` emits `Unauthenticated`; `user_sub` removed; `cachedUser=null`. Traces: AC-4, AC-6.
+
+- **TC-AND-029-05 — 5xx does NOT mutate persisted auth flag.** Type: unit/contract. Preconditions: store seeded `Authenticated("sub_1")` via a spy/fake store. Steps: enqueue `500`; call `getMe()`. Expected: `ApiResult.Error`; neither `setAuthenticated` nor `clear` called; `authState` stays `Authenticated("sub_1")`. Traces: AC-5.
+
+- **TC-AND-029-06 — Network drop / socket timeout (flaky dev host) does NOT log out.** Type: unit/contract (MockWebServer `SocketPolicy.DISCONNECT_AT_START` or no-response + short timeout). Preconditions: store seeded `Authenticated("sub_1")`. Steps: call `getMe()` against the failing host. Expected: `ApiResult.Error` (network/timeout kind); store untouched (`setAuthenticated`/`clear` never called); persisted `authenticated=true` remains. Traces: AC-5.
+
+- **TC-AND-029-07 — `clear()` resets store.** Type: unit (temp-file Preferences DataStore). Preconditions: `setAuthenticated("sub_1")` applied. Steps: call `AuthStateStore.clear()`; read `authState`. Expected: emits `Unauthenticated`; `authenticated=false`; `user_sub` key absent. Traces: AC-6.
+
+- **TC-AND-029-08 — Persistence across process restart (primary backlog AC).** Type: integration. Preconditions: temp DataStore file path. Steps: construct store A → `setAuthenticated("sub_1")` → dispose A → construct store B over the SAME file → read `authState.first()` (filtering out the `Unknown` bootstrap emission). Expected: first non-`Unknown` emission is `Authenticated("sub_1")`; no network call made. Traces: AC-3, AC-7.
+
+- **TC-AND-029-09 — Corrupt/empty preferences fail safe.** Type: unit. Preconditions: DataStore read throws `IOException` (corrupted file) or returns `emptyPreferences()`. Steps: collect `authState`. Expected: resolves to `Unauthenticated` (no crash). Traces: AC-6.
+
+- **TC-AND-029-10 — Login finalize success auto-calls getMe and authenticates.** Type: integration. Preconditions: mocked AND-028 finalize returns `SessionFinalizeResp{status:"ok"}`; MockWebServer enqueues valid `/ui/me` `200`. Steps: run finalize-success path. Expected: repo calls `getMe()`; `authState` becomes `Authenticated(userSub)` and `cachedUser` populated before the result is reported complete. Traces: AC-2, AC-7.
+
+- **TC-AND-029-11 — Cold-start gating without network.** Type: integration. Preconditions: pre-seed DataStore file as `Authenticated("sub_1")`; no MockWebServer expectation. Steps: build the Hilt graph (or store singleton) and read `authState.first { it != Unknown }`. Expected: `Authenticated("sub_1")` with zero HTTP calls (verify MockWebServer `requestCount == 0`). Traces: AC-3, AC-7.
+
+- **TC-AND-029-12 — CSRF header + cookies attached on getMe.** Type: contract/MockWebServer. Preconditions: cookie jar (AND-011) holds session + `ui_csrf` cookies; shared interceptor installed. Steps: call `getMe()`; inspect `RecordedRequest`. Expected: request carries the session `Cookie` header and `X-CSRF-Token: <ui_csrf value>`; matches `src/api/client.ts` CSRF behavior. Traces: AC-1.
+
+- **TC-AND-029-13 — No PII/secrets persisted or logged.** Type: unit + manual (security). Preconditions: run a full success + 401 cycle. Steps: dump the `auth_state` Preferences file and captured logs. Expected: file contains only `authenticated` + `user_sub`; never `session_id`, `ip`, cookie values, or `X-CSRF-Token`; logs redact `user_sub` to a short hash. Traces: AC-4, AC-6 (security guardrail on the clear/persist paths).
+
+- **TC-AND-029-14 — Instrumented restart smoke (optional, dev host).** Type: instrumented/e2e. Preconditions: device/emulator, reachable dev host `http://18.222.237.167:8000`, real login completed. Steps: kill + relaunch the app process; observe start destination; let background `getMe()` run. Expected: app resolves `Authenticated` from DataStore without a login flash; background `getMe()` returns `200` and `cachedUser` repopulates; a forced 401 (e.g. server-side session revoke) flips to `Unauthenticated`. Traces: AC-2, AC-3, AC-4.
+
+Accessibility note: this ticket ships no UI (§9), so no Compose-UI/a11y cases are included; accessibility is owned by consumers (AND-025/032/044). The only UI-adjacent guarantee here — not flashing the login screen on cold start — is covered behaviorally by TC-11/TC-14.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+|---|---|
+| AC-1 (`getMe` → `GET /ui/me`, `ApiResult<User>`, correct mapping) | TC-01, TC-02, TC-03, TC-12 |
+| AC-2 (finalize → `cachedUser` + `Authenticated`) | TC-03, TC-10, TC-14 |
+| AC-3 (persists across restart, no network) | TC-08, TC-11, TC-14 |
+| AC-4 (definitive 401 → `Unauthenticated`, clears `user_sub`) | TC-04, TC-13, TC-14 |
+| AC-5 (network/timeout/5xx do not mutate flag) | TC-02, TC-05, TC-06 |
+| AC-6 (`clear()` resets + removes `user_sub`) | TC-04, TC-07, TC-09, TC-13 |
+| AC-7 (hot `StateFlow` exposes persisted value) | TC-03, TC-08, TC-10, TC-11 |

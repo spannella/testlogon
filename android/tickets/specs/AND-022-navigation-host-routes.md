@@ -5,7 +5,8 @@ milestone: M1
 epic: E03
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-002]
 blocks: [AND-023]
 ---
@@ -55,9 +56,16 @@ interaction. This is a UI-shell ticket with no network surface.
   extension pattern to assemble the real unauthenticated graph; it owns the
   `Login`/`Mfa`/`Register`/`Recovery`/`MagicLink` route definitions and start
   destination logic.
-- **Web reference:** `frontend/` uses React Router; route names there
-  (`/login`, `/mfa`, `/me`) inform our route naming but are not binding — Android
-  uses type-safe in-process routes, not URL strings.
+- **Web reference:** `frontend/` (`src/App.tsx`) uses React Router. The
+  unauthenticated client routes are `/login`, `/register`, `/password-recovery`,
+  and `/magic-link-verify`; authenticated screens live under a
+  `ProtectedRoute` → `AppShell` subtree whose `index` route renders the
+  `Dashboard`. **Correction (review AND-022):** there is **no** client-side
+  `/mfa` or `/me` route in the web app — MFA is an in-page *step* of `Login.tsx`
+  (`LoginStep = "credentials" | "mfa" | "magic-link" | "webauthn"`), and `/ui/me`
+  is a backend API endpoint, not a browser route. These names inform our Android
+  route naming but are not binding — Android uses type-safe in-process routes, not
+  URL strings.
 - **No backend reference** is relevant; OpenAPI/`/openapi.json` is not touched by
   this ticket.
 
@@ -421,3 +429,266 @@ cases. CI must execute at least the route round-trip and the
 - Lint and ktlint/detekt pass with no new warnings; PR reviewed and approved.
 - AND-023 owner confirms the route catalogue and graph-builder pattern are
   sufficient to assemble the unauthenticated graph without modifying AND-022 code.
+
+## 16. Citations & Assumption Audit
+
+This is a UI-shell ticket with **no backend/network surface** (see §5). There are
+therefore no API endpoint, HTTP-method, request/response-field, or auth/CSRF
+claims to verify against the OpenAPI spec — the only externally-checkable claims
+are (a) the web-app reference behavior cited in §2 and (b) the Android framework
+choices. Each key claim below is listed with a VERDICT and an exact SOURCE
+pointer.
+
+1. **Claim:** This ticket touches no backend; OpenAPI/`/openapi.json` is not
+   relevant (§2, §5). **VERDICT: Verified.** The ticket scope (single-Activity
+   `NavHost`, typed routes, transitions, two placeholders) introduces no HTTP
+   calls; no endpoint in the index pertains to navigation shell.
+   **SOURCE:** `reference/openapi.index.txt` (no nav/shell endpoints);
+   ticket scope `specs-src/AND-022.md`.
+
+2. **Claim:** The web app uses React Router for routing (§2). **VERDICT: Verified.**
+   **SOURCE:** `src/App.tsx` (`<Routes>` / `<Route path=… element=… />`, lines
+   ~273–335); `react-router` imports present across `src/`.
+
+3. **Claim:** Web unauthenticated route names are `/login` (+ register, recovery,
+   magic-link) (§2). **VERDICT: Verified / Corrected.** `/login` is a real client
+   route; the sibling routes are `/register`, `/password-recovery`,
+   `/magic-link-verify`. **SOURCE:** `src/App.tsx:275–278`.
+
+4. **Claim (original):** Web route names include `/mfa` and `/me` (§2, pre-review).
+   **VERDICT: Corrected.** No client-side `/mfa` or `/me` route exists. MFA is an
+   in-page step of the Login screen, and `/ui/me` is a backend endpoint, not a
+   browser route. Corrected inline in §2. **SOURCE:** `src/pages/Login.tsx:40`
+   (`type LoginStep = "credentials" | "mfa" | "magic-link" | "webauthn"`);
+   `src/App.tsx` (grep for `/mfa`, `/me` → no matches); OpenAPI
+   `GET /ui/me | op=ui_me_ui_me_get` confirms `/ui/me` is an API path.
+
+5. **Claim:** Authenticated web screens sit behind a `ProtectedRoute`/`AppShell`
+   with an `index` Dashboard (§2, corrected). **VERDICT: Verified.**
+   **SOURCE:** `src/App.tsx:289–290` (`<Route element={<ProtectedRoute><AppShell/></ProtectedRoute>}>` … `<Route index element={<Dashboard />}/>`).
+
+6. **Claim:** AND-023 will own the real `Login`/`Mfa`/`Register`/`Recovery`/
+   `MagicLink` unauthenticated graph (§1, §2, §12). **VERDICT:
+   Unverified-assumption (internal planning).** This is a cross-ticket ownership
+   statement, not verifiable from OpenAPI/frontend; it is consistent with the web
+   set of unauthenticated screens (Login, Register, PasswordRecovery,
+   MagicLinkVerify) per `src/App.tsx:275–278`. The naming of an Android `Mfa`
+   route is a design choice (web has no `/mfa` route — see #4).
+
+7. **Claim:** Navigation-Compose 2.8 provides type-safe routes via `@Serializable`
+   route objects + `composable<T>` / `navigation<T>` overloads and
+   `backStackEntry.toRoute<T>()` (§2, §4.1, §4.3). **VERDICT:
+   Verified (framework ref).** **SOURCE (framework ref):**
+   https://developer.android.com/guide/navigation/design/type-safety .
+
+8. **Claim:** Type-safe routes require Kotlin Serialization
+   (`kotlin("plugin.serialization")` + `kotlinx-serialization-json`) (§4.1, §12).
+   **VERDICT: Verified (framework ref).** **SOURCE (framework ref):**
+   https://developer.android.com/guide/navigation/design/type-safety#kotlin-dsl
+   and https://kotlinlang.org/docs/serialization.html .
+
+9. **Claim:** `NavHost` accepts `enterTransition`/`exitTransition`/
+   `popEnterTransition`/`popExitTransition` lambdas applied host-wide, overridable
+   per `composable` (§4.2, §4.6). **VERDICT: Verified (framework ref).**
+   **SOURCE (framework ref):**
+   https://developer.android.com/develop/ui/compose/navigation#animate-transitions .
+
+10. **Claim:** `rememberNavController()` retains back stack across config change,
+    and Navigation-Compose persists/restores the back stack across process death
+    via saved state (§6, §7). **VERDICT: Verified (framework ref).**
+    **SOURCE (framework ref):**
+    https://developer.android.com/develop/ui/compose/navigation and
+    https://developer.android.com/guide/navigation/backstack .
+
+11. **Claim:** `navigateUp()` returns `false` when the back stack cannot pop and
+    popping the start destination finishes the Activity by default (§7).
+    **VERDICT: Verified (framework ref).** **SOURCE (framework ref):**
+    https://developer.android.com/reference/androidx/navigation/NavController#navigateUp() .
+
+12. **Claim:** `launchSingleTop = true` prevents duplicate top-of-stack
+    destinations from rapid taps (§4.4, §7). **VERDICT: Verified (framework ref).**
+    **SOURCE (framework ref):**
+    https://developer.android.com/guide/navigation/backstack#singleTop .
+
+13. **Claim:** `androidx.navigation:navigation-testing` provides
+    `TestNavHostController` for asserting current destination/back stack (§11).
+    **VERDICT: Verified (framework ref).** **SOURCE (framework ref):**
+    https://developer.android.com/guide/navigation/testing .
+
+14. **Claim:** Reduced-motion can be honored by collapsing animation duration when
+    system animations are disabled, read via `Settings.Global.ANIMATOR_DURATION_SCALE`
+    (§4.6, §9). **VERDICT: Verified (framework ref).** **SOURCE (framework ref):**
+    https://developer.android.com/reference/android/provider/Settings.Global#ANIMATOR_DURATION_SCALE .
+
+### Corrections made
+
+- **§2 web route names.** Removed the incorrect claim that the web app has `/mfa`
+  and `/me` *routes*. Replaced with the verified route set
+  (`/login`, `/register`, `/password-recovery`, `/magic-link-verify`, plus a
+  `ProtectedRoute`/`AppShell` `index` Dashboard) and noted that MFA is an in-page
+  Login step (`Login.tsx`) and `/ui/me` is a backend API endpoint, not a browser
+  route. SOURCES: `src/App.tsx:275–290`, `src/pages/Login.tsx:40`,
+  OpenAPI `GET /ui/me`.
+
+No other factual errors were found; all Android-framework claims verified against
+official Android/Kotlin docs (cited above).
+
+### Open assumptions
+
+- **Cross-ticket ownership (AND-023 owns the auth graph; AND-021 owns state
+  composables).** Not verifiable from OpenAPI or the frontend; these are
+  internal program-plan statements. Treated as planning assumptions.
+- **Exact pinned versions** (Navigation-Compose 2.8.x, AGP 8.7.3, Gradle 8.9,
+  Kotlin 2.0.21, compileSdk 35) are environment/build assumptions to confirm
+  against `gradle/libs.versions.toml` at implementation time; the version-catalog
+  file is not present in the provided sources, so they remain unverified here.
+- **Process-death restoration reliability on API 24–26 OEM builds** (R3) is an
+  empirical assumption to confirm on-device; not statically verifiable.
+
+## 17. Test Plan
+
+All cases trace to the §14 Acceptance Criteria (AC-1 … AC-9). Because AND-022 has
+no network surface, there are no contract/MockWebServer cases; the analogous
+"resilience" case is the reduced-motion / animations-disabled path and the
+empty-back-stack pop. Test IDs are stable.
+
+- **TC-AND-022-01 — Serialization round-trip of route args**
+  - **Type:** unit (JVM)
+  - **Preconditions:** `kotlinx-serialization-json` on classpath; `PlaceholderB`
+    is `@Serializable`.
+  - **Steps:** Encode `PlaceholderB("hello")` to JSON and decode it back.
+  - **Expected:** Decoded instance equals the original (`text == "hello"`); no
+    exception. Guards arg-encoding regressions.
+  - **Traces: AC-2, AC-3.**
+
+- **TC-AND-022-02 — Host starts at PlaceholderA**
+  - **Type:** Compose-UI (`createComposeRule` + `TestNavHostController`)
+  - **Preconditions:** `TestLogonNavHost` set as content with a test
+    `NavHostController`.
+  - **Steps:** Render the host; read `currentBackStackEntry`.
+  - **Expected:** Current destination route corresponds to `PlaceholderA`; only
+    one `NavHost`/Activity exists.
+  - **Traces: AC-1.**
+
+- **TC-AND-022-03 — Go-to-B navigates and renders the passed argument (core)**
+  - **Type:** Compose-UI
+  - **Preconditions:** Host rendered at `PlaceholderA`.
+  - **Steps:** `onNodeWithText("Go to B")` (via `R.string.placeholder_go_to_b`)
+    `.performClick()`; then read current destination and on-screen text.
+  - **Expected:** Current destination is `PlaceholderB`;
+    `backStackEntry.toRoute<PlaceholderB>().text` equals the passed string and is
+    rendered on screen. **(Core acceptance test.)**
+  - **Traces: AC-3.**
+
+- **TC-AND-022-04 — On-screen Back pops B → A**
+  - **Type:** Compose-UI
+  - **Preconditions:** On `PlaceholderB` (after TC-03 navigation).
+  - **Steps:** Click the "Back" button (`R.string.placeholder_back`).
+  - **Expected:** Current destination is `PlaceholderA`; back-stack depth is 1;
+    no crash.
+  - **Traces: AC-4.**
+
+- **TC-AND-022-05 — System Back pops B → A**
+  - **Type:** instrumented/e2e (`Espresso.pressBack()`)
+  - **Preconditions:** On `PlaceholderB`.
+  - **Steps:** Invoke system Back.
+  - **Expected:** Returns to `PlaceholderA`; back-stack depth 1.
+  - **Traces: AC-4.**
+
+- **TC-AND-022-06 — Pop from start destination finishes Activity (no crash)**
+  - **Type:** instrumented/e2e
+  - **Preconditions:** On `PlaceholderA` (start destination), back stack depth 1.
+  - **Steps:** Invoke system Back.
+  - **Expected:** `navigateUp()`/default handling finishes the Activity without
+    throwing; `activity.isFinishing` is true. No `IllegalStateException`.
+  - **Traces: AC-4.**
+
+- **TC-AND-022-07 — Rotation preserves destination and argument**
+  - **Type:** instrumented/e2e (Activity recreate)
+  - **Preconditions:** Navigated to `PlaceholderB("keep-me")`.
+  - **Steps:** Recreate the Activity (configuration change / rotation).
+  - **Expected:** Still on `PlaceholderB`; rendered/`toRoute` arg is still
+    `"keep-me"`.
+  - **Traces: AC-6.**
+
+- **TC-AND-022-08 — Process-death restoration preserves destination + arg**
+  - **Type:** instrumented/e2e (saved-state restore; run on API 24 emulator)
+  - **Preconditions:** Navigated to `PlaceholderB("survive")`.
+  - **Steps:** Simulate process death and restore from saved instance state.
+  - **Expected:** Host restores to `PlaceholderB` with arg `"survive"` intact; no
+    manual `SavedStateHandle` plumbing required.
+  - **Traces: AC-6.** (Addresses risk R3.)
+
+- **TC-AND-022-09 — Double-tap "Go to B" yields a single destination**
+  - **Type:** Compose-UI
+  - **Preconditions:** On `PlaceholderA`.
+  - **Steps:** Perform two rapid clicks on "Go to B".
+  - **Expected:** Exactly one `PlaceholderB` entry on the back stack
+    (`launchSingleTop` honored).
+  - **Traces: AC-7.**
+
+- **TC-AND-022-10 — Shared transitions applied; collapse to 0 ms when animations
+  disabled**
+  - **Type:** instrumented/e2e
+  - **Preconditions:** Two test runs — (a) `ANIMATOR_DURATION_SCALE = 1`,
+    (b) `= 0` (animations off).
+  - **Steps:** Navigate A → B in each run; observe transition duration used by
+    `TLTransitions`.
+  - **Expected:** (a) enter/exit/pop transitions animate (~300 ms);
+    (b) effective duration is 0 (no animation), navigation still completes
+    correctly.
+  - **Traces: AC-5.**
+
+- **TC-AND-022-11 — Graph-builder pattern: screens receive lambdas, not NavController**
+  - **Type:** unit / Compose-UI (API/usage assertion)
+  - **Preconditions:** `placeholderGraph(navController)` registered in the host.
+  - **Steps:** Inspect/exercise `PlaceholderAScreen` / `PlaceholderBScreen`
+    signatures and render them in isolation with stub lambdas (no NavController).
+  - **Expected:** Both screens are previewable/testable with `onNavigateToB` /
+    `onBack` lambda callbacks only; no `NavController` parameter is exposed to the
+    screen composables.
+  - **Traces: AC-8.**
+
+- **TC-AND-022-12 — Security: no sensitive data encoded in route args (policy guard)**
+  - **Type:** unit / static-style assertion
+  - **Preconditions:** Route catalogue defined.
+  - **Steps:** Assert route arg types are limited to non-sensitive placeholders
+    (`PlaceholderB.text: String`); confirm no route declares
+    password/OTP/`challenge_id`/token fields. (Enforced by review + KDoc note;
+    test asserts the placeholder shape.)
+  - **Expected:** Only non-sensitive `String` args present; policy KDoc present on
+    the route file.
+  - **Traces: AC-2** (and §8 security policy).
+
+- **TC-AND-022-13 — Telemetry does not log route argument values (release-safe)**
+  - **Type:** unit
+  - **Preconditions:** `OnDestinationChangedListener` logging enabled.
+  - **Steps:** Navigate A → B with a recognizable arg (e.g. `"secret-123"`);
+    capture emitted log lines.
+  - **Expected:** Logs contain the route **type name** only (e.g. `PlaceholderB`),
+    never the arg value `"secret-123"`.
+  - **Traces: AC-9** (and §8/§10 logging policy).
+
+- **TC-AND-022-14 — Accessibility: TalkBack labels and touch targets**
+  - **Type:** Compose-UI (semantics) / manual (TalkBack)
+  - **Preconditions:** Both placeholder screens rendered.
+  - **Steps:** Assert semantics for the "Go to B" and "Back" buttons; verify
+    touch target ≥ 48 dp; manually sweep with TalkBack.
+  - **Expected:** Buttons expose accessible text from `strings.xml` (no hardcoded
+    literals); targets ≥ 48 dp; focus moves to the new screen's primary content on
+    destination change.
+  - **Traces: AC-5** (reduced-motion ties in) **and §9 accessibility.**
+
+### Coverage matrix (AC → TC)
+
+| Acceptance criterion (§14)                                   | Covered by                          |
+|--------------------------------------------------------------|-------------------------------------|
+| AC-1 Single NavHost, launches at PlaceholderA, one Activity  | TC-02                               |
+| AC-2 Type-safe `@Serializable` routes via `composable<T>`    | TC-01, TC-12                        |
+| AC-3 Go-to-B passes/renders String arg (core)                | TC-01, TC-03                        |
+| AC-4 On-screen + system Back pop; pop-from-start finishes     | TC-04, TC-05, TC-06                  |
+| AC-5 TLTransitions animate; collapse to 0 when disabled       | TC-10, TC-14                         |
+| AC-6 Nav state survives rotation (and process death)          | TC-07, TC-08                         |
+| AC-7 `launchSingleTop`; double-tap = single destination       | TC-09                               |
+| AC-8 `placeholderGraph()` pattern; screens take lambdas       | TC-11                               |
+| AC-9 §11 navigation tests pass in CI                          | TC-01, TC-02, TC-03, TC-04, TC-05, TC-07, TC-09, TC-13 |

@@ -5,7 +5,8 @@ milestone: M1
 epic: E01
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-002]
 blocks: [AND-003, AND-004, AND-005, AND-006, AND-007]
 ---
@@ -416,3 +417,252 @@ invariant, Testing 3)
   false`, PR cache read-only confirmed in review.
 - Reviewed and approved by a second engineer; documentation note added pointing
   future feature tickets at this gate as the place their unit tests will execute.
+
+## 16. Citations & Assumption Audit
+
+This is a CI/chore ticket. Most claims concern GitHub Actions, Gradle, and the
+Android toolchain (framework refs), not the TestLogon backend API. Per Section 5
+the ticket performs no HTTP I/O, so the OpenAPI/frontend sources are consulted only
+to confirm that the "API is irrelevant here" claim is itself correct, and to
+verify the few backend/web-app facts the spec mentions in passing.
+
+1. **Claim:** "This ticket adds no application networking and contacts no HTTP
+   endpoint" / Section 5 is N/A. **VERDICT: Verified.** The deliverable is a
+   GitHub Actions workflow + Gradle config; no networking code is introduced. No
+   AND-008-specific endpoint exists in the backend. **SOURCE:** OpenAPI index
+   `reference/openapi.index.txt` (no CI/build-related path; endpoints are all
+   product/admin APIs). Self-evident from ticket scope (AND-008 META: "CI: build +
+   unit test on build server").
+
+2. **Claim (Section 2 & 5):** the dev backend is reachable at
+   `http://18.222.237.167:8000` and exposes OpenAPI at `/openapi.json`.
+   **VERDICT: Unverified-assumption** (host literal). The frontend does not hardcode
+   this host; it reads `VITE_API_BASE_URL` at runtime and prefixes relative paths.
+   The IP/port comes from project context, not from any source file, so it cannot
+   be confirmed against the repo. It is also immaterial to AND-008 (no network I/O).
+   **SOURCE:** `src/api/client.ts` (lines ~7-13): `API_BASE_URL` derived from
+   `import.meta.env.VITE_API_BASE_URL`; no literal host present.
+
+3. **Claim (Section 5):** the web client uses a "cookie/CSRF session flow" that is
+   irrelevant to this CI job. **VERDICT: Verified** (the CSRF flow exists; its
+   irrelevance to AND-008 is correct). The web client sends requests with
+   `credentials: "include"`, reads the CSRF token from the `ui_csrf` cookie, and
+   sends it as the `X-CSRF-Token` header. None of this is exercised by a hermetic
+   JVM unit-test/build job. **SOURCE:** `src/api/client.ts`: `credentials:
+   "include"`, `getCookie("ui_csrf")`, `headers.set("X-CSRF-Token", csrf)`.
+
+4. **Claim (Section 5):** the only "API" AND-008 consumes is the Gradle task
+   interface `:app:assembleDebug` and `:app:testDebugUnitTest`. **VERDICT:
+   Verified** (framework ref). `assembleDebug` and `testDebugUnitTest` are standard
+   tasks contributed by the Android Gradle Plugin's application/unit-test variants.
+   **SOURCE:** framework ref — AGP build/test task docs
+   (https://developer.android.com/build/gradle-build-overview and
+   https://developer.android.com/studio/test/command-line).
+
+5. **Claim (Section 2):** toolchain pins Kotlin 2.0.21, AGP 8.7.3, Gradle 8.9
+   (wrapper), JDK 17, compileSdk/targetSdk 35, minSdk 24, KSP for Hilt.
+   **VERDICT: Unverified-assumption** (inherited from AND-002, not re-derivable from
+   the API/frontend sources). These are an upstream-ticket contract, not facts in
+   any authoritative source provided here; AGP 8.7.x requires JDK 17 and supports
+   compileSdk 35, which is internally consistent. **SOURCE:** framework ref — AGP
+   release/compatibility notes
+   (https://developer.android.com/build/releases/gradle-plugin); cross-ticket
+   reference to AND-002. Flagged so the implementer confirms against AND-002's spec.
+
+6. **Claim (Section 4.1):** wrapper validation and Gradle setup use
+   `gradle/actions/wrapper-validation@v4` and `gradle/actions/setup-gradle@v4`.
+   **VERDICT: Verified** (framework ref). The standalone
+   `gradle/wrapper-validation-action` was consolidated into the `gradle/actions`
+   repo; `gradle/actions/wrapper-validation` and `gradle/actions/setup-gradle` are
+   the current action paths, and `setup-gradle` provides the dependency-cache layer.
+   **SOURCE:** framework ref — https://github.com/gradle/actions
+   (setup-gradle / wrapper-validation READMEs).
+
+7. **Claim (Section 4.1):** `cache-read-only: ${{ github.event_name != 'push' }}`
+   makes PR runs read-only so fork PRs cannot poison the shared Gradle cache.
+   **VERDICT: Verified** (framework ref). `setup-gradle` exposes `cache-read-only`,
+   and restricting cache writes to trusted `push` events is the documented
+   anti-poisoning pattern. **SOURCE:** framework ref — gradle/actions setup-gradle
+   caching docs (https://github.com/gradle/actions/blob/main/docs/setup-gradle.md).
+
+8. **Claim (Section 4.1 / FR-7):** `concurrency` with `cancel-in-progress: true`
+   cancels superseded in-flight runs for the same ref. **VERDICT: Verified**
+   (framework ref). **SOURCE:** framework ref — GitHub Actions concurrency docs
+   (https://docs.github.com/actions/using-jobs/using-concurrency).
+
+9. **Claim (Section 4.1 / FR-1):** `paths:` filters limit triggering to
+   `android/**` and the workflow file. **VERDICT: Verified** (framework ref).
+   `push`/`pull_request` support `paths` filtering. Caveat: `paths` interacts with
+   required-status-check branch protection (a skipped required check can block
+   merges); the implementer should pair `paths` with a path-skip "success shim" or
+   use branch-protection's handling for skipped checks. **SOURCE:** framework ref —
+   GitHub Actions `on.<event>.paths`
+   (https://docs.github.com/actions/using-workflows/workflow-syntax-for-github-actions#onpushpull_requestpaths).
+
+10. **Claim (Section 4.1):** self-hosted runner targeted via
+    `runs-on: [self-hosted, andrioiddev]`. **VERDICT: Unverified-assumption.** The
+    label string `andrioiddev` is copied verbatim from the backlog and may be a
+    typo for `androiddev` (tracked as R1); the actual registered label cannot be
+    confirmed from any provided source. **SOURCE:** ticket backlog
+    `specs-src/AND-008.md` (scope line: "job on `andrioiddev`"); no source file
+    confirms the runner label. Framework ref for syntax — GitHub Actions
+    self-hosted `runs-on` labels
+    (https://docs.github.com/actions/hosting-your-own-runners/managing-self-hosted-runners/using-self-hosted-runners-in-a-workflow).
+
+11. **Claim (Section 4.2):** `org.gradle.configuration-cache=true`,
+    `org.gradle.caching=true`, `org.gradle.parallel=true` are valid CI-determinism
+    settings. **VERDICT: Verified** (framework ref), with one note: enabling the
+    configuration cache while forcing `--no-daemon`/`org.gradle.daemon=false`
+    reduces (but does not eliminate) the configuration-cache benefit, since the
+    cache is reloaded from disk each invocation rather than reused from a warm
+    daemon. Not an error; intentional per the "ephemeral runner" rationale in 4.2.
+    **SOURCE:** framework ref — Gradle build environment / configuration-cache docs
+    (https://docs.gradle.org/current/userguide/build_environment.html,
+    https://docs.gradle.org/current/userguide/configuration_cache.html).
+
+### Corrections made
+
+- **Frontmatter:** `status: draft` -> `status: reviewed`; added
+  `reviewed_on: 2026-06-06`.
+- No factual corrections to the body were required: every concrete API/web-app
+  reference in Sections 2 and 5 was confirmed against the sources (CSRF/cookie flow,
+  configurable base URL, the "no networking" scope), and the framework claims
+  (action paths, Gradle/AGP tasks, concurrency, caching, paths filter) check out
+  against current official docs. Two pre-existing nuances were annotated rather than
+  changed: (a) the `paths`-filter + required-check interaction (citation 9), and
+  (b) configuration-cache vs `--no-daemon` effectiveness (citation 11). These are
+  advisory notes, not contradictions of the spec.
+
+### Open assumptions
+
+- **Backend host literal** `http://18.222.237.167:8000` (citation 2): sourced from
+  project context only; the frontend reads `VITE_API_BASE_URL`, so the IP cannot be
+  verified from the repo. Immaterial to AND-008 (no network I/O), so left as-is.
+- **Toolchain version pins** (citation 5): Kotlin/AGP/Gradle/SDK levels are an
+  AND-002 contract, not present in the API/frontend sources; assumed correct and
+  internally consistent. Confirm against the merged AND-002 before relying on them.
+- **Runner label** `andrioiddev` vs `androiddev` (citation 10, R1): unverifiable
+  from any source; must be confirmed against the actual registered self-hosted
+  runner before merge.
+- **Orchestrator is GitHub Actions** (Section 4.1, R1): assumed; if the build
+  server runs Jenkins/GitLab CI the same step sequence must be ported. No source
+  confirms the orchestrator.
+
+## 17. Test Plan
+
+Validation cases for the CI gate. Types: unit (Gradle/JVM test invoked by the gate),
+contract/MockWebServer (N/A here — no HTTP), integration (workflow behavior on the
+runner), Compose-UI / instrumented-e2e (N/A — no UI, no device), manual/review.
+"Traces: AC-#" links to Section 14.
+
+- **TC-AND-008-01 — Green on scaffold (happy path).** *Type:* integration.
+  *Preconditions:* AND-002 merged; runner `andrioiddev` online; JDK 17 provisionable
+  via `setup-java`. *Steps:* open a no-op PR against `android-port`; let the
+  `Android CI` check run. *Expected:* check passes; log shows both `assembleDebug`
+  and `testDebugUnitTest` executing in a single `./gradlew` invocation from
+  `android/`; wrapper-validation step passes. *Traces: AC-1, AC-2.*
+
+- **TC-AND-008-02 — Reproducible on fresh checkout.** *Type:* integration
+  (clean-room). *Preconditions:* clean machine/container, JDK 17 on PATH,
+  `ANDROID_HOME`/`ANDROID_SDK_ROOT` set, no prior Gradle home. *Steps:* `git clone`
+  the repo, `cd android`, run `./gradlew assembleDebug testDebugUnitTest`. *Expected:*
+  passes with no manual SDK component installation beyond `ANDROID_HOME`; no
+  `local.properties` is present in the checkout (it is git-ignored). *Traces: AC-4.*
+
+- **TC-AND-008-03 — Cache-independence (cold cache).** *Type:* integration.
+  *Preconditions:* a previously-green pipeline; access to prune the runner Gradle
+  home. *Steps:* delete `~/.gradle/caches` and `~/.gradle/wrapper` on the runner;
+  re-run the workflow on `android-port`. *Expected:* run is still green (slower);
+  proving the cache is an optimization, not a correctness dependency. *Traces: AC-7.*
+
+- **TC-AND-008-04 — Red on real test failure + report artifact.** *Type:* unit
+  (negative) + integration. *Preconditions:* green baseline. *Steps:* temporarily
+  change `CiSanityTest` to `assertEquals(5, 2 + 2)`; push; observe the run; then
+  revert. *Expected:* job goes red on a non-zero Gradle exit; the failing test
+  appears in the uploaded `unit-test-reports` artifact (uploaded due to
+  `if: always()`); after revert the job returns to green. *Traces: AC-5, AC-6.*
+
+- **TC-AND-008-05 — Sanity test actually executes (non-vacuous gate).** *Type:*
+  unit. *Preconditions:* green run. *Steps:* inspect `testDebugUnitTest` output and
+  the uploaded HTML/XML report. *Expected:* reported executed-test count >= 1 (at
+  least `CiSanityTest.arithmetic_holds`); an empty `src/test` source set must not be
+  able to make the gate pass vacuously. *Traces: AC-2, AC-5.*
+
+- **TC-AND-008-06 — Artifact upload on success and on failure.** *Type:*
+  integration. *Preconditions:* one green run and one red run available (red from
+  TC-04). *Steps:* check the Artifacts of both runs. *Expected:* `unit-test-reports`
+  present on BOTH runs (`if: always()`); `app-debug-apk` present only on the
+  successful run (`if: success()`), containing the debug APK; 7-day retention set.
+  *Traces: AC-5.*
+
+- **TC-AND-008-07 — Path filtering (under-trigger guard).** *Type:* integration.
+  *Preconditions:* monorepo with `frontend/` and `android/`. *Steps:* open a PR that
+  touches only `frontend/**`. *Expected:* the `Android CI` workflow does NOT run
+  (paths filter scopes to `android/**` + the workflow file). Verify this does not
+  block merge if `Android CI` is a required check (skipped-required-check handling /
+  success-shim per citation 9). *Traces: AC-1.*
+
+- **TC-AND-008-08 — Path filtering (over-trigger guard).** *Type:* integration.
+  *Preconditions:* as above. *Steps:* open a PR that touches `android/**` (or the
+  workflow file). *Expected:* the workflow DOES run. Confirms the filter does not
+  silently drop legitimate Android changes (the missed-gate risk, R4). *Traces:
+  AC-1, AC-2.*
+
+- **TC-AND-008-09 — Concurrency cancellation.** *Type:* integration.
+  *Preconditions:* a PR with an in-flight run. *Steps:* push a second commit to the
+  same PR ref before the first run finishes. *Expected:* the older in-flight run is
+  cancelled (`cancel-in-progress: true`, group keyed on ref); only the newest run
+  proceeds. *Traces: AC-1.*
+
+- **TC-AND-008-10 — Cache write-policy / PR cache-poisoning guard (security).**
+  *Type:* integration (security). *Preconditions:* a PR run and a `push`-to-
+  `android-port` run. *Steps:* inspect `setup-gradle` cache logs on each. *Expected:*
+  PR run is cache **read-only** (`cache-read-only: true`, since
+  `github.event_name != 'push'`); only the `push` run writes the shared Gradle
+  cache. Confirms a fork PR cannot poison the cache. *Traces: AC-3.*
+
+- **TC-AND-008-11 — Cache restore/save key correctness.** *Type:* integration.
+  *Preconditions:* two consecutive `push` runs with no Gradle/catalog changes
+  between them. *Steps:* compare cache restore on run 2 vs run 1. *Expected:* run 2
+  restores the cache saved by run 1 (warm-cache hit, reduced download/wall time);
+  changing a `*.gradle*` / `gradle-wrapper.properties` / `libs.versions.toml` file
+  produces a new key with restore-key fallback to the nearest prior cache. *Traces:
+  AC-3.*
+
+- **TC-AND-008-12 — Least-privilege & credential hygiene (security).** *Type:*
+  review + integration. *Preconditions:* workflow file + a completed run on the
+  self-hosted runner. *Steps:* review `permissions:` and checkout config; on the
+  runner workspace, check git config after the job. *Expected:* `permissions:
+  contents: read` only (no write/publish); `persist-credentials: false` so no
+  `GITHUB_TOKEN` remains in the persistent runner's local git config; no secrets,
+  keystores, or backend credentials referenced. *Traces: AC-1.*
+
+- **TC-AND-008-13 — Wrapper-integrity gate (security).** *Type:* integration
+  (negative). *Preconditions:* green baseline. *Steps:* in a throwaway branch,
+  tamper with `gradle/wrapper/gradle-wrapper.jar` (or point the wrapper at an
+  unknown distribution) and run. *Expected:* `gradle/actions/wrapper-validation`
+  fails the job before the build runs; restoring the genuine wrapper passes.
+  *Traces: AC-2.*
+
+- **TC-AND-008-14 — Timeout / no-auto-retry-on-failure (resilience).** *Type:*
+  review + integration. *Preconditions:* workflow file. *Steps:* confirm
+  `timeout-minutes: 30` is set and no step-level retry/`continue-on-error` wraps the
+  build/test step. *Expected:* a hung job is capped at 30 min and fails; build/test
+  failures are NOT auto-retried (a green-on-retry build would mask nondeterminism).
+  No network I/O to the dev backend occurs during the job. *Traces: AC-2, AC-7.*
+
+### Coverage matrix
+
+| Acceptance criterion (Section 14) | Covered by |
+|---|---|
+| AC-1 (workflow triggers, scope, runner, concurrency, perms) | TC-01, TC-07, TC-08, TC-09, TC-12 |
+| AC-2 (single `gradlew assembleDebug testDebugUnitTest`, JDK17, wrapper validated, tasks in log) | TC-01, TC-05, TC-08, TC-13, TC-14 |
+| AC-3 (Gradle caches restored/saved, read-only on PRs, keyed on hashed files) | TC-10, TC-11 |
+| AC-4 (reproducible on fresh checkout, no local.properties) | TC-02 |
+| AC-5 (test reports always uploaded, APK on success, non-empty test count) | TC-04, TC-05, TC-06 |
+| AC-6 (failing test -> red, visible in report, revert -> green) | TC-04 |
+| AC-7 (cleared cache still green) | TC-03, TC-14 |
+
+Accessibility note: no UI is delivered by AND-008, so no Compose-UI/TalkBack cases
+apply (Section 9). The gate established here is what downstream accessibility/
+semantics unit tests will execute under.

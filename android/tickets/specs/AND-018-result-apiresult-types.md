@@ -5,7 +5,8 @@ milestone: M1
 epic: E02
 priority: P0
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-003]
 blocks: [AND-015]
 ---
@@ -51,7 +52,10 @@ here — those belong to AND-010, AND-015, and `core-ui` respectively.
 - **Stack:** Kotlin 2.0.21, JDK 17. Pure Kotlin module; `kotlin-stdlib` and Coroutines
   (`kotlinx-coroutines-core`) only.
 - **Web reference:** the FastAPI `detail` union (`string | [{msg}] | {code,...}`) drives
-  the `ApiError` shape consumed here; full normalization is AND-015.
+  the `ApiError` shape consumed here; full normalization is AND-015. *(Verified: the web
+  client's `normalizeErrorDetail` in `src/api/client.ts` handles exactly these three forms;
+  the array form items are `ValidationError {loc, msg, type}` and the object form is
+  `{code, message, ...}`. See §16.)*
 - **Project rule:** package base `com.testlogon.android`. All types here live under
   `com.testlogon.android.core.model.result`.
 
@@ -349,3 +353,263 @@ Unit tests in `core-model/src/test` (JUnit + kotlin-test/Truth; coroutines-test 
 - ktlint/detekt (AND-005) pass on the new files.
 - Code reviewed and merged to `android-port`; AND-015 and AND-010 owners notified that the
   `ApiResult`/`ApiError` shape is frozen for their consumption.
+
+## 16. Citations & Assumption Audit
+
+This ticket introduces a pure-Kotlin envelope type and consumes **no** network endpoint, so
+most claims are framework/design decisions rather than API-contract claims. The few external
+claims (the FastAPI `detail` union and the error-code examples that shape `ApiError`) were
+verified against the OpenAPI spec and the web client.
+
+1. **Claim:** The FastAPI error `detail` is a union `string | [{msg}] | {code,...}`.
+   **VERDICT:** Verified.
+   **SOURCE:** `src/api/client.ts: normalizeErrorDetail` (handles `typeof detail === "string"`,
+   `Array.isArray(detail)` with item `.msg`, and `detail && typeof detail === "object"` with
+   `.code`); OpenAPI schemas `HTTPValidationError` (`detail: ValidationError[]`) and
+   `ValidationError` (`{loc, msg, type}`, all required). The object/`{code,...}` form is
+   confirmed by inline response examples (e.g. `detail: {code: "invalid_payload", message: ...}`)
+   and `MessageControlsErrorOut {detail: string, error_code?}`.
+
+2. **Claim:** The structured object form carries a machine-readable `code` and a human
+   `message` (mapped to `ApiError.code` / `ApiError.message`).
+   **VERDICT:** Verified.
+   **SOURCE:** `src/api/client.ts` line ~245 reads `rawDetail.code === "geo_blocked"` then
+   `rawDetail.message`; OpenAPI examples consistently use `{code, message}`. The KDoc example
+   codes are real.
+
+3. **Claim:** `role_required` is a real authorization error code.
+   **VERDICT:** Corrected (clarified). The code family exists, but `role_required` is one of
+   several siblings.
+   **SOURCE:** `src/api/client.ts: mapAuthorizationError` matches `role_required_scope`,
+   `role_required_admin_profile_type`, and `role_required` (lines 38–47);
+   `src/api/client.errorMapping.test.ts` exercises the first two. The KDoc lists `role_required`
+   as an *example* code, which is accurate as a representative; `ApiError.code` is a free-form
+   `String?`, so no schema change is needed.
+
+4. **Claim:** `geo_blocked` is a real error code surfaced via the `detail` object.
+   **VERDICT:** Verified.
+   **SOURCE:** `src/api/client.ts` line ~245 (`(rawDetail).code === "geo_blocked"`, then
+   renders `rawDetail.message` and throws `ApiError(403, ...)`).
+
+5. **Claim:** The data layer should distinguish "server answered with an error" from "we
+   never reached the server."
+   **VERDICT:** Verified (design corroborated by the web client).
+   **SOURCE:** `src/api/client.ts` line ~185–188 — the `fetch` `catch` block emits
+   `new ApiError(0, "Network error", err)` with the comment "Network error (offline, DNS
+   failure, etc.)". The web client collapses this into status `0`; the Android `ApiResult`
+   intentionally promotes it to a first-class `NetworkError` variant (a deliberate divergence,
+   not a contradiction — see Corrections).
+
+6. **Claim:** The web `ApiError` shape is `(status, detail, body)`, analogous to the Android
+   `ApiError(status, message, code, rawBody)`.
+   **VERDICT:** Verified (analogy, not identity).
+   **SOURCE:** `src/api/client.ts: class ApiError extends Error` (ctor `status, detail, body`,
+   line ~106–113). Android adds an explicit `code` field (web derives it ad hoc from
+   `detail.code` at the call site); `rawBody` corresponds to web's `body`.
+
+7. **Claim:** `core-model` is a pure Kotlin/JVM module with no Android/Retrofit/OkHttp/Hilt
+   deps; `ApiResult` is unit-testable in isolation.
+   **VERDICT:** Unverified-assumption (depends on AND-003, not on the API sources).
+   **SOURCE:** AND-003 (not present in the authoritative API/frontend sources). Treated as a
+   dependency contract; enforced by the §15 DoD build-file inspection.
+
+8. **Claim:** `CancellationException` must propagate and `IOException` subtypes map to
+   `NetworkError` (timeout flag for `SocketTimeoutException` / `InterruptedIOException`).
+   **VERDICT:** Verified (framework ref).
+   **SOURCE:** framework ref — Kotlin structured concurrency requires re-throwing
+   `CancellationException` (https://kotlinlang.org/docs/cancellation-and-timeouts.html);
+   `java.net.SocketTimeoutException` extends `java.io.InterruptedIOException` extends
+   `java.io.IOException` (https://docs.oracle.com/javase/8/docs/api/java/net/SocketTimeoutException.html).
+
+9. **Claim:** `out T` variance lets `Failure`/`NetworkError` be typed `ApiResult<Nothing>`
+   and reused across any `ApiResult<T>`.
+   **VERDICT:** Verified (framework ref).
+   **SOURCE:** framework ref — Kotlin declaration-site variance and `Nothing`
+   (https://kotlinlang.org/docs/generics.html#declaration-site-variance).
+
+10. **Claim:** HTTP-error→`Failure` mapping and `detail` normalization are out of scope here
+    (owned by AND-010 / AND-015).
+    **VERDICT:** Unverified-assumption (cross-ticket scoping; not checkable against API sources).
+    **SOURCE:** AND-010 / AND-015 ticket scope. Internally consistent with §3.4 and §5.
+
+### Corrections made
+
+- **§2 (Web reference):** added an inline verification note confirming the three `detail` forms
+  against `src/api/client.ts: normalizeErrorDetail`, the `ValidationError {loc, msg, type}`
+  schema, and the `{code, message}` object form.
+- **Citation #3 / KDoc codes:** clarified that `role_required` is one member of a family
+  (`role_required`, `role_required_scope`, `role_required_admin_profile_type`). No code change —
+  `ApiError.code` is `String?`, so the example remains valid; this is a documentation precision
+  fix, not a contract fix.
+- **Citation #5 (network/server split):** noted that the web client collapses unreachable-host
+  failures into `ApiError(status = 0)`, whereas this ticket promotes them to a distinct
+  `NetworkError` variant. Recorded as an intentional, documented divergence so reviewers do not
+  mistake it for a contract mismatch.
+- No factual errors were found in the type design, helper list, or `apiCall` semantics; those
+  edits were limited to the notes above.
+
+### Open assumptions
+
+- **AND-003 module shape** (namespace `com.testlogon.android.core.model`, Kotlin-stdlib +
+  coroutines-core only, no Android deps): not verifiable from the OpenAPI/frontend sources;
+  it is an upstream-ticket contract. Risk is low and is gated by the §15 DoD build-file check.
+- **AND-010 / AND-015 ownership** of the `HttpException`→`Failure` adapter and `detail`
+  normalization: cross-ticket scoping decision, not checkable against API sources. The `apiCall`
+  seam is deliberately left final on the `IOException` branch (§3.4, §4).
+- **Exact set of FastAPI error codes** that AND-015 will key on: only a representative sample
+  (`role_required*`, `geo_blocked`, `invalid_payload`, `invalid_signature`, …) is observable in
+  the spec/frontend; the full enumeration is owned by AND-015 and is not frozen here. `ApiError.code`
+  stays a free-form `String?` precisely to avoid premature lock-in (§13 R1).
+
+## 17. Test Plan
+
+All tests run in `core-model/src/test` (JVM unit tests; JUnit + Truth/kotlin-test, with
+`kotlinx-coroutines-test` for `apiCall`). No MockWebServer/instrumented/Compose-UI tests apply:
+this module has no network transport and no UI (so accessibility cases are N/A and explicitly
+noted). The "flaky-dev-host/offline" path is exercised at the type level by simulating thrown
+`IOException`s through `apiCall`/`mapCatching`, since the real transport (AND-010) is out of scope.
+
+- **TC-AND-018-01 — `map` over `Success` transforms; over failures is identity**
+  - Type: unit
+  - Preconditions: none.
+  - Steps: (a) `ApiResult.Success(2).map { it * 3 }`; (b) take a `Failure(err)` instance `f`
+    and call `f.map { it }`; (c) take a `NetworkError(e)` instance `n` and call `n.map { it }`.
+  - Expected: (a) `Success(6)`; (b) returns the *same* `f` instance (assert reference equality);
+    (c) returns the *same* `n` instance.
+  - Traces: AC-1, AC-3.
+
+- **TC-AND-018-02 — `flatMap` chains on `Success`, short-circuits on failures**
+  - Type: unit
+  - Preconditions: none.
+  - Steps: (a) `Success(2).flatMap { Success(it+1) }`; (b) `Success(2).flatMap { Failure(err) }`;
+    (c) `Failure(err).flatMap { Success(1) }`; (d) `NetworkError(e).flatMap { Success(1) }`.
+  - Expected: (a) `Success(3)`; (b) `Failure(err)`; (c) original `Failure` unchanged (identity);
+    (d) original `NetworkError` unchanged (identity); transform not invoked in (c)/(d).
+  - Traces: AC-3.
+
+- **TC-AND-018-03 — `fold` dispatches to the correct branch for all three variants**
+  - Type: unit
+  - Preconditions: none.
+  - Steps: call `fold(onSuccess, onFailure, onNetworkError)` on a `Success`, a `Failure`, and a
+    `NetworkError`, each returning a distinct sentinel.
+  - Expected: each variant routes to exactly its branch (other branches not invoked); `onFailure`
+    receives the `ApiError`, `onNetworkError` receives the `NetworkError` instance.
+  - Traces: AC-3, AC-7.
+
+- **TC-AND-018-04 — getters: `getOrNull` / `getOrElse` / `getOrDefault`**
+  - Type: unit
+  - Preconditions: none.
+  - Steps: on `Success("x")`, `Failure(err)`, `NetworkError(e)` call each getter (with a fallback
+    value/lambda for the latter two).
+  - Expected: `Success` returns its data; `Failure`/`NetworkError` return the supplied fallback;
+    `getOrElse` lambda receives the original receiver.
+  - Traces: AC-3.
+
+- **TC-AND-018-05 — `errorOrNull` / `exceptionOrNull` selectivity**
+  - Type: unit
+  - Preconditions: none.
+  - Steps: call both accessors on each of the three variants.
+  - Expected: `errorOrNull` returns the `ApiError` only on `Failure` (null otherwise);
+    `exceptionOrNull` returns `cause` only on `NetworkError` (null otherwise).
+  - Traces: AC-3.
+
+- **TC-AND-018-06 — side-effect helpers fire only on matching variant and return receiver**
+  - Type: unit
+  - Preconditions: none.
+  - Steps: chain `.onSuccess{}.onFailure{}.onNetworkError{}` on each variant, recording which
+    actions ran; assert the returned value.
+  - Expected: only the matching action runs; the original receiver is returned unchanged
+    (enables fluent chaining).
+  - Traces: AC-3.
+
+- **TC-AND-018-07 — boolean predicates `isSuccess` / `isFailure` / `isNetworkError`**
+  - Type: unit
+  - Preconditions: none.
+  - Steps: evaluate all three predicates against all three variants.
+  - Expected: exactly one predicate is `true` per variant; the other two are `false`.
+  - Traces: AC-3.
+
+- **TC-AND-018-08 — `mapCatching` converts a thrown transform exception to `NetworkError`**
+  - Type: unit
+  - Preconditions: none.
+  - Steps: `Success(1).mapCatching { throw RuntimeException("boom") }`; also
+    `Failure(err).mapCatching { it }` and `NetworkError(e).mapCatching { it }`.
+  - Expected: first yields `NetworkError(cause=RuntimeException, isTimeout=false)`; the failure
+    inputs pass through unchanged (transform not invoked).
+  - Traces: AC-3.
+
+- **TC-AND-018-09 — `mapCatching` re-throws `CancellationException`**
+  - Type: unit
+  - Preconditions: none.
+  - Steps: `assertFailsWith<CancellationException> { Success(1).mapCatching { throw CancellationException() } }`.
+  - Expected: the `CancellationException` propagates (is NOT converted to `NetworkError`).
+  - Traces: AC-3.
+
+- **TC-AND-018-10 — `apiCall` happy path returns `Success`**
+  - Type: unit (coroutines-test)
+  - Preconditions: `runTest` scope.
+  - Steps: `apiCall { 42 }`.
+  - Expected: `ApiResult.Success(42)`.
+  - Traces: AC-4, AC-5.
+
+- **TC-AND-018-11 — `apiCall` maps `IOException` subtypes to `NetworkError` with correct timeout flag (flaky-dev-host/offline path)**
+  - Type: unit (coroutines-test)
+  - Preconditions: `runTest` scope.
+  - Steps: (a) `apiCall { throw SocketTimeoutException() }`; (b)
+    `apiCall { throw InterruptedIOException() }`; (c) `apiCall { throw IOException("connreset") }`
+    (simulates the flaky plaintext dev host `18.222.237.167:8000` being slow/unreachable).
+  - Expected: (a) and (b) → `NetworkError(isTimeout = true)`; (c) → `NetworkError(isTimeout = false)`;
+    `cause` is the thrown instance in each case.
+  - Traces: AC-4.
+
+- **TC-AND-018-12 — `apiCall` re-throws `CancellationException`**
+  - Type: unit (coroutines-test)
+  - Preconditions: `runTest` scope.
+  - Steps: `assertFailsWith<CancellationException> { apiCall { throw CancellationException() } }`.
+  - Expected: propagates; never returned as `NetworkError`/`Failure`.
+  - Traces: AC-4.
+
+- **TC-AND-018-13 — `ApiError` defaults + repository return-type stub compiles**
+  - Type: contract (compile/usage)
+  - Preconditions: none.
+  - Steps: (a) construct `ApiError()` (all defaults: `status=0`, others null); construct
+    `ApiError(status=422, message="bad", code="role_required", rawBody="{...}")`. (b) define a
+    sample `suspend fun foo(): ApiResult<String>` in test source that returns each of the three
+    variants on different paths and compiles.
+  - Expected: both constructions compile and hold the given values; the stub compiles and can
+    return `Success`/`Failure`/`NetworkError`. (Mirrors the web `detail.{code, message}` /
+    `ValidationError` shapes verified in §16.)
+  - Traces: AC-2, AC-5.
+
+- **TC-AND-018-14 — `when` over `ApiResult` is exhaustive without `else`; variance assignability**
+  - Type: unit (compile-time regression guard)
+  - Preconditions: a `sealed interface` with exactly three variants.
+  - Steps: (a) a `when (result)` covering `Success`/`Failure`/`NetworkError` with no `else`
+    compiles and returns a value; (b) `val a: ApiResult<Animal> = ApiResult.Success(Cat())`
+    compiles; (c) a `Failure`/`NetworkError` value is assignable to both `ApiResult<String>` and
+    `ApiResult<Int>` (typed `ApiResult<Nothing>`).
+  - Expected: all compile; adding a 4th variant would break (a) at compile time (the intended
+    regression guard).
+  - Traces: AC-1, AC-7.
+
+- **TC-AND-018-15 — security: failure types carry no credentials/PII and full suite is green**
+  - Type: unit + manual review
+  - Preconditions: none.
+  - Steps: (a) unit-assert `ApiError`/`NetworkError` expose only `status/message/code/rawBody` and
+    `cause/isTimeout` (no token/cookie/CSRF fields) via property checks; (b) manual: confirm
+    `core-model` build file adds no Android/Retrofit/OkHttp/Moshi/Hilt dep and no logging dep;
+    run `./gradlew :core-model:test` and confirm green with `ApiResultExt.kt` + `apiCall` covered.
+  - Expected: (a) only the documented fields exist; (b) build file is clean and the suite passes.
+  - Traces: AC-1, AC-2, AC-6. (Accessibility: N/A — no UI in this module.)
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 — `ApiResult` sealed interface, 3 variants | TC-01, TC-14, TC-15 |
+| AC-2 — `ApiError` with defaulted params | TC-13, TC-15 |
+| AC-3 — all helpers implemented, `inline`, no `CancellationException` catch | TC-01, TC-02, TC-03, TC-04, TC-05, TC-06, TC-07, TC-08, TC-09 |
+| AC-4 — `apiCall` folds `IOException`→`NetworkError` (timeout flag), re-throws `CancellationException` | TC-10, TC-11, TC-12 |
+| AC-5 — repository can declare/return `ApiResult<T>` (compiling stub) | TC-10, TC-13 |
+| AC-6 — unit tests cover every helper + `apiCall` branch; suite passes | TC-01..TC-12, TC-15 |
+| AC-7 — exhaustive `when` without `else` | TC-03, TC-14 |
