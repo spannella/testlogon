@@ -801,6 +801,14 @@ class Settings:
     # Multi-stage cart reminders (GAP-0189 / FIN-003)
     cart_reminders_enabled: bool = os.environ.get("CART_REMINDERS_ENABLED", "1") not in ("0", "false", "False")
     cart_reminder_config_table_name: str = os.environ.get("CART_REMINDER_CONFIG_TABLE", "cart_reminder_config")
+    # Cart recovery one-time link signing (GAP-0190 / FIN-003). Defaults to the
+    # UI access-token secret so dev (no extra env) and prod (set via env) both
+    # produce verifiable signed tokens — dev/prod parity (SECOPS-007).
+    cart_recovery_link_secret: str = (
+        os.environ.get("CART_RECOVERY_LINK_SECRET")
+        or os.environ.get("UI_ACCESS_TOKEN_SECRET", "")
+    )
+    cart_recovery_link_ttl_days: int = int(os.environ.get("CART_RECOVERY_LINK_TTL_DAYS", "7"))
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
     catalog_default_low_stock_threshold: int = int(os.environ.get("CATALOG_LOW_STOCK_THRESHOLD", "5"))

@@ -16,10 +16,16 @@ flag is ``0`` the background loop returns to the old behaviour.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import uuid
 from typing import Any, Dict, List, Optional
 
 from boto3.dynamodb.conditions import Key
+from fastapi import HTTPException
 
+from app.core.crypto import b64url, b64url_decode
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
@@ -29,6 +35,10 @@ from app.services.profile import get_profile
 # Config-table partition keys
 _STAGE_CONFIG_PK = "STAGE#CONFIG"
 _OPTOUT_PK_PREFIX = "OPTOUT#USER#"
+# Recovery-token consumption markers live in the same config table so GAP-0190
+# needs no new table. The signed token is stateless; this row only records that
+# a given token id (jti) has been consumed, enforcing one-time use.
+_RECOVERY_CONSUMED_PK_PREFIX = "RECOVERY#CONSUMED#"
 
 
 def _default_stages() -> List[Dict[str, Any]]:
@@ -82,7 +92,12 @@ def _get_stages() -> List[Dict[str, Any]]:
     return sorted(stages, key=lambda s: int(s.get("stage_number", 0)))
 
 
-def _is_opted_out(user_sub: str) -> bool:
+def is_user_opted_out(user_sub: str) -> bool:
+    """Return True if the user has opted out of cart abandonment reminders.
+
+    Opt-out state lives in the ``cart_reminder_config`` table under the
+    ``OPTOUT#USER#{sub}`` partition (GAP-0191).
+    """
     try:
         item = T.cart_reminder_config.get_item(
             Key={"pk": f"{_OPTOUT_PK_PREFIX}{user_sub}", "sk": "META"}
@@ -92,14 +107,142 @@ def _is_opted_out(user_sub: str) -> bool:
     return bool(item and item.get("opted_out"))
 
 
-def generate_recovery_link(user_sub: str, cart_id: str) -> str:
-    """Return a cart recovery URL.
+# Backwards-compatible private alias (used by process_abandoned_carts above).
+_is_opted_out = is_user_opted_out
 
-    GAP-0190 covers signing this link with an authentication token; until then
-    this returns the plain deep-link used by the legacy reminder so behaviour is
-    unchanged. Kept as a single seam so GAP-0190 can swap the implementation.
+
+def get_reminder_preference(user_sub: str) -> Dict[str, Any]:
+    """Return the user's cart-reminder preference; defaults to opted-in."""
+    try:
+        item = T.cart_reminder_config.get_item(
+            Key={"pk": f"{_OPTOUT_PK_PREFIX}{user_sub}", "sk": "META"}
+        ).get("Item")
+    except Exception:
+        item = None
+    if not item:
+        return {"opted_out": False, "updated_at": None}
+    updated_at = int(item.get("updated_at", 0) or 0) or None
+    return {"opted_out": bool(item.get("opted_out")), "updated_at": updated_at}
+
+
+def set_reminder_preference(user_sub: str, opted_out: bool) -> Dict[str, Any]:
+    """Write or update the user's cart-reminder opt-out preference."""
+    ts = now_ts()
+    T.cart_reminder_config.put_item(
+        Item={
+            "pk": f"{_OPTOUT_PK_PREFIX}{user_sub}",
+            "sk": "META",
+            "opted_out": bool(opted_out),
+            "updated_at": ts,
+        }
+    )
+    return {"opted_out": bool(opted_out), "updated_at": ts}
+
+
+# ─── GAP-0190: signed one-time cart-recovery tokens ──────────────────────────
+
+def _recovery_secret() -> bytes:
+    """Signing key for recovery tokens (dev/prod parity, SECOPS-007)."""
+    secret = S.cart_recovery_link_secret or "dev-cart-recovery-secret"
+    return secret.encode("utf-8")
+
+
+def _sign_recovery_token(user_sub: str, cart_id: str) -> str:
+    """Mint a signed, time-limited, one-time-use recovery token.
+
+    Format mirrors ``app.core.crypto.mint_ws_token``: ``b64url(payload).b64url(sig)``
+    with an HMAC-SHA256 signature. ``jti`` lets us mark the token consumed in DDB.
     """
-    return f"/cart?cartId={cart_id}"
+    now = now_ts()
+    payload = {
+        "user_sub": user_sub,
+        "cart_id": cart_id,
+        "jti": uuid.uuid4().hex,
+        "exp": now + S.cart_recovery_link_ttl_days * 86400,
+        "iat": now,
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sig = hmac.new(_recovery_secret(), raw, hashlib.sha256).digest()
+    return f"{b64url(raw)}.{b64url(sig)}"
+
+
+def _verify_recovery_token(token: str) -> Optional[Dict[str, Any]]:
+    """Verify signature + expiry. Returns the payload dict or ``None``."""
+    try:
+        raw_b64, sig_b64 = token.split(".", 1)
+        raw = b64url_decode(raw_b64)
+        sig = b64url_decode(sig_b64)
+        expected = hmac.new(_recovery_secret(), raw, hashlib.sha256).digest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        obj = json.loads(raw.decode("utf-8"))
+        if not isinstance(obj, dict):
+            return None
+        if int(obj.get("exp", 0)) < now_ts():
+            return None
+        return obj
+    except Exception:
+        return None
+
+
+def _is_token_consumed(jti: str) -> bool:
+    try:
+        item = T.cart_reminder_config.get_item(
+            Key={"pk": f"{_RECOVERY_CONSUMED_PK_PREFIX}{jti}", "sk": "META"}
+        ).get("Item")
+    except Exception:
+        return False
+    return bool(item)
+
+
+def _mark_token_consumed(jti: str) -> bool:
+    """Atomically mark a token id consumed. Returns False if already consumed."""
+    try:
+        T.cart_reminder_config.put_item(
+            Item={
+                "pk": f"{_RECOVERY_CONSUMED_PK_PREFIX}{jti}",
+                "sk": "META",
+                "consumed_at": now_ts(),
+            },
+            ConditionExpression="attribute_not_exists(pk)",
+        )
+        return True
+    except Exception:
+        return False
+
+
+def generate_recovery_link(user_sub: str, cart_id: str) -> str:
+    """Return a signed, one-time-use cart recovery URL (GAP-0190).
+
+    The token carries the owning user and cart, is signed with an HMAC secret,
+    and is consumed on first use. The base URL comes from ``S.public_base_url``
+    (localhost in dev, the public HTTPS domain in prod) so the same code path
+    works in both environments (SECOPS-007).
+    """
+    token = _sign_recovery_token(user_sub, cart_id)
+    base = S.public_base_url.rstrip("/")
+    return f"{base}/ui/shoppingcart/recover/{token}"
+
+
+def recover_cart(token: str) -> Dict[str, Any]:
+    """Validate and consume a recovery token.
+
+    Returns ``{user_sub, cart_id}``. Raises ``HTTPException(400)`` for an
+    invalid/expired token or one that has already been used (one-time-use).
+    """
+    payload = _verify_recovery_token(token)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Invalid or expired recovery link")
+    jti = str(payload.get("jti") or "")
+    if not jti or _is_token_consumed(jti):
+        raise HTTPException(status_code=400, detail="Recovery link already used")
+    # Atomically consume — guards against concurrent double-use.
+    if not _mark_token_consumed(jti):
+        raise HTTPException(status_code=400, detail="Recovery link already used")
+    return {
+        "user_sub": str(payload.get("user_sub") or ""),
+        "cart_id": str(payload.get("cart_id") or ""),
+    }
 
 
 def _count_cart_items(user_pk: str, cart_id: str) -> int:

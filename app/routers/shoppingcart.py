@@ -4,6 +4,8 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 
 from app.auth.deps import AuthenticatedUser, get_authenticated_user
 from app.auth.policy import require_admin_or_root
@@ -258,6 +260,61 @@ async def ui_cart_abandonment_status(cart_id: str, ctx=Depends(require_ui_sessio
         "reminder_count": int(cart.get("reminder_count", 0) or 0),
         "is_abandoned": int(cart.get("abandoned_at", 0) or 0) > 0,
     }
+
+
+# ─── GAP-0190: public one-time cart recovery link ────────────────────────────
+
+
+@router.get("/recover/{token}")
+async def ui_recover_cart(token: str):
+    """Public endpoint: validate a one-time recovery token and redirect to the cart.
+
+    No auth required — the signed token is the credential. Consumes the token
+    (one-time-use) then redirects to the cart page with the cart pre-selected.
+    """
+    from app.services.cart_reminders import recover_cart
+
+    result = recover_cart(token)
+    cart_id = result.get("cart_id", "")
+    return RedirectResponse(
+        url=f"/cart?cartId={cart_id}&recovered=1",
+        status_code=302,
+    )
+
+
+# ─── GAP-0191: cart-reminder opt-out preference ──────────────────────────────
+
+
+class ReminderPreferenceIn(BaseModel):
+    opted_out: bool
+
+
+@router.get("/reminders/preferences")
+async def ui_get_reminder_preference(ctx=Depends(require_ui_session)):
+    """Return the authenticated user's cart-reminder opt-out preference."""
+    from app.services.cart_reminders import get_reminder_preference
+
+    return get_reminder_preference(ctx["user_sub"])
+
+
+@router.put("/reminders/preferences")
+async def ui_set_reminder_preference(
+    body: ReminderPreferenceIn,
+    req: Request = None,
+    ctx=Depends(require_ui_session),
+):
+    """Set the authenticated user's cart-reminder opt-out preference."""
+    from app.services.cart_reminders import set_reminder_preference
+
+    result = set_reminder_preference(ctx["user_sub"], body.opted_out)
+    audit_event(
+        "cart_reminder_preference_updated",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        opted_out=body.opted_out,
+    )
+    return result
 
 
 # ─── SHOP-003: Background Cart Abandonment Loop ───────────────────────────────

@@ -256,6 +256,8 @@ Feature flags (all default to `true` in `.env.local.example`):
 
 ## Common gotchas
 
+**Cart recovery links + reminder opt-out (FIN-003 / GAP-0190, GAP-0191)**: `app/services/cart_reminders.py` owns both. `generate_recovery_link(user_sub, cart_id)` mints a signed, time-limited (`CART_RECOVERY_LINK_TTL_DAYS`, default 7) HMAC token (same scheme as `mint_ws_token`; secret = `CART_RECOVERY_LINK_SECRET`, falling back to `UI_ACCESS_TOKEN_SECRET`) and returns `{S.public_base_url}/ui/shoppingcart/recover/{token}`. `recover_cart(token)` verifies + consumes it (one-time-use: a `RECOVERY#CONSUMED#{jti}` row is written to `cart_reminder_config` with a conditional put; second use → 400). The public `GET /ui/shoppingcart/recover/{token}` endpoint (no auth) 302-redirects to `/cart?cartId=...&recovered=1`. Opt-out lives in `cart_reminder_config` under `OPTOUT#USER#{sub}` / `META`; `is_user_opted_out`, `get_reminder_preference`, `set_reminder_preference` manage it, and `GET/PUT /ui/shoppingcart/reminders/preferences` (cookie auth) expose it. Both `send_cart_reminder` (legacy, admin sweep + fallback loop) and `_send_stage_reminder` (multi-stage) check opt-out and embed the recovery URL.
+
 **DynamoDB numeric GSI sort keys**: If a GSI sort key is a number (e.g., `created_at`), the `TableDef` in `scripts/local-ddb-init.py` must include `attr_types={"created_at": "N"}`. Missing this causes DynamoDB to store it as String → `ValidationException` when queried with integer values.
 
 **Backend won't start without `.env.local`**: The startup script sources `.env.local` for mock AWS creds. Running `uvicorn` directly causes `NoCredentialsError`.

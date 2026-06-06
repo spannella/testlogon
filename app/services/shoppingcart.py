@@ -809,6 +809,12 @@ def send_cart_reminder(cart: Dict[str, Any], *, now: Optional[int] = None) -> No
     if not latest or latest.get("status") != "OPEN":
         return
 
+    # GAP-0191: respect the user's cart-reminder opt-out preference.
+    from app.services.cart_reminders import is_user_opted_out, generate_recovery_link
+
+    if is_user_opted_out(user_sub):
+        return
+
     # Count items in this cart
     prefix = f"CART#{cart_id}#ITEM#"
     items_resp = T.shopping_cart.query(
@@ -819,6 +825,9 @@ def send_cart_reminder(cart: Dict[str, Any], *, now: Optional[int] = None) -> No
     if items_count == 0:
         return  # Don't remind for empty carts
 
+    # GAP-0190: signed one-time recovery URL embedded in the alert + email.
+    recovery_url = generate_recovery_link(user_sub, cart_id)
+
     # Write in-app alert
     write_alert(
         user_sub,
@@ -828,7 +837,7 @@ def send_cart_reminder(cart: Dict[str, Any], *, now: Optional[int] = None) -> No
         details={
             "cart_id": cart_id,
             "alert_type": "cart.abandoned",
-            "link": f"/cart?cartId={cart_id}",
+            "link": recovery_url,
             "items_count": str(items_count),
         },
     )
@@ -842,7 +851,7 @@ def send_cart_reminder(cart: Dict[str, Any], *, now: Optional[int] = None) -> No
             subject="You left items in your cart",
             body_text=(
                 f"You have {items_count} item(s) waiting in your cart. "
-                f"Complete your purchase: /cart?cartId={cart_id}"
+                f"Complete your purchase: {recovery_url}"
             ),
         )
 

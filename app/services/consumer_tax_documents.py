@@ -28,7 +28,9 @@ MONEY values are integer cents throughout.
 
 from __future__ import annotations
 
+import io
 import logging
+import zipfile
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -50,6 +52,10 @@ _s3 = s3_client()
 
 # Platform launch year — no data exists before this.
 _PLATFORM_LAUNCH_YEAR = 2024
+
+# Cap the number of receipts bundled into a single ZIP to guard against runaway
+# memory / latency. Larger ranges must be narrowed by the caller (router → 422).
+MAX_ZIP_RECEIPTS = 500
 
 # Consumer SPENDING categories surfaced in consumer tax documents (FIN-004).
 CATEGORIES = ("subscriptions", "tips", "purchases", "unlocks", "deposits", "other")
@@ -608,3 +614,124 @@ def download_tax_document_pdf(*, user_sub: str, year: int) -> bytes:
     """Return PDF bytes for the given year's tax document, generating fresh if needed."""
     summary = get_annual_summary(user_sub=user_sub, year=year)
     return generate_tax_summary_pdf(user_sub=user_sub, summary=summary, year=year)
+
+
+# ---------------------------------------------------------------------------
+# Bulk receipt ZIP export (FIN-004)
+# ---------------------------------------------------------------------------
+
+def _query_transactions_range(
+    *, user_sub: str, date_from: int, date_to: int
+) -> List[Dict[str, Any]]:
+    """Query the caller's own purchase transactions within [date_from, date_to].
+
+    The ``purchase_transactions`` table is keyed by ``user_sub`` (PK) with sort
+    key ``TXN#{created_at}#{txn_id}``, so a timestamp range maps to a ``between``
+    KeyCondition. The ``~`` upper-bound suffix sweeps every txn_id within the
+    ``date_to`` second (ASCII ``~`` sorts after any txn-id character). Loops on
+    ``LastEvaluatedKey`` so a busy table is not silently truncated.
+    """
+    key_cond = "user_sub = :u AND sk BETWEEN :lo AND :hi"
+    expr_vals: Dict[str, Any] = {
+        ":u": user_sub,
+        ":lo": f"TXN#{int(date_from)}#",
+        ":hi": f"TXN#{int(date_to)}#~",
+    }
+    query_kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": key_cond,
+        "ExpressionAttributeValues": expr_vals,
+        "Limit": 500,
+    }
+    collected: List[Dict[str, Any]] = []
+    for _ in range(40):  # safety cap (~20k transactions)
+        resp = T.purchase_transactions.query(**query_kwargs)
+        collected.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        query_kwargs["ExclusiveStartKey"] = last_key
+    return collected
+
+
+def _fetch_receipt_pdf_bytes(*, user_sub: str, txn_id: str) -> bytes:
+    """Return the receipt PDF bytes for one transaction, fetched from S3.
+
+    Ensures a receipt exists (generating + uploading it on first request) and
+    then reads the object back through the shared ``s3_client`` helper. This is
+    the same boto3 path in dev (moto, intercepted in-process) and prod (real
+    S3), satisfying the SECOPS-007 dev/prod parity rule — no URL re-derivation
+    or HTTP round-trip.
+    """
+    from app.services import filemanager as fm
+    from app.services.receipts import get_or_create_receipt
+
+    receipt_path = fm.norm_path(f"/billing/receipts/{txn_id}.pdf", is_folder=False)
+    try:
+        node = fm.get_node(user_sub, receipt_path)
+    except Exception:
+        # Receipt not generated yet — create it (uploads PDF to S3), then read.
+        get_or_create_receipt(user_sub, txn_id)
+        node = fm.get_node(user_sub, receipt_path)
+
+    bucket = node.get("s3_bucket") or _bucket()
+    key = node["s3_key"]
+    resp = _s3.get_object(Bucket=bucket, Key=key)
+    return resp["Body"].read()
+
+
+def export_receipts_zip(*, user_sub: str, date_from: int, date_to: int) -> bytes:
+    """Bundle every receipt PDF in [date_from, date_to] for ``user_sub`` into a ZIP.
+
+    Only the caller's own transactions are included (scoped by the
+    ``purchase_transactions`` user PK). Returns the ZIP archive as bytes.
+
+    Raises ``ValueError("<code>:<message>")`` when:
+      - ``no_transactions`` — the range contains no transactions, or
+      - ``too_many_transactions`` — the range exceeds ``MAX_ZIP_RECEIPTS``.
+    """
+    txns = _query_transactions_range(
+        user_sub=user_sub, date_from=date_from, date_to=date_to
+    )
+    if not txns:
+        raise ValueError(
+            "no_transactions:No transactions found in the specified range"
+        )
+    if len(txns) > MAX_ZIP_RECEIPTS:
+        raise ValueError(
+            f"too_many_transactions:Date range contains {len(txns)} transactions "
+            f"(max {MAX_ZIP_RECEIPTS}). Please narrow the range."
+        )
+
+    written = 0
+    skipped = 0
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for txn in txns:
+            txn_id = str(txn.get("txn_id") or "")
+            if not txn_id:
+                skipped += 1
+                continue
+            try:
+                pdf_bytes = _fetch_receipt_pdf_bytes(user_sub=user_sub, txn_id=txn_id)
+            except Exception:
+                logger.warning(
+                    "export_receipts_zip: skipped txn %s", txn_id, exc_info=True
+                )
+                skipped += 1
+                continue
+            zf.writestr(f"receipt_{txn_id}.pdf", pdf_bytes)
+            written += 1
+
+    logger.info(
+        "export_receipts_zip",
+        extra={
+            "user_sub": user_sub,
+            "date_from": date_from,
+            "date_to": date_to,
+            "count": written,
+            "skipped": skipped,
+        },
+    )
+
+    buf.seek(0)
+    return buf.read()
