@@ -12747,28 +12747,69 @@ def presence_heartbeat(
     )
     ts = now_ts()
     status = _normalize_presence_status(inp.status)
-
-    # Check previous heartbeat for cooldown-based SSE fanout
-    prev_item = None
-    try:
-        prev_resp = tbl_presence.get_item(Key={"user_id": user_id})
-        prev_item = prev_resp.get("Item")
-    except Exception:
-        pass
-    prev_last_seen = int(prev_item.get("last_seen_at", 0) or 0) if prev_item else 0
-
-    tbl_presence.put_item(
-        Item={
-            "user_id": user_id,
-            "last_seen_at": ts,
-            "device": inp.device or "",
-            "status": status,
-            "ttl": ts + PRESENCE_TTL_SEC,
-        }
-    )
-
     online = status in {"online", "available"}
-    if ts - prev_last_seen >= PRESENCE_SSE_COOLDOWN_SEC:
+
+    # GAP-0313: Gate the SSE fan-out on an *atomic* conditional UpdateItem so that
+    # only ONE writer per cooldown window fires the (expensive) fan-out. The
+    # read-then-put pattern previously used here was vulnerable to a cold-start /
+    # TTL-expired flood (a missing item yielded prev_last_seen=0 → fan-out always
+    # fired) and to a multi-worker burst (each worker read stale state and fired
+    # its own cooldown-less fan-out).
+    #
+    # `last_seen_at` keeps updating on every heartbeat to preserve presence/TTL
+    # freshness for all other readers. A dedicated `last_sse_at` attribute is the
+    # cooldown gate: the conditional update only succeeds (and we only fan out)
+    # when no prior SSE has fired within PRESENCE_SSE_COOLDOWN_SEC. Concurrent
+    # cold starts race on the same conditional write, so exactly one wins.
+    cutoff = ts - PRESENCE_SSE_COOLDOWN_SEC
+    should_fanout = False
+    try:
+        tbl_presence.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression=(
+                "SET last_seen_at = :ts, last_sse_at = :ts, "
+                "#device = :device, #status = :status, #ttl = :ttl"
+            ),
+            ConditionExpression=(
+                "attribute_not_exists(last_sse_at) OR last_sse_at <= :cutoff"
+            ),
+            ExpressionAttributeNames={
+                "#device": "device",
+                "#status": "status",
+                "#ttl": "ttl",
+            },
+            ExpressionAttributeValues={
+                ":ts": ts,
+                ":device": inp.device or "",
+                ":status": status,
+                ":ttl": ts + PRESENCE_TTL_SEC,
+                ":cutoff": cutoff,
+            },
+        )
+        should_fanout = True
+    except tbl_presence.meta.client.exceptions.ConditionalCheckFailedException:
+        # Cooldown still active (another worker/recent beat already fired the
+        # fan-out within this window) — keep presence/TTL fresh but do NOT fan out.
+        tbl_presence.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression=(
+                "SET last_seen_at = :ts, #device = :device, "
+                "#status = :status, #ttl = :ttl"
+            ),
+            ExpressionAttributeNames={
+                "#device": "device",
+                "#status": "status",
+                "#ttl": "ttl",
+            },
+            ExpressionAttributeValues={
+                ":ts": ts,
+                ":device": inp.device or "",
+                ":status": status,
+                ":ttl": ts + PRESENCE_TTL_SEC,
+            },
+        )
+
+    if should_fanout:
         _fanout_presence_update(user_id, online, ts)
 
     routing = _handle_helpdesk_presence_event(user_id=user_id, status=status, ts=ts)
