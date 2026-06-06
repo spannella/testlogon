@@ -4,17 +4,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowLeft,
-  ZoomIn,
-  ZoomOut,
-  RotateCw,
-  RotateCcw,
-  Maximize,
   CheckCircle,
   XCircle,
   MessageSquare,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/PageHeader";
+import { DocumentViewer } from "@/components/shared/DocumentViewer";
 import {
   Card,
   CardContent,
@@ -34,7 +30,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   fetchKycCaseDetail,
   approveKycCase,
@@ -42,7 +37,6 @@ import {
   requestKycInfo,
   type KycCaseDetail,
   type KycTimelineEvent,
-  type KycFileRef,
 } from "@/api/endpoints/kyc-admin";
 import { KycFacialComparisonReview } from "@/pages/admin/KycFacialComparisonReview";
 
@@ -92,143 +86,6 @@ const REQUEST_INFO_ITEMS = [
   { value: "id_back", label: "ID Back" },
   { value: "proof_of_address", label: "Proof of Address" },
 ];
-
-const FILE_TYPE_LABELS: Record<string, string> = {
-  selfie: "Selfie",
-  id_front: "ID Front",
-  id_back: "ID Back",
-  proof_of_address: "Proof of Address",
-};
-
-// ─── Document Viewer ──────────────────────────────────────────────────────────
-
-function DocumentViewer({ files }: { files: KycFileRef[] }) {
-  const [activeTab, setActiveTab] = useState(files[0]?.type ?? "");
-  const [scale, setScale] = useState(1);
-  const [rotation, setRotation] = useState(0);
-  const [fullscreen, setFullscreen] = useState(false);
-
-  const activeFile = files.find((f) => f.type === activeTab);
-
-  function handleZoomIn() {
-    setScale((s) => Math.min(s + 0.25, 5));
-  }
-
-  function handleZoomOut() {
-    setScale((s) => Math.max(s - 0.25, 0.25));
-  }
-
-  function handleRotateCw() {
-    setRotation((r) => (r + 90) % 360);
-  }
-
-  function handleRotateCcw() {
-    setRotation((r) => (r - 90 + 360) % 360);
-  }
-
-  function handleWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    if (e.deltaY < 0) {
-      handleZoomIn();
-    } else {
-      handleZoomOut();
-    }
-  }
-
-  if (files.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center text-muted-foreground">
-          No documents attached to this case.
-        </CardContent>
-      </Card>
-    );
-  }
-
-  const viewer = (
-    <div className={fullscreen ? "fixed inset-0 z-50 bg-background flex flex-col" : ""}>
-      <Tabs
-        value={activeTab}
-        onValueChange={(val) => {
-          setActiveTab(val);
-          setScale(1);
-          setRotation(0);
-        }}
-      >
-        <div className="flex items-center justify-between border-b px-4 py-2">
-          <TabsList>
-            {files.map((file) => (
-              <TabsTrigger key={file.type} value={file.type} data-testid={`doc-tab-${file.type}`}>
-                {FILE_TYPE_LABELS[file.type] ?? file.type}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" onClick={handleZoomIn} aria-label="Zoom In">
-              <ZoomIn className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={handleZoomOut} aria-label="Zoom Out">
-              <ZoomOut className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={handleRotateCw} aria-label="Rotate CW">
-              <RotateCw className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={handleRotateCcw} aria-label="Rotate CCW">
-              <RotateCcw className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setFullscreen(!fullscreen)}
-              aria-label="Fullscreen"
-            >
-              <Maximize className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-
-        {files.map((file) => (
-          <TabsContent key={file.type} value={file.type} className="mt-0">
-            <div
-              className="relative flex items-center justify-center overflow-auto bg-muted/30"
-              style={{ minHeight: fullscreen ? "calc(100vh - 60px)" : "400px" }}
-              onWheel={handleWheel}
-            >
-              {activeFile && (
-                <>
-                  <img
-                    src={`/ui/files/download?path=${encodeURIComponent(file.path)}`}
-                    alt={FILE_TYPE_LABELS[file.type] ?? file.type}
-                    className="max-w-full transition-transform"
-                    style={{
-                      transform: `scale(${scale}) rotate(${rotation}deg)`,
-                    }}
-                    data-testid="doc-image"
-                  />
-                  <Badge
-                    variant={
-                      file.verification_state === "verified"
-                        ? "default"
-                        : file.verification_state === "rejected"
-                        ? "destructive"
-                        : "outline"
-                    }
-                    className="absolute bottom-3 right-3"
-                    data-testid="verification-badge"
-                  >
-                    {file.verification_state}
-                  </Badge>
-                </>
-              )}
-            </div>
-          </TabsContent>
-        ))}
-      </Tabs>
-    </div>
-  );
-
-  return <Card className="overflow-hidden">{viewer}</Card>;
-}
 
 // ─── Timeline ─────────────────────────────────────────────────────────────────
 
