@@ -14,6 +14,7 @@ from app.services.mfa import list_enabled_emails
 from app.services.device_trust import record_device_login
 from app.services.rate_limit import rate_limit_login_attempt, record_login_anomaly
 from app.services.device_trust import trust_current_device
+from app.services.sso_saml_provider import is_sso_only_tenant
 from app.services.sessions import (
     compute_required_factors,
     clear_session_cookies,
@@ -71,6 +72,24 @@ async def ui_session_start(
         response = Response()
     if user_sub == (S.root_user_sub or "").strip():
         raise HTTPException(status_code=403, detail="Root login must use /auth/root/login")
+
+    # ── SSO-only enforcement (GAP-0173 / ENTERPRISE-002) ────────────────
+    # If the resolving tenant has an active SSO provider with sso_only=True,
+    # password / non-SSO login must be rejected server-side. The frontend's
+    # GET /ui/sso/info hint is advisory only; this is the authoritative gate.
+    if S.sso_saml_enabled:
+        tenant_id = getattr(getattr(req, "state", None), "tenant_id", None) or S.default_tenant_id
+        if is_sso_only_tenant(tenant_id):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "sso_only",
+                    "message": "Password login is disabled for this tenant. Use SSO.",
+                    "sso_login_url": f"/saml/login?tenant={tenant_id}",
+                },
+            )
+    # ── End SSO-only enforcement ────────────────────────────────────────
+
     rate_limit_login_attempt(user_sub, client_ip_from_request(req))
     anomaly = record_login_anomaly(user_sub, client_ip_from_request(req))
     if anomaly.get("user_threshold_exceeded") or anomaly.get("ip_threshold_exceeded"):

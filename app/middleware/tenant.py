@@ -12,6 +12,7 @@ import logging
 import time
 from typing import Any, Dict, Optional, Tuple
 
+import jwt as _jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -88,6 +89,42 @@ def _resolve_tenant_from_domain(domain: str) -> Optional[Tuple[str, Dict[str, An
     return tenant_id, tenant_record
 
 
+def _request_is_root(request: Request) -> bool:
+    """
+    Lightweight check: does the incoming request carry a ROOT-role credential?
+
+    Used only to bypass the suspended-tenant 503 guard so a genuine root
+    session can reach the auth layer and remediate the suspension. This does
+    NOT replace full authentication — the request still passes through
+    ``require_root_session`` downstream in the router layer. Forged cookies are
+    rejected because the HS256 HMAC signature is verified here.
+    """
+    # 1. Cookie-based access token (browser session) — HMAC-verified.
+    access_secret = getattr(S, "ui_access_token_secret", "") or ""
+    access_cookie_name = getattr(S, "ui_access_token_cookie_name", "") or ""
+    if access_secret and access_cookie_name:
+        cookie_val = request.cookies.get(access_cookie_name, "")
+        if cookie_val:
+            try:
+                payload = _jwt.decode(
+                    cookie_val,
+                    access_secret,
+                    algorithms=["HS256"],
+                    options={"verify_exp": False},
+                )
+                if str(payload.get("role", "")).lower() == "root":
+                    return True
+            except _jwt.PyJWTError:
+                pass
+
+    # 2. Dev-mode header fallback, mirroring the dev header fallback in
+    #    app/auth/deps.py. Gated on S.dev_mode so it is inert in production.
+    if S.dev_mode and request.headers.get("x-user-role", "").lower() == "root":
+        return True
+
+    return False
+
+
 class TenantMiddleware(BaseHTTPMiddleware):
     """Resolve the current tenant for each request."""
 
@@ -130,10 +167,14 @@ class TenantMiddleware(BaseHTTPMiddleware):
         # Check tenant status
         status = str(tenant_record.get("status", "active")).lower()
         if status == "suspended":
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "Tenant is suspended"},
-            )
+            # ROOT sessions bypass the suspension wall so operators can
+            # remediate (e.g. lift the suspension) without break-glass access.
+            # Full auth still runs downstream in the router layer.
+            if not _request_is_root(request):
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Tenant is suspended"},
+                )
         if status == "deleted":
             return JSONResponse(
                 status_code=410,

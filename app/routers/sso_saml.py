@@ -36,7 +36,12 @@ from app.services.sso_saml_provider import (
     update_provider,
 )
 from app.services.sso_saml_roles import map_groups_to_role
-from app.services.sso_saml_sp import MockSamlAuth, build_saml_settings, prepare_request_data
+from app.services.sso_saml_sp import (
+    MockSamlAuth,  # retained for the admin-only test_provider endpoint
+    build_saml_settings,
+    get_saml_auth,  # GAP-0174: picks real OneLogin_Saml2_Auth in prod, mock in dev
+    prepare_request_data,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +111,7 @@ async def saml_login(request: Request, tenant: str = "default"):
         raise HTTPException(400, "No active SSO provider for this tenant")
 
     settings_dict = build_saml_settings(provider, prepare_request_data(request))
-    auth = MockSamlAuth(prepare_request_data(request), settings_dict)
+    auth = get_saml_auth(prepare_request_data(request), settings_dict)
     redirect_url = auth.login(return_to="/")
 
     audit_event(
@@ -152,7 +157,7 @@ async def saml_acs(request: Request):
         req_data["post_data"]["RelayState"] = relay_state
 
     settings_dict = build_saml_settings(provider, req_data)
-    auth = MockSamlAuth(req_data, settings_dict)
+    auth = get_saml_auth(req_data, settings_dict)
     auth.process_response()
 
     errors = auth.get_errors()
@@ -579,6 +584,9 @@ async def test_provider(
         raise HTTPException(404, "SSO provider not found")
 
     settings_dict = build_saml_settings(provider, prepare_request_data(request))
+    # Admin-only (require_root_session) connection-test endpoint that only builds a
+    # redirect URL and never issues a real session; MockSamlAuth is intentional here
+    # and is not part of the authentication path fixed in GAP-0174.
     auth = MockSamlAuth(prepare_request_data(request), settings_dict)
     redirect_url = auth.login(return_to="/")
 
