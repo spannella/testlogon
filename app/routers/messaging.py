@@ -13404,10 +13404,27 @@ async def _expire_stale_invites() -> None:
             if not call_id:
                 continue
             try:
-                timeout_call(
+                updated, event = timeout_call(
                     call_id=call_id,
                     actor_user_id="system",
                     reason="server_timeout",
+                )
+                # GAP-0142: fan out call.missed from the backstop too, so the
+                # callee dismisses the ringing overlay even when the caller's
+                # client never sends the timeout request.
+                fanout_event_to_conversation(
+                    conversation_id=updated.conversation_id,
+                    sender_id="system",
+                    event_type="call.missed",
+                    payload={
+                        "call_id": updated.call_id,
+                        "caller_user_id": updated.caller_user_id,
+                        "callee_user_id": updated.callee_user_id,
+                        "from_state": event.from_state,
+                        "reason": event.reason,
+                        "event_ts": event.event_ts,
+                    },
+                    respect_mute=False,
                 )
                 logger.info("Server timeout expired stale invite call_id=%s", call_id)
             except CallLifecycleError:
@@ -14145,6 +14162,22 @@ async def timeout_call_endpoint(
             actor_user_id=user_id,
             reason=body.reason,
             idempotency_key=body.idempotency_key,
+        )
+        # GAP-0142: fan out call.missed so the callee dismisses the ringing
+        # overlay in real time instead of waiting for the next SSE poll.
+        fanout_event_to_conversation(
+            conversation_id=record.conversation_id,
+            sender_id=user_id,
+            event_type="call.missed",
+            payload={
+                "call_id": record.call_id,
+                "caller_user_id": record.caller_user_id,
+                "callee_user_id": record.callee_user_id,
+                "from_state": event.from_state,
+                "reason": event.reason,
+                "event_ts": event.event_ts,
+            },
+            respect_mute=False,
         )
         _vm_eligible = (
             record.state in VOICEMAIL_ELIGIBLE_STATES

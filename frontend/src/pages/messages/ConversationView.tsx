@@ -94,6 +94,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const [threadAnchorMessage, setThreadAnchorMessage] = React.useState<Message | null>(null);
   const [callMachine, dispatchCall] = React.useReducer(callStateReducer, undefined, createInitialCallMachineState);
   const callTimeoutRef = React.useRef<number | null>(null);
+  // GAP-0143: callee-side guard timer (separate ref to avoid colliding with the caller-side callTimeoutRef).
+  const calleeRingTimerRef = React.useRef<number | null>(null);
   const callResourcesRef = React.useRef<CallRuntimeResources | null>(null);
   const lastCallEventTsRef = React.useRef<number>(0);
   const mediaCapture = useMediaCapture();
@@ -768,8 +770,50 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     }
   }, [callMachine.phase]);
 
+  // GAP-0143: callee-side guard — auto-dismiss the ringing overlay if the
+  // `call.missed` SSE event is lost/delayed. Mirrors the caller-side 30s timer
+  // (line ~856). Fires at ringing_timeout (30s, MESSAGING_WEBRTC_CALL_RINGING_TIMEOUT_SECONDS)
+  // + 2s grace, giving the SSE event time to arrive before the local guard fires.
+  React.useEffect(() => {
+    if (callMachine.phase !== "incoming_ringing") return;
+    const CALLEE_RING_GUARD_MS = 32_000;
+    calleeRingTimerRef.current = window.setTimeout(() => {
+      // SSE event was never received — dismiss locally. REMOTE_DECLINE on
+      // incoming_ringing transitions to `timeout` (callStateMachine REMOTE_DECLINE).
+      dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
+      calleeRingTimerRef.current = null;
+    }, CALLEE_RING_GUARD_MS);
+    return () => {
+      if (calleeRingTimerRef.current) {
+        window.clearTimeout(calleeRingTimerRef.current);
+        calleeRingTimerRef.current = null;
+      }
+    };
+  }, [callMachine.phase]);
+
+  // GAP-0144: on the `failure` phase, signal the backend so the remote peer is
+  // notified (call.end SSE → END_REMOTE on the remote side). Local teardown
+  // already ran in the effect above; this sends the missing `end` action.
+  React.useEffect(() => {
+    if (callMachine.phase !== "failure") return;
+    const cid = callMachine.callId;
+    if (!cid) return;
+    // Best-effort: the idempotency key guards against React strict-mode double
+    // fire; a failed POST is swallowed (the stale-session backstop is the fallback).
+    callActionMutation.mutate(
+      { action: "end", callId: cid, reason: "reconnect_failed" },
+      { onError: () => {} },
+    );
+    // callActionMutation is a stable useMutation ref; intentionally omitted from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callMachine.phase, callMachine.callId]);
+
   React.useEffect(() => () => {
     clearCallTimeout();
+    if (calleeRingTimerRef.current) {
+      window.clearTimeout(calleeRingTimerRef.current);
+      calleeRingTimerRef.current = null;
+    }
     teardownCallResources(callResourcesRef.current);
   }, [clearCallTimeout]);
 
@@ -783,10 +827,10 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   });
 
   const callActionMutation = useMutation({
-    mutationFn: async (args: { action: "accept" | "decline" | "end"; callId: string }) => {
+    mutationFn: async (args: { action: "accept" | "decline" | "end"; callId: string; reason?: string }) => {
       if (args.action === "accept") return acceptCallInvite(args.callId, `ui-accept-${Date.now()}`);
       if (args.action === "decline") return declineCallInvite(args.callId, { reason: "declined", idempotency_key: `ui-decline-${Date.now()}` });
-      return endCall(args.callId, { reason: "ended", idempotency_key: `ui-end-${Date.now()}` });
+      return endCall(args.callId, { reason: args.reason ?? "ended", idempotency_key: `ui-end-${Date.now()}` });
     },
   });
 
