@@ -5,7 +5,8 @@ milestone: M2
 epic: E12
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-084]
 blocks: []
 ---
@@ -46,7 +47,7 @@ FR-6. Provide `fun refresh()` that invalidates the paging source and re-fetches 
 
 FR-7. Provide `fun retry()` that re-attempts the last failed load (delegates to the Paging `LoadState` retry lambda surfaced to the UI; this ticket exposes the mechanism, the screen wires the button).
 
-FR-8. Map domain `Notification` to a UI model `NotificationUi` with stable `id`, formatted relative timestamp source fields, read/unread flag, category, title, body, and optional deep-link target.
+FR-8. Map domain `Notification` to a UI model `NotificationUi` with stable `id` (from `notification_id`), the raw `created_at` epoch-seconds value for relative-timestamp formatting, read/unread flag (from `read`), a derived category (from the free-form `notification_type` string), title, body, and an optional deep-link target derived from the `data` object (there is no server `deep_link` field).
 
 FR-9. Distinct concurrent mark-read intents must be conflated/serialized so the badge never goes negative and never double-counts.
 
@@ -60,13 +61,13 @@ Package root: `com.testlogon.android.feature.notifications`.
 package com.testlogon.android.feature.notifications.model
 
 data class NotificationUi(
-    val id: String,
-    val category: NotificationCategory,
+    val id: String,            // maps from NotificationOut.notification_id (NOT "id")
+    val category: NotificationCategory, // DERIVED from NotificationOut.notification_type (server sends a free-form string, not an enum)
     val title: String,
     val body: String,
-    val isRead: Boolean,
-    val createdAtEpochMs: Long,
-    val deepLink: String?, // app:// route or null
+    val isRead: Boolean,       // maps from NotificationOut.read (NOT "is_read")
+    val createdAtEpochSec: Long, // CORRECTED: server created_at is epoch SECONDS (integer), not an ISO string and not ms; multiply by 1000 before java.time use
+    val deepLink: String?,     // there is NO server "deep_link" field; derive from NotificationOut.data if present, else null
 )
 
 data class UnreadBadgeUiState(
@@ -227,31 +228,37 @@ interface NotificationsRepository {
 data class NotificationPage(val items: List<Notification>, val nextCursor: String?)
 ```
 
-Underlying endpoints (mirroring `frontend/src/api/endpoints/notifications.ts`; confirm against `/openapi.json`):
+Note (review): AND-084's `markRead(id)` is expected to wrap the batch endpoint by sending `{ "notification_ids": [id] }`; `unreadCount()` wraps `GET /ui/notifications/unread-count` returning the `count` field. Since the list response itself carries `unread_count`, an optional optimization (not required by this ticket) is to seed the badge from the first page rather than a separate `unreadCount()` call; the design here keeps `unreadCount()` as the authoritative source for simplicity.
 
-- `GET /ui/notifications?cursor=<opaque>&limit=20` → `200`
+Underlying endpoints, VERIFIED against the backend OpenAPI index/spec and `reference/src/api/endpoints/notifications.ts`. The draft below was corrected on review — several paths, methods, status codes, and field names were wrong:
+
+- `GET /ui/notifications?cursor=<opaque>&limit=<n>` → `200 NotificationListResponse`. (op `list_notifications_ui_notifications_get`.) Verified shape:
   ```json
   {
     "items": [
       {
-        "id": "ntf_01H...",
-        "category": "security",
+        "notification_id": "ntf_01H...",
+        "notification_type": "system",
         "title": "New sign-in",
         "body": "A new device signed in to your account.",
-        "is_read": false,
-        "created_at": "2026-06-05T14:03:22Z",
-        "deep_link": "app://devices"
+        "data": { "route": "app://devices" },
+        "read": false,
+        "created_at": 1749132202,
+        "batch_key": null,
+        "batch_count": 1,
+        "batch_actors": []
       }
     ],
-    "next_cursor": "eyJwayI6..."
+    "next_cursor": "eyJwayI6...",
+    "unread_count": 7
   }
   ```
-  `next_cursor` is `null` on the last page.
-- `POST /ui/notifications/{id}/read` → `204` (idempotent).
-- `POST /ui/notifications/read-all` → `204`.
-- `GET /ui/notifications/unread-count` → `200 {"count": 7}`.
+  CORRECTIONS vs. draft: item key is `notification_id` (not `id`); category comes from `notification_type` string (not a `category` enum); read flag is `read` (not `is_read`); `created_at` is an **integer epoch in seconds** (not an ISO-8601 string); there is **no `deep_link` field** (deep-link must be derived from `data`); the list response ALSO carries a top-level `unread_count` integer (the spec previously ignored this — it can seed the badge on first page load, avoiding a separate call). Additional fields `data`, `batch_key`, `batch_count`, `batch_actors` exist. Only `notification_id` is required; all others are defaulted server-side. `next_cursor` is `null`/absent on the last page.
+- `POST /ui/notifications/mark-read` → `200` with body `{ "ok": boolean, "marked_count": integer }`. Request body is `MarkNotificationsReadIn` = `{ "notification_ids": string[] }`. CORRECTION: this is a **batch endpoint keyed by an array of IDs**, NOT a per-id path `POST /ui/notifications/{id}/read`, and it returns `200` with a JSON body, NOT `204`. The Android `markRead(id)` should send `{ "notification_ids": [id] }`.
+- `POST /ui/notifications/mark-all-read` → `200` with body `{ "ok": boolean, "marked_count": integer }`. Empty JSON body (`{}`). CORRECTION: path is `mark-all-read` (NOT `read-all`), method/response are `200` + JSON (NOT `204`). This RESOLVES OQ-2 — a bulk mark-all endpoint exists upstream.
+- `GET /ui/notifications/unread-count` → `200`. The OpenAPI response schema is untyped (`{}`), but the web client (`getNotificationUnreadCount`) reads the body as `{ "count": number }`. CORRECTION: treat `{"count": N}` as the verified-by-frontend shape; flag the untyped OpenAPI as an open assumption (§16).
 
-All calls send the session cookies and `X-CSRF-Token`. FastAPI errors map via the shared `detail` mapper (`string | [{msg}] | {code,...}`) into `ApiResult.Failure`. Only the two `GET`s are retried with bounded backoff; `POST`s are not auto-retried (handled by repository/core-network, not here).
+All endpoints take optional `user_sub` query plus `X-SESSION-ID` / `X-IMPERSONATION-TOKEN` headers (impersonation/admin paths; the normal mobile client omits them). All calls send the session cookies and `X-CSRF-Token` (sourced from the `ui_csrf` cookie, per `src/api/client.ts`). FastAPI errors map via the shared `detail` mapper (`string | [{msg}] | {code,...}`) into `ApiResult.Failure`; validation failures are `422 HTTPValidationError` (`detail: [{loc, msg, type}]`). Only the `GET`s are retried with bounded backoff; `POST`s are not auto-retried (handled by repository/core-network, not here).
 
 ## 6. Data & State Management
 
@@ -259,7 +266,7 @@ All calls send the session cookies and `X-CSRF-Token`. FastAPI errors map via th
 - Source of truth for the badge is `repository.unreadCount()`. Optimistic decrement is applied immediately on mark-read for responsiveness, then reconciled by the next authoritative fetch (after page invalidation). The count is `coerceAtLeast(0)` everywhere.
 - `refreshTrigger: MutableStateFlow<Long>` is the single invalidation lever; both `refresh()` and successful mutations push to it.
 - No DataStore/Room writes occur in this ticket. Unread-count persistence across cold starts and offline inbox caching are deferred (see Risks). On cold start, `badge` begins at `Loading` and resolves on first `unreadCount()`.
-- `NotificationCategory` is an enum in `core-model` (`SECURITY, ACCOUNT, BILLING, SYSTEM, UNKNOWN`); unknown server values map to `UNKNOWN` rather than throwing.
+- `NotificationCategory` is an Android-side enum in `core-model` derived from the server's free-form `notification_type` string (the backend does NOT send a category enum). The observed `notification_type` values in the web client are `follow, like, comment, mention, tip, message, system` (see `src/pages/notifications/NotificationsPage.tsx` TYPE_ICONS map); any unrecognized value MUST map to `UNKNOWN` rather than throwing. The earlier draft's `SECURITY/ACCOUNT/BILLING` values are not in the verified contract; treat the enum mapping as an Android presentation concern keyed off the verified `notification_type` strings.
 
 ## 7. Error Handling & Resilience
 
@@ -327,8 +334,8 @@ Use `StandardTestDispatcher` + `runTest`; inject a `TestDispatcher` via the `@Di
 
 ## 13. Risks & Open Questions
 
-- OQ-1: Pagination shape — confirm against `/openapi.json` whether the feed is cursor-based (`next_cursor`) or offset/page-number. Design assumes opaque cursor; if offset, swap `PagingSource<String, _>` for `PagingSource<Int, _>` and compute `getRefreshKey` from anchor position.
-- OQ-2: Does AND-084 expose `markAllRead()`? If only single mark-read exists, `markAllAsRead()` must either be removed from this ticket or fan-out per-id (poor). Prefer adding the bulk endpoint upstream.
+- OQ-1: RESOLVED on review — the feed IS cursor-based. `NotificationListResponse.next_cursor` is `string | null`, confirmed in both the OpenAPI schema (`components.schemas.NotificationListResponse`) and `src/api/types.ts`. The `GET /ui/notifications` params are `cursor` + `limit`. Keep `PagingSource<String, _>`; no offset variant needed.
+- OQ-2: RESOLVED on review — `POST /ui/notifications/mark-all-read` exists (op `mark_all_read_ui_notifications_mark_all_read_post`) and is used by the web client (`markAllNotificationsRead`). `markAllAsRead()` is safe to keep; no per-id fan-out required. Note: mark-read is itself a batch endpoint (`notification_ids: []`), so even single mark-read goes through the batch shape.
 - OQ-3: Push-driven badge updates — when an FCM notification arrives while the app is foregrounded, should the badge live-update? Current design only refreshes on user actions/refresh. Live push reconciliation is deferred to the push ticket.
 - Risk: optimistic decrement can briefly diverge from server truth on flaky network; mitigated by post-mutation invalidation + reconcile, but a rapid mark-read burst on a slow backend may show a transiently stale count. Acceptable for M2.
 - Risk: no offline cache means cold start with no network shows an empty/error inbox; flagged for a future Room `RemoteMediator` ticket.
@@ -356,3 +363,83 @@ AC-10. All package declarations use `com.testlogon.android.feature.notifications
 - No `BuildConfig.DEBUG`-gated logs leak notification content; telemetry events verified in tests or via a fake `AnalyticsClient`.
 - Open questions OQ-1/OQ-2 resolved or explicitly ticketed before merge; PR description links AND-084 and notes any pagination-shape adjustment.
 - Reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources: OpenAPI index `reference/openapi.index.txt`, OpenAPI spec `reference/openapi.pretty.json` (schemas under `components.schemas.<Name>`), and frontend `reference/src/...`.
+
+1. **List endpoint is `GET /ui/notifications` with `cursor` + `limit` query params, returning `NotificationListResponse`.** — Verified. OpenAPI `GET /ui/notifications` (op `list_notifications_ui_notifications_get`, `resp=200:NotificationListResponse`, `params=cursor,limit,user_sub,...`); frontend `src/api/endpoints/notifications.ts: getNotifications`.
+2. **`NotificationListResponse = { items: NotificationOut[], next_cursor?: string|null, unread_count: int }`.** — Verified (and the draft was incomplete: it omitted `unread_count`). `components.schemas.NotificationListResponse`; `src/api/types.ts: NotificationListResponse`.
+3. **Feed pagination is cursor-based with opaque `next_cursor` (null on last page).** — Verified. `components.schemas.NotificationListResponse.next_cursor` (`anyOf string|null`); `src/api/types.ts` line ~5272. (Resolves OQ-1.)
+4. **Notification item key is `notification_id` (NOT `id`).** — Corrected. `components.schemas.NotificationOut` requires `notification_id`; `src/api/types.ts: NotificationOut`. Draft used `id`.
+5. **Read flag is `read` (NOT `is_read`).** — Corrected. `components.schemas.NotificationOut.read` (boolean, default false); `src/api/types.ts: NotificationOut.read`. Draft used `is_read`.
+6. **`created_at` is an integer epoch in SECONDS (NOT an ISO-8601 string, NOT ms).** — Corrected. `components.schemas.NotificationOut.created_at` (`type: integer`, default 0); `src/pages/notifications/NotificationsPage.tsx: formatTimeAgo` computes `Date.now()/1000 - ts`, confirming seconds. Draft modeled an ISO string and `createdAtEpochMs`.
+7. **There is no server `deep_link` field; category is not a server enum.** — Corrected. `components.schemas.NotificationOut` has `notification_type` (free-form string) and a generic `data` object; no `deep_link`, no `category`. Deep-link must be derived from `data`. `src/pages/notifications/NotificationsPage.tsx` keys icons off `notification_type` (follow/like/comment/mention/tip/message/system).
+8. **Mark-read is a batch endpoint `POST /ui/notifications/mark-read` with body `{ notification_ids: string[] }`, response `200 { ok, marked_count }`.** — Corrected. OpenAPI `POST /ui/notifications/mark-read` (op `mark_read_...`, `req=MarkNotificationsReadIn`); `components.schemas.MarkNotificationsReadIn = { notification_ids: string[] }`; `src/api/endpoints/notifications.ts: markNotificationsRead` returns `{ ok, marked_count }`. Draft claimed `POST /ui/notifications/{id}/read` → `204`.
+9. **Mark-all-read is `POST /ui/notifications/mark-all-read` (empty body), response `200 { ok, marked_count }`.** — Corrected. OpenAPI `POST /ui/notifications/mark-all-read` (op `mark_all_read_...`); `src/api/endpoints/notifications.ts: markAllNotificationsRead`. Draft used `read-all` and `204`. (Resolves OQ-2.)
+10. **Unread-count is `GET /ui/notifications/unread-count`, body `{ count: number }`.** — Verified by frontend / Unverified by OpenAPI typing. OpenAPI `GET /ui/notifications/unread-count` exists (op `get_unread_count_...`) but its `200` schema is empty `{}` (untyped) at `paths./ui/notifications/unread-count`. Frontend `src/api/endpoints/notifications.ts: getNotificationUnreadCount` reads `{ count: number }`; a separate `components.schemas.UnreadCountResponse = { count }` exists and is used by sibling unread-count endpoints (`/ui/activity/feed/unread-count`, `/ui/alerts/unread-count`). Treated as verified-by-frontend.
+11. **Auth: CSRF via `X-CSRF-Token` header sourced from the `ui_csrf` cookie; cookie-based session.** — Verified. `src/api/client.ts` lines ~168-171 (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`) and `credentials: "include"`.
+12. **401 triggers a single `POST /ui/session/refresh` then one retry, then logout on repeat 401.** — Verified. `src/api/client.ts: refreshSession` (`POST /ui/session/refresh`) and the single-flight `refreshPromise` + retry block (lines ~119-237).
+13. **FastAPI error `detail` mapper handles `string | [{msg}] | {code,...}`; validation errors are `422 HTTPValidationError`.** — Verified. `src/api/client.ts: normalizeErrorDetail` (string/array-of-{msg}/object-with-code branches); OpenAPI `GET /ui/notifications` lists `422:HTTPValidationError`; `components.schemas.HTTPValidationError.detail = [{loc,msg,type}]`.
+14. **Optimistic mark-read + invalidate-then-reconcile pattern matches the web client's behavior.** — Verified (analogous). `src/pages/notifications/NotificationsPage.tsx` invalidates both the list and unread-count queries on mark-read/mark-all success (`onSuccess` invalidateQueries). The web client invalidates rather than optimistically decrementing; the Android optimistic decrement is an additive UX choice reconciled by the same invalidation — labeled an assumption below.
+15. **Paging 3 `flatMapLatest(refreshTrigger){ Pager(...).flow }.cachedIn(viewModelScope)` invalidation pattern.** — Verified (framework ref). Android Paging 3 docs: https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data (invalidation / `cachedIn`). `PagingConfig`/`PagingSource`/`getRefreshKey`: https://developer.android.com/reference/kotlin/androidx/paging/PagingSource .
+16. **`@HiltViewModel` injection of a `NotificationsViewModel` with an injected `CoroutineDispatcher`.** — Verified (framework ref). Hilt + ViewModel: https://developer.android.com/training/dependency-injection/hilt-jetpack . `viewModelScope`: https://developer.android.com/topic/libraries/architecture/coroutines#viewmodelscope .
+17. **minSdk 24 / Paging-testing harness (`AsyncPagingDataDiffer`, `paging-testing`).** — Verified (framework ref). https://developer.android.com/reference/kotlin/androidx/paging/testing/package-summary .
+
+### Corrections made
+
+- §4.1 `NotificationUi`: `id` now documented as mapping from `notification_id`; `isRead` from `read`; `createdAtEpochMs` → `createdAtEpochSec` (server sends epoch seconds); `category` documented as derived from `notification_type` string; `deepLink` documented as derived from `data` (no server `deep_link`).
+- §4 / §6: `NotificationCategory` clarified as an Android-side derived enum keyed off the verified `notification_type` strings; removed reliance on the unverified `SECURITY/ACCOUNT/BILLING` values.
+- §5 API Contract: corrected the list-item field names and `created_at` type; added the previously-missing `unread_count` on the list response and the `data/batch_*` fields; corrected mark-read to the batch path `POST /ui/notifications/mark-read` (`notification_ids[]`, `200` JSON) instead of `POST /ui/notifications/{id}/read` (`204`); corrected mark-all to `POST /ui/notifications/mark-all-read` (`200` JSON) instead of `read-all` (`204`); documented `unread-count` body and the untyped OpenAPI caveat; added `user_sub`/`X-SESSION-ID`/`X-IMPERSONATION-TOKEN` params and the `422 HTTPValidationError` shape.
+- §13: OQ-1 and OQ-2 marked RESOLVED with sources.
+
+### Open assumptions
+
+- **Unread-count response is exactly `{ count: int }`.** OpenAPI types the `200` body as empty `{}`; only the frontend confirms `{ count }`. If the deployed backend differs, AND-084's `unreadCount()` mapping must adapt. (Unverifiable from OpenAPI alone.)
+- **Optimistic badge decrement on mark-read.** The web client does not decrement optimistically — it invalidates and refetches. The Android optimistic-then-reconcile behavior (FR-5/FR-9) is an additive UX decision, not mirrored from the reference app.
+- **`deepLink` derivation from `data`.** The exact key inside `data` carrying a route is not specified by the schema (`data` is `additionalProperties: true`). Mapping logic is an assumption to confirm with AND-084 / backend owners.
+- **Cursor opacity / ordering newest-first.** `next_cursor` is opaque and ordering is not asserted by the schema; newest-first is inferred from inbox semantics and the web "Load more" forward-only paging. Treated as an assumption pending backend confirmation.
+- **AND-084 repository surface** (`list/markRead/markAllRead/unreadCount` returning `ApiResult`). Not present in this repo to verify; assumed per the dependency. If AND-084 exposes only the batch `markRead(ids: List<String>)` rather than `markRead(id: String)`, this ViewModel adapts trivially.
+- **Retry/backoff + 20s timeout + `X-CSRF-Token` echo on Android.** These are core-network (AND-027) concerns asserted by the spec; the web client confirms CSRF/refresh semantics but Android transport tuning is not verifiable from the reference sources.
+
+## 17. Test Plan
+
+All cases are JVM-local unless noted. The acceptance bar is "Paging + badge unit-tested," so the suite is dominated by JVM unit + contract tests; instrumented/emulator/device cases are included only where they add real coverage (this ticket ships no Composables, so most device-class testing is downstream). Test IDs trace to the §14 Acceptance Criteria.
+
+Targets legend: **JVM** = local JVM unit / Robolectric (no device); **MWS** = contract test with OkHttp `MockWebServer` exercising the AND-084 service mapping; **emulator** = headless AVD `test35` (API 35, x86_64); **device** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a).
+
+- **TC-AND-089-01** — Type: unit (JVM). Target: `NotificationsPagingSource`. Preconditions: fake `NotificationsRepository.list` returns `ApiResult.Success(NotificationPage(items=20, nextCursor="c2"))`. Steps: call `load(LoadParams.Refresh(key=null, loadSize=40))`. Expected: `LoadResult.Page` with 20 mapped `NotificationUi`, `prevKey=null`, `nextKey="c2"`; mapping preserves `notification_id→id`, `read→isRead`, `created_at→createdAtEpochSec`. Traces: AC-2.
+- **TC-AND-089-02** — Type: unit (JVM). Target: `NotificationsPagingSource`. Preconditions: `list` returns `nextCursor=null`. Steps: `load` a refresh. Expected: `LoadResult.Page` with `nextKey=null` (terminal page). Traces: AC-2.
+- **TC-AND-089-03** — Type: unit (JVM). Target: `NotificationsPagingSource`. Preconditions: `list` returns `ApiResult.Failure` (mapped from a `422 HTTPValidationError`/`500`). Steps: `load`. Expected: `LoadResult.Error` carrying the mapped exception; no crash. Traces: AC-2.
+- **TC-AND-089-04** — Type: unit (JVM, `AsyncPagingDataDiffer` + `runTest`). Target: `NotificationsViewModel.notifications`. Preconditions: fake repo yields page1 (40 items, nextCursor="c2"), page2 (20 items, nextCursor=null). Steps: collect `PagingData`, assert initial 40, trigger append, assert next 20, assert terminal. Expected: items in order, no duplicates, append stops at terminal. Traces: AC-1, AC-2.
+- **TC-AND-089-05** — Type: unit (JVM, Turbine on `badge`). Target: `NotificationsViewModel.badge`. Preconditions: `unreadCount()` returns `Success(7)`. Steps: construct VM, collect `badge`. Expected: first emission `UnreadBadgeUiState.Loading`, then `of(7)` with `display="7"`, `isLoading=false`, `isStale=false`. Traces: AC-1, AC-3.
+- **TC-AND-089-06** — Type: unit (JVM). Target: `UnreadBadgeUiState.of` formatting. Preconditions: none. Steps: evaluate `of(0)`, `of(5)`, `of(150)`, `of(-3)`. Expected: `display` = `""`, `"5"`, `"99+"`, `""` respectively and `count` coerced ≥ 0 (`-3→0`). Traces: AC-3.
+- **TC-AND-089-07** — Type: unit (JVM, Turbine). Target: `NotificationsViewModel.markAsRead`. Preconditions: badge resolved at 7; `repository.markRead(id)` returns `Success`. Steps: call `markAsRead("ntf_1")`; advance dispatcher. Expected: badge decrements to 6 optimistically; `refreshTrigger` fires (paging invalidation observable via new `pagingSourceFactory` call); repo received `notification_ids=["ntf_1"]` (verify via captured arg). Traces: AC-4, AC-8.
+- **TC-AND-089-08** — Type: unit (JVM, Turbine). Target: `markAsRead` floor. Preconditions: badge resolved at 0; `markRead` returns `Success`. Steps: call `markAsRead("x")`. Expected: badge stays at 0 (no negative), `display=""`. Traces: AC-4, AC-7.
+- **TC-AND-089-09** — Type: unit (JVM, Turbine). Target: `markAllAsRead`. Preconditions: badge at 7; `markAllRead()` returns `Success`. Steps: call `markAllAsRead()`. Expected: badge → `of(0)` (`display=""`), `refreshTrigger` fires. Traces: AC-5.
+- **TC-AND-089-10** — Type: unit (JVM, Turbine). Target: `unreadCount()` failure path. Preconditions: badge previously resolved at 7; next `unreadCount()` returns `Failure`. Steps: call `refresh()`. Expected: badge keeps `count=7`, `isStale=true`, `isLoading=false` (no flicker to 0). Traces: AC-6.
+- **TC-AND-089-11** — Type: unit (JVM, Turbine). Target: `markAsRead` failure reconcile. Preconditions: badge at 7; `markRead` returns `Failure`; subsequent `unreadCount()` returns `Success(7)`. Steps: call `markAsRead("x")`. Expected: optimistic decrement is reconciled back to server truth 7 via `refreshUnreadCount()`; no silent divergence. Traces: AC-4, AC-6.
+- **TC-AND-089-12** — Type: unit (JVM, `StandardTestDispatcher`). Target: intent serialization (FR-9). Preconditions: badge at 3; three `markAsRead` calls fired without advancing; `markRead` each returns `Success`. Steps: fire 3 intents, then `advanceUntilIdle()`. Expected: intents processed one-at-a-time via the channel; final count = 0 (3→2→1→0), never negative, no double-decrement; repo called exactly 3 times. Traces: AC-7.
+- **TC-AND-089-13** — Type: unit (JVM, Turbine + differ). Target: `refresh()`. Preconditions: VM constructed; spy `pagingSourceFactory`. Steps: call `refresh()`. Expected: a new `PagingSource` instance is created (factory re-invoked via `refreshTrigger`) AND `unreadCount()` is re-fetched (badge re-resolves). Traces: AC-8.
+- **TC-AND-089-14** — Type: contract / MockWebServer (JVM). Target: AND-084 service mapping consumed by the paging source (boundary contract). Preconditions: `MockWebServer` enqueues the verified `200 NotificationListResponse` JSON (snake_case, `created_at` integer seconds, `unread_count`), a `200 {ok,marked_count}` for `mark-read`, and `{count:N}` for `unread-count`. Steps: drive `list`/`markRead`/`unreadCount` through the real Retrofit/Moshi stack; assert the request to `mark-read` carries body `{"notification_ids":["ntf_1"]}` and header `X-CSRF-Token`. Expected: snake_case → camelCase mapping correct; `created_at` interpreted as seconds; CSRF header present; paths exactly `/ui/notifications`, `/ui/notifications/mark-read`, `/ui/notifications/unread-count`. Traces: AC-1, AC-2, AC-4.
+- **TC-AND-089-15** — Type: contract / MockWebServer (JVM). Target: error-shape handling. Preconditions: `MockWebServer` returns `422` with `{"detail":[{"loc":["query","limit"],"msg":"...","type":"..."}]}`, then a `500`, then a connection drop (simulating the flaky dev host `18.222.237.167:8000`). Steps: call `list` for each. Expected: each maps to `ApiResult.Failure` → `LoadResult.Error` (no crash); the dropped-connection/offline case surfaces as `Error` and `unreadCount` failure sets `isStale=true` rather than zeroing the badge. Traces: AC-2, AC-6.
+- **TC-AND-089-16** — Type: unit (JVM). Target: telemetry + logging redaction. Preconditions: fake `AnalyticsClient`; logger spy; load a page then `markAsRead`. Steps: exercise load-success, load-error, mark-read; capture analytics events and any log output. Expected: `notifications_list_loaded`/`notification_marked_read`/`notifications_unread_count` fire with ids+categories only; assert NO event or log line contains a notification `title` or `body`. Traces: AC-9.
+- **TC-AND-089-17** — Type: unit (JVM, package assertion / lint). Target: package naming. Steps: reflectively assert `NotificationsViewModel`, `NotificationsPagingSource`, `NotificationUi`, `UnreadBadgeUiState` declare package `com.testlogon.android.feature.notifications(.*)`; ktlint/detekt run clean. Expected: all in the required root package; lint clean. Traces: AC-10.
+- **TC-AND-089-18** — Type: instrumented (emulator `test35`). Target: lifecycle safety of `cachedIn(viewModelScope)`. Preconditions: host an `Activity`/`Fragment` collecting `notifications`; trigger a configuration change (rotation). Steps: rotate, re-collect. Expected: no re-fetch of page 1 (cached `PagingData` survives), no crash, `viewModelScope` not leaked. Runs on emulator (no real hardware needed). Traces: AC-1, AC-8.
+
+Note on device usage: this ticket is logic-only with no camera/biometric/push/WebRTC/Telecom surface, so the physical Galaxy A15 is NOT required for any case here. The arm64-vs-x86 / API-34-vs-35 concern is moot for pure-Kotlin coroutine/Paging logic; emulator coverage (TC-18) is sufficient. Real-device push-driven badge live-update is explicitly deferred (OQ-3) to the push ticket and is out of this ticket's scope.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (exposes paged flow + badge StateFlow) | TC-04, TC-05, TC-14, TC-18 |
+| AC-2 (PagingSource maps Page/Error, nextKey) | TC-01, TC-02, TC-03, TC-04, TC-14, TC-15 |
+| AC-3 (badge Loading→count, 0/n/99+ format) | TC-05, TC-06 |
+| AC-4 (markAsRead decrements, invalidates, reconciles) | TC-07, TC-08, TC-11, TC-14 |
+| AC-5 (markAllAsRead → 0, invalidates) | TC-09 |
+| AC-6 (unreadCount failure → isStale, count preserved) | TC-10, TC-11, TC-15 |
+| AC-7 (concurrent mark-read serialized, no negative/double) | TC-08, TC-12 |
+| AC-8 (refresh rebuilds source + refetches count) | TC-07, TC-09, TC-13, TC-18 |
+| AC-9 (no title/body logged; ids/categories only) | TC-16 |
+| AC-10 (package `com.testlogon.android.feature.notifications`) | TC-17 |

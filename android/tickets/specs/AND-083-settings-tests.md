@@ -5,7 +5,8 @@ milestone: M2
 epic: E11
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-078, AND-079, AND-080, AND-081]
 blocks: []
 ---
@@ -19,7 +20,7 @@ This ticket delivers the automated test suite for the Settings/Preferences featu
 Concretely, "preferences round-trip" means verifying that:
 
 1. A `GET` of the relevant preferences endpoint maps the server DTO to the domain model and into `StateFlow<SettingsUiState>` correctly.
-2. A user mutation (toggle/select) optimistically updates UI state, issues the correct `PATCH/PUT` request with the correct body and `X-CSRF-Token` header, and on success commits the server-confirmed value.
+2. A user mutation (toggle/select) optimistically updates UI state, issues the correct request with the correct method and body — **`PUT /ui/media/preferences`** for media, **`PATCH /ui/settings/preferences`** for appearance, **`POST /ui/alerts/type-preferences`** (or the per-channel `/ui/alerts/*_prefs` POSTs) for notifications — plus the `X-CSRF-Token` header (verified: sourced from the `ui_csrf` cookie in `src/api/client.ts`), and on success commits the server-confirmed value.
 3. On failure (HTTP error, network timeout, 401) the repository surfaces a typed `ApiResult.Error` / `ApiResult.NetworkError` and the ViewModel rolls back the optimistic value and exposes an error state.
 4. Local DataStore caching (where AND-078 caches preferences) round-trips the values across process death.
 
@@ -32,11 +33,11 @@ This ticket does **not** modify `PreferencesRepository`, DTOs, or any Settings U
 - **Module layering:** `feature-settings -> core-data -> core-network -> core-model`, with `core-testing` providing shared fakes/fixtures. Tests for the repository live in `core-data` (or wherever AND-078 placed `PreferencesRepository`); ViewModel tests live in `feature-settings`.
 - **Upstream tickets under test:**
   - **AND-078 — Preferences API + DTOs (P0):** owns `preferences.ts`-equivalent endpoints/DTOs and the `PreferencesRepository`. This is the primary system under test; AND-083 hard-depends on it.
-  - **AND-079 — Media preferences:** `/ui/media/preferences` (autoplay, data saver, quality).
-  - **AND-080 — Notification preferences UI:** per-category push/email/SMS toggles.
-  - **AND-081 — Appearance/theme settings:** light/dark/system + dynamic color (persisted locally in DataStore, not server-side).
+  - **AND-079 — Media preferences:** `GET`/`PUT /ui/media/preferences`. **Correction:** the real `MediaPreferencesIn`/`MediaPreferencesOut` fields are `default_audio_muted`, `default_video_off`, `video_resolution` (enum `"360"|"480"|"720"|"1080"`, default `"720"`), and device-selection IDs (`preferred_audio_input_id`/`preferred_audio_output_id`/`preferred_video_input_id`); `MediaPreferencesOut` also carries server-injected ad fields (`is_house_ad`, `skip_after_seconds`, `user_sub`, `updated_at`, etc.). There are **no** `autoplay`, `data_saver`, or `quality` fields.
+  - **AND-080 — Notification preferences UI:** per-channel/per-type toggles. **Correction:** there is no `/ui/notifications/preferences` endpoint. The web client uses `src/api/endpoints/alerts.ts`: `POST /ui/alerts/type-preferences` (`AlertTypePreferenceUpdate`: `alert_type` + nullable `email`/`push`/`sms`/`in_app`/`enabled`), and per-channel list endpoints `GET`/`POST /ui/alerts/{email_prefs,sms_prefs,toast_prefs,webhook_prefs}`.
+  - **AND-081 — Appearance/theme settings:** light/dark/system + accent/density/font. **Correction:** appearance prefs are **server-synced**, not local-only — `PATCH /ui/settings/preferences` (`PreferencesPatchReq`) accepts `theme` (`system|light|dark`), `accent_color`, `custom_accent_hex`, `font_size`, `density`, `high_contrast`, `sidebar_collapsed`. A DataStore cache may still front them locally, but the server is authoritative (see Section 13 Open Q1).
   - **AND-077 — Settings hub IA:** navigation entry points (light smoke coverage only).
-- **Web reference:** `frontend/src/api/endpoints/preferences.ts`, media endpoints under `frontend/src/api/endpoints/*.ts`, and shared shapes in `frontend/src/api/types.ts`. Test fixtures should be derived from these and from `/openapi.json` so DTO shapes stay faithful to the backend.
+- **Web reference (verified paths):** `src/api/endpoints/preferences.ts` (UI/appearance prefs → `GET`/`PATCH /ui/settings/preferences`, `POST /ui/settings/validate-color`), `src/api/endpoints/mediaPreferences.ts` (`GET`/`PUT /ui/media/preferences`), `src/api/endpoints/alerts.ts` (notification/alert channel prefs), `src/api/client.ts` (auth header, CSRF, 401-refresh transport), and shared shapes in `src/api/types.ts` (`MediaPreferencesIn`/`MediaPreferencesOut`). Test fixtures should be derived from these and from `openapi.pretty.json` so DTO shapes stay faithful to the backend. **Note:** there is NO `frontend/src/api/endpoints/preferences.ts` "media" call and no `/ui/notifications/preferences` endpoint — see Section 5 corrections.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext, unreliable). **Tests never touch the live host.** All HTTP is served by an in-process `MockWebServer` (OkHttp) with canned JSON.
 - **Stack:** Kotlin 2.0.21, JUnit4, Coroutines `kotlinx-coroutines-test` 1.9.x (`runTest`, `StandardTestDispatcher`), Turbine for `Flow` assertions, MockWebServer 4.12, Truth assertions, Robolectric for JVM-side Android deps (DataStore), Compose UI test (`createAndroidComposeRule`) for instrumentation, Hilt test runner for DI.
 
@@ -122,55 +123,60 @@ fun preferencesApi(server: MockWebServer): PreferencesApi =
 ```kotlin
 @get:Rule val mainRule = MainDispatcherRule()
 
+// NOTE: fields/method below are corrected against MediaPreferencesOut / MediaPreferencesIn
+// and the verified PUT verb (openapi.index: PUT /ui/media/preferences).
 @Test fun `loadMediaPreferences maps dto to domain`() = runTest {
     server.enqueue(jsonResponse(200, PreferencesFixtures.MEDIA_PREFS_JSON))
     val result = repository.getMediaPreferences()
     assertThat(result).isInstanceOf(ApiResult.Success::class.java)
     val prefs = (result as ApiResult.Success).data
-    assertThat(prefs.autoplay).isTrue()
-    assertThat(prefs.dataSaver).isFalse()
-    assertThat(prefs.quality).isEqualTo(VideoQuality.AUTO)
+    assertThat(prefs.defaultAudioMuted).isFalse()
+    assertThat(prefs.defaultVideoOff).isFalse()
+    assertThat(prefs.videoResolution).isEqualTo(VideoResolution.P720)
     val recorded = server.takeRequest()
     assertThat(recorded.path).isEqualTo("/ui/media/preferences")
     assertThat(recorded.method).isEqualTo("GET")
 }
 
-@Test fun `updateMediaPreferences sends csrf header and patch body`() = runTest {
-    server.enqueue(jsonResponse(200, PreferencesFixtures.MEDIA_PREFS_DATASAVER_JSON))
-    val result = repository.setDataSaver(enabled = true)
+@Test fun `updateMediaPreferences sends csrf header and put body`() = runTest {
+    server.enqueue(jsonResponse(200, PreferencesFixtures.MEDIA_PREFS_MUTED_JSON))
+    val result = repository.setDefaultAudioMuted(muted = true)
     val req = server.takeRequest()
-    assertThat(req.method).isEqualTo("PATCH")
+    assertThat(req.method).isEqualTo("PUT")            // verified PUT, not PATCH
     assertThat(req.getHeader("X-CSRF-Token")).isEqualTo("test-csrf")
-    assertThat(req.body.readUtf8()).isEqualTo("""{"data_saver":true}""")
-    assertThat((result as ApiResult.Success).data.dataSaver).isTrue()
+    // Body is the full MediaPreferencesIn (server merges by overwrite on PUT);
+    // assert the mutated field is present and correct.
+    assertThat(req.body.readUtf8()).contains("\"default_audio_muted\":true")
+    assertThat((result as ApiResult.Success).data.defaultAudioMuted).isTrue()
 }
 ```
 
 ### 4.4 ViewModel tests (JVM, Turbine)
 
 ```kotlin
-@Test fun `toggling autoplay is optimistic then committed`() = runTest {
-    val repo = FakePreferencesRepository(initial = mediaPrefs(autoplay = false))
+// Uses real media field `default_video_off` (no `autoplay` field exists).
+@Test fun `toggling defaultVideoOff is optimistic then committed`() = runTest {
+    val repo = FakePreferencesRepository(initial = mediaPrefs(defaultVideoOff = false))
     val vm = MediaPreferencesViewModel(repo, savedStateHandle)
     vm.uiState.test {
-        assertThat(awaitItem().autoplay).isFalse()       // initial
-        vm.onAutoplayChanged(true)
-        assertThat(awaitItem().autoplay).isTrue()         // optimistic
-        repo.completeNext(ApiResult.Success(mediaPrefs(autoplay = true)))
-        expectNoEvents()                                  // confirmed == optimistic
+        assertThat(awaitItem().defaultVideoOff).isFalse()   // initial
+        vm.onDefaultVideoOffChanged(true)
+        assertThat(awaitItem().defaultVideoOff).isTrue()    // optimistic
+        repo.completeNext(ApiResult.Success(mediaPrefs(defaultVideoOff = true)))
+        expectNoEvents()                                    // confirmed == optimistic
     }
 }
 
 @Test fun `failed save rolls back and surfaces error`() = runTest {
-    val repo = FakePreferencesRepository(initial = mediaPrefs(autoplay = false))
+    val repo = FakePreferencesRepository(initial = mediaPrefs(defaultVideoOff = false))
     val vm = MediaPreferencesViewModel(repo, savedStateHandle)
     vm.uiState.test {
         awaitItem()
-        vm.onAutoplayChanged(true)
-        awaitItem()                                       // optimistic true
+        vm.onDefaultVideoOffChanged(true)
+        awaitItem()                                         // optimistic true
         repo.completeNext(ApiResult.Error(code = 500, message = "boom"))
         val rolled = awaitItem()
-        assertThat(rolled.autoplay).isFalse()             // rollback
+        assertThat(rolled.defaultVideoOff).isFalse()        // rollback
         assertThat(rolled.error).isNotNull()
     }
 }
@@ -185,12 +191,12 @@ Uses a `tmpFolder`-backed `PreferenceDataStoreFactory`; writes, closes, recreate
 ```kotlin
 @get:Rule val composeRule = createAndroidComposeRule<HiltTestActivity>()
 
-@Test fun toggling_data_saver_calls_repository() {
-    val fake = FakePreferencesRepository(initial = mediaPrefs(dataSaver = false))
+@Test fun toggling_default_audio_muted_calls_repository() {
+    val fake = FakePreferencesRepository(initial = mediaPrefs(defaultAudioMuted = false))
     composeRule.setContent { MediaPreferencesScreen(viewModel = vmWith(fake)) }
-    composeRule.onNodeWithTag("pref_data_saver").assertIsOff().performClick()
+    composeRule.onNodeWithTag("pref_default_audio_muted").assertIsOff().performClick()
     composeRule.runOnIdle {
-        assertThat(fake.calls).contains(Recorded.SetDataSaver(true))
+        assertThat(fake.calls).contains(Recorded.SetDefaultAudioMuted(true))
     }
 }
 ```
@@ -199,30 +205,49 @@ UI uses Hilt test components with `FakePreferencesRepository` bound via `@TestIn
 
 ## 5. API Contract
 
-This ticket asserts contracts owned by AND-078/079/080; it defines no new endpoints. The fixtures must mirror these shapes (canonical, derived from `/openapi.json` and `frontend/src/api/types.ts`):
+This ticket asserts contracts owned by AND-078/079/080/081; it defines no new endpoints. The fixtures must mirror these shapes (canonical, verified against `openapi.pretty.json` `components.schemas.*` and `src/api/types.ts` / `src/api/endpoints/*.ts`):
 
-`GET /ui/media/preferences` → `200`:
+**Media preferences (AND-079).** `GET /ui/media/preferences` → `200:MediaPreferencesOut`; mutation is **`PUT /ui/media/preferences`** (verified — NOT `PATCH`), request body `MediaPreferencesIn`, response `200:MediaPreferencesOut`.
+
+`GET /ui/media/preferences` → `200` (`MediaPreferencesOut`; `user_sub` is the only required field; ad/server fields shown abbreviated):
 ```json
-{ "autoplay": true, "data_saver": false, "quality": "auto" }
+{ "user_sub": "test-user", "default_audio_muted": false, "default_video_off": false,
+  "video_resolution": "720", "preferred_audio_input_id": null,
+  "preferred_audio_output_id": null, "preferred_video_input_id": null,
+  "is_house_ad": false, "skip_after_seconds": 5, "updated_at": 0 }
 ```
-`PATCH /ui/media/preferences` request body (single field example):
+`PUT /ui/media/preferences` request body (`MediaPreferencesIn`; all fields optional, defaults shown):
 ```json
-{ "data_saver": true }
+{ "default_audio_muted": true, "default_video_off": false, "video_resolution": "720",
+  "preferred_audio_input_id": null, "preferred_audio_output_id": null,
+  "preferred_video_input_id": null }
 ```
-Notification preferences (AND-080), `GET /ui/notifications/preferences` → `200`:
+`video_resolution` is the enum `"360" | "480" | "720" | "1080"` (default `"720"`). There are **no** `autoplay`/`data_saver`/`quality` fields.
+
+**Appearance/UI preferences (AND-081 — server-synced).** `GET /ui/settings/preferences` → `200` wraps the prefs object: `{ "preferences": { ... } }` (web `getPreferences()` reads `resp.preferences`). Mutation is **`PATCH /ui/settings/preferences`**, request body `PreferencesPatchReq` (all fields optional/nullable, merge-update):
 ```json
-{ "categories": [
-  { "key": "social", "push": true, "email": false, "sms": false },
-  { "key": "security", "push": true, "email": true, "sms": true }
-] }
+{ "preferences": { "theme": "system", "accent_color": "blue", "custom_accent_hex": null,
+  "font_size": "default", "density": "comfortable", "high_contrast": false,
+  "sidebar_collapsed": false } }
 ```
-FastAPI error bodies that fixtures must include (FR-7), one per shape:
+Enums: `theme` ∈ {`system`,`light`,`dark`}; `accent_color` ∈ {`blue`,`purple`,`green`,`orange`,`pink`,`red`,`teal`,`custom`}; `font_size` ∈ {`small`,`default`,`large`,`xlarge`}; `density` ∈ {`compact`,`comfortable`,`spacious`}.
+
+**Notification/alert preferences (AND-080).** There is **no** `/ui/notifications/preferences` endpoint and no `{ "categories": [...] }` shape. The verified contract is `POST /ui/alerts/type-preferences` (`AlertTypePreferenceUpdate`):
+```json
+{ "alert_type": "social", "push": true, "email": false, "sms": false,
+  "in_app": true, "enabled": true }
+```
+(`alert_type` is the only required field; `email`/`push`/`sms`/`in_app`/`enabled` are nullable booleans). Per-channel list endpoints (`src/api/endpoints/alerts.ts`) are `GET`/`POST /ui/alerts/{email_prefs,sms_prefs,toast_prefs,webhook_prefs}` taking arrays of event-type strings (e.g. `{ "email_event_types": ["new_follower"] }`).
+
+**Error bodies (FR-7).** The preference endpoints declare `422:HTTPValidationError` (FastAPI validation: `{ "detail": [ { "msg": "...", "loc": [...], "type": "..." } ] }`). Domain endpoints elsewhere use `ErrorEnvelope` = `{ "error": { "code": "...", "message": "...", "details": {...}? } }` (schema `ErrorDetail`). The web client's `normalizeErrorDetail` (`src/api/client.ts`) handles three `detail` shapes — string, array-of-`{msg}`, and object-with-`code`/`message` — so fixtures must cover all three:
 ```json
 { "detail": "Invalid preference value" }
-{ "detail": [ { "msg": "quality: invalid enum", "loc": ["body","quality"] } ] }
+{ "detail": [ { "msg": "video_resolution: invalid enum", "loc": ["body","video_resolution"], "type": "enum" } ] }
 { "detail": { "code": "PREF_CONFLICT", "message": "Stale preferences" } }
 ```
-401 refresh path: first request → `401`; `POST /ui/session/refresh` → `200` (sets refreshed cookie); retried original request → `200`. Appearance prefs (AND-081) are local-only DataStore values with no API contract; that is owned downstream and exercised purely via FR-6.
+Note: `PREF_CONFLICT`/409 is **not** declared on the preference endpoints in the OpenAPI (only `422`); treat it as an unverified forward-compat assumption (Section 13 Open Q2). Also include an `ErrorEnvelope` fixture to exercise the alternate envelope mapper.
+
+**401 refresh path (verified, `src/api/client.ts`):** first request → `401`; a single shared refresh fires **`POST /ui/session/refresh`** → `200` (refreshes the session cookie); the original request is retried exactly once with the same headers. A second `401` on retry triggers logout, not a loop. Refresh only fires when the user is already authenticated; an unauthenticated `401` propagates directly without a refresh attempt.
 
 ## 6. Data & State Management
 
@@ -243,7 +268,7 @@ The suite is the *verifier* of resilience behaviour rather than its implementer.
 
 ## 8. Security & Privacy
 
-- Tests assert the `X-CSRF-Token` header is present and equals the `ui_csrf` cookie value on every mutating request (FR-2); a mutation missing the header is a test failure.
+- Tests assert the `X-CSRF-Token` header is present and equals the `ui_csrf` cookie value on every mutating request (FR-2); a mutation missing the header is a test failure. (Verified: `src/api/client.ts` sets `X-CSRF-Token` from the `ui_csrf` cookie on *every* request — including GETs — whenever the cookie exists; the Android port may scope it to mutations, but the source of truth is the `ui_csrf` cookie value.)
 - Tests assert no preference payloads, cookies, CSRF tokens, or session identifiers are written to logs by the code under test (capture a test logger / Timber test tree and assert redaction).
 - All test traffic targets `localhost` MockWebServer; the suite must contain **no** reference to `18.222.237.167` or any plaintext production host. A lint/CI grep guard fails the build if such a literal appears in test sources.
 - No real credentials or PII in fixtures; usernames/emails are synthetic (`test@example.com`).
@@ -277,12 +302,12 @@ No production telemetry is added. The suite may assert that expected analytics e
 
 ## 13. Risks & Open Questions
 
-- **R1 — Endpoint/method shapes unconfirmed.** The exact paths/verbs/body keys for media and notification preferences must be confirmed against `/openapi.json` before fixtures are frozen. *Mitigation:* golden-fixture deserialization test + derive from OpenAPI.
+- **R1 — Endpoint/method shapes (now confirmed; was a real defect).** This review confirmed the shapes against `openapi.pretty.json` and the web client, and corrected several errors in the original draft: media mutation is **`PUT`** not `PATCH`; media fields are `default_audio_muted`/`default_video_off`/`video_resolution`/device-IDs, not `autoplay`/`data_saver`/`quality`; there is **no** `/ui/notifications/preferences` endpoint (use `/ui/alerts/type-preferences` + `/ui/alerts/*_prefs`); appearance prefs are server-synced via `PATCH /ui/settings/preferences`. *Mitigation:* golden-fixture deserialization test + derive from OpenAPI; keep fixtures in sync with `MediaPreferencesIn/Out`, `PreferencesPatchReq`, `AlertTypePreferenceUpdate`.
 - **R2 — Optimistic-update semantics may not yet be implemented** in AND-079/080. If the ViewModels save without optimism, FR-3/FR-4 assertions must follow whatever AND-078/079 actually specify; align with those tickets, do not implement behaviour here.
 - **R3 — Instrumentation flakiness / emulator availability in CI.** *Mitigation:* prefer Gradle Managed Devices; keep instrumentation tier thin (smoke only), push logic coverage to JVM.
 - **R4 — Retry/backoff policy location.** If retry lives in an OkHttp interceptor vs. repository, timeout/retry tests target the correct layer; confirm with AND-027 (network core) owners.
-- **Open Q1:** Are appearance prefs purely local (DataStore) or also synced server-side? Assumed local-only per AND-081; revisit if AND-078 syncs them.
-- **Open Q2:** Is there a server-side conflict/version field requiring `PREF_CONFLICT` handling beyond FR-7? Pending OpenAPI confirmation.
+- **Open Q1 (resolved):** Appearance prefs are **server-synced**, not local-only. `PATCH /ui/settings/preferences` (`PreferencesPatchReq`) and `GET /ui/settings/preferences` (`{ "preferences": {...} }`) carry `theme`/`accent_color`/`font_size`/`density`/`high_contrast`/`sidebar_collapsed`/`custom_accent_hex`. FR-6's local-DataStore round-trip is still valid as a *cache* test, but a server round-trip (load/PATCH) must also be asserted. AND-081 should be confirmed to sync, and any "local-only" assumption removed.
+- **Open Q2 (partially resolved):** The preference endpoints declare only `422:HTTPValidationError` in OpenAPI — no `409`/`PREF_CONFLICT` and no version field are documented for media/settings prefs. `PREF_CONFLICT` remains an **unverified forward-compat assumption**; keep the FR-7 object-shape fixture but do not assume a real 409 path exists until AND-078 confirms it.
 
 ## 14. Acceptance Criteria
 
@@ -307,3 +332,78 @@ No production telemetry is added. The suite may assert that expected analytics e
 - No flaky tests (`Thread.sleep` free; idling-resource based); suite runtime for the JVM tier under ~30s.
 - JaCoCo and JUnit XML published as CI artifacts; coverage gate reported.
 - Code reviewed and merged; ticket linked to the defects it surfaced (if any).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact authoritative source.
+
+1. **`GET /ui/media/preferences` exists and returns `MediaPreferencesOut`.** VERDICT: Verified. SOURCE: OpenAPI `GET /ui/media/preferences` (op `ui_get_media_preferences_..._get`, `resp=200:MediaPreferencesOut`); `src/api/endpoints/mediaPreferences.ts: getMediaPreferences`.
+2. **Media mutation HTTP method.** Claim (original): `PATCH /ui/media/preferences`. VERDICT: Corrected → **`PUT`**. SOURCE: OpenAPI `PUT /ui/media/preferences` (op `ui_save_media_preferences_..._put`, `req=MediaPreferencesIn`, `resp=200:MediaPreferencesOut`); `src/api/endpoints/mediaPreferences.ts: saveMediaPreferences` (`api.put<MediaPreferencesOut>`).
+3. **Media preference fields.** Claim (original): `autoplay`, `data_saver`, `quality`. VERDICT: Corrected → real fields are `default_audio_muted`, `default_video_off`, `video_resolution` (enum `"360"|"480"|"720"|"1080"`, default `"720"`), `preferred_audio_input_id`, `preferred_audio_output_id`, `preferred_video_input_id`; `MediaPreferencesOut` adds `user_sub` (required), `updated_at`, and ad fields (`is_house_ad`, `skip_after_seconds`, `click_url`, etc.). SOURCE: `components.schemas.MediaPreferencesIn` / `components.schemas.MediaPreferencesOut`; `src/api/types.ts: MediaPreferencesIn / MediaPreferencesOut` (lines ~12732–12748).
+4. **Notification preferences endpoint.** Claim (original): `GET /ui/notifications/preferences` with `{ "categories": [{ key, push, email, sms }] }`. VERDICT: Corrected → no such endpoint exists. Real contract: `POST /ui/alerts/type-preferences` (`AlertTypePreferenceUpdate`) and per-channel `GET`/`POST /ui/alerts/{email_prefs,sms_prefs,toast_prefs,webhook_prefs}`. SOURCE: OpenAPI `GET`/`POST /ui/alerts/type-preferences`; `components.schemas.AlertTypePreferenceUpdate` (`alert_type` required; nullable `email`/`push`/`sms`/`in_app`/`enabled`); `src/api/endpoints/alerts.ts: getEmailPrefs/setEmailPrefs/getSmsPrefs/...`. (No `/ui/notifications/preferences` row in `openapi.index.txt`.)
+5. **Appearance/theme prefs are local-only (DataStore).** Claim (original, §2/§5/§13). VERDICT: Corrected → server-synced. SOURCE: OpenAPI `GET`/`PATCH /ui/settings/preferences`; `components.schemas.PreferencesPatchReq` (`theme`/`accent_color`/`custom_accent_hex`/`font_size`/`density`/`high_contrast`/`sidebar_collapsed`); `src/api/endpoints/preferences.ts: getPreferences/patchPreferences` (GET wraps as `{ preferences }`, mutation is `api.patch`).
+6. **Settings prefs mutation method is `PATCH`.** VERDICT: Verified. SOURCE: OpenAPI `PATCH /ui/settings/preferences` (op `ui_update_preferences_..._patch`, `req=PreferencesPatchReq`); `src/api/endpoints/preferences.ts: patchPreferences`.
+7. **CSRF: `X-CSRF-Token` header sourced from the `ui_csrf` cookie.** VERDICT: Verified (and broadened — sent on every request, not only mutations). SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`, lines ~168–171).
+8. **401 → single `POST /ui/session/refresh` → single retry, no loop.** VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh_..._post`, `resp=200`); `src/api/client.ts` (`refreshSession()` + shared `refreshPromise`, single retry, logout on second 401, lines ~119–237); `src/api/endpoints/auth.ts: refreshSession` (`api.post<StatusResp>("/ui/session/refresh")`).
+9. **Unauthenticated 401 does NOT trigger refresh.** VERDICT: Verified (nuance added). SOURCE: `src/api/client.ts` (`if (!useAuthStore.getState().isAuthenticated) { ... throw }`, lines ~196–203).
+10. **Network error surfaces a typed error (no hang).** VERDICT: Verified. SOURCE: `src/api/client.ts` (`catch (err) { ... throw new ApiError(0, "Network error", err) }`, lines ~185–189). Android equivalent: `ApiResult.NetworkError`.
+11. **FastAPI error `detail` shapes (string / array-of-`{msg}` / object-with-`code`+`message`) map to a stable message.** VERDICT: Verified. SOURCE: `src/api/client.ts: normalizeErrorDetail` (lines ~66–102) + `mapAuthorizationError`; OpenAPI `components.schemas.HTTPValidationError` (`detail: ValidationError[]`, each `{msg, loc, type}`) and `components.schemas.ErrorEnvelope`/`ErrorDetail` (`{ error: { code, message, details? } }`).
+12. **Preference endpoints' declared error responses.** VERDICT: Verified (corrects an implicit assumption). SOURCE: OpenAPI rows for `/ui/media/preferences`, `/ui/settings/preferences`, `/ui/alerts/type-preferences` declare only `422:HTTPValidationError`; richer `ErrorEnvelope` codes (e.g. `409`) appear on other domains (e.g. `/integrations/jira/preferences`).
+13. **`PREF_CONFLICT` / 409 conflict handling for preferences.** VERDICT: Unverified-assumption. SOURCE: not present on any preference endpoint in `openapi.index.txt`; only `422` is declared. Keep the fixture for forward-compat but do not assert a live 409 path.
+14. **Dev host `http://18.222.237.167:8000` is plaintext/unreliable and must never be hit by tests.** VERDICT: Verified (project constraint, consistent with task brief). SOURCE: task environment brief; spec §2/§8. Not independently in OpenAPI (servers list not asserted here).
+15. **Test stack choices (JUnit4, kotlinx-coroutines-test `runTest`/`StandardTestDispatcher`, Turbine, MockWebServer, Truth, Robolectric, Compose UI test, Hilt).** VERDICT: Unverified-assumption (framework choices, not backend contract). SOURCE (framework ref): `https://developer.android.com/training/testing`, `https://developer.android.com/jetpack/compose/testing`, `https://developer.android.com/topic/libraries/architecture/datastore#testing`, `https://github.com/cashapp/turbine`, `https://github.com/square/okhttp/tree/master/mockwebserver`, `https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/`.
+16. **Optimistic-update + rollback semantics in the ViewModels (FR-3/FR-4).** VERDICT: Unverified-assumption (behaviour owned by AND-079/080/081; not derivable from backend or web client, which is fire-and-forget for prefs — see `patchPreferences` "frontend does not wait"). SOURCE: `src/api/endpoints/preferences.ts` doc comment (fire-and-forget); behaviour must be confirmed against AND-078/079.
+17. **GET retry/backoff + timeout layer location.** VERDICT: Unverified-assumption. The web client does **not** implement retry/backoff for GETs (only the 401 single-refresh path); whether the Android core-network adds bounded GET retry is owned by AND-027. SOURCE: `src/api/client.ts` (no retry loop beyond 401); spec §13 R4.
+
+### Corrections made
+
+- §2 / §5 / §13: media mutation verb `PATCH` → **`PUT`** (citation 2).
+- §1 / §4.3 / §4.4 / §4.6 / §5: media fields `autoplay`/`data_saver`/`quality` → `default_audio_muted`/`default_video_off`/`video_resolution`(+device IDs) (citation 3).
+- §2 / §5: removed non-existent `GET /ui/notifications/preferences` + `categories` shape; replaced with `POST /ui/alerts/type-preferences` (`AlertTypePreferenceUpdate`) and `/ui/alerts/*_prefs` (citation 4).
+- §2 / §5 / §13 (Open Q1): appearance prefs reclassified from "local-only DataStore" to **server-synced** via `PATCH /ui/settings/preferences` / `PreferencesPatchReq`; GET response wraps as `{ "preferences": {...} }` (citation 5).
+- §5: clarified declared error responses are `422:HTTPValidationError`; `PREF_CONFLICT`/409 flagged as unverified (citations 12, 13); added `ErrorEnvelope` fixture note.
+- §8: clarified `X-CSRF-Token` is set on every request from the `ui_csrf` cookie, not only mutations (citation 7).
+- §5: 401-refresh path annotated as verified, including the unauthenticated-401 no-refresh nuance (citations 8, 9).
+
+### Open assumptions
+
+- **A1 — Optimistic UI + rollback (FR-3/FR-4).** Not verifiable from backend/web (web is fire-and-forget). Confirm with AND-078/079/080 before freezing the Turbine emission sequences.
+- **A2 — `PREF_CONFLICT`/409 + version field.** Not in OpenAPI; forward-compat only (citation 13).
+- **A3 — GET retry/backoff policy + which layer owns it.** Web client has none; depends on AND-027 core-network design (citation 17).
+- **A4 — Android DataStore caching of prefs (FR-6 cache test).** Whether AND-078 fronts server prefs with a DataStore cache is its design choice; the cache round-trip test is valid only if such a cache exists. Appearance still needs a *server* round-trip test regardless (citation 5).
+- **A5 — Exact notification subsection mapping.** Which alert endpoint(s) AND-080's screen drives (`type-preferences` vs per-channel `*_prefs`) is a UI-design choice owned by AND-080; fixtures provided for both.
+
+## 17. Test Plan
+
+All HTTP is served by an in-process OkHttp `MockWebServer`; no test touches the live dev host. Target legend per the CI/dev inventory: JVM = local Robolectric/unit (no device); emulator = headless AVD `test35` (x86_64, API 35); device = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Compose-UI/instrumented cases run on the emulator unless a real-hardware reason forces the device.
+
+- **TC-AND-083-01 — Media GET maps DTO → domain (happy path).** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: `MockWebServer` enqueues `200` with `PreferencesFixtures.MEDIA_PREFS_JSON` (real `MediaPreferencesOut` shape). Steps: call `repository.getMediaPreferences()`; take request. Expected: `ApiResult.Success`; `defaultAudioMuted=false`, `defaultVideoOff=false`, `videoResolution=720`; request path `/ui/media/preferences`, method `GET`. Traces: AC-2.
+- **TC-AND-083-02 — Media mutation uses PUT + CSRF + correct body.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: cookie jar seeded with `ui_csrf=test-csrf`; enqueue `200` with mutated `MediaPreferencesOut`. Steps: call `repository.setDefaultAudioMuted(true)`; take request. Expected: method `PUT` (not PATCH); `X-CSRF-Token: test-csrf`; body contains `"default_audio_muted":true`; result reflects server body. Traces: AC-2.
+- **TC-AND-083-03 — Appearance prefs server round-trip (GET wraps `{preferences}`, PATCH merge).** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: enqueue `200 {"preferences":{"theme":"system",...}}` then `200` for PATCH. Steps: `getPreferences()`; assert unwrap; `patchPreferences(theme=dark)`; take requests. Expected: GET `/ui/settings/preferences` unwraps `preferences`; PATCH method `PATCH`, body `{"theme":"dark"}` (only provided field), `X-CSRF-Token` present. Traces: AC-2, AC-5.
+- **TC-AND-083-04 — Notification type-preference POST shape.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: enqueue `200`. Steps: call repo to set a type pref (e.g. `social` push on); take request. Expected: `POST /ui/alerts/type-preferences`; body includes `"alert_type":"social"` and the toggled channel boolean; `X-CSRF-Token` present. Traces: AC-2. (Uses corrected endpoint; covers assumption A5.)
+- **TC-AND-083-05 — ViewModel optimistic-then-committed.** Type: unit (JVM, Turbine + FakeRepository). Target: JVM. Preconditions: `FakePreferencesRepository(initial defaultVideoOff=false)`. Steps: collect `uiState`; call `onDefaultVideoOffChanged(true)`; complete fake with `Success(defaultVideoOff=true)`. Expected: emissions initial=false → optimistic=true → no further change after commit. Traces: AC-3. (Depends on assumption A1.)
+- **TC-AND-083-06 — ViewModel rollback + error on failed save.** Type: unit (JVM, Turbine). Target: JVM. Preconditions: fake initial `defaultVideoOff=false`. Steps: toggle to true (optimistic); complete fake with `ApiResult.Error(500)`. Expected: state rolls back to false; `error != null` (resource-backed `UiText`). Traces: AC-3, AC-6.
+- **TC-AND-083-07 — 401 → single refresh → single retry, no loop.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: enqueue `401`, then `200` for `POST /ui/session/refresh`, then `200` for retried original. Steps: issue a preferences GET/mutation; inspect dispatched requests. Expected: exactly one `/ui/session/refresh`; original retried once; success returned; total request count == 3. Also assert: second-`401`-on-retry case yields auth error/logout and request count == 3 (no further retries). Traces: AC-4.
+- **TC-AND-083-08 — FastAPI error `detail` shapes map to stable typed errors.** Type: unit (JVM, parameterized). Target: JVM. Preconditions: three fixtures — string detail, array-of-`{msg}`, object-`{code,message}` — plus one `ErrorEnvelope` `{error:{code,message}}`. Steps: feed each to the shared error mapper. Expected: each yields a non-empty stable message; array joins `msg`s; object uses `message`/mapped code; envelope maps via `error`. Traces: AC-6.
+- **TC-AND-083-09 — Timeout yields NetworkError, not a hang (virtual time).** Type: unit (JVM, MockWebServer + `runTest`). Target: JVM. Preconditions: enqueue response with `setBodyDelay(25, SECONDS)`; call timeout 20s. Steps: launch request; `advanceTimeBy` past 20s. Expected: `ApiResult.NetworkError` (timeout); no deadlock; completes in ms of wall time. Traces: AC-7. (Covers offline/flaky-dev-host path at the transport layer.)
+- **TC-AND-083-10 — Retry policy: GET bounded-retry vs mutation no-retry.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: GET case enqueues `503,503,200`; mutation case enqueues `503`. Steps: run GET and PUT. Expected: GET retried per bounded policy and ultimately `Success`; PUT returns error with request count == 1 (no retry). Traces: AC-7. NOTE: gated on assumption A3 — if core-network (AND-027) implements no GET retry, downgrade to asserting "no retry on either" and file against AND-027.
+- **TC-AND-083-11 — Malformed JSON → typed parse error (no crash).** Type: unit (JVM, MockWebServer). Target: JVM. Preconditions: enqueue `200` with invalid body. Steps: call `getMediaPreferences()`. Expected: `ApiResult.Error` (parse), no exception escapes. Traces: AC-6.
+- **TC-AND-083-12 — DataStore appearance-cache survives process restart.** Type: integration/Robolectric (JVM). Target: JVM. Preconditions: `tmpFolder`-backed `PreferenceDataStoreFactory`. Steps: write theme=dark; close store; recreate against same file; read back. Expected: theme=dark persists; plus assert server round-trip exists separately (per correction 5). Traces: AC-5.
+- **TC-AND-083-13 — Compose smoke: render + seeded state + interaction calls repo.** Type: Compose-UI/instrumented. Target: emulator `test35`. Preconditions: Hilt test graph binds `FakePreferencesRepository(initial defaultAudioMuted=false)`. Steps: set `MediaPreferencesScreen`; assert switch reflects seeded off state; `performClick`. Expected: `fake.calls` contains `Recorded.SetDefaultAudioMuted(true)`; no real network. Traces: AC-8.
+- **TC-AND-083-14 — Accessibility: controls labelled, toggle semantics inspectable.** Type: Compose-UI/instrumented. Target: emulator `test35`. Preconditions: each Settings subsection screen rendered with seeded state. Steps: query nodes by `testTag`; assert non-empty content description; assert `assertIsOn()/assertIsOff()` toggle semantics; one `SettingsHub` navigation smoke (AND-077). Expected: every interactive control has an accessible label and a stable `testTag`; toggle state is programmatically readable (TalkBack-compatible). Traces: AC-8.
+- **TC-AND-083-15 — Security: no live host literal + no secret leakage in logs.** Type: unit + manual (CI grep guard). Target: JVM. Preconditions: test sources tree. Steps: (a) grep-guard test sources for `18.222.237.167`; (b) capture a Timber test tree during a mutation and inspect logs. Expected: no match for the dev-host literal (build fails if present); no CSRF token, cookie, session id, or preference payload appears in logs (redacted). Traces: AC-9.
+
+### Coverage matrix
+
+| AC (Section 14) | Test case(s) |
+|---|---|
+| AC-1 (`testDebugUnitTest` suites green) | All TC (suite-level; aggregate green) |
+| AC-2 (GET mapping + mutation path/method/body/CSRF) | TC-01, TC-02, TC-03, TC-04 |
+| AC-3 (optimistic + rollback via Turbine) | TC-05, TC-06 |
+| AC-4 (401 single refresh + single retry, no loop) | TC-07 |
+| AC-5 (persistence round-trip) | TC-12 (cache) + TC-03 (server round-trip) |
+| AC-6 (three `detail` shapes → typed errors) | TC-08, TC-06, TC-11 |
+| AC-7 (timeout + bounded-GET-retry / no-mutation-retry) | TC-09, TC-10 |
+| AC-8 (instrumentation smoke + interaction + a11y) | TC-13, TC-14 |
+| AC-9 (no live-host reference; grep guard) | TC-15 |
+| AC-10 (JaCoCo coverage ≥85% soft gate) | Enforced by TC-01..TC-12 coverage of repo + ViewModels (reported, not a standalone case) |

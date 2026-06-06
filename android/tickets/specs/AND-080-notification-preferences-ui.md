@@ -5,7 +5,8 @@ milestone: M2
 epic: E11
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-078, AND-088]
 blocks: []
 ---
@@ -23,7 +24,10 @@ The user lands on a single scrollable screen grouped by notification *category*
 (for example `security_alerts`, `account_activity`, `product_updates`,
 `billing`, `marketing`). Each category exposes up to three channel switches.
 Toggling a switch optimistically updates the UI and issues a debounced
-`PATCH /ui/preferences/notifications` write. The screen reflects loading, saved,
+write to the preferences repository. (NOTE — corrected during review: the path
+`/ui/preferences/notifications` does **not** exist in the backend OpenAPI. The
+nearest matching endpoint is `POST /ui/alerts/type-preferences` with schema
+`AlertTypePreferenceUpdate`; see §5 and §16.) The screen reflects loading, saved,
 saving, error, and offline/stale states, and survives configuration changes and
 process death.
 
@@ -58,9 +62,16 @@ layer (AND-078, epic E11). It consumes both.
   AND-088 where available; if AND-088 lands after this ticket, AND-080 ships a
   local copy of the row composable behind the same signature and is refactored to
   the shared one in a follow-up.
-- **Auth/transport:** cookie-based session with `X-CSRF-Token` echo and single
+- **Auth/transport:** session credentials + `X-CSRF-Token` echo and single
   `POST /ui/session/refresh` retry on 401 — all handled by the OkHttp
   interceptor stack from `core-network`; this screen issues no auth logic itself.
+  (Corrected during review: the web reference client is **not** cookie-only — its
+  `api()` wrapper additionally sends `Authorization: Bearer <accessToken>` from the
+  auth store and an optional `X-IMPERSONATION-TOKEN`, alongside `credentials:
+  "include"` cookies; `X-CSRF-Token` is read from the `ui_csrf` cookie and sent on
+  **every** request, not only writes. The exact Android auth scheme is owned by
+  core-network/AND-078; see §16. `POST /ui/session/refresh` and the single-retry
+  behavior are verified against `src/api/client.ts`.)
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000`
   (plaintext, unreliable). OpenAPI at `/openapi.json`. FastAPI `detail` error
   shape (`string | [{msg}] | {code,...}`) is mapped to `ApiResult.Error` in
@@ -221,11 +232,42 @@ fires `Settings.ACTION_APP_NOTIFICATION_SETTINGS` (API 26+) via a one-shot event
 ## 5. API Contract
 
 This screen does not call Retrofit directly; it consumes
-`NotificationPreferencesRepository` (AND-078). The repository wraps these endpoints
-(mirrored from web `preferences.ts`). Shapes below are the contract this UI relies
-on; AND-078 owns the DTOs and exact (de)serialization.
+`NotificationPreferencesRepository` (AND-078). AND-078 owns the DTOs and exact
+(de)serialization. Shapes below are the contract this UI relies on.
 
-**GET `/ui/preferences/notifications`** — fetch current preferences.
+> **REVIEW CORRECTION (authoritative).** The originally-specified path
+> `/ui/preferences/notifications` (GET/PATCH) does **not** exist in the backend
+> OpenAPI, and web `preferences.ts` does **not** expose notification-channel
+> toggles — it calls `GET`/`PATCH /ui/settings/preferences` (`PreferencesPatchReq`),
+> which carries only UI theme/density prefs (accent_color, font_size, …), not
+> push/email/SMS. The backend endpoint that actually models per-type
+> push/email/SMS booleans is:
+>
+> - **`GET /ui/alerts/type-preferences`** (`op=get_type_preferences…`) — response
+>   schema is **untyped** in OpenAPI (`200: {}`), so the GET response shape is an
+>   **unverified assumption** and must be confirmed with AND-078 / backend.
+> - **`POST /ui/alerts/type-preferences`** (`op=update_type_preferences…`,
+>   req=`AlertTypePreferenceUpdate`) — **POST, not PATCH**; **one alert type per
+>   call**; response `200: {}` (untyped).
+>
+> The verified `AlertTypePreferenceUpdate` request shape is:
+> `{ "alert_type": string (required, 1–64 chars), "enabled"?: bool|null,
+> "push"?: bool|null, "email"?: bool|null, "sms"?: bool|null, "in_app"?: bool|null }`.
+> Note the key is **`alert_type`** (not `category_id`), channels are **flat
+> top-level booleans** (not a nested `channels` object), there is an extra
+> **`in_app`** channel and an **`enabled`** master flag, and there is **no
+> `available` field** anywhere in the schema — per-channel availability (FR-2)
+> is NOT backend-expressed and is an unverified assumption (see OQ-2, §16).
+>
+> Note also the web client (`src/api/endpoints/alerts.ts`) does not call
+> `type-preferences` at all; it uses separate per-channel endpoints
+> (`POST /ui/alerts/email_prefs`, `/sms_prefs`, `/toast_prefs`, `/webhook_prefs`)
+> that take **event-type string arrays**, not booleans. The example JSON below is
+> retained as the *desired UI-facing contract* AND-078 must adapt to/from, but it
+> is **not** a verbatim backend shape. Reconcile via OQ-1 before implementation.
+
+**GET notification preferences** (illustrative UI-facing shape; backend source is
+`GET /ui/alerts/type-preferences`, response schema untyped/unverified).
 
 Response `200`:
 ```json
@@ -245,10 +287,28 @@ Response `200`:
 }
 ```
 
-**PATCH `/ui/preferences/notifications`** — partial update for one category.
-Idempotent in effect but treated as a non-idempotent write (no auto-retry).
+**Write — `POST /ui/alerts/type-preferences`** — update one alert type's channels.
+(Corrected: was specified as `PATCH /ui/preferences/notifications`; the real
+verb is **POST** and the path is `/ui/alerts/type-preferences`.) Treated as a
+non-idempotent write (no auto-retry).
 
-Request:
+Verified backend request body (`AlertTypePreferenceUpdate`):
+```json
+{
+  "alert_type": "security_alerts",
+  "push": true,
+  "email": true,
+  "sms": false,
+  "in_app": true,
+  "enabled": true
+}
+```
+Note: flat channel booleans, key `alert_type`, optional `in_app` + `enabled`.
+The UI-facing `{ "category_id", "channels": {…} }` shape below is what AND-078's
+repository should accept; AND-078 is responsible for mapping it onto
+`AlertTypePreferenceUpdate`.
+
+UI-facing request (repository input — AND-078 maps to backend):
 ```json
 {
   "category_id": "security_alerts",
@@ -256,7 +316,10 @@ Request:
 }
 ```
 
-Response `200` returns the canonical category (used to reconcile optimistic state):
+Response `200` — **unverified.** The backend OpenAPI declares `200: {}` (untyped)
+for `POST /ui/alerts/type-preferences`, so the "canonical category" reconciliation
+response below is an **unverified assumption** and must be confirmed (OQ-1). If the
+backend returns no usable body, reconciliation must instead re-`GET` preferences:
 ```json
 {
   "category": {
@@ -270,27 +333,39 @@ Response `200` returns the canonical category (used to reconcile optimistic stat
 }
 ```
 
-Headers: cookie session + `X-CSRF-Token` (from `ui_csrf` cookie) applied by the
-`core-network` interceptor. CSRF is **required** on `PATCH`.
+Headers: session credentials + `X-CSRF-Token` (read from the `ui_csrf` cookie)
+applied by the `core-network` interceptor. (Corrected: per `src/api/client.ts` the
+web client sets `X-CSRF-Token` on **every** request, not only writes — and also
+sends `Authorization: Bearer` + cookies. The header presence on the write is the
+load-bearing assertion for AC-3.)
 
-Error responses use FastAPI `detail`:
+Error responses use FastAPI `detail`. The three `detail` shapes are **verified**
+against `src/api/client.ts: normalizeErrorDetail` (string | array-of-`{msg}` |
+object-with-`code`) and `HTTPValidationError`/`ValidationError` in OpenAPI
+(422 bodies are `{detail:[{loc, msg, type}]}`):
 ```json
 { "detail": "Notification category not found" }
 { "detail": [ { "loc": ["body","channels","sms"], "msg": "channel unavailable" } ] }
 { "detail": { "code": "preference_locked", "message": "Managed by org policy" } }
 ```
-These map to `ApiResult.Error(message, code?)`; `403 preference_locked` is surfaced
-as a non-retryable inline message and the toggle reverts.
+The object-with-`code` shape is real (the web client maps codes like
+`role_required`, `role_required_scope`, `geo_blocked` in `mapAuthorizationError`),
+but the specific code **`preference_locked` is an unverified assumption** — it does
+not appear in the reference sources (see §16). These map to
+`ApiResult.Error(message, code?)`; a `403` org-policy lock (if it exists) is
+surfaced as a non-retryable inline message and the toggle reverts. Some `alerts`
+endpoints in OpenAPI also wrap errors in `ErrorEnvelope` (`{error:{...}}`); AND-078
+must normalize both shapes.
 
-If AND-078's deployed endpoint names diverge from `/ui/preferences/notifications`,
-the repository contract (function names + DTO types) is authoritative and this UI
-is unaffected — see Open Question OQ-1.
+Because the real path/verb differs from this spec's original assumption, the
+repository contract (function names + DTO types) is authoritative and this UI is
+insulated from the exact path — see Open Question OQ-1 and §16.
 
 ## 6. Data & State Management
 
 - **Source of truth:** backend, fetched on screen entry via the repository.
-- **Cache:** repository (AND-078) caches the last successful
-  `GET /ui/preferences/notifications` in DataStore as JSON (last-known-good).
+- **Cache:** repository (AND-078) caches the last successful preferences GET
+  (backend `GET /ui/alerts/type-preferences`) in DataStore as JSON (last-known-good).
   This screen reads cache to populate `Ready(isStale = true)` when a live fetch
   fails but cache exists.
 - **In-memory working model:** `MutableStateFlow<Map<String, CategoryPrefUi>>`
@@ -389,10 +464,14 @@ testable and enforced in CI.
 
 **Persistence round-trip (the headline acceptance test):**
 - Integration test with `MockWebServer`: load → toggle SMS on → assert outbound
-  `PATCH /ui/preferences/notifications` body
-  `{"category_id":"...","channels":{...,"sms":true}}` with `X-CSRF-Token` present
-  → server returns canonical → re-create ViewModel (simulating reload) → assert
-  the toggle is `true` (proves persistence end-to-end through the repository).
+  write hits the real backend route (`POST /ui/alerts/type-preferences`, **POST**)
+  with an `AlertTypePreferenceUpdate` body whose `sms` is `true` (e.g.
+  `{"alert_type":"...","sms":true,...}`) and with `X-CSRF-Token` present → server
+  returns its body (or, if untyped/empty, the ViewModel re-`GET`s) → re-create
+  ViewModel (simulating reload) → assert the toggle is `true` (proves persistence
+  end-to-end through the repository). The repository-input shape may use
+  `category_id`/`channels`; the *on-the-wire* assertion is against the backend
+  contract above (see §5 correction).
 
 **Compose UI (`createAndroidComposeRule`):**
 - Toggling a switch flips its semantics state.
@@ -422,9 +501,13 @@ except the instrumented persistence round-trip.
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 — Endpoint shape:** the exact path/verb (`PATCH` vs `PUT`, per-category
-  vs bulk) is owned by AND-078 and must be confirmed against `/openapi.json`.
-  Mitigation: depend on repository function signatures, not raw paths.
+- **OQ-1 — Endpoint shape (PARTIALLY RESOLVED in review):** the originally-assumed
+  `PATCH /ui/preferences/notifications` is wrong. Verified backend route is
+  `POST /ui/alerts/type-preferences` (req `AlertTypePreferenceUpdate`, one alert
+  type per call); its `200` response is untyped in OpenAPI, so the reconciliation
+  body is still unconfirmed. Outstanding: confirm the GET/POST response shapes and
+  whether a bulk variant exists. Mitigation: depend on repository function
+  signatures, not raw paths.
 - **OQ-2 — Channel availability source:** does the backend express SMS/email
   availability per category, or globally (e.g., SMS only if a verified phone
   exists)? If global, the UI must gate channels by account capability flags.
@@ -477,3 +560,264 @@ except the instrumented persistence round-trip.
   owners; any local fallback `PreferenceChannelRow` annotated with a follow-up to
   consolidate with AND-088.
 - PR reviewed and approved; spec linked in the PR description.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Claim:** Preferences are fetched/written at `/ui/preferences/notifications`
+   (GET + PATCH). **VERDICT: Corrected.** No such path exists in the backend.
+   **Source:** OpenAPI index (`reference/openapi.index.txt`) — no `/ui/preferences/notifications`
+   entry; nearest endpoints are `GET /ui/settings/preferences` /
+   `PATCH /ui/settings/preferences` (`PreferencesPatchReq`, theme/UI only) and
+   `GET /ui/alerts/type-preferences` / `POST /ui/alerts/type-preferences`.
+2. **Claim:** The write is a `PATCH` carrying `{category_id, channels:{push,email,sms}}`.
+   **VERDICT: Corrected.** Real backend write is **`POST /ui/alerts/type-preferences`**
+   with body `AlertTypePreferenceUpdate` = `{alert_type (req), enabled?, push?,
+   email?, sms?, in_app?}` (flat booleans; key `alert_type` not `category_id`).
+   **Source:** OpenAPI `POST /ui/alerts/type-preferences`
+   (op=`update_type_preferences_ui_alerts_type_preferences_post`) and schema
+   `components.schemas.AlertTypePreferenceUpdate` (openapi.pretty.json L4676-4746).
+3. **Claim:** The GET returns `{categories:[{id,title,description,channels:[{channel,enabled,available}]}]}`.
+   **VERDICT: Unverified-assumption.** OpenAPI declares `GET /ui/alerts/type-preferences`
+   response as `200:{}` (untyped). No `categories`/`title`/`description`/`available`
+   keys exist in any schema. **Source:** OpenAPI `GET /ui/alerts/type-preferences`
+   (op=`get_type_preferences…`, openapi.pretty.json L178501-178509, empty schema).
+4. **Claim:** The PATCH/POST `200` returns a "canonical category" for reconciliation.
+   **VERDICT: Unverified-assumption.** POST response is `200:{}` (untyped) in OpenAPI;
+   no documented body. Reconcile-by-re-GET is the safe fallback (added to §5/§11).
+   **Source:** OpenAPI `POST /ui/alerts/type-preferences` responses block (untyped).
+5. **Claim:** Each channel has a per-category `available` flag the UI honors (FR-2).
+   **VERDICT: Unverified-assumption.** No `available` field exists in
+   `AlertTypePreferenceUpdate` or related schemas; per-channel availability is not
+   backend-modeled. **Source:** schema `AlertTypePreferenceUpdate` (no `available`);
+   grep of openapi.pretty.json for `"available"` returns only unrelated commerce schemas.
+6. **Claim:** Web client mirrors this via `preferences.ts`. **VERDICT: Corrected.**
+   `preferences.ts` targets `/ui/settings/preferences` (theme/density only) and the
+   alerts prefs live in `alerts.ts` as per-channel POSTs taking **event-type
+   arrays** (not booleans), and the web app does not call `type-preferences` at all.
+   **Source:** `src/api/endpoints/preferences.ts: getPreferences/patchPreferences`
+   (L30-42); `src/api/endpoints/alerts.ts: setEmailPrefs/setSmsPrefs/setToastPrefs`
+   (L23-48).
+7. **Claim:** Auth is cookie-based session with `X-CSRF-Token` echo from `ui_csrf`.
+   **VERDICT: Corrected (incomplete).** CSRF-from-`ui_csrf` is correct, but the web
+   client ALSO sends `Authorization: Bearer <accessToken>` and optional
+   `X-IMPERSONATION-TOKEN`, and includes cookies via `credentials:"include"`;
+   `X-CSRF-Token` is sent on **all** requests, not just writes. **Source:**
+   `src/api/client.ts: api()` (L154-176) and `getCookie("ui_csrf")` (L168).
+8. **Claim:** 401 is handled by a single `POST /ui/session/refresh` retry.
+   **VERDICT: Verified.** **Source:** `src/api/client.ts: refreshSession()` (L121-130)
+   and the 401 handling block (L194-237); OpenAPI `POST /ui/session/refresh`
+   (op=`ui_session_refresh…`, openapi.index.txt L1847).
+9. **Claim:** CSRF is required on the write. **VERDICT: Verified (as sent header).**
+   The header is attached to the write; whether the server *rejects* a missing token
+   is not asserted by the client. **Source:** `src/api/client.ts` L168-171.
+10. **Claim:** FastAPI `detail` error shape is `string | [{msg}] | {code,...}`.
+    **VERDICT: Verified.** **Source:** `src/api/client.ts: normalizeErrorDetail`
+    (L66-102) and `mapAuthorizationError` (L34-64); 422 bodies use
+    `HTTPValidationError`/`ValidationError` (`detail:[{loc,msg,type}]`) in OpenAPI.
+11. **Claim:** `403 preference_locked` (code `preference_locked`) is a real org-policy error.
+    **VERDICT: Unverified-assumption.** The object-with-`code` error *shape* is real,
+    but `preference_locked` itself is not in the sources; observed codes are
+    `role_required*`, `geo_blocked`, `helpdesk_*`. **Source:** `mapAuthorizationError`
+    (src/api/client.ts L34-64) lists the actual codes; no `preference_locked` present.
+12. **Claim:** Network/offline maps to an error result (IOException-class). **VERDICT:
+    Verified (analogue).** Web client throws `ApiError(0, "Network error")` on fetch
+    failure; the Android core-network equivalent is an IOException → `ApiResult.Error`.
+    **Source:** `src/api/client.ts` catch block (L185-189).
+13. **Claim:** `POST_NOTIFICATIONS` runtime permission applies on API 33+ and
+    `Settings.ACTION_APP_NOTIFICATION_SETTINGS` exists on API 26+ (FR-6, §4).
+    **VERDICT: Verified (framework ref).** **Source:** Android docs —
+    https://developer.android.com/develop/ui/views/notifications/notification-permission
+    and https://developer.android.com/reference/android/provider/Settings#ACTION_APP_NOTIFICATION_SETTINGS .
+14. **Claim:** Material 3 `PullToRefreshBox` is the pull-to-refresh primitive (§4).
+    **VERDICT: Verified (framework ref).** **Source:**
+    https://developer.android.com/reference/kotlin/androidx/compose/material3/pulltorefresh/package-summary .
+15. **Claim:** Repository `NotificationPreferencesRepository` / DTOs come from AND-078.
+    **VERDICT: Unverified-assumption (upstream).** Internal upstream artifact; not
+    present in the provided reference sources. **Source:** none available — owned by AND-078.
+
+### Corrections made
+- **§1, §5, §6, §11, §13:** replaced the non-existent `PATCH /ui/preferences/notifications`
+  with the verified `POST /ui/alerts/type-preferences` (and noted `GET` equivalent).
+- **§5:** corrected verb (PATCH→POST), request body (`alert_type` + flat booleans
+  `push/email/sms/in_app/enabled`, no `category_id`/`channels`/`available`),
+  flagged GET and write response bodies as untyped/unverified, and added the
+  reconcile-by-re-GET fallback.
+- **§2 & §5:** corrected the auth description — not cookie-only; Bearer +
+  impersonation + cookies, and CSRF on every request (not just writes).
+- **§5:** flagged `preference_locked` as an unverified code; verified the three
+  `detail` shapes; noted some alerts endpoints use `ErrorEnvelope`.
+- **§11:** rewrote the MockWebServer round-trip assertion to target the real route/verb.
+- **§13 OQ-1:** marked partially resolved with the verified endpoint.
+
+### Open assumptions
+- **GET and write response shapes** for `/ui/alerts/type-preferences` (untyped
+  `{}` in OpenAPI) — cannot verify field names; AND-078/backend must confirm.
+- **Per-channel `available` flag (FR-2)** — not backend-modeled; UI gating source
+  (per-type vs account-capability, e.g. verified phone for SMS) is unresolved (OQ-2).
+- **`preference_locked` / org-policy lock (OQ-3)** — code not found in sources;
+  presence and HTTP status unverified.
+- **`category_id`/`channels` vs `alert_type`/flat-booleans mapping** — assumed to
+  live in AND-078's repository; the mapping layer itself is not in the references.
+- **`NotificationPreferencesRepository`, DTOs, DataStore cache** — upstream AND-078
+  artifacts, not in the provided sources.
+- **`X-SESSION-ID` / `user_sub` query+header params** appear on the alerts prefs
+  endpoints in OpenAPI; whether the Android core-network stack supplies them (vs.
+  cookie/Bearer) is an upstream/AND-078 detail, unverified here.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = JVM unit/Robolectric (local, no device); **emu35** =
+headless emulator AVD `test35` (x86_64, API 35) in CI; **deviceA15** = physical
+Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android 14 / API 34, arm64-v8a).
+Most cases are device-agnostic and run on emu35 in CI; cases that exercise real OS
+notification-permission behavior, ON_RESUME permission drift, or the system-settings
+deep-link SHOULD run on **deviceA15** to validate real OEM (Samsung One UI) behavior
+in addition to emu35.
+
+- **TC-AND-080-01 — Happy path: load + render categories**
+  - Type: contract/MockWebServer (+ Robolectric). Target: JVM.
+  - Preconditions: MockWebServer returns a 200 preferences payload with 2
+    categories, each exposing push/email/sms.
+  - Steps: create ViewModel → collect `uiState` until `Ready`.
+  - Expected: `Ready` with both categories; each renders its channel toggles;
+    unavailable channels (per OQ-2 mapping) are omitted, not disabled.
+  - Traces: AC-1.
+
+- **TC-AND-080-02 — Optimistic toggle + debounced/coalesced single write**
+  - Type: unit (Turbine + virtual-time `TestDispatcher` + recording fake repo). Target: JVM.
+  - Preconditions: `Ready` state loaded; debounce = 600 ms.
+  - Steps: call `onToggle(cat, SMS, true/false/true)` three times rapidly within
+    the debounce window → advance virtual time past 600 ms.
+  - Expected: UI flips immediately on first toggle (optimistic); exactly **one**
+    repository write occurs carrying the final value (`sms=true`); superseded
+    saves are cancelled.
+  - Traces: AC-2.
+
+- **TC-AND-080-03 — Persistence round-trip (headline) over the wire**
+  - Type: integration/MockWebServer. Target: emu35 (instrumented).
+  - Preconditions: server accepts the write and serves the new value on re-GET.
+  - Steps: load → toggle SMS on → capture outbound request → server responds →
+    recreate ViewModel (simulate reload) → collect `uiState`.
+  - Expected: outbound request is **`POST /ui/alerts/type-preferences`** with an
+    `AlertTypePreferenceUpdate`-shaped body where `sms=true`, and header
+    `X-CSRF-Token` is present; after reload the toggle re-hydrates to `true`.
+  - Traces: AC-2, AC-3.
+
+- **TC-AND-080-04 — CSRF header present on write**
+  - Type: contract/MockWebServer. Target: JVM.
+  - Preconditions: `ui_csrf` cookie seeded in the cookie jar.
+  - Steps: perform a toggle write → inspect `RecordedRequest` headers.
+  - Expected: `X-CSRF-Token` header present and equal to the cookie value.
+  - Traces: AC-3.
+
+- **TC-AND-080-05 — Save failure: revert + inline error + Retry succeeds**
+  - Type: unit (fake repo returning `ApiResult.Error` then success). Target: JVM.
+  - Preconditions: `Ready`; first write fails (e.g. 422 `{detail:[{msg:"channel
+    unavailable"}]}`), second succeeds.
+  - Steps: toggle → save fails → assert state → `onRetrySave(cat)` → save succeeds.
+  - Expected: on failure the toggle reverts to last persisted value, `saving`
+    clears, `transientError` is the mapped `detail` message, inline Retry shown;
+    Retry re-issues the write and the value sticks.
+  - Traces: AC-4.
+
+- **TC-AND-080-06 — Error-shape mapping (string | [{msg}] | {code})**
+  - Type: contract/MockWebServer. Target: JVM.
+  - Preconditions: parametrized server responses: `{"detail":"Notification
+    category not found"}` (404), `{"detail":[{"loc":[...],"msg":"channel
+    unavailable"}]}` (422), `{"detail":{"code":"role_required","message":"…"}}` (403).
+  - Steps: trigger a write per variant → observe `transientError`/state.
+  - Expected: each `detail` shape maps to a non-empty user-facing message; the
+    object form surfaces its message; a 403 code is treated as non-retryable.
+    (Note: `preference_locked` is unverified — test uses a verified code; see §16.)
+  - Traces: AC-4.
+
+- **TC-AND-080-07 — Flaky dev host / offline: stale cache vs hard error**
+  - Type: contract/MockWebServer. Target: JVM.
+  - Preconditions: variant A — cache present, live GET fails (timeout/IOException);
+    variant B — no cache, GET fails.
+  - Steps: enter screen with each variant.
+  - Expected: A → `Ready(isStale=true)` with dismissible stale banner showing
+    cached values; B → `Error(message)` full-screen Retry; on flaky write,
+    no silent auto-retry occurs (only user Retry re-issues).
+  - Traces: AC-4, AC-6.
+
+- **TC-AND-080-08 — Pull-to-refresh and empty state**
+  - Type: Compose-UI (`createAndroidComposeRule`). Target: emu35.
+  - Preconditions: initial `Ready`; refresh returns updated data; separate run
+    returns zero categories.
+  - Steps: trigger `PullToRefreshBox` refresh → assert refreshed; load empty set.
+  - Expected: refresh re-fetches and updates rows; `isRefreshing` toggles;
+    zero-category response renders the explanatory empty state, not a blank screen.
+  - Traces: AC-6.
+
+- **TC-AND-080-09 — State survives rotation and process death**
+  - Type: instrumented. Target: emu35.
+  - Preconditions: a toggle is optimistically applied but its write not yet confirmed.
+  - Steps: rotate device; then simulate process death + restore via
+    `SavedStateHandle` (`pending_edits`).
+  - Expected: after rotation the working model is intact; after restore the pending
+    edit is replayed through the save pipeline and re-attempted.
+  - Traces: AC-7.
+
+- **TC-AND-080-10 — OS push-off gating + system-settings deep-link (real OS)**
+  - Type: instrumented/e2e. Target: **deviceA15** (MUST run on physical device;
+    also smoke on emu35). Rationale: real `POST_NOTIFICATIONS` denial and Samsung
+    One UI app-notification-settings screen behavior differ from a stock emulator.
+  - Preconditions: app's notifications disabled at OS level (API 33+ permission off).
+  - Steps: open screen → observe push column → tap "Turn on in system settings".
+  - Expected: push toggles render disabled/`osBlocked=true` with the inline action;
+    email/SMS remain functional; the action fires
+    `Settings.ACTION_APP_NOTIFICATION_SETTINGS` and lands on the app's own settings;
+    on `ON_RESUME` after re-enabling, push columns re-enable.
+  - Traces: AC-5.
+
+- **TC-AND-080-11 — Security: CSRF & no PII in logs/cache**
+  - Type: unit + contract. Target: JVM.
+  - Preconditions: Timber test tree captures logs; cache inspected.
+  - Steps: perform load + toggle + a failing save.
+  - Expected: write carries `X-CSRF-Token` (cannot be bypassed from UI);
+    no full preference payloads or contact endpoints (phone/email values) appear in
+    any log line; DataStore cache contains only category ids + booleans.
+  - Traces: AC-3, AC-8 (security posture, §8/§10).
+
+- **TC-AND-080-12 — Accessibility: TalkBack semantics + live regions**
+  - Type: Compose-UI (semantics assertions). Target: emu35 (full TalkBack pass on
+    **deviceA15** as manual confirmation).
+  - Preconditions: `Ready` with at least one category.
+  - Steps: assert switch semantics; toggle and observe announcements; show error
+    and stale banner.
+  - Expected: each switch has `role=Switch`, a contentDescription including
+    category + channel ("Security alerts, push notifications"), and on/off
+    toggle state; errors announce `Assertive`, "Saved" announces `Polite`; headers
+    have `heading()`; touch targets ≥ 48dp; strings sourced from `strings.xml`.
+  - Traces: AC-8.
+
+- **TC-AND-080-13 — Screenshot/state coverage (Roborazzi)**
+  - Type: unit (Roborazzi). Target: JVM.
+  - Preconditions: deterministic state fixtures.
+  - Steps: render Ready, Loading, Error, Empty, Stale, OS-blocked.
+  - Expected: golden screenshots match for each state; CI fails on diff.
+  - Traces: AC-9.
+
+- **TC-AND-080-14 — ViewModel coverage gate**
+  - Type: unit (Jacoco/Kover). Target: JVM.
+  - Preconditions: full unit suite (TC-02/05/06/07/09 etc.) runs.
+  - Steps: run coverage report on `NotificationPreferencesViewModel`.
+  - Expected: line coverage ≥ 85%; CI gate enforced.
+  - Traces: AC-9.
+
+### Coverage matrix (AC → covering TCs)
+
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 — render categories, omit unavailable channels | TC-01 |
+| AC-2 — optimistic toggle + debounced/coalesced write | TC-02, TC-03 |
+| AC-3 — persistence proven incl. `X-CSRF-Token` | TC-03, TC-04, TC-11 |
+| AC-4 — save failure revert + inline Retry | TC-05, TC-06, TC-07 |
+| AC-5 — OS push-off gating + deep-link | TC-10 |
+| AC-6 — pull-to-refresh, stale banner, empty state | TC-07, TC-08 |
+| AC-7 — survives rotation + process death | TC-09 |
+| AC-8 — TalkBack semantics + externalized strings | TC-11, TC-12 |
+| AC-9 — unit + Compose + screenshot pass, coverage ≥ 85% | TC-13, TC-14 (all unit/Compose TCs feed coverage) |

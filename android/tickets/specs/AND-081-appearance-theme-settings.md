@@ -5,7 +5,8 @@ milestone: M2
 epic: E11
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-019]
 blocks: []
 ---
@@ -35,9 +36,28 @@ override into `darkTheme`." **This is that ticket.** AND-081 introduces:
 3. An `AppearanceSettingsScreen` (Compose + Material 3) with a
    `AppearanceSettingsViewModel` for reading and mutating the preference.
 
-The goal is strictly local on-device preference plumbing and one screen. It does
-**not** sync the theme to the backend (no `/ui/preferences` write for theme),
-does not add custom palettes/fonts, and does not modify the AND-019 color tokens.
+The goal is strictly local on-device preference plumbing and one screen. As a
+**deliberate scope decision**, AND-081 does **not** sync the theme to the
+backend, does not add custom palettes/fonts, and does not modify the AND-019
+color tokens.
+
+> **Correction (review 2026-06-06):** an earlier draft claimed there is "no
+> `/ui/preferences` write for theme" as if no such contract existed. That is
+> factually wrong about the platform. The backend **does** expose a theme
+> preference contract and the **web client actively uses it**: the web app
+> persists the `system|light|dark` choice both to `localStorage` (zustand
+> `persist`, for instant application) **and** to the server via a debounced,
+> fire-and-forget `PATCH /ui/settings/preferences` with body field `theme`
+> (`PreferencesPatchReq.theme`, enum `system|light|dark`), and re-hydrates it on
+> startup via `GET /ui/settings/preferences` (`{ preferences: { theme, ... } }`).
+> See `src/stores/uiStore.ts: setTheme/loadServerPreferences` and
+> `src/api/endpoints/preferences.ts`. AND-081 is therefore *choosing* local-only
+> behavior (offline-instant, no dependency on the unreliable dev backend), **not**
+> reflecting an absence of a backend contract. The "dynamic color (Material You)"
+> flag genuinely has **no** backend field — it is an Android-only concept; the
+> web equivalent is `accent_color`/`custom_accent_hex` via the same endpoint and
+> the separate `/ui/theme` customization API (PLATFORM-013). A future roaming
+> ticket (see §13) could map `mode` onto `PreferencesPatchReq.theme`.
 
 ## 2. Context & References
 
@@ -57,8 +77,16 @@ does not add custom palettes/fonts, and does not modify the AND-019 color tokens
 - **Stack:** Kotlin 2.0.21, Jetpack Compose + Material 3, Hilt DI (KSP),
   Coroutines/Flow, **DataStore Preferences** for persistence, single-Activity
   Navigation-Compose. minSdk 24, compileSdk/targetSdk 35, JDK 17, AGP 8.7.3.
-- **Web reference:** `frontend/` has its own appearance handling; there is no
-  parity requirement and no shared backend contract for the theme value.
+- **Web reference:** the web client handles appearance in
+  `src/pages/settings/Appearance.tsx` (three-card Light/Dark/System picker) +
+  `src/components/ThemeProvider.tsx` (applies the `dark` class; for `system` it
+  uses `window.matchMedia("(prefers-color-scheme: dark)")`). There is **no UI
+  parity requirement**. There *is*, however, a shared backend contract for the
+  theme value (corrected from an earlier draft): the web client syncs `theme`
+  via `PATCH /ui/settings/preferences` and loads it via
+  `GET /ui/settings/preferences`. AND-081 intentionally does not consume that
+  contract (local-only by design); the contract is documented here so the
+  decision is explicit and a later roaming ticket can pick it up.
 - **Dynamic color availability:** Android 12+ (API 31+) only; gated identically
   to AND-019. On API 24–30 the dynamic-color toggle is hidden/disabled.
 
@@ -251,17 +279,36 @@ row uses `Modifier.toggleable(role = Role.Switch)`. Labels are string resources
 
 ## 5. API Contract
 
-**Not applicable — no network contract.** AND-081 stores the theme preference
-**device-locally in DataStore** and makes no FastAPI calls. There is no
-`/ui/...` request or response associated with this ticket; cookie/CSRF/refresh
-plumbing (AND-011/012/013) is untouched.
+**No network contract is *exercised* by this ticket — by design.** AND-081
+stores the theme preference **device-locally in DataStore** and makes **no**
+FastAPI calls. This is a scope decision, not an absence of a contract.
 
-Server-synced user preferences are owned by **AND-078** (Preferences API DTOs).
-If product later wants theme to roam across devices, a follow-up ticket would map
-this preference onto the AND-078 preferences payload; that is explicitly out of
-scope here, and theme is deliberately kept local to guarantee instant offline
-application (the dev backend at `http://18.222.237.167:8000` is unreliable and
-must never block applying a theme).
+For accuracy, the relevant backend contract that exists but is **deliberately
+not used** here is:
+
+| Method | Path | Req schema | Resp (200) | Notes |
+|--------|------|-----------|-----------|-------|
+| `GET`  | `/ui/settings/preferences` | — | `{ preferences: UiPreferences }` (untyped `200:` in OpenAPI index; web types it via `UiPreferences`) | reads `theme` etc. |
+| `PATCH`| `/ui/settings/preferences` | `PreferencesPatchReq` (all fields optional; `theme` enum `system\|light\|dark`) | `200:` (no body schema) | web sends `{ theme }`, debounced 500 ms, fire-and-forget |
+
+There is also a separate per-user **theme customization** API (PLATFORM-013):
+`GET/PUT/PATCH/DELETE /ui/theme` with `ThemeConfigResponse`/`ThemeConfigPatchReq`
+(accent palette, etc.) — likewise out of scope for AND-081.
+
+If this ticket *did* call the backend, it would go through the standard transport
+(AND-011/012/013): `Authorization: Bearer` + cookies (`credentials: include`),
+CSRF header **`X-CSRF-Token`** sourced from the **`ui_csrf`** cookie on non-GET
+requests, and a single automatic refresh via `POST /ui/session/refresh` on 401
+(verified in `src/api/client.ts`). None of that plumbing is touched here because
+no request is made.
+
+Server-synced user preferences are owned by **AND-078** (Preferences API DTOs),
+which wraps exactly the `/ui/settings/preferences` contract above. If product
+later wants theme to roam across devices, a follow-up ticket would map this
+preference onto the AND-078 payload (`PreferencesPatchReq.theme`); that is
+explicitly out of scope here, and theme is deliberately kept local to guarantee
+instant offline application (the dev backend at `http://18.222.237.167:8000` is
+unreliable and must never block applying a theme).
 
 The only "contract" this ticket exposes is its Kotlin surface:
 `ThemePreferencesRepository.preferences: Flow<ThemePreferences>`,
@@ -477,3 +524,281 @@ flow from a fresh repository instance over the same DataStore file.
   telemetry abstraction; no PII logged.
 - Brief KDoc on `ThemePreferencesRepository`, `ThemeMode`, and the app-shell
   resolution helper documenting defaults and the API-31 dynamic-color gate.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **"Web persists theme locally for instant application."** VERDICT: **Verified.**
+   SOURCE: `src/stores/uiStore.ts` — `useUiStore` is wrapped in zustand
+   `persist({ name: "ui-store", partialize: … theme … })`; `setTheme` calls
+   `set({ theme })` immediately.
+2. **"Web ALSO syncs the theme choice to the backend."** VERDICT: **Corrected**
+   (the spec originally claimed no `/ui/preferences` write for theme / no shared
+   backend contract). SOURCE: `src/stores/uiStore.ts: setTheme` →
+   `debouncedSyncToServer({ theme })` → `src/api/endpoints/preferences.ts:
+   patchPreferences` → `PATCH /ui/settings/preferences`.
+3. **Backend theme contract path/method.** VERDICT: **Verified.** SOURCE: OpenAPI
+   `GET /ui/settings/preferences` (op `ui_get_preferences_…`) and
+   `PATCH /ui/settings/preferences` (op `ui_update_preferences_…`, req
+   `PreferencesPatchReq`).
+4. **`PreferencesPatchReq.theme` enum is exactly `system|light|dark`.** VERDICT:
+   **Verified.** SOURCE: `components.schemas.PreferencesPatchReq.theme.anyOf[0].enum`
+   in `openapi.pretty.json` (= `["system","light","dark"]`); mirrored in
+   `src/api/endpoints/preferences.ts: UiPreferences.theme`.
+5. **`GET /ui/settings/preferences` response shape `{ preferences: {...} }`.**
+   VERDICT: **Verified (frontend) / partially Unverified (OpenAPI).** SOURCE:
+   `src/api/endpoints/preferences.ts: getPreferences` reads
+   `resp.preferences`. The OpenAPI index lists the 200 response as empty
+   (`resp=200:` with no schema), so the wrapper key is verified only from the
+   frontend, not the server schema.
+6. **"Dynamic color (Material You) has no backend field."** VERDICT: **Verified.**
+   SOURCE: `PreferencesPatchReq` fields are `theme, sidebar_collapsed,
+   accent_color, custom_accent_hex, font_size, density, high_contrast`
+   (openapi.pretty.json) — no Material-You / dynamic-color field; the web colour
+   concept is `accent_color`/`custom_accent_hex` instead.
+7. **Web "system" mode follows OS via prefers-color-scheme.** VERDICT:
+   **Verified.** SOURCE: `src/components/ThemeProvider.tsx` —
+   `window.matchMedia("(prefers-color-scheme: dark)")` + `change` listener for
+   `theme === "system"`. (Android analogue `isSystemInDarkTheme()` is the correct
+   parallel — framework ref:
+   https://developer.android.com/develop/ui/compose/designsystems/material3#dynamic.)
+8. **CSRF/auth transport (if used): `X-CSRF-Token` from `ui_csrf` cookie; Bearer +
+   cookies; one refresh on 401.** VERDICT: **Verified.** SOURCE: `src/api/client.ts`
+   — `getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`;
+   `Authorization: Bearer`; `credentials: "include"`; `refreshSession()` →
+   `POST /ui/session/refresh`. (Confirms the §5 statement; this ticket makes no
+   such call.)
+9. **A separate per-user theme-customization API exists (`/ui/theme`).** VERDICT:
+   **Verified.** SOURCE: OpenAPI `GET/PUT/PATCH/DELETE /ui/theme`
+   (`ThemeConfigResponse`, `ThemeConfigPatchReq`); `src/api/endpoints/themeCustomization.ts`.
+   Out of scope for AND-081 (noted for accuracy).
+10. **Web error/validation envelope.** VERDICT: **Verified.** SOURCE: OpenAPI
+    `422:HTTPValidationError` on the preferences endpoints; non-422 errors return
+    `detail` (string | array of `{msg}` | object), normalized in
+    `src/api/client.ts: normalizeErrorDetail`. (Most platform endpoints also use
+    `ErrorEnvelope`, but the `/ui/settings/preferences` ops list only
+    `HTTPValidationError`.)
+11. **DataStore Preferences for on-device persistence; `.catch(IOException →
+    emptyPreferences())`; main-thread-safe.** VERDICT: **Unverified-assumption
+    (framework ref).** No Android source tree is in the provided references; this
+    is a standard pattern. Framework ref:
+    https://developer.android.com/topic/libraries/architecture/datastore.
+12. **AND-019 `TestLogonTheme(darkTheme, dynamicColor, content)` exists and dark
+    background == `Color(0xFF1A1C1E)`.** VERDICT: **Unverified-assumption.** AND-019
+    source is not in the provided references; the signature and the exact hex are
+    taken from the spec's own claim about a sibling ticket and must be confirmed
+    against the actual AND-019 code before the §11 colour assertion is written.
+13. **Dynamic color requires API 31+ (`Build.VERSION_CODES.S`).** VERDICT:
+    **Verified (framework ref).** SOURCE:
+    https://developer.android.com/develop/ui/compose/designsystems/material3#dynamic
+    ("available on Android 12 and above").
+14. **Splash hold via `installSplashScreen()` /
+    `setKeepOnScreenCondition`.** VERDICT: **Unverified-assumption (framework
+    ref).** Standard `androidx.core:core-splashscreen` API; not verifiable from
+    the provided sources. Framework ref:
+    https://developer.android.com/develop/ui/views/launch/splash-screen.
+
+### Corrections made
+
+- **§1, §2, §5 — backend contract for theme.** Removed/qualified the false claim
+  that "there is no `/ui/preferences` write for theme" and "no shared backend
+  contract for the theme value." The contract exists
+  (`PATCH/GET /ui/settings/preferences`, `PreferencesPatchReq.theme`) and the web
+  client uses it (local + debounced server sync). Reframed AND-081 as a
+  *deliberate local-only scope decision*, and documented the real contract and
+  transport (`X-CSRF-Token` / `ui_csrf` / `POST /ui/session/refresh`) so the
+  decision is explicit and a roaming follow-up can adopt it.
+- **§2 — web reference detail.** Replaced the vague "frontend has its own
+  appearance handling" with the actual files and mechanism
+  (`Appearance.tsx`, `ThemeProvider.tsx`, `matchMedia`).
+- **§5 — CSRF header name.** Stated explicitly as `X-CSRF-Token` from the
+  `ui_csrf` cookie (verified in `client.ts`), in case the ticket is ever
+  extended to call the backend.
+
+### Open assumptions
+
+- **AND-019 internals (signature + dark hex `0xFF1A1C1E`).** Not in provided
+  references; confirm against AND-019 source before relying on the §11 colour
+  assertion (Citation 12).
+- **Android-side library behavior** (DataStore `IOException` fallback,
+  splash-screen keep-on-screen, Hilt single-DataStore provider, Material You
+  gating constants) — standard framework patterns, not verifiable from the
+  backend/frontend sources given (Citations 11, 13, 14).
+- **`GET /ui/settings/preferences` exact response schema.** OpenAPI lists an
+  empty 200 body; the `{ preferences: {...} }` envelope is known only from the
+  frontend client (Citation 5). Irrelevant to AND-081 (no call made) but worth
+  noting for the roaming follow-up.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-081-NN`. "Traces" link to §14 acceptance criteria (AC-1 … AC-9).
+Target legend per the available CI/dev targets: **JVM/Robolectric** (local, no
+device), **emulator test35** (API 35 x86_64 headless AVD), **physical A15**
+(Samsung SM-A156U, API 34 arm64). Theme/persistence logic is device-independent,
+so most cases run JVM/Robolectric; the dynamic-color/Material-You and
+ABI/API-version cases must run on real hardware/emulator as noted.
+
+- **TC-AND-081-01 — Repository default when store empty.**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric.
+  Preconditions: fresh temp `DataStore<Preferences>`, no keys written.
+  Steps: collect `repo.preferences.first()`.
+  Expected: `ThemePreferences(mode = SYSTEM, dynamicColor = true)`.
+  Traces: AC-4.
+
+- **TC-AND-081-02 — setMode persists and emits.**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric.
+  Preconditions: temp DataStore.
+  Steps: `repo.setMode(DARK)`; then read `repo.preferences.first().mode`; then
+  construct a *fresh* repository over the *same* file and read again.
+  Expected: both reads return `DARK` (proves emit + cross-instance persistence).
+  Traces: AC-3.
+
+- **TC-AND-081-03 — setDynamicColor persists.**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric.
+  Preconditions: temp DataStore.
+  Steps: `repo.setDynamicColor(false)`; read back via a fresh repo instance.
+  Expected: `dynamicColor == false` after restart-equivalent re-read.
+  Traces: AC-3.
+
+- **TC-AND-081-04 — Corrupt/unknown mode string falls back to SYSTEM.**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric.
+  Preconditions: temp DataStore.
+  Steps: write raw `appearance_theme_mode = "PLAID"`; collect
+  `repo.preferences.first()`.
+  Expected: `mode == SYSTEM` (no crash; `runCatching` fallback).
+  Traces: AC-4 (defaults/resilience).
+
+- **TC-AND-081-05 — DataStore read IOException yields defaults (offline/flaky
+  store path).**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric.
+  Preconditions: a DataStore whose `data` flow throws `IOException` (fake/throwing
+  source).
+  Steps: collect `repo.preferences.first()`.
+  Expected: `.catch` emits `emptyPreferences()` → `ThemePreferences(SYSTEM,
+  true)`; flow does not propagate the exception. (Non-IO exceptions, by contrast,
+  must rethrow — assert with a separate throwing source.)
+  Traces: AC-4.
+
+- **TC-AND-081-06 — ViewModel mirrors repo and writes through.**
+  Type: unit (JVM/Robolectric). Target: JVM/Robolectric.
+  Preconditions: `AppearanceSettingsViewModel` over a temp-DataStore repo.
+  Steps: collect `uiState`; call `onModeSelected(DARK)` and
+  `onDynamicColorChanged(false)`; re-read `uiState`.
+  Expected: `uiState` transitions to `mode=DARK, dynamicColor=false`; repo
+  reflects the same (no optimistic-only state).
+  Traces: AC-6, AC-2.
+
+- **TC-AND-081-07 — `dynamicColorSupported` matches SDK_INT (gating).**
+  Type: unit (Robolectric SDK config). Target: JVM/Robolectric (parameterize
+  `@Config(sdk = [30, 31])`).
+  Preconditions: VM constructed under each configured SDK.
+  Steps: read `viewModel.dynamicColorSupported`.
+  Expected: `false` at API 30, `true` at API 31.
+  Traces: AC-5.
+
+- **TC-AND-081-08 — Resolution helper maps preference → theme inputs.**
+  Type: unit (Robolectric for `isSystemInDarkTheme`/SDK). Target: JVM/Robolectric.
+  Preconditions: drive each `ThemeMode` and both `dynamicColor` values; vary
+  OS night-mode and SDK via `@Config`.
+  Steps: invoke the AppRoot resolution logic.
+  Expected: `LIGHT→darkTheme=false`, `DARK→true`, `SYSTEM→isSystemInDarkTheme()`;
+  `dynamicColor` is `pref.dynamicColor && SDK_INT>=31` (so forced `false` at API
+  ≤30 even when the stored flag is `true`).
+  Traces: AC-5.
+
+- **TC-AND-081-09 — Compose screen renders and reflects persisted state.**
+  Type: Compose-UI (Robolectric). Target: JVM/Robolectric (`createComposeRule`).
+  Preconditions: repo seeded `mode=DARK` on an API-31 config.
+  Steps: render `AppearanceSettingsScreen`; inspect rows.
+  Expected: three radio rows present, "Dark" `assertIsSelected()`, others not;
+  dynamic-color switch present.
+  Traces: AC-1, AC-6.
+
+- **TC-AND-081-10 — Tapping a mode / toggling dynamic color updates UI + store.**
+  Type: Compose-UI (Robolectric). Target: JVM/Robolectric.
+  Preconditions: temp-DataStore repo, default state.
+  Steps: tap "Dark" row, then toggle dynamic-color switch.
+  Expected: "Dark" becomes `assertIsSelected()`; switch flips
+  `assertIsOn()`/`assertIsOff()`; underlying repo values change accordingly.
+  Traces: AC-1, AC-2, AC-6.
+
+- **TC-AND-081-11 — Immediate application end-to-end (no restart).**
+  Type: integration/Compose-UI (Robolectric). Target: JVM/Robolectric.
+  Preconditions: host `AppRoot` with a real temp-DataStore repo at default.
+  Steps: capture `MaterialTheme.colorScheme.background`; write `DARK`;
+  recompose; re-read background.
+  Expected: background changes to the AND-019 dark value (spec asserts
+  `Color(0xFF1A1C1E)` — confirm exact hex against AND-019 source first, see §16
+  Citation 12) with no Activity restart.
+  Traces: AC-2, AC-8.
+
+- **TC-AND-081-12 — Dynamic-color row hidden below API 31; static schemes used.**
+  Type: Compose-UI (Robolectric SDK config). Target: JVM/Robolectric
+  (`@Config(sdk = [30])`), then confirmed on **physical A15 (API 34)** for the
+  *enabled* path.
+  Preconditions: render screen at API 30 then on the device at API 34.
+  Steps: API 30 — assert the dynamic-color row does **not** exist; A15 — assert
+  it exists and toggling it visibly changes the palette (Material You).
+  Expected: row absent + static scheme at API ≤30; present + tonal-palette effect
+  on the device. MUST run on the physical device for the real Material-You render.
+  Traces: AC-1, AC-5.
+
+- **TC-AND-081-13 — No-flash cold start.**
+  Type: instrumented/e2e. Target: **physical A15 (API 34)** (real cold-start
+  timing/splash); spot-check on emulator test35 (API 35).
+  Preconditions: persist `mode=DARK`; force-stop the app; relaunch cold.
+  Steps: launch and capture the first rendered frame (screenshot/UiAutomator or
+  trace).
+  Expected: first content frame is already dark — no light→dark flash; splash is
+  held until first `ThemePreferences` emission. Physical-device run is
+  authoritative for real timing; emulator is a fast regression check.
+  Traces: AC-7.
+
+- **TC-AND-081-14 — No network traffic on theme change (local-only guarantee).**
+  Type: contract/MockWebServer (negative). Target: JVM/Robolectric +
+  MockWebServer.
+  Preconditions: app wired with a MockWebServer the HTTP client *would* hit;
+  enqueue a sentinel response.
+  Steps: change mode and toggle dynamic color several times.
+  Expected: MockWebServer records **zero** requests (no
+  `PATCH /ui/settings/preferences`, no `/ui/theme`), proving the device-local
+  design and that the unreliable dev backend can never block theming.
+  Traces: AC-9.
+
+- **TC-AND-081-15 — Accessibility semantics & tap targets.**
+  Type: Compose-UI / instrumented accessibility. Target: JVM/Robolectric for
+  roles; **physical A15** for a TalkBack pass.
+  Preconditions: render the screen.
+  Steps: assert each mode row exposes `Role.RadioButton` within a
+  `selectableGroup` and selected-state semantics; the dynamic-color row exposes
+  `Role.Switch` and checked-state; all rows report ≥48.dp height; run one TalkBack
+  sweep on the device confirming role + state announcements and no unlabeled
+  controls.
+  Expected: correct roles/states announced; tap targets ≥48.dp; all labels from
+  string resources (no hard-coded text).
+  Traces: AC-1, AC-9.
+
+- **TC-AND-081-16 — Private-storage / no-leak check (security).**
+  Type: instrumented. Target: **physical A15 (API 34)**.
+  Preconditions: set a non-default theme so the prefs file is written.
+  Steps: locate the DataStore file under the app's private dir; check it is in
+  app-sandboxed storage (not world-readable) and contains only the enum + boolean
+  (no credentials/PII); confirm via traffic capture that nothing is transmitted.
+  Expected: file is app-private with `MODE_PRIVATE`-equivalent perms; contents are
+  appearance-only; zero network egress. No new permissions in the merged manifest.
+  Traces: AC-9.
+
+### Coverage matrix (§14 AC → test cases)
+
+| AC | Acceptance criterion (abridged) | Covered by |
+|----|--------------------------------|-----------|
+| AC-1 | Appearance screen with 3-way select + (API31+) dynamic-color switch | TC-09, TC-10, TC-12, TC-15 |
+| AC-2 | Selection re-themes whole app immediately, no restart | TC-06, TC-10, TC-11 |
+| AC-3 | Persists across process death / fresh repo instance | TC-02, TC-03 |
+| AC-4 | First-run defaults SYSTEM + dynamic-on; empty/unreadable → defaults | TC-01, TC-04, TC-05 |
+| AC-5 | `darkTheme`/`dynamicColor` derived from pref; SYSTEM→OS; dynamic gated ≥31 | TC-07, TC-08, TC-12 |
+| AC-6 | Screen always reflects persisted state (incl. external change) | TC-06, TC-09, TC-10 |
+| AC-7 | No wrong-theme flash on cold start | TC-13 |
+| AC-8 | Repo/VM/Compose tests pass incl. write-DARK→background hex assertion | TC-11 (plus TC-01..TC-10 as the suite) |
+| AC-9 | No network calls; no token/string/color edits; private storage | TC-14, TC-15, TC-16 |

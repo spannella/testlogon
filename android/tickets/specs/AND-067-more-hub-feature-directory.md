@@ -5,7 +5,8 @@ milestone: M2
 epic: E09
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-024]
 blocks: []
 ---
@@ -27,8 +28,8 @@ This is deliberately scoped to the **directory and its gating logic**, not the d
 - **Project stack:** Kotlin 2.0.21, Jetpack Compose + Material 3, single-Activity Navigation-Compose, Hilt (KSP), Coroutines/Flow. minSdk 24, compileSdk/targetSdk 35, JDK 17, AGP 8.7.3, Gradle 8.9.
 - **Module layering:** `app -> feature-* -> core-*`. This ticket introduces `feature-more` and uses `core-ui`, `core-model`, `core-data` (for capability/entitlement flags) and `core-testing`.
 - **Namespace:** `com.testlogon.android` (e.g., `com.testlogon.android.feature.more`).
-- **Web reference:** the `frontend/` React app's "More"/settings index and route table (`frontend/src/api/types.ts` for any capability flags) inform which entries exist and their labels. The hub mirrors that catalog but is Android-native and route-driven.
-- **Backend:** No dedicated endpoint for the hub. The only server interaction is reading user capability/entitlement signals already surfaced by `GET /ui/me` (consumed via `core-data` from AND's session work). See §5.
+- **Web reference (verified):** the web client implements an equivalent "More" surface in `src/components/layout/MobileNav.tsx`. There, a bottom-nav `More` button opens a Material `Sheet` that renders a static `MORE_LINKS` catalog (label + i18nKey + path + icon) in a 4-column grid; each link calls `navigate(link.path)`. The catalog is gated by a `.filter(...)` predicate that hides links based on (a) feature flags (`isBroadcastNavigationEnabled()`, `isVncRemoteDesktopEnabled()` from `src/lib/featureFlags`) and (b) JWT-derived roles (`canSeeRootRoleManagement()`, `canAccessModerationBoard()` from `src/lib/adminCapabilities`). NOTE: the web app uses **hide-only** gating (no disabled/greyed state); the `Disabled(reason)` state in this spec is a deliberate Android-native enhancement, not a mirror of web behavior. The Android hub mirrors the catalog-of-descriptors + predicate-filter pattern but is a dedicated route rather than a sheet.
+- **Backend:** No dedicated endpoint for the hub. The hub makes no network calls of its own. Capability/entitlement gating on web is driven by the **JWT access-token claims** (`role`, `admin_profile.scopes`), parsed client-side (`getRoleFromAccessToken` / `getAdminProfileFromAccessToken` in `src/lib/adminCapabilities.ts`), plus local feature flags — NOT by fields in `GET /ui/me`. See §5 for the corrected source-of-truth.
 
 ## 3. Functional Requirements
 
@@ -96,7 +97,7 @@ sealed interface EntryAvailability {
 }
 ```
 
-`Capability` (server-driven, from `GET /ui/me`) and `FeatureFlag` (local/remote toggle from `core-data`) are existing enums; if a flag/capability type is not yet available, the predicate defaults to "built but `Disabled(Coming soon)`".
+`Capability` (derived from the **decoded JWT access-token claims** — `role` / `admin_profile.scopes` — mirroring web `src/lib/adminCapabilities.ts`, NOT from `/ui/me` body fields) and `FeatureFlag` (local/remote toggle from `core-data`) are existing enums; if a flag/capability type is not yet available, the predicate defaults to "built but `Disabled(Coming soon)`".
 
 ### 4.3 Availability resolution
 
@@ -105,7 +106,7 @@ A pure resolver, unit-testable in isolation:
 ```kotlin
 class MoreAvailabilityResolver @Inject constructor(
     private val routeRegistry: RouteRegistry,        // known registered routes
-    private val capabilities: CapabilityProvider,    // from /ui/me snapshot
+    private val capabilities: CapabilityProvider,    // from decoded JWT access-token claims (role/admin_profile.scopes), not /ui/me body
     private val flags: FeatureFlagProvider,
 ) {
     fun resolve(entry: MoreEntry): EntryAvailability {
@@ -169,20 +170,26 @@ fun NavGraphBuilder.moreScreen(onNavigate: (String) -> Unit) {
 
 ## 5. API Contract
 
-This ticket has **no dedicated backend endpoint**. The hub is a local routing surface. The only server data consumed is the existing user session snapshot used for capability gating:
+This ticket has **no dedicated backend endpoint**. The hub is a local routing surface and makes **no network calls of its own**.
 
-- `GET /ui/me` (owned by the session/auth tickets; cookie-based session, `X-CSRF-Token` echoed from `ui_csrf` cookie). Relevant fields are read through `core-data`'s cached user model, e.g.:
+**CORRECTION (verified against sources):** Earlier drafts of this spec claimed the hub reads `capabilities[]` and `flags{}` from `GET /ui/me`. That is **wrong**. The actual `MeResp` returned by `GET /ui/me` (web `src/api/types.ts: MeResp`) is only:
 
 ```json
 {
-  "id": "u_123",
-  "username": "alice",
-  "capabilities": ["sessions.view", "security.totp", "billing.manage"],
-  "flags": { "developer_tools": false }
+  "user_sub": "string",
+  "session_id": "string",
+  "ip": "string"
 }
 ```
 
-The hub maps `entry.requiredCapability` against `capabilities[]` and never calls the network itself. If `/ui/me` is stale/unavailable (the dev host `http://18.222.237.167:8000` is unreliable), the resolver uses the last cached snapshot from `core-data`; missing data is treated conservatively as "capability absent" → `Disabled` rather than wrongly enabling an entry. No write/mutation occurs from this screen. Owner of the `/ui/me` contract and refresh-on-401 logic is the session epic, not AND-067.
+`/ui/me` carries **no** `capabilities`, `flags`, `id`, or `username` fields (the OpenAPI 200 response for `GET /ui/me` is an unconstrained schema `{}`, and the web `MeResp` type confirms the three-field shape). Capability/entitlement gating on web is therefore NOT sourced from `/ui/me`. The verified sources of gating signals are:
+
+1. **Role / admin scope** — derived by parsing the **JWT access-token claims** client-side: `claims.role` and `claims.admin_profile.scopes` (`src/lib/adminCapabilities.ts: getRoleFromAccessToken / getAdminProfileFromAccessToken`). The access token is held in the auth store and attached as `Authorization: Bearer <token>` by the client (`src/api/client.ts`).
+2. **Feature flags** — local toggles in `src/lib/featureFlags.ts` (e.g. `isBroadcastNavigationEnabled()`, `isVncRemoteDesktopEnabled()`).
+
+**Android mapping:** the Android `CapabilityProvider` should therefore derive capability from the **decoded access-token claims** surfaced by the session layer (mirroring the web JWT-claims approach), and `FeatureFlagProvider` from `core-data`'s local/remote flags — NOT from a `capabilities[]` field on `/ui/me`. The hub itself still never calls the network: it consumes these already-in-memory signals via `core-data`.
+
+**Transport/auth context (verified, owned by the session epic — not AND-067):** the web client uses cookie-based sessions (`fetch(..., { credentials: "include" })`) and echoes the CSRF token from the `ui_csrf` cookie into the `X-CSRF-Token` request header (`src/api/client.ts`), in addition to the `Authorization: Bearer` access token. On a `401`, the client refreshes once via `POST /ui/session/refresh` and retries; on refresh failure it logs out. If session signals are stale/unavailable (the dev host `http://18.222.237.167:8000` is unreliable), the resolver uses the last cached snapshot from `core-data`; missing data is treated conservatively as "capability absent" → `Disabled` (fail-closed) rather than wrongly enabling an entry. No write/mutation occurs from this screen.
 
 ## 6. Data & State Management
 
@@ -264,3 +271,70 @@ AC-8. All user-facing strings are localized; cards meet 48dp touch targets and e
 - Strings localized; accessibility verified with TalkBack for `Available`/`Disabled`/empty states; light/dark + dynamic color verified.
 - `ktlint`/`detekt` clean; no new lint regressions; module builds on AGP 8.7.3 / Gradle 8.9 / JDK 17.
 - Code reviewed and merged to `android-port`; spec status moved from `draft` to `done`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **A web "More" hub exists and uses a static catalog of descriptors filtered by predicates.** VERIFIED. Source: `src/components/layout/MobileNav.tsx` — `MORE_LINKS` (static array of `{ label, i18nKey, path, icon }`) rendered in a `Sheet`, filtered by `MORE_LINKS.filter(...)`.
+2. **The web "More" surface is a bottom-sheet opened from a bottom-nav button, not a dedicated route.** VERIFIED. Source: `src/components/layout/MobileNav.tsx` (`setMoreOpen(true)` → `<Sheet open={moreOpen}>`). The Android decision to use a dedicated `more` route instead is an intentional platform divergence (see §3 FR-1) — UNVERIFIED-ASSUMPTION as a product decision, but consistent with Navigation-Compose conventions (framework ref: https://developer.android.com/jetpack/compose/navigation).
+3. **The web "More" catalog renders as a grid.** VERIFIED. Source: `src/components/layout/MobileNav.tsx` (`<div className="grid grid-cols-4 gap-4">`). Backs FR-2 / AC-2 (responsive grid).
+4. **Web gating hides entries by feature flag.** VERIFIED. Source: `src/components/layout/MobileNav.tsx` (`if (item.path === "/broadcast") return isBroadcastNavigationEnabled();`, `isVncRemoteDesktopEnabled()`), flags defined in `src/lib/featureFlags.ts`.
+5. **Web gating hides entries by user role/scope.** VERIFIED. Source: `src/components/layout/MobileNav.tsx` (`canSeeRootRoleManagement(accessToken)`, `canAccessModerationBoard(accessToken)`) → `src/lib/adminCapabilities.ts`.
+6. **Capability/role on web is derived from JWT access-token claims, NOT from `/ui/me`.** VERIFIED. Source: `src/lib/adminCapabilities.ts: getRoleFromAccessToken / getAdminProfileFromAccessToken` (decodes `atob(token.split(".")[1])`, reads `claims.role` and `claims.admin_profile.scopes`); token attached in `src/api/client.ts` as `Authorization: Bearer`.
+7. **`GET /ui/me` exists.** VERIFIED. Source: OpenAPI `GET /ui/me` (op `ui_me_ui_me_get`, tag `ui-session`).
+8. **`GET /ui/me` returns `{ user_sub, session_id, ip }` and does NOT include `capabilities[]`/`flags{}`/`id`/`username`.** CORRECTED (was wrong in earlier draft). Source: `src/api/types.ts: MeResp` (exactly `user_sub`, `session_id`, `ip`); OpenAPI `GET /ui/me` 200 response schema is unconstrained (`{}`), so it does not assert any capability/flag fields.
+9. **The hub maps `requiredCapability` against a `capabilities[]` array from `/ui/me`.** CORRECTED → the array does not exist; gating must derive from decoded JWT claims (claim 6) + local feature flags (claim 4). Source: same as claims 6 and 8.
+10. **Web auth uses cookie session + `X-CSRF-Token` from `ui_csrf` cookie.** VERIFIED. Source: `src/api/client.ts` (`credentials: "include"`, `const csrf = getCookie("ui_csrf"); headers.set("X-CSRF-Token", csrf)`).
+11. **Web client also attaches `Authorization: Bearer <accessToken>`.** VERIFIED (and was omitted from the earlier draft's transport description). Source: `src/api/client.ts` (`headers.set("Authorization", \`Bearer ${accessToken}\`)`).
+12. **On 401 the client refreshes once via `POST /ui/session/refresh` and retries.** VERIFIED. Source: `src/api/client.ts` (`refreshSession()` → `fetch(withApiBase("/ui/session/refresh"), { method: "POST" })`, then retry; logout on failure) and `src/api/endpoints/auth.ts: refreshSession → POST /ui/session/refresh`.
+13. **`/ui/me` accepts an optional `X-IMPERSONATION-TOKEN` header (impersonation path).** VERIFIED. Source: OpenAPI `GET /ui/me` params `user_sub, X-SESSION-ID, X-IMPERSONATION-TOKEN`; web sends it conditionally in `src/api/client.ts` (`headers.set("X-IMPERSONATION-TOKEN", imp.token)`). Not used by the hub directly; noted for the session layer.
+14. **Validation errors (422) use `HTTPValidationError { detail: ValidationError[] }`.** VERIFIED. Source: OpenAPI `components.schemas.HTTPValidationError` and `components.schemas.ValidationError`. (Not raised by the hub itself, but the shape governs any upstream session-refresh failure surfaced to gating.)
+15. **Web "More" gating is hide-only (no disabled/greyed state).** VERIFIED. Source: `src/components/layout/MobileNav.tsx` uses `.filter(...)` (entry simply absent). The spec's `Disabled(reason)` state (FR-4) is an Android-native enhancement, NOT mirrored from web.
+16. **Android stack/tooling (Compose + Material 3, single-Activity Navigation-Compose, Hilt/KSP, `LazyVerticalGrid` + `GridCells.Adaptive`, `rememberLazyGridState`, `collectAsStateWithLifecycle`).** UNVERIFIED from backend/frontend sources (framework choices). framework refs: Navigation-Compose https://developer.android.com/jetpack/compose/navigation ; LazyVerticalGrid/GridCells.Adaptive https://developer.android.com/jetpack/compose/lists#lazy-grids ; Hilt https://developer.android.com/training/dependency-injection/hilt-android ; lifecycle-aware collection https://developer.android.com/jetpack/compose/state#use-other-types-of-state-in-jetpack-compose .
+17. **Touch targets ≥ 48dp; non-color signalling for disabled; TalkBack semantics.** UNVERIFIED from app sources (a11y design choice). framework ref: https://developer.android.com/guide/topics/ui/accessibility/principles .
+
+### Corrections made
+
+- **§2 (Context):** rewrote the web-reference bullet to cite the real web "More" implementation (`MobileNav.tsx` sheet + `MORE_LINKS` + predicate filter) and the real gating sources (JWT claims via `adminCapabilities.ts`, flags via `featureFlags.ts`); noted that web is hide-only and the `Disabled` state is an Android addition. Removed the incorrect implication that capability flags live in `src/api/types.ts`.
+- **§2 / §5:** removed the false claim that the hub reads `capabilities[]`/`flags{}` from `GET /ui/me`. Replaced §5's fabricated JSON body with the verified `MeResp` (`user_sub`, `session_id`, `ip`) and re-pointed capability gating at decoded JWT access-token claims + local feature flags. Added the verified transport/auth context (cookie + `X-CSRF-Token`, `Authorization: Bearer`, 401→`/ui/session/refresh` retry).
+- **§4.2 / §4.3:** fixed inline comments asserting `Capability` comes "from `GET /ui/me`" → now "decoded JWT access-token claims (role/admin_profile.scopes)".
+
+### Open assumptions
+
+- **OA-1 — `more` as a dedicated route/tab vs. a sheet.** The web equivalent is a bottom sheet; this spec proposes a dedicated `more` route. This is a product/design decision (mirrors §13 R1) and is not derivable from the sources. Unverifiable until design confirms.
+- **OA-2 — Android `Capability`/`FeatureFlag` enum existence and the JWT-claims plumbing in `core-data`.** The session/auth tickets must expose decoded access-token claims (role/scopes) to a `CapabilityProvider`. Not present in the reference sources (web parses the JWT inline). Mirrors §13 R2; resolve when those types land.
+- **OA-3 — Final section taxonomy and per-entry route names.** The web `MORE_LINKS` paths (e.g. `/security`, `/billing`, `/settings`, `/notifications`) suggest the catalog, but the Android route constants and section grouping are not yet fixed (mirrors §13 Q1). Unverifiable until destination tickets register their routes.
+- **OA-4 — Whether the access token is a JWT on Android.** Web decodes a base64 JWT payload; if the Android session layer stores an opaque token instead, capability derivation needs a different surface. Unverifiable from current sources.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device); **Emulator** = headless AVD `test35` (x86_64, Android 15 / API 35); **Device** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android 14 / API 34, arm64-v8a). For this ticket no case strictly requires the physical device — there is no camera/biometrics/FCM/WebRTC/Telecom/streaming hardware path — so UI/instrumented cases default to the **Emulator**; one accessibility case is additionally exercised on the **Device** to validate real TalkBack + API-34/arm64 behavior.
+
+- **TC-AND-067-01 — Resolver: available path.** Type: unit (JVM). Target: `MoreAvailabilityResolver`. Preconditions: fakes from `core-testing` — `RouteRegistry.isRegistered(route)=true`, no `featureFlag`, no `requiredCapability`. Steps: `resolve(entry)`. Expected: returns `EntryAvailability.Available`. Traces: AC-3.
+- **TC-AND-067-02 — Resolver: unregistered route → Hidden.** Type: unit (JVM). Target: `MoreAvailabilityResolver`. Preconditions: `RouteRegistry.isRegistered(route)=false`. Steps: `resolve(entry)`. Expected: `Hidden`. Traces: AC-4.
+- **TC-AND-067-03 — Resolver: disabled feature flag → Hidden.** Type: unit (JVM). Target: `MoreAvailabilityResolver`. Preconditions: route registered, `featureFlag` set, `FeatureFlagProvider.isEnabled(flag)=false`. Steps: `resolve(entry)`. Expected: `Hidden`. Traces: AC-4.
+- **TC-AND-067-04 — Resolver: missing capability → Disabled(reason).** Type: unit (JVM). Target: `MoreAvailabilityResolver`. Preconditions: route registered, flag enabled, `requiredCapability` set, `CapabilityProvider.has(cap)=false`. Steps: `resolve(entry)`. Expected: `Disabled(R.string.more_unavailable_account)`. Traces: AC-5.
+- **TC-AND-067-05 — Resolver: precedence (unregistered beats missing-capability).** Type: unit (JVM). Target: `MoreAvailabilityResolver`. Preconditions: route NOT registered AND capability missing AND flag disabled. Steps: `resolve(entry)`. Expected: `Hidden` (route check wins; never leaks an unbuilt feature as `Disabled`). Traces: AC-4, AC-5.
+- **TC-AND-067-06 — Capability derived from JWT claims, not `/ui/me` body.** Type: contract/MockWebServer (Emulator or JVM/Robolectric). Target: `CapabilityProvider` + session layer adapter. Preconditions: MockWebServer returns `GET /ui/me` = `{ "user_sub":"u1","session_id":"s1","ip":"1.2.3.4" }` (verified shape, no `capabilities`) and the auth store holds an access token whose decoded payload contains `{"role":"root"}`. Steps: resolve an entry whose `requiredCapability` maps to a root-only capability. Expected: capability is satisfied from the decoded token claim (entry `Available`); the absence of `capabilities[]` in `/ui/me` does NOT cause it to be treated as missing. Negative variant: token with `{"role":"user"}` → capability absent → `Disabled`. Traces: AC-5.
+- **TC-AND-067-07 — Catalog integrity: every route is registered.** Type: integration (JVM/Robolectric). Target: `MoreCatalog` × app `RouteRegistry`. Preconditions: build the same `RouteRegistry` the `app` module assembles from the authenticated graph. Steps: for each `MoreEntry` in `MoreCatalog`, assert `routeRegistry.isRegistered(entry.route)` OR the entry is intentionally gated (flag/capability) — fail if a catalog route can never resolve to a real destination. Expected: no catalog entry links to a non-existent destination. Traces: AC-3, AC-4.
+- **TC-AND-067-08 — ViewModel: Loading → Content with Hidden filtered out.** Type: unit (JVM, Turbine + test dispatcher). Target: `MoreViewModel`. Preconditions: catalog with a mix resolving to `Available`/`Disabled`/`Hidden`. Steps: collect `uiState`. Expected: first `Loading`, then `Content` whose sections contain only `Available`+`Disabled` items (no `Hidden`); empty sections suppressed. Traces: AC-2, AC-4, AC-6.
+- **TC-AND-067-09 — ViewModel: re-resolves on capability/flag emission.** Type: unit (JVM, Turbine). Target: `MoreViewModel`. Preconditions: a `Disabled` entry; capability flow then emits the granting capability. Steps: emit new capability snapshot. Expected: `uiState` re-emits `Content` with that entry now `Available`, without leaving the screen. Traces: AC-6.
+- **TC-AND-067-10 — ViewModel: empty after gating → Empty.** Type: unit (JVM, Turbine). Target: `MoreViewModel`. Preconditions: every entry resolves to `Hidden`. Steps: collect `uiState`. Expected: terminal state `MoreUiState.Empty`. Traces: AC-7.
+- **TC-AND-067-11 — Compose-UI: three availability states render correctly.** Type: Compose-UI (Emulator, `createAndroidComposeRule`). Target: `MoreScreen`/`MoreEntryCard`. Preconditions: stub state with one `Hidden`, one `Disabled`, one `Available` entry. Steps: assert tree. Expected: `Hidden` → `assertDoesNotExist`; `Disabled` → exists, `assertHasNoClickAction`, reason exposed via semantics; `Available` → exists, clickable. Traces: AC-2, AC-4, AC-5.
+- **TC-AND-067-12 — Compose-UI/integration: Available tap navigates; Disabled tap does not.** Type: integration/Compose-UI (Emulator). Target: `MoreScreen` in a test `NavHost` with stub destinations. Preconditions: catalog with one `Available` and one `Disabled` entry whose routes are registered. Steps: tap each. Expected: `Available` invokes `onNavigate(route)` exactly once and lands on the stub destination; `Disabled` consumes the click as a no-op (no nav) and surfaces the reason. Traces: AC-3, AC-5.
+- **TC-AND-067-13 — Offline / flaky-dev-host degradation (fail-closed).** Type: contract/MockWebServer (Emulator). Target: `CapabilityProvider` + `MoreAvailabilityResolver` via `MoreViewModel`. Preconditions: simulate the dev host `http://18.222.237.167:8000` unreachable / session refresh failing (MockWebServer returns connection drop or `401` with no successful refresh). Steps: render the hub. Expected: resolver uses last cached snapshot; entries requiring an unconfirmed capability resolve to `Disabled` (fail-closed), never silently `Available`; no crash; hub still renders ungated entries. Traces: AC-5, AC-6.
+- **TC-AND-067-14 — Accessibility & touch targets.** Type: instrumented/e2e + manual (Emulator for automated semantics assertions; **Device** for real TalkBack pass). Target: `MoreScreen`. Preconditions: hub rendered with `Available`/`Disabled` entries and (separately) the empty state. Steps: (a) automated — assert each card `contentDescription` combines label + state, `Disabled` cards set `semantics { disabled() }` and are excluded from click semantics, touch targets ≥ 48dp, traversal order = declared order; (b) manual on the physical A15 (API 34, arm64) — enable TalkBack, swipe through, confirm `Available`/`Disabled`/empty are announced correctly and color is not the only disabled signal. Expected: all semantics/target assertions pass on both targets. Traces: AC-8, AC-5, AC-7.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (More destination in nav graph, reachable) | TC-AND-067-12 (nav into registered destinations; route plumbing exercised) |
+| AC-2 (responsive grid grouped into sections, icon+label) | TC-AND-067-08, TC-AND-067-11 |
+| AC-3 (Available tap → existing registered destination) | TC-AND-067-01, TC-AND-067-07, TC-AND-067-12 |
+| AC-4 (unregistered/flag-off → not present in UI) | TC-AND-067-02, TC-AND-067-03, TC-AND-067-05, TC-AND-067-07, TC-AND-067-08 |
+| AC-5 (missing capability → Disabled, non-clickable, reason, no nav) | TC-AND-067-04, TC-AND-067-06, TC-AND-067-11, TC-AND-067-12, TC-AND-067-13, TC-AND-067-14 |
+| AC-6 (re-resolves on input change without leaving screen) | TC-AND-067-08, TC-AND-067-09, TC-AND-067-13 |
+| AC-7 (zero visible entries → neutral empty state) | TC-AND-067-10, TC-AND-067-14 |
+| AC-8 (localized strings, 48dp targets, correct a11y semantics) | TC-AND-067-14 |

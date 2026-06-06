@@ -5,7 +5,8 @@ milestone: M2
 epic: E11
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-024]
 blocks: [AND-079, AND-080, AND-081, AND-082, AND-083, AND-088]
 ---
@@ -61,8 +62,14 @@ the entire E11 (Settings & Preferences) epic hangs off of, hence **P0**.
 - **Reusable building blocks:** `AND-019` (Material 3 theme), `AND-021` (state
   composables: loading/empty/error/offline), `AND-022` (NavHost + routes),
   `core-ui` design system, `core-data` availability/feature-flag source.
-- **Web reference:** `frontend/` settings IA (`frontend/src/api/endpoints/preferences.ts`
-  and the settings route tree) for section naming parity.
+- **Web reference:** `frontend/` settings (`src/api/endpoints/preferences.ts`, which calls
+  `GET`/`PATCH /ui/settings/preferences`, and `src/pages/settings/SettingsPage.tsx`).
+  **Correction (verified):** the web settings page is **not** a six-section hub with the
+  same taxonomy — it is a single scrolling page of cards (Language, Appearance,
+  Customization, Theme Customization, Account, Jira Integration). The six-section
+  Account/Security/Notifications/Media/Appearance/Privacy IA is an **Android-specific**
+  design from the backlog scope, not a web-parity mirror. Use the web only for
+  per-feature naming hints (e.g. "Appearance"), not for the hub structure. See §16.
 - **Package base:** `com.testlogon.android`.
 
 ## 3. Functional Requirements
@@ -204,8 +211,15 @@ Disabled rows are non-clickable and rendered with reduced alpha. Test tags follo
 
 **N/A for this ticket.** The Settings hub performs no network I/O — it is pure IA and
 navigation rendered from a static catalog plus local availability flags. The backend
-preferences contract (`POST/GET /ui/media/preferences`, alert prefs, etc.) is owned by
-**`AND-078` (Preferences API + DTOs)** and consumed by the subsection tickets
+preferences contract is owned by **`AND-078` (Preferences API + DTOs)** and consumed by
+the subsection tickets. **Correction (verified against OpenAPI):** the relevant backend
+endpoints are `GET /ui/settings/preferences` + `PATCH /ui/settings/preferences`
+(UI prefs; the web client uses these), `GET /ui/media/preferences` +
+**`PUT`** `/ui/media/preferences` (`MediaPreferencesOut`/`MediaPreferencesIn`), and
+`GET`/`POST /ui/alerts/type-preferences` (`AlertTypePreferenceUpdate`). The draft's
+`POST/GET /ui/media/preferences` was **wrong** on the write method (it is `PUT`, not
+`POST`) and conflated media prefs with the generic settings prefs endpoint. These are
+consumed by the subsection tickets
 (`AND-079`, `AND-080`, `AND-086`, `AND-087`, `AND-088`). No `openapi.json` endpoints,
 DTOs, or `ApiResult<T>` flows are introduced here.
 
@@ -372,3 +386,203 @@ UI tests. Settings round-trip data tests are explicitly out of scope and owned b
   Gradle 8.9 with `minSdk 24`, `compile/targetSdk 35`.
 - Code reviewed and merged to `android-port`; downstream subsection tickets can register
   against `SettingsRoutes` without modifying the hub.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Claim:** The backend preferences write for media is `POST /ui/media/preferences`
+   (§5 draft). **VERDICT: Corrected.** The actual endpoints are `GET /ui/media/preferences`
+   (`resp 200: MediaPreferencesOut`) and `PUT /ui/media/preferences`
+   (`req MediaPreferencesIn`, `resp 200: MediaPreferencesOut`). There is no `POST`.
+   **Source:** OpenAPI index `GET /ui/media/preferences`
+   (`op=ui_get_media_preferences_ui_media_preferences_get`) and
+   `PUT /ui/media/preferences` (`op=ui_save_media_preferences_ui_media_preferences_put`).
+2. **Claim:** The web client's preferences endpoint module backs the settings IA.
+   **VERDICT: Corrected/clarified.** `src/api/endpoints/preferences.ts` calls
+   `GET /ui/settings/preferences` (`getPreferences`, returns `{ preferences: UiPreferences }`)
+   and `PATCH /ui/settings/preferences` (`patchPreferences`), plus
+   `POST /ui/settings/validate-color` (`validateColor`). It does **not** call
+   `/ui/media/preferences`. **Source:** `src/api/endpoints/preferences.ts: getPreferences`,
+   `patchPreferences`, `validateColor`; OpenAPI index `GET /ui/settings/preferences`
+   (`op=ui_get_preferences_...`) and `PATCH /ui/settings/preferences`
+   (`op=ui_update_preferences_...`).
+3. **Claim:** The web app has a six-section settings IA
+   (Account/Security/Notifications/Media/Appearance/Privacy) with naming parity (§2 draft).
+   **VERDICT: Corrected.** The web settings page is a single scrolling page of cards:
+   Language, Appearance, Customization, Theme Customization, Account, Jira Integration —
+   not a six-row gated hub. The six-section taxonomy is an Android-specific design taken
+   from the AND-077 backlog scope. **Source:** `src/pages/settings/SettingsPage.tsx`
+   (Card sections enumerated lines 21-72); backlog `specs-src/AND-077.md` Scope line.
+4. **Claim:** This ticket performs no network I/O and introduces no endpoints/DTOs
+   (§5, §8, FR-8, AC-4). **VERDICT: Verified (by design/scope).** Nothing in the ticket
+   calls the API; consistent with backlog Acceptance "Hub navigates to each subsection."
+   **Source:** `specs-src/AND-077.md`; no endpoint cross-reference required. The web
+   transport (Bearer + `ui_csrf`) is therefore out of scope here but is documented in
+   claim 5 for the downstream subsection tickets that will fetch.
+5. **Claim (§8):** The app uses `ui_csrf` cookie / no CSRF values are referenced by the hub.
+   **VERDICT: Verified.** The web client reads the `ui_csrf` cookie and sends it as the
+   `X-CSRF-Token` request header; auth is `Authorization: Bearer <accessToken>`; a 401
+   triggers one `POST /ui/session/refresh`; a fetch failure throws `ApiError(0, "Network
+   error")`. The hub itself references none of these (correct). **Source:**
+   `src/api/client.ts` (lines 135-189: `getCookie("ui_csrf")` -> `X-CSRF-Token`;
+   `refreshSession` -> `POST /ui/session/refresh`; offline -> `ApiError(0, ...)`).
+6. **Claim:** Settings is an authenticated-only destination registered in the
+   authenticated nav graph (`AND-024`), unreachable logged-out (§8, AC-5).
+   **VERDICT: Unverified-assumption.** `AND-024`/`AND-025` are sibling Android tickets,
+   not present in the authoritative backend/frontend sources; the auth-gating contract
+   cannot be confirmed here. Plausible and consistent with the web (which gates on
+   `useAuthStore.isAuthenticated`), but treat as a cross-ticket dependency assumption.
+   **Source:** none authoritative; cf. `src/api/client.ts: useAuthStore` for the web's
+   auth-state notion only.
+7. **Claim:** The unreliable dev backend is `http://18.222.237.167:8000` (§7).
+   **VERDICT: Unverified-assumption.** The frontend resolves its base URL from the
+   `VITE_API_BASE_URL` env var (`src/api/client.ts: API_BASE_URL`), not a hard-coded IP,
+   so this host cannot be confirmed from source. It is an environment/infra detail.
+   **Source:** `src/api/client.ts: API_BASE_URL` (env-driven); no literal IP in source.
+8. **Claim:** Alert/notification preferences exist as a backend contract owned downstream
+   (§2, §5). **VERDICT: Verified (endpoint exists).** `GET /ui/alerts/type-preferences`
+   and `POST /ui/alerts/type-preferences` (`req AlertTypePreferenceUpdate`) are present.
+   **Source:** OpenAPI index `GET`/`POST /ui/alerts/type-preferences`.
+9. **Claim:** Real backend error shapes are `ErrorEnvelope`/`HTTPValidationError`.
+   **VERDICT: Verified (for downstream use).** Preferences endpoints declare
+   `422: HTTPValidationError`; `ErrorEnvelope` wraps a single `error: ErrorDetail`
+   (used by other endpoints, e.g. jira prefs returning `400/401/.../502: ErrorEnvelope`).
+   **Source:** OpenAPI index lines for `/ui/*/preferences`;
+   `components.schemas.ErrorEnvelope` (`pretty.json` ~line 31777, `required: [error]`),
+   `components.schemas.HTTPValidationError` (~line 37133).
+10. **Claim:** Framework choices — Jetpack Compose Material 3 `ListItem`, Navigation-Compose
+    route constants, Hilt `@HiltViewModel`, `StateFlow`/`collectAsStateWithLifecycle`,
+    `Modifier.semantics { disabled() }`, 48 dp touch targets (§4, §6, §9).
+    **VERDICT: Unverified-assumption (framework ref).** Standard, current Android/Compose
+    APIs and conventions; not verifiable against the backend/frontend sources.
+    **Source (framework ref):** Compose Material 3 `ListItem`
+    (https://developer.android.com/jetpack/compose/components/list),
+    Navigation-Compose (https://developer.android.com/jetpack/compose/navigation),
+    accessibility semantics (https://developer.android.com/jetpack/compose/accessibility),
+    Material touch-target guidance
+    (https://m3.material.io/foundations/designing/structure#touch-targets).
+11. **Claim:** Toolchain — JDK 17 / AGP 8.7.3 / Gradle 8.9, `minSdk 24`,
+    `compile/targetSdk 35` (§15). **VERDICT: Unverified-assumption (framework ref).**
+    Cross-ticket build-config convention (`AND-005`); not in authoritative sources.
+    AGP 8.7.x requires JDK 17 and pairs with Gradle 8.9+, which is internally consistent.
+    **Source (framework ref):** AGP release notes
+    (https://developer.android.com/build/releases/gradle-plugin).
+
+### Corrections made
+
+- **§ frontmatter:** `status: draft` -> `status: reviewed`; added `reviewed_on: 2026-06-06`.
+- **§2 Web reference:** corrected the false "section naming parity" / six-section web IA
+  claim; clarified the web is a single-page card layout and the six-section hub is an
+  Android-specific design; pinned `preferences.ts` to `GET`/`PATCH /ui/settings/preferences`.
+- **§5 API Contract:** corrected `POST/GET /ui/media/preferences` to the real
+  `GET`/`PUT /ui/media/preferences` (`MediaPreferencesOut`/`MediaPreferencesIn`), and
+  added the actual `GET`/`PATCH /ui/settings/preferences` and
+  `GET`/`POST /ui/alerts/type-preferences` contracts for downstream context.
+
+### Open assumptions
+
+- **Auth-gating (claim 6):** the hub being authenticated-only depends on `AND-024`/`AND-025`,
+  which are not in the authoritative sources — confirm when those tickets land.
+- **Dev backend host (claim 7):** `18.222.237.167:8000` is env/infra config, not in source.
+- **Section -> ticket mapping for Security & Privacy (existing R1):** unresolved in sources;
+  remains a PM question.
+- **Availability source of truth (existing R2):** compile-time vs runtime feature flag —
+  not determinable from backend/frontend; an Android architecture decision.
+- **Framework/toolchain (claims 10-11):** verified only against external Android docs, not
+  the project's authoritative API sources.
+
+## 17. Test Plan
+
+Acceptance Criteria referenced are from §14 (AC-1 … AC-8). Test targets: JVM/Robolectric
+(local, no device), emulator AVD `test35` (x86_64, API 35), or the physical Samsung
+Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). This ticket is pure IA/navigation with no
+camera/biometrics/push/WebRTC, so most cases are JVM or emulator; the physical device is
+used only where real-device a11y (TalkBack) and ABI/API-level parity matter.
+
+- **TC-AND-077-01 — Catalog order & size (happy path).**
+  Type: unit (JVM). Target: JVM/Robolectric. Preconditions: fake `SettingsAvailability`
+  emitting all-true flags. Steps: build `SettingsHubViewModel`, collect first `uiState`,
+  read `sections`. Expected: exactly 6 sections in order Account, Security, Notifications,
+  Media, Appearance, Privacy; each with non-null `titleRes`/`icon`/`route`. Traces: AC-1.
+- **TC-AND-077-02 — Availability mapping.**
+  Type: unit (JVM). Target: JVM. Preconditions: fake availability with a mixed flag set
+  (e.g. Account=on, Media=off). Steps: collect `uiState`. Expected: each section's
+  `available` equals its flag; flag-off rows have `available=false`. Traces: AC-3.
+- **TC-AND-077-03 — No I/O on hub render.**
+  Type: unit (JVM). Target: JVM. Preconditions: fake availability; a `core-network`/HTTP
+  test double that fails if invoked. Steps: instantiate ViewModel + collect state.
+  Expected: state emits synchronously; zero network calls; no `core-network` dependency
+  on the classpath. Traces: AC-4, FR-8.
+- **TC-AND-077-04 — Rows render with localized titles.**
+  Type: Compose-UI (instrumented). Target: emulator `test35`. Preconditions: state with
+  all 6 sections available. Steps: set `SettingsHubScreen`; assert nodes with test tags
+  `settings_row_account` … `settings_row_privacy` exist and display their string-resource
+  titles (not raw keys). Expected: all six rows visible with localized text. Traces: AC-1, AC-6.
+- **TC-AND-077-05 — Tap available row navigates with correct route (primary acceptance).**
+  Type: Compose-UI (instrumented). Target: emulator `test35`. Preconditions: recorded
+  `onOpenSection` callback; all rows available. Steps: click each available row in turn.
+  Expected: `onOpenSection` invoked once per tap with the matching `SettingsRoutes.*`
+  constant (e.g. tapping Media -> `"settings/media"`). Traces: AC-2, AC-8.
+- **TC-AND-077-06 — Navigation integration to real routes.**
+  Type: integration (instrumented). Target: emulator `test35`. Preconditions: a NavHost
+  with `settingsGraph(...)` plus stub `composable(route)` destinations for each section.
+  Steps: from HUB, tap each available section. Expected: `navController.currentDestination.route`
+  becomes the expected `SettingsRoutes.*`; system back returns to `settings`. Traces: AC-2, FR-6.
+- **TC-AND-077-07 — Disabled row is a no-op.**
+  Type: Compose-UI (instrumented). Target: emulator `test35`. Preconditions: state with at
+  least one section `available=false` (e.g. Notifications). Steps: assert the row is
+  `isNotEnabled()`; perform click. Expected: `onOpenSection` is never invoked; no chevron;
+  no navigation/crash. Traces: AC-3, AC-8.
+- **TC-AND-077-08 — Unresolved-route guard (defense-in-depth).**
+  Type: unit (JVM). Target: JVM. Preconditions: navigate lambda wrapping a NavController
+  whose graph lacks the target route. Steps: invoke the wrapped navigate for a missing
+  destination. Expected: a warning is logged and the call no-ops; no
+  `IllegalArgumentException` propagates. Traces: AC-3.
+- **TC-AND-077-09 — All-gated catalog still renders (resilience / offline-equivalent).**
+  Type: Compose-UI (instrumented). Target: emulator `test35`. Preconditions: availability
+  source emits all-false (simulating subsections not yet shipped / flags off). Steps: render
+  hub. Expected: six disabled rows shown; screen is reachable and non-blank; no spinner/error
+  state. Traces: AC-3, AC-4.
+- **TC-AND-077-10 — Hub reachable with backend down (no-network path).**
+  Type: integration (instrumented). Target: emulator `test35` with networking disabled
+  (airplane mode / no base URL). Preconditions: app authenticated locally; backend
+  unreachable. Steps: navigate to `settings`. Expected: hub renders the catalog with no
+  network attempt, no error toast, no crash. Traces: AC-4.
+- **TC-AND-077-11 — Authenticated-only gating.**
+  Type: integration (instrumented). Target: emulator `test35`. Preconditions: app in
+  logged-out state. Steps: attempt to resolve/navigate to `settings`. Expected: route is
+  absent from the unauthenticated graph / redirects to auth; hub does not display.
+  (Depends on AND-024/AND-025 — see §16 open assumption 6.) Traces: AC-5.
+- **TC-AND-077-12 — Analytics events, no PII.**
+  Type: unit (JVM). Target: JVM. Preconditions: fake analytics sink. Steps: enter the route
+  (compose) and tap an available section; for a disabled section, tap it. Expected:
+  `settings_hub_viewed` fires once on first composition; `settings_section_opened` fires with
+  `section_key` = stable enum name (e.g. `MEDIA`) only on available taps; disabled taps emit
+  nothing; payloads contain no username/email/token/cookie/CSRF/URL. Traces: AC-7.
+- **TC-AND-077-13 — Accessibility & touch targets (real TalkBack).**
+  Type: instrumented/e2e (a11y). Target: **physical device** (SM-A156U) — TalkBack and real
+  font-scale/RTL behavior should be validated on hardware, not just emulator. Preconditions:
+  TalkBack enabled; one section disabled. Steps: navigate rows with TalkBack; inspect
+  semantics. Expected: each row has a merged content description combining title + state
+  ("Account, double tap to open" / "Notifications, coming soon, disabled"); disabled rows
+  carry `disabled()` semantics; every row's touch target ≥ 48 dp; chevron is decorative
+  (no content description). Traces: AC-6.
+- **TC-AND-077-14 — ABI / API-level parity smoke.**
+  Type: instrumented (smoke). Target: **physical device** (arm64-v8a, API 34) — complements
+  the x86_64/API-35 emulator runs to catch ABI/API-level differences. Steps: launch app,
+  open `settings`, render and tap one available row. Expected: identical catalog order,
+  rendering, and navigation behavior as on `test35`; no ABI/resource crashes. Traces: AC-1, AC-2.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (six sections, fixed order) | TC-01, TC-04, TC-14 |
+| AC-2 (tap available navigates) | TC-05, TC-06, TC-14 |
+| AC-3 (disabled rows no-op, no dead-link/crash) | TC-02, TC-07, TC-08, TC-09 |
+| AC-4 (no network, reachable when backend down) | TC-03, TC-09, TC-10 |
+| AC-5 (authenticated-only) | TC-11 |
+| AC-6 (localized, 48 dp, TalkBack semantics) | TC-04, TC-13 |
+| AC-7 (analytics, no PII) | TC-12 |
+| AC-8 (unit + Compose tests for order/nav/disabled-tap pass in CI) | TC-01, TC-05, TC-07 |

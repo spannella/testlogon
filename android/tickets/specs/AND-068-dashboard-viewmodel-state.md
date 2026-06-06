@@ -5,9 +5,10 @@ milestone: M2
 epic: E09
 priority: P0
 size: M
-status: draft
 depends_on: [AND-065]
 blocks: [AND-069]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-068 — Dashboard ViewModel + state
@@ -47,17 +48,32 @@ churn.
   binds to `DashboardUiState`.
 - **Downstream (AND-069):** empty/error/offline Composables and the headless
   Compose UI test; this ticket must expose the states those Composables render.
-- **Web reference:** `frontend/src/api/endpoints/dashboard.ts` and
-  `frontend/src/api/types.ts` define the payload shape mirrored by AND-065's
-  domain model. Web has no offline/stale concept; that is Android-specific.
+- **Web reference:** `frontend/src/api/endpoints/dashboard.ts` (`getDashboardSummary`
+  → `GET /ui/dashboard/summary`, `refreshDashboard` → `POST /ui/dashboard/refresh`)
+  and `frontend/src/api/types.ts` (`DashboardSummary`) define the payload shape
+  mirrored by AND-065's domain model. CORRECTION: the dedicated summary endpoint
+  exists, but the web's main `frontend/src/pages/Dashboard.tsx` screen does NOT
+  call it — it aggregates several independent endpoints (conversations, billing
+  balance, files, alerts, carts, calendar) with React Query. AND-065's repository
+  is assumed to back the single-call `/ui/dashboard/summary` contract; if AND-065
+  instead aggregates, the same `ApiResult<Dashboard>` surface still applies and
+  this ViewModel is unchanged. Web has no offline/stale concept; that is
+  Android-specific.
 - **Shared conventions:** ViewModels expose `StateFlow<UiState>`; the typed
   `ApiResult<T>` lives in `core-network`; FastAPI `detail` mapping
   (`string | [{msg}] | {code,...}`) is normalized into a user-facing message by
   the `core-network` error mapper, surfaced here as `DashboardError`.
-- **Auth:** session is cookie-based and managed by `core-network` (cookie jar,
-  `X-CSRF-Token`, single `/ui/session/refresh` on 401). This ViewModel does not
-  perform auth itself; it reacts to an `Unauthorized` `ApiResult` by emitting a
-  re-auth side effect.
+- **Auth:** managed by `core-network`. Per the web client
+  (`frontend/src/api/client.ts`) auth is a combination of an `Authorization:
+  Bearer <accessToken>` header AND a cookie jar, with a CSRF token read from the
+  `ui_csrf` cookie and sent as the `X-CSRF-Token` request header (CORRECTION: the
+  earlier draft implied purely cookie-based session; it is Bearer + cookie +
+  CSRF). On a 401 the web client performs exactly one de-duplicated `POST
+  /ui/session/refresh` then retries the original request once; a second 401 logs
+  out. The dashboard endpoints additionally accept `X-SESSION-ID` and
+  `X-IMPERSONATION-TOKEN` parameters per the OpenAPI index. This ViewModel does
+  not perform auth itself; it reacts to an `Unauthorized` `ApiResult` (i.e. a 401
+  that survived the single refresh+retry) by emitting a re-auth side effect.
 
 ## 3. Functional Requirements
 
@@ -197,8 +213,12 @@ content) and stale `Content` + `ShowMessage` (cached content present) per FR-4.
 
 The reducer's emptiness check delegates to a domain predicate
 `Dashboard.isEmpty()` (defined in core-model by AND-065, or a local extension if
-not yet present): true when there are no sections or all sections have zero
-items.
+not yet present). CORRECTION: the real `DashboardSummary` has no `sections`;
+emptiness must be defined against its actual fields — e.g. true when there is no
+meaningful activity to render: `top_content`, `active_broadcasts`, and
+`recent_milestones` are all empty AND `today_earnings_cents == 0 &&
+period_views == 0 && period_revenue_cents == 0 && total_subscribers == 0`. The
+exact predicate is AND-065's to own; this ViewModel only calls `isEmpty()`.
 
 ### 4.4 Repository contract assumed from AND-065
 
@@ -222,20 +242,44 @@ bound by AND-065's module.
 
 ## 5. API Contract
 
-This ticket introduces **no new network calls**. All HTTP is owned by AND-065
-(`DashboardApi.getDashboard()` → `GET /ui/dashboard`, mapped from
-`frontend/src/api/endpoints/dashboard.ts`). For reference, the upstream payload
-the domain model derives from is shaped roughly as:
+This ticket introduces **no new network calls**. All HTTP is owned by AND-065,
+mapped from `frontend/src/api/endpoints/dashboard.ts`.
+
+CORRECTION (verified against OpenAPI + frontend): there is **no** `GET
+/ui/dashboard` endpoint. The real, verified endpoints are:
+- `GET /ui/dashboard/summary` (op `dashboard_summary_ui_dashboard_summary_get`)
+  → `200: DashboardSummary`; `422: HTTPValidationError`. Frontend:
+  `getDashboardSummary()`.
+- `POST /ui/dashboard/refresh` (op `dashboard_refresh_ui_dashboard_refresh_post`)
+  → `200: { ok: boolean; message: string; refreshed_at: number }`;
+  `422: HTTPValidationError`. Frontend: `refreshDashboard()`. AND-065 may wire
+  `forceRefresh=true` to POST this before re-reading the summary.
+
+CORRECTION: the earlier draft's `{sections:[{items:[{thumbnail_url, deep_link}]}],
+generated_at: ISO-string}` payload is **wrong** — no such shape exists. The real
+`DashboardSummary` (verified at `src/api/types.ts: DashboardSummary`) is a flat
+creator-analytics object:
 
 ```json
 {
-  "sections": [
-    { "id": "continue", "title": "Continue watching",
-      "items": [ { "id": "...", "title": "...", "thumbnail_url": "...", "deep_link": "/watch/..." } ] }
-  ],
-  "generated_at": "2026-06-05T12:00:00Z"
+  "today_earnings_cents": 0,
+  "earnings_breakdown": { "subscriptions": 0, "tips": 0, "unlocks": 0, "vod_purchases": 0, "other": 0 },
+  "period_views": 0,
+  "period_revenue_cents": 0,
+  "total_subscribers": 0,
+  "top_content": [ { "content_id": "...", "content_type": "...", "title": "...", "views": 0, "revenue_cents": 0 } ],
+  "active_broadcasts": [ { "session_id": "...", "status": "...", "name": "...", "started_at": "..." } ],
+  "recent_milestones": [ { "milestone_id": "...", "user_id": "...", "metric": "...", "threshold": 0, "current_value": 0, "formatted": "...", "achieved_at": 0, "acknowledged": false } ],
+  "currency": "USD",
+  "generated_at": 0,
+  "warnings": []
 }
 ```
+
+Note `generated_at` and milestone `achieved_at` are **unix-epoch numbers**, not
+ISO strings, and there are no `sections`/`items`/`thumbnail_url`/`deep_link`
+fields. The "empty" UI state (FR-3, Section 6) must therefore be re-defined in
+terms of the real fields (see correction in Section 4.3 below).
 
 The ViewModel consumes the already-mapped `Dashboard` domain object, not this
 JSON. Error normalization (FastAPI `detail`: `string | [{msg}] | {code,...}`)
@@ -427,3 +471,319 @@ AND-069.
   no new lint/detekt suppressions added.
 - No hard-coded user-facing strings; no payload/PII logging.
 - Code reviewed and merged to `android-port`; AND-069 unblocked.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its verdict and exact source pointer.
+
+1. **Claim:** The dashboard is fetched via `GET /ui/dashboard`.
+   **VERDICT: Corrected.** No such endpoint exists. The real read endpoint is
+   `GET /ui/dashboard/summary`.
+   **SOURCE:** OpenAPI `GET /ui/dashboard/summary` (op
+   `dashboard_summary_ui_dashboard_summary_get`); `src/api/endpoints/dashboard.ts:
+   getDashboardSummary`.
+
+2. **Claim:** A refresh action maps to a backend call.
+   **VERDICT: Verified (and clarified).** `POST /ui/dashboard/refresh` exists,
+   returning `{ ok, message, refreshed_at }`.
+   **SOURCE:** OpenAPI `POST /ui/dashboard/refresh` (op
+   `dashboard_refresh_ui_dashboard_refresh_post`); `src/api/endpoints/dashboard.ts:
+   refreshDashboard`.
+
+3. **Claim:** The payload is `{sections:[{items:[{thumbnail_url, deep_link}]}],
+   generated_at: ISO-string}`.
+   **VERDICT: Corrected.** The real `DashboardSummary` is a flat creator-analytics
+   object (`today_earnings_cents`, `earnings_breakdown`, `period_views`,
+   `period_revenue_cents`, `total_subscribers`, `top_content[]`,
+   `active_broadcasts[]`, `recent_milestones[]`, `currency`, `generated_at`,
+   `warnings[]`); `generated_at` is a unix-epoch number, not an ISO string; no
+   `sections`/`items`/`thumbnail_url`/`deep_link`.
+   **SOURCE:** `src/api/types.ts: DashboardSummary` (and `DashboardEarningsBreakdown`,
+   `DashboardTopContentItem`, `DashboardActiveBroadcast`, `DashboardMilestone`).
+
+4. **Claim:** The web client uses this dashboard payload to render its dashboard
+   screen.
+   **VERDICT: Corrected.** The dedicated `/ui/dashboard/summary` endpoint exists,
+   but `src/pages/Dashboard.tsx` does NOT call it — it aggregates conversations,
+   billing balance, files, alerts, carts and calendar via separate React Query
+   calls. The summary endpoint is the creator-analytics dashboard (CREATOR-003).
+   **SOURCE:** `src/pages/Dashboard.tsx` (imports from `messaging`, `billing`,
+   `files`, `alerts`, `cart`, `calendar` endpoints; no `dashboard.ts` import).
+
+5. **Claim:** Auth is cookie-based with `X-CSRF-Token` and a single
+   `/ui/session/refresh` on 401.
+   **VERDICT: Verified (with one correction).** Correction: it is Bearer token +
+   cookie + CSRF, not purely cookie-based. CSRF token is read from the `ui_csrf`
+   cookie and sent as the `X-CSRF-Token` header; on 401 the client performs one
+   de-duplicated `POST /ui/session/refresh` then retries once; second 401 logs out.
+   **SOURCE:** `src/api/client.ts` (`getCookie("ui_csrf")` → `X-CSRF-Token`;
+   `Authorization: Bearer ${accessToken}`; `refreshSession()` / `refreshPromise`
+   single-flight on `res.status === 401`); OpenAPI `POST /ui/session/refresh` (op
+   `ui_session_refresh_ui_session_refresh_post`, `req=` empty, `resp=200`).
+
+6. **Claim:** FastAPI `detail` is normalized from `string | [{msg}] | {code,...}`.
+   **VERDICT: Verified.** `normalizeErrorDetail` handles a plain string, an array
+   of `{msg}` validation items, and an object with a `code`
+   (`mapAuthorizationError`); `HTTPValidationError = { detail: ValidationError[] }`
+   where `ValidationError` carries `msg`.
+   **SOURCE:** `src/api/client.ts: normalizeErrorDetail` / `mapAuthorizationError`;
+   OpenAPI `components.schemas.HTTPValidationError` and `ValidationError`.
+
+7. **Claim:** A network/offline failure surfaces distinctly from an HTTP error.
+   **VERDICT: Verified (web analog).** The web client throws `ApiError(0,
+   "Network error")` on `fetch` rejection (offline/DNS), distinct from non-2xx
+   `ApiError(status, detail)`. This justifies mapping IO/timeout →
+   `DashboardError.Network` and 5xx → `DashboardError.Server`.
+   **SOURCE:** `src/api/client.ts` (catch block → `new ApiError(0, "Network
+   error", err)`; `if (!res.ok)` → `new ApiError(res.status, ...)`).
+
+8. **Claim (Android-only):** Offline/stale serving (`ApiResult.Cached`,
+   `isStale`, `Offline`).
+   **VERDICT: Unverified-assumption.** Intentionally Android-specific; the web
+   client has no offline/stale concept and there is no backend signal for it.
+   **SOURCE:** none (by design); depends on AND-065 adding `ApiResult.Cached`
+   (Risk R1).
+
+9. **Claim:** `StateFlow<UiState>` + Channel-backed one-shot effects consumed via
+   `LaunchedEffect`, surviving rotation, with Hilt `@HiltViewModel`.
+   **VERDICT: Verified (framework refs).**
+   **SOURCE (framework ref):**
+   https://developer.android.com/topic/architecture/ui-layer/state-production
+   (StateFlow UI state); https://developer.android.com/kotlin/flow#stateflow ;
+   https://developer.android.com/training/dependency-injection/hilt-jetpack
+   (`@HiltViewModel`); https://developer.android.com/topic/libraries/architecture/coroutines#viewmodelscope
+   (`viewModelScope`).
+
+10. **Claim:** `@StringRes`-keyed, locale-agnostic user messages.
+    **VERDICT: Verified (framework ref).**
+    **SOURCE (framework ref):**
+    https://developer.android.com/guide/topics/resources/string-resource and
+    https://developer.android.com/guide/topics/resources/localization .
+
+11. **Claim:** ~20s timeout against the unreliable plaintext dev host
+    `http://18.222.237.167:8000`.
+    **VERDICT: Unverified-assumption.** The host/port and timeout value are not in
+    the OpenAPI/frontend sources; the timeout is an OkHttp config choice owned by
+    `core-network` (AND-065), not this ticket.
+    **SOURCE:** none in references; framework ref
+    https://square.github.io/okhttp/recipes/#timeouts-kt-java .
+
+### Corrections made
+
+- §2 Web reference: replaced the vague "payload shape" claim with the real
+  endpoints (`GET /ui/dashboard/summary`, `POST /ui/dashboard/refresh`) and noted
+  that the web `Dashboard.tsx` page aggregates separate endpoints rather than
+  calling the summary endpoint.
+- §2 Auth: corrected "cookie-based" to Bearer token + cookie + `X-CSRF-Token`
+  (from `ui_csrf` cookie), with the single de-duplicated `POST /ui/session/refresh`
+  + one retry on 401; added the `X-SESSION-ID`/`X-IMPERSONATION-TOKEN` params.
+- §5 API Contract: corrected the endpoint from the nonexistent `GET /ui/dashboard`
+  to `GET /ui/dashboard/summary`, added `POST /ui/dashboard/refresh`, and replaced
+  the fabricated `sections/items/thumbnail_url/deep_link` JSON with the real
+  `DashboardSummary` shape (noting `generated_at`/`achieved_at` are unix numbers).
+- §4.3 Emptiness predicate: redefined `isEmpty()` against the real
+  `DashboardSummary` fields (no `sections`).
+- Frontmatter: `status: reviewed`, `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **`ApiResult.Cached` / offline-stale (Risk R1):** unverifiable from backend or
+  web sources — it is a deliberate Android addition. Depends on AND-065.
+- **`Dashboard` domain model & `getDashboard(forceRefresh)` repository signature:**
+  AND-065 deliverables not present in the references; assumed as specified.
+- **Dev host `http://18.222.237.167:8000` and the ~20s timeout:** environment/config
+  facts not present in OpenAPI or frontend; owned by `core-network`.
+- **Mapping of `forceRefresh=true` to `POST /ui/dashboard/refresh` then re-read:**
+  plausible but AND-065's choice; not asserted by the references.
+
+## 17. Test Plan
+
+All cases live in `feature-dashboard`. IDs are `TC-AND-068-NN`. Unit/contract
+cases are the acceptance deliverable; UI/instrumented cases are listed for the
+downstream binding contract and run on the targets noted. Because this ticket
+ships no Composables and no networking, the bulk runs as JVM/Robolectric on the
+local CI runner; only the integration smoke and accessibility checks touch a
+device, and none of this ticket's logic requires the physical device.
+
+- **TC-AND-068-01 — init: Loading → Content (happy path)**
+  Type: unit (JVM, `StandardTestDispatcher` + Turbine).
+  Test target: JVM unit/Robolectric.
+  Preconditions: `FakeDashboardRepository.getDashboard` returns
+  `ApiResult.Success(nonEmptyDashboard)`.
+  Steps: construct `DashboardViewModel`; collect `uiState`; `advanceUntilIdle()`.
+  Expected: first emission `phase == Loading`; terminal `phase == Content`,
+  `dashboard != null`, `isStale == false`, `isRefreshing == false`, `error == null`.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-068-02 — Success with empty payload → Empty**
+  Type: unit (JVM).
+  Test target: JVM unit/Robolectric.
+  Preconditions: repo returns `ApiResult.Success(dashboard)` where
+  `dashboard.isEmpty()` is true (empty `top_content`/`active_broadcasts`/
+  `recent_milestones` and all numeric metrics zero, per §4.3 corrected predicate).
+  Steps: init; `advanceUntilIdle()`.
+  Expected: terminal `phase == Empty`; `canRetry == true`; no `dashboard` content
+  rendered.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-068-03 — Cached result → stale Content + ShowMessage (offline path)**
+  Type: unit (JVM).
+  Test target: JVM unit/Robolectric.
+  Preconditions: repo returns `ApiResult.Cached(nonEmptyDashboard)`; collect
+  `effects`.
+  Steps: init; `advanceUntilIdle()`.
+  Expected: `phase == Content`, `isStale == true`, `isOffline == true`; exactly
+  one `DashboardEffect.ShowMessage(@StringRes)` emitted; no `Error`.
+  Traces: AC-2, AC-4, AC-6.
+
+- **TC-AND-068-04 — Error with no prior content → Error(canRetry=true)**
+  Type: unit (JVM).
+  Test target: JVM unit/Robolectric.
+  Preconditions: repo returns `ApiResult.Error(IOException, httpCode=null)`
+  (network/timeout — analog of web `ApiError(0, "Network error")`).
+  Steps: init; `advanceUntilIdle()`.
+  Expected: `phase == Error`, `error is DashboardError.Network`, `canRetry == true`,
+  `dashboard == null`. No `ShowMessage`/`RequireReauth`.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-068-05 — 5xx Error mapping → DashboardError.Server**
+  Type: unit (JVM).
+  Test target: JVM unit/Robolectric.
+  Preconditions: repo returns `ApiResult.Error(httpCode=503, message="…")` derived
+  from a FastAPI `detail` (string form) normalized upstream.
+  Steps: init; `advanceUntilIdle()`.
+  Expected: `phase == Error`, `error is DashboardError.Server(code=503)`,
+  `retryable == true`.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-068-06 — onRefresh over Content: isRefreshing then clears on success**
+  Type: unit (JVM).
+  Test target: JVM unit/Robolectric.
+  Preconditions: reach `Content` (per TC-01); script second `getDashboard` to
+  suspend, then return `Success(updatedDashboard)`.
+  Steps: call `onRefresh()`; assert intermediate `isRefreshing == true` with
+  content still visible; resume; `advanceUntilIdle()`.
+  Expected: while in flight `phase == Content && isRefreshing == true &&
+  dashboard != null`; after success `isRefreshing == false`, `isStale == false`,
+  content replaced.
+  Traces: AC-3.
+
+- **TC-AND-068-07 — onRefresh failure keeps Content, sets isStale + ShowMessage**
+  Type: unit (JVM).
+  Test target: JVM unit/Robolectric.
+  Preconditions: reach `Content`; script second `getDashboard` to return
+  `ApiResult.Error` (or `Cached`).
+  Steps: `onRefresh()`; `advanceUntilIdle()`; collect `effects`.
+  Expected: `phase == Content` retained, `isStale == true`, `isRefreshing == false`;
+  one `ShowMessage(@StringRes)`; no transition to `Error`.
+  Traces: AC-3, AC-4.
+
+- **TC-AND-068-08 — Unauthorized → SessionExpired + RequireReauth**
+  Type: unit (JVM).
+  Test target: JVM unit/Robolectric.
+  Preconditions: repo returns `ApiResult.Unauthorized` (i.e. a 401 that survived
+  `core-network`'s single `POST /ui/session/refresh` + retry, per `client.ts`);
+  collect `effects`.
+  Steps: init; `advanceUntilIdle()`.
+  Expected: `phase == Error`, `error == DashboardError.SessionExpired`,
+  `canRetry == false`; exactly one `DashboardEffect.RequireReauth`. Cached content
+  (if any) preserved per Risk R3 default.
+  Traces: AC-4. (Security/permission case.)
+
+- **TC-AND-068-09 — onRetry from Error re-enters Loading then resolves**
+  Type: unit (JVM).
+  Test target: JVM unit/Robolectric.
+  Preconditions: reach `Error` (per TC-04); script next `getDashboard` to return
+  `Success(nonEmpty)`.
+  Steps: `onRetry()`; assert `phase == Loading`; `advanceUntilIdle()`.
+  Expected: `Loading` then `Content`; `error == null`.
+  Traces: AC-1, AC-2, AC-3.
+
+- **TC-AND-068-10 — Concurrent onRefresh collapses to one repo call (de-dup)**
+  Type: unit (JVM).
+  Test target: JVM unit/Robolectric.
+  Preconditions: `getDashboard` suspends until released; spy/count invocations on
+  the fake.
+  Steps: call `onRefresh()` three times rapidly before releasing; release;
+  `advanceUntilIdle()`.
+  Expected: repository invocation count == 1; single terminal state; no duplicate
+  effects.
+  Traces: AC-3. (FR-5 in-flight guard.)
+
+- **TC-AND-068-11 — Reducer purity / transition table**
+  Type: unit (JVM, dispatcher-free).
+  Test target: JVM unit/Robolectric.
+  Preconditions: none (pure functions `startLoad`, `toContentOrEmpty`, `toError`).
+  Steps: drive each row of the §6 transition table directly on
+  `DashboardUiState`.
+  Expected: each row produces the documented target state; functions have no side
+  effects and are deterministic.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-068-12 — State survives configuration change (no reload on rotation)**
+  Type: unit (JVM) + instrumented confirmation.
+  Test target: JVM unit/Robolectric for the StateFlow assertion; optional
+  instrumented confirm on headless emulator AVD `test35` (API 35) for real
+  ViewModel-retention across rotation.
+  Preconditions: reach `Content`; record repo call count.
+  Steps: re-collect `uiState` (simulating a new collector after rotation); for the
+  instrumented variant, rotate the host Activity.
+  Expected: same terminal value re-emitted; repository call count unchanged (no
+  extra fetch). Traces: AC-1, AC-2. (FR-7.)
+
+- **TC-AND-068-13 — Contract: repository wired to /ui/dashboard/summary shape**
+  Type: contract/MockWebServer.
+  Test target: JVM unit/Robolectric (MockWebServer; no device).
+  Preconditions: a real `DashboardApi`/repository (AND-065) under test, or a thin
+  contract harness, pointed at MockWebServer.
+  Steps: enqueue a `200` with a real `DashboardSummary` JSON body (numeric
+  `generated_at`, `earnings_breakdown`, `top_content`, etc., per §5); enqueue a
+  `422 HTTPValidationError` (`{"detail":[{"msg":"…","loc":[…],"type":"…"}]}`);
+  enqueue a `503`; enqueue a `401` then assert exactly one `POST
+  /ui/session/refresh` is issued before the single retry.
+  Expected: 200 → `ApiResult.Success` with correctly mapped fields; 422/503 →
+  `ApiResult.Error` with normalized message; 401-after-failed-refresh →
+  `ApiResult.Unauthorized`; request carries the `X-CSRF-Token` header sourced from
+  the session cookie. (Guards against regressions to the corrected endpoint/shape.)
+  Traces: AC-2, AC-4, AC-5.
+
+- **TC-AND-068-14 — Flaky/offline dev-host integration smoke**
+  Type: integration (instrumented).
+  Test target: headless emulator AVD `test35` (API 35) for CI; ALSO run once on
+  the PHYSICAL DEVICE (Samsung Galaxy A15 5G, SM-A156U, API 34, arm64-v8a) to
+  confirm real-network/airplane-mode behavior and API-34-vs-35 / arm64-vs-x86
+  parity against the unreliable plaintext dev host `http://18.222.237.167:8000`.
+  Preconditions: app built against the dev host; cleartext permitted for that host.
+  Steps: (a) cold-load with network up → Content; (b) toggle airplane mode and
+  `onRefresh()` → stale Content + ShowMessage (if cache present) or Error (if not);
+  (c) restore network and `onRetry()` → Content; (d) induce a slow (~20s) response
+  and confirm no shorter client deadline fires.
+  Expected: state transitions match §6; offline yields stale/`Error` not a crash;
+  cleartext call to the dev host succeeds only because it is allow-listed.
+  Traces: AC-1, AC-2, AC-4, AC-5. (MUST include a physical-device run for the
+  real-network/airplane-mode and ABI/API-parity portions.)
+
+- **TC-AND-068-15 — Accessibility / @StringRes resolution (downstream binding)**
+  Type: Compose-UI (instrumented).
+  Test target: headless emulator AVD `test35` (API 35); a minimal harness
+  Composable that binds `DashboardUiState`/`DashboardEffect` (formally AND-069,
+  exercised here for contract).
+  Preconditions: feed Content, Empty, Error, stale/offline states; emit a
+  `ShowMessage(resId)`.
+  Steps: render each state; resolve `ShowMessage.resId` against `strings.xml`;
+  run an accessibility assertion pass (TalkBack/`assertContentDescriptionEquals`,
+  touch-target and contrast checks via the Compose a11y test APIs).
+  Expected: every `@StringRes` resolves (no missing-resource crash); no hard-coded
+  literals leak; states expose content descriptions; no logged payload/PII.
+  Traces: AC-6, AC-2. (Accessibility + no-literal-strings security/privacy check.)
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|----------------------|------------|
+| AC-1 (all transitions unit-tested, deterministic) | TC-01, TC-02, TC-04, TC-05, TC-09, TC-11, TC-12, TC-14 |
+| AC-2 (`StateFlow<DashboardUiState>` Loading/Content/Empty/Error + isStale/isRefreshing) | TC-01, TC-02, TC-03, TC-04, TC-05, TC-09, TC-11, TC-12, TC-13, TC-14, TC-15 |
+| AC-3 (`onRefresh`/`onRetry`; concurrent refresh collapses to one call) | TC-06, TC-07, TC-09, TC-10 |
+| AC-4 (Cached → stale + ShowMessage; Unauthorized → SessionExpired + RequireReauth) | TC-03, TC-07, TC-08, TC-13, TC-14 |
+| AC-5 (no Composables/HTTP/Room added; depends only on repository) | TC-13, TC-14 |
+| AC-6 (user-facing strings via `@StringRes`, locale-agnostic) | TC-03, TC-15 |

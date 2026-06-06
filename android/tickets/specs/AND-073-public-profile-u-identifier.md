@@ -5,7 +5,8 @@ milestone: M2
 epic: E10
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-070, AND-022]
 blocks: []
 ---
@@ -26,9 +27,9 @@ Out of scope: editing one's own profile, follow/unfollow actions, blocking/repor
 
 - **Module**: new `feature-profile` module under `android/feature/feature-profile/`, namespace `com.testlogon.android.feature.profile`. Layering: `app -> feature-profile -> core-network, core-model, core-ui, core-data, core-testing`.
 - **Upstream deps**:
-  - **AND-070 — Profile API + DTOs**: provides `ProfileApi`, the `GET /ui/profile/meta/{identifier}` endpoint binding, and the DTO→domain mapping for both own and public payloads. This ticket calls into that API and renders the public domain model.
+  - **AND-070 — Profile API + DTOs**: provides `ProfileApi`, the `GET /ui/profile/public/{identifier}` endpoint binding (CORRECTED — see §16; the earlier `/ui/profile/meta/{identifier}` is the SEO meta-tags endpoint, not the profile-data read), and the DTO→domain mapping for both own and public payloads. This ticket calls into that API and renders the public domain model.
   - **AND-022 — Navigation host & routes**: provides the single-Activity `NavHost` and typed route registration. This ticket registers its route and deep link into that host.
-- **Web reference**: `frontend/src/api/endpoints/profile.ts` (endpoint shapes), `frontend/src/api/types.ts` (shared `PublicProfile` / error types), and the route `/u/:identifier` in the web router. OpenAPI: `GET http://18.222.237.167:8000/openapi.json` (path `/ui/profile/meta/{identifier}`).
+- **Web reference**: `src/api/endpoints/profile.ts` (`getPublicProfile` / `getProfileByIdentifier`), `src/api/types.ts` (`PublicProfileData` and `CrossUserProfileResp` — note there is NO `PublicProfile` type in the web sources; see §16), `src/pages/profile/PublicUserProfilePage.tsx` (the `/u/:identifier` screen), and `src/api/client.ts` (auth/CSRF/transport). OpenAPI: `GET http://18.222.237.167:8000/openapi.json` (paths `/ui/profile/public/{identifier}`, `/ui/profiles/{identifier}`, `/ui/profile/public/{identifier}/posts`).
 - **Stack**: Kotlin 2.0.21, Compose + Material 3, Hilt (KSP), Coroutines/Flow, Coil (avatar), Paging 3 (activity preview, optional), Retrofit 2.11 / OkHttp 4.12 / Moshi 1.15. minSdk 24, compileSdk/targetSdk 35.
 - **Backend reality**: dev host is **plaintext HTTP**, unreliable. App Links require HTTPS for verification; see §8 for the dev-vs-prod host split.
 
@@ -38,13 +39,13 @@ FR-1 **Route**: The screen is registered as a typed route `ProfileRoute.Public(i
 
 FR-2 **App Link**: Tapping `https://<verified-host>/u/<identifier>` opens the app directly to this screen with `identifier` extracted from the path. The link must be an **autoVerified** App Link in production. Custom-scheme fallback (`testlogon://u/<identifier>`) is also accepted for share flows.
 
-FR-3 **Load**: On entry, the screen fetches the public profile by `identifier` via `GET /ui/profile/meta/{identifier}` and shows a skeleton/loading state until the result resolves.
+FR-3 **Load**: On entry, the screen fetches the public profile by `identifier` via `GET /ui/profile/public/{identifier}` (CORRECTED from `/ui/profile/meta/{identifier}`) and shows a skeleton/loading state until the result resolves. The endpoint binding is owned by AND-070.
 
-FR-4 **Loaded state**: Render display name, `@handle`, avatar (Coil), bio, join date, and public counters (followers/following/posts where present). Null/absent optional fields are omitted, never shown as empty rows.
+FR-4 **Loaded state**: Render `display_name` (falling back to `identifier` when blank, per web), `title`, `description`, `location`, avatar (Coil, from `profile_photo_url`; optional `cover_photo_url`), join date (from `created_at`, a **unix epoch seconds** integer — CORRECTED, not an ISO string), and public counters `follower_count`/`following_count`/`post_count`. Null/absent optional fields are omitted, never shown as empty rows. NOTE (CORRECTED): the public DTO has no `handle`, `bio`, `avatar_url`, `joined_at`, or nested `stats{}` object; those names in earlier drafts do not exist in `PublicProfileData` — see §16 for the verified field list.
 
-FR-5 **Not-found state**: HTTP 404 (or backend `detail` indicating no such user) renders a dedicated empty state ("This profile doesn't exist") with a Back action. No retry button (retrying a 404 is pointless).
+FR-5 **Not-found state**: HTTP 404 (the backend returns 404 for both genuinely-missing AND suppressed/private profiles — the web `ProfileLookupError` code is `not_found_or_suppressed`) renders a dedicated empty state ("This profile doesn't exist") with a Back action. No retry button (retrying a 404 is pointless).
 
-FR-6 **Private state**: HTTP 403 (or a payload marked private) renders a "This profile is private" state showing only the minimal public stub the backend returns (handle/avatar if provided) and an explanatory message. No activity/bio shown.
+FR-6 **Private/suppressed state**: There is NO separate "private" signal in the public API (CORRECTED — see §16: `PublicProfileData` has no `is_private` field and the endpoint does not return 403 for private profiles; the web app folds private/suppressed into 404). Treat privacy as a subset of Not-found. The dedicated `Private` UI state is therefore an **Android-only product choice** and currently UNREACHABLE from the verified backend contract; either drop it and route private→NotFound, or keep it behind a defensive `is_private==true`/403 branch flagged as an unverified assumption (R2). The fine-grained audience/member enrichment that the web screen layers on (member email/phone/languages) comes from the SECONDARY `GET /ui/profiles/{identifier}` lookup (`CrossUserProfileResp.audience`), not from the public endpoint.
 
 FR-7 **Offline/stale**: If the request fails due to connectivity and a cached copy exists (Room cache via AND-070's layer), render the cached profile with a non-blocking "Showing saved copy" banner. If no cache, show an offline error state with **Retry**.
 
@@ -157,43 +158,65 @@ A single `Scaffold` with a `TopAppBar` (title = handle once known, up icon → `
 
 ## 5. API Contract
 
-Single endpoint, owned by AND-070, consumed here.
+Primary endpoint, owned by AND-070, consumed here. (All shapes below VERIFIED against OpenAPI and `src/api/types.ts: PublicProfileData` — see §16.)
 
 **Request**
 ```
-GET /ui/profile/meta/{identifier}
-Headers: X-CSRF-Token: <ui_csrf cookie>   (sent if a session cookie jar exists; public reads also work unauthenticated)
+GET /ui/profile/public/{identifier}      (CORRECTED — was /ui/profile/meta/{identifier})
+Headers (all opportunistic; public reads also work fully unauthenticated):
+  Authorization: Bearer <accessToken>     (if a session exists)
+  X-CSRF-Token: <ui_csrf cookie>           (if the cookie exists)
+  X-IMPERSONATION-TOKEN: <token>           (web-only; n/a for the Android client)
 ```
-`{identifier}` is the URL-encoded path segment.
+`{identifier}` is the URL-encoded path segment. OpenAPI description: "Public profile with social metrics and follow status. Auth is optional -- unauthenticated callers get follow fields as False."
 
-**200 — public profile**
+**200 — public profile** (`PublicProfileData`; the OpenAPI `200` schema is an empty `{}` so the field list is taken from the verified web DTO):
 ```json
 {
+  "user_id": "usr_123",
   "identifier": "ada",
+  "canonical_identifier": "ada",
   "display_name": "Ada Lovelace",
-  "handle": "ada",
-  "avatar_url": "https://cdn.testlogon.dev/a/ada.png",
-  "bio": "First programmer.",
-  "joined_at": "2025-01-04T12:00:00Z",
-  "is_private": false,
-  "stats": { "followers": 1280, "following": 73, "posts": 211 }
+  "title": "Mathematician",
+  "description": "First programmer.",
+  "location": "London",
+  "profile_photo_url": "https://cdn.testlogon.dev/a/ada.png",
+  "cover_photo_url": null,
+  "follower_count": 1280,
+  "following_count": 73,
+  "post_count": 211,
+  "is_following": false,
+  "is_followed_by": false,
+  "is_mutual": false,
+  "has_subscription_plans": true,
+  "created_at": 1735992000,
+  "discoverability": "public"
 }
 ```
+- `created_at` is a **unix epoch seconds** integer (nullable), NOT an ISO-8601 string. Render via `Instant.ofEpochSecond(created_at)`.
+- Counts are flat top-level fields (`follower_count`/`following_count`/`post_count`), NOT a nested `stats{}` object.
+- Follow fields (`is_following`/`is_followed_by`/`is_mutual`) are `false` for unauthenticated callers; this read-only screen ignores them (follow actions are out of scope) but the DTO carries them.
+- `canonical_identifier`: when present and different from the requested `identifier`, the web app **redirects** to `/u/<canonical>` (`navigate(..., { replace: true })`). The Android screen SHOULD mirror this (re-fetch / re-key on the canonical identifier) to keep cache keys and share URLs canonical.
 
-**200/403 — private**
+**404 — not found OR suppressed/private** (CORRECTED: there is no 403/`is_private` path):
 ```json
-{ "identifier": "ada", "handle": "ada", "avatar_url": null, "is_private": true }
+{ "detail": "Profile not available" }
 ```
-Treat either a 403 **or** a 200 with `"is_private": true` as the Private state. Map the minimal fields into `PublicProfileStub`.
+The web maps 404 to `ProfileLookupError("not_found_or_suppressed")` and renders a single "Profile Not Available" page covering both missing and private profiles. Classify 404 → `NotFound`.
 
-**404 — not found**
+**429 — rate limited** (ADDED — present in the web contract, omitted in earlier drafts):
 ```json
-{ "detail": "Profile not found" }
+{ "detail": "Too many profile lookups. Please try again shortly." }
 ```
+A `Retry-After` header (seconds, or HTTP-date) and/or `detail.retry_after_seconds` may be present. The web surfaces a dedicated 429 "Too Many Requests" state. Classify 429 → retryable `Error` (ideally honoring `Retry-After` before re-enabling Retry); do NOT hammer.
 
-**FastAPI `detail` mapping** (string | `[{ "msg": ... }]` | `{ "code", ... }`) is normalized by core-network's error mapper. This screen only needs the resulting human string for the generic Error state; 404 and 403 are classified by status code before message extraction.
+**FastAPI `detail` mapping** (string | `[{ "msg": ... }]` | `{ "code", ... }`) is normalized by core-network's error mapper. This screen needs the resulting human string for the generic Error state; 404 and 429 are classified by status code before message extraction.
 
-Behaviour: GET is **idempotent** → eligible for the bounded backoff retry on transient failures (timeout/5xx) per the network policy; 404/403 are **not** retried.
+**Secondary (optional) lookup** — `GET /ui/profiles/{identifier}` → `CrossUserProfileResp { identifier, canonical_identifier?, user_sub, audience, profile }`. The web fires this in parallel (ungated; failures are swallowed) to enrich the "About" tab with member-audience fields and to source a canonical redirect. It supports ETag / `If-None-Match` 304 caching. This is OUT of scope for the minimal public screen but documented so AND-070 cache keying matches (R3).
+
+**Activity preview** — `GET /ui/profile/public/{identifier}/posts?limit=&cursor=&filter=` → `ProfilePostsResponse { items[], next_cursor?, total_count }`; `limit` default 12, max 50; `filter ∈ {all,text,image,video,locked}`. Optional/follow-up per §4.
+
+Behaviour: GET is **idempotent** → eligible for the bounded backoff retry on transient failures (timeout/5xx) per the network policy; 404 is **not** retried; 429 is retried only after `Retry-After`.
 
 ## 6. Data & State Management
 
@@ -207,15 +230,16 @@ Behaviour: GET is **idempotent** → eligible for the bounded backoff retry on t
 
 | Condition | Classification | UI |
 |---|---|---|
-| 404 / `detail` "not found" | terminal | `NotFound`, no retry |
-| 403 / `is_private==true` | terminal | `Private(stub)`, no retry |
+| 404 (`not_found_or_suppressed`; covers missing AND private/suppressed) | terminal | `NotFound`, no retry |
+| 403 / `is_private==true` (NOT emitted by the verified backend; defensive only) | terminal | `Private(stub)` if the defensive branch is kept, else `NotFound` — see §16 / R2 |
+| 429 rate-limited | transient (rate) | `Error(retryable=true)`; honor `Retry-After`/`detail.retry_after_seconds` before re-enabling Retry |
 | Timeout (~20s), 5xx, conn reset | transient | `Error(retryable=true)` with Retry; or `Loaded(stale=true)` if cache hit |
 | Offline, no cache | transient | `Error(retryable=true)` |
 | Offline, cache present | degraded | `Loaded(stale=true)` + "Showing saved copy" banner |
 | Malformed body / parse error | terminal | `Error("Couldn't load profile", retryable=true)` (allow one retry) |
 
 - Honour the **~20s** OkHttp timeout and the **bounded backoff** retry for the idempotent GET (network-layer policy; this screen does not implement its own retry loop beyond the user-driven Retry button).
-- On 401, the network layer performs the single `POST /ui/session/refresh` + retry transparently; this screen never handles 401 directly.
+- On 401, the network layer performs the single `POST /ui/session/refresh` + retry transparently (VERIFIED in `src/api/client.ts`: a 401 on an authenticated request triggers one `POST /ui/session/refresh` then a single retry; failure logs out); this screen never handles 401 directly. For this public, auth-optional read a 401 is unexpected.
 - Retry is debounced (ignore taps while `Loading`).
 
 ## 8. Security & Privacy
@@ -233,7 +257,8 @@ Behaviour: GET is **idempotent** → eligible for the bounded backoff retry on t
 A matching `/.well-known/assetlinks.json` on the production host is a release-ops prerequisite (tracked in the release/CI ticket, not here).
 - **Privacy**: respect `is_private` strictly — never render bio, stats, or activity for a private profile even if a stale cache contains richer data; private state must render from the stub only and the repository must not serve cached private-richer data.
 - **No PII logging**: do not log full profile payloads; log only `identifier` (already public in the URL) and status codes.
-- Public GET works unauthenticated; the cookie/CSRF header is attached opportunistically when a session exists but is not required.
+- Public GET works unauthenticated (VERIFIED: OpenAPI "Auth is optional"); `Authorization: Bearer` and `X-CSRF-Token` (from the `ui_csrf` cookie) are attached opportunistically when a session exists but are not required.
+- NOTE (assumption): the `testlogon://u/<id>` custom scheme has no web counterpart (web is route-only, `/u/:identifier`); it is an Android share-flow product choice, not part of the verified backend/web contract — see §16 / Open assumptions.
 
 ## 9. Accessibility & i18n
 
@@ -242,7 +267,7 @@ A matching `/.well-known/assetlinks.json` on the production host is a release-op
 - Stats counters use a `pluralResources` `quantityString` (followers/following/posts) and locale-aware number formatting (`NumberFormat.getInstance()`).
 - Touch targets (Back, Retry) ≥ 48dp; TalkBack reading order: title → stale banner (if any) → identity → bio → stats. Error/empty states are announced via `liveRegion = Polite`.
 - Dynamic type and dark theme via Material 3 tokens from `core-ui`; no fixed font sizes.
-- `joined_at` rendered with `DateTimeFormatter` in the device locale/zone.
+- Join date (`created_at`, unix epoch **seconds** — see §5/§16) rendered with `DateTimeFormatter` in the device locale/zone, e.g. `Instant.ofEpochSecond(created_at).atZone(ZoneId.systemDefault())`.
 
 ## 10. Telemetry & Logging
 
@@ -312,3 +337,71 @@ A matching `/.well-known/assetlinks.json` on the production host is a release-op
 - Telemetry events emitted with no PII/payload/token logging.
 - Code review approved; merged to `android-port`; CI (build + lint + tests) green.
 - Open questions R1–R3 resolved or explicitly deferred with owners before release tagging.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its VERDICT and exact SOURCE pointer.
+
+1. **Public-profile read endpoint is `GET /ui/profile/public/{identifier}`.** VERDICT: Corrected (earlier draft said `/ui/profile/meta/{identifier}`). SOURCE: OpenAPI `GET /ui/profile/public/{identifier}` (op `get_public_profile_ui_profile_public__identifier__get`); `src/api/endpoints/profile.ts: getPublicProfile`; `src/pages/profile/PublicUserProfilePage.tsx` (`queryFn: () => getPublicProfile(identifier)`).
+2. **`/ui/profile/meta/{identifier}` is the SEO meta-tags endpoint, not the profile-data read.** VERDICT: Verified (root cause of the correction in #1). SOURCE: OpenAPI `GET /ui/profile/meta/{identifier}` (op `profile_meta_tags_ui_profile_meta__identifier__get`).
+3. **200 response is `PublicProfileData` with fields `user_id, identifier, canonical_identifier?, display_name, title?, description?, location?, profile_photo_url?, cover_photo_url?, follower_count, following_count, post_count, is_following, is_followed_by, is_mutual, has_subscription_plans, created_at?, discoverability?`.** VERDICT: Verified. SOURCE: `src/api/types.ts: PublicProfileData` (lines 503–522). (OpenAPI 200 schema is empty `{}`, so the web DTO is authoritative.)
+4. **The public DTO has NO `handle`, `bio`, `avatar_url`, `joined_at`, `is_private`, or nested `stats{}` fields.** VERDICT: Corrected (earlier draft used all of these). SOURCE: `src/api/types.ts: PublicProfileData` (none present); avatar is `profile_photo_url`, bio is `description`, name is `display_name`.
+5. **`created_at` is a unix epoch SECONDS integer, not an ISO-8601 string.** VERDICT: Corrected. SOURCE: `src/api/types.ts: PublicProfileData` (`created_at?: number | null`); `src/pages/profile/PublicUserProfilePage.tsx` (`new Date(pub.created_at * 1000)`).
+6. **Public counters are flat `follower_count`/`following_count`/`post_count`, not `stats.followers` etc.** VERDICT: Corrected. SOURCE: `src/api/types.ts: PublicProfileData`; `PublicUserProfilePage.tsx` (`pub.follower_count`, `pub.following_count`, `pub.post_count`).
+7. **The endpoint is auth-optional; unauthenticated callers get follow fields as `false`.** VERDICT: Verified. SOURCE: OpenAPI `GET /ui/profile/public/{identifier}` description ("Auth is optional -- unauthenticated callers get follow fields as False").
+8. **Private/suppressed profiles return 404 (no 403, no `is_private`); web maps to `not_found_or_suppressed`.** VERDICT: Corrected (earlier draft asserted a 403 / `is_private==true` Private state). SOURCE: `src/api/endpoints/profile.ts: mapProfileLookupError` (404 → `"not_found_or_suppressed"`, "Profile not available"); `PublicUserProfilePage.tsx` (only 404/429/500 branches; no 403/private branch).
+9. **A 429 rate-limited response with `Retry-After`/`detail.retry_after_seconds` exists and is a distinct UI state.** VERDICT: Corrected/Added (omitted in earlier drafts). SOURCE: `src/api/endpoints/profile.ts` (`parseRetryAfterSeconds`, `ProfileLookupError("rate_limited")`); `PublicUserProfilePage.tsx` (status 429 → "Too Many Requests").
+10. **Web route is `/u/:identifier`.** VERDICT: Verified. SOURCE: `src/App.tsx` (`<Route path="/u/:identifier" element={<PublicUserProfilePage />}` />).
+11. **`identifier` is trimmed but otherwise treated opaque; blank → not-found without a network call.** VERDICT: Verified. SOURCE: `src/api/endpoints/profile.ts: getProfileByIdentifier` (`if (!normalized) throw ProfileLookupError(...404...)`); `PublicUserProfilePage.tsx` (`enabled: Boolean(identifier)`, blank → `ErrorPage status={404}`).
+12. **Canonical-identifier redirect: when `canonical_identifier` differs from the requested id, navigate to `/u/<canonical>` (replace).** VERDICT: Verified. SOURCE: `PublicUserProfilePage.tsx` (`navigate(\`/u/${...canonicalIdentifier}\`, { replace: true })`).
+13. **Transport: `Authorization: Bearer`, `X-CSRF-Token` from `ui_csrf` cookie, `credentials: include`; on authenticated 401 → single `POST /ui/session/refresh` + one retry.** VERDICT: Verified. SOURCE: `src/api/client.ts` (`refreshSession()` → `POST /ui/session/refresh`; `getCookie("ui_csrf")` → `X-CSRF-Token`; `Authorization: Bearer`; 401 handling lines 194–221).
+14. **Secondary enrichment endpoint `GET /ui/profiles/{identifier}` returns `CrossUserProfileResp { identifier, canonical_identifier?, user_sub, audience, profile }`, supports ETag/304, and is fired ungated alongside the public read.** VERDICT: Verified. SOURCE: OpenAPI `GET /ui/profiles/{identifier}` (op `ui_get_profile_by_identifier_...`); `src/api/types.ts: CrossUserProfileResp` (lines 493–499); `src/api/endpoints/profile.ts: getProfileByIdentifier` (If-None-Match / 304 logic); `PublicUserProfilePage.tsx` (`detailQ`, ungated, `retry: false`).
+15. **Activity/posts endpoint `GET /ui/profile/public/{identifier}/posts` → `ProfilePostsResponse { items[], next_cursor?, total_count }`; `limit` default 12 / max 50; `filter ∈ {all,text,image,video,locked}`.** VERDICT: Verified. SOURCE: OpenAPI `GET /ui/profile/public/{identifier}/posts` (limit default 12, max 50; cursor; filter); `src/api/endpoints/profile.ts: getProfilePosts`; `src/api/types.ts: ProfilePostsResponse`.
+16. **App Links require HTTPS + Digital Asset Links (`/.well-known/assetlinks.json`) verification; cleartext HTTP host cannot autoVerify.** VERDICT: Verified (framework ref). SOURCE: framework ref — https://developer.android.com/training/app-links/verify-android-applinks.
+17. **Type-safe Navigation-Compose deep links via `navDeepLink<T>(basePath = ...)` and `composable<T>(deepLinks = ...)`.** VERDICT: Verified (framework ref). SOURCE: framework ref — https://developer.android.com/guide/navigation/design/deep-link and https://developer.android.com/guide/navigation/design/type-safety.
+
+### Corrections made
+- C1: Endpoint path `/ui/profile/meta/{identifier}` → `/ui/profile/public/{identifier}` (claims #1/#2). Fixed in §2, FR-3, §5.
+- C2: Response shape rewritten — removed non-existent `handle`/`bio`/`avatar_url`/`joined_at`/`is_private`/`stats{}`; substituted the real `PublicProfileData` fields (claims #3/#4/#6). Fixed in FR-4, §5.
+- C3: `created_at` documented as unix epoch SECONDS, not an ISO string (claim #5). Fixed in FR-4, §5, §9.
+- C4: Removed the 403/`is_private` "Private" contract; private/suppressed folds into 404 `not_found_or_suppressed` (claim #8). Fixed in FR-6, §5, §7. The `Private` UI state is now flagged as Android-only/unreachable (R2).
+- C5: Added the 429 rate-limited path with `Retry-After`/`detail.retry_after_seconds` (claim #9). Fixed in §5, §7.
+- C6: Replaced the non-existent web type name `PublicProfile`/`PublicProfileStub` reference with the real `PublicProfileData` / `CrossUserProfileResp` (§2). The Android domain types `PublicProfile`/`PublicProfileStub` are AND-070 abstractions, not web DTOs — left as such but clarified.
+- C7: Documented the canonical-identifier redirect, the secondary `/ui/profiles/{identifier}` enrichment lookup, and the posts endpoint that the web screen actually uses (claims #12/#14/#15).
+
+### Open assumptions
+- A1 (R1/R3): Production HTTPS App Link host and the `assetlinks.json` publishing owner are unverified — no source in OpenAPI/web; the dev host `18.222.237.167:8000` is cleartext HTTP and cannot autoVerify. Unverifiable from provided sources (release-ops concern).
+- A2: The `testlogon://u/<id>` custom scheme has no web counterpart (web is route-only, claim #10); it is an Android-only product choice, not part of the verified backend/web contract.
+- A3 (R2): A defensive 403 / `is_private==true` "Private" branch is retained as an unverified assumption only; the verified backend never emits it (claim #8). Recommend routing private→`NotFound` unless backend behavior changes.
+- A4: `ApiResult.Stale` / Room cache semantics (FR-7, offline stale banner) belong to AND-070 and are not represented in the web client or OpenAPI; treated as an upstream-owned assumption (the web uses an in-memory ETag map + TanStack Query `staleTime`, not a persistent offline cache).
+- A5: `discoverability` field values (e.g. `"public"`) are present in the DTO but their enumeration is not specified in OpenAPI (200 schema is empty `{}`); not consumed by this screen.
+
+## 17. Test Plan
+
+IDs `TC-AND-073-NN`. Targets: JVM = JVM unit/Robolectric (local); MWS = contract via MockWebServer (JVM); EMU = headless emulator AVD `test35` (x86_64, API 35); DEV = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). "Traces: AC-#" links to §14.
+
+- **TC-AND-073-01** — Type: unit (JVM). Target: `PublicProfileViewModel` with a fake `ProfileRepository`. Preconditions: repo returns `ApiResult.Success(PublicProfile)` for `identifier="ada"`. Steps: construct VM (init runs `load()`); collect `uiState` via Turbine. Expected: `Loading` → `Loaded(stale=false)` carrying display name, description, counts, `created_at`-derived join date. Traces: AC-2.
+- **TC-AND-073-02** — Type: unit (JVM). Target: VM. Preconditions: repo returns `ApiResult.Error` classified 404 (`not_found_or_suppressed`). Steps: init; collect. Expected: `Loading` → `NotFound`; no retryable error; repository called exactly once. Traces: AC-4.
+- **TC-AND-073-03** — Type: unit (JVM). Target: VM. Preconditions: `identifier` blank/whitespace. Steps: init; collect; assert repo never invoked. Expected: `NotFound` with zero network/repository calls. Traces: AC-4. (Verifies claim #11.)
+- **TC-AND-073-04** — Type: unit (JVM). Target: VM. Preconditions: repo returns transient `Error` (timeout/5xx) then, on `retry()`, `Success`. Steps: collect initial `Error(retryable=true)`; call `retry()`; collect. Expected: `Error(retryable=true)` → `Loading` → `Loaded`. Retry debounced while `Loading`. Traces: AC-5, AC-7.
+- **TC-AND-073-05** — Type: unit (JVM). Target: VM. Preconditions: network failure with a Room cache hit (`ApiResult.Stale` or `Success(stale=true)`). Steps: init; collect. Expected: `Loaded(stale=true)`; UI exposes the "Showing saved copy" banner flag. Traces: AC-5.
+- **TC-AND-073-06** — Type: contract/MockWebServer (JVM). Target: `ProfileApi`/repository GET against MWS. Preconditions: MWS enqueues `200` with a real `PublicProfileData` body (epoch-seconds `created_at`, flat `*_count`, no `is_private`). Steps: call `getPublicProfile("ada")`; assert request line `GET /ui/profile/public/ada` and parsed domain fields. Expected: path is `/ui/profile/public/{identifier}` (NOT `/meta/`); `created_at` parsed as epoch seconds; counts mapped from flat fields. Traces: AC-2. (Locks corrections C1–C3, C6.)
+- **TC-AND-073-07** — Type: contract/MockWebServer (JVM). Target: repository error mapping. Preconditions: MWS enqueues `404 {"detail":"Profile not available"}`, then in a second case `429` with `Retry-After: 30`. Steps: issue GET for each. Expected: 404 → terminal `NotFound` (not retried); 429 → retryable `Error` that honors `Retry-After` (no immediate re-request). Traces: AC-4, AC-5. (Locks corrections C4–C5.)
+- **TC-AND-073-08** — Type: contract/MockWebServer (JVM). Target: transport/header attachment. Preconditions: a session cookie jar/token exists. Steps: issue the public GET; inspect the recorded MWS request. Expected: when a session exists, `Authorization: Bearer` and `X-CSRF-Token` (from `ui_csrf`) are present; when no session, the GET still succeeds with neither header (auth-optional). Traces: AC-2. (Verifies claims #7, #13.)
+- **TC-AND-073-09** — Type: Compose-UI (EMU; `createAndroidComposeRule`). Target: `PublicProfileScreen` state rendering. Preconditions: VM seeded with each of `Loaded(stale=false)`, `Loaded(stale=true)`, `NotFound`, `Error(retryable=true)`. Steps: assert hallmark nodes. Expected: loaded shows name/description/stats; stale shows "Showing saved copy" banner iff `stale`; not-found shows title + no Retry; error shows Retry; clicking Retry invokes `viewModel.retry()`. Traces: AC-2, AC-4, AC-5.
+- **TC-AND-073-10** — Type: Compose-UI / accessibility (EMU). Target: `PublicProfileScreen`. Preconditions: `Loaded` state; TalkBack semantics assertions. Steps: assert avatar `contentDescription` = "Avatar of <name/identifier>"; Back and Retry touch targets ≥ 48dp; error/empty states `liveRegion = Polite`; reading order title → banner → identity → description → stats. Expected: all a11y assertions pass. Traces: AC-2, AC-7. (Manual TalkBack spot-check on DEV recommended for real screen-reader announcement order.)
+- **TC-AND-073-11** — Type: instrumented/e2e deep link (EMU). Target: App Link + custom scheme resolution into the NavHost. Preconditions: app installed; `APP_LINK_HOST` set for the build. Steps: `adb shell am start -W -a android.intent.action.VIEW -d "https://<host>/u/ada"` and `-d "testlogon://u/ada"`; also `/u/a%20b`. Expected: `PublicProfileScreen` opens with `identifier=="ada"` (and `"a b"` after one URL-decode); both URI forms resolve the same route. Traces: AC-1. (Custom scheme is the Android-only path — assumption A2.)
+- **TC-AND-073-12** — Type: instrumented/e2e (EMU). Target: deep-link cold-start Back behavior. Preconditions: app process not running; launched via the deep link (empty back stack). Steps: press system Back. Expected: navigates to home/start destination, not app exit. Traces: AC-6.
+- **TC-AND-073-13** — Type: instrumented/e2e — verified App Link (DEV, MUST run on physical device). Target: real autoVerify + Digital Asset Links handoff. Preconditions: release build signed with the production cert, `assetlinks.json` published, A15 (SM-A156U, API 34) online via adb. Steps: open `https://<verified-host>/u/ada` from a real browser/another app; confirm the app (not Chrome) handles it; check `adb shell pm get-app-links <pkg>` shows `verified`. Expected: link opens `PublicProfileScreen` directly with no disambiguation chooser. Traces: AC-1. (Needs the real device because emulator autoVerify/Asset-Links handoff and the on-device App Links verifier are not reliably reproducible on the headless AVD; also exercises arm64/API-34.)
+- **TC-AND-073-14** — Type: integration — offline/flaky-host (DEV preferred; EMU acceptable). Target: full screen against a toggled-connectivity device. Preconditions: profile previously loaded and cached (AND-070 Room); then enable airplane mode. Steps: re-open the screen offline; then with no cache for a fresh identifier offline. Expected: cached identifier → `Loaded(stale=true)` + "Showing saved copy" banner (never serves richer data for a now-private/suppressed profile, per §8); fresh-with-no-cache → `Error(retryable=true)` with working Retry once back online. Traces: AC-5. (Physical-device airplane-mode toggling is more faithful than emulator network shaping.)
+
+### Coverage matrix
+| AC | Covered by |
+|---|---|
+| AC-1 (link opens profile; https verified + custom scheme) | TC-11, TC-13 |
+| AC-2 (valid public profile renders name/avatar/description/stats) | TC-01, TC-06, TC-08, TC-09, TC-10 |
+| AC-3 (private handled) | TC-02, TC-07 (private folds into 404 `not_found_or_suppressed` — see §16 C4/A3; no separate 403 path) |
+| AC-4 (404 → NotFound, no Retry) | TC-02, TC-03, TC-07, TC-09 |
+| AC-5 (transient error + Retry; stale cache banner) | TC-04, TC-05, TC-07, TC-09, TC-14 |
+| AC-6 (deep-link cold-start Back → home) | TC-12 |
+| AC-7 (unit + Compose + deep-link tests green in CI) | TC-01..TC-12 (CI: JVM/MWS local, EMU `test35`; TC-13/TC-14 on DEV) |

@@ -5,9 +5,10 @@ milestone: M2
 epic: E10
 priority: P0
 size: M
-status: draft
 depends_on: [AND-070]
 blocks: [AND-071, AND-072, AND-073, AND-076]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-075 — Profile ViewModels
@@ -29,11 +30,11 @@ The goal is to land fully unit-tested, side-effect-free-on-construction ViewMode
 
 ## 3. Functional Requirements
 
-**FR-1 — Own profile load.** `OwnProfileViewModel` loads the authenticated user's profile via the repository (backed by `GET /ui/me` / `GET /ui/profile/meta/{identifier}` for the current user) on first collection, exposing `Loading -> Content | Error` with the mapped domain `Profile` (avatar, bio, display name, stats, links).
+**FR-1 — Own profile load.** `OwnProfileViewModel` loads the authenticated user's profile via the repository (backed by `GET /ui/profile`, which the web client calls as `getProfile()` and which returns `{ profile: Profile }`) on first collection, exposing `Loading -> Content | Error` with the mapped domain `Profile` (display name, description/bio, photo + cover URLs, title, location). [CORRECTED — the previous draft cited `GET /ui/me` / `GET /ui/profile/meta/{identifier}`; `/ui/me` is the identity/session endpoint and `/ui/profile/meta/{identifier}` serves meta tags, not the editable own-profile payload. Note: domain `Profile` does not include nested `stats` or `links` fields — see §5.]
 
-**FR-2 — Public profile load by identifier.** `PublicProfileViewModel` takes an `identifier` (username or id) from `SavedStateHandle` (route arg from AND-073) and loads the public profile, mapping the distinct outcomes **found**, **not-found (404)**, and **private/forbidden (403)** into discrete UI states.
+**FR-2 — Public profile load by identifier.** `PublicProfileViewModel` takes an `identifier` (username or id) from `SavedStateHandle` (route arg from AND-073) and loads the public profile via `GET /ui/profile/public/{identifier}` (web `getPublicProfile`, returns `PublicProfileData`), optionally enriched by `GET /ui/profiles/{identifier}` (web `getProfileByIdentifier`, returns `CrossUserProfileResp` with an `audience` field). It maps the distinct outcomes **found**, **not-found-or-suppressed (404)**, and **rate-limited (429)** into discrete UI states, falling back to a generic error otherwise. [CORRECTED — the previous draft assumed a `403 → Private` outcome; neither the OpenAPI spec (only 200/422 documented) nor the web client distinguishes 403. The web `PublicUserProfilePage` collapses private/suppressed profiles into the 404 "Profile Not Available" path and additionally handles 429. The `Private` UI state is retained only as an OPTIONAL/UNVERIFIED rendering of the 404 `not_found_or_suppressed` code, never a separate 403; see §16.]
 
-**FR-3 — Edit profile.** `EditProfileViewModel` seeds an editable form from the current profile, exposes field-level edit events (display name, bio, links), runs synchronous client-side validation, tracks dirty state, and performs save via `PATCH /ui/profile`. It blocks save while invalid or in-flight and surfaces field errors and server-side `detail` errors.
+**FR-3 — Edit profile.** `EditProfileViewModel` seeds an editable form from the current profile, exposes field-level edit events (display name, description/bio, and other editable basics such as title/location), runs synchronous client-side validation, tracks dirty state, and performs save via `PATCH /ui/profile` (web `patchProfile`, request schema `ProfilePatchReq`, response `{ profile: Profile }`). It blocks save while invalid or in-flight and surfaces field errors and server-side `detail` errors. [CORRECTED — the backend `ProfilePatchReq` has `display_name`, `description`, `profile_photo_url`, `cover_photo_url`, `title`, `location`, `first/middle/last_name`, etc.; there is NO `bio` field (the equivalent is `description`) and NO `links` field. The `links` form field from the original draft is unsupported by the API and is dropped / flagged as an open assumption in §16.]
 
 **FR-4 — Refresh & retry.** Own and public ViewModels support pull-to-refresh (non-blocking, preserves last content) and a retry action from the error state (re-runs the load).
 
@@ -121,7 +122,7 @@ sealed interface OwnProfileEffect {
 
 ### 4.3 PublicProfileViewModel
 
-Reads `identifier` from `SavedStateHandle` (route arg key `identifier`, defined by AND-073). Distinct phases for `NotFound` and `Private` so the screen renders dedicated empty states.
+Reads `identifier` from `SavedStateHandle` (route arg key `identifier`, defined by AND-073). Distinct phases for `NotFound` and (optionally) `Private` so the screen renders dedicated empty states. NOTE (corrected): the backend does not emit a 403 for private profiles — it returns 404 `not_found_or_suppressed`. The `Private` phase is therefore reachable only if AND-070's mapping chooses to distinguish a suppressed-but-existing profile from a true 404; absent that signal, treat 404 as `NotFound`. A `RateLimited` outcome (429) should also be representable; if the enum below does not yet carry it, it maps to `Error` (retryable after `Retry-After`).
 
 ```kotlin
 @HiltViewModel
@@ -208,36 +209,40 @@ sealed interface EditProfileEffect {
 
 ## 5. API Contract
 
-This ticket consumes — it does not define — HTTP contracts; the Retrofit `ProfileApi` and DTOs are owned by AND-070. The endpoints reached transitively are:
+This ticket consumes — it does not define — HTTP contracts; the Retrofit `ProfileApi` and DTOs are owned by AND-070. The endpoints reached transitively (all VERIFIED against the OpenAPI index and `src/api/endpoints/profile.ts`) are:
 
-- `GET /ui/profile/meta/{identifier}` → public/own profile payload.
-- `GET /ui/me` → authenticated identity used to resolve the own-profile identifier.
-- `PATCH /ui/profile` → partial update (body `ProfilePatch`).
+- `GET /ui/profile` → own profile; web `getProfile()` returns `{ profile: Profile }`. [CORRECTED from `GET /ui/profile/meta/{identifier}` + `GET /ui/me`.]
+- `GET /ui/profile/public/{identifier}` → public storefront profile; web `getPublicProfile()` returns `PublicProfileData` (includes `follower_count`, `following_count`, `post_count`, `is_following`, etc.).
+- `GET /ui/profiles/{identifier}` → cross-user lookup; web `getProfileByIdentifier()` returns `CrossUserProfileResp` (`{ identifier, canonical_identifier?, user_sub, audience: "owner"|"member"|"public", profile }`); used for audience/canonical-redirect enrichment.
+- `PATCH /ui/profile` → partial update; request schema `ProfilePatchReq`, response `{ profile: Profile }`. [CORRECTED — body type was `ProfilePatch`; the backend schema is `ProfilePatchReq`.]
+- `GET /ui/me` and `GET /ui/profile/meta/{identifier}` DO exist but are NOT the own-/public-profile data endpoints (`/ui/me` = identity/session; `/ui/profile/meta/{identifier}` = social meta tags).
 
-The mapped domain `Profile` (post-AND-070 mapping) the ViewModels rely on:
+The web `Profile` DTO (`src/api/types.ts: Profile`, the shape AND-070 maps from) — CORRECTED; the original illustrative JSON used fabricated field names:
 
 ```json
 {
-  "identifier": "jane",
-  "user_id": "u_123",
   "display_name": "Jane Doe",
-  "bio": "Builder.",
-  "avatar_url": "https://.../a.jpg",
-  "cover_url": "https://.../c.jpg",
-  "links": ["https://jane.dev"],
-  "stats": { "followers": 12, "following": 9, "posts": 4 },
-  "is_self": true,
-  "is_private": false
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "title": "Builder",
+  "description": "Builder.",
+  "location": "NYC",
+  "displayed_email": "jane@example.com",
+  "profile_photo_url": "https://.../a.jpg",
+  "cover_photo_url": "https://.../c.jpg",
+  "languages": []
 }
 ```
 
-`PATCH /ui/profile` request body the edit VM emits:
+Notes on the corrected shape: the field is `description` (NOT `bio`), `profile_photo_url`/`cover_photo_url` (NOT `avatar_url`/`cover_url`); there is NO `links`, NO nested `stats`, NO `is_self`, NO `is_private` on `Profile`. Social counts live on `PublicProfileData` as flat `follower_count`/`following_count`/`post_count`; viewer-relationship is `is_following`/`is_followed_by`/`is_mutual`; the "owner vs member vs public" distinction is `CrossUserProfileResp.audience`, not an `is_self` boolean. The mapped domain `Profile` and any `stats`/`links` convenience aggregation must be agreed with AND-070 (see §13 R-1 and §16 Open assumptions).
+
+`PATCH /ui/profile` request body the edit VM emits (CORRECTED — `bio`→`description`, `links` removed; all `ProfilePatchReq` fields are optional/nullable so the patch may carry any subset):
 
 ```json
-{ "display_name": "Jane Doe", "bio": "Builder.", "links": ["https://jane.dev"] }
+{ "display_name": "Jane Doe", "description": "Builder.", "title": "Builder", "location": "NYC" }
 ```
 
-Error mapping (handled in repository, surfaced to VM as `AppError.kind`): HTTP 401 → repository performs the single `POST /ui/session/refresh` retry before returning; 403 → `Forbidden` (→ `Private`); 404 → `NotFound`; 422 `detail:[{msg,loc}]` → `Validation(fieldErrors)` keyed by `loc` tail; timeouts (~20s) → `Timeout`. All write requests carry the `X-CSRF-Token` header from the `ui_csrf` cookie; that plumbing belongs to `core-network`, not this ticket.
+Error mapping (handled in repository, surfaced to VM as `AppError.kind`): HTTP 401 → repository performs the single `POST /ui/session/refresh` retry before returning (web dedupes concurrent refreshes via a shared `refreshPromise`; on refresh failure the web client logs out with `session_expired`); 404 → `NotFound` (web `getProfileByIdentifier` maps this to `ProfileLookupError("not_found_or_suppressed")`, i.e. it ALSO covers private/suppressed profiles); 429 → rate-limited (web parses `Retry-After`); 422 `detail:[{msg,loc?}]` → `Validation(fieldErrors)` keyed by `loc` tail; timeouts (~20s) → `Timeout`. The FastAPI `detail` may be `string | [{msg,...}] | {code,...}` (web `normalizeErrorDetail`/`mapAuthorizationError`). [CORRECTED — a discrete `403 → Forbidden/Private` mapping is NOT supported by the sources; OpenAPI documents only 200/422 for these routes and the web client has no 403 branch. `loc` is present on standard FastAPI 422 items but its exact field-mapping table is unverified — see §16.] All write requests carry the `X-CSRF-Token` header from the `ui_csrf` cookie; that plumbing belongs to `core-network`, not this ticket.
 
 ## 6. Data & State Management
 
@@ -265,9 +270,9 @@ Error mapping (handled in repository, surfaced to VM as `AppError.kind`): HTTP 4
 ## 8. Security & Privacy
 
 - No credentials, cookies, or CSRF tokens are handled in this layer; the session cookie jar and `X-CSRF-Token` injection are owned by `core-network`. ViewModels must never log raw profile payloads or URLs containing tokens.
-- Private/forbidden profiles (403) must render the dedicated `Private` state with **no** leaked fields — the VM discards any partial body on 403/404 and stores only the phase.
+- Private/suppressed/not-found profiles (surfaced by the backend as **404 `not_found_or_suppressed`**, not 403 — corrected) must render the dedicated empty (`NotFound`/optional `Private`) state with **no** leaked fields — the VM discards any partial body on 404 (and on 403 should one ever occur) and stores only the phase.
 - Outbound `OpenUrl` effects carry user-controlled link strings; the VM validates they are `http(s)` schemes in `validate`/before emit to avoid `intent://`/`javascript:` smuggling; non-http links are rejected with a field/snackbar error.
-- `is_self` from the payload gates the presence of `EditClicked` affordance state (`canEdit` flag) so a public VM never exposes edit actions.
+- "Is this my own profile?" gates the `EditClicked` affordance state (`canEdit` flag) so a public VM never exposes edit actions. [CORRECTED — there is no `is_self` field on the payload; the web client derives ownership from `CrossUserProfileResp.audience == "owner"` and/or `viewerUserId == PublicProfileData.user_id`. AND-070's mapping should expose this as a derived `isSelf`/`audience` value.]
 
 ## 9. Accessibility & i18n
 
@@ -319,7 +324,7 @@ Coverage target ≥ 90% line/branch on the three VM classes. Tests run headlessl
 ## 13. Risks & Open Questions
 
 - **R-1:** AND-070's exact `Profile` field names / `ProfilePatch` shape may differ from the web `profile.ts`; mitigate by mapping at the repository boundary and keeping VM coupled only to domain `Profile`. (Owner: AND-070.)
-- **R-2:** Own-identifier resolution — whether own profile is fetched via `/ui/me` then `/ui/profile/meta/{identifier}` or a dedicated own endpoint affects `getOwnProfile`. Confirm against `/openapi.json`. (Q-1)
+- **R-2 (RESOLVED):** Own-identifier resolution. Confirmed against OpenAPI + `src/api/endpoints/profile.ts`: a dedicated `GET /ui/profile` returns the own profile directly as `{ profile: Profile }` — no `/ui/me` round-trip and no `/ui/profile/meta/{identifier}` are needed for `getOwnProfile`. Q-1 closed.
 - **Q-2:** Should an in-progress edit form survive process death via `SavedStateHandle`? Deferred; current design re-seeds from server on reload.
 - **Q-3:** Server-side `422` `loc` paths must map cleanly to `FieldErrors`; the `loc`→field mapping table should be confirmed once AND-072 finalizes the PATCH contract.
 - **R-4:** Unreliable dev host means flaky integration; this ticket avoids real network in tests entirely (fakes), so risk is contained to downstream integration tickets.
@@ -344,3 +349,87 @@ Coverage target ≥ 90% line/branch on the three VM classes. Tests run headlessl
 - Strings extracted to `strings.xml`; no hardcoded user-facing literals.
 - Telemetry/analytics emitted via injected interfaces with no payload leakage; debug-gated verbose logs.
 - Downstream owners (AND-071/072/073) reviewed and signed off on the UiState/Event/Effect contracts; open questions Q-1..Q-3 resolved or explicitly deferred with owners.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources: OpenAPI index/spec (`reference/openapi.index.txt`, `reference/openapi.pretty.json`) and the web reference app under `reference/src/`.
+
+1. **Own profile is fetched from a dedicated `GET /ui/profile` returning `{ profile: Profile }`.** VERDICT: Corrected (the draft said `GET /ui/me` + `GET /ui/profile/meta/{identifier}`). SOURCE: OpenAPI `GET /ui/profile` (op `ui_get_profile_ui_profile_get`); `src/api/endpoints/profile.ts: getProfile`.
+2. **`GET /ui/me` is identity/session, not the own-profile data endpoint.** VERDICT: Corrected. SOURCE: OpenAPI `GET /ui/me` (op `ui_me_ui_me_get`).
+3. **`GET /ui/profile/meta/{identifier}` is a meta-tags endpoint, not the profile payload.** VERDICT: Corrected. SOURCE: OpenAPI `GET /ui/profile/meta/{identifier}` (op `profile_meta_tags_ui_profile_meta__identifier__get`).
+4. **Public profile is fetched from `GET /ui/profile/public/{identifier}` returning `PublicProfileData`.** VERDICT: Corrected (draft used `/ui/profile/meta/{identifier}`). SOURCE: OpenAPI `GET /ui/profile/public/{identifier}` (op `get_public_profile_...`); `src/api/endpoints/profile.ts: getPublicProfile`; `src/api/types.ts: PublicProfileData`.
+5. **Cross-user lookup `GET /ui/profiles/{identifier}` returns `CrossUserProfileResp` with an `audience` field ("owner"|"member"|"public").** VERDICT: Verified. SOURCE: OpenAPI `GET /ui/profiles/{identifier}` (op `ui_get_profile_by_identifier_...`); `src/api/endpoints/profile.ts: getProfileByIdentifier`; `src/api/types.ts: CrossUserProfileResp` / `ProfileViewAudience`.
+6. **Edit save uses `PATCH /ui/profile` with request schema `ProfilePatchReq` and response `{ profile: Profile }`.** VERDICT: Corrected (draft body type `ProfilePatch`; method/path were right). SOURCE: OpenAPI `PATCH /ui/profile` (op `ui_patch_profile_ui_profile_patch`, `req=ProfilePatchReq`); `src/api/endpoints/profile.ts: patchProfile`.
+7. **The `Profile` field for the long-text field is `description`, NOT `bio`.** VERDICT: Corrected. SOURCE: `src/api/types.ts: Profile`; `components.schemas.ProfilePatchReq.description` in `openapi.pretty.json`.
+8. **Photo fields are `profile_photo_url` / `cover_photo_url`, NOT `avatar_url` / `cover_url`.** VERDICT: Corrected. SOURCE: `src/api/types.ts: Profile`; `ProfilePatchReq.profile_photo_url`/`cover_photo_url`.
+9. **`Profile` has no `links` field and `ProfilePatchReq` accepts no `links`.** VERDICT: Corrected (draft's `links` form field and PATCH body key are unsupported). SOURCE: `src/api/types.ts: Profile`; `components.schemas.ProfilePatchReq` (full property list contains no `links`).
+10. **`Profile` has no nested `stats` object; social counts are flat fields (`follower_count`/`following_count`/`post_count`) on `PublicProfileData`.** VERDICT: Corrected. SOURCE: `src/api/types.ts: PublicProfileData`.
+11. **`Profile` has no `is_self`/`is_private` booleans; ownership comes from `CrossUserProfileResp.audience == "owner"` or `viewerUserId == PublicProfileData.user_id`.** VERDICT: Corrected. SOURCE: `src/api/types.ts: Profile` / `CrossUserProfileResp` / `PublicProfileData`; `src/pages/profile/PublicUserProfilePage.tsx` (`isOwnerAudience`, `isOwnProfile`).
+12. **Private/suppressed profiles surface as 404 `not_found_or_suppressed`, not 403.** VERDICT: Corrected (draft mapped `403 → Private`). SOURCE: `src/api/endpoints/profile.ts: getProfileByIdentifier` (`mapProfileLookupError`, `ProfileLookupErrorCode`); `src/pages/profile/PublicUserProfilePage.tsx` (only 404/429/else branches, no 403). OpenAPI documents only 200/422 for these routes.
+13. **A 429 rate-limited outcome exists for profile lookups (with `Retry-After`).** VERDICT: Verified. SOURCE: `src/api/endpoints/profile.ts` (`rate_limited`, `parseRetryAfterSeconds`); `PublicUserProfilePage.tsx` 429 branch.
+14. **401 triggers a single `POST /ui/session/refresh` retry, deduped, with logout-on-failure.** VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh_...`, no request body); `src/api/client.ts: refreshSession` + the 401 handler (`refreshPromise` dedupe, `logout("session_expired")`).
+15. **Write requests carry `X-CSRF-Token` sourced from the `ui_csrf` cookie; session is cookie-based (`credentials: include`).** VERDICT: Verified. SOURCE: `src/api/client.ts` (CSRF header from `getCookie("ui_csrf")`, `credentials: "include"`); same pattern in `src/api/endpoints/profile.ts`.
+16. **FastAPI `detail` may be `string | [{msg,...}] | {code,...}`; 422 errors carry `loc`.** VERDICT: Verified (shape) / Unverified (exact `loc`→field table). SOURCE: `src/api/client.ts: normalizeErrorDetail` / `mapAuthorizationError`; OpenAPI `HTTPValidationError` (standard FastAPI 422). The precise `loc` tail per editable field is not enumerated in the sources.
+17. **ViewModel framework choices (Hilt `@HiltViewModel`, `StateFlow`, `SavedStateHandle`, `viewModelScope`).** VERDICT: Verified (framework ref). SOURCE: framework ref — Android docs: developer.android.com/topic/libraries/architecture/viewmodel, developer.android.com/training/dependency-injection/hilt-jetpack (`@HiltViewModel`), kotlinlang.org/api/kotlinx.coroutines (StateFlow/SharedFlow).
+18. **`extraBufferCapacity` + `BufferOverflow.DROP_OLDEST` for one-shot effect `SharedFlow`.** VERDICT: Verified (framework ref). SOURCE: framework ref — kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-mutable-shared-flow.
+19. **`http(s)`-only validation of outbound link strings to block `intent://`/`javascript:`.** VERDICT: Unverified-assumption (the web `Profile` has no `links`, so there is no web precedent to cite). SOURCE: n/a — see Open assumptions.
+20. **Stale-while-error from a local Room cache via `repo.cachedOwnProfile()`.** VERDICT: Unverified-assumption (no web equivalent; web uses an in-memory etag `profileLookupCache` only, not offline content). SOURCE: `src/api/endpoints/profile.ts` (in-memory `profileLookupCache`, `If-None-Match`/etag) shows caching exists but not an offline-content store; the Room cache is an AND-070 design choice.
+
+### Corrections made
+
+- §FR-1 / §5: own profile endpoint changed from `GET /ui/me` + `GET /ui/profile/meta/{identifier}` to `GET /ui/profile` (`{ profile: Profile }`).
+- §FR-2 / §4.3 / §5 / §8: public profile endpoint changed to `GET /ui/profile/public/{identifier}` (+ optional `GET /ui/profiles/{identifier}`); removed the `403 → Private` mapping (private/suppressed = 404 `not_found_or_suppressed`); added 429 rate-limited handling.
+- §FR-3 / §5: PATCH body corrected — `bio`→`description`, `links` removed; request schema named `ProfilePatchReq`; response wrapped as `{ profile: Profile }`.
+- §5: replaced the fabricated `Profile` JSON (had `bio`, `avatar_url`, `cover_url`, `links`, nested `stats`, `is_self`, `is_private`) with the real `src/api/types.ts: Profile` shape; clarified social counts live flat on `PublicProfileData` and ownership comes from `audience`.
+- §8: removed reliance on a non-existent `is_self` field; ownership derived from `audience`/`user_id`.
+- §13 R-2 / Q-1: marked RESOLVED — dedicated `GET /ui/profile` confirmed.
+
+### Open assumptions
+
+- **`stats`/`links` on domain `Profile`:** the API exposes neither on `Profile`; counts exist only on `PublicProfileData` and there is no links concept. Whether AND-070's domain `Profile` synthesizes `stats`/drops `links` must be agreed (R-1). Unverifiable here because it depends on AND-070's not-yet-landed mapping.
+- **`Private` UI phase:** retained as optional; only reachable if AND-070 distinguishes suppressed-from-true-404. No backend 403 signal exists to drive it.
+- **`loc`→`FieldErrors` mapping table (Q-3):** the 422 `loc` shape is standard FastAPI but the exact per-field tail for `display_name`/`description`/etc. is not enumerated in the sources; confirm once AND-072 finalizes the PATCH contract.
+- **`http(s)`-only link validation:** no web precedent (no links feature); kept as a defensive Android-side assumption.
+- **Offline/stale Room cache (`cachedOwnProfile()`):** web has only in-memory etag caching, not an offline content store; the Room-backed stale path is an AND-070 design decision, not a verified web behavior.
+- **~20s timeout / bounded backoff for GETs:** an OkHttp/`core-network` configuration assumption; not specified by the sources.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-075-NN`. Unless noted, cases are pure JVM unit tests (no device) using `runTest` + `StandardTestDispatcher` (injected `DispatcherProvider`), Turbine for `StateFlow`/`SharedFlow`, and a fake/mock `ProfileRepository` — appropriate because this ticket ships ViewModels with no Compose UI and no real network. "Traces" link to §14 Acceptance Criteria (AC-1..AC-8).
+
+**Test targets:** `JVM unit/Robolectric` (local, no device) is the primary target for every VM case here. The emulator AVD `test35` (API 35) and the physical Samsung Galaxy A15 5G (SM-A156U, API 34) targets are listed for the small number of cases that benefit from a device; none of this ticket's logic is hardware-dependent (no camera/biometrics/FCM/WebRTC/Telecom), so device runs are only forward-looking smoke checks deferred to AND-071/072/073/076 and are flagged accordingly.
+
+- **TC-AND-075-01 — Own: no I/O on construction.** Type: unit (JVM). Target: JVM unit. Preconditions: fake repo records all calls; VM constructed but `state` not yet collected. Steps: construct `OwnProfileViewModel`; assert no repo method invoked; collect `state` once. Expected: initial emission is `phase=Loading` with `profile=null` and zero repo calls until first subscription/`Load`. Traces: AC-3.
+- **TC-AND-075-02 — Own: load happy path.** Type: unit (JVM). Target: JVM unit. Preconditions: repo returns `Success(profileFixture())`. Steps: send `Load`; advance dispatcher. Expected: emitted sequence `Loading → Content` with mapped `Profile` (display_name/description/profile_photo_url populated). Traces: AC-1, AC-2.
+- **TC-AND-075-03 — Own: offline with cache → stale content.** Type: unit (JVM). Target: JVM unit. Preconditions: repo `getOwnProfile` returns `Failure(Network)`; `cachedOwnProfile()` returns a profile. Steps: send `Load`. Expected: `phase=Content, isStale=true, staleReason=Offline` (no hard error). Traces: AC-2, AC-6.
+- **TC-AND-075-04 — Own: offline without cache → retryable error.** Type: unit (JVM). Target: JVM unit. Preconditions: repo `Failure(Network)`, `cachedOwnProfile()` null. Steps: send `Load`. Expected: `phase=Error, error.retryable=true`. Traces: AC-2, AC-6.
+- **TC-AND-075-05 — Own: refresh retains content; failure snackbars.** Type: unit (JVM). Target: JVM unit. Preconditions: VM in `Content`. Steps: send `Refresh` (repo success) → assert `isRefreshing` toggles true→false and content updates; then `Refresh` (repo `Failure`) → assert content retained, `isRefreshing=false`, and a `ShowSnackbar` effect emitted. Expected: as described; content never cleared on refresh failure. Traces: AC-2.
+- **TC-AND-075-06 — Own: retry from error re-loads.** Type: unit (JVM). Target: JVM unit. Preconditions: VM in `Error`. Steps: repo now returns `Success`; send `Retry`. Expected: `Error → Loading → Content`. Traces: AC-2.
+- **TC-AND-075-07 — Own: effects (edit/link) + non-http link rejected.** Type: unit (JVM). Target: JVM unit. Preconditions: VM in `Content`. Steps: send `EditClicked` → assert `NavigateToEdit`; send `LinkClicked("https://ok")` → assert `OpenUrl`; send `LinkClicked("javascript:alert(1)")` and `LinkClicked("intent://x")` → assert NO `OpenUrl`, a rejection `ShowSnackbar`/field error instead. Expected: only `http(s)` URLs produce `OpenUrl`. Security case. Traces: AC-2, AC-7.
+- **TC-AND-075-08 — Public: 200/404/429/error mapping.** Type: contract/MockWebServer (or unit with fake mapping repo). Target: JVM unit (MockWebServer JVM-local). Preconditions: repo/MockWebServer scripted per sub-case. Steps: load with (a) 200 `PublicProfileData` → `Content`; (b) 404 `not_found_or_suppressed` → `NotFound`; (c) 429 with `Retry-After` → rate-limited/`Error(retryable)`; (d) 5xx/timeout → `Error`. Expected: discrete phases per real backend outcomes; note there is NO 403/Private path. Traces: AC-4, AC-6.
+- **TC-AND-075-09 — Public: missing `identifier` arg throws at construction.** Type: unit (JVM). Target: JVM unit. Preconditions: empty `SavedStateHandle`. Steps: construct `PublicProfileViewModel`. Expected: `IllegalArgumentException` (documented `requireNotNull` contract). Traces: AC-1.
+- **TC-AND-075-10 — Edit: seed form, no dirty.** Type: unit (JVM). Target: JVM unit. Preconditions: repo `getOwnProfile` Success. Steps: send `Load`. Expected: `phase=Editing`, `form == original`, `hasUnsavedChanges == false`, `canSave == false`. Traces: AC-5.
+- **TC-AND-075-11 — Edit: field change → dirty + canSave.** Type: unit (JVM). Target: JVM unit. Preconditions: loaded, valid. Steps: send `DisplayNameChanged("New Name")`. Expected: `hasUnsavedChanges == true`, `canSave == true`. Traces: AC-5.
+- **TC-AND-075-12 — Edit: client validation blocks save.** Type: unit (JVM). Target: JVM unit. Preconditions: loaded. Steps: set empty `displayName`; set over-length `bio`/description; (if links supported in form) a non-http link. Expected: corresponding `fieldErrors` populated as `UiText`, `canSave == false`. Note: link validation only applies if a links field is retained; per §16 the API has no `links`. Traces: AC-5, AC-7.
+- **TC-AND-075-13 — Edit: save success → navigate + cache.** Type: unit (JVM). Target: JVM unit. Preconditions: dirty + valid; repo `updateProfile` returns `Success(updated)`. Steps: send `Save`. Expected: `Editing → Saving`, then `NavigateBackWithResult(updated)` effect; cache updated; the PATCH body carries `description` (not `bio`) and no `links` key. Traces: AC-5.
+- **TC-AND-075-14 — Edit: save 422 merges server field errors.** Type: contract/MockWebServer. Target: JVM unit (MockWebServer JVM-local). Preconditions: repo/server returns 422 `detail:[{msg,loc:["body","display_name"]}]`. Steps: send `Save`. Expected: server `fieldErrors` merged (keyed by `loc` tail), `phase` returns to `Editing`, no auto-retry. Uses the real FastAPI 422 shape. Traces: AC-5, AC-7.
+- **TC-AND-075-15 — Edit: save other failure → saveError, no retry.** Type: unit (JVM). Target: JVM unit. Preconditions: repo `updateProfile` returns `Failure(Server)`. Steps: send `Save`. Expected: `saveError` set, `phase=Editing`, repo `updateProfile` called exactly once (writes never auto-retried). Traces: AC-5, AC-6.
+- **TC-AND-075-16 — Edit: back-press guard.** Type: unit (JVM). Target: JVM unit. Steps: with changes send `BackPressed` → assert `ConfirmDiscard` effect; without changes send `BackPressed` → assert NO `ConfirmDiscard`. Expected: as described (FR-8). Traces: AC-5.
+- **TC-AND-075-17 — All: in-flight double-action guarded.** Type: unit (JVM). Target: JVM unit. Steps: while a `Save` (or `Refresh`) is suspended, send a second `Save`/`Refresh`. Expected: second action ignored; repo write/refresh invoked once. Traces: AC-2, AC-6.
+- **TC-AND-075-18 — 401 surfaces after refresh exhausted.** Type: contract/MockWebServer. Target: JVM unit (MockWebServer JVM-local). Preconditions: server returns 401, then 401 again on the post-`session/refresh` retry (or refresh 401). Steps: send `Load`. Expected: repository performs exactly one `POST /ui/session/refresh` then surfaces `Unauthorized`; VM renders `Error(retryable=false)` and emits a `ShowSnackbar` (own profile). Verifies the single-retry contract. Traces: AC-6, AC-7.
+- **TC-AND-075-19 — No payload/token logging.** Type: unit (JVM). Target: JVM unit. Preconditions: inject a capturing logger; load a profile and trigger an error. Steps: drive load/save/error paths. Expected: emitted log records contain only enum `kind`/event names — no `description`, URLs, identifiers (beyond hashed user id), or tokens. Security/privacy case. Traces: AC-7.
+- **TC-AND-075-20 — Strings are UiText/resource-backed (i18n/a11y).** Type: unit (JVM, Robolectric for resource resolution). Target: JVM unit/Robolectric. Preconditions: trigger each error/snackbar/field-error path. Steps: assert every user-facing message is a `UiText` resource reference (e.g., `R.string.profile_error_offline`) and resolves under a non-default locale. Expected: no hardcoded literals; messages resolve for TalkBack/RTL downstream. Accessibility/i18n case. Traces: AC-7.
+- **TC-AND-075-21 — (Forward-looking) device smoke of VM-backed screens.** Type: instrumented/e2e. Target: PREFER emulator AVD `test35` (API 35) for CI; ALSO run once on the physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a) to catch API-34-vs-35 / arm64-vs-x86 differences once AND-071/072/073 land screens. Preconditions: a debug build wiring these VMs to Compose screens (downstream). Steps: launch own/public/edit screens, exercise load + save. Expected: states render; no crashes across both ABIs/API levels. NOTE: this case is DEFERRED to AND-076 (no UI in this ticket) and is listed only to flag the device matrix. Traces: AC-1, AC-4 (indirect).
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (three VMs: state/onEvent/effects) | TC-01, TC-02, TC-09, TC-21 |
+| AC-2 (each §6 transition unit-tested via Turbine) | TC-02, TC-03, TC-04, TC-05, TC-06, TC-07, TC-08, TC-17 |
+| AC-3 (no I/O on construction; initial Loading) | TC-01 |
+| AC-4 (public 200/404/(no-403)/error mapping) | TC-08, TC-21 |
+| AC-5 (edit validation/dirty/422 merge/navigate) | TC-10, TC-11, TC-12, TC-13, TC-14, TC-15, TC-16 |
+| AC-6 (stale-with-cache / retryable error / no write retry) | TC-03, TC-04, TC-08, TC-15, TC-17, TC-18 |
+| AC-7 (no raw payloads/tokens; UiText/resource strings) | TC-07, TC-12, TC-14, TC-18, TC-19, TC-20 |
+| AC-8 (`testDebugUnitTest` headless, ≥90% coverage) | All TC-01..TC-20 (headless JVM/Robolectric suite) |

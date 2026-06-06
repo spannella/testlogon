@@ -5,7 +5,8 @@ milestone: M2
 epic: E12
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-086, AND-087]
 blocks: []
 ---
@@ -18,9 +19,18 @@ AND-088 delivers a single unified **Alert Preferences** screen that composes the
 email and SMS alert-target capabilities shipped by AND-086 and AND-087 into one
 coherent settings surface, and adds the **category** layer on top of the
 **channel** layer. A "channel" is a delivery target (a verified email address or
-phone number, plus the implicit in-app/push channel); a "category" is a class of
-alert event (e.g. `security`, `account`, `billing`, `product`) that the user can
-independently enable or disable per channel.
+phone number, plus the implicit in-app/push channel); a "category" is an **alert
+event type** (the backend calls these `event_types`, e.g. `security`, `account`,
+`billing`, `product`) that the user can independently enable or disable per
+channel.
+
+> **Review note (contract):** The backend does **not** model per-category booleans.
+> "Enabled for a channel" means the event-type id is a member of that channel's
+> `*_event_types` string array (e.g. `email_event_types`). The authoritative list
+> of categories comes from `GET /ui/alerts/types` → `{ types, event_types }`, not
+> from the prefs payload. The internal `PrefMatrix` in §4 is a client-side
+> projection of these arrays; it is assembled/serialized as
+> `event_type ∈ <kind>_event_types`. See §16 for the full audit.
 
 The goal is a screen where the user can:
 
@@ -56,9 +66,14 @@ add/verify/remove network calls — those are owned by AND-086 (`/ui/alerts/emai
   persistent cookie jar; on 401 call `POST /ui/session/refresh` once then retry.
   OpenAPI at `/openapi.json`. Web reference: `frontend/src/api/endpoints/alerts.ts`,
   types in `frontend/src/api/types.ts`.
-- The exact category preference endpoint shape MUST be reconciled against
-  `/openapi.json` before implementation (see §13). This spec uses the
-  `email_prefs` / `sms_prefs` GET/PUT shapes that AND-086/087 already integrate.
+- **R1 RESOLVED (this review):** The category-prefs contract was reconciled against
+  `/openapi.json` and `src/api/endpoints/alerts.ts`. Writes are **`POST`** (not PUT)
+  to `/ui/alerts/email_prefs` / `/ui/alerts/sms_prefs`, the body is the **full**
+  enabled list `{ email_event_types: [...] }` / `{ sms_event_types: [...] }`
+  (read-modify-write of the whole array — NOT a partial `{prefs:{cat:bool}}` merge),
+  and the GET responses are the `AlertPreferences` shape with `email_event_types`/
+  `emails` (plain `string[]`). The original `prefs: {categoryId: bool}` map assumed
+  in this spec does not exist server-side. See §5 (corrected) and §16.
 
 ## 3. Functional Requirements
 
@@ -124,10 +139,16 @@ UI state and models:
 enum class ChannelKind { EMAIL, SMS, PUSH }
 
 data class AlertChannel(
-    val id: String,            // target id, or "push" for the device channel
+    // NOTE: the backend identifies targets by VALUE, not an id. GET prefs returns
+    // `emails: String[]` / `sms_numbers: String[]` (plain values, no per-target id
+    // or verified flag). `id` here is the value itself (the email/phone), or "push".
+    val id: String,            // the email/phone value, or "push" for the device channel
     val kind: ChannelKind,
-    val display: String,       // masked email / formatted number / "This device"
-    val verified: Boolean,
+    val display: String,       // see §8: web shows full value; Android masks for display
+    val verified: Boolean,     // backend GET has no per-target verified flag; treat
+                               // every configured target as verified (only verified
+                               // targets are persisted server-side). "pending" exists
+                               // only transiently during the AND-086/087 confirm flow.
 )
 
 data class AlertCategory(
@@ -186,11 +207,11 @@ Repository (new, in `feature-alerts` data layer, returns `ApiResult`):
 
 ```kotlin
 interface AlertPrefsRepository {
-    suspend fun getPrefs(): ApiResult<AlertPrefsBundle>          // GET email_prefs + sms_prefs + categories
+    suspend fun getPrefs(): ApiResult<AlertPrefsBundle>          // GET /ui/alerts/types + email_prefs + sms_prefs
     suspend fun setCategoryPref(
         categoryId: String, kind: ChannelKind, enabled: Boolean,
-    ): ApiResult<Unit>                                            // PUT prefs
-    suspend fun setBulkPrefs(matrix: PrefMatrix): ApiResult<Unit>
+    ): ApiResult<Unit>                                            // read-modify-write: POST <kind>_prefs with full array
+    suspend fun setBulkPrefs(matrix: PrefMatrix): ApiResult<Unit>  // POST each kind's full *_event_types array
 }
 
 data class AlertPrefsBundle(
@@ -200,9 +221,13 @@ data class AlertPrefsBundle(
 ```
 
 The repository merges the `email_prefs` and `sms_prefs` GET responses (already
-modeled by AND-086/087) plus a categories list into one `AlertPrefsBundle`. The
-Retrofit service interface is `AlertPrefsApi` (Moshi-mapped). `setCategoryPref`
-maps a single switch back to the channel-kind-specific prefs PUT.
+modeled by AND-086/087) plus the category list from `GET /ui/alerts/types`
+(`event_types`) into one `AlertPrefsBundle`. The Retrofit service interface is
+`AlertPrefsApi` (Moshi-mapped). `setCategoryPref` performs a **read-modify-write**:
+it adds/removes the event-type id in the cached `<kind>_event_types` array and
+**POSTs the full array** to the channel-kind-specific prefs endpoint (there is no
+partial/PUT variant). The POST returns the canonical `AlertPreferences` which the
+repo uses to reconcile state.
 
 Composable structure:
 
@@ -225,58 +250,105 @@ show a disabled state to prevent double-fire while a PUT is in flight.
 This ticket consumes endpoints owned by AND-086/AND-087 plus a category layer.
 No new add/verify/remove endpoints are introduced here.
 
-Read prefs (per channel kind; merged client-side). Example email prefs:
+> **Corrected in this review.** The shapes below were verified against
+> `openapi.index.txt`, `openapi.pretty.json` (schemas `AlertEmailPrefsReq`,
+> `AlertSmsPrefsReq`, `AlertPushPrefsReq`, `AlertEmailRemoveReq`,
+> `AlertSmsRemoveReq`) and `src/api/endpoints/alerts.ts` / `src/api/types.ts`
+> (`AlertPreferences`). The previously documented `targets`/`categories`/`prefs`
+> JSON and the **PUT** method were wrong and have been replaced.
+
+**Category list** comes from a dedicated endpoint, not the prefs payload:
+
+```
+GET /ui/alerts/types
+200 OK
+{ "types": ["security", ...], "event_types": ["security_login", "billing_invoice", ...] }
+```
+
+The matrix rows are driven by `event_types` (the per-event toggles); `types` is a
+coarser grouping (informational). FR-4's "data-driven categories" maps to
+`event_types`.
+
+Read prefs (per channel kind; merged client-side). Response is the
+`AlertPreferences` schema. Example email prefs:
 
 ```
 GET /ui/alerts/email_prefs
 200 OK
 {
-  "targets": [
-    { "id": "em_a1", "email": "s***@gmail.com", "verified": true }
-  ],
-  "categories": [
-    { "id": "security", "label": "Security", "description": "Logins, MFA" },
-    { "id": "billing",  "label": "Billing",  "description": null }
-  ],
-  "prefs": { "security": true, "billing": false }   // categoryId -> enabled for this channel kind
+  "emails": ["alerts@example.com", "ops@example.com"],   // plain string[] of configured addresses
+  "email_event_types": ["security_login", "billing_invoice"]   // ENABLED event types for this channel
 }
 ```
 
-`GET /ui/alerts/sms_prefs` returns the same shape with `phone` masked targets.
+`GET /ui/alerts/sms_prefs` returns the same shape with `sms_numbers` (string[]) and
+`sms_event_types`. (Optional fields per `AlertPreferences`: `emails`, `sms_numbers`,
+`toast_event_types`, `push_event_types`, `webhook_urls`, `webhook_event_types`.)
+A category is "on" for a channel iff its `event_type` id is present in that
+channel's `*_event_types` array.
 
-Write a single category toggle (channel-kind-scoped PUT). Email example:
+Write prefs — **POST** (not PUT), sending the **full** enabled list (read-modify-write):
 
 ```
-PUT /ui/alerts/email_prefs
+POST /ui/alerts/email_prefs
 Headers: X-CSRF-Token: <ui_csrf cookie value>
 Content-Type: application/json
-{ "prefs": { "security": true } }     // partial merge: only changed keys
+{ "email_event_types": ["security_login", "billing_invoice"] }   // entire enabled set, not a delta
 200 OK
-{ "prefs": { "security": true, "billing": false } }   // canonical post-write map
+{ "emails": [...], "email_event_types": ["security_login", "billing_invoice"] }   // canonical AlertPreferences
 ```
 
-SMS uses `PUT /ui/alerts/sms_prefs` identically. PUSH category prefs, if exposed
-by the backend, use the same `prefs` map under whatever push prefs endpoint
-`/openapi.json` declares; if PUSH prefs are not yet available server-side, the
-PUSH column is hidden (see §13 open question).
+To toggle one switch: read current `email_event_types`, add/remove the event-type
+id, POST the whole array (mirrors `toggleEventType` in `src/pages/alerts/AlertPrefs.tsx`).
+This makes `setCategoryPref` a read-modify-write over the cached array; there is no
+partial-merge endpoint, so R3 is moot.
 
-Remove channel (delegated): `POST /ui/alerts/emails/remove {"id":"em_a1"}` /
-`POST /ui/alerts/sms/remove {"id":"sm_b2"}` — owned by AND-086/087.
+SMS uses `POST /ui/alerts/sms_prefs { "sms_event_types": [...] }` identically.
+**PUSH:** there is a `POST /ui/alerts/push_prefs { "push_event_types": [...] }`
+(schema `AlertPushPrefsReq`) for writing, but the index exposes **no
+`GET` for push prefs** — push enabled-state cannot be read back. Therefore the PUSH
+column renders only if a push prefs GET is added (see §16 open assumptions); for M2,
+default to hiding PUSH and `activeKinds` excludes it.
 
-All requests carry session cookies and the `X-CSRF-Token` header. On `401`,
-`core-network` performs one `POST /ui/session/refresh` then retries (idempotent
-GETs auto-retry; the PUT retries only after a successful refresh, not on backoff).
-FastAPI error mapping: `detail` may be `string | [{msg}] | {code,...}` and is
-normalized by the shared mapper to `ApiResult.Error(message, code?)`.
+> **Alternative API (not used):** the backend also exposes
+> `GET/POST /ui/alerts/type-preferences` (schema `AlertTypePreferenceUpdate`:
+> `{ alert_type, email?, sms?, push?, in_app?, enabled? }`), which is a true
+> per-event × per-channel matrix in one call. The web client does **not** use it,
+> so this ticket follows the web contract (`*_prefs` arrays). If a single-call
+> matrix write is desired later, `type-preferences` is the path. Flagged in §16.
+
+Remove channel (delegated, **by value not by id**):
+`POST /ui/alerts/emails/remove {"email":"alerts@example.com"}` (schema
+`AlertEmailRemoveReq`, required field `email`) /
+`POST /ui/alerts/sms/remove {"phone":"+15550000000"}` (schema `AlertSmsRemoveReq`,
+required field `phone`) — owned by AND-086/087. Both return the updated
+`AlertPreferences`.
+
+All requests carry session cookies and the `X-CSRF-Token` header (sourced from the
+`ui_csrf` cookie). **Verified** against `src/api/client.ts`: the web client sends
+`credentials: "include"`, attaches `X-CSRF-Token` from `getCookie("ui_csrf")`, and on
+`401` calls `POST /ui/session/refresh` exactly once (a single shared in-flight
+`refreshPromise`) then **retries the original request** (the web client retries the
+same request method after refresh — it does not distinguish GET vs POST here; on
+this screen the only write is the POST prefs save, which is naturally idempotent
+since it sends the full array). If refresh fails the client logs out
+(`session_expired`). FastAPI error mapping: `detail` may be
+`string | [{msg,...}] | {code,message,...}` and is normalized by
+`normalizeErrorDetail(body.detail, ...)` (verified in `client.ts`) to a single
+message; the shared `core-network` mapper produces `ApiResult.Error(message, code?)`.
+A `403` with `detail.code == "geo_blocked"` is a distinct path in the web client.
 
 ## 6. Data & State Management
 
-- **Load**: `load()` launches two `async` fetches (`emailRepo.getPrefs()` /
-  `smsRepo.getPrefs()`) plus categories via `prefsRepo.getPrefs()`, `await`s all.
-  Categories are the union of category lists across channel responses (dedup by
-  id). The `PrefMatrix` is assembled as `(categoryId, kind) -> enabled` from each
-  channel's `prefs` map. `activeKinds` = kinds with ≥1 verified target, plus PUSH
-  if push prefs are supported.
+- **Load**: `load()` launches concurrent `async` fetches: `GET /ui/alerts/types`
+  (the authoritative `event_types` list), `emailRepo.getPrefs()`
+  (`GET email_prefs`), `smsRepo.getPrefs()` (`GET sms_prefs`); `await`s all.
+  Categories come from `event_types` (NOT from per-channel responses — that was the
+  pre-review error; channel GETs only return the *enabled* subset). The `PrefMatrix`
+  is assembled as `(eventType, kind) -> (eventType ∈ <kind>_event_types)`.
+  `activeKinds` = kinds with ≥1 configured target (`emails` / `sms_numbers`
+  non-empty), plus PUSH only if a push-prefs GET is available (currently it is
+  not — see §5/§16).
 - **Optimistic toggle**: `onToggle` immediately emits `Ready` with
   `matrix.with(...)` and the key added to `pendingKeys`, then calls
   `prefsRepo.setCategoryPref(...)`. On success it reconciles against the returned
@@ -318,6 +390,12 @@ normalized by the shared mapper to `ApiResult.Error(message, code?)`.
 
 - Channel displays are **masked** (`s***@gmail.com`, `+1 ••• ••• ••12`). Full
   email/phone values are never rendered on this screen.
+  > **Divergence note (verified):** the web reference (`src/pages/alerts/AlertPrefs.tsx`)
+  > renders the **full** address/number (`font-mono`, unmasked) because the GET
+  > returns plain `emails`/`sms_numbers` strings with no masking and no per-target
+  > id. Masking here is a deliberate Android-side hardening choice, not a backend
+  > guarantee. Because remove is **by value** (`{email}`/`{phone}`), the un-masked
+  > value must still be retained in memory (not displayed) to issue the remove call.
 - All writes include the `X-CSRF-Token` header sourced from the `ui_csrf` cookie;
   requests without it are rejected by the backend — the shared OkHttp interceptor
   guarantees attachment so this screen needs no special handling.
@@ -373,8 +451,9 @@ optimistic-toggle persistence, and rollback.
 - **Repository** with MockWebServer:
   - `getPrefs` parses the `email_prefs`/`sms_prefs` JSON (string/array/object
     `detail` error variants mapped correctly).
-  - `setCategoryPref` issues `PUT .../email_prefs` with partial `{prefs:{...}}`
-    and the `X-CSRF-Token` header; 401 triggers single refresh+retry.
+  - `setCategoryPref` issues `POST .../email_prefs` with the **full**
+    `{email_event_types:[...]}` array and the `X-CSRF-Token` header; 401 triggers a
+    single `POST /ui/session/refresh` then retry.
 - **Compose UI tests** (`ComposeTestRule`):
   - Matrix renders one switch per active kind per category; toggling a switch
     invokes `onToggle` with correct args and reflects new state.
@@ -404,18 +483,23 @@ optimistic-toggle persistence, and rollback.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Category-prefs contract uncertainty.** This spec models category prefs as
-  a `prefs: {categoryId: bool}` map inside `email_prefs`/`sms_prefs`. The actual
-  `/openapi.json` may instead expose a separate `/ui/alerts/category_prefs` or a
-  different field name. **Action:** confirm against `/openapi.json` and
-  `frontend/src/api/endpoints/alerts.ts` before coding; adjust `AlertPrefsApi`
-  accordingly. The ViewModel/UI contracts above are insulated from this.
-- **R2 — PUSH channel availability.** If the backend has no push-category prefs in
-  M2, the PUSH column is hidden and `activeKinds` excludes PUSH (no dead UI). Open
-  question: is push prefs in scope for M2 or a later ticket?
-- **R3 — Partial vs full PUT.** Whether the backend accepts a partial `prefs`
-  merge or requires the full map per write affects `setCategoryPref`/`setBulkPrefs`.
-  Default to partial; fall back to read-modify-write full map if 422 is returned.
+- **R1 — Category-prefs contract uncertainty. [RESOLVED in review 2026-06-06.]**
+  Confirmed against `openapi.index.txt` + `src/api/endpoints/alerts.ts`: prefs are
+  per-channel `*_event_types` string arrays, written via **POST** `email_prefs`/
+  `sms_prefs` (full array). The assumed `prefs: {categoryId: bool}` map does not
+  exist. Category ids come from `GET /ui/alerts/types`. `AlertPrefsApi` updated in
+  §5. (A separate `/ui/alerts/type-preferences` matrix endpoint also exists but is
+  unused by the web client.)
+- **R2 — PUSH channel availability. [PARTIALLY RESOLVED.]** A push **write** exists
+  (`POST /ui/alerts/push_prefs`, `AlertPushPrefsReq.push_event_types`) but there is
+  **no push GET** in the index, so enabled-state cannot be read back. For M2 the
+  PUSH column is hidden and `activeKinds` excludes PUSH. Open question: add a
+  `GET push_prefs` server-side, or use `GET /ui/alerts/type-preferences` (which
+  carries a `push` boolean per type) to source push state?
+- **R3 — Partial vs full write. [RESOLVED in review.]** The backend accepts only
+  the **full** `*_event_types` array per POST; there is no partial merge. Both
+  `setCategoryPref` and `setBulkPrefs` are read-modify-write over the cached array.
+  No 422-fallback logic is needed.
 - **R4 — Unreliable dev host** may make integration tests flaky; rely on
   MockWebServer for deterministic CI and treat dev-host runs as smoke only.
 - **R5 — Category set divergence** between email and SMS responses; resolved by
@@ -429,8 +513,9 @@ verified/pending badges) and a category matrix with one switch per active channe
 kind per category. (Maps to backlog "Prefs render.")
 
 AC-2. Toggling any category-channel switch persists to the backend
-(`PUT email_prefs`/`sms_prefs` with the changed key) and the new value survives
-pull-to-refresh and app restart (re-load reflects it). (Maps to "persist.")
+(`POST email_prefs`/`sms_prefs` with the full updated `*_event_types` array) and the
+new value survives pull-to-refresh and app restart (re-load reflects it). (Maps to
+"persist.")
 
 AC-3. A failed persist rolls back exactly the toggled switch and shows a
 retryable snackbar; no other switches change.
@@ -472,3 +557,304 @@ AC-9. No raw email/phone/CSRF/cookie values appear in logs or analytics.
 - Lint/detekt/ktlint clean; KDoc on public ViewModel and repository APIs.
 - PR reviewed and merged to `android-port` with screenshots of the rendered matrix
   and a persistence demo (toggle -> restart -> state retained).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer. Sources:
+OpenAPI index = `reference/openapi.index.txt`; OpenAPI spec = `reference/openapi.pretty.json`
+(`components.schemas.<Name>`); frontend = `reference/src/...`.
+
+1. **Read email prefs endpoint** — `GET /ui/alerts/email_prefs`.
+   VERDICT: Verified.
+   SOURCE: OpenAPI `GET /ui/alerts/email_prefs` (op `get_email_prefs_...`);
+   `src/api/endpoints/alerts.ts: getEmailPrefs`.
+2. **Read SMS prefs endpoint** — `GET /ui/alerts/sms_prefs`.
+   VERDICT: Verified.
+   SOURCE: OpenAPI `GET /ui/alerts/sms_prefs`; `src/api/endpoints/alerts.ts: getSmsPrefs`.
+3. **Write prefs HTTP method is POST, not PUT.**
+   VERDICT: Corrected (spec said PUT).
+   SOURCE: OpenAPI `POST /ui/alerts/email_prefs` / `POST /ui/alerts/sms_prefs`
+   (ops `set_email_prefs_...` / `set_sms_prefs_...`); `src/api/endpoints/alerts.ts:
+   setEmailPrefs` / `setSmsPrefs` (both `api.post`).
+4. **Write body is the full `*_event_types` string array, not a partial
+   `{prefs:{categoryId:bool}}` map.**
+   VERDICT: Corrected.
+   SOURCE: `components.schemas.AlertEmailPrefsReq` = `{ email_event_types: string[] }`;
+   `AlertSmsPrefsReq` = `{ sms_event_types: string[] }`; `src/api/endpoints/alerts.ts:
+   setEmailPrefs` posts `{ email_event_types }`; toggle logic in
+   `src/pages/alerts/AlertPrefs.tsx: toggleEventType` rebuilds & posts the whole array.
+5. **GET prefs response shape is `AlertPreferences` with plain `emails: string[]` /
+   `sms_numbers: string[]` and `*_event_types: string[]` — there is no
+   `targets`/`categories`/`prefs` object.**
+   VERDICT: Corrected.
+   SOURCE: `src/api/types.ts: AlertPreferences` (lines ~446-455);
+   `src/pages/alerts/AlertPrefs.tsx` uses `emailPrefs.data.emails`,
+   `.email_event_types`, `smsPrefs.data.sms_numbers`.
+6. **Category/event-type list comes from `GET /ui/alerts/types` →
+   `{ types: string[], event_types: string[] }`, not from the prefs payload.**
+   VERDICT: Corrected (spec embedded `categories` in the prefs response).
+   SOURCE: OpenAPI `GET /ui/alerts/types` (op `alert_types_...`);
+   `src/api/endpoints/alerts.ts: getAlertTypes`; consumed in `AlertPrefs.tsx`
+   (`typesQuery.data.event_types`).
+7. **Remove email is by value `{email}`, not `{id}`.**
+   VERDICT: Corrected (spec said `{"id":"em_a1"}`).
+   SOURCE: `components.schemas.AlertEmailRemoveReq` (required `email`);
+   OpenAPI `POST /ui/alerts/emails/remove`; `src/api/endpoints/alerts.ts:
+   alertEmailRemove(email)`.
+8. **Remove SMS is by value `{phone}`, not `{id}`.**
+   VERDICT: Corrected (spec said `{"id":"sm_b2"}`).
+   SOURCE: `components.schemas.AlertSmsRemoveReq` (required `phone`);
+   OpenAPI `POST /ui/alerts/sms/remove`; `src/api/endpoints/alerts.ts:
+   alertSmsRemove(phone)`.
+9. **PUSH prefs: a write endpoint exists but no read endpoint.**
+   VERDICT: Corrected/clarified (spec treated push as fully open question).
+   SOURCE: OpenAPI `POST /ui/alerts/push_prefs` (op `set_push_prefs_...`,
+   `AlertPushPrefsReq.push_event_types`) present; **no** `GET .../push_prefs` line in
+   `openapi.index.txt`. `AlertPreferences.push_event_types` exists in types.ts but is
+   not read by the web client.
+10. **An alternative matrix endpoint `GET/POST /ui/alerts/type-preferences` exists
+    (`AlertTypePreferenceUpdate { alert_type, email?, sms?, push?, in_app?, enabled? }`).**
+    VERDICT: Verified (informational; web client does not use it).
+    SOURCE: OpenAPI `GET/POST /ui/alerts/type-preferences`;
+    `components.schemas.AlertTypePreferenceUpdate`; absent from
+    `src/api/endpoints/alerts.ts`.
+11. **CSRF: `X-CSRF-Token` header sourced from the `ui_csrf` cookie on all requests.**
+    VERDICT: Verified.
+    SOURCE: `src/api/client.ts` (`const csrf = getCookie("ui_csrf")` →
+    `headers.set("X-CSRF-Token", csrf)`).
+12. **Auth: cookie-based, `credentials: include`; on 401 perform one
+    `POST /ui/session/refresh` then retry; logout on refresh failure.**
+    VERDICT: Verified.
+    SOURCE: `src/api/client.ts` (`refreshSession()` → `fetch(.../ui/session/refresh)`,
+    single shared `refreshPromise`, retry of original request, `logout("session_expired")`).
+13. **FastAPI `detail` is normalized (string | array | object incl. `{code,message}`)
+    to a single message.**
+    VERDICT: Verified.
+    SOURCE: `src/api/client.ts: normalizeErrorDetail(body.detail, ...)`; 403
+    `detail.code === "geo_blocked"` branch; error responses use
+    `HTTPValidationError` (FastAPI `{detail:[{loc,msg,type}]}`) per OpenAPI
+    (`resp=...;422:HTTPValidationError` on every alerts route).
+14. **All write errors surface as `422 HTTPValidationError`** (the only declared
+    error code on these routes besides auth).
+    VERDICT: Verified.
+    SOURCE: OpenAPI index lines for `POST /ui/alerts/email_prefs`, `.../sms_prefs`,
+    `.../emails/remove`, `.../sms/remove` (all `resp=200:;422:HTTPValidationError`).
+15. **Add-channel flows (begin/confirm) owned by AND-086/087.**
+    VERDICT: Verified.
+    SOURCE: OpenAPI `POST /ui/alerts/emails/begin|confirm`,
+    `POST /ui/alerts/sms/begin|confirm` (`AlertEmailBeginReq`/`AlertEmailConfirmReq`/
+    `AlertSmsBeginReq`/`AlertSmsConfirmReq`); `src/api/endpoints/alerts.ts:
+    alertEmailBegin/Confirm`, `alertSmsBegin/Confirm`.
+16. **Masked display of email/phone on the prefs screen.**
+    VERDICT: Corrected to "Android-only hardening, not a backend/web behavior."
+    SOURCE: `src/pages/alerts/AlertPrefs.tsx` renders full values (`font-mono`,
+    `configuredEmails.map`, `configuredSmsNumbers.map`); no masking in
+    `AlertPreferences`.
+17. **Compose + Material 3, single-Activity Navigation-Compose, Hilt, StateFlow
+    UDF.**
+    VERDICT: Unverified-assumption (no Android source in reference; standard for the
+    stack in §2). SOURCE: framework ref —
+    https://developer.android.com/jetpack/compose ,
+    https://developer.android.com/guide/navigation ,
+    https://developer.android.com/topic/architecture/ui-layer#define-ui-state .
+18. **Pull-to-refresh, DataStore stale cache, optimistic toggle + rollback.**
+    VERDICT: Unverified-assumption (Android UX choices; no backend/web contract
+    governs them). SOURCE: framework ref —
+    https://developer.android.com/jetpack/androidx/releases/datastore .
+
+### Corrections made
+
+- §1: redefined "category" as backend `event_type`; clarified "enabled" = array
+  membership; added review note.
+- §2: replaced the open R1 reconciliation note with the resolved POST/full-array
+  contract.
+- §4: `AlertChannel` documented as value-keyed (no server id / verified flag);
+  repository doc comments changed PUT→POST and partial-merge→read-modify-write; the
+  merge paragraph now sources categories from `GET /ui/alerts/types`.
+- §5: full rewrite of the API Contract — `GET /ui/alerts/types`; corrected GET
+  `AlertPreferences` shape; **POST** (not PUT) with full `*_event_types`; remove
+  **by value** (`{email}`/`{phone}`) not `{id}`; push write-only (no GET); noted the
+  unused `type-preferences` matrix endpoint; CSRF/refresh/`detail` claims verified
+  with exact `client.ts` behavior.
+- §6: load now fetches `/ui/alerts/types` for categories; matrix is array-membership.
+- §8: added divergence note (web shows unmasked values; masking is Android-only;
+  un-masked value retained in memory for value-based remove).
+- §11, §14 (AC-2): PUT→POST + full-array wording.
+- §13: R1 and R3 marked RESOLVED; R2 marked PARTIALLY RESOLVED (push write-only).
+
+### Open assumptions
+
+- **PUSH enabled-state is not readable.** `POST /ui/alerts/push_prefs` exists but no
+  GET; without `GET push_prefs` (or adopting `GET /ui/alerts/type-preferences`) the
+  Android client cannot render an accurate push column. M2: hide PUSH. Cannot be
+  resolved from current sources — needs a backend decision.
+- **No per-target verified/pending flag in GET prefs.** `emails`/`sms_numbers` are
+  plain strings; the "pending badge" in §3/§14-AC-1 has no backend field to bind to.
+  Assumed: all returned targets are verified; pending exists only transiently in the
+  AND-086/087 confirm flow. Unverifiable here (depends on AND-086/087 internals).
+- **Relationship between `types` and `event_types`** from `GET /ui/alerts/types` is
+  not documented in the schema (response is untyped `200:` in the index). Assumed
+  `event_types` drives matrix rows (matches `AlertPrefs.tsx`); `types` is a coarser
+  grouping. Could not confirm exact semantics from the spec.
+- **Android UI/architecture choices** (Compose, Hilt, DataStore cache, optimistic
+  rollback, pull-to-refresh) are framework conventions, not derivable from the
+  backend/web sources (no Android reference app provided). See citations 17-18.
+- **`detail` array element fields** beyond `msg` (the spec's `[{msg}]`) — FastAPI
+  emits `{loc,msg,type}`; only `msg` is used for display. Verified shape, but the
+  Android mapper's exact field handling is an AND-078/`core-network` concern, assumed
+  to mirror `normalizeErrorDetail`.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = local JVM/Robolectric unit (no device); **MWS** =
+contract test with MockWebServer (JVM); **emu** = headless AVD `test35`
+(x86_64 / API 35); **device** = physical Samsung Galaxy A15 5G (SM-A156U,
+serial R5CX821TA9R, API 34 / arm64-v8a). Compose-UI tests run on Robolectric or
+`emu`; instrumented/e2e on `emu` unless real hardware/push is required (then
+**device**).
+
+- **TC-AND-088-01 — Matrix assembly from `/types` + per-channel arrays.**
+  Type: unit (JVM). Target: `AlertPrefsViewModel` + `AlertPrefsRepository` (fakes).
+  Preconditions: `GET /ui/alerts/types` → `event_types=[security_login, billing_invoice]`;
+  `email_prefs.email_event_types=[security_login]`; `sms_prefs.sms_event_types=[]`;
+  `emails=[a@x.com]`, `sms_numbers=[]`.
+  Steps: call `load()`, await `Ready`.
+  Expected: 2 category rows; Email column present and `security_login` ON /
+  `billing_invoice` OFF; SMS in `activeKinds` only if `sms_numbers` non-empty (here
+  excluded → SMS column hidden); PUSH excluded.
+  Traces: AC-1.
+
+- **TC-AND-088-02 — `setCategoryPref` does read-modify-write POST with full array
+  and CSRF header.**
+  Type: contract/MockWebServer (MWS). Target: `AlertPrefsApi`/repository.
+  Preconditions: cached `email_event_types=[security_login]`; `ui_csrf` cookie set.
+  Steps: `setCategoryPref("billing_invoice", EMAIL, true)`; capture the request.
+  Expected: `POST /ui/alerts/email_prefs`, body
+  `{"email_event_types":["security_login","billing_invoice"]}` (full set, not a
+  delta), header `X-CSRF-Token` = cookie value; 200 `AlertPreferences` reconciled.
+  Traces: AC-2.
+
+- **TC-AND-088-03 — Toggle OFF removes the id from the array.**
+  Type: unit (JVM). Target: ViewModel.
+  Preconditions: `security_login` ON for Email.
+  Steps: `onToggle("security_login", EMAIL, false)`.
+  Expected: optimistic state OFF with key in `pendingKeys`; persisted POST body omits
+  `security_login`; on success key cleared.
+  Traces: AC-2.
+
+- **TC-AND-088-04 — Optimistic rollback on persist failure.**
+  Type: contract/MockWebServer (MWS). Target: ViewModel + repository.
+  Preconditions: server returns `422 {"detail":[{"loc":["body"],"msg":"bad","type":"value_error"}]}`
+  for `POST email_prefs`.
+  Steps: `onToggle("billing_invoice", EMAIL, true)`.
+  Expected: UI flips ON optimistically, then rolls back **only** that key to OFF;
+  other switches unchanged; retryable snackbar shows the normalized `msg`
+  ("bad"), never raw JSON.
+  Traces: AC-3, AC-9 (no raw JSON).
+
+- **TC-AND-088-05 — 401 triggers single session refresh then retry.**
+  Type: contract/MockWebServer (MWS). Target: `core-network` authenticator + repo.
+  Preconditions: first `POST email_prefs` → 401; `POST /ui/session/refresh` → 200;
+  retried `POST email_prefs` → 200.
+  Steps: `setCategoryPref(...)`.
+  Expected: exactly one refresh call, then the original POST retried once and
+  succeeding; no infinite loop; second 401 (refresh fails) surfaces re-auth and
+  preserves screen state.
+  Traces: AC-2, AC-3.
+
+- **TC-AND-088-06 — Remove channel posts by VALUE not id, collapses column.**
+  Type: contract/MockWebServer (MWS) + unit. Target: ViewModel + email/sms repos.
+  Preconditions: single email `a@x.com` configured; Email column visible.
+  Steps: `onRemoveChannel(AlertChannel(id="a@x.com", EMAIL, ...))`.
+  Expected: request `POST /ui/alerts/emails/remove {"email":"a@x.com"}` (field
+  `email`, not `id`); on success the email disappears and, being the last email, the
+  Email matrix column collapses and `activeKinds` drops EMAIL.
+  Traces: AC-5.
+
+- **TC-AND-088-07 — Empty-kind shows Add affordance, no dead switches.**
+  Type: Compose-UI (Robolectric/emu). Target: `AlertPrefsScreen`/`CategoryMatrix`.
+  Preconditions: `emails=[]`, `sms_numbers=[a]`.
+  Steps: render `Ready`.
+  Expected: Email column replaced by "No email targets — add one" affordance; tapping
+  it invokes `onAddEmail`; SMS column shows switches.
+  Traces: AC-4.
+
+- **TC-AND-088-08 — Master "Disable all" then restore within session.**
+  Type: unit (JVM). Target: ViewModel.
+  Preconditions: mixed ON/OFF matrix.
+  Steps: `onMasterToggle(true)` → assert all pairs OFF persisted via per-kind full
+  arrays (each `*_event_types=[]`); `onMasterToggle(false)` → restore snapshot.
+  Expected: one batched persist per active kind; re-enable restores the exact prior
+  arrays from the in-memory snapshot; on persist failure the snapshot is restored.
+  Traces: AC-6.
+
+- **TC-AND-088-09 — Load failure: cache vs no-cache.**
+  Type: unit (JVM). Target: ViewModel + DataStore cache fake.
+  Preconditions: backend GET fails (timeout). Variant A: a cached `AlertPrefsBundle`
+  exists; Variant B: none.
+  Steps: `load()`.
+  Expected: A → `Ready` with stale flag + "Couldn't refresh — showing saved settings"
+  banner; B → `Error(retryable=true)` full-screen with Retry.
+  Traces: AC-7.
+
+- **TC-AND-088-10 — Flaky/offline dev-host resilience.**
+  Type: contract/MockWebServer (MWS). Target: repository retry/backoff.
+  Preconditions: `GET email_prefs` fails twice (socket reset) then 200; toggle POST
+  fails once.
+  Steps: `load()`; then `onToggle(...)`.
+  Expected: GET auto-retries (max 2, jittered) and eventually succeeds; the toggle
+  **POST is not auto-retried** by backoff (fails fast → rollback + snackbar);
+  no crash on cleartext-HTTP socket errors.
+  Traces: AC-3, AC-7.
+
+- **TC-AND-088-11 — Accessibility: contentDescription, 48dp, font-scale reflow.**
+  Type: Compose-UI (Robolectric/emu). Target: `CategoryRow`/`MasterDisableRow`.
+  Preconditions: matrix with ≥2 active kinds.
+  Steps: assert each `Switch` has cd "<Category> alerts via <Channel>, on/off";
+  assert touch target ≥48dp; set font scale 2.0 and assert no clipping (stacked
+  reflow).
+  Expected: all assertions pass; header icons carry text labels.
+  Traces: AC-8.
+
+- **TC-AND-088-12 — No PII in logs/analytics.**
+  Type: unit (JVM). Target: telemetry + logging.
+  Preconditions: debug build; toggle + remove performed.
+  Steps: capture emitted analytics props and log lines.
+  Expected: `alert_pref_toggle` carries `category_id`/`channel_kind`/`enabled`/`result`
+  only; no email/phone, no `ui_csrf`/cookie values, no raw `detail` JSON in any log.
+  Traces: AC-9.
+
+- **TC-AND-088-13 — Persistence across process death (instrumented).**
+  Type: instrumented/e2e (emu). Target: full screen against MockWebServer or dev host.
+  Preconditions: toggle `billing_invoice` Email ON; server now returns it in
+  `email_event_types`.
+  Steps: toggle ON → trigger Activity recreation / process kill → re-`load()`.
+  Expected: switch reflects the persisted ON value after restart.
+  Traces: AC-2.
+
+- **TC-AND-088-14 — Real FCM push delivery vs hidden PUSH column.**
+  Type: instrumented/e2e — **MUST run on the physical device** (real FCM token + APIs
+  cannot be exercised on the headless x86 emulator without Play services / real push).
+  Target: PUSH column gating + push prefs write.
+  Preconditions: device registered for FCM (AND-085-class plumbing); `push_prefs`
+  write reachable; no `GET push_prefs`.
+  Steps: open screen; confirm PUSH column is HIDDEN for M2 (no readable state);
+  if/when a push read is added, write `push_event_types` via
+  `POST /ui/alerts/push_prefs` and confirm a real push is/ isn't delivered per toggle.
+  Expected: M2 — PUSH column absent, no dead switches; write path (if invoked) sends
+  `{push_event_types:[...]}` with CSRF.
+  Traces: AC-1 (active-kinds gating), AC-2 (push write contract).
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (render channels + matrix) | TC-01, TC-07, TC-14 |
+| AC-2 (toggle persists; survives refresh/restart) | TC-02, TC-03, TC-05, TC-13, TC-14 |
+| AC-3 (rollback + retryable snackbar) | TC-04, TC-05, TC-10 |
+| AC-4 (empty-kind Add affordance) | TC-07 |
+| AC-5 (remove delegates, column collapses) | TC-06 |
+| AC-6 (master disable + restore) | TC-08 |
+| AC-7 (no-cache error vs cached stale banner) | TC-09, TC-10 |
+| AC-8 (a11y: cd, 48dp, reflow) | TC-11 |
+| AC-9 (no PII/CSRF/cookie/raw-JSON) | TC-04, TC-12 |
