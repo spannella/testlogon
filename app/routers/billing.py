@@ -1005,7 +1005,7 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
         state="pending" if pi.get("status") in ("processing", "requires_action") else ("settled" if pi.get("status") == "succeeded" else "pending"),
         reason="payment",
         meta={"idempotency_key": idem},
-        extra={"stripe_payment_intent_id": pi["id"]},
+        extra={"stripe_payment_intent_id": pi["id"], "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 
@@ -1104,7 +1104,7 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
         state=state,
         reason="charge_once",
         meta={"idempotency_key": idem, "payment_method_id": payment_method_id},
-        extra={"stripe_payment_intent_id": pi["id"]},
+        extra={"stripe_payment_intent_id": pi["id"], "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 
@@ -1169,7 +1169,7 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
         state="settled",
         reason="refund",
         meta={"reason": body.reason},
-        extra={"stripe_payment_intent_id": body.payment_intent_id, "stripe_refund_id": refund.get("id")},
+        extra={"stripe_payment_intent_id": body.payment_intent_id, "stripe_refund_id": refund.get("id"), "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 
@@ -1497,7 +1497,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
                 state="settled",
                 reason="dispute_funds_withdrawn",
                 meta={"currency": currency, "dispute_id": dispute.get("id")},
-                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id},
+                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id, "provider": "stripe"},
             )
             ddb_put(T.billing, led_item)
             apply_balance_delta(T.billing, pk, {"owed_settled_cents": amount}, currency=currency)
@@ -1526,7 +1526,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
                 state="settled",
                 reason="dispute_funds_reinstated",
                 meta={"currency": currency, "dispute_id": dispute.get("id")},
-                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id},
+                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id, "provider": "stripe"},
             )
             ddb_put(T.billing, led_item)
             apply_balance_delta(T.billing, pk, {"owed_settled_cents": -amount}, currency=currency)
@@ -2351,7 +2351,7 @@ def wallet_deposit(body: WalletDepositReq, req: Request = None, ctx=Depends(requ
         state=state,
         reason="wallet_deposit",
         meta={"idempotency_key": idem, "payment_method_id": payment_method_id},
-        extra={"stripe_payment_intent_id": pi["id"]},
+        extra={"stripe_payment_intent_id": pi["id"], "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 

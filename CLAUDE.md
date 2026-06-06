@@ -260,6 +260,10 @@ Feature flags (all default to `true` in `.env.local.example`):
 
 **DynamoDB numeric GSI sort keys**: If a GSI sort key is a number (e.g., `created_at`), the `TableDef` in `scripts/local-ddb-init.py` must include `attr_types={"created_at": "N"}`. Missing this causes DynamoDB to store it as String → `ValidationException` when queried with integer values.
 
+**Billing ledger queries use `GSI_LEDGER_DATE` (FIN-013 / GAP-0202)**: The `billing` table has a GSI keyed on `ledger_date` (S) / `sk`. The platform financial dashboard (`app/services/platform_financial_dashboard.py`) queries ledger entries per-day via this index instead of scanning the whole billing table (which also holds `PM#` / `BILLING` rows). New ledger rows must carry `ledger_date` (written by `new_ledger_entry` in `billing_shared.py`) to appear in the index. After adding the GSI in dev, `just restart` recreates the table; in prod it requires an `UpdateTable` + async backfill before the query path is deployed (SECOPS-007 parity — same code/index both envs, no `dev_mode` branch).
+
+**Ledger `provider` attribution (FIN-013 / GAP-0203)**: Provider-originated ledger entries must persist a `provider` field (`stripe` / `paypal` / `ccbill`) or the dashboard provider breakdown buckets them as `"unknown"`. Stripe call sites in `app/routers/billing.py` pass `extra={..., "provider": "stripe"}`; the PayPal wrapper (`app/routers/paypal.py`) and CCBill wrapper (`app/services/billing_ccbill.py`) default a `provider` kwarg onto the item. `extra` is a pass-through onto the persisted DynamoDB item.
+
 **Backend won't start without `.env.local`**: The startup script sources `.env.local` for mock AWS creds. Running `uvicorn` directly causes `NoCredentialsError`.
 
 **Cognito blocks dev-mode header fallback**: When `COGNITO_USER_POOL_ID` is set (which it is in the local stack), the `X-User-Id` dev fallback is disabled. All dev auth goes through either cookie-based sessions or real Cognito JWT tokens.

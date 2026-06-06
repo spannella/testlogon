@@ -198,8 +198,11 @@ def new_ledger_entry(
     ccbill_transaction_id: Optional[str] = None,
     ccbill_subscription_id: Optional[str] = None,
     meta: Optional[Dict[str, Any]] = None,
+    provider: str = "ccbill",
 ) -> Tuple[str, Dict[str, Any]]:
-    extra: Dict[str, Any] = {}
+    # GAP-0203 / FIN-013: persist provider so the platform financial dashboard
+    # provider breakdown attributes CCBill ledger entries correctly.
+    extra: Dict[str, Any] = {"provider": provider}
     if ccbill_payment_token_id:
         extra["ccbill_payment_token_id"] = ccbill_payment_token_id
     if ccbill_transaction_id:

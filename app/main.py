@@ -185,6 +185,7 @@ from app.routers.media_preferences import router as media_preferences_router
 from app.middleware.rate_limit import rate_limit_middleware_factory
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
+from app.services.payment_provider_health import start_provider_health_check_task
 from app.services.llm_provider_keys import start_llm_usage_reset_task
 from app.services.ad_daily_reset import start_ad_daily_reset_task
 from app.services.ad_analytics import start_ad_analytics_rollup_task
@@ -530,6 +531,7 @@ def create_app() -> FastAPI:
 
     app.add_event_handler("startup", newsfeed_startup)
     app.add_event_handler("startup", start_billing_dunning_task)
+    app.add_event_handler("startup", start_provider_health_check_task)
     app.add_event_handler("startup", start_llm_usage_reset_task)
     app.add_event_handler("startup", start_ad_daily_reset_task)
     app.add_event_handler("startup", start_ad_analytics_rollup_task)

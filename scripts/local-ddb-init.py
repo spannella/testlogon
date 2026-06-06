@@ -61,7 +61,20 @@ def _table_defs() -> List[TableDef]:
         TableDef(_resolve_table_name(S.alerts_table_name, "alerts"), "user_sub", "alert_id"),
         TableDef(_resolve_table_name(S.alert_prefs_table_name, "alert_prefs"), "user_sub"),
         TableDef(_resolve_table_name(S.push_devices_table_name, "push_devices"), "user_sub", "device_id"),
-        TableDef(_resolve_table_name(S.billing_table_name, "billing"), "pk", "sk"),
+        # GAP-0202 / FIN-013: GSI_LEDGER_DATE lets the platform financial
+        # dashboard query ledger entries by day instead of scanning the whole
+        # billing table (which also holds payment methods + balance rows).
+        TableDef(
+            _resolve_table_name(S.billing_table_name, "billing"),
+            "pk",
+            "sk",
+            gsi=[{
+                "index_name": "GSI_LEDGER_DATE",
+                "partition_key": "ledger_date",
+                "sort_key": "sk",
+            }],
+            attr_types={"ledger_date": "S"},
+        ),
         TableDef(_resolve_table_name(S.billing_config_table_name, "billing_config"), "pk", "sk"),
         TableDef(
             _resolve_table_name(S.ddb_sticker_collections_table, "sticker_collections"),

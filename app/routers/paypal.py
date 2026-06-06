@@ -134,6 +134,7 @@ def new_ledger_entry(
     paypal_capture_id: Optional[str] = None,
     paypal_subscription_id: Optional[str] = None,
     meta: Optional[Dict[str, Any]] = None,
+    provider: str = "paypal",
 ) -> Tuple[str, Dict[str, Any]]:
     ts = now_ts()
     eid = ulidish()
@@ -147,6 +148,9 @@ def new_ledger_entry(
         "amount_cents": int(amount_cents),
         "state": state,
         "reason": reason,
+        # GAP-0203 / FIN-013: persist provider so the platform financial
+        # dashboard provider breakdown attributes PayPal entries correctly.
+        "provider": provider,
     }
     if paypal_payment_token_id:
         item["paypal_payment_token_id"] = paypal_payment_token_id

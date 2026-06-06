@@ -133,23 +133,57 @@ def _user_for(item: Dict[str, Any]) -> str:
 # Ledger scan
 # ---------------------------------------------------------------------------
 
-def _scan_ledger_entries(date_set: Optional[set[str]] = None) -> List[Dict[str, Any]]:
-    """Scan the billing table, keeping only LEDGER# rows. Optionally filter
-    to a set of ledger_date strings (computed in-memory to avoid a GSI)."""
+def _query_ledger_by_date(date_str: str) -> List[Dict[str, Any]]:
+    """Query all ledger entries for a single date via GSI_LEDGER_DATE.
+
+    Returns only ``LEDGER#`` sort-key rows for ``date_str``. Non-ledger rows
+    (payment methods, balance config) never carry ``ledger_date`` so they are
+    naturally excluded from the index.
+    """
+    from boto3.dynamodb.conditions import Key
+
     out: List[Dict[str, Any]] = []
-    kwargs: Dict[str, Any] = {}
+    kwargs: Dict[str, Any] = {
+        "IndexName": "GSI_LEDGER_DATE",
+        "KeyConditionExpression": Key("ledger_date").eq(date_str)
+        & Key("sk").begins_with("LEDGER#"),
+    }
+    while True:
+        resp = T.billing.query(**kwargs)
+        out.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return out
+
+
+def _scan_ledger_entries(date_set: Optional[set[str]] = None) -> List[Dict[str, Any]]:
+    """Return ledger entries.
+
+    GAP-0202 / FIN-013: when a ``date_set`` is provided (the common
+    date-bounded path used by every KPI / trend / breakdown endpoint), query
+    the ``GSI_LEDGER_DATE`` index per day instead of scanning the entire
+    billing table (which also holds payment methods and balance rows). Falls
+    back to a filtered full scan only for the rare all-time path
+    (``date_set is None``).
+    """
+    if date_set is not None:
+        logger.debug("financial_dashboard_scan_type=gsi dates=%d", len(date_set))
+        out: List[Dict[str, Any]] = []
+        for d in date_set:
+            out.extend(_query_ledger_by_date(d))
+        return out
+
+    logger.debug("financial_dashboard_scan_type=fallback")
+    out = []
+    kwargs: Dict[str, Any] = {
+        "FilterExpression": "begins_with(sk, :pfx)",
+        "ExpressionAttributeValues": {":pfx": "LEDGER#"},
+    }
     while True:
         resp = T.billing.scan(**kwargs)
-        for item in resp.get("Items", []):
-            sk = str(item.get("sk", ""))
-            if not sk.startswith("LEDGER#"):
-                continue
-            ld = item.get("ledger_date")
-            if not ld:
-                ld = _ledger_date_fallback(item)
-            if date_set is not None and ld not in date_set:
-                continue
-            out.append(item)
+        out.extend(resp.get("Items", []))
         lek = resp.get("LastEvaluatedKey")
         if not lek:
             break

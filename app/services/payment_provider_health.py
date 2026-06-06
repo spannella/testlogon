@@ -36,6 +36,7 @@ Storage (DynamoDB table ``payment_provider_health``):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -590,3 +591,98 @@ def check_and_alert(provider: str) -> Optional[Dict[str, Any]]:
         "alert_email": config["alert_email"],
         "at": now_ts(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Background health-check task (GAP-0204 / FIN-014)
+#
+# `check_and_alert` was previously dead code: defined but never invoked, so
+# configured provider alert thresholds (error rate, latency) were never
+# evaluated automatically. This loop runs every 5 minutes and calls
+# `check_and_alert` for each known provider, emitting a structured warning log
+# when a threshold is breached. Mirrors the in-process asyncio task pattern
+# used by `app/services/billing_dunning.py` (register_task is called inside the
+# loop; the `start_*` entrypoint only schedules the loop via create_task).
+# ---------------------------------------------------------------------------
+
+_HEALTH_CHECK_INTERVAL_SECONDS = 300  # 5 minutes
+
+
+def _dispatch_alert(alert: Dict[str, Any]) -> None:
+    """Handle a breach alert payload.
+
+    GAP-0204 wires the periodic evaluation; actual delivery (email) is the
+    scope of GAP-0205. Until then this logs the alert as a structured warning
+    so degradation is at least observable in the application logs.
+    """
+    logger.warning(
+        "provider_health_alert provider=%s status=%s breaches=%s "
+        "error_rate_bps=%s avg_latency_ms=%s alert_email=%s",
+        alert.get("provider"),
+        alert.get("status"),
+        alert.get("breaches"),
+        alert.get("error_rate_bps"),
+        alert.get("avg_latency_ms"),
+        alert.get("alert_email"),
+    )
+
+
+async def _provider_health_loop(interval: int = _HEALTH_CHECK_INTERVAL_SECONDS) -> None:
+    """Periodic loop: evaluate every provider against its alert thresholds."""
+    import time as _time
+    from app.services.job_registry import register_task, report_error, report_poll
+
+    interval = max(60, int(interval))
+    register_task(
+        "payment_provider_health_check",
+        interval,
+        enabled=True,
+        description=(
+            "Checks payment provider health thresholds and dispatches alerts "
+            "when error rate or latency exceed configured limits"
+        ),
+    )
+
+    while True:
+        _start = _time.perf_counter()
+        try:
+            for prov in PROVIDERS:
+                try:
+                    alert = check_and_alert(prov)
+                    if alert:
+                        _dispatch_alert(alert)
+                except Exception:
+                    logger.exception(
+                        "provider_health_check failed for %s", prov
+                    )
+            _dur = (_time.perf_counter() - _start) * 1000
+            report_poll("payment_provider_health_check", duration_ms=_dur)
+        except Exception as exc:
+            report_error("payment_provider_health_check", str(exc))
+            logger.exception("Payment provider health loop failed")
+        await asyncio.sleep(interval)
+
+
+def start_provider_health_check_task() -> None:
+    """Register and start the payment provider health-check background task.
+
+    Registered as a FastAPI startup handler in `app/main.py`. Respects the
+    `S.payment_provider_health_enabled` feature flag (same flag that gates
+    `record_provider_event`): when disabled, the task is registered as
+    disabled in the job registry and the loop is not started.
+    """
+    from app.services.job_registry import register_task
+
+    if not S.payment_provider_health_enabled:
+        register_task(
+            "payment_provider_health_check",
+            _HEALTH_CHECK_INTERVAL_SECONDS,
+            enabled=False,
+            description=(
+                "Checks payment provider health thresholds and dispatches "
+                "alerts when error rate or latency exceed configured limits"
+            ),
+        )
+        logger.info("Payment provider health check disabled")
+        return
+    asyncio.create_task(_provider_health_loop(_HEALTH_CHECK_INTERVAL_SECONDS))
