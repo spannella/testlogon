@@ -785,6 +785,52 @@ def _audit_to_out(item: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# Per-user "a running audit exists" lock. A stable SK lets us claim it with an
+# atomic conditional write so two concurrent start_audit calls cannot both
+# create a running audit (GAP-0100 TOCTOU fix). ``ttl`` enables DynamoDB TTL
+# auto-expiry so a stale lock (worker crash before complete_audit) is reclaimed.
+_RUNNING_LOCK_SK = "RUNNING_LOCK"
+_LOCK_TTL_SECONDS = 3600  # 1 hour: covers the longest expected audit
+
+
+def _acquire_audit_lock(*, user_id: str) -> bool:
+    """Atomically acquire the per-user running-audit lock.
+
+    Returns True if the lock was acquired (no audit currently running). Returns
+    False if the lock is already held (ConditionalCheckFailedException). Raises
+    ClientError for any other DynamoDB error. Identical semantics on DynamoDB
+    Local (dev) and AWS DynamoDB (prod) — no feature flag (SECOPS-007).
+    """
+    expires_at = now_ts() + _LOCK_TTL_SECONDS
+    try:
+        T.compliance_audits.put_item(
+            Item={
+                "pk": _user_pk(user_id),
+                "sk": _RUNNING_LOCK_SK,
+                "lock_type": "running_audit",
+                "acquired_at": now_ts(),
+                "expires_at": expires_at,
+                "ttl": expires_at,
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+        return True
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def _release_audit_lock(*, user_id: str) -> None:
+    """Release the running-audit lock. Best-effort; TTL handles crash cleanup."""
+    try:
+        T.compliance_audits.delete_item(
+            Key={"pk": _user_pk(user_id), "sk": _RUNNING_LOCK_SK}
+        )
+    except Exception:  # noqa: BLE001 - non-fatal: TTL expires the lock eventually
+        pass
+
+
 def get_running_audit(*, user_id: str) -> Optional[Dict[str, Any]]:
     """Return an in-progress audit for the user, if any."""
     ensure_tables()
@@ -806,29 +852,39 @@ def start_audit(
     In mock mode (the default), the audit is created in ``running`` state and the
     deterministic completion is driven immediately by the caller via
     ``run_mock_audit``. The state machine is fully driveable for tests.
+
+    The running-audit guard is an atomic conditional write (``_acquire_audit_lock``)
+    rather than a read-then-write check, so two concurrent callers cannot both
+    create a running audit (GAP-0100). The lock is released by ``complete_audit``;
+    if the audit-item write fails here the lock is released immediately so the
+    user is not left permanently blocked.
     """
     ensure_tables()
-    if get_running_audit(user_id=user_id) is not None:
+    if not _acquire_audit_lock(user_id=user_id):
         raise ValueError("audit_in_progress")
-    audit_id = uuid.uuid4().hex
-    ts = now_ts()
-    item = {
-        "pk": _user_pk(user_id),
-        "sk": _audit_sk(audit_id),
-        "audit_id": audit_id,
-        "user_id": user_id,
-        "agent_id": agent_id,
-        "worker_id": worker_id,
-        "status": "running",
-        "source": source,
-        "started_at": ts,
-        "finding_counts": {},
-        "files_scanned": 0,
-        "compliance_summary": {},
-        "GSI1PK": f"USER#{user_id}#AUDITS",
-        "GSI1SK": ts,
-    }
-    T.compliance_audits.put_item(Item=item)
+    try:
+        audit_id = uuid.uuid4().hex
+        ts = now_ts()
+        item = {
+            "pk": _user_pk(user_id),
+            "sk": _audit_sk(audit_id),
+            "audit_id": audit_id,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "worker_id": worker_id,
+            "status": "running",
+            "source": source,
+            "started_at": ts,
+            "finding_counts": {},
+            "files_scanned": 0,
+            "compliance_summary": {},
+            "GSI1PK": f"USER#{user_id}#AUDITS",
+            "GSI1SK": ts,
+        }
+        T.compliance_audits.put_item(Item=item)
+    except Exception:
+        _release_audit_lock(user_id=user_id)
+        raise
     return _audit_to_out(item)
 
 
@@ -874,6 +930,8 @@ def complete_audit(
     updated = T.compliance_audits.get_item(
         Key={"pk": _user_pk(user_id), "sk": _audit_sk(audit_id)}
     ).get("Item", {})
+    # Release the running-audit lock so a subsequent audit can start (GAP-0100).
+    _release_audit_lock(user_id=user_id)
     return _audit_to_out(updated)
 
 

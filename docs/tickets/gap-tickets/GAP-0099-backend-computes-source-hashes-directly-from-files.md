@@ -1,6 +1,6 @@
 # GAP-0099: backend computes source hashes directly from filesystem
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-014 · **Effort**: M
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-014 · **Effort**: M
 **From**: gap audit (`docs/tickets/gaps/AGENT-014.md`); see also `docs/tickets/writeups/AGENT-014.md`
 
 ## Location

@@ -195,17 +195,40 @@ def validate_paths(paths: List[str]) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
-def _compute_source_hash(path: str) -> str:
-    """Compute a stable hash token for a source file.
+def _path_stub_hash(path: str) -> str:
+    """Content-independent token derived purely from the path string.
 
-    Hashes are normally produced by the agent in its terminal session (real git
-    blob hashes). The backend never touches the filesystem; in mock/dev mode it
-    derives a deterministic content-independent token from the path so freshness
-    detection is exercisable without git. When the same path is registered and
-    later re-verified with no intervening update call, the token is identical →
-    the doc is considered fresh.
+    Used only as a fallback (prod, or when the file is inaccessible in dev). The
+    ``h_`` prefix marks it as a non-content hash so it is distinguishable from a
+    real content hash.
     """
     return f"h_{abs(hash(path)) & 0xFFFFFFFF:08x}"
+
+
+def _compute_source_hash(path: str) -> str:
+    """Compute a hash token for a source file (GAP-0099).
+
+    The hash must depend on the file's *content* so that freshness/staleness
+    detection actually fires when a source file changes. In production the agent
+    runs co-located with the source files in its terminal session and supplies
+    real git blob hashes via the API; the backend container has no access to the
+    working tree, so it falls back to a path-derived stub there.
+
+    To keep dev/prod parity exercisable through the same code path (SECOPS-007),
+    in ``S.dev_mode`` the backend reads the file content and returns a SHA-256
+    prefix (``d_`` prefix). Changing the file content changes the hash, so
+    ``check_freshness`` correctly marks the doc stale. Outside dev mode — or when
+    the file is missing/unreadable — it falls back to the path-derived stub.
+    """
+    if S.dev_mode and validate_path(path):
+        try:
+            import hashlib
+
+            with open(path, "rb") as fh:
+                return "d_" + hashlib.sha256(fh.read()).hexdigest()[:16]
+        except OSError:
+            pass  # File inaccessible — fall back to the path-derived stub.
+    return _path_stub_hash(path)
 
 
 def compute_source_hashes(paths: List[str]) -> Dict[str, str]:

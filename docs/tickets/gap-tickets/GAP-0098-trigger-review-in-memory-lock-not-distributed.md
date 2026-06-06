@@ -1,6 +1,6 @@
 # GAP-0098: trigger_review in-memory lock not distributed
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: AGENT-013 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: AGENT-013 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/AGENT-013.md`); see also `docs/tickets/writeups/AGENT-013.md`
 
 ## Location
