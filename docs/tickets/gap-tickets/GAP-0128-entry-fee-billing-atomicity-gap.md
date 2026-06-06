@@ -1,6 +1,6 @@
 # GAP-0128: Entry fee billing atomicity gap
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BCAST-014 · **Effort**: S
+**Status**: Implemented (branch impl/crit-batch-1, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BCAST-014 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BCAST-014.md`); see also `docs/tickets/writeups/BCAST-014.md`
 
 ## Location

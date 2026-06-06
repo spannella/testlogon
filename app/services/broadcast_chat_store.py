@@ -335,16 +335,18 @@ def delete_chat_message(session_id: str, message_id: str, actor_sub: str) -> boo
 
 
 def _find_sort_key(session_id: str, message_id: str) -> Optional[str]:
-    """Find sort_key by message_id via a filter on the partition."""
+    """Find sort_key by message_id using the MessageIdIndex GSI (O(1))."""
     resp = T.broadcast_chat_messages.query(
-        KeyConditionExpression=Key("session_id").eq(session_id),
-        FilterExpression=Attr("message_id").eq(message_id),
-        Limit=200,
-        ScanIndexForward=False,
+        IndexName="MessageIdIndex",
+        KeyConditionExpression=Key("message_id").eq(message_id),
     )
     items = resp.get("Items", [])
-    if items:
-        return items[0]["sort_key"]
+    if not items:
+        return None
+    # Confirm the message belongs to the requested session (partition ownership).
+    for item in items:
+        if item.get("session_id") == session_id:
+            return item["sort_key"]
     return None
 
 

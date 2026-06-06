@@ -514,49 +514,91 @@ def _charge_entry_fee(
             )
         payment_method_id = billing_item["default_payment_method_id"]
 
-    try:
-        debit_entry_id = uuid.uuid4().hex
-        billing_tbl.put_item(Item={
-            "pk": f"USER#{user_id}",
-            "sk": f"LEDGER#{ts}#{debit_entry_id}",
-            "entry_id": debit_entry_id,
-            "ts": ts,
-            "type": "debit",
-            "amount_cents": entry_fee_cents,
-            "currency": "USD",
-            "state": "settled",
-            "reason": "Lottery entry fee",
-            "meta": {
-                "lottery_id": lottery_id,
-                "session_id": session_id,
-                "fee_payment_id": fee_payment_id,
-                "payment_method_id": payment_method_id,
-            },
-        })
-    except Exception:
-        logger.exception("Failed to write lottery entry fee debit user=%s lottery=%s", user_id, lottery_id)
+    # Atomic debit + credit via TransactWriteItems so the entrant is never charged
+    # without the broadcaster being credited (and vice versa). Mirrors GAP-0126/0123.
+    # On failure the transaction rolls back entirely; re-raise so the caller aborts
+    # the entry instead of silently recording a partial ledger (GAP-0128).
+    #
+    # Build a fresh low-level client using the SAME endpoint / region / credential
+    # resolution as the table handles, so dev (DynamoDB Local) and prod (AWS)
+    # behave identically (SECOPS-007 parity). TransactWriteItems is only available
+    # on the low-level client, not on the resource Table API.
+    import boto3
+    from boto3.dynamodb.types import TypeSerializer
+    from botocore.exceptions import ClientError
+
+    from app.core.aws_clients import (
+        _aws_region,
+        _ddb_endpoint_url,
+        _local_credentials_kwargs,
+    )
+
+    endpoint_url = _ddb_endpoint_url()
+    client = boto3.client(
+        "dynamodb",
+        region_name=_aws_region(),
+        endpoint_url=endpoint_url,
+        **_local_credentials_kwargs(endpoint_url),
+    )
+
+    debit_entry_id = uuid.uuid4().hex
+    credit_entry_id = uuid.uuid4().hex
+
+    debit_item = {
+        "pk": f"USER#{user_id}",
+        "sk": f"LEDGER#{ts}#{debit_entry_id}",
+        "entry_id": debit_entry_id,
+        "ts": ts,
+        "type": "debit",
+        "amount_cents": entry_fee_cents,
+        "currency": "USD",
+        "state": "settled",
+        "reason": "Lottery entry fee",
+        "meta": {
+            "lottery_id": lottery_id,
+            "session_id": session_id,
+            "fee_payment_id": fee_payment_id,
+            "payment_method_id": payment_method_id,
+        },
+    }
+    credit_item = {
+        "pk": f"USER#{broadcaster_id}",
+        "sk": f"LEDGER#{ts}#{credit_entry_id}",
+        "entry_id": credit_entry_id,
+        "ts": ts,
+        "type": "credit",
+        "amount_cents": entry_fee_cents,
+        "currency": "USD",
+        "state": "settled",
+        "reason": "Lottery entry fee received",
+        "meta": {
+            "lottery_id": lottery_id,
+            "session_id": session_id,
+            "fee_payment_id": fee_payment_id,
+            "from_user_id": user_id,
+        },
+    }
+
+    serializer = TypeSerializer()
+    table_name = S.billing_table_name
+
+    def _serialize(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: serializer.serialize(v) for k, v in row.items()}
 
     try:
-        credit_entry_id = uuid.uuid4().hex
-        billing_tbl.put_item(Item={
-            "pk": f"USER#{broadcaster_id}",
-            "sk": f"LEDGER#{ts}#{credit_entry_id}",
-            "entry_id": credit_entry_id,
-            "ts": ts,
-            "type": "credit",
-            "amount_cents": entry_fee_cents,
-            "currency": "USD",
-            "state": "settled",
-            "reason": "Lottery entry fee received",
-            "meta": {
-                "lottery_id": lottery_id,
-                "session_id": session_id,
-                "fee_payment_id": fee_payment_id,
-                "from_user_id": user_id,
-            },
-        })
-    except Exception:
-        logger.exception("Failed to write lottery entry fee credit broadcaster=%s lottery=%s", broadcaster_id, lottery_id)
+        client.transact_write_items(
+            TransactItems=[
+                {"Put": {"TableName": table_name, "Item": _serialize(debit_item)}},
+                {"Put": {"TableName": table_name, "Item": _serialize(credit_item)}},
+            ]
+        )
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+        logger.error(
+            "lottery_entry_fee_transact_failed user=%s broadcaster=%s lottery=%s error=%s",
+            user_id, broadcaster_id, lottery_id, error_code,
+        )
+        raise
 
     return fee_payment_id
 

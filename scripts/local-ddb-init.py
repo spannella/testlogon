@@ -727,6 +727,7 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.broadcast_chat_messages_table_name, "BroadcastChatMessages"),
             "session_id",
             "sort_key",
+            gsi=[{"index_name": "MessageIdIndex", "partition_key": "message_id"}],
         ),
         TableDef(
             _resolve_table_name(S.broadcast_chat_mutes_table_name, "BroadcastChatMutes"),
