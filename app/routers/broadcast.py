@@ -1626,6 +1626,20 @@ def send_chat_message_route(session_id: str, body: BroadcastChatSendIn, ctx: dic
             detail={"code": "BROADCAST_NOT_LIVE", "message": "Chat is only available while the broadcast is live"},
         )
 
+    # Go-Private access gating (GAP-0117): mirror the gating on the chat
+    # stream / playback-url / viewers/join endpoints. Without this, any
+    # authenticated user could post into a private session's live chat
+    # (and have it fanned out to legitimate viewers via SSE). The mute /
+    # rate-limit checks in _store_send_chat run afterwards, so excluded
+    # users receive a privacy denial rather than a mute-specific error.
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+    )
+
     user_id = ctx["user_sub"]
 
     # Broadcaster-only features (BCAST-015 Phase C + D)
