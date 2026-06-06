@@ -21,6 +21,7 @@ from app.core.tables import T
 from app.services.alerts import audit_event
 from app.services.profile import (
     PROFILE_READ_NOT_FOUND_DETAIL,
+    SCREENING_SENSITIVE_PROFILE_FIELDS,
     apply_profile_update,
     get_audit_log,
     get_profile,
@@ -168,18 +169,69 @@ async def ui_get_profile_by_identifier(identifier: str, req: Request):
 async def ui_get_profile_audit(ctx=Depends(require_ui_session)):
     return {"audit": get_audit_log(ctx["user_sub"])}
 
+def _maybe_rescreen_after_profile_update(
+    user_sub: str,
+    previous: Dict[str, Any],
+    updated: Dict[str, Any],
+) -> None:
+    """Re-screen the user if an identity-sensitive profile field changed.
+
+    GAP-0259 / KYC-006: AML continuous monitoring requires re-screening when an
+    approved subject changes identity-relevant attributes (legal name, DOB, ...).
+    Best-effort: fully wrapped in try/except so screening problems can never
+    block or fail the profile update. Same in-process code path in dev and prod
+    (SECOPS-007 parity — no environment-specific branches).
+    """
+    try:
+        changed_sensitive = any(
+            previous.get(field) != updated.get(field)
+            for field in SCREENING_SENSITIVE_PROFILE_FIELDS
+        )
+        if not changed_sensitive:
+            return
+
+        from app.services.kyc_cases import STORE as KYC_CASE_STORE
+        from app.services.kyc_sanctions_screening import (
+            STORE as SCREENING_STORE,
+            TRIGGER_PROFILE_CHANGE,
+        )
+
+        cases = KYC_CASE_STORE.list_cases_by_owner(user_sub=user_sub)
+        approved = [c for c in cases if c.get("status") == "approved"]
+        if not approved:
+            return
+        # list_cases_by_owner returns most-recent-first; re-screen against the
+        # most recently approved case so results attach to the live case record.
+        case_id = approved[0].get("kyc_case_id")
+        if not case_id:
+            return
+        SCREENING_STORE.rescreen_user(
+            case_id=case_id,
+            user_sub=user_sub,
+            trigger=TRIGGER_PROFILE_CHANGE,
+        )
+    except Exception:
+        logger.exception(
+            "kyc.rescreen.profile_change_hook_failed user_sub=%s", user_sub
+        )
+
+
 @router.patch("/profile")
 async def ui_patch_profile(req: Request, body: ProfilePatchReq, ctx=Depends(require_ui_session)):
     updates = body.model_dump(exclude_unset=True)
+    previous = get_profile(ctx["user_sub"])
     profile = apply_profile_update(ctx["user_sub"], updates, replace=False)
     audit_event("profile_update", ctx["user_sub"], req, outcome="success", mode="patch")
+    _maybe_rescreen_after_profile_update(ctx["user_sub"], previous, profile)
     return {"profile": profile}
 
 @router.put("/profile")
 async def ui_put_profile(req: Request, body: ProfilePutReq, ctx=Depends(require_ui_session)):
     updates = body.model_dump()
+    previous = get_profile(ctx["user_sub"])
     profile = apply_profile_update(ctx["user_sub"], updates, replace=True)
     audit_event("profile_update", ctx["user_sub"], req, outcome="success", mode="replace")
+    _maybe_rescreen_after_profile_update(ctx["user_sub"], previous, profile)
     return {"profile": profile}
 
 async def ui_upload_profile_photo_unavailable(ctx=Depends(require_ui_session)):

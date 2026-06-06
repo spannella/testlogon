@@ -33,6 +33,18 @@ PROFILE_FIELDS = (
 )
 
 
+# Identity-relevant profile fields whose change must trigger KYC re-screening
+# for users with an approved KYC case (GAP-0259 / KYC-006 continuous monitoring).
+SCREENING_SENSITIVE_PROFILE_FIELDS = frozenset(
+    {
+        "display_name",
+        "first_name",
+        "last_name",
+        "birthday",
+    }
+)
+
+
 PROFILE_VISIBILITY_LEVELS = ("public", "member", "private")
 PROFILE_AUDIENCES = ("owner", "member", "public")
 PROFILE_READ_NOT_FOUND_DETAIL = "Profile not found"
