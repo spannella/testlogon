@@ -257,13 +257,39 @@ def list_assignments(*, bot_id: str, creator_id: str) -> list[dict]:
     return [_assignment_dict(i) for i in items]
 
 
-def get_bots_for_conversation(*, conversation_id: str) -> list[dict]:
-    """Find all bots assigned to a conversation (direct assignment via GSI1)."""
+def get_bots_for_conversation(
+    *,
+    conversation_id: str,
+    conversation_type: str = "dm",
+) -> list[dict]:
+    """Find all bots that apply to a conversation.
+
+    Resolves both direct ``CONV#{conversation_id}`` assignments and wildcard
+    scope assignments (``all_dms`` / ``all_groups`` / ``all_broadcasts``) that
+    match the conversation kind. All assignments live on GSI1: direct ones under
+    the ``CONV#`` bucket and wildcard ones under their ``SCOPE#`` bucket, so each
+    is reachable with a single keyed query (GAP-0134).
+    """
+    bot_ids: set[str] = set()
+
+    # 1. Direct assignments.
     resp = T.bot_assignments.query(
         IndexName="GSI1",
         KeyConditionExpression=Key("GSI1PK").eq(f"CONV#{conversation_id}"),
     )
-    bot_ids = [item["bot_id"] for item in resp.get("Items", [])]
+    for item in resp.get("Items", []):
+        bot_ids.add(item["bot_id"])
+
+    # 2. Wildcard scope assignments matching this conversation kind.
+    scope_pk = _CONVO_KIND_TO_SCOPE_GSI1PK.get(conversation_type)
+    if scope_pk:
+        scope_resp = T.bot_assignments.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(scope_pk),
+        )
+        for item in scope_resp.get("Items", []):
+            bot_ids.add(item["bot_id"])
+
     bots = []
     for bid in bot_ids:
         b = get_bot(bot_id=bid)
@@ -458,7 +484,20 @@ def _build_assignment_gsi1pk(target_type: str, target_id: str | None) -> str | N
         return f"CONV#{target_id}"
     if target_type == "broadcast" and target_id:
         return f"BCAST#{target_id}"
+    # Wildcard scope assignments are stored on GSI1 under a scope bucket so that
+    # get_bots_for_conversation() can find them by querying the matching bucket
+    # for the conversation kind (GAP-0134). The scope sk is reused as GSI1PK.
+    if target_type in ("all_dms", "all_groups", "all_broadcasts"):
+        return _build_assignment_sk(target_type, target_id)
     return None
+
+
+# Maps a conversation kind to the wildcard scope bucket whose assignments apply.
+_CONVO_KIND_TO_SCOPE_GSI1PK = {
+    "dm": "SCOPE#ALL_DMS",
+    "group": "SCOPE#ALL_GROUPS",
+    "broadcast": "SCOPE#ALL_BROADCASTS",
+}
 
 
 def _bot_dict(item: dict) -> dict:
