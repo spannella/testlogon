@@ -171,4 +171,23 @@ def write_tip_ledger(entry: TipLedgerEntry) -> Dict[str, str]:
                    "content_id": entry.content_id, "amount": entry.amount_cents},
         )
 
+    # GAP-0152: notify recipient's dashboard stream (best-effort, fire-and-forget).
+    # The ledger write is the source of truth; SSE delivery failures must never
+    # propagate to the caller. Lazy import guards against circular imports.
+    try:
+        from app.services.dashboard_sse import dashboard_sse_publish
+        dashboard_sse_publish(
+            entry.recipient_user_id,
+            {
+                "type": "earnings:update",
+                "amount_cents": entry.amount_cents,
+                "currency": entry.currency,
+                "content_type": entry.content_type,
+                "content_id": entry.content_id,
+                "tip_payment_id": entry.tip_payment_id,
+            },
+        )
+    except Exception:
+        logger.warning("dashboard_sse_publish failed for tip", exc_info=True)
+
     return result

@@ -90,6 +90,24 @@ def check_milestone(user_id: str, metric: str, current_value: int) -> Optional[D
             ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
         )
         logger.info("Milestone achieved: user=%s metric=%s threshold=%s", user_id, metric, achieved_threshold)
+        # GAP-0152: push real-time milestone event to the creator's dashboard
+        # stream (best-effort). Only fires for genuinely new milestones (i.e. the
+        # conditional put_item succeeded, not on ConditionalCheckFailedException).
+        try:
+            from app.services.dashboard_sse import dashboard_sse_publish
+            dashboard_sse_publish(
+                user_id,
+                {
+                    "type": "milestone:reached",
+                    "milestone_id": milestone["milestone_id"],
+                    "metric": metric,
+                    "threshold": achieved_threshold,
+                    "formatted": milestone["formatted"],
+                    "achieved_at": now,
+                },
+            )
+        except Exception:
+            logger.warning("dashboard_sse_publish failed for milestone", exc_info=True)
         return milestone
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":

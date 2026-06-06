@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.services.sessions import require_ui_session
+from app.core.settings import S
 from app.core.time import now_ts
 from app.models import (
     ChannelCreateIn,
@@ -45,8 +46,14 @@ from app.services.fan_club_tiers import (
 )
 from app.services.fan_club_access import get_early_access_status
 
-router = APIRouter(tags=["fan-club"])
-public_router = APIRouter(tags=["fan-club-public"])
+def _check_enabled() -> None:
+    """Enforce FAN_CLUBS_ENABLED feature flag (GAP-0151)."""
+    if not S.fan_clubs_enabled:
+        raise HTTPException(503, "Fan club feature is disabled")
+
+
+router = APIRouter(tags=["fan-club"], dependencies=[Depends(_check_enabled)])
+public_router = APIRouter(tags=["fan-club-public"], dependencies=[Depends(_check_enabled)])
 
 
 # ─── Tier Management ──────────────────────────────────────────────────────────

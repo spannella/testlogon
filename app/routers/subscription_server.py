@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from app.services.profile import get_profile_identity
 from app.services.purchase_history import record_billing_transaction
 from app.services.subscription_access import get_subscription_settings, set_subscription_settings
 from app.services.subscription_cycle_orders import emit_subscription_cycle_order
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["subscriptions"])
 FEE_BPS = int(os.environ.get("SUBSCRIPTION_FEE_BPS", "1000"))
@@ -519,6 +522,27 @@ def save_subscription(sub: Dict[str, Any]) -> None:
         ddb_put_item(item)
 
 
+_ACTIVE_SUBSCRIBER_STATUSES = {"active", "trialing", "past_due"}
+
+
+def count_active_subscribers(creator_id: str) -> int:
+    """Count a creator's currently active (non-cancelled/expired) subscriptions.
+
+    Reads the creator index (``CREATOR#{id}`` partition, ``SUB#`` items) which is
+    written by ``save_subscription``. Used to drive milestone detection
+    (GAP-0153) at signup time.
+    """
+    items = ddb_query(pk_creator(creator_id))
+    count = 0
+    for it in items:
+        if not it.get("sk", "").startswith("SUB#"):
+            continue
+        status = (it.get("status") or "").lower()
+        if status in _ACTIVE_SUBSCRIBER_STATUSES:
+            count += 1
+    return count
+
+
 def build_invoice_item(invoice: Dict[str, Any]) -> Dict[str, Any]:
     item = invoice.copy()
     item.update({"pk": pk_subscription(invoice["subscription_id"]), "sk": f"INV#{invoice['invoice_id']}", "entity": "invoice"})
@@ -976,6 +1000,15 @@ async def subscribe(
         plan_id=plan_id,
         subscriber_id=subscriber_id,
     )
+
+    # GAP-0153: detect subscriber-count milestones in real time at signup.
+    try:
+        from app.services.milestones import check_milestone
+
+        new_count = count_active_subscribers(plan["creator_id"])
+        check_milestone(plan["creator_id"], "subscribers", new_count)
+    except Exception:
+        logger.warning("check_milestone failed on subscription signup", exc_info=True)
 
     refresh_subscription_calendar_events(sub, plan)
     return attach_subscription_profiles(sub)
