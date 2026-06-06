@@ -6740,6 +6740,15 @@ def vote_on_poll(post_id: str, body: VoteIn, user_id: UserIdDep):
     post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    # ── GAP-0164 fix: enforce visibility/subscription gate ──────────────────
+    # Check access BEFORE revealing post type so a gated post does not become an
+    # enumeration oracle (400 "not a poll" vs 403 leaks classification).
+    post_author = str(post.get("user_id") or "").strip()
+    if post_author and post_author != user_id and not can_view_post(user_id, post):
+        raise HTTPException(status_code=403, detail="Not authorized to view this post")
+    # ────────────────────────────────────────────────────────────────────────
+
     if post.get("post_type") not in ("poll", "survey"):
         raise HTTPException(status_code=400, detail="Post is not a poll")
 
@@ -6769,6 +6778,28 @@ def vote_on_poll(post_id: str, body: VoteIn, user_id: UserIdDep):
         my_vote = get_user_vote_for_question(refreshed or post, body.question_id, user_id)
     else:
         my_votes = list(get_user_multi_votes(refreshed or post, body.question_id, user_id))
+
+    # ── GAP-0163 fix: publish real-time poll:vote SSE event to post author ───
+    # Mirrors the established put_notification pattern (sync handler runs in a
+    # threadpool with no running loop, so RuntimeError is caught and dropped;
+    # cross-worker delivery requires the SNS/SQS fan-out noted on SSEHub).
+    if post_author:
+        sse_payload = {
+            "type": "poll:vote",
+            "post_id": post_id,
+            "question_id": body.question_id,
+            "option_id": body.option_id,
+            "vote_counts": updated_counts,
+            "total_votes": total_votes,
+            "voter_sub": user_id,
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(sse_hub.publish(post_author, sse_payload))
+        except RuntimeError:
+            # Sync threadpool context — no running loop; SSE push not possible.
+            pass
+    # ────────────────────────────────────────────────────────────────────────
 
     return {
         "ok": True,

@@ -70,10 +70,23 @@ def submit_question(
 ):
     """Submit a question to the queue (any authenticated, non-muted user)."""
     _check_enabled()
-    display_name = ctx.get("display_name") or ctx["user_sub"]
+    user_id = ctx["user_sub"]
+    # Resolve display name: use profile display_name if available, otherwise user_sub.
+    # ``require_ui_session`` does not put display_name in ctx, so fetch it from the
+    # profile table (same pattern as broadcast.py special-message attribution).
+    display_name = user_id
+    try:
+        from app.core.tables import T as _T
+
+        profile_resp = _T.profile.get_item(Key={"user_sub": user_id})
+        profile_item = profile_resp.get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
     return live_qa.submit_question(
         session_id=session_id,
-        user_id=ctx["user_sub"],
+        user_id=user_id,
         display_name=display_name,
         text=body.text,
     )
