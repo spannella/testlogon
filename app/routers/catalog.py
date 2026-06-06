@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,7 @@ from app.models import (
 )
 from app.services.filemanager import download_file, upload_catalog_image
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
+from app.services.geo_check import check_geo_access
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import can_access_creator
 
@@ -124,6 +125,25 @@ def _catalog_item_out(item: dict) -> CatalogItemOut:
         stock_updated_at=item.get("stock_updated_at"),
         position=int(pos) if pos is not None else None,
     )
+
+
+def _item_geo_blocked(request: Request, item: dict) -> bool:
+    """Return True if the viewer's resolved country is blocked from this item.
+
+    Reads the per-item ``geo_mode``/``geo_countries`` stored inline on the
+    catalog item record (GEO-001 stores catalog geo rules on the item itself,
+    not a separate table). Delegates the allow/block decision to the shared
+    ``check_geo_access`` helper used by video/broadcast endpoints. Items with no
+    geo rule (``geo_mode`` absent) are never blocked.
+    """
+    geo_mode = item.get("geo_mode")
+    if not geo_mode:
+        return False
+    try:
+        check_geo_access(request, geo_mode, item.get("geo_countries"))
+    except HTTPException:
+        return True
+    return False
 
 
 def _b64e(raw: bytes) -> str:
@@ -374,6 +394,7 @@ async def create_item(
 @router.get("/categories/{category_id}/items", response_model=CatalogItemListOut)
 async def list_items(
     category_id: str,
+    request: Request,
     ctx=Depends(require_ui_session),
     page_size: int = Query(default=50, ge=1, le=200),
     next_token: Optional[str] = Query(default=None),
@@ -387,6 +408,9 @@ async def list_items(
     out: List[CatalogItemOut] = []
     for item in items:
         if item.get("entity") != "item":
+            continue
+        # GEO-001 (GAP-0216): drop items the viewer's region is blocked from.
+        if _item_geo_blocked(request, item):
             continue
         out.append(_catalog_item_out(item))
     # Sort by position (items without position sorted to end)
@@ -440,6 +464,7 @@ async def reorder_catalog_items(
 
 @router.get("/items/search", response_model=CatalogItemListOut)
 async def search_items(
+    request: Request,
     q: str = Query(..., min_length=1, max_length=200),
     ctx=Depends(require_ui_session),
     page_size: int = Query(default=50, ge=1, le=200),
@@ -458,6 +483,9 @@ async def search_items(
         items = resp.get("Items", [])
         for item in items:
             if item.get("entity") != "item":
+                continue
+            # GEO-001 (GAP-0216): silently exclude geo-blocked items from search.
+            if _item_geo_blocked(request, item):
                 continue
             if _catalog_matches(query_tokens, item):
                 matches.append(_catalog_item_out(item))

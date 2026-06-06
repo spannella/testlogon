@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from app.core.tables import T
 from app.core.time import now_ts
+from app.services.billing_config import split_fee
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +128,16 @@ def write_tip_ledger(entry: TipLedgerEntry) -> Dict[str, str]:
     reason = _reason_for_content_type(entry.content_type)
     meta = _build_meta(entry)
 
+    # GAP-0214 (FIN-018): apply the admin-configured platform fee. The tipper is
+    # debited the full gross amount; the creator is credited the net after the
+    # platform fee. Fee BPS is read from the runtime billing config so changes in
+    # the BillingConfig UI take effect on every tip.
+    platform_fee_cents, net_cents, fee_bps = split_fee("tip_debit", entry.amount_cents)
+    fee_meta = {"platform_fee_bps": fee_bps, "platform_fee_cents": platform_fee_cents}
+
     result = {"debit_entry_id": debit_id, "credit_entry_id": credit_id}
 
-    # 1. Write debit entry (charge to tipper)
+    # 1. Write debit entry (charge to tipper -- full gross amount)
     try:
         T.billing.put_item(Item={
             "pk": f"USER#{entry.tipper_user_id}",
@@ -141,7 +149,7 @@ def write_tip_ledger(entry: TipLedgerEntry) -> Dict[str, str]:
             "currency": entry.currency,
             "state": "settled",
             "reason": reason,
-            "meta": meta,
+            "meta": {**meta, **fee_meta},
         })
     except Exception:
         logger.warning(
@@ -150,7 +158,7 @@ def write_tip_ledger(entry: TipLedgerEntry) -> Dict[str, str]:
                    "content_id": entry.content_id, "amount": entry.amount_cents},
         )
 
-    # 2. Write credit entry (income to recipient)
+    # 2. Write credit entry (income to recipient -- net after platform fee)
     try:
         T.billing.put_item(Item={
             "pk": f"USER#{entry.recipient_user_id}",
@@ -158,11 +166,11 @@ def write_tip_ledger(entry: TipLedgerEntry) -> Dict[str, str]:
             "entry_id": credit_id,
             "ts": ts,
             "type": "credit",
-            "amount_cents": entry.amount_cents,
+            "amount_cents": net_cents,
             "currency": entry.currency,
             "state": "settled",
             "reason": reason,
-            "meta": meta,
+            "meta": {**meta, **fee_meta},
         })
     except Exception:
         logger.warning(
