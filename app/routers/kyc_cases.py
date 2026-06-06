@@ -63,9 +63,15 @@ from app.services.signature_packet_store import (
 from app.routers.tickets import get_kyc_sync_snapshot
 from app.services.tickets import STORE as TICKET_STORE, TicketStateError
 from app.services.sessions import require_ui_session
+from app.services.kyc_sanctions_screening import (
+    STORE as SCREENING_STORE,
+    TRIGGER_SUBMISSION,
+)
 from uuid import uuid4
+import logging
 from app.core.settings import S
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/kyc/cases", tags=["kyc-cases"])
 QNR_REPO = DynamoQuestionnaireRepository()
 _KYC_REQUIRED_FILE_TYPES = ["selfie", "id_front", "id_back"]
@@ -991,6 +997,18 @@ def submit_kyc_case(
     if not updated:
         _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
     updated = _ensure_review_ticket(updated)
+    # KYC-006 / GAP-0258: run sanctions/PEP screening on every submission.
+    # Best-effort: a screening failure must NEVER block the submission (fail open).
+    try:
+        SCREENING_STORE.screen_case(
+            case_id=case_id,
+            user_sub=user.sub,
+            trigger=TRIGGER_SUBMISSION,
+        )
+    except Exception:
+        logger.exception(
+            "kyc.screening.submission_hook_failed case_id=%s", case_id
+        )
     _audit_state_transition(
         event_name="kyc_submitted",
         actor_sub=user.sub,

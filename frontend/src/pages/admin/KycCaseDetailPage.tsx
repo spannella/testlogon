@@ -43,6 +43,7 @@ import {
 } from "@/api/endpoints/kyc-admin";
 import { KycFacialComparisonReview } from "@/pages/admin/KycFacialComparisonReview";
 import { ResidencyVerificationTab } from "@/pages/admin/ResidencyVerificationTab";
+import { KycFinancialVerificationPanel } from "@/pages/admin/KycFinancialVerificationPanel";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -299,6 +300,9 @@ export default function KycCaseDetailPage() {
           <TabsTrigger value="residency" data-testid="tab-residency">
             Residency
           </TabsTrigger>
+          <TabsTrigger value="financial" data-testid="tab-financial">
+            Financial Verification
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -411,6 +415,10 @@ export default function KycCaseDetailPage() {
 
         <TabsContent value="residency">
           <ResidencyVerificationTab caseId={caseData.kyc_case_id} />
+        </TabsContent>
+
+        <TabsContent value="financial">
+          <KycFinancialVerificationPanel userSub={caseData.user_sub} />
         </TabsContent>
       </Tabs>
 

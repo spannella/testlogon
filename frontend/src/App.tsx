@@ -188,6 +188,7 @@ const KycDocumentReviewQueuePage = lazy(() => import("@/pages/kyc/KycDocumentRev
 const KycResidencyVerificationPage = lazy(() => import("@/pages/kyc/KycResidencyVerificationPage"));
 const KycResidencyReviewQueuePage = lazy(() => import("@/pages/kyc/KycResidencyReviewQueuePage"));
 const KycProofOfFunds = lazy(() => import("@/pages/kyc/KycProofOfFunds"));
+const KycProofOfFundsReviewQueue = lazy(() => import("@/pages/kyc/KycProofOfFundsReviewQueue"));
 const KycLivenessCallSchedulePage = lazy(() => import("@/pages/kyc/KycLivenessCallSchedulePage"));
 const KycLivenessCallVerifierPage = lazy(() => import("@/pages/kyc/KycLivenessCallVerifierPage"));
 const KycScreeningReviewQueuePage = lazy(() => import("@/pages/kyc/KycScreeningReviewQueuePage"));
@@ -468,6 +469,7 @@ export default function App() {
           <Route path="kyc/residency" element={<KycResidencyVerificationPage />} />
           <Route path="admin/kyc/residency" element={<KycResidencyReviewQueuePage />} />
           <Route path="kyc/proof-of-funds" element={<KycProofOfFunds />} />
+          <Route path="admin/kyc/proof-of-funds" element={<KycProofOfFundsReviewQueue />} />
           <Route path="kyc/liveness-call" element={<KycLivenessCallSchedulePage />} />
           <Route path="admin/kyc/liveness-call" element={<KycLivenessCallVerifierPage />} />
           <Route path="admin/kyc/screening" element={<KycScreeningReviewQueuePage />} />

@@ -60,6 +60,13 @@ export const kycProofOfFundsApi = {
       `/ui/kyc/proof-of-funds/review/by-status/${status}`
     ),
 
+  getAdminSubmissionsForUser: (userSub: string) =>
+    api.get<ProofOfFundsSubmissionList>(
+      `/ui/kyc/proof-of-funds/admin/submissions?user_sub=${encodeURIComponent(
+        userSub
+      )}`
+    ),
+
   adjudicate: (
     id: string,
     body: { decision: string; reviewer_note?: string | null }
